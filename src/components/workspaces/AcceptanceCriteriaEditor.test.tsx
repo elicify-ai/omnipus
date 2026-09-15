@@ -578,3 +578,27 @@ describe('AcceptanceCriteriaEditor — remove criterion', () => {
     expect(onChange).toHaveBeenCalledWith([keep])
   })
 })
+
+// GOAL-FR-048 (C-82) — DefinitionOfDoneEditor renders a second editor
+// instance on the same form as Acceptance criteria. Both instances' plain-
+// language inputs default to the identical accessible name
+// ("What must be true when this is done?"); without a way to override it,
+// two editors on one page would be indistinguishable to a screen reader.
+describe('AcceptanceCriteriaEditor — inputAriaLabel override (GOAL-FR-048, C-82)', () => {
+  it('defaults the text-input accessible name to the original wording when not provided', () => {
+    renderEditor()
+    expect(screen.getByLabelText(TEXT_FIELD)).toBeInTheDocument()
+    expect(screen.queryByLabelText('Definition of Done item')).not.toBeInTheDocument()
+  })
+
+  it('uses inputAriaLabel for the text input when provided, and stops answering to the default label', () => {
+    renderEditor({ inputAriaLabel: 'Definition of Done item' })
+    expect(screen.getByLabelText('Definition of Done item')).toBeInTheDocument()
+    expect(screen.queryByLabelText(TEXT_FIELD)).not.toBeInTheDocument()
+  })
+
+  it('keeps the visible placeholder text identical regardless of the aria-label override', () => {
+    renderEditor({ inputAriaLabel: 'Definition of Done item' })
+    expect(screen.getByPlaceholderText(TEXT_FIELD)).toBeInTheDocument()
+  })
+})

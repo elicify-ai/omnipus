@@ -159,7 +159,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 		setWorkspaceCoreTeam(t, api, wsID, []string{"mia", "hans"})
 
 		body := fmt.Sprintf(
-			`{"title":"WorkerOnTeam","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans"}`,
+			`{"title":"WorkerOnTeam","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans",`+minimalCriteriaDodJSON+`}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -181,7 +181,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 		wsID := ensureTestWorkspace(t, api) // default team = ["ava"] only; "hans" absent
 
 		body := fmt.Sprintf(
-			`{"title":"WorkerOffTeam","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans"}`,
+			`{"title":"WorkerOffTeam","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans",`+minimalCriteriaDodJSON+`}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -201,7 +201,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 		wsID := ensureTestWorkspace(t, api) // default team = ["ava"] only; "otto" (non-worker) absent
 
 		body := fmt.Sprintf(
-			`{"title":"NonWorkerOffTeam","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"otto"}`,
+			`{"title":"NonWorkerOffTeam","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"otto",`+minimalCriteriaDodJSON+`}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -226,7 +226,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 		setWorkspaceCoreTeam(t, api, wsID, []string{"mia", "gustav"})
 
 		body := fmt.Sprintf(
-			`{"title":"Subagent3pTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"gustav"}`,
+			`{"title":"Subagent3pTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"gustav",`+minimalCriteriaDodJSON+`}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -258,7 +258,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 		wsID := ensureTestWorkspace(t, api)
 
 		body := fmt.Sprintf(
-			`{"title":"BaseAgentDefaultTeamTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"ava"}`,
+			`{"title":"BaseAgentDefaultTeamTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"ava",`+minimalCriteriaDodJSON+`}`,
 			wsID,
 		)
 		w := httptest.NewRecorder()
@@ -356,7 +356,7 @@ func TestTaskPost_AgentOnDifferentWorkspaceTeam_Rejected(t *testing.T) {
 	setWorkspaceCoreTeam(t, api, wsB, []string{"mia", "hans"})
 
 	body := fmt.Sprintf(
-		`{"title":"CrossWorkspaceLeak","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans"}`,
+		`{"title":"CrossWorkspaceLeak","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans",`+minimalCriteriaDodJSON+`}`,
 		wsA,
 	)
 	w := httptest.NewRecorder()
@@ -373,7 +373,7 @@ func TestTaskPost_AgentOnDifferentWorkspaceTeam_Rejected(t *testing.T) {
 
 	// Control: the SAME agent_id in workspace B (where it IS a team member) succeeds.
 	bodyB := fmt.Sprintf(
-		`{"title":"SameWorkspaceControl","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans"}`,
+		`{"title":"SameWorkspaceControl","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":"hans",`+minimalCriteriaDodJSON+`}`,
 		wsB,
 	)
 	wB := httptest.NewRecorder()

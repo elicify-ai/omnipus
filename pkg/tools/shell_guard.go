@@ -10,8 +10,10 @@
 package tools
 
 import (
+	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
 )
 
 // applyDenyPatterns checks command against a merged list of deny patterns.
@@ -39,11 +41,35 @@ func applyDenyPatterns(command string, denyPatterns []*regexp.Regexp, customAllo
 	}
 
 	for _, p := range denyPatterns {
-		if p != nil && p.MatchString(lower) {
-			return "Command blocked by safety guard (dangerous pattern detected)"
+		if p == nil {
+			continue
+		}
+		if loc := p.FindStringIndex(lower); loc != nil {
+			return denyPatternMessage(command[loc[0]:loc[1]], p.String())
 		}
 	}
 	return ""
+}
+
+// denyPatternMessage names the token that tripped a deny pattern and the
+// pattern itself (UAT 2026-09-13 D-65). The bare "dangerous pattern detected"
+// this replaced gave an agent nothing to act on: a compound command carrying
+// `xxd` or `sips` was refused with no indication of which word was the
+// problem. The message is also honest about what this layer IS — a list of
+// phrasings, not a judgement about the act — so the agent (and an operator
+// reading the transcript) can see that `rm -rf dir` is refused as a phrasing
+// while the same deletion carried out file-by-file is judged by the path
+// guard and the kernel sandbox instead.
+func denyPatternMessage(matched, pattern string) string {
+	matched = strings.TrimSpace(matched)
+	if len(matched) > 80 {
+		matched = matched[:80] + "…"
+	}
+	return fmt.Sprintf(
+		"Command blocked by safety guard (dangerous pattern detected): the text %q matched the deny pattern %s. "+
+			"This layer is a list of blocked phrasings, not a judgement about the outcome — rephrase without that token; "+
+			"path containment is enforced separately by the workspace path guard and the kernel sandbox.",
+		matched, pattern)
 }
 
 // compileDenyPatterns compiles a slice of raw regex strings into []*regexp.Regexp.

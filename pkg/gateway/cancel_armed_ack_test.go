@@ -2,10 +2,9 @@
 //
 // CancelOutcome.Armed's own doc comment (pkg/agent/cancel.go) mandates:
 // "Callers surfacing Fired to a user MUST also check Armed before reporting
-// a cancel as a no-op." Before this fix, handleCancel (and its two siblings,
-// reapOrphanForegroundTurn and schedules.go's watchDeadline) read
-// outcome.Fired and never outcome.Armed. A Stop click arriving before its
-// turn registered latched correctly on the backend
+// a cancel as a no-op." Before this fix, handleCancel (and its sibling,
+// schedules.go's watchDeadline) read outcome.Fired and never outcome.Armed.
+// A Stop click arriving before its turn registered latched correctly on the backend
 // (pkg/agent/cancel_prearm.go) — the next turn to register under that
 // session IS canceled the instant it does — but the click itself produced
 // ZERO frames, visually identical to the pre-fix silent no-op this whole

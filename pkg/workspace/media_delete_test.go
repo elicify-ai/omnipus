@@ -93,7 +93,7 @@ func TestCascadeDelete_FinalUnlinkFailure_ReturnsNonEmptyDeletedWithError(t *tes
 	}))
 	require.NoError(t, err)
 
-	_, _, uploadErr := lib.Upload("note.txt", gen.UserUpload, strings.NewReader("bytes"))
+	_, _, uploadErr := lib.Upload("note.txt", gen.MediaLibraryEntrySourceUserUpload, strings.NewReader("bytes"))
 	require.NoError(t, uploadErr)
 
 	deleted, bytesFreed, cascadeErr := lib.CascadeDelete()

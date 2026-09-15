@@ -50,8 +50,12 @@ describe('POLICY_PRESETS', () => {
       expect(preset.defaultPolicy).toBe('ask')
     })
 
-    it('has zero overrides', () => {
-      expect(Object.keys(preset.overrides)).toHaveLength(0)
+    it('has exactly 1 override (goal_claim)', () => {
+      expect(Object.keys(preset.overrides)).toHaveLength(1)
+    })
+
+    it('sets goal_claim = allow (founder decision 2026-09-15)', () => {
+      expect(preset.overrides['goal_claim']).toBe('allow')
     })
 
     it('does not reference delete_file', () => {
@@ -124,6 +128,28 @@ describe('POLICY_PRESETS', () => {
     it('does not reference delete_file', () => {
       expect(Object.keys(preset.overrides)).not.toContain('delete_file')
     })
+  })
+})
+
+// ── goal_claim allow invariant (founder decision 2026-09-15) ──────────────────
+//
+// goal_claim is the tool-call an agent uses to claim a task/goal is finished.
+// The backend (pkg/coreagent/core.go's coreAgentSeed and
+// NewCustomAgentToolsCfg) seeds it as an explicit "allow" for every agent,
+// including the Worker — a completion claim is verified by the Judge before
+// a task is allowed to finish, so gating the call itself behind "ask" adds
+// no safety and only stalls completion. Every UI preset must match: an agent
+// created with any preset, including Cautious, must never sit waiting on a
+// human approval just to finish a task it already completed.
+describe('goal_claim always resolves to allow, across every preset', () => {
+  const TOOLS_WITH_GOAL_CLAIM: RegistryTool[] = [
+    makeTool('goal_claim'),
+    makeTool('set_goal'),
+    makeTool('read_file'),
+  ]
+
+  it.each(Object.keys(POLICY_PRESETS) as RolePreset[])('%s → goal_claim = allow', (role) => {
+    expect(applyRolePreset(role, TOOLS_WITH_GOAL_CLAIM).policies.goal_claim).toBe('allow')
   })
 })
 
@@ -294,6 +320,7 @@ describe('findOrphanedPresetOverrideKeys', () => {
       makeTool('browser_type'),
       makeTool('browser_evaluate'),
       makeTool('write_file'),
+      makeTool('goal_claim'),
     ]
     expect(findOrphanedPresetOverrideKeys(fullCatalog)).toEqual([])
   })

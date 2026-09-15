@@ -1,0 +1,2116 @@
+// Omnipus — ADR-068 D15.3 / spec 4.1.2, FR-064: the retrieval path and its two bounds.
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package knowledgefind
+
+import (
+	"context"
+	"fmt"
+	"reflect"
+	"sort"
+	"strings"
+	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/propindex"
+)
+
+// TextHit is one result from the text index — the plain-word half of the query.
+type TextHit struct {
+	Path string
+	// SourceHash is the hash the TEXT index holds for this note. FR-020c's
+	// comparison is against THIS, not against a manifest entry.
+	SourceHash string
+	Score      float64
+	// Kind is the document's OWN indexed kind — KindNote or KindAttachment —
+	// as the text index recorded it (pkg/knowledge/index.go's indexNote /
+	// indexAttachment write it into the "kind" field of every segment they
+	// add). It is carried through unchanged from the underlying index, never
+	// re-derived here: this package has no filesystem access of its own to
+	// re-classify a path by extension, and doing so would let this layer
+	// silently disagree with what the index actually indexed.
+	//
+	// A TextSearcher that predates this field (a test double, typically)
+	// leaves it blank; textOnlyResponse treats a blank Kind as KindNote for
+	// backward compatibility, since every text-only caller before attachment
+	// support was note-only.
+	Kind string
+	// Relaxed is KB-7a's per-hit disclosure carried through from the text
+	// index (knowledge.IndexHit.FallbackMode): true when the strict "every
+	// word present somewhere in the file" tier found nothing and this hit
+	// came from the looser OR-ranked, typo-tolerant fallback instead — so it
+	// may satisfy only SOME of the query's words, or a near spelling of one.
+	// findRecords turns it into a named problem (text_search_relaxed) so the
+	// answer can never read as an exact match (UAT 2026-09-13, D-07 / D-01).
+	Relaxed bool
+}
+
+// TextSearcher is the bleve half. It is an interface rather than a concrete
+// index so this package does not import pkg/knowledge, and so a test can drive
+// the whole pipeline without a real index on disk.
+type TextSearcher interface {
+	// Search returns the ranked hits for a plain-word query, within the caller's
+	// already-resolved scope.
+	Search(ctx context.Context, words string, limit int) ([]TextHit, error)
+	// NearestTerms reports the vocabulary the index actually holds near a term
+	// that matched nothing (FR-114). It is what a zero-hit answer reports
+	// INSTEAD of broadening the query.
+	NearestTerms(ctx context.Context, words string, limit int) ([]generated.VaultTermCount, error)
+	// SourceHash returns the hash the TEXT index holds for one note.
+	//
+	// It exists because FR-020c's freshness comparison is PER RETURNED RECORD
+	// and applies to every answer — not only to answers that used `words`. A
+	// purely typed query returns rows whose two indexes can disagree just as
+	// easily, and checking only the word-search path would leave the commonest
+	// query shape unchecked.
+	//
+	// ok=false means the text index holds no document for that path, which is
+	// UNKNOWN freshness and is flagged — never assumed fresh.
+	SourceHash(ctx context.Context, path string) (hash string, ok bool, err error)
+
+	// Populated reports whether this text index has completed at least one
+	// build pass over its collection, INDEPENDENT of how many documents that
+	// pass found. A genuinely empty vault (0 notes on disk) whose index has
+	// finished building reports populated=true, and a query that then finds
+	// zero hits is an honest zero. A vault that has never been indexed at
+	// all — the index opened, never built — reports populated=false, and a
+	// query finding zero hits there has not searched anything.
+	//
+	// This exists to close the exact hole that produced F-9
+	// (docs/internal/uat/uat-findings-knowledge-tools-2026-09-01-run2.md):
+	// an unbuilt bleve index answers d.Text.Search with zero hits, which is
+	// byte-for-byte indistinguishable from a real miss over a searched
+	// corpus — so findRecords cannot tell "0 because nothing matched" from
+	// "0 because nothing was ever indexed" from Search's return alone. This
+	// is the population accessor a caller needs to tell them apart.
+	//
+	// err != nil means the build state itself could not be read — folded
+	// into "not populated" by the caller rather than treated as a third
+	// state, because a zero-hit answer this layer cannot even confirm was
+	// searched is no more trustworthy than one it positively knows was not.
+	Populated(ctx context.Context) (populated bool, err error)
+}
+
+// TextIndexFreshness is the richer answer TextFreshnessReporter gives beyond
+// Populated's single boolean: not only WHETHER the index reflects the whole
+// collection, but — when it does not — whether that is because it was NEVER
+// BUILT or because it has DRIFTED since its last build. Those are the two cases
+// Populated=false folds together, and they need different words to the caller:
+// "index it" versus "re-index it".
+type TextIndexFreshness struct {
+	// Built is true when a build has completed at least once. False is the
+	// never-indexed state.
+	Built bool
+	// Fresh is true when the index reflects the collection with nothing
+	// pending. A genuinely empty, fully-swept vault is Fresh.
+	Fresh bool
+	// ScannedFiles is what is on disk now; IndexedFiles is what the index
+	// reflects; PendingFiles is how many on-disk files the index has not yet
+	// caught up with. These make a stale-index message concrete ("reflects 1 of
+	// 68 files") rather than a bare "stale".
+	ScannedFiles int
+	IndexedFiles int
+	PendingFiles int
+	// ScannedNotes / IndexedNotes are ScannedFiles / IndexedFiles restricted
+	// to markdown notes — the files whose text the index actually holds. A
+	// caller that says "notes" to a reader must use these, not the file
+	// counts (UAT 2026-09-13, D-129).
+	ScannedNotes int
+	IndexedNotes int
+	// NewFiles / ChangedFiles / RemovedFiles break PendingFiles down, and the
+	// split is what lets the A2(d) coverage warning fire ONLY on genuine
+	// under-reporting (Finding 2):
+	//
+	//   - NewFiles are on disk but not in the index at all. These, and ONLY
+	//     these, can make a `words` result under-report — a matching file that
+	//     is not indexed cannot appear. This is the count the warning keys on.
+	//   - ChangedFiles are already in the index; a stat moved (an mtime touch
+	//     from a git checkout, rsync or backup restore reads as Changed even
+	//     when the bytes are identical). They still return their hits, so they
+	//     do not under-report — and must not downgrade an otherwise-complete
+	//     answer.
+	//   - RemovedFiles are in the index but gone from disk. They can only
+	//     OVER-report, never under-report, so they do not trigger the warning
+	//     either.
+	NewFiles     int
+	ChangedFiles int
+	RemovedFiles int
+}
+
+// TextTermCounter is the OPTIONAL per-word breakdown a TextSearcher can
+// offer so a relaxed answer is declared concretely (UAT 2026-09-13, D-07).
+//
+// When the text index had to fall back from "every word present" to
+// "any word, or a near spelling" (TextHit.Relaxed), the honest disclosure
+// is not merely "loosened" but WHICH words were found and which were not:
+// `Collision zzqqxx` → "Collision: 1, zzqqxx: 0". A searcher that cannot
+// count per word still gets the relaxation declared, without the numbers.
+type TextTermCounter interface {
+	// TermDocumentCounts reports, in query order, how many indexed files
+	// contain each word of `words` on its own.
+	TermDocumentCounts(ctx context.Context, words string) ([]generated.VaultTermCount, error)
+}
+
+// TextFreshnessReporter is an OPTIONAL capability a TextSearcher may implement
+// to let a zero-hit refusal — and, in time, any answer — distinguish a STALE
+// index from one that was NEVER BUILT, and to say by how much it is behind.
+//
+// IT IS A SEPARATE INTERFACE RATHER THAN A METHOD ON TextSearcher for the same
+// reason ViewFormulaLoader is separate from ViewLoader: widening the required
+// interface would silently un-satisfy every existing implementation (the
+// production adapter AND every test stub) at once. A searcher that does not
+// implement it degrades to Populated's boolean — the pre-existing behaviour —
+// with no loss of correctness, only of specificity in the message.
+//
+// This is A2(d)'s "index-health / freshness" signal made reachable on the
+// knowledge_find path: a caller running a zero-hit `words` query over a vault
+// whose index is behind is told the index is stale and by how much, instead of
+// being told it was never built (wrong) or nothing matched (also wrong).
+type TextFreshnessReporter interface {
+	IndexFreshness(ctx context.Context) (TextIndexFreshness, error)
+}
+
+// TextDeepSearcher is an OPTIONAL capability a TextSearcher may implement to
+// answer fetchWordHits' own re-ask at propindex.BoundSurvivors (F3) honestly.
+//
+// Search's contract is "returns at most limit, and is silent about whether the
+// corpus held more" (see TextSearcher.Search's own doc comment). fetchWordHits
+// used to turn that silence into a claim of exhaustion by comparing
+// len(hits) to the limit it asked for — but that comparison is only sound if
+// the searcher's OWN implementation cannot itself run out of budget before
+// the corpus does. The real production adapter cannot make that promise:
+// knowledge.Index.Search is built on SearchFiltered, which stops at its own
+// internal fetch ceiling (indexSearchMaxFetch, far below
+// propindex.BoundSurvivors) and DISCARDS the truncated flag that would say
+// so (see Index.Search's own doc comment for why that discard is
+// deliberate at ITS layer). So "fewer than BoundSurvivors hits came back"
+// is consistent with BOTH "the corpus is exhausted" and "the searcher's own
+// ceiling stopped it first" — Search alone cannot tell fetchWordHits which
+// happened, and len(hits) < BoundSurvivors was true in both cases, making
+// the old inference unconditionally true whenever a real corpus exceeded
+// that ceiling.
+//
+// A TextSearcher that CAN prove the difference implements this, and
+// fetchWordHits asks it directly instead of inferring. One that cannot —
+// including every existing test double before this fix — is used through
+// Search alone, and fetchWordHits then treats deep exhaustion as UNPROVEN
+// (never true) rather than guessing, the same honest-degradation shape
+// TextFreshnessReporter's own absence already gets elsewhere in this file.
+type TextDeepSearcher interface {
+	// SearchDeep is Search, plus the one bit Search's contract cannot carry:
+	// exhausted is true only when the searcher can PROVE no further match
+	// exists past what hits already holds — never inferred from a length
+	// comparison a hidden internal ceiling could make true by coincidence.
+	SearchDeep(ctx context.Context, words string, limit int) (hits []TextHit, exhausted bool, err error)
+}
+
+// ViewLoader resolves a saved view by name (FR-025c). Stage 2's schema owner
+// owns the loader; this package consumes it.
+type ViewLoader interface {
+	// View returns the saved view's request fragment. ok=false means the name is
+	// not defined, and the caller refuses listing Names().
+	View(name string) (generated.VaultFindRequest, bool)
+	// Names lists the saved views in scope, for that refusal.
+	Names() []string
+}
+
+// ViewFormulaLoader is the OPTIONAL half of ViewLoader: the saved view's
+// `formulas:` map (FR-141), which the base interface does not carry because a
+// view's request fragment and its computed properties are different things.
+//
+// IT IS A SEPARATE INTERFACE RATHER THAN A METHOD ON ViewLoader so that adding
+// formulas cannot silently un-satisfy an existing loader — records.ViewFindLoader
+// implements ViewLoader today and would stop compiling against a widened one at
+// a wiring site that does not exist yet, which is a landmine rather than a
+// compile error anybody would see.
+//
+// A loader that does not implement it is a vault with no formulas, which is the
+// correct reading of "this view declares none" and is exactly what the
+// formula-namespace refusal then says.
+type ViewFormulaLoader interface {
+	// Formulas returns one view's formula sources, keyed by name, with the
+	// expression as SOURCE TEXT (FR-141). ok=false means the view is not
+	// defined; an empty map means it defines no formulas.
+	Formulas(view string) (map[string]string, bool)
+}
+
+// Deps is what knowledge_find needs from its host. Every field is a real dependency
+// with a real consumer; there is no field here that exists only to be nil.
+type Deps struct {
+	// Schemas is the declared record types in the caller's scope.
+	Schemas *records.SchemaSet
+	// Store is the properties index. It may be nil ONLY on a build where the
+	// index cannot be compiled — and on such a build the platform gate refuses
+	// before anything reads it.
+	Store propindex.Store
+	// PathPrefix is FR-060's workspace scope, ALREADY RESOLVED by the caller
+	// from the calling agent's workspace. It is never caller text: the model
+	// does not get to choose what it can see.
+	PathPrefix string
+	// Text is the text index. REQUIRED, not optional, and the reason is
+	// FR-020c: freshness is compared per returned record against the text
+	// index's own hash, so without it no answer can honour the comparison.
+	//
+	// A nil Text used to mean "skip the check", which is the quiet degradation
+	// this package refuses everywhere else — an answer that silently stopped
+	// verifying freshness looks exactly like one that verified it and found
+	// nothing wrong.
+	Text TextSearcher
+	// Views resolves saved views. Required when `view` is given.
+	Views ViewLoader
+	// Resolve maps a wikilink to a record identity (section 8 R-8). Without it
+	// relation comparisons report "unresolved" rather than silently comparing
+	// link text, which is the honest degradation.
+	Resolve records.RelationResolver
+	// ResolveNear turns `near`'s note reference (a bare path/name or a
+	// [[wikilink]]) into the anchor note's own collection-relative PATH, so the
+	// anchor counts as hop 0 EVEN WHEN IT IS AN ORDINARY NOTE with no record
+	// identity — the case Resolve cannot serve, because Resolve returns !ok for
+	// a note that is not a record (relation_resolver.go's Resolve collapses
+	// "exists but has no identity" onto "did not resolve"). near/hops still
+	// walks only the TYPED relation graph for hops >= 1; ResolveNear is purely
+	// how the origin note itself re-enters the answer at hop 0.
+	//
+	// Optional: when nil, near falls back to record-graph membership only — the
+	// anchor is hop 0 only if it is itself a record — which is the pre-existing
+	// behaviour every test that does not wire this relies on.
+	ResolveNear func(near string) (path string, ok bool)
+	// Epoch is the properties index's generation counter, which a cursor is
+	// issued against.
+	Epoch int64
+	// StoreUnavailableReason, when Store is nil on a build that HAS a
+	// properties index, says why the caller could not open one — so the
+	// refusal names the actual cause instead of prescribing a remedy that
+	// may not apply (UAT 2026-09-13, D-02: "run knowledge_describe
+	// check_integrity" never re-opened anything). Empty when Store is set,
+	// or on a build with no properties index at all.
+	StoreUnavailableReason string
+	// StoreCoverageCaveat, when Store is non-nil but the writer that last
+	// established its coverage could not evaluate every file, names that fact
+	// — the store answers, every readable file is indexed, but the collection
+	// was not fully evaluated, and the named files cannot appear in any
+	// answer (Codex review 2026-09-14, finding 6). Find records it as a
+	// problem on EVERY evaluation drawn from such a store, so the verdict is
+	// complete:false with the reason, instead of a confident complete:true
+	// over a silently narrower corpus. Empty when coverage was established
+	// over the whole collection (the ordinary case).
+	StoreCoverageCaveat string
+	// RenderRows lifts the two bounds that exist for a LANGUAGE-MODEL reader,
+	// for an IN-PROCESS RENDERER that is not one. Zero — the default — changes
+	// nothing, and no tool path sets it.
+	//
+	// MaxLimit (200) and ResponseBudgetBytes (4 kB) are both sized for what a
+	// model should be handed in one turn. The gateway's view-result endpoint
+	// is not a turn: it fills an HTTP response the SPA draws a table from, and
+	// under those two bounds it could only collect rows by walking the OFFSET
+	// cursor — where every page is a fresh Find() that re-runs the entire
+	// evaluation (filter, sort, aggregate over the whole candidate set) and
+	// discards everything before the offset. Ten pages cost ten complete
+	// evaluations of one query, and the byte budget still trimmed each page,
+	// so a few hundred records could not be collected at all.
+	//
+	// Set to the number of rows the caller can actually take, and this
+	// evaluation caps the page there instead of at MaxLimit and skips the byte
+	// budget entirely. It is NOT a way to ask for unbounded rows: the caller
+	// states its own bound and is answered within it. Nothing else changes —
+	// the same query, the same totals over the same full evaluated set, the
+	// same cursor when more rows exist than were asked for.
+	RenderRows int
+	// PlainNotesOnly narrows a kind=note query to notes that declare NO
+	// record type — an in-process switch for a caller that partitions its
+	// answer into a "records" group and a "notes" group and must not file a
+	// record under "notes" (UAT 2026-09-13, D-130). It is not on the wire:
+	// the tool's kind=note keeps its documented meaning ("every markdown
+	// note, records included"; kind=record is its strict subset), and no
+	// tool path sets it.
+	//
+	// Why it exists: the gateway's vault search ran one Find per record type
+	// (capped at the caller's limit) and one kind=note Find, then dropped
+	// from the notes group only the paths the RECORDS group had returned.
+	// Every record past a type's limit was therefore absent from the records
+	// group, present in the note query, and shown as a NOTE — fifteen of
+	// them for one query at the limit the SPA always uses. Excluding by
+	// "was it returned as a record" can never be right under a limit;
+	// excluding by "does it declare a type" is decided per candidate at the
+	// store, before any limit applies.
+	PlainNotesOnly bool
+	// CollectionName is the display name of the knowledge base this
+	// evaluation answers for (UAT 2026-09-13 D-46, #698). Find stamps it on
+	// the response and on every row as provenance, and Render prints it
+	// once in the header. Empty leaves both absent — an in-process caller
+	// that named no collection is not lied to with an invented one.
+	CollectionName string
+	// Now is the instant `now()` and `today()` are evaluated at, snapshotted
+	// ONCE for the whole response (FR-146). The zero value means "read the
+	// clock when the query starts", which is the same snapshot taken one layer
+	// down — it is a default, never a per-candidate clock read.
+	Now time.Time
+}
+
+// Find answers one query.
+//
+// IT RETURNS BOTH A RESPONSE AND AN ERROR ON A REFUSAL, and both halves are
+// load-bearing — see the note on RefusalError. The response is what the model reads
+// and can act on; the error is what stops a caller mistaking a refusal for an
+// answer. What it never returns is a successful empty result over a question it
+// could not answer.
+func Find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generated.VaultFindResponse, error) {
+	resp, err := find(ctx, d, req)
+	stampCollection(&resp, d.CollectionName)
+	return resp, err
+}
+
+// stampCollection writes D-46's provenance onto a response and each of its
+// rows — on EVERY response shape (rows, zero-hit, refusal, explain), because
+// a reader with two knowledge bases needs to know which one refused just as
+// much as which one answered.
+func stampCollection(resp *generated.VaultFindResponse, name string) {
+	if name == "" {
+		return
+	}
+	n := name
+	resp.Collection = &n
+	for i := range resp.Rows {
+		rn := name
+		resp.Rows[i].Collection = &rn
+	}
+}
+
+func find(ctx context.Context, d Deps, req generated.VaultFindRequest) (generated.VaultFindResponse, error) {
+	set := d.Schemas
+	if set == nil {
+		set = records.NewSchemaSet()
+	}
+
+	if d.Text == nil {
+		ref := refuse(problem(generated.RecordProblemCodeIndexUnavailable,
+			"no text index is wired into this knowledge base, so no answer can be checked for freshness",
+			"re-open the knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
+		return refusalResponse(req, rawEcho(req), ref), ref
+	}
+
+	// BEFORE THE VIEW IS EXPANDED, not after. applyView gates on
+	// `req.Type == nil`, so a present-but-blank `type` is non-nil, silently
+	// discards the view's own `type:` and then resolves to no schema — running
+	// the view's filter against EVERY note in the vault and presenting it as
+	// the view's answer, marked complete.
+	// A CURSOR CONTINUES THE QUERY IT WAS ISSUED FOR (UAT 2026-09-13, D-08).
+	// Every cursor this package issues carries the request it belongs to
+	// (encodeCursor); a follow-up that sends the cursor ALONE — which is
+	// exactly what the NEXT block tells the caller to do — is completed from
+	// it, and a follow-up that sends the cursor with a DIFFERENT query is
+	// refused by name rather than answered for one of the two.
+	if r := restoreCursorQuery(&req); r != nil {
+		return refusalResponse(req, rawEcho(req), r), r
+	}
+	// The request as received, before any saved view is merged into it —
+	// what a cursor must carry so the continuation re-applies the view by
+	// name exactly as the first page did.
+	wire := req
+	wire.Cursor = nil
+
+	if r := checkBlankNarrowing(req); r != nil {
+		return refusalResponse(req, rawEcho(req), r), r
+	}
+
+	if r := applyView(&req, d.Views); r != nil {
+		return refusalResponse(req, rawEcho(req), r), r
+	}
+
+	q, r := parse(req, set, viewFormulas(d.Views, req.View), d.RenderRows)
+	if r != nil {
+		// The echo is the RAW request here, not the executable one: parse is the
+		// step that failed, so there is no "as executed" form to report. A
+		// caller refused for an unknown property still has to be able to see
+		// that the tool received the argument they think they sent.
+		return refusalResponse(req, rawEcho(req), r), r
+	}
+	// D5.1 / R-8: grouping by a relation compares by target identity, not by
+	// the wikilink's own text, same as the comparator. d.Resolve may be nil —
+	// project.go degrades rather than panicking.
+	q.resolve = d.Resolve
+	q.wire = wire
+	echo := q.echo()
+
+	// THE PLATFORM GATE, BEFORE ANY RETRIEVAL.
+	//
+	// records.RequirePropertyIndex's error is returned UNCHANGED (wrapped with
+	// %w so errors.Is still finds it and the platform name survives). Returning
+	// a zero value here instead would re-open the exact hole FR-020h exists to
+	// close: the operator is told there is nothing to find, when the truth is
+	// that the question cannot be answered on this platform.
+	for _, capability := range q.capabilities() {
+		if err := records.RequirePropertyIndex(capability); err != nil {
+			ref := refuse(problem(generated.RecordProblemCodeIndexUnavailable, err.Error(),
+				"plain-word search and knowledge_read still work on this build"), err)
+			return refusalResponse(req, echo, ref), fmt.Errorf("knowledge_find: %w", err)
+		}
+	}
+
+	if q.explain {
+		return explainResponse(q, echo), nil
+	}
+
+	if q.cursor != "" {
+		if r := checkCursor(q.cursor, d.Epoch); r != nil {
+			return refusalResponse(req, echo, r), r
+		}
+	}
+
+	if q.kind == KindTask {
+		return findTasks(ctx, d, q, echo)
+	}
+	return findRecords(ctx, d, q, echo)
+}
+
+// checkBlankNarrowing refuses a present-but-BLANK `type` or `kind`.
+//
+// The contract already rules on this for a saved view's own `type:` — "An empty
+// string is not 'untyped' — it is a typo for a type name, and treating it as a
+// deliberate absence would turn a misspelling into a vault-wide query" — and
+// the same sentence is true of the argument. Two code paths disagreed about it:
+// applyView treated blank as PRESENT (so the view's narrowing was discarded)
+// and resolveType treated it as ABSENT (so nothing narrowed at all). Refusing
+// is what makes the two agree, and it is the reading the contract already took.
+func checkBlankNarrowing(req generated.VaultFindRequest) *RefusalError {
+	blank := func(argument, value, remedy string) *RefusalError {
+		p := problem(generated.RecordProblemCodeUnsupportedParameter,
+			fmt.Sprintf("%s was given as %q, which is not a name; a blank %s is a typo for one, "+
+				"never a deliberate absence", argument, value, argument),
+			remedy)
+		return refuse(p, nil)
+	}
+	if req.Type != nil && strings.TrimSpace(*req.Type) == "" {
+		return blank("type", *req.Type,
+			"omit type entirely to search every note, or name a declared record type — "+
+				"call knowledge_describe to see them")
+	}
+	if req.Kind != nil && strings.TrimSpace(string(*req.Kind)) == "" {
+		return blank("kind", string(*req.Kind),
+			"omit kind entirely to use the default, or name one of: "+
+				strings.Join([]string{KindNote, KindRecord, KindTask, KindAttachment}, ", "))
+	}
+	return nil
+}
+
+// ViewRefusalReporter is the OPTIONAL half of ViewLoader that explains an
+// ok=false: the view EXISTS and cannot be carried through this request shape.
+//
+// ViewLoader.View is (VaultFindRequest, bool) with no field for a reason, so a
+// view stored `disabled`, one grouping in descending order and one declaring
+// `formulas` all arrive here indistinguishable from a name nobody ever defined
+// — and applyView then told the caller "no saved view named X; defined: <every
+// other view>", which is flatly false about a view knowledge_configure wrote
+// successfully and knowledge_describe still lists.
+//
+// It is a separate interface for the same reason ViewFormulaLoader is: widening
+// ViewLoader would silently un-satisfy an existing implementation at a wiring
+// site nobody would see. records.ViewFindLoader already carries exactly this
+// method (ServeRefusal), whose own header says "knowledge_describe and
+// knowledge_configure hold a *ViewFindLoader and can ask" — this is find
+// asking.
+type ViewRefusalReporter interface {
+	ServeRefusal(name string) (records.ViewServeRefusal, bool)
+}
+
+// ViewAmbiguousLabelReporter is the OPTIONAL third half of ViewLoader,
+// beside ViewRefusalReporter: it distinguishes "no view answers to this name
+// at all" from "more than one view answers to it, and this loader will not
+// guess which". UAT 2026-09-13 Q-08 is the failure this pair fixes: the
+// Library shows a saved view by its LABEL ("All Projects"), never by the
+// slug it resolves `view` by, and a caller who names a view that way must
+// either be answered or be told, by name, which views share that label —
+// never handed whichever one happened to load first.
+type ViewAmbiguousLabelReporter interface {
+	AmbiguousLabel(name string) (records.ViewAmbiguousLabel, bool)
+}
+
+// ViewCatalogReporter is the OPTIONAL fourth half: it lists every servable
+// view's LABEL alongside its SLUG, so the "no saved view named" refusal can
+// show both spellings a caller might reasonably have used — the slug this
+// argument has always accepted, and the label knowledge_describe and the
+// Library both render for the same view.
+type ViewCatalogReporter interface {
+	Catalog() []records.ViewLabelCandidate
+}
+
+// applyView expands a saved view UNDER the caller's own arguments, so `filter`
+// refines the view rather than replacing it (spec 4.1.2: "a saved view, applied
+// first; filter refines it").
+func applyView(req *generated.VaultFindRequest, loader ViewLoader) *RefusalError {
+	if req.View == nil || *req.View == "" {
+		return nil
+	}
+	name := *req.View
+	if loader == nil {
+		return refuse(problem(generated.RecordProblemCodeUnknownView,
+			fmt.Sprintf("this knowledge base has no saved views, so %q cannot be resolved", name),
+			"drop the view and write the filter directly, or define the view with knowledge_configure"), nil)
+	}
+	view, ok := loader.View(name)
+	if !ok {
+		// EXISTS-BUT-UNSERVABLE IS NOT "DOES NOT EXIST". Asking first is what
+		// stops this refusal making a false statement about a view the operator
+		// wrote, saw accepted, and can still read back through
+		// knowledge_describe.
+		if reporter, isReporter := loader.(ViewRefusalReporter); isReporter {
+			if refusal, unservable := reporter.ServeRefusal(name); unservable {
+				p := problem(generated.RecordProblemCodeUnsupportedParameter,
+					fmt.Sprintf("the saved view %q exists but cannot be run through knowledge_find: %s (%s)",
+						name, refusal.Reason, refusal.Code),
+					refusal.Remedy)
+				return refuse(p, nil)
+			}
+		}
+		// AMBIGUOUS LABEL: more than one view carries the exact label `name`
+		// asks for. Refusing by NAME ALONE, the way an unknown view is below,
+		// would risk silently serving whichever one happened to load first
+		// the next time this ran — the one outcome ViewSet.Resolve's own doc
+		// comment refuses to permit. Every candidate is named by BOTH its
+		// label and its slug so the caller can repeat the request with the
+		// slug — which is always unambiguous — and get an answer.
+		if reporter, isReporter := loader.(ViewAmbiguousLabelReporter); isReporter {
+			if amb, ambiguous := reporter.AmbiguousLabel(name); ambiguous {
+				pairs := make([]string, 0, len(amb.Candidates))
+				for _, c := range amb.Candidates {
+					pairs = append(pairs, fmt.Sprintf("%s (%s)", c.Label, c.Slug))
+				}
+				p := problem(generated.RecordProblemCodeUnsupportedParameter,
+					fmt.Sprintf("%q names more than one saved view: %s", name, strings.Join(pairs, ", ")),
+					"call the view by its slug — shown in parentheses above — instead of its label, which is not unique")
+				return refuse(p, nil)
+			}
+		}
+		names := loader.Names()
+		sort.Strings(names)
+		p := problem(generated.RecordProblemCodeUnknownView,
+			fmt.Sprintf("no saved view named %q", name),
+			"call knowledge_describe include=views to see the saved views in scope")
+		if len(names) > 0 {
+			// The listed slugs are always the callable, unambiguous answer
+			// (Permitted), but the READABLE half of the message names each
+			// view's LABEL alongside its slug when the loader can say what it
+			// is — UAT 2026-09-13 Q-08: an agent told "the All Projects view"
+			// could not match that word against a bare slug list at all.
+			defined := names
+			if catalog, isCatalog := loader.(ViewCatalogReporter); isCatalog {
+				if entries := catalog.Catalog(); len(entries) > 0 {
+					labeled := make([]string, 0, len(entries))
+					for _, c := range entries {
+						if c.Label != "" && c.Label != c.Slug {
+							labeled = append(labeled, fmt.Sprintf("%s (%s)", c.Label, c.Slug))
+						} else {
+							labeled = append(labeled, c.Slug)
+						}
+					}
+					defined = labeled
+				}
+			}
+			p.Reason += "; defined: " + strings.Join(defined, ", ")
+			p.Permitted = &names
+		}
+		return refuse(p, nil)
+	}
+
+	// The caller's own arguments WIN over the view's. A view that could
+	// overwrite an explicit argument would silently answer a different question
+	// from the one asked.
+	if req.Type == nil {
+		req.Type = view.Type
+	}
+	if req.Kind == nil {
+		req.Kind = view.Kind
+	}
+	if req.Sort == nil {
+		req.Sort = view.Sort
+	}
+	if req.Select == nil {
+		req.Select = view.Select
+	}
+	if req.GroupBy == nil {
+		req.GroupBy = view.GroupBy
+	}
+	if req.Join == nil {
+		req.Join = view.Join
+	}
+	if req.Aggregate == nil {
+		req.Aggregate = view.Aggregate
+	}
+	// THE VIEW'S OWN PAGE SIZE. It was computed by the bridge
+	// (translateViewMechanical copies def.Limit into the request), rendered by
+	// knowledge_describe and documented — and then dropped here, so a `limit: 5`
+	// view returned fifty rows while three surfaces stated five.
+	if req.Limit == nil {
+		req.Limit = view.Limit
+	}
+	switch {
+	case view.Filter == nil:
+		// nothing to compose
+	case req.Filter == nil:
+		req.Filter = view.Filter
+	default:
+		// BOTH are present: the answer is the INTERSECTION. Replacing the view's
+		// filter with the caller's would widen the result set beyond what the
+		// view defines, which is the opposite of "refines".
+		req.Filter = &generated.VaultFilterNode{
+			All: &[]generated.VaultFilterNode{*view.Filter, *req.Filter},
+		}
+	}
+	return nil
+}
+
+// checkCursor refuses a cursor issued against a different index generation.
+// FR-020c: an unhonourable cursor is an ERROR, never a silent restart — a silent
+// restart returns page one while the caller believes it is reading page four.
+func checkCursor(cursor string, epoch int64) *RefusalError {
+	off, issued, _, ok := decodeCursor(cursor)
+	if !ok {
+		return refuse(problem(generated.RecordProblemCodeStaleCursor,
+			fmt.Sprintf("the cursor %q was not issued by this system", cursor),
+			"re-run the query without a cursor"), nil)
+	}
+	if issued != epoch {
+		return refuse(problem(generated.RecordProblemCodeStaleCursor,
+			fmt.Sprintf("that cursor was issued against index_epoch %d; the index is now at %d",
+				issued, epoch),
+			"re-run the query — the corpus changed underneath the page boundary"), nil)
+	}
+	_ = off
+	return nil
+}
+
+// restoreCursorQuery completes a cursor-bearing request from the query sealed
+// in the cursor, and refuses a cursor sent alongside a different query (D-08).
+//
+// "Different" is decided SEMANTICALLY, over the decoded structs, by
+// sameRememberedQuery: every field the follow-up SENT (besides the cursor)
+// must ask for the same thing the cursor remembers, under the engine's own
+// equivalences. A byte-level JSON comparison was the earlier rule, and it
+// refused a caller who re-sent the identical query with a different but
+// equivalent spelling — `direction: descending` where page one said `desc`
+// (both valid, both executed identically since D-10), or a default stated
+// explicitly against the same default left implicit (`kind: note`,
+// `limit: 50`) — and it refused the follow-up that re-sent only part of the
+// query (`cursor` + `limit` after `words` + `limit`) even though the cursor
+// itself already carries the whole of it. A cursor with no carried query (an
+// old two-part token, or one not issued by this system) is left for
+// checkCursor to judge.
+func restoreCursorQuery(req *generated.VaultFindRequest) *RefusalError {
+	if req.Cursor == nil || *req.Cursor == "" {
+		return nil
+	}
+	_, _, carried, ok := decodeCursor(*req.Cursor)
+	if !ok || carried == nil {
+		return nil
+	}
+	cursor := *req.Cursor
+	sent := *req
+	sent.Cursor = nil
+	if !sameRememberedQuery(sent, *carried) {
+		return refuse(problem(generated.RecordProblemCodeStaleCursor,
+			"that cursor was issued for a different query ("+rawEcho(*carried)+"), not for the one sent with it",
+			"send the cursor on its own to continue the original query, or drop the cursor to run the new one from its first page"), nil)
+	}
+	// The continuation runs the REMEMBERED query, so the next cursor this page
+	// issues seals the same one the first page did — page three is issued
+	// against what page one asked, not against how page two happened to spell
+	// it. Fields the caller did not send are inherited; fields the caller did
+	// send were just proven to ask for the same thing.
+	*req = *carried
+	req.Cursor = &cursor
+	return nil
+}
+
+// sameRememberedQuery reports whether the follow-up request `sent` (cursor
+// already stripped) asks for the same query the cursor remembers.
+//
+// Only fields PRESENT in the follow-up can disagree: the cursor carries the
+// whole query (encodeCursor), so a field the follow-up omits is simply
+// inherited from the remembered one — the cursor-only form is the empty
+// extreme of that, and needs no case of its own. Each present field is
+// compared under the same equivalence parse() executes the request under
+// (request.go): an omitted kind/limit/detail/explain is that field's default,
+// `desc` and `descending` are one direction, and words/view/near are compared
+// as parse trims them. A present field that asks for anything else — another
+// page size, another narrowing, a spelling no rule accepts — is a genuinely
+// different query, and the caller is refused for it rather than answered for
+// either (D-08).
+//
+// A direction spelling outside the four the engine accepts is treated as a
+// disagreement on purpose: this function's acceptance path replaces the
+// request with the remembered one, so an unusable spelling must not ride
+// through it. Dropping the cursor and re-sending reaches parse, which refuses
+// the spelling by name.
+func sameRememberedQuery(sent, remembered generated.VaultFindRequest) bool {
+	if !sameExactString(sent.Type, remembered.Type) ||
+		!sameExactString(sent.Collection, remembered.Collection) {
+		return false
+	}
+	if !sameKindField(sent.Kind, remembered.Kind) ||
+		!sameDetailField(sent.Detail, remembered.Detail) {
+		return false
+	}
+	if !sameTrimmedString(sent.Words, remembered.Words) ||
+		!sameTrimmedString(sent.View, remembered.View) ||
+		!sameTrimmedString(sent.Near, remembered.Near) {
+		return false
+	}
+	if !sameHops(sent.Hops, remembered.Hops, remembered.Near) {
+		return false
+	}
+	if !sameExplainField(sent.Explain, remembered.Explain) ||
+		!sameLimitField(sent.Limit, remembered.Limit) {
+		return false
+	}
+	if (sent.Filter == nil) != (remembered.Filter == nil) {
+		return false
+	}
+	if sent.Filter != nil && !reflect.DeepEqual(*sent.Filter, *remembered.Filter) {
+		return false
+	}
+	if !sameSortKeys(sent.Sort, remembered.Sort) || !sameGroupKeys(sent.GroupBy, remembered.GroupBy) {
+		return false
+	}
+	if !sameStringList(sent.Select, remembered.Select) || !sameStringList(sent.Join, remembered.Join) {
+		return false
+	}
+	return sameAggregates(sent.Aggregate, remembered.Aggregate)
+}
+
+// sameExactString compares one field the engine reads verbatim: nil on the
+// sent side means the field was not sent, so the remembered value stands.
+func sameExactString(sent, remembered *string) bool {
+	if sent == nil {
+		return true
+	}
+	return remembered != nil && *sent == *remembered
+}
+
+// sameTrimmedString compares a field the engine trims before executing
+// (request.go's parse), so whitespace alone is not a different query.
+func sameTrimmedString(sent, remembered *string) bool {
+	if sent == nil {
+		return true
+	}
+	want := ""
+	if remembered != nil {
+		want = *remembered
+	}
+	return strings.TrimSpace(*sent) == strings.TrimSpace(want)
+}
+
+// sameKindField compares the row kind. An omitted kind is the remembered one;
+// a stated kind must fold to the same kind parse executes — and an omitted
+// kind IS note, so stating `note` explicitly continues the same query.
+func sameKindField(sent, remembered *generated.VaultFindRequestKind) bool {
+	if sent == nil {
+		return true
+	}
+	return canonicalKind(sent) == canonicalKind(remembered)
+}
+
+// canonicalKind folds the kind field to what parse executes: omitted means
+// note.
+func canonicalKind(k *generated.VaultFindRequestKind) string {
+	if k == nil {
+		return KindNote
+	}
+	return string(*k)
+}
+
+// sameDetailField compares the rendering density; omitted means standard.
+func sameDetailField(sent, remembered *generated.VaultFindRequestDetail) bool {
+	if sent == nil {
+		return true
+	}
+	if remembered == nil {
+		return string(*sent) == "standard"
+	}
+	return string(*sent) == string(*remembered)
+}
+
+// sameExplainField compares the plan-only flag; omitted means false.
+func sameExplainField(sent, remembered *bool) bool {
+	if sent == nil {
+		return true
+	}
+	return *sent == (remembered != nil && *remembered)
+}
+
+// sameLimitField compares the page size. An omitted limit is the remembered
+// page; a stated limit must equal the remembered one folded to its default —
+// so stating the default page size (50) explicitly continues a query that
+// never stated one.
+func sameLimitField(sent, remembered *int) bool {
+	if sent == nil {
+		return true
+	}
+	return canonicalLimit(sent) == canonicalLimit(remembered)
+}
+
+// canonicalLimit folds the page size: omitted means the default page.
+func canonicalLimit(l *int) int {
+	if l == nil {
+		return DefaultLimit
+	}
+	return *l
+}
+
+// sameHops compares the link-step count. An omitted hops is the remembered
+// hops, and a remembered-omitted hops is parse's own default of 1 when the
+// remembered query carries a near (request.go's applyHops).
+func sameHops(sent, remembered *int, rememberedNear *string) bool {
+	if sent == nil {
+		return true
+	}
+	want := 0
+	if remembered != nil {
+		want = *remembered
+	} else if strings.TrimSpace(derefOrEmpty(rememberedNear)) != "" {
+		want = 1
+	}
+	return *sent == want
+}
+
+// derefOrEmpty reads a string pointer the way an absent field reads.
+func derefOrEmpty(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// sameSortKeys compares the sort keys: same length, same properties in
+// order, and directions folded to the meaning parse executes (D-10 made
+// `descending` and `desc` one direction, and `ascending` and `asc` one).
+func sameSortKeys(sent, remembered *[]generated.VaultFindSort) bool {
+	if sent == nil {
+		return true
+	}
+	if remembered == nil || len(*sent) != len(*remembered) {
+		return false
+	}
+	for i := range *sent {
+		sentDesc, sentOK := sortDirectionDesc((*sent)[i].Direction)
+		remDesc, remOK := sortDirectionDesc((*remembered)[i].Direction)
+		if !sentOK || !remOK || sentDesc != remDesc {
+			return false
+		}
+		if (*sent)[i].Property != (*remembered)[i].Property {
+			return false
+		}
+	}
+	return true
+}
+
+// sameGroupKeys is sameSortKeys for the grouping keys.
+func sameGroupKeys(sent, remembered *[]generated.VaultFindGroupBy) bool {
+	if sent == nil {
+		return true
+	}
+	if remembered == nil || len(*sent) != len(*remembered) {
+		return false
+	}
+	for i := range *sent {
+		sentDesc, sentOK := groupDirectionDesc((*sent)[i].Direction)
+		remDesc, remOK := groupDirectionDesc((*remembered)[i].Direction)
+		if !sentOK || !remOK || sentDesc != remDesc {
+			return false
+		}
+		if (*sent)[i].Property != (*remembered)[i].Property {
+			return false
+		}
+	}
+	return true
+}
+
+// sortDirectionDesc folds one sort-direction spelling to the meaning parse
+// executes. ok=false marks a spelling no rule accepts, which this package's
+// comparison treats as a disagreement (see sameRememberedQuery).
+func sortDirectionDesc(d *generated.VaultFindSortDirection) (desc, ok bool) {
+	if d == nil {
+		return false, true
+	}
+	switch *d {
+	case generated.VaultFindSortDirectionAsc, generated.VaultFindSortDirectionAscending:
+		return false, true
+	case generated.VaultFindSortDirectionDesc, generated.VaultFindSortDirectionDescending:
+		return true, true
+	}
+	return false, false
+}
+
+// groupDirectionDesc is sortDirectionDesc for the grouping direction.
+func groupDirectionDesc(d *generated.VaultFindGroupByDirection) (desc, ok bool) {
+	if d == nil {
+		return false, true
+	}
+	switch *d {
+	case generated.VaultFindGroupByDirectionAsc, generated.VaultFindGroupByDirectionAscending:
+		return false, true
+	case generated.VaultFindGroupByDirectionDesc, generated.VaultFindGroupByDirectionDescending:
+		return true, true
+	}
+	return false, false
+}
+
+// sameStringList compares a list field element by element; an omitted list is
+// the remembered one, and an explicitly empty list executes the same as none.
+func sameStringList(sent, remembered *[]string) bool {
+	if sent == nil {
+		return true
+	}
+	if len(*sent) != listLen(remembered) {
+		return false
+	}
+	for i, v := range *sent {
+		if v != (*remembered)[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// listLen reads a list pointer's length the way an absent list reads.
+func listLen(l *[]string) int {
+	if l == nil {
+		return 0
+	}
+	return len(*l)
+}
+
+// sameAggregates compares the totals: same ops in order, and the same
+// property each reduces (an absent property and an empty one execute the
+// same way in parse).
+func sameAggregates(sent, remembered *[]generated.VaultFindAggregate) bool {
+	if sent == nil {
+		return true
+	}
+	if len(*sent) != aggLen(remembered) {
+		return false
+	}
+	for i := range *sent {
+		if (*sent)[i].Op != (*remembered)[i].Op {
+			return false
+		}
+		if derefOrEmpty((*sent)[i].Property) != derefOrEmpty((*remembered)[i].Property) {
+			return false
+		}
+	}
+	return true
+}
+
+// aggLen reads an aggregate list pointer's length the way an absent list
+// reads.
+func aggLen(l *[]generated.VaultFindAggregate) int {
+	if l == nil {
+		return 0
+	}
+	return len(*l)
+}
+
+// ---------------------------------------------------------------------------
+// THE TWO BOUND REMEDIES, STATED ONCE
+//
+// B2's remedy used to end "or ask for a total instead", and the refusal's NEXT
+// block issued exactly that call: `knowledge_find aggregate=[{op:count}]`. It
+// is a GUARANTEED LOOP. B2 is counted inside the store's flush, unconditionally
+// on every Accepted verdict, with no exemption parameter on Candidates — so an
+// aggregate-only query streams the identical candidates through the identical
+// counter and receives the identical refusal, with the identical advice. B1 is
+// worse still: it is a COUNT taken before any candidate is read, so an
+// aggregate-only re-run does not even reach a different code path.
+//
+// Both remedies now name only things that change the number that fired.
+// ---------------------------------------------------------------------------
+const (
+	// narrowedCandidateRemedy answers B1, which counts the narrowed candidate
+	// POPULATION. A filter does not change that number, so it is not offered.
+	narrowedCandidateRemedy = "narrow the scope to a collection or path, or narrow the kind"
+
+	// candidateCapRemedy answers B2, which counts SURVIVORS. Both a tighter
+	// filter and a narrower scope reduce it.
+	candidateCapRemedy = "add or tighten a filter, or narrow the scope to a collection or path — " +
+		"an aggregate-only query streams the same candidates through the same bound and is refused the same way"
+)
+
+// findRecords is the note/record path: narrow, bound, stream, decide in Go.
+func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.VaultFindResponse, error) {
+	sel := q.selector(d.PathPrefix)
+
+	// The plain-word half runs FIRST when it is asked for, because it produces a
+	// PATH SET the typed half then intersects. The answer is the intersection,
+	// never the union: a caller who asked for both and received either is being
+	// told something false about their vault.
+	var wordPaths map[string]TextHit
+	// wordHits keeps the hits IN RANK ORDER as well as by path. The map is what
+	// the typed half intersects against; the slice is what the text-only path
+	// below returns when there is no typed half to intersect with.
+	var wordHits []TextHit
+	var wordsTruncated bool
+	// relaxedProblem is non-nil when the text index answered from its
+	// OR-ranked fallback tier (TextHit.Relaxed) — see relaxedWordsProblem.
+	var relaxedProblem *generated.RecordProblem
+	if q.words != "" {
+		// FIX F6 (code review A): ask for ONE MORE than the fanout. A real
+		// text index has no way to say "there were more" other than by
+		// actually handing back more than was asked for — Search's own
+		// contract (see TextSearcher) returns at most `limit` hits and is
+		// silent about whether the corpus held any past it. Asking for
+		// fanout+1 turns that silence into a fact this layer can observe:
+		// getting back the (fanout+1)-th hit proves the corpus held more
+		// matches than the fanout could carry, and the typed filter below
+		// never got a chance to see them.
+		//
+		// When the query is narrowed to KindNote or KindAttachment, that
+		// fanout+1 ask is not enough by itself: Search has no kind argument
+		// (see TextSearcher), so its ranking is one undifferentiated list
+		// across every indexed kind, and taking its top fanout+1 rows
+		// crowds out whichever kind is scarcer whenever the other kind
+		// dominates the top of that ranking. fetchWordHits pushes the kind
+		// constraint down into the search itself — asking it for a DEEPER
+		// ranking, not just filtering what fanout+1 happened to return — and
+		// reports truncated=true whenever it cannot prove the kind's own
+		// population is fully accounted for, exactly the way the plain
+		// fanout+1 check below already does for the unkinded case.
+		fanout := textFanout(q.limit)
+		hits, truncated, err := fetchWordHits(ctx, d.Text, q, fanout)
+		if err != nil {
+			ref := refuse(problem(generated.RecordProblemCodeIndexUnavailable,
+				fmt.Sprintf("the text index could not answer %q: %v", q.words, err),
+				"re-run, or run knowledge_describe check_integrity to see the index state"), err)
+			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+		}
+		if truncated {
+			// The corpus held more than the fanout — or, for a kind-narrowed
+			// query, fetchWordHits could not rule that out within its own
+			// search ceiling. wordPaths — the set the typed filter intersects
+			// against — is being built from a PREFIX of the real match set,
+			// never the whole of it, so this answer can no longer claim to be
+			// complete no matter what the typed filter and the evaluation
+			// below find. Reported below (see ev.recordProblems), never
+			// assumed away.
+			wordsTruncated = true
+		}
+		wordHits = hits
+		wordPaths = make(map[string]TextHit, len(hits))
+		for _, h := range hits {
+			wordPaths[h.Path] = h
+		}
+		relaxedProblem = relaxedWordsProblem(ctx, d, q, hits)
+		// A genuine zero-hit answer — the vocabulary check, NearestTerms,
+		// "did you mean" — is refused to a TRUNCATED query: those exist to
+		// tell the caller their spelling found nothing in a corpus this layer
+		// actually finished searching, and offering vocabulary suggestions
+		// over a corpus it gave up on partway through would imply a
+		// completeness this answer does not have. A truncated-but-zero-in-
+		// the-fanout query instead falls through to the ordinary evaluation
+		// path below (0 candidates ever match wordPaths, exactly as an
+		// ordinary zero-survivor query does), which is where the truncation
+		// problem is actually recorded.
+		if len(wordPaths) == 0 && !wordsTruncated {
+			// F1: a zero-hit word search must not report completeness for a
+			// query that ALSO depends on the properties index (a typed
+			// filter, record type, near, join, group_by, sort, select, or a
+			// kind the text index alone cannot answer — see
+			// textOnlyServable) when that index is not open. Without this
+			// check, THIS query's verdict depended on whether the word
+			// happened to match: a miss took this branch straight to
+			// zeroHitResponse below — Complete:true, 0 hits — while a hit
+			// (or no `words` at all) fell through to the d.Store == nil
+			// gate further down and refused. Checking the identical
+			// condition that gate checks, HERE, before the zero is reported
+			// as complete, makes the two agree regardless of which side of
+			// the word match this query lands on. This is also what keeps
+			// MV-9's attachment carve-out (see textOnlyServable, consulted
+			// by the SAME d.Store == nil gate below) honest on a build with
+			// no properties index at all: a kind=attachment word-miss must
+			// refuse exactly like a kind=attachment word-hit already does,
+			// not answer a confident zero because textOnlyServable was
+			// never consulted for it.
+			if d.Store == nil && !q.textOnlyServable() {
+				ref := propertiesIndexUnavailableRefusal(d)
+				return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+			}
+			// R1 (docs/internal/design/knowledge-tools-remediation.md):
+			// complete:true over zero hits is a claim that the corpus was
+			// actually searched. Search's own zero return cannot make that
+			// claim by itself — it is silent about whether the index has
+			// ever been built — so that has to be checked here, BEFORE the
+			// zero is reported as complete, not after. This is the one-line
+			// fix for F-9: the query that reproduced it (`words="Vorlex"`
+			// over an unindexed vault with 11 matching notes on disk)
+			// reached this exact branch and returned Complete:true.
+			if r := checkTextIndexPopulated(ctx, d.Text); r != nil {
+				return refusalResponse(generated.VaultFindRequest{}, echo, r), r
+			}
+			return zeroHitResponse(ctx, d, q, echo), nil
+		}
+	}
+
+	// `near`/`hops` runs AFTER words for the same reason B1/B2 run after both:
+	// it is the most expensive narrowing input (a graph walk, not an index
+	// lookup), so a query already known to be zero-hit from the cheaper words
+	// check never pays for it. It produces a RECORD-IDENTITY set the candidate
+	// stream then intersects — the same shape wordPaths already is, so `visit`
+	// composes the two with one extra membership test rather than a second
+	// mechanism (FR-076: near MUST NOT bypass, weaken or replace any filter
+	// supplied alongside it, in either direction — AC-F2).
+	var nearSet map[string]bool
+	var nearAnchorPath string
+	if q.near != "" {
+		reached, anchorPath, r := nearReachable(ctx, d, q)
+		if r != nil {
+			return refusalResponse(generated.VaultFindRequest{}, echo, r), r
+		}
+		// Zero ONLY when neither the graph nor the anchor placed anything: an
+		// anchor that resolved to an ordinary note (empty graph, non-empty
+		// anchorPath) is NOT a zero-hit query — it still has hop 0 to return.
+		if len(reached) == 0 && anchorPath == "" {
+			return zeroHitResponse(ctx, d, q, echo), nil
+		}
+		nearSet = reached
+		nearAnchorPath = anchorPath
+	}
+
+	if d.Store == nil {
+		// PLAIN WORDS STILL WORK WITH NO PROPERTIES INDEX, because that is what
+		// the platform posture promises in as many words: propindex_stub.go's
+		// header says "What keeps working on such a build: knowledge_read, and
+		// the plain-word half of knowledge_find". It did not. Every non-explain
+		// query, a bare `words` one included, was refused here — and the
+		// platform gate never named a capability either, because a words-only
+		// query has none, so the caller received a generic "the properties
+		// index is not open" for a question bleve alone could answer.
+		if q.textOnlyServable() {
+			return textOnlyResponse(d, q, echo, wordHits, wordsTruncated, relaxedProblem), nil
+		}
+		ref := propertiesIndexUnavailableRefusal(d)
+		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+	}
+
+	// ── B1: bound WORK, before anything is retrieved ────────────────────────
+	//
+	// It counts the narrowed candidate POPULATION and it is taken BEFORE the
+	// first candidate is read. The count is exact, so the refusal quotes it. Its
+	// remedy is SCOPE or KIND and deliberately NOT "add a filter" — a filter
+	// does not change the number that fired, and naming a remedy that does not
+	// reduce the number is worse than naming none.
+	total, err := d.Store.CountCandidates(ctx, sel)
+	if err != nil {
+		ref := refuse(problem(generated.RecordProblemCodeIndexUnavailable,
+			fmt.Sprintf("the properties index could not count candidates: %v", err),
+			"run knowledge_describe check_integrity"), err)
+		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+	}
+	if total > propindex.BoundNarrowedCandidates {
+		subject := "records"
+		if q.recordType != "" {
+			subject = "candidate records of type " + q.recordType
+		}
+		ref := refuse(problem(generated.RecordProblemCodeEvaluationBoundExceeded,
+			fmt.Sprintf("this query would evaluate %s %s; the limit is %s",
+				group3(total), subject, group3(propindex.BoundNarrowedCandidates)),
+			narrowedCandidateRemedy), nil)
+		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+	}
+
+	// THE CHILD-TABLE PREPASSES, before the candidate stream and after B1.
+	//
+	// After B1 because a query that would be refused for evaluating 80,000
+	// candidates must not first pay to buffer their tags; before the stream
+	// because FR-131 forbids joining a second child table into the candidate
+	// statement, so the only place to assemble `file.tags`/`file.links` is
+	// beside the stream rather than inside it.
+	files, r := newFileMetaSource(ctx, d, q)
+	if r != nil {
+		return refusalResponse(generated.VaultFindRequest{}, echo, r), r
+	}
+
+	cmp := records.Comparator{ResolveRelation: d.Resolve}
+	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet, nearAnchorPath: nearAnchorPath, files: files,
+		plainNotesOnly: d.PlainNotesOnly}
+
+	// THE STORE'S COVERAGE CAVEAT, BEFORE ANY ROW IS EVALUATED (Codex review
+	// 2026-09-14, finding 6). A store whose recovery could not read every
+	// file is a USABLE store — this evaluation runs against it and returns
+	// its rows — but the answer is over "every file that could be read", not
+	// "the whole collection", and complete:true would present the first as
+	// the second. Recording the caveat as a problem makes finishVerdict
+	// derive complete:false with the reason, on every answer shape, exactly
+	// like the text index's freshness caveat below. It fires on EVERY
+	// evaluation, not only word-carrying ones, because a typed query is at
+	// least as able to miss a record in an unreadable file as a word search.
+	if cav := strings.TrimSpace(d.StoreCoverageCaveat); cav != "" {
+		ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeIndexUnavailable,
+			cav,
+			"make the named files readable (check permissions or cloud-sync placeholders), then re-run; "+
+				"run knowledge_describe check_integrity to see the index state")})
+	}
+
+	// ONE evaluator for the whole scan, and `now` snapshotted ONCE (FR-146's
+	// last clause) so `now()`/`today()` give the same answer for every
+	// candidate. A per-candidate clock read would put records on opposite sides
+	// of `due < today()` in one response that has no error to show for it.
+	if ev.q.namespace().formulas.Len() > 0 {
+		ev.formulas = records.NewFormulaEvaluator(ev.q.namespace().formulas, cmp, queryNow(d))
+	}
+
+	// FIX F6: the fanout truncation detected above is a property of the
+	// QUERY, not of any one record — Records is deliberately empty, matching
+	// scope_truncated and page_size_clamped's own shape (RecordProblem.yaml).
+	// It is recorded on ev HERE, as early as ev exists, so that assemble()
+	// below — the one path that reads e.problems into the response — always
+	// carries it. (A B1/B2 bound refusal further down returns its OWN
+	// single-problem response built directly from `ref`, bypassing e.problems
+	// entirely — but a refusal already carries Complete:false and its own
+	// named cause, so it is not the silent-success shape F6 is about.)
+	if relaxedProblem != nil {
+		ev.recordProblems([]generated.RecordProblem{*relaxedProblem})
+	}
+	if wordsTruncated {
+		ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeTextSearchTruncated,
+			fmt.Sprintf("the text index holds more than %s matches for %q; "+
+				"only the top-ranked %s were considered before the typed filter ran",
+				group3(textFanout(q.limit)), q.words, group3(textFanout(q.limit))),
+			"add or tighten a typed `filter` — unlike `words`, it is evaluated over "+
+				"the full narrowed candidate population, not this fanout")})
+	}
+
+	// A2(d): a NON-ZERO `words` result can still UNDER-REPORT when the text
+	// index does not yet reflect the whole vault — the query returns the hits
+	// the partial index happens to hold while more matching files sit on disk
+	// unindexed. The zero-hit branch above (checkTextIndexPopulated) is the
+	// ONLY place the freshness signal was wired, so a partial index that
+	// returned SOME hits skipped it and would otherwise answer complete:true
+	// with no signal anywhere the caller reads — a false-completeness claim
+	// (R1), and the exact non-zero symptom the tester reported ("words=X
+	// returns 1 hit while 68 files contain it").
+	//
+	// When the searcher can report its freshness and it is behind, record a
+	// non-fatal coverage problem. finishVerdict derives complete:false from
+	// any recorded problem, so the caller is told the answer may be short and
+	// by how much — never silently told it is whole. A fresh, fully-swept
+	// index (Fresh, nothing pending, indexed == scanned) records nothing, so a
+	// healthy vault is not dragged incomplete. It reuses IndexUnavailable — the
+	// same code the zero-hit refusal uses for the identical "the index cannot
+	// be trusted to be whole" fact — because there is no narrower code and a
+	// new one is a wire-contract change owned elsewhere.
+	if q.words != "" {
+		if fr, ok := d.Text.(TextFreshnessReporter); ok {
+			// GENUINE incompleteness is NewFiles > 0: files on disk that are not
+			// in the index AT ALL, so a matching one cannot appear in this
+			// result — the exact "term in 68 notes, returned for 1" symptom.
+			// It must NOT fire on the other ways an index can differ from disk,
+			// because none of them under-report (Finding 2):
+			//   - a mtime-only touch reads as Changed (git checkout / rsync /
+			//     backup restore); the file is still indexed and still returns
+			//     its hits, so !Fresh / PendingFiles>0 alone must not downgrade.
+			//   - a Removed file is in the index but gone from disk — it can
+			//     only over-report, never under-report.
+			//   - an unreadable/permanently-skipped file leaves
+			//     IndexedFiles<ScannedFiles forever; keying on that disjunct
+			//     made every search incomplete for good. NewFiles excludes it
+			//     (the index accounts for it as unindexable, not pending).
+			//
+			// F4: `ferr == nil` used to be the ONLY branch — a freshness-read
+			// ERROR fell through to no problem being recorded at all, so the
+			// caller lost the entire "this may under-report" warning exactly
+			// when the coverage check itself could not be trusted either.
+			// checkTextIndexPopulated's own zero-hit fallback (below, when
+			// TextFreshnessReporter is unavailable or errors) already treats a
+			// freshness failure as worth reporting rather than silent; this
+			// mirrors that for the non-zero-hit path instead of dropping it.
+			switch fresh, ferr := fr.IndexFreshness(ctx); {
+			case ferr != nil:
+				ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeIndexUnavailable,
+					fmt.Sprintf("the text index's freshness could not be verified: %v — this `words` result "+
+						"may under-report if the index is behind", ferr),
+					"re-run, or run knowledge_describe check_integrity to see the index state")})
+			case fresh.ScannedFiles > 0 && fresh.NewFiles > 0:
+				ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeIndexUnavailable,
+					fmt.Sprintf("the text index has not finished indexing this knowledge base — it currently reflects "+
+						"%s of the %s files on disk (%s not yet indexed), so this `words` result may "+
+						"under-report: matching files that are not yet indexed cannot appear here",
+						group3(fresh.IndexedFiles), group3(fresh.ScannedFiles), group3(fresh.NewFiles)),
+					"re-run indexing for this knowledge base; run knowledge_describe check_integrity to see the index state")})
+			}
+		}
+	}
+
+	// ── B2: bound MEMORY, during evaluation ─────────────────────────────────
+	//
+	// It counts SURVIVORS and aborts the stream. It is not a precondition and
+	// cannot be: "the rows surviving the filter" is a quantity only the Go
+	// comparator can produce, and it produces it by evaluating candidates.
+	err = d.Store.Candidates(ctx, sel, ev.visit)
+	if err != nil {
+		if propindex.IsBoundExceeded(err) {
+			ref := refuse(problem(generated.RecordProblemCodeCandidateCapExceeded,
+				fmt.Sprintf("this query matched more than %s records; the limit is %s",
+					group3(propindex.BoundSurvivors), group3(propindex.BoundSurvivors)),
+				candidateCapRemedy), err)
+			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+		}
+		ref := refuse(problem(generated.RecordProblemCodeIndexUnavailable,
+			fmt.Sprintf("the properties index could not stream candidates: %v", err),
+			"run knowledge_describe check_integrity"), err)
+		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+	}
+
+	return ev.assemble(ctx, d, echo), nil
+}
+
+// propertiesIndexUnavailableRefusal is the one refusal for "this query needs
+// the properties index and it is not open" — shared by every place findRecords
+// discovers that gap, so the message is byte-identical regardless of WHERE it
+// is discovered. F1/F2: before this was centralized, the word-search zero-hit
+// early return and the general d.Store == nil gate each built this refusal
+// independently, and only the second one actually ran early enough to catch a
+// query whose word half missed — the verdict must not depend on that, so both
+// call sites now share one source of truth.
+func propertiesIndexUnavailableRefusal(d Deps) *RefusalError {
+	reason := "the properties index is not open, so no record can be read"
+	fix := "the index rebuilds itself on the next query; if this persists, check the gateway log " +
+		"and run knowledge_describe check_integrity to see the index state"
+	if why := strings.TrimSpace(d.StoreUnavailableReason); why != "" {
+		reason = "the properties index is not open (" + why + "), so no record can be read"
+	}
+	return refuse(problem(generated.RecordProblemCodeIndexUnavailable, reason, fix), nil)
+}
+
+// relaxedWordsProblem is the DECLARATION of a loosened text match (UAT
+// 2026-09-13, D-07 and the false-positive half of D-01).
+//
+// The text index tries "every word present somewhere in the file" first and,
+// only when that finds nothing, an OR-ranked, typo-tolerant tier (KB-7a,
+// pkg/knowledge/index.go's searchRaw). That fallback stayed SILENT at this
+// door: `words: "Collision zzqqxx"` — one word present, one absent from the
+// whole vault — rendered "COMPLETE: yes — 1 of 1 shown" with the phrase
+// echoed verbatim, and `words: "bashwrittenmarker3"` returned the note
+// holding "bashwrittenmarker2" as an exact hit. A reader of either concluded
+// every word was found.
+//
+// The fix is not to remove the fallback — a near match is often the useful
+// answer — but to make it IMPOSSIBLE to mistake for an exact one: a named
+// problem, which finishVerdict turns into COMPLETE: no with the reason, and
+// where the searcher can count per word, the concrete breakdown ("Collision:
+// 1, zzqqxx: 0") so the caller sees which word failed. nil when the hits are
+// exact, or when there are none (a zero-hit answer has nothing to declare).
+func relaxedWordsProblem(ctx context.Context, d Deps, q *query, hits []TextHit) *generated.RecordProblem {
+	if len(hits) == 0 || !hits[0].Relaxed {
+		return nil
+	}
+	var reason string
+	if len(strings.Fields(q.words)) > 1 {
+		reason = fmt.Sprintf("no indexed file contains every word of %q; the rows shown match only some of "+
+			"the words, or a near spelling of one", q.words)
+	} else {
+		reason = fmt.Sprintf("no indexed file contains %q; the rows shown match a near spelling of it", q.words)
+	}
+	if tc, ok := d.Text.(TextTermCounter); ok {
+		counts, err := tc.TermDocumentCounts(ctx, q.words)
+		if err == nil && len(counts) > 0 {
+			parts := make([]string, 0, len(counts))
+			for _, c := range counts {
+				parts = append(parts, fmt.Sprintf("%s: %d", c.Term, c.Documents))
+			}
+			reason += " — files containing each word on its own: " + strings.Join(parts, ", ")
+		}
+	}
+	p := problem(generated.RecordProblemCodeTextSearchRelaxed, reason,
+		"treat these rows as near matches, not as files containing all the words; "+
+			"respell or drop a word to search exactly, or narrow with a typed `filter`")
+	return &p
+}
+
+// checkTextIndexPopulated refuses a words-carrying, zero-hit query whose text
+// index has never completed a build — R1's rule made concrete.
+//
+// CHOICE OF CHECK, STATED EXPLICITLY: this asks "has a build ever completed",
+// NOT "does the index currently hold zero documents". Those read as the same
+// question and are not. `knowledge.Index.DocCount()` reports the SECOND one,
+// and gating on it directly would be wrong in both directions:
+//
+//   - An index that has never been built and holds zero documents would be
+//     refused correctly, by coincidence — but so would a HEALTHY index over a
+//     genuinely empty collection (0 notes on disk), which is exactly the
+//     regression this fix must not introduce: an honest "complete: true, 0
+//     rows" answer turned into a false refusal because the true answer and the
+//     unbuilt one happen to share a document count of zero.
+//   - Conversely, DocCount alone says nothing about a corpus that HAS notes
+//     but whose index build genuinely failed partway through and left a
+//     handful of documents behind — DocCount() > 0 there would wrongly read
+//     as "populated" and let exactly F-9's shape back in for a query whose
+//     words happen to miss the partial index.
+//
+// A build-completion flag does not have this ambiguity: it is orthogonal to
+// how many documents the build found, so "populated, 0 docs" (an honest empty
+// vault) and "not populated" (an unbuilt or partially-built index) stay
+// distinguishable regardless of what DocCount happens to read.
+func checkTextIndexPopulated(ctx context.Context, text TextSearcher) *RefusalError {
+	populated, err := text.Populated(ctx)
+	if err != nil {
+		return refuse(problem(generated.RecordProblemCodeIndexUnavailable,
+			fmt.Sprintf("the text index's build state could not be read: %v", err),
+			"re-run, or run knowledge_describe check_integrity to see the index state"), err)
+	}
+	if !populated {
+		// A2(d): the caller's real question is "is this zero a real miss, or an
+		// index that has not caught up?". Populated already answers that as a
+		// boolean; what it could not do was say BY HOW MUCH the index is behind.
+		// When the searcher can report its freshness, quote the concrete
+		// coverage — "reflects N of M files on disk, P not yet indexed" — so a
+		// stale/incomplete index is distinguishable from genuinely absent
+		// content by the NUMBERS, not just the refusal.
+		//
+		// It deliberately does NOT try to label the state "stale" vs "never
+		// built": an instant-indexing write (author.go) leaves a manifest with
+		// a single entry, so "manifest present" and "collection swept" are not
+		// the same fact and cannot be told apart from coverage alone — both are
+		// simply "the index does not cover this vault yet", which is exactly
+		// what the count says without over-claiming. The "never finished
+		// indexing" wording is preserved because it is true of every
+		// incomplete-coverage state (a vault whose index does not reflect all
+		// of it has not finished indexing it) and because callers/tests key on
+		// it.
+		if fr, ok := text.(TextFreshnessReporter); ok {
+			if fresh, ferr := fr.IndexFreshness(ctx); ferr == nil && fresh.ScannedFiles > 0 {
+				return refuse(problem(generated.RecordProblemCodeIndexUnavailable,
+					fmt.Sprintf("the text index has never finished indexing this knowledge base — it currently reflects "+
+						"%s of the %s files on disk (%s not yet indexed), so a zero-hit answer here cannot be "+
+						"trusted; it is indistinguishable from a real miss over a knowledge base that was actually searched",
+						group3(fresh.IndexedFiles), group3(fresh.ScannedFiles), group3(fresh.PendingFiles)),
+					"re-run indexing for this knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
+			}
+		}
+		return refuse(problem(generated.RecordProblemCodeIndexUnavailable,
+			"the text index has never finished indexing this knowledge base, so a zero-hit answer "+
+				"here cannot be trusted — it would be indistinguishable from a real miss over a "+
+				"knowledge base that was actually searched",
+			"re-open the knowledge base; run knowledge_describe check_integrity to see the index state"), nil)
+	}
+	return nil
+}
+
+// textFanout is how many text hits to ask for. It is deliberately wider than the
+// page: the typed filter runs AFTER, so asking for exactly `limit` would page
+// the text index and then throw most of it away, reporting fewer rows than exist
+// with nothing saying so.
+func textFanout(limit int) int {
+	n := limit * 20
+	if n < 200 {
+		n = 200
+	}
+	if n > propindex.BoundSurvivors {
+		n = propindex.BoundSurvivors
+	}
+	return n
+}
+
+// wordKindKeepsHit is the same "blank Kind reads as KindNote" rule
+// textOnlyResponse applies (see TextHit.Kind's own doc comment), pulled out
+// so fetchWordHits can apply it before textOnlyResponse ever sees the hits.
+func wordKindKeepsHit(h TextHit, kind string) bool {
+	hitKind := h.Kind
+	if hitKind == "" {
+		hitKind = KindNote
+	}
+	return hitKind == kind
+}
+
+// wordKindFilterActive reports whether q.kind narrows the word search at all.
+// Only KindNote and KindAttachment do: KindRecord and KindTask are answered
+// exclusively through the properties-index path (textOnlyServable refuses
+// them outright when the index is absent), and the general path's own
+// candidate stream already narrows them to the propindex "note" bucket via
+// the selector, independently of anything the word half returns — so
+// narrowing the word search for them is neither required by this fix nor
+// exercised by anything that depends on it.
+func wordKindFilterActive(kind string) bool {
+	return kind == KindNote || kind == KindAttachment
+}
+
+// fetchWordHits runs the plain-word half of the query and, for a query
+// narrowed to KindNote or KindAttachment, pushes that narrowing INTO the
+// search rather than applying it to whatever the first fanout+1 ranked hits
+// happened to contain.
+//
+// Search has no kind argument (TextSearcher's contract is words-and-limit
+// only), so its ranking is one undifferentiated list across every indexed
+// kind. Taking its top fanout+1 rows and filtering THOSE by kind — the
+// previous shape of this code — silently drops whichever kind is scarcer
+// whenever the other kind crowds the top of that ranking: the candidates
+// were never wrong, they were discarded before the kind filter ever got to
+// see them, and the caller was told the (already-filtered) remainder was the
+// whole answer.
+//
+// The fix is to keep asking Search for a DEEPER ranking — the same query, a
+// larger limit — until either enough kind-matching hits have been collected
+// to satisfy the fanout, or the index itself proves there is nothing deeper
+// to find (it returns fewer hits than asked for), or the ask has reached
+// propindex.BoundSurvivors, this package's own existing ceiling on how much
+// of a ranking it will ever pull into memory (textFanout already clamps to
+// it). Reaching that ceiling without either of the other two outcomes means
+// completeness genuinely cannot be proven within the bound this package
+// already accepts elsewhere — truncated is reported true in that case, same
+// as an ordinary unkinded fanout truncation.
+//
+// This costs at most one extra Search call, and only for a query kind- and
+// word-narrowed in the first place: an unfiltered kind (record, task, or no
+// words at all) never reaches the loop below.
+func fetchWordHits(ctx context.Context, text TextSearcher, q *query, fanout int) ([]TextHit, bool, error) {
+	want := fanout + 1
+	raw, err := text.Search(ctx, q.words, want)
+	if err != nil {
+		return nil, false, err
+	}
+
+	if !wordKindFilterActive(q.kind) {
+		truncated := len(raw) > fanout
+		if truncated {
+			raw = raw[:fanout]
+		}
+		return raw, truncated, nil
+	}
+
+	filtered := make([]TextHit, 0, len(raw))
+	for _, h := range raw {
+		if wordKindKeepsHit(h, q.kind) {
+			filtered = append(filtered, h)
+		}
+	}
+	exhausted := len(raw) < want
+
+	if len(filtered) < want && !exhausted && want < propindex.BoundSurvivors {
+		// The first window was crowded out by the other kind and the index is
+		// not exhausted — broaden the ask to this package's own ceiling and
+		// filter again, once.
+		//
+		// F3: `exhausted = len(raw) < propindex.BoundSurvivors` used to be the
+		// proof here, and it is not one — see TextDeepSearcher's doc comment.
+		// A TextDeepSearcher is asked directly, when the searcher offers one,
+		// for the real answer; a plain TextSearcher cannot prove it either
+		// way, so exhaustion here is left UNPROVEN (false) rather than
+		// inferred from a length comparison indexSearchMaxFetch (the real
+		// production ceiling, far below BoundSurvivors) can make true by
+		// coincidence regardless of the corpus' actual size.
+		if ds, ok := text.(TextDeepSearcher); ok {
+			raw, exhausted, err = ds.SearchDeep(ctx, q.words, propindex.BoundSurvivors)
+			if err != nil {
+				return nil, false, err
+			}
+		} else {
+			raw, err = text.Search(ctx, q.words, propindex.BoundSurvivors)
+			if err != nil {
+				return nil, false, err
+			}
+			exhausted = false
+		}
+		filtered = filtered[:0]
+		for _, h := range raw {
+			if wordKindKeepsHit(h, q.kind) {
+				filtered = append(filtered, h)
+			}
+		}
+	}
+
+	switch {
+	case len(filtered) > fanout:
+		// Proof: more than fanout real matches of this kind exist. Same
+		// evidence shape as the unkinded case above.
+		return filtered[:fanout], true, nil
+	case exhausted:
+		// The index ran out before the last ask — every match of this kind
+		// for this word is accounted for in filtered.
+		return filtered, false, nil
+	default:
+		// Neither proof of more, nor proof of exhaustion: the search stopped
+		// at its own ceiling with fanout or fewer kind-matching hits in hand.
+		// There may be more of this kind ranked below where it stopped
+		// looking — an honest answer says so rather than asserting a
+		// completeness it cannot back up.
+		return filtered, true, nil
+	}
+}
+
+// evaluation accumulates survivors. It holds ONE candidate at a time from the
+// store's perspective — what it retains per survivor is the rendered row and the
+// sort keys, not the decoded candidate.
+type evaluation struct {
+	q     *query
+	cmp   records.Comparator
+	words map[string]TextHit
+	// near is the reachable-record-identity set nearReachable computed, nil
+	// when the query carried no `near`. It narrows exactly the way words does
+	// — a candidate outside it is never selected at all, not "selected and
+	// excluded" — so near and words compose as an intersection with each
+	// other and with the typed filter (FR-076, AC-F2), never as a filter one
+	// of them could weaken.
+	near map[string]bool
+	// nearAnchorPath is the `near` origin note's own path (hop 0), admitted
+	// regardless of record identity so an ORDINARY-note anchor re-enters the
+	// answer even though it is not a node in the record graph `near` holds.
+	// Empty when the query carried no `near`, or when ResolveNear could not
+	// place the anchor on disk.
+	nearAnchorPath string
+	// plainNotesOnly is Deps.PlainNotesOnly for this evaluation (D-130).
+	plainNotesOnly bool
+
+	// files assembles FR-130's twelve virtual properties per candidate from the
+	// parent row and the child-table prepasses.
+	files *fileMetaSource
+	// formulas is the ONE evaluator for this scan, nil when the view declares
+	// no formulas.
+	formulas *records.FormulaEvaluator
+
+	selected    int
+	survivors   []survivor
+	problems    []generated.RecordProblem
+	unevaluable int
+	seenProblem map[string]bool
+}
+
+type survivor struct {
+	cand  propindex.Candidate
+	score float64
+	// textHash is what the TEXT index holds for this note. FR-020c compares the
+	// row's own hash against THIS, per returned record.
+	textHash string
+	hasText  bool
+	values   map[string]records.PropertyValue
+	// formulaNotes is the candidate's formulaNotes, kept because the
+	// candidate itself does not outlive visit (D-61).
+	formulaNotes map[string]string
+}
+
+// visit is the per-candidate callback. Returning Accepted counts against B2.
+func (e *evaluation) visit(c propindex.Candidate) (propindex.Verdict, error) {
+	// The word half is an INTERSECTION, applied before the comparator so a
+	// record outside it costs no decode.
+	var hit TextHit
+	hasText := false
+	if e.words != nil {
+		h, ok := e.words[c.Path]
+		if !ok {
+			return propindex.Rejected, nil
+		}
+		hit, hasText = h, true
+	}
+
+	// kind=record is the THIRD narrowing, and it is applied here rather than in
+	// the Selector because "any declared record type" is not one of the three
+	// things ruling R-A lets the store decide. A note with no `type:` is an
+	// ordinary note (FR-005) and carries no RecordID/RecordType, so the test is
+	// the column itself.
+	if e.q.kind == KindRecord && c.RecordType == "" {
+		return propindex.Rejected, nil
+	}
+	// D-130's inverse, for the in-process caller that asked for it: a
+	// kind=note query under Deps.PlainNotesOnly rejects every note that
+	// declares a record type, so the caller's "notes" partition can never
+	// contain a record whatever limit the records partition ran under.
+	if e.q.kind == KindNote && e.plainNotesOnly && c.RecordType != "" {
+		return propindex.Rejected, nil
+	}
+
+	// The near/hops half is the SECOND intersection, same shape as words: an
+	// ordinary note (no declared type, RecordID empty) can never be a graph
+	// node — relation edges only connect record identities (D7) — so it is
+	// correctly excluded here whenever `near` narrowed at all, without a
+	// special case.
+	if e.near != nil {
+		// The anchor note itself is hop 0 and is admitted by PATH, so an
+		// ordinary-note anchor (RecordID == "") re-enters the answer even
+		// though it is not a node in the record graph. Every OTHER row must be
+		// a record within the traversed radius — a plain note that is not the
+		// anchor is still correctly excluded, because it can never be a graph
+		// node (relation edges connect record identities only, D7).
+		isAnchor := e.nearAnchorPath != "" && c.Path == e.nearAnchorPath
+		inRadius := c.RecordID != "" && e.near[c.RecordID]
+		if !isAnchor && !inRadius {
+			return propindex.Rejected, nil
+		}
+	}
+
+	e.selected++
+	cand := newCandidate(c, e.q.schema, e.files.meta(c), e.formulas)
+	defer e.drainFormulaProblems(cand)
+
+	matched := true
+	if e.q.filter != nil {
+		res := e.q.filter.eval(e.cmp, cand)
+		e.recordProblems(res.problems)
+		if res.blocked {
+			e.unevaluable++
+			return propindex.Rejected, nil
+		}
+		matched = res.matched
+	}
+	if !matched {
+		return propindex.Rejected, nil
+	}
+
+	// Decode the columns that will actually be RENDERED or SORTED, while the
+	// candidate is still in hand. Doing it later would mean holding every
+	// candidate, which is the memory bound this stream exists to respect.
+	values, err := e.materialise(cand)
+	if err != nil {
+		p := problem(generated.RecordProblemCodeStaleRecord, err.Error(),
+			"re-index this note, or correct the value to one the schema declares", cand.identity())
+		p.Paths = &[]string{c.Path}
+		e.recordProblems([]generated.RecordProblem{p})
+		e.unevaluable++
+		return propindex.Rejected, nil
+	}
+
+	e.recordNoteHealth(c, cand, values)
+
+	e.survivors = append(e.survivors, survivor{
+		cand: c, score: hit.Score, textHash: hit.SourceHash, hasText: hasText, values: values,
+		formulaNotes: cand.formulaNotes,
+	})
+	return propindex.Accepted, nil
+}
+
+// recordNoteHealth names, in problems[], a survivor whose frontmatter could
+// not be read or whose declared property holds a value the schema does not
+// accept (UAT 2026-09-13, D-06). Both were DETECTED before — the parser sets
+// Record.ParseError, BuildNoteRows stores the non-conforming state row — and
+// both were then served as a healthy row with no marker anywhere the caller
+// reads. The row is still returned (it is a real note at a real path); the
+// problem is non-fatal and makes the verdict COMPLETE: no with the reason.
+func (e *evaluation) recordNoteHealth(c propindex.Candidate, cand *candidate, values map[string]records.PropertyValue) {
+	var ps []generated.RecordProblem
+	if c.ParseError != "" {
+		p := problem(generated.RecordProblemCodeFrontmatterMalformed,
+			fmt.Sprintf("%s: the frontmatter could not be read (%s), so this note declares no type and no properties",
+				c.Path, c.ParseError),
+			"close the frontmatter block with a `---` line, or fix the YAML the message names",
+			cand.identity())
+		p.Paths = &[]string{c.Path}
+		ps = append(ps, p)
+	}
+	names := make([]string, 0, len(values))
+	for name, pv := range values {
+		if pv.State == records.StateNonConforming {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		pv := values[name]
+		reason := "the stored value does not conform to the declaration"
+		if len(pv.Findings) > 0 && pv.Findings[0].Reason != "" {
+			reason = pv.Findings[0].Reason
+		} else if got, expected := cand.evidence(name); got != "" || expected != "" {
+			reason = fmt.Sprintf("holds %q where %s was expected", got, expected)
+		}
+		p := problem(generated.RecordProblemCodeTypeMismatch,
+			fmt.Sprintf("%s: property %s — %s", c.Path, name, reason),
+			"correct the value to the declared shape, or change the declaration with knowledge_configure",
+			cand.identity())
+		n := name
+		p.Property = &n
+		p.Paths = &[]string{c.Path}
+		ps = append(ps, p)
+	}
+	if len(ps) > 0 {
+		e.recordProblems(ps)
+	}
+}
+
+// materialise decodes the render and sort columns for one survivor.
+func (e *evaluation) materialise(cand *candidate) (map[string]records.PropertyValue, error) {
+	out := map[string]records.PropertyValue{}
+	for _, prop := range e.q.renderProperties() {
+		v, err := cand.value(prop)
+		if err != nil {
+			return nil, err
+		}
+		out[prop.Name] = v
+	}
+	return out, nil
+}
+
+// drainFormulaProblems moves a candidate's formula problems into the response.
+//
+// It runs on EVERY visited candidate, matched or not, because FR-026 requires
+// the offending record to be named whether or not the problem happened to
+// change the outcome — a division by zero in a formula the filter then rejected
+// on other grounds is still a defect the reader has to fix.
+func (e *evaluation) drainFormulaProblems(cand *candidate) {
+	if len(cand.formulaProblems) == 0 {
+		return
+	}
+	ps := make([]generated.RecordProblem, 0, len(cand.formulaProblems))
+	for _, cp := range cand.formulaProblems {
+		ps = append(ps, comparisonProblem(cand.rows.RecordID, cand.rows.Path, cp))
+	}
+	e.recordProblems(ps)
+	cand.formulaProblems = nil
+}
+
+// queryNow is FR-146's one-per-response snapshot.
+func queryNow(d Deps) time.Time {
+	if d.Now.IsZero() {
+		return time.Now()
+	}
+	return d.Now
+}
+
+// ---------------------------------------------------------------------------
+// SCHEMA-DECLARED FORMULAS: REFUSED BY THE LOADER, SO NOT A CASE HERE
+//
+// This file used to carry refuseSchemaDeclaredFormulas, which refused EVERY
+// query over a record type whose schema declared `formula:` on a property. That
+// refusal has moved to where the mistake is — records/schema.go's
+// propertyDeclKeys refuses the key at load, per file, so such a schema never
+// enters the SchemaSet and q.schema can no longer hold a derived property.
+//
+// The guard is not kept "just in case": an unreachable second refusal is a
+// branch no test can distinguish from a working one. What remains true, and is
+// what the rest of this file relies on, is the routing rule itself — a query
+// reaches a formula ONLY as `formula.<name>` (FR-140), resolved by namespace.go
+// against the saved VIEW's formula set below. A bare property name always means
+// the record's STORED value.
+// ---------------------------------------------------------------------------
+
+// viewFormulas reads the named view's `formulas:` map, when the loader carries
+// one. Everything about it is optional and every absence means the same,
+// honest thing: this query has no formulas.
+func viewFormulas(loader ViewLoader, view *string) map[string]string {
+	if loader == nil || view == nil || *view == "" {
+		return nil
+	}
+	fl, ok := loader.(ViewFormulaLoader)
+	if !ok {
+		return nil
+	}
+	sources, ok := fl.Formulas(*view)
+	if !ok {
+		return nil
+	}
+	return sources
+}
+
+// recordProblems appends, deduplicating on record+property+code so a filter tree
+// naming one property in three leaves reports one line rather than three.
+//
+// The deduplication is on the RECORD's identity, not on the message, because the
+// same defect in two different notes is two problems the reader must fix twice.
+func (e *evaluation) recordProblems(ps []generated.RecordProblem) {
+	if e.seenProblem == nil {
+		e.seenProblem = map[string]bool{}
+	}
+	for _, p := range ps {
+		key := strings.Join(p.Records, ",") + "|" + string(p.Code)
+		if p.Property != nil {
+			key += "|" + *p.Property
+		}
+		if e.seenProblem[key] {
+			continue
+		}
+		e.seenProblem[key] = true
+		e.problems = append(e.problems, p)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// THE PLAIN-WORD HALF, WITH NO PROPERTIES INDEX — FR-020h
+// ---------------------------------------------------------------------------
+
+// textOnlyServable reports whether this query can be answered by the text index
+// ALONE.
+//
+// It is deliberately a whitelist of "names nothing the properties index owns",
+// not a blacklist. Every argument below reaches a stored row: a typed filter, a
+// record type, kind=record's record_type column, a graph walk, a join, a
+// grouping, a summary, a sort key and a rendered column are all decoded from
+// CANDIDATES this build has none of when Store is nil — the properties store's
+// own `kind` column (propindex.KindNote/KindAttachment, propindex/rows.go)
+// included. Answering any of them from a text ranking would be the silent
+// broadening the platform gate exists to refuse — so anything outside this
+// shape still gets the refusal.
+//
+// kind=attachment is the one exception, and it is answerable WITHOUT that
+// candidate column: the text index tags every document it holds with its OWN
+// kind (pkg/knowledge/index.go's indexNote/indexAttachment write the "kind"
+// field directly), and an attachment is indexed by NAME ONLY — no body, no
+// properties (FR-039a) — so a plain-word match against it needs nothing the
+// properties store would otherwise supply. TextHit.Kind carries that
+// already-indexed fact through; textOnlyResponse is what filters on it, so a
+// kind=note query and a kind=attachment query each see only their own
+// documents from the SAME underlying Search call.
+//
+// The PropertyIndexAvailable guard here is not about what this query needs —
+// it needs nothing from the properties index either way — it exists only to
+// hold the platform posture steady on a build where that index cannot exist
+// at all (records_no_sqlite/mipsle/netbsd/freebsd-arm): MV-9's carve-out
+// (docs/internal/specs/unified-search-and-grep-spec.md) deliberately refuses
+// attachment search there by name, honestly, rather than answering it out of
+// the one index such a build does have, so SC-009's "propindex-less builds
+// show the honest carve-out instead" stays true regardless of this fix.
+func (q *query) textOnlyServable() bool {
+	if q.words == "" ||
+		q.filter != nil ||
+		q.recordType != "" ||
+		q.near != "" ||
+		len(q.join) != 0 ||
+		len(q.groupBy) != 0 ||
+		len(q.aggregates) != 0 ||
+		len(q.sort) != 0 ||
+		len(q.selectCols) != 0 {
+		return false
+	}
+	// FAIL CLOSED ON A BUILD THAT HAS A PROPERTIES INDEX (UAT 2026-09-13,
+	// D-01). A nil Store on such a build is a FAULT — the index could not be
+	// opened or rebuilt — never a platform posture, and the UAT showed what
+	// answering from the text index alone in that state produces: a
+	// confident "COMPLETE: yes" with the INDEX line silently missing, while
+	// the identical query with a `type` was honestly refused. The two doors
+	// must agree: on a SQLite build every non-explain query needs the store,
+	// exactly as the d.Store == nil gate says, and the words-only case is not
+	// exempt. The carve-out below is the platform one only: a build with no
+	// properties index at all still answers plain words over notes (the
+	// propindex_stub posture), and still refuses attachments by name
+	// (MV-9).
+	if propertyIndexAvailable {
+		return false
+	}
+	return q.kind == KindNote
+}
+
+// propertyIndexAvailable mirrors records.PropertyIndexAvailable (a build-time
+// constant). It is a variable only so a test on a SQLite build can exercise
+// the propindex-less platform posture textOnlyServable keeps for builds that
+// cannot have a properties index at all; production never assigns it.
+var propertyIndexAvailable = records.PropertyIndexAvailable
+
+// textOnlyResponse answers a words-only query out of the text index.
+//
+// TWO THINGS IT DELIBERATELY DOES NOT DO. It reports NO index state — there is
+// only one index on such a build, so "N of M returned records agree across both
+// indexes" would be a freshness claim with nothing behind it, and a false
+// reassurance is worse than a missing line. And it renders NO cells: a column
+// is a decoded property value, and there are no property rows here.
+func textOnlyResponse(d Deps, q *query, echo string, hits []TextHit, truncated bool, relaxed *generated.RecordProblem) generated.VaultFindResponse {
+	// FR-060's workspace scope is the caller's, already resolved, and it is
+	// applied again here rather than trusted: TextSearcher.Search states that
+	// it answers "within the caller's already-resolved scope", and a prefix
+	// test costs nothing next to returning a path the agent may not see.
+	//
+	// KIND is filtered here too, not left to the caller: Search answers over
+	// the whole text index regardless of q.kind — it has no kind argument —
+	// so a query for one kind and a query for the other draw from the SAME
+	// hit list. Without this, a kind=note query returned every attachment
+	// that matched the words alongside the real notes (labelled as a note,
+	// since a row has no kind of its own to say otherwise), and a
+	// kind=attachment query saw its own hits stolen by the kind=note path
+	// while textOnlyServable refused to serve it at all. A blank h.Kind
+	// (a TextSearcher stub predating this field) is treated as KindNote —
+	// every text-only caller before attachment support was note-only, so
+	// that is the one backward-compatible reading.
+	//
+	// By the time `hits` reaches here, fetchWordHits has already narrowed the
+	// SAME hit list to q.kind (see its own doc comment) — this loop's kind
+	// check is therefore a second, defense-in-depth pass, not the only place
+	// the narrowing happens; the PathPrefix check right below is the one
+	// piece of work this loop still does that fetchWordHits cannot, since
+	// scope is a caller property Search knows nothing about.
+	scoped := make([]TextHit, 0, len(hits))
+	for _, h := range hits {
+		if d.PathPrefix != "" && !strings.HasPrefix(h.Path, d.PathPrefix) {
+			continue
+		}
+		hitKind := h.Kind
+		if hitKind == "" {
+			hitKind = KindNote
+		}
+		if hitKind != q.kind {
+			continue
+		}
+		scoped = append(scoped, h)
+	}
+
+	evaluated := len(scoped)
+	offset := cursorOffset(q.cursor)
+	page := scoped
+	switch {
+	case offset > 0 && offset < len(page):
+		page = page[offset:]
+	case offset >= len(page) && offset > 0:
+		page = nil
+	}
+	if len(page) > q.limit {
+		page = page[:q.limit]
+	}
+
+	rows := make([]generated.VaultFindRow, 0, len(page))
+	for _, h := range page {
+		rows = append(rows, generated.VaultFindRow{
+			Path:  h.Path,
+			Title: titleOf(h.Path),
+			Cells: []generated.VaultFindCell{},
+			Joins: []generated.VaultFindJoin{},
+		})
+	}
+
+	problems := []generated.RecordProblem{}
+	if relaxed != nil {
+		problems = append(problems, *relaxed)
+	}
+	if truncated {
+		problems = append(problems, problem(generated.RecordProblemCodeTextSearchTruncated,
+			fmt.Sprintf("the text index holds more than %s matches for %q; only the top-ranked %s were returned",
+				group3(textFanout(q.limit)), q.words, group3(textFanout(q.limit))),
+			"add more words to narrow the ranking — a typed `filter` is not available on this build"))
+	}
+
+	resp := generated.VaultFindResponse{
+		Complete:  true,
+		Refused:   false,
+		QueryEcho: echo,
+		Counts: generated.VaultFindCounts{
+			Selected: evaluated, Evaluated: evaluated, Shown: len(rows),
+		},
+		Rows:     rows,
+		Totals:   []generated.VaultFindTotal{},
+		Problems: problems,
+		Next:     []generated.VaultFindAction{},
+	}
+	applied := q.limit
+	resp.LimitApplied = &applied
+	if q.clamped {
+		resp.LimitClamped = boolPtr(true)
+		asked := q.limitAsked
+		resp.LimitRequested = &asked
+	}
+
+	if q.renderRows == 0 {
+		trimToBudget(&resp)
+	}
+	finishVerdict(&resp, q)
+	if consumed := offset + resp.Counts.Shown; consumed < evaluated {
+		c := encodeCursor(consumed, d.Epoch, q.wire)
+		resp.NextCursor = &c
+	}
+	resp.Next = nextActions(q, &resp)
+	return resp
+}
+
+// group3 renders a count with thousands separators, for a refusal message.
+func group3(n int) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var parts []string
+	for len(s) > 3 {
+		parts = append([]string{s[len(s)-3:]}, parts...)
+		s = s[:len(s)-3]
+	}
+	return strings.Join(append([]string{s}, parts...), ",")
+}

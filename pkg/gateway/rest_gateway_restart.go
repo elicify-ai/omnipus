@@ -74,7 +74,7 @@ func (a *restAPI) HandleGatewayRestart(w http.ResponseWriter, r *http.Request) {
 
 	msg := "Gateway is restarting; reconnecting shortly."
 	resp := gen.GatewayRestartResponse{
-		Status:       gen.Restarting,
+		Status:       gen.GatewayRestartResponseStatusRestarting,
 		RestartId:    restartID,
 		DrainSeconds: selfRestartDrainSeconds,
 		Message:      &msg,

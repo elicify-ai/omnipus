@@ -1,5 +1,5 @@
 // Local opt-in observation only; these records never cross the signaling socket.
-interface VideoDiagnosticSample {
+interface VideoDiagnosticSample { // not-wire-format: viewer-local diagnostic samples retained only in window memory, never sent over the network
   peer: number
   atMs: number
   durationMs: number

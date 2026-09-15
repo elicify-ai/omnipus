@@ -475,15 +475,20 @@ func TestCopilotProbe_NotSignedInIsNeverCached(t *testing.T) {
 	const path = "/api/v1/providers/github-copilot/sign-in/status"
 	api, _ := newAuthMethodOnboardingAPI(t)
 
-	dir := t.TempDir()
+	dir := neutralFakeCLIDir(t)
 	writeFakeCopilot(t, dir, "", "Error: No authentication information found.", 1)
 	t.Setenv("PATH", dir)
+	logs := captureSlog(t)
 
 	w := adminRequest(t, api, http.MethodGet, path)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 	var first gen.SignInStatus
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &first))
 	require.Equal(t, gen.SignInStatusStateNotSignedIn, first.State)
+	// not_signed_in is also the fallback for a message nobody recognised, so
+	// the state alone would pass even if the fake never printed its text.
+	require.NotContains(t, logs.String(), unrecognisedCopilotMessageLog,
+		"the verified no-credential message must be recognised, not reach the fallback; logs=%s", logs.String())
 
 	// The operator now signs in: the SAME binary path starts reporting success.
 	writeFakeCopilot(t, dir, "ok", "", 0)
@@ -523,66 +528,105 @@ func TestCopilotProbe_ConcurrentCallsAreRefusedNotSpawned(t *testing.T) {
 // TestCopilotProbe_ConcurrentHTTPCallsSpawnOneVendorProcess drives the same
 // guarantee through the real handler from many goroutines at once, counting
 // actual vendor execs.
+//
+// It used to assert only "at most one vendor process", and never looked at a
+// response. That also passes when NO call reached the probe — for example
+// when every call was refused by the per-IP rate limiter, which this test
+// shared with the rest of the package because it was the one provider test
+// not isolated — since 0 <= 1. The shared check below closes that.
 func TestCopilotProbe_ConcurrentHTTPCallsSpawnOneVendorProcess(t *testing.T) {
-	const path = "/api/v1/providers/github-copilot/sign-in/status"
 	api, _ := newAuthMethodOnboardingAPI(t)
 	counter := putCountingCopilotOnPath(t, "ok", "", 0)
+	requireConcurrentCopilotChecksSpawnOneProcess(t, api, counter, 25)
+}
+
+// requireConcurrentCopilotChecksSpawnOneProcess sends `calls` concurrent
+// Copilot sign-in checks as an admin and requires that the C2 guard, and only
+// the C2 guard, shaped every answer:
+//
+//   - every request carries this test's own rate-limit address, so the per-IP
+//     limiter can never be what refused it;
+//   - every answer is either signed_in (the one probe, or the C2 cache after
+//     it) or the C2 guard's own "already running" 429 — a rate-limiter 429 or
+//     anything else fails;
+//   - at least one call reached the probe, and exactly ONE vendor process ran.
+func requireConcurrentCopilotChecksSpawnOneProcess(t *testing.T, api *restAPI, counter string, calls int) {
+	t.Helper()
+	const path = "/api/v1/providers/github-copilot/sign-in/status"
 	cfg := api.agentLoop.GetConfig()
 
+	// Built up front: isolateRateLimit takes t, which a goroutine must not use
+	// to fail the test.
+	reqs := make([]*http.Request, calls)
+	recorders := make([]*httptest.ResponseRecorder, calls)
+	for i := range reqs {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		ctx := context.WithValue(req.Context(), UserContextKey{},
+			&config.UserConfig{Username: "admin"})
+		ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, cfg)
+		reqs[i] = isolateRateLimit(t, req.WithContext(ctx))
+		recorders[i] = httptest.NewRecorder()
+	}
+
 	var wg sync.WaitGroup
-	for i := 0; i < 25; i++ {
+	for i := range reqs {
 		wg.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
-			req := httptest.NewRequest(http.MethodGet, path, nil)
-			ctx := context.WithValue(req.Context(), UserContextKey{},
-				&config.UserConfig{Username: "admin"})
-			ctx = context.WithValue(ctx, ctxkey.ConfigContextKey{}, cfg)
-			api.HandleProviders(httptest.NewRecorder(), req.WithContext(ctx))
-		}()
+			api.HandleProviders(recorders[i], reqs[i])
+		}(i)
 	}
 	wg.Wait()
 
-	assert.LessOrEqual(t, countInvocations(t, counter), 1,
-		"25 concurrent status calls must never spawn more than one vendor process")
+	signedIn, refusedByGuard := 0, 0
+	for i, w := range recorders {
+		switch w.Code {
+		case http.StatusOK:
+			var got gen.SignInStatus
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got), "call %d body=%s", i, w.Body.String())
+			require.Equal(t, gen.SignInStatusStateSignedIn, got.State, "call %d body=%s", i, w.Body.String())
+			signedIn++
+		case http.StatusTooManyRequests:
+			require.Contains(t, w.Body.String(), "a Copilot sign-in check is already running",
+				"call %d was refused by something other than the C2 single-flight guard: body=%s", i, w.Body.String())
+			refusedByGuard++
+		default:
+			require.Failf(t, "unexpected response", "call %d: status %d body=%s", i, w.Code, w.Body.String())
+		}
+	}
+	require.Equal(t, calls, signedIn+refusedByGuard)
+	require.GreaterOrEqual(t, signedIn, 1, "at least one concurrent call must have reached the probe")
+	assert.Equal(t, 1, countInvocations(t, counter),
+		"%d concurrent status calls must spawn exactly ONE vendor process", calls)
 }
 
 // writeFakeCopilot writes a `copilot` stand-in into dir. Split out of the
 // existing putFakeCopilotOnPath so a test can REPLACE the binary mid-test
-// (the sign-in transition) without swapping PATH.
+// (the sign-in transition) without swapping PATH. The script uses shell
+// built-ins only and is self-checked before use — see installFakeCopilot.
 func writeFakeCopilot(t *testing.T, dir, stdout, stderr string, exitCode int) {
 	t.Helper()
-	body := "#!/bin/bash\n"
-	if stdout != "" {
-		body += "cat <<'OMNIPUS_EOF'\n" + stdout + "\nOMNIPUS_EOF\n"
-	}
-	if stderr != "" {
-		body += "cat >&2 <<'OMNIPUS_EOF'\n" + stderr + "\nOMNIPUS_EOF\n"
-	}
-	body += "exit " + strconv.Itoa(exitCode) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "copilot"), []byte(body), 0o755))
+	// Builtins only — dir is the whole PATH (see writeFakeCopilotBinary).
+	writeFakeCopilotBinary(t, dir, "", stdout, stderr, exitCode)
 }
 
 // putCountingCopilotOnPath installs a `copilot` stand-in that appends one line
 // to a tally file per invocation, and returns that file's path. Counting execs
 // rather than HTTP 200s is the point: the defect is about how many PREMIUM
 // REQUESTS the operator is billed for, not how many responses are returned.
+// installFakeCopilot proves the counter works before the test relies on a
+// count of zero meaning "never ran".
 func putCountingCopilotOnPath(t *testing.T, stdout, stderr string, exitCode int) string {
 	t.Helper()
 	if !hasBash() {
 		t.Skip("fake CLI uses a #!/bin/bash shebang with no Windows equivalent (see #113)")
 	}
-	dir := t.TempDir()
+	dir := neutralFakeCLIDir(t)
 	tally := filepath.Join(dir, "invocations")
-	body := "#!/bin/bash\necho x >> " + tally + "\n"
-	if stdout != "" {
-		body += "cat <<'OMNIPUS_EOF'\n" + stdout + "\nOMNIPUS_EOF\n"
-	}
-	if stderr != "" {
-		body += "cat >&2 <<'OMNIPUS_EOF'\n" + stderr + "\nOMNIPUS_EOF\n"
-	}
-	body += "exit " + strconv.Itoa(exitCode) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "copilot"), []byte(body), 0o755))
+	require.NotContainsf(t, tally, "'", "tally path %q cannot be single-quoted", tally)
+	// `echo` is a bash builtin; the output half is writeFakeCopilotBinary's,
+	// builtins only, because dir is the whole PATH.
+	writeFakeCopilotBinary(t, dir, "echo x >> '"+tally+"'\n", stdout, stderr, exitCode)
 	t.Setenv("PATH", dir)
 	return tally
 }

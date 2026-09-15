@@ -247,6 +247,34 @@ func TestMessageParentTool_NoSessionContext_Rejected(t *testing.T) {
 	}
 }
 
+// TestMessageParentTool_TaskRun_NoParentSession_RedirectsToGoalClaim proves a
+// native task run's root turn — which carries tools.WithRunningTaskID on ctx
+// (task_executor.go, before processTaskDirect) but never
+// tools.WithDelegateSessionID (only pkg/agent/subturn.go's spawnSubTurn sets
+// that, for a real delegated child) — gets an error that tells the worker
+// what to do instead of the generic "no session context available for this
+// call" text, since a task-dispatch session structurally has no delegating
+// parent to message (task_executor.go's mintTaskLifecycleRecord leaves
+// ParentDurableKey empty on purpose).
+func TestMessageParentTool_TaskRun_NoParentSession_RedirectsToGoalClaim(t *testing.T) {
+	lc := session.NewLifecycleStore(t.TempDir())
+	inbox := session.NewMessageInboxStore(t.TempDir())
+	tool := NewMessageParentTool(inbox, lc)
+	tool.SetSessionMessagingEnabled(func() bool { return true }) // fix B.5: default fail-closed
+
+	ctx := WithRunningTaskID(context.Background(), "task-42")
+	result := tool.Execute(ctx, map[string]any{"kind": "progress", "text": "x"})
+	if !result.IsError {
+		t.Fatal("expected an error: a task run has no parent session to message")
+	}
+	if strings.Contains(result.ForLLM, "no session context available for this call") {
+		t.Fatalf("expected the task-run-specific redirect, got the generic message: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "goal_claim") {
+		t.Fatalf("expected the error to redirect the worker to goal_claim, got: %s", result.ForLLM)
+	}
+}
+
 func TestMessageParentTool_ContentEgressFilter_Applied(t *testing.T) {
 	tool, _, inbox, _ := newMessageParentTestSetup(t)
 	tool.SetContentEgressFilter(func(s string) string {

@@ -992,6 +992,18 @@ func TestProcessMessage_MediaArtifactCanBeForwardedBySendFile(t *testing.T) {
 	// implicit "main" sentinel (ADR-064), so with an empty list there is no
 	// agent to resolve as the default and no tools/skills to report.
 	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Home: tmpDir}}
+	// Tools-on-demand OFF for this fixture. DefaultConfig ships it ON, where
+	// only full-tier and already-loaded tools are offered to the model; the
+	// test-registered media_artifact_tool is not full-tier, so on a compressed
+	// request it is offered only after ToolSearch loads it (ADR-071: a lazy
+	// tool is "callable only after load_tool promotes it"). The scripted
+	// provider calls it directly, which the offered-tool gate
+	// (tool_offer_gate.go) correctly refuses. This test is about forwarding a
+	// media artifact through send_file, not about tools-on-demand, and it pins
+	// the exact provider-call count — so it runs with tools-on-demand off, a
+	// supported operator setting under which every allowed tool is offered,
+	// rather than scripting an extra load step.
+	cfg.Tools.Manifest.Compressed = false
 
 	msgBus := bus.NewMessageBus()
 	provider := &artifactThenSendProvider{}

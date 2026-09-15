@@ -244,7 +244,7 @@ func (t *SwitchTabTool) Execute(ctx context.Context, args map[string]any) *tools
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
-	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
 		return result
 	}
 	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
@@ -355,7 +355,7 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
-	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
 		return result
 	}
 	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())
@@ -394,11 +394,17 @@ func (t *CloseTabTool) Execute(ctx context.Context, args map[string]any) *tools.
 // a URL, and makes it the active tab. Before this tool existed, the agent's
 // ONLY way to end up with a second tab was clicking a target="_blank" link
 // (ADR-041 D2 adoption) — there was no way to deliberately OPEN one, e.g. to
-// check a second source without losing the current page. Gated by
-// controlledResult for the same reason as SwitchTabTool/CloseTabTool: it
-// changes what the live view screencasts and what subsequent interactive
-// tools act on, so it defers to a human currently holding the live-view
-// control lock rather than fighting for the cursor (ADR-038 D6).
+// check a second source without losing the current page.
+//
+// D-G (operator decision, 2026-09-11): this tool is the ESCAPE HATCH out of
+// the ADR-085 control gate. It still calls controlledResult — the call is
+// load-bearing for the §14 rule-3 biconditional and for
+// control_gate_membership_test.go's oracle — but the gate lets it through by
+// name (controlGateEscapeHatchTools, tools.go), so an agent whose other
+// browser work is deferring against a held wheel can open a tab and carry on
+// instead of sitting idle. Read controlGateEscapeHatchTools' doc comment
+// before changing this: it records exactly how far the escape hatch reaches
+// while the control lock remains per-TAB-SET rather than per-tab.
 type OpenTabTool struct {
 	tools.BaseTool
 	// browserAudit is FR-027's audit sink, populated by the tool registry
@@ -419,9 +425,9 @@ func (t *OpenTabTool) Description() string {
 		"page you already have open. If the machine is short of memory this call " +
 		"fails with an explanatory error saying so — close a tab with browser_close_tab and retry. " +
 		"A provided url is SSRF-checked the same " +
-		"as browser_navigate. If a human is currently controlling the browser via the live view, this " +
-		"call defers instead of opening a tab — the result is {\"deferred\": true, \"reason\": ...} " +
-		"instead; wait for them to release control and retry. " +
+		"as browser_navigate. This is the ONE browser tool that still works while a human is " +
+		"controlling the browser via the live view: if your other browser actions are deferring, " +
+		"open a new tab with this and carry on there rather than waiting. " +
 		"Each workspace has its own browser, with its own logins; you cannot see or use another workspace's."
 }
 
@@ -461,7 +467,7 @@ func (t *OpenTabTool) Execute(ctx context.Context, args map[string]any) *tools.T
 	// Composition order is FIXED (spec §14.2 rule 1): ownership resolves the
 	// scope, controlledResult decides whether a human outranks this call, and
 	// only then is the write lease taken on the resolved (key, owner) pair.
-	if result := controlledResult(mgr, key, owner, t.Name()); result != nil {
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
 		return result
 	}
 	deferred, release := leaseWrite(ctx, mgr, key, owner, tools.ToolAgentID(ctx), t.Name())

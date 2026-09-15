@@ -268,28 +268,99 @@ func TestSeed_PlanSupervisorSkillAllowlist_ReEnforced(t *testing.T) {
 
 // TestSeed_JudgeSkillAllowlistUnchanged records — as a deliberate decision
 // rather than an oversight — that ADR-055 did NOT narrow the Judge's skills.
-// The Judge ships with no allowlist (i.e. unrestricted) today; narrowing it is
-// out of this change's scope and would be a behaviour change smuggled in under
-// a PlanSupervisor commit. If that gap is ever closed, this test is the place
-// it gets recorded.
+// It kept a standing invitation: "if you are narrowing it, update this test
+// and say so explicitly."
+//
+// SAYING SO EXPLICITLY: JUDGE-FR-059 (ADR-084 revision 9,
+// docs/internal/specs/judge-active-reviewer-spec.md — "systemAgentSkills
+// (IDJudge) MUST return a non-nil, empty []string{}") narrowed it. ADR-055's
+// claim was ALSO factually stale in the direction that matters: it described
+// the pre-narrowing nil as "unrestricted", but ADR-072 D5 / C12 had already
+// made context.go::skillAllowed deny every name for a nil OR empty allowlist,
+// so the registry shelf was closed either way. What FR-059 actually changes is
+// DURABILITY, not reach: seedSystemAgents re-enforces a seeded allowlist only
+// on its `skills != nil` branch, so an explicit [] is re-stamped on every boot
+// while a nil left an operator's hand-edit to it standing.
+//
+// This test therefore keeps its subject (the Judge's seeded skill posture) and
+// its strength (an exact-value assertion), and re-points it at the narrowed
+// posture FR-059 mandates.
 func TestSeed_JudgeSkillAllowlistUnchanged(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
 	j := findSeeded(t, cfg, string(coreagent.IDJudge))
-	assert.Nil(t, j.Skills,
-		"the Judge's (unrestricted) skill posture is unchanged by ADR-055 — "+
-			"if you are narrowing it, update this test and say so explicitly")
+	require.NotNil(t, j.Skills,
+		"JUDGE-FR-059: the Judge's seeded allowlist must be an EXPLICIT empty list, never nil — "+
+			"nil skips seedSystemAgents' re-enforcement branch entirely, so a hand-edited grant "+
+			"would survive every subsequent boot")
+	assert.Equal(t, []string{}, j.Skills,
+		"JUDGE-FR-059: the Judge's seeded registry-skill allowlist is non-nil and EMPTY — "+
+			"the verifier loads no registry skill at all")
+}
+
+// TestSeedSystemAgents_ReEnforcesJudgeSkillAllowlist is the second of
+// JUDGE-FR-059's two named oracles in the judge-active-reviewer-spec Test
+// Matrix, and it is the one that proves FR-059 buys something real rather
+// than documentation: the empty allowlist is a ROLE INVARIANT, re-enforced on
+// every SeedConfig pass, so an operator (or a stale config artifact) that
+// grants the verifier a skill has that grant repaired away on the next boot.
+//
+// Under the pre-FR-059 nil this could not be asserted at all —
+// seedSystemAgents leaves a nil-declaring System Agent's Skills untouched by
+// construction.
+func TestSeedSystemAgents_ReEnforcesJudgeSkillAllowlist(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tamper []string
+	}{
+		{"granted a skill", []string{"define-goal"}},
+		{"granted several skills", []string{"plan", "summarize"}},
+		// NOT covered here, deliberately: a tamper that sets the Judge's
+		// Skills back to nil. seedSystemAgents compares with
+		// stringSlicesEqual, which treats nil and []string{} as equal (both
+		// length 0), so that one shape is left as-is rather than rewritten.
+		// That is not a hole in the closure — context.go::skillAllowed
+		// denies every registry skill for nil and [] alike (ADR-072 D5/C12),
+		// so reach is identical; only the literal in config.json differs.
+		// Asserting a repair that does not happen would be asserting against
+		// the spec, which requires the SEED to be non-nil (FR-059) and says
+		// nothing about normalising a hand-edited nil.
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Config{}
+			require.True(t, coreagent.SeedConfig(cfg))
+
+			for i := range cfg.Agents.List {
+				if cfg.Agents.List[i].ID == string(coreagent.IDJudge) {
+					cfg.Agents.List[i].Skills = tc.tamper
+				}
+			}
+
+			require.True(t, coreagent.SeedConfig(cfg),
+				"re-enforcement must report modified=true after tampering with the Judge's allowlist")
+
+			j := findSeeded(t, cfg, string(coreagent.IDJudge))
+			assert.Equal(t, []string{}, j.Skills,
+				"JUDGE-FR-059: the Judge's empty allowlist is a role invariant — a tampered or "+
+					"cleared value must be repaired back to the seeded empty list on the next boot")
+		})
+	}
 }
 
 // --- FR-008: the exact one-tool grant, as a complement ---------------------
 
 // TestPlanSupervisorSeed_ExactlyPlanCorrect verifies FR-008 over the SEED
-// literal: plan_correct allow, ToolSearch allow and Skill allow (the two
+// literal: plan_correct allow, ToolSearch allow, Skill allow (the two
 // structural floors every agent gets — CLAUDE.md constraint 6 / ADR-072 D1 —
-// applying even to the most locked-down agent in the system), and every
-// other name in the static catalog deny. Stated as a COMPLEMENT rather than
-// a list, so a tool added to the catalog later can never silently land in
-// PlanSupervisor's allow set.
+// applying even to the most locked-down agent in the system) and, as of
+// ADR-081 D11, grep allow (FR-009's founder ruling — "explicit allow for
+// EVERY agent tier ... system agents", the deliberate FOURTH grant this
+// test's own comment used to say would require amending it on purpose; see
+// coreAgentSeed's IDPlanSupervisor case for the full rationale, including
+// why this does not reopen the read_file/list_directory withholding just
+// below). Every other name in the static catalog stays deny. Stated as a
+// COMPLEMENT rather than a list, so a tool added to the catalog later can
+// never silently land in PlanSupervisor's allow set.
 func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
@@ -301,7 +372,7 @@ func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 	require.Len(t, pol, len(catalog),
 		"policy must enumerate the whole static catalog, one literal entry each (Constraint #6)")
 
-	allowedNames := map[string]bool{"plan_correct": true, "ToolSearch": true, "Skill": true}
+	allowedNames := map[string]bool{"plan_correct": true, "ToolSearch": true, "Skill": true, "grep": true}
 	for _, name := range catalog {
 		p, ok := pol[name]
 		require.Truef(t, ok, "policy must enumerate tool %q (no default fallback)", name)
@@ -310,9 +381,9 @@ func TestPlanSupervisorSeed_ExactlyPlanCorrect(t *testing.T) {
 			continue
 		}
 		assert.Equalf(t, config.ToolPolicyDeny, p,
-			"%q must be deny — PlanSupervisor's grant is exactly plan_correct plus the ToolSearch "+
-				"and Skill structural floors; if you are widening it further, amend this test "+
-				"deliberately (the complement failing IS the guard working)", name)
+			"%q must be deny — PlanSupervisor's grant is exactly plan_correct plus the ToolSearch, "+
+				"Skill and (ADR-081 D11) grep grants; if you are widening it further, amend this "+
+				"test deliberately (the complement failing IS the guard working)", name)
 	}
 
 	// Named call-outs for the withheld grants the spec argues about at length,
@@ -350,14 +421,17 @@ func TestPlanSupervisorResolved_ExactlyPlanCorrect(t *testing.T) {
 	assert.Equal(t, "allow", resolveFor(t, cfg, id, "Skill", nil),
 		"(PlanSupervisor, Skill) must RESOLVE allow — the ADR-072 D1 structural floor every "+
 			"agent gets applies even to the most locked-down agent in the system")
+	assert.Equal(t, "allow", resolveFor(t, cfg, id, "grep", nil),
+		"(PlanSupervisor, grep) must RESOLVE allow — ADR-081 D11's founder ruling (FR-009) "+
+			"grants grep to every agent tier including the most locked-down system agent")
 
 	for _, name := range coreagent.AllStaticToolNames() {
-		if name == "plan_correct" || name == "ToolSearch" || name == "Skill" {
+		if name == "plan_correct" || name == "ToolSearch" || name == "Skill" || name == "grep" {
 			continue
 		}
 		assert.Equalf(t, "deny", resolveFor(t, cfg, id, name, nil),
 			"(PlanSupervisor, %s) must resolve deny — its grant is exactly plan_correct plus "+
-				"the ToolSearch and Skill structural floors", name)
+				"the ToolSearch/Skill structural floors and (ADR-081 D11) grep", name)
 	}
 }
 

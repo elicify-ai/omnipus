@@ -1,0 +1,691 @@
+// Tests for POST /api/v1/library/{workspace_id}/files/search — the file
+// search over a plain folder or mount
+// (docs/internal/specs/unified-search-and-grep-spec.md workstream B/C).
+//
+// Expected values are derived from the SPEC and the CONTRACT, never from what
+// the handler happens to do: field names come from
+// contracts/components/schemas/FileSearch*.yaml, bound defaults from MV-3
+// (max matches 1000), the error taxonomy from MV-1 and the Library's existing
+// mapLibraryErr table, and the walk-cap behaviour from MV-11.
+
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/filegrep"
+	"github.com/elicify-ai/omnipus/pkg/library"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
+)
+
+// TestLibraryFilesSearch_HandlerHappy — US-2 AS-1/2: a name match in a plain
+// folder, a content match with a bounded excerpt, an honestly-empty zero-hit
+// answer (MV-5: hits is [] on the wire, never null), and a clamp-disclosed
+// limits_applied echo (R2-MIN-007) when the caller over-asks.
+func TestLibraryFilesSearch_HandlerHappy(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	dir := workDir(api, ws)
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "Q3 report.md"), []byte("nothing relevant in here"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("the meeting notes are here"), 0o600))
+
+	// US-2 AS-1: a name match returns the workspace-relative path.
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"report"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.FileSearchResponse](t, w)
+	require.Len(t, resp.Hits, 1)
+	assert.Equal(t, "Q3 report.md", resp.Hits[0].Path)
+	assert.Equal(t, gen.FileSearchResponseHitsMatchKindName, resp.Hits[0].MatchKind)
+	assert.False(t, resp.Truncated)
+
+	// US-2 AS-2: a content match carries a bounded, non-empty excerpt and the
+	// 1-based matching line number.
+	w = libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"meeting"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp = decodeJSON[gen.FileSearchResponse](t, w)
+	require.Len(t, resp.Hits, 1)
+	assert.Equal(t, "notes.txt", resp.Hits[0].Path)
+	assert.Equal(t, gen.FileSearchResponseHitsMatchKindContent, resp.Hits[0].MatchKind)
+	require.NotNil(t, resp.Hits[0].Excerpt)
+	assert.Contains(t, *resp.Hits[0].Excerpt, "meeting")
+	require.NotNil(t, resp.Hits[0].Line)
+	assert.Equal(t, 1, *resp.Hits[0].Line)
+
+	// MV-5: a zero-hit answer is [] on the wire, never null. Asserted on the
+	// RAW body — decoding through encoding/json would silently turn either
+	// shape into the same empty Go slice and hide a regression.
+	w = libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"zzzznomatchzzzz"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), `"hits":[]`,
+		"a zero-hit response must marshal hits as [] not null: %s", w.Body.String())
+	resp = decodeJSON[gen.FileSearchResponse](t, w)
+	assert.Empty(t, resp.Hits)
+	assert.False(t, resp.Truncated)
+
+	// R2-MIN-007: an over-cap request is clamped to the server default (MV-3:
+	// max matches 1000) and the clamp is disclosed via limits_applied, not
+	// honored silently.
+	w = libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"report","limits":{"matches":999999}}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp = decodeJSON[gen.FileSearchResponse](t, w)
+	assert.Equal(t, 1000, resp.LimitsApplied.Matches,
+		"a matches override above the server default must be clamped down and disclosed, per MV-3")
+}
+
+// TestLibraryFilesSearch_ErrTaxonomy — MV-1's status table: 400 invalid body,
+// 400 invalid regex (with the engine's own compile error), 401
+// unauthenticated, 403 a scope path outside the confined root, 404 an unknown
+// workspace, 429 rate-limited (with Retry-After).
+func TestLibraryFilesSearch_ErrTaxonomy(t *testing.T) {
+	t.Run("400 invalid JSON body", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":`)
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+
+	t.Run("400 invalid regex surfaces the compile error", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"(","regex":true}`)
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		assert.Contains(t, w.Body.String(), "missing closing",
+			"the 400 must surface the engine's own RE2 compile error, not a generic message")
+	})
+
+	// Drives the REAL registered middleware chain (a.withUploadAuth wrapping
+	// a.HandleLibraryTree, the same wrapper every /api/v1/library/{id}/...
+	// endpoint is registered under — rest.go's
+	// RegisterHTTPHandler("/api/v1/library/", ...) line), not a bare handler
+	// shortcut — mirrors TestVaultSearch_RefusesUnauthenticatedCallsLikeItsNeighbours's
+	// own reasoning: a shortcut here would hide an auth regression on this
+	// one endpoint while its neighbours stayed protected.
+	t.Run("401 unauthenticated", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		guarded := api.withUploadAuth(api.HandleLibraryTree)
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/library/"+ws+"/files/search",
+			strings.NewReader(`{"query":"x"}`))
+		r.Header.Set("Content-Type", "application/json")
+		guarded(w, r)
+		assert.Equal(t, http.StatusUnauthorized, w.Code,
+			"an unauthenticated caller must be refused before any search runs: %s", w.Body.String())
+	})
+
+	t.Run("403 path outside the confined root", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+		outsideDir := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(outsideDir, "secret.txt"), []byte("top secret"), 0o600))
+		require.NoError(t, os.Symlink(outsideDir, filepath.Join(workDir(api, ws), "escape")))
+
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"secret","path":"escape"}`)
+		assert.Equal(t, http.StatusForbidden, w.Code, w.Body.String())
+	})
+
+	t.Run("404 unknown workspace", func(t *testing.T) {
+		api, _ := buildLibraryTestAPI(t)
+		w := libPostJSON(t, api, "/api/v1/library/"+ulidLikeID(t)+"/files/search", `{"query":"x"}`)
+		assert.Equal(t, http.StatusNotFound, w.Code, w.Body.String())
+	})
+
+	// MV-11/FR-017: files/search sits behind the SAME knowledge-retrieval-
+	// class limiter as its sibling knowledge routes — exhaust this
+	// workspace's own bucket directly, the same call the handler itself
+	// makes, rather than firing dozens of real requests. The drain runs on a
+	// private limiter (useFreshKnowledgeLimiter) so a full bucket can never
+	// outlive this subtest and be inherited by a later test.
+	t.Run("429 rate limited", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+		useFreshKnowledgeLimiter(t)
+		drainKnowledgeBudget(t, "", ws, knowledgeRead) // libPostJSON carries no signed-in account
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"x"}`)
+		assert.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
+	})
+}
+
+// TestLibraryFilesSearch_GlobBoundsEnforcedRegardlessOfValidateInbound is a
+// code-review regression (2026-09-07, G2): the contract's include_globs/
+// exclude_globs maxItems:32/maxLength:512 bounds
+// (contracts/components/schemas/FileSearchRequest.yaml) were declared but
+// never enforced by the handler — fileSearchOptionsFromRequest copied
+// *req.IncludeGlobs/*req.ExcludeGlobs verbatim into filegrep.Options, and
+// filegrep.Limits.Normalize only clamps files/bytes/matches/depth/deadline/
+// output, never glob count or length. The contract-schema check that WOULD
+// catch this is itself gated behind gateway.validate_inbound, a plain
+// omitempty bool defaulting to false (decodeAndValidate's fast path skips it
+// entirely) — so on a default-configured server, an authenticated caller
+// could post thousands of globs and force globAllowed to run
+// O(len(include)+len(exclude)) doublestar.Match calls per visited file,
+// burning a shared MV-11 walk slot for its full deadline. buildLibraryTestAPI
+// leaves ValidateInbound at its zero value (false), so this test exercises
+// exactly that default-configured, unvalidated path — matching MV-1's 400
+// "invalid body" bucket, the same taxonomy TestLibraryFilesSearch_ErrTaxonomy
+// covers for this endpoint's other bad-request cases.
+func TestLibraryFilesSearch_GlobBoundsEnforcedRegardlessOfValidateInbound(t *testing.T) {
+	t.Run("include_globs over the 32-item cap is rejected 400", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+		require.False(t, api.agentLoop.GetConfig().Gateway.ValidateInbound,
+			"this test must exercise the unvalidated default, not the schema-validated path")
+
+		globs := make([]string, 33)
+		for i := range globs {
+			globs[i] = "**/*.md"
+		}
+		body, err := json.Marshal(map[string]any{"query": "x", "include_globs": globs})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+
+	t.Run("exclude_globs over the 32-item cap is rejected 400", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		globs := make([]string, 33)
+		for i := range globs {
+			globs[i] = "**/*.log"
+		}
+		body, err := json.Marshal(map[string]any{"query": "x", "exclude_globs": globs})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+
+	t.Run("a single glob entry over the 512-char cap is rejected 400", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		body, err := json.Marshal(map[string]any{
+			"query":         "x",
+			"include_globs": []string{"**/" + strings.Repeat("a", 513) + ".md"},
+		})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+
+	t.Run("globs within both caps are accepted", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(workDir(api, ws), "report.md"), []byte("x"), 0o600))
+
+		globs := make([]string, 32)
+		for i := range globs {
+			globs[i] = "**/*.md"
+		}
+		body, err := json.Marshal(map[string]any{"query": "report", "include_globs": globs})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+		resp := decodeJSON[gen.FileSearchResponse](t, w)
+		require.Len(t, resp.Hits, 1)
+	})
+}
+
+// TestLibraryFilesSearch_QueryAndPathBoundsEnforcedRegardlessOfValidateInbound
+// is a code-review finding (F4, 2026-09-08): the contract's query
+// maxLength:1024 (contracts/components/schemas/FileSearchRequest.yaml) was
+// declared but never enforced by the handler — decodeAndValidate's schema
+// pass is entirely opt-in (gateway.validate_inbound defaults false,
+// buildLibraryTestAPI leaves it at that zero value), and the handler itself
+// only ever checked query for emptiness. A caller could post a
+// multi-megabyte query with regex:true straight into filegrep's compile-and-
+// scan path, burning a shared MV-11 walk slot for its full deadline — on a
+// request the contract says to reject outright. path had no length bound in
+// the contract at all, the same unenforced-length gap through a second
+// field; this test also pins the same cap now declared for it.
+func TestLibraryFilesSearch_QueryAndPathBoundsEnforcedRegardlessOfValidateInbound(t *testing.T) {
+	t.Run("a query at the 1024-char cap is accepted", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+		require.False(t, api.agentLoop.GetConfig().Gateway.ValidateInbound,
+			"this test must exercise the unvalidated default, not the schema-validated path")
+
+		body, err := json.Marshal(map[string]any{"query": strings.Repeat("a", fileSearchMaxQueryLength)})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	})
+
+	t.Run("a query over the 1024-char cap is rejected 400", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		body, err := json.Marshal(map[string]any{"query": strings.Repeat("a", fileSearchMaxQueryLength+1)})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+
+	t.Run("a regex query over the cap never reaches the engine", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		orig := filegrepSearchFn
+		t.Cleanup(func() { filegrepSearchFn = orig })
+		called := false
+		filegrepSearchFn = func(ctx context.Context, roots []filegrep.Root, opts filegrep.Options) (filegrep.Result, error) {
+			called = true
+			return orig(ctx, roots, opts)
+		}
+
+		body, err := json.Marshal(map[string]any{
+			"query": strings.Repeat("a", fileSearchMaxQueryLength+1), "regex": true,
+		})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+		assert.False(t, called, "an over-cap query must be rejected before the engine is ever invoked")
+	})
+
+	t.Run("a path over the contract's cap is rejected 400", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		overCap := strings.Repeat("a/", fileSearchMaxPathLength)
+		body, err := json.Marshal(map[string]any{"query": "x", "path": overCap})
+		require.NoError(t, err)
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+		assert.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	})
+}
+
+// TestLibraryFilesSearch_ConcurrencyCapAndCancel — MV-11 / R2-MAJ-003: the
+// ONE shared 2-slot walk semaphore answers a 3rd concurrent request with 429
+// + Retry-After, and a disconnected client's r.Context() cancellation stops
+// the walk promptly rather than running to an injected large deadline.
+func TestLibraryFilesSearch_ConcurrencyCapAndCancel(t *testing.T) {
+	t.Run("3rd walk while both slots are busy answers 429", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		// Occupy both shared slots directly, exactly as a slow REST walk or
+		// the agent grep tool's own walk would (MV-11: "TOOL walk shares the
+		// semaphore") — the semaphore does not know or care which surface
+		// acquired it.
+		release1, ok1 := AcquireFilegrepWalkSlot(context.Background(), 0)
+		require.True(t, ok1)
+		release2, ok2 := AcquireFilegrepWalkSlot(context.Background(), 0)
+		require.True(t, ok2)
+		defer release1()
+		defer release2()
+
+		w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"anything"}`)
+		assert.Equal(t, http.StatusTooManyRequests, w.Code, w.Body.String())
+		assert.Equal(t, "1", w.Header().Get("Retry-After"))
+	})
+
+	// filegrepSearchFn is this file's swappable seam over filegrep.Search
+	// (see its doc comment). Substituting a controllable stand-in here lets
+	// this test prove r.Context() cancellation propagates into the engine
+	// call deterministically — a real, disk-backed walk fast enough to
+	// finish in a unit test would never be slow enough to reliably still be
+	// running when the cancel fires, and one slow enough to guarantee that
+	// window would make the suite flaky/slow. The semaphore acquisition,
+	// root building and request wiring this exercises are all the REAL
+	// production code path; only the engine call itself is stood in for.
+	t.Run("client disconnect cancels the walk", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+		orig := filegrepSearchFn
+		t.Cleanup(func() { filegrepSearchFn = orig })
+
+		started := make(chan struct{})
+		filegrepSearchFn = func(ctx context.Context, _ []filegrep.Root, opts filegrep.Options) (filegrep.Result, error) {
+			close(started)
+			select {
+			case <-ctx.Done():
+				return filegrep.Result{
+					Hits:            []filegrep.Hit{},
+					Truncated:       true,
+					TruncatedReason: filegrep.ReasonDeadline,
+					LimitsApplied:   opts.Limits.Normalize(),
+				}, nil
+			case <-time.After(30 * time.Second):
+				return filegrep.Result{Hits: []filegrep.Hit{}, LimitsApplied: opts.Limits.Normalize()}, nil
+			}
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/library/"+ws+"/files/search",
+			strings.NewReader(`{"query":"anything"}`)).WithContext(ctx)
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+
+		done := make(chan struct{})
+		go func() {
+			api.HandleLibrary(rec, req)
+			close(done)
+		}()
+
+		select {
+		case <-started:
+		case <-time.After(2 * time.Second):
+			t.Fatal("search never reached the engine call")
+		}
+
+		cancelledAt := time.Now()
+		cancel()
+
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatal("handler did not return after the client's context was cancelled")
+		}
+		assert.Less(t, time.Since(cancelledAt), 1*time.Second,
+			"a disconnected client must cancel the walk promptly via r.Context(), not run to the fake engine's 30s fallback")
+	})
+}
+
+// TestLibraryFilesSearch_MountScope — US-2 AS-3: a mount is searched as its
+// own root, so its hits carry the mount-prefixed workspace-relative path; an
+// engineered small bound truncates honestly over the mount's own entries too,
+// not just the plain work tree.
+func TestLibraryFilesSearch_MountScope(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+	mountDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(mountDir, "shared-a.txt"), []byte("alpha"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(mountDir, "shared-b.txt"), []byte("beta"), 0o600))
+	_, _, err := workspace.CreateMount(api.homePath, ws, "mymount", mountDir)
+	require.NoError(t, err)
+
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"shared"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.FileSearchResponse](t, w)
+	require.Len(t, resp.Hits, 2)
+	paths := []string{resp.Hits[0].Path, resp.Hits[1].Path}
+	assert.Contains(t, paths, "mymount/shared-a.txt",
+		"a mount hit must carry the mount-prefixed workspace-relative path")
+	assert.Contains(t, paths, "mymount/shared-b.txt")
+	assert.False(t, resp.Truncated)
+
+	// Edge-case table (US-2 AS-3; US-3 AS-6): an engineered small bound
+	// truncates honestly. Deterministic path-lexicographic order (spec A3)
+	// means the alphabetically-first match is the one a 1-match cap keeps.
+	w = libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"shared","limits":{"matches":1}}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp = decodeJSON[gen.FileSearchResponse](t, w)
+	require.True(t, resp.Truncated)
+	require.NotNil(t, resp.TruncatedReason)
+	assert.Equal(t, gen.FileSearchResponseTruncatedReasonMaxMatches, *resp.TruncatedReason)
+	require.Len(t, resp.Hits, 1)
+	assert.Equal(t, "mymount/shared-a.txt", resp.Hits[0].Path)
+}
+
+// TestLibraryFilesSearch_SemaphoreIsSharedWithTheAgentTool — MV-11's actual
+// guarantee, which no other test states: the REST surface and the agent grep
+// tool draw from ONE 2-slot counter, not one each.
+//
+// This test exists because the defect it catches shipped in the parallel
+// build and survived a green suite. The gateway owned a private 2-slot
+// channel while pkg/tools/grep.go acquired pkg/filegrep's — two independent
+// caps of 2, so four walks could run at once and the "cap" bounded nothing.
+// TestLibraryFilesSearch_ConcurrencyCapAndCancel could not see it: it fills
+// the slots through AcquireFilegrepWalkSlot, the same door the handler uses,
+// so it stays green whichever counter that door happens to open.
+//
+// The discriminating move is to fill both slots through the TOOL's door —
+// filegrep.TryAcquire, exactly what GrepTool.Execute calls — and then assert
+// the REST surface is refused. Under one shared counter that is a 429; under
+// two separate counters the handler finds its own slots free and answers 200.
+func TestLibraryFilesSearch_SemaphoreIsSharedWithTheAgentTool(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+	// Both acquisitions go through pkg/filegrep directly — the agent tool's
+	// path, never the gateway's wrapper.
+	require.True(t, filegrep.TryAcquire(context.Background()),
+		"tool-side slot 1 must be available on a quiet process")
+	require.True(t, filegrep.TryAcquire(context.Background()),
+		"tool-side slot 2 must be available on a quiet process")
+	defer filegrep.Release()
+	defer filegrep.Release()
+
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"anything"}`)
+	assert.Equalf(t, http.StatusTooManyRequests, w.Code,
+		"two agent-tool walks already hold both shared slots, so the human file "+
+			"search must be refused with 429 — a 200 here means the REST surface counts "+
+			"against its OWN private semaphore and MV-11's cross-surface cap is not real. "+
+			"body=%s", w.Body.String())
+	assert.Equal(t, "1", w.Header().Get("Retry-After"))
+}
+
+// TestLibraryFilesSearch_MalformedMountStoreReportsRootLost is F2 (2026-09-08
+// code review): rest_library_files_search.go's buildFileSearchRoots called
+// workspace.LoadMounts and, on !ok (an unreadable or malformed mount record —
+// I/O failure, bad JSON, a workspace_id mismatch), simply skipped every mount
+// with no log, no counter, and no wire signal. A whole-workspace search
+// (path omitted) then silently covered the work tree alone: a 200 with
+// truncated:false — indistinguishable from "nothing matched" — even though
+// two of the workspace's three mounted folders were never opened.
+// root_lost's own documented meaning already covers exactly this case ("the
+// walk root OR A MOUNT ROOT became unreadable"); this proves the handler
+// actually raises it, AND that the work tree it COULD still search is not
+// abandoned in the process (a broken mount store must not fail the whole
+// request FR-021's own "visible, never quiet" principle applies just as much
+// to what the search DID cover as to what it could not).
+func TestLibraryFilesSearch_MalformedMountStoreReportsRootLost(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir(api, ws), "report.md"), []byte("x"), 0o600))
+
+	storePath, err := workspace.MountStorePath(api.homePath, ws)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0o700))
+	require.NoError(t, os.WriteFile(storePath, []byte("{not valid json"), 0o600))
+
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"report"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.FileSearchResponse](t, w)
+
+	require.True(t, resp.Truncated,
+		"a malformed mount store must be surfaced as root_lost, never a quiet empty result")
+	require.NotNil(t, resp.TruncatedReason)
+	assert.Equal(t, gen.FileSearchResponseTruncatedReasonRootLost, *resp.TruncatedReason)
+
+	require.Len(t, resp.Hits, 1,
+		"a broken mount store must not take the whole-workspace search offline — the work tree is still searched")
+	assert.Equal(t, "report.md", resp.Hits[0].Path)
+}
+
+// TestLibraryFilesSearch_UnreachableMountReportsRootLost is F3 (2026-09-08
+// code review): buildFileSearchRoots' loop over LoadMounts' entries already
+// logged a WARN when os.OpenRoot(m.HostPath) failed (a detached volume, a
+// renamed folder) but then just `continue`d — no stat, no truncated_reason,
+// no wire signal at all, even though root_lost's own contract names this
+// exact case. This proves an unreachable mount now surfaces the same
+// root_lost signal as F2's broken store, while the work tree and any OTHER,
+// still-reachable mount stay fully searched.
+func TestLibraryFilesSearch_UnreachableMountReportsRootLost(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir(api, ws), "report.md"), []byte("x"), 0o600))
+
+	// A mount whose target volume has since detached: CreateMount validates
+	// the target exists at creation time, so the only way to reach an
+	// unopenable target later is to remove it out from under an already
+	// granted mount — exactly the "detached volume, renamed folder" scenario
+	// buildFileSearchRoots' own doc comment names.
+	vanished := filepath.Join(t.TempDir(), "vanished-mount")
+	require.NoError(t, os.MkdirAll(vanished, 0o700))
+	_, _, err := workspace.CreateMount(api.homePath, ws, "gonemount", vanished)
+	require.NoError(t, err)
+	require.NoError(t, os.RemoveAll(vanished))
+
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"report"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.FileSearchResponse](t, w)
+
+	require.True(t, resp.Truncated,
+		"a mount whose target cannot be opened must be surfaced as root_lost, never a quiet empty result")
+	require.NotNil(t, resp.TruncatedReason)
+	assert.Equal(t, gen.FileSearchResponseTruncatedReasonRootLost, *resp.TruncatedReason)
+
+	require.Len(t, resp.Hits, 1,
+		"an unreachable mount must not take the whole-workspace search offline — the work tree is still searched")
+	assert.Equal(t, "report.md", resp.Hits[0].Path)
+}
+
+// TestLibraryFilesSearch_MountScopedSearchStillHonestlyTruncatesOnBudget is
+// the F2/F3 fix's discriminating negative control: an ordinary budget-capped
+// truncation (a real engine reason) must still win over root_lost, and a
+// healthy multi-mount search with nothing broken must NOT report root_lost at
+// all — proving the new signal fires only for an actually-lost root, not on
+// every truncated response.
+func TestLibraryFilesSearch_HealthyMultiMountSearchNeverReportsRootLost(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir(api, ws), "report.md"), []byte("x"), 0o600))
+
+	mountDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(mountDir, "report-2.md"), []byte("x"), 0o600))
+	_, _, err := workspace.CreateMount(api.homePath, ws, "healthy", mountDir)
+	require.NoError(t, err)
+
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"report"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.FileSearchResponse](t, w)
+
+	assert.False(t, resp.Truncated,
+		"a fully healthy work tree + mount search must not be flagged root_lost")
+	require.Len(t, resp.Hits, 2, "both the work tree and the mount must be searched")
+}
+
+// TestLibraryFilesSearch_DroppedInvalidMountEntryReportsRootLost is I4
+// (2026-09-09 code review): loadMountStore (pkg/workspace/mountstore.go)
+// silently DROPS any recorded mount entry that fails Mount.Validate() or
+// repeats an earlier name, yet still returns ok=true for the entries that
+// survive. Before this fix, workspace.LoadMounts gave buildFileSearchRoots
+// no way to tell "this workspace has no such mounts" apart from "this
+// workspace's mounts.json named more mounts than were actually opened" — a
+// mounts.json with one healthy mount and one corrupt entry searched only the
+// healthy mount and answered truncated:false, byte-identical to a complete
+// search of every recorded mount, even though the corrupt one was never
+// opened at all. This proves the dropped entry is now surfaced as root_lost
+// (the same signal F2/F3 already use for a store-level or open-level
+// failure), while the work tree and the surviving valid mount are still
+// both searched.
+func TestLibraryFilesSearch_DroppedInvalidMountEntryReportsRootLost(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir(api, ws), "report.md"), []byte("x"), 0o600))
+
+	goodMountDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(goodMountDir, "report-2.md"), []byte("x"), 0o600))
+
+	storePath, err := workspace.MountStorePath(api.homePath, ws)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0o700))
+	raw := map[string]any{
+		"workspace_id": ws,
+		"mounts": []map[string]any{
+			{"name": "goodmount", "host_path": goodMountDir},
+			// Fails Mount.Validate: a name containing a path separator is not
+			// a single path segment (see ValidateMountName) — dropped by
+			// loadMountStore with a WARN, never trusted.
+			{"name": "bad/name", "host_path": "/tmp"},
+		},
+	}
+	data, err := json.MarshalIndent(raw, "", "  ")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(storePath, data, 0o600))
+
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", `{"query":"report"}`)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+	resp := decodeJSON[gen.FileSearchResponse](t, w)
+
+	require.True(t, resp.Truncated,
+		"a mount dropped from the store during validation must be surfaced as root_lost, never counted as a complete search")
+	require.NotNil(t, resp.TruncatedReason)
+	assert.Equal(t, gen.FileSearchResponseTruncatedReasonRootLost, *resp.TruncatedReason)
+
+	require.Len(t, resp.Hits, 2,
+		"the work tree and the surviving valid mount must still both be searched — a dropped entry must not take the whole search offline")
+}
+
+// TestBuildFileSearchRoots_DistinguishesRootLossFromPolicyFailure is L8
+// (2026-09-09 code review): buildFileSearchRoots' caller-facing comment
+// claimed a buildErr "can only be a root going away", but the function
+// actually returns errors from several sources — workspace.SafeWorkDir,
+// fspolicy.EffectiveFSPolicy (the carve-out guard itself), os.OpenRoot, and
+// fs.Sub — and only an os.OpenRoot failure is a genuine "the root
+// disappeared between StatDir and here" case. A security-policy or
+// workspace-id construction failure is a different kind of problem and must
+// not be classified (even internally) as a missing folder. This proves the
+// two classes are actually distinguishable via errFileSearchRootUnreachable,
+// using two REAL failures (a removed directory; an unsafe workspace id) —
+// not a stubbed error.
+func TestBuildFileSearchRoots_DistinguishesRootLossFromPolicyFailure(t *testing.T) {
+	t.Run("a work root that vanished after StatDir is a genuine root-loss error", func(t *testing.T) {
+		api, ws := buildLibraryTestAPI(t)
+		libRoot, err := library.OpenRoot(api.homePath, ws)
+		require.NoError(t, err)
+		defer func() { _ = libRoot.Close() }()
+
+		require.NoError(t, os.RemoveAll(workDir(api, ws)),
+			"simulate the work tree disappearing between StatDir and buildFileSearchRoots opening its own independent os.Root")
+
+		_, closeRoots, rootLost, buildErr := buildFileSearchRoots(api.homePath, ws, libRoot, "")
+		defer closeRoots()
+
+		require.Error(t, buildErr)
+		assert.False(t, rootLost,
+			"buildErr and rootLost are reported through different channels — rootLost is F2/F3/I4's own per-mount signal")
+		assert.True(t, errors.Is(buildErr, errFileSearchRootUnreachable),
+			"an os.OpenRoot failure on the work root must classify as root-unreachable: %v", buildErr)
+	})
+
+	t.Run("an invalid workspace id fails workspace-dir construction, not root loss", func(t *testing.T) {
+		home := t.TempDir()
+
+		_, closeRoots, rootLost, buildErr := buildFileSearchRoots(home, "../escape", nil, "")
+		defer closeRoots()
+
+		require.Error(t, buildErr)
+		assert.False(t, rootLost)
+		assert.False(t, errors.Is(buildErr, errFileSearchRootUnreachable),
+			"a workspace-id construction failure must NOT be classified as a root going away: %v", buildErr)
+	})
+}
+
+// TestLibraryFilesSearch_BadGlobSaysGlobNotRegex is L9 (2026-09-09 code
+// review, REST half only — pkg/filegrep itself already reports the right
+// underlying cause via validateGlobs): filegrep.Search's single error return
+// covers both a malformed regex query AND a malformed include_globs/
+// exclude_globs entry, and this handler previously labeled BOTH "invalid
+// regex pattern". The underlying filegrep message rode along (so it misled
+// rather than hid the real cause), but a caller who mistyped a glob was
+// pointed at the wrong field. "a[b" is doublestar's own canonical invalid-
+// pattern example (an unterminated character class).
+func TestLibraryFilesSearch_BadGlobSaysGlobNotRegex(t *testing.T) {
+	api, ws := buildLibraryTestAPI(t)
+	require.NoError(t, os.MkdirAll(workDir(api, ws), 0o700))
+
+	body, err := json.Marshal(map[string]any{"query": "x", "include_globs": []string{"a[b"}})
+	require.NoError(t, err)
+	w := libPostJSON(t, api, "/api/v1/library/"+ws+"/files/search", string(body))
+
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	assert.Contains(t, w.Body.String(), "invalid glob pattern",
+		"a bad include_globs entry must be reported as a glob problem: %s", w.Body.String())
+	assert.NotContains(t, w.Body.String(), "invalid regex pattern",
+		"a glob error must not be mislabeled as a regex error: %s", w.Body.String())
+}

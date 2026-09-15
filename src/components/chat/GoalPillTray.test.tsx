@@ -74,20 +74,20 @@ describe('GoalPillTray — per-goal-id pills', () => {
   })
 })
 
-describe('GoalPillTray — 9-state rendering', () => {
+describe('GoalPillTray — 13-state rendering (ADR-081 D5/D9: `queued` retired; C-39: five states added)', () => {
   beforeEach(() => {
     useChatStore.setState({ goalPills: {} })
     useJudgeActivityStore.getState().reset()
   })
 
-  // All 9 wire states (contracts/components/schemas/GoalStatusFrame.yaml),
-  // including `cleared` — the UAT S3 post-ADR-053 addition. Its row was
-  // missing here entirely (this table was still titled "8-state" and had
-  // only 8 rows), which is exactly how a mutation collapsing `cleared`'s
-  // rendering into `failed`'s survived 72/72 green: nothing asserted that
-  // `goal-pill-cleared` exists at all.
+  // 13 of the 14 wire states (contracts/components/schemas/GoalStatusFrame.yaml)
+  // render a dedicated pill, including `cleared` — the UAT S3 post-ADR-053
+  // addition — and the five states added by the joint ADR-084/ADR-085/
+  // ADR-086 delivery (C-39): `judge_refused_god_mode`, `judge_cas_loss`,
+  // `blocked`, `claim_overturned`, `expired`. The 14th, `queued`, is
+  // retired (ADR-081 D5/D9) — see the dedicated describe block below for
+  // its now-renders-nothing coverage.
   const states: Array<[GoalStatusFrame['state'], string]> = [
-    ['queued', 'goal-pill-queued'],
     ['active', 'goal-pill-active'],
     ['waiting_on_user', 'goal-pill-waiting'],
     ['judge_unavailable', 'goal-pill-judge-unavailable'],
@@ -96,6 +96,11 @@ describe('GoalPillTray — 9-state rendering', () => {
     ['done', 'goal-pill-done'],
     ['failed', 'goal-pill-failed'],
     ['cleared', 'goal-pill-cleared'],
+    ['judge_refused_god_mode', 'goal-pill-judge-refused-god-mode'],
+    ['judge_cas_loss', 'goal-pill-judge-cas-loss'],
+    ['blocked', 'goal-pill-blocked'],
+    ['claim_overturned', 'goal-pill-claim-overturned'],
+    ['expired', 'goal-pill-expired'],
   ]
 
   for (const [state, testId] of states) {
@@ -133,6 +138,39 @@ describe('GoalPillTray — 9-state rendering', () => {
     expect(clearedIconHtml).toBeTruthy()
     expect(failedIconHtml).toBeTruthy()
     expect(clearedIconHtml).not.toEqual(failedIconHtml)
+  })
+})
+
+// ADR-081 D5/D9: `queued` is retired — the backend never emits it anymore
+// (the pending-confirm state it represented is deleted in full). The
+// wire-enum value survives untouched in the generated type (Constraint #8),
+// so the tray still filters it out defensively rather than the type simply
+// not existing.
+describe('GoalPillTray — queued state (retired, ADR-081 D5/D9)', () => {
+  beforeEach(() => {
+    useChatStore.setState({ goalPills: {} })
+    useJudgeActivityStore.getState().reset()
+  })
+
+  it('renders no tray at all when the only pill is queued', () => {
+    useChatStore.setState({ goalPills: { g1: makeGoal({ goal_id: 'g1', state: 'queued' }) } })
+    const { container } = render(<GoalPillTray />)
+    expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByTestId('goal-pill-tray')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('goal-pill-queued')).not.toBeInTheDocument()
+  })
+
+  it('renders only the non-queued pill when a queued pill and a live pill coexist', () => {
+    useChatStore.setState({
+      goalPills: {
+        stale: makeGoal({ goal_id: 'stale', state: 'queued' }),
+        g1: makeGoal({ goal_id: 'g1', state: 'active' }),
+      },
+    })
+    render(<GoalPillTray />)
+    expect(screen.getAllByTestId('goal-pill-wrapper')).toHaveLength(1)
+    expect(screen.getByTestId('goal-pill-active')).toBeInTheDocument()
+    expect(screen.queryByTestId('goal-pill-queued')).not.toBeInTheDocument()
   })
 })
 
@@ -298,4 +336,94 @@ describe('GoalPillTray — terminal pill display window (regression fix, bc66345
     // window has elapsed — this fix is render-layer only, not data-loss.
     expect(screen.queryByTestId('goal-pill-tray')).not.toBeInTheDocument()
   })
+})
+
+// ── OQ-17: `expired` joins the terminal set; `blocked`/`claim_overturned` do NOT ──
+//
+// Plan OQ-17's assumption, taken as an instruction: `blocked` and
+// `claim_overturned` are deliberately NOT added to GOAL_TERMINAL_STATES,
+// because the goal is still live in both states and a returning operator
+// MUST still see them (JUDGE-FR-102's whole point). `expired` IS added —
+// it is the fourth distinguishable terminal ending (ADR-086 GOAL-FR-028).
+// A mutation that folded any of these three the wrong way would pass every
+// OTHER test in this file (each state's own dedicated testId still
+// renders), so this coverage asserts the display-window BEHAVIOUR
+// specifically, not just presence.
+// ── Judge retry reason subtitle (UAT E-14) ──────────────────────────────────
+//
+// While a goal is being judged, the Judge can retry in the background after
+// the chat turn has already ended (e.g. "…did not answer in time. Trying
+// again in 60 s (try 2)."). That reason was previously only visible by
+// expanding the pill. It now also renders as a muted, truncated subtitle
+// under the COLLAPSED pill for the two states where the Judge is actively
+// working — `judging` and `judge_unavailable` — so it's visible at a glance.
+describe('GoalPillTray — Judge retry reason subtitle (UAT E-14)', () => {
+  beforeEach(() => {
+    useChatStore.setState({ goalPills: {} })
+    useJudgeActivityStore.getState().reset()
+  })
+
+  it.each(['judging', 'judge_unavailable'] as const)(
+    'shows the latest_reason as a truncated muted subtitle under the collapsed %s pill',
+    (state) => {
+      useChatStore.setState({
+        goalPills: { g1: makeGoal({ goal_id: 'g1', state, latest_reason: 'its model did not answer in time. Trying again in 60 s (try 2).' }) },
+      })
+      render(<GoalPillTray />)
+      const subtitle = screen.getByTestId('goal-pill-subtitle')
+      expect(subtitle).toHaveTextContent('its model did not answer in time. Trying again in 60 s (try 2).')
+      expect(subtitle).toHaveAttribute('title', 'its model did not answer in time. Trying again in 60 s (try 2).')
+    },
+  )
+
+  it.each(['active', 'waiting_on_user', 'done', 'failed', 'cleared'] as const)(
+    'does NOT show a subtitle under the collapsed pill for %s',
+    (state) => {
+      useChatStore.setState({
+        goalPills: { g1: makeGoal({ goal_id: 'g1', state, latest_reason: 'some reason' }) },
+      })
+      render(<GoalPillTray />)
+      expect(screen.queryByTestId('goal-pill-subtitle')).not.toBeInTheDocument()
+    },
+  )
+})
+
+describe('GoalPillTray — terminal-set membership for the five new states (OQ-17)', () => {
+  beforeEach(() => {
+    useChatStore.setState({ goalPills: {} })
+    useJudgeActivityStore.getState().reset()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('hides an expired pill once the terminal display window elapses — expired IS terminal', () => {
+    vi.useFakeTimers()
+    useChatStore.setState({ goalPills: { g1: makeGoal({ goal_id: 'g1', state: 'expired' }) } })
+    render(<GoalPillTray />)
+
+    expect(screen.getByTestId('goal-pill-expired')).toBeInTheDocument()
+    act(() => {
+      vi.advanceTimersByTime(4000)
+    })
+    expect(screen.queryByTestId('goal-pill-tray')).not.toBeInTheDocument()
+  })
+
+  it.each(['blocked', 'claim_overturned'] as const)(
+    'never hides a %s pill, even long past the terminal display window — %s is NOT terminal (OQ-17)',
+    (state) => {
+      vi.useFakeTimers()
+      useChatStore.setState({ goalPills: { g1: makeGoal({ goal_id: 'g1', state }) } })
+      render(<GoalPillTray />)
+
+      expect(screen.getByTestId(`goal-pill-${state === 'blocked' ? 'blocked' : 'claim-overturned'}`)).toBeInTheDocument()
+      act(() => {
+        vi.advanceTimersByTime(60_000)
+      })
+      // Still rendered — no display-window timer was ever armed for a
+      // non-terminal state, however long real time passes.
+      expect(screen.getByTestId(`goal-pill-${state === 'blocked' ? 'blocked' : 'claim-overturned'}`)).toBeInTheDocument()
+    },
+  )
 })

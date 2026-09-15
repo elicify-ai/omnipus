@@ -511,7 +511,7 @@ func TestHandleWorkspaces_ConcurrentDelete(t *testing.T) {
 
 	// Step 2: Create a unified task linked to the project via POST /api/v1/tasks.
 	// Sprint 2: /board/tasks replaced by /api/v1/tasks; "title"+"action" required.
-	taskBody := fmt.Sprintf(`{"title":"ConcurrentTask","action":"llm","workspace_id":%q}`, projID)
+	taskBody := fmt.Sprintf(`{"title":"ConcurrentTask","action":"llm","workspace_id":%q,`+minimalCriteriaDodJSON+`}`, projID)
 	wTask := httptest.NewRecorder()
 	rTask := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(taskBody))
 	rTask.Header.Set("Content-Type", "application/json")

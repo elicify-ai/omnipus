@@ -278,6 +278,29 @@ func (cb *ContextBuilder) WithProjectShelfResolver(fn func(workspaceID string) s
 	return cb
 }
 
+// WithNoProjectShelf closes the project-shelf skill surface entirely
+// (JUDGE-FR-059a): it clears BOTH the single shelf (WithProjectShelf(nil))
+// and the per-workspace resolver (WithProjectShelfResolver(nil)), so
+// effectiveProjectShelf returns nil for every workspace id regardless of
+// which one a caller installed first.
+//
+// This is the closure the verifier turn's ContextBuilder MUST apply.
+// skillAllowed governs the REGISTRY shelf only (ADR-072 D5, C12) — a nil or
+// empty allowlist already denies every name there, which is what
+// systemAgentSkills(IDJudge) now returns (JUDGE-FR-059, C12). The PROJECT
+// shelf is a workspace mount's own skills, gated separately by the mount
+// itself, and runVerifierAdjudication re-roots the Judge into the workspace
+// of the work under review. Without this closure a project-shelf skill the
+// worker under review just wrote is loadable by the Judge as
+// instruction-shaped text arriving through a tool result, outside
+// buildJudgeUserContent's untrusted-data framing — a hole the registry-shelf
+// closure above does nothing to touch.
+func (cb *ContextBuilder) WithNoProjectShelf() *ContextBuilder {
+	cb.projectShelf = nil
+	cb.projectShelfResolver = nil
+	return cb
+}
+
 // effectiveProjectShelf resolves the project shelf that governs skill
 // listing/menu rendering for workspaceID (ADR-072 D8): the resolver's
 // answer when one is installed, otherwise the single shelf WithProjectShelf

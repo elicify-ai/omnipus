@@ -162,7 +162,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
 
     expect(mockSocketSendInput).toHaveBeenCalledWith({
       kind: 'navigate',
-      url: 'https://duckduckgo.com/?q=cheap%20flights%20to%20tokyo',
+      url: 'https://www.google.com/search?q=cheap%20flights%20to%20tokyo',
     })
   })
 
@@ -194,7 +194,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
 
   // ADR-040 D5 "must-handle": submitting while NOT currently driving takes
   // the wheel first (sendControl('take')) before dispatching the navigate.
-  it('navigates without an implicit ownership request', () => {
+  it('requests ownership before navigating', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
 
@@ -202,7 +202,8 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     fireEvent.change(input, { target: { value: 'example.com' } })
     fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
-    expect(mockSendControl).not.toHaveBeenCalledWith('take')
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl.mock.invocationCallOrder[0]).toBeLessThan(mockSocketSendInput.mock.invocationCallOrder[0])
     expect(mockSocketSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
   })
 
@@ -233,7 +234,8 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     expect(form).not.toBeNull()
     fireEvent.submit(form!)
 
-    expect(mockSendControl).not.toHaveBeenCalledWith('take')
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl.mock.invocationCallOrder[0]).toBeLessThan(mockSocketSendInput.mock.invocationCallOrder[0])
     expect(mockSocketSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
   })
 

@@ -193,6 +193,13 @@ func (h *SSEHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		},
 		ChatID:  chatID,
 		Content: body.Message,
+		// OperatorPrompt (ADR-085 BROWSER-FR-029): the SSE chat POST is one
+		// of the three sites where the operator composed this message on
+		// THIS session — see websocket.go's matching field for the full
+		// contract. UserInitiated is deliberately NOT set on this path
+		// today (pre-existing), which is exactly why FR-029's spec forbids
+		// reusing UserInitiated as the release discriminator.
+		OperatorPrompt: true,
 	}
 	if err := h.msgBus.PublishInbound(r.Context(), msg); err != nil {
 		writeSSEEvent(w, "error", map[string]string{"error": err.Error()})

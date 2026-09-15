@@ -237,12 +237,13 @@ func CreateProviderFromConfig(cfg *config.ModelConfig) (LLMProvider, string, err
 		if err := requireKey(cfg, row); err != nil {
 			return nil, "", err
 		}
-		p, err := NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
+		p, err := NewHTTPProviderWithTimeouts(
 			cfg.APIKey(),
 			row.api,
 			cfg.Proxy,
 			cfg.MaxTokensField,
 			cfg.RequestTimeout,
+			int(cfg.EffectiveStreamStallTimeout().Seconds()),
 			cfg.ExtraBody,
 		)
 		if err != nil {

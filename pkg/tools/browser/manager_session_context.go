@@ -2,7 +2,6 @@ package browser
 
 import (
 	"context"
-	"fmt"
 	"time"
 )
 
@@ -103,7 +102,7 @@ func runFirstAttachContext(ctx context.Context, fn func() error, timeout time.Du
 	case <-ctx.Done():
 		return context.Cause(ctx)
 	case <-timer.C:
-		return fmt.Errorf("browser: timed out after %s waiting for the browser to attach the tab (target may be unresponsive)", timeout)
+		return &tabOpenTimeoutError{after: timeout, phase: "attach"}
 	}
 }
 

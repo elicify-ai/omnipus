@@ -15,12 +15,23 @@ import (
 
 // HandlePerformance handles GET and PUT /api/v1/performance.
 //
-// GET returns the current max_parallel_agents config and the effective
-// (auto-detected or explicit) value actually in use.
+// GET returns the current max_parallel_agents config, the effective
+// (auto-detected or explicit) value actually in use, and goal_max_rounds —
+// the global goal try limit (GOAL-FR-024/FR-045, D-D/D-E): how many tries a
+// goal gets, in chat and within one task run alike. There is no per-goal
+// override. It does not bound task attempts (how many fresh runs a task gets):
+// that is the separate planning.task_max_attempts config value, overridden per
+// task by max_attempts (founder decision 2026-09-14, issue #710).
 //
-// PUT accepts {max_parallel_agents: int} and updates config.json atomically.
-// The dispatch semaphore is resized in-memory immediately so the new value
-// takes effect without a restart.
+// PUT accepts a partial update of {max_parallel_agents, tools_on_demand,
+// goal_max_rounds} and updates config.json atomically. The dispatch
+// semaphore is resized in-memory immediately so a changed max_parallel_agents
+// takes effect without a restart; goal_max_rounds takes effect for every goal
+// that STARTS after the config reload below completes — a chat goal set after
+// it, and a task run started after it — since every reader resolves it live
+// via cfg.Planning.EffectiveGoalMaxRounds() rather than snapshotting it at
+// boot. A goal already running keeps the limit it started with (it is
+// snapshotted onto the goal record when the goal starts).
 //
 // Admin-only: enforced by the adminWrap registration in rest.go.
 func (a *restAPI) HandlePerformance(w http.ResponseWriter, r *http.Request) {
@@ -82,11 +93,18 @@ func (a *restAPI) getPerformance(w http.ResponseWriter, _ *http.Request) {
 	// tools_on_demand mirrors cfg.Tools.Manifest.Compressed:
 	// true (default) = load tools on demand; false = all tools every message.
 	toolsOnDemand := cfg.Tools.Manifest.Compressed
+	// goal_max_rounds (GOAL-FR-024/FR-045, D-D/D-E): the SINGLE, GLOBAL
+	// adjudication-round ceiling for every goal — task-owned and
+	// session-owned alike. There is no per-goal override (D-E/NQ-2), so this
+	// is always the resolved value of the one config field, never echoed
+	// back as an unresolved 0. Always present in responses per the schema.
+	goalMaxRounds := cfg.Planning.EffectiveGoalMaxRounds()
 	jsonOK(w, gen.PerformanceSettings{
 		MaxParallelAgents:           &configured,
 		EffectiveMaxParallelAgents:  &effective,
 		MaxParallelAgentsConfigured: &capped,
 		ToolsOnDemand:               &toolsOnDemand,
+		GoalMaxRounds:               &goalMaxRounds,
 	})
 }
 
@@ -116,14 +134,23 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 
 	// At least one field must be present — a PUT with no recognized fields is
 	// a no-op that almost certainly indicates a client bug.
-	if req.MaxParallelAgents == nil && req.ToolsOnDemand == nil {
-		jsonErr(w, http.StatusBadRequest, "at least one of max_parallel_agents or tools_on_demand is required")
+	if req.MaxParallelAgents == nil && req.ToolsOnDemand == nil && req.GoalMaxRounds == nil {
+		jsonErr(w, http.StatusBadRequest, "at least one of max_parallel_agents, tools_on_demand or goal_max_rounds is required")
 		return
 	}
 
 	// Validate max_parallel_agents when present.
 	if req.MaxParallelAgents != nil && *req.MaxParallelAgents < 0 {
 		jsonErr(w, http.StatusBadRequest, "max_parallel_agents must be >= 0")
+		return
+	}
+
+	// Validate goal_max_rounds when present (GOAL-FR-025/FR-045, D-E): the
+	// single global budget is still a real round count and a value below 1
+	// is rejected outright — there is no "reset to auto" sentinel for this
+	// field the way 0 is for max_parallel_agents.
+	if req.GoalMaxRounds != nil && *req.GoalMaxRounds < 1 {
+		jsonErr(w, http.StatusBadRequest, "goal_max_rounds must be >= 1")
 		return
 	}
 
@@ -139,6 +166,10 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 			tools := ensureMap(m, "tools")
 			manifest := ensureMap(tools, "manifest")
 			manifest["compressed"] = *req.ToolsOnDemand
+		}
+		if req.GoalMaxRounds != nil {
+			planning := ensureMap(m, "planning")
+			planning["goal_max_rounds"] = *req.GoalMaxRounds
 		}
 		return nil
 	}); err != nil {
@@ -160,10 +191,12 @@ func (a *restAPI) putPerformance(w http.ResponseWriter, r *http.Request) {
 	effective, capped := newCfg.Performance.EffectiveMaxParallelAgents()
 	configured := wireMaxParallelAgents(newCfg.Performance.MaxParallelAgents, effective)
 	toolsOnDemand := newCfg.Tools.Manifest.Compressed
+	goalMaxRounds := newCfg.Planning.EffectiveGoalMaxRounds()
 	jsonOK(w, gen.PerformanceSettings{
 		MaxParallelAgents:           &configured,
 		EffectiveMaxParallelAgents:  &effective,
 		MaxParallelAgentsConfigured: &capped,
 		ToolsOnDemand:               &toolsOnDemand,
+		GoalMaxRounds:               &goalMaxRounds,
 	})
 }

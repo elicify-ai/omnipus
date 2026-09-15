@@ -1,0 +1,26 @@
+title: ViewResultSeries
+description: >
+  One line of a chart part (view-kinds-design-2026-09-03 §7). A chart over a
+  number with a companion unit draws ONE SERIES PER UNIT VALUE (G2) — the
+  series are never merged into one line, because a line that sums euros and
+  hours is a wrong picture that looks right. A number with no companion unit
+  produces exactly one series with `unit` absent.
+type: object
+additionalProperties: false
+required:
+  - points
+properties:
+  unit:
+    type: string
+    description: >
+      The unit value this series covers. Absent when the plotted number
+      declares no companion unit property.
+    example: SGD
+  points:
+    type: array
+    description: >
+      The aggregated points in date order. Always present — an empty array,
+      never null.
+    items:
+      $ref: "./ViewResultPoint.yaml"
+      x-go-type: ViewResultPoint

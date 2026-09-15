@@ -31,7 +31,20 @@
 // Error handling:
 //   401 → re-auth toast (user must log in again)
 //   403 → "you must be an admin to approve this tool" toast
-//   410 → "this approval has already been resolved" → dismiss modal entry
+//   404 / 410 → the approval is no longer pending server-side (410 inside the
+//         registry's retention window, 404 after it) → markResolved: the
+//         card goes and cannot come back; an approve/always also gets a
+//         warning that it was not applied
+//
+// Dismissal: Cancel and Close/Escape/overlay remove the card from this tab
+// FIRST and unconditionally, then send their request — a failing request can
+// never leave a dialog the user cannot get rid of. Server-made resolutions
+// (another tab, timeout, Stop, agent deletion) arrive as tool_approval_resolved
+// frames and are applied by src/store/chat.ts → markResolved.
+//
+// Scope: only approvals whose workspace matches the active workspace (or that
+// have no workspace) are shown — see isApprovalInScope. Out-of-scope approvals
+// stay queued and appear when the user switches to their workspace.
 //
 // ADR-036 §3.4 note: this is now the ONLY tool-approval UI — the dedicated
 // exec-only flow (ExecApprovalBlock/ExecApprovalTool, WS
@@ -66,8 +79,9 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
-import { useToolApprovalStore } from '@/store/toolApproval'
-import { submitToolApproval, isApiError } from '@/lib/api'
+import { useToolApprovalStore, isApprovalInScope } from '@/store/toolApproval'
+import { useWorkspacesStore } from '@/store/workspacesStore'
+import { submitToolApproval, isApiError, fetchAgents } from '@/lib/api'
 import type { Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { forceLogout } from '@/lib/authLogout'
@@ -82,13 +96,28 @@ function useCountdown(expiresAt: number): { remainingMs: number; progressPct: nu
   const [totalMs] = useState(() => Math.max(1, expiresAt - Date.now()))
 
   useEffect(() => {
-    setRemainingMs(Math.max(0, expiresAt - Date.now()))
-    const interval = setInterval(() => {
+    const tick = () => {
       const left = Math.max(0, expiresAt - Date.now())
       setRemainingMs(left)
-      if (left === 0) clearInterval(interval)
+      return left
+    }
+    tick()
+    const interval = setInterval(() => {
+      if (tick() === 0) clearInterval(interval)
     }, 500)
-    return () => clearInterval(interval)
+    // Browsers throttle timers in a background tab to as little as once a
+    // minute, so the displayed countdown lags real time while the tab is
+    // hidden (UAT 2026-09-13 D-16 observed 52 s of countdown over 180 s of
+    // wall-clock). expiresAt is an absolute local timestamp, so one tick on
+    // return to the foreground snaps the display back to the truth.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') tick()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [expiresAt])
 
   return {
@@ -137,6 +166,7 @@ function ToolApprovalCard({
   sessionId,
 }: ToolApprovalCardProps) {
   const dequeue = useToolApprovalStore((s) => s.dequeue)
+  const markResolved = useToolApprovalStore((s) => s.markResolved)
   const addToast = useUiStore((s) => s.addToast)
   const [submitting, setSubmitting] = useState(false)
   const { remainingMs, progressPct } = useCountdown(expiresAt)
@@ -150,9 +180,16 @@ function ToolApprovalCard({
     // Action union sourced from submitToolApproval's own signature (which in
     // turn is the generated ToolApprovalActionRequest['action']) rather than
     // a hand-rolled literal, per Constraint #8.
-    async (action: Parameters<typeof submitToolApproval>[1]) => {
+    //
+    // dismissFirst: take the card off THIS tab before the request goes out.
+    // Cancel and Close/Escape/overlay pass it — they must dismiss locally
+    // whatever the server answers. If the server still holds the approval
+    // open, the next session_state snapshot restores it (the agent is still
+    // waiting), so nothing is lost by dismissing early.
+    async (action: Parameters<typeof submitToolApproval>[1], opts?: { dismissFirst?: boolean }) => {
       if (submitting) return
       setSubmitting(true)
+      if (opts?.dismissFirst) dequeue(approvalId)
       try {
         const resp = await submitToolApproval(approvalId, action)
         if (action === 'always' && resp.grant_recorded !== true) {
@@ -161,7 +198,8 @@ function ToolApprovalCard({
             variant: 'warning',
           })
         }
-        dequeue(approvalId)
+        // The server resolved it: remember that, rather than only hiding it.
+        markResolved(approvalId)
       } catch (err) {
         if (isApiError(err)) {
           if (err.status === 401) {
@@ -181,9 +219,22 @@ function ToolApprovalCard({
               message: 'You must be an admin to approve this tool.',
               variant: 'error',
             })
-          } else if (err.status === 410) {
-            // Already resolved — silently dismiss
-            dequeue(approvalId)
+          } else if (err.status === 404 || err.status === 410) {
+            // No longer pending on the server. 410 = resolved within the
+            // registry's terminal-retention window; 404 = resolved longer
+            // ago than that (the entry was purged) or never existed. Nothing
+            // is left to decide, so the card must go and stay gone — before
+            // this, a 404 only toasted and left a dialog whose every button
+            // (Close included) re-sent a request that could only 404 again.
+            markResolved(approvalId)
+            if (action === 'approve' || action === 'always') {
+              // Deny/cancel stay silent (what the user asked for holds or no
+              // longer matters). An approval that did not land deserves a word.
+              addToast({
+                message: 'This request was already closed before your approval arrived, so your approval was not applied.',
+                variant: 'warning',
+              })
+            }
           } else {
             addToast({
               message: `Failed to submit approval: ${err.userMessage}`,
@@ -201,13 +252,15 @@ function ToolApprovalCard({
         setSubmitting(false)
       }
     },
-    [approvalId, dequeue, addToast, submitting],
+    [approvalId, dequeue, markResolved, addToast, submitting],
   )
 
   // Safe-default handler for Escape / overlay-click / X close. The Dialog
   // primitive requests a close; we translate that into the SAFE decision:
-  //   - not expired  → submit a DENY (never an approve, never a no-op dismiss
-  //     that would leave the agent hanging on a pending approval).
+  //   - not expired  → dismiss the card locally AND submit a DENY (never an
+  //     approve, never a silent dismiss that leaves the agent hanging). The
+  //     local dismissal is unconditional: a close must always close, even
+  //     when the deny request fails.
   //   - expired      → the decision is already made server-side; just dismiss
   //     the notice from the local queue.
   const handleDismissRequest = useCallback(() => {
@@ -215,7 +268,7 @@ function ToolApprovalCard({
     if (hasExpired) {
       dequeue(approvalId)
     } else {
-      void handleAction('deny')
+      void handleAction('deny', { dismissFirst: true })
     }
   }, [submitting, hasExpired, dequeue, approvalId, handleAction])
 
@@ -247,8 +300,31 @@ function ToolApprovalCard({
   const hideAlwaysAllow = isReconnectStub || (toolName === 'request_mount' && !mountPath)
 
   // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
-  const resolvedAgentName =
-    queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name || agentId
+  // Agent display name (D-87): a permission prompt is exactly where the human
+  // needs to know WHICH agent is asking, and a raw UUID is not that. The
+  // ['agents'] cache is usually warm (the sidebar and chat both populate it);
+  // when it is not — this dialog can open on any screen — fetch it once and
+  // re-render. The id remains the fallback so the prompt is never blank.
+  const cachedAgentName = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name
+  const [fetchedAgentName, setFetchedAgentName] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    if (cachedAgentName) return
+    let cancelled = false
+    queryClient
+      .ensureQueryData({ queryKey: ['agents'], queryFn: fetchAgents })
+      .then((agents) => {
+        if (cancelled) return
+        const name = agents.find((a) => a.id === agentId)?.name
+        if (name) setFetchedAgentName(name)
+      })
+      .catch(() => {
+        /* the id fallback below stands */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [agentId, cachedAgentName])
+  const resolvedAgentName = cachedAgentName || fetchedAgentName || agentId
   const previewEntry = TOOL_APPROVAL_PREVIEWS[toolName]
   const replaceEntry = previewEntry?.mode === 'replace' ? previewEntry : undefined
   const previewCtx: ToolApprovalPreviewContext = {
@@ -312,8 +388,8 @@ function ToolApprovalCard({
                 'Review the details below before deciding.'
               ) : (
                 <>
-                  Agent <span className="font-mono">{agentId}</span> is requesting permission to run a
-                  tool.
+                  <span className="font-medium text-[var(--color-secondary)]">{resolvedAgentName}</span>{' '}
+                  is requesting permission to run a tool.
                 </>
               )}
             </DialogDescription>
@@ -370,7 +446,7 @@ function ToolApprovalCard({
           {hasExpired ? (
             <p className="text-xs text-[var(--color-error)] flex items-center gap-1">
               <XCircle size={13} weight="fill" aria-hidden="true" />
-              Approval expired — the agent will receive a denial.
+              Approval expired unanswered — the agent is told nobody answered (a timeout, not a denial by you).
             </p>
           ) : (
             <>
@@ -456,7 +532,7 @@ function ToolApprovalCard({
                   <Button
                     size="sm"
                     variant="ghost"
-                    onClick={() => handleAction('cancel')}
+                    onClick={() => handleAction('cancel', { dismissFirst: true })}
                     disabled={submitting}
                     className="h-8 text-xs text-[var(--color-muted)] hover:text-[var(--color-secondary)] ml-auto"
                   >
@@ -486,10 +562,14 @@ function ToolApprovalCard({
   )
 }
 
-// ToolApprovalModal renders the front-of-queue approval, if any.
+// ToolApprovalModal renders the front-of-queue approval that belongs to the
+// active workspace, if any. Out-of-scope approvals stay queued (not dropped)
+// and surface when the user switches to their workspace.
 export function ToolApprovalModal() {
   const queue = useToolApprovalStore((s) => s.queue)
-  const first = queue[0]
+  const activeWorkspaceId = useWorkspacesStore((s) => s.activeWorkspaceId)
+  const visible = queue.filter((a) => isApprovalInScope(a, activeWorkspaceId))
+  const first = visible[0]
 
   if (!first) return null
 
@@ -501,7 +581,7 @@ export function ToolApprovalModal() {
       args={first.args}
       agentId={first.agentId}
       expiresAt={first.expiresAt}
-      queueLength={queue.length}
+      queueLength={visible.length}
       toolCallId={first.toolCallId}
       turnId={first.turnId}
       sessionId={first.sessionId}

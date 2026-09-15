@@ -41,6 +41,14 @@ func TestAdmissionController_DefaultSoftCap(t *testing.T) {
 //
 // Traces to: pkg/agent/admission.go — AdmissionController.resolveCap/effectiveCap
 func TestAdmissionController_ResolverConstructor_LiveResolution(t *testing.T) {
+	// Pin the memory reading — this test is about live re-resolution of the
+	// CONFIGURED cap, not the live memory gate. Left unpinned it reads this
+	// machine's real memory state; on a loaded host the memory gate clamps
+	// admission to its floor of 2 even after the resolver is raised to 5, so
+	// "TryAdmit scope-3" fails for reasons unrelated to the property under
+	// test. See stubMemory (memory_admission_test.go).
+	stubMemory(t, false, true)
+
 	capVal := 2
 	a := newAdmissionControllerWithResolver(func() int { return capVal })
 
@@ -124,6 +132,14 @@ func TestAdmissionController_ExplicitSoftCap(t *testing.T) {
 //
 // Traces to: pkg/agent/admission.go — TryAdmit below-cap path
 func TestAdmissionController_TryAdmit_BelowCap(t *testing.T) {
+	// Pin the memory reading — this test is about admitting up to a
+	// configured cap of 3, not the live memory gate. Left unpinned it reads
+	// this machine's real memory state; on a loaded host the memory gate
+	// clamps admission to its floor of 2, failing "TryAdmit scope-3" for
+	// reasons unrelated to the property under test. See stubMemory
+	// (memory_admission_test.go).
+	stubMemory(t, false, true)
+
 	a := newAdmissionController(3)
 
 	ok, release1 := a.TryAdmit("scope-1")

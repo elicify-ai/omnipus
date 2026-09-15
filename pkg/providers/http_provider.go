@@ -22,12 +22,24 @@ func NewHTTPProviderWithMaxTokensFieldAndRequestTimeout(
 	requestTimeoutSeconds int,
 	extraBody map[string]any,
 ) (*HTTPProvider, error) {
+	return NewHTTPProviderWithTimeouts(
+		apiKey, apiBase, proxy, maxTokensField, requestTimeoutSeconds, 0, extraBody)
+}
+
+// NewHTTPProviderWithTimeouts builds the OpenAI-compatible HTTP provider with
+// BOTH timeouts: the non-streaming request timeout (seconds) and the
+// streaming silence limit (seconds; 0 = the shipped default). The factory
+// passes the model row's EffectiveStreamStallTimeout here.
+func NewHTTPProviderWithTimeouts(
+	apiKey, apiBase, proxy, maxTokensField string,
+	requestTimeoutSeconds, streamStallSeconds int,
+	extraBody map[string]any,
+) (*HTTPProvider, error) {
 	p, err := openai_compat.NewProvider(
-		apiKey,
-		apiBase,
-		proxy,
+		apiKey, apiBase, proxy,
 		openai_compat.WithMaxTokensField(maxTokensField),
 		openai_compat.WithRequestTimeout(time.Duration(requestTimeoutSeconds)*time.Second),
+		openai_compat.WithStreamStallTimeout(time.Duration(streamStallSeconds)*time.Second),
 		openai_compat.WithExtraBody(extraBody),
 	)
 	if err != nil {

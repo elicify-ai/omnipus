@@ -20,7 +20,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CalendarEventSlideOver } from './CalendarEventSlideOver'
 import type { Task, TaskTrigger } from '@/lib/api'
@@ -115,6 +115,12 @@ function makeClient() {
 // Real, verified weekday (node-checked): Jul 20 2026 = Monday.
 const ANCHOR = new Date(2026, 6, 20, 9, 0, 0)
 
+// GOAL-FR-047/D-C: every surface now requires >= 1 acceptance criterion and
+// >= 1 definition-of-done item to save an edit. The fixture carries one of
+// each by default so the many pre-existing edit-mode Save tests below (which
+// exercise title/agent/instruction/recurrence, not the criteria gate itself)
+// keep passing — the dedicated gate coverage lives in its own describe block
+// and constructs a criteria-less task explicitly.
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
     id: 'task-1',
@@ -128,6 +134,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     created_at: '2026-06-01T00:00:00Z',
     updated_at: '2026-06-01T00:00:00Z',
     surface: 'user',
+    criteria: [{ kind: 'prose', judgment: 'boolean', text: 'Existing criterion', author: { kind: 'user', id: 'alice' }, status: 'pending' }],
+    dod: [{ kind: 'prose', judgment: 'boolean', text: 'Existing DoD item', author: { kind: 'user', id: 'alice' }, status: 'pending' }],
     ...overrides,
   } as Task
 }
@@ -231,6 +239,23 @@ function fillPrompt(text = 'Summarize the last run and flag anomalies.') {
   fireEvent.change(screen.getByLabelText(/instruction/i), { target: { value: text } })
 }
 
+// GOAL-FR-047/D-C: the create path now also requires >= 1 acceptance
+// criterion and >= 1 definition-of-done item — mirrors
+// CreateTaskSlideOver.test.tsx's own addCriterionLike/fillRequiredFields
+// pattern. Scoped to the draft panel the input lives in, since Acceptance
+// criteria and Definition of Done render two instances of the same editor.
+function addCriterionLike(inputLabel: RegExp, text: string) {
+  const input = screen.getByLabelText(inputLabel)
+  fireEvent.change(input, { target: { value: text } })
+  const draftPanel = input.parentElement as HTMLElement
+  fireEvent.click(within(draftPanel).getByRole('button', { name: /add criterion/i }))
+}
+
+function fillCriteria() {
+  addCriterionLike(/what must be true when this is done\?/i, 'A criterion is satisfied.')
+  addCriterionLike(/definition of done item/i, 'A DoD item is satisfied.')
+}
+
 beforeEach(() => {
   vi.mocked(createTask).mockReset()
   vi.mocked(updateTask).mockReset().mockResolvedValue(makeTask() as never)
@@ -269,6 +294,7 @@ describe('CalendarEventSlideOver — create: recurring rule (US-1 AS-1/3)', () =
     fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Weekly sync' } })
     await selectAgent()
     fillPrompt('Summarize weekly progress.')
+    fillCriteria()
 
     openRepeatDropdown()
     await pickRepeatOption('Weekly on Monday')
@@ -301,6 +327,7 @@ describe('CalendarEventSlideOver — create: "Does not repeat" (US-1 AS-6)', () 
     fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'One-off check' } })
     await selectAgent()
     fillPrompt('Run the one-off check.')
+    fillCriteria()
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
@@ -358,6 +385,7 @@ describe('CalendarEventSlideOver — Agent and Instruction are required (operato
     fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Nightly digest' } })
     await selectAgent()
     fillPrompt('Compile the nightly digest and post it to #ops.')
+    fillCriteria()
 
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
@@ -489,6 +517,7 @@ describe('CalendarEventSlideOver — server validation error (FR-006)', () => {
     fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Poll inbox' } })
     await selectAgent()
     fillPrompt()
+    fillCriteria()
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
@@ -497,6 +526,97 @@ describe('CalendarEventSlideOver — server validation error (FR-006)', () => {
     expect(alert).toHaveTextContent('Rule would fire too often')
     // The panel stays open (no onOpenChange(false) call) and no generic toast fires.
     expect(mockAddToast).not.toHaveBeenCalled()
+  })
+})
+
+// GOAL-FR-047/FR-053, D-C (joint delivery plan U5 row + R-26): the calendar
+// slide-over enforces the SAME mandatory-criteria/DoD gate as the other two
+// task surfaces, uniformly on BOTH its create and edit paths — not a
+// creation-only carve-out.
+describe('CalendarEventSlideOver — Acceptance criteria + Definition of Done are required (GOAL-FR-047/D-C)', () => {
+  it('create: refuses to save with zero criteria, naming which lists are missing, and never calls createTask', async () => {
+    renderSlideOver({ task: null })
+
+    fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Needs criteria' } })
+    await selectAgent()
+    fillPrompt()
+    // Deliberately skip fillCriteria() — both lists stay empty.
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    expect(await screen.findByText(/add at least one acceptance criterion/i)).toBeInTheDocument()
+    expect(screen.getByText(/add at least one definition-of-done item/i)).toBeInTheDocument()
+    expect(vi.mocked(createTask)).not.toHaveBeenCalled()
+  })
+
+  it('create: adding one criterion and one DoD item clears the errors and lets the save through', async () => {
+    vi.mocked(createTask).mockResolvedValueOnce(makeTask() as never)
+    renderSlideOver({ task: null })
+
+    fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Now has criteria' } })
+    await selectAgent()
+    fillPrompt()
+    fillCriteria()
+    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
+
+    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
+    const body = vi.mocked(createTask).mock.calls[0][0]
+    expect(body.criteria).toEqual([
+      expect.objectContaining({ text: 'A criterion is satisfied.' }),
+    ])
+    expect(body.dod).toEqual([
+      expect.objectContaining({ text: 'A DoD item is satisfied.' }),
+    ])
+  })
+
+  it('edit: a legacy task with no criteria/DoD (created before FR-047) still OPENS and its fields are readable', async () => {
+    // GOAL-FR-048: opening a pre-existing task with no criteria/dod must not
+    // block reading it — the gate binds only at save.
+    const task = makeTask({ criteria: [], dod: [] })
+    renderSlideOver({ task })
+
+    const titleInput = await screen.findByLabelText(/title/i)
+    expect(titleInput).toHaveValue('Weekly report')
+    expect(screen.getByLabelText(/instruction/i)).toBeInTheDocument()
+  })
+
+  it('edit: saving a legacy task with no criteria/DoD is refused until both are added (GOAL-FR-048)', async () => {
+    const task = makeTask({ criteria: [], dod: [] })
+    renderSlideOver({ task })
+
+    await screen.findByLabelText(/title/i)
+    await selectAgent()
+    fillPrompt('Now has instructions.')
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    expect(await screen.findByText(/add at least one acceptance criterion/i)).toBeInTheDocument()
+    expect(screen.getByText(/add at least one definition-of-done item/i)).toBeInTheDocument()
+    expect(vi.mocked(updateTask)).not.toHaveBeenCalled()
+
+    // Adding both, then saving again, goes through.
+    fillCriteria()
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+    await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledOnce())
+    const [, data] = vi.mocked(updateTask).mock.calls[0]
+    expect(data.criteria).toEqual([expect.objectContaining({ text: 'A criterion is satisfied.' })])
+    expect(data.dod).toEqual([expect.objectContaining({ text: 'A DoD item is satisfied.' })])
+  })
+
+  it('edit: removing the LAST criterion from an already-saved task is refused (no dead server round-trip)', async () => {
+    const task = makeTask()
+    renderSlideOver({ task })
+
+    await screen.findByLabelText(/title/i)
+    // The fixture's one existing criterion — remove it via its own editor's
+    // remove control.
+    fireEvent.click(screen.getByRole('button', { name: /remove criterion existing criterion/i }))
+    expect(screen.queryByText('Existing criterion')).not.toBeInTheDocument()
+
+    await selectAgent()
+    fillPrompt('Still has instructions.')
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
+
+    expect(await screen.findByText(/add at least one acceptance criterion/i)).toBeInTheDocument()
+    expect(vi.mocked(updateTask)).not.toHaveBeenCalled()
   })
 })
 
@@ -623,6 +743,7 @@ describe('CalendarEventSlideOver — real Custom flow via RecurrenceEditor widge
     fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Sprint sync' } })
     await selectAgent()
     fillPrompt()
+    fillCriteria()
     expect(screen.getByRole('combobox', { name: 'Repeat' })).toHaveTextContent('Does not repeat')
 
     // Pick "Custom…" — the dropdown must STAY on Custom and reveal the widgets.
@@ -680,6 +801,7 @@ describe('CalendarEventSlideOver — task-lifecycle sections', () => {
     fireEvent.change(await screen.findByLabelText(/title/i), { target: { value: 'Prep release notes' } })
     await selectAgent()
     fillPrompt('Draft the notes.')
+    fillCriteria()
 
     // Add two checklist items via the buffered field.
     const checklistInput = screen.getByLabelText(/new checklist item/i)

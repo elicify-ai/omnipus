@@ -16,15 +16,18 @@ import {
   stopTaskGoalLoop,
   runTaskNow,
   isApiError,
+  getErrorMessage,
   workspacesQueryKeys,
   tasksQueryKeys,
   plansQueryKeys,
   taskEvidenceQueryKeys,
   taskVerdictsQueryKeys,
 } from '@/lib/api'
-import type { Task, TaskUpdateRequest } from '@/lib/api'
+import type { Task, TaskUpdateRequest, AcceptanceCriterion } from '@/lib/api'
 import { TagInput } from '@/components/workspaces/TagInput'
+import { JoinMemberCheckbox, WriteSetField } from '@/components/workspaces/PlanMemberFields'
 import { AcceptanceCriteriaEditor } from '@/components/workspaces/AcceptanceCriteriaEditor'
+import { DefinitionOfDoneEditor } from '@/components/workspaces/DefinitionOfDoneEditor'
 import { CriteriaVerdictList } from '@/components/workspaces/CriteriaVerdictList'
 import { useAuthStore } from '@/store/auth'
 import {
@@ -34,6 +37,7 @@ import {
   SheetTitle,
 } from '@/components/ui/sheet'
 import { SmartSelect } from '@/components/ui/smart-select'
+import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { DateTimePicker } from '@/components/ui/date-time-picker'
 import { Button } from '@/components/ui/button'
@@ -59,6 +63,7 @@ import { TaskChecklistField } from '@/components/workspaces/TaskChecklistField'
 import { TaskResultField } from '@/components/workspaces/TaskResultField'
 import { OpenInChatButton } from '@/components/workspaces/OpenInChatButton'
 import { TaskRunsList } from '@/components/workspaces/TaskRunsList'
+import { TaskActivityChip } from '@/components/workspaces/TaskActivityChip'
 import { STATUS_OPTIONS, STATUS_BADGE } from '@/components/workspaces/taskStatusConfig'
 import { formatDateTime } from '@/lib/dateFormat'
 import {
@@ -76,8 +81,6 @@ import {
 } from '@phosphor-icons/react'
 import { cn } from '@/lib/utils'
 import {
-  type TriggerKind,
-  buildTrigger,
   datetimeLocalToIso,
   datetimeLocalToDate,
   dateToDatetimeLocal,
@@ -117,6 +120,18 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
 
   const [editingPrompt, setEditingPrompt] = useState(false)
   const [promptDraft, setPromptDraft] = useState('')
+  // GOAL-FR-058 — the title becomes editable in the panel, following the
+  // same click-to-edit/autosave pattern the Prompt field already uses.
+  const [editingTitle, setEditingTitle] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
+  const [titleError, setTitleError] = useState('')
+  // D-C — the uniform edit gate: an edit that would leave the task with no
+  // acceptance criteria, or no definition-of-done item, is refused here
+  // (blocked autosave + a stated reason), matching FR-047's HTTP 400 on the
+  // update path. There is no Save button on this panel, so the refusal is
+  // simply "the autosave never fires."
+  const [criteriaError, setCriteriaError] = useState('')
+  const [dodError, setDodError] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
   // Inline field errors — surfaced instead of silently discarding invalid input.
   // (No inline trigger-time error here: operator ruling 2026-08-07 made
@@ -125,6 +140,13 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   // calendar editor (CalendarEventSlideOver) owns that validation now.)
   const [dueError, setDueError] = useState('')
   const [statusError, setStatusError] = useState('')
+  // E-10 (live UAT): a rejected dependency PUT (most often the
+  // blocked_by-cycle guard) used to only toast — the checkbox visually
+  // never applied (blockedBy renders from `task.blocked_by`, the server's
+  // own value, not an optimistic draft — see handleToggleDep below) and
+  // there was no reason on screen for why. This is the inline echo of that
+  // rejection, next to the "Depends on" field it belongs to.
+  const [depError, setDepError] = useState('')
   // DateTimePicker is fully controlled (value/onChange) — day, hour, and minute
   // picks each fire a separate onChange that must compose on top of the prior
   // pick, so this holds the in-progress edit and is re-synced from the task
@@ -146,12 +168,22 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   useEffect(() => {
     setPromptDraft(task?.prompt ?? '')
     setEditingPrompt(false)
+    // Title resyncs on the same identity/self-write schedule as Prompt (see
+    // above) — a title autosave PATCH invalidates the tasks query and hands
+    // this component a new `task` object with the SAME id but the NEW
+    // title, which re-fires this effect and safely closes the in-progress
+    // editor exactly like a successful Prompt save does.
+    setTitleDraft(task?.title ?? '')
+    setEditingTitle(false)
+    setTitleError('')
     setDueError('')
     setStatusError('')
+    setCriteriaError('')
+    setDodError('')
     setSaveStatus('idle')
     setSaveError(undefined)
     setConfirmDelete(false)
-  }, [task?.id, task?.prompt, task?.workspace_id])
+  }, [task?.id, task?.prompt, task?.title, task?.workspace_id])
 
   // Resync ONLY the due draft when the task's due date changes — including
   // the same-identity resync described above (a due PATCH's own success
@@ -263,15 +295,94 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     }, 500)
   }
 
+  // ── Plan-member fields: locally-held, optimistic ────────────────────────────
+  //
+  // `doUpdate` (below) is NOT optimistic — it only sets the save indicator in
+  // `onMutate`, and the new value reaches this component solely through the
+  // `invalidateQueries` in `onSuccess`. Driving the two plan-member controls
+  // straight off the server-round-tripped `task` therefore loses edits, and
+  // hides the ones it does not lose:
+  //
+  //   - write_set (DATA LOSS): type path A → Add → PATCH in flight → type
+  //     path B → Add. The second commit still sees the PRE-PATCH array, so it
+  //     PATCHes [B] alone — and `TaskUpdateRequest.yaml` makes `write_set` a
+  //     full REPLACEMENT, so path A is deleted while the indicator says
+  //     "Saved". A write set is a multi-entry list; adding two paths in a row
+  //     is the normal motion, not an edge case.
+  //   - is_join: a fully-controlled Radix checkbox keeps no internal state, so
+  //     on a slow link the box does not move when clicked. The operator clicks
+  //     again, firing a second PATCH that flips it straight back.
+  //
+  // So both are held here, seeded from the task and re-seeded whenever the
+  // SERVER value actually changes, with a refused PATCH rolled back to the
+  // server's own value alongside the stated reason.
+  const [writeSetDraft, setWriteSetDraft] = useState<string[]>(task?.write_set ?? [])
+  const [isJoinDraft, setIsJoinDraft] = useState<boolean>(task?.is_join ?? false)
+  // How many of OUR OWN plan-member PATCHes are still in flight. While any is,
+  // a refetch that has not yet observed them must not overwrite the draft with
+  // the pre-PATCH value it still holds.
+  const planMemberInFlight = useRef(0)
+  const planMemberTaskIdRef = useRef<string | null>(task?.id ?? null)
+  // The server's own current values, for the rollback path.
+  const planMemberServerRef = useRef<{ writeSet: string[]; isJoin: boolean }>({
+    writeSet: task?.write_set ?? [],
+    isJoin: task?.is_join ?? false,
+  })
+
+  /**
+   * Is this PATCH body one of the two plan-member controls'?
+   *
+   * The bookkeeping this gates lives on the MUTATION-level callbacks rather
+   * than `mutate()`'s per-call ones, and that is not a style choice:
+   * `MutationObserver.mutate` detaches the observer from the previous mutation
+   * before starting the next one, so a superseded call's per-call
+   * `onError`/`onSettled` NEVER FIRE. Two plan-member edits in a row is
+   * exactly the case this code exists for, so a per-call `onSettled` would
+   * leave the in-flight count stuck above zero and the panel would stop
+   * adopting server-side changes for the rest of the task's life.
+   */
+  function isPlanMemberPatch(data: TaskUpdateRequest): boolean {
+    return 'write_set' in data || 'is_join' in data
+  }
+
+  // One signature covering identity AND both server-side values, so the effect
+  // below depends on a primitive that changes only when something really
+  // changed — `task.write_set` is a fresh array on every refetch, identical
+  // contents or not.
+  const planMemberServerState = JSON.stringify({
+    id: task?.id ?? null,
+    write_set: task?.write_set ?? [],
+    is_join: task?.is_join ?? false,
+  })
+  useEffect(() => {
+    const server = JSON.parse(planMemberServerState) as {
+      id: string | null
+      write_set: string[]
+      is_join: boolean
+    }
+    planMemberServerRef.current = { writeSet: server.write_set, isJoin: server.is_join }
+    if (server.id !== planMemberTaskIdRef.current) {
+      // A different task: adopt its values unconditionally and drop any
+      // in-flight bookkeeping, which belonged to the task we just left.
+      planMemberTaskIdRef.current = server.id
+      planMemberInFlight.current = 0
+    } else if (planMemberInFlight.current > 0) {
+      return
+    }
+    setWriteSetDraft(server.write_set)
+    setIsJoinDraft(server.is_join)
+  }, [planMemberServerState])
+
   const { mutate: doUpdate } = useMutation({
     mutationFn: (data: TaskUpdateRequest) => {
       if (!task) return Promise.reject(new Error('No task selected'))
       return updateTask(task.id, data)
     },
-    onMutate: () => {
+    onMutate: (variables) => {
       if (savedFadeRef.current) clearTimeout(savedFadeRef.current)
       setSaveError(undefined)
       setSaveStatus('saving')
+      if (isPlanMemberPatch(variables)) planMemberInFlight.current += 1
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
@@ -279,18 +390,52 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       setSaveStatus('saved')
       savedFadeRef.current = setTimeout(() => setSaveStatus((s) => (s === 'saved' ? 'idle' : s)), 2000)
     },
-    onError: (err: unknown) => {
+    onError: (err: unknown, variables) => {
       const msg = isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update task'
       setSaveStatus('error')
       setSaveError(msg)
       addToast({ message: msg, variant: 'error' })
+      // A refused plan-member edit rolls its control back to what the server
+      // actually holds — the PATCH failed, so `task` is still the truth — and
+      // the reason is already on screen (indicator + toast). Rolling back
+      // WITHOUT a stated reason is what makes a control read as broken rather
+      // than refused, so the two always travel together.
+      if (isPlanMemberPatch(variables)) {
+        setWriteSetDraft(planMemberServerRef.current.writeSet)
+        setIsJoinDraft(planMemberServerRef.current.isJoin)
+      }
+    },
+    onSettled: (_data, _err, variables) => {
+      if (isPlanMemberPatch(variables)) {
+        planMemberInFlight.current = Math.max(0, planMemberInFlight.current - 1)
+      }
     },
   })
+
+  // The two plan-member controls: move the draft NOW, PATCH the whole
+  // replacement value computed from that same draft. Rollback and in-flight
+  // bookkeeping live in the mutation's own callbacks above.
+  function handleWriteSetChange(next: string[]) {
+    setWriteSetDraft(next)
+    doUpdate({ write_set: next })
+  }
+
+  function handleIsJoinChange(next: boolean) {
+    setIsJoinDraft(next)
+    doUpdate({ is_join: next })
+  }
 
   // Todos checklist — see TaskChecklistField (shared with the calendar's
   // recurring-task edit slide-over) for the setTaskTodos mutation + handlers.
 
-  // Dependencies — replace atomically via PUT /tasks/{id}/dependencies
+  // Dependencies — replace atomically via PUT /tasks/{id}/dependencies.
+  // E-10: the server's own rejection (most often the blocked_by-cycle
+  // guard — pkg/task's cycle check, never reimplemented client-side) must
+  // reach the user, not just the console. This editor has only one target
+  // to route to, so unlike CreateTaskSlideOver it doesn't need
+  // `fieldFromValidationError`'s classification — but it uses the same
+  // `getErrorMessage` extraction (see taskValidationError.ts's header for
+  // why the two call sites share one recognizer, not a copy per component).
   const { mutate: doSetDeps } = useMutation({
     mutationFn: (blockedBy: string[]) => {
       if (!task) return Promise.reject(new Error('No task selected'))
@@ -298,9 +443,13 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
+      setDepError('')
     },
-    onError: (err: unknown) =>
-      addToast({ message: isApiError(err) ? err.userMessage : err instanceof Error ? err.message : 'Failed to update dependencies', variant: 'error' }),
+    onError: (err: unknown) => {
+      const msg = getErrorMessage(err, 'Failed to update dependencies')
+      setDepError(msg)
+      addToast({ message: msg, variant: 'error' })
+    },
   })
 
   // "Start" = PATCH status to in_progress (no /start endpoint in unified model)
@@ -383,6 +532,45 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
     setEditingPrompt(false)
   }
 
+  // GOAL-FR-058 — title is required (a task cannot be renamed to blank);
+  // mirrors handleSavePrompt's no-op-if-unchanged guard.
+  function handleSaveTitle() {
+    const trimmed = titleDraft.trim()
+    if (!trimmed) {
+      setTitleError('Title is required')
+      return
+    }
+    setTitleError('')
+    if (trimmed !== (task?.title ?? '')) {
+      doUpdate({ title: trimmed })
+    }
+    setEditingTitle(false)
+  }
+
+  // D-C uniform edit gate — refuse an edit that would leave the task with
+  // zero acceptance criteria: block the autosave, state why, and leave the
+  // editor showing the still-non-empty list (task.criteria is unchanged
+  // because doUpdate never fires, so AcceptanceCriteriaEditor's controlled
+  // `criteria` prop reverts the attempted removal on the next render).
+  function handleCriteriaChange(next: AcceptanceCriterion[]) {
+    if (next.length === 0) {
+      setCriteriaError('A task must keep at least one acceptance criterion. Add one before removing the last.')
+      return
+    }
+    setCriteriaError('')
+    doUpdate({ criteria: next })
+  }
+
+  // Same gate, for the definition-of-done list (GOAL-FR-048/FR-054).
+  function handleDodChange(next: AcceptanceCriterion[]) {
+    if (next.length === 0) {
+      setDodError('A task must keep at least one definition-of-done item. Add one before removing the last.')
+      return
+    }
+    setDodError('')
+    doUpdate({ dod: next })
+  }
+
   function handleToggleDep(id: string) {
     if (!task) return
     const current = task.blocked_by ?? []
@@ -390,27 +578,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       ? current.filter((x) => x !== id)
       : [...current, id]
     doSetDeps(next)
-  }
-
-  // FR-011/D3/FR-005, updated by operator ruling 2026-08-07: the generic
-  // detail panel only ever offers switching the trigger *kind* between
-  // "None (manual)" and "Once (at a time)" — it no longer owns setting the
-  // actual once-trigger time. Picking "Once" here hands the task a default
-  // at_ms (now + 1h) via buildTrigger and immediately PATCHes; the task then
-  // round-trips as a schedule-bearing task and the Trigger field below
-  // switches to its read-only calendar-redirect rendering — the same
-  // treatment every/recurring already got, and where the actual time is set.
-  // (This handler is unreachable for every/recurring/once tasks already at
-  // rest: the Trigger field renders the calendar-redirect guard for those,
-  // never this SmartSelect.)
-  function handleTriggerKindChange(kind: TriggerKind) {
-    if (!task) return
-    if (kind === 'once') {
-      const cfg = task.trigger?.config ?? {}
-      doUpdate({ trigger: buildTrigger('once', { at_ms: typeof cfg.at_ms === 'number' ? cfg.at_ms : Date.now() + 3_600_000 }) })
-    } else {
-      doUpdate({ trigger: buildTrigger('manual', {}) })
-    }
   }
 
   function handleDueChange(value: string) {
@@ -476,7 +643,6 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
   const isFailed = task.status === 'failed'
   const isRunning = task.status === 'in_progress'
   const blockedBy = task.blocked_by ?? []
-  const triggerKind: TriggerKind = task.trigger?.type ?? 'manual'
 
   return (
     <div className="space-y-5">
@@ -485,13 +651,60 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         <AutoSaveIndicator status={saveStatus} error={saveError} />
       </div>
 
-      {/* Title */}
+      {/* Title (GOAL-FR-058 — now editable, same click-to-edit/autosave
+          pattern as the Goal field below). */}
       <Field label="Title">
-        <p className="text-sm font-medium text-[var(--color-secondary)]">{task.title}</p>
+        {editingTitle ? (
+          <div className="space-y-1.5">
+            <Input
+              value={titleDraft}
+              onChange={(e) => { setTitleDraft(e.target.value); setTitleError('') }}
+              className="text-sm font-medium h-8"
+              autoFocus
+              maxLength={200}
+              aria-label="Title"
+              aria-invalid={!!titleError}
+              aria-describedby={titleError ? 'task-title-error' : undefined}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); handleSaveTitle() }
+                if (e.key === 'Escape') { e.preventDefault(); setTitleDraft(task.title); setTitleError(''); setEditingTitle(false) }
+              }}
+            />
+            {titleError && (
+              <p id="task-title-error" className="text-xs text-[var(--color-error)]">{titleError}</p>
+            )}
+            <div className="flex gap-1.5">
+              <Button size="sm" className="h-6 px-2 text-[10px] gap-1" onClick={handleSaveTitle}>
+                <Check size={10} weight="bold" /> Save
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-[10px] gap-1"
+                onClick={() => { setTitleDraft(task.title); setTitleError(''); setEditingTitle(false) }}
+              >
+                <X size={10} /> Cancel
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="relative group">
+            <p className="text-sm font-medium text-[var(--color-secondary)] pr-6">{task.title}</p>
+            <button tabIndex={0}
+              type="button"
+              onClick={() => { setTitleDraft(task.title); setEditingTitle(true) }}
+              className="absolute top-0 right-0 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity p-1 rounded text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-1)]"
+              aria-label="Edit title"
+            >
+              <PencilSimple size={12} />
+            </button>
+          </div>
+        )}
       </Field>
 
-      {/* Prompt */}
-      <Field label="Prompt / Instructions">
+      {/* Goal (GOAL-FR-056 — was "Prompt / Instructions"; this becomes the
+          goal record once the task starts its own session). */}
+      <Field label="Goal">
         {editingPrompt ? (
           <div className="space-y-1.5">
             <Textarea
@@ -550,9 +763,13 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
       {/* Status */}
       <Field label="Status">
         {isRunning ? (
-          <Badge className="h-8 text-xs bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">
-            In Progress
-          </Badge>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge className="h-8 text-xs bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">
+              In Progress
+            </Badge>
+            {/* "Last activity 5 s ago" (founder decision 2026-09-14). */}
+            <TaskActivityChip task={task} variant="panel" />
+          </div>
         ) : task.status === 'blocked' ? (
           // blocked is backend-derived (unmet dependency) — show read-only, not selectable
           <Badge className="h-8 text-xs bg-[var(--color-warning)]/10 text-[color:var(--color-warning)] border-transparent rounded-md px-2 inline-flex items-center">
@@ -623,6 +840,37 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         )}
       </Field>
 
+      {/* Plan-member fields (ADR-053 §Contract Surface, US-11/G-16) — the
+          `write_set` and `is_join` inputs `pkg/plan/lint.go` reads when it
+          refuses a plan for overlapping parallel writes or a join-less
+          convergence point. Shown only on a task that belongs to a plan:
+          both are explicitly ignored on a standalone task (Task.yaml), so
+          offering them there would be a control with no effect. Each saves
+          on change through the same `doUpdate` PATCH every other field on
+          this panel uses, so the autosave indicator covers them too — but
+          through an OPTIMISTIC draft, because that PATCH is not optimistic
+          itself; see the plan-member draft block above for what breaks
+          without it. Both fields are rendered by the shared components in
+          PlanMemberFields, never re-assembled from the copy constants. */}
+      {task.plan_id && (
+        <>
+          <WriteSetField
+            id="td-write-set"
+            labelStyle="section"
+            paths={writeSetDraft}
+            onChange={handleWriteSetChange}
+          />
+
+          <Field label="Parallel work">
+            <JoinMemberCheckbox
+              id="td-is-join"
+              checked={isJoinDraft}
+              onCheckedChange={handleIsJoinChange}
+            />
+          </Field>
+        </>
+      )}
+
       {/* Tags (ADR-049 — replaces the milestone dropdown). Migrated
           `milestone:<name>` tags render as ordinary chips here. */}
       <Field label="Tags">
@@ -633,23 +881,53 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
         />
       </Field>
 
-      {/* Acceptance criteria + per-attempt verdicts (ADR-049 FR-087/088) */}
-      <Field label="Acceptance criteria">
+      {/* Acceptance criteria + per-attempt verdicts (ADR-049 FR-087/088).
+          GOAL-FR-053: required — the D5 soft-tier empty hint is retired,
+          with no replacement text needed on the panel (C-63/C-80: only the
+          `emptyHint` ATTRIBUTE at this call site is removed, never the
+          prop itself, which survives on AcceptanceCriteriaEditor for its
+          other callers). D-C: removing the last criterion is refused —
+          see handleCriteriaChange. */}
+      <Field label={<>Acceptance criteria <span className="text-[var(--color-error)]">*</span></>}>
         <AcceptanceCriteriaEditor
           criteria={task.criteria ?? []}
-          onChange={(criteria) => doUpdate({ criteria })}
+          onChange={handleCriteriaChange}
           currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
-          emptyHint="No criteria — this task will be judged against its title and description (D5)."
         />
+        {criteriaError && (
+          <p className="text-xs text-[var(--color-error)]">{criteriaError}</p>
+        )}
         <div className="mt-2">
+          {/* GOAL-FR-054/FR-055 (C-81/C-42): `dod` is now passed to the
+              EXISTING CriteriaVerdictList, which already accepts the prop
+              and already renders a distinctly-labelled "Definition of
+              Done" verdict group below the acceptance-criteria verdicts —
+              zero new rendering code added here or inside that component. */}
           <CriteriaVerdictList
             criteria={task.criteria ?? []}
+            dod={task.dod ?? []}
             verdicts={taskVerdicts}
             evidence={taskEvidence}
             attemptCount={task.attempt_count}
-            maxAttempts={task.max_attempts}
+            maxAttempts={task.effective_max_attempts ?? task.max_attempts}
+            isRunning={isRunning}
           />
         </div>
+      </Field>
+
+      {/* Definition of Done (GOAL-FR-003/FR-048/FR-054, D-C's uniform edit
+          gate; joint delivery plan C-81) — the EDIT half, mirroring the
+          Acceptance criteria field above. `DefinitionOfDoneEditor` (U1) is
+          a thin wrapper supplying its own label/asterisk/helper text. */}
+      <Field label="Definition of Done">
+        <DefinitionOfDoneEditor
+          dod={task.dod ?? []}
+          onChange={handleDodChange}
+          currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
+        />
+        {dodError && (
+          <p className="text-xs text-[var(--color-error)]">{dodError}</p>
+        )}
       </Field>
 
       {/* Clear/Stop — a task actively running its own goal loop (US-11 AS-5) */}
@@ -717,30 +995,37 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             Team list unavailable — showing all agents
           </p>
         ) : null}
+        {/* Founder decision 2026-09-15: Task.assignee_warning is routed to this
+            field (field: "agent_id") — the agent cannot finish this task as
+            configured, and the server's text names the fix. */}
+        {task.assignee_warning?.field === 'agent_id' && (
+          <p
+            data-testid="task-assignee-warning"
+            role="status"
+            className="text-xs text-[color:var(--color-warning)] mt-1.5"
+          >
+            {task.assignee_warning.message}
+          </p>
+        )}
       </Field>
 
-      {/* Trigger — operator ruling 2026-08-07 (supersedes the 364d00b2-era
-          judgment that kept `once` inline-editable here): editing a
-          schedule-bearing task's TIME is calendar-only for every kind —
-          once/every/recurring alike — not just repeating ones. Gate on the
-          broader isScheduledTrigger, not the narrower isRecurringTrigger.
-          Board/List already exclude every schedule-bearing task
-          (BoardView/ListView's isScheduledTrigger filter), so this panel
-          should rarely receive one in practice — reachable via a dependency
-          chip, subtask row, search result, stale cache, or a race. When it
-          does, render a READ-ONLY plain-English summary + a link to the
-          workspace calendar instead of an editable picker — never a raw
-          cron/rule string, never trigger-time editing here. Schedule editing
-          exists only in the calendar editor (FR-005, CalendarEventSlideOver).
-          Otherwise (manual, the normal case), the picker below offers
-          "None (manual)" and "Once (at a time)" as trigger KINDS — the same
-          trim as the generic create form (FR-011/D3). Picking "Once" hands
-          the task a default at_ms and PATCHes immediately; once the task
-          round-trips as schedule-bearing, this field switches to the
-          read-only redirect above — the actual date/time is then set in the
-          calendar, same as every/recurring. */}
-      <Field label="Trigger">
-        {isScheduledTrigger(task.trigger) ? (
+      {/* Trigger — GOAL-FR-060: the manual-kind CONTROL (the SmartSelect
+          offering "None (manual)" / "Once (at a time)") is REMOVED outright.
+          A normal task has no timer — it starts by a human pressing Start,
+          an agent starting it, or a plan reaching it, none of which is a
+          schedule; time-based starts are the calendar's own job now
+          (CalendarEventSlideOver). Scope limit: only the CONTROL is gone —
+          the `trigger` model field, wire type, isScheduledTrigger/
+          scheduledTriggerSummary helpers and the calendar's own editor all
+          stay. The READ-ONLY branch below MUST also stay: Board/List
+          already exclude every schedule-bearing task, so this panel should
+          rarely receive one in practice — reachable via a dependency chip,
+          subtask row, search result, stale cache, or a race — and when it
+          does, it needs a plain-English summary + a link to the workspace
+          calendar, never a raw cron/rule string and never trigger-time
+          editing here. */}
+      {isScheduledTrigger(task.trigger) && (
+        <Field label="Trigger">
           <div className="space-y-1.5">
             <p className="text-xs text-[var(--color-secondary)]">
               {scheduledTriggerSummary(task.trigger)}
@@ -757,19 +1042,8 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
               </Link>
             )}
           </div>
-        ) : (
-          <SmartSelect
-            value={triggerKind}
-            onValueChange={(val) => handleTriggerKindChange(val as TriggerKind)}
-            triggerClassName="h-8 text-xs"
-            ariaLabel="Trigger"
-            items={[
-              { value: 'manual', label: 'None (manual)', className: 'text-xs' },
-              { value: 'once', label: 'Once (at a time)', className: 'text-xs' },
-            ]}
-          />
-        )}
-      </Field>
+        </Field>
+      )}
 
       {/* Depends on (blocked_by, editable) */}
       <Field label="Depends on">
@@ -840,6 +1114,9 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
               )
             })}
           </div>
+        )}
+        {depError && (
+          <p role="alert" className="text-xs text-[var(--color-error)] mt-1.5">{depError}</p>
         )}
       </Field>
 
@@ -1040,7 +1317,7 @@ export function WorkflowTaskDetailPanel({
 
 // ── Field ──────────────────────────────────────────────────────────────────────
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
       <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">{label}</p>

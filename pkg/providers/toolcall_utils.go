@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
 // buildCLIToolsPrompt creates the tool definitions section for a CLI provider system prompt.
@@ -69,10 +70,34 @@ func NormalizeToolCall(tc ToolCall) ToolCall {
 		normalized.Arguments = map[string]any{}
 	}
 
-	// Parse Arguments from Function.Arguments if not already set
+	// Parse Arguments from Function.Arguments if not already set.
+	//
+	// This is the last decode before dispatch, and it used to be the quietest:
+	// the unmarshal error was discarded with `err == nil &&`, so an
+	// undecodable payload left Arguments as the empty map while
+	// Function.Arguments kept the fragment. The tool was then dispatched with
+	// no parameters and failed downstream on a schema complaint that named the
+	// wrong cause.
+	//
+	// The decode now runs through the one canonical decoder and REPORTS. A
+	// failure here cannot return an error — NormalizeToolCall's signature is
+	// fixed by its callers in the agent loop — so it logs at Error and leaves
+	// Arguments empty, which is the same conservative value as before but no
+	// longer silent. In practice the providers refuse such a call before it
+	// ever reaches normalisation; this path firing at all means a decode site
+	// was added that bypasses common.DecodeToolCallArguments.
 	if len(normalized.Arguments) == 0 && normalized.Function != nil && normalized.Function.Arguments != "" {
-		var parsed map[string]any
-		if err := json.Unmarshal([]byte(normalized.Function.Arguments), &parsed); err == nil && parsed != nil {
+		parsed, err := common.DecodeToolCallArguments(
+			json.RawMessage(normalized.Function.Arguments), normalized.Name,
+		)
+		if err != nil {
+			logger.ErrorCF(
+				"providers",
+				"tool call arguments reached normalisation undecodable; "+
+					"dispatching with no arguments (a provider decode site is bypassing the canonical decoder)",
+				map[string]any{"tool": normalized.Name, "error": err.Error()},
+			)
+		} else if parsed != nil {
 			normalized.Arguments = parsed
 		}
 	}

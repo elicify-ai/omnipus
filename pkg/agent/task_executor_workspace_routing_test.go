@@ -69,7 +69,8 @@ func TestExecuteTask_NativeDispatch_RootsAtTaskWorkspaceID_WhenAgentBelongsToMul
 
 	provider := testutil.NewScenario().
 		WithToolCall("write_file", `{"path":"proof.txt","content":"hello-from-ws-zzz","overwrite":true}`).
-		WithText(successMarkerBody)
+		WithToolCall(tools.GoalClaimToolName, `{"status":"met","evidence":"wrote proof.txt into ws-zzz's work directory"}`).
+		WithText("Done: proof.txt is written.")
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{
@@ -80,20 +81,30 @@ func TestExecuteTask_NativeDispatch_RootsAtTaskWorkspaceID_WhenAgentBelongsToMul
 				MaxToolIterations:   10,
 				RestrictToWorkspace: true,
 			},
-			List: []config.AgentConfig{{ID: "main"}},
+			// GOAL-FR-022/R-27: this task carries no explicit criteria, so the
+			// worker's goal_claim is adjudicated on the soft tier — which
+			// REQUIRES a registered Judge to resolve at all. See
+			// judgeAgentConfigForTaskTests (task_completion_contract_test.go).
+			// A System Agent is never a chat target, so this entry cannot
+			// displace "main" as GetDefaultAgent's answer below.
+			List: []config.AgentConfig{{ID: "main"}, judgeAgentConfigForTaskTests(t)},
 		},
+		// A task worker finishes only by calling goal_claim (founder decision
+		// 2026-09-14); production seeds it "allow" on the global ceiling.
+		Sandbox: config.OmnipusSandboxConfig{ToolPolicies: map[string]string{tools.GoalClaimToolName: "allow"}},
 	}
 
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	defer al.Close()
+	bindMetSoftTierJudge(t, al)
 	defaultAgent := al.registry.GetDefaultAgent()
 	require.NotNil(t, defaultAgent, "expected default agent")
 	// No-default-policy model (CLAUDE.md hard constraint 6): write_file needs
 	// an explicit agent-level grant, or it fails closed to "deny" and this
 	// test never actually exercises the re-rooting behavior under test.
 	defaultAgent.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]config.ToolPolicy{"write_file": "allow"},
+		Policies: map[string]config.ToolPolicy{"write_file": "allow", tools.GoalClaimToolName: "allow"},
 	})
 
 	tk := &task.Task{

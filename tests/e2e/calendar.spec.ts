@@ -333,6 +333,28 @@ async function createTaskWithDue(
         workspace_id: wsId,
         due: dueIso,
         surface: 'user',
+        // Operator decision D-C (2026-09-11): criteria AND a definition of
+        // done are mandatory at creation, and the DoD must be DISTINCT from
+        // the criteria (GOAL-FR-021/FR-047/FR-048). Without both, POST /tasks
+        // answers 400. This task is a calendar CHIP fixture — never
+        // dispatched, never judged — so both lists are the smallest honest
+        // pair that satisfies the gate.
+        criteria: [
+          {
+            kind: 'prose',
+            text: 'the task is due on the day it was created for',
+            author: { kind: 'user', id: 'admin' },
+            status: 'pending',
+          },
+        ],
+        dod: [
+          {
+            kind: 'prose',
+            text: 'the due date is recorded on the task',
+            author: { kind: 'user', id: 'admin' },
+            status: 'pending',
+          },
+        ],
       },
     });
     if (!res.ok()) {

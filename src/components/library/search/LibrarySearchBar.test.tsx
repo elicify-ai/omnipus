@@ -1,0 +1,1655 @@
+// LibrarySearchBar.test.tsx — library-b-c-design-2026-09-07 §C1.
+//
+// The founder decision this pins down: a PERSISTENT bar, not a command
+// palette — so the input is always mounted, and typing into it REPLACES the
+// file list (`children`) with grouped results; clearing it restores the list
+// exactly as the caller passed it in. Fixtures go through the generated zod
+// schemas so nothing here is built on a payload the server could not send.
+
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import {
+  VaultSearchResponse as VaultSearchResponseSchema,
+  KnowledgeBaseInfo as KnowledgeBaseInfoSchema,
+  ViewResult as ViewResultSchema,
+  FileSearchResponse as FileSearchResponseSchema,
+} from '@/lib/api/generated/schemas'
+import { ApiError } from '@/lib/api-error'
+import { LibrarySearchBar } from './LibrarySearchBar'
+import type { KnowledgeGraphLoader } from '../knowledge/KnowledgeBacklinks'
+import type { VaultSearchResponse, KnowledgeBaseInfo, VaultSearchFn, LoadCollectionInfoFn } from './useVaultSearch'
+import type { FileSearchResponse, FileSearchFn } from './useFileSearch'
+import type { ViewResult } from '@/lib/api/generated/openapi-types'
+import type { LoadViewResultFn } from './LibrarySearchBar'
+
+function vaultInfo(over: Partial<KnowledgeBaseInfo> = {}): KnowledgeBaseInfo {
+  const base: KnowledgeBaseInfo = {
+    workspace_id: 'ws-1',
+    root_path: 'vault',
+    is_knowledge_base: true,
+    marker: 'omnipus_vault',
+    collection_id: 'kb_1',
+    ...over,
+  }
+  return KnowledgeBaseInfoSchema.parse(base) as KnowledgeBaseInfo
+}
+
+function response(over: Partial<VaultSearchResponse> = {}): VaultSearchResponse {
+  const base: VaultSearchResponse = {
+    collection_id: 'kb_1',
+    complete: true,
+    notes: [],
+    records: [],
+    views: [],
+    ...over,
+  }
+  return VaultSearchResponseSchema.parse(base) as VaultSearchResponse
+}
+
+function viewResult(over: Partial<ViewResult> = {}): ViewResult {
+  const base: ViewResult = {
+    view: 'open-deals',
+    label: 'Open deals',
+    parts: [],
+    rows: [],
+    complete: true,
+    problems: [],
+    ...over,
+  }
+  return ViewResultSchema.parse(base) as ViewResult
+}
+
+function filesResponse(over: Partial<FileSearchResponse> = {}): FileSearchResponse {
+  const base: FileSearchResponse = {
+    hits: [],
+    truncated: false,
+    limits_applied: {
+      files: 50000,
+      bytes: 268435456,
+      matches: 1000,
+      matches_per_file: 50,
+      depth: 32,
+      deadline_ms: 3000,
+      output_bytes: 1048576,
+    },
+    stats: {
+      files_visited: 0,
+      bytes_scanned: 0,
+      files_skipped_problems: 0,
+      files_pruned_ignored: 0,
+      files_skipped_per_file_cap: 0,
+      hits_capped_per_file: 0,
+    },
+    ...over,
+  }
+  return FileSearchResponseSchema.parse(base) as FileSearchResponse
+}
+
+/** A folder OUTSIDE any vault — the collection-detection lookup answers
+ *  is_knowledge_base:false, which is what puts the bar in files mode. */
+function plainFolderInfo(over: Partial<KnowledgeBaseInfo> = {}): KnowledgeBaseInfo {
+  const base: KnowledgeBaseInfo = {
+    workspace_id: 'ws-1',
+    root_path: '01-Areas',
+    is_knowledge_base: false,
+    marker: 'none',
+    ...over,
+  }
+  return KnowledgeBaseInfoSchema.parse(base) as KnowledgeBaseInfo
+}
+
+function renderBar(opts: {
+  workspaceId?: string | null
+  res?: VaultSearchResponse | VaultSearchFn
+  info?: KnowledgeBaseInfo | LoadCollectionInfoFn
+  filesRes?: FileSearchResponse | FileSearchFn
+  onOpenNote?: (p: string) => void
+  onOpenFolder?: (p: string) => boolean
+  loadViewResult?: LoadViewResultFn
+  loadGraph?: KnowledgeGraphLoader
+  debounceMs?: number
+} = {}) {
+  const searchFn: VaultSearchFn =
+    typeof opts.res === 'function' ? opts.res : vi.fn().mockResolvedValue(opts.res ?? response())
+  const loadCollectionInfo: LoadCollectionInfoFn =
+    typeof opts.info === 'function' ? opts.info : vi.fn().mockResolvedValue(opts.info ?? vaultInfo())
+  const searchFilesFn: FileSearchFn =
+    typeof opts.filesRes === 'function' ? opts.filesRes : vi.fn().mockResolvedValue(opts.filesRes ?? filesResponse())
+  const onOpenNote = opts.onOpenNote ?? vi.fn()
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const utils = render(
+    <QueryClientProvider client={client}>
+      <LibrarySearchBar
+        workspaceId={opts.workspaceId === undefined ? 'ws-1' : opts.workspaceId}
+        folderPath="vault"
+        onOpenNote={onOpenNote}
+        debounceMs={opts.debounceMs ?? 5}
+        searchFn={searchFn}
+        searchFilesFn={searchFilesFn}
+        loadCollectionInfo={loadCollectionInfo}
+        {...(opts.onOpenFolder ? { onOpenFolder: opts.onOpenFolder } : {})}
+        {...(opts.loadViewResult ? { loadViewResult: opts.loadViewResult } : {})}
+        {...(opts.loadGraph ? { loadGraph: opts.loadGraph } : {})}
+      >
+        <div data-testid="file-tree">The file tree</div>
+      </LibrarySearchBar>
+    </QueryClientProvider>,
+  )
+  return { ...utils, searchFn, loadCollectionInfo, searchFilesFn, onOpenNote }
+}
+
+function type(text: string) {
+  fireEvent.change(screen.getByTestId('library-search-input'), { target: { value: text } })
+}
+
+/** KB-6d's client-side highlight can split a hit's text (title/snippet)
+ *  across multiple elements — a `<span>` around the matched word, plain
+ *  text around it — which defeats getByText's default single-text-node
+ *  matching. This is react-testing-library's own documented workaround:
+ *  match by the FULL, normalized textContent of the element whose own
+ *  children do not individually contain it (so it matches the row's
+ *  wrapping element, not the highlighted fragment alone). */
+function getByFullText(text: string): HTMLElement {
+  return screen.getByText((_, element) => {
+    if (!element) return false
+    const hasText = (el: Element) => el.textContent === text
+    return hasText(element) && Array.from(element.children).every((child) => !hasText(child))
+  })
+}
+
+/** Radix's TabsTrigger activates on `mousedown` (pointer path), not `click` —
+ *  see @radix-ui/react-tabs's TabsTrigger, which wires onValueChange to
+ *  onMouseDown/onKeyDown/onFocus and deliberately NOT onClick. */
+function selectTab(testId: string) {
+  fireEvent.mouseDown(screen.getByTestId(testId), { button: 0 })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Query → grouped render, and clearing restores the tree
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — query replaces the tree, clearing restores it', () => {
+  it('shows the file tree while the box is empty', () => {
+    renderBar()
+    expect(screen.getByTestId('file-tree')).toBeInTheDocument()
+    expect(screen.queryByTestId('library-search-active')).toBeNull()
+  })
+
+  it('replaces the tree with grouped results once a query is typed', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: 'a.md', title: 'Note A' }],
+        records: [{ path: 'acme.md', title: 'Acme', record_type: 'company', cells: [{ property: 'status', value: 'open' }] }],
+        views: [{ view: 'open-deals', label: 'Open deals', kind: 'table' }],
+      }),
+    })
+
+    type('acme')
+
+    await waitFor(() => expect(screen.getByTestId('library-search-results')).toBeInTheDocument())
+    expect(screen.queryByTestId('file-tree')).toBeNull()
+
+    expect(screen.getByText('Note A')).toBeInTheDocument()
+    expect(screen.getByText('Acme')).toBeInTheDocument()
+    expect(screen.getByText('company')).toBeInTheDocument()
+    expect(screen.getByText('Open deals')).toBeInTheDocument()
+
+    // Segmented filter carries per-kind counts.
+    const filters = screen.getByTestId('library-search-filters')
+    expect(within(filters).getByTestId('library-search-filter-all')).toHaveTextContent('All3')
+    expect(within(filters).getByTestId('library-search-filter-notes')).toHaveTextContent('Notes1')
+    expect(within(filters).getByTestId('library-search-filter-records')).toHaveTextContent('Records1')
+    expect(within(filters).getByTestId('library-search-filter-views')).toHaveTextContent('Views1')
+
+    // Ported from the retired KnowledgeSearch.test.tsx's "shows the results
+    // and says nothing about PARTIAL-ness": a complete, unclamped answer
+    // shows none of the honesty banners — never a "partial results" claim
+    // over a complete answer (US-6 AS-4's guarantee, carried onto this bar).
+    expect(screen.queryByTestId('library-search-not-ready')).toBeNull()
+    expect(screen.queryByTestId('library-search-clamped')).toBeNull()
+  })
+
+  it('restores the tree the instant the query is cleared', async () => {
+    renderBar({ res: response({ notes: [{ path: 'a.md', title: 'Note A' }] }) })
+    type('note')
+    await waitFor(() => expect(getByFullText('Note A')).toBeInTheDocument())
+
+    type('')
+
+    expect(screen.getByTestId('file-tree')).toBeInTheDocument()
+    expect(screen.queryByTestId('library-search-active')).toBeNull()
+  })
+
+  it('opens a note hit via onOpenNote, translated to a workspace-relative path', async () => {
+    const onOpenNote = vi.fn()
+    renderBar({
+      res: response({ notes: [{ path: 'sub/a.md', title: 'Note A' }] }),
+      info: vaultInfo({ root_path: 'vault' }),
+      onOpenNote,
+    })
+    type('note')
+
+    await waitFor(() => expect(getByFullText('Note A')).toBeInTheDocument())
+    fireEvent.click(getByFullText('Note A'))
+    expect(onOpenNote).toHaveBeenCalledWith('vault/sub/a.md')
+  })
+
+  it('opens a record hit the same way, by its declaring note', async () => {
+    const onOpenNote = vi.fn()
+    renderBar({
+      res: response({ records: [{ path: 'crm/acme.md', title: 'Acme', record_type: 'company', cells: [] }] }),
+      info: vaultInfo({ root_path: 'vault' }),
+      onOpenNote,
+    })
+    type('acme')
+
+    await waitFor(() => expect(screen.getByText('Acme')).toBeInTheDocument())
+    fireEvent.click(screen.getByText('Acme'))
+    expect(onOpenNote).toHaveBeenCalledWith('vault/crm/acme.md')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Filter tabs switch what is shown
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — filter tabs', () => {
+  it('shows only the selected kind once a filter tab is chosen', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: 'a.md', title: 'Note A' }],
+        records: [{ path: 'acme.md', title: 'Acme Co', cells: [] }],
+      }),
+    })
+    type('a')
+    await waitFor(() => expect(getByFullText('Note A')).toBeInTheDocument())
+    expect(getByFullText('Acme Co')).toBeInTheDocument()
+
+    selectTab('library-search-filter-notes')
+
+    await waitFor(() => expect(screen.queryByText('Acme Co')).toBeNull())
+    expect(getByFullText('Note A')).toBeInTheDocument()
+  })
+
+  it('says plainly when the selected kind has nothing, rather than an empty panel', async () => {
+    renderBar({ res: response({ notes: [{ path: 'a.md', title: 'Note A' }] }) })
+    type('a')
+    await waitFor(() => expect(getByFullText('Note A')).toBeInTheDocument())
+
+    selectTab('library-search-filter-records')
+
+    expect(await screen.findByTestId('library-search-filter-empty')).toHaveTextContent(/no records match/i)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Empty state
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — empty results', () => {
+  it('says no results for the query when the collection genuinely has none', async () => {
+    renderBar({ res: response() })
+    type('nonexistent')
+
+    const empty = await screen.findByTestId('library-search-empty')
+    expect(empty).toHaveTextContent('nonexistent')
+    expect(screen.queryByTestId('library-search-results')).toBeNull()
+  })
+})
+
+describe('LibrarySearchBar — vault search failure (ported from the retired KnowledgeSearch box)', () => {
+  it('surfaces a failed vault search as a visible error, never as an empty result list', async () => {
+    const searchFn = vi.fn().mockRejectedValue(new Error('Search failed (HTTP 500).'))
+    renderBar({ res: searchFn })
+    type('landlock')
+
+    const banner = await screen.findByTestId('library-search-error')
+    expect(banner).toHaveTextContent('Search failed (HTTP 500).')
+    // Critically: NOT reported as "no results", which would be a false
+    // statement about the vault.
+    expect(screen.queryByTestId('library-search-empty')).toBeNull()
+    expect(screen.queryByTestId('library-search-results')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Index-not-ready — complete: false
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — not-ready index', () => {
+  it('states the server\'s own reason when the answer is not complete', async () => {
+    renderBar({
+      res: response({
+        complete: false,
+        complete_reason: 'the vault index has never finished indexing this vault',
+        notes: [{ path: 'a.md', title: 'Note A' }],
+      }),
+    })
+    type('note')
+
+    const banner = await screen.findByTestId('library-search-not-ready')
+    expect(banner).toHaveAttribute('role', 'status')
+    expect(banner).toHaveTextContent('the vault index has never finished indexing this vault')
+    // Results are still shown alongside the honesty banner.
+    expect(getByFullText('Note A')).toBeInTheDocument()
+  })
+
+  it('falls back to a generic sentence when the server sent no reason', async () => {
+    renderBar({ res: response({ complete: false }) })
+    type('note')
+
+    const banner = await screen.findByTestId('library-search-not-ready')
+    expect(banner.textContent ?? '').not.toBe('')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Context switching (unified-search-and-grep-spec.md US-2/US-4) — a plain
+// folder is now FILES-searchable rather than disabled; only the Library
+// virtual root (and mid-resolution) stays disabled.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — a plain folder gets Files search, not the old disabled state', () => {
+  it('enables the input with a files-oriented placeholder outside a vault (US-2/US-4 AS-3)', async () => {
+    // THE DEFECT THIS FIXES. Until unified-search-and-grep-spec.md, a folder
+    // that was not a vault was indistinguishable from "nothing to search
+    // here" — collectionId===undefined disabled the whole bar. A plain
+    // folder/mount now gets the FILES kind instead.
+    renderBar({ info: plainFolderInfo() })
+    await waitFor(() =>
+      expect(screen.getByTestId('library-search-input')).toHaveAttribute(
+        'placeholder',
+        'Search file and folder names',
+      ),
+    )
+    expect(screen.getByTestId('library-search-input')).not.toBeDisabled()
+  })
+
+  it('stays disabled only while collection detection is still resolving', () => {
+    renderBar({ info: () => new Promise(() => {}) })
+    expect(screen.getByTestId('library-search-input')).toHaveAttribute('placeholder', 'Checking this folder…')
+    expect(screen.getByTestId('library-search-input')).toBeDisabled()
+  })
+})
+
+describe('LibrarySearchBar — the Library virtual root (US-4 AS-2)', () => {
+  it('renders in its disabled state with an explanatory placeholder, and never looks up a collection', async () => {
+    const loadCollectionInfo = vi.fn()
+    renderBar({ workspaceId: null, info: loadCollectionInfo })
+
+    expect(screen.getByTestId('library-search-input')).toBeDisabled()
+    expect(screen.getByTestId('library-search-input')).toHaveAttribute(
+      'placeholder',
+      'Open a workspace to search',
+    )
+    expect(screen.getByTestId('file-tree')).toBeInTheDocument()
+    expect(loadCollectionInfo).not.toHaveBeenCalled()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MV-10 — exactly one search input, in every mode
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — exactly one search input per view (MV-10)', () => {
+  it('is the ONLY search input while in vault mode', () => {
+    renderBar({ info: vaultInfo() })
+    expect(screen.getAllByRole('searchbox')).toHaveLength(1)
+  })
+
+  it('is the ONLY search input while in files mode', () => {
+    renderBar({ info: plainFolderInfo() })
+    expect(screen.getAllByRole('searchbox')).toHaveLength(1)
+  })
+
+  it('is the ONLY search input at the disabled virtual root', () => {
+    renderBar({ workspaceId: null })
+    expect(screen.getAllByRole('searchbox')).toHaveLength(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// A view hit opens its evaluated result
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — opening a view', () => {
+  it('fetches and draws the view result in a dialog, addressed by name and collection alone', async () => {
+    const loadViewResult = vi.fn().mockResolvedValue(viewResult())
+    renderBar({
+      res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }),
+      loadViewResult,
+    })
+    type('deals')
+
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+
+    await waitFor(() => expect(loadViewResult).toHaveBeenCalledWith('ws-1', 'kb_1', 'open-deals', expect.anything()))
+    expect(await screen.findByTestId('view-empty')).toBeInTheDocument()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Honesty port (unified-search-and-grep-spec.md US-1, MV-9) — every signal
+// the retired KnowledgeSearch box carried, now on this bar.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — attachments (US-1, ported attachment search)', () => {
+  it('renders an Attachments group and tab with its own count', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: 'a.md', title: 'Note A' }],
+        attachments: [{ path: 'img/diagram-v3.png', name: 'diagram-v3.png' }],
+      }),
+    })
+    type('diagram')
+
+    await waitFor(() => expect(screen.getByText('diagram-v3.png')).toBeInTheDocument())
+    const filters = screen.getByTestId('library-search-filters')
+    expect(within(filters).getByTestId('library-search-filter-attachments')).toHaveTextContent('Attachments1')
+  })
+
+  it('never describes an attachment hit as a failure — it was never read, by design (FR-039a)', async () => {
+    renderBar({ res: response({ attachments: [{ path: 'img/diagram-v3.png', name: 'diagram-v3.png' }] }) })
+    type('diagram')
+
+    const hit = await screen.findByTestId('vault-search-attachment-hit')
+    expect(hit.textContent ?? '').not.toMatch(/could not be read|failed/i)
+  })
+
+  it('opens an attachment hit via onOpenNote, translated to a workspace-relative path', async () => {
+    const onOpenNote = vi.fn()
+    renderBar({
+      res: response({ attachments: [{ path: 'img/diagram.png', name: 'diagram.png' }] }),
+      info: vaultInfo({ root_path: 'vault' }),
+      onOpenNote,
+    })
+    type('diagram')
+
+    await waitFor(() => expect(screen.getByText('diagram.png')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-attachment-hit'))
+    expect(onOpenNote).toHaveBeenCalledWith('vault/img/diagram.png')
+  })
+})
+
+describe('LibrarySearchBar — excerpt-unavailable note hits (US-1 AS-4)', () => {
+  it('renders the note with an explicit marker instead of a bare title over nothing', async () => {
+    renderBar({
+      res: response({ notes: [{ path: 'notes/gone.md', title: 'Gone', excerpt_unavailable: true }] }),
+    })
+    type('gone')
+
+    await waitFor(() => expect(screen.getByText('Gone')).toBeInTheDocument())
+    expect(screen.getByTestId('vault-search-excerpt-unavailable')).toBeVisible()
+  })
+
+  it('shows the real snippet instead of the marker when one is present', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: 'notes/a.md', title: 'A', snippet: 'kernel sandbox', excerpt_unavailable: true }],
+      }),
+    })
+    type('a')
+
+    await waitFor(() => expect(getByFullText('kernel sandbox')).toBeInTheDocument())
+    expect(screen.queryByTestId('vault-search-excerpt-unavailable')).toBeNull()
+  })
+})
+
+describe('LibrarySearchBar — WL-2: no raw [[wikilink]] notation in search results', () => {
+  // Reproduction: the founder's real vault has frontmatter like
+  // `owner: "[[Daniel Piatkowski]]"` — an ordinary wikilink typed OUTSIDE any
+  // note body. The search engine returns a raw excerpt around the matched
+  // term (it never renders markdown), so a note hit's `snippet` can carry the
+  // wikilink notation verbatim. Before the fix, NoteRow rendered `hit.snippet`
+  // through `highlightQuery` alone — a plain-text split/highlight with no
+  // wikilink awareness — so the brackets reached the screen exactly as
+  // written on disk. This is the surface WL-2's own writeup flagged but could
+  // not name: "if the founder saw [[...]] where frontmatter lives, a
+  // different surface is rendering frontmatter as text."
+  it('shows a wikilink inside a note snippet as its display text, never as raw brackets', async () => {
+    renderBar({
+      res: response({
+        notes: [
+          {
+            path: '01-Areas/CRM/LinkedIn.md',
+            title: 'LinkedIn',
+            snippet: 'owner: "[[Daniel Piatkowski]]" website: https://www.linkedin.com',
+          },
+        ],
+      }),
+    })
+    type('Daniel Piatkowski')
+
+    await waitFor(() =>
+      expect(getByFullText('owner: "Daniel Piatkowski" website: https://www.linkedin.com')).toBeInTheDocument(),
+    )
+    // The literal notation must never reach the DOM — not even split across
+    // highlight spans (getByFullText already proves the exact joined text
+    // above; this is the direct, unambiguous check for the notation itself).
+    expect(screen.queryByText(/\[\[.*\]\]/)).toBeNull()
+  })
+
+  it('resolves a wikilink alias to its alias text, not the raw target', async () => {
+    renderBar({
+      res: response({
+        notes: [
+          {
+            path: '05-Maps/Entities/Daniel Piatkowski.md',
+            title: 'Daniel Piatkowski',
+            snippet: 'decided_by: "[[Daniel Piatkowski|the founder]]" status: accepted',
+          },
+        ],
+      }),
+    })
+    type('founder')
+
+    await waitFor(() =>
+      expect(getByFullText('decided_by: "the founder" status: accepted')).toBeInTheDocument(),
+    )
+    expect(screen.queryByText(/\[\[.*\]\]/)).toBeNull()
+  })
+
+  it('strips wikilink notation from a record cell value the same way', async () => {
+    renderBar({
+      res: response({
+        records: [
+          {
+            path: 'crm/linkedin.md',
+            title: 'LinkedIn',
+            record_type: 'company',
+            cells: [{ property: 'owner', value: '[[Daniel Piatkowski]]' }],
+          },
+        ],
+      }),
+    })
+    type('linkedin')
+
+    await waitFor(() => expect(getByFullText('owner: Daniel Piatkowski')).toBeInTheDocument())
+    expect(screen.queryByText(/\[\[.*\]\]/)).toBeNull()
+  })
+})
+
+describe('LibrarySearchBar — server-authored statement and coverage (US-1 AS-1/AS-2, FR-036)', () => {
+  it('shows the server statement, in the reading flow, ahead of a partial answer', async () => {
+    const statement = 'Searched 4,120 of 12,880 notes — indexing is still running.'
+    renderBar({
+      res: response({
+        complete: false,
+        notes: [{ path: 'a.md', title: 'A' }],
+        statement,
+        notes_searched: 4120,
+        notes_total_known: 12880,
+      }),
+    })
+    type('a')
+
+    const banner = await screen.findByTestId('library-search-not-ready')
+    expect(within(banner).getByText(statement)).toBeVisible()
+    // UAT D-129 (web statement): the bar's own coverage line says exactly
+    // WHAT was searched — the full TEXT of markdown notes — so it can never
+    // again be read as "every file, attachments included".
+    expect(screen.getByTestId('library-search-coverage-ratio')).toHaveTextContent(
+      'Searched the full text of 4,120 of 12,880 notes',
+    )
+  })
+
+  it('shows a bare "so far" count — never an invented denominator — when the total is unknown', async () => {
+    renderBar({
+      res: response({ complete: false, notes: [{ path: 'a.md', title: 'A' }], notes_searched: 4120 }),
+    })
+    type('a')
+
+    const banner = await screen.findByTestId('library-search-not-ready')
+    expect(screen.getByTestId('library-search-coverage-so-far')).toHaveTextContent(
+      'Searched the full text of 4,120 notes so far',
+    )
+    expect(screen.queryByTestId('library-search-coverage-ratio')).toBeNull()
+    // No invented ratio anywhere in the banner.
+    expect(banner.textContent ?? '').not.toMatch(/[\d,]+\s*(?:of|\/)\s*[\d,]+/i)
+  })
+
+  it('shows the server statement beside a COMPLETE has-hits answer too, not only a bare count', async () => {
+    const statement = 'Searched the whole of this vault; its index was complete at query time.'
+    renderBar({
+      res: response({ complete: true, notes: [{ path: 'a.md', title: 'A' }], statement }),
+    })
+    type('a')
+
+    await waitFor(() => expect(screen.getByText('A')).toBeInTheDocument())
+    expect(screen.getByTestId('library-search-complete-statement')).toHaveTextContent(statement)
+    expect(screen.queryByTestId('library-search-not-ready')).toBeNull()
+  })
+
+  it('falls back to complete_reason when the server has not been upgraded to send `statement` yet', async () => {
+    // Additive compatibility (MV-9): an older server sends complete_reason but
+    // no statement — the not-ready banner still says something real.
+    renderBar({
+      res: response({ complete: false, complete_reason: 'the vault index has never finished indexing this vault' }),
+    })
+    type('a')
+
+    const banner = await screen.findByTestId('library-search-not-ready')
+    expect(banner).toHaveTextContent('the vault index has never finished indexing this vault')
+  })
+
+  it('shows the server statement on a COMPLETE but EMPTY answer too — never only the client\'s own sentence', async () => {
+    // Ported from the retired KnowledgeSearch.test.tsx: an out-of-scope
+    // collection_id (or any complete-but-refused answer) comes back as
+    // hits: [], complete: true, with a server statement explaining why — the
+    // server writes the sentence precisely so the client cannot phrase the
+    // answer for it.
+    const statement = 'No knowledge base with that identifier is available in this workspace.'
+    renderBar({ res: response({ complete: true, statement }) })
+    type('landlock')
+
+    const empty = await screen.findByTestId('library-search-empty')
+    expect(empty).toBeInTheDocument()
+    expect(screen.getByTestId('library-search-complete-statement')).toHaveTextContent(statement)
+  })
+})
+
+describe('LibrarySearchBar — clamp disclosure (FR-037)', () => {
+  it('says the count was clamped, naming the refused number when the server echoed it', async () => {
+    renderBar({
+      res: response({ notes: [{ path: 'a.md', title: 'A' }], limit_clamped: true, limit_requested: 400 }),
+    })
+    type('a')
+
+    const notice = await screen.findByTestId('library-search-clamped')
+    expect(notice).toHaveTextContent(/clamped/i)
+    expect(notice).toHaveTextContent('400')
+  })
+
+  it('still discloses the clamp when the server omitted the requested number', async () => {
+    renderBar({ res: response({ notes: [{ path: 'a.md', title: 'A' }], limit_clamped: true }) })
+    type('a')
+
+    const notice = await screen.findByTestId('library-search-clamped')
+    expect(notice).toHaveTextContent(/clamped/i)
+    expect(notice.textContent ?? '').not.toMatch(/undefined|NaN/)
+  })
+
+  it('says nothing when nothing was clamped', async () => {
+    renderBar({ res: response({ notes: [{ path: 'a.md', title: 'A' }] }) })
+    type('a')
+
+    await waitFor(() => expect(screen.getByText('A')).toBeInTheDocument())
+    expect(screen.queryByTestId('library-search-clamped')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FILES kind (unified-search-and-grep-spec.md US-2/US-4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind: name and content hits', () => {
+  it('renders a name match with its path', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({ hits: [{ path: '01-Areas/Q3 report.md', match_kind: 'name' }] }),
+    })
+    type('report')
+
+    const hit = await screen.findByTestId('file-search-name-hit')
+    expect(hit).toHaveTextContent('01-Areas/Q3 report.md')
+  })
+
+  it('renders a content match with its line number and excerpt', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        hits: [
+          {
+            path: '01-Areas/notes.txt',
+            match_kind: 'content',
+            line: 42,
+            excerpt: 'quarterly meeting notes',
+          },
+        ],
+      }),
+    })
+    type('meeting')
+
+    const hit = await screen.findByTestId('file-search-content-hit')
+    expect(hit).toHaveTextContent('01-Areas/notes.txt')
+    expect(hit).toHaveTextContent(':42')
+    expect(hit).toHaveTextContent('quarterly meeting notes')
+  })
+
+  it('renders optional context lines around a content match', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        hits: [
+          {
+            path: 'a.txt',
+            match_kind: 'content',
+            line: 10,
+            excerpt: 'the match line',
+            context_before: ['line eight', 'line nine'],
+            context_after: ['line eleven'],
+          },
+        ],
+      }),
+    })
+    type('match')
+
+    const hit = await screen.findByTestId('file-search-content-hit')
+    expect(hit).toHaveTextContent('line eight')
+    expect(hit).toHaveTextContent('line nine')
+    expect(hit).toHaveTextContent('the match line')
+    expect(hit).toHaveTextContent('line eleven')
+  })
+
+  it('opens a file hit via onOpenNote with its path unchanged (no collection translation)', async () => {
+    const onOpenNote = vi.fn()
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({ hits: [{ path: '01-Areas/report.md', match_kind: 'name' }] }),
+      onOpenNote,
+    })
+    type('report')
+
+    fireEvent.click(await screen.findByTestId('file-search-name-hit'))
+    expect(onOpenNote).toHaveBeenCalledWith('01-Areas/report.md')
+  })
+
+  it('says no results for the query when nothing matched', async () => {
+    renderBar({ info: plainFolderInfo(), filesRes: filesResponse() })
+    type('nonexistent')
+
+    const empty = await screen.findByTestId('library-search-empty')
+    expect(empty).toHaveTextContent('nonexistent')
+  })
+
+  it('never sorts hits client-side — engine order is preserved', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        hits: [
+          { path: 'zebra.md', match_kind: 'name' },
+          { path: 'apple.md', match_kind: 'name' },
+        ],
+      }),
+    })
+    type('a')
+
+    await screen.findAllByTestId('file-search-name-hit')
+    const paths = screen.getAllByTestId('file-search-name-hit').map((el) => el.textContent)
+    expect(paths[0]).toContain('zebra.md')
+    expect(paths[1]).toContain('apple.md')
+  })
+})
+
+describe('LibrarySearchBar — files kind: honest truncation (US-2 AS-3/AS-6, MV-3)', () => {
+  it('states the stopped-early reason for a root_lost walk', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        truncated: true,
+        truncated_reason: 'root_lost',
+        stats: {
+          files_visited: 12,
+          bytes_scanned: 4096,
+          files_skipped_problems: 0,
+          files_pruned_ignored: 0,
+          files_skipped_per_file_cap: 0,
+          hits_capped_per_file: 0,
+        },
+      }),
+    })
+    type('report')
+
+    const banner = await screen.findByTestId('library-search-truncated')
+    expect(banner).toHaveAttribute('role', 'status')
+    expect(banner.textContent ?? '').toMatch(/unreadable while searching/i)
+    expect(banner.textContent ?? '').toMatch(/12 files? searched/i)
+  })
+
+  it('states a distinct reason for a deadline stop', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({ truncated: true, truncated_reason: 'deadline' }),
+    })
+    type('report')
+
+    const banner = await screen.findByTestId('library-search-truncated')
+    expect(banner.textContent ?? '').toMatch(/ran out of time/i)
+  })
+
+  it('shows no truncation banner for a complete answer', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({ hits: [{ path: 'a.md', match_kind: 'name' }], truncated: false }),
+    })
+    type('a')
+
+    await waitFor(() => expect(screen.getByTestId('file-search-name-hit')).toBeInTheDocument())
+    expect(screen.queryByTestId('library-search-truncated')).toBeNull()
+  })
+})
+
+describe('LibrarySearchBar — files kind: literal metacharacters (US-2 AS-7, FR-016)', () => {
+  it('never lets a regex metacharacter surface as a parse error — the bar always sends regex:false', async () => {
+    const searchFilesFn = vi.fn().mockResolvedValue(filesResponse({ hits: [{ path: 'calc.py', match_kind: 'content', line: 3, excerpt: 'f(x)' }] }))
+    renderBar({ info: plainFolderInfo(), filesRes: searchFilesFn })
+    type('f(x)')
+
+    await waitFor(() => expect(searchFilesFn).toHaveBeenCalled())
+    const body = searchFilesFn.mock.calls[0]?.[1] as { query: string; regex: boolean }
+    expect(body.query).toBe('f(x)')
+    expect(body.regex).toBe(false)
+    expect(screen.queryByTestId('library-search-error')).toBeNull()
+  })
+})
+
+describe('LibrarySearchBar — files kind: at most one search in flight (MV-11)', () => {
+  it('holds ≤1 in-flight search — a new keystroke cancels the previous request', async () => {
+    const searchFilesFn = vi.fn().mockImplementation(() => new Promise(() => {}))
+    renderBar({ info: plainFolderInfo(), filesRes: searchFilesFn })
+
+    type('rep')
+    await waitFor(() => expect(searchFilesFn).toHaveBeenCalledTimes(1))
+    const firstSignal = searchFilesFn.mock.calls[0]?.[2] as AbortSignal
+
+    type('report')
+    await waitFor(() => expect(searchFilesFn).toHaveBeenCalledTimes(2))
+    expect(firstSignal.aborted).toBe(true)
+  })
+
+  it('keeps previous results and retries once on a 429, without ever showing an error', async () => {
+    const searchFilesFn = vi
+      .fn()
+      .mockResolvedValueOnce(filesResponse({ hits: [{ path: 'old.md', match_kind: 'name' }] }))
+    renderBar({ info: plainFolderInfo(), filesRes: searchFilesFn })
+
+    type('old')
+    await waitFor(() => expect(screen.getByTestId('file-search-name-hit')).toHaveTextContent('old.md'))
+
+    searchFilesFn.mockRejectedValueOnce(new ApiError(429, 'Too many requests'))
+    searchFilesFn.mockResolvedValueOnce(filesResponse({ hits: [{ path: 'new.md', match_kind: 'name' }] }))
+
+    type('new')
+    await waitFor(() => expect(searchFilesFn).toHaveBeenCalledTimes(2))
+    // The 429 landed but nothing on screen flashed an error — the stale
+    // result is still what is rendered while the retry is pending.
+    expect(screen.queryByTestId('library-search-error')).toBeNull()
+
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 550))
+    })
+    await waitFor(() => expect(searchFilesFn).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(screen.getByTestId('file-search-name-hit')).toHaveTextContent('new.md'))
+    expect(screen.queryByTestId('library-search-error')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding F-L: a failed FILE search must surface as an error, exactly like a
+// failed vault search already does — the discriminating test the audit found
+// missing (a mutation to `isVaultMode ? vaultError : null` left every
+// existing test green).
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind search failure (finding F-L)', () => {
+  it('surfaces a failed FILE search as a visible error, never as an empty result list', async () => {
+    const searchFilesFn = vi.fn().mockRejectedValue(new Error('walk failed'))
+    renderBar({ info: plainFolderInfo(), filesRes: searchFilesFn })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-error')
+    expect(banner).toHaveTextContent('walk failed')
+    // The failure must not ALSO render as a silent "No results" — that is
+    // precisely the false-negative the missing wiring would produce.
+    expect(screen.queryByTestId('library-search-empty')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding R-3: a stale error from a PREVIOUS query must not survive into the
+// next one's own in-flight or successful request.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind: a new query clears the previous one\'s error (finding R-3)', () => {
+  it('drops query A\'s error once query B starts, and shows B\'s real results', async () => {
+    const searchFilesFn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('query A failed'))
+      .mockResolvedValueOnce(filesResponse({ hits: [{ path: 'b.md', match_kind: 'name' }] }))
+    renderBar({ info: plainFolderInfo(), filesRes: searchFilesFn })
+
+    type('a-query')
+    await screen.findByTestId('library-search-error')
+
+    type('b-query')
+    await waitFor(() => expect(searchFilesFn).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.getByTestId('file-search-name-hit')).toHaveTextContent('b.md'))
+    expect(screen.queryByTestId('library-search-error')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding F-J: `truncated: true` with no `truncated_reason` must still
+// render a banner — the schema does not enforce the reason's presence on the
+// wire, so the client must not silently drop it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind: truncated with no reason (finding F-J)', () => {
+  it('renders a generic stopped-early banner rather than none at all', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        truncated: true,
+        hits: [{ path: 'a.md', match_kind: 'name' }],
+        stats: {
+          files_visited: 5,
+          bytes_scanned: 0,
+          files_skipped_problems: 0,
+          files_pruned_ignored: 0,
+          files_skipped_per_file_cap: 0,
+          hits_capped_per_file: 0,
+        },
+      }),
+    })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-truncated')
+    expect(banner).toHaveTextContent(/stopped early/i)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding F-K: the walk-accounting stats were almost entirely discarded —
+// the sharpest case is a file visible in the listing, pruned from search,
+// with "No results" and nothing else on screen.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind: skip stats are surfaced (finding F-K)', () => {
+  it('says WHY nothing matched when files were pruned, even on a zero-hit answer', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        hits: [],
+        stats: {
+          files_visited: 4,
+          bytes_scanned: 0,
+          files_skipped_problems: 0,
+          files_pruned_ignored: 3,
+          files_skipped_per_file_cap: 0,
+          hits_capped_per_file: 0,
+        },
+      }),
+    })
+
+    type('report')
+    await screen.findByTestId('library-search-empty')
+    const stats = await screen.findByTestId('library-search-files-stats')
+    expect(stats).toHaveTextContent(/3.*gitignore/i)
+  })
+
+  it('renders nothing extra when every stat is zero', async () => {
+    renderBar({ info: plainFolderInfo(), filesRes: filesResponse({ hits: [] }) })
+    type('report')
+    await screen.findByTestId('library-search-empty')
+    expect(screen.queryByTestId('library-search-files-stats')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding F-I: a knowledge base whose detection FAILED must surface the
+// failure, never silently fall through to a plain file walk.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — knowledge base detection failure (finding F-I)', () => {
+  it('surfaces detection_error as a visible error, and does not run a file search instead', async () => {
+    const searchFilesFn = vi.fn().mockResolvedValue(filesResponse())
+    renderBar({
+      info: vaultInfo({
+        is_knowledge_base: true,
+        collection_id: undefined,
+        detection_error: { code: 'root_unreadable', message: 'cannot read vault: permission denied' },
+      }),
+      filesRes: searchFilesFn,
+    })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-error')
+    expect(banner).toHaveTextContent('permission denied')
+    expect(searchFilesFn).not.toHaveBeenCalled()
+  })
+
+  it('surfaces the collection-info request itself failing outright', async () => {
+    const loadCollectionInfo = vi.fn().mockRejectedValue(new Error('network error'))
+    renderBar({ info: loadCollectionInfo })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-error')
+    expect(banner).toHaveTextContent('network error')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Findings R-1/R-2: a directory hit must open as a FOLDER (and clear the
+// search), and must be inert — never fall back to opening it as a file —
+// when the caller wired no onOpenFolder handler.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — directory hits (findings R-1/R-2)', () => {
+  it('clicking a directory hit clears the search and calls onOpenFolder, never onOpenNote', async () => {
+    // Returns true: navigation actually happened (the S1 contract) — this
+    // is the happy path the R-1 clearing behaviour is meant to cover.
+    const onOpenFolder = vi.fn().mockReturnValue(true)
+    const onOpenNote = vi.fn()
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({ hits: [{ path: 'sub-dir', match_kind: 'name', is_dir: true }] }),
+      onOpenFolder,
+      onOpenNote,
+    })
+
+    type('sub')
+    const row = await screen.findByTestId('file-search-name-hit')
+    fireEvent.click(row)
+
+    expect(onOpenFolder).toHaveBeenCalledWith('sub-dir')
+    expect(onOpenNote).not.toHaveBeenCalled()
+    // R-1: the query itself must be cleared as part of navigating — the
+    // search input reverts to empty, which is what un-replaces `children`.
+    await waitFor(() => expect(screen.getByTestId('library-search-input')).toHaveValue(''))
+    await waitFor(() => expect(screen.getByTestId('file-tree')).toBeInTheDocument())
+  })
+
+  it('a directory hit is inert — not openFile — when no onOpenFolder handler is wired', async () => {
+    const onOpenNote = vi.fn()
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({ hits: [{ path: 'sub-dir', match_kind: 'name', is_dir: true }] }),
+      onOpenNote,
+    })
+
+    type('sub')
+    const row = await screen.findByTestId('file-search-name-hit')
+    fireEvent.click(row)
+
+    // R-2: no handler means the row does nothing — it must NOT degrade into
+    // opening the directory path as though it were a note/file.
+    expect(onOpenNote).not.toHaveBeenCalled()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding S1 (code review of the ADR-081 search work): the production
+// onOpenFolder (LibraryExplorer.tsx) gates real navigation behind
+// confirmDiscardLibraryEdits(), which the user can decline. Before this fix,
+// openFolder cleared the query UNCONDITIONALLY before calling onOpenFolder —
+// a user who clicked a folder result, then clicked "Cancel" on the discard
+// prompt, correctly stayed put but lost their search query and results
+// anyway. onOpenFolder now reports back whether navigation happened; the bar
+// must only clear once it knows that is true.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — a cancelled folder navigation must not wipe the search (finding S1)', () => {
+  it('keeps the query AND its results on screen when onOpenFolder reports navigation did not happen', async () => {
+    // Simulates LibraryExplorer's onOpenFolder declining because the user
+    // clicked "Cancel" on the unsaved-edits discard prompt.
+    const onOpenFolder = vi.fn().mockReturnValue(false)
+    const onOpenNote = vi.fn()
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({ hits: [{ path: 'sub-dir', match_kind: 'name', is_dir: true }] }),
+      onOpenFolder,
+      onOpenNote,
+    })
+
+    type('sub')
+    const row = await screen.findByTestId('file-search-name-hit')
+    fireEvent.click(row)
+
+    expect(onOpenFolder).toHaveBeenCalledWith('sub-dir')
+    // This is the whole defect: a declined navigation must leave the query
+    // AND its rendered results exactly as the user left them — never wiped
+    // as a side effect of a navigation that never happened.
+    expect(screen.getByTestId('library-search-input')).toHaveValue('sub')
+    expect(screen.getByTestId('file-search-name-hit')).toBeInTheDocument()
+    expect(screen.queryByTestId('file-tree')).not.toBeInTheDocument()
+    expect(onOpenNote).not.toHaveBeenCalled()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding S2 (code review of the ADR-081 search work): a record hit rendered
+// only its first 4 cells with no indication anything was withheld — a
+// record that matched on its 7th property could show four cells NONE of
+// which contain the search term. VaultFindCell carries no "this matched"
+// flag on the wire (contracts/components/schemas/VaultFindCell.yaml has only
+// `property`/`value`), so the fix approximates client-side: cells whose
+// property or value contain a query word sort first, and a withheld count is
+// shown whenever cells remain hidden.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — record hits: withheld cells are disclosed (finding S2)', () => {
+  it('surfaces the MATCHING cell instead of silently cutting it, and states how many were withheld', async () => {
+    renderBar({
+      res: response({
+        records: [
+          {
+            path: 'crm/acme.md',
+            title: 'Acme Corp',
+            cells: [
+              { property: 'status', value: 'open' },
+              { property: 'owner', value: 'jamie' },
+              { property: 'region', value: 'west' },
+              { property: 'tier', value: 'gold' },
+              { property: 'notes', value: 'renewal pending' },
+              { property: 'contact', value: 'ops@acme.test' },
+              { property: 'sku', value: 'widget-42' },
+            ],
+          },
+        ],
+      }),
+    })
+
+    type('widget')
+    const hit = await screen.findByTestId('vault-search-record-hit')
+
+    // The 7th cell is the one that actually matched "widget" — it must be
+    // shown, not silently dropped by a naive first-4 slice.
+    expect(within(hit).getByText(/widget-42/)).toBeInTheDocument()
+    // 7 cells total, 4 shown — 3 withheld. UAT D-137: the control is a
+    // SIBLING of the open button (not inside it), so it is looked up on the
+    // row, not within the hit.
+    expect(screen.getByTestId('vault-search-record-cells-more')).toHaveTextContent('+3 more')
+  })
+
+  it('renders no withheld-count indicator when every cell already fits', async () => {
+    renderBar({
+      res: response({
+        records: [{ path: 'crm/acme.md', title: 'Acme Corp', cells: [{ property: 'status', value: 'open' }] }],
+      }),
+    })
+
+    type('open')
+    await screen.findByTestId('vault-search-record-hit')
+    expect(screen.queryByTestId('vault-search-record-cells-more')).toBeNull()
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding S3 (code review of the ADR-081 search work): FileSearchResponse's
+// honesty fields `truncated_root` and `stats.dirs_visited` arrived on the
+// wire and were dropped entirely. A walk that burned its whole Files budget
+// on thousands of directories and a handful of files reported only "N files
+// searched" beside "too many files to search in one pass" — two true
+// numbers that together read as nonsense. And a lost mount named itself in
+// `truncated_root` while the UI never said which one.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind: honesty fields dirs_visited/truncated_root (finding S3)', () => {
+  const zeroStats = {
+    files_visited: 12,
+    bytes_scanned: 0,
+    files_skipped_problems: 0,
+    files_pruned_ignored: 0,
+    files_skipped_per_file_cap: 0,
+    hits_capped_per_file: 0,
+  }
+
+  it('reports directories alongside files so a directory-heavy stop is not read as nonsense', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        truncated: true,
+        truncated_reason: 'max_files',
+        stats: { ...zeroStats, dirs_visited: 40000 },
+      }),
+    })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-truncated')
+    expect(banner.textContent ?? '').toMatch(/40,000 directories/i)
+    expect(banner.textContent ?? '').toMatch(/12 files? searched/i)
+  })
+
+  it('names the lost mount when truncated_root identifies one', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        truncated: true,
+        truncated_reason: 'root_lost',
+        truncated_root: 'research-drive',
+        stats: zeroStats,
+      }),
+    })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-truncated')
+    expect(banner.textContent ?? '').toMatch(/research-drive/i)
+  })
+
+  it('names the workspace folder itself when truncated_root is the empty string — never "absent"', async () => {
+    renderBar({
+      info: plainFolderInfo(),
+      filesRes: filesResponse({
+        truncated: true,
+        truncated_reason: 'root_lost',
+        truncated_root: '',
+        stats: zeroStats,
+      }),
+    })
+
+    type('report')
+    const banner = await screen.findByTestId('library-search-truncated')
+    expect(banner.textContent ?? '').toMatch(/workspace folder/i)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Finding S4 (code review of the ADR-081 search work): the previous query's
+// results stay on screen during the debounce window (useFileSearch's
+// stale-while-debouncing retention, load-bearing for the 429 grace path —
+// see useFileSearch.ts) but the copy describing them was keyed to the LIVE
+// `text`, not the query that actually produced them — so mid-keystroke the
+// UI could assert "No results for 'bar'" before "bar" had been searched at
+// all.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('LibrarySearchBar — files kind: empty-state copy keys to the query that ran, not live text (finding S4)', () => {
+  it('keeps naming the query that produced the results while a newer keystroke is still debouncing', async () => {
+    const searchFilesFn = vi.fn().mockResolvedValue(filesResponse({ hits: [] }))
+    // A long debounce makes the "still on the old query" window observable
+    // synchronously, with no need to fake timers.
+    renderBar({ info: plainFolderInfo(), filesRes: searchFilesFn, debounceMs: 200 })
+
+    type('foo')
+    await waitFor(() => expect(searchFilesFn).toHaveBeenCalledTimes(1))
+    const empty = await screen.findByTestId('library-search-empty')
+    expect(empty.textContent ?? '').toMatch(/foo/)
+
+    // Type a new query. Its debounce (200ms) has not elapsed yet, so the
+    // request for "bar" has not even been sent — the empty state must still
+    // describe "foo", the query that actually ran, not the live keystrokes.
+    type('bar')
+    expect(searchFilesFn).toHaveBeenCalledTimes(1)
+    expect(screen.getByTestId('library-search-empty').textContent ?? '').toMatch(/foo/)
+    expect(screen.getByTestId('library-search-empty').textContent ?? '').not.toMatch(/bar/)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UAT 2026-09-13 — D-130 (bar half), D-132, D-133, D-137
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('UAT D-132 — an over-long query is refused with a sentence, never a raw validation dump', () => {
+  it('states the limit and the typed length, and issues no request', async () => {
+    const searchFn: VaultSearchFn = vi.fn().mockResolvedValue(response())
+    renderBar({ res: searchFn })
+    await waitFor(() => expect(screen.getByTestId('library-search-input')).not.toBeDisabled())
+    type('x'.repeat(4000))
+    const alert = await screen.findByTestId('library-search-query-too-long')
+    expect(alert.textContent).toContain('1,024 characters')
+    expect(alert.textContent).toContain('4,000')
+    // DIES ON the old bar: the generated client threw a ZodError whose
+    // `[ { "code": "too_big", ... } ]` message rendered in the error banner.
+    expect(document.body.textContent).not.toContain('too_big')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(searchFn).not.toHaveBeenCalled()
+  })
+
+  it('accepts exactly 1,024 characters (the limit is inclusive)', async () => {
+    const searchFn: VaultSearchFn = vi.fn().mockResolvedValue(response())
+    renderBar({ res: searchFn })
+    await waitFor(() => expect(screen.getByTestId('library-search-input')).not.toBeDisabled())
+    type('y'.repeat(1024))
+    await waitFor(() => expect(searchFn).toHaveBeenCalled())
+    expect(screen.queryByTestId('library-search-query-too-long')).not.toBeInTheDocument()
+  })
+})
+
+describe('UAT D-133 — one folder down, the bar is still knowledge search, and says what it searches', () => {
+  it('resolves the vault from an ANCESTOR folder and states that the whole knowledge base is searched', async () => {
+    const loadCollectionInfo: LoadCollectionInfoFn = vi.fn(async (_ws: string, path: string) =>
+      path === 'vault'
+        ? vaultInfo({ display_name: 'UAT Vault' })
+        : plainFolderInfo({ root_path: path === '' ? '.' : path }),
+    )
+    const searchFn: VaultSearchFn = vi.fn().mockResolvedValue(
+      response({ notes: [{ path: 'Projects/a.md', title: 'Northbridge' }] }),
+    )
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={client}>
+        <LibrarySearchBar
+          workspaceId="ws-1"
+          folderPath="vault/Projects"
+          onOpenNote={vi.fn()}
+          debounceMs={5}
+          searchFn={searchFn}
+          searchFilesFn={vi.fn().mockResolvedValue(filesResponse())}
+          loadCollectionInfo={loadCollectionInfo}
+        >
+          <div />
+        </LibrarySearchBar>
+      </QueryClientProvider>,
+    )
+    // DIES ON the old hook: only the exact folder was asked, `vault/Projects`
+    // is not itself a vault, so the bar became a filename search.
+    await waitFor(() =>
+      expect(screen.getByTestId('library-search-input')).toHaveAttribute('placeholder', 'Search notes, records, views, attachments'),
+    )
+    type('Northbridge')
+    await screen.findByTestId('vault-search-note-hit')
+    expect(searchFn).toHaveBeenCalled()
+    const mode = screen.getByTestId('library-search-mode')
+    expect(mode.textContent).toContain('whole knowledge base')
+    expect(mode.textContent).toContain('UAT Vault')
+    expect(mode.textContent).toContain('this folder is inside it')
+  })
+
+  it('states plainly that a folder outside any vault gets a file-and-folder NAME search', async () => {
+    renderBar({ info: plainFolderInfo(), filesRes: filesResponse() })
+    await waitFor(() => expect(screen.getByTestId('library-search-input')).not.toBeDisabled())
+    type('notes')
+    const mode = await screen.findByTestId('library-search-mode')
+    expect(mode.textContent).toContain('file and folder names')
+    expect(mode.textContent).toContain('not note contents')
+  })
+})
+
+describe('UAT D-137 — the "+N more" control reveals the withheld cells instead of opening the note', () => {
+  it('expands in place and does not call onOpen', async () => {
+    const onOpenNote = vi.fn()
+    renderBar({
+      onOpenNote,
+      res: response({
+        records: [
+          {
+            path: 'crm/acme.md',
+            title: 'Acme Corp',
+            cells: [
+              { property: 'status', value: 'open' },
+              { property: 'owner', value: 'Ada' },
+              { property: 'region', value: 'EU' },
+              { property: 'tier', value: 'gold' },
+              { property: 'contact', value: 'ops@acme.test' },
+              { property: 'sku', value: 'widget-42' },
+            ],
+          },
+        ],
+      }),
+    })
+    // "corp" matches the title only, so no cell is promoted into the
+    // visible four by orderCellsForDisplay and the last two are withheld.
+    type('corp')
+    const more = await screen.findByTestId('vault-search-record-cells-more')
+    expect(more).toHaveTextContent('+2 more')
+    expect(screen.queryByText(/ops@acme.test/)).not.toBeInTheDocument()
+    fireEvent.click(more)
+    // DIES ON the old row: the badge sat inside the open button, so this
+    // click opened the note and revealed nothing.
+    expect(onOpenNote).not.toHaveBeenCalled()
+    expect(screen.getByText(/ops@acme.test/)).toBeInTheDocument()
+    expect(screen.getByTestId('vault-search-record-cells-more')).toHaveTextContent('Show fewer')
+  })
+
+  it('names attachments in the vault placeholder, since an Attachments tab sits beneath it', async () => {
+    renderBar()
+    await waitFor(() =>
+      expect(screen.getByTestId('library-search-input')).toHaveAttribute('placeholder', 'Search notes, records, views, attachments'),
+    )
+  })
+})
+
+// UAT D-129/D-130 (leftover wording round): the summary sentence under the
+// tabs states exactly WHAT was searched, HOW MANY hits exist, and HOW MANY
+// are shown — one line, derived only from wire fields, never an invented
+// total. A kind at the per-kind cap is a LOWER bound ("at least N").
+describe('UAT D-129/D-130 — the results summary states what was searched, how many hits exist, how many are shown', () => {
+  it('a complete, uncapped answer says all hits are shown, per kind, and what "attachments" searching means', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: 'a.md', title: 'A' }],
+        records: [
+          { path: 'r1.md', title: 'R1', cells: [] },
+          { path: 'r2.md', title: 'R2', cells: [] },
+        ],
+        views: [{ view: 'v', label: 'V' }],
+        attachments: [{ path: 'x/logo.png', name: 'logo.png' }],
+      }),
+    })
+    type('acme')
+    const line = await screen.findByTestId('library-search-results-summary')
+    // DIES ON the old code: no such sentence existed — only tab badges and,
+    // for capped kinds, a separate cap line.
+    expect(line.textContent).toContain('Showing all 5 hits for “acme”')
+    expect(line.textContent).toContain('1 note')
+    expect(line.textContent).toContain('2 records')
+    expect(line.textContent).toContain('1 view')
+    expect(line.textContent).toContain('1 attachment')
+    // D-129: "exactly what was searched" — attachments are name-only, never
+    // full text, stated beside the counts so the note count is never read
+    // as covering them.
+    expect(line.textContent).toContain('Attachments are matched by filename only, never their contents')
+    expect(line.textContent).not.toContain('at least')
+  })
+
+  it('a kind at the per-kind cap is stated as a lower bound with the cap named (D-130)', async () => {
+    const notes = Array.from({ length: 20 }, (_, i) => ({ path: `n${i}.md`, title: `Note ${i}` }))
+    renderBar({ res: response({ notes, notes_capped_at_limit: true }) })
+    type('mermaid')
+    const line = await screen.findByTestId('library-search-results-summary')
+    // DIES ON the old code: "20 of 47 shown" understated the true total by
+    // 72 documents; the honest phrasing is a floor plus the cap.
+    expect(line.textContent).toContain('at least 20 notes')
+    expect(line.textContent).toContain('at most 20 per kind')
+    expect(line.textContent).toContain('more may exist')
+    expect(line.textContent).not.toContain('Showing all')
+  })
+
+  it('an uncapped answer never says "at least" (D-130 control)', async () => {
+    renderBar({ res: response({ notes: [{ path: 'a.md', title: 'A' }] }) })
+    type('a')
+    const line = await screen.findByTestId('library-search-results-summary')
+    expect(line.textContent).toContain('Showing all 1 hit for “a”')
+    expect(line.textContent).not.toContain('at least')
+  })
+
+  it('says nothing beyond the empty-state sentence when there are no hits at all', async () => {
+    renderBar({ res: response() })
+    type('zzqqxx')
+    await screen.findByTestId('library-search-empty')
+    expect(screen.queryByTestId('library-search-results-summary')).not.toBeInTheDocument()
+  })
+})
+
+describe('UAT D-72 / D-136 — the saved-view dialog links relation cells and names its source file', () => {
+  it('renders a relation cell as a real link, with the brackets stripped', async () => {
+    const loadViewResult = vi.fn().mockResolvedValue(
+      viewResult({
+        parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'owner'] }],
+        rows: [
+          {
+            path: 'Projects/a.md',
+            title: 'Core Platform Migration',
+            cells: [{ property: 'owner', value: '[[Sofia Marchetti]]', relation: true }],
+            joins: [],
+          },
+        ],
+      }),
+    )
+    renderBar({ res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }), loadViewResult })
+    type('deals')
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+    const dialog = await screen.findByTestId('library-search-view-dialog')
+    // DIES ON the old dialog: ViewPartsRenderer got no link wiring, so the
+    // cell read "[[Sofia Marchetti]]" as literal text with no link element.
+    await waitFor(() => expect(within(dialog).getByTestId('viewpart-cell-link')).toBeInTheDocument())
+    expect(within(dialog).queryByText('[[Sofia Marchetti]]')).not.toBeInTheDocument()
+    // Unverified (the dialog has no collection-wide resolver, so the link
+    // carries the sr-only "not verified" note) — but a LINK, named after
+    // the target, never the raw notation.
+    expect(within(dialog).getByTestId('viewpart-cell-link').textContent).toContain('Sofia Marchetti')
+    expect(within(dialog).getByTestId('viewpart-cell-link').textContent).not.toContain('[[')
+  })
+
+  it('names the .base file the view came from and opens it on request', async () => {
+    const onOpenNote = vi.fn()
+    const loadViewResult = vi.fn().mockResolvedValue(viewResult({ source: 'Projects.base' }))
+    renderBar({ res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }), loadViewResult, onOpenNote })
+    type('deals')
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+    const src = await screen.findByTestId('library-search-view-source')
+    // DIES ON the old dialog: the description read only "Saved view".
+    expect(src.textContent).toContain('Projects.base')
+    fireEvent.click(screen.getByTestId('library-search-view-source-open'))
+    expect(onOpenNote).toHaveBeenCalledWith('vault/Projects.base')
+  })
+
+  it('still says "Saved view" for an authored view with no source', async () => {
+    const loadViewResult = vi.fn().mockResolvedValue(viewResult())
+    renderBar({ res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }), loadViewResult })
+    type('deals')
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+    await screen.findByTestId('library-search-view-dialog')
+    await waitFor(() => expect(screen.getByText('Saved view')).toBeInTheDocument())
+    expect(screen.queryByTestId('library-search-view-source')).not.toBeInTheDocument()
+  })
+
+  // Codex review #12 (fan-out round): the dialog's link callbacks omitted
+  // resolveWikilink, so a BASENAME wikilink cell ("[[Sofia Marchetti]]")
+  // navigated to the literal path "vault/Sofia Marchetti" — a not-found view.
+  // The dialog now uses the SAME collection-aware resolver the base preview
+  // uses (useCollectionLinkGraph/makeCollectionLinkResolver), and this test
+  // asserts the RESOLVED DESTINATION of the click, not just that a link
+  // exists.
+  it('clicking a relation cell opens the RESOLVED note, never the literal wikilink name (Codex #12)', async () => {
+    const onOpenNote = vi.fn()
+    const loadGraph = vi.fn().mockResolvedValue({
+      collection_id: 'kb_1',
+      kind: 'links' as const,
+      nodes: [{ path: 'People/Sofia Marchetti.md', exists: true }],
+      edges: [
+        {
+          from_path: 'Projects/a.md',
+          to_path: 'People/Sofia Marchetti.md',
+          link_text: 'Sofia Marchetti',
+          heading_found: false,
+          resolution: 'exact_path' as const,
+          ambiguous: false,
+        },
+      ],
+      skipped: [],
+      truncated: false,
+    })
+    const loadViewResult = vi.fn().mockResolvedValue(
+      viewResult({
+        parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'owner'] }],
+        rows: [
+          {
+            path: 'Projects/a.md',
+            title: 'Core Platform Migration',
+            cells: [{ property: 'owner', value: '[[Sofia Marchetti]]', relation: true }],
+            joins: [],
+          },
+        ],
+      }),
+    )
+    renderBar({
+      res: response({ views: [{ view: 'open-deals', label: 'Open deals' }] }),
+      loadViewResult,
+      loadGraph,
+      onOpenNote,
+    })
+    type('deals')
+    await waitFor(() => expect(screen.getByText('Open deals')).toBeInTheDocument())
+    fireEvent.click(screen.getByTestId('vault-search-view-hit'))
+    const dialog = await screen.findByTestId('library-search-view-dialog')
+    const link = await within(dialog).findByTestId('viewpart-cell-link')
+    // DIES ON the old code: no resolver → the cell read data-kb-state
+    // "unknown" and its path was the RAW wikilink target.
+    await waitFor(() => expect(link).toHaveAttribute('data-kb-state', 'resolved'))
+    fireEvent.click(link)
+    // DIES ON the old code: 'vault/Sofia Marchetti' — a literal not-found
+    // path. The destination is the note the collection's link graph names.
+    expect(onOpenNote).toHaveBeenCalledWith('vault/People/Sofia Marchetti.md')
+    expect(onOpenNote).not.toHaveBeenCalledWith('vault/Sofia Marchetti')
+    // And the click closed the dialog, as every open-path here does.
+    expect(screen.queryByTestId('library-search-view-dialog')).not.toBeInTheDocument()
+  })
+})
+
+describe('UAT D-129 (web half) — client-side matching folds accents like the engine', () => {
+  const NFD_CAFE = 'café' // "café" as e + combining acute (NFD)
+
+  it('coverage chips credit `cafe` against a "Café" hit instead of contradicting the engine', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: 'menus/cafe.md', title: 'Café menu', snippet: 'Zürich résumé' }],
+      }),
+    })
+    type('cafe zurich resume')
+    await waitFor(() => expect(screen.getByTestId('vault-search-note-hit')).toBeInTheDocument())
+    // DIES ON the old code: `cafe`, `zurich` and `resume` all read as "not
+    // covered" because the haystack was only lower-cased, never folded.
+    expect(screen.getAllByTestId('vault-search-coverage-hit')).toHaveLength(3)
+    expect(screen.queryAllByTestId('vault-search-coverage-miss')).toHaveLength(0)
+  })
+
+  it('the NFC and the NFD spelling of café cover each other', async () => {
+    renderBar({
+      res: response({
+        notes: [{ path: `${NFD_CAFE} (1).png`, title: `${NFD_CAFE} (1).png` }],
+      }),
+    })
+    type('café menu') // typed as NFC
+    await waitFor(() => expect(screen.getByTestId('vault-search-note-hit')).toBeInTheDocument())
+    const chips = screen.getAllByTestId(/vault-search-coverage-(hit|miss)/)
+    const cafeChip = chips.find((c) => c.textContent?.includes('café'))
+    expect(cafeChip).toBeDefined()
+    // DIES ON the old code: "café" (NFC) is not a substring of "café" (NFD).
+    expect(cafeChip?.getAttribute('data-testid')).toBe('vault-search-coverage-hit')
+  })
+
+  it('highlights the accented word as the reader sees it when the query has no accent', async () => {
+    renderBar({ res: response({ notes: [{ path: 'menus/cafe.md', title: 'Café menu' }] }) })
+    type('cafe')
+    const hit = await screen.findByTestId('vault-search-note-hit')
+    // DIES ON the old code: the regex `/cafe/gi` never matched "Café", so
+    // nothing was highlighted.
+    const mark = hit.querySelector('span[class*="color-accent"]')
+    expect(mark).not.toBeNull()
+    expect(mark?.textContent).toBe('Café')
+  })
+
+  it('orders a "Zürich" cell first for the query `zurich` instead of withholding it', async () => {
+    renderBar({
+      res: response({
+        records: [
+          {
+            path: 'crm/acme.md',
+            title: 'Acme',
+            record_type: 'company',
+            cells: [
+              { property: 'status', value: 'open' },
+              { property: 'owner', value: 'Sofia' },
+              { property: 'tier', value: 'gold' },
+              { property: 'since', value: '2021' },
+              { property: 'city', value: 'Zürich' },
+            ],
+          },
+        ],
+      }),
+    })
+    type('zurich')
+    const hit = await screen.findByTestId('vault-search-record-hit')
+    // DIES ON the old code: the one cell that explains the hit was the
+    // fifth, unmatched under a bare lower-case compare, and so withheld
+    // behind "+1 more".
+    expect(within(hit).getByText('Zürich')).toBeInTheDocument()
+    expect(within(hit).queryByText('2021')).toBeNull()
+  })
+})

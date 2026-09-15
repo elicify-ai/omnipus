@@ -1,0 +1,34 @@
+title: CreateVaultRequest
+description: >
+  Request body for POST /api/v1/library/{workspace_id}/vaults. Creates a new
+  Omnipus knowledge base ("vault") as a folder inside the workspace's work
+  tree (pkg/knowledge.CreateInWorkspace — FR-022/FR-023/FR-025), writing the
+  .omnipus-vault/ marker plus empty records/ and views/ control-plane
+  directories so the vault is immediately usable by knowledge_configure.
+  workspace_id is NOT a body field — it is already the {workspace_id} path
+  parameter, matching every other per-workspace Library create/write route
+  (LibraryMkdirRequest, LibraryContentRequest, ...) rather than duplicating
+  it and risking the two disagreeing.
+type: object
+additionalProperties: false
+required:
+  - name
+properties:
+  name:
+    type: string
+    minLength: 1
+    description: >
+      The new vault folder's name — a single path segment, never containing
+      "/" or "\" and never "." or "..". Also becomes the vault's marker
+      display_name. Rejected (400) if it fails either check, or the
+      workspace's own portable-name rules; rejected (409) if an entry
+      already exists at the resulting path.
+    example: "Research"
+  parent_rel_path:
+    type: string
+    description: >
+      Workspace-relative folder the vault is created inside, forward-slash
+      separated. Never absolute and never containing a ".." segment
+      (library-spec.md Constraints). Omit or pass "" to create the vault at
+      the workspace's work-tree root.
+    example: "projects/2026"

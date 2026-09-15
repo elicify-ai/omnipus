@@ -1,5 +1,7 @@
 # Root cause: agent stops mid-sentence on a truncated LLM response
 
+> **Update 2026-09-14:** the per-delegation token budget described here (and the app-level token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Date:** 2026-07-30
 **Found in:** live UAT (`uat-omnipus`), session `session_01KYSA6AH8RYXJDR9C22AQKSCX`, agent `jim`, turn `jim-turn-11`
 **Severity:** High — silent failure. The turn reports success; the user sees the agent stop working with no error.

@@ -796,7 +796,7 @@ describe('BrowserLiveView — explicit failed viewport recovery', () => {
         emitBrowserFrame(video, { rtpTimestamp: 200, expectedDisplayTime: performance.now() })
       })
       mockSendViewport.mockClear(); mockInputStart.mockClear(); mockSendInput.mockClear()
-      fireEvent.click(screen.getByRole('button', { name: 'Retry input', exact: true }))
+      fireEvent.click(screen.getByRole('button', { name: 'Retry input' }))
       expect(mockInputStart).not.toHaveBeenCalled()
       if (outcome === 'detach' || outcome === 'supersede') {
         if (outcome === 'detach') view.unmount()

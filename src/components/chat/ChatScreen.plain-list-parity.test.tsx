@@ -260,7 +260,7 @@ describe('VirtualAssistantMessageRow (PlainMessageList fallback)', () => {
       expect(bubble).toBeTruthy()
       expect(bubble!.textContent).not.toContain('Copy')
       expect(bubble!.textContent).toMatch(
-        /Thinking…|Composing response…|Processing your request…|Analyzing…|Generating…/,
+        /Thinking…|Working on it…|Composing a response…|Processing your request…|Analyzing…|Considering the details…|Piecing it together…|Reasoning it through…|Working through this…|Gathering my thoughts…|Figuring out the approach…|Reviewing the context…|Drafting a response…|Making sense of it…|Weighing the options…/,
       )
     })
 

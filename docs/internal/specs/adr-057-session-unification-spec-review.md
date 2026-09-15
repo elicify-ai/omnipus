@@ -6,6 +6,8 @@
 **Mode**: `plan-spec` (BDD scenarios, FR-xxx, SC-xxx, traceability matrix all present)
 **Grill**: #1 of 2
 
+> **ADR-082 note (2026-09-08):** this review's `TestOrphanWatchdog_*`/`orphan_watch_test.go`/AC-19 "no orphan directory" findings that reference the ADR-045 orphan-foreground-turn watchdog describe a mechanism [ADR-082](../architecture/ADR-082-ui-independent-turns-and-session-bound-streaming.md) D1 has since deleted in full, not merely disabled. Read those passages as history; unrelated uses of "orphan" (session directories) are untouched.
+
 ---
 
 ## 1. Executive Summary

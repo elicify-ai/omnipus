@@ -60,7 +60,7 @@ func TestUnroutableMessage_PanicStillPublishesTerminalFrame(t *testing.T) {
 	logFile := filepath.Join(tmpDir, "unroutable-panic.log")
 
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.ERROR)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)

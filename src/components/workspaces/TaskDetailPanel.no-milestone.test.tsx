@@ -97,10 +97,13 @@ describe('TaskDetailPanel — no milestone UI anywhere (SC-040)', () => {
     expect(await screen.findByText('milestone:q3')).toBeInTheDocument()
   })
 
-  it('renders the acceptance-criteria editor', async () => {
+  it('renders the acceptance-criteria editor with the D5 soft-tier hint retired (GOAL-FR-053/C-63/C-80)', async () => {
     renderPanel(makeTask())
     expect(await screen.findByText(/acceptance criteria/i)).toBeInTheDocument()
-    expect(screen.getByText(/no criteria/i)).toBeInTheDocument()
+    // The panel's `emptyHint` ATTRIBUTE is removed with no replacement text
+    // (unlike the create form, which gets a plain instruction) — the old D5
+    // soft-tier sentence must never appear here again.
+    expect(screen.queryByText(/no criteria — this task will be judged/i)).toBeNull()
   })
 
   it('shows the Clear/Stop goal-loop button only for a running task with a live attempt', async () => {

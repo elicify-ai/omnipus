@@ -143,6 +143,35 @@ func GeneralBuiltinMetadata() []Tool {
 	// (buildKnownBuiltinToolNames) see it, mirroring message_parent exactly.
 	out = append(out, NewAskUserQuestionTool(nil))
 
+	// --- set_goal (CategoryTasks) — ADR-081 D2 (work-first-goal-flow-spec
+	// FR-004/FR-005/FR-006): the validated write-path over the goal record
+	// (definition/criteria/DoD), replacing the old two-compile-call gate as
+	// the working agent's own first move on a freshly activated goal.
+	// Metadata-only instance (nil access fn; never Execute()d here) so the
+	// central registry and the Constraint #6 tool-policy-coverage universe
+	// (buildKnownBuiltinToolNames) see it, mirroring AskUserQuestion's own
+	// registration exactly.
+	out = append(out, NewSetGoalTool(nil))
+
+	// --- goal_claim (CategoryTasks) — ADR-084 revision 9 §O / D12
+	// (JUDGE-FR-087 – FR-091): the reliable claim channel that replaces
+	// prose-marker DETECTION with tool-call ARRIVAL. Metadata-only instance
+	// (nil access fn; never Execute()d here) so the central registry and the
+	// Constraint #6 tool-policy-coverage universe (buildKnownBuiltinToolNames)
+	// see it, mirroring set_goal's own registration exactly.
+	//
+	// THIS ENTRY IS ATOMIC WITH THE POLICY SEED: `goal_claim` is in
+	// pkg/coreagent's allStaticToolNames, in the global ceiling
+	// (pkg/config/defaults.go) and in every agent seed, and
+	// TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog
+	// compares the two sets. Its EXECUTABLE per-agent registration is a
+	// separate, equally mandatory wiring site —
+	// pkg/agent/goal_record_wiring.go's wireGoalToolsForAgent, where the live
+	// GoalRecordAccess seam is bound; a metadata entry alone would leave the
+	// tool seeded and policy-covered but invisible to every model, which is
+	// exactly the defect this line and that one jointly close.
+	out = append(out, NewGoalClaimTool(nil))
+
 	// --- Task tools (CategoryTasks) ---
 	out = append(out, NewTaskListTool(nil))
 	out = append(out, NewTaskCreateTool(nil))

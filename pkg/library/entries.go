@@ -144,6 +144,12 @@ func extOf(name string) string {
 // databases on Unix (e.g. /etc/mime.types), whose presence and contents
 // vary between the dev pod and CI — a listing/content-sniff result must not
 // depend on what happens to be installed on the host running Omnipus.
+//
+// ".base" (UAT 2026-09-13 D-119): a base file is YAML declaring a base's
+// views (view-kinds-design-2026-09-03 §7). It renders as its views in the
+// SPA, but it is TEXT the operator must be able to open and repair in place
+// — a healthy one and a malformed one alike — so it is listed here and in
+// textExtensions like any other YAML.
 var extMimeTypes = map[string]string{
 	".txt":      "text/plain",
 	".md":       "text/markdown",
@@ -153,6 +159,7 @@ var extMimeTypes = map[string]string{
 	".json":     "application/json",
 	".yaml":     "application/x-yaml",
 	".yml":      "application/x-yaml",
+	".base":     "application/x-yaml",
 	".xml":      "application/xml",
 	".svg":      "image/svg+xml",
 	".html":     "text/html",
@@ -218,7 +225,7 @@ var extMimeTypes = map[string]string{
 // (images, video, audio, archives, PDF, OOXML).
 var textExtensions = map[string]bool{
 	".txt": true, ".md": true, ".markdown": true, ".csv": true, ".tsv": true,
-	".json": true, ".yaml": true, ".yml": true, ".xml": true, ".svg": true,
+	".json": true, ".yaml": true, ".yml": true, ".base": true, ".xml": true, ".svg": true,
 	".html": true, ".htm": true, ".toml": true, ".ini": true, ".cfg": true, ".conf": true,
 	".log": true, ".env": true,
 	".go": true, ".py": true, ".js": true, ".ts": true, ".tsx": true, ".jsx": true,

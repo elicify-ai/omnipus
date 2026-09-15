@@ -18,6 +18,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
+    // GOAL-FR-059: the create form now fetches this workspace's plans for its
+    // own Plan picker — this test file doesn't exercise that field, so an
+    // empty list keeps it out of the way.
+    fetchPlans: vi.fn().mockResolvedValue([]),
     // Fix B: the assignee picker's workspace-team scoping (useWorkspaceTeamIds)
     // — this test file doesn't exercise the Agent field, so the rejection
     // just exercises the documented degraded/unscoped fallback path.

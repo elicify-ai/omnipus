@@ -1,5 +1,7 @@
 # Adversarial Review (Round 2): ADR-055 — PlanSupervisor
 
+> **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Spec reviewed**: `docs/internal/architecture/ADR-055-plan-supervisor.md` (v2, Proposed, 2026-07-27)
 **Prior review**: `docs/internal/architecture/ADR-055-plan-supervisor-review.md` (v1 — BLOCK, 33 findings)
 **Review date**: 2026-07-27

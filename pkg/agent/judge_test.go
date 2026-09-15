@@ -72,16 +72,24 @@ type fakeJudgeProvider struct {
 	mu      sync.Mutex
 	calls   int
 	lastCtx context.Context
-	chatFn  func(callNum int) (*providers.LLMResponse, error)
+	// lastMessages records the message list of the most recent Chat call, so
+	// a test can assert what the engine actually PUT IN FRONT of the verifier
+	// — the evidence bundle itself, not just the verdict that came back. The
+	// goal-scope machine-check evidence regression (the Judge was shown "(no
+	// machine-check results on this attempt)" for a check that had just
+	// passed) is invisible to any assertion that only reads the verdict.
+	lastMessages []providers.Message
+	chatFn       func(callNum int) (*providers.LLMResponse, error)
 }
 
 func (f *fakeJudgeProvider) Chat(
-	ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
+	ctx context.Context, msgs []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
 ) (*providers.LLMResponse, error) {
 	f.mu.Lock()
 	f.calls++
 	n := f.calls
 	f.lastCtx = ctx
+	f.lastMessages = append([]providers.Message(nil), msgs...)
 	f.mu.Unlock()
 	return f.chatFn(n)
 }
@@ -136,6 +144,9 @@ func newGoalLoopTestLoop(
 			},
 		},
 	}
+	// Production seeds goal_claim "allow" for every agent (pkg/config/defaults.go);
+	// a task worker can only finish by calling it (founder decision 2026-09-14).
+	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	if mutateCfg != nil {
 		mutateCfg(cfg)
 	}
@@ -760,6 +771,15 @@ func TestJudgeCriteriaInput_Validate(t *testing.T) {
 		{"goal_scope_ok", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalSessionID: "s1"}, true},
 		{"goal_scope_missing_sessionid", JudgeCriteriaInput{Scope: task.VerdictScopeGoal}, false},
 		{"goal_scope_also_carries_planid", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalSessionID: "s1", PlanID: "p1"}, false},
+		// C-08 (ADR-086): GoalID is the new scope-correlating id — valid on
+		// its own, even with no GoalSessionID set.
+		{"goal_scope_via_goalid_only", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalID: "g1"}, true},
+		// C-08's whole point: a running task's own goal legitimately
+		// carries BOTH TaskID and GoalID — the old symmetric "must not
+		// carry TaskID" rule is removed for goal scope only.
+		{"goal_scope_goalid_with_taskid_now_permitted", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalID: "g1", TaskID: "t1"}, true},
+		// PlanID has no such combination in ADR-086 and stays rejected.
+		{"goal_scope_goalid_with_planid_still_rejected", JudgeCriteriaInput{Scope: task.VerdictScopeGoal, GoalID: "g1", PlanID: "p1"}, false},
 		{"unknown_scope", JudgeCriteriaInput{Scope: "bogus", TaskID: "t1"}, false},
 		{"empty_scope", JudgeCriteriaInput{}, false},
 	}

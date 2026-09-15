@@ -68,6 +68,10 @@ x-user-messages:
   network:
     message: "We couldn’t reach the model provider. Check your internet connection and retry."
     attribution: ambiguous
+  provider_stalled:
+    # Kept in lockstep with contracts/components/schemas/LLMError.yaml.
+    message: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details."
+    attribution: provider
   content_policy:
     message: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content."
     attribution: provider
@@ -76,6 +80,9 @@ x-user-messages:
     attribution: product
   tool_args:
     message: "The model filled in a tool’s arguments incorrectly. Retry — Verbose chat shows which tool and what went wrong."
+    attribution: model
+  tool_call_truncated:
+    message: "The model's tool call was cut off at its output limit before it finished. Ask for less in one step, or split the work."
     attribution: model
   schema:
     message: "We sent the model provider a request it couldn’t process — that’s a bug on our side, not yours. Retry the turn, or open Verbose chat for technical details."
@@ -122,9 +129,11 @@ properties:
       - provider_auth_failed
       - rate_limited
       - network
+      - provider_stalled
       - content_policy
       - context_too_long
       - tool_args
+      - tool_call_truncated
       - schema
       - agent_not_configured
       - workspace_unavailable

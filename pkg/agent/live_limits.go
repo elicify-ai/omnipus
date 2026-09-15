@@ -134,6 +134,18 @@ type LiveLimits struct {
 	inflight map[string]struct{}
 	failedAt map[string]time.Time
 	wg       sync.WaitGroup
+
+	// lifetime bounds every background fetch and every cache write. Close
+	// cancels it; a fetch that is in flight aborts, and one that has just
+	// landed discards its answer instead of writing the cache file. Before
+	// this existed the fetch ran on context.Background() and the instance was
+	// never retained by the gateway, so a write could land AFTER shutdown —
+	// on 2026-09-12 every one of 130 integration-test gateways re-created
+	// $OMNIPUS_HOME/cache/model_limits.json after its home dir had been
+	// removed, and one landed mid-RemoveAll ("directory not empty").
+	lifetime  context.Context
+	cancel    context.CancelFunc
+	closeOnce sync.Once
 }
 
 // liveLimitEntry is one cached answer. not-wire-format: the on-disk cache
@@ -166,6 +178,7 @@ func NewLiveLimits(opts LiveLimitsOptions) *LiveLimits {
 		inflight:   map[string]struct{}{},
 		failedAt:   map[string]time.Time{},
 	}
+	ll.lifetime, ll.cancel = context.WithCancel(context.Background())
 	if ll.credential == nil {
 		ll.credential = func(string) string { return "" }
 	}
@@ -208,6 +221,11 @@ func (ll *LiveLimits) Lookup(provider, baseURL, model string) (int, bool) {
 	if !ok {
 		return 0, false
 	}
+	if ll.lifetime.Err() != nil {
+		// Closed: serve the cache above, never start a fetch that would
+		// write after shutdown.
+		return 0, false
+	}
 	ll.inflight[key] = struct{}{}
 	ll.wg.Add(1)
 	go ll.fetchAndStore(key, target)
@@ -222,6 +240,19 @@ func (ll *LiveLimits) CachePath() string { return ll.cachePath }
 // Wait blocks until every background fetch started so far has finished.
 // Shutdown and tests use it; the resolver never does.
 func (ll *LiveLimits) Wait() { ll.wg.Wait() }
+
+// Close aborts every in-flight fetch, forbids new ones, and returns once
+// the last fetch goroutine has exited — after which the instance performs
+// no further I/O of any kind. Idempotent. The gateway calls it in shutdown
+// step 1, alongside the other turn-triggering background services, so no
+// cache write can outlive RunContext.
+func (ll *LiveLimits) Close() {
+	ll.closeOnce.Do(ll.cancel)
+	ll.wg.Wait()
+}
+
+// Closed reports whether Close has been called.
+func (ll *LiveLimits) Closed() bool { return ll.lifetime.Err() != nil }
 
 // liveTarget is one planned fetch.
 type liveTarget struct {
@@ -279,13 +310,19 @@ func liveNeedsCredential(provider string, locality catalog.Locality) bool {
 // fetchAndStore runs one background fetch and records the outcome.
 func (ll *LiveLimits) fetchAndStore(key string, t liveTarget) {
 	defer ll.wg.Done()
-	ctx, cancel := context.WithTimeout(context.Background(), liveLimitsRequestTimeout)
+	ctx, cancel := context.WithTimeout(ll.lifetime, liveLimitsRequestTimeout)
 	defer cancel()
 	window, err := ll.fetch(ctx, t)
 
 	ll.mu.Lock()
 	defer ll.mu.Unlock()
 	delete(ll.inflight, key)
+	if ll.lifetime.Err() != nil {
+		// Closed while the fetch was in flight: the answer (or the error the
+		// cancellation produced) is discarded — no backoff mark, no cache
+		// write, no reload notification.
+		return
+	}
 	now := ll.now()
 	if err != nil || window <= 0 || window > liveLimitsMaxWindow {
 		ll.failedAt[key] = now

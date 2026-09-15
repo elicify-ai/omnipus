@@ -1,0 +1,3 @@
+check-no-fail-closed-backfill.sh  # ADR-077 guard — no proof-of-failure companion exists yet (C-93)
+check-no-goal-confirm-gate.sh  # ADR-081 guard — no proof-of-failure companion exists yet (C-93)
+check-no-jpeg-screencast.sh  # ADR-061 guard — no proof-of-failure companion exists yet (C-93)

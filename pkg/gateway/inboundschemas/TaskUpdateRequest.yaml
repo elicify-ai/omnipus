@@ -128,18 +128,35 @@ properties:
       $ref: ./AcceptanceCriterionInput.yaml
     description: >
       Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces
-      the current `criteria` atomically. Agent tool paths reject an update
-      that reduces the count below 1. Items use the authoring-time
+      the current `criteria` atomically. GOAL-FR-021/D-C (2026-09-11,
+      operator-ratified): the mandatory-criteria rule now binds at EDIT
+      too, uniformly with creation — an update that reduces the count
+      below 1 (on either `criteria` or `dod` below) is rejected with a
+      400, on every surface (the create form, the task detail panel, the
+      calendar slide-over, this REST path, and the `update_task` tool) —
+      no creation-only carve-out and no exemption for a task created
+      before this rule (GOAL-FR-023 exempts an untouched legacy task from
+      running, never from being edited). Items use the authoring-time
       `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted
       and is inferred server-side from the payload.
+  dod:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterionInput.yaml
+    description: >
+      GOAL-FR-003/FR-021/FR-048/D-C — replacement Definition-of-Done set,
+      DISTINCT from `criteria`, replacing the current `dod` atomically.
+      NEW field (ADR-086). Same edit-time mandatory-count rule as
+      `criteria` above (>= 1 item, enforced with a 400 on every surface).
   max_attempts:
     type: integer
     minimum: 1
     nullable: true
     description: >
-      New per-task override of the attempt ceiling before the goal loop
-      wakes the owner (ADR-049 D7/FR-9). Null clears the override (inherit
-      the global default).
+      New per-task override of the task attempt limit — how many fresh runs
+      this task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null
+      clears the override (inherit the global `planning.task_max_attempts`
+      config value, default 3).
     example: 5
   surface:
     type: string

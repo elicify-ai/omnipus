@@ -806,6 +806,33 @@ rather than an accumulation of unrecorded drift.
 `run_retrospective`, `read_inbox`, `search_email`, `read_message`, `send_email`, `reply`,
 `delete_task`.
 
+> **Amendment 2026-09-14 (founder decision): `create_plan` and `execute_plan` move from search-only
+> to previewed.** Reason: UAT A-17/B-7/B-10 showed agents never discover them — the ADR's own
+> accepted risk (§4.3: "depends on the model formulating a `ToolSearch` query it has no prompt to
+> formulate") materialised. An agent granted both tools split multi-part parallel work into raw
+> `delegate` calls instead of a plan in 0 of 5 runs. Precedent: Claude Code keeps
+> planning/orchestration tools visible by default and defers only rarely-needed tools as name-only
+> entries.
+>
+> This amends §4.1's placement and §4.2's "planning → Tier 3" bullet for these two tools only.
+> `plan_correct`, `stop_plan`, `run_task` and `inspect_session` stay search-only. The table and
+> lists above are kept as originally ratified. The current counts — after `navigate`'s and
+> `write_agent_metadata`'s retirements, ADR-075 D2's six browser tools, and this amendment — are
+> **Tier 1 = 17, Tier 2 = 9, Tier 3 = 66, Infra = 1, total 93**, pinned by
+> `TestVisibility_TierArithmetic` and `TestVisibility_PreviewedSetIsExactlyNine`
+> (`pkg/tools/manifest_test.go`).
+>
+> A preview line is still bounded by policy: the builder renders only the agent's policy-filtered
+> tools, so an agent whose policy denies either tool never sees its line
+> (`TestManifest_PlanToolPreviewFollowsToolPolicy`, `pkg/tools/manifest_plan_preview_test.go`).
+> An `ask` policy is not a denial, so agents seeded `ask` see both lines and get an approval prompt
+> when they call them. Both descriptions now open with a one-line when-to-use hint, which is the
+> text the preview shows.
+>
+> Measured cost, per request, for an agent allowed both tools and having loaded neither: 2 more
+> lines (the rendered block grows from 19 to 21), 271 more characters — about 67 tokens at four
+> characters per token, or 109 by the agent loop's own conservative estimate.
+
 ### 4.2 Why these placements (the categories, not the individual names)
 
 Individual placements are the operator's own calls and are not re-derived here. The reasoning

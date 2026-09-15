@@ -66,7 +66,7 @@ beforeEach(async () => {
 
   // Reset store
   act(() => {
-    useToolApprovalStore.setState({ queue: [] })
+    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
   })
   vi.clearAllMocks()
   vi.mocked(api.submitToolApproval).mockResolvedValue({
@@ -654,7 +654,7 @@ describe.each(edgeCases)(
     it('renders without throwing', () => {
       const frame: ToolApprovalRequiredFrame = { ...baseFrame, ...overrides }
       act(() => {
-        useToolApprovalStore.setState({ queue: [] })
+        useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
         useToolApprovalStore.getState().enqueue(frame)
       })
       expect(() => render(<ToolApprovalModal />)).not.toThrow()

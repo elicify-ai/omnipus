@@ -54,6 +54,10 @@ func newPlanToolWiringTestLoop(t *testing.T) (*AgentLoop, *AgentInstance, string
 			},
 		},
 	}
+	// Production seeds goal_claim "allow" for every agent (pkg/config/defaults.go).
+	// Without it create_task refuses to assign planner-agent a task it could
+	// never report done (founder decision 2026-09-15).
+	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	t.Cleanup(func() { al.Close() })
 
@@ -213,9 +217,9 @@ func TestWirePlanTools_RunTaskAndInspectSessionWiredFromFirstPass(t *testing.T) 
 	// An earlier version of this test polled taskStore.Get(tk.ID) waiting
 	// for Status != StatusInProgress as a manual substitute for that drain.
 	// That polling loop was itself racy and is why this comment replaces it:
-	// consumeAttemptOrExhaust's goal-loop redispatch (task_executor.go) CASes
+	// consumeTaskAttempt's restart (task_run_loop.go) CASes
 	// the task to StatusNext and returns its ID so the owning goroutine's
-	// own trailing defer can re-enter ExecuteTask for the NEXT attempt —
+	// own trailing defer can re-enter ExecuteTask for the NEXT run —
 	// which re-claims the task back to StatusInProgress. A poll landing in
 	// that brief StatusNext window between attempts declared the task
 	// "finished" while a fresh goroutine for the next attempt was already
@@ -291,6 +295,16 @@ func TestPlanExecuteWired_CreatePlanAttachMemberExecutePlanEndToEnd(t *testing.T
 	// resolves it via tools.ToolWorkspaceID(ctx), falling back to the
 	// is_default workspace on disk, and this test harness's shared seed file
 	// (testHarnessWorkspaceMembershipID) is never flagged is_default.
+	//
+	// dod is supplied because operator decision D-C made definition-of-done
+	// mandatory alongside criteria on EVERY task-creation surface, at create
+	// AND at edit (GOAL-FR-021/D-C; the gate itself is create_task's own
+	// "required" schema list plus the explicit check in pkg/tools/task.go).
+	// This fixture predates that decision and asserted a create_task call
+	// with criteria but no dod would succeed — behaviour D-C retired. The
+	// gate stays; the call site gains the field. dod items are DISTINCT from
+	// criteria by contract (generic standing quality gates vs the
+	// outcome-specific check), so this is a different statement, not a copy.
 	taskCreateCtx := tools.WithWorkspaceID(ctx, testHarnessWorkspaceMembershipID)
 	createTaskResult := agentInst.Tools.Execute(taskCreateCtx, "create_task", map[string]any{
 		"title":    "do the thing",
@@ -298,6 +312,7 @@ func TestPlanExecuteWired_CreatePlanAttachMemberExecutePlanEndToEnd(t *testing.T
 		"agent_id": "planner-agent",
 		"plan_id":  createPayload.PlanID,
 		"criteria": []any{map[string]any{"kind": "prose", "text": "did it"}},
+		"dod":      []any{map[string]any{"kind": "prose", "text": "the work meets the team's quality bar"}},
 	})
 	if createTaskResult == nil || createTaskResult.IsError {
 		t.Fatalf("create_task(plan_id=%q) must succeed now that the plan store is wired, got %+v",

@@ -31,11 +31,12 @@ type (
 )
 
 type Provider struct {
-	apiKey         string
-	apiBase        string
-	maxTokensField string // Field name for max tokens (e.g., "max_completion_tokens" for o1/glm models)
-	httpClient     *http.Client
-	extraBody      map[string]any // Additional fields to inject into request body
+	apiKey             string
+	apiBase            string
+	maxTokensField     string // Field name for max tokens (e.g., "max_completion_tokens" for o1/glm models)
+	httpClient         *http.Client
+	extraBody          map[string]any // Additional fields to inject into request body
+	streamStallTimeout time.Duration  // streaming silence limit; 0 = common.DefaultStreamStallTimeout
 }
 
 type Option func(*Provider)
@@ -60,6 +61,27 @@ func WithExtraBody(extraBody map[string]any) Option {
 	return func(p *Provider) {
 		p.extraBody = extraBody
 	}
+}
+
+// WithStreamStallTimeout sets the streaming silence limit (founder decision
+// 2026-09-14): a ChatStream call receiving no bytes of any kind for this long
+// is aborted with common.ErrStreamStalled. Non-positive falls back to
+// common.DefaultStreamStallTimeout. NOT a wall-clock limit — a stream that
+// keeps delivering, however slowly, is never cut.
+func WithStreamStallTimeout(d time.Duration) Option {
+	return func(p *Provider) {
+		if d > 0 {
+			p.streamStallTimeout = d
+		}
+	}
+}
+
+// effectiveStreamStallTimeout resolves the silence limit for this provider.
+func (p *Provider) effectiveStreamStallTimeout() time.Duration {
+	if p.streamStallTimeout > 0 {
+		return p.streamStallTimeout
+	}
+	return common.DefaultStreamStallTimeout
 }
 
 func NewProvider(apiKey, apiBase, proxy string, opts ...Option) (*Provider, error) {
@@ -255,20 +277,36 @@ func (p *Provider) ChatStream(
 		resp.Body.Close()
 	}()
 
-	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress)
+	// Silence check (founder decision 2026-09-14): abort this call when
+	// NOTHING has arrived for the configured limit. The monitor's clock is
+	// re-armed by the parser on every consumed SSE event (parseStreamResponse
+	// holds the arm fn), so any byte of any kind — content, tool-call delta,
+	// reasoning, keep-alive — keeps a slow stream alive. This is not a
+	// wall-clock limit.
+	stall := p.effectiveStreamStallTimeout()
+	watch := common.WatchStreamStall(ctx, func() { _ = resp.Body.Close() }, stall)
+	defer watch.Stop()
+
+	return parseStreamResponse(ctx, resp.Body, onChunk, onProgress, watch)
 }
 
-// parseStreamResponse parses an OpenAI-compatible SSE stream.
+// parseStreamResponse parses an OpenAI-compatible SSE stream. watch, when
+// non-nil, is re-armed after EVERY consumed event (data line, comment,
+// [DONE], even a malformed one) so the caller's stall monitor restarts its
+// silence clock — any byte of any kind counts as the provider still
+// responding.
 func parseStreamResponse(
 	ctx context.Context,
 	reader io.Reader,
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
+	watch *common.StreamStallWatch,
 ) (*LLMResponse, error) {
 	var textContent strings.Builder
 	var finishReason string
 	var usage *UsageInfo
 	var totalArgsBytes int
+	var totalReasoningBytes int
 
 	// Tool call assembly: OpenAI streams tool calls as incremental deltas
 	type toolAccum struct {
@@ -287,6 +325,11 @@ func parseStreamResponse(
 			return nil, err
 		}
 
+		// Every line the scanner delivers is a byte from the provider: even a
+		// comment, a keep-alive, or a malformed chunk proves the connection is
+		// alive. Re-arm the stall clock before looking at the content.
+		watch.Arm()
+
 		line := scanner.Text()
 
 		if !strings.HasPrefix(line, "data: ") {
@@ -300,8 +343,14 @@ func parseStreamResponse(
 		var chunk struct {
 			Choices []struct {
 				Delta struct {
-					Content   string `json:"content"`
-					ToolCalls []struct {
+					Content string `json:"content"`
+					// Reasoning ("thinking") deltas — see
+					// reasoningDeltaBytes for the three spellings. Only
+					// their length is ever used.
+					Reasoning        string                  `json:"reasoning"`
+					ReasoningContent string                  `json:"reasoning_content"`
+					ReasoningDetails []streamReasoningDetail `json:"reasoning_details"`
+					ToolCalls        []struct {
 						Index    int    `json:"index"`
 						ID       string `json:"id"`
 						Function *struct {
@@ -338,6 +387,22 @@ func parseStreamResponse(
 			}
 		}
 
+		// Reasoning deltas count as forward progress (founder decision
+		// 2026-09-14, UAT E-15c): a model can reason for many minutes before
+		// its first content or tool-call byte, and ignoring these deltas made
+		// that indistinguishable from a hung call. The reasoning TEXT is not
+		// kept or forwarded — only its byte count reaches the callback.
+		if n := reasoningDeltaBytes(
+			choice.Delta.Reasoning, choice.Delta.ReasoningContent, choice.Delta.ReasoningDetails,
+		); n > 0 {
+			totalReasoningBytes += n
+			protocoltypes.SafeInvoke(onProgress, protocoltypes.ToolCallProgress{
+				Index:          protocoltypes.ReasoningProgressIndex,
+				TotalArgsBytes: totalArgsBytes,
+				ReasoningBytes: totalReasoningBytes,
+			})
+		}
+
 		// Accumulate tool call deltas.
 		//
 		// Every argument delta also emits a progress signal. Without it a
@@ -369,6 +434,7 @@ func parseStreamResponse(
 						Name:           acc.name,
 						ArgsBytes:      acc.argsJSON.Len(),
 						TotalArgsBytes: totalArgsBytes,
+						ReasoningBytes: totalReasoningBytes,
 					})
 				}
 			}
@@ -390,6 +456,17 @@ func parseStreamResponse(
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
+		// A body-closed read error while the context is still alive is EITHER
+		// our stall monitor aborting a fully silent stream (founder decision
+		// 2026-09-14) or a genuine server-side reset — the same bytes carry
+		// both. Fired() is the only honest discriminator: it is set by our own
+		// monitor just before it closes the body. Only then report the typed
+		// stall error so callers classify it as a retryable provider fault
+		// rather than a transient reset; a server drop keeps its historical
+		// streaming-read-error classification.
+		if watch.Fired() && common.IsBodyClosedStreamError(err) {
+			return nil, common.NewStallError(watch.SilentFor())
+		}
 		return nil, fmt.Errorf("streaming read error: %w", err)
 	}
 	if malformedChunks > 0 {
@@ -403,16 +480,24 @@ func parseStreamResponse(
 		if !ok {
 			continue
 		}
-		args := make(map[string]any)
-		raw := acc.argsJSON.String()
-		if raw != "" {
-			if err := json.Unmarshal([]byte(raw), &args); err != nil {
-				logger.WarnCF("openai_compat", "failed to decode tool call arguments", map[string]any{
-					"tool":  acc.name,
-					"error": err.Error(),
-				})
-				args["raw"] = raw
-			}
+		// The streaming path is where truncation actually lands: the arguments
+		// arrive as a run of deltas appended into acc.argsJSON, and a
+		// generation that hits the output-token cap simply stops mid-run,
+		// leaving a fragment. Decoding it is the check that catches that —
+		// finish_reason cannot be relied on here (see
+		// common.ErrToolArgumentsUndecodable).
+		args, err := common.DecodeToolCallArguments(
+			json.RawMessage(acc.argsJSON.String()), acc.name,
+		)
+		if err != nil {
+			// finishReason and usage are both already captured off the
+			// stream at this point (the loop above collects every chunk
+			// before tool-call assembly runs) — attach them to the refusal
+			// so the caller's classifier can tell truncation from a
+			// well-formed wrong-shaped payload, and so the refused
+			// attempt's billed usage isn't silently discarded (ADR-087
+			// D3.9 / D5).
+			return nil, common.AttachToolArgumentsEvidence(err, finishReason, usage)
 		}
 		toolCalls = append(toolCalls, ToolCall{
 			ID:        acc.id,
@@ -436,6 +521,40 @@ func parseStreamResponse(
 		FinishReason: finishReason,
 		Usage:        usage,
 	}, nil
+}
+
+// streamReasoningDetail is one element of OpenRouter's structured
+// `reasoning_details` delta. Its type decides which field is populated:
+// `reasoning.text` fills Text, `reasoning.summary` fills Summary, and
+// `reasoning.encrypted` fills Data. Only the lengths are read.
+type streamReasoningDetail struct {
+	Text    string `json:"text"`
+	Summary string `json:"summary"`
+	Data    string `json:"data"`
+}
+
+// reasoningDeltaBytes returns how many reasoning bytes one streamed delta
+// carries. OpenAI-compatible providers spell reasoning three ways:
+//
+//   - `reasoning` — OpenRouter's normalised string;
+//   - `reasoning_content` — Z.AI (GLM) and DeepSeek;
+//   - `reasoning_details` — OpenRouter's structured array.
+//
+// OpenRouter sends `reasoning` AND `reasoning_details` in the same delta with
+// the same text, so the first non-empty spelling wins rather than summing all
+// three — otherwise that provider would report every byte twice.
+func reasoningDeltaBytes(reasoning, reasoningContent string, details []streamReasoningDetail) int {
+	if reasoning != "" {
+		return len(reasoning)
+	}
+	if reasoningContent != "" {
+		return len(reasoningContent)
+	}
+	n := 0
+	for _, d := range details {
+		n += len(d.Text) + len(d.Summary) + len(d.Data)
+	}
+	return n
 }
 
 func buildToolsList(tools []ToolDefinition, nativeSearch bool) []any {

@@ -57,7 +57,7 @@ import type { WsSessionStateFrame } from '@/lib/ws'
 
 beforeEach(() => {
   act(() => {
-    useToolApprovalStore.setState({ queue: [] })
+    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
   })
   vi.clearAllMocks()
   vi.mocked(api.submitToolApproval).mockResolvedValue({
@@ -126,8 +126,12 @@ describe('ToolApprovalModal — request_mount readable summary (Deliverable 2)',
     })
     render(<ToolApprovalModal />)
     expect(
-      screen.getByText('Jim will be able to read and change files in this folder until you remove it.'),
+      screen.getByText('Jim will be able to change files in this folder until you remove it.'),
     ).toBeInTheDocument()
+    // UAT 2026-09-13 D-15: the decision is about write access only; the copy
+    // must never claim that declining withholds reading (ADR-068 opens reads).
+    expect(screen.queryByText(/able to read and change/)).toBeNull()
+    expect(screen.getByText(/declining keeps this folder read-only for Jim, it does not hide it/)).toBeInTheDocument()
   })
 
   it('falls back to the raw agent id in the consequence line when the agent name is not cached', () => {
@@ -137,7 +141,7 @@ describe('ToolApprovalModal — request_mount readable summary (Deliverable 2)',
     render(<ToolApprovalModal />)
     expect(
       screen.getByText(
-        'agent-jim will be able to read and change files in this folder until you remove it.',
+        'agent-jim will be able to change files in this folder until you remove it.',
       ),
     ).toBeInTheDocument()
   })
@@ -202,13 +206,12 @@ describe('ToolApprovalModal — request_mount button copy (Deliverable 2/3)', ()
     })
   })
 
-  it('does not offer Cancel for request_mount (closed 2-button spec)', () => {
-    act(() => {
-      useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
-    })
-    render(<ToolApprovalModal />)
-    expect(screen.queryByRole('button', { name: /^Cancel$/i })).not.toBeInTheDocument()
-  })
+  // MERGE 2026-09-15: the "does not offer Cancel for request_mount" case is
+  // dropped. It pinned integrate's D-90 decision (Cancel control removed,
+  // Escape sets the approval aside); the founder ruled tool approval comes
+  // from release/v0.1.1 (#683), whose modal keeps an explicit Cancel action
+  // and treats Escape as the safe-default deny. Recorded as a contested
+  // product decision in the merge decision record.
 })
 
 describe('ToolApprovalModal — registry fallback (Deliverable 1)', () => {
@@ -368,7 +371,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
     // Start exactly where a fresh page load starts: nobody has enqueued
     // anything locally, but the server still thinks this approval is open.
     act(() => {
-      useToolApprovalStore.setState({ queue: [] })
+      useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
     })
 
     const frame: WsSessionStateFrame = {
@@ -406,7 +409,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
     // connected, THEN a session_state snapshot arrives (e.g. a brief WS
     // reconnect) reporting the SAME approval as still pending.
     act(() => {
-      useToolApprovalStore.setState({ queue: [] })
+      useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
       useToolApprovalStore.getState().enqueue({
         type: 'tool_approval_required',
         approval_id: 'appr-e2e-known',
@@ -460,7 +463,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
     // otherwise a reconnect could show a stub approval as actionable seconds
     // after the server-side window it was actually granted has closed.
     act(() => {
-      useToolApprovalStore.setState({ queue: [] })
+      useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
     })
 
     const frame: WsSessionStateFrame = {
@@ -484,7 +487,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
 
     render(<ToolApprovalModal />)
 
-    expect(screen.getByText('Approval expired — the agent will receive a denial.')).toBeInTheDocument()
+    expect(screen.getByText(/Approval expired unanswered — the agent is told nobody answered/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Deny/i })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Dismiss/i })).toBeInTheDocument()
   })

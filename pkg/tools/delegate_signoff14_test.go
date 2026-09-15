@@ -98,7 +98,7 @@ func TestDelegateTool_Respond_NativeRedispatchesWithIsResume(t *testing.T) {
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}
 	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-resume-proof", "q-resume",
-		"corr-resume", generated.SelfOk)); err != nil {
+		"corr-resume", generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
 		t.Fatalf("seed question message failed: %v", err)
 	}
 
@@ -167,7 +167,7 @@ func TestDelegateTool_Respond_EnqueueFailure_LeavesSessionParkedNotWedged(t *tes
 		t.Fatalf("seed lifecycle record failed: %v", err)
 	}
 	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-enqueue-fail", "q-ef",
-		"corr-enqueue-fail", generated.SelfOk)); err != nil {
+		"corr-enqueue-fail", generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
 		t.Fatalf("seed question message failed: %v", err)
 	}
 
@@ -223,7 +223,7 @@ func TestDelegateTool_Inbox_AuthorizedAncestor_SeesMessagesUnderDirectParentKey(
 	// The message is Appended under childB (D's DIRECT parent) — exactly
 	// how message_parent.go's real Append call addresses it.
 	if _, err := inbox.Append(childB, questionMsgForDelegateTest(t, grandchildD, "signoff14-msg-1",
-		"signoff14-corr", generated.SelfOk)); err != nil {
+		"signoff14-corr", generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
 		t.Fatalf("seed inbox message failed: %v", err)
 	}
 

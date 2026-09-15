@@ -1,5 +1,7 @@
 # Grill Review — ADR-053: Unified goal / plan / subagent system (RE-GRILL, 2nd pass)
 
+> **Update 2026-09-14:** the app-level token budget described here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 - **Input:** `docs/internal/architecture/ADR-053-unified-goal-plan-subagent.md`
 - **Authoritative design:** `docs/internal/design/unified-goal-plan-subagent-target-design-v2.2.html`
 - **Mode:** generic-markdown (ADR ratification) — re-grill after revision.

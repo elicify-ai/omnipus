@@ -205,6 +205,9 @@ func (lv *LiveView) dispatchInputContext(caller context.Context, viewerID string
 	}
 	lv.mu.Lock()
 	allowed := tracked && releasing || lv.allowInputLocked(in.Kind)
+	if allowed {
+		lv.lastControlActivity = time.Now()
+	}
 	lv.mu.Unlock()
 	if !allowed {
 		return inputRateLimitError(in.Kind)
@@ -267,6 +270,17 @@ func (lv *LiveView) dispatchTrackedInput(ctx, targetCtx context.Context, viewerI
 	}
 	if skip {
 		return nil
+	}
+	// The input connection itself establishes human ownership after picture,
+	// source, coordinate and action validation. A separate WS take could race
+	// the first data-channel event. Hover and matching releases never take over.
+	if in.SourceContext != nil && lv.mgr.cfg.TakeControlEnabled {
+		switch in.Kind {
+		case "mouse_down", "key_down", "text", "wheel":
+			if !lv.ensureControlForInputContext(ctx, targetCtx, in.SourceContext, viewerID) {
+				return benignInputError("browser live: input source retired or another viewer holds control")
+			}
+		}
 	}
 	var documentWatch *liveDocumentWatch
 	var documentWork *liveDocumentWork

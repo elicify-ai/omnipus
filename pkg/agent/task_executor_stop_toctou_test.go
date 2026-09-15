@@ -4,9 +4,8 @@
 
 // task_executor_stop_toctou_test.go covers the ADR-052 FR-014/§6.4(b) Stop
 // guarantee's executor-side TOCTOU fix (7-reviewer + architect gate,
-// final-fix wave). The three outcome-writing call sites
-// (consumeAttemptOrExhaust, completeTaskWithResult, and
-// rejectBareEvidenceClaim's free-retry write) previously wrote via a plain
+// final-fix wave). The outcome-writing call sites
+// (consumeTaskAttempt and completeTaskWithResult) previously wrote via a plain
 // task.Store.Update with NO guard against a concurrent Stop having already
 // moved the task out of in_progress — a Stop landing between the caller's
 // stale read of a task and one of these writes could be silently
@@ -57,13 +56,13 @@ func simulateConcurrentStop(t *testing.T, taskStore *task.Store, id string) {
 	}
 }
 
-// TestConsumeAttemptOrExhaust_ReviveGuard_DropsOutcomeAfterConcurrentStop is
+// TestConsumeTaskAttempt_ReviveGuard_DropsOutcomeAfterConcurrentStop is
 // interleaving (a): pre-fix, this call would blindly Update Status->next +
 // AttemptCount+1 against a stale `t`, REVIVING a task the user had just
 // Stopped (and wiping its stopped_by_user marker via updateLocked's own
 // leaving-failed auto-clear). Post-fix, the CAS write conflicts (the task
 // is no longer in_progress on disk) and the outcome is dropped.
-func TestConsumeAttemptOrExhaust_ReviveGuard_DropsOutcomeAfterConcurrentStop(t *testing.T) {
+func TestConsumeTaskAttempt_ReviveGuard_DropsOutcomeAfterConcurrentStop(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	taskStore := GetTaskStore(al)
 
@@ -77,7 +76,7 @@ func TestConsumeAttemptOrExhaust_ReviveGuard_DropsOutcomeAfterConcurrentStop(t *
 	stale := *tk // the caller's in-memory view, taken BEFORE the simulated Stop
 	simulateConcurrentStop(t, taskStore, tk.ID)
 
-	redispatch := al.taskExecutor.consumeAttemptOrExhaust(context.Background(), &stale, "", "unmet claim", nil, nil)
+	redispatch := al.taskExecutor.consumeTaskAttempt(context.Background(), &stale, "", "unmet claim", nil)
 
 	if redispatch != "" {
 		t.Errorf("must not re-dispatch a task the Stop already claimed, got %q", redispatch)
@@ -95,14 +94,14 @@ func TestConsumeAttemptOrExhaust_ReviveGuard_DropsOutcomeAfterConcurrentStop(t *
 	}
 }
 
-// TestConsumeAttemptOrExhaust_ExhaustedBranch_DropsTerminalWriteAfterStop
+// TestConsumeTaskAttempt_ExhaustedBranch_DropsTerminalWriteAfterStop
 // proves the SAME guard covers the exhausted-attempts branch's OWN terminal
 // write (completeTaskWithResult called with expected=next from inside
-// consumeAttemptOrExhaust): the attempt-increment CAS itself must conflict
+// consumeTaskAttempt): the attempt-increment CAS itself must conflict
 // first (task is not in_progress), so the exhausted branch is never even
 // reached — the terminal handover write and wakeOwnerAttemptsExhausted must
 // not fire either.
-func TestConsumeAttemptOrExhaust_ExhaustedBranch_DropsTerminalWriteAfterStop(t *testing.T) {
+func TestConsumeTaskAttempt_ExhaustedBranch_DropsTerminalWriteAfterStop(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	taskStore := GetTaskStore(al)
 
@@ -117,7 +116,7 @@ func TestConsumeAttemptOrExhaust_ExhaustedBranch_DropsTerminalWriteAfterStop(t *
 	stale := *tk
 	simulateConcurrentStop(t, taskStore, tk.ID)
 
-	redispatch := al.taskExecutor.consumeAttemptOrExhaust(context.Background(), &stale, "", "unmet claim", nil, nil)
+	redispatch := al.taskExecutor.consumeTaskAttempt(context.Background(), &stale, "", "unmet claim", nil)
 	if redispatch != "" {
 		t.Errorf("must not re-dispatch, got %q", redispatch)
 	}
@@ -165,79 +164,5 @@ func TestCompleteTaskWithResult_DoneOverwriteGuard_DropsOutcomeAfterConcurrentSt
 	}
 	if final.Result == "claims success" {
 		t.Error("the stale claim's Result must never overwrite the Stop's own Result")
-	}
-}
-
-// TestRejectBareEvidenceClaim_FreeRetry_DropsOutcomeAfterConcurrentStop
-// covers the FREE (non-attempt-consuming) re-dispatch write — the same
-// revive risk as interleaving (a), via a DIFFERENT call site than
-// consumeAttemptOrExhaust.
-func TestRejectBareEvidenceClaim_FreeRetry_DropsOutcomeAfterConcurrentStop(t *testing.T) {
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	taskStore := GetTaskStore(al)
-
-	tk := &task.Task{
-		ID: "t-free-retry-guard", AgentID: "native-agent", WorkspaceID: "test-ws", Title: "free retry guard",
-		Status: task.StatusInProgress,
-	}
-	if err := taskStore.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	stale := *tk
-	simulateConcurrentStop(t, taskStore, tk.ID)
-
-	redispatch := al.taskExecutor.rejectBareEvidenceClaim(context.Background(), &stale, "", "steering text", nil)
-	if redispatch != "" {
-		t.Errorf("must not re-dispatch a task the Stop already claimed, got %q", redispatch)
-	}
-	final, err := taskStore.Get(tk.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if final.Status != task.StatusFailed || final.CancelReason != task.CancelReasonStoppedByUser {
-		t.Fatalf("status=%q cancel_reason=%q, want unchanged (the free-retry write must not revive the "+
-			"stopped task)", final.Status, final.CancelReason)
-	}
-}
-
-// TestRejectBareEvidenceClaim_StreakExhaust_DropsOutcomeAfterConcurrentStop
-// is the "streak-exhaust path" the fix-wave brief names explicitly (the
-// SECOND consecutive bare-evidence rejection, which routes through
-// consumeAttemptOrExhaust — task_executor.go:828 pre-edit): proves the
-// guard covers this specific entry point end-to-end, not just
-// consumeAttemptOrExhaust in isolation.
-func TestRejectBareEvidenceClaim_StreakExhaust_DropsOutcomeAfterConcurrentStop(t *testing.T) {
-	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
-	taskStore := GetTaskStore(al)
-
-	tk := &task.Task{
-		ID: "t-streak-exhaust-guard", AgentID: "native-agent", WorkspaceID: "test-ws", Title: "streak exhaust guard",
-		Status: task.StatusInProgress,
-	}
-	if err := taskStore.Create(tk); err != nil {
-		t.Fatalf("create task: %v", err)
-	}
-	// Pre-load the streak to 1 (the FIRST, free rejection already happened
-	// for this task) so the NEXT call reaches the exhaust threshold
-	// (evidenceGateMaxConsecutiveRejections == 2) and routes through
-	// consumeAttemptOrExhaust.
-	al.taskExecutor.bumpEvidenceRejectStreak(tk.ID)
-
-	stale := *tk
-	simulateConcurrentStop(t, taskStore, tk.ID)
-
-	redispatch := al.taskExecutor.rejectBareEvidenceClaim(context.Background(), &stale, "", "steering text", nil)
-	if redispatch != "" {
-		t.Errorf("must not re-dispatch, got %q", redispatch)
-	}
-	final, err := taskStore.Get(tk.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if final.Status != task.StatusFailed || final.CancelReason != task.CancelReasonStoppedByUser {
-		t.Fatalf("status=%q cancel_reason=%q, want unchanged", final.Status, final.CancelReason)
-	}
-	if final.AttemptCount != 0 {
-		t.Errorf("attempt_count = %d, want 0 — a dropped conflict write must not consume an attempt", final.AttemptCount)
 	}
 }

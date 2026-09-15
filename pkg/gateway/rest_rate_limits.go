@@ -21,7 +21,6 @@ import (
 //                                      rate-limit config.
 // PUT  /api/v1/security/rate-limits — partial update to the same.
 //
-// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 // This endpoint handles ONLY per-agent sliding-window rate limits (LLM/hr, tool/min).
 //
 // PUT requires authentication only (single-user model). Strict type
@@ -73,9 +72,8 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ADR-053 D12: reject any daily_cost_cap_usd field. The SEC-26 USD cap
-	// was retired; TokenBudget (set via /api/v1/settings/token-budget) is
-	// the sole app-level spend brake. Operators who set this field get a
-	// clear 400 instead of a silent no-op.
+	// was retired. Operators who set this field get a clear 400 instead of a
+	// silent no-op.
 	//
 	// SECURITY: do NOT echo the raw field value back into the response body.
 	// MaxBytesReader caps the body at 1<<20 — a crafted payload could land up
@@ -83,8 +81,7 @@ func (a *restAPI) putRateLimits(w http.ResponseWriter, r *http.Request) {
 	// cite is enough for operators to find the migration path.
 	if _, ok := raw["daily_cost_cap_usd"]; ok {
 		jsonErr(w, http.StatusBadRequest,
-			"daily_cost_cap_usd: SEC-26 USD cap retired per ADR-053 D12; "+
-				"use /api/v1/settings/token-budget to set the app-level OVERALL token budget")
+			"daily_cost_cap_usd: SEC-26 USD cap retired per ADR-053 D12")
 		return
 	}
 

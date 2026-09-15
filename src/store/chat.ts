@@ -5,13 +5,14 @@ import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
-import { tasksQueryKeys } from '@/lib/api'
+import { tasksQueryKeys, libraryQueryKeys } from '@/lib/api'
 import type { Message, ToolCall, AgentKind, Agent } from '@/lib/api'
 import type { WsReceiveFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
 import type {
   ToolResultRef,
   TruncatedResult,
   WhatsAppPairingFrame,
+  KnowledgeIndexProgressFrame,
   NotificationFrame,
   GoalStatusFrame,
   LoopStatusFrame,
@@ -21,16 +22,22 @@ import type {
   AskUserQuestionCard,
   AskUserAnswerFrame,
   SessionStateFrame,
+  BrowserHandoverNoticeFrame,
+  GoalOutcomeFrame,
 } from '@/lib/api/generated/asyncapi-types'
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
+import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
 import { reconcilePendingAsks } from '@/store/pendingAskReconcile'
 import { registerSyncChatForeground } from '@/store/session'
 import { logDiagnostic } from '@/lib/telemetry'
+import { normalizeTruncationReason } from '@/lib/truncation'
+import { buildGoalOutcomeInsertion } from '@/lib/goalOutcome'
+import { buildJudgeVerdictInsertion } from '@/lib/judgeVerdictThread'
 import {
   getLLMErrorDisplay,
   readEntryIdFromFrame,
@@ -146,6 +153,16 @@ interface BufferedFrame {
 // discriminated union) with extra display-only fields so each role variant
 // still carries its role-specific status constraints. Using a type alias (not
 // interface extends) because TypeScript does not allow extending a union type.
+//
+// ADR-087 (Truncation is an outcome, not a silence) — `truncated`/
+// `truncationReason` are inherited here from `Message`'s shared
+// `MessageBase` (src/lib/api.ts), matching the existing `model`/`verdict`
+// pattern rather than being redeclared on this intersection. They are
+// populated by `rawToMessage` (cold-load/REST — layer 3, api.ts) and by the
+// `case 'replay_message'` reducer below (WS replay — layer 6) via the same
+// `normalizeTruncationReason` (src/lib/truncation.ts) legacy-default rule.
+// `getMessageStatusSuffix` (same module) is the single render-layer
+// consumer of both fields — see its D1 precedence doc comment.
 export type ChatMessage = Message & {
   isStreaming?: boolean
   media?: MediaAttachment[]
@@ -233,6 +250,37 @@ export type ChatMessage = Message & {
    * equivalent explicit exclusion, never by a UI render branch.
    */
   closedBySteer?: boolean
+  /**
+   * Operator-reported UX fix (2026-09-08 — a `/goal` activation left the
+   * user staring at a generic thinking indicator for 17 minutes with no
+   * sign the goal had registered). Set ONLY on the synthetic `role:
+   * 'system'` marker message the `case 'goal_status'` reducer inserts the
+   * first time it sees an `active` frame for this goal_id — never on an
+   * ordinary system banner (help text, `/new`, etc.), which carries no
+   * goal_id at all. Purely a render-time discriminator (MessageItem.tsx /
+   * ChatScreen.tsx's `SystemMessage`/`VirtualSystemMessageRow`) so the
+   * `data-testid="goal-ack-line"` e2e hook lands on exactly this message
+   * and not on every system banner. Never serialized to the wire — the
+   * marker message itself is entirely SPA-synthesized, not a persisted
+   * transcript entry (see the `case 'goal_status'` doc comment for the
+   * durability tradeoff this implies).
+   */
+  goalAckGoalId?: string
+  /**
+   * ADR-085 BROWSER-FR-042/FR-044 (wave B8, `src/store/chat.ts` region 2 of
+   * 2 — C-73). Set ONLY on the synthetic `role: 'system'` marker message
+   * `case 'browser_handover_notice'` inserts via `buildBrowserHandoverInsertion`
+   * — never on an ordinary system banner. Purely a render-time discriminator
+   * (`ChatScreen.tsx`'s `SystemMessage`/`VirtualSystemMessageRow`, mirroring
+   * `goalAckGoalId`'s identical role) so the `data-testid=
+   * "browser-handover-notice"` e2e hook (C-90) lands on exactly this
+   * message and nothing else. Never serialized to the wire. Unlike
+   * `goalAckGoalId` (which stores the goal_id, a value the ack line's own
+   * id is DERIVED from via `goalAckMessageId`), this field stores the SAME
+   * string as `id` — the server-computed `message_id` (BROWSER-FR-044) IS
+   * the de-dup key, there is no separate domain id to carry.
+   */
+  browserHandoverNoticeId?: string
 }
 
 // Client-side truncation sentinel — parallel to server TruncatedResult/ToolResultRef shapes.
@@ -483,6 +531,55 @@ export interface SessionChatState {
    * fixture-compat reason as `goalStatus` above.
    */
   pendingAsk?: AskUserQuestionCard | null
+  /**
+   * ADR-082 D4/D5 (FR-008/FR-009): turn id of the in-flight turn most
+   * recently announced via `session_state.active_turn` for this session,
+   * or null/undefined when no turn is known to be in flight. Paired with
+   * `activeTurnAgentId`. Set by the `session_state` handler when the frame
+   * carries `active_turn` (a reconnecting/attaching connection learning a
+   * turn is already running, or a bare re-broadcast confirming one is still
+   * running — see the 'session_state' case's own S2 finished-turn guard);
+   * cleared the moment the turn's OWN (non-replay) terminal frame —
+   * `done` OR `error`, review S1/S7 — resolves it, or by
+   * `clearStreamingState`/`cancelStream`/`markLastMessageInterrupted` on a
+   * hard disconnect or explicit user cancel so a dead/abandoned turn can
+   * never leave this wedged. Also cleared by a session_state snapshot that
+   * carries NO `active_turn` for this session (review CR3/S2). Review
+   * finding S1/CR1: the `done`/`error` cases classify their OWN frame
+   * shape to decide whether they are the thing that finalizes a turn — they
+   * never read `activeTurnId`/`activeTurnBubbleOpened` to make that call,
+   * only to know WHICH bubble/turn to finalize once they've already decided
+   * to. Optional for the same fixture-compat reason as
+   * `toolCallOwnerMessageId` above.
+   */
+  activeTurnId?: string | null
+  /** Agent id paired with `activeTurnId` — see its doc comment. */
+  activeTurnAgentId?: string | null
+  /**
+   * ADR-082 D4, review S1/CR1: whether the empty streaming placeholder for
+   * `activeTurnId` has already been opened. Deliberately NOT keyed off
+   * `isReplaying`: the MIN_REPLAY_DISPLAY_MS debounce (see
+   * `setReplaying`/the `done` case) can leave `isReplaying` true for up to
+   * 750ms after the replay-terminating `done` has already run, and a
+   * genuinely fast turn's own `done` can arrive inside that window — using
+   * `isReplaying` alone as the "is this the replay-terminator" test would
+   * then wrongly re-open a second, empty bubble on the turn's REAL `done`.
+   * This flag instead tracks the one fact that actually matters: has the
+   * placeholder/bubble for `activeTurnId` been created yet. Set true by
+   * THREE independent writers, because the wire order between
+   * session_state/replay-terminator-done/tokens is not guaranteed (an older
+   * gateway sends session_state LAST; even the fixed contract can race a
+   * fast concurrent turn): (1) the 'done' case, opening the placeholder
+   * itself once replay has landed; (2) the 'token' case, the instant ANY
+   * token arrives for an announced turn — a token proves a bubble exists
+   * even if this store never got to open one itself; (3) the 'session_state'
+   * case, when it finds a bubble already streaming for this session at
+   * announcement time. False/unset while a turn is announced but neither a
+   * placeholder nor any content has appeared yet; irrelevant once
+   * `activeTurnId` is cleared (finalization, disconnect, or explicit cancel
+   * all clear it too).
+   */
+  activeTurnBubbleOpened?: boolean
 }
 
 function emptySessionState(): SessionChatState {
@@ -510,6 +607,9 @@ function emptySessionState(): SessionChatState {
     goalPills: {},
     loopStatus: null,
     pendingAsk: null,
+    activeTurnId: null,
+    activeTurnAgentId: null,
+    activeTurnBubbleOpened: false,
   }
 }
 
@@ -978,11 +1078,75 @@ function applyMessageArray(
   }
 }
 
-/** Advance lastReceivedEventTime if the provided timestamp is newer (lexicographic ISO-8601 comparison). */
-function advanceEventTime(current: string | null, incoming: string | null | undefined): string | null {
+/** Captures an ISO-8601 timestamp's head, its fractional-seconds digits, and any trailing zone designator. */
+const ISO_FRACTIONAL_SECONDS = /^(.*T\d{2}:\d{2}:\d{2})\.(\d+)(.*)$/
+
+/**
+ * Splits an ISO-8601 timestamp into its whole-second-plus-milliseconds part and
+ * the sub-millisecond remainder, so two timestamps can be ordered CHRONOLOGICALLY.
+ *
+ * Why this is not a plain string compare, and not a plain `Date.parse` either:
+ *
+ * The gateway writes these timestamps with Go's `time.RFC3339Nano`
+ * (pkg/gateway/replay.go, `buildReplayErrorFrame`), which STRIPS trailing zeros
+ * from the fractional seconds. Two chronologically ordered instants can therefore
+ * arrive with different fractional widths:
+ *
+ *   "2026-09-12T10:00:00.5Z"        (earlier)
+ *   "2026-09-12T10:00:00.5000001Z"  (later)
+ *
+ *   - A string compare gets this BACKWARDS: at the first differing character it
+ *     compares '0' (0x30) against 'Z' (0x5A), so the later timestamp sorts BELOW
+ *     the earlier one and the cursor refuses to advance past it.
+ *   - `Date.parse` alone cannot separate them either: JS `Date` has only
+ *     millisecond resolution, so both collapse to the same epoch value and the
+ *     `>` test is false — the cursor again fails to advance.
+ *
+ * Either way the cursor is left behind the newest entry the SPA has actually
+ * seen, the next reconnect sends a `since` that is too early, and the server
+ * (whose `applySinceCursor` compares real parsed instants with `.After()`)
+ * correctly replays entries the SPA already has — duplicate bubbles.
+ *
+ * So: take the first three fractional digits as milliseconds and hand those to
+ * `Date.parse` explicitly (never relying on how a given engine truncates or
+ * rounds the rest), and keep the remaining digits as an integer tiebreaker
+ * normalised to a FIXED six-digit width so they compare as plain numbers. Go
+ * emits at most nine fractional digits, so three + six covers the whole wire
+ * range with nothing to truncate.
+ *
+ * Returns null when the value is not a parseable timestamp.
+ */
+function parseEventTime(value: string): { ms: number; subMs: number } | null {
+  const match = ISO_FRACTIONAL_SECONDS.exec(value)
+  if (!match) {
+    const whole = Date.parse(value)
+    return Number.isNaN(whole) ? null : { ms: whole, subMs: 0 }
+  }
+  const [, head, digits, tail] = match
+  const ms = Date.parse(`${head}.${digits.slice(0, 3).padEnd(3, '0')}${tail}`)
+  if (Number.isNaN(ms)) return null
+  return { ms, subMs: Number(digits.slice(3, 9).padEnd(6, '0')) }
+}
+
+/**
+ * Advance lastReceivedEventTime if `incoming` is chronologically newer than
+ * `current`. Monotonic: it never moves the cursor backwards.
+ *
+ * Exported for direct unit testing — see chat.replay-cursor.test.ts.
+ */
+export function advanceEventTime(current: string | null, incoming: string | null | undefined): string | null {
   if (!incoming) return current
   if (!current) return incoming
-  return incoming > current ? incoming : current
+  const inc = parseEventTime(incoming)
+  // An unparseable incoming value must never move the cursor: erring towards a
+  // stale cursor costs a duplicate replay, erring forwards would lose messages.
+  if (!inc) return current
+  const cur = parseEventTime(current)
+  // A cursor we can no longer parse is useless — the server rejects it and falls
+  // back to a full replay — so a parseable incoming value is strictly better.
+  if (!cur) return incoming
+  if (inc.ms !== cur.ms) return inc.ms > cur.ms ? incoming : current
+  return inc.subMs > cur.subMs ? incoming : current
 }
 
 interface ChatStore {
@@ -1086,6 +1250,26 @@ interface ChatStore {
   // ── Actions that operate on the foreground session ───────────────────────────
   setReplaying: (value: boolean) => void
   setMessages: (messages: Message[]) => void
+  /**
+   * Backfills any `type: judge_verdict` entries from a REST-fetched
+   * transcript (src/lib/api.ts's `rawToMessage`) into `sessionId`'s bucket,
+   * WITHOUT touching anything else the WS live/replay path already
+   * populated. ADR-049 D2/D4/SD-C10 — see the doc comment on this action's
+   * implementation for the full rationale.
+   *
+   * Live-thread-card fix (2026-09-14): the live/replayed `judge_verdict` WS
+   * frame now ALSO inserts a thread message directly, for scope=task/
+   * scope=goal (which now carry `session_id` — `case 'judge_verdict'`,
+   * `src/lib/judgeVerdictThread.ts`), keyed by the SAME id this REST path
+   * produces (the persisted entry's own id) — so this backfill is now only
+   * reached for: a scope this module doesn't cover (scope=plan has no
+   * session_id and stays panel-only), or a session whose WS replay never
+   * ran (e.g. a cold REST-only load with no live connection). Idempotent
+   * (skips any id already present) so calling it on every `historyData`
+   * resolution, and after the live/replay path already inserted the same
+   * card, is always safe.
+   */
+  mergeJudgeVerdictHistory: (sessionId: string, historyMessages: Message[]) => void
   appendMessage: (message: ChatMessage) => void
   updateLastAssistantMessage: (content: string, done?: boolean) => void
   /**
@@ -1422,6 +1606,38 @@ function schedulePlanStatusInvalidate(planId: string): void {
   planStatusInvalidateTimer = setTimeout(flushPlanStatusInvalidation, PLAN_STATUS_INVALIDATE_DEBOUNCE_MS)
 }
 
+// F3 (SILENT-FAILURES-rate-limits-dd25339bf.md): `library_changed` fires on
+// EVERY Library write — a bulk operation (e.g. trashing 54 files) or several
+// tabs writing at once broadcasts a burst of these in quick succession. Each
+// one used to trigger its OWN full invalidation pass (the listing prefix for
+// its workspace, plus the shared workspaces list), so a burst of N frames
+// cost N full reload passes — competing with the very same shared
+// per-workspace knowledge rate limiter this fix round exists to stop
+// tripping. Mirrors `schedulePlanStatusInvalidate` above exactly: same
+// trailing-edge debounce shape, same "collect ids, flush once" pattern.
+const LIBRARY_CHANGED_INVALIDATE_DEBOUNCE_MS = 1000
+let libraryChangedInvalidateTimer: ReturnType<typeof setTimeout> | undefined
+const pendingLibraryChangedWorkspaceIds = new Set<string>()
+
+function flushLibraryChangedInvalidation(): void {
+  const workspaceIds = Array.from(pendingLibraryChangedWorkspaceIds)
+  pendingLibraryChangedWorkspaceIds.clear()
+  libraryChangedInvalidateTimer = undefined
+  for (const workspaceId of workspaceIds) {
+    queryClient.invalidateQueries({ queryKey: ['library', workspaceId] })
+  }
+  // The workspaces list carries entry_count for every workspace — one shared
+  // invalidation covers all of them, fired once per flush regardless of how
+  // many distinct workspaces' frames arrived in this window.
+  queryClient.invalidateQueries({ queryKey: libraryQueryKeys.workspaces() })
+}
+
+function scheduleLibraryChangedInvalidate(workspaceId: string): void {
+  pendingLibraryChangedWorkspaceIds.add(workspaceId)
+  if (libraryChangedInvalidateTimer) return
+  libraryChangedInvalidateTimer = setTimeout(flushLibraryChangedInvalidation, LIBRARY_CHANGED_INVALIDATE_DEBOUNCE_MS)
+}
+
 // UAT (browser-panel "Take over"): session ids with an explicit
 // cancelStream(sessionId) sent to the server but no terminal (done/error)
 // frame acknowledging it yet. Populated by cancelStream(), drained by the
@@ -1431,6 +1647,52 @@ function schedulePlanStatusInvalidate(planId: string): void {
 // frame (token/done/error missing session_id) that would otherwise
 // misattribute to whatever session happens to be foreground — see F-S3 below.
 const pendingCancelAckSids = new Set<string>()
+
+// ADR-082 review S2: turn ids whose OWN (non-replay-terminator) `done` has
+// already been processed, keyed by session id. A `session_state.active_turn`
+// announcement racing a reconnect can name a turn that this client already
+// finalized on an earlier connection cycle (the announcement was snapshotted
+// server-side before the done landed, or simply arrives late) — without this
+// guard, re-applying that stale announcement would set isStreaming:true /
+// activeTurnId again with no `done` ever coming to clear it a second time,
+// wedging the Stop button and composer lock permanently. Bounded per-session
+// FIFO: a session only ever has one turn "in flight" at a time from this
+// client's perspective, so a handful of recently-finished ids per session is
+// more than enough to catch any plausible race window; unbounded growth
+// across a long-lived session is the failure mode this cap exists to avoid.
+const FINISHED_TURN_IDS_CAP = 8
+const finishedTurnIdsBySession: Record<string, string[]> = {}
+
+function markTurnFinished(sessionId: string, turnId: string | null | undefined): void {
+  if (!turnId) return
+  const ids = finishedTurnIdsBySession[sessionId] ?? (finishedTurnIdsBySession[sessionId] = [])
+  if (ids.includes(turnId)) return
+  ids.push(turnId)
+  if (ids.length > FINISHED_TURN_IDS_CAP) ids.shift()
+}
+
+function isTurnFinished(sessionId: string, turnId: string): boolean {
+  return finishedTurnIdsBySession[sessionId]?.includes(turnId) ?? false
+}
+
+/**
+ * Test-only escape hatch: clears `finishedTurnIdsBySession`. This tracker is
+ * deliberately module-scoped (it must survive a `resetStores()`-style
+ * `sessionsById` wipe in production — that's the whole point of S2, so a
+ * reconnect that rebuilds the bucket from scratch still remembers a turn id
+ * it already finalized), which means it also survives across `it()` blocks
+ * within one test FILE. Test suites that reuse the same session id + turn id
+ * constant across multiple independent scenarios (as chat.reconnect.test.ts
+ * and chat.session-state-routing.test.ts both do, deliberately, for
+ * readability) must call this from their `resetStores()`/`beforeEach` or a
+ * turn finalized in one `it()` block will be wrongly treated as
+ * already-finished in a later, unrelated one.
+ */
+export function __resetFinishedTurnIdsForTests(): void {
+  for (const sid of Object.keys(finishedTurnIdsBySession)) {
+    delete finishedTurnIdsBySession[sid]
+  }
+}
 
 // ── Frame-routing helpers ─────────────────────────────────────────────────────
 
@@ -1472,16 +1734,32 @@ const SESSION_SCOPED_FRAME_TYPES = new Set([
   'tool_approval_required', 'rate_limit', 'media', 'session_started',
   'system_overload', 'session_close_ack', 'cancel_stage',
   // ADR-049 R3: goal_status/loop_status always carry `session_id` (schema
-  // `min(1)`, required) — session-scoped like rate_limit. plan_status and
-  // judge_verdict deliberately do NOT carry session_id (correlated by
-  // plan_id/task_id instead, not any specific chat thread) and so are
-  // handled as GLOBAL frames below (like notification/whatsapp_pairing) —
-  // do not add them here.
+  // `min(1)`, required) — session-scoped like rate_limit. plan_status
+  // deliberately does NOT carry session_id (correlated by plan_id instead,
+  // not any specific chat thread) and is handled as a GLOBAL frame below
+  // (like notification/whatsapp_pairing) — do not add it here.
+  //
+  // judge_verdict deliberately is ALSO not added here even though it now
+  // OPTIONALLY carries session_id (task/goal scope, JudgeVerdictFrame.yaml):
+  // this set means "session_id is REQUIRED; drop the frame in production
+  // when it's missing" (see the targetSid resolver below), which is the
+  // wrong semantic for an OPTIONAL field — a plan-scope verdict (and any
+  // legacy path) legitimately has none, and must keep routing to the
+  // GLOBAL ActivityPanel, not get dropped with a connection-error toast.
+  // `case 'judge_verdict'` below reads `frame.session_id` directly and
+  // handles both cases itself.
   'goal_status', 'loop_status',
   // askuserquestion-tool-spec v3 §3: session-scoped — the session id rides
   // on card.session_id (required, min(1)); the routing resolver below
   // falls back to it when no top-level session_id exists.
   'ask_user_question',
+  // ADR-085 BROWSER-FR-042/FR-044 (wave B8): BrowserHandoverNoticeFrame
+  // carries a required, min(1) `session_id` (contracts/components/schemas/
+  // BrowserHandoverNoticeFrame.yaml) — session-scoped like goal_status.
+  'browser_handover_notice',
+  // Goal outcome line (founder decision 2026-09-14): GoalOutcomeFrame carries
+  // a required, min(1) `session_id` — session-scoped like goal_status.
+  'goal_outcome',
 ])
 
 // F-S3: frame types that can carry a turn-cancellation acknowledgment
@@ -1518,12 +1796,21 @@ const UNKNOWN_FRAME_TOAST_THRESHOLD = 5
 // ── goalPills bound (regression fix, bc66345f follow-up) ──────────────────
 //
 // Authoritative terminal-state set per the wire contract
-// (contracts/components/schemas/GoalStatusFrame.yaml `state` enum, 9
-// values): `done` (success), `failed` (a genuine budget/rounds-exhausted/
-// idle-expired brake), and `cleared` (a deliberate user-initiated stop —
-// added post-ADR-053 so it does NOT collapse into `failed`). All other
+// (contracts/components/schemas/GoalStatusFrame.yaml `state` enum, now 14
+// values after the joint ADR-084/ADR-085/ADR-086 delivery, C-39): `done`
+// (success), `failed` (a genuine rounds-exhausted/idle-expired
+// brake — pre-existing, now narrower now that `expired` has its own
+// value, see below), `cleared` (a deliberate user-initiated stop — added
+// post-ADR-053 so it does NOT collapse into `failed`), and `expired`
+// (ADR-086 GOAL-FR-028: the 7-day idle-expiry sweep, D-A — the fourth
+// distinguishable terminal ending, ADDED by this delivery). All other
 // states (queued/active/waiting_on_user/judge_unavailable/re-planning/
-// judging) are non-terminal: the goal can still receive another frame.
+// judging/judge_refused_god_mode/judge_cas_loss/blocked/claim_overturned)
+// are non-terminal: the goal can still receive another frame. `blocked`
+// and `claim_overturned` deliberately do NOT join this set (plan OQ-17,
+// C-17) even though both "park" the goal — the goal is still live and a
+// returning operator seeing `claim_overturned` hidden by the terminal
+// display timer would defeat JUDGE-FR-102's whole point.
 //
 // Exported (not just module-private) so `GoalPillTray.tsx` can key its own
 // short-lived "keep a terminal pill visible briefly, then stop rendering
@@ -1533,6 +1820,7 @@ export const GOAL_TERMINAL_STATES: ReadonlySet<GoalStatusFrame['state']> = new S
   'done',
   'failed',
   'cleared',
+  'expired',
 ])
 
 /**
@@ -1596,6 +1884,214 @@ function evictGoalPillsOverCap(pills: Record<string, GoalStatusFrame>): Record<s
     }
   }
   return next
+}
+
+/**
+ * Field-preserving merge for `goalPills[pillKey]` — ADR-081 code-review
+ * round 1, Finding 1 (HIGH): the goal record card was only transiently
+ * visible. Root cause: the engine's ROUTINE `goal_status` emissions
+ * (end-of-turn pushes from the goal loop) carry NO `criteria`/`dod`/
+ * `definition` — only the `set_goal` post-write emission populates the
+ * record. Wholesale-replacing the stored pill on every frame (the previous
+ * behavior) meant the very next routine frame after registration clobbered
+ * the record-carrying pill — the pre-ADR-082 thread-tail card component
+ * (retired; read `goalPills` as its ONLY source) lost its
+ * `criteria.length>0` filter and unmounted seconds after appearing, until
+ * the next `set_goal` write re-populated it. ADR-082 D9 moved the record
+ * card's primary source to each `set_goal` call's OWN result (SetGoalToolUI/
+ * SetGoalCardBlock) — `goalPills` is now the progress OVERLAY only (state/
+ * round/per-criterion status by goal_id) — but this merge rule still
+ * matters: the overlay reads the SAME map, and a criteria-less routine push
+ * clobbering the last known criteria/dod here would still corrupt what
+ * per-criterion status gets matched onto the card by text.
+ *
+ * Rule (see the case 'goal_status' comment for why): a frame that DOES
+ * carry `criteria` always wins wholesale (it IS a fresh record — either the
+ * initial author or a `set_goal(mode: update)` steering revision). A
+ * terminal/cleared frame (`done`/`failed`/`cleared`) also always wins
+ * wholesale — record display ends with the goal regardless of what was
+ * stored. Otherwise (incoming carries no criteria AND is non-terminal —
+ * i.e. a routine `active`/`judging`/`waiting_on_user`/... progress push)
+ * carry the stored `criteria`/`dod`/`definition` forward while taking every
+ * other field (state/round/reason/accounting) from the incoming frame — the
+ * incoming frame is still the source of truth for everything EXCEPT the
+ * record fields it didn't populate.
+ */
+function mergeGoalPillFrame(
+  stored: GoalStatusFrame | undefined,
+  incoming: GoalStatusFrame,
+): GoalStatusFrame {
+  const incomingHasCriteria = (incoming.criteria?.length ?? 0) > 0
+  if (incomingHasCriteria || GOAL_TERMINAL_STATES.has(incoming.state)) {
+    return incoming
+  }
+  const storedHasCriteria = (stored?.criteria?.length ?? 0) > 0
+  if (!stored || !storedHasCriteria) {
+    return incoming
+  }
+  return {
+    ...incoming,
+    criteria: stored.criteria,
+    dod: stored.dod,
+    definition: stored.definition,
+  }
+}
+
+// ── Goal acknowledgement line (operator-reported UX fix, 2026-09-08) ──────
+//
+// Repro: `/goal <text>` activates INSTANTLY (ADR-081 D1, zero LLM calls
+// before the working agent's first request), but the user saw nothing
+// confirming that — just the generic rotating thinking indicator — for as
+// long as 17 minutes in the reported case, while a tool call had actually
+// failed off-screen. Fix: render one quiet line, "Goal set. Working out
+// what done looks like.", at the goal's chronological position the FIRST
+// time the store observes an `active` goal_status frame for a given
+// goal_id — driven entirely by that real server-pushed frame, never an
+// optimistic client-side guess (see the case 'goal_status' handler below).
+//
+// Durability tradeoff (flagged per the wave brief rather than faked): this
+// line is a client-synthesized `ChatMessage`, NOT a persisted transcript
+// entry — pkg/agent/goal_loop.go (which owns the instant-activation call
+// site) is out of this wave's scope, so there is no backend anchor writing
+// it into the session's JSONL the way the goal record card itself is
+// anchored (pkg/agent/goal_record_wiring.go's anchorGoalRecordInTranscript).
+// It still survives an ordinary page reload: EmitGoalStatusRehydrate
+// (pkg/agent/goal_record_wiring.go, extended by this same wave) now
+// re-emits the SAME `active` frame on every WS re-attach — including a
+// full page reload's fresh attach — for as long as the goal stays active,
+// whether or not its record has been written yet (previously it only
+// covered the record-populated case). Since insertion below is idempotent
+// (keyed by a deterministic `goal-ack-<goal_id>` message id), that rehydrate
+// re-arrival reconstructs this exact line after a reload rather than a
+// second one appearing. What it does NOT survive: a session whose local
+// message history is cleared/never-loaded before any reattach happens for
+// this goal (there is no transcript entry to replay it from at all in that
+// case) — the cheapest durable alternative, if that gap ever matters in
+// practice, is a small addition to goal_loop.go's activateInstantGoal (out
+// of scope here) that anchors a plain (non-tool-call) transcript entry the
+// same way the record card is anchored, so a cold REST/replay load also
+// reconstructs it with no live frame required.
+const GOAL_ACK_LINE_TEXT = 'Goal set. Working out what done looks like.'
+
+/** Deterministic id for one goal's ack-line marker message — doubles as the
+ * de-dup key (a message already present at this id means the line has
+ * already been shown for this goal_id, live or rehydrated) so the handler
+ * below never inserts a second one. */
+function goalAckMessageId(goalId: string): string {
+  return `goal-ack-${goalId}`
+}
+
+/**
+ * Finds the message id the goal-ack line should render immediately after —
+ * the most recent user message that actually issued this goal (so the line
+ * lands at "the goal's chronological position in the thread", not just
+ * tacked onto whatever is currently last). Two matching strategies, tried
+ * in order: (1) a user message containing the frame's own `condition` text
+ * verbatim — this is what the persisted transcript carries, since the
+ * gateway records the RAW inbound `/goal <condition>` message before any
+ * command-rewrite touches it (mirrors pkg/agent/loop.go's scheduled-run
+ * comment "mirroring the interactive websocket path"); (2) defensively, the
+ * most recent user message that starts with the `/goal` command literal,
+ * in case the condition text was normalized/trimmed differently than the
+ * frame's copy. Returns null when neither matches (falls back to appending
+ * at the current tail — correct for the live case, where nothing has
+ * happened after the command yet).
+ */
+function findGoalCommandAnchorId(
+  order: readonly string[],
+  byId: Record<string, ChatMessage>,
+  condition: string,
+): string | null {
+  const trimmedCondition = condition.trim()
+  for (let i = order.length - 1; i >= 0; i--) {
+    const m = byId[order[i]]
+    if (!m || m.role !== 'user') continue
+    const content = m.content ?? ''
+    if (trimmedCondition && content.includes(trimmedCondition)) return m.id
+    if (/^\s*\/goal\b/i.test(content)) return m.id
+  }
+  return null
+}
+
+/**
+ * Builds the {messagesById, messageOrder} patch that inserts the goal-ack
+ * marker for `goalFrame` into bucket `b`, or returns null when no insertion
+ * is needed (no goal_id on the frame — a legacy/compat emission — the
+ * frame's state is not `active`, or the marker for this goal_id already
+ * exists). Split out of the `case 'goal_status'` handler so the insertion
+ * logic has a single, independently-reasoned-about home.
+ */
+function buildGoalAckInsertion(
+  b: SessionChatState,
+  goalFrame: GoalStatusFrame,
+): Pick<SessionChatState, 'messagesById' | 'messageOrder'> | null {
+  if (goalFrame.state !== 'active' || !goalFrame.goal_id) return null
+  const ackId = goalAckMessageId(goalFrame.goal_id)
+  if (b.messagesById[ackId]) return null // already shown for this goal — idempotent, never duplicate.
+
+  const ackMessage: ChatMessage = {
+    id: ackId,
+    role: 'system',
+    status: 'done',
+    content: GOAL_ACK_LINE_TEXT,
+    timestamp: new Date().toISOString(),
+    goalAckGoalId: goalFrame.goal_id,
+  }
+  const messagesById = { ...b.messagesById, [ackId]: ackMessage }
+  const anchorId = findGoalCommandAnchorId(b.messageOrder, b.messagesById, goalFrame.condition)
+  const messageOrder = anchorId
+    ? (() => {
+        const idx = b.messageOrder.indexOf(anchorId)
+        return [...b.messageOrder.slice(0, idx + 1), ackId, ...b.messageOrder.slice(idx + 1)]
+      })()
+    : [...b.messageOrder, ackId]
+  return { messagesById, messageOrder }
+}
+
+/**
+ * Builds the {messagesById, messageOrder} patch that inserts the ADR-085
+ * browser-handover waiting notice for `frame` into bucket `b`, or returns
+ * null when a message with this id already exists in the bucket — the
+ * idempotency BROWSER-FR-044 requires. The server derives `message_id`
+ * deterministically from `(session_id, holdStartedAtUnixNano)` — a
+ * wall-clock nanosecond timestamp minted once at the transition INTO a
+ * stood-down state and reused verbatim for every emission within that one
+ * unbroken hold (never a per-process counter, which would collide across a
+ * gateway restart — C-84) — so a duplicate arrival (a WS re-attach
+ * re-delivering the same live frame, or the FR-043a replay of the same
+ * persisted transcript entry landing on top of an already-live line) must
+ * never insert a second line, while a genuinely NEW hold (a fresh
+ * `holdStartedAtUnixNano`) always gets its own.
+ *
+ * Deliberately simpler than `buildGoalAckInsertion` in one respect: this
+ * notice always appends at the current tail rather than being anchored to
+ * an earlier message in the thread — a handover has no "condition" text
+ * (goal's `/goal <condition>` command) to search the history for, and
+ * BROWSER-FR-041/042 only ever describe it as delivered live into the open
+ * thread, never backdated to some earlier point in it. Split out of `case
+ * 'browser_handover_notice'` for the same reason `buildGoalAckInsertion`
+ * is split out of `case 'goal_status'`: the insertion logic gets a single,
+ * independently-reasoned-about home. Per C-73, this function and its call
+ * site are B8's entire region of this file — it reads no goal symbol.
+ */
+function buildBrowserHandoverInsertion(
+  b: SessionChatState,
+  frame: BrowserHandoverNoticeFrame,
+): Pick<SessionChatState, 'messagesById' | 'messageOrder'> | null {
+  if (b.messagesById[frame.message_id]) return null // already shown for this hold — idempotent, never duplicate.
+
+  const noticeMessage: ChatMessage = {
+    id: frame.message_id,
+    role: 'system',
+    status: 'done',
+    content: frame.text,
+    timestamp: new Date().toISOString(),
+    browserHandoverNoticeId: frame.message_id,
+  }
+  return {
+    messagesById: { ...b.messagesById, [frame.message_id]: noticeMessage },
+    messageOrder: [...b.messageOrder, frame.message_id],
+  }
 }
 
 export const useChatStore = create<ChatStore>((set, get) => {
@@ -1888,6 +2384,116 @@ export const useChatStore = create<ChatStore>((set, get) => {
       }))
     },
 
+    // ADR-049 D2/D4/SD-C10 (verdict-card fix): originally, the WS
+    // live/replayed `judge_verdict` frame (see `case 'judge_verdict'` below)
+    // never inserted a thread message — it was a deliberately GLOBAL frame
+    // (no `session_id` on the wire, JudgeVerdictFrame.yaml), so it was
+    // routed to `useJudgeActivityStore` (the ActivityPanel) only. The ONLY
+    // carrier that could place a verdict in a specific chat thread was the
+    // persisted REST transcript (`type: judge_verdict`, forwarded by
+    // rawToMessage). But ChatScreen.tsx's ordinary `historyData` effect only
+    // calls `setMessages` (a full bucket OVERWRITE) when the bucket is still
+    // empty and WS replay hasn't already populated it — in the normal
+    // (WS-connected) case, WS replay wins that race almost every time, so
+    // the REST fetch resolves into a no-op and any judge_verdict entry it
+    // carried was silently lost, reload or not (reproduced live: two real
+    // judge rounds recorded in the transcript, ActivityPanel showed them,
+    // the thread never did, even after a hard reload).
+    //
+    // Live-thread-card fix (2026-09-14): the frame now OPTIONALLY carries
+    // `session_id` (scope=task/scope=goal), and `case 'judge_verdict'`
+    // inserts the SAME thread card directly (src/lib/judgeVerdictThread.ts),
+    // keyed by this same entry id — so in the normal WS-connected case this
+    // action is now a no-op (its `if (draft.messagesById[verdictMsg.id])
+    // continue` guard below skips a card already inserted live/on replay).
+    // It remains the ONLY path for a scope this frame doesn't cover
+    // (scope=plan — no session_id) and for a session whose WS replay never
+    // ran (a cold REST-only load with no live connection).
+    //
+    // This action is the fix: called whenever `historyData` resolves AND the
+    // active bucket is populated with replay not in flight (ChatScreen.tsx's
+    // gated effect — see its own doc comment for why the gate is
+    // load-bearing), it walks the REST-fetched transcript and inserts any
+    // `judge_verdict` entry the bucket doesn't already have — positioned by
+    // TURN-ID anchor first (the judged turn's assistant message; see the
+    // anchor-1 comment below), content-match fallback second, append-at-end
+    // last. Neither raw entry ids nor timestamps work as the position key
+    // against a replay-populated bucket — live-verified against a real
+    // gateway: WS replay's assistant-bubble coalescing does not preserve the
+    // underlying transcript entry's own id on the resulting ChatMessage
+    // (an id-neighbor scan found no match and dropped every verdict at
+    // position 0), and replay frames carry no timestamp so replay-created
+    // messages are stamped with ARRIVAL time (a timestamp comparison made
+    // every bucket entry "newer" than every persisted verdict — same
+    // position-0 symptom). Id-based dedup (via messagesById), so a
+    // live/replayed duplicate delivery (there isn't one today, but
+    // future-proofing) or a repeat REST fetch never double-inserts.
+    mergeJudgeVerdictHistory: (sessionId, historyMessages) => {
+      const verdictEntries = historyMessages.filter(
+        (m): m is Message & { type: 'judge_verdict'; verdict: NonNullable<Message['verdict']> } =>
+          m.type === 'judge_verdict' && !!m.verdict,
+      )
+      if (verdictEntries.length === 0) return
+      withBucket(sessionId, (b) => {
+        return produce(b, (draft) => {
+          for (const verdictMsg of verdictEntries) {
+            if (draft.messagesById[verdictMsg.id]) continue
+            const historyIdx = historyMessages.indexOf(verdictMsg)
+            // Anchor 1 — TURN ID (the reliable one, live-verified necessary):
+            // scan the REST list backward from the verdict for the nearest
+            // preceding entry that carries a turnId (the judged turn's own
+            // assistant message — `writeGoalVerdictTranscript` writes the
+            // verdict immediately after that turn's entries), then insert
+            // after the LAST bucket message carrying that same turnId.
+            // Timestamps CANNOT order against a replay-populated bucket:
+            // replay frames carry no timestamp (pkg/gateway/replay.go's
+            // generic ReplayMessageFrame sets Role/Content/AgentId/TurnId/
+            // Model only), so every replay-created ChatMessage is stamped
+            // with its ARRIVAL time — live-verified to make every bucket
+            // "timestamp" newer than every persisted verdict timestamp,
+            // which dumped both cards at index 0. turn_id is the one stable
+            // per-turn correlator both carriers share (REST Message.turn_id
+            // ↔ ReplayMessageFrame.turn_id → ChatMessage.turnId).
+            let insertPos = -1
+            for (let j = historyIdx - 1; j >= 0 && insertPos === -1; j--) {
+              const anchorTurnId = historyMessages[j].turnId
+              if (!anchorTurnId) continue
+              for (let k = draft.messageOrder.length - 1; k >= 0; k--) {
+                const m = draft.messagesById[draft.messageOrder[k]]
+                if (m?.turnId === anchorTurnId) { insertPos = k + 1; break }
+              }
+            }
+            // Anchor 2 — CONTENT (legacy fallback, best-effort): nearest
+            // preceding user/assistant entry with non-empty content; insert
+            // after the last bucket message with identical content. Only
+            // reachable for transcripts whose entries predate turn-id
+            // stamping. Best-effort by nature: identical contents across
+            // turns resolve to the LAST match, which can over-shoot for a
+            // repeat-reply pattern — accepted, since without turn ids there
+            // is no better signal on either carrier.
+            if (insertPos === -1) {
+              for (let j = historyIdx - 1; j >= 0 && insertPos === -1; j--) {
+                const anchor = historyMessages[j]
+                if ((anchor.role !== 'user' && anchor.role !== 'assistant') || !anchor.content) continue
+                for (let k = draft.messageOrder.length - 1; k >= 0; k--) {
+                  const m = draft.messagesById[draft.messageOrder[k]]
+                  if (m && (m.role === 'user' || m.role === 'assistant') && m.content === anchor.content) {
+                    insertPos = k + 1
+                    break
+                  }
+                }
+              }
+            }
+            // No anchor found at all (verdict precedes every bucket message,
+            // or empty bucket) — append at the end.
+            if (insertPos === -1) insertPos = draft.messageOrder.length
+            draft.messagesById[verdictMsg.id] = verdictMsg as ChatMessage
+            draft.messageOrder.splice(insertPos, 0, verdictMsg.id)
+          }
+        }) as Partial<SessionChatState>
+      })
+    },
+
     appendMessage: (message) => {
       const sid = getActiveSid()
       if (!sid) return
@@ -1968,7 +2574,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
             isStreaming: false,
           }
           const msgs = [...getMessages(b), placeholder]
-          return { ...applyMessageArray(msgs, b), isStreaming: false }
+          // S7: clear any ADR-082 active-turn announcement alongside
+          // isStreaming — see the produce() branch below for why.
+          return {
+            ...applyMessageArray(msgs, b),
+            isStreaming: false,
+            activeTurnId: null,
+            activeTurnAgentId: null,
+            activeTurnBubbleOpened: false,
+          }
         }
         // FR-21 / T21–T26: set isStreaming:false AND status:'interrupted' on the message.
         // Setting isStreaming:false is necessary so that buildMessageStatus() in
@@ -1996,6 +2610,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // all have one), this branch — not the placeholder one — is the one
           // that actually runs, so it must carry the same immediate clear.
           draft.isStreaming = false
+          // S7: an explicit user cancel ends streaming here, synchronously —
+          // clear any ADR-082 active-turn announcement in the same write.
+          // The invariant elsewhere in this file ("activeTurnId is never set
+          // while isStreaming is false") is written by every path that
+          // stops streaming, not just the 'session_state'/'done' cases —
+          // this is one of them. Leaving activeTurnId set here would let a
+          // later, unrelated done for this session misread it as "replay
+          // still awaiting catch-up" and open a stray empty placeholder.
+          draft.activeTurnId = null
+          draft.activeTurnAgentId = null
+          draft.activeTurnBubbleOpened = false
         }) as Partial<SessionChatState>
       })
       // An explicit `sessionId` (e.g. the browser panel's pinned session)
@@ -3022,8 +3647,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
 
       if (!connection) return
       if (!targetSid) {
-        // No server-side session established yet — just clear local streaming state.
-        withBucket(getActiveSid(), () => ({ isStreaming: false }))
+        // No server-side session established yet — just clear local streaming
+        // state. S7: activeTurn* travels with isStreaming everywhere else in
+        // this file, so clear it here too even though this specific bucket
+        // is very unlikely to carry an ADR-082 announcement yet.
+        withBucket(getActiveSid(), () => ({
+          isStreaming: false,
+          activeTurnId: null,
+          activeTurnAgentId: null,
+          activeTurnBubbleOpened: false,
+        }))
         maybeDrainNext()
         return
       }
@@ -3085,6 +3718,27 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // outstanding cancel — stale entries here would otherwise persist across
       // reconnects and could misattribute an unrelated later frame.
       pendingCancelAckSids.clear()
+      // S6: a socket drop means no more frames — done, error, or otherwise —
+      // are coming on THIS connection for any outstanding replay either. A
+      // bucket that is mid-replay (isReplaying:true) but not yet
+      // isStreaming:true (session_state hasn't announced a turn, or hasn't
+      // been reached in the reducer yet) would otherwise pass through the
+      // per-bucket gate below untouched — nothing else ever clears
+      // isReplaying for it, since the only two writers are this function and
+      // setReplaying's own done/error-driven clear (immediate or via the
+      // deferred timers below), neither of which fires on a hard
+      // disconnect. Left alone, the composer stays permanently locked
+      // behind "Loading session history…" even after reconnect regenerates
+      // a fresh attach (a fresh setReplaying(true) does reset the timer, but
+      // only once the user is looking at that session again — a background
+      // bucket the user never revisits stays wedged for the life of the
+      // tab). Cancel every pending replay-clear timer up front — the
+      // connection they were waiting on is already gone, so let them fire
+      // is both pointless and racy against the synchronous clear below.
+      for (const timerSid of Object.keys(replayingClearTimers)) {
+        clearTimeout(replayingClearTimers[timerSid])
+        delete replayingClearTimers[timerSid]
+      }
       // Sweep every bucket — not just the active one — because a background
       // session can be mid-stream when the socket drops. Any bucket left with
       // isStreaming=true would wedge if the user switches to it later.
@@ -3112,12 +3766,38 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // resolved but never baked — a status-'running' filter here would miss
           // it and let it silently vanish once isStreaming flips false.
           const hasPendingTools = bucket.toolCallOrder.length > 0
-          if (!bucket.isStreaming && !needsMsgFix && !hasPendingTools && bucket.cancelStage === null) {
+          // Defense-in-depth: activeTurnId should never be set while isStreaming
+          // is false (both are always written together — see the 'session_state'/
+          // 'done' cases above), but guard the skip on it too so a bucket never
+          // slips through this sweep carrying a stale ADR-082 activeTurnId. S6:
+          // also guard on isReplaying — see the doc comment above this sweep.
+          if (!bucket.isStreaming && !needsMsgFix && !hasPendingTools && bucket.cancelStage === null && !bucket.activeTurnId && !bucket.isReplaying) {
             sessionsById[sid] = bucket
             continue
           }
           mutated = true
-          const next: SessionChatState = { ...bucket, isStreaming: false, cancelStage: null }
+          // ADR-082 D4 edge case: a turn was announced via session_state.active_turn
+          // (isStreaming:true, activeTurnId set) but the socket died before any
+          // token/done ever arrived for it (server died mid-catch-up, or the
+          // connection dropped between session_state and the replay-terminating
+          // done that would have opened the bubble). Clear activeTurnId/
+          // activeTurnAgentId here alongside isStreaming so a stale id never
+          // survives to mislabel an unrelated later done as "replay-terminating,
+          // turn still open" — the existing WS-close handling already prevents
+          // the hang (isStreaming flips false, any bubble that did exist is
+          // swept below); this just keeps the two fields' invariant intact.
+          // S6: isReplaying is cleared here too, for the same reason — a hard
+          // disconnect mid-replay is exactly as terminal as a done/error would
+          // have been, and nothing else is coming to clear it.
+          const next: SessionChatState = {
+            ...bucket,
+            isStreaming: false,
+            isReplaying: false,
+            cancelStage: null,
+            activeTurnId: null,
+            activeTurnAgentId: null,
+            activeTurnBubbleOpened: false,
+          }
           if (needsMsgFix) {
             const messagesById = { ...bucket.messagesById }
             for (let i = order.length - 1; i >= 0; i--) {
@@ -3266,13 +3946,35 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // HIGH-2: reset unknown-frame counter on every known-good frame.
       unknownFrameCount = 0
 
-      // I1: advance the reconnect `since` cursor for ANY frame that carries a
-      // sequence timestamp — not only replay_message. The cursor is sent as
-      // `since` on attach_session so the gateway skips frames the SPA already
-      // saw; if it only advanced on replay_message, every replayed/live frame
-      // that DID carry a timestamp would be re-replayed on the next reconnect.
-      // advanceEventTime is monotonic (only moves forward), so this is safe to
-      // run before the per-frame reducer regardless of dedup/early-return paths.
+      // I1: advance the reconnect `since` cursor from whatever frame carries a
+      // `timestamp` field. The cursor is sent as `since` on attach_session so the
+      // gateway skips transcript entries the SPA already saw.
+      //
+      // What this actually covers today — the generic `frame.timestamp` read
+      // below reads broadly, but the set of frames that can satisfy it is small
+      // and worth stating plainly rather than leaving as "any frame":
+      //   - `replay_error` is the ONLY frame the gateway currently sends with a
+      //     populated timestamp (pkg/gateway/replay.go, `buildReplayErrorFrame`
+      //     is the single `Timestamp:` assignment in the replay path).
+      //   - `replay_message` declares an OPTIONAL `timestamp` in the contract
+      //     (contracts/components/schemas/ReplayMessageFrame.yaml) but neither
+      //     gateway construction site populates it, so in production it never
+      //     advances the cursor. The reducer still honours it if that changes.
+      //   - `token` / `done` / `session_state` have no `timestamp` field at all
+      //     and never advance the cursor.
+      //
+      // So the cursor moves rarely and lags the true high-water mark. That is
+      // conservative in the SAFE direction: too-old a `since` costs a duplicate
+      // replay the dedup paths absorb, whereas too-new would silently skip
+      // messages. Do not "fix" the lag by advancing on a frame whose timestamp
+      // is not a transcript-entry time — the server compares `since` against
+      // TranscriptEntry.Timestamp, so only those values are meaningful here.
+      //
+      // advanceEventTime is monotonic (only moves forward) and compares
+      // chronologically, not lexicographically — see its doc comment for why the
+      // difference matters on RFC3339Nano's variable-width fractional seconds.
+      // Being monotonic, it is safe to run before the per-frame reducer
+      // regardless of dedup/early-return paths.
       {
         const frameTimestamp = (frame as { timestamp?: string }).timestamp
         if (frameTimestamp && targetSid) {
@@ -3475,13 +4177,49 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // different producer's bubble than the one the tool call
                 // actually started on.
                 let abandonedMsgId: string | null = null
+                // Empty-response variant of the "delivered twice" defect
+                // documented on the status==='error' guard above: when the
+                // LLM call itself produced no tokens at all (not a
+                // classified error — the engine's success-path empty-content
+                // fallback, pkg/agent/loop.go's `defaultResponse` sentinel),
+                // NO `error` frame is ever sent, so the guard above never
+                // fires. The turn still finalizes the optimistic placeholder
+                // via `done` with content:'' (nothing was ever streamed to
+                // abandon it against), and THEN webchatChannel.Send()'s
+                // markStreamed fallback (pkg/gateway/webchat_channel.go —
+                // markStreamed is only called when `accumulated.Len() > 0`)
+                // delivers the actual fallback text as a second token+done
+                // pair so the turn doesn't strand the user on a stuck
+                // "thinking" spinner. Without this check, the boundary rule
+                // right below (closed bubble = new segment) abandons the
+                // now-closed EMPTY placeholder and mints a brand-new bubble
+                // for that fallback text — leaving the original placeholder
+                // stranded on screen as a permanent empty bubble with a Copy
+                // button that copies nothing (D-fix's terminal-empty
+                // variant). A closed bubble that finalized holding
+                // absolutely nothing — no text, no tool call, no media, no
+                // subagent span — was never actually shown as content, so
+                // reusing it here (rather than abandoning it) collapses the
+                // two deliveries back into the single bubble the user
+                // actually needs to see.
+                const lastMsg = lastMsgId ? draft.messagesById[lastMsgId] : null
+                const lastMsgIsEmptyTerminal =
+                  !!lastMsg &&
+                  !lastMsg.isStreaming &&
+                  !lastMsg.content?.trim().length &&
+                  !lastMsg.tool_calls?.length &&
+                  !lastMsg.media?.length &&
+                  !lastMsg.spans?.length
                 // Only reuse the last assistant bubble if it is still
-                // streaming. A closed bubble (status=done) means the prior
-                // LLM call has finalized and any new tokens are part of a
-                // *new* turn-segment — typically a follow-up call after a
-                // tool returned. Stuffing them back into the closed bubble
-                // is what produced the "text-then-image-at-bottom" ordering.
-                if (lastMsgId && !draft.messagesById[lastMsgId].isStreaming) {
+                // streaming (or, per the empty-terminal case just above, if
+                // it finalized holding nothing at all). A closed bubble
+                // that DID hold something (status=done, real content/tool
+                // calls/media/spans already shown) means the prior LLM call
+                // has finalized and any new tokens are part of a *new*
+                // turn-segment — typically a follow-up call after a tool
+                // returned. Stuffing them back into that closed bubble is
+                // what produced the "text-then-image-at-bottom" ordering.
+                if (lastMsgId && !draft.messagesById[lastMsgId].isStreaming && !lastMsgIsEmptyTerminal) {
                   abandonedMsgId = lastMsgId
                   lastMsgId = null
                 }
@@ -3595,6 +4333,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 msg.isStreaming = true
                 msg.status = 'streaming'
                 draft.isStreaming = true
+                // ADR-082 review S1/CR1: a token proves the announced turn's
+                // bubble now exists, regardless of which frame order got us
+                // here (fixed-contract session_state-first, an older
+                // gateway's session_state-last, or anything racing in
+                // between). Without this, an out-of-order attach where a
+                // token arrives before the replay-terminating `done` ever
+                // gets a chance to open the placeholder (see the 'done' case
+                // below) would leave `activeTurnBubbleOpened` false while a
+                // real, content-bearing bubble is already streaming — and
+                // the turn's OWN done would then misclassify itself as
+                // "still awaiting catch-up" and open a second, empty
+                // placeholder instead of finalizing this one.
+                if (draft.activeTurnId) {
+                  draft.activeTurnBubbleOpened = true
+                }
               }) as Partial<SessionChatState>
             })
           }
@@ -3664,7 +4417,8 @@ export const useChatStore = create<ChatStore>((set, get) => {
             // terminally acknowledged — stop treating it as "pending" so a
             // later, unrelated untagged frame doesn't get misattributed here.
             pendingCancelAckSids.delete(sid)
-            const wasReplaying = (get().sessionsById[sid] ?? EMPTY_BUCKET).isReplaying
+            const priorBucket = get().sessionsById[sid] ?? EMPTY_BUCKET
+            const wasReplaying = priorBucket.isReplaying
             const elapsed = wasReplaying ? Date.now() - (replayingStartedAt[sid] ?? 0) : 0
             // FR-I-014: mirror the same MIN_REPLAY_DISPLAY_MS used in setReplaying above.
             // Both code paths that clear isReplaying must use the same threshold.
@@ -3682,6 +4436,117 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 }, MIN_REPLAY_DISPLAY_MS - elapsed)
               }
             }
+            // ADR-082 D3/D4 (FR-007/FR-009), review S1/CR1: a `done` frame
+            // arrives TWICE for a mid-turn attach — once marking the end of
+            // transcript replay (carries `stats.frames_emitted`, never
+            // `stats.tokens`/`stats.cost` — pkg/gateway/replay.go's
+            // terminator emit), and again later when the announced turn
+            // itself actually finishes (`stats.tokens`/`stats.cost` always
+            // stamped, even a zero-token turn — pkg/gateway/websocket.go's
+            // Finalize). Tell them apart PURELY by this stats shape — never
+            // by activeTurnId/activeTurnBubbleOpened/isReplaying state. The
+            // gateway contract fixes the wire order (session_state →
+            // replay_message* → replay-terminator done → catch-up token →
+            // live token* → the turn's own done), but this store must not
+            // assume any particular order arrived: an older gateway sent
+            // session_state LAST, and even under the fixed contract a fast
+            // concurrent turn can race its own done ahead of the replay
+            // terminator. Classifying by activeTurn* state alone (the
+            // pre-review version of this code) broke under both: with
+            // session_state arriving late, the turn's REAL done would find
+            // activeTurnId set && activeTurnBubbleOpened still false (no
+            // frame had ever flipped it — see the 'token' case's own fix)
+            // and wrongly treat itself as the replay terminator, opening a
+            // second empty placeholder and `break`ing without ever
+            // finalizing the real, content-bearing bubble — permanent Stop,
+            // locked composer.
+            const doneStats = frame.stats
+            const isReplayTerminatorDone =
+              doneStats?.frames_emitted !== undefined &&
+              doneStats?.tokens === undefined &&
+              doneStats?.cost === undefined
+            if (isReplayTerminatorDone) {
+              // This done marks the end of transcript replay only — it is
+              // NEVER the signal to finalize a bubble. If session_state
+              // already announced a turn for this session and no bubble has
+              // opened for it yet (the ordinary, in-order case), open the
+              // empty streaming placeholder now: this IS the correct
+              // position for it, because every replay_message for this
+              // attach has already landed (pushed onto messageOrder in
+              // arrival order, strictly before this done — see case
+              // 'replay_message' above) — and let the catch-up token (case
+              // 'token' above) append into it exactly like the first token
+              // of any ordinary turn. If a bubble is already open (an
+              // out-of-order token beat this terminator here) or no turn
+              // was announced at all, there is nothing to open — just let
+              // the isReplaying clear/defer above stand.
+              // FX-E (ADR-082 D9): bake any tool calls still left over from
+              // replay reconstruction before this replay-terminator done —
+              // closes the remaining gap the 'replay_message' case's own
+              // fix (see its bake immediately before constructing a new
+              // NON-assistant-role message) doesn't cover: a tool call that
+              // is the LITERAL LAST transcript entry, with no further
+              // message of ANY role replayed after it. Without this, that
+              // call stays stranded in toolCallOrder forever whenever the
+              // session has no live turn to continue (the ordinary
+              // completed-session reload case) — never reaching
+              // message.tool_calls, so its dedicated renderer (e.g.
+              // SetGoalCardBlock) never sees it on reload.
+              if (priorBucket.toolCallOrder.length > 0) {
+                withBucket(sid, (b) => {
+                  if (b.toolCallOrder.length === 0) return {}
+                  return produce(b, (draft) => {
+                    const fallbackMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+                    bakeToolCallsByOwner(draft.messagesById, draft.toolCallOrder, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, fallbackMsgId, draft.textAtToolCallStart)
+                    draft.toolCalls = {}
+                    draft.toolCallOrder = []
+                    draft.textAtToolCallStart = {}
+                    draft.toolCallOwnerMessageId = {}
+                  }) as Partial<SessionChatState>
+                })
+              }
+              const awaitingCatchUp =
+                !!priorBucket.activeTurnId && !priorBucket.activeTurnBubbleOpened
+              if (awaitingCatchUp) {
+                withBucket(sid, (b) => {
+                  return produce(b, (draft) => {
+                    const placeholder: ChatMessage = {
+                      id: generateId(),
+                      role: 'assistant',
+                      content: '',
+                      timestamp: new Date().toISOString(),
+                      status: 'streaming',
+                      isStreaming: true,
+                      agentId: draft.activeTurnAgentId ?? undefined,
+                    }
+                    draft.messagesById[placeholder.id] = placeholder
+                    draft.messageOrder.push(placeholder.id)
+                    draft.activeTurnBubbleOpened = true
+                    draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
+                    if (clearReplayingNow) {
+                      draft.isReplaying = false
+                    }
+                  }) as Partial<SessionChatState>
+                })
+              } else if (clearReplayingNow) {
+                withBucket(sid, () => ({ isReplaying: false }))
+              }
+              // Mirrors the normal finalization path's own drain call below —
+              // harmless here too (maybeDrainNext no-ops while isStreaming).
+              maybeDrainNext()
+              break
+            }
+            // ADR-087 D2 (finding #10) — live-path counterpart of the
+            // `replayTruncated`/`replayTruncationReason` pair computed for
+            // 'replay_message' above. Same `normalizeTruncationReason`
+            // legacy-default rule, same wire shape, different carrier
+            // (DoneStats instead of ReplayMessageFrame) so a turn truncated
+            // while the user is watching renders the suffix immediately.
+            const doneTruncated = doneStats?.truncated === true
+            const doneTruncationReason = normalizeTruncationReason(
+              doneStats?.truncated,
+              doneStats?.truncation_reason,
+            )
             withBucket(sid, (b) => {
               return produce(b, (draft) => {
                 const lastMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
@@ -3736,6 +4601,21 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // left `true` on a message with no next token coming — a
                   // representable-but-meaningless state for a finalized bubble.
                   m.pendingTextBoundary = false
+                  // ADR-087 D2 (finding #10): the live `done` frame carries the
+                  // same truncation signal ReplayMessageFrame carries on
+                  // reattach (DoneStats.truncated/truncation_reason mirror
+                  // Message.truncated/truncation_reason). Stamp it on the
+                  // bubble the turn actually finished on (lastMsgId) so a
+                  // turn cut off at the output limit — or cancelled — renders
+                  // its suffix immediately, without waiting for a reload or a
+                  // reconnect to replay it in. Only lastMsgId: the other
+                  // still-streaming bubbles this sweep also finalizes (the
+                  // mid-turn-steer defense-in-depth case above) are not the
+                  // entry the backend actually marked truncated.
+                  if (id === lastMsgId && doneTruncated) {
+                    m.truncated = true
+                    m.truncationReason = doneTruncationReason
+                  }
                 }
                 // Bake any pending tool calls into the last assistant message so
                 // VirtualAssistantMessageRow can render them from message.tool_calls.
@@ -3771,6 +4651,25 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 draft.sessionCost = draft.sessionCost + costDelta
                 draft.replayCompletedForSession = draft.isReplaying ? sid : draft.replayCompletedForSession
                 draft.cancelStage = null
+                // ADR-082 D4 (FR-009 "finalize once"), review S1/S2: this is
+                // the turn's OWN done — the isReplayTerminatorDone branch
+                // above always `break`s before reaching here, so every path
+                // that gets here carries real turn stats (or is the
+                // stats-less outbound-publish fallback done, which is also
+                // always a real turn's own completion — see
+                // pkg/gateway/webchat_channel.go). The announced turn, if
+                // any, is now finalized: record its id as finished BEFORE
+                // clearing so a stale/racing session_state.active_turn that
+                // re-announces this same turn_id later (S2) is recognized
+                // and ignored rather than re-opening streaming state with no
+                // second done ever coming to close it. Then clear
+                // activeTurnId/activeTurnAgentId/activeTurnBubbleOpened so a
+                // later, unrelated replay-terminating done for this session
+                // never mistakes a stale id for a still-open turn.
+                markTurnFinished(sid, draft.activeTurnId)
+                draft.activeTurnId = null
+                draft.activeTurnAgentId = null
+                draft.activeTurnBubbleOpened = false
                 if (clearReplayingNow) {
                   draft.isReplaying = false
                 }
@@ -3974,6 +4873,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   return produce(b, (draft) => {
                     draft.isStreaming = false
                     if (clearReplayingNow) draft.isReplaying = false
+                    // S7/S1: an error frame terminates a turn exactly like a
+                    // done would — see the matching comment on the C8 sweep
+                    // branch below for why every branch here clears this.
+                    markTurnFinished(targetSid, draft.activeTurnId)
+                    draft.activeTurnId = null
+                    draft.activeTurnAgentId = null
+                    draft.activeTurnBubbleOpened = false
                   }) as Partial<SessionChatState>
                 }
               }
@@ -4093,6 +4999,16 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   if (clearReplayingNow) {
                     draft.isReplaying = false
                   }
+                  // S7/S1: a terminal error frame ends the turn exactly like
+                  // a `done` would — clear the ADR-082 active-turn
+                  // announcement (and record it finished, S2) here too, or a
+                  // later, unrelated done for this session could misread a
+                  // stale activeTurnId as "replay still awaiting catch-up"
+                  // and open a stray empty placeholder.
+                  markTurnFinished(targetSid, draft.activeTurnId)
+                  draft.activeTurnId = null
+                  draft.activeTurnAgentId = null
+                  draft.activeTurnBubbleOpened = false
                 }) as Partial<SessionChatState>
               }
               // Same catalogue already on the last bubble (replay drew it,
@@ -4101,6 +5017,10 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 return produce(b, (draft) => {
                   draft.isStreaming = false
                   if (clearReplayingNow) draft.isReplaying = false
+                  markTurnFinished(targetSid, draft.activeTurnId)
+                  draft.activeTurnId = null
+                  draft.activeTurnAgentId = null
+                  draft.activeTurnBubbleOpened = false
                 }) as Partial<SessionChatState>
               }
               // No this-turn assistant to coalesce into — last is a prior
@@ -4131,10 +5051,14 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   : {}),
               }
               const msgs = [...getMessages(b), errMsg]
+              markTurnFinished(targetSid, b.activeTurnId)
               return {
                 ...applyMessageArray(msgs, b),
                 isStreaming: false,
                 ...(clearReplayingNow ? { isReplaying: false } : {}),
+                activeTurnId: null,
+                activeTurnAgentId: null,
+                activeTurnBubbleOpened: false,
               }
             })
             // The failed turn may have been one we sent from the offline-queue
@@ -4627,6 +5551,30 @@ export const useChatStore = create<ChatStore>((set, get) => {
           queryClient.invalidateQueries({ queryKey: ['tasks'] })
           break
 
+        // D-107 (2026-09-14): a Library write landed on the REST surface —
+        // usually in ANOTHER tab, which is the whole point. GLOBAL frame (no
+        // session_id — it describes a workspace's file tree, not a chat).
+        // Invalidate EVERY cached library query for the named workspace
+        // (partial-key ['library', workspace_id] covers entries in every
+        // folder, both include_hidden variants, and content) rather than
+        // trying to compute which folders were affected — a wrong folder set
+        // would reintroduce exactly the stale-listing defect this exists to
+        // remove. The workspaces list carries entry_count, so it goes too.
+        // The originating tab's redundant invalidate is a no-op (its own
+        // mutation already invalidated), and the focus-path pull half lives
+        // in useLibraryCrossTabRefresh for tabs that never see a WS event.
+        //
+        // F3 (2026-09-14, SILENT-FAILURES-rate-limits-dd25339bf.md): routed
+        // through scheduleLibraryChangedInvalidate rather than invalidating
+        // synchronously here — a burst of these frames (bulk trash, several
+        // tabs writing at once) used to cost one full reload pass PER FRAME.
+        // See that function's own doc comment for the debounce/coalesce
+        // rationale; a real change still refreshes every open view, just
+        // once per short window instead of once per frame.
+        case 'library_changed':
+          scheduleLibraryChangedInvalidate(frame.workspace_id)
+          break
+
         // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires
         // at run open AND close (not just terminal), so the calendar chip
         // flips to "In progress" immediately, not only on completion. Unlike
@@ -4872,6 +5820,15 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // find this exact message. Captured on the ChatMessage so it survives
           // for the lifetime of the bucket entry (until ring-buffer eviction).
           const replayTurnId = replayFrame.turn_id
+          // ADR-087 D2 — WS-replay truncation plumbing, layer 6 of the SPA's
+          // six-layer path (§7.2). Same legacy-default rule as the cold-load
+          // path (rawToMessage, src/lib/api.ts) via the same helper, so both
+          // paths derive the same value from the same wire shape.
+          const replayTruncated = replayFrame.truncated === true
+          const replayTruncationReason = normalizeTruncationReason(
+            replayFrame.truncated,
+            replayFrame.truncation_reason,
+          )
           withBucket(targetSid, (b) => {
             return produce(b, (draft) => {
               // Cursor advancement is handled centrally before the switch (I1);
@@ -4971,6 +5928,13 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   // Fix 5c: stamp the turn-correlation id so a later
                   // turn_canceled replay entry can find this exact message.
                   if (replayTurnId) m.turnId = replayTurnId
+                  // ADR-087 D2 — this frame is the entry that closes the
+                  // bubble (coalesced into the empty placeholder), so it's
+                  // the one MarkLastEntryTruncated would have stamped.
+                  if (replayTruncated) {
+                    m.truncated = true
+                    m.truncationReason = replayTruncationReason
+                  }
                   // Coalesce path: this empty placeholder was created by the
                   // turn's own tool_call_start frames, so any pending live tool
                   // calls belong to THIS assistant. Bake them in before the early
@@ -5085,6 +6049,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
                     // replay equivalent, and avoids the tag flip-flopping
                     // across segments that may report different models.
                     if (!candidate.model && replayModel) candidate.model = replayModel
+                    // ADR-087 D2 — only the LAST transcript entry of an
+                    // incomplete turn carries truncated/truncation_reason
+                    // (MarkLastEntryTruncated stamps the final assistant
+                    // entry only), so this only ever fires on the segment
+                    // that closes the merged bubble — earlier segments in
+                    // the same merge chain arrive with replayTruncated false
+                    // and leave candidate.truncated untouched.
+                    if (replayTruncated) {
+                      candidate.truncated = true
+                      candidate.truncationReason = replayTruncationReason
+                    }
                     // Stamp agentId when previously unknown (mirrors the
                     // 'token' case). compatibleProducer already guarantees
                     // this never overwrites a genuinely different producer.
@@ -5114,7 +6089,43 @@ export const useChatStore = create<ChatStore>((set, get) => {
                   draft.toolCalls = {}
                   draft.toolCallOrder = []
                   draft.textAtToolCallStart = {}
+                  draft.toolCallOwnerMessageId = {}
                 }
+              }
+              // FX-E (ADR-082 D9): bake any STILL-pending tool calls before
+              // opening a message of a NON-assistant role (user/system) —
+              // every branch above only bakes for `role === 'assistant'`
+              // (the empty-placeholder coalesce and same-turn-merge
+              // sub-paths bake-then-`return`; the T1.10 fallback
+              // immediately above bakes-then-falls-through), so a
+              // `role === 'assistant'` frame always leaves toolCallOrder
+              // empty by the time it reaches here. A user/system
+              // replay_message skips that whole `if` block, so without
+              // this, a tool call whose owner is a PRIOR assistant bubble —
+              // e.g. `set_goal` as the LAST thing in a turn, immediately
+              // followed by the transcript's next USER message with no
+              // further assistant narration replayed afterward — is left
+              // stranded in `toolCallOrder` forever: the only other bake
+              // site, the terminal `done` frame, is a no-op replay
+              // terminator (`isReplayTerminatorDone`, this file's `done`
+              // case) whenever the session has no live turn in flight — the
+              // ordinary case of reloading an already-completed session.
+              // The call then never reaches `message.tool_calls`, so
+              // SetGoalCardBlock (and any other tool-call renderer keyed off
+              // `message.tool_calls`) never sees it: the card renders live
+              // but silently vanishes on reload (e2e
+              // goal-card-position.spec.ts's post-reload assertion).
+              // Routed through the owner map (bakeToolCallsByOwner, same as
+              // the `done` case) rather than a flat "last assistant
+              // message" bake — correct even when more than one assistant
+              // bubble is currently open/pending an owner.
+              if (role !== 'assistant' && draft.toolCallOrder.length > 0) {
+                const fallbackMsgId = findLastAssistantMessageId(draft.messageOrder, draft.messagesById)
+                bakeToolCallsByOwner(draft.messagesById, draft.toolCallOrder, draft.toolCalls, draft.toolCallOwnerMessageId ?? {}, fallbackMsgId, draft.textAtToolCallStart)
+                draft.toolCalls = {}
+                draft.toolCallOrder = []
+                draft.textAtToolCallStart = {}
+                draft.toolCallOwnerMessageId = {}
               }
               const newMsg: ChatMessage = {
                 id: messageId ?? generateId(),
@@ -5132,6 +6143,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // cancellation entries only) — lets a later turn_canceled
                 // replay entry find this exact message.
                 ...(replayTurnId && role === 'assistant' ? { turnId: replayTurnId } : {}),
+                // ADR-087 D2 — only meaningful on assistant messages (the
+                // backend only ever stamps this on the last assistant
+                // transcript entry of an incomplete turn). D4a: an entry
+                // with truncated:true and EMPTY content (`text === ''`)
+                // still reaches here and still gets stamped — nothing in
+                // this reducer conditions message creation on non-empty
+                // content, so the bubble renders with no body and just the
+                // D1 footer suffix, per spec.
+                ...(replayTruncated && role === 'assistant'
+                  ? { truncated: true as const, truncationReason: replayTruncationReason }
+                  : {}),
               }
               draft.messagesById[newMsg.id] = newMsg
               draft.messageOrder.push(newMsg.id)
@@ -5292,13 +6314,79 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // change again?), not a render decision (should it be shown right
           // now?) — the render policy the comment above still refers to is
           // untouched.
+          //
+          // ADR-081 D5 store hygiene: an EMPTY-goal_id frame (the '_default'
+          // key) was root cause #2 of the 2026-09-07 UX trace — the deleted
+          // `queued` emission carried no `goal_id`, landed on '_default', and
+          // was never overwritten once the later keyed `active` frame arrived
+          // under a different key, so the stale card rendered forever. The
+          // `queued` emission itself is gone (ADR-081 D9), but a keyed frame
+          // arriving for this session still evicts any lingering '_default'
+          // pill defensively — harmless once no frame is ever emitted with an
+          // empty goal_id, cheap insurance against any stale/legacy one.
+          //
+          // ADR-081 code-review round 1, Finding 1 (HIGH): the pill for
+          // `pillKey` is no longer stored verbatim — it goes through
+          // `mergeGoalPillFrame` so a routine, criteria-less progress frame
+          // cannot clobber a record a prior `set_goal` write already
+          // authored. `goalStatus` (the legacy single latest-frame selector,
+          // feeding only `GoalIndicator`, which never reads criteria) stays
+          // store-verbatim — this fix is scoped to `goalPills` only, the
+          // field the record card actually reads. See `mergeGoalPillFrame`'s
+          // doc comment for the merge rule.
           if (!targetSid) break
           const goalFrame = frame as GoalStatusFrame
           const pillKey = goalFrame.goal_id && goalFrame.goal_id.length > 0 ? goalFrame.goal_id : '_default'
-          withBucket(targetSid, (b) => ({
-            goalStatus: goalFrame,
-            goalPills: evictGoalPillsOverCap({ ...(b.goalPills ?? {}), [pillKey]: goalFrame }),
-          }))
+          withBucket(targetSid, (b) => {
+            const storedPill = b.goalPills?.[pillKey]
+            const mergedPill = mergeGoalPillFrame(storedPill, goalFrame)
+            const merged = { ...(b.goalPills ?? {}), [pillKey]: mergedPill }
+            if (pillKey !== '_default') {
+              delete merged['_default']
+            }
+            // Operator-reported UX fix (2026-09-08): the goal-ack line — see
+            // buildGoalAckInsertion's doc comment above for the full design
+            // (why this frame, why idempotent-by-goal_id, and the durability
+            // tradeoff vs. a persisted transcript anchor). Applied in the
+            // SAME withBucket pass as the pill-map update above (one set()
+            // call) rather than a second withBucket, so a reattach that
+            // fires both the pill update and the first-ever ack insertion
+            // renders as one atomic state transition, not two.
+            const ackInsertion = buildGoalAckInsertion(b, goalFrame)
+            return {
+              goalStatus: goalFrame,
+              goalPills: evictGoalPillsOverCap(merged),
+              ...ackInsertion,
+            }
+          })
+          break
+        }
+
+        case 'browser_handover_notice': {
+          // ADR-085 BROWSER-FR-042 (render half) / FR-044 (SPA idempotency
+          // half), wave B8 (C-73 — this arm and buildBrowserHandoverInsertion
+          // are this file's ENTIRE B8 region; neither reads nor edits any
+          // goal_status symbol). Session-scoped (in SESSION_SCOPED_FRAME_TYPES
+          // above) — targetSid is already resolved/dropped per the routing
+          // rules at the top of handleFrame. See buildBrowserHandoverInsertion's
+          // doc comment for the idempotency/append-at-tail rationale (mirrors
+          // buildGoalAckInsertion's pattern — C-73).
+          if (!targetSid) break
+          const handoverFrame = frame as BrowserHandoverNoticeFrame
+          withBucket(targetSid, (b) => buildBrowserHandoverInsertion(b, handoverFrame) ?? {})
+          break
+        }
+
+        case 'goal_outcome': {
+          // Goal outcome line (founder decision 2026-09-14) — how a goal ended,
+          // pushed live at the ending or re-sent by replay from the persisted
+          // `system_subtype: goal_outcome` entry. Session-scoped (in
+          // SESSION_SCOPED_FRAME_TYPES above). buildGoalOutcomeInsertion
+          // (src/lib/goalOutcome.ts) drops a frame whose id the bucket already
+          // holds, so live + replay + cold load converge on one line.
+          if (!targetSid) break
+          const outcomeFrame = frame as GoalOutcomeFrame
+          withBucket(targetSid, (b) => buildGoalOutcomeInsertion(b, outcomeFrame) ?? {})
           break
         }
 
@@ -5342,12 +6430,38 @@ export const useChatStore = create<ChatStore>((set, get) => {
         }
 
         case 'judge_verdict': {
-          // ADR-049 D2/D4/US-13: GLOBAL frame (no session_id — correlated by
-          // task_id/plan_id) — feeds the ActivityPanel's judge row via a
-          // dedicated global store (mirrors the #283/#264
+          // ADR-049 D2/D4/US-13: ALWAYS feeds the ActivityPanel's judge row
+          // via a dedicated global store (mirrors the #283/#264
           // whatsapp_pairing/notification pattern: accessed via getState()
-          // at frame time, never routed through a session bucket).
-          useJudgeActivityStore.getState().apply(frame as JudgeVerdictFrame)
+          // at frame time, never routed through a session bucket) —
+          // unconditional, regardless of session_id.
+          //
+          // Live-thread-card fix (2026-09-14): the frame now OPTIONALLY
+          // carries `session_id` for scope=task/scope=goal
+          // (JudgeVerdictFrame.yaml). When present, ALSO insert the verdict
+          // as a thread message in that session — see
+          // buildJudgeVerdictInsertion's own doc comment
+          // (src/lib/judgeVerdictThread.ts) for the anchoring/de-dup
+          // contract. A frame without session_id (scope=plan, or any legacy
+          // emission) keeps exactly today's panel-only behaviour.
+          const verdictFrame = frame as JudgeVerdictFrame
+          useJudgeActivityStore.getState().apply(verdictFrame)
+          if (verdictFrame.session_id) {
+            withBucket(verdictFrame.session_id, (b) => buildJudgeVerdictInsertion(b, verdictFrame) ?? {})
+          }
+          break
+        }
+
+        case 'knowledge_index_progress': {
+          // ADR-067 FR-080: GLOBAL frame (no session_id — it describes a
+          // knowledge base, not a chat). Same shape as the whatsapp_pairing /
+          // notification cases: applied through getState() at frame time so
+          // chatStore stays decoupled from the knowledge store.
+          //
+          // Without this case the frame was validated, counted as known, and
+          // then dropped on the floor — which is why every knowledge base in
+          // the Library reported "no indexing progress received" forever.
+          useKnowledgeIndexStore.getState().apply(frame as KnowledgeIndexProgressFrame)
           break
         }
 
@@ -5374,6 +6488,12 @@ export const useChatStore = create<ChatStore>((set, get) => {
           useToolApprovalStore.getState().enqueue(frame)
           break
 
+        case 'tool_approval_resolved':
+          // The server closed this approval (a decision from any tab, timeout,
+          // Stop, agent deletion, shutdown) — drop it here and keep it dropped.
+          useToolApprovalStore.getState().markResolved(frame.approval_id)
+          break
+
         case 'session_state': {
           useToolApprovalStore.getState().reconcileWithSessionState(frame)
           // askuserquestion-tool-spec v3 US-6 S1/FR-9: reconcile pending
@@ -5389,6 +6509,101 @@ export const useChatStore = create<ChatStore>((set, get) => {
           )
           for (const [sid, card] of Object.entries(askChanges)) {
             withBucket(sid, () => ({ pendingAsk: card }))
+          }
+          // ADR-082 D4/D5 (FR-008/FR-009), review CR3/S2: a connection that
+          // just bound to a session (fresh mount, reconnect, or second tab)
+          // learns here whether a turn is already running for it. `targetSid`
+          // resolves to `frame.session_id` when the frame carries one (the
+          // generated `SessionStateFrame` type carries an optional
+          // `session_id` — CR3), falling back to `activeSid` only when it is
+          // absent (an older gateway, or any other reason the field is
+          // missing) — see the generic `frameSessionId` resolution above.
+          // This matters because a client can be attached/foreground on one
+          // session while a session_state snapshot for a DIFFERENT session
+          // (e.g. a background tab's own reconnect, or a stale broadcast)
+          // arrives — routing it to whatever happens to be foreground would
+          // wrongly stamp an unrelated session's turn onto the active one.
+          //
+          // Mirror exactly the state a live turn THIS client had started
+          // would already be in — isStreaming:true so the Stop control and
+          // composer lock render immediately — without creating the
+          // assistant bubble yet: replay history for this attach has not
+          // arrived on the wire at this point (case 'replay_message' below
+          // pushes messages in arrival order onto messageOrder), so opening
+          // the bubble here would insert it BEFORE messages that are
+          // chronologically earlier, corrupting order. The bubble opens
+          // instead at the replay-terminating `done` (see case 'done'
+          // above), which is guaranteed to fire only after every
+          // replay_message for this attach has already landed — UNLESS a
+          // token for this turn beats that done here (out-of-order gateway,
+          // or a fast concurrent turn), in which case the 'token' case's own
+          // ADR-082 review fix opens/marks the bubble first and this done
+          // becomes a no-op for placeholder purposes.
+          if (targetSid) {
+            const activeTurn = stateFrame.active_turn
+            if (activeTurn) {
+              // S2: a stale/racing announcement for a turn this client
+              // already finalized (its own done already processed — see
+              // markTurnFinished in the 'done' case) must be ignored
+              // outright. Re-applying it would set isStreaming:true /
+              // activeTurnId again with no second done ever coming to close
+              // it a second time — a permanent Stop button and locked
+              // composer.
+              if (!isTurnFinished(targetSid, activeTurn.turn_id)) {
+                withBucket(targetSid, (b) => {
+                  // If a bubble for this session is already streaming (e.g.
+                  // an older gateway that sends session_state LAST, after
+                  // tokens have already started flowing for this very
+                  // turn), do not reset the "bubble opened" flag to false —
+                  // the 'token' case's own fix already flipped it true the
+                  // instant the first token landed, and stomping it back to
+                  // false here would make a later replay-terminator-shaped
+                  // done wrongly think it still needs to open a placeholder.
+                  const lastMsgId = findLastAssistantMessageId(b.messageOrder, b.messagesById)
+                  const lastMsg = lastMsgId ? b.messagesById[lastMsgId] : undefined
+                  const alreadyStreaming =
+                    !!lastMsg && (lastMsg.isStreaming === true || lastMsg.status === 'streaming')
+                  return {
+                    isStreaming: true,
+                    activeTurnId: activeTurn.turn_id,
+                    activeTurnAgentId: activeTurn.agent_id,
+                    activeTurnBubbleOpened: b.activeTurnBubbleOpened || alreadyStreaming,
+                  }
+                })
+              }
+            } else {
+              // CR3: this snapshot says NO turn is in flight for this
+              // session. If a PRIOR snapshot (or the token case) had
+              // announced one and it is still unresolved, clear it so a
+              // stale announcement can never wedge the composer — but only
+              // force isStreaming:false when no bubble is actually open;
+              // a genuinely open, mid-stream bubble keeps streaming exactly
+              // as before (its own done will finalize it normally).
+              //
+              // Check bucket existence BEFORE calling withBucket: withBucket
+              // always creates (`?? emptySessionState()`) and writes back the
+              // bucket it's given, even for a no-op `{}` patch. A session
+              // this client has never otherwise heard of (no bucket yet) has
+              // nothing to clear — calling withBucket unconditionally here
+              // would materialize a brand-new empty bucket for it, which is
+              // an observable regression: a bare "no turn in flight" snapshot
+              // for a session with no other activity must stay a true no-op,
+              // exactly like it was before this fix (chat.reconnect.test.ts's
+              // "session_state WITHOUT active_turn leaves current behaviour
+              // unchanged").
+              const existing = get().sessionsById[targetSid]
+              if (existing?.activeTurnId) {
+                withBucket(targetSid, (b) => {
+                  const bubbleOpen = !!b.activeTurnBubbleOpened
+                  return {
+                    activeTurnId: null,
+                    activeTurnAgentId: null,
+                    activeTurnBubbleOpened: false,
+                    ...(bubbleOpen ? {} : { isStreaming: false }),
+                  }
+                })
+              }
+            }
           }
           break
         }

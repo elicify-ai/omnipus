@@ -9,8 +9,21 @@ package config
 // whenever the corresponding field is zero, and used directly by DefaultConfig
 // (defaults.go) to populate a fresh install's config.json.
 const (
+	// DefaultGoalMaxRounds is the shipped value of the global goal try limit
+	// (Settings -> Performance "goal_max_rounds", ADR-086 GOAL-FR-024): how many
+	// tries a goal gets — Judge rulings, and turns that ended without a usable
+	// claim — before it ends not met. It bounds a chat goal and the goal a task
+	// run works toward identically (the INNER limit).
+	DefaultGoalMaxRounds = 20
+	// DefaultTaskMaxAttempts is the shipped task attempt limit (the OUTER
+	// limit): how many times a task is run from a fresh start before it ends
+	// Failed. A run fails as a whole when its goal ends not met after all its
+	// tries, when the run breaks, or after two reasoning-only tries in a row.
+	// Goal tries and task attempts are separate limits (founder decision
+	// 2026-09-14); whether to merge them is tracked in issue #710. There is no
+	// Settings control for this value yet — it is the `planning.task_max_attempts`
+	// config key, overridden per task by `max_attempts`.
 	DefaultTaskMaxAttempts     = 3
-	DefaultGoalMaxRounds       = 20
 	DefaultPlanJudgeMaxRounds  = 20
 	DefaultLoopMaxRuns         = 100
 	DefaultIdleExpiryDays      = 7
@@ -47,11 +60,16 @@ const (
 // take precedence over these global values — see the Effective* resolver
 // methods below (FR-9). Deliberately has NO token/money fields (NFR-1).
 type PlanningConfig struct {
-	// TaskMaxAttempts is the default attempt ceiling before a standalone
-	// task's goal loop wakes its owner. Overridden per-task by
-	// task.Task.MaxAttempts (nil ⇒ inherit this default).
+	// TaskMaxAttempts is the global task attempt limit (the OUTER limit): how
+	// many fresh runs a task gets before it ends Failed. Overridden per task by
+	// task.Task.MaxAttempts. Resolved by EffectiveTaskMaxAttempts. No Settings
+	// control yet (founder decision pending); config.json only.
 	TaskMaxAttempts int `json:"task_max_attempts,omitempty"`
-	// GoalMaxRounds bounds a /goal session loop's round count.
+	// GoalMaxRounds is the global goal try limit (Settings -> Performance, the
+	// INNER limit): how many tries a goal gets before it ends not met, for a
+	// chat goal and for the goal a task run works toward alike. Resolved by
+	// EffectiveGoalMaxRounds and snapshotted onto the goal record when the goal
+	// starts. It does not bound task attempts.
 	GoalMaxRounds int `json:"goal_max_rounds,omitempty"`
 	// PlanJudgeMaxRounds is the default plan-judge round ceiling before a
 	// running Plan fails with failed_reason=judge_rounds_exhausted.
@@ -98,17 +116,6 @@ type PlanningConfig struct {
 	// snapshot for the isNeedsInputReconstructable predicate (R§8.6 clause 4).
 	// Zero inherits the engine's DefaultSnapshotMaxBytes.
 	SnapshotMaxBytes int `json:"snapshot_max_bytes,omitempty"`
-	// TokenBudget is the ADR-053 Phase-2 / D12 (R§8.3) app-level OVERALL token
-	// budget: the ONE shared pool debited by ALL workloads (owner/member/
-	// verifier/Judge) from provider-reported usage, deliberately NOT honoring
-	// IsPrivilegedAgent (FR-171/FR-172). Sentinel 0 = unbounded (FR-175); an
-	// unset budget runs unbounded with a persistent Usage-screen advisory. The
-	// ceiling is restart-gated (FR-177 — a live change would straddle two
-	// budgets, the N-15 hazard); the live lever for runaway spend is the
-	// existing Stop/cancel cascade, NOT a live token cut. This field supersedes
-	// NFR-1's "no token/money fields" for THIS one overall budget (D12 converts
-	// SEC-26's USD cap → tokens because cost isn't reliably measurable).
-	TokenBudget int64 `json:"token_budget,omitempty"`
 	// SupervisionTurnTimeoutSeconds is FR-021's supervision observation
 	// deadline: how long the PlanSupervisor waits on an armed wake before the
 	// attempt counts as spent. Overridden per-plan by
@@ -145,10 +152,12 @@ func (c PlanningConfig) EffectiveSnapshotMaxBytes() int64 {
 	return 0
 }
 
-// EffectiveTaskMaxAttempts resolves the attempt ceiling (FR-9): a non-nil,
-// >=1 per-task override wins; otherwise falls back to this config's
-// TaskMaxAttempts (itself defaulting to DefaultTaskMaxAttempts when <1, so
-// this resolver is safe to call even against a zero-value PlanningConfig).
+// EffectiveTaskMaxAttempts resolves a task's attempt limit — how many fresh
+// runs it gets (the OUTER limit): the task's own `max_attempts` when non-nil
+// and >=1; otherwise this config's TaskMaxAttempts when >=1; otherwise
+// DefaultTaskMaxAttempts. It never reads the goal try limit: goal tries and
+// task attempts are separate limits (founder decision 2026-09-14, issue #710).
+// Safe to call against a zero-value PlanningConfig.
 func (c PlanningConfig) EffectiveTaskMaxAttempts(override *int) int {
 	if override != nil && *override >= 1 {
 		return *override
@@ -185,13 +194,13 @@ func (c PlanningConfig) EffectiveIdleExpiryDays(override *int) int {
 	return DefaultIdleExpiryDays
 }
 
-// EffectiveGoalMaxRounds resolves the /goal round ceiling (FR-9, FR-067):
-// this config's GoalMaxRounds when >=1, else DefaultGoalMaxRounds. No
-// per-entity override source exists for /goal (a session-scoped chat
-// command, not a stored entity with its own Bounds) — the resolved value is
-// snapshotted onto the session's UnifiedMeta.GoalMaxRounds at `/goal` set
-// time so a later config change never retroactively changes an
-// already-running goal's bound.
+// EffectiveGoalMaxRounds resolves the global goal try limit (FR-9, FR-067,
+// GOAL-FR-024, D-D/D-E): this config's GoalMaxRounds when >=1, else
+// DefaultGoalMaxRounds. There is no per-goal override (D-E/NQ-2). The
+// resolved value is snapshotted onto the goal record's MaxRounds when the goal
+// starts running — at `/goal` set time for a chat goal, and when a task run
+// activates its goal (TaskExecutor.activateTaskGoal) — so a later config
+// change never retroactively changes an already-running goal's bound.
 func (c PlanningConfig) EffectiveGoalMaxRounds() int {
 	if c.GoalMaxRounds >= 1 {
 		return c.GoalMaxRounds
@@ -209,21 +218,6 @@ func (c PlanningConfig) EffectiveLoopMaxRuns() int {
 		return c.LoopMaxRuns
 	}
 	return DefaultLoopMaxRuns
-}
-
-// EffectiveTokenBudget resolves the app-level OVERALL token budget ceiling
-// (D12/R§8.3/FR-175): returns the configured TokenBudget verbatim, since 0 IS
-// the unbounded sentinel (not a "fall back to a default" case). A negative
-// value is clamped to 0 (unbounded) defensively. The ceiling is restart-gated
-// (FR-177): the caller reads this ONCE at boot to construct the TokenBudget
-// pool; later config changes do NOT live-reload the ceiling (a live change
-// would straddle two budgets). The live lever for runaway spend is the existing
-// Stop/cancel cascade, not a live token cut.
-func (c PlanningConfig) EffectiveTokenBudget() int64 {
-	if c.TokenBudget < 0 {
-		return 0
-	}
-	return c.TokenBudget
 }
 
 // EffectiveSupervisionTurnTimeoutSeconds resolves FR-021's supervision

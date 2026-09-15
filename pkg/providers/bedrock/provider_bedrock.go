@@ -509,6 +509,22 @@ func parseResponse(output *bedrockruntime.ConverseOutput) (*LLMResponse, error) 
 	var content strings.Builder
 	toolCalls := make([]ToolCall, 0)
 
+	// Computed up front (output.StopReason/output.Usage are top-level
+	// fields, not dependent on the content-block loop below) so a tool-call
+	// decode failure can attach this same evidence to the refusal (ADR-087
+	// D3.9 / D5 / D7) instead of building a bare, unclassifiable error.
+	// StopReasonMaxTokens's raw string value is "max_tokens", which already
+	// matches AttachToolArgumentsEvidence's normalised-spelling matcher, so
+	// it is passed through unmapped.
+	var usage *UsageInfo
+	if output.Usage != nil {
+		usage = &UsageInfo{
+			PromptTokens:     int(aws.ToInt32(output.Usage.InputTokens)),
+			CompletionTokens: int(aws.ToInt32(output.Usage.OutputTokens)),
+			TotalTokens:      int(aws.ToInt32(output.Usage.InputTokens)) + int(aws.ToInt32(output.Usage.OutputTokens)),
+		}
+	}
+
 	// Process output content blocks
 	if output.Output != nil {
 		if msgOutput, ok := output.Output.(*types.ConverseOutputMemberMessage); ok {
@@ -518,16 +534,38 @@ func parseResponse(output *bedrockruntime.ConverseOutput) (*LLMResponse, error) 
 					content.WriteString(b.Value)
 
 				case *types.ContentBlockMemberToolUse:
-					// Unmarshal the document interface to a map
+					// Bedrock hands tool input as a Smithy document rather than
+					// a JSON string, so this is the one inbound path that does
+					// not go through common.DecodeToolCallArguments. The POLICY
+					// it enforces is the same: an input that is present but
+					// will not unmarshal fails the response instead of being
+					// replaced by a stand-in.
+					//
+					// This site was previously the quietest degrade of the
+					// family — it substituted an EMPTY map, so the tool ran
+					// with no arguments at all and not even a fragment
+					// survived to say why. It was also, until this fix, the
+					// only decode site that built a plain fmt.Errorf instead
+					// of a *common.ToolArgumentsError: errors.As could never
+					// classify it as tool_call_truncated, so a max_tokens
+					// cutoff on Bedrock always read as "filled in arguments
+					// incorrectly" no matter how clearly the stop reason said
+					// otherwise.
 					args := make(map[string]any)
 					if b.Value.Input != nil {
 						if err := b.Value.Input.UnmarshalSmithyDocument(&args); err != nil {
-							logger.WarnCF("bedrock", "failed to unmarshal tool input", map[string]any{
-								"tool":  aws.ToString(b.Value.Name),
-								"id":    aws.ToString(b.Value.ToolUseId),
-								"error": err.Error(),
-							})
-							args = make(map[string]any)
+							cause := fmt.Errorf(
+								"%w: tool %q (id %q): %v",
+								common.ErrToolArgumentsUndecodable,
+								aws.ToString(b.Value.Name),
+								aws.ToString(b.Value.ToolUseId),
+								err,
+							)
+							tae := common.NewToolArgumentsError(
+								aws.ToString(b.Value.Name), cause,
+								output.StopReason == types.StopReasonMaxTokens,
+							)
+							return nil, common.AttachToolArgumentsEvidence(tae, string(output.StopReason), usage)
 						}
 					}
 
@@ -569,16 +607,6 @@ func parseResponse(output *bedrockruntime.ConverseOutput) (*LLMResponse, error) 
 		finishReason = "stop"
 	case types.StopReasonContentFiltered:
 		finishReason = "content_filter"
-	}
-
-	// Build usage info
-	var usage *UsageInfo
-	if output.Usage != nil {
-		usage = &UsageInfo{
-			PromptTokens:     int(aws.ToInt32(output.Usage.InputTokens)),
-			CompletionTokens: int(aws.ToInt32(output.Usage.OutputTokens)),
-			TotalTokens:      int(aws.ToInt32(output.Usage.InputTokens)) + int(aws.ToInt32(output.Usage.OutputTokens)),
-		}
 	}
 
 	return &LLMResponse{

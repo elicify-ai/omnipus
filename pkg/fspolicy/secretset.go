@@ -115,7 +115,7 @@ var SecretEntriesAlways = []string{
 
 	// system — $OMNIPUS_HOME/system/, which holds audit.jsonl, its rotated
 	// audit-YYYY-MM-DD.jsonl siblings, audit-chain-checkpoint.json (the HMAC
-	// chain's tamper-evidence anchor), token_budget.json, and state.json. The
+	// chain's tamper-evidence anchor), and state.json. The
 	// v0.2 HMAC chain (pkg/audit/hmac.go) detects a sandboxed child MODIFYING
 	// an entry; it does nothing to stop `rm system/audit.jsonl` or `: >
 	// system/audit.jsonl` — an unlink or truncate needs no read and produces

@@ -4,15 +4,27 @@
 
 // WebSocket events for the Central Tool Registry redesign (A3 lane).
 //
-// Emits two event types:
+// Emits three event types:
 //
 //  1. tool_approval_required (FR-011, FR-082)
-//     Sent to all connected WS clients when an ask-policy tool call is paused.
+//     Sent to the connected WS clients of the account whose agent paused on
+//     an ask-policy tool call (UAT 2026-09-13 D-16; approvalVisibleTo).
 //     Uses expires_in_ms (not expires_at) per OBS-004.
 //
-//  2. session_state (FR-052, FR-073, FR-081)
+//  2. tool_approval_resolved
+//     Sent to all connected WS clients when a pending approval leaves the
+//     pending state for ANY reason (see approvalRegistryV2.resolutionListener).
+//
+//  3. session_state (FR-052, FR-073, FR-081)
 //     One-shot per WS connection on every reconnect.
 //     Single-user model: every connection sees every pending approval.
+//
+// Workspace scoping: the two approval-carrying frames stamp workspace_id (the
+// requesting session's workspace) so the SPA can show an approval only while
+// that workspace is active. Delivery itself stays unscoped — every connection
+// still receives every frame — because the SPA's active workspace can change
+// without a reconnect and a hidden approval must reappear when the user
+// switches to its workspace.
 
 package gateway
 
@@ -24,9 +36,57 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
+// approvalWorkspaceMaxHops bounds approvalWorkspaceID's walk up the
+// delegation chain. Real chains are a handful of levels deep; the bound only
+// guarantees termination over corrupt or cyclic on-disk meta.
+const approvalWorkspaceMaxHops = 16
+
+// approvalWorkspaceIDMaxLen mirrors the wire schema's maxLength for
+// workspace_id (ToolApprovalRequiredFrame / SessionStatePendingApproval). A
+// longer value is omitted rather than emitted schema-invalid.
+const approvalWorkspaceIDMaxLen = 128
+
+// approvalWorkspaceID resolves the workspace an approval belongs to from the
+// acting session's meta. A delegated child session may carry no workspace of
+// its own, so the walk follows ParentSessionID upward until a session with a
+// workspace is found. Returns "" when the session belongs to no workspace, or
+// when its meta cannot be read — the SPA treats an absent workspace_id as
+// "show everywhere", which is the safe direction for an approval the agent is
+// blocked on.
+func (h *WSHandler) approvalWorkspaceID(sessionID string) string {
+	if h == nil || h.agentLoop == nil || sessionID == "" {
+		return ""
+	}
+	seen := make(map[string]struct{}, 4)
+	sid := sessionID
+	for hop := 0; hop < approvalWorkspaceMaxHops && sid != ""; hop++ {
+		if _, dup := seen[sid]; dup {
+			return ""
+		}
+		seen[sid] = struct{}{}
+		store := h.resolveSessionStore(sid)
+		if store == nil {
+			return ""
+		}
+		meta, err := store.GetMeta(sid)
+		if err != nil || meta == nil {
+			return ""
+		}
+		if meta.WorkspaceID != "" {
+			if len(meta.WorkspaceID) > approvalWorkspaceIDMaxLen {
+				return ""
+			}
+			return meta.WorkspaceID
+		}
+		sid = meta.ParentSessionID
+	}
+	return ""
+}
+
 // broadcastToolApprovalRequired sends a tool_approval_required WS frame to
-// every connected WebSocket client (FR-073; single-user model, no per-account
-// scoping).
+// every connected WebSocket client of the account that owns the acting
+// session (FR-073; see approvalVisibleTo for the audience rule and its
+// fallbacks).
 //
 // Wire format: generated.ToolApprovalRequiredFrame (contract-first, pkg/api/generated).
 // Nil-safety: args MUST be an object (never null). The SPA's ToolApprovalModal calls
@@ -59,21 +119,91 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 		TurnId:      entry.TurnID,
 		ExpiresInMs: int(entry.expiresInMs()), // OBS-004: relative, not absolute
 	}
+	if ws := h.approvalWorkspaceID(entry.SessionID); ws != "" {
+		frame.WorkspaceId = &ws
+	}
 	raw, err := json.Marshal(frame)
 	if err != nil {
 		slog.Error("ws: marshal tool_approval_required", "error", err)
 		return
 	}
 
-	// FR-073 scoping is moot under the single-user model — every connected
-	// client is the one account, so every connection receives every approval
-	// broadcast unconditionally (role-based scoping removed).
-	h.broadcastRaw(raw, "ws: tool_approval_required dropped — send buffer full",
-		"approval_id", entry.ApprovalID)
+	// MERGE 2026-09-15: integrate's D-82 reliable delivery is kept (each
+	// connection gets a bounded wait for send-buffer space instead of an
+	// immediate drop); its per-account audience filter is not — Omnipus is
+	// single-account by founder ruling, so every connection is the audience.
+	h.mu.Lock()
+	conns := make([]*wsConn, 0, len(h.sessions))
+	for _, wc := range h.sessions {
+		conns = append(conns, wc)
+	}
+	h.mu.Unlock()
+	if len(conns) == 0 {
+		slog.Warn("ws: tool_approval_required has no connected audience — the request will wait for a reconnect (session_state) or time out",
+			"approval_id", entry.ApprovalID, "tool", entry.ToolName)
+	}
+	for _, wc := range conns {
+		go sendApprovalFrame(wc, raw, entry.ApprovalID)
+	}
 }
 
-// emitSessionState sends the session_state one-shot frame to a single WS connection
-// immediately after authentication (FR-052, FR-073, FR-081).
+// sendApprovalFrame delivers one approval frame to one connection, waiting up
+// to approvalFrameSendTimeout for buffer space instead of dropping on a full
+// buffer (D-82). A connection that closes meanwhile is skipped silently; one
+// that stays full past the timeout is logged loudly, because that is the one
+// case left where a human is never asked.
+func sendApprovalFrame(wc *wsConn, raw []byte, approvalID string) {
+	select {
+	case wc.sendCh <- raw:
+	case <-wc.doneCh:
+	case <-time.After(approvalFrameSendTimeout):
+		slog.Warn("ws: tool_approval_required dropped — send buffer full past timeout",
+			"approval_id", approvalID, "user_id", wc.userID)
+		wc.droppedFrames.Add(1)
+	}
+}
+
+// broadcastToolApprovalResolved sends a tool_approval_resolved WS frame to
+// every connected client. It is the registry's resolution listener
+// (approvalRegistryV2.setResolutionListener, wired in gateway.go), so it runs
+// once for every pending→terminal transition whatever caused it — a decision
+// from any tab, the timeout, a Stop, the owning agent's deletion, a batch
+// short-circuit, or shutdown.
+//
+// Why it exists: before it, only the tab whose POST resolved an approval
+// learned of the resolution. Every other open tab — and every tab after a
+// resolution the server made on its own — kept a dialog whose actions could
+// only return 410, then 404 once the registry's terminal retention elapsed,
+// with no way to dismiss it short of a full reload.
+//
+// Best-effort like every broadcast: a client with a full send buffer misses
+// the frame. It still converges — its next session_state snapshot no longer
+// lists the approval, and the SPA dismisses on a 404/410 action response.
+func (h *WSHandler) broadcastToolApprovalResolved(entry *approvalEntry, state ApprovalState) {
+	if entry == nil {
+		return
+	}
+	frame := generated.ToolApprovalResolvedFrame{
+		Type:       string(generated.WsFrameTypeToolApprovalResolved),
+		ApprovalId: entry.ApprovalID,
+		State:      string(state),
+	}
+	if entry.SessionID != "" {
+		sid := entry.SessionID
+		frame.SessionId = &sid
+	}
+	raw, err := json.Marshal(frame)
+	if err != nil {
+		slog.Error("ws: marshal tool_approval_resolved", "error", err)
+		return
+	}
+	h.broadcastRaw(raw, "ws: tool_approval_resolved dropped — send buffer full",
+		"approval_id", entry.ApprovalID, "state", string(state))
+}
+
+// emitSessionState sends a session_state frame to a single WS connection —
+// once, immediately after authentication (FR-052, FR-073, FR-081), and again
+// by handleAttachSession once a session id is known (ADR-082 D4).
 //
 // Wire format: generated.SessionStateFrame (contract-first, pkg/api/generated).
 // Nil-safety: pending_approvals MUST be an array (never null). The SPA calls
@@ -84,7 +214,14 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 //
 // Note: When approvalRegV2 is nil (pre-registry harness), the payload has an empty
 // pending_approvals array — the SPA receives a valid frame and clears any stale UI.
-func (h *WSHandler) emitSessionState(wc *wsConn) {
+//
+// sessionID (ADR-082 D4/FR-008): when non-empty, populates ActiveTurn from
+// AgentLoop.ActiveForegroundTurnInfo — present only while a foreground turn
+// is in flight for that session, absent otherwise. Pass "" at raw
+// connection-open (before any session is known); handleAttachSession's
+// post-bind call passes the real attachID so a reconnecting SPA immediately
+// knows whether to render the streaming bubble + Stop control.
+func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 	if wc == nil {
 		return
 	}
@@ -95,17 +232,21 @@ func (h *WSHandler) emitSessionState(wc *wsConn) {
 	if h.approvalRegV2 != nil {
 		allPending := h.approvalRegV2.pendingApprovals()
 
-		// FR-073 scoping is moot under the single-user model — every connected
-		// client is the one account, so every connection sees every pending
-		// approval (role-based scoping removed).
+		// D-16: the reconnect snapshot follows the same audience rule as the
+		// live frame — a tab reconnecting under account B must not re-hydrate
+		// account A's pending approvals as blocking stubs.
 		for _, e := range allPending {
-			pendingApprovals = append(pendingApprovals, generated.SessionStatePendingApproval{
+			entry := generated.SessionStatePendingApproval{
 				ApprovalId:  e.ApprovalID,
 				SessionId:   e.SessionID,
 				ToolName:    e.ToolName,
 				AgentId:     e.AgentID,
 				ExpiresInMs: int(e.expiresInMs()),
-			})
+			}
+			if ws := h.approvalWorkspaceID(e.SessionID); ws != "" {
+				entry.WorkspaceId = &ws
+			}
+			pendingApprovals = append(pendingApprovals, entry)
 		}
 	}
 
@@ -114,6 +255,32 @@ func (h *WSHandler) emitSessionState(wc *wsConn) {
 		UserId:           wc.userID,
 		PendingApprovals: pendingApprovals,
 		EmittedAt:        time.Now().UTC().Format(time.RFC3339),
+	}
+
+	// ADR-082 review CR3: stamp the session this snapshot describes so a
+	// client juggling several attached sessions (or a re-attach mid-flight)
+	// can tell which session_state a frame belongs to instead of guessing
+	// from arrival order. Absent (nil) at the raw connection-open emit, where
+	// sessionID is "" because no session has been bound yet.
+	if sessionID != "" {
+		sid := sessionID
+		frame.SessionId = &sid
+	}
+
+	// ADR-082 D4/FR-008: announce the in-flight foreground turn (if any) for
+	// the session this connection is bound to, so a reconnecting SPA
+	// immediately knows to render the streaming bubble + Stop control
+	// instead of a deceptively idle composer. Absent when sessionID is
+	// unknown (the raw connection-open call, before any attach/message) or
+	// the session has no foreground turn in flight.
+	if sessionID != "" && h.agentLoop != nil {
+		if turnID, agentID, startedAt, ok := h.agentLoop.ActiveForegroundTurnInfo(sessionID); ok {
+			frame.ActiveTurn = &generated.SessionStateActiveTurn{
+				TurnId:    turnID,
+				AgentId:   agentID,
+				StartedAt: startedAt.UTC().Format(time.RFC3339),
+			}
+		}
 	}
 
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9: snapshot every PENDING
@@ -146,3 +313,12 @@ func (h *WSHandler) emitSessionState(wc *wsConn) {
 		wc.droppedFrames.Add(1)
 	}
 }
+
+// approvalFrameSendTimeout bounds how long broadcastToolApprovalRequired waits
+// for a connection's send buffer to drain before giving up on it. The frame
+// used to be dropped instantly when the buffer was full ("best-effort"); a
+// dropped approval frame is a modal that never appears while the agent sits
+// blocked for the whole approval window, which is the shape UAT 2026-09-13
+// D-82 reported ("denied with no modal ever shown; only a reload brought it
+// back"). It is treated as a critical frame now, like "done" and "error".
+const approvalFrameSendTimeout = 2 * time.Second

@@ -59,7 +59,7 @@ Tasks are stored per-agent as JSON files; concurrency goes through the `fileutil
 | Tool | What it does | Notes |
 |---|---|---|
 | `agent_list` | List configured agents (core and custom). | `pkg/tools/task.go:378` (lives in this file historically). |
-| `delegate` | Delegate a task to a subagent, and control/monitor it afterward. `action="run"` (default) delegates a new task, in the background by default (returns a `task_id`/`session_id` immediately; set `async=false` to block and get the result inline). `action="status"` polls a running delegation. ADR-036 unified the retired `subagent`/`spawn`/`spawn_status` tools into this one. | `pkg/tools/delegate.go`. |
+| `delegate` | Delegate a task to a subagent, and control/monitor it afterward. `action="run"` (default) delegates a new task, in the background by default (returns a `task_id`/`session_id` immediately; set `async=false` to block and get the result inline). `action="status"` polls a running delegation. For a goal with two or more independent parts meant to run in parallel, the description points the agent at `create_plan` / `execute_plan` instead (loaded via `ToolSearch`): plan-lint rejects overlapping parallel write-sets before anything runs, while parallel `delegate` calls get no overlap check. ADR-036 unified the retired `subagent`/`spawn`/`spawn_status` tools into this one. | `pkg/tools/delegate.go`. |
 | `switch_agent` | Switch the active agent for this session — hand off to a named agent (`target: <agent_id>`) or return to the default agent (`target: "default"`). Replaces the retired `hand_off` / `return_to_default` pair (ADR-071 D4). | `pkg/tools/handoff.go`. |
 
 ### Browser

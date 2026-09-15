@@ -181,6 +181,14 @@ func deletePlan(t *testing.T, api *restAPI, id string) *httptest.ResponseRecorde
 	return w
 }
 
+// minimalCriteriaDodJSON is GOAL-FR-021/D-C's minimum satisfying payload
+// fragment (one criterion, one dod item) — appended to a postTask body by
+// every call site below that does not itself exercise the mandatory-
+// criteria/dod gate (that gate has its own dedicated coverage in
+// rest_tasks_criteria_test.go).
+const minimalCriteriaDodJSON = `"criteria":[{"text":"criterion","author":{"kind":"user","id":"tester"},"status":"pending"}],` +
+	`"dod":[{"text":"dod item","author":{"kind":"user","id":"tester"},"status":"pending"}]`
+
 // postTask issues POST /api/v1/tasks and returns the recorder.
 func postTask(t *testing.T, api *restAPI, body string) *httptest.ResponseRecorder {
 	t.Helper()
@@ -234,7 +242,7 @@ func TestPlanCRUD_RoundtripAndProgress(t *testing.T) {
 	assert.Equal(t, "Launch v1 (delayed)", updated.Title)
 
 	// Add a member task and mark it done -> progress should be 1.0.
-	taskBody := `{"workspace_id":"` + wsID + `","title":"member","plan_id":"` + created.Id + `"}`
+	taskBody := `{"workspace_id":"` + wsID + `","title":"member","plan_id":"` + created.Id + `",` + minimalCriteriaDodJSON + `}`
 	wTask := postTask(t, api, taskBody)
 	require.Equal(t, http.StatusCreated, wTask.Code, "body=%s", wTask.Body.String())
 	var createdTask gen.Task
@@ -354,11 +362,21 @@ func TestPlanApprove_MemberCriteriaGateReturns400WithTaskErrors(t *testing.T) {
 	var p gen.Plan
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
 
-	// Member task with ZERO criteria.
-	wTask := postTask(t, api, `{"workspace_id":"`+wsID+`","title":"no criteria task","plan_id":"`+p.Id+`"}`)
-	require.Equal(t, http.StatusCreated, wTask.Code)
-	var offendingTask gen.Task
-	require.NoError(t, json.Unmarshal(wTask.Body.Bytes(), &offendingTask))
+	// Member task with ZERO criteria. GOAL-FR-021/D-C now makes this
+	// unreachable via the CREATE path itself (postTask would 400) — the
+	// only way a member task can still carry zero criteria is a task that
+	// predates the rule (GOAL-FR-023/FR-048 grandfather it), so this test
+	// constructs that state directly on the store rather than through the
+	// gate it is NOT testing here (FR-084's plan-approve gate, below, is).
+	offendingEntity := &task.Task{
+		Title:       "no criteria task",
+		Action:      task.ActionLLM,
+		Status:      task.StatusInbox,
+		WorkspaceID: wsID,
+		PlanID:      p.Id,
+	}
+	require.NoError(t, api.taskStore.Create(offendingEntity))
+	offendingTask := gen.Task{Id: offendingEntity.ID}
 
 	wApprove := postPlanAction(t, api, p.Id, "approve")
 	require.Equal(t, http.StatusBadRequest, wApprove.Code, "body=%s", wApprove.Body.String())
@@ -391,6 +409,12 @@ func TestPlanApprove_SoftTierEmptyDoDSucceeds_ThenNotDraftRejected(t *testing.T)
 	var p gen.Plan
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
 	require.Empty(t, p.Dod)
+
+	// A plan needs >=1 member task to be approvable at all (plan-lint's
+	// LintEmptyPlan arity precondition). This test is about the SOFT-TIER
+	// EMPTY DoD, not about member arity, so give it a valid member and keep
+	// the DoD empty — which is the condition actually under test.
+	mustCreateTask(t, api, wsID, "soft tier member", p.Id)
 
 	wApprove := postPlanAction(t, api, p.Id, "approve")
 	require.Equal(t, http.StatusOK, wApprove.Code, "body=%s", wApprove.Body.String())
@@ -434,7 +458,11 @@ func TestPlanStop_RequiresRunning(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, wStopDraft.Code,
 		"draft stop body=%s", wStopDraft.Body.String())
 
-	// draft -> approved (soft tier, empty DoD, no members).
+	// draft -> approved (soft tier, empty DoD). A plan needs >=1 member task
+	// to be approvable at all (plan-lint's LintEmptyPlan arity precondition);
+	// this test is about the STOP endpoint's state gating, so the member is
+	// scaffolding rather than subject matter.
+	mustCreateTask(t, api, wsID, "stoppable member", p.Id)
 	wApprove := postPlanAction(t, api, p.Id, "approve")
 	require.Equal(t, http.StatusOK, wApprove.Code, "approve body=%s", wApprove.Body.String())
 
@@ -474,6 +502,11 @@ func TestPlanGet_WirePlanPhaseStalled(t *testing.T) {
 	require.Equal(t, http.StatusCreated, wCreate.Code)
 	var p gen.Plan
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+	// >=1 member task is required for approval (plan-lint's LintEmptyPlan
+	// arity precondition). This test is about how plan_phase=stalled renders
+	// on the wire, so the member is scaffolding.
+	mustCreateTask(t, api, wsID, "stalled plan member", p.Id)
 
 	wApprove := postPlanAction(t, api, p.Id, "approve")
 	require.Equal(t, http.StatusOK, wApprove.Code, "body=%s", wApprove.Body.String())
@@ -515,12 +548,12 @@ func TestTaskPlanID_CrossWorkspaceRejected(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, wCross.Code, "body=%s", wCross.Body.String())
 
 	// Same-workspace: task in A referencing plan in A -> 201.
-	wSame := postTask(t, api, `{"workspace_id":"`+wsA+`","title":"same-ws task","plan_id":"`+p.Id+`"}`)
+	wSame := postTask(t, api, `{"workspace_id":"`+wsA+`","title":"same-ws task","plan_id":"`+p.Id+`",`+minimalCriteriaDodJSON+`}`)
 	assert.Equal(t, http.StatusCreated, wSame.Code, "body=%s", wSame.Body.String())
 
 	// PATCH path: create a plain task in B, then try to PATCH its plan_id to
 	// the plan in A -> 400.
-	wPlainTask := postTask(t, api, `{"workspace_id":"`+wsB+`","title":"plain B task"}`)
+	wPlainTask := postTask(t, api, `{"workspace_id":"`+wsB+`","title":"plain B task",`+minimalCriteriaDodJSON+`}`)
 	require.Equal(t, http.StatusCreated, wPlainTask.Code)
 	var plainTask gen.Task
 	require.NoError(t, json.Unmarshal(wPlainTask.Body.Bytes(), &plainTask))
@@ -560,6 +593,11 @@ func TestDeleteAgent_OwningActivePlan_Rejected(t *testing.T) {
 	require.Equal(t, http.StatusCreated, wCreate.Code)
 	var p gen.Plan
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+	// A plan needs at least one member to be approvable (plan-lint's
+	// LintEmptyPlan). This test's subject is agent deletion, not approval —
+	// the member is fixture, not assertion.
+	mustCreateTask(t, api, wsID, "owned plan member", p.Id)
 
 	require.Equal(t, http.StatusOK, postPlanAction(t, api, p.Id, "approve").Code)
 	// PUT can no longer set state at all (ADR-052 FR-007/A1) — drive the
@@ -602,6 +640,9 @@ func TestDeleteAgent_PlanStoreListError_FailsClosed(t *testing.T) {
 	require.Equal(t, http.StatusCreated, wCreate.Code)
 	var p gen.Plan
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+	// See above: a member is required for approval; the subject here is the
+	// plan-store list error, not the member.
+	mustCreateTask(t, api, wsID, "owned plan 2 member", p.Id)
 	require.Equal(t, http.StatusOK, postPlanAction(t, api, p.Id, "approve").Code)
 	running := plan.StateRunning
 	_, rerr := api.planStore.Update(p.Id, plan.Patch{State: &running})
@@ -794,7 +835,10 @@ func TestPlanPut_DoDAndOwnerFrozenOnceNotDraft(t *testing.T) {
 	wDraftOwnerBack := putPlan(t, api, p.Id, `{"owner_agent_id":"`+testPlansAgentID+`"}`)
 	require.Equal(t, http.StatusOK, wDraftOwnerBack.Code, "body=%s", wDraftOwnerBack.Body.String())
 
-	// draft -> approved.
+	// draft -> approved. >=1 member task is required for approval (plan-lint's
+	// LintEmptyPlan arity precondition); this test is about which PUT fields
+	// freeze once a plan leaves draft, so the member is scaffolding.
+	mustCreateTask(t, api, wsID, "frozen fields member", p.Id)
 	wApprove := postPlanAction(t, api, p.Id, "approve")
 	require.Equal(t, http.StatusOK, wApprove.Code, "body=%s", wApprove.Body.String())
 
@@ -945,6 +989,11 @@ func TestPlanStopREST_DispatchesARealOwnerWakeTurn(t *testing.T) {
 		require.Equal(t, http.StatusCreated, wCreate.Code, "body=%s", wCreate.Body.String())
 		var p gen.Plan
 		require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
+
+		// >=1 member task is required for approval (plan-lint's LintEmptyPlan
+		// arity precondition). This test is about draining the owner wake turn
+		// POST /stop dispatches, so the member is scaffolding.
+		mustCreateTask(t, api, wsID, "wake drain member", p.Id)
 
 		require.Equal(t, http.StatusOK, postPlanAction(t, api, p.Id, "approve").Code)
 		// PUT can no longer set state (ADR-052 FR-007/A1) — drive

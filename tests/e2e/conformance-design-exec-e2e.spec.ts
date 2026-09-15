@@ -29,6 +29,7 @@ import {
   apiFetch,
   createMainAgent,
   createPlanWithMembers,
+  defaultMemberDoD,
   proseCriterion,
   requireApiKey,
   startFreshChatWithJim,
@@ -88,6 +89,10 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
       agent_id: workerId,
       max_attempts: 3,
       criteria: [proseCriterion('the reply contains the word "done"')],
+      // D-C (2026-09-11): a definition of done is mandatory at creation and
+      // must be DISTINCT from the acceptance criteria (GOAL-FR-021/FR-048) —
+      // without it POST /tasks answers 400 and the ladder never runs.
+      dod: defaultMemberDoD('t1 conformance task'),
     },
   )
   if (!taskRes.ok) {
@@ -178,6 +183,8 @@ test('Conformance_t1_StandaloneTaskE2E: ▶ Run ladder → done; ■ Stop cancel
     agent_id: workerId,
     max_attempts: 3,
     criteria: [proseCriterion('the reply contains the word "done"')],
+    // D-C: mandatory at creation, distinct from `criteria` (GOAL-FR-021/FR-048).
+    dod: defaultMemberDoD('t1 stop-conformance task'),
   })
   if (!stopRes0.ok) {
     throw new Error(`Conformance_t1: POST /tasks (stop target) failed ${stopRes0.status}: ${stopRes0.raw}`)
@@ -464,6 +471,8 @@ test('Conformance_bootsweep_E2E: kill -9 mid-task → restart → boot sweep rec
           status: 'pending',
         },
       ],
+      // D-C: mandatory at creation, distinct from `criteria` (GOAL-FR-021/FR-048).
+      dod: defaultMemberDoD('bootsweep member'),
     })
     expect(memberRes.ok, `bootsweep: POST /tasks (member) failed ${memberRes.status}: ${memberRes.raw}`).toBe(true)
     const memberId = memberRes.body.id

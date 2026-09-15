@@ -1,0 +1,47 @@
+title: ToolApprovalResolvedFrame
+description: >
+  Server → client. Emitted once, to every connected client, the moment a
+  pending tool approval (one previously announced by tool_approval_required)
+  leaves the pending state for ANY reason: a decision from any tab (approve,
+  deny, cancel, always), the approval timeout, a chat Stop/cancel, the owning
+  agent being deleted, a batch short-circuit, or gateway shutdown. The SPA
+  removes the matching approval from its queue (and remembers the id so a
+  late snapshot cannot resurrect it). Without this frame, only the tab that
+  clicked learned of a resolution; every other tab kept a dialog whose actions
+  could only fail. THIS FILE EXISTS ONLY for the Constraint #8 5-step process
+  and the pkg/gateway/inboundschemas/ sync — the GENERATING copy is the inline
+  schema in contracts/asyncapi.yaml. Keep both copies in sync by hand.
+type: object
+required:
+  - type
+  - approval_id
+  - state
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: tool_approval_resolved
+  approval_id:
+    type: string
+    minLength: 1
+    description: The approval_id from the tool_approval_required frame this resolves.
+  state:
+    type: string
+    enum:
+      - approved
+      - denied_user
+      - denied_timeout
+      - denied_cancel
+      - denied_restart
+      - denied_batch_short_circuit
+    description: >
+      The terminal state the approval reached (pkg/gateway/approvals.go's
+      ApprovalState). Informational for the SPA — any value means "no longer
+      pending, remove it".
+  session_id:
+    type: string
+    minLength: 1
+    description: >
+      The acting session id the approval belonged to (the same value its
+      tool_approval_required frame carried). Omitted when the approval was
+      recorded without one.

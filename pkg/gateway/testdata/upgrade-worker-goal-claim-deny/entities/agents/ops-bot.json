@@ -1,0 +1,13 @@
+{
+  "id": "ops-bot",
+  "name": "Ops Bot",
+  "description": "Operator-built agent whose goal_claim the operator denied",
+  "type": "custom",
+  "tools": {
+    "builtin": {
+      "policies": {
+        "goal_claim": "deny"
+      }
+    }
+  }
+}

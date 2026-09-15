@@ -29,7 +29,12 @@ import { requireApiKey, startFreshChatWithJim } from './fixtures/conformance-hel
 // ── Conformance_t0_ChatGoalE2E ───────────────────────────────────────────────
 //
 // BDD (§9.1 t0): set /goal → SMART compile → conversational confirm in chat
-// → worker turn → claim OR idle trigger → Judge verdict → done.
+// → worker turn → claim → Judge verdict → done.
+//
+// The "OR idle trigger" this line used to carry is GONE, deliberately:
+// ADR-084 revision 9 D13 (JUDGE-FR-095/FR-097) retired claimless idle
+// adjudication in full, making a `met` claim the sole trigger. The §9.1
+// sentence predates that decision; the decision wins.
 // Pill walks active → judging → done; /goal clear cancels the verifier
 // AND any in-flight compilation turn.
 //
@@ -40,7 +45,7 @@ import { requireApiKey, startFreshChatWithJim } from './fixtures/conformance-hel
 //   - §9.1 Live E2E checklist first 5 bullets (line ~286)
 //   - ADR-053 FE-1 (GoalPillTray bottom-right, 8-state enum)
 
-test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → verdict → done pill walk', async ({
+test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim → verdict → done pill walk', async ({
   page,
 }) => {
   requireApiKey()
@@ -61,13 +66,14 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → verdict
   // it (out-of-policy or unjudgeable criteria are rejected at compile,
   // per FR-111/D9 — fail-closed, no rejected criterion persists).
   //
-  // Use an explicit [check:] machine criterion (not pure prose): claimless
-  // idle adjudication (G-3) runs KindCheck under the agent's sandbox. A
-  // pure-prose "say goal met" goal left the real-LLM judge returning unmet
-  // + steer loops (Jim kept working, pill never reached done). `true`
-  // exits 0 deterministically so idle→judge→met→done is reliable.
-  // "please continue" is pure steering (looksLikePureSteering) so it does
-  // NOT lift a second KindProse criterion.
+  // Use an explicit [check:] machine criterion (not pure prose): the Judge
+  // runs KindCheck under the agent's sandbox and `true` exits 0
+  // deterministically, so the VERDICT half of this walk never depends on a
+  // real model's opinion of prose. A pure-prose "say goal met" goal left the
+  // judge returning unmet + steer loops (Jim kept working, pill never
+  // reached done). "please continue" is pure steering
+  // (looksLikePureSteering) so it does NOT lift a second KindProse
+  // criterion.
   const condition = '[check: true exit:0] please continue'
   await input.fill(`/goal ${condition}`)
   await input.press('Enter')
@@ -90,30 +96,121 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → verdict
   // the goal_status frame, then a normal chat turn fires to do the work).
   await expect(assistantMessages(page).first()).toBeVisible({ timeout: 300_000 })
 
-  // After the worker turn, claimless idle settlement fires (~60s quiet window,
-  // FR-102). The KindCheck runs `true` → exit 0 → met → clearGoal emits
-  // state=done (ADR-053 R§8.10). Poll for done (or ephemeral judging).
-  const judgingPill = page.locator('[data-testid="goal-pill-judging"]')
+  // A CLAIM is the only thing that produces a verdict.
+  //
+  // This wait used to be a bare 300s poll for done, on the strength of the
+  // comment that claimless idle settlement would fire after the quiet window
+  // and run the KindCheck itself. ADR-084 revision 9 D13 (JUDGE-FR-095/
+  // FR-097) retired that path outright: a `met` claim is now the SOLE
+  // adjudication trigger, and a quiet RECORDED goal gets the keeper's
+  // bounded continue-push instead — never a Judge call, never a round
+  // consumed. scripts/check-no-claimless-adjudication.sh fails the build if
+  // it returns.
+  //
+  // That left this test's outcome resting on whether the real model happened
+  // to claim during its worker turn, and it split exactly there: on one CI
+  // worker it claimed and reached done, on the other it went quiet and the
+  // goal ended the run at `state=active, round=0, attempts_used=0,
+  // zero_output_pushes=1` — the keeper pushed, nothing was ever judged. Same
+  // commit, same spec, opposite verdicts.
+  //
+  // So the claim is no longer left to chance. Poll briefly FIRST, because a
+  // model that already claimed during its worker turn is the legitimate fast
+  // path and must not be steered a second time; only if the goal is still
+  // waiting is the claim asked for explicitly.
+  //
+  // Do NOT "fix" this by asserting a quiet goal stays unjudged: this test
+  // cannot know whether a claim arrived, so such an assertion fails a
+  // CORRECT system on the fast path. The D13 invariant is pinned
+  // deterministically in Go (TestQuietWindow_MakesZeroJudgeCalls) and by the
+  // guard script; this file's job is the visible pill walk.
   const donePill = page.locator('[data-testid="goal-pill-done"]')
-  // Race-free wait: poll for either. Budget = quiet window (60s) + judge
-  // turn + slack for a possible unmet→steer→retry cycle.
-  const deadline = Date.now() + 300_000
-  let sawDone = false
-  while (Date.now() < deadline) {
-    if (await donePill.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      sawDone = true
-      break
+
+  // waitForDone polls rather than using a single web-first assertion because
+  // `judging` is a legitimate ephemeral mid-state and the pill may pass
+  // through it between polls; only `done` is the terminal we care about.
+  const waitForDone = async (budgetMs: number): Promise<boolean> => {
+    const deadline = Date.now() + budgetMs
+    while (Date.now() < deadline) {
+      if (await donePill.isVisible({ timeout: 1_000 }).catch(() => false)) return true
+      await page.waitForTimeout(500)
     }
-    if (await judgingPill.isVisible({ timeout: 1_000 }).catch(() => false)) {
-      // Saw judging — that's a legitimate mid-state. Keep polling for done.
+    return false
+  }
+
+  // FAST PATH: the worker may have claimed during its own turn. A model that
+  // already claimed must not be steered again, so check before asking.
+  let sawDone = await waitForDone(20_000)
+
+  // ASK FOR THE CLAIM, AND KEEP ASKING.
+  //
+  // A single steer was not enough on CI, and the root cause was a genuine
+  // test bug, not model noise: the previous version of this steer told the
+  // model to pass "the exact text of the check criterion you were given" as
+  // its goal_claim evidence — i.e. to paste the `[check: true exit:0]`
+  // marker back verbatim. That is not a verification claim, it is an echo.
+  // Every compiled goal automatically carries the floor DoD criterion
+  // "goal-dod-floor-grounded-claims" — "Every factual claim is grounded, not
+  // assumed" (pkg/agent/goal_compile.go's newFloorDoD) — alongside whatever
+  // the operator asked for, and the Judge adjudicates ALL of them on a
+  // claim, not just the one the operator wrote. Under ADR-084 revision 9
+  // D2b–D2d an evidence string that only restates the criterion text grounds
+  // nothing (D2c requires a quote/claim traceable to this turn's own tool
+  // results, and D2d explicitly rejects "a quote that merely proves [the
+  // criterion] exists" as verification), so the Judge correctly ruled that
+  // claim ungrounded and sent the worker back to rework it — confirmed in
+  // the CI gateway log as a verdict disagreement on
+  // goal-dod-floor-grounded-claims with previous_met=false. The worker then
+  // (correctly) refused to repeat an ungrounded claim and spent the rest of
+  // its budget arguing instead of reaching done. The retry on CI passed only
+  // because that run's model happened to ground its evidence on the first
+  // try — a coin flip, not a fix, which is exactly the kind of flake
+  // docs/internal/false-green-patterns.md says CI is right to reject
+  // ("retries: 3 masked a real failure").
+  //
+  // The fix is to ask for evidence the Judge can actually ground: have the
+  // model verify the check itself with a real tool call and cite what it
+  // observed, matching goal_claim's own contract ("your own one-line
+  // statement of what you verified", pkg/tools/goal_claim.go's
+  // Description/Parameters) instead of parroting the marker text.
+  //
+  // A BARE claim (no evidence, or one that fails goal_claim's own non-empty
+  // check) is separately bounced by design (G-4,
+  // goal_triggers.go's handleBareGoalClaim) and costs a round instead of
+  // adjudicating — that mechanism is untouched here.
+  //
+  // Steering repeatedly is still a legitimate user action and is how a real
+  // operator would drive this if a first grounded attempt is somehow still
+  // rejected, so this keeps asking up to three times with a full
+  // adjudication budget after each. What is being tested is unchanged: the
+  // walk from a met claim through the Judge to a done pill.
+  const STEER_ATTEMPTS = 3
+  for (let attempt = 1; attempt <= STEER_ATTEMPTS && !sawDone; attempt++) {
+    // Grounded evidence, not an echo of the criterion — see the block
+    // comment above this loop for why.
+    await input.fill(
+      'Verify the goal\'s check criterion yourself, then claim it. First call the bash tool ' +
+        'with the command `true; echo $?` and read the exit code it reports. Then call the ' +
+        'goal_claim tool with status "met" and, for the evidence argument, your own one-line ' +
+        'statement of what you personally observed from that bash call (for example: "ran ' +
+        '`true` via bash and observed exit code 0, as the check requires"). Do not pass the ' +
+        'criterion text itself as evidence — describe what you verified. Do not reply with ' +
+        'prose only — the tool calls are what is required.',
+    )
+    await input.press('Enter')
+
+    // Adjudication is DEFERRED until after the reply is delivered (D13), so
+    // the walk is claim → judging (ephemeral) → done.
+    sawDone = await waitForDone(90_000)
+    if (!sawDone && attempt < STEER_ATTEMPTS) {
+      console.log(`t0: no done pill after steer ${attempt}/${STEER_ATTEMPTS} — asking again`)
     }
-    await page.waitForTimeout(500)
   }
 
   // Differentiation assertion: the active pill must be GONE once done
   // (the FR-114 cleanup — GoalCondition cleared from session meta). At
   // least one done-pill must have appeared.
-  expect(sawDone, 'GoalPillTray must transition to data-testid="goal-pill-done" within 300s').toBe(
+  expect(sawDone, 'GoalPillTray must transition to data-testid="goal-pill-done" after a met claim').toBe(
     true,
   )
   // The active pill should be gone or replaced — at minimum the count of

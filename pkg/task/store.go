@@ -47,25 +47,59 @@ var ErrStatusConflict = errors.New("task: status conflict: task is no longer in 
 // also wrap ErrValidation.
 var ErrValidation = errors.New("task validation")
 
+// validationError is the concrete type behind every ErrValidation-attributable
+// refusal built via verr() or one of the more specific sentinels below
+// (ErrIllegalTransition, ErrBlockedNotSettable, ErrDoDNotDistinct,
+// ErrBlockedByCycle, ...). Its Error() is EXACTLY the caller-supplied detail
+// — deliberately with NO "task validation: " (or any other internal)
+// prefix — because these messages are read verbatim by end users (task
+// create/edit dialogs) and by agents (create_task/update_task tool results):
+// a machine-log-style prefix in front of a user-facing sentence is exactly
+// the register mismatch GOAL-FR-021/FR-048's live-UAT rejections exposed
+// (fix wave: task-validation-message-register). Unwrap() still reaches
+// ErrValidation (directly or via a more specific sentinel that itself wraps
+// ErrValidation), so errors.Is(err, ErrValidation) — the check every
+// REST/tool 400-vs-500 gate uses — is completely unaffected by this change.
+type validationError struct {
+	msg string
+	id  error
+}
+
+func (e *validationError) Error() string { return e.msg }
+func (e *validationError) Unwrap() error { return e.id }
+
+// verr wraps a formatted message as a user-facing validation error
+// attributable to ErrValidation via errors.Is, with a plain-language
+// Error() carrying no internal prefix (see validationError).
+func verr(format string, args ...any) error {
+	return &validationError{msg: fmt.Sprintf(format, args...), id: ErrValidation}
+}
+
+// verrf is verr with a more specific identity sentinel than bare
+// ErrValidation (e.g. ErrDoDNotDistinct, ErrBlockedByCycle) — sentinel must
+// itself be attributable to ErrValidation via errors.Is. REST/tool call
+// sites use errors.Is(err, <specific sentinel>) to attribute a rejection to
+// a wire ErrorResponse.field without parsing message text.
+func verrf(sentinel error, format string, args ...any) error {
+	return &validationError{msg: fmt.Sprintf(format, args...), id: sentinel}
+}
+
 // ErrIllegalTransition is returned when a status PATCH requests a transition the
 // lifecycle does not allow (e.g. done→inbox, or a client-supplied `blocked`).
-// It wraps ErrValidation so the REST seam maps it to HTTP 400.
-var ErrIllegalTransition = fmt.Errorf("%w: illegal status transition", ErrValidation)
+// It is attributable to ErrValidation via errors.Is so the REST seam maps it
+// to HTTP 400.
+var ErrIllegalTransition = verrf(ErrValidation, "illegal status transition")
 
 // ErrBlockedNotSettable is returned when a client tries to set status=blocked
 // directly. `blocked` is a derived side-state: the store sets it when a
 // dependency is unmet and clears it to `next` when every blocker reaches done.
-// It wraps ErrValidation so the REST seam maps it to HTTP 400.
-var ErrBlockedNotSettable = fmt.Errorf(
-	"%w: status %q is a derived side-state and cannot be set directly",
+// It is attributable to ErrValidation via errors.Is so the REST seam maps it
+// to HTTP 400.
+var ErrBlockedNotSettable = verrf(
 	ErrValidation,
+	"status %q is a derived side-state and cannot be set directly",
 	StatusBlocked,
 )
-
-// verr wraps a formatted message as a user-facing validation error (ErrValidation).
-func verr(format string, args ...any) error {
-	return fmt.Errorf("%w: "+format, append([]any{ErrValidation}, args...)...)
-}
 
 // ValidatePriority rejects any priority value outside 1..5, with NO exception
 // for 0.
@@ -914,7 +948,18 @@ type Patch struct {
 	Due          *string
 	PlanID       *string
 	Tags         *[]string
-	Criteria     *[]AcceptanceCriterion
+	// Criteria replaces Task.Criteria atomically, same as every other Patch
+	// field. ADR-086 D5/GOAL-FR-029/FR-030 names this write path as a
+	// consumer to re-point onto the task's paired goal record (pkg/goal) —
+	// see Task.Criteria's own doc comment (pkg/task/task.go) for why this
+	// field is deliberately KEPT, disk-persisted, in this round rather than
+	// removed. The tool/REST callers that also hold a goal.Store dual-write
+	// the SAME criteria onto the paired goal record in the same request;
+	// this store has no way to do that itself (pkg/goal imports pkg/task,
+	// so this package cannot import pkg/goal back) and is not the place
+	// GOAL-FR-048's separate `dod` list lives at all — there is no
+	// Patch.Dod, because there is no Task.Dod.
+	Criteria *[]AcceptanceCriterion
 	// WriteSet, Stream, and IsJoin are the ADR-053 plan-member fields
 	// (§Contract Surface — "write_sets + rationale on create_plan", US-11
 	// G-16). Meaningful only when the task has a non-empty PlanID; plan-lint
@@ -954,10 +999,6 @@ type Patch struct {
 	FollowedUp    *bool
 	SourceChannel *string
 	SourceChatID  *string
-	// PendingJudgeClaim is the runtime/tool-layer write path for
-	// Task.PendingJudgeClaim (ADR-049 C1/SD-B2, review r1). A non-nil pointer
-	// to "" clears it (adjudication finished, either outcome).
-	PendingJudgeClaim *string
 
 	// allowBlockedSet is the internal escape hatch that permits a Status patch to
 	// set or clear the derived `blocked` side-state. It is NEVER set from the wire
@@ -1228,7 +1269,7 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	// preserves as re-run context for the worker). Concretely: a task that
 	// exhausted at AttemptCount==maxAttempts, re-run via this route and
 	// producing another unmet outcome, immediately re-exhausts in
-	// consumeAttemptOrExhaust (newAttempt==maxAttempts+1 already fails the
+	// consumeTaskAttempt (newAttempt==maxAttempts+1 already fails the
 	// `< maxAttempts` gate) — one supervised extra shot per Run click, never
 	// a free budget refill. This is judged defensible and is NOT changed;
 	// see TestAttemptCount_NotResetOnRunRoute for the pinned regression.
@@ -1374,9 +1415,6 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	if patch.SourceChatID != nil {
 		t.SourceChatID = *patch.SourceChatID
 	}
-	if patch.PendingJudgeClaim != nil {
-		t.PendingJudgeClaim = *patch.PendingJudgeClaim
-	}
 
 	// Cross-field invariant (ADR-052 FR-028, mirrors plan.Plan's normalize()-
 	// enforced FailedReason/State coupling — pkg/plan/plan.go:299-306):
@@ -1426,9 +1464,8 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 
 // UpdateIfStatus is the compare-and-swap write primitive that closes the
 // EXECUTOR-side half of the ADR-052 FR-014/§6.4(b) Stop guarantee's TOCTOU
-// window (see pkg/agent/task_executor.go's adjudicate/finish-path outcome
-// writers — completeTaskWithResult, consumeAttemptOrExhaust,
-// rejectBareEvidenceClaim). Those callers each re-read a task, decide an
+// window (see the task executor's outcome writers in pkg/agent —
+// completeTaskWithResult and task_run_loop.go's consumeTaskAttempt). Those callers each re-read a task, decide an
 // outcome (possibly after an unlocked, potentially slow judge/verifier
 // call), and only THEN write it — a separate re-check (e.g.
 // taskVerdictStillApplicable) followed by a LATER, SEPARATE write leaves a
@@ -1518,7 +1555,6 @@ func (s *Store) RestartReset(id string) (*Task, error) {
 	t.StartedAt = ""
 	t.CompletedAt = ""
 	t.FollowedUp = false
-	t.PendingJudgeClaim = ""
 	s.recomputeBlockedStateLocked(t)
 	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 	if err := s.write(t); err != nil {
@@ -1582,6 +1618,25 @@ func ValidateStandaloneRestart(status Status, cancelReason CancelReason) error {
 // Delete removes the task file for id and cascade-cleans inbound blocked_by
 // edges (every other task that depended on id loses that edge). It returns the
 // IDs of tasks that became fully unblocked (their blocked_by list emptied).
+//
+// GOAL-FR-044 — WHY THE PAIRED GOAL RECORD IS NOT REMOVED HERE. FR-044 says a
+// goal must not outlive its owner, and pkg/goal/retention.go's own Sweep doc
+// comment names this function as where the other half of that rule was meant
+// to live: "a direct call from pkg/task/store.go's own deletion path". It
+// cannot live here, and that is not an oversight to correct — it is a cycle.
+// pkg/goal imports pkg/task (a Goal's Criteria and DoD ARE
+// []task.AcceptanceCriterion), so pkg/task can never import pkg/goal to call
+// back the other way. The hook having been assigned an uninhabitable home is
+// why it stayed unwritten until a deleted task was found leaving a permanently
+// active, unreferenced goal behind.
+//
+// It therefore lives in the CALLERS, one mirrored copy per delete surface —
+// pkg/gateway/rest_tasks.go, pkg/tools/task.go and pkg/sysagent/tools/task.go,
+// each named removeTaskGoalRecords. Any NEW task-delete surface must call it
+// too; there is no chokepoint here that would do it automatically. Introducing
+// one would mean a delete-observer seam on this store (a callback field or a
+// package-level registry) — a design change that deserves its own ADR rather
+// than being smuggled in behind a bug fix.
 func (s *Store) Delete(id string) (unblockedIDs []string, err error) {
 	if err := validateID(id); err != nil {
 		return nil, err

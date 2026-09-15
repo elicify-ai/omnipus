@@ -47,13 +47,33 @@ export interface PresetDefinition { // not-wire-format: internal UI role-preset 
  *
  * Balanced is the system default (matches spec §2.1 table exactly).
  * Override keys are real registered tool ids (verified via live /api/v1/tools).
+ *
+ * Invariant (founder decision 2026-09-15): every preset must resolve
+ * `goal_claim` to `allow`. Balanced and Full access already do — their
+ * `defaultPolicy` is `allow` and neither overrides `goal_claim` down from
+ * it. Cautious needs an explicit override (see its `overrides.goal_claim`
+ * comment) since its `defaultPolicy` is `ask`.
  */
 export const POLICY_PRESETS: Record<RolePreset, PresetDefinition> = {
   cautious: {
     label: 'Cautious',
     description: 'Every tool requires your approval before it runs. Best for production or sensitive data.',
     defaultPolicy: 'ask',
-    overrides: {},
+    overrides: {
+      // Founder decision 2026-09-15: goal_claim (the "I'm done" tool an agent
+      // calls to finish a task) is allowed by default for every agent —
+      // matches the backend seed (pkg/coreagent/core.go's coreAgentSeed and
+      // NewCustomAgentToolsCfg both carry an explicit "goal_claim": allow for
+      // every agent, including the Worker). Completion claims are verified
+      // by the Judge before a task is allowed to finish, so gating the call
+      // itself behind human "ask" approval adds no safety — it just stalls
+      // task completion waiting on an approval that was never the real
+      // check. Unlike goal_claim, set_goal is NOT given this exception: the
+      // backend denies it explicitly for the Worker (a task-running agent
+      // may claim completion but may not author its own goal), so it isn't
+      // safe to allow across every role here.
+      goal_claim: 'allow',
+    },
   },
   balanced: {
     label: 'Balanced',

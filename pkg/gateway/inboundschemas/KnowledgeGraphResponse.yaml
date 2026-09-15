@@ -1,0 +1,85 @@
+title: KnowledgeGraphResponse
+description: >
+  Response for GET /api/v1/library/{workspace_id}/knowledge/graph
+  (ADR-067 D18). One shape serves all five graph queries (FR-051) — links,
+  backlinks, unresolved, orphans and neighbourhood — because they differ
+  only in which subgraph is selected, not in what a link is.
+
+  Every query is bounded (FR-054) and reports its own truncation, so a
+  caller can always tell a small graph from a clipped one.
+type: object
+additionalProperties: false
+required:
+  - collection_id
+  - kind
+  - nodes
+  - edges
+  - skipped
+  - truncated
+properties:
+  collection_id:
+    type: string
+    minLength: 1
+    description: The collection queried.
+    example: "kb_3d1c9a7e5b2f4806"
+  kind:
+    type: string
+    enum:
+      - links
+      - backlinks
+      - unresolved
+      - orphans
+      - neighbourhood
+    description: >
+      Which query produced this graph. "links" and "backlinks" are outbound
+      and inbound edges of source_path; "unresolved" lists edges whose target
+      does not exist; "orphans" lists nodes with no inbound edge;
+      "neighbourhood" is the bounded subgraph around source_path.
+    example: "backlinks"
+  source_path:
+    type: string
+    description: >
+      The note the query was about. Required in practice for links,
+      backlinks and neighbourhood; absent for unresolved and orphans, which
+      are collection-wide.
+    example: "architecture/sandboxing.md"
+  nodes:
+    type: array
+    description: >
+      Every node referenced by this graph, including non-existent link
+      targets (exists=false). Always an array, never null.
+    items:
+      $ref: "./KnowledgeGraphNode.yaml"
+  edges:
+    type: array
+    description: >
+      Every edge in this graph. Empty for "orphans". Always an array, never
+      null.
+    items:
+      $ref: "./KnowledgeGraphEdge.yaml"
+  skipped:
+    type: array
+    description: >
+      Paths the walk did not follow, with reasons. Always an array, never
+      null — an empty array is a positive statement that nothing was skipped.
+    items:
+      $ref: "./KnowledgeGraphSkip.yaml"
+  truncated:
+    type: boolean
+    description: >
+      True when a bound stopped the walk before it was exhausted, so this
+      graph is a clipped view. The bounds that applied are in
+      hop_limit_applied and node_limit_applied.
+    example: false
+  hop_limit_applied:
+    type: integer
+    minimum: 1
+    description: >
+      Maximum hops walked from source_path (FR-054). Present for
+      "neighbourhood".
+    example: 2
+  node_limit_applied:
+    type: integer
+    minimum: 1
+    description: Maximum nodes this response may contain (FR-054).
+    example: 200

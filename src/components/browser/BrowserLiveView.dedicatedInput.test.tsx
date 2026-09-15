@@ -102,11 +102,16 @@ it.each(['/', '/?browserInput=websocket', '/?browserInput=dedicated'])('requires
 it('waits for the control acknowledgment and its presented capture generation', async () => {
   const s = await connected()
   fireEvent.click(screen.getByRole('button', { name: 'Go back' }))
-  expect(s.socket.frames.at(-1)).toEqual({ type: 'browser_input', kind: 'navigate_back', input_epoch: 1, control_epoch: 1 })
+  expect(s.socket.frames.at(-1)).toEqual({ type: 'browser_input', kind: 'navigate_back', input_epoch: 1, control_epoch: 2 })
   fireEvent.keyDown(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
   fireEvent.keyUp(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
   expect(s.peer.channels['input-reliable'].send).not.toHaveBeenCalled()
-  act(() => s.socket.receive({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 1, ok: true, capture_id: capture, capture_generation: 2 }))
+  // The ownership request is epoch 1; navigation is epoch 2. An
+  // intermediate ownership ACK must not reopen input on the previous page.
+  act(() => s.socket.receive({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 1, ok: true, capture_id: capture, capture_generation: 1 }))
+  fireEvent.keyDown(s.frame, { key: 'b', code: 'KeyB', keyCode: 66 })
+  expect(s.peer.channels['input-reliable'].send).not.toHaveBeenCalled()
+  act(() => s.socket.receive({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 2, ok: true, capture_id: capture, capture_generation: 2 }))
   fireEvent.keyDown(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
   fireEvent.keyUp(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
   expect(s.peer.channels['input-reliable'].send).not.toHaveBeenCalled()
@@ -192,38 +197,38 @@ it('stops loading while picture proof is pending, releases held input, and waits
   const s = await connected()
   fireEvent.keyDown(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
   act(() => health(s.socket, 2))
-  const stop = screen.getByRole('button', { name: 'Stop loading', exact: true })
+  const stop = screen.getByRole('button', { name: 'Stop loading' })
   expect(stop).toBeEnabled()
   expect(screen.getByText('Waiting for the current page to appear before enabling input. Use Stop loading to cancel a pending page load.')).toBeInTheDocument()
   fireEvent.click(stop)
   expect(s.socket.frames.filter(frame => frame.type === 'browser_input')).toEqual([
-    { type: 'browser_input', kind: 'stop_loading', input_epoch: 1, control_epoch: 1 },
+    { type: 'browser_input', kind: 'stop_loading', input_epoch: 1, control_epoch: 2 },
   ])
   expect(s.peer.channels['input-reliable'].send.mock.calls.map(([data]) => decodeBrowserInput(data).kind)).toEqual(['key_down', 'key_up'])
   fireEvent.keyDown(s.frame, { key: 'b', code: 'KeyB' })
-  act(() => s.socket.receive({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 1, ok: true, capture_id: capture, capture_generation: 3 }))
+  act(() => s.socket.receive({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 2, ok: true, capture_id: capture, capture_generation: 3 }))
   fireEvent.keyDown(s.frame, { key: 'b', code: 'KeyB' })
   expect(s.peer.channels['input-reliable'].send).toHaveBeenCalledTimes(2)
   act(() => { health(s.socket, 3, 300); emitBrowserFrame(s.video, { rtpTimestamp: 300, expectedDisplayTime: performance.now() - 1 }) })
   fireEvent.keyDown(s.frame, { key: 'c', code: 'KeyC' })
   expect(s.peer.channels['input-reliable'].send.mock.calls.map(([data]) => {
     const frame = decodeBrowserInput(data); return [frame.kind, frame.control_epoch, frame.reliable_seq]
-  })).toEqual([['key_down', 0, 1], ['key_up', 0, 2], ['key_down', 1, 1]])
+  })).toEqual([['key_down', 0, 1], ['key_up', 0, 2], ['key_down', 2, 1]])
 })
 
 it('disables Stop loading before the command connection opens', () => {
   render(<BrowserLiveView sessionId="s1" agentId="a1" />)
-  expect(screen.getByRole('button', { name: 'Stop loading', exact: true })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Stop loading' })).toBeDisabled()
 })
 
 it('Stop loading releases a held key before retiring the current control', async () => {
   const s = await connected()
   fireEvent.keyDown(s.frame, { key: 'a', code: 'KeyA', keyCode: 65 })
-  fireEvent.click(screen.getByRole('button', { name: 'Stop loading', exact: true }))
+  fireEvent.click(screen.getByRole('button', { name: 'Stop loading' }))
   expect(s.peer.channels['input-reliable'].send.mock.calls.map(([data]) => {
     const frame = decodeBrowserInput(data); return [frame.kind, frame.control_epoch, frame.reliable_seq]
   })).toEqual([['key_down', 0, 1], ['key_up', 0, 2]])
   expect(s.socket.frames.filter(frame => frame.type === 'browser_input')).toEqual([
-    { type: 'browser_input', kind: 'stop_loading', input_epoch: 1, control_epoch: 1 },
+    { type: 'browser_input', kind: 'stop_loading', input_epoch: 1, control_epoch: 2 },
   ])
 })

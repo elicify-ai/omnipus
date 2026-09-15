@@ -1,0 +1,51 @@
+title: KnowledgeOutline
+description: >
+  Response for GET /api/v1/library/{workspace_id}/knowledge/outline
+  (ADR-067 D18). The heading tree for the reading rail.
+
+  Available for ANY markdown file, whether or not it belongs to a knowledge
+  base (FR-062): an outline is parsed from the one file in hand and needs no
+  index. Search and backlinks stay knowledge-base-only precisely because
+  they do need one — is_knowledge_base tells the client which of the rail's
+  panels it may offer.
+type: object
+additionalProperties: false
+required:
+  - path
+  - is_knowledge_base
+  - headings
+properties:
+  path:
+    type: string
+    minLength: 1
+    description: >
+      Workspace-relative path of the file this outline describes.
+    example: "notes/vault/architecture/sandboxing.md"
+  is_knowledge_base:
+    type: boolean
+    description: >
+      True when this file sits inside a detected knowledge base, so the
+      client may additionally offer search and backlinks. False means the
+      outline is all that is available for this file — not an error.
+    example: true
+  collection_id:
+    type: string
+    minLength: 1
+    description: >
+      The collection containing this file. Present only when
+      is_knowledge_base is true.
+    example: "kb_3d1c9a7e5b2f4806"
+  headings:
+    type: array
+    description: >
+      Headings in document order. Always an array, never null; empty for a
+      file with no headings.
+    items:
+      $ref: "./KnowledgeOutlineHeading.yaml"
+  frontmatter_malformed:
+    type: boolean
+    description: >
+      True when the file opens with a frontmatter block that is not valid
+      YAML. The file is still outlined and still indexed for body text; the
+      malformed frontmatter is reported rather than silently dropped (E-17).
+    example: false

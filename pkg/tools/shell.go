@@ -48,6 +48,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -189,6 +191,12 @@ type ExecTool struct {
 	// timeout, background timeout, explicit kill action) shares one closure.
 	// Nil when auditLogger is nil.
 	killAuditFn func(pid int, killErr error, caller string)
+
+	// backgroundSweepFn, when non-nil, replaces sweepAfterRun on the
+	// background completion path ONLY (sweepBackgroundCompletion). It is nil
+	// in every production build; it exists so a test can make the sweep panic
+	// and prove the completion goroutine survives it.
+	backgroundSweepFn func(ctx context.Context, command, cwd, baseDir string, started time.Time, result *ToolResult) *ToolResult
 }
 
 // GodModeForTest exposes the resolved god-mode flag for white-box testing.
@@ -814,9 +822,119 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 	if runInBackground {
 		ownerSessionID := ToolTranscriptSessionID(ctx)
-		return t.runBackground(ctx, command, cwd, timeoutSeconds, lim, ownerSessionID, cb)
+		return t.runBackground(ctx, command, cwd, baseDir, timeoutSeconds, lim, ownerSessionID, cb)
 	}
-	return t.runForeground(ctx, command, lim, timeoutSeconds)
+	started := time.Now()
+	result := t.runForeground(ctx, command, lim, timeoutSeconds)
+	return t.sweepAfterRun(ctx, command, cwd, baseDir, started, result)
+}
+
+// sweepAfterRun runs the post-command escaping-symlink sweep (D-14, see
+// shell_escape_sweep.go) over the turn's roots and appends its report to the
+// tool result. The sweep REPORTS and never removes (Codex review 2026-09-14
+// finding #2: a link inside the command's time window cannot be attributed
+// to the command, and deleting an unattributable link destroys a person's
+// work). Every finding is written to the audit log as well, so the operator
+// sees it even if the agent ignores the notice. God mode is the operator's
+// explicit opt-out of confinement and is skipped; so is an unrestricted tool
+// (restrictToWorkspace=false), whose whole point is that the workspace is
+// not a boundary. Background runs ARE swept — at their completion, in
+// runBackground's completion goroutine, the one place that knows the
+// process has exited and its pipes are drained, so the walk cannot race a
+// command that is still writing (Claude review 2026-09-14: sweeping only
+// the foreground path left a background run free to plant the very escape
+// the sweep exists to name).
+func (t *ExecTool) sweepAfterRun(ctx context.Context, command, cwd, baseDir string, started time.Time, result *ToolResult) *ToolResult {
+	if result == nil || t.godMode || !t.restrictToWorkspace {
+		return result
+	}
+	// baseDir is resolved through this package's own sanctioned resolver
+	// (the one ResolvePath itself uses) rather than a locally glued
+	// filepath.EvalSymlinks — FR-034 routes every path resolution in
+	// pkg/tools through resolveRealpathUnderWorkDir (see grep.go's
+	// guardCarveOuts comment for the established pattern).
+	roots := []string{baseDir}
+	if resolved, err := resolveRealpathUnderWorkDir(baseDir, ""); err == nil {
+		roots = []string{resolved}
+	}
+	// mountRootsResolved records whether the turn's mount list could be
+	// resolved at all. A nil AllowedRoots is NOT a failure (a workspace with
+	// no mounts yields nil) — only an error is, and only the error leaves the
+	// sweep ignorant of trees a link may legitimately point into. The sweep
+	// still runs and still only REPORTS (nothing is removed, nothing is
+	// refused on it), so the worst case is an over-broad finding, which the
+	// honesty note below names rather than letting the notice claim
+	// "... and its mounts" over mounts it never enumerated.
+	mountRootsResolved := true
+	if authored, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace); err == nil {
+		roots = append(roots, authored.AllowedRoots...)
+	} else {
+		mountRootsResolved = false
+	}
+	res := sweepEscapingSymlinks(roots, roots, started)
+	// Claude review 2026-09-14 cut-list: a partial sweep must be visible to
+	// the OPERATOR too, not only in the tool result an agent can paraphrase
+	// away — one WARN per run naming exactly what was skipped (mounts among
+	// it), so a log reader knows the sweep was partial and where.
+	if res.Partial {
+		slog.Warn("bash: post-command symlink sweep was partial — some roots were not inspected",
+			"agent_id", ToolAgentID(ctx),
+			"partial_root", res.PartialRoot,
+			"swept", strings.Join(res.Swept, ", "),
+			"skipped", strings.Join(res.Skipped, ", "),
+			"found", len(res.Found))
+	}
+	notice := escapeSweepNotice(res)
+	if len(res.Found) > 0 && !mountRootsResolved {
+		notice += escapeSweepMountsUnresolvedNote()
+	}
+	if notice == "" {
+		return result
+	}
+	if len(res.Found) > 0 {
+		links := make([]map[string]string, 0, len(res.Found))
+		for _, r := range res.Found {
+			links = append(links, map[string]string{"link": r.Link, "target": r.Target})
+		}
+		if t.auditLogger != nil {
+			// The command itself was allowed and ran; this entry is a
+			// warning attached to it, not a denial of anything. "removed"
+			// is deliberately absent from the details: nothing was.
+			if err := t.auditLogger.Log(&audit.Entry{
+				Event:    audit.EventExec,
+				Decision: audit.DecisionAllow,
+				AgentID:  ToolAgentID(ctx),
+				Tool:     t.Name(),
+				Command:  command,
+				Details: map[string]any{
+					"cwd":               cwd,
+					"warning":           "escaping_symlinks",
+					"escaping_symlinks": links,
+					"reason": "symlink(s) pointing outside the workspace appeared during this command's window; " +
+						"they were reported, not removed (creator cannot be attributed with certainty) — operator review",
+				},
+			}); err != nil {
+				slog.Warn("bash: audit write failed", "agent_id", ToolAgentID(ctx), "error", err)
+			}
+		}
+	}
+	result.ForLLM = result.ContentForLLM() + notice
+	if result.ForUser != "" {
+		result.ForUser += notice
+	}
+	return result
+}
+
+// escapeSweepMountsUnresolvedNote is appended to a sweep notice that reported
+// findings while the turn's mount list could not be resolved (Claude review
+// 2026-09-14 PLAUSIBLE, verified then hardened): without it the notice
+// asserts the links point "outside the workspace and its mounts" over a mount
+// list it never saw, and a link legitimately pointing INTO a mounted folder
+// would be described as an escape. The sweep is report-only either way —
+// nothing is removed or refused on these findings — so this is honesty about
+// the report's own coverage, not a new enforcement.
+func escapeSweepMountsUnresolvedNote() string {
+	return "\n  Note: this turn's mount list could not be resolved for this sweep, so a link above that points into a MOUNTED folder may be listed although pointing into a mount is legitimate. Only the workspace itself was swept."
 }
 
 // turnKernelPolicy derives the per-turn kernel policy for this bash call from
@@ -1109,7 +1227,10 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 		// command text, so it must be computed here (byte offsets exist only at
 		// this call site) and threaded down into checkPathSegment, which sees
 		// the path string alone.
-		readOnly := classifier.isReadOnly(start) && !expansionDerived
+		use := classifier.classify(start)
+		if expansionDerived {
+			use.readOnly = false
+		}
 
 		// Colon-joined path list (PATH= assignments, -I a:b-style flags):
 		// each `:`-separated segment is checked independently against the
@@ -1125,7 +1246,7 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 		// whatever the command does with it, it does with all of it.
 		if strings.Contains(raw, ":") && colonPathListPattern.MatchString(raw) {
 			for _, seg := range strings.Split(raw, ":") {
-				if msg := t.checkPathSegment(seg, cwdPath, mountRoots, turnPolicy, readPolicyOK, readOnly, expansionDerived); msg != "" {
+				if msg := t.checkPathSegment(seg, cwdPath, mountRoots, turnPolicy, readPolicyOK, use, expansionDerived); msg != "" {
 					return msg
 				}
 			}
@@ -1146,7 +1267,7 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 			}
 		}
 
-		if msg := t.checkPathSegment(raw, cwdPath, mountRoots, turnPolicy, readPolicyOK, readOnly, expansionDerived); msg != "" {
+		if msg := t.checkPathSegment(raw, cwdPath, mountRoots, turnPolicy, readPolicyOK, use, expansionDerived); msg != "" {
 			return msg
 		}
 	}
@@ -1161,13 +1282,15 @@ func (t *ExecTool) guardCommand(ctx context.Context, command, cwd string) string
 // turn's workspace mounts (mountRoots, from ResolveTurnFSPolicy.AllowedRoots).
 // Returns "" when the segment is allowed, or a rejection message otherwise.
 //
-// readOnly is the caller's ADR-068 classification of this candidate: true only
-// when guardCommand's pathUseClassifier could PROVE, from the command text,
-// that the reference is a read. It changes exactly one thing — the final
-// out-of-working-directory rejection. Everything above that point (safePaths,
-// the operator allowlist, containment, mounts) is identical for reads and
-// writes, so no existing exemption widens or narrows because of this parameter.
-func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, turnPolicy fspolicy.FSPolicy, readPolicyOK, readOnly, expansionDerived bool) string {
+// use is the caller's ADR-068 classification of this candidate: use.readOnly
+// is true only when guardCommand's pathUseClassifier could PROVE, from the
+// command text, that the reference is a read. It changes exactly one thing —
+// the final out-of-working-directory rejection (and, via use.exec/use.reason,
+// what that rejection SAYS). Everything above that point (safePaths, the
+// operator allowlist, containment, mounts) is identical for reads and writes,
+// so no existing exemption widens or narrows because of this parameter.
+func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, turnPolicy fspolicy.FSPolicy, readPolicyOK bool, use pathUseVerdict, expansionDerived bool) string {
+	readOnly := use.readOnly
 	p, err := filepath.Abs(raw)
 	if err != nil {
 		return "Command blocked by safety guard (cannot resolve path)"
@@ -1250,14 +1373,61 @@ func (t *ExecTool) checkPathSegment(raw, cwdPath string, mountRoots []string, tu
 		// the env var is the recovery path that outranks it. Neither is the
 		// kernel sandbox (`sandbox.mode`) — the confusion between the two is
 		// precisely what UAT defect 002 reported.
-		return fmt.Sprintf(
-			"Command blocked by safety guard (path outside working dir): %q is outside the effective working directory %q and no mount covers it. "+
-				"Rule: bash workspace path guard (RestrictToWorkspace) — a WRITE outside the working directory needs an approved workspace mount; reads outside it are allowed (ADR-068). "+
-				"Fixes: request a mount for that folder (request_mount), or have an operator set sandbox.workspace_path_guard=false (env OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE=false). "+
-				"This is NOT the kernel sandbox setting (sandbox.mode).",
-			p, cwdPath)
+		return outsideWorkDirRefusal(p, cwdPath, use, readOnly && !readPolicyOK)
 	}
 	return ""
+}
+
+// outsideWorkDirRefusal builds the message for an absolute path outside the
+// working directory that no mount covers. It says exactly which of three
+// things was refused — running a program, a reference the guard could not
+// prove is a read, or a read withheld because the turn policy was
+// unresolvable — instead of calling every one of them "a WRITE" (UAT
+// 2026-09-13 D-66, D-44). It also states plainly what this guard is (D-14):
+// a scan of the command text, which a path assembled at runtime never
+// reaches, and names the layer that actually enforces the boundary on this
+// host.
+func outsideWorkDirRefusal(p, cwdPath string, use pathUseVerdict, readWithheld bool) string {
+	var what string
+	switch {
+	case use.exec:
+		what = "RUNNING a program from outside the working directory by its absolute path is refused: ADR-068 opens reads only, and executing is neither a read nor a write. " +
+			"Fix: copy or install the program inside the workspace, or run it through an approved mount."
+	case readWithheld:
+		what = "This looks like a read, but the turn's filesystem policy could not be resolved, so the read exemption is withheld for this command (fail closed). Retry; if it persists, the gateway log names the cause."
+	default:
+		reason := use.reason
+		if reason == "" {
+			reason = "the guard could not prove from the command text that the reference is a read"
+		}
+		what = fmt.Sprintf("The guard treats this reference as a WRITE because %s. Reads outside the working directory are allowed (ADR-068) only when the guard can PROVE the reference is a read from the command text; every other reference needs an approved workspace mount. "+
+			"read_file and list_directory answer the same read without this limitation.", reason)
+	}
+	return fmt.Sprintf(
+		"Command blocked by safety guard (path outside working dir): %q is outside the effective working directory %q and no mount covers it. %s "+
+			"Rule: bash workspace path guard (RestrictToWorkspace). "+
+			"Fixes: request a mount for that folder (request_mount), or have an operator set sandbox.workspace_path_guard=false (env OMNIPUS_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE=false). "+
+			"This is NOT the kernel sandbox setting (sandbox.mode). %s",
+		p, cwdPath, what, guardNatureStatement())
+}
+
+// guardNatureStatement is the honest one-liner every path-guard refusal
+// carries (UAT 2026-09-13 D-14): this guard reads the command TEXT, so a path
+// the command assembles at runtime (an interpreter concatenating strings) is
+// invisible to it. It is a courtesy check for a cooperative agent, not the
+// boundary. The boundary is the kernel sandbox where the platform has one;
+// where it does not, the statement says so rather than implying a protection
+// that is not there. The post-command symlink sweep (sweepEscapingSymlinks)
+// is named because it is the one check that does look at what the command
+// actually did rather than what it said — and it reports, never removes.
+func guardNatureStatement() string {
+	if sandbox.TurnPolicyBaseInstalled() {
+		return "Note: this guard scans the command text and is advisory — a path assembled at runtime is not seen by it. " +
+			"The enforced boundary is the kernel sandbox, which confines the command by the real path it touches; " +
+			"symlinks inside the workspace that point outside it are reported after the command runs (never removed) and recorded for the operator."
+	}
+	return "Note: this guard scans the command text and is advisory — a path assembled at runtime is not seen by it. " +
+		"On this host NO kernel sandbox is active, so this scan and the post-command symlink sweep are the only checks on where a command writes."
 }
 
 // --- read/write classification (ADR-068 §1, option A) ------------------------
@@ -1366,11 +1536,35 @@ func newPathUseClassifier(cmd string) pathUseClassifier {
 	}
 }
 
-// isReadOnly reports whether the absolute-path candidate beginning at byte
-// offset start is provably a read. See the type's doc comment for the rules.
-func (c pathUseClassifier) isReadOnly(start int) bool {
-	if !c.classifiable || start < 0 || start >= len(c.cmd) {
-		return false
+// pathUseVerdict is what the classifier can say about one absolute-path
+// candidate from the command TEXT alone. readOnly is the ADR-068 proof;
+// exec and reason exist so a refusal can name WHY the proof failed (UAT
+// 2026-09-13 D-44/D-66) instead of describing every unproven reference as
+// "a WRITE". (A former `head` field carried the segment's command word too,
+// but no reader ever consumed it — the reasons embed the word via %q where
+// it matters — so it was deleted as dead code, Claude review 2026-09-14
+// cut-list; do not re-add it without a reader.)
+type pathUseVerdict struct {
+	// readOnly is true only when rules 1-6 all hold.
+	readOnly bool
+	// exec is true when the candidate sits in the segment's command position
+	// — the command would RUN it, which is neither a read nor a write.
+	exec bool
+	// reason explains, for a human or an agent, why the read proof failed.
+	// Empty when readOnly is true.
+	reason string
+}
+
+// classify reports whether the absolute-path candidate beginning at byte
+// offset start is provably a read, with its reasoning attached. See the
+// type's doc comment for the rules; each early return below names the rule
+// it applies.
+func (c pathUseClassifier) classify(start int) pathUseVerdict {
+	if !c.classifiable {
+		return pathUseVerdict{reason: "the command contains quoting or a command/process substitution this guard cannot parse, so it cannot tell which file each reference opens"}
+	}
+	if start < 0 || start >= len(c.cmd) {
+		return pathUseVerdict{reason: "the reference could not be located in the command text"}
 	}
 
 	segStart, segEnd := c.segmentBounds(start)
@@ -1378,7 +1572,7 @@ func (c pathUseClassifier) isReadOnly(start int) bool {
 
 	// Rule 3: unmodelled brace expansion.
 	if strings.ContainsAny(seg, "{}") {
-		return false
+		return pathUseVerdict{reason: "the command uses brace expansion ({ }), which rewrites its words before they run"}
 	}
 
 	// Rule 2: literal, allowlisted head — named EXACTLY, with no directory
@@ -1395,25 +1589,42 @@ func (c pathUseClassifier) isReadOnly(start int) bool {
 	// costs only the absolute spellings (`/bin/cat f`) and keeps the doctrine
 	// intact: prove a read, or call it a write.
 	head, headIsExpansion, headNormalised := shellCommandHeadDetailed(seg)
-	if headIsExpansion || headNormalised || !readOnlyShellCommands[head] {
-		return false
-	}
-
 	word := c.wordStart(start, segStart)
 
-	// Rule 4: command position is exec, not read.
+	// Rule 4: command position is exec, not read. Checked before the head
+	// allowlist so an absolute path in command position is reported as an
+	// EXEC rather than as "head not on the allowlist" (D-66).
 	if word == c.firstWordStart(segStart, segEnd) {
-		return false
+		return pathUseVerdict{exec: true, reason: "the path is in command position — the shell would RUN it, which is not a read"}
+	}
+	switch {
+	case headIsExpansion:
+		return pathUseVerdict{reason: "the command word is a shell expansion, so the guard cannot tell which program runs"}
+	case headNormalised:
+		return pathUseVerdict{reason: fmt.Sprintf("the command word is spelled with a directory prefix or in upper case (%q), which the read-only allowlist matches only literally", head)}
+	case !readOnlyShellCommands[head]:
+		return pathUseVerdict{reason: fmt.Sprintf("%q is not on the guard's read-only allowlist (%s) — it has a flag or mode that can write to a path named on its command line, so the guard cannot prove this use is a read", head, readOnlyShellCommandsSummary())}
 	}
 	// Rule 5: this word is a redirect target.
 	if c.precededByOutputRedirect(word, segStart) {
-		return false
+		return pathUseVerdict{reason: "the path is the target of an output redirect"}
 	}
 	// Rule 6: some other redirect in this segment writes somewhere we cannot see.
 	if !c.redirectTargetsAreLiteral(segStart, segEnd) {
-		return false
+		return pathUseVerdict{reason: "the same command segment redirects output to a target the guard cannot see (an expansion or a glob)"}
 	}
-	return true
+	return pathUseVerdict{readOnly: true}
+}
+
+// readOnlyShellCommandsSummary renders the allowlist for a refusal message,
+// sorted so the text is stable across runs.
+func readOnlyShellCommandsSummary() string {
+	names := make([]string, 0, len(readOnlyShellCommands))
+	for n := range readOnlyShellCommands {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return strings.Join(names, ", ")
 }
 
 // segmentBounds returns the half-open byte range of the command segment
@@ -1920,21 +2131,24 @@ func sandboxLimitsEnv(lim sandbox.Limits) []string {
 // SessionManager.KillAllForSessions rather than a single exact match. The
 // completion goroutine below fires cb exactly once — on natural completion,
 // failure, timeout, or explicit kill (FR-B9) — via whichever ToolResult best
-// describes the final state.
+// describes the final state. baseDir is the same turn base directory
+// executeRun computed; the completion goroutine needs it for the D-14
+// post-command symlink sweep it runs before delivering the result.
 func (t *ExecTool) runBackground(
 	ctx context.Context,
-	command, cwd string,
+	command, cwd, baseDir string,
 	timeoutSeconds int32,
 	lim sandbox.Limits,
 	ownerSessionID string,
 	cb AsyncCallback,
 ) *ToolResult {
+	started := time.Now()
 	sessionID := generateSessionID()
 	session := &ProcessSession{
 		ID:             sessionID,
 		Command:        command,
 		Background:     true,
-		StartTime:      time.Now().Unix(),
+		StartTime:      started.Unix(),
 		Status:         StatusRunning,
 		OwnerSessionID: ownerSessionID,
 	}
@@ -2113,8 +2327,24 @@ func (t *ExecTool) runBackground(
 		// (timeoutSeconds <= 0): nothing ever selects on it in that case.
 		close(naturalCompletionCh)
 
+		// D-14 background coverage (Claude review 2026-09-14): run the
+		// post-command escaping-symlink sweep HERE, at the completion
+		// goroutine — the one place that knows the process has exited and
+		// its pipes are drained, so the walk cannot race a command that is
+		// still writing. Before this, only the foreground path swept, so a
+		// background run could plant the very symlink escape the sweep
+		// exists to name and never be reported. The sweep is report-only
+		// (see sweepAfterRun) and shares its skip conditions (god mode,
+		// unrestricted tool); it runs even when cb is nil so the operator's
+		// audit entry is still written, and its notice is folded into the
+		// completion result the callback delivers. sweepAfterRun reads only
+		// context VALUES off ctx (agent/workspace identity for the policy
+		// lookup and the audit entry), so a turn that has since ended does
+		// not silence it.
+		completion := backgroundCompletionResult(sessionID, finalStatus, finalExitCode, outputSoFar)
+		completion = t.sweepBackgroundCompletion(ctx, command, cwd, baseDir, sessionID, started, completion)
 		if cb != nil {
-			cb(context.Background(), backgroundCompletionResult(sessionID, finalStatus, finalExitCode, outputSoFar))
+			cb(context.Background(), completion)
 		}
 	}()
 
@@ -2131,6 +2361,106 @@ func (t *ExecTool) runBackground(
 		ForLLM:  string(data),
 		ForUser: fmt.Sprintf("Session %s started", sessionID),
 		IsError: marshalErr != nil,
+	}
+}
+
+// sweepBackgroundCompletion runs the D-14 post-command sweep for a finished
+// background session, and cannot take the gateway down with it.
+//
+// WHY THE RECOVER (silent-failure review 2026-09-14, F9). The foreground sweep
+// runs inside a tool call, under the agent loop's own protection. This one
+// runs in runBackground's bare completion goroutine, after the turn that
+// started the command has usually ended — nothing above it catches a panic,
+// so a panic in the sweep or in the policy lookup it makes would crash the
+// whole gateway process, recorded only on stderr (gateway_panic.log covers
+// startup only). A crashed check must not cost the operator every other
+// session, and must not vanish either, so a panic here is turned into:
+//
+//   - the completion result STILL delivered through the callback, with a
+//     plain notice that this run was NOT checked (the agent must not read a
+//     missing sweep report as a clean one);
+//   - one ERROR log carrying the panic value and the stack;
+//   - an audit warning ("escaping_symlink_sweep_failed"), shaped like the
+//     sweep's own "escaping_symlinks" warning, so an operator reviewing audit
+//     sees the gap where a finding would have been.
+func (t *ExecTool) sweepBackgroundCompletion(
+	ctx context.Context,
+	command, cwd, baseDir, sessionID string,
+	started time.Time,
+	completion *ToolResult,
+) (out *ToolResult) {
+	sweep := t.sweepAfterRun
+	if t.backgroundSweepFn != nil {
+		sweep = t.backgroundSweepFn
+	}
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		panicText := fmt.Sprint(r)
+		slog.Error("bash: post-command symlink sweep panicked after a background command finished; delivering the result without the check",
+			"agent_id", ToolAgentID(ctx),
+			"session_id", sessionID,
+			"panic", panicText,
+			"stack", string(debug.Stack()))
+		t.auditBackgroundSweepFailure(ctx, command, cwd, sessionID, panicText)
+		out = completion
+		if completion == nil {
+			return
+		}
+		notice := backgroundSweepFailedNotice()
+		completion.ForLLM = completion.ContentForLLM() + notice
+		if completion.ForUser != "" {
+			completion.ForUser += notice
+		}
+	}()
+	return sweep(ctx, command, cwd, baseDir, started, completion)
+}
+
+// backgroundSweepFailedNotice is appended to a background completion whose
+// post-command sweep crashed. It deliberately carries no panic text: that is
+// internal detail for the operator log, not for the agent-facing result.
+func backgroundSweepFailedNotice() string {
+	return "\n\n[SAFETY GUARD: the post-command symlink check FAILED to run after this command finished, " +
+		"so this run was NOT checked for symlinks pointing outside the workspace. " +
+		"Do not treat the absence of a finding as a clean result. The failure has been recorded for the operator.]"
+}
+
+// auditBackgroundSweepFailure writes the audit warning for a crashed
+// background sweep. The audit write is itself guarded: sweepAfterRun writes
+// audit too, so a panicking audit logger is one plausible cause of the panic
+// being reported, and re-raising it here would crash the gateway after all.
+func (t *ExecTool) auditBackgroundSweepFailure(ctx context.Context, command, cwd, sessionID, panicText string) {
+	if t.auditLogger == nil {
+		return
+	}
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("bash: writing the audit entry for a failed post-command symlink sweep panicked as well",
+				"agent_id", ToolAgentID(ctx),
+				"session_id", sessionID,
+				"panic", fmt.Sprint(r))
+		}
+	}()
+	// Same shape as sweepAfterRun's "escaping_symlinks" entry: the command
+	// was allowed and ran; this is a warning attached to it.
+	if err := t.auditLogger.Log(&audit.Entry{
+		Event:    audit.EventExec,
+		Decision: audit.DecisionAllow,
+		AgentID:  ToolAgentID(ctx),
+		Tool:     t.Name(),
+		Command:  command,
+		Details: map[string]any{
+			"cwd":        cwd,
+			"session_id": sessionID,
+			"warning":    "escaping_symlink_sweep_failed",
+			"error":      panicText,
+			"reason": "the post-command check for symlinks pointing outside the workspace crashed after this background command finished; " +
+				"this run was NOT checked — operator review",
+		},
+	}); err != nil {
+		slog.Warn("bash: audit write failed", "agent_id", ToolAgentID(ctx), "error", err)
 	}
 }
 

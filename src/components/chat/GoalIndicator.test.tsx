@@ -1,4 +1,5 @@
-// GoalIndicator.test.tsx — ADR-049 D6/US-12/FR-094/SD-C9.
+// GoalIndicator.test.tsx — ADR-049 D6/US-12/FR-094/SD-C9; ADR-081 D5/D9
+// (work-first goal flow) for the retired `queued` state.
 //
 // Pure presentational component, driven entirely by props (goalStatus/
 // loopStatus). Covers the ADR-053 9-value pill enum (queued/active/
@@ -11,7 +12,12 @@
 // `/goal clear` renders as a deliberate stop, not a failure (see the
 // `cleared` describe block below). "Renders nothing" is still covered by
 // `goalStatus === null` — `cleared` is a normal non-null frame like any
-// other terminal state.
+// other terminal state. `queued` (ADR-081 D5/D9) is now the ONE non-null
+// state that also renders nothing — it is retired and never emitted by the
+// backend anymore; the wire-enum value survives only in the generated type
+// (Constraint #8), so this component still defensively renders nothing for
+// it rather than the pre-ADR-081 "queued — waiting for a free loop slot"
+// summary line.
 
 import { describe, it, expect } from 'vitest'
 import { render, screen } from '@testing-library/react'
@@ -65,11 +71,22 @@ describe('GoalIndicator — active state', () => {
   })
 })
 
-describe('GoalIndicator — queued state', () => {
-  it('shows a queued summary line and does not show the round line', () => {
-    render(<GoalIndicator goalStatus={makeGoal({ state: 'queued' })} />)
-    expect(screen.getByTestId('goal-indicator-queued')).toHaveTextContent('queued — waiting for a free loop slot')
+// ADR-081 D5/D9: `queued` is retired — the backend never emits it anymore.
+// Unlike every other non-null state, it renders NOTHING (same as a null
+// goalStatus), defensively, in case a stale/legacy frame ever carries it.
+describe('GoalIndicator — queued state (retired, ADR-081 D5/D9)', () => {
+  it('renders nothing for a queued frame — no summary line, no round line, no indicator container', () => {
+    const { container } = render(<GoalIndicator goalStatus={makeGoal({ state: 'queued' })} />)
+    expect(container).toBeEmptyDOMElement()
+    expect(screen.queryByTestId('goal-indicator')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('goal-indicator-queued')).not.toBeInTheDocument()
     expect(screen.queryByTestId('goal-indicator-round')).not.toBeInTheDocument()
+  })
+
+  it('still renders the loop status line alongside a queued (suppressed) goal frame', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'queued' })} loopStatus={makeLoop()} />)
+    expect(screen.getByTestId('loop-status-line')).toBeInTheDocument()
+    expect(screen.queryByTestId('goal-indicator-queued')).not.toBeInTheDocument()
   })
 })
 
@@ -142,6 +159,48 @@ describe('GoalIndicator — cleared state', () => {
     render(<GoalIndicator goalStatus={makeGoal({ state: 'failed' })} />)
     const failedLine = screen.getByTestId('goal-indicator-failed')
     expect(failedLine.className).toContain('color-error')
+  })
+})
+
+// Five states added by the joint ADR-084/ADR-085/ADR-086 delivery (C-39).
+describe('GoalIndicator — judge_refused_god_mode state (JUDGE-FR-057a)', () => {
+  it('shows a distinct, operator-actionable line naming god mode as the cause', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'judge_refused_god_mode' })} />)
+    const line = screen.getByTestId('goal-indicator-judge-refused-god-mode')
+    expect(line).toHaveTextContent('god mode')
+    expect(screen.queryByTestId('goal-indicator-paused')).not.toBeInTheDocument()
+  })
+})
+
+describe('GoalIndicator — judge_cas_loss state (JUDGE-FR-083)', () => {
+  it('shows a distinct line, not the judge_unavailable one', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'judge_cas_loss' })} />)
+    expect(screen.getByTestId('goal-indicator-judge-cas-loss')).toBeInTheDocument()
+    expect(screen.queryByTestId('goal-indicator-paused')).not.toBeInTheDocument()
+  })
+})
+
+describe('GoalIndicator — blocked state (JUDGE-FR-093)', () => {
+  it('shows a distinct line, not the waiting_on_user one', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'blocked' })} />)
+    expect(screen.getByTestId('goal-indicator-blocked')).toBeInTheDocument()
+    expect(screen.queryByTestId('goal-indicator-waiting')).not.toBeInTheDocument()
+  })
+})
+
+describe('GoalIndicator — claim_overturned state (JUDGE-FR-102)', () => {
+  it('shows a distinct "claim overturned" line', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'claim_overturned' })} />)
+    expect(screen.getByTestId('goal-indicator-claim-overturned')).toHaveTextContent('overturned')
+  })
+})
+
+describe('GoalIndicator — expired state (ADR-086 GOAL-FR-028)', () => {
+  it('shows "expired", distinct from failed and cleared', () => {
+    render(<GoalIndicator goalStatus={makeGoal({ state: 'expired' })} />)
+    expect(screen.getByTestId('goal-indicator-expired')).toHaveTextContent('expired')
+    expect(screen.queryByTestId('goal-indicator-failed')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('goal-indicator-cleared')).not.toBeInTheDocument()
   })
 })
 

@@ -1,0 +1,36 @@
+title: RecordGroupKey
+description: >
+  One level of a group's key (ADR-068 D10).
+
+  ABSENT IS ITS OWN GROUP. `absent: true` with no `value` is the group of
+  records that hold no value for the grouping property (D3.2) — it is not
+  merged into an empty-string group and it is not dropped. Grouping that
+  silently discards the records with nothing in the column loses exactly the
+  rows a triage view is looking for.
+type: object
+additionalProperties: false
+required:
+  - property
+  - absent
+properties:
+  property:
+    type: string
+    minLength: 1
+    description: The property this level grouped by.
+    example: "status"
+  absent:
+    type: boolean
+    description: >
+      True when this group holds the records for which the property is absent.
+      When true, `value` is omitted.
+    example: false
+  value:
+    $ref: "./RecordValue.yaml"
+    x-go-type: RecordValue
+  label:
+    type: string
+    description: >
+      Display label for the group heading. For an enum this is the declared
+      label, and groups are ordered by declared position, not by spelling
+      (FR-010).
+    example: "Active"

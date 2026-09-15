@@ -47,7 +47,7 @@ func TestToWireJudgeVerdict_EvidenceQuote(t *testing.T) {
 }
 
 func TestToJudgeVerdictFrame_EvidenceQuote(t *testing.T) {
-	f := toJudgeVerdictFrame(judgeVerdictWithQuotes())
+	f := toJudgeVerdictFrame("", judgeVerdictWithQuotes())
 	require.Len(t, f.PerCriterion, 2)
 
 	require.NotNil(t, f.PerCriterion[0].EvidenceQuote)

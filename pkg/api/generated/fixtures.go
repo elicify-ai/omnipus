@@ -220,6 +220,12 @@ func FixtureDoneFrame_Populated() DoneFrame {
 	dupCount := float64(0)
 	truncCount := float64(1)
 	replayErr := false
+	// ADR-087 D2 (finding #10): truncated + truncation_reason populated so
+	// this fixture actually exercises these two fields — an omitempty field
+	// with no populated fixture would ship green without ever being
+	// validated. Mirrors FixtureReplayMessageFrame_Populated's rationale.
+	truncated := true
+	truncationReason := "max_output_tokens"
 	return DoneFrame{
 		Type:      "done",
 		SessionId: "sess-1",
@@ -233,6 +239,8 @@ func FixtureDoneFrame_Populated() DoneFrame {
 			DuplicateToolCallIdCount: &dupCount,
 			TruncatedResultCount:     &truncCount,
 			ReplayError:              &replayErr,
+			Truncated:                &truncated,
+			TruncationReason:         &truncationReason,
 		},
 	}
 }
@@ -455,14 +463,22 @@ func FixtureReplayMessageFrame_Populated() ReplayMessageFrame {
 	agentId := "jim"
 	msgId := "msg-uuid-1"
 	ts := "2026-05-17T10:00:00Z"
+	// ADR-087 D2: truncated + truncation_reason populated so this fixture
+	// actually exercises the additionalProperties:false schema check for
+	// these two fields — an omitempty field with no populated fixture would
+	// ship green without ever being validated.
+	truncated := true
+	truncationReason := "max_output_tokens"
 	return ReplayMessageFrame{
-		Type:      "replay_message",
-		SessionId: "sess-1",
-		Role:      "assistant",
-		Content:   "Hello! How can I help you today?",
-		AgentId:   &agentId,
-		Id:        &msgId,
-		Timestamp: &ts,
+		Type:             "replay_message",
+		SessionId:        "sess-1",
+		Role:             "assistant",
+		Content:          "Hello! How can I help you today?",
+		AgentId:          &agentId,
+		Id:               &msgId,
+		Timestamp:        &ts,
+		Truncated:        &truncated,
+		TruncationReason: &truncationReason,
 	}
 }
 
@@ -1029,12 +1045,13 @@ func FixtureTask_Populated() Task {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
-		Id         *string                 `json:"id,omitempty"`
-		Judgment   TaskCriteriaJudgment    `json:"judgment"`
-		Kind       TaskCriteriaKind        `json:"kind"`
-		Provenance *TaskCriteriaProvenance `json:"provenance,omitempty"`
-		Status     TaskCriteriaStatus      `json:"status"`
-		Text       string                  `json:"text"`
+		ClauseCount *int                    `json:"clause_count,omitempty"`
+		Id          *string                 `json:"id,omitempty"`
+		Judgment    TaskCriteriaJudgment    `json:"judgment"`
+		Kind        TaskCriteriaKind        `json:"kind"`
+		Provenance  *TaskCriteriaProvenance `json:"provenance,omitempty"`
+		Status      TaskCriteriaStatus      `json:"status"`
+		Text        string                  `json:"text"`
 	}{
 		{
 			Kind:     TaskCriteriaKind("check"),
@@ -1750,8 +1767,6 @@ func FixturePromptGuardUpdateResponse_Edge() PromptGuardUpdateResponse {
 // ── RateLimitsResponse ────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsResponse.yaml
 
-// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
-
 func FixtureRateLimitsResponse_Populated() RateLimitsResponse {
 	return RateLimitsResponse{
 		Enabled:                    true,
@@ -1775,8 +1790,6 @@ func FixtureRateLimitsResponse_Edge() RateLimitsResponse {
 // ── RateLimitsUpdateRequest ───────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsUpdateRequest.yaml
 
-// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
-
 func FixtureRateLimitsUpdateRequest_Populated() RateLimitsUpdateRequest {
 	llm := int64(200)
 	tool := int64(120)
@@ -1797,8 +1810,6 @@ func FixtureRateLimitsUpdateRequest_Edge() RateLimitsUpdateRequest {
 
 // ── RateLimitsUpdateResponse ──────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/RateLimitsUpdateResponse.yaml
-
-// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 
 func FixtureRateLimitsUpdateResponse_Populated() RateLimitsUpdateResponse {
 	llm := int64(200)
@@ -2190,10 +2201,19 @@ func FixtureJudgeVerdict_Populated() JudgeVerdict {
 		Round:  1,
 		Met:    false,
 		PerCriterion: []struct {
-			CriterionId   string  `json:"criterion_id"`
-			EvidenceQuote *string `json:"evidence_quote,omitempty"`
-			Met           bool    `json:"met"`
-			Reason        string  `json:"reason"`
+			CriterionId string `json:"criterion_id"`
+			Evidence    *[]struct {
+				Part   string  `json:"part"`
+				Quote  string  `json:"quote"`
+				Source *string `json:"source,omitempty"`
+				Target *string `json:"target,omitempty"`
+			} `json:"evidence,omitempty"`
+			EvidenceQuote  *string                                 `json:"evidence_quote,omitempty"`
+			EvidenceSource *JudgeVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
+			EvidenceTarget *string                                 `json:"evidence_target,omitempty"`
+			Met            bool                                    `json:"met"`
+			Provenance     *JudgeVerdictPerCriterionProvenance     `json:"provenance,omitempty"`
+			Reason         string                                  `json:"reason"`
 		}{
 			{CriterionId: "550e8400-e29b-41d4-a716-446655440010", Met: false, Reason: "3 tests still failing"},
 		},
@@ -2308,12 +2328,13 @@ func FixturePlanListResponse_Populated() PlanListResponse {
 					Command          string `json:"command"`
 					ExpectedExitCode int    `json:"expected_exit_code"`
 				} `json:"check,omitempty"`
-				Id         *string                             `json:"id,omitempty"`
-				Judgment   PlanListResponsePlansDodJudgment    `json:"judgment"`
-				Kind       PlanListResponsePlansDodKind        `json:"kind"`
-				Provenance *PlanListResponsePlansDodProvenance `json:"provenance,omitempty"`
-				Status     PlanListResponsePlansDodStatus      `json:"status"`
-				Text       string                              `json:"text"`
+				ClauseCount *int                                `json:"clause_count,omitempty"`
+				Id          *string                             `json:"id,omitempty"`
+				Judgment    PlanListResponsePlansDodJudgment    `json:"judgment"`
+				Kind        PlanListResponsePlansDodKind        `json:"kind"`
+				Provenance  *PlanListResponsePlansDodProvenance `json:"provenance,omitempty"`
+				Status      PlanListResponsePlansDodStatus      `json:"status"`
+				Text        string                              `json:"text"`
 			} `json:"dod,omitempty"`
 			FailedReason               *PlanListResponsePlansFailedReason `json:"failed_reason,omitempty"`
 			Goal                       *string                            `json:"goal,omitempty"`
@@ -2394,7 +2415,7 @@ func FixtureWorkspace_ZeroValue() Workspace {
 // Traces to: contracts/components/schemas/ExecutorConfig.yaml
 
 func FixtureExecutorConfig_Populated() ExecutorConfig {
-	kind := ExternalCli
+	kind := ExecutorConfigKindExternalCli
 	cli := ExternalCliToolClaudeCode
 	return ExecutorConfig{
 		Kind: &kind,
@@ -2490,7 +2511,6 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 	description := "Focused research assistant"
 	temperature := 0.7
 	maxTokens := 4096
-	topP := 1.0
 	maxCost := 5.0
 	maxCalls := 100
 	maxTools := 60
@@ -2514,11 +2534,9 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 		ModelParams: &struct {
 			MaxTokens   *int     `json:"max_tokens,omitempty"`
 			Temperature *float64 `json:"temperature,omitempty"`
-			TopP        *float64 `json:"top_p,omitempty"`
 		}{
 			MaxTokens:   &maxTokens,
 			Temperature: &temperature,
-			TopP:        &topP,
 		},
 		RateLimits: &struct {
 			MaxCostPerDay         *float64 `json:"max_cost_per_day,omitempty"`
@@ -2653,7 +2671,7 @@ func FixtureAgentCreateRequestSubagent3p_Populated() AgentCreateRequestSubagent3
 
 	return AgentCreateRequestSubagent3p{
 		Name:           "Claude Code Worker",
-		Type:           Subagent3p,
+		Type:           AgentCreateRequestSubagent3pTypeSubagent3p,
 		Description:    &description,
 		Model:          &model,
 		Provider:       &provider,
@@ -2735,7 +2753,6 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 	description := "Updated description"
 	temperature := 0.5
 	maxTokens := 2048
-	topP := 0.9
 	allow := AgentUpdateRequestToolsCfgBuiltinPoliciesAllow
 	heartbeat := "Check queue every hour."
 	soul := "You are a helpful assistant."
@@ -2756,11 +2773,9 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 		ModelParams: &struct {
 			MaxTokens   *int     `json:"max_tokens,omitempty"`
 			Temperature *float64 `json:"temperature,omitempty"`
-			TopP        *float64 `json:"top_p,omitempty"`
 		}{
 			MaxTokens:   &maxTokens,
 			Temperature: &temperature,
-			TopP:        &topP,
 		},
 		ToolsCfg: &struct {
 			Builtin *struct {

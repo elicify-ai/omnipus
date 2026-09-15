@@ -271,6 +271,30 @@ type approvalRegistryV2 struct {
 	// observable defect rather than a mystery stall, and the counter is
 	// asserted by test rather than a log scrape.
 	missingActingSessionID atomic.Int64
+
+	// resolutionListener, when non-nil, is told about EVERY pending→terminal
+	// transition, whatever caused it: an explicit decision (resolve), the
+	// timeout (fireTimeout), a batch short-circuit, a session Stop
+	// (cancelAllPendingForSessions), the owning agent being deleted
+	// (cancelAllPendingForAgent), or shutdown (cancelAllPendingForRestart).
+	// Protected by mu; read under mu inside each transition and invoked AFTER
+	// mu is released, so a listener may call back into the registry.
+	//
+	// Production wires it to WSHandler.broadcastToolApprovalResolved
+	// (gateway.go). Before it existed, only the tab whose POST caused a
+	// resolution learned of it; every other tab — and every tab after a
+	// server-side resolution such as a Stop or a timeout — kept showing a
+	// dialog whose buttons could only return 410, then 404 once
+	// terminalRetention elapsed.
+	resolutionListener func(entry *approvalEntry, state ApprovalState)
+}
+
+// setResolutionListener installs fn as the registry's resolution listener
+// (see resolutionListener). Passing nil removes it.
+func (r *approvalRegistryV2) setResolutionListener(fn func(entry *approvalEntry, state ApprovalState)) {
+	r.mu.Lock()
+	r.resolutionListener = fn
+	r.mu.Unlock()
 }
 
 // defaultTerminalRetention is the grace window during which a terminal-state
@@ -399,6 +423,7 @@ func (r *approvalRegistryV2) requestApproval(
 	// Arm the timeout timer (FR-016, SC-006: default gateway.go::defaultToolApprovalTimeout).
 	e.timer = time.AfterFunc(r.timeout, func() {
 		r.fireTimeout(e.ApprovalID)
+		r.notifyTimedOut(e)
 	})
 
 	r.entries[e.ApprovalID] = e
@@ -423,6 +448,23 @@ func (r *approvalRegistryV2) fireTimeout(approvalID string) {
 
 	slog.Info("approval: timeout fired", "approval_id", approvalID, "tool", e.ToolName)
 	e.resultCh <- ApprovalOutcome{Approved: false, Reason: "timeout"}
+}
+
+// notifyTimedOut tells the resolution listener about a timeout transition.
+// It sits beside fireTimeout rather than inside it because fireTimeout's body
+// is held byte-for-byte unchanged by ADR-058 FR-058-04. Only fireTimeout ever
+// sets ApprovalStateDeniedTimeout and each entry's timer fires at most once,
+// so observing that state here means THIS timer made the transition; a
+// resolution that won the race left a different terminal state and notified
+// from its own path.
+func (r *approvalRegistryV2) notifyTimedOut(e *approvalEntry) {
+	r.mu.Lock()
+	timedOut := e.state == ApprovalStateDeniedTimeout
+	listener := r.resolutionListener
+	r.mu.Unlock()
+	if timedOut && listener != nil {
+		listener(e, ApprovalStateDeniedTimeout)
+	}
 }
 
 // resolve applies an explicit action (approve/deny/cancel) to a pending approval.
@@ -479,9 +521,13 @@ func (r *approvalRegistryV2) resolve(
 	}
 	r.pendingCount.Add(-1)
 	r.scheduleTerminalDelete(approvalID)
+	listener := r.resolutionListener
 	r.mu.Unlock()
 
 	e.resultCh <- outcome
+	if listener != nil {
+		listener(e, newState)
+	}
 	return true, false
 }
 
@@ -502,9 +548,13 @@ func (r *approvalRegistryV2) cancelBatchShortCircuit(approvalID string) bool {
 	}
 	r.pendingCount.Add(-1)
 	r.scheduleTerminalDelete(approvalID)
+	listener := r.resolutionListener
 	r.mu.Unlock()
 
 	e.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonBatchShortCircuit}
+	if listener != nil {
+		listener(e, ApprovalStateDeniedBatchShortCircuit)
+	}
 	return true
 }
 
@@ -559,11 +609,14 @@ func (r *approvalRegistryV2) cancelAllPendingForRestart() []approvalEntry {
 	for _, id := range cancelledIDs {
 		r.scheduleTerminalDelete(id)
 	}
+	listener := r.resolutionListener
 	r.mu.Unlock()
 
-	for _, snap := range canceled {
-		// capture loop variable
-		snap.resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonRestart}
+	for i := range canceled {
+		canceled[i].resultCh <- ApprovalOutcome{Approved: false, Reason: denialReasonRestart}
+		if listener != nil {
+			listener(&canceled[i], ApprovalStateDeniedRestart)
+		}
 	}
 	return canceled
 }
@@ -607,14 +660,41 @@ func (r *approvalRegistryV2) cancelAllPendingForSessions(sessionIDs []string, re
 		return 0
 	}
 
+	n := r.cancelPendingMatching(func(e *approvalEntry) bool {
+		_, hit := targets[e.SessionID]
+		return hit
+	}, reason)
+	slog.Info("approval: auto-denied pending approvals on session cancel",
+		"session_ids", sessionIDs, "count", n, "reason", reason)
+	return n
+}
+
+// cancelAllPendingForAgent auto-denies every pending approval raised by
+// agentID, using ApprovalStateDeniedCancel and delivering reason verbatim.
+// Called when the agent is deleted (pkg/gateway/rest.go's deleteAgent): its
+// pending approvals can no longer be meaningfully granted, and leaving them
+// pending strands the blocked turn and every open approval dialog until the
+// timeout. An empty agentID matches nothing.
+func (r *approvalRegistryV2) cancelAllPendingForAgent(agentID, reason string) int {
+	if agentID == "" {
+		return 0
+	}
+	n := r.cancelPendingMatching(func(e *approvalEntry) bool { return e.AgentID == agentID }, reason)
+	slog.Info("approval: auto-denied pending approvals for deleted agent",
+		"agent_id", agentID, "count", n, "reason", reason)
+	return n
+}
+
+// cancelPendingMatching transitions every PENDING entry for which match
+// returns true to ApprovalStateDeniedCancel, delivers {Approved: false,
+// Reason: reason} to each blocked caller, and notifies the resolution
+// listener once per entry. match runs under r.mu and must not call back into
+// the registry. Returns the number of entries transitioned.
+func (r *approvalRegistryV2) cancelPendingMatching(match func(e *approvalEntry) bool, reason string) int {
 	r.mu.Lock()
 	var toDeliver []*approvalEntry
-	cancelledIDs := make([]string, 0)
 	for _, e := range r.entries {
-		if e.state != ApprovalStatePending {
-			continue
-		}
-		if _, hit := targets[e.SessionID]; !hit {
+		if e.state != ApprovalStatePending || !match(e) {
 			continue
 		}
 		e.state = ApprovalStateDeniedCancel
@@ -623,19 +703,20 @@ func (r *approvalRegistryV2) cancelAllPendingForSessions(sessionIDs []string, re
 			e.timer = nil
 		}
 		toDeliver = append(toDeliver, e)
-		cancelledIDs = append(cancelledIDs, e.ApprovalID)
 		r.pendingCount.Add(-1)
 	}
-	for _, id := range cancelledIDs {
-		r.scheduleTerminalDelete(id)
+	for _, e := range toDeliver {
+		r.scheduleTerminalDelete(e.ApprovalID)
 	}
+	listener := r.resolutionListener
 	r.mu.Unlock()
 
 	for _, e := range toDeliver {
 		e.resultCh <- ApprovalOutcome{Approved: false, Reason: reason}
+		if listener != nil {
+			listener(e, ApprovalStateDeniedCancel)
+		}
 	}
-	slog.Info("approval: auto-denied pending approvals on session cancel",
-		"session_ids", sessionIDs, "count", len(toDeliver), "reason", reason)
 	return len(toDeliver)
 }
 

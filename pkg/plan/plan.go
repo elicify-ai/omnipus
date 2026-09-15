@@ -346,12 +346,6 @@ const (
 	FailedReasonJudgeRoundsExhausted FailedReason = "judge_rounds_exhausted"
 	FailedReasonStoppedByUser        FailedReason = "stopped_by_user"
 	FailedReasonIdleExpired          FailedReason = "idle_expired"
-	// FailedReasonBudgetExhausted is the ADR-053 D12/R§8.3c/FR-174 graceful
-	// wind-down terminal for a plan/task scope that crosses the app-level
-	// OVERALL token budget at a dispatch/adjudication boundary (the same brake
-	// the goal loop surfaces). The contract enum
-	// (contracts/components/schemas/Plan.yaml failed_reason) already lists it.
-	FailedReasonBudgetExhausted FailedReason = "budget_exhausted"
 	// FailedReasonDoDUnreachable (ADR-055/FR-035) is the honest-exit terminal:
 	// the Definition of Done cannot be reached from the plan's current state,
 	// either because an applied correction left the plan unable to progress or
@@ -378,7 +372,6 @@ var validFailedReasons = map[FailedReason]bool{ //nolint:gochecknoglobals
 	FailedReasonJudgeRoundsExhausted:   true,
 	FailedReasonStoppedByUser:          true,
 	FailedReasonIdleExpired:            true,
-	FailedReasonBudgetExhausted:        true,
 	FailedReasonDoDUnreachable:         true,
 	FailedReasonSupervisionUnavailable: true,
 }
@@ -401,17 +394,67 @@ func IsValidFailedReason(r FailedReason) bool { return validFailedReasons[r] }
 // FailedReason/PlanPhase's validity CONCEPT without their Go type.
 const PausedReasonOwnerDisabled = "owner_disabled"
 
-// validPausedReasons is the closed set IsValidPausedReason checks against.
-// The empty string ("not paused") is handled separately by every caller
-// (never a member of this set), exactly like PlanPhase/FailedReason's own
-// "empty means unset" convention.
+// PausedReasonJudgeUnavailable is the stable PREFIX of the PausedReason a
+// running plan carries while its in-flight plan-level judge round is waiting
+// out the D7 backoff on an unavailable Judge (provider outage, SEC-26 denial,
+// turn timeout, Judge agent not registered). pkg/agent's plan engine sets it
+// before each backoff sleep and clears it the moment a judge call succeeds or
+// the round ends by any path.
+//
+// Unlike PausedReasonOwnerDisabled this is a PREFIX, not a whole value: the
+// operator-facing string carries the cause and the retry interval after a
+// colon ("judge temporarily unavailable: provider outage; retrying in 1m0s"),
+// because the whole point of the field here is telling a human on the board
+// WHY a plan has been sitting at plan_phase=judging. The reason KIND stays
+// closed (only the two constants in this block are ever valid); only the
+// human-readable detail after the colon varies. Keep the prefix itself stable
+// — the SPA chip and tests/e2e/conformance-design-plan-e2e.spec.ts both
+// discriminate this pause from an owner-disabled one by prefix match.
+const PausedReasonJudgeUnavailable = "judge temporarily unavailable"
+
+// validPausedReasons is the closed set of exact-match paused reasons
+// IsValidPausedReason checks against. The empty string ("not paused") is
+// handled separately by every caller (never a member of this set), exactly
+// like PlanPhase/FailedReason's own "empty means unset" convention.
+// PausedReasonJudgeUnavailable is deliberately NOT here — it is prefix-matched
+// (see IsJudgeUnavailablePausedReason).
 var validPausedReasons = map[string]bool{ //nolint:gochecknoglobals
 	PausedReasonOwnerDisabled: true,
 }
 
 // IsValidPausedReason reports whether r is a known, explicit non-empty
-// paused reason (fix-wave finding 6(b)).
-func IsValidPausedReason(r string) bool { return validPausedReasons[r] }
+// paused reason (fix-wave finding 6(b)) — an exact member of the closed set,
+// or the judge-unavailability reason with its variable detail suffix.
+func IsValidPausedReason(r string) bool {
+	return validPausedReasons[r] || IsJudgeUnavailablePausedReason(r)
+}
+
+// IsJudgeUnavailablePausedReason reports whether r is the judge-unavailability
+// paused reason — the bare prefix, or the prefix followed by a detail suffix
+// introduced by one of the two documented separators: ":" (the cause) or ";"
+// (the retry interval, when there is no cause to state). This is the ONE place
+// the prefix rule lives: pkg/agent's plan engine uses it as the guard that
+// stops a judge-round pause from clobbering (or later clearing) an
+// owner-disabled pause.
+//
+// The separator requirement is deliberate. A bare strings.HasPrefix would also
+// accept "judge temporarily unavailableXYZ" — i.e. it would silently open the
+// closed reason-KIND set to anything sharing a leading substring, which is the
+// exact property the closed set exists to deny.
+func IsJudgeUnavailablePausedReason(r string) bool {
+	if r == PausedReasonJudgeUnavailable {
+		return true
+	}
+	if !strings.HasPrefix(r, PausedReasonJudgeUnavailable) {
+		return false
+	}
+	switch r[len(PausedReasonJudgeUnavailable)] {
+	case ':', ';':
+		return true
+	default:
+		return false
+	}
+}
 
 // PlanBounds holds per-plan overrides of the global config.PlanningConfig
 // bounds (ADR D7/FR-9, spec Part A §A). A nil field inherits that field's
@@ -684,9 +727,13 @@ func (p *Plan) normalize() error {
 	if len([]rune(p.Description)) > maxPlanDescriptionRunes {
 		return verr("description must be %d characters or fewer", maxPlanDescriptionRunes)
 	}
-	if len([]rune(p.HandoverText)) > maxPlanHandoverRunes {
-		return verr("handover_text must be %d characters or fewer", maxPlanHandoverRunes)
-	}
+	// HandoverText is CLAMPED, not rejected — it is the one bounded field on
+	// this struct that is server-set from provider-controlled input, with no
+	// author in the loop who could shorten it. Rejecting it does not produce
+	// a shorter note, it produces no note at all and a deterministically
+	// failing write. See handover_clamp.go for the full rationale and for why
+	// Store.write clamps again as the unbypassable last mile.
+	clampPlanHandover(p)
 	if len([]rune(p.Rationale)) > maxPlanRationaleRunes {
 		return verr("rationale must be %d characters or fewer", maxPlanRationaleRunes)
 	}
@@ -772,6 +819,70 @@ const (
 	// MaxTextBytes caps each free-text correction field.
 	MaxTextBytes = 8192
 )
+
+// MaxConsecutiveJudgeUnavailable caps how many times in a row a plan-level
+// judge round may be abandoned as UNAVAILABLE before the plan is parked at
+// PhaseStalled and the adjudicator is woken, instead of being retried again.
+//
+// WHY THIS BOUND EXISTS (UAT defect B). An abandoned round deliberately burns
+// NO judge round — judge unavailability is usually a transient model timeout
+// or rate-limit, and making the user pay a correction round for the provider's
+// hiccup would be wrong. But "costs nothing" was implemented as "retry
+// forever": the abandon path reverted plan_phase to `dispatching`, the next
+// tick found the DAG still all-terminal and started another round, that round
+// timed out too, and the plan oscillated dispatching -> judging -> dispatching
+// indefinitely at progress=1.0 with judge_rounds frozen. Observed live for
+// 16+ minutes and still not terminal, rendering the whole time as an ordinary
+// "Running / Judging" chip with no error and no way to tell a stall from real
+// work — the silent-stuck class this project treats as a serious bug
+// (docs/internal/false-green-patterns.md).
+//
+// The value is a compromise between the two ways of being wrong. Too low and a
+// single slow provider minute escalates a healthy plan to a human; too high
+// and the invisible window grows back. Three consecutive failures is well
+// past any transient hiccup — each attempt is itself a full judge turn that
+// only reaches this path after its OWN context deadline expires, so three
+// abandonments already represent several minutes of sustained unavailability.
+//
+// It is a plain constant rather than a Bounds/config field on purpose: it is a
+// backstop against a broken invariant, not a knob a plan author should be
+// tuning, and a shipped wire field is far harder to retract than a constant is
+// to promote (the same reasoning the correction caps above are held to).
+const MaxConsecutiveJudgeUnavailable = 3
+
+// MaxJudgeUnavailableParkAttempts caps how many times in a row the engine will
+// re-attempt the PhaseStalled park above before giving up on parking and
+// ending the plan at failed(supervision_unavailable) instead.
+//
+// WHY THIS SECOND BOUND EXISTS (H1 review finding against the first fix).
+// MaxConsecutiveJudgeUnavailable is only enforceable if the park it triggers
+// actually takes effect. The park is a store WRITE, and a write can fail — a
+// full disk, an unwritable data directory, a corrupt plan file, a rejected
+// patch. When it did, the engine logged an ERROR and returned with the plan
+// still phased `judging`; processPlan's crash-resume arm then started another
+// judge round on the very next tick, the streak climbed to 4, 5, 6..., and the
+// original unbounded loop resumed verbatim — one ERROR line per iteration and
+// no terminal state, which is the exact behaviour the first bound was added to
+// end. The hold-back gate could not stop it, because it also required the
+// phase the failed write never set.
+//
+// So the park is now re-attempted from processPlan itself, and THAT retry is
+// what this constant bounds. The counter measures the park not TAKING EFFECT
+// (the engine finding the plan still at `judging` while its streak is at the
+// bound), not the Update call returning an error — so it also covers a park
+// that is written successfully and then reverted by something else, which no
+// error-counting version could see.
+//
+// Past the bound the plan is failed closed rather than parked again: a park
+// that cannot be persisted cannot be seen by the adjudicator, cannot be
+// corrected and cannot terminate, so it is not a park at all. The terminal
+// write IS retried until it lands (never the judge round) — an engine whose
+// store accepts no write has no better move, and in the meantime no judge
+// round runs, no LLM call is made and the streak cannot grow.
+//
+// Three is the same compromise value, for the same reason, as the constant
+// above: past a transient failure, short of an invisible window.
+const MaxJudgeUnavailableParkAttempts = 3
 
 // CorrectionCaller is the authenticated principal issuing a correction
 // (sec-MAJOR-2). Whoever consumes it decides what authority the identity

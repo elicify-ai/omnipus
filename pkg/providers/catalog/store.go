@@ -57,7 +57,11 @@ func (s *FileStore) Read(_ context.Context) ([]byte, error) {
 }
 
 // Write atomically replaces the persisted file.
-func (s *FileStore) Write(_ context.Context, data []byte) error {
+func (s *FileStore) Write(ctx context.Context, data []byte) error {
+	// Never write into a data dir whose owner has already given up on it.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	return fileutil.WriteFileAtomic(s.path, data, 0o600)
 }
 

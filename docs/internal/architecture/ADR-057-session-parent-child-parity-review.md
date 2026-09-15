@@ -5,6 +5,8 @@
 - **Mode:** structured-spec (ADR with labelled decisions D1–D5, risks R-1–R-6, work items 1–9; no BDD/FR-ID/traceability matrix)
 - **Grounding:** verified against the live tree on `feature/plan-swimlane-board` @ `0ee87fbe`, via one direct pass plus six parallel exhaustive sweeps (transcript-id consumers, WS frame routing, the durable edge, history replay, the cancel/steering surface, session-store scaling). Every file:line below was opened.
 
+> **ADR-082 note (2026-09-08):** this review's "ADR-045 watchdog" / `hasLiveCriticalDelegate` / `orphan_watch.go` findings describe a mechanism [ADR-082](ADR-082-ui-independent-turns-and-session-bound-streaming.md) D1 has since deleted in full, not merely disabled. Read those passages as history — the interlock, the file, and `hasLiveCriticalDelegate` no longer exist in the tree. Unrelated uses of "orphan" in this document are untouched.
+
 ---
 
 ## 1. Executive summary

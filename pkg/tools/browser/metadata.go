@@ -64,6 +64,19 @@ func BrowserBuiltinMetadata() []tools.Tool {
 		// dereference, per this file's binding invariant: these instances
 		// carry a nil *BrowserManager and are never Execute()d.
 		&HandleDialogTool{},
+		// ADR-085 D7 (BROWSER-FR-046/FR-051) — browser_handover, the agent's
+		// own voluntary hand-over of the wheel to the human operator. Same
+		// binding invariant as every entry above: Name/Description/Category
+		// are static strings, this instance carries a nil resolver and is
+		// never Execute()d.
+		//
+		// It is registered unconditionally at runtime (register.go), so its
+		// ABSENCE here was not a "held" tool like browser_upload_file below —
+		// it was a coverage hole: buildKnownBuiltinToolNames (pkg/gateway/
+		// gateway.go) builds the Constraint #6 tool-policy universe from THIS
+		// catalog, so a registered-but-uncatalogued tool falls outside
+		// ReconcileToolPolicyCeiling's reach and outside GET /api/v1/tools.
+		&HandoverTool{},
 		// browser_upload_file appears HERE while it is deliberately absent
 		// from RegisterTools (FR-029, issue #659). That asymmetry is the
 		// point: "held" means unregistered, not unseeded. The name must be in

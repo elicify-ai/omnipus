@@ -115,11 +115,25 @@ func TestIdleTimeout_FireSeam_TriggersCloseSession(t *testing.T) {
 	}
 
 	// A retro file must also exist with trigger=idle.
+	//
+	// AppendRetro (memory.go) is NOT atomic from a concurrent reader's point
+	// of view: it os.OpenFile(O_CREATE|O_APPEND)s the path, THEN writes the
+	// content in a separate syscall. os.ReadDir can observe the just-created
+	// (still-empty) file in the sliver between those two steps. The original
+	// form of this loop treated "the filename showed up in ReadDir" as proof
+	// the write was complete, read it exactly ONCE, and — on catching that
+	// sliver — failed permanently on an empty/partial read with no retry.
+	// That is a genuine intra-test race, not a load simulation: it is more
+	// likely to fire under scheduling contention (which delays the writer
+	// between its two syscalls, or delays this loop's iteration to land in
+	// that widened window), but it can fire at any load. The fix is to keep
+	// polling — re-reading the file — until its CONTENT is actually there,
+	// not just its directory entry, using the same 5s budget as before.
 	retrosDir := filepath.Join(ag.Home, ".omnipus", "retros")
-	var foundRetro bool
 	var retroBytes []byte
+	var sawRetroFile bool
 	retroDeadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(retroDeadline) && !foundRetro {
+	for time.Now().Before(retroDeadline) {
 		dateDirs, rerr := os.ReadDir(retrosDir)
 		if rerr != nil {
 			if !os.IsNotExist(rerr) {
@@ -128,6 +142,8 @@ func TestIdleTimeout_FireSeam_TriggersCloseSession(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
+		var content []byte
+		var found bool
 		for _, d := range dateDirs {
 			if !d.IsDir() {
 				continue
@@ -135,20 +151,28 @@ func TestIdleTimeout_FireSeam_TriggersCloseSession(t *testing.T) {
 			files, _ := os.ReadDir(filepath.Join(retrosDir, d.Name()))
 			for _, f := range files {
 				if strings.HasSuffix(f.Name(), "_retro.md") {
-					foundRetro = true
-					retroBytes, _ = os.ReadFile(filepath.Join(retrosDir, d.Name(), f.Name()))
+					found = true
+					data, readErr := os.ReadFile(filepath.Join(retrosDir, d.Name(), f.Name()))
+					if readErr == nil {
+						content = data
+					}
 				}
 			}
 		}
-		if !foundRetro {
-			time.Sleep(20 * time.Millisecond)
+		if found {
+			sawRetroFile = true
+			retroBytes = content
 		}
+		if found && strings.Contains(string(content), "trigger=idle") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if !foundRetro {
+	if !sawRetroFile {
 		t.Fatal("no _retro.md produced within 5s after fireIdleTimeout")
 	}
 	if !strings.Contains(string(retroBytes), "trigger=idle") {
-		t.Errorf("retro must record trigger=idle; got:\n%s", retroBytes)
+		t.Errorf("retro must record trigger=idle within 5s; last observed content:\n%s", retroBytes)
 	}
 
 	// Ensure al.Close() drains recapWG cleanly (no goroutine leak).

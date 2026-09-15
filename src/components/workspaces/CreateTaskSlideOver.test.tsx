@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { CreateTaskSlideOver } from './CreateTaskSlideOver'
@@ -90,6 +90,29 @@ async function openAgentPicker(): Promise<HTMLElement> {
   return agentTrigger
 }
 
+// Add one criterion/DoD item through the shared AcceptanceCriteriaEditor:
+// type into the input identified by its accessible name, then click the
+// "Add criterion" button SCOPED to that same draft panel — the Acceptance
+// criteria and Definition of Done editors render two instances of the same
+// component, each with its own "Add criterion" button, so an unscoped query
+// would be ambiguous whenever both are on the page (GOAL-FR-047/FR-048).
+function addCriterionLike(inputLabel: RegExp, text: string) {
+  const input = screen.getByLabelText(inputLabel)
+  fireEvent.change(input, { target: { value: text } })
+  const draftPanel = input.parentElement as HTMLElement
+  fireEvent.click(within(draftPanel).getByRole('button', { name: /add criterion/i }))
+}
+
+// GOAL-FR-047/FR-053/FR-056: fills every field the create form now requires
+// before it will accept a submission — Title, Goal, one acceptance
+// criterion and one definition-of-done item.
+function fillRequiredFields(title: string) {
+  fireEvent.change(screen.getByLabelText(/title/i), { target: { value: title } })
+  fireEvent.change(screen.getByLabelText(/^goal/i), { target: { value: 'Do the thing well.' } })
+  addCriterionLike(/what must be true when this is done\?/i, 'A criterion is satisfied.')
+  addCriterionLike(/definition of done item/i, 'A DoD item is satisfied.')
+}
+
 // ── API mock ─────────────────────────────────────────────────────────────────
 
 vi.mock('@/lib/api', async (importOriginal) => {
@@ -98,6 +121,9 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchAgents: vi.fn().mockResolvedValue([]),
     fetchTasks: vi.fn().mockResolvedValue([]),
+    // GOAL-FR-059: the create form now offers its own Plan picker; an empty
+    // list keeps it out of the way for tests that don't exercise it.
+    fetchPlans: vi.fn().mockResolvedValue([]),
     // Fix B: the assignee picker's workspace-team scoping — see the
     // "assignee picker is workspace-team-scoped" describe block below.
     fetchWorkspaceDelegation: vi.fn(),
@@ -118,6 +144,7 @@ import {
   updateTask,
   fetchAgents,
   fetchTasks,
+  fetchPlans,
   fetchWorkspaceDelegation,
 } from '@/lib/api'
 
@@ -186,6 +213,7 @@ function renderSlideOver(props: Partial<{
 beforeEach(() => {
   vi.mocked(fetchAgents).mockResolvedValue([])
   vi.mocked(fetchTasks).mockResolvedValue([])
+  vi.mocked(fetchPlans).mockReset().mockResolvedValue([])
   // Default: the workspace-team query fails (unmocked in most tests, which
   // don't care about team-scoping) — this is the DEGRADED fallback path
   // (buildTaskAssigneeItems / useWorkspaceTeamIds), which offers the full
@@ -203,17 +231,21 @@ describe('CreateTaskSlideOver — renders all fields', () => {
   it('renders with all expected form fields and action buttons', async () => {
     // BDD: Given the CreateTaskSlideOver is open,
     // When it renders,
-    // Then Title, Prompt, Priority, Tags, Acceptance criteria, Agent, Create, and Create & Run are visible.
+    // Then Title, Goal, Priority, Plan, Tags, Acceptance criteria,
+    // Definition of Done, Agent, Create, and Create & Run are visible.
     renderSlideOver()
 
     // Title field — by label
     expect(screen.getByLabelText(/title/i)).toBeInTheDocument()
 
-    // Prompt / Instructions field
-    expect(screen.getByLabelText(/prompt/i)).toBeInTheDocument()
+    // Goal field (GOAL-FR-056 — renamed from "Prompt")
+    expect(screen.getByLabelText(/^goal/i)).toBeInTheDocument()
 
     // Priority label is present
     expect(screen.getByText(/priority/i)).toBeInTheDocument()
+
+    // Plan picker (GOAL-FR-059 — new)
+    expect(screen.getByText(/^plan$/i)).toBeInTheDocument()
 
     // Tags input (ADR-049 — replaces the milestone selector). The "Add tag"
     // text input and its adjacent add-button share the same accessible name
@@ -222,6 +254,9 @@ describe('CreateTaskSlideOver — renders all fields', () => {
 
     // Acceptance criteria editor is present
     expect(screen.getByText(/acceptance criteria/i)).toBeInTheDocument()
+
+    // Definition of Done editor is present (GOAL-FR-048 — new)
+    expect(screen.getByText(/definition of done/i)).toBeInTheDocument()
 
     // Create button
     expect(screen.getByRole('button', { name: /^create$/i })).toBeInTheDocument()
@@ -244,7 +279,7 @@ describe('CreateTaskSlideOver — Create button calls createTask and lands in in
 
     renderSlideOver()
 
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'My task' } })
+    fillRequiredFields('My task')
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
@@ -254,6 +289,9 @@ describe('CreateTaskSlideOver — Create button calls createTask and lands in in
     expect(callArg.action).toBe('llm')
     expect(callArg.surface).toBe('user')
     expect(callArg.workspace_id).toBe('proj-test')
+    // GOAL-FR-047: both mandatory lists ride along in the body.
+    expect(callArg.criteria).toHaveLength(1)
+    expect(callArg.dod).toHaveLength(1)
     // No status field in the create body
     expect((callArg as Record<string, unknown>).status).toBeUndefined()
     // No updateTask call for plain "Create"
@@ -275,7 +313,7 @@ describe('CreateTaskSlideOver — Create button calls createTask and lands in in
       </QueryClientProvider>,
     )
     vi.mocked(createTask).mockResolvedValueOnce(inboxTask as never)
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Task A' } })
+    fillRequiredFields('Task A')
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledTimes(1))
     expect(vi.mocked(updateTask)).not.toHaveBeenCalled()
@@ -292,7 +330,7 @@ describe('CreateTaskSlideOver — Create button calls createTask and lands in in
     )
     vi.mocked(createTask).mockResolvedValueOnce(runTask as never)
     vi.mocked(updateTask).mockResolvedValueOnce(runTaskInProgress as never)
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Task B' } })
+    fillRequiredFields('Task B')
     fireEvent.click(screen.getByRole('button', { name: /create & run/i }))
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledTimes(1))
     await waitFor(() => expect(vi.mocked(updateTask)).toHaveBeenCalledTimes(1))
@@ -313,7 +351,7 @@ describe('CreateTaskSlideOver — Create & Run calls createTask then PATCH in_pr
 
     renderSlideOver()
 
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Start immediately' } })
+    fillRequiredFields('Start immediately')
     fireEvent.click(screen.getByRole('button', { name: /create & run/i }))
 
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
@@ -410,7 +448,7 @@ describe('CreateTaskSlideOver — worker-type agents are offered as assignees', 
     fireEvent.pointerDown(workerOption, { pointerId: 1, button: 0 })
     fireEvent.click(workerOption)
 
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Delegate to worker' } })
+    fillRequiredFields('Delegate to worker')
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
@@ -433,7 +471,7 @@ describe('CreateTaskSlideOver — worker-type agents are offered as assignees', 
     fireEvent.pointerDown(workerOption, { pointerId: 1, button: 0 })
     fireEvent.click(workerOption)
 
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Delegate to worker' } })
+    fillRequiredFields('Delegate to worker')
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
 
     await waitFor(() => expect(mockAddToast).toHaveBeenCalledWith(
@@ -593,90 +631,23 @@ describe('CreateTaskSlideOver — assignee picker is workspace-team-scoped (Fix 
   })
 })
 
-describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / due / todos)', () => {
+describe('CreateTaskSlideOver — full task UX fields (depends-on / due / todos)', () => {
   function makeWsTask(over: Record<string, unknown> = {}) {
     return makeCreatedTask({ id: 'dep-1', title: 'Existing dependency', ...over })
   }
 
-  it('posts a once trigger with at_ms when "Once" is selected with a datetime', async () => {
-    vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask({ title: 'Trig' }) as never)
-    Element.prototype.scrollIntoView = vi.fn()
+  // GOAL-FR-060: the Trigger control is REMOVED from the create form in
+  // full — a normal task has no timer (it starts by a human pressing Start,
+  // an agent starting it, or a plan reaching it). Time-based starts stay the
+  // calendar's own job. This is the create-half regression; the cross-form
+  // assertion that BOTH forms agree lives in U5's taskFormNoTrigger.test.tsx.
+  it('renders no Trigger control anywhere on the form', async () => {
     renderSlideOver()
 
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Trig' } })
-
-    // Open the Trigger select and pick "Once"
-    const trigCombo = document.getElementById('ct-trigger') as HTMLElement
-    fireEvent.click(trigCombo)
-    fireEvent.click(await screen.findByText(/once \(at a time\)/i))
-
-    // Pick the date + time via the DateTimePicker (calendar day + Hour/Minute selects)
-    await pickDateTime(/trigger date and time/i, { isoDate: '2026-07-31', hour: '17', minute: '00' })
-
-    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
-    await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
-
-    const body = vi.mocked(createTask).mock.calls[0][0]
-    expect(body.trigger?.type).toBe('once')
-    expect(typeof body.trigger?.config.at_ms).toBe('number')
-    expect(body.trigger?.config.at_ms).toBe(new Date('2026-07-31T17:00').getTime())
-    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
-  })
-
-  // FR-011/US-3.3 (test 23): recurring trigger options are removed from the
-  // generic create form entirely — recurring tasks are calendar-only (D3),
-  // created/edited exclusively via the calendar's event slide-over. The two
-  // tests that used to post `every`/`recurring` triggers from this form are
-  // replaced by the trim-verification tests below; `every`/`recurring`
-  // remain wire-legal (no enum change) but no form produces them anymore.
-  it('the Trigger dropdown offers only "None (manual)" and "Once (at a time)" — no recurring options', async () => {
-    Element.prototype.scrollIntoView = vi.fn()
-    renderSlideOver()
-
-    fireEvent.click(document.getElementById('ct-trigger') as HTMLElement)
-
-    // Query by role="option" — the closed trigger's own selected-value
-    // display ALSO reads "None (manual)" (the default), so a plain
-    // getByText would ambiguously match both it and the open option.
-    expect(await screen.findByRole('option', { name: /none \(manual\)/i })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: /once \(at a time\)/i })).toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: /every \(interval\)/i })).toBeNull()
-    expect(screen.queryByRole('option', { name: /recurring \(cron\)/i })).toBeNull()
-    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
-  })
-
-  it('renders no cron input or interval input anywhere in the form, regardless of trigger selection', async () => {
-    Element.prototype.scrollIntoView = vi.fn()
-    renderSlideOver()
-
-    // Default (manual) — no trigger-related date/cron/interval controls.
-    expect(screen.queryByLabelText(/cron expression/i)).toBeNull()
-    expect(screen.queryByLabelText(/interval in minutes/i)).toBeNull()
-
-    // Switch to the only other offered kind, "Once" — still no cron/interval
-    // input; only the date/time picker appears.
-    fireEvent.click(document.getElementById('ct-trigger') as HTMLElement)
-    fireEvent.click(await screen.findByText(/once \(at a time\)/i))
-
-    expect(await screen.findByRole('button', { name: /trigger date and time/i })).toBeInTheDocument()
-    expect(screen.queryByLabelText(/cron expression/i)).toBeNull()
-    expect(screen.queryByLabelText(/interval in minutes/i)).toBeNull()
-    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
-  })
-
-  it('blocks Create when "Once" is selected but no datetime is set', async () => {
-    Element.prototype.scrollIntoView = vi.fn()
-    renderSlideOver()
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'No time' } })
-    fireEvent.click(document.getElementById('ct-trigger') as HTMLElement)
-    fireEvent.click(await screen.findByText(/once \(at a time\)/i))
-
-    fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
-    // Two DateTimePicker triggers (Trigger + Due) also show "Pick a date and time" as
-    // their empty placeholder, so match the error paragraph text uniquely.
-    expect(await screen.findByText(/pick a date and time for the one-time trigger/i)).toBeInTheDocument()
-    expect(vi.mocked(createTask)).not.toHaveBeenCalled()
-    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+    expect(screen.queryByText(/^trigger$/i)).toBeNull()
+    expect(document.getElementById('ct-trigger')).toBeNull()
+    expect(screen.queryByRole('option', { name: /once \(at a time\)/i })).toBeNull()
+    expect(screen.queryByLabelText(/trigger date and time/i)).toBeNull()
   })
 
   it('posts blocked_by with the selected dependency task IDs', async () => {
@@ -687,7 +658,7 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
     vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
     renderSlideOver()
 
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Dependent' } })
+    fillRequiredFields('Dependent')
 
     // Open the depends-on popover and check one dependency
     fireEvent.click(await screen.findByText(/no dependencies/i))
@@ -723,7 +694,7 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
     vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
     renderSlideOver()
 
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'With due' } })
+    fillRequiredFields('With due')
     await pickDateTime(/^due date$/i, { isoDate: '2026-08-01', hour: '09', minute: '00' })
 
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
@@ -733,12 +704,15 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
     expect(body.due).toBe(new Date('2026-08-01T09:00').toISOString())
   })
 
-  it('posts todos from the checklist as {text, status:"pending"}', async () => {
+  it('posts todos from the Todos field as {text, status:"pending"}', async () => {
     vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
     renderSlideOver()
 
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'With todos' } })
+    fillRequiredFields('With todos')
 
+    // GOAL-FR-057: the section is relabelled Todos, but the input/button
+    // accessible names stay byte-identical (C-79) — still queried by their
+    // original aria-labels.
     const todoInput = screen.getByLabelText(/new checklist item/i)
     fireEvent.change(todoInput, { target: { value: 'First item' } })
     fireEvent.click(screen.getByRole('button', { name: /add checklist item/i }))
@@ -755,15 +729,15 @@ describe('CreateTaskSlideOver — full task UX fields (trigger / depends-on / du
     ])
   })
 
-  it('omits trigger/blocked_by/due/todos from the body when none are set', async () => {
+  it('omits blocked_by/due/todos from the body when none are set, and never sends a trigger', async () => {
     vi.mocked(createTask).mockResolvedValueOnce(makeCreatedTask() as never)
     renderSlideOver()
-    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'Bare' } })
+    fillRequiredFields('Bare')
     fireEvent.click(screen.getByRole('button', { name: /^create$/i }))
     await waitFor(() => expect(vi.mocked(createTask)).toHaveBeenCalledOnce())
 
     const body = vi.mocked(createTask).mock.calls[0][0]
-    expect(body.trigger).toBeUndefined()
+    expect((body as Record<string, unknown>).trigger).toBeUndefined()
     expect(body.blocked_by).toBeUndefined()
     expect(body.due).toBeUndefined()
     expect(body.todos).toBeUndefined()

@@ -349,27 +349,34 @@ func TestListSessionsFiltered_NilPredMatchesListSessions(t *testing.T) {
 // half of finding #3: only sessions the predicate approves are returned,
 // with a positive lower bound (2 real matches, not just "not everything")
 // pairing the near-zero assertion (3 real non-matches excluded).
+//
+// ADR-086 GOAL-FR-005 (wave S6): this test used GoalCondition as its
+// predicate field before wave S6 retired the goal group from session meta
+// entirely (the predicate's own field is a caller-supplied closure over
+// *UnifiedMeta, so this file's own compile survives S6 regardless — but the
+// FIELD it closed over does not). PendingAskJSON exercises the identical
+// "predicate over one field" shape with a surviving field.
 func TestListSessionsFiltered_ReturnsOnlyMatches(t *testing.T) {
 	store := u6NewTestStore(t)
 
-	goalCond := "ship the feature"
+	askSet := "parked question"
 	var matchIDs []string
 	for i := 0; i < 2; i++ {
 		meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
 		require.NoError(t, err)
-		require.NoError(t, store.SetMeta(meta.ID, MetaPatch{GoalCondition: &goalCond}))
+		require.NoError(t, store.SetMeta(meta.ID, MetaPatch{PendingAskJSON: &askSet}))
 		matchIDs = append(matchIDs, meta.ID)
 	}
 	for i := 0; i < 3; i++ {
-		_, err := store.NewSession(SessionTypeChat, "", "agent-1") // no GoalCondition — must be excluded
+		_, err := store.NewSession(SessionTypeChat, "", "agent-1") // no PendingAskJSON — must be excluded
 		require.NoError(t, err)
 	}
 
-	goalOnly := func(m *UnifiedMeta) bool { return m != nil && m.GoalCondition != "" }
-	got, err := store.ListSessionsFiltered(goalOnly)
+	pendingAskOnly := func(m *UnifiedMeta) bool { return m != nil && m.PendingAskJSON != "" }
+	got, err := store.ListSessionsFiltered(pendingAskOnly)
 	require.NoError(t, err)
 
-	require.Len(t, got, 2, "want exactly the 2 sessions with a non-empty GoalCondition")
+	require.Len(t, got, 2, "want exactly the 2 sessions with a non-empty PendingAskJSON")
 	gotIDs := map[string]bool{got[0].ID: true, got[1].ID: true}
 	for _, id := range matchIDs {
 		assert.True(t, gotIDs[id], "expected match id %s in the filtered result", id)
@@ -388,12 +395,12 @@ func TestListSessionsFiltered_ClonesOnlyMatches(t *testing.T) {
 
 	const total = 40
 	const matching = 3
-	goalCond := "only these should be cloned"
+	askSet := "only these should be cloned"
 	var matchIDs []string
 	for i := 0; i < matching; i++ {
 		meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
 		require.NoError(t, err)
-		require.NoError(t, store.SetMeta(meta.ID, MetaPatch{GoalCondition: &goalCond}))
+		require.NoError(t, store.SetMeta(meta.ID, MetaPatch{PendingAskJSON: &askSet}))
 		matchIDs = append(matchIDs, meta.ID)
 	}
 	for i := 0; i < total-matching; i++ {
@@ -401,10 +408,10 @@ func TestListSessionsFiltered_ClonesOnlyMatches(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	goalOnly := func(m *UnifiedMeta) bool { return m != nil && m.GoalCondition != "" }
+	pendingAskOnly := func(m *UnifiedMeta) bool { return m != nil && m.PendingAskJSON != "" }
 
 	before := unifiedMetaCloneCalls.Load()
-	got, err := store.ListSessionsFiltered(goalOnly)
+	got, err := store.ListSessionsFiltered(pendingAskOnly)
 	require.NoError(t, err)
 	delta := unifiedMetaCloneCalls.Load() - before
 

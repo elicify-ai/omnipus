@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -338,7 +339,10 @@ func TestRefreshLoop_NoCatalog_NoPanic(t *testing.T) {
 func TestEmbeddedSnapshot_Corrupt_BootDegrades(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "catalog-degraded.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	// Console logging is deliberately left ON: the assertions read the file
+	// sink only, and pkg/logger has no way to switch the console back on once
+	// DisableConsole has run — so calling it here silenced every later test
+	// in this package. TestCatalogLogTests_LeaveConsoleLoggingOn pins that.
 	logger.SetLevel(logger.DEBUG)
 	require.NoError(t, logger.EnableFileLogging(logFile))
 	t.Cleanup(func() {
@@ -385,7 +389,7 @@ func TestEmbeddedSnapshot_Corrupt_BootDegrades(t *testing.T) {
 func TestCatalogLogAdapter_RoutesToLoggerFileSink(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "catalog-log-adapter.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	// Console left ON for the same reason as TestEmbeddedSnapshot_Corrupt_BootDegrades.
 	logger.SetLevel(logger.DEBUG)
 	require.NoError(t, logger.EnableFileLogging(logFile))
 	t.Cleanup(func() {
@@ -406,6 +410,62 @@ func TestCatalogLogAdapter_RoutesToLoggerFileSink(t *testing.T) {
 	assert.Contains(t, logged, "catalog refreshed")
 	assert.Contains(t, logged, "v2026.8.23.1")
 	assert.Contains(t, logged, "boom-err-9f21")
+}
+
+// catalogConsoleProbeEnv switches TestCatalogLogConsoleProbe on in the child
+// process TestCatalogLogTests_LeaveConsoleLoggingOn starts.
+const catalogConsoleProbeEnv = "OMNIPUS_TEST_CATALOG_CONSOLE_PROBE"
+
+// catalogConsoleProbeToken is the line the child logs. It must reach the
+// child's console output.
+const catalogConsoleProbeToken = "catalog-console-probe-7c1e9a"
+
+// TestCatalogLogTests_LeaveConsoleLoggingOn proves the two catalog logging
+// tests above leave console logging switched on for whatever runs after them.
+//
+// They used to call logger.DisableConsole(), which replaces the console logger
+// with a discard writer and has no counterpart that restores it. Every later
+// test in the package then ran with console logging silenced — which is why a
+// CI failure in the Copilot sign-in tests showed none of the log lines that
+// would have explained it.
+//
+// In-process there is no way to observe the console logger (pkg/logger keeps
+// it unexported), so this re-runs the test binary with exactly those two tests
+// followed by a probe that logs one line, and requires that line in the
+// child's output. Test order within a file is source order, and the probe is
+// defined after both.
+func TestCatalogLogTests_LeaveConsoleLoggingOn(t *testing.T) {
+	if os.Getenv(catalogConsoleProbeEnv) != "" {
+		t.Skip("already the child process")
+	}
+	exe, err := os.Executable()
+	require.NoError(t, err)
+
+	cmd := exec.Command(exe,
+		"-test.run", "^(TestEmbeddedSnapshot_Corrupt_BootDegrades|TestCatalogLogAdapter_RoutesToLoggerFileSink|TestCatalogLogConsoleProbe)$",
+		"-test.count=1", "-test.v")
+	cmd.Env = append(os.Environ(), catalogConsoleProbeEnv+"=1")
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "child run failed:\n%s", out)
+
+	output := string(out)
+	require.Contains(t, output, "--- PASS: TestEmbeddedSnapshot_Corrupt_BootDegrades",
+		"the child must actually run the first catalog logging test:\n%s", output)
+	require.Contains(t, output, "--- PASS: TestCatalogLogAdapter_RoutesToLoggerFileSink",
+		"the child must actually run the second catalog logging test:\n%s", output)
+	require.Contains(t, output, "--- PASS: TestCatalogLogConsoleProbe",
+		"the child must actually run the probe AFTER both:\n%s", output)
+	assert.Contains(t, output, catalogConsoleProbeToken,
+		"a log line written after the catalog logging tests must still reach the console:\n%s", output)
+}
+
+// TestCatalogLogConsoleProbe is the child half of
+// TestCatalogLogTests_LeaveConsoleLoggingOn. It does nothing in a normal run.
+func TestCatalogLogConsoleProbe(t *testing.T) {
+	if os.Getenv(catalogConsoleProbeEnv) == "" {
+		t.Skip("runs only as the child of TestCatalogLogTests_LeaveConsoleLoggingOn")
+	}
+	logger.WarnCF("gateway-test", catalogConsoleProbeToken, nil)
 }
 
 // TestSlogArgsToFields covers the key/value-pair conversion helper directly,

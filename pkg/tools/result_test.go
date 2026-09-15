@@ -246,3 +246,85 @@ func TestToolResultContentForLLM_AppendsArtifactPaths(t *testing.T) {
 		t.Fatalf("expected artifact guidance note in ContentForLLM, got %q", content)
 	}
 }
+
+// isBrowserControlDeferral mirrors, exactly, the classification predicate
+// ADR-085 FR-012a specifies the turn-engine ledger (FR-013) must use:
+// "result.Deferred != nil && result.Deferred.Gate == \"browser_control\"".
+// It is NOT a helper exported by pkg/tools — the spec places the real
+// consumer in pkg/agent (FR-013's ledger) — it is inlined here, verbatim, so
+// this test proves the STRUCT gives that exact predicate a correct answer
+// without reaching into pkg/agent's write-set.
+func isBrowserControlDeferral(r *ToolResult) bool {
+	return r.Deferred != nil && r.Deferred.Gate == "browser_control"
+}
+
+// TestToolResult_DeferralIsStructuralNotProse proves the ADR-085 FR-012a
+// contract end to end: a deferral is a STRUCT fact (Deferred != nil, with
+// Gate == "browser_control"), never a fact about ForLLM's prose. Before
+// FR-012a, the only way to know a result was a deferral was to parse
+// ForLLM — exactly what the turn-loop ledger must never do, because a
+// wording change would silently break the count.
+func TestToolResult_DeferralIsStructuralNotProse(t *testing.T) {
+	// A result whose ForLLM prose says "deferred" but carries no structural
+	// marker at all MUST NOT be counted as a deferral — the ledger reads
+	// Deferred, never ForLLM.
+	proseOnly := NewToolResult("a human is currently controlling the browser; this call was deferred, please wait")
+	if proseOnly.Deferred != nil {
+		t.Fatalf("expected Deferred to be nil on a plain NewToolResult, got %+v", proseOnly.Deferred)
+	}
+	if isBrowserControlDeferral(proseOnly) {
+		t.Fatal("a result with deferral-sounding prose but no structural marker must not classify as a deferral")
+	}
+
+	// A result carrying the structural marker MUST classify as a deferral
+	// even when its ForLLM prose is entirely unrelated (i.e. wording alone
+	// is not the signal).
+	structural := NewToolResult("some unrelated tool output")
+	structural.Deferred = &ToolDeferral{Gate: "browser_control", Reason: "human is currently controlling the browser"}
+	if !isBrowserControlDeferral(structural) {
+		t.Fatal("a result carrying Deferred{Gate: \"browser_control\"} must classify as a deferral regardless of ForLLM wording")
+	}
+
+	// A structural marker for a DIFFERENT gate must not be mistaken for a
+	// browser-control deferral — Gate, not mere non-nilness, is the
+	// discriminator FR-012a specifies.
+	otherGate := NewToolResult("irrelevant")
+	otherGate.Deferred = &ToolDeferral{Gate: "some_other_gate", Reason: "irrelevant"}
+	if isBrowserControlDeferral(otherGate) {
+		t.Fatal("a deferral for a different gate must not classify as a browser_control deferral")
+	}
+}
+
+// TestToolResult_DeferredNeverCrossesTheWire proves ADR-085 FR-012a's
+// Constraint #8 requirement: Deferred carries json:"-" and must never appear
+// in the JSON this struct produces — the same guarantee the existing Err
+// field already has, verified the same way (round-trip through the real
+// custom MarshalJSON, plus a raw key-presence check).
+func TestToolResult_DeferredNeverCrossesTheWire(t *testing.T) {
+	result := NewToolResult("deferred")
+	result.Deferred = &ToolDeferral{Gate: "browser_control", Reason: "human is currently controlling the browser"}
+
+	data, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("failed to parse JSON: %v", err)
+	}
+	if _, ok := parsed["Deferred"]; ok {
+		t.Error("expected 'Deferred' key to be excluded from JSON (json:\"-\")")
+	}
+	if _, ok := parsed["deferred"]; ok {
+		t.Error("expected no 'deferred' key in JSON output at all")
+	}
+
+	var decoded ToolResult
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if decoded.Deferred != nil {
+		t.Error("expected Deferred to be nil after a JSON round-trip (json:\"-\" strips it on the way out, so nothing populates it on the way back in)")
+	}
+}

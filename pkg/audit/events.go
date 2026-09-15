@@ -161,29 +161,6 @@ const (
 	// logic or intentional abuse (FR-25a).
 	EventCancelAbusePattern = "cancel.abuse_pattern"
 
-	// EventTurnOrphanTimeout — INFO. The orphan-foreground-turn watchdog
-	// (ADR-045) fired: a webchat session's grace period elapsed with no
-	// client reattaching, no surviving Critical/background delegate was found
-	// on the session, and nobody had reconnected — so the watchdog handed the
-	// session's root turn to al.RequestCancel (the SAME cancellation state
-	// machine every other cancel surface uses), attributed to
-	// "system:orphan-watchdog" via CancelCanceller rather than a real
-	// user/channel canceller. Emitted immediately BEFORE the RequestCancel
-	// call, so the audit trail always records WHY a cancel was triggered even
-	// if RequestCancel itself no-ops (turn already finished) or errors.
-	// Distinct from — and normally followed by — RequestCancel's OWN
-	// EventTurnCancelAttempt (always) and EventTurnCancelled (unless the root
-	// turn finishes naturally in the narrow gap before RequestCancel claims it,
-	// in which case the reap is a logged no-op — see reapOrphanForegroundTurn),
-	// which carry the full
-	// graceful->hard->detached escalation, approval auto-deny,
-	// background-session kill, and transcript writes uniformly with every
-	// other cancel surface. There is no separate turn.orphan_hard_aborted
-	// event (retired 2026-07 redesign) — RequestCancel's own turn_canceled
-	// event (cancel_method: "hard") is the single source of truth for how a
-	// reaped orphan turn actually terminated.
-	EventTurnOrphanTimeout = "turn.orphan_timeout"
-
 	// EventBrowserInstanceCreated — INFO. A workspace's browser instance came
 	// into existence: the first turn to resolve a browser for a given
 	// BrowsingKey established it (ADR-075 FR-027). Fires exactly ONCE per
@@ -259,6 +236,130 @@ const (
 	// or implicitly via detach/disconnect) interactive control of an agent's
 	// live browser (ADR-038 D6).
 	EventBrowserLiveControlReleased = "browser.live.control_released"
+
+	// --- ADR-085 browser control handover audit vocabulary --------------
+	//
+	// The four constants below are declared by wave B7 ("Browser audit
+	// event vocabulary") for consumption by wave B123 (ADR-085's gate
+	// semantics / lock lifecycle / turn engine lanes). All four are now
+	// emitted for real: EventBrowserControlDeferred and
+	// EventBrowserHandover from pkg/tools/browser (audit.go's
+	// recordControlDeferral and tools_handover.go), and
+	// EventBrowserControlIdleRelease / EventBrowserControlDisabledRelease
+	// from the LiveViewRegistry sweeper release path
+	// (pkg/gateway/browser_ws.go's auditServerRelease).
+	// They form one flat-underscore "browser_control_*" family
+	// (plus EventBrowserHandover, named after its tool per the
+	// EventBrowserUploadFile precedent above) rather than the dotted
+	// "browser.live.*" family immediately above, because
+	// EventBrowserControlIdleRelease's literal value is mandated verbatim
+	// by docs/internal/specs/browser-control-handover-spec.md ("the release
+	// MUST be audited as a distinct outcome, `browser_control_idle_release`"
+	// — FR-031a) and the other three are named to match it.
+	//
+	// CLOSED GAP: all four are registered in IsValidEventName's switch
+	// (audit.go), so an emission does not trip the "warn-once on unknown
+	// event" path. They were left unregistered when B7 declared them —
+	// pkg/audit/audit.go sat outside every wave's write-set in
+	// docs/internal/specs/adr-084-086-joint-delivery-plan.md §3 — and
+	// TestIsValidEventName_ExhaustiveOverEventConsts caught it. Any new
+	// Event* constant added below MUST also be added to that switch.
+
+	// EventBrowserControlDeferred — WARN. A live-view control take by a
+	// human operator caused a queued agent tool call to defer rather than
+	// execute (ADR-085 D4/D5, BROWSER-FR-061). WARN rather than INFO because
+	// a deferral is functionally the same observable as a tool-policy denial
+	// from the agent's point of view — its requested action did not go
+	// through — and this is the channel an operator tuning ADR-085's N=3
+	// bounded-attempt behaviour (BROWSER-FR-014) would watch.
+	//
+	// MUST be emitted from the deferral path itself
+	// (pkg/tools/browser/audit.go::recordControlDeferral, called from
+	// controlledResult when it returns a deferral), never from the take
+	// handler (pkg/gateway/browser_ws.go::handleControl) — at take time no
+	// tool has deferred yet and the handler cannot know which one later
+	// will (FR-061).
+	//
+	// Fields: {session_id, root_chat_session_id, viewer_id, acting_user,
+	// tab_set, tool, tool_call_id}. Deliberately NO turn id field: the tool
+	// context (pkg/tools/base.go) exposes ToolCallID, ToolTranscriptSessionID,
+	// ToolSessionKey and ToolAgentID but no turn id, so root_chat_session_id
+	// (stable across a delegation subtree, ADR-057 FR-011) carries "which
+	// conversation was blocked?" instead, with tool_call_id pinning the
+	// individual deferred call.
+	EventBrowserControlDeferred = "browser_control_deferred"
+
+	// EventBrowserHandover — INFO. An agent voluntarily gave up the browser
+	// wheel via the browser_handover tool (ADR-085 D7, BROWSER-FR-062).
+	// Named after its tool, matching the EventBrowserUploadFile /
+	// EventBrowserSnapshot precedent above (ADR-075 D2) rather than the
+	// EventBrowserControlDeferred/EventBrowserControlIdleRelease
+	// "browser_control_*" shape, because — unlike a deferral or a sweeper
+	// release — this is the agent's own affirmative, successful action, not
+	// something done to it.
+	//
+	// MUST be emitted from the same recordControlDeferral family as
+	// EventBrowserControlDeferred (BROWSER-FR-062), from
+	// pkg/tools/browser/tools_handover.go's browser_handover tool body, with
+	// the agent recorded as actor (Entry.AgentID) rather than the human
+	// "acting_user" a deferral or a sweeper release carries.
+	//
+	// Fields: the same set as EventBrowserControlDeferred (session_id,
+	// root_chat_session_id, viewer_id, tab_set, tool_call_id — tool is
+	// always "browser_handover") PLUS the tool's own free-text `reason`
+	// argument (BROWSER-FR-048a: truncated at 200 runes, escaped as plain
+	// text before it reaches this record; an empty reason produces no
+	// entry, never an empty-string field).
+	EventBrowserHandover = "browser_handover"
+
+	// EventBrowserControlIdleRelease — INFO. The LiveViewRegistry sweeper
+	// released a held-but-idle wheel because tools.browser.control_idle_release
+	// (Go field ControlIdleRelease, default 900s, 0 disables) elapsed with
+	// no proof of life — no input, no attach/detach, no ViewerHeartbeat, no
+	// live media track (ADR-085 D4, BROWSER-FR-031a). This literal value is
+	// mandated verbatim by the ADR-085 spec: "the release MUST be audited as
+	// a distinct outcome, `browser_control_idle_release`" — do not rename it
+	// to fit a different naming convention.
+	//
+	// Distinct from EventBrowserControlDisabledRelease immediately below:
+	// this fires on elapsed idle time regardless of the
+	// take_control_enabled flag; that one fires because the flag itself was
+	// switched off mid-hold. The two MUST stay separately named outcomes —
+	// conflating them loses the ability to tell "nobody was watching" from
+	// "an operator disabled the feature" in the audit trail.
+	//
+	// Fields: {session_id, former_holder}. No acting_user field: the release
+	// is server-initiated, not requested by any human (FR-031a: "the former
+	// holder recorded and no acting user"). The former holder is notified
+	// per BROWSER-FR-031b (an unsolicited browser_status{state:"released"}
+	// frame on their own connection), which is a separate, non-audit
+	// mechanism from this record.
+	EventBrowserControlIdleRelease = "browser_control_idle_release"
+
+	// EventBrowserControlDisabledRelease — INFO. The same LiveViewRegistry
+	// sweeper that emits EventBrowserControlIdleRelease also released a
+	// held wheel, cleared handover-pending state, and voided a stand-down
+	// latch because tools.browser.take_control_enabled was switched to
+	// false while they existed (ADR-085 D-G/FR-052: "on each tick it MUST
+	// release any hold ... found while ... false ... audits each as a
+	// distinct outcome"). The sweeper runs regardless of the flag's value
+	// specifically so this is the only release path left once the flag is
+	// off and the live panel is closed (FR-052's own text: "with the panel
+	// closed there is then no release path at all except the FR-031a
+	// timer"). Bounded by one sweeper tick (30s), not instantaneous.
+	//
+	// No literal string is mandated for this one by the spec (only
+	// EventBrowserControlIdleRelease's value is given verbatim); this name
+	// was chosen to read as its sibling in the same
+	// "browser_control_*_release" family rather than reusing
+	// EventBrowserControlIdleRelease's name for a semantically different
+	// trigger.
+	//
+	// Fields: {session_id, former_holder}. No acting_user field, same
+	// reasoning as EventBrowserControlIdleRelease: this is a server-
+	// initiated release, not a human request. Also notified per
+	// BROWSER-FR-031b, same as the idle-release case.
+	EventBrowserControlDisabledRelease = "browser_control_disabled_release"
 
 	// EventChannelRoutingDriftDrop — WARN. A workspace-bound channel instance's
 	// configured agent is unresolvable (deleted or a worker): the

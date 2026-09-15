@@ -56,7 +56,7 @@ func listTaskSubtasks(t *testing.T, api *restAPI, parentID string) *httptest.Res
 // and returns its wire representation.
 func createChildTask(t *testing.T, api *restAPI, wsID, title, parentID string) gen.Task {
 	t.Helper()
-	body := fmt.Sprintf(`{"workspace_id":%q,"title":%q,"parent_task_id":%q}`, wsID, title, parentID)
+	body := fmt.Sprintf(`{"workspace_id":%q,"title":%q,"parent_task_id":%q,`+minimalCriteriaDodJSON+`}`, wsID, title, parentID)
 	w := postTask(t, api, body)
 	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
 	var created gen.Task
@@ -77,7 +77,7 @@ func TestHandleTaskList_RollupIndexBoundsListCalls(t *testing.T) {
 	const numParents = 12
 	parentIDs := make([]string, 0, numParents)
 	for i := 0; i < numParents; i++ {
-		parentBody := fmt.Sprintf(`{"workspace_id":%q,"title":"parent-%d"}`, wsID, i)
+		parentBody := fmt.Sprintf(`{"workspace_id":%q,"title":"parent-%d",`+minimalCriteriaDodJSON+`}`, wsID, i)
 		wCreate := postTask(t, api, parentBody)
 		require.Equal(t, http.StatusCreated, wCreate.Code, "body=%s", wCreate.Body.String())
 		var parent gen.Task
@@ -131,7 +131,7 @@ func TestHandleTaskSubtasks_RollupIndexBoundsListCalls(t *testing.T) {
 	api := newTestRestAPIWithAgent(t)
 	wsID := createTestWorkspace(t, api, "Subtasks Rollup Perf WS")
 
-	parentBody := fmt.Sprintf(`{"workspace_id":%q,"title":"root"}`, wsID)
+	parentBody := fmt.Sprintf(`{"workspace_id":%q,"title":"root",`+minimalCriteriaDodJSON+`}`, wsID)
 	wParent := postTask(t, api, parentBody)
 	require.Equal(t, http.StatusCreated, wParent.Code, "body=%s", wParent.Body.String())
 	var parent gen.Task

@@ -57,9 +57,11 @@ import type { SignInStatus } from '@/lib/api/generated/openapi-types'
 
 type Phase =
   | { kind: 'starting' }
-  | { kind: 'cli_login'; command: string; instructions: string; checking: boolean; checkResult?: 'not_yet' | 'signed_in' | 'expired' }
+  | { kind: 'cli_login'; command: string; instructions: string; checking: boolean; checkResult?: 'not_yet' | 'signed_in' | 'expired'; checkReason?: string }
   | { kind: 'device_code'; verificationUrl: string; userCode: string; deviceAuthId: string; intervalSeconds: number }
   | { kind: 'signed_in'; accountLabel?: string }
+  // device_code only: a code that was never approved in time. A cli_login
+  // "expired" result stays on the cli_login phase (checkResult: 'expired').
   | { kind: 'expired' }
   | { kind: 'denied' }
   | { kind: 'error'; message: string }
@@ -98,6 +100,17 @@ export function isTransientSignInPollError(err: unknown): boolean {
   if (err instanceof ApiSchemaError) return true
   if (isApiError(err)) return err.isNetworkError() || err.isServerError() || err.isRateLimited()
   return false
+}
+
+/**
+ * The cli_login "expired" message (silent-failure review 2026-09-14, finding 7).
+ * For a CLI-login provider such as GitHub Copilot, "expired" means the vendor
+ * CLI's existing session was rejected, so the operator signs in again with the
+ * same login command the server already sent (`command`), never a new one.
+ * One source for both the aria-live status line and the visible alert.
+ */
+function cliSessionRejectedText(providerLabel: string, command: string): string {
+  return `Your ${providerLabel} session is no longer accepted. Run \`${command}\` again to sign in, then click Check sign-in.`
 }
 
 /**
@@ -282,9 +295,17 @@ export function SignInDialog({
         setPhase({ kind: 'signed_in', accountLabel: status.account_label })
         onSignedIn?.(status)
       } else if (status.state === 'expired') {
-        setPhase({ kind: 'expired' })
+        // For cli_login, "expired" means the CLI's EXISTING session was
+        // rejected — no code went unapproved, so the device-code `expired`
+        // phase and its wording do not apply. Stay on the command step so the
+        // way back in (run the login command, then Check sign-in) stays on screen.
+        setPhase({ kind: 'cli_login', command: phase.command, instructions: phase.instructions, checking: false, checkResult: 'expired' })
       } else {
-        setPhase({ kind: 'cli_login', command: phase.command, instructions: phase.instructions, checking: false, checkResult: 'not_yet' })
+        // SignInStatus.reason (2026-09-14): present exactly when the check
+        // itself could not run (CLI missing, failed to start, timed out) —
+        // without it the operator reads "not signed in yet" as "run the
+        // command", which is the wrong advice for a machine-level failure.
+        setPhase({ kind: 'cli_login', command: phase.command, instructions: phase.instructions, checking: false, checkResult: 'not_yet', checkReason: status.reason })
       }
     } catch (err) {
       setPhase({ kind: 'error', message: getErrorMessage(err, 'Sign-in check failed') })
@@ -327,7 +348,13 @@ export function SignInDialog({
   const statusText = (() => {
     switch (phase.kind) {
       case 'starting': return 'Starting sign-in…'
-      case 'cli_login': return phase.checkResult === 'not_yet' ? 'Not signed in yet — run the command above, then check again.' : 'Waiting for you to sign in.'
+      case 'cli_login':
+        if (phase.checkResult === 'not_yet') {
+          if (phase.checkReason) return `Not signed in yet — ${phase.checkReason}.`
+          return 'Not signed in yet — run the command above, then check again.'
+        }
+        if (phase.checkResult === 'expired') return cliSessionRejectedText(providerLabel, phase.command)
+        return 'Waiting for you to sign in.'
       case 'device_code': return 'Waiting for you to approve this sign-in…'
       case 'signed_in': return phase.accountLabel ? `Signed in as ${phase.accountLabel}.` : 'Signed in.'
       case 'expired': return 'Sign-in expired before it was approved.'
@@ -381,7 +408,20 @@ export function SignInDialog({
               </div>
               {phase.checkResult === 'not_yet' && (
                 <p className="text-sm text-[var(--color-warning)] flex items-center gap-1.5" role="alert" aria-live="assertive">
-                  <Warning size={13} weight="fill" /> Not signed in yet — run the command above, then check again.
+                  <Warning size={13} weight="fill" />{' '}
+                  {phase.checkReason
+                    ? `Not signed in yet — ${phase.checkReason}.`
+                    : 'Not signed in yet — run the command above, then check again.'}
+                </p>
+              )}
+              {phase.checkResult === 'expired' && (
+                <p
+                  className="text-sm text-[var(--color-warning)] flex items-start gap-1.5"
+                  role="alert"
+                  aria-live="assertive"
+                  data-testid="cli-login-expired"
+                >
+                  <Warning size={13} weight="fill" className="shrink-0 mt-0.5" /> {cliSessionRejectedText(providerLabel, phase.command)}
                 </p>
               )}
               <Button

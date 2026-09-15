@@ -37,6 +37,17 @@ type SubTurnSpawner interface {
 	SpawnSubTurn(ctx context.Context, cfg SubTurnConfig) (*ToolResult, error)
 }
 
+// ErrDelegationTimedOut is wrapped into a SpawnSubTurn error when the
+// delegated sub-turn reached its time limit (SubTurnConfig.Timeout) and was
+// force-cancelled (pkg/agent/subturn.go's armSubTurnForceCancel). It lives here,
+// not in pkg/agent, because this package cannot import pkg/agent — it is the
+// one discriminator executeSync/executeAsync use to tell the delegator the
+// truth about a timeout: the child is STOPPED (no further tool calls or
+// writes), not "failed" in some state that might still be running (UAT A-17,
+// where an orchestrator read "SubTurn failed: turn timed out" as "possibly
+// still alive" and raced its own re-delegations).
+var ErrDelegationTimedOut = errors.New("delegation timed out")
+
 // SubTurnConfig holds configuration for spawning a sub-turn. This is the
 // shared underlying primitive DelegateTool's async and sync paths both call
 // (Async is the only differentiator) — unchanged in shape from the
@@ -60,9 +71,8 @@ type SubTurnConfig struct {
 	// the child turn runs with system=soul + user=task, uniformly across the
 	// native and external-cli executors. Empty means "delegate the parent's
 	// own agent" — the parent's own soul applies.
-	TargetAgentID      string
-	InitialMessages    []providers.Message
-	InitialTokenBudget *atomic.Int64 // Shared token budget for team members; nil if no budget
+	TargetAgentID   string
+	InitialMessages []providers.Message
 	// TaskLabel is the optional human-readable label for the sub-turn task (FR-H-004).
 	// Populated from delegate's "label" argument. Used in the subagent_start WS frame.
 	TaskLabel string
@@ -427,12 +437,17 @@ type ToolCallProgressSnapshot struct {
 	// empty for the first few deltas of a call.
 	Name string
 	// ArgsBytes is the byte count accumulated so far for the tool call that
-	// produced the most recent delta.
+	// produced the most recent delta. Zero when the most recent delta was
+	// reasoning rather than a tool-call argument.
 	ArgsBytes int
 	// TotalArgsBytes is the byte count accumulated across every tool call in
 	// the current LLM response so far (may exceed ArgsBytes when more than
 	// one tool call is in flight in the same response).
 	TotalArgsBytes int
+	// ReasoningBytes is the reasoning ("thinking") byte count streamed so far
+	// in the current LLM response. A count only — the reasoning text is never
+	// recorded (see protocoltypes.ToolCallProgress).
+	ReasoningBytes int
 	// LastActivity is the wall-clock time of the most recent recorded delta.
 	// Zero when no progress has ever been recorded for the turn.
 	LastActivity time.Time
@@ -1196,6 +1211,12 @@ func (t *DelegateTool) Name() string {
 
 func (t *DelegateTool) Description() string {
 	return "Delegate a task to a subagent, and control/monitor it afterward. " +
+		"For a goal with two or more independent parts meant to run in parallel (for example several " +
+		"files or deliverables written by different agents), prefer a plan over several parallel run " +
+		"calls: load create_plan and execute_plan with ToolSearch (if your policy allows them). A plan's " +
+		"members declare write_sets that plan-lint checks for overlap before anything runs, and the whole " +
+		"plan is judged against one Definition of Done and can be stopped as a unit; parallel delegate " +
+		"calls get no overlap check. Delegate directly for a single self-contained piece of work. " +
 		"action=\"run\" (default) delegates a new task — by default in the background " +
 		"(async=true), returning immediately with a task_id/session_id; set async=false to " +
 		"block and receive the result inline. A delegation is force-cancelled after " +
@@ -2051,6 +2072,21 @@ func (t *DelegateTool) executeAsync(
 		// once the turn loop itself was fixed to stop.
 		parked := false
 
+		// UAT A-17: a delegation that reached its time limit was
+		// force-cancelled (pkg/agent/subturn.go). Built BEFORE t.mu is taken:
+		// timedOutDelegationResult kills the child's background shells, which
+		// walks the lifecycle store and must never run under this tool's
+		// mutex. Its case below is checked ahead of `ctx.Err() != nil` on
+		// purpose — ctx is the delegating PARENT's tool context, which is
+		// routinely already cancelled by the time a background child times
+		// out (the parent turn moved on), so that case would otherwise report
+		// a timeout as "Task canceled during execution".
+		timedOut := !requestedSkillFailure && errors.Is(err, ErrDelegationTimedOut)
+		var timedOutResult *ToolResult
+		if timedOut {
+			timedOutResult = t.timedOutDelegationResult(delegateSessionID, label, err)
+		}
+
 		t.mu.Lock()
 		if state, ok := t.tasks[taskID]; ok {
 			switch {
@@ -2058,6 +2094,10 @@ func (t *DelegateTool) executeAsync(
 				state.Status = "failed"
 				state.Result = requestedSkillFailureResult.ForLLM
 				lifecycleState, lifecycleFailedReason = session.LifecycleFailed, "error"
+			case timedOut:
+				state.Status = delegateTaskStatusTimedOut
+				state.Result = timedOutResult.ForLLM
+				lifecycleState, lifecycleFailedReason = session.LifecycleTimedOut, ""
 			case err != nil && ctx.Err() != nil:
 				state.Status = "canceled"
 				state.Result = "Task canceled during execution"
@@ -2089,6 +2129,17 @@ func (t *DelegateTool) executeAsync(
 		switch {
 		case requestedSkillFailure:
 			result = requestedSkillFailureResult
+		case timedOut:
+			// Not "spawn failed": the child ran and was force-cancelled at its
+			// time limit. Warn (an expected, bounded outcome), not Error, and
+			// with its own grep-able message.
+			slog.Warn("delegate: async subagent reached its time limit and was force-cancelled",
+				"session_id", delegateSessionID,
+				"task_id", taskID,
+				"agent_id", agentID,
+				"is_resume", isResume,
+				"error", err)
+			result = timedOutResult
 		case err != nil:
 			// Kill the silent swallow: a spawn that dies before starting
 			// (e.g. a `follow_up` resume whose target session vanished, or
@@ -2293,6 +2344,17 @@ func (t *DelegateTool) executeSync(
 	// result this function returns — which pkg/agent/loop.go's tool-call-
 	// transcript persistence reads to decide whether a session reload shows
 	// "interrupted" (matching live) or "failed" (the bug this closes).
+	// UAT A-17: a delegation that reached its time limit was force-cancelled
+	// (pkg/agent/subturn.go) — report exactly that, never the generic
+	// "Delegate execution failed" wording below, which told an orchestrator
+	// nothing about whether the child was still running. Checked before that
+	// shortcut so the timeout discriminator is never flattened into it.
+	if errors.Is(err, ErrDelegationTimedOut) {
+		timedOut := t.timedOutDelegationResult(delegateSessionID, label, err)
+		t.transitionLifecycle(delegateSessionID, session.LifecycleTimedOut, "")
+		t.finalizeSyncTask(taskID, delegateTaskStatusTimedOut, timedOut.ForLLM)
+		return timedOut
+	}
 	if result == nil || (err != nil && !result.Interrupted) {
 		t.transitionLifecycle(delegateSessionID, session.LifecycleFailed, "error")
 		t.finalizeSyncTask(taskID, "failed", fmt.Sprintf("Error: %v", err))
@@ -2379,6 +2441,52 @@ func (t *DelegateTool) finalizeSyncTask(taskID, status, resultText string) {
 		st.Status = status
 		st.Result = resultText
 	}
+}
+
+// delegateTaskStatusTimedOut is the in-memory DelegateTaskState.Status for a
+// delegation that reached its time limit and was force-cancelled. It mirrors
+// the durable session.LifecycleTimedOut record written alongside it, so
+// action:"status" and list_jobs agree on what happened.
+const delegateTaskStatusTimedOut = "timed_out"
+
+// timedOutDelegationResult is the ONE place a delegation that reached its time
+// limit is reported to the delegator — shared by executeSync and executeAsync
+// so the two can never describe the same outcome differently.
+//
+// Documented intent (Description / the timeout_seconds schema): "A delegation
+// is force-cancelled after timeout_seconds ... if it has not finished by then."
+// pkg/agent/subturn.go's force-cancel has already hard-aborted the child's turn
+// by the time this runs; this function completes the force-cancel for the
+// child's OS-level work, exactly as executeCancel does for an explicit cancel:
+// it kills the child's (and its descendants') background shells, so a backgrounded
+// command cannot keep writing after the delegator was told the delegation ended.
+//
+// The wording is deliberate (UAT A-17): an orchestrator that read the old
+// "SubTurn failed: turn timed out: context deadline exceeded" concluded "a
+// timed-out delegation is not necessarily dead", then fought a phantom writer.
+// The message must state plainly that the child is stopped, that there is
+// nothing to cancel, and that partial work may already be on disk.
+func (t *DelegateTool) timedOutDelegationResult(delegateSessionID, label string, err error) *ToolResult {
+	_, killFailed, walkIncomplete := t.killChildBackgroundShells(delegateSessionID)
+
+	labelStr := label
+	if labelStr == "" {
+		labelStr = "(unnamed)"
+	}
+	shells := "Any background shells it started were killed."
+	if t.sessionManager == nil {
+		shells = "No background-shell manager is configured, so none could be checked."
+	}
+	msg := fmt.Sprintf(
+		"Subagent task TIMED OUT and was force-cancelled:\nLabel: %s\nSession: %s\nDetail: %v\n"+
+			"The subagent is STOPPED: it will make no further tool calls or file changes. %s "+
+			"There is nothing left to cancel. Work it finished before the time limit (for example "+
+			"files it had already written) may still be on disk, possibly incomplete — inspect the "+
+			"current state before re-delegating, and raise timeout_seconds if the task needs longer.",
+		labelStr, delegateSessionID, err, shells,
+	)
+	msg += cancelBackgroundShellWarnings(killFailed, walkIncomplete)
+	return ErrorResult(msg).WithError(err)
 }
 
 // ResolvableSessionIDs implements tools.JobSessionResolver (#583): it reports
@@ -2799,6 +2907,17 @@ const maxToolCallProgressStaleness = 5 * time.Minute
 // delegateStatusExtra's call site and DelegateProgressReader's doc comment
 // for the incident this closes.
 func formatToolCallProgressLine(snap ToolCallProgressSnapshot) string {
+	// The most recent delta was reasoning, not a tool-call argument: the
+	// model is thinking. Saying "generating tool call" here would be false —
+	// there is no tool call yet (founder decision 2026-09-14).
+	if snap.ArgsBytes == 0 && snap.ReasoningBytes > 0 {
+		verb := "thinking"
+		if snap.Age > maxToolCallProgressStaleness {
+			verb = "stale — no update recently, may have stalled while thinking"
+		}
+		return fmt.Sprintf("  progress: %s — %d bytes of reasoning so far this round, last update %s ago",
+			verb, snap.ReasoningBytes, snap.Age.Round(time.Second))
+	}
 	name := snap.Name
 	if name == "" {
 		name = "(name pending)"

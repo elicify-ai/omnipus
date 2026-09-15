@@ -368,7 +368,22 @@ func TestDurableC1_RestartChangedStateReJudges(t *testing.T) {
 	// signature is now DIFFERENT from the persisted one.
 	mustCreateTask(t, ts, &task.Task{ID: "t-b", Title: "t-b", WorkspaceID: "ws", PlanID: "plan-chg", Status: task.StatusDone})
 
+	// judgeCalled is signaled the instant JudgeCriteria is invoked, so the
+	// wait below is event-driven rather than a fixed wall-clock poll.
+	// bootReconcile's beginPlanJudgeRound dispatches the round via `go
+	// pe.runPlanJudgeRound(...)` (plan_engine.go), so SOME asynchrony is
+	// unavoidable — this channel is what makes waiting for it deterministic
+	// instead of racy against an arbitrary poll interval/deadline pair.
+	// Buffered 1: fakePlanJudge.JudgeCriteria records the call under its own
+	// mutex BEFORE invoking resultFn, so by the time this fires
+	// judge.callCount() is already 1 — no separate poll of callCount is
+	// needed to make that read safe.
+	judgeCalled := make(chan struct{}, 1)
 	judge := &fakePlanJudge{resultFn: func(in JudgeCriteriaInput) JudgeCriteriaResult {
+		select {
+		case judgeCalled <- struct{}{}:
+		default:
+		}
 		return JudgeCriteriaResult{Verdict: &task.JudgeVerdict{Met: true}}
 	}}
 	pe := &PlanEngine{
@@ -377,6 +392,21 @@ func TestDurableC1_RestartChangedStateReJudges(t *testing.T) {
 		activeCounters: make(map[string]ActiveCounterFunc), verifierRegistry: NewVerifierSessionRegistry(),
 		judgeSema: newDispatchSemaphore(defaultPlanJudgeConcurrency),
 	}
+	// Stop() drains judgeWG/wakeWG (plan_engine.go's own doc comment on Stop
+	// names this exact failure mode: "in tests, a wake turn writing its
+	// session/transcript into an already-removed temp dir"). This test's
+	// bootReconcile->beginPlanJudgeRound launches the judge round on its own
+	// goroutine, and a met verdict here goes on to synthesize the plan and
+	// dispatch an origin-less owner-wake turn on WAKEWG's own goroutine — both
+	// still running after the assertions below return unless drained. Without
+	// this, t.TempDir()'s automatic RemoveAll races that still-running
+	// goroutine's writes into plans/, surfacing as a nondeterministic
+	// "TempDir RemoveAll cleanup: ... directory not empty" failure (reproduced
+	// under back-to-back stress, unrelated to the assertions this test makes).
+	// Safe unconditionally: pe was never Start()ed, so Stop's WaitGroup drain
+	// is the only thing that runs, and it returns immediately when both
+	// counters are already zero.
+	t.Cleanup(pe.Stop)
 	pe.bootReconcile(context.Background())
 
 	// The signature changed -> a round MUST fire (the persisted gate does not

@@ -248,8 +248,15 @@ func TestTaskCreate_SourceChannelIgnored(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	wsID := ensureTestWorkspace(t, api)
 
+	// GOAL-FR-021/D-C: POST /tasks now requires at least one criterion and
+	// one dod item — see TestCreateTaskRejectsEmptyCriteriaOrDod in
+	// rest_tasks_criteria_test.go for the dedicated coverage of that gate
+	// itself; this test only needs a body that satisfies it so the
+	// exfiltration-sink assertion below stays isolated to what it tests.
 	body := fmt.Sprintf(
-		`{"title":"ExfilTest","action":"llm","workspace_id":%q,"source_channel":"telegram","source_chat_id":"chat-12345"}`,
+		`{"title":"ExfilTest","action":"llm","workspace_id":%q,"source_channel":"telegram","source_chat_id":"chat-12345",`+
+			`"criteria":[{"text":"c1","author":{"kind":"user","id":"tester"},"status":"pending"}],`+
+			`"dod":[{"text":"d1","author":{"kind":"user","id":"tester"},"status":"pending"}]}`,
 		wsID,
 	)
 	w := httptest.NewRecorder()

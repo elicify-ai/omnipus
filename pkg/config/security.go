@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 // This file provides:
@@ -66,6 +68,17 @@ func (sec *Config) SensitiveDataReplacer() *strings.Replacer {
 // must pass the COMPLETE current set of plaintexts each time.
 //
 // Thread-safe: safe to call concurrently with SensitiveDataReplacer.
+//
+// It also publishes the registered set as the process-wide credential replacer
+// (logger.SetSensitiveValueReplacer), which scrubs the gateway log and the
+// Verbose-chat error detail — the operator-only surfaces allowed to keep a raw
+// provider error. Every registration supplies the complete current set (ADR-004
+// boot step 6 and each re-registration after it), so the most recent call is
+// the set in force; publishing under sensitiveMu keeps two registrations on one
+// config from publishing out of order. Only the registered plaintexts are
+// published — the reflection-walked SecureString values stay on this config's
+// own lazily built replacer — so building the published replacer reads no other
+// config field.
 func (sec *Config) RegisterSensitiveValues(values []string) {
 	sec.sensitiveMu.Lock()
 	defer sec.sensitiveMu.Unlock()
@@ -74,6 +87,30 @@ func (sec *Config) RegisterSensitiveValues(values []string) {
 	sec.registeredSensitive = unique(sec.registeredSensitive)
 	// Invalidate the cache so the next SensitiveDataReplacer() call rebuilds.
 	sec.sensitiveCache = nil
+	logger.SetSensitiveValueReplacer(newSensitiveReplacer(sec.registeredSensitive))
+}
+
+// sensitiveReplacementPairs builds the old/new pairs of a credential replacer:
+// every value longer than 3 bytes is replaced by "[FILTERED]". The one rule for
+// both this config's own replacer and the published process-wide one.
+func sensitiveReplacementPairs(values []string) []string {
+	var pairs []string
+	for _, v := range values {
+		if len(v) > 3 {
+			pairs = append(pairs, v, "[FILTERED]")
+		}
+	}
+	return pairs
+}
+
+// newSensitiveReplacer returns the credential replacer for values, or nil when
+// no value qualifies.
+func newSensitiveReplacer(values []string) *strings.Replacer {
+	pairs := sensitiveReplacementPairs(values)
+	if len(pairs) == 0 {
+		return nil
+	}
+	return strings.NewReplacer(pairs...)
 }
 
 // buildAndPopulateSensitiveCache constructs the replacer and stores it on

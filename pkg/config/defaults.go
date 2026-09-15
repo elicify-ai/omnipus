@@ -11,6 +11,43 @@ import (
 	"github.com/elicify-ai/omnipus/pkg"
 )
 
+// Judge budget defaults (ADR-084 §H, JUDGE-FR-049 – FR-052, FR-081; C-29 /
+// C-70: pkg/config/defaults.go's sole writer for the whole delivery is
+// wave E1, landed in the same commit as the goal_claim and browser_handover
+// ceiling entries above/below). These are the LITERAL DEFAULT VALUES the
+// spec fixes up front; wave E2 owns pkg/config/config.go for the whole
+// delivery and adds the Config struct fields (judge timeout / cap /
+// byte-cap / token-ceiling) plus their Effective*() accessors that fall
+// back to these constants, mirroring the shipped EffectiveTaskMaxAttempts /
+// EffectiveGoalMaxRounds pattern — see pkg/config/planning.go. Exported now,
+// ahead of their consumer, so E2's commit is a pure additive reference: the
+// value is known from the spec, so it does not need its consumer to exist
+// first (C-29).
+const (
+	// DefaultJudgeTimeoutSeconds is JUDGE-FR-049's operator-configurable
+	// judge-turn timeout default (420 s).
+	DefaultJudgeTimeoutSeconds = 420
+	// JudgeTimeoutHardCeilingSeconds is JUDGE-FR-049's hard ceiling: a
+	// configured judge timeout MUST be clamped to this value.
+	JudgeTimeoutHardCeilingSeconds = 900
+	// DefaultJudgeToolCallCap is JUDGE-FR-051's per-adjudication tool-call
+	// cap default (verifier dispatch, not the global chat MaxIterations).
+	DefaultJudgeToolCallCap = 25
+	// JudgeToolCallCapCeiling is JUDGE-FR-051's configurable ceiling on the
+	// tool-call cap.
+	JudgeToolCallCapCeiling = 60
+	// DefaultJudgeByteCapBytes is JUDGE-FR-051's per-adjudication cap on
+	// total bytes returned by tool results (2 MiB default).
+	DefaultJudgeByteCapBytes = 2 * 1024 * 1024
+	// JudgeByteCapCeilingBytes is JUDGE-FR-051's configurable ceiling on the
+	// byte cap (8 MiB).
+	JudgeByteCapCeilingBytes = 8 * 1024 * 1024
+	// DefaultJudgeTokenCeiling is JUDGE-FR-081's per-adjudication
+	// prompt+completion token/cost ceiling default (120 K tokens). FR-081
+	// also requires a WARN at 75% of this value.
+	DefaultJudgeTokenCeiling = 120_000
+)
+
 // DefaultConfig returns the default configuration for Omnipus.
 func DefaultConfig() *Config {
 	// Determine the base path for the workspace via the single mandatory
@@ -164,6 +201,29 @@ func DefaultConfig() *Config {
 			LogLevel:  "warn",
 		},
 		Sandbox: OmnipusSandboxConfig{
+			// SEC-15/SEC-17: the structured security audit log is ON by
+			// default (founder decision, 2026-09-11) so a new install records
+			// who changed what from its first minute. Until this seed existed
+			// the field had no entry here at all, so it defaulted to the bool
+			// zero value — audit off — and a freshly onboarded instance, which
+			// has no "sandbox" block in config.json, recorded no REST mutation
+			// of any kind for the life of the process.
+			//
+			// Like every other value in this literal, this is install-time
+			// DATA an operator can edit in their own config.json, not a
+			// fallback branch in the binary: loadConfig unmarshals the
+			// operator's JSON over DefaultConfig(), so an explicit
+			// `"audit_log": false` wins, and a config.json predating this seed
+			// (no `audit_log` key) picks the default up on its next load.
+			// The full reasoning, including why the field carries no
+			// `omitempty`, is on the field itself in sandbox.go.
+			AuditLog: true,
+			// Provenance: this true came from the seed, not from anybody's
+			// config.json. loadConfig clears it whenever the key IS present.
+			// See the field's doc comment on sandbox.go for why the polarity
+			// is "from default" rather than "explicit".
+			AuditLogFromDefault: true,
+
 			// browser_evaluate is ON by default (ADR D1.9b ruling 2). It is a
 			// standard browser capability, and gating it behind a config flag
 			// an operator had to discover meant the tool was registered,
@@ -274,7 +334,34 @@ func DefaultConfig() *Config {
 				// ask-gate). Per-agent seeds decide who holds it: every
 				// human-facing agent allow; Judge/PlanSupervisor explicit deny
 				// via their denyAllThenOverride stamps.
-				"AskUserQuestion":     "allow",
+				"AskUserQuestion": "allow",
+				// set_goal (ADR-081 D2, work-first-goal-flow-spec FR-004): the
+				// validated write-path over the goal record. Ceiling "allow"
+				// for the same reason AskUserQuestion's is — writing your own
+				// session's goal record is the safety-increasing direction
+				// (it can only ever register/replace THIS session's own
+				// record, gated shut for a delegated sub-turn or a goalless
+				// session by the tool's own scope preconditions, never by
+				// policy) — and per-agent seeds decide who holds it: every
+				// human-facing agent allow (mirroring AskUserQuestion's own
+				// seed), Judge/PlanSupervisor explicit deny via their
+				// denyAllThenOverride stamps, Worker explicit deny via
+				// tightenGlobalCeiling (see pkg/coreagent/core.go).
+				"set_goal": "allow",
+				// goal_claim (ADR-084 D12, JUDGE-FR-089, C-70): the tool-call
+				// claim channel. Ceiling "allow" for the same reason
+				// set_goal's is directly above — it reports the CALLING
+				// session's own completion only, gated shut for a goalless
+				// session, and for a delegated sub-turn that is not a task's
+				// own run, by the tool's own scope preconditions, never by
+				// policy. A native task run finishes ONLY through an upheld
+				// goal_claim (ADR-084 §11, issue #710), so every agent a task
+				// can be assigned to must hold it. Per-agent seeds decide who
+				// holds it: every human-facing agent and the Worker allow
+				// (the Worker explicitly, via tightenGlobalCeiling — unlike its
+				// set_goal deny), Judge/PlanSupervisor explicit deny via their
+				// denyAllThenOverride stamps (see pkg/coreagent/core.go).
+				"goal_claim":          "allow",
 				"list_tasks":          "allow",
 				"create_task":         "allow",
 				"update_task":         "allow",
@@ -344,6 +431,21 @@ func DefaultConfig() *Config {
 				// tightenGlobalCeiling's sparse map, which is intended and
 				// recorded rather than discovered.
 				"browser_upload_file": "ask",
+				// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow.
+				// This is a decision, not an inheritance — the browser
+				// family is NOT uniform (browser_upload_file above is
+				// "ask") — because handing the browser to the human is the
+				// conservative direction: the tool takes nothing and reaches
+				// no page, and an "ask" on it would put an approval card
+				// between the agent and its own stand-down. Per-agent seeds
+				// (pkg/coreagent/core.go) decide who holds it: IDJim, IDRay,
+				// IDExplorer, IDResearcher explicit allow; Mia and Ava need
+				// no edit at all (denyAllThenOverride's floor already
+				// resolves them deny); Worker inherits this ceiling value
+				// through tightenGlobalCeiling's sparse map, matching every
+				// other browser_* tool's existing, already-tolerated posture
+				// for Worker.
+				"browser_handover": "allow",
 
 				// --- Sysagent management tools ---
 				"create_workspace":    "allow",
@@ -551,13 +653,115 @@ func DefaultConfig() *Config {
 				//    ceiling directly above pointless. Same defect shape as
 				//    inspect_session and plan_correct, third time.
 				//
-				// As always, raising the ceiling grants the tool to nobody by
-				// itself: the four base agents carry an explicit per-agent
-				// "allow" and every other seeded agent an explicit "deny"
-				// (pkg/coreagent/core.go's ROSTER VISIBILITY seed rule,
+				// Raising the ceiling grants the tool to nobody who carries an
+				// entry of their own: the four base agents carry an explicit
+				// per-agent "allow" and every other seeded agent an explicit
+				// "deny" (pkg/coreagent/core.go's ROSTER VISIBILITY seed rule,
 				// including the Worker's sparse-map deny — an absent key there
-				// would inherit this "allow").
+				// would inherit this "allow"). See the CEILING vs GRANT note
+				// under the ADR-068 block below for what an absent key means
+				// and what now guarantees there are none.
 				"list_jobs": "allow",
+
+				// --- ADR-068 D15.3 (FR-070) knowledge-base tools ---
+				// All six seeded "allow" at the ceiling, read tier and the
+				// three writes alike — superseding ADR-067 D17's nine (see
+				// pkg/coreagent/core.go's allStaticToolNames for the
+				// retirement).
+				//
+				// CEILING vs GRANT — the one thing to get right about this
+				// whole map. An "allow" here is a CEILING for an agent that
+				// carries its own entry for the same tool: the runtime merge
+				// is strictest-wins, so the agent's value wins whenever it is
+				// stricter. For an agent that carries NO entry it is a
+				// GRANT — pkg/tools/compositor.go's
+				// resolveEffectivePolicyWith reads `case a == "": return g`,
+				// so silence on the agent side resolves to the global value,
+				// not to a denial. This comment used to claim the flat
+				// opposite ("allow here grants the tools to NOBODY by
+				// itself"), which was true only because every agent the seed
+				// writes is fully enumerated (pkg/coreagent/core.go's
+				// coreAgentSeed: allow on all six for Jim, allow-read +
+				// ask-write for Ava/Mia/Ray, explicit deny on all six
+				// everywhere else including the Worker's sparse map, where an
+				// absent key would silently INHERIT this allow).
+				//
+				// That enumeration only ever ran on a FRESH install, so on an
+				// UPGRADE every agent that predated these six names had no
+				// entry for them and silently resolved this "allow" — the
+				// delegation-only subagents included. Note that
+				// ValidateToolPolicyCoverage does NOT catch that: it counts a
+				// global entry as coverage (deliberately — the Worker's sparse
+				// seed depends on exactly that inheritance), so it reports no
+				// gap and RepairIncompleteToolPolicyCoverage is handed nothing
+				// to repair. What closes it is
+				// pkg/coreagent/tool_policy_catalog_drift.go's
+				// backfillToolPolicyCatalogDrift, which runs at the end of
+				// SeedConfig on every boot and writes each pre-existing agent
+				// the explicit entry its own seed states (or, for an
+				// operator-created agent, the deny baseline). Adding a tool
+				// here without a matching per-agent posture in coreAgentSeed
+				// therefore grants it, on upgrade, to every agent the seed
+				// leaves silent.
+				//
+				// An "ask" ceiling on the write three (knowledge_edit,
+				// knowledge_restructure, knowledge_configure) would be the
+				// same landed defect recorded four times above
+				// (inspect_session, the ADR-052 three, plan_correct/
+				// stop_plan, list_jobs): the runtime global x agent merge is
+				// strictest-wins (pkg/tools/compositor.go:
+				// resolveEffectivePolicyWith), so a stricter ceiling here
+				// would drag Jim's deliberately-seeded "allow" back down to
+				// "ask" and make his one intentional exception (argued in
+				// his own coreAgentSeed case: he already holds unprompted
+				// bash, so an ask-gate on these three would gate nothing
+				// real for him) dead on every install while the seed data
+				// still read exactly as intended.
+				//
+				// The real containment for these tools is not the ceiling:
+				// it is the per-agent seed, the workspace-mount scoping the
+				// read tier enforces itself, and the per-mutation audit
+				// event (ADR-068's FR-090, carried forward from ADR-067
+				// D19).
+				// Read tier.
+				"knowledge_describe": "allow",
+				"knowledge_find":     "allow",
+				"knowledge_read":     "allow",
+				// knowledge_list (KB-2a, defect-list-knowledge-base-ux-
+				// 2026-09-08.md, founder-ratified 2026-09-08) — also read
+				// tier: which knowledge bases this agent can reach. Same
+				// ceiling posture as the other three read tools, for the
+				// same reason (touches nothing outside what it reports).
+				"knowledge_list": "allow",
+				// Writes.
+				"knowledge_edit":        "allow",
+				"knowledge_restructure": "allow",
+				"knowledge_configure":   "allow",
+				// knowledge_base_create (KB-1, same defect list) — makes a
+				// NEW knowledge base in the workspace's own Library. Ceiling
+				// "allow" for the same reason as the write three above: the
+				// real containment is the per-agent seed (Ava/Mia/Ray "ask",
+				// Jim "allow" — his bash exception applies here too, since
+				// bash can already create arbitrary folders+files unprompted)
+				// plus the FR-090 audit record, not the ceiling.
+				"knowledge_base_create": "allow",
+
+				// --- grep (ADR-081 D11, FR-009 — founder ruling) ---
+				// Ceiling "allow": grep is a read-only, no-write, recursive
+				// file-name/content search confined to the CALLING agent's
+				// own workspace root and mounts only (FR-020) — never a
+				// cross-workspace scope, never a mutation. The founder
+				// ruling (unified-search-and-grep-spec.md MV-8) requires an
+				// EXPLICIT "allow" for every seeded agent tier
+				// (pkg/coreagent/core.go: Jim/Mia/Ava/Ray, the Worker, the
+				// specialist tier, every system agent), so unlike most
+				// entries in this map the ceiling is not a real gate for
+				// anyone in the shipped roster — it exists so a name absent
+				// from a future custom agent's own map still resolves
+				// "allow" rather than falling through to a silent runtime
+				// default (Constraint #6), exactly like every other ceiling
+				// entry here.
+				"grep": "allow",
 			},
 		},
 		// Planning holds the Planning & Goals epic's global loop bounds
@@ -566,6 +770,10 @@ func DefaultConfig() *Config {
 		// config.json is self-documenting; validateBootConfig still applies
 		// the same defaults for any field an operator zeroes out later.
 		Planning: PlanningConfig{
+			// Two separate limits (founder decision 2026-09-14, issue #710):
+			// TaskMaxAttempts is how many fresh runs a task gets (default 3);
+			// GoalMaxRounds is how many tries a goal gets within one run or one
+			// chat (Settings -> Performance, default 20).
 			TaskMaxAttempts:         DefaultTaskMaxAttempts,
 			GoalMaxRounds:           DefaultGoalMaxRounds,
 			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,

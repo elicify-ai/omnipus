@@ -50,6 +50,7 @@ func TestCreateTaskInWorkspace_PlanLinkage_Happy(t *testing.T) {
 		"agent_id":     "worker-agent",
 		"plan_id":      planID,
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
 	require.False(t, result.IsError, "create_task_in_workspace with plan_id: %s", result.ForLLM)
 
@@ -81,8 +82,15 @@ func TestCreateTaskInWorkspace_PlanLinkage_CrossWorkspaceRejected(t *testing.T) 
 		"agent_id":     "worker-agent",
 		"plan_id":      planID,
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
-	assert.True(t, result.IsError, "expected rejection for a cross-workspace plan_id")
+	require.True(t, result.IsError, "expected rejection for a cross-workspace plan_id")
+	// Assert the REASON, not merely that something failed: before the dod
+	// argument above was supplied this call was rejected by the D-C
+	// criteria/dod gate and never reached the plan-linkage check at all, so a
+	// bare IsError assertion passed while proving nothing.
+	assert.Contains(t, result.ForLLM, "belongs to a different workspace",
+		"rejection must come from the plan-linkage FK, not an earlier gate")
 }
 
 // TestCreateTaskInWorkspace_PlanLinkage_TerminalPlanRejected proves linking
@@ -111,8 +119,11 @@ func TestCreateTaskInWorkspace_PlanLinkage_TerminalPlanRejected(t *testing.T) {
 		"agent_id":     "worker-agent",
 		"plan_id":      planID,
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
-	assert.True(t, result.IsError, "expected rejection for a terminal plan")
+	require.True(t, result.IsError, "expected rejection for a terminal plan")
+	assert.Contains(t, result.ForLLM, "terminal",
+		"rejection must come from the terminal-plan check, not an earlier gate")
 }
 
 // TestCreateTaskInWorkspace_PlanLinkage_UnwiredStore_FailsClosed proves a
@@ -130,8 +141,11 @@ func TestCreateTaskInWorkspace_PlanLinkage_UnwiredStore_FailsClosed(t *testing.T
 		"agent_id":     "worker-agent",
 		"plan_id":      "some-plan-id",
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
-	assert.True(t, result.IsError, "expected fail-closed rejection when the plan store is unwired")
+	require.True(t, result.IsError, "expected fail-closed rejection when the plan store is unwired")
+	assert.Contains(t, result.ForLLM, "plan store is not configured",
+		"rejection must be the fail-closed unwired-store branch, not an earlier gate")
 }
 
 // TestCreateTaskInWorkspace_NoPlanID_Unaffected proves an ordinary call with
@@ -148,6 +162,60 @@ func TestCreateTaskInWorkspace_NoPlanID_Unaffected(t *testing.T) {
 		"workspace_id": testWorkspaceID,
 		"agent_id":     "worker-agent",
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
 	assert.False(t, result.IsError, "plan-less create_task_in_workspace must be unaffected by an unwired plan store: %s", result.ForLLM)
+}
+
+// TestCreateTaskInWorkspace_PlanMembership_NonDraftPlanRefused is the agent-
+// tool half of the draft-only membership rule (operator directive: adding a
+// task to a running plan must not be possible for the agent OR via the UI).
+//
+// A member attached to an already-approved or already-running plan reaches
+// neither plan.Lint (approve-time) nor plan.LintCorrection (supervision-time),
+// so it enters the plan with its write_set and join obligations unchecked.
+// The System Agent tool pays the same gate as the REST surface and the plain
+// create_task tool — they all call tools.ValidateTaskPlanMembership.
+func TestCreateTaskInWorkspace_PlanMembership_NonDraftPlanRefused(t *testing.T) {
+	for _, target := range []plan.State{plan.StateApproved, plan.StateRunning} {
+		t.Run(string(target), func(t *testing.T) {
+			deps, home := newTestDepsWithHome(t)
+			seedWorkspace(t, home, testWorkspaceID)
+			planStore, planID := seedPlanForLinkage(t, home, testWorkspaceID)
+			deps.PlanStore = planStore
+
+			approved := plan.StateApproved
+			_, err := planStore.Update(planID, plan.Patch{State: &approved})
+			require.NoError(t, err)
+			if target == plan.StateRunning {
+				running := plan.StateRunning
+				_, err = planStore.Update(planID, plan.Patch{State: &running})
+				require.NoError(t, err)
+			}
+
+			create := systools.NewTaskCreateTool(deps)
+			ctx := tools.WithAgentID(context.Background(), "jim")
+			result := create.Execute(ctx, map[string]any{
+				"name":         "smuggled member",
+				"workspace_id": testWorkspaceID,
+				"agent_id":     "worker-agent",
+				"plan_id":      planID,
+				"write_set":    []any{"src/app.ts"},
+				"criteria":     workspaceCriteriaArg(),
+				"dod":          workspaceDoDArg(),
+			})
+
+			require.True(t, result.IsError, "expected rejection for a %s plan; got %s", target, result.ForLLM)
+			assert.Contains(t, result.ForLLM, string(target),
+				"the refusal must name the plan's state, not fail generically")
+			assert.Contains(t, result.ForLLM, "membership is frozen",
+				"rejection must come from the membership gate, not an earlier gate")
+
+			// Nothing persisted: a refused attach leaves no orphan task.
+			taskStore := task.New(home + "/tasks")
+			all, lerr := taskStore.List(task.Filter{WorkspaceID: testWorkspaceID})
+			require.NoError(t, lerr)
+			assert.Empty(t, all, "a refused attach must persist no task at all")
+		})
+	}
 }

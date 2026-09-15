@@ -21,13 +21,20 @@ import { useLibraryFileEditor } from './useLibraryFileEditor'
 import { LibraryCodeEditor } from './LibraryCodeEditor'
 import type { LibraryEntry } from '@/lib/api'
 
+/** What a `renderView` may ask the shell to do on the reader's behalf. */
+export interface LibraryTextViewHelpers {
+  /** Switch this pane to Edit mode (the same thing the Edit button does). */
+  switchToEdit: () => void
+}
+
 interface LibraryTextPreviewProps {
   workspaceId: string
   entry: LibraryEntry
   content: string
   /** Renders the read-only view for the CURRENT draft text (may include
-   * unsaved edits — see module doc comment above). */
-  renderView: (draft: string) => ReactNode
+   * unsaved edits — see module doc comment above). The second argument lets
+   * a view offer a "Fix" affordance that lands in the editor (UAT D-118). */
+  renderView: (draft: string, helpers: LibraryTextViewHelpers) => ReactNode
   /** Filename passed to LibraryCodeEditor for language-grammar selection —
    * normally just `entry.name`. */
   editorFilename: string
@@ -105,7 +112,7 @@ export function LibraryTextPreview({
       <div className="flex-1 min-h-0 overflow-auto">
         {mode === 'view' ? (
           <div className="p-4" data-testid="library-preview-view-body">
-            {renderView(draft)}
+            {renderView(draft, { switchToEdit: () => setMode('edit') })}
           </div>
         ) : (
           <LibraryCodeEditor value={draft} onChange={setDraft} filename={editorFilename} />

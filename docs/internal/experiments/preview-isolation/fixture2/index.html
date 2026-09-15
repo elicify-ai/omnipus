@@ -1,0 +1,34 @@
+<!doctype html><html><head><meta charset="utf-8"><title>probe2</title>
+<link rel="stylesheet" href="/f/style.css"><script src="/f/app.js"></script></head>
+<body>
+<div id="ft">Wwq</div>
+<iframe id="pdf" src="/f/doc.pdf" width="320" height="220"></iframe>
+<script>
+(function(){
+ function done(){
+  var r={};
+  r.js_ran=!!window.__APP_JS_RAN__;
+  r.origin=String(window.origin); r.opaque=(String(window.origin)==='null');
+  try{r.cookie=document.cookie}catch(e){r.cookie='THREW:'+e.name}
+  // REAL font oracle: compare rendered width against a forced fallback.
+  try{
+   var el=document.getElementById('ft');
+   var w1=el.getBoundingClientRect().width;
+   var prev=el.style.fontFamily; el.style.fontFamily='monospace';
+   var w2=el.getBoundingClientRect().width; el.style.fontFamily=prev;
+   r.font_width_custom=Math.round(w1*100)/100;
+   r.font_width_fallback=Math.round(w2*100)/100;
+   r.font_actually_applied=(Math.abs(w1-w2)>0.5);
+  }catch(e){r.font_err=String(e)}
+  try{ r.fonts_status_UNRELIABLE=document.fonts.status }catch(e){}
+  try{ r.fonts_check=document.fonts.check('40px RealProbe') }catch(e){ r.fonts_check='err' }
+  var f=document.getElementById('pdf');
+  try{ r.pdf_frame_url=f.contentWindow?String(f.contentWindow.location):'(blocked)'; }
+  catch(e){ r.pdf_frame_url='THREW:'+e.name; }
+  document.title='RESULT:'+JSON.stringify(r);
+  var p=document.createElement('pre'); p.id='result'; p.textContent=JSON.stringify(r); document.body.appendChild(p);
+ }
+ if(document.fonts && document.fonts.ready) document.fonts.ready.then(function(){setTimeout(done,1500)});
+ else window.addEventListener('load',function(){setTimeout(done,1500)});
+})();
+</script></body></html>

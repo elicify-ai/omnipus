@@ -201,6 +201,101 @@ func TestPutPerformance_PartialUpdate_ToolsOnDemandOnly_LeavesParallelAgentsUnch
 		"max_parallel_agents must be unchanged after a tools_on_demand-only PUT")
 }
 
+// TestGetPerformance_GoalMaxRounds_DefaultTwenty is GOAL-FR-024/FR-045's
+// backend-half regression: a fresh install with nothing configured must
+// still surface goal_max_rounds (schema: "Always present in responses"),
+// resolved to config.DefaultGoalMaxRounds (20) via
+// cfg.Planning.EffectiveGoalMaxRounds() — never a bare zero.
+func TestGetPerformance_GoalMaxRounds_DefaultTwenty(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/performance", nil)
+	w := httptest.NewRecorder()
+	api.HandlePerformance(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "GET must return 200; body=%s", w.Body.String())
+
+	var resp gen.PerformanceSettings
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.NotNil(t, resp.GoalMaxRounds, "goal_max_rounds must always be present in the response (GOAL-FR-045)")
+	assert.EqualValues(t, 20, *resp.GoalMaxRounds,
+		"goal_max_rounds must default to 20 (GOAL-FR-024) on a fresh install with nothing configured")
+}
+
+// TestPutPerformance_GoalMaxRounds_PersistsThenGet verifies the write-then-
+// read round trip end to end through the real REST handler: PUT a new
+// goal_max_rounds, confirm the PUT response reflects it, then confirm a
+// SEPARATE GET request reflects the persisted value — proving it actually
+// reached pkg/config's planning.goal_max_rounds on disk rather than being
+// echoed back from the request body alone.
+func TestPutPerformance_GoalMaxRounds_PersistsThenGet(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	putReq := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
+		strings.NewReader(`{"goal_max_rounds":35}`))
+	putReq.Header.Set("Content-Type", "application/json")
+	putReq = withReAuthAdmin(t, api, putReq)
+	putW := httptest.NewRecorder()
+	api.HandlePerformance(putW, putReq)
+	require.Equal(t, http.StatusOK, putW.Code, "PUT must return 200; body=%s", putW.Body.String())
+
+	var putResp gen.PerformanceSettings
+	require.NoError(t, json.Unmarshal(putW.Body.Bytes(), &putResp))
+	require.NotNil(t, putResp.GoalMaxRounds, "goal_max_rounds must be in the PUT response")
+	assert.EqualValues(t, 35, *putResp.GoalMaxRounds, "PUT response must reflect the written value (35)")
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/performance", nil)
+	getW := httptest.NewRecorder()
+	api.HandlePerformance(getW, getReq)
+	require.Equal(t, http.StatusOK, getW.Code, "GET must return 200; body=%s", getW.Body.String())
+
+	var getResp gen.PerformanceSettings
+	require.NoError(t, json.Unmarshal(getW.Body.Bytes(), &getResp))
+	require.NotNil(t, getResp.GoalMaxRounds, "goal_max_rounds must be in the GET response")
+	assert.EqualValues(t, 35, *getResp.GoalMaxRounds,
+		"GET after PUT must reflect the persisted value (35), not the pre-PUT default of 20")
+
+	// The single global value must also drive EffectiveGoalMaxRounds() for
+	// any in-memory caller (GOAL-FR-024/D-D: one budget, governs task and
+	// chat goals identically) — not just the wire echo.
+	liveCfg := api.agentLoop.GetConfig()
+	assert.Equal(t, 35, liveCfg.Planning.EffectiveGoalMaxRounds(),
+		"cfg.Planning.EffectiveGoalMaxRounds() must be 35 after PUT")
+}
+
+// TestPutPerformance_PartialUpdate_GoalMaxRoundsOnly_LeavesOtherFieldsUnchanged
+// mirrors the existing tools_on_demand/max_parallel_agents partial-update
+// tests below: a PUT touching only goal_max_rounds must not clobber the
+// other two fields, and vice versa.
+func TestPutPerformance_PartialUpdate_GoalMaxRoundsOnly_LeavesOtherFieldsUnchanged(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+
+	req1 := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
+		strings.NewReader(`{"max_parallel_agents":6,"tools_on_demand":false}`))
+	req1.Header.Set("Content-Type", "application/json")
+	req1 = withReAuthAdmin(t, api, req1)
+	w1 := httptest.NewRecorder()
+	api.HandlePerformance(w1, req1)
+	require.Equal(t, http.StatusOK, w1.Code, "first PUT must return 200; body=%s", w1.Body.String())
+
+	req2 := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
+		strings.NewReader(`{"goal_max_rounds":12}`))
+	req2.Header.Set("Content-Type", "application/json")
+	req2 = withReAuthAdmin(t, api, req2)
+	w2 := httptest.NewRecorder()
+	api.HandlePerformance(w2, req2)
+	require.Equal(t, http.StatusOK, w2.Code, "second PUT must return 200; body=%s", w2.Body.String())
+
+	var resp2 gen.PerformanceSettings
+	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &resp2))
+	require.NotNil(t, resp2.GoalMaxRounds, "goal_max_rounds must be in the PUT response")
+	assert.EqualValues(t, 12, *resp2.GoalMaxRounds, "goal_max_rounds must be 12 after the goal_max_rounds-only PUT")
+
+	liveCfg := api.agentLoop.GetConfig()
+	assert.Equal(t, 6, liveCfg.Performance.MaxParallelAgents,
+		"max_parallel_agents must be unchanged after a goal_max_rounds-only PUT")
+	assert.False(t, liveCfg.Tools.Manifest.Compressed,
+		"tools_on_demand must be unchanged after a goal_max_rounds-only PUT")
+}
+
 // TestPutPerformance_PartialUpdate_MaxParallelAgentsOnly_LeavesToolsOnDemandUnchanged
 // verifies that a PUT with only max_parallel_agents does not clobber tools_on_demand.
 func TestPutPerformance_PartialUpdate_MaxParallelAgentsOnly_LeavesToolsOnDemandUnchanged(t *testing.T) {

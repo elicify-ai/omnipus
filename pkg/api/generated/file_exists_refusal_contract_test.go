@@ -1,3 +1,10 @@
+//go:build !windows
+
+// Must match contract_test.go's constraint: the mustPassAsyncAPI /
+// mustFailAsyncAPI helpers this file uses are defined there, and that file is
+// !windows. Without the same tag this file compiles on Windows WITHOUT its
+// helpers and fails as "undefined" — which is how it was found.
+
 package generated
 
 import "testing"

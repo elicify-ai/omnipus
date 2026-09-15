@@ -80,11 +80,7 @@ func TestOriginGating_GoalLoop(t *testing.T) {
 				Content:       "/goal confirm",
 				UserInitiated: tc.userInitiated,
 			}, agentInst, &opts)
-			after, err := store.GetMeta(meta.ID)
-			if err != nil {
-				t.Fatalf("GetMeta: %v", err)
-			}
-			started := after.GoalCondition != ""
+			started := activeGoalForSession(meta.ID) != nil
 			if started != tc.wantStarted {
 				t.Errorf("goal started = %v, want %v (UserInitiated=%v)", started, tc.wantStarted, tc.userInitiated)
 			}

@@ -100,7 +100,6 @@ func (al *AgentLoop) getSubTurnConfig() subTurnRuntimeConfig {
 		maxConcurrent:      maxConcurrent,
 		concurrencyTimeout: concurrencyTimeout,
 		defaultTimeout:     defaultTimeout,
-		defaultTokenBudget: cfg.DefaultTokenBudget,
 	}
 }
 
@@ -110,7 +109,6 @@ type subTurnRuntimeConfig struct {
 	maxConcurrent      int
 	concurrencyTimeout time.Duration
 	defaultTimeout     time.Duration
-	defaultTokenBudget int
 }
 
 // ====================== SubTurn Config ======================
@@ -214,12 +212,6 @@ type SubTurnConfig struct {
 	// InitialMessages preloads the ephemeral session history before the agent loop starts.
 	// Used by evaluator-optimizer patterns to pass the full worker context across multiple iterations.
 	InitialMessages []providers.Message
-
-	// InitialTokenBudget is a shared atomic counter for tracking remaining tokens.
-	// If set, the SubTurn will inherit this budget and deduct tokens after each LLM call.
-	// If nil, the SubTurn will inherit the parent's tokenBudget (if any).
-	// Used by team tool to enforce token limits across all team members.
-	InitialTokenBudget *atomic.Int64
 
 	// TaskLabel is the optional human-readable label for the sub-turn task.
 	// Populated by the spawn tool from its "label" argument (FR-H-004).
@@ -516,7 +508,6 @@ func (s *AgentLoopSpawner) SpawnSubTurn(
 		ActualSystemPrompt: cfg.ActualSystemPrompt,
 		TargetAgentID:      cfg.TargetAgentID,
 		InitialMessages:    cfg.InitialMessages,
-		InitialTokenBudget: cfg.InitialTokenBudget,
 		MaxTokens:          cfg.MaxTokens,
 		Async:              cfg.Async,
 		Critical:           cfg.Critical,
@@ -835,7 +826,21 @@ func spawnSubTurn(
 	// activeRequests WaitGroup rather than context propagation here; the child
 	// timeout (defaultSubTurnTimeout, typically 5 minutes) acts as a safety
 	// ceiling that prevents runaway sub-turns from blocking clean shutdown.
-	childCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	//
+	// UAT A-17: the time limit itself is NOT this context's deadline any more.
+	// It is enforced by the force-cancel timer armed just before dispatch
+	// (armSubTurnForceCancel, below), which hard-aborts the child at
+	// forceCancelAt exactly the way a hard cancel does. A bare context
+	// deadline could not do that: runTurn's tool loop stops between queued
+	// tool calls only on turnState.hardAbortRequested(), which a deadline never
+	// sets, so a child whose limit expired inside one tool call went on to run
+	// the next queued call (a file write) after its caller had already been
+	// told the delegation failed. childCtx keeps a deadline
+	// subTurnForceCancelBackstop later as a pure safety net for the one window
+	// the timer cannot reach (the limit expiring before runTurn has registered
+	// its cancel funcs).
+	forceCancelAt := time.Now().Add(timeout)
+	childCtx, cancel := context.WithTimeout(context.Background(), timeout+subTurnForceCancelBackstop)
 	defer cancel()
 
 	// ADR-053 S2/D1: when the caller (pkg/tools/delegate.go's executeRun)
@@ -1491,20 +1496,6 @@ func spawnSubTurn(
 	// carry the parent spawn's ToolCall.ID as ParentSpawnCallID.
 	childTS.parentSpawnCallID = parentSpawnCallID
 
-	// Token budget initialization/inheritance
-	// If InitialTokenBudget is explicitly provided (e.g., by team tool), use it.
-	// Otherwise, inherit from parent's tokenBudget (for nested SubTurns).
-	if cfg.InitialTokenBudget != nil {
-		childTS.tokenBudget = cfg.InitialTokenBudget
-	} else if parentTS.tokenBudget != nil {
-		childTS.tokenBudget = parentTS.tokenBudget
-	} else if rtCfg.defaultTokenBudget > 0 {
-		// Apply default token budget from config if no budget is set
-		budget := &atomic.Int64{}
-		budget.Store(int64(rtCfg.defaultTokenBudget))
-		childTS.tokenBudget = budget
-	}
-
 	// IMPORTANT: Put childTS into childCtx so that code inside runTurn can retrieve it
 	childCtx = withTurnState(childCtx, childTS)
 	childCtx = WithAgentLoop(childCtx, al) // Propagate AgentLoop to child turn
@@ -1569,10 +1560,8 @@ func spawnSubTurn(
 	// hard, or detach) can ever find it again, and it runs unchecked until its
 	// own MaxIterations ceiling. clearActiveTurnStateEntry only removes the
 	// entry if it is STILL this exact childTS, so a since-registered newer
-	// generation is left untouched — mirrors the identical guard
-	// orphan_watch.go already uses for al.orphanWatches
-	// (fireOrphanForegroundTurnWatch's CompareAndDelete) and clearActiveTurn
-	// uses for the parent's own ts.sessionKey.
+	// generation is left untouched — the same compare-and-delete-by-identity
+	// pattern clearActiveTurn uses for the parent's own ts.sessionKey.
 	defer al.clearActiveTurnStateEntry(childID, childTS)
 
 	// The child is now real, discoverable evidence of its own (findable via
@@ -1607,6 +1596,10 @@ func spawnSubTurn(
 	}
 	// W1-12: only emit span lifecycle events when parentSpawnCallID is non-empty.
 	if emitSpanEvents {
+		// The span counts as active from before its spawn event until after its
+		// end event (the cleanup defer below) — markSubTurnSpanOpen's doc
+		// comment (steering.go) explains why the turn registry alone cannot say.
+		al.markSubTurnSpanOpen(parentSpawnCallID)
 		slog.Debug("subagent_start",
 			"span_id", spanID,
 			"parent_call_id", parentSpawnCallID,
@@ -1649,6 +1642,15 @@ func spawnSubTurn(
 	// defer literal below, is what makes it a valid closure upvalue.
 	var lastTurnStatus TurnEndStatus
 
+	// forceCancelFired is true when THIS sub-turn was stopped by its own time
+	// limit (armSubTurnForceCancel, UAT A-17) rather than by completing, failing
+	// on its own, or being cancelled by a user/parent. Declared here, beside
+	// lastTurnStatus and for the same reason (a closure upvalue the cleanup
+	// defer below must be able to read), and assigned in step 8 only AFTER
+	// forceCancel.disarm() has returned — so the defer always sees a final
+	// answer, never a timer callback still in flight.
+	var forceCancelFired bool
+
 	// 7. Defer cleanup: deliver result (for async), emit End event, and recover from panics
 	defer func() {
 		if r := recover(); r != nil {
@@ -1674,6 +1676,18 @@ func spawnSubTurn(
 			endStatus := SubTurnStatusSuccess
 			var endReason string
 			switch {
+			case err != nil && forceCancelFired:
+				// UAT A-17: this sub-turn reached its time limit and was
+				// force-cancelled. It stays SubTurnStatusError — see
+				// SubTurnStatusTimeout's doc comment (events.go) for why a
+				// timeout is deliberately reported as an error on this wire,
+				// not as a cancellation. Checked FIRST because the force-cancel
+				// is a hard abort, so runTurn's own deferred Finish(true) calls
+				// childTS.cancelFunc — childCtx.Err() is then context.Canceled
+				// and the two cases below would otherwise mislabel a timeout as
+				// an interruption, which executeSync would in turn report to the
+				// delegator as "stopped_by_user".
+				endStatus = SubTurnStatusError
 			case err != nil && errors.Is(childCtx.Err(), context.Canceled) && childTS.cancelFired.Load():
 				// FIX 4 (7-reviewer-gate follow-up on FIX 5): this SPECIFIC
 				// sub-turn's own ClaimCancel was claimed — i.e. RequestCancel
@@ -1935,6 +1949,11 @@ func spawnSubTurn(
 					Reason:    endReason,
 				},
 			)
+			// The end event is now queued for every subscriber (EventBus.Emit
+			// delivers on this goroutine, with a bounded blocking retry for this
+			// must-not-drop kind), so only now may the span stop counting as
+			// active — see markSubTurnSpanOpen (steering.go).
+			al.markSubTurnSpanEnded(parentSpawnCallID)
 		}
 
 		// ADR-057 FR-033/W10d (US-6 AS-4): the child-turn-terminal CloseSession
@@ -1973,6 +1992,11 @@ func spawnSubTurn(
 		return result, err
 	}
 
+	// UAT A-17: arm the time limit as a force-cancel for BOTH dispatch kinds.
+	// See forceCancelAt's comment (step 4) and armSubTurnForceCancel's doc
+	// comment for why a context deadline alone does not stop a child.
+	forceCancel := armSubTurnForceCancel(childTS, time.Until(forceCancelAt))
+
 	if dispatchKind == runner.DispatchKindExternalCLI {
 		// External-cli dispatch: compose the same (soul, task) pair the
 		// native path uses. An empty soul yields task-only input (a
@@ -1982,17 +2006,31 @@ func spawnSubTurn(
 		// prompt, mirroring the native system+user split.
 		externalInput := composeDelegateInput(al, cfg.SystemPrompt, cfg.ActualSystemPrompt, cfg.TargetAgentID)
 		extResult, extErr := runExternalCLISubTurn(childCtx, al, childTS, externalInput, timeout)
+		// runExternalCLISubTurn registers one cancel func as both
+		// turnCancel and providerCancel, and every driver binds the OS child
+		// to it, so the force-cancel's requestHardAbort kills the CLI process.
+		// A run that nonetheless SUCCEEDED as the timer fired keeps its result.
+		forceCancelFired = forceCancel.disarm() && extErr != nil
 		if semAcquired {
 			<-parentTS.concurrencySem
 			semAcquired = false
 		}
 		result = extResult
 		err = extErr
+		if forceCancelFired {
+			result, err = subTurnTimedOutResult(al, childTS, timeout, extErr)
+		}
 		return result, err
 	}
 
 	// Native path (default, existing behavior — unchanged).
 	turnRes, turnErr := al.runTurn(childCtx, childTS)
+	// UAT A-17: settle the force-cancel before ANYTHING reads this outcome.
+	// It counts only when the turn did not finish on its own terms — a hard
+	// abort surfaces from runTurn as either an error or TurnEndStatusAborted
+	// with a nil error (abortTurn's Case 1) — so a child that completed or
+	// parked in the same instant the timer fired keeps its real result.
+	forceCancelFired = forceCancel.disarm() && (turnErr != nil || turnRes.status == TurnEndStatusAborted)
 	// M4/C2 (2026-08-04): mirror the real terminal status into the
 	// pre-declared upvalue the cleanup defer above reads — see
 	// lastTurnStatus's own doc comment for why a direct reference from that
@@ -2031,6 +2069,10 @@ func spawnSubTurn(
 	}
 
 	// Convert turnResult to tools.ToolResult
+	if forceCancelFired {
+		result, err = subTurnTimedOutResult(al, childTS, timeout, turnErr)
+		return result, err
+	}
 	if turnErr != nil {
 		err = turnErr
 		// IsError is set explicitly (rather than left at its zero value, as
@@ -2075,6 +2117,114 @@ func spawnSubTurn(
 	}
 
 	return result, err
+}
+
+// subTurnForceCancelBackstop is how far past a sub-turn's time limit childCtx's
+// own deadline sits (UAT A-17). The limit itself is enforced by
+// armSubTurnForceCancel; this backstop only bounds the rare window in which
+// the limit expires before runTurn / runExternalCLISubTurn has registered the
+// cancel funcs requestHardAbort fires. The hard-abort flag is still set in
+// that window, so no tool call can start — only an in-flight model call is
+// left for this deadline to end.
+const subTurnForceCancelBackstop = 5 * time.Second
+
+// subTurnForceCancel is one sub-turn's time limit, enforced as a hard abort.
+type subTurnForceCancel struct {
+	timer *time.Timer
+	done  chan struct{}
+	fired atomic.Bool
+}
+
+// armSubTurnForceCancel schedules a force-cancel of childTS after `after`.
+//
+// Documented intent (pkg/tools/delegate.go DelegateTool.Description and the
+// timeout_seconds schema): "A delegation is force-cancelled after
+// timeout_seconds ... if it has not finished by then." A force-cancel must
+// therefore stop the child the way a hard cancel does. requestHardAbort sets
+// turnState.hardAbort under ts.mu BEFORE it fires turnCancel/providerCancel, so
+// a tool call that returns because its context ended finds
+// hardAbortRequested() already true, and runTurn's tool loop aborts instead of
+// dispatching the next queued call. runTurn's deferred
+// Finish(hardAbortRequested()) then cascades the hard abort to the child's own
+// sub-turns.
+//
+// A plain context deadline gave none of that: the loop's only pre-dispatch
+// stop check is hardAbortRequested(), and ToolRegistry.ExecuteWithContext does
+// not check ctx before Execute, so a child whose deadline expired during one
+// tool call ran the next queued call — a file write — after its delegator had
+// been told it failed (TestSubTurn_TimedOutChild_StartsNoFurtherToolCalls).
+//
+// If a hard abort was already requested (a user or parent cancel won the
+// race), the timer records nothing and the outcome stays that cancellation.
+func armSubTurnForceCancel(childTS *turnState, after time.Duration) *subTurnForceCancel {
+	fc := &subTurnForceCancel{done: make(chan struct{})}
+	fc.timer = time.AfterFunc(after, func() {
+		defer close(fc.done)
+		if childTS.requestHardAbort() {
+			fc.fired.Store(true)
+		}
+	})
+	return fc
+}
+
+// disarm stops the timer and reports whether the force-cancel fired. When the
+// callback has already started, disarm waits for it to finish so the answer is
+// final: callers classify the sub-turn's outcome from this value, and a
+// callback still in flight could otherwise flip it after they read it.
+func (fc *subTurnForceCancel) disarm() bool {
+	if fc.timer.Stop() {
+		return false
+	}
+	<-fc.done
+	return fc.fired.Load()
+}
+
+// subTurnTimedOutResult builds what spawnSubTurn returns for a sub-turn its
+// force-cancel stopped. The error wraps tools.ErrDelegationTimedOut (the
+// discriminator pkg/tools/delegate.go reports from), ErrTurnTimedOut and
+// context.DeadlineExceeded, so TranslateTurnError and every existing
+// errors.Is(err, context.DeadlineExceeded) caller still classify it as a
+// timeout. cause — what the dispatch itself returned, typically nil or
+// context.Canceled from the hard abort — is logged, never wrapped: wrapping a
+// context.Canceled would make a timeout read as a user cancellation downstream.
+//
+// It also records the timeout in the child's own transcript and on the event
+// bus when the turn's own exit did not already (a hard abort exits through
+// abortTurn's Case 1, which deliberately records nothing), so the child's
+// session shows why it stopped — and says so truthfully: the delegation's time
+// limit, not the model provider.
+func subTurnTimedOutResult(al *AgentLoop, childTS *turnState, limit time.Duration, cause error) (*tools.ToolResult, error) {
+	err := fmt.Errorf("%w: reached its %s time limit and was force-cancelled (%w: %w)",
+		tools.ErrDelegationTimedOut, limit, ErrTurnTimedOut, context.DeadlineExceeded)
+	slog.Warn("subturn: force-cancelled at its time limit",
+		"child_turn_id", childTS.turnID,
+		"agent_id", childTS.agentID,
+		"limit", limit,
+		"exit_cause", cause,
+	)
+
+	if !errors.Is(cause, ErrTurnTimedOut) {
+		llm := TranslateTurnError(err)
+		llm.Message = fmt.Sprintf("This delegated task reached its %s time limit and was force-cancelled. "+
+			"It made no further tool calls or changes after that point.", limit)
+		// The same error frame and transcript record typedTurnExit writes for
+		// a turn that timed out on its own, through the same emitter: before
+		// the force-cancel existed, a timed-out child exited through
+		// typedTurnExit, and this is that record with truthful wording. The
+		// frame's session id is stamped inside emitTurnErrorFrame (loop.go),
+		// so this function never reads routingSessionID and adds no consumer
+		// to ADR-057 FR-014's closed set.
+		al.emitTurnErrorFrame(childTS, childTS.eventMeta("spawnSubTurn", "subturn.force_cancel"),
+			"subturn_timeout", "subturn_timeout", llm)
+	}
+
+	return &tools.ToolResult{
+		Err: err,
+		ForLLM: fmt.Sprintf("SubTurn timed out: it reached its %s time limit and was force-cancelled. "+
+			"It is stopped and will make no further tool calls or changes; work it completed before the "+
+			"limit may remain.", limit),
+		IsError: true,
+	}, err
 }
 
 // updateToolCallStatusRetryDelays is the bounded backoff schedule

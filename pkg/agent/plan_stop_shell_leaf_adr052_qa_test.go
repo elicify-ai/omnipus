@@ -1,3 +1,10 @@
+//go:build !windows
+
+// Not built on Windows: these tests drive REAL processes and assert with
+// syscall.Kill, which does not exist there. The behaviour under test is the
+// POSIX signal path; Windows cancels via Job Objects, a different mechanism
+// that needs its own test rather than a #ifdef of this one.
+
 // Omnipus - Ultra-lightweight personal AI agent
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
@@ -38,7 +45,6 @@ package agent
 import (
 	"context"
 	"path/filepath"
-	"runtime"
 	"syscall"
 	"testing"
 	"time"
@@ -92,9 +98,6 @@ func (*stillAliveError) Error() string {
 // hard-abort window — verified at the OS level, not merely via the
 // ProcessSession's in-memory status field.
 func TestStopReachesShellLeaf_RealBackgroundProcessGroupDies(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("test uses POSIX process-group SIGKILL semantics (syscall.Kill(-pid, ...))")
-	}
 	// Deliberately NOT t.Parallel(). tools.GetSharedSessionManager() is a
 	// single process-wide singleton shared by every *AgentLoop any pkg/agent
 	// test constructs (see loop.go's AgentLoop.Close doc comment, "LOAD-

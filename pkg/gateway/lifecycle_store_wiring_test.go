@@ -56,6 +56,11 @@ func TestSetupAndStartServices_TaskExecutorLifecycleStoreWiring(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{
 		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 0},
+		// The mock worker below never claims, so its run spends goal tries and
+		// task attempts (founder decision 2026-09-14). One of each lets the run
+		// end Failed quickly, so the teardown guard does not wait out the
+		// default 20 tries x 3 attempts.
+		Planning: config.PlanningConfig{GoalMaxRounds: 1, TaskMaxAttempts: 1},
 		Agents: config.AgentsConfig{
 			Defaults: config.AgentDefaults{
 				Home:         tmpDir,
@@ -70,6 +75,10 @@ func TestSetupAndStartServices_TaskExecutorLifecycleStoreWiring(t *testing.T) {
 			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
+	// Production seeds goal_claim "allow" for every agent (pkg/config/defaults.go).
+	// Without it the task below would end before its first turn (founder
+	// decision 2026-09-15) instead of exercising a real run's lifecycle writes.
+	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 
@@ -122,6 +131,14 @@ func TestSetupAndStartServices_TaskExecutorLifecycleStoreWiring(t *testing.T) {
 		WorkspaceID: "lifecycle-wiring-smoke-ws",
 	}
 	require.NoError(t, tStore.Create(tsk))
+
+	// StartTaskNow launches a task its caller has ALREADY moved to in_progress
+	// (the REST PATCH does exactly that first). Leaving it `next` lets the
+	// heartbeat claim and dispatch the same task a second time alongside this
+	// run.
+	inProgress := task.StatusInProgress
+	_, advErr := tStore.Update(tsk.ID, task.Patch{Status: &inProgress})
+	require.NoError(t, advErr, "advance the task to in_progress before StartTaskNow")
 
 	sessionID, startErr := tExecutor.StartTaskNow(context.Background(), tsk.ID)
 	require.NoError(t, startErr, "StartTaskNow must succeed for a valid standalone task with a registered agent")

@@ -170,7 +170,7 @@ func TestListTasksInWorkspace_EmptyPrincipal_ErrorsAndLeaksNothing(t *testing.T)
 // TestListTasksInWorkspace_ProjectionOmitsDiskOnlyFields proves the response is
 // an allowlist PROJECTION, not a marshal of the on-disk task.Task. task.Task
 // documents four fields as DISK-ONLY — CreatedByAgentID ("MUST NOT be added to
-// any schema in contracts/"), Scratchpad, PendingJudgeClaim, DelegationDepth —
+// any schema in contracts/"), Scratchpad, DelegationDepth —
 // and a whole-struct marshal shipped every one of them, plus prompt and result.
 func TestListTasksInWorkspace_ProjectionOmitsDiskOnlyFields(t *testing.T) {
 	deps, home := newTestDepsWithHome(t)
@@ -178,12 +178,11 @@ func TestListTasksInWorkspace_ProjectionOmitsDiskOnlyFields(t *testing.T) {
 	writeTask(t, home, task.Task{
 		ID: "01JXSCOPE_PROJECTION0001", Title: "PROJECTED", Status: task.StatusNext,
 		WorkspaceID: testWorkspaceID, AgentID: "agent-a",
-		CreatedByAgentID:  "agent-a",
-		Scratchpad:        true,
-		PendingJudgeClaim: "PRIVATE-CLAIM-SECRET",
-		DelegationDepth:   7,
-		Prompt:            "PRIVATE-PROMPT-SECRET",
-		Result:            "PRIVATE-RESULT-SECRET",
+		CreatedByAgentID: "agent-a",
+		Scratchpad:       true,
+		DelegationDepth:  7,
+		Prompt:           "PRIVATE-PROMPT-SECRET",
+		Result:           "PRIVATE-RESULT-SECRET",
 	})
 
 	res := systools.NewTaskListTool(deps).Execute(callerCtx("agent-a"), map[string]any{})
@@ -192,7 +191,7 @@ func TestListTasksInWorkspace_ProjectionOmitsDiskOnlyFields(t *testing.T) {
 		"the seeded task did not come back at all; the rest of this test would prove nothing")
 
 	for _, forbidden := range []string{
-		"scratchpad", "pending_judge_claim", "created_by_agent_id", "delegation_depth",
+		"scratchpad", "created_by_agent_id", "delegation_depth",
 		"PRIVATE-CLAIM-SECRET", "PRIVATE-PROMPT-SECRET", "PRIVATE-RESULT-SECRET",
 	} {
 		assert.NotContains(t, res.ForLLM, forbidden, "disk-only content crossed the tool boundary")

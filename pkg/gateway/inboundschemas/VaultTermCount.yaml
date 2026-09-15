@@ -1,0 +1,24 @@
+title: VaultTermCount
+description: >
+  One term the text index actually holds, with its document frequency (spec
+  FR-114, FR-115).
+
+  It is what a zero-hit answer reports INSTEAD of broadening the query. The
+  system states the vocabulary it has and stops: a user who searched for one
+  thing and silently received results for a broader thing has been given a wrong
+  answer with no error channel.
+type: object
+additionalProperties: false
+required:
+  - term
+  - documents
+properties:
+  term:
+    type: string
+    minLength: 1
+    example: "prospect"
+  documents:
+    type: integer
+    minimum: 1
+    description: How many indexed notes contain it.
+    example: 412

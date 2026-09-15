@@ -184,6 +184,16 @@ type BrowserDetachFrame struct {
 	Type      string  `json:"type"`
 }
 
+// BrowserHandoverNoticeFrame — Server → client. ADR-085 BROWSER-FR-041/FR-042 visible waiting surface. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). THIS is the GENERATING copy (C-69: a WebSocket frame's generating copy is the inline schema here, not components/schemas/BrowserHandoverNoticeFrame.yaml, which exists only for the Constraint #8 5-step process and the pkg/gateway/inboundschemas/ sync) — keep both in sync by hand.
+type BrowserHandoverNoticeFrame struct {
+	// BROWSER-FR-044 — deterministic id from (sessionID, holdStartedAtUnixNano), reused verbatim for every emission within one unbroken hold; the SAME id is stamped onto the persisted transcript entry.
+	MessageId string `json:"message_id"`
+	SessionId string `json:"session_id"`
+	// BROWSER-FR-041/FR-048a. Includes the browser_handover tool's reason (plain text, truncated to 200 runes) when that is the producer.
+	Text string `json:"text"`
+	Type string `json:"type"`
+}
+
 // BrowserInputAnswerFrame — ADR-081 attachment-scoped dedicated input signaling. Never starts or replaces media capture.
 type BrowserInputAnswerFrame struct {
 	ControlEpoch int    `json:"control_epoch"`
@@ -462,8 +472,12 @@ type DoneStats struct {
 	ReplayError              *bool    `json:"replay_error,omitempty"`
 	Tokens                   *float64 `json:"tokens,omitempty"`
 	TokensDropped            *float64 `json:"tokens_dropped,omitempty"`
-	TruncatedResultCount     *float64 `json:"truncated_result_count,omitempty"`
-	TurnFailed               *bool    `json:"turn_failed,omitempty"`
+	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame, so a turn cut off while the user is still watching renders the notice immediately instead of only after reload/reattach via replay. Only present when true. Absent on a normal turn.
+	Truncated            *bool    `json:"truncated,omitempty"`
+	TruncatedResultCount *float64 `json:"truncated_result_count,omitempty"`
+	// ADR-087 D2 (finding #10). Mirrors Message.truncation_reason for the live done frame: narrows why truncated is true — "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a normal turn.
+	TruncationReason *string `json:"truncation_reason,omitempty"`
+	TurnFailed       *bool   `json:"turn_failed,omitempty"`
 }
 
 // ErrorFrame — Server → client. Error notification. May be global (no session_id, e.g., auth failure) or session-scoped. The SPA displays the message as a toast or inline error. Does NOT terminate the WebSocket connection.
@@ -493,12 +507,33 @@ type FileExistsRefusal struct {
 	Tool string `json:"tool"`
 }
 
+// GoalOutcomeFrame — Server → client. The goal outcome line (founder decision 2026-09-14): one push per goal ENDING (met / round limit reached / stopped by the user / other). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Emitted live by the terminal transition right after it persists the SAME outcome as a `type: system, system_subtype: goal_outcome` transcript entry, and re-emitted as this same frame type by pkg/gateway/replay.go from that entry (discriminating on the stamped system_subtype, never on content). THIS is the GENERATING copy; components/schemas/GoalOutcomeFrame.yaml exists only for the Constraint #8 5-step process and the inboundschemas sync — keep both in sync by hand.
+type GoalOutcomeFrame struct {
+	// Stable id for THIS ending, minted once by the writer and stamped verbatim onto both the persisted transcript entry's `id` and every frame for it (live and replay), e.g. `goal-outcome-<goal_id>-<terminal unix nanos>` — goal_id alone is not unique per ending (a task-owned goal can be re-run and end again). The SPA inserts at most one line per id.
+	MessageId string                  `json:"message_id"`
+	Outcome   GoalOutcomeFrameOutcome `json:"outcome"`
+	SessionId string                  `json:"session_id"`
+	Type      string                  `json:"type"`
+}
+
+// GoalOutcomeFrameOutcome — Hand-synced WS copy of contracts/components/schemas/GoalOutcome.yaml (the REST/transcript carrier — see it for every field's meaning). Named differently because pkg/api/generated holds the OpenAPI and AsyncAPI Go types in one package and cannot declare `GoalOutcome` twice. Any field edit MUST be mirrored in GoalOutcome.yaml.
+type GoalOutcomeFrameOutcome struct {
+	CriteriaTotal *int    `json:"criteria_total,omitempty"`
+	EndedAt       string  `json:"ended_at"`
+	Ending        string  `json:"ending"`
+	GoalId        string  `json:"goal_id"`
+	GoalText      string  `json:"goal_text"`
+	JudgeReason   *string `json:"judge_reason,omitempty"`
+	MaxRounds     int     `json:"max_rounds"`
+	RoundsUsed    int     `json:"rounds_used"`
+}
+
 // GoalStatusFrame — Server → client. Status push for a session's active /goal loop (ADR-049 D6/D7/US-8; state enum + goal_id extended by ADR-053 §Contract Surface — "Pill-state enum"/R§8.10). Emitted on round completion, state change, and clear/stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Canonical copy — keep in sync by hand with components/schemas/GoalStatusFrame.yaml. Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id until the audit classifies it.
 type GoalStatusFrame struct {
 	ActiveLoops int    `json:"active_loops"`
 	Cap         int    `json:"cap"`
 	Condition   string `json:"condition"`
-	// ADR-074 D5.2 / judgment-first FR-011 — compiled criteria breakdown for the `queued` (pending-confirm) emission. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI does not resolve cross-file $ref for its own codegen — the JudgeVerdictFrame/CriterionVerdict precedent); keep both in sync by hand, never a third criteria shape.
+	// ADR-074 D5.2 / judgment-first FR-011 — compiled criteria breakdown for the `active` emission that follows a goal record register/update (ADR-081 `set_goal`) or marker activation. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI does not resolve cross-file $ref for its own codegen — the JudgeVerdictFrame/CriterionVerdict precedent); keep both in sync by hand, never a third criteria shape.
 	Criteria []struct {
 		Author struct {
 			Id   string `json:"id"`
@@ -514,16 +549,17 @@ type GoalStatusFrame struct {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
-		Id         *string `json:"id,omitempty"`
-		Judgment   string  `json:"judgment"`
-		Kind       string  `json:"kind"`
-		Provenance *string `json:"provenance,omitempty"`
-		Status     string  `json:"status"`
-		Text       string  `json:"text"`
+		ClauseCount *int    `json:"clause_count,omitempty"`
+		Id          *string `json:"id,omitempty"`
+		Judgment    string  `json:"judgment"`
+		Kind        string  `json:"kind"`
+		Provenance  *string `json:"provenance,omitempty"`
+		Status      string  `json:"status"`
+		Text        string  `json:"text"`
 	} `json:"criteria,omitempty"`
-	// ADR-080 D-STATEMENT — the compiled SMART restatement, rendered before the criteria breakdown. Present on the `queued` (pending-confirm) emission; keep in sync by hand with components/schemas/GoalStatusFrame.yaml.
+	// ADR-080 D-STATEMENT — the compiled SMART restatement, rendered before the criteria breakdown. Populated on the `active` emission that follows a goal record register/update (ADR-081 `set_goal`) or marker activation; MAY be absent on marker-path records; keep in sync by hand with components/schemas/GoalStatusFrame.yaml.
 	Definition *string `json:"definition,omitempty"`
-	// ADR-080 D-DOD — the goal's Definition of Done breakdown, DISTINCT from `criteria`, for the `queued` (pending-confirm) emission. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape, same as `criteria` above — keep both in sync by hand with components/schemas/GoalStatusFrame.yaml.
+	// ADR-080 D-DOD — the goal's Definition of Done breakdown, DISTINCT from `criteria`, for the `active` emission that follows a goal record register/update (ADR-081 `set_goal`) or marker activation. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape, same as `criteria` above — keep both in sync by hand with components/schemas/GoalStatusFrame.yaml.
 	Dod []struct {
 		Author struct {
 			Id   string `json:"id"`
@@ -539,12 +575,13 @@ type GoalStatusFrame struct {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
-		Id         *string `json:"id,omitempty"`
-		Judgment   string  `json:"judgment"`
-		Kind       string  `json:"kind"`
-		Provenance *string `json:"provenance,omitempty"`
-		Status     string  `json:"status"`
-		Text       string  `json:"text"`
+		ClauseCount *int    `json:"clause_count,omitempty"`
+		Id          *string `json:"id,omitempty"`
+		Judgment    string  `json:"judgment"`
+		Kind        string  `json:"kind"`
+		Provenance  *string `json:"provenance,omitempty"`
+		Status      string  `json:"status"`
+		Text        string  `json:"text"`
 	} `json:"dod,omitempty"`
 	// ADR-053 R§8.11 — the specific goal-id this pill/timer/round- budget belongs to (a session may carry multiple independent goals). Optional — see components/schemas/GoalStatusFrame.yaml for the shape decision.
 	GoalId       *string `json:"goal_id,omitempty"`
@@ -555,7 +592,7 @@ type GoalStatusFrame struct {
 	// Adjudications consumed so far (ADR-053 R§8.9 — one round = one adjudication, claim-triggered OR idle-settled).
 	Round     int    `json:"round"`
 	SessionId string `json:"session_id"`
-	// ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk (originally 8 states, superseding the earlier 4-value active/paused_judge_unavailable/brake_fired/cleared set — no back-compat at the time; `cleared` re-added as a 9th value by the UAT S3 fix so a user-initiated `/goal clear` no longer collapses into `failed`). See components/schemas/GoalStatusFrame.yaml for the full per-state crosswalk description.
+	// ADR-053 §Contract Surface — "Pill-state enum"/R§8.10 crosswalk (originally 8 states, superseding the earlier 4-value active/paused_judge_unavailable/brake_fired/cleared set — no back-compat at the time; `cleared` re-added as a 9th value by the UAT S3 fix so a user-initiated `/goal clear` no longer collapses into `failed`). Five values ADDED by the joint ADR-084/ADR-085/ADR-086 delivery (C-39): `judge_refused_god_mode` (JUDGE-FR-057a), `judge_cas_loss` (JUDGE-FR-083, reason string stays `cas_loss`), `blocked` (JUDGE-FR-093, not terminal), `claim_overturned` (JUDGE-FR-102, not terminal), `expired` (ADR-086 GOAL-FR-028, terminal). See components/schemas/GoalStatusFrame.yaml for the full per-state crosswalk description.
 	State string `json:"state"`
 	Type  string `json:"type"`
 }
@@ -568,16 +605,50 @@ type JudgeVerdictFrame struct {
 	Met          bool   `json:"met"`
 	Model        string `json:"model"`
 	PerCriterion []struct {
-		CriterionId   string  `json:"criterion_id"`
-		EvidenceQuote *string `json:"evidence_quote,omitempty"`
-		Met           bool    `json:"met"`
-		Reason        string  `json:"reason"`
+		CriterionId string `json:"criterion_id"`
+		Evidence    []struct {
+			Part   string  `json:"part"`
+			Quote  string  `json:"quote"`
+			Source *string `json:"source,omitempty"`
+			Target *string `json:"target,omitempty"`
+		} `json:"evidence,omitempty"`
+		EvidenceQuote  *string `json:"evidence_quote,omitempty"`
+		EvidenceSource *string `json:"evidence_source,omitempty"`
+		EvidenceTarget *string `json:"evidence_target,omitempty"`
+		Met            bool    `json:"met"`
+		Provenance     *string `json:"provenance,omitempty"`
+		Reason         string  `json:"reason"`
 	} `json:"per_criterion"`
 	PlanId *string `json:"plan_id,omitempty"`
 	Round  int     `json:"round"`
 	Scope  string  `json:"scope"`
-	TaskId *string `json:"task_id,omitempty"`
-	Type   string  `json:"type"`
+	// OPTIONAL chat-thread session this verdict's round belongs to — present for `scope: task` (the task's run session) and `scope: goal` (the `/goal` session itself), absent for `scope: plan` (a plan round has no single owning chat session). A `judge_verdict` frame without it stays a GLOBAL, panel-only push exactly as before this field existed; when present the SPA also inserts the verdict as a thread message, de-duplicated against the persisted transcript entry's own id so a live push, a replay and a cold REST load converge on one card. Keep in sync by hand with components/schemas/JudgeVerdictFrame.yaml.
+	SessionId *string `json:"session_id,omitempty"`
+	TaskId    *string `json:"task_id,omitempty"`
+	Type      string  `json:"type"`
+}
+
+// KnowledgeIndexProgressFrame — Server → client. Indexing progress for ONE knowledge base (ADR-067 D18 `KnowledgeIndexProgress`, FR-080). WHY THIS IS A FRAME AND NOT A REST FIELD. Progress is a value that moves — enumerating a large collection can take seconds and indexing it minutes. A REST field means the client either polls (lagging behind, and hammering the gateway to lag less) or shows a number that quietly goes stale. Pushing it means the reader sees the count move and the gateway does no work it was not already doing. A REST surface that exposed progress would invite exactly the polling loop this decision exists to prevent, which is why KnowledgeBaseInfo carries no counts at all. NOT THE SAME THING AS KnowledgeSearchResponse.incompleteness. That object rides on a search response and qualifies THAT ANSWER — "these results were drawn from a partially built index". This frame is the live state of the indexer, independent of any query. Both exist deliberately; neither replaces the other. HONESTY WHILE ENUMERATING. total_files is ABSENT until enumeration finishes, and total_known says so (FR-036). A client MUST render an indeterminate state in that window and MUST NOT compute a ratio against a total it does not have — a progress bar built on an invented denominator is a confidently wrong answer, which is the one outcome this feature refuses everywhere else too.
+type KnowledgeIndexProgressFrame struct {
+	// The collection being indexed — KnowledgeBaseInfo.collection_id, derived from the root's resolved real path (FR-031). Opaque to the client. Two mounts of one folder share it, so a client that shows the same collection twice updates both from one frame.
+	CollectionId string `json:"collection_id"`
+	// Human-readable failure reason. Present if and only if phase is "failed".
+	Error *string `json:"error,omitempty"`
+	// Files indexed and therefore searchable right now. Monotonic within one indexing run; resets when a rebuild starts.
+	IndexedFiles int64 `json:"indexed_files"`
+	// "enumerating" — walking the tree to discover files; total_files is not yet known. "indexing" — parsing and writing index documents; total_files is known. "idle" — nothing in flight and the index is current; this is the terminal success state and the client should stop showing progress. "failed" — indexing stopped with an error, described in `error`; the client MUST surface it rather than leaving a bar stalled at some percentage forever.
+	Phase string `json:"phase"`
+	// Files deliberately not indexed and reported — symbolic links, paths resolving outside the collection root, unreadable or evicted files (FR-044, FR-043, FR-111, FR-112). Non-zero here is not a failure, but it is never silent: it is the client's cue to offer the detail rather than let files vanish unmentioned.
+	SkippedFiles *int64 `json:"skipped_files,omitempty"`
+	// Total files in the collection. Present if and only if total_known is true.
+	TotalFiles *int64 `json:"total_files,omitempty"`
+	// False while enumerating. When false, total_files is absent and the client MUST show an indeterminate state (FR-036).
+	TotalKnown bool   `json:"total_known"`
+	Type       string `json:"type"`
+	// When the server produced this frame. Lets a client discard a frame that arrives out of order rather than letting a stale count overwrite a fresher one.
+	UpdatedAt *string `json:"updated_at,omitempty"`
+	// Workspace through which this collection is mounted.
+	WorkspaceId string `json:"workspace_id"`
 }
 
 // LLMError — Translated provider/LLM error safe for the live WebSocket boundary.
@@ -594,6 +665,17 @@ type LLMErrorReplay struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable"`
+}
+
+// LibraryChangedFrame — Server → client (D-107, cross-tab listing invalidation). Emitted by the Library REST write handlers after a mutation has landed, so every OTHER connected tab can drop its stale folder listing and refetch. Scope is deliberately coarse: clients invalidate every cached listing query for the named workspace; `path` and `reason` are informational (debugging, future refinement), never a scoping instruction. Broadcast, not addressed — the originating tab receives it too, where its own local invalidation makes the redundant one a no-op.
+type LibraryChangedFrame struct {
+	// The workspace-relative path of the affected entry, when the mutation was about one entry. Informational only — never a scoping instruction. Absent for multi-entry mutations such as an upload.
+	Path *string `json:"path,omitempty"`
+	// Which REST operation emitted the frame (e.g. "delete", "rename", "mkdir", "upload", "write"). For debugging surfaces; clients must not branch their invalidation on it.
+	Reason *string `json:"reason,omitempty"`
+	Type   string  `json:"type"`
+	// The workspace whose file tree changed. Clients invalidate their cached listings for this workspace.
+	WorkspaceId string `json:"workspace_id"`
 }
 
 // LoopStatusFrame — Server → client. Status push for a session's active /loop (ADR-049 D6/D7/US-9). Emitted on run completion, state change, and stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id until the audit classifies it.
@@ -648,10 +730,11 @@ type MessageFrame struct {
 
 // NotificationFrame — Server → client. A notification raised for the recipient user (e.g. a scheduled run failed). Delivered only to that user's connections; the SPA adds it to the header notification center (#264).
 type NotificationFrame struct {
-	AgentId          *string `json:"agent_id,omitempty"`
-	Body             *string `json:"body,omitempty"`
-	CreatedAtMs      int64   `json:"created_at_ms"`
-	Id               string  `json:"id"`
+	AgentId     *string `json:"agent_id,omitempty"`
+	Body        *string `json:"body,omitempty"`
+	CreatedAtMs int64   `json:"created_at_ms"`
+	Id          string  `json:"id"`
+	// The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a) means the drift check found a knowledge base's search index out of step with the folder on disk and the index is being rebuilt; it is never emitted for a healthy check.
 	NotificationType string  `json:"notification_type"`
 	Read             bool    `json:"read"`
 	ScheduleId       *string `json:"schedule_id,omitempty"`
@@ -736,11 +819,17 @@ type ReplayMessageFrame struct {
 	Content string  `json:"content"`
 	Id      *string `json:"id,omitempty"`
 	// Model identifier that produced this assistant message (Phase 1B, FR-013/FR-014). Omitted for legacy entries written before per-turn model recording landed.
-	Model     *string `json:"model,omitempty"`
-	Role      string  `json:"role"`
-	SessionId string  `json:"session_id"`
-	Timestamp *string `json:"timestamp,omitempty"`
-	// Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels, without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between). Omitted for legacy entries written before turn-id stamping landed. producing_session_id: type: string minLength: 1 description: > ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — emitted by the gateway replay path, not by a turn.
+	Model *string `json:"model,omitempty"`
+	// ADR-057 FR-012/FR-013. Present iff it differs from session_id. Class (b) (FR-089): absent for this frame type — emitted by the gateway replay path, not by a turn.
+	ProducingSessionId *string `json:"producing_session_id,omitempty"`
+	Role               string  `json:"role"`
+	SessionId          string  `json:"session_id"`
+	Timestamp          *string `json:"timestamp,omitempty"`
+	// ADR-087 D2. Populated from TranscriptEntry.Truncated when replaying an incomplete assistant entry — see truncation_reason for why. Only present when true. Replay emits this even when content is empty (an entry with Truncated && Content == "" still passes through, so the SPA can render a suffix with no body).
+	Truncated *bool `json:"truncated,omitempty"`
+	// ADR-087 D2. Populated from TranscriptEntry.TruncationReason. Narrows why truncated is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a truncated: true frame means "cancelled" — every entry written before this field existed predates it and was always a cancel.
+	TruncationReason *string `json:"truncation_reason,omitempty"`
+	// Turn-correlation identifier (from TranscriptEntry.TurnID), stamped on assistant entries and turn-cancellation entries. Lets the client match a replayed turn_canceled entry to the specific preceding assistant message it cancels, without relying on stream adjacency (async delegation can interleave other agents'/turns' frames in between). Omitted for legacy entries written before turn-id stamping landed.
 	TurnId *string `json:"turn_id,omitempty"`
 	Type   string  `json:"type"`
 }
@@ -782,15 +871,26 @@ type SessionStartedFrame struct {
 	Type               string  `json:"type"`
 }
 
+// SessionStateActiveTurn — ADR-082 D4 — the in-flight foreground turn of the session a connection has just bound to. Keep in sync by hand with components/schemas/SessionStateActiveTurn.yaml.
+type SessionStateActiveTurn struct {
+	AgentId   string `json:"agent_id"`
+	StartedAt string `json:"started_at"`
+	TurnId    string `json:"turn_id"`
+}
+
 // SessionStateFrame — Server → client reconnect approval snapshot (FR-052, FR-073, FR-081). pending_approvals MUST be an array (never null). Backend coerces nil → []. SPA calls pending_approvals.map() — null crashes at render time.
 type SessionStateFrame struct {
-	EmittedAt string `json:"emitted_at"`
+	// ADR-082 D4 — present only when the attached session has a foreground turn in flight at emit time. Absent when idle. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	ActiveTurn *SessionStateActiveTurn `json:"active_turn,omitempty"`
+	EmittedAt  string                  `json:"emitted_at"`
 	// Always array, never null. Capped at 1000.
 	PendingApprovals []SessionStatePendingApproval `json:"pending_approvals"`
 	// askuserquestion-tool-spec v3 US-6 S1/FR-9 — snapshot of every PENDING AskUserQuestion card (global registry cap 64) so a reconnecting SPA re-hydrates its card + composer lock. Optional (older gateways omit it); absent/empty means no pending sets.
 	PendingAsks []AskUserQuestionCard `json:"pending_asks,omitempty"`
-	Type        string                `json:"type"`
-	UserId      string                `json:"user_id"`
+	// ADR-082 (review CR3) — the transcript session this snapshot describes; absent on the connection-open emit. Keep in sync by hand with components/schemas/SessionStateFrame.yaml.
+	SessionId *string `json:"session_id,omitempty"`
+	Type      string  `json:"type"`
+	UserId    string  `json:"user_id"`
 }
 
 // SessionStatePendingApproval — One pending approval entry in a SessionStateFrame.
@@ -800,6 +900,8 @@ type SessionStatePendingApproval struct {
 	ExpiresInMs int    `json:"expires_in_ms"`
 	SessionId   string `json:"session_id"`
 	ToolName    string `json:"tool_name"`
+	// Same value and semantics as ToolApprovalRequiredFrame.workspace_id.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
 }
 
 // SubagentEndFrame — Server → client subagent span closed (FR-H-004). status MUST be one of the six allowed values — the SPA drops frames with invalid status (W4-6). Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES); class (b) per the ADR-057 W5 audit (FR-089) — emitted by the PARENT about the child (pkg/agent/subturn.go); FR-017 pins its SessionID to the routing key, so producing_session_id would equal session_id and is therefore absent (FR-013's "iff it differs"). Kept in sync by hand with components/schemas/SubagentEndFrame.yaml for the full shape — see that file for the per-value description (including "parked", ADR-057 UAT defect C2 fix).
@@ -912,6 +1014,16 @@ type ToolApprovalRequiredFrame struct {
 	ToolName           string  `json:"tool_name"`
 	TurnId             string  `json:"turn_id"`
 	Type               string  `json:"type"`
+	// Workspace the requesting session belongs to (resolved server-side from session meta, walking up to the delegating parent). The SPA shows the approval only while that workspace is active. Omitted when the session belongs to no workspace (shown everywhere).
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// ToolApprovalResolvedFrame — Server → client. Emitted once, to every connected client, when a pending tool approval leaves the pending state for ANY reason (a decision from any tab, timeout, Stop/cancel, agent deletion, batch short-circuit, shutdown). The SPA drops the matching queue entry and remembers the id so a late snapshot cannot resurrect it. THIS is the GENERATING copy; components/schemas/ToolApprovalResolvedFrame.yaml exists for the Constraint #8 process and the inboundschemas sync — keep both in sync by hand.
+type ToolApprovalResolvedFrame struct {
+	ApprovalId string  `json:"approval_id"`
+	SessionId  *string `json:"session_id,omitempty"`
+	State      string  `json:"state"`
+	Type       string  `json:"type"`
 }
 
 // ToolArgumentRefusal — ADR-066 D4 / spec FR-016 (T066-01 schema, T066-04 producer): structured tool-result payload returned INSTEAD of executing a tool call whose serialised arguments exceed the builtin success cap (ContextSettings.builtin_success_cap, 64,000 chars by default). The tool does not run, the turn is not fatal, and the model sees the refusal — naming the tool, the size it sent and the cap — so it can retry smaller. ADR-060 family member: inline schema with a const `error` discriminator, one exported *Code constant in pkg/tools/result.go, a single producer routed through marshalWithinBudget, and an entry in scripts/check-no-handwritten-wire-types.sh's KNOWN_STRUCTURED_FAILURE_DISCRIMINATORS register. toolResult-channel (ADR-060 D2): the refusal IS the tool's result, so it passes the D4 choke point like any other result (US-5.AC3) and flows through ToolCallResultFrame.result live and ToolCall.Error on replay — hence its entry in ToolCallResultFrame.result's oneOf below and in pkg/gateway/tool_result_store.go's allow-list (derived from pkg/tools.AllStructuredFailureCodes()). The SPA detector is stream B5's.
@@ -1065,6 +1177,7 @@ const (
 	WsFrameTypeMedia                    WsFrameType = "media"
 	WsFrameTypeAgentSwitched            WsFrameType = "agent_switched"
 	WsFrameTypeToolApprovalRequired     WsFrameType = "tool_approval_required"
+	WsFrameTypeToolApprovalResolved     WsFrameType = "tool_approval_resolved"
 	WsFrameTypeSessionState             WsFrameType = "session_state"
 	WsFrameTypeSystemOverload           WsFrameType = "system_overload"
 	WsFrameTypeReplayWarning            WsFrameType = "replay_warning"
@@ -1101,4 +1214,7 @@ const (
 	WsFrameTypeBrowserInputAnswer       WsFrameType = "browser_input_answer"
 	WsFrameTypeBrowserInputState        WsFrameType = "browser_input_state"
 	WsFrameTypeBrowserInputControlAck   WsFrameType = "browser_input_control_ack"
+	WsFrameTypeBrowserHandoverNotice    WsFrameType = "browser_handover_notice"
+	WsFrameTypeGoalOutcome              WsFrameType = "goal_outcome"
+	WsFrameTypeLibraryChanged           WsFrameType = "library_changed"
 )

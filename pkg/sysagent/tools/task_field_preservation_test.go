@@ -202,6 +202,7 @@ func TestRegression_SysagentTaskCreate_FieldsRoundTrip(t *testing.T) {
 		"agent_id":     "agent-1",
 		"workspace_id": testWorkspaceID,
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
 	require.False(t, r1.IsError, "create Alpha must succeed; got: %s", r1.ForLLM)
 	var resp1 map[string]any
@@ -216,6 +217,7 @@ func TestRegression_SysagentTaskCreate_FieldsRoundTrip(t *testing.T) {
 		"agent_id":     "agent-2",
 		"workspace_id": testWorkspaceID,
 		"criteria":     workspaceCriteriaArg(),
+		"dod":          workspaceDoDArg(),
 	})
 	require.False(t, r2.IsError, "create Beta must succeed; got: %s", r2.ForLLM)
 	var resp2 map[string]any

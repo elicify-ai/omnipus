@@ -1,5 +1,7 @@
 # DoD-6 Live E2E Evidence — ADR-053
 
+> **Update 2026-09-14:** the app-level token budget described here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Date:** 2026-07-24  
 **Branch:** `feature/plan-swimlane-board` @ `82e58701` (range `2358521c..82e58701`)  
 **Environment:** fresh `OMNIPUS_HOME=/tmp/omnipus-dod6-e2e`, binary `/tmp/omnipus-adr053`, gateway `localhost:5000`  

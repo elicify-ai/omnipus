@@ -230,6 +230,16 @@ type Deps struct {
 	// constructed.
 	ResolveBashPolicy func(assigneeAgentID string) (policy string, ok bool)
 
+	// AssigneeCannotFinish answers whether an assignee can finish a task at all
+	// (founder decision 2026-09-15) — the SAME answer the plain create_task /
+	// update_task tools and the task run's pre-run check use (pkg/agent
+	// AgentLoop.TaskAssigneeCannotFinish): the reason naming the fix, or "".
+	// When nil (tests / standalone) no refusal is made and a warning is logged
+	// once (tools.AssigneeCannotFinishRefusal); the task run's pre-run check
+	// still ends such a task at once. The production gateway wires it where
+	// sysAgentDeps is constructed.
+	AssigneeCannotFinish tools.AssigneeReadinessChecker
+
 	// ListSessions returns all sessions across all stores (shared + legacy per-agent),
 	// deduplicating entries that appear in both. Errors are per-store and non-fatal;
 	// the slice may be partial on error. Nil when not wired — the get_usage tool

@@ -1461,6 +1461,21 @@ export function BrowserLiveView({
   const retryViewportRef = useRef<() => boolean>(() => false)
   const releaseInputsRef = useRef<() => void>(() => {})
   const inputFailureAtRef = useRef(-Infinity)
+  // Explicit ownership and browser commands share the control connection.
+  // Dedicated inputs acquire ownership atomically on the server after their
+  // scope and picture checks; they never depend on a separate WS take.
+  const takeWheelIfNeeded = useCallback(() => {
+    if (!connectedRef.current || controllingRef.current || pendingTakeRef.current) return
+    setPendingTake(true)
+    if (!wsRef.current?.sendControl('take')) {
+      setPendingTake(false)
+      useUiStore.getState().addToast({
+        message: 'Could not confirm taking control — click Take over again if needed.',
+        variant: 'error',
+      })
+    }
+  }, [setPendingTake])
+
   const dispatchInput = useCallback(
     (input: Omit<BrowserInputFrame, 'type'>, cleanup = false): boolean => {
       const initiating = ['navigate', 'navigate_back', 'reload', 'stop_loading'].includes(input.kind)
@@ -1468,6 +1483,7 @@ export function BrowserLiveView({
       const proof = current.gate.read(performance.now())
       if (!initiating && !cleanup && (viewportHandoffRef.current || proof.status !== 'ready' || !dedicatedFrameReady())) return false
       if (!cleanup && input.kind !== 'wheel' && input.kind !== 'mouse_move') flushWheelBeforeActionRef.current()
+      if (initiating && !cleanup) takeWheelIfNeeded()
       const payload = !initiating && !cleanup && proof.status === 'ready' && current.id
         ? { ...input, capture_id: current.id, capture_generation: proof.generation }
         : input
@@ -1497,7 +1513,7 @@ export function BrowserLiveView({
       }
       if (!cleanup && (input.kind === 'key_up' || input.kind === 'mouse_up') && held.size === 0) resumeViewportRef.current()
       return true
-    }, [dedicatedFrameReady],
+    }, [dedicatedFrameReady, takeWheelIfNeeded],
   )
   const releasePhysicalInputs = useCallback(() => {
     pendingMoveRef.current = null
@@ -2133,29 +2149,32 @@ export function BrowserLiveView({
   const handleTabSwitch = useCallback((index: number) => {
     if (!canIssueCommands()) return
     releasePressedInputs()
+    takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('switch', index)
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not switch tabs — check your connection and try again.', variant: 'error' })
     }
-  }, [canIssueCommands, releasePressedInputs])
+  }, [canIssueCommands, releasePressedInputs, takeWheelIfNeeded])
 
   const handleTabClose = useCallback((index: number) => {
     if (!canIssueCommands()) return
     releasePressedInputs()
+    takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('close', index)
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not close that tab — check your connection and try again.', variant: 'error' })
     }
-  }, [canIssueCommands, releasePressedInputs])
+  }, [canIssueCommands, releasePressedInputs, takeWheelIfNeeded])
 
   const handleTabOpen = useCallback(() => {
     if (!canIssueCommands()) return
     releasePressedInputs()
+    takeWheelIfNeeded()
     const sent = wsRef.current?.sendTabAction('open')
     if (!sent) {
       useUiStore.getState().addToast({ message: 'Could not open a new tab — check your connection and try again.', variant: 'error' })
     }
-  }, [canIssueCommands, releasePressedInputs])
+  }, [canIssueCommands, releasePressedInputs, takeWheelIfNeeded])
 
   const handlePointerMove = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     if (annotateMode) {
@@ -2467,7 +2486,7 @@ export function BrowserLiveView({
   // F5 anti-pattern reintroduced). One computation, used by both.
   const takeOverLabel = controlledByOther
     ? 'Someone else is currently driving'
-    : `Take over — pause ${agentDisplayName} and take control`
+    : `Take over — take control while ${agentDisplayName} keeps working`
 
   // Operator directive (JPEG-fallback removal) — the one manual "try live
   // video again" entry point, offered wherever `displayError` is shown (the
@@ -2979,19 +2998,14 @@ export function BrowserLiveView({
           </div>
         )}
 
-        {/* ADR-040 D2/D6 — "Take over" — the ONLY affordance shown while
-            agent activity (an explicit action to pause the response). Adjacent
-            to the frame (not a header button — D1's header stays limited to
-            Close/Pin/Pen/Pop-out). Rendered whenever agent-working, even
-            before the video has attached, so the user can pause the agent
-            immediately rather than waiting on the first decoded frame. */}
+        {/* Taking control changes browser ownership without cancelling the
+            agent's response (ADR-085). Human input continues over its dedicated
+            connection; this button only requests the control status change. */}
         {visualState === 'agent-working' && (
           <div className="pointer-events-none absolute inset-x-0 top-3 z-20 flex justify-center">
             <button tabIndex={0}
               type="button"
-              onClick={() => {
-                useChatStore.getState().cancelStream(sessionId)
-              }}
+              onClick={takeWheelIfNeeded}
               // No longer disabled by controlledByOther (2026-08-03): another
               // attached viewer must never make this button dead, since taking
               // over from the agent is exactly what the user is trying to do.

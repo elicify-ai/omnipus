@@ -33,7 +33,7 @@ export type LLMErrorAttribution =
 export const llmErrorAttributionValues = ["model", "provider", "product", "config", "ambiguous", "unknown", "user"] as const
 
 /** Every LLMError code, in contract (enum) order. */
-export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "content_policy", "context_too_long", "tool_args", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"] as const
+export const llmErrorCodes = ["media_unsupported", "provider_rejected", "request_too_large", "provider_auth_failed", "rate_limited", "network", "provider_stalled", "content_policy", "context_too_long", "tool_args", "tool_call_truncated", "schema", "agent_not_configured", "workspace_unavailable", "model_unavailable", "needs_provider", "model_unassigned", "turn_canceled", "turn_timed_out", "context_unrecoverable", "context_window_unknown", "unknown"] as const
 
 /**
  * The sentence a user sees for each code. Exhaustive by construction: codegen
@@ -47,9 +47,11 @@ export const llmErrorUserMessages: Record<LLMErrorCode, string> = {
   provider_auth_failed: "The model provider rejected our credentials. Check this provider’s API key in Settings.",
   rate_limited: "The model provider is temporarily overloaded. Wait a moment, then retry.",
   network: "We couldn’t reach the model provider. Check your internet connection and retry.",
+  provider_stalled: "The model provider stopped responding: nothing arrived for 5 minutes (or the silence limit set for this provider), so the call was ended. Retry — if it keeps happening, open Verbose chat for details.",
   content_policy: "The model provider blocked this request under its content policy. Try rephrasing to remove the flagged content.",
   context_too_long: "This turn needed more context than the model can hold, even after trimming older turns automatically. Try a model with a larger context window, or shorten this message.",
   tool_args: "The model filled in a tool’s arguments incorrectly. Retry — Verbose chat shows which tool and what went wrong.",
+  tool_call_truncated: "The model's tool call was cut off at its output limit before it finished. Ask for less in one step, or split the work.",
   schema: "We sent the model provider a request it couldn’t process — that’s a bug on our side, not yours. Retry the turn, or open Verbose chat for technical details.",
   agent_not_configured: "This agent isn’t on any workspace yet, so it has nowhere to work. Add it to a workspace team to get started.",
   workspace_unavailable: "This agent’s working folder could not be opened. Check that the disk has space and the folder is writable.",
@@ -71,9 +73,11 @@ export const llmErrorUserAttributions: Record<LLMErrorCode, LLMErrorAttribution>
   provider_auth_failed: "config",
   rate_limited: "provider",
   network: "ambiguous",
+  provider_stalled: "provider",
   content_policy: "provider",
   context_too_long: "product",
   tool_args: "model",
+  tool_call_truncated: "model",
   schema: "product",
   agent_not_configured: "config",
   workspace_unavailable: "config",

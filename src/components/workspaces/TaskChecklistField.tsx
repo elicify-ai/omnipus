@@ -100,7 +100,9 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
   return (
     <div className="space-y-1.5">
       <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">
-        {`Checklist${todos.length > 0 ? ` (${doneTodos}/${todos.length})` : ''}`}
+        {/* GOAL-FR-057 — relabelled Todos (visible text only; the three
+            aria-labels below stay byte-identical, C-62/C-79). */}
+        {`Todos${todos.length > 0 ? ` (${doneTodos}/${todos.length})` : ''}`}
       </p>
       <div className="space-y-1">
         {todos.map((todo: Todo, idx: number) => (
@@ -157,7 +159,7 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
               handleAddTodo()
             }
           }}
-          placeholder="Add a checklist item…"
+          placeholder="Add a todo…"
           maxLength={500}
           disabled={disabled}
           className="text-xs flex-1 h-8"

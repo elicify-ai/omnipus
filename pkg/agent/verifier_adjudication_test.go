@@ -57,6 +57,28 @@ func TestVerifierUnitID_GoalScopeUsesSessionIDKey(t *testing.T) {
 	}
 }
 
+// TestVerifierUnitID_GoalScope_PrefersGoalIDOverGoalSessionID is C-08's
+// split: once a caller sets GoalID, verifierUnitID's goal arm keys on it
+// exclusively — GoalSessionID is the transcript-window/descendant-root
+// field, never the scope-correlating id, once GoalID is present.
+func TestVerifierUnitID_GoalScope_PrefersGoalIDOverGoalSessionID(t *testing.T) {
+	got := verifierUnitID(JudgeCriteriaInput{GoalID: "g1", GoalSessionID: "sess-123"})
+	if want := verifierUnitForGoal("g1"); got != want {
+		t.Errorf("verifierUnitID(goal scope, GoalID set) = %q, want %q (GoalID must win)", got, want)
+	}
+}
+
+// TestVerifierUnitID_GoalScope_FallsBackToGoalSessionID proves the C-08
+// compatibility bridge: a caller that has not yet been migrated to set
+// GoalID (today's only production writer, goal_triggers.go, E8 — a later
+// wave) still resolves correctly off GoalSessionID alone.
+func TestVerifierUnitID_GoalScope_FallsBackToGoalSessionID(t *testing.T) {
+	got := verifierUnitID(JudgeCriteriaInput{GoalSessionID: "sess-only"})
+	if want := verifierUnitForGoal("sess-only"); got != want {
+		t.Errorf("verifierUnitID(goal scope, only GoalSessionID) = %q, want %q", got, want)
+	}
+}
+
 // TestVerifierUnitID_MatchesSharedKeyHelpers pins verifierUnitID to the
 // SAME shared helpers (verifier_registry.go) plan_engine.go's Stop fan-out
 // uses — the F1 regression this wave closes was exactly the two sides
@@ -895,5 +917,109 @@ func TestVerifierAdjudication_TurnError_NeverConsumesAttempt(t *testing.T) {
 	}
 	if result.Verdict != nil {
 		t.Error("no verdict/attempt may be recorded for an Unavailable outcome (D7)")
+	}
+}
+
+// --- FR-070a mapping loop (verdictFromJudgeResponse, deriveVerdictProvenance) ---
+
+// TestVerdictFromJudgeResponse_PopulatesReportingFieldsWithoutGatingMet
+// proves the four new fields (JUDGE-FR-070a, C-02) are carried through from
+// the parsed response, AND that an invalid/unrecognised evidence_source
+// never gates Met — D-B's "reporting only" guarantee at the mapping-loop
+// level (parseJudgeResponse's own guarantee is covered separately in
+// judge_outcome_parse_adr084_test.go).
+func TestVerdictFromJudgeResponse_PopulatesReportingFieldsWithoutGatingMet(t *testing.T) {
+	pc := judgeCriterionResponse{
+		Met: true, Reason: "the file exists and is correct",
+		EvidenceQuote: "fallback quote", EvidenceSource: "file_read", EvidenceTarget: "index.html",
+	}
+	v := verdictFromJudgeResponse("c1", pc)
+	if !v.Met {
+		t.Fatal("Met must come straight from pc.Met, unaffected by anything below it")
+	}
+	if v.EvidenceSource != task.EvidenceSourceFileRead {
+		t.Errorf("EvidenceSource = %q, want %q", v.EvidenceSource, task.EvidenceSourceFileRead)
+	}
+	if v.EvidenceTarget != "index.html" {
+		t.Errorf("EvidenceTarget = %q, want %q", v.EvidenceTarget, "index.html")
+	}
+	if v.Provenance != task.ProvenanceJudgeRead {
+		t.Errorf("Provenance = %q, want %q (file_read -> judge_read)", v.Provenance, task.ProvenanceJudgeRead)
+	}
+
+	// An invalid/unrecognised evidence_source is treated as absent — NEVER
+	// as a reason to flip Met (D-B: these are reporting fields only).
+	invalid := verdictFromJudgeResponse("c2", judgeCriterionResponse{
+		Met: true, Reason: "r", EvidenceSource: "not-a-real-source",
+	})
+	if !invalid.Met {
+		t.Fatal("an unrecognised evidence_source must never gate Met")
+	}
+	if invalid.EvidenceSource != "" {
+		t.Errorf("an unrecognised evidence_source must be dropped, not persisted verbatim; got %q", invalid.EvidenceSource)
+	}
+	if invalid.Provenance != task.ProvenanceNone {
+		t.Errorf("Provenance = %q, want %q for an absent/invalid source", invalid.Provenance, task.ProvenanceNone)
+	}
+}
+
+// TestVerdictFromJudgeResponse_EvidenceArray_MirrorsIntoTopLevelQuote
+// proves FR-071: when the evidence[] array is present, EvidenceQuote is
+// synced from evidence[0].quote rather than trusting the model to have set
+// both fields identically.
+func TestVerdictFromJudgeResponse_EvidenceArray_MirrorsIntoTopLevelQuote(t *testing.T) {
+	pc := judgeCriterionResponse{
+		Met: true, Reason: "r", EvidenceQuote: "STALE — must be overridden",
+		Evidence: []judgeEvidenceEntryResponse{
+			{Part: "clause one", Source: "file_read", Target: "a.txt", Quote: "clause one is satisfied"},
+			{Part: "clause two", Source: "file_read", Target: "b.txt", Quote: "clause two is satisfied"},
+		},
+	}
+	v := verdictFromJudgeResponse("c1", pc)
+	if v.EvidenceQuote != "clause one is satisfied" {
+		t.Errorf("EvidenceQuote = %q, want it mirrored from evidence[0].quote", v.EvidenceQuote)
+	}
+	if len(v.Evidence) != 2 {
+		t.Fatalf("got %d evidence entries, want 2", len(v.Evidence))
+	}
+	if v.Evidence[1].Part != "clause two" || v.Evidence[1].Quote != "clause two is satisfied" {
+		t.Errorf("evidence[1] not carried through correctly: %+v", v.Evidence[1])
+	}
+}
+
+// TestVerdictFromJudgeResponse_EvidenceArray_CappedAt50Entries proves the
+// CriterionVerdict.yaml maxItems:50 bound is enforced here, not left to the
+// contract layer to silently reject.
+func TestVerdictFromJudgeResponse_EvidenceArray_CappedAt50Entries(t *testing.T) {
+	entries := make([]judgeEvidenceEntryResponse, 0, 60)
+	for i := 0; i < 60; i++ {
+		entries = append(entries, judgeEvidenceEntryResponse{Part: "p", Quote: "q"})
+	}
+	v := verdictFromJudgeResponse("c1", judgeCriterionResponse{Met: true, Reason: "r", Evidence: entries})
+	if len(v.Evidence) != maxCriterionEvidenceEntries {
+		t.Errorf("Evidence has %d entries, want capped at %d", len(v.Evidence), maxCriterionEvidenceEntries)
+	}
+}
+
+// TestDeriveVerdictProvenance_SchemaMapping pins JUDGE-FR-065's literal
+// mapping (CriterionVerdict.yaml's provenance description) that E9 wires
+// as the initial call-site body — E10 replaces the body with real
+// grounding-based derivation without moving the call site.
+func TestDeriveVerdictProvenance_SchemaMapping(t *testing.T) {
+	cases := []struct {
+		source task.VerdictEvidenceSource
+		want   task.VerdictProvenance
+	}{
+		{task.EvidenceSourceMachineCheck, task.ProvenanceDeterministic},
+		{task.EvidenceSourceFileRead, task.ProvenanceJudgeRead},
+		{task.EvidenceSourceDiff, task.ProvenanceDiffRead},
+		{task.EvidenceSourceTranscript, task.ProvenanceTranscriptRead},
+		{task.EvidenceSourceSessionRead, task.ProvenanceSessionRead},
+		{"", task.ProvenanceNone},
+	}
+	for _, tc := range cases {
+		if got := deriveVerdictProvenance(tc.source); got != tc.want {
+			t.Errorf("deriveVerdictProvenance(%q) = %q, want %q", tc.source, got, tc.want)
+		}
 	}
 }

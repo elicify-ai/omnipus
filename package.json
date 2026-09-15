@@ -28,7 +28,8 @@
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:ui": "playwright test --ui",
-    "deadcode": "knip"
+    "deadcode": "knip",
+    "check:vitest-coverage": "node scripts/check-vitest-coverage.mjs"
   },
   "peerDependencies": {
     "react": "^19.0.0",
@@ -91,6 +92,7 @@
     "immer": "^11.1.15",
     "katex": "^0.18.1",
     "mermaid": "^11.16.0",
+    "pdfjs-dist": "6.2.108",
     "qrcode.react": "^4.2.0",
     "react-day-picker": "^9.14.0",
     "react-markdown": "^10.1.0",

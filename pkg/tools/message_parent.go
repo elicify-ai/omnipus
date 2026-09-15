@@ -410,6 +410,23 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 	// transcript id.
 	childSessionID := strings.TrimSpace(ToolDelegateSessionID(ctx))
 	if childSessionID == "" {
+		// A native task run's root turn carries tools.WithRunningTaskID on ctx
+		// (task_executor.go, set before processTaskDirect) but is never a
+		// delegated child — only pkg/agent/subturn.go's spawnSubTurn calls
+		// WithDelegateSessionID, and it never runs for a task dispatch. This
+		// is a structural, not transient, gap: a task-dispatch session's
+		// durable lifecycle record deliberately leaves ParentDurableKey empty
+		// (task_executor.go's mintTaskLifecycleRecord doc comment — "a task
+		// dispatch is not a delegate.run call, so there is no delegating
+		// parent to attribute"), so there is no parent inbox this call could
+		// ever reach even if the context plumbing were added. Name the actual
+		// completion/reporting path instead of a generic session error.
+		if strings.TrimSpace(ToolRunningTaskID(ctx)) != "" {
+			return ErrorResult("message_parent: this task run has no parent session to message — " +
+				"it was dispatched directly, not delegated. Report progress in your reasoning, and report " +
+				"your outcome with goal_claim (status \"met\" when verified done, \"blocked\" when something " +
+				"stops you, \"waiting_on_user\" when only the operator can proceed).")
+		}
 		return ErrorResult("message_parent: no session context available for this call")
 	}
 

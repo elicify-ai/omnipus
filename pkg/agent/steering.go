@@ -883,60 +883,6 @@ func (al *AgentLoop) sessionTurnsStillAlive(sessionID string) []*turnState {
 	return alive
 }
 
-// hasLiveCriticalDelegate reports whether any NON-ROOT turnState matching
-// sessionID (depth>0 / parentTurnID != "" — i.e. a delegate sub-turn, never
-// the root itself) that is marked Critical (SubTurnConfig.Critical,
-// subturn.go) is currently alive (turnState.IsAlive()). Async delegation
-// (`delegate async=true`) unconditionally sets Critical:true (see
-// pkg/tools/delegate.go's executeAsync), so this single predicate covers
-// both "Critical" and "background/async" as one and the same property —
-// ADR-045 uses all three names for what is, mechanically, the identical
-// turnState.critical flag.
-//
-// Mirrors sessionTurnsStillAlive's scan shape but additionally classifies
-// root vs. descendant and filters to Critical-only: a live NON-Critical
-// descendant's lifetime is bound to its parent's own goroutine (synchronous
-// delegation blocks the parent's own runTurn until the child returns, and
-// the child's activeTurnStates entry is removed via spawnSubTurn's own
-// `defer al.activeTurnStates.Delete(childID)` before spawnSubTurn itself
-// ever returns) — so it can only be observed alive here while the root
-// itself is ALSO still alive, a case the orphan watchdog's fire predicate
-// already requires (a live root) before this check is even consulted.
-//
-// Used exclusively by the orphan-foreground-turn watchdog (ADR-045,
-// pkg/agent/orphan_watch.go) to decide whether reaping the session's root
-// turn via RequestCancel would risk cascading into wanted background work —
-// RequestCancel's own PHASE B/C escalation is session-wide by construction
-// and cannot be scoped to "the root only" from the outside, so the watchdog
-// defers reaping entirely rather than reusing it while a Critical delegate
-// survives.
-func (al *AgentLoop) hasLiveCriticalDelegate(sessionID string) bool {
-	if sessionID == "" {
-		return false
-	}
-	found := false
-	al.activeTurnStates.Range(func(key, value any) bool {
-		ts, ok := value.(*turnState)
-		if !ok {
-			slog.Error("activeTurnStates contains non-*turnState value",
-				"session_key", key, "value_type", fmt.Sprintf("%T", value))
-			return true
-		}
-		if string(ts.routingSessionID) != sessionID {
-			return true
-		}
-		if ts.depth == 0 || ts.parentTurnID == "" {
-			return true // root, not a delegate
-		}
-		if ts.critical && ts.IsAlive() {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
 // IsSubTurnActiveForSpawnCall reports whether a sub-turn spawned by the spawn
 // tool call identified by parentSpawnCallID is currently registered as an
 // active turn — meaning either not-yet-finished, OR finished but its
@@ -979,9 +925,15 @@ func (al *AgentLoop) hasLiveCriticalDelegate(sessionID string) bool {
 // see "active" so it withholds the fabricated "done 0ms" snapshot rather than
 // serving it as genuine. See turnState.subTurnRecordPersisted's doc comment
 // (turn.go) for the full mechanics.
+//
+// A span whose EventKindSubTurnEnd has not been emitted yet is also active,
+// whatever activeTurnStates says at that instant — see markSubTurnSpanOpen.
 func (al *AgentLoop) IsSubTurnActiveForSpawnCall(parentSpawnCallID string) bool {
 	if parentSpawnCallID == "" {
 		return false
+	}
+	if al.subTurnSpanOpen(parentSpawnCallID) {
+		return true
 	}
 	active := false
 	al.activeTurnStates.Range(func(_, value any) bool {
@@ -999,6 +951,71 @@ func (al *AgentLoop) IsSubTurnActiveForSpawnCall(parentSpawnCallID string) bool 
 		return true
 	})
 	return active
+}
+
+// markSubTurnSpanOpen records that spawnSubTurn is about to emit
+// EventKindSubTurnSpawn for parentSpawnCallID; markSubTurnSpanEnded removes
+// that record only AFTER the span's EventKindSubTurnEnd has been emitted.
+// Between the two, IsSubTurnActiveForSpawnCall reports the span active.
+//
+// Why the turn registry alone cannot answer "is this span still running": it
+// stops reporting a finished child as active BEFORE the child's end event
+// exists, in two places.
+//
+//  1. runTurn's own deferred clearActiveTurn removes the child from
+//     activeTurnStates during its unwind, and spawnSubTurn re-stores it only
+//     after runTurn has returned (subturn.go, "Re-register childTS"). For that
+//     whole unwind the Range scan finds nothing.
+//  2. spawnSubTurn's cleanup defer sets subTurnRecordPersisted, and only then
+//     emits EventKindSubTurnEnd.
+//
+// The WS forwarder's orphan watchdog (pkg/gateway/websocket.go,
+// startOrphanWatchdog) asks this question to decide whether a span still open
+// after its parent ended is orphaned. Answered "not active" in either gap, it
+// synthesized subagent_end{status:"interrupted"} for a delegation that was
+// completing normally, ahead of (or right after) the real success frame.
+//
+// EventBus.Emit hands the end event to every subscriber's buffer on the
+// emitting goroutine (a bounded blocking retry for this must-not-drop kind,
+// then a counted drop). So once this record is gone, the end event is already
+// queued for every subscriber that did not drop it — which is what lets a
+// subscriber decide an orphan only after consuming what was already queued.
+//
+// A count, not a set, so two spawns sharing one call ID cannot end each other.
+func (al *AgentLoop) markSubTurnSpanOpen(parentSpawnCallID string) {
+	if parentSpawnCallID == "" {
+		return
+	}
+	al.subTurnSpansMu.Lock()
+	defer al.subTurnSpansMu.Unlock()
+	if al.openSubTurnSpans == nil {
+		al.openSubTurnSpans = make(map[string]int)
+	}
+	al.openSubTurnSpans[parentSpawnCallID]++
+}
+
+// markSubTurnSpanEnded is markSubTurnSpanOpen's counterpart; see its doc
+// comment. Called only after EventKindSubTurnEnd has been emitted.
+func (al *AgentLoop) markSubTurnSpanEnded(parentSpawnCallID string) {
+	if parentSpawnCallID == "" {
+		return
+	}
+	al.subTurnSpansMu.Lock()
+	defer al.subTurnSpansMu.Unlock()
+	if n := al.openSubTurnSpans[parentSpawnCallID]; n > 1 {
+		al.openSubTurnSpans[parentSpawnCallID] = n - 1
+		return
+	}
+	delete(al.openSubTurnSpans, parentSpawnCallID)
+}
+
+// subTurnSpanOpen reports whether parentSpawnCallID has a span whose spawn
+// event was emitted and whose end event has not been; see
+// markSubTurnSpanOpen.
+func (al *AgentLoop) subTurnSpanOpen(parentSpawnCallID string) bool {
+	al.subTurnSpansMu.Lock()
+	defer al.subTurnSpansMu.Unlock()
+	return al.openSubTurnSpans[parentSpawnCallID] > 0
 }
 
 func (al *AgentLoop) InterruptHard() error {

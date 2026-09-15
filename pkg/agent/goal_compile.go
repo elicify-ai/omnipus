@@ -565,15 +565,13 @@ func formatGoalStatementAndCriteria(g *CompiledGoal) string {
 	return sb.String()
 }
 
-// formatGoalEcho renders the compiled goal for the chat echo (FR-113/D11/G-8,
-// delivered by ADR-074 D4a's pending step — this is the confirmation surface
-// in chat history): the literal commands are included verbatim (never
-// paraphrased away), and the whole echo is what the user confirms by a chat
-// reply — no form/modal. The user's confirming reply (any of
-// confirmGoalAliases, or `/goal confirm`) activates the goal. This IS the
-// channel plain-text echo (no separate renderer) — see
-// formatGoalStatementAndCriteria for the statement/criteria/DoD core it
-// shares with buildGoalPendingNote.
+// formatGoalEcho renders the compiled goal RECORD (FR-113/D11/G-8;
+// RE-SCOPED by ADR-081 D9/D5: the goal is ALREADY ACTIVE by the time this
+// renders — instant activation, D1 — so the old "reply confirm to activate"
+// ritual is gone). Two surfaces use it: the channel-origin record echo
+// (FR-020 — a channel user has no SPA frame to read the record from) and
+// `/goal status`'s record summary (FR-029). See
+// formatGoalStatementAndCriteria for the statement/criteria/DoD core.
 //
 // Plain-language-first (spec US-6 S4, FR-011): criteria are itemized as
 // readable statements with their technical payloads verbatim per row —
@@ -582,19 +580,8 @@ func formatGoalEcho(g *CompiledGoal) string {
 	if g == nil {
 		return "(no goal compiled)"
 	}
-	var sb strings.Builder
-	sb.WriteString("Here's the goal I've compiled for your confirmation.\n\n")
-	sb.WriteString(formatGoalStatementAndCriteria(g))
-	sb.WriteString("\nReply **" + ConfirmGoalWord + "** (or `/goal confirm`) to activate this goal, " +
-		"`/goal <new intent>` to restate it, or `/goal clear` to discard.")
-	return sb.String()
+	return formatGoalStatementAndCriteria(g)
 }
-
-// goalEchoFallbackNote is the FR-014/US-3 S4 observability line appended to
-// the pending echo whenever the deterministic parser produced the criteria
-// because the LLM compile could not (failure/timeout/schema miss/second veto).
-const goalEchoFallbackNote = "\n\nNote: the automatic quality-bar rewrite was unavailable, " +
-	"so these criteria were compiled directly from your wording without it."
 
 // judgmentEchoSuffix renders a short, plain-language tag for a criterion's
 // ADR-080 D-TYPES judgment kind (the "what SHAPE of claim is this" axis,
@@ -636,21 +623,6 @@ func criterionEchoLine(c task.AcceptanceCriterion) string {
 		}
 	}
 	return base + judgmentEchoSuffix(c.Judgment)
-}
-
-// ConfirmGoalWord is the chat reply that activates an echoed goal (FR-113/D11).
-// A bare "confirm"/"yes"/"ok"/"activate" (case-insensitive) confirms; anything
-// else is treated as a re-statement → an amendment diff (N-6).
-const ConfirmGoalWord = "confirm"
-
-// confirmGoalAliases are the accepted chat-confirming replies.
-var confirmGoalAliases = map[string]bool{
-	"confirm": true, "yes": true, "ok": true, "okay": true, "activate": true, "y": true,
-}
-
-// IsGoalConfirm reports whether a chat reply confirms the echoed goal.
-func IsGoalConfirm(reply string) bool {
-	return confirmGoalAliases[strings.ToLower(strings.TrimSpace(reply))]
 }
 
 // GoalAmendment is the diffed, confirmed amendment surface (N-6/D11): a
@@ -738,64 +710,6 @@ func diffCriteriaSet(current, proposed []task.AcceptanceCriterion) (added, chang
 		}
 	}
 	return added, changed, dropped
-}
-
-// formatAmendmentEcho renders the amendment for chat confirmation (N-6),
-// including the DoD delta block (fix-wave finding #4) whenever the
-// amendment touches DoD, with inferred items flagged for approve/drop
-// exactly like formatGoalStatementAndCriteria's own DoD block.
-func formatAmendmentEcho(a *GoalAmendment) string {
-	if a == nil || a.Proposed == nil {
-		return "No amendment to apply."
-	}
-	if !a.HasChanges() {
-		return "The re-statement matches the current goal — no changes to amend."
-	}
-	var sb strings.Builder
-	sb.WriteString("Proposed amendment to your active goal:\n\n")
-	for _, c := range a.Added {
-		sb.WriteString("  + [added]   " + criterionEchoLine(c) + "\n")
-	}
-	for _, c := range a.Changed {
-		sb.WriteString("  ~ [changed] " + criterionEchoLine(c) + "\n")
-	}
-	for _, c := range rangeCriteria(a.Dropped) {
-		sb.WriteString("  - [dropped] " + criterionEchoLine(c) + "\n")
-	}
-	if len(a.DoDAdded) > 0 || len(a.DoDChanged) > 0 || len(a.DoDDropped) > 0 {
-		sb.WriteString("\nDefinition of Done changes (standing quality gates, judged alongside the criteria above):\n")
-		for _, c := range a.DoDAdded {
-			sb.WriteString("  + [added]   " + dodAmendmentEchoLine(c) + "\n")
-		}
-		for _, c := range a.DoDChanged {
-			sb.WriteString("  ~ [changed] " + dodAmendmentEchoLine(c) + "\n")
-		}
-		for _, c := range rangeCriteria(a.DoDDropped) {
-			sb.WriteString("  - [dropped] " + dodAmendmentEchoLine(c) + "\n")
-		}
-	}
-	sb.WriteString("\nReply **" + ConfirmGoalWord + "** to apply this amendment, or restate again.")
-	return sb.String()
-}
-
-// dodAmendmentEchoLine renders one DoD delta line, flagging
-// provenance==inferred items exactly like formatGoalStatementAndCriteria's
-// own DoD block (fix-wave finding #4).
-func dodAmendmentEchoLine(c task.AcceptanceCriterion) string {
-	line := criterionEchoLine(c)
-	if c.Provenance == task.ProvenanceInferred {
-		line += " (inferred — confirm or drop)"
-	}
-	return line
-}
-
-// rangeCriteria is a trivial identity-iterator kept so the dropped-loop reads
-// uniformly with the append loops above (and a single place to guard nil).
-func rangeCriteria(cs []task.AcceptanceCriterion) []task.AcceptanceCriterion {
-	if cs == nil {
-		return nil
-	}
-	return cs
 }
 
 // normalizeCritText is the text key used for amendment matching (case/whitespace).
@@ -1245,11 +1159,4 @@ func compiledGoalCriteriaFor(rawJSON, condition, sessionID string) []task.Accept
 		Author: task.CriterionAuthor{Kind: task.AuthorKindUser, ID: sessionID},
 		Status: task.CritPending,
 	}}
-}
-
-// isGoalConfirmVerb reports whether args (text after "/goal ") is a confirmation
-// alias (FR-113/D11 — the chat reply that activates an echoed pending goal or
-// applies a pending amendment). Distinct from the clear aliases.
-func isGoalConfirmVerb(args string) bool {
-	return IsGoalConfirm(args)
 }

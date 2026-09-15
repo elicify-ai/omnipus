@@ -16,9 +16,10 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -29,6 +30,112 @@ import (
 type unifiedTask = task.Task
 
 func tasksDir(home string) string { return filepath.Join(home, "tasks") }
+
+// This file has NO goal-store wrapper and NO task-delete goal cleanup of its
+// own. The goal store is constructed inline as goal.NewStore(t.deps.Home) —
+// the retired goalStoreForWorkspace added nothing to that one call — and the
+// delete cleanup is tools.RemoveTaskGoalRecords (pkg/tools/task.go), the single
+// implementation shared with the REST surface and the plain delete_task tool.
+// The private copies that used to live here (goalTerminalReasonOwnerDeleted,
+// terminateGoalForOwnerDeletion, removeTaskGoalRecords) were byte-identical
+// mirrors and are deleted; mirroring is the shape that let the sibling
+// task-terminal hook reach only three of its seven writers.
+
+// syncWorkspaceTaskGoalRecord mirrors pkg/tools/task.go's syncTaskGoalRecord
+// exactly (ADR-086 D2/D5, GOAL-FR-003/FR-012/FR-021/FR-029) — see its doc
+// comment for the full contract. Duplicated per this file's own established
+// convention (parseCriteriaArgsFromWorkspaceTool, allCheckCriteriaWorkspace,
+// deferWorkspaceDoneClaimToJudge all mirror a pkg/tools/task.go twin rather
+// than import it).
+//
+// THE CRITERIA COME FROM t, NEVER FROM THE CALLER. This signature used to take
+// a `criteria []task.AcceptanceCriterion` alongside criteriaProvided, and every
+// one of its call sites handed it the PRE-normalisation slice it had just given
+// to the task store — the one whose criteria still carry empty ids. The store
+// mints ids into its own deep copy (task.normalizeCriteria), and goal.New /
+// Goal.SetCriteria then mint a SECOND, different set for the same text. The
+// criterion id is the join key the verdict projection de-unions the Judge's
+// result on (GOAL-FR-007/FR-041), so the same criterion ended up reading `met`
+// on the task and `pending` on its goal record. Taking the list off t makes
+// that divergence unrepresentable rather than merely fixed at three call sites.
+func syncWorkspaceTaskGoalRecord(
+	home string,
+	t *task.Task,
+	criteriaProvided bool,
+	dod []task.AcceptanceCriterion, dodProvided bool,
+	goalMaxRoundsFn func() int,
+) error {
+	if !criteriaProvided && !dodProvided {
+		return nil
+	}
+	criteria := t.Criteria
+	gs := goal.NewStore(home)
+	now := time.Now().UTC()
+	existing, err := gs.GetByOwner(generated.GoalOwnerKindTask, t.ID)
+	if err != nil {
+		if !errors.Is(err, goal.ErrOwnerNotFound) {
+			return fmt.Errorf("load paired goal record: %w", err)
+		}
+		if !criteriaProvided || !dodProvided {
+			return fmt.Errorf(
+				"this task has no existing Definition of Done — saving criteria or dod for the " +
+					"first time requires supplying BOTH together (GOAL-FR-048)")
+		}
+		maxRounds := config.DefaultGoalMaxRounds
+		if goalMaxRoundsFn != nil {
+			maxRounds = goalMaxRoundsFn()
+		}
+		// goal.New requires a non-empty Prompt; fall back to Title (always
+		// present) when the task carries no Prompt.
+		goalPrompt := t.Prompt
+		if goalPrompt == "" {
+			goalPrompt = t.Title
+		}
+		g, nErr := goal.New(
+			generated.GoalOwnerKindTask, t.ID, generated.GoalSourceTaskExplicit,
+			goalPrompt, "", criteria, dod, maxRounds, now,
+		)
+		if nErr != nil {
+			return fmt.Errorf("build goal record: %w", nErr)
+		}
+		return gs.Create(g)
+	}
+	_, err = gs.Update(existing.GoalID, func(g *goal.Goal) error {
+		if criteriaProvided {
+			if sErr := g.SetCriteria(criteria, now); sErr != nil {
+				return sErr
+			}
+		}
+		if dodProvided {
+			if sErr := g.SetDoD(dod, now); sErr != nil {
+				return sErr
+			}
+		}
+		return nil
+	})
+	return err
+}
+
+// pairedWorkspaceGoalDoD returns the Definition of Done currently persisted on
+// the goal record paired with taskID, or nil when the task has no paired record
+// at all (a legacy pre-D-C task, GOAL-FR-023/FR-048). Mirrors pkg/tools's
+// pairedGoalDoD.
+//
+// It exists for the one edit shape that cannot evaluate the distinctness rule
+// (GOAL-FR-021/FR-047/FR-048) from the call arguments alone: an update that
+// replaces `criteria` and leaves `dod` untouched has to compare the NEW criteria
+// against the DoD already on file, and the task record has no DoD field to read
+// it from (ADR-086 D5). A read fault is returned, never swallowed.
+func pairedWorkspaceGoalDoD(home, taskID string) ([]task.AcceptanceCriterion, error) {
+	g, err := goal.NewStore(home).GetByOwner(generated.GoalOwnerKindTask, taskID)
+	if err != nil {
+		if errors.Is(err, goal.ErrOwnerNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load paired goal record: %w", err)
+	}
+	return g.DoD, nil
+}
 
 // taskStoreFor returns a task.Store rooted at the home's tasks directory. It
 // shares the process-wide task.TaskFileLock so its DAG validation, auto-advance,
@@ -123,6 +230,40 @@ func parseCriteriaArgsFromWorkspaceTool(raw []any, authorAgentID string) ([]task
 	return out, nil
 }
 
+// workspaceUpdateAssigneeCannotFinish is update_task_in_workspace's readiness
+// question (founder decision 2026-09-15) — the same rule as the plain
+// update_task tool: asked only when the update changes who does the task or
+// what it is judged against, over the effective post-update agent, criteria
+// and Definition of Done. A stored Definition of Done that cannot be read is
+// left out with a warning, acting only on what is known.
+func workspaceUpdateAssigneeCannotFinish(
+	checker tools.AssigneeReadinessChecker, home string, existing *task.Task, newAgentID *string,
+	newCriteria, newDoD []task.AcceptanceCriterion, criteriaProvided, dodProvided bool,
+) *tools.AssigneeCannotFinishError {
+	agentChanged := newAgentID != nil && *newAgentID != existing.AgentID
+	if !agentChanged && !criteriaProvided && !dodProvided {
+		return nil
+	}
+	agentID := existing.AgentID
+	if agentChanged {
+		agentID = *newAgentID
+	}
+	criteria := newCriteria
+	if !criteriaProvided {
+		criteria = existing.Criteria
+	}
+	judged := append([]task.AcceptanceCriterion{}, criteria...)
+	if dodProvided {
+		judged = append(judged, newDoD...)
+	} else if persisted, err := pairedWorkspaceGoalDoD(home, existing.ID); err != nil {
+		slog.Warn("update_task_in_workspace: the task's Definition of Done could not be read — checking the "+
+			"assignee against its acceptance criteria only", "task_id", existing.ID, "error", err)
+	} else {
+		judged = append(judged, persisted...)
+	}
+	return tools.AssigneeCannotFinishRefusal("update_task_in_workspace", checker, agentID, judged)
+}
+
 // allCheckCriteriaWorkspace reports whether criteria is non-empty and EVERY
 // entry is kind=check (ADR-049 D2 rule 5 gate condition). Mirrors
 // pkg/tools/task.go's allCheckCriteria.
@@ -138,36 +279,13 @@ func allCheckCriteriaWorkspace(criteria []task.AcceptanceCriterion) bool {
 	return true
 }
 
-// validateTaskPlanLinkageWorkspace enforces the same-workspace FK a
-// Task.plan_id reference must satisfy AND rejects linking to a terminal
-// (done/failed) plan (ADR-052 spec "Edge Cases": "create_task(plan_id)
-// referencing a plan already done -> reject"). Mirrors
-// pkg/tools/plan.go's validateTaskPlanLinkage exactly (duplicated rather
-// than exported+imported: that helper is unexported package-internal to
-// pkg/tools, and this package must not reach into pkg/tools' internals —
-// same rationale as parseCriteriaArgsFromWorkspaceTool above). planID == ""
-// (no linkage requested) is always valid (nil). A nil planStore fails
-// CLOSED — an unwired store is a configuration error, never a permission
-// grant.
-func validateTaskPlanLinkageWorkspace(planStore *plan.Store, planID, workspaceID string) error {
-	if planID == "" {
-		return nil
-	}
-	if planStore == nil {
-		return fmt.Errorf("cannot verify plan_id %q: plan store is not configured", planID)
-	}
-	if err := planStore.ValidatePlanWorkspace(planID, workspaceID); err != nil {
-		return err
-	}
-	p, err := planStore.Get(planID)
-	if err != nil {
-		return fmt.Errorf("could not load plan %q: %w", planID, err)
-	}
-	if plan.IsTerminal(p.State) {
-		return fmt.Errorf("plan %q is %q (terminal) and cannot accept new member tasks", planID, p.State)
-	}
-	return nil
-}
+// This package has NO plan-linkage validator of its own — create_task_in_
+// workspace calls tools.ValidateTaskPlanMembership (pkg/tools/plan.go)
+// directly, the same choke point the plain create_task tool and the REST
+// surface use. The retired local copy here (validateTaskPlanLinkageWorkspace)
+// was a byte-for-byte duplicate kept only because the original was
+// unexported; exporting it removed the reason for the copy. Do not re-add
+// one — a second copy is how the rule drifts.
 
 // delegationDenied evaluates the FR-6.2 delegation gate for an update/delete
 // mutation that targets a task assigned to (or being reassigned to) targetAgentID.
@@ -190,7 +308,7 @@ func NewTaskCreateTool(d *Deps) *TaskCreateTool  { return &TaskCreateTool{deps: 
 func (t *TaskCreateTool) Name() string           { return "create_task_in_workspace" }
 func (t *TaskCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *TaskCreateTool) Description() string {
-	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, blocked, done, failed — defaults to inbox; in_progress is rejected — it is only ever reached through real dispatch via run_task, never persisted directly), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must not be a terminal plan), write_set (optional, array of concrete paths this plan member creates/edits; meaningful only alongside plan_id), stream (optional, the parallel-group id this plan member belongs to), is_join (optional, true marks this plan member as an authored join/assemble member), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion / Definition of Done). Before authoring acceptance criteria, load the define-goal skill (via the Skill tool) and follow its quality bar. Assigning agent_id to an agent other than yourself is delegation and requires delegation trust to that agent within the workspace, or the call is refused. If every acceptance criterion is kind=check, the assignee must have bash policy allow — otherwise the criteria set could never be satisfied and the create is rejected. An unknown status value is rejected, not defaulted."
+	return "Create a task on the workspace board. Call this when the user wants to create, add, or track a task or action item. If the user mentioned a workspace name, call list_workspaces first to get the workspace_id.\nParameters: name (required, the task title), description (optional), prompt (optional, agent instruction), workspace_id (required, from list_workspaces), agent_id (optional, agent to assign), status (optional: inbox=new/untriaged, next=ready, blocked, done, failed — defaults to inbox; in_progress is rejected — it is only ever reached through real dispatch via run_task, never persisted directly), due (optional, RFC 3339 due date/time), priority (optional, 1 highest to 5 lowest, default 3), plan_id (optional, ID of the Plan this task is a member of — must exist in the same workspace and must still be a draft plan; a plan's membership is frozen at approval), write_set (optional, array of concrete paths this plan member creates/edits; meaningful only alongside plan_id), stream (optional, the parallel-group id this plan member belongs to), is_join (optional, true marks this plan member as an authored join/assemble member), blocked_by (optional, array of task IDs this task is blocked by), criteria (REQUIRED when agent_id is set: at least one acceptance criterion), dod (REQUIRED when agent_id is set: at least one definition-of-done item, distinct from criteria — GOAL-FR-021/D-C). Before authoring acceptance criteria or dod, load the define-goal skill (via the Skill tool) and follow its quality bar. Assigning agent_id to an agent other than yourself is delegation and requires delegation trust to that agent within the workspace, or the call is refused. If every acceptance criterion is kind=check, the assignee must have bash policy allow — otherwise the criteria set could never be satisfied and the create is rejected. An unknown status value is rejected, not defaulted."
 }
 
 func (t *TaskCreateTool) Parameters() map[string]any {
@@ -212,7 +330,7 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 			},
 			"plan_id": map[string]any{
 				"type":        "string",
-				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must not be a terminal (done/failed) plan.",
+				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must still be a DRAFT plan — a plan's membership is frozen at approval, so an approved, running, done or failed plan rejects a new member.",
 			},
 			"write_set": map[string]any{
 				"type":        "array",
@@ -263,8 +381,38 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 					},
 					"required": []string{"text"},
 				},
-				"description": "Acceptance criteria (Definition of Done). REQUIRED (at least one) when " +
-					"agent_id is set — an agent-assigned task with zero criteria is rejected.",
+				"description": "Acceptance criteria — the outcome-specific checks. REQUIRED (at least " +
+					"one) when agent_id is set — an agent-assigned task with zero criteria is rejected.",
+			},
+			"dod": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type":        "string",
+							"enum":        []string{"check", "prose", "behavior"},
+							"description": "See criteria.kind — same inference rules.",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "The definition-of-done statement (1-1000 characters)",
+						},
+						"check": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+							},
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
+						},
+						"behavior": task.BehaviorCriterionParamSchema(),
+					},
+					"required": []string{"text"},
+				},
+				"description": "Definition of Done (GOAL-FR-003/FR-021/FR-048) — generic standing " +
+					"quality gates, DISTINCT from criteria and never mixed into it, judged identically. " +
+					"REQUIRED (at least one) when agent_id is set.",
 			},
 		},
 		"required": []string{"name", "workspace_id"},
@@ -358,17 +506,46 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// AgentID is set at all (an unassigned, human-tracking-only task never
 	// enters the goal loop/judge machinery, so criteria enforcement does not
 	// apply to it).
+	// Only the DoD needs carrying past this block: the criteria reach the goal
+	// record off tk.Criteria, which store.Create normalises in place (see
+	// syncWorkspaceTaskGoalRecord's doc comment on why the criteria may not be
+	// passed separately).
+	var goalDoD []task.AcceptanceCriterion
 	if tk.AgentID != "" {
 		rawCriteria, _ := args["criteria"].([]any)
 		if len(rawCriteria) == 0 {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"criteria is required: an agent-assigned task must supply at least one acceptance "+
-					"criterion (Definition of Done) — ADR-049 D5/SD-A7", "criteria"))
+				"Add at least one acceptance criterion: say what must be true for this task to be done.",
+				"criteria"))
 		}
 		criteria, cErr := parseCriteriaArgsFromWorkspaceTool(rawCriteria, caller)
 		if cErr != nil {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", cErr.Error(), "criteria"))
 		}
+		// GOAL-FR-021/D-C: dod is mandatory alongside criteria, uniformly,
+		// on every task-creation surface (R-25) — this cross-workspace twin
+		// included. Same conditionality as criteria above: only meaningful
+		// once AgentID is set (an unassigned, human-tracking-only task never
+		// enters the goal loop/judge machinery).
+		rawDoD, _ := args["dod"].([]any)
+		if len(rawDoD) == 0 {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				"Add at least one Definition of Done item, distinct from the acceptance criteria.", "dod"))
+		}
+		dod, dErr := parseCriteriaArgsFromWorkspaceTool(rawDoD, caller)
+		if dErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", dErr.Error(), "dod"))
+		}
+		// The DISTINCTNESS half of the same rule the refusal above advertises.
+		// It was advertised on every surface and checked on none: a task whose
+		// DoD restates its acceptance criteria spends a second judged slot on a
+		// sentence already being scored (the judge unions Criteria and DoD).
+		// See task.ValidateDoDDistinct for the rule and for why it stops at
+		// whitespace and case. Checked before any store write.
+		if vErr := task.ValidateDoDDistinct(criteria, dod); vErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod")).WithError(vErr)
+		}
+		goalDoD = dod
 		// D2 rule 5 (FR-017/052): an all-check criteria set can never be
 		// adjudicated MET if the assignee's effective bash policy is deny or
 		// ask (ask resolves to deny unattended at judge time, D2 rule 2).
@@ -397,6 +574,13 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 				), "criteria"))
 			}
 		}
+		// Founder decision 2026-09-15 (parity with the plain create_task tool):
+		// refuse an assignee that cannot finish this task — denied goal_claim,
+		// or a check its bash policy cannot run — before anything is written.
+		if refusal := tools.AssigneeCannotFinishRefusal("create_task_in_workspace", t.deps.AssigneeCannotFinish,
+			tk.AgentID, append(append([]task.AcceptanceCriterion{}, criteria...), dod...)); refusal != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", refusal.Reason, refusal.Field)).WithError(refusal)
+		}
 		tk.Criteria = criteria
 	}
 
@@ -424,11 +608,12 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		tk.Priority = pr
 	}
 
-	// Optional plan_id (ADR-052 FR-002): same-workspace FK + not-terminal
-	// (validateTaskPlanLinkageWorkspace above). A call with no plan_id is
+	// Optional plan_id (ADR-052 FR-002): same-workspace FK + draft-only
+	// membership (tools.ValidateTaskPlanMembership — see its doc for why an
+	// approved/running plan refuses a new member). A call with no plan_id is
 	// entirely unaffected — the check is a no-op for planID == "".
 	if v, ok := args["plan_id"].(string); ok && v != "" {
-		if pErr := validateTaskPlanLinkageWorkspace(t.deps.PlanStore, v, tk.WorkspaceID); pErr != nil {
+		if pErr := tools.ValidateTaskPlanMembership(t.deps.PlanStore, v, tk.WorkspaceID); pErr != nil {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", pErr.Error(), "plan_id"))
 		}
 		tk.PlanID = v
@@ -504,20 +689,36 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	if createErr != nil {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", createErr.Error(), ""))
 	}
+
+	// ADR-086 D2/D5, GOAL-FR-003/FR-012/FR-021/FR-029: mirrors the plain
+	// create_task tool — a task's Definition of Done is authored ahead of
+	// time onto its own paired goal record (stays "defining" until the task
+	// starts, GOAL-FR-012). Only meaningful once AgentID is set, matching
+	// the criteria/dod requirement's own conditionality above.
+	if tk.AgentID != "" {
+		var goalMaxRoundsFn func() int
+		if t.deps.GetCfg != nil {
+			goalMaxRoundsFn = func() int {
+				cfg := t.deps.GetCfg()
+				if cfg == nil {
+					return config.DefaultGoalMaxRounds
+				}
+				return cfg.Planning.EffectiveGoalMaxRounds()
+			}
+		}
+		if gErr := syncWorkspaceTaskGoalRecord(t.deps.Home, &tk, true, goalDoD, true, goalMaxRoundsFn); gErr != nil {
+			slog.Error("create_task_in_workspace: failed to create paired goal record",
+				"task_id", tk.ID, "error", gErr)
+			return tools.ErrorResult(errorJSON("SAVE_FAILED",
+				fmt.Sprintf("task %q was created but its Definition of Done could not be persisted: %v",
+					tk.ID, gErr), ""))
+		}
+	}
+
 	return tools.NewToolResult(successJSON(map[string]any{
 		"id": tk.ID, "name": name, "status": string(tk.Status),
 		"workspace_id": tk.WorkspaceID, "agent_id": tk.AgentID,
 	}))
-}
-
-// deferWorkspaceDoneClaimToJudge mirrors pkg/tools/task.go's
-// deferDoneClaimToJudge exactly (duplicated rather than exported/shared —
-// same "criteria/timestamp-helper dedup" scope call already accepted
-// elsewhere in this feature's review): a `status:"done"` write on a task WITH
-// explicit acceptance criteria (hard tier, non-Scratchpad) must be
-// adjudicated by the judge, never trusted as an immediate terminal write.
-func deferWorkspaceDoneClaimToJudge(t *task.Task, newStatus task.Status) bool {
-	return newStatus == task.StatusDone && !t.Scratchpad && len(t.Criteria) > 0
 }
 
 // ---- update_task_in_workspace ----
@@ -571,6 +772,38 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 			"is_join": map[string]any{
 				"type":        "boolean",
 				"description": "Set/clear whether this plan member is an authored join/assemble member",
+			},
+			"criteria": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind":     map[string]any{"type": "string", "enum": []string{"check", "prose", "behavior"}},
+						"text":     map[string]any{"type": "string"},
+						"check":    map[string]any{"type": "object"},
+						"behavior": task.BehaviorCriterionParamSchema(),
+					},
+					"required": []string{"text"},
+				},
+				"description": "Replacement acceptance-criteria set (replaces the current set atomically). " +
+					"Pass at least one item — GOAL-FR-021/D-C binds at edit too: an update supplying an " +
+					"empty criteria array is rejected. Omit to leave criteria unchanged.",
+			},
+			"dod": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind":     map[string]any{"type": "string", "enum": []string{"check", "prose", "behavior"}},
+						"text":     map[string]any{"type": "string"},
+						"check":    map[string]any{"type": "object"},
+						"behavior": task.BehaviorCriterionParamSchema(),
+					},
+					"required": []string{"text"},
+				},
+				"description": "Replacement Definition-of-Done set (replaces the current set atomically). " +
+					"Pass at least one item — GOAL-FR-021/D-C binds at edit too: an update supplying an " +
+					"empty dod array is rejected. Omit to leave dod unchanged.",
 			},
 		},
 		"required": []string{"id"},
@@ -661,7 +894,6 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		patch.Prompt = &v
 		updated = append(updated, "prompt")
 	}
-	pendingJudgeNote := ""
 	if v, ok := args["status"].(string); ok {
 		if !isValidTaskStatus(v) {
 			// UAT batch3 S58 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
@@ -693,32 +925,25 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 				"in_progress cannot be set directly — it is only ever reached through real dispatch; "+
 					"call run_task to actually start this task", "status"))
 		}
-		if deferWorkspaceDoneClaimToJudge(existing, st) {
-			// review r2 Chunk 1: close the privileged-tool judge-bypass — this
-			// tool (update_task_in_workspace) previously wrote status:"done"
-			// straight to disk and advanced dependents directly, with no judge
-			// routing at all, for a task WITH acceptance criteria. Mirror the
-			// plain update_task gate: only stage a claim when this call is
-			// genuinely part of THAT task's own executor run (so
-			// finishTaskRun, the sole reader of PendingJudgeClaim, will
-			// adjudicate it) — otherwise reject outright rather than stage a
-			// claim nothing will ever adjudicate.
-			if tools.ToolRunningTaskID(ctx) != id {
-				return tools.ErrorResult(errorJSON("JUDGE_REQUIRED",
-					"this task has acceptance criteria — completion is adjudicated by the judge "+
-						"during a task run; it cannot be force-completed here", "status"))
-			}
-			claimText, _ := args["result"].(string)
-			patch.PendingJudgeClaim = &claimText
-			updated = append(updated, "pending_judge_claim")
-			pendingJudgeNote = "completion claim recorded — this task has acceptance criteria, so it is " +
-				"NOT yet done; the evidence-ladder judge will adjudicate your claim against the criteria " +
-				"before the task can reach a terminal status"
-			// Status is deliberately left unpatched — the judge decides.
-		} else {
-			patch.Status = &st
-			updated = append(updated, "status")
+		// Founder decision 2026-09-14 (one claim mechanism): while THIS
+		// task's own executor run is in flight, no terminal status may be
+		// written through this privileged tool either — completion is claimed
+		// with goal_claim and decided by the judge. Out-of-band done on a
+		// criteria task stays refused for the same reason it always was:
+		// nothing would ever adjudicate it.
+		if tools.ToolRunningTaskID(ctx) == id {
+			return tools.ErrorResult(errorJSON("JUDGE_REQUIRED",
+				"you cannot set this task's status while it is running — its completion is decided "+
+					"by the judge. The worker claims with goal_claim (status \"met\" with evidence, "+
+					"or \"blocked\" when it cannot proceed)", "status"))
 		}
+		if st == task.StatusDone && !existing.Scratchpad && len(existing.Criteria) > 0 {
+			return tools.ErrorResult(errorJSON("JUDGE_REQUIRED",
+				"this task has acceptance criteria — completion is adjudicated by the judge "+
+					"during a task run; it cannot be force-completed here", "status"))
+		}
+		patch.Status = &st
+		updated = append(updated, "status")
 	}
 	if v, ok := args["agent_id"].(string); ok && v != "" {
 		// subagent_3p (external-CLI) worker reassignment is no longer guarded
@@ -823,6 +1048,79 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		updated = append(updated, "is_join")
 	}
 
+	// criteria / dod (GOAL-FR-021/FR-029/FR-030/D-C): mirrors the plain
+	// update_task tool — the mandatory-count gate binds at edit too,
+	// uniformly with create. Persisted to the paired goal record after
+	// store.Update succeeds (syncWorkspaceTaskGoalRecord, below).
+	var goalCriteria, goalDoD []task.AcceptanceCriterion
+	criteriaProvided, dodProvided := false, false
+	if rawCriteria, ok := args["criteria"].([]any); ok {
+		criteriaProvided = true
+		if len(rawCriteria) == 0 {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				"An update that changes the acceptance criteria must leave at least one.", "criteria"))
+		}
+		parsed, cErr := parseCriteriaArgsFromWorkspaceTool(rawCriteria, caller)
+		if cErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", cErr.Error(), "criteria"))
+		}
+		goalCriteria = parsed
+		patch.Criteria = &parsed
+		updated = append(updated, "criteria")
+	}
+	if rawDoD, ok := args["dod"].([]any); ok {
+		dodProvided = true
+		if len(rawDoD) == 0 {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT",
+				"An update that changes the Definition of Done must leave at least one item.", "dod"))
+		}
+		parsed, dErr := parseCriteriaArgsFromWorkspaceTool(rawDoD, caller)
+		if dErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", dErr.Error(), "dod"))
+		}
+		goalDoD = parsed
+		updated = append(updated, "dod")
+	}
+
+	// GOAL-FR-048 binds the distinctness rule at SAVE, not only at create —
+	// otherwise the rule is a door you walk around: create with a distinct DoD,
+	// then edit it into a duplicate.
+	//
+	// An edit may touch one list and not the other, so the comparison is
+	// against the EFFECTIVE post-edit pair: the submitted list where one was
+	// submitted, the persisted list otherwise. The persisted criteria come off
+	// the task record; the persisted DoD can only come off the paired goal
+	// record, which is the only place a task's DoD exists (ADR-086 D5).
+	// Checked before store.Update, so a refusal writes nothing at all.
+	if criteriaProvided || dodProvided {
+		effectiveCriteria := goalCriteria
+		if !criteriaProvided {
+			effectiveCriteria = existing.Criteria
+		}
+		effectiveDoD := goalDoD
+		if !dodProvided {
+			persistedDoD, dErr := pairedWorkspaceGoalDoD(t.deps.Home, id)
+			if dErr != nil {
+				return tools.ErrorResult(errorJSON("SAVE_FAILED",
+					"could not read the task's Definition of Done to check it stays distinct from "+
+						"the criteria: "+dErr.Error(), "criteria"))
+			}
+			effectiveDoD = persistedDoD
+		}
+		if vErr := task.ValidateDoDDistinct(effectiveCriteria, effectiveDoD); vErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod")).WithError(vErr)
+		}
+	}
+
+	// Founder decision 2026-09-15 (parity with the plain update_task tool): a
+	// reassignment, or a change to what the task is judged against, may not
+	// leave it with an agent that cannot finish it. Checked before
+	// store.Update, so a refusal writes nothing.
+	if refusal := workspaceUpdateAssigneeCannotFinish(t.deps.AssigneeCannotFinish, t.deps.Home, existing,
+		patch.AgentID, goalCriteria, goalDoD, criteriaProvided, dodProvided); refusal != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", refusal.Reason, refusal.Field)).WithError(refusal)
+	}
+
 	// Apply the field patch via the store (DAG validation + atomic write).
 	result, err := store.Update(id, patch)
 	if err != nil {
@@ -849,6 +1147,22 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		}
 	}
 
+	// GOAL-FR-015/FR-027/FR-028 (review finding C1): this privileged tool is
+	// one of the seven terminal task writers and had no goal hook at all. The
+	// judge deferral above only intercepts `done` — status:"failed" was
+	// written straight through, leaving the paired goal record ACTIVE forever
+	// and silently killing Goal.Reactivate on every re-run of that task.
+	//
+	// Keyed on result.Status (what landed on disk) rather than the requested
+	// status, so a deferred done-claim — which deliberately leaves patch.Status
+	// unset — terminates nothing. The prior-status guard keeps a no-op resend
+	// on an already-terminal task out of the hook; the hook is idempotent
+	// anyway, this just keeps the logs honest.
+	if task.IsTerminal(result.Status) && !task.IsTerminal(existing.Status) {
+		tools.TerminateTaskGoalRecord(
+			goal.NewStore(t.deps.Home), id, result.Status, result.CancelReason, result.Result)
+	}
+
 	// FR-6.5: when the task newly reaches terminal "done", advance dependents.
 	if result.Status == task.StatusDone {
 		if advanced, advErr := store.AdvanceBlockedDependents(id); advErr != nil {
@@ -858,9 +1172,33 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 				"completed_id", id, "advanced_ids", advanced)
 		}
 	}
+
+	// GOAL-FR-029/FR-030: the task record itself already carries the new
+	// criteria (dual-write, via patch.Criteria above); this is what actually
+	// persists the change onto the task's paired goal record.
+	var goalSyncWarning string
+	if criteriaProvided || dodProvided {
+		var goalMaxRoundsFn func() int
+		if t.deps.GetCfg != nil {
+			goalMaxRoundsFn = func() int {
+				cfg := t.deps.GetCfg()
+				if cfg == nil {
+					return config.DefaultGoalMaxRounds
+				}
+				return cfg.Planning.EffectiveGoalMaxRounds()
+			}
+		}
+		if gErr := syncWorkspaceTaskGoalRecord(t.deps.Home, result, criteriaProvided, goalDoD, dodProvided, goalMaxRoundsFn); gErr != nil {
+			slog.Error("update_task_in_workspace: failed to sync paired goal record",
+				"task_id", id, "error", gErr)
+			goalSyncWarning = gErr.Error()
+		}
+	}
+
 	respFields := map[string]any{"id": id, "updated_fields": updated}
-	if pendingJudgeNote != "" {
-		respFields["pending_judge_note"] = pendingJudgeNote
+	if goalSyncWarning != "" {
+		respFields["goal_sync_warning"] = "criteria/dod saved on the task, but the paired goal " +
+			"record could not be updated: " + goalSyncWarning
 	}
 	return tools.NewToolResult(successJSON(respFields))
 }
@@ -943,6 +1281,21 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *tool
 		}
 	}
 
+	// GOAL-FR-044/EC-4: a goal MUST NOT outlive its owner as an unreferenced
+	// record. Runs BEFORE the task file is removed and a failure refuses the
+	// whole delete — see tools.RemoveTaskGoalRecords' doc for why this ordering
+	// replaced the best-effort-afterwards shape all three delete surfaces used
+	// to share. Nothing has been deleted yet here, so refusing leaves the task
+	// and its goal exactly as they were and a retry is safe.
+	if gErr := tools.RemoveTaskGoalRecords(goal.NewStore(t.deps.Home), id); gErr != nil {
+		slog.Error("delete_task_in_workspace: refusing to delete a task whose paired goal record "+
+			"could not be removed (GOAL-FR-044) — nothing was deleted", "task_id", id, "error", gErr)
+		return tools.ErrorResult(errorJSON("GOAL_CLEANUP_FAILED",
+			"the task was NOT deleted: its paired goal record could not be removed, and deleting "+
+				"the task anyway would leave that record behind as an unreferenced orphan: "+gErr.Error(),
+			"Retry the delete once the goal store is writable again"))
+	}
+
 	unblocked, err := store.Delete(id)
 	cascadeFailed := false
 	if err != nil {
@@ -996,7 +1349,7 @@ const maxWorkspaceTaskRows = 100
 // declare them DISK-ONLY and forbid them from crossing any boundary —
 // CreatedByAgentID ("the REST mapper does NOT copy it to the wire type, and it
 // MUST NOT be added to any schema in contracts/"), Scratchpad (every agent's
-// private todo card), PendingJudgeClaim, DelegationDepth — and a whole-struct
+// private todo card), DelegationDepth — and a whole-struct
 // marshal shipped every one of them, plus Prompt and Result, straight into an
 // LLM's context. With an allowlist a field added to task.Task tomorrow is NOT
 // disclosed by default; with a denylist the next field to land would re-open

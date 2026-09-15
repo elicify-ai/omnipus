@@ -24,7 +24,7 @@
 #   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
-.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-removed-providers spa-embed release-snapshot release-build golangci-lint-version-check
+.PHONY: all build install uninstall clean help test vet vet-windows gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-duplicate-renderer lint-no-removed-providers lint-no-orphan-turn-watchdog lint-guards spa-embed release-snapshot release-build golangci-lint-version-check
 
 # Build variables
 BINARY_NAME=omnipus
@@ -277,9 +277,30 @@ clean:
 vet: generate
 	@$(GO) vet $(GOFLAGS) ./...
 
+## vet-windows: go vet the whole module for windows/amd64 from this machine
+# The local equivalent of pr.yml's "GOOS=windows vet" step. It type-checks every
+# package AND every _test.go for Windows without a Windows machine, which is the
+# only way to catch a GOOS-selected file (e.g. pathsafe's rule-set selection,
+# ADR-067 Stage 0) that compiles on Linux and not on Windows.
+# Needs pkg/gateway/spa/ to exist for //go:embed all:spa — run `make spa-embed`
+# first, or the gateway package alone fails to load with "pattern all:spa: no
+# matching files found".
+vet-windows: generate
+	@GOOS=windows GOARCH=amd64 $(GO) vet $(GOFLAGS) ./...
+
 ## test: Test Go code
+# -timeout 30m is REQUIRED, not cosmetic: go test's default is 10m PER PACKAGE
+# TEST BINARY, and pkg/agent alone (400+ test files) measured ~19min (1142s)
+# on an uncontended machine, well past that default. Without an explicit
+# override, the default fires first and panics naming whatever test happened
+# to be in flight at that instant — a false-lead generator, not a real
+# failure signal (it sent one investigation chasing an innocent test,
+# TestMemory_RecallScoreOrdering, that had nothing to do with the actual
+# defect). 30m gives real headroom above the measured 19min baseline for a
+# loaded machine. See deploy/ci-worker/runci.sh's run_gotest/run_gorace for
+# the same fix applied to the CI worker's own gates.
 test: generate
-	@$(GO) test $(GOFLAGS) ./...
+	@$(GO) test $(GOFLAGS) -timeout 30m ./...
 
 ## golangci-lint-version-check: Fail loudly if $(GOLANGCI_LINT) isn't the version CI gates with.
 ## ADR-067 §5: a green measured with a different instrument is not a green — this refuses
@@ -307,7 +328,7 @@ fmt: golangci-lint-version-check
 	@$(GOLANGCI_LINT) fmt
 
 ## lint: Run linters
-lint: golangci-lint-version-check lint-no-removed-providers
+lint: golangci-lint-version-check lint-guards
 	@$(GOLANGCI_LINT) run --build-tags $(GO_BUILD_TAGS)
 
 ## fix: Fix linting issues
@@ -448,6 +469,21 @@ lint-no-jpeg-screencast:
 lint-no-fail-closed-backfill:
 	bash scripts/check-no-fail-closed-backfill.sh
 
+## lint-no-goal-confirm-gate: Fail if the deleted /goal confirm-gate machinery reappears
+## Regression guard for ADR-081 — see scripts/check-no-goal-confirm-gate.sh's header comment.
+lint-no-goal-confirm-gate:
+	bash scripts/check-no-goal-confirm-gate.sh
+
+## lint-no-orphan-turn-watchdog: Fail if the deleted ADR-045 orphan-foreground-turn watchdog reappears
+## Regression guard for ADR-082 D1/D7 — see scripts/check-no-orphan-turn-watchdog.sh's header comment.
+lint-no-orphan-turn-watchdog:
+	bash scripts/check-no-orphan-turn-watchdog.sh
+
+## lint-no-duplicate-renderer: Fail if LibraryAudioPreview is defined more than once outside its canonical module
+## Regression guard for ADR-083 EMB-027 — see scripts/check-no-duplicate-renderer.sh's header comment.
+lint-no-duplicate-renderer:
+	bash scripts/check-no-duplicate-renderer.sh
+
 ## lint-e2e-login-crosstalk: Fail if any E2E spec calls POST /api/v1/auth/login
 ## Regression guard: login re-mints the SINGLE-SLOT session_token_hash, silently invalidating the
 ## shared storageState cookie for every spec that runs later. Self-test first (a guard that cannot
@@ -462,6 +498,14 @@ lint-e2e-login-crosstalk:
 lint-no-removed-providers:
 	bash scripts/check-no-removed-providers-selfcheck.sh
 	bash scripts/check-no-removed-providers.sh
+
+## lint-guards: Run every discovered guard under scripts/ (scripts/guards.sh)
+## The eight targets above remain as thin delegates to their own guard for muscle memory and
+## direct references; this is the aggregate that `lint` actually depends on. Adding a guard to
+## the delivery is adding a scripts/check-*.sh file plus its companion — this target discovers
+## it automatically, with no Makefile edit (C-19, C-44, C-45, C-92, C-93).
+lint-guards:
+	bash scripts/guards.sh
 
 ## verify-contracts: Regenerate contracts, run wire-type lint, typecheck TS, fail if anything has drifted
 # Note: `tsc --noEmit` (without -b) is a silent no-op on a project-references

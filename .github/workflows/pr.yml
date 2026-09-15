@@ -831,26 +831,28 @@ jobs:
 
   tool-error-status-lint:
     name: Tool-Error-From-Status Lint
-    # Regression guard for issue #617: an SPA tool-call component must never
-    # derive its ERROR state from AssistantUI's `status.type === 'incomplete'`
-    # — a finished tool call always carries a truthy result, so that status
-    # can never be true for a real failure (see this job's script for the
-    # full mechanism). This exact anti-pattern was independently introduced
-    # across several component families before being fixed; this job stops a
-    # third recurrence rather than relying on review alone.
-    #
-    # Developer note: this check has no opt-out comment (unlike the wire-
-    # types lint) — the two legitimate exceptions (isCancelledStatus's own
-    # reason-qualified check, and GenericToolCall's `|| !!error`-disjuncted
-    # form) are structurally excluded by the script itself, not via a
-    # per-line annotation. If this fires, read the real outcome instead — see
-    # the script's header comment for the correct pattern.
+    # This job now runs the whole discovery-based guard suite via
+    # scripts/guards.sh (ADR-084/085/086 delivery, wave G1, C-19/C-44/C-45/
+    # C-92/C-93) — it discovers every scripts/check-*.sh guard, resolves and
+    # runs each one's proof-of-failure companion first, runs every guard
+    # regardless of an earlier one's outcome, and fails if any guard or
+    # companion failed, if zero guards were discovered, or if a non-exempt
+    # guard has no companion. The job name and needs/if gating are unchanged
+    # so `ci-required`'s hand-maintained `needs:` array and branch protection
+    # are untouched. Adding a guard from here on is adding a
+    # scripts/check-*.sh file plus its companion — this job requires NO
+    # further edit; see scripts/guards.sh's header for the full mechanism,
+    # and scripts/guards.test.sh for the mutation proof that the runner
+    # itself can go red.
     runs-on: ubuntu-latest
     needs: [changes]
     if: success() && needs.changes.outputs.code == 'true'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Run every discovered guard (scripts/guards.sh)
+        run: bash scripts/guards.sh
 
       - name: Run tool-error-from-status lint
         # python3-based (not `grep -P`) so it behaves identically on
@@ -876,6 +878,17 @@ jobs:
         # mechanical half of CLAUDE.md's "Retired surfaces — do NOT
         # reintroduce" rule.
         run: bash scripts/check-no-fail-closed-backfill.sh
+
+      - name: Run duplicate-renderer removal guard
+        # ADR-083 EMB-027: LibraryAudioPreview must be defined exactly once,
+        # in its canonical module (src/components/library/preview/
+        # LibraryAudioPreview.tsx), shared between the Library preview pane
+        # and the inline note embed. A branch cut before the extraction still
+        # contains the old private copy inside LibraryPreviewPane.tsx, so a
+        # merge re-adds it as an ordinary, conflict-free addition alongside
+        # the new module — git has no idea the duplication is the defect
+        # EMB-027 exists to prevent.
+        run: bash scripts/check-no-duplicate-renderer.sh
 
       - name: Run E2E auth cross-talk guard
         # POST /api/v1/auth/login re-mints the SINGLE-SLOT session_token_hash,
@@ -1499,6 +1512,41 @@ jobs:
             exit 1
           fi
 
+      - name: Run records_no_sqlite propindexless honesty-contract tests
+        # Review finding F7: pkg/gateway/rest_knowledge_find_propindexless_test.go
+        # is gated `//go:build records_no_sqlite || mipsle || netbsd || (freebsd &&
+        # arm)` — the platform/feature carve-out for a build with no SQLite-backed
+        # properties index (ADR-081 / MV-9). That tag combination appeared NOWHERE
+        # in CI: every other step here, and deploy/ci-worker/runci.sh, builds and
+        # tests with `-tags goolm,stdjson` only — so deleting this file's whole
+        # attachment carve-out (the honesty contract it exists to pin: a
+        # properties-index-only request group must refuse with complete:false and
+        # the engine's own reason, never a silently bare empty group) would have
+        # left every other gate green. Same #615/Landlock-step shape: a build-tag
+        # branch nothing runs is silent coverage loss, not merely untested code.
+        #
+        # -p 1: matches this file's own doc comment (its documented run command)
+        # and this package's existing convention for the sibling propindex-backed
+        # suite — the propindexless tests flip package-level state to simulate the
+        # carve-out and must not run concurrently with anything else in the same
+        # test binary.
+        #
+        # Pass-floor mirrors the Landlock step above (docs/internal/false-green-
+        # patterns.md: "ok with zero --- PASS lines" is a build-tag miscompile or a
+        # silently-skipped suite, not a real pass) — 2 is exact (grep this test
+        # file for `^func Test` before changing it).
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 go test -v -tags goolm,stdjson,records_no_sqlite -count=1 -timeout 300s \
+            -run '^TestVaultSearch_Propindexless' -p 1 ./pkg/gateway/ 2>&1 | tee /tmp/records-no-sqlite.log
+
+          passes=$(grep -c -- '--- PASS' /tmp/records-no-sqlite.log || true)
+          echo "records_no_sqlite propindexless passing tests: $passes"
+          if [ "$passes" -lt 2 ]; then
+            echo "::error::Only $passes of the 2 known records_no_sqlite propindexless tests passed. This build-tag honesty contract has silently lost coverage (or a test was added/renamed without updating this step)." >&2
+            exit 1
+          fi
+
   # Split out of `test` (ADR-067 parallelism pass). Measured on a real run,
   # the single Tests job spent 355s on `go test` and then a further 648s on
   # `go test -race` — 58% of an 18.7-minute job, running strictly AFTER the
@@ -1730,7 +1778,35 @@ jobs:
             fi
             exit 1
           fi
-          # No race detected — now the ordinary short-circuit applies.
+          # --- FAIL carve-out, matching the PLAIN test step above.
+          #
+          # The flake filter below exists for ONE signature: CPU/IO contention
+          # on a loaded runner, which makes a test exceed a wall-clock budget
+          # or a package hit its timeout. Contention produces TIMEOUTS and bare
+          # `FAIL <pkg>` summaries — it does not produce assertion failures. So
+          # an `--- FAIL` line means a test evaluated its own assertion and the
+          # assertion was false, and re-running it alone can only ever hide
+          # that. An assertion failure is never excused by an isolated re-run.
+          #
+          # Same native-substring reasoning as DATA RACE above — no grep -q on
+          # the multi-megabyte $out.
+          if [[ $out == *"--- FAIL"* ]]; then
+            echo ""
+            echo "=== --- FAIL detected — an assertion failure is never excused by an isolated re-run ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (assertion failure detected — never excused): $p"
+              done
+            else
+              echo "REAL FAILURE (assertion failure detected — never excused): --- FAIL detected but no package-level FAIL line matched; see full output above"
+            fi
+            exit 1
+          fi
+          # No race and no assertion failure detected — now the ordinary
+          # short-circuit applies. What reaches the flake filter below is
+          # exclusively the hang/contention signature: a bare `FAIL <pkg>`
+          # summary with no `--- FAIL` line anywhere in the run.
           [ $code -eq 0 ] && exit 0
           failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
           [ -z "$failed" ] && exit $code
@@ -1738,7 +1814,17 @@ jobs:
           echo "=== FLAKE FILTER (-race): re-running failed packages isolated (-p 1): $failed ==="
           rc=0
           for p in $failed; do
-            if go test -race -tags goolm,stdjson -count=1 -timeout 900s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
+            # The isolated re-run is grepped for DATA RACE, not just checked
+            # for a zero exit — deploy/ci-worker/runci.sh's run_gorace already
+            # does this and the two must stay in lockstep.
+            #
+            # The carve-out above exists because "a race can be reported
+            # without flipping go test's exit code". That is equally true of
+            # THIS run, so testing only its exit code let a race reported in
+            # the SECOND run be stamped "FLAKE (passed isolated)" and excused
+            # — precisely what the carve-out forbids.
+            if go test -race -tags goolm,stdjson -count=1 -timeout 900s -p 1 "$p" >/tmp/rr_race.log 2>&1 \
+               && ! grep -aq "DATA RACE" /tmp/rr_race.log; then
               echo "FLAKE (passed isolated): $p"
             else
               echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL|DATA RACE' /tmp/rr_race.log | head; rc=1
@@ -2112,21 +2198,13 @@ jobs:
         # --allow-empty permits gateway boot without a fully configured provider,
         # which is needed in case the credential seed step is extended in future.
         #
-        # OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 (ADR-045): the orphan-
-        # foreground-turn watchdog only arms when the LAST WebSocket watcher on
-        # a session disconnects, so a short 20s grace here reaps a genuinely
-        # leaked (finished-tab) live turn quickly without ever touching an
-        # open-tab turn or a transcript-seeded replay test (those have no live
-        # turn to begin with). This is the fix for the "Group-A variance"
-        # family of load-dependent failures: a Playwright test that navigates
-        # away mid-turn without clicking Stop used to leave a real agent loop
-        # running indefinitely, queuing against the shared OpenRouter
-        # rate-limit window and starving later tests' tool calls. Production
-        # default (300s) is untouched — this override applies only to the e2e
-        # gateway process.
+        # ADR-082 D1 deleted the ADR-045 orphan-foreground-turn watchdog in
+        # full (the old OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 override
+        # that used to reap a leaked, navigated-away-from turn quickly no
+        # longer exists — a turn now runs to completion regardless of whether
+        # any UI connection is watching it, by design).
         run: |
           OMNIPUS_MASTER_KEY=${{ secrets.OMNIPUS_MASTER_KEY_CI }} \
-            OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 \
             ./omnipus start --allow-empty > /tmp/omnipus.log 2>&1 &
           GATEWAY_PID=$!
           echo "${GATEWAY_PID}" > /tmp/omnipus.pid

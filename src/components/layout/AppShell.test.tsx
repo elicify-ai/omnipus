@@ -52,6 +52,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchNotifications: vi.fn(),
     fetchTasks: vi.fn().mockResolvedValue([]),
     fetchAgents: vi.fn().mockResolvedValue([]),
+    // CrossWorkspaceApprovalBanner (rendered for real below, not stubbed —
+    // the coexistence test needs it to actually mount) resolves workspace
+    // names via this call.
+    fetchWorkspaces: vi.fn().mockResolvedValue([]),
   }
 })
 
@@ -59,6 +63,8 @@ import * as api from '@/lib/api'
 import { AppShell } from './AppShell'
 import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
+import { useToolApprovalStore } from '@/store/toolApproval'
+import { useWorkspacesStore } from '@/store/workspacesStore'
 
 const APP_STATE_OK: AppState = { onboarding_complete: true, dev_mode_bypass: false }
 const NOTIFICATIONS_EMPTY: NotificationList = { notifications: [], unread_count: 0 }
@@ -492,5 +498,86 @@ describe('AppShell — <sm docked-browser takeover inerts collapsed chat control
 
     const main = await waitFor(() => screen.getByTestId('app-main-content'))
     expect(main.hasAttribute('inert')).toBe(false)
+  })
+})
+
+// ── Cross-workspace approval banner coexists with the connection-error
+// banner (founder decision 2026-09-14) ─────────────────────────────────────
+//
+// CrossWorkspaceApprovalBanner (src/components/layout/CrossWorkspaceApprovalBanner.tsx)
+// is mounted in the same stacked-banner column as connectionError/
+// devModeBypass/appStateError, right above <main>. Both are plain block-level
+// children of a flex column (never `fixed`/`absolute`), so when more than one
+// is visible at once they simply stack — neither can visually cover or
+// replace the other, and <main> (flex-1) still gets whatever height remains.
+// This proves that stacking holds for real, not just by code inspection.
+describe('AppShell — cross-workspace approval banner coexists with other banners', () => {
+  afterEach(() => {
+    useConnectionStore.setState({ connectionError: null })
+    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
+    useWorkspacesStore.setState({ activeWorkspaceId: null })
+  })
+
+  it('renders both the connection-error banner and the cross-workspace approval banner at once, neither hiding the other', async () => {
+    vi.mocked(api.fetchAppState).mockResolvedValue(APP_STATE_OK)
+    vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
+    vi.mocked(api.fetchWorkspaces).mockResolvedValue([
+      {
+        id: 'ws-other',
+        name: 'UAT-T2',
+        status: 'active',
+        pinned: false,
+        pin_order: 0,
+        task_count: 0,
+        created_at: '2026-09-14T00:00:00Z',
+        updated_at: '2026-09-14T00:00:00Z',
+      },
+    ])
+    useConnectionStore.setState({ connectionError: 'Lost connection to gateway' })
+    useWorkspacesStore.setState({ activeWorkspaceId: 'ws-active' })
+    useToolApprovalStore.getState().enqueue({
+      type: 'tool_approval_required',
+      approval_id: 'appr-cross',
+      tool_call_id: 'call-cross',
+      tool_name: 'write_file',
+      args: {},
+      agent_id: 'agent-x',
+      session_id: 'sess-x',
+      turn_id: 'turn-x',
+      expires_in_ms: 300_000,
+      workspace_id: 'ws-other',
+    })
+
+    renderShell()
+
+    const connectionBanner = await waitFor(() => screen.getByText('Lost connection to gateway'))
+    const approvalBanner = await waitFor(() =>
+      screen.getByText('1 approval waiting in UAT-T2'),
+    )
+    expect(connectionBanner).toBeInTheDocument()
+    expect(approvalBanner).toBeInTheDocument()
+
+    // Stacked siblings, not overlapping: the approval banner's ancestor
+    // button must come AFTER the connection-error alert in document order
+    // (matching source order — connectionError renders first), and the two
+    // must not be the same element or contained one-in-the-other.
+    const approvalButton = screen.getByTestId('cross-workspace-approval-banner')
+    const alertBanner = connectionBanner.closest('[role="alert"]')
+    expect(alertBanner).not.toBeNull()
+    expect(approvalButton).not.toBe(alertBanner)
+    expect(alertBanner?.contains(approvalButton)).toBe(false)
+    expect(approvalButton.contains(alertBanner)).toBe(false)
+    // DOCUMENT_POSITION_FOLLOWING (4): approvalButton comes after alertBanner.
+    expect(
+      alertBanner
+        ? (alertBanner.compareDocumentPosition(approvalButton) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+        : false,
+    ).toBe(true)
+
+    // <main> is still present and not pushed out of the DOM/collapsed to
+    // nothing — both banners take their natural height in the flex column,
+    // <main> (flex-1) absorbs the rest.
+    const main = screen.getByTestId('app-main-content')
+    expect(main).toBeInTheDocument()
   })
 })

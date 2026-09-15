@@ -163,6 +163,72 @@ describe('MessageItem — interrupted status', () => {
   })
 })
 
+describe('MessageItem — ADR-087 truncation notice (D1)', () => {
+  it('shows the "(cut off at the output limit)" suffix for a max_output_tokens truncation', () => {
+    renderWithQuery(
+      <MessageItem
+        message={makeMsg({
+          role: 'assistant',
+          content: 'The answer starts here and then',
+          status: 'done',
+          truncated: true,
+          truncationReason: 'max_output_tokens',
+        })}
+      />
+    )
+    expect(screen.getByText('(cut off at the output limit)')).toBeInTheDocument()
+    // Never both — the interrupted label must not also render.
+    expect(screen.queryByText('(interrupted)')).not.toBeInTheDocument()
+  })
+
+  it('D1 precedence: renders "(interrupted)" — not the cutoff suffix — when both signals are present', () => {
+    renderWithQuery(
+      <MessageItem
+        message={makeMsg({
+          role: 'assistant',
+          content: 'Cancelled mid-stream',
+          status: 'interrupted',
+          truncated: true,
+          truncationReason: 'max_output_tokens',
+        })}
+      />
+    )
+    expect(screen.getByText('(interrupted)')).toBeInTheDocument()
+    expect(screen.queryByText('(cut off at the output limit)')).not.toBeInTheDocument()
+  })
+
+  it('D1 precedence: truncationReason "cancelled" alone renders "(interrupted)", not the cutoff suffix', () => {
+    renderWithQuery(
+      <MessageItem
+        message={makeMsg({
+          role: 'assistant',
+          content: 'Legacy cancel, no status',
+          status: 'done',
+          truncated: true,
+          truncationReason: 'cancelled',
+        })}
+      />
+    )
+    expect(screen.getByText('(interrupted)')).toBeInTheDocument()
+    expect(screen.queryByText('(cut off at the output limit)')).not.toBeInTheDocument()
+  })
+
+  it('D4a: a truncated entry with EMPTY content still renders the bubble row and the suffix', () => {
+    renderWithQuery(
+      <MessageItem
+        message={makeMsg({
+          role: 'assistant',
+          content: '',
+          status: 'done',
+          truncated: true,
+          truncationReason: 'max_output_tokens',
+        })}
+      />
+    )
+    expect(screen.getByText('(cut off at the output limit)')).toBeInTheDocument()
+  })
+})
+
 describe('MessageItem — per-turn model footer (FR-014)', () => {
   it('renders the model slug on assistant messages that carry one', () => {
     // test-analyzer-B #6: assert the model footer is rendered when the

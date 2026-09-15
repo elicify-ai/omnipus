@@ -134,6 +134,38 @@ type BrowserConfig struct {
 	// this to its own served start page so a reopened panel lands somewhere
 	// branded and actionable rather than on a blank void that reads as broken.
 	StartPageURL string `json:"start_page_url,omitempty"`
+
+	// --- ADR-085 browser control handover (BROWSER-FR-031a/FR-052) ---
+
+	// ControlIdleRelease is the LiveViewRegistry idle-release sweeper's
+	// window (tools.browser.control_idle_release), ALREADY resolved to its
+	// effective value by config.BrowserToolConfig.EffectiveControlIdleReleaseSec
+	// before it reaches here (registerSharedTools' translation) — this
+	// field never sees the raw "0 means unset" config zero value, only the
+	// resolved default (900s) or an explicit override. Zero here means the
+	// operator explicitly disabled expiry (an indefinite hold, opt-in only).
+	// Named to match this field's own config key rather than the
+	// IdleTTL/IdleCloseTTL naming above, because it governs a DIFFERENT
+	// thing (a held control lock, not a browsing context).
+	//
+	// It carries NO "Sec" suffix even though its config counterpart does:
+	// this one is a time.Duration (the suffix would be a lie, and
+	// staticcheck's ST1011 says so), while config.BrowserToolConfig's
+	// ControlIdleReleaseSec is an int of seconds and earns it. Two
+	// differently-typed fields, one config key — the translation between
+	// them is loop.go's registerSharedTools.
+	ControlIdleRelease time.Duration `json:"control_idle_release,omitempty"`
+	// TakeControlEnabled mirrors config.BrowserToolConfig.TakeControlEnabled
+	// (tools.browser.take_control_enabled). Read by the sweeper on every
+	// tick (BROWSER-FR-052): with this false, no take can succeed
+	// (pkg/gateway/browser_ws.go's own check), and this field is what lets
+	// the sweeper release an ALREADY-held wheel left over from before the
+	// flag flipped, on its own regardless of whether the panel is even
+	// attached — see LiveViewRegistry.sweepTick. A config reload rebuilds
+	// this manager wholesale (registerSharedTools' Shutdown-old/install-new
+	// pattern), so this value is as "live" as every other field on this
+	// struct: current as of the last reload, not baked in at process start.
+	TakeControlEnabled bool `json:"take_control_enabled,omitempty"`
 }
 
 // DefaultConfig returns a BrowserConfig with spec-defined defaults.
@@ -1768,8 +1800,10 @@ func (m *BrowserManager) registerFreshSessionLocked(
 	return snapshotTabsLocked(se)
 }
 
-// firstAttachTimeout bounds runFirstAttach's wait for the very first
-// chromedp.Run on a freshly created chromedp context — used by both
+// firstAttachTimeout bounds opening a tab: for a brand-new tab, creating,
+// activating AND attaching it share this one budget (openNewTab); for an
+// adopted tab it bounds runFirstAttach's wait for the very first chromedp.Run
+// on its freshly created chromedp context. Used by both
 // bootstrapBrowserCtx (a session's initial browser-owning context) and
 // createTab (every subsequent/adopted tab). Both sit on the cold-start
 // critical path a slow attach can push past the browser WS handler's 60s
@@ -1860,12 +1894,49 @@ func (m *BrowserManager) bootstrapBrowserCtx(allocCtx context.Context) (context.
 	// context — the only one chrome.tabCapture can reach — and isolation is
 	// the workspace's own Chrome process and profile directory (FR-037), not
 	// a context id.
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	if err := runFirstAttachContext(allocCtx, func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
-		cancel()
+	//
+	// The browser-owning context is a brand-new tab like any other: created,
+	// ACTIVATED, then attached, inside one bounded budget (openNewTab). This is
+	// exactly where the Chrome 153 un-activated-tab stall surfaced in the field,
+	// as "failed to launch browser: ... timed out after 20s waiting for the
+	// browser to attach the tab" — see openActivatedTarget.
+	deadline := time.Now().Add(firstAttachTimeout)
+	remoteCancel := func() {}
+	parent := chromedp.FromContext(allocCtx)
+	if parent != nil && parent.Browser == nil {
+		if allocator, ok := parent.Allocator.(*chromedp.RemoteAllocator); ok {
+			// Remote allocators connect lazily. Allocate only the browser here:
+			// chromedp.Run would create and attach a page before we activate it.
+			// This bootstrap runs outside manager.mu and its parent already
+			// carries cancellation until the session has been accepted.
+			root, cancelRoot := chromedp.NewContext(allocCtx)
+			var cancelOnce sync.Once
+			cancel := func() { cancelOnce.Do(cancelRoot) }
+			stop := time.AfterFunc(time.Until(deadline), cancel)
+			b, err := allocator.Allocate(root, chromedp.WithDialTimeout(time.Until(deadline)))
+			stopped := stop.Stop()
+			if err != nil || !stopped || root.Err() != nil {
+				cancel()
+				if err == nil {
+					err = root.Err()
+				}
+				return nil, nil, fmt.Errorf("browser: failed to connect remote browser: %w", err)
+			}
+			chromedp.FromContext(root).Browser = b
+			allocCtx, remoteCancel = root, cancel
+		}
+	}
+	steps, err := newTabStepsFor(allocCtx)
+	if err != nil {
+		remoteCancel()
 		return nil, nil, fmt.Errorf("browser: failed to launch browser: %w", err)
 	}
-	return ctx, cancel, nil
+	ctx, cancel, err := openNewTab(allocCtx, time.Until(deadline), steps)
+	if err != nil {
+		remoteCancel()
+		return nil, nil, fmt.Errorf("browser: failed to launch browser: %w", err)
+	}
+	return ctx, func() { cancel(); remoteCancel() }, nil
 }
 
 // errMemoryPressureTabOpen is the shared refusal every tab-open site returns
@@ -1961,15 +2032,29 @@ func (m *BrowserManager) createTab(parentCtx context.Context, targetID target.ID
 	if m.createTabFn != nil {
 		return m.createTabFn(parentCtx, targetID)
 	}
-	var opts []chromedp.ContextOption
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
 	if targetID != "" {
-		opts = append(opts, chromedp.WithTargetID(targetID))
-	}
-	ctx, cancel := chromedp.NewContext(parentCtx, opts...)
-
-	if err := runFirstAttachContext(parentCtx, func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
-		cancel()
-		return nil, err
+		// ADOPTING a target that already exists (a popup, window.open): attach
+		// only. Chrome created and showed it; the Chrome 153 activation stall
+		// openNewTab works around was measured on targets created over CDP, not
+		// on these.
+		ctx, cancel = chromedp.NewContext(parentCtx, chromedp.WithTargetID(targetID))
+		if err := runFirstAttachContext(parentCtx, func() error { return chromedp.Run(ctx) }, firstAttachTimeout); err != nil {
+			cancel()
+			return nil, err
+		}
+	} else {
+		steps, err := newTabStepsFor(parentCtx)
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel, err = openNewTab(parentCtx, firstAttachTimeout, steps)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Best-effort stealth on a bounded timeout CHILD of ctx — safe because
@@ -3951,6 +4036,10 @@ func (m *BrowserManager) InvalidateExecPathCache() {
 // Chrome. Either way the bookkeeping (sessions, started, allocCancel) is
 // reset cleanly and idempotently.
 func (m *BrowserManager) Shutdown() {
+	if m.live != nil {
+		m.live.Shutdown()
+	}
+
 	// Encoder targets outlive the tab contexts below. Stop every panel capture
 	// first, outside manager locks: Stop can perform I/O and its callback removes
 	// the exact capture from this manager.

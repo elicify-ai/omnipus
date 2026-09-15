@@ -656,11 +656,13 @@ func TestInfraManifestToolNames_Set(t *testing.T) {
 // re-derived from a count.
 
 // tier3SearchOnlyToolNames is ADR-071 §4.1's literal Tier 3 list, transcribed
-// verbatim, now 68 names: 62 after write_agent_metadata's retirement, plus
-// ADR-075 D2's five new browser tools and Stream C's browser_handle_dialog (a
-// redundant, unguarded second door onto
-// the same files update_agent already writes through a properly-guarded
-// path — see pkg/sysagent/tools/metadata.go). It exists ONLY as the third leg
+// verbatim and kept current, now 66 names: 62 after write_agent_metadata's
+// retirement (a redundant, unguarded second door onto the same files
+// update_agent already writes through a properly-guarded path — see
+// pkg/sysagent/tools/metadata.go), plus ADR-075 D2's five new browser tools
+// and Stream C's browser_handle_dialog, minus create_plan and execute_plan,
+// which the ADR-071 amendment of 2026-09-14 moved to the previewed tier
+// (founder decision: agents never discovered them). It exists ONLY as the third leg
 // of the arithmetic check below — pkg/tools has no other reason to enumerate
 // Tier 3 by name, since search-only tools resolve to ManifestSearchOnly by
 // DEFAULT (everything lazy that isn't in previewedLazyToolNames), not by
@@ -686,18 +688,20 @@ var tier3SearchOnlyToolNames = []string{
 	"update_task_in_workspace", "delete_task_in_workspace", "list_tasks_in_workspace", "remove_skill",
 	"list_skills", "enable_channel", "configure_channel", "disable_channel", "list_channels",
 	"test_channel", "get_config", "set_config", "create_agent", "update_agent", "delete_agent",
-	"create_plan", "execute_plan", "run_task", "inspect_session", "plan_correct", "stop_plan",
+	"run_task", "inspect_session", "plan_correct", "stop_plan",
 	"run_retrospective", "read_inbox", "search_email", "read_message", "send_email", "reply",
 	"delete_task",
 }
 
-// TestVisibility_TierArithmetic pins the full 17+7+68+1=93 partition (FR-032:
+// TestVisibility_TierArithmetic pins the full 17+9+66+1=93 partition (FR-032:
 // navigate's retirement dropped the previewed set from 8 to 7, and
 // write_agent_metadata's retirement dropped the search-only set from 63 to
 // 62, and ADR-075 D2 raised it from 62 to 68 (five interaction/snapshot
-// verbs plus browser_handle_dialog) — "The
+// verbs plus browser_handle_dialog), and the ADR-071 amendment of 2026-09-14
+// moved create_plan and execute_plan from search-only to previewed (7 -> 9,
+// 68 -> 66, total unchanged) — "The
 // always-listed set MUST contain exactly 17 names, the previewed set exactly
-// 7, the search-only set exactly 68, and the infrastructure set exactly 1"). Counts
+// 9, the search-only set exactly 66, and the infrastructure set exactly 1"). Counts
 // alone are NOT verification (two different 6-out/5-in vs 3-out/2-in diffs
 // both land on 17) — this test additionally proves the four sets are
 // pairwise disjoint and that every Tier 3 name resolves to ManifestLazy +
@@ -711,14 +715,14 @@ func TestVisibility_TierArithmetic(t *testing.T) {
 	if len(full) != 17 {
 		t.Errorf("len(FullManifestToolNames()) = %d, want 17; got %v", len(full), full)
 	}
-	if len(previewed) != 7 {
-		t.Errorf("len(PreviewedLazyToolNames()) = %d, want 7; got %v", len(previewed), previewed)
+	if len(previewed) != 9 {
+		t.Errorf("len(PreviewedLazyToolNames()) = %d, want 9; got %v", len(previewed), previewed)
 	}
 	if len(infra) != 1 {
 		t.Errorf("len(InfraManifestToolNames()) = %d, want 1; got %v", len(infra), infra)
 	}
-	if len(tier3SearchOnlyToolNames) != 68 {
-		t.Fatalf("tier3SearchOnlyToolNames has %d entries, want 68 — fixture defect, fix the test data",
+	if len(tier3SearchOnlyToolNames) != 66 {
+		t.Fatalf("tier3SearchOnlyToolNames has %d entries, want 66 — fixture defect, fix the test data",
 			len(tier3SearchOnlyToolNames))
 	}
 
@@ -755,16 +759,19 @@ func TestVisibility_TierArithmetic(t *testing.T) {
 	}
 }
 
-// TestVisibility_PreviewedSetIsExactlySeven pins ADR-071 §4.1's literal Tier 2
-// list — the 7 names that still render a preview line, transcribed verbatim,
+// TestVisibility_PreviewedSetIsExactlyNine pins ADR-071 §4.1's literal Tier 2
+// list — the 9 names that still render a preview line, transcribed verbatim,
 // not re-derived from a count (FR-034, matching "Tier membership: one source
 // of truth"). Originally 8; navigate was retired outright (total no-op, its
 // callback was nil in every production path, so nothing anywhere could ever
-// receive a navigation event), dropping the set to 7.
-func TestVisibility_PreviewedSetIsExactlySeven(t *testing.T) {
+// receive a navigation event), dropping the set to 7; the ADR-071 amendment
+// of 2026-09-14 (founder decision) then moved create_plan and execute_plan in
+// from search-only, raising it to 9.
+func TestVisibility_PreviewedSetIsExactlyNine(t *testing.T) {
 	want := []string{
 		"list_agents", "list_jobs", "serve_web",
 		"get_workspace", "bash", "create_task", "update_task",
+		"create_plan", "execute_plan",
 	}
 	got := PreviewedLazyToolNames()
 	if len(got) != len(want) {
@@ -827,6 +834,111 @@ func TestVisibility_SearchOnlyToolsRemainInSearchIndex(t *testing.T) {
 	}
 }
 
+// knowledgeManifestToolNames is ADR-068 D15.3's six-tool vault-records
+// family (knowledge_describe, knowledge_find, knowledge_read, knowledge_edit,
+// knowledge_restructure, knowledge_configure — see
+// pkg/agent/knowledge_tools.go's registerKnowledgeTools and
+// pkg/coreagent/catalog_count_test.go's currentKnowledgeToolNames). Declared here
+// (not merged into tier3SearchOnlyToolNames above) because that list is
+// documented as "ADR-071 §4.1's literal Tier 3 list, transcribed verbatim" —
+// a closed historical snapshot of an ADR that predates ADR-068 and never
+// mentions these names; folding them in would misrepresent the transcription
+// as covering an ADR it does not.
+var knowledgeManifestToolNames = []string{
+	"knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list",
+	"knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create",
+}
+
+// TestVisibility_KnowledgeToolsAreSearchOnly pins the ADR-068 knowledge
+// family's manifest exposure (widened by KB-1/KB-2's knowledge_list and
+// knowledge_base_create, defect-list-knowledge-base-ux-2026-09-08.md,
+// founder-ratified 2026-09-08): all eight resolve to ManifestLazy +
+// ManifestSearchOnly, deliberately (per ADR-071 §4.4's default — "search-only
+// by default... itself deliberate, not a silent fallthrough"), never
+// ManifestFull and never previewed.
+//
+// Registration is unconditional for every agent (instance.go's
+// registerKnowledgeTools), so the every-turn token cost of these six names
+// is governed entirely by this tier assignment: ManifestFull/ManifestInfra
+// tools are charged a full JSON schema on every turn regardless of whether
+// they were used (sentToolSurfaceTokens, loop.go); ManifestLazy tools are
+// charged nothing until loaded, and — being search-only rather than
+// previewed — cost zero manifest-block text either (BuildCompressedManifest
+// skips any name whose ToolManifestVisibility is not ManifestPreviewed). A
+// tool moved from this set into fullManifestToolNames or
+// previewedLazyToolNames would silently reintroduce a fixed per-turn cost
+// across every agent; this test exists so that move can only ever be
+// deliberate.
+//
+// All EIGHT resolve the same way, not just the four read tools: retrieval
+// (describe/find/read/list) and write (edit/restructure/configure/
+// base_create) are equally niche — meaningful only in a workspace with a
+// knowledge base mounted or one about to be created — and none of the eight
+// has the "no natural discovery moment" property that justifies a Tier 2
+// preview line (contrast bash, list_mounts, recall_conversation in
+// fullManifestToolNames's own doc comment). Maximal payload cut for the
+// whole family, consistent with ADR-071 D3's design intent for a niche,
+// workspace-gated tool surface.
+func TestVisibility_KnowledgeToolsAreSearchOnly(t *testing.T) {
+	previewed := make(map[string]bool)
+	for _, n := range PreviewedLazyToolNames() {
+		previewed[n] = true
+	}
+	for _, name := range knowledgeManifestToolNames {
+		if got := ToolManifestTier(name); got != ManifestLazy {
+			t.Errorf("ToolManifestTier(%q) = %v, want ManifestLazy", name, got)
+		}
+		if IsFullManifestTool(name) {
+			t.Errorf("IsFullManifestTool(%q) = true, want false — knowledge tools must never be Full-tier", name)
+		}
+		if got := ToolManifestVisibility(name); got != ManifestSearchOnly {
+			t.Errorf("ToolManifestVisibility(%q) = %v, want ManifestSearchOnly", name, got)
+		}
+		if previewed[name] {
+			t.Errorf("%q must not be in previewedLazyToolNames (knowledge tools stay fully search-only)", name)
+		}
+	}
+}
+
+// TestVisibility_GrepIsSearchOnly pins the ADR-081 D11 tier ruling for the
+// new "grep" agent tool (unified-search-and-grep-spec.md MV-7): search-only
+// by default, like the knowledge family — ADR-071 §4.4's default applies
+// ("search-only by default... itself deliberate, not a silent fallthrough"),
+// never ManifestFull and never previewed.
+//
+// This is its OWN sibling test rather than an extension of
+// TestVisibility_KnowledgeToolsAreSearchOnly / knowledgeManifestToolNames:
+// grep is not part of ADR-068's vault-records family, and folding it into
+// that list would misrepresent the family it documents. "grep" is asserted
+// with no entry in fullManifestToolNames, infraManifestToolNames or
+// previewedLazyToolNames anywhere in this package — it reaches
+// ManifestLazy + ManifestSearchOnly purely by ABSENCE from those three maps
+// (ToolManifestTier's default branch), which is exactly why this pin exists:
+// nothing else in this package would fail if a future edit accidentally
+// added "grep" to one of them, so this test is the only thing that would
+// catch that regression.
+func TestVisibility_GrepIsSearchOnly(t *testing.T) {
+	const name = "grep"
+
+	previewed := make(map[string]bool)
+	for _, n := range PreviewedLazyToolNames() {
+		previewed[n] = true
+	}
+
+	if got := ToolManifestTier(name); got != ManifestLazy {
+		t.Errorf("ToolManifestTier(%q) = %v, want ManifestLazy", name, got)
+	}
+	if IsFullManifestTool(name) {
+		t.Errorf("IsFullManifestTool(%q) = true, want false — grep must never be Full-tier", name)
+	}
+	if got := ToolManifestVisibility(name); got != ManifestSearchOnly {
+		t.Errorf("ToolManifestVisibility(%q) = %v, want ManifestSearchOnly", name, got)
+	}
+	if previewed[name] {
+		t.Errorf("%q must not be in previewedLazyToolNames (grep stays fully search-only, ADR-081 D11)", name)
+	}
+}
+
 // TestVisibility_EveryCatalogNameHasRecordedLevel mirrors the existing
 // TestManifestNamesResolveInCatalog / TestCatalog_MatchesGlobalCeilingEntryForEntry
 // drift-test pattern: every name GeneralBuiltinMetadata() returns must resolve
@@ -884,15 +996,18 @@ func TestVisibility_EveryCatalogNameHasRecordedLevel(t *testing.T) {
 	}
 }
 
-// TestManifest_RenderedBlockIsNineteenLines proves FR-033's exact rendered
-// line count for the real 7-tool, 5-category Tier 2 set: `2 + 2C + N` with
-// C=5 categories and N=7 tools = 19 lines. Uses the REAL categories each of
-// the 7 previewed tools resolves to in production (verified against source:
+// TestManifest_RenderedBlockIsTwentyOneLines proves FR-033's exact rendered
+// line count for the real 9-tool, 5-category Tier 2 set: `2 + 2C + N` with
+// C=5 categories and N=9 tools = 21 lines. Uses the REAL categories each of
+// the 9 previewed tools resolves to in production (verified against source:
 // list_agents→agents, list_jobs→tasks, serve_web→web, get_workspace→workspaces,
-// bash→shell, create_task/update_task→tasks — 5 distinct categories).
-// Originally 8 tools / 6 categories / 22 lines; navigate (→platform) was the
-// dropped tool and platform was the dropped category, retired outright.
-func TestManifest_RenderedBlockIsNineteenLines(t *testing.T) {
+// bash→shell, create_task/update_task→tasks, create_plan/execute_plan→tasks —
+// 5 distinct categories). Originally 8 tools / 6 categories / 22 lines;
+// navigate (→platform) was the dropped tool and platform the dropped category,
+// retired outright (19 lines). The ADR-071 amendment of 2026-09-14 added
+// create_plan and execute_plan, both in the already-present tasks category,
+// so it adds two tool lines and no heading.
+func TestManifest_RenderedBlockIsTwentyOneLines(t *testing.T) {
 	toolList := []Tool{
 		&fakeManifestTool{name: "list_agents", desc: "List agents.", cat: CategoryAgents},
 		&fakeManifestTool{name: "list_jobs", desc: "List jobs.", cat: CategoryTasks},
@@ -901,19 +1016,29 @@ func TestManifest_RenderedBlockIsNineteenLines(t *testing.T) {
 		&fakeManifestTool{name: "bash", desc: "Run a shell command.", cat: CategoryShell},
 		&fakeManifestTool{name: "create_task", desc: "Create a task.", cat: CategoryTasks},
 		&fakeManifestTool{name: "update_task", desc: "Update a task.", cat: CategoryTasks},
+		&fakeManifestTool{name: "create_plan", desc: "Plan parallel work.", cat: CategoryTasks},
+		&fakeManifestTool{name: "execute_plan", desc: "Start a plan.", cat: CategoryTasks},
+	}
+	// The fakes must carry the production categories, or the 5-category
+	// arithmetic below would be checking a fixture rather than the real set.
+	if got := (&PlanCreateTool{}).Category(); got != CategoryTasks {
+		t.Fatalf("create_plan's real category is %q, fixture assumes %q", got, CategoryTasks)
+	}
+	if got := (&PlanExecuteTool{}).Category(); got != CategoryTasks {
+		t.Fatalf("execute_plan's real category is %q, fixture assumes %q", got, CategoryTasks)
 	}
 	got := BuildCompressedManifest(toolList, nil)
 	if got == "" {
-		t.Fatal("BuildCompressedManifest returned empty string for the 7-tool previewed set")
+		t.Fatal("BuildCompressedManifest returned empty string for the 9-tool previewed set")
 	}
 	lines := strings.Split(strings.TrimRight(got, "\n"), "\n")
-	if len(lines) != 19 {
-		t.Errorf("rendered manifest block has %d lines, want 19 (FR-033: 2 + 2*5 + 7):\n%s", len(lines), got)
+	if len(lines) != 21 {
+		t.Errorf("rendered manifest block has %d lines, want 21 (FR-033: 2 + 2*5 + 9):\n%s", len(lines), got)
 	}
 	// Non-vacuous: no search-only tool must sneak into this rendering.
-	for _, n := range tier3SearchOnlyToolNames[:5] { // sample, not the whole 67
+	for _, n := range tier3SearchOnlyToolNames[:5] { // sample, not the whole 66
 		if strings.Contains(got, "  - "+n) {
-			t.Errorf("19-line block must not contain search-only tool %q", n)
+			t.Errorf("21-line block must not contain search-only tool %q", n)
 		}
 	}
 }

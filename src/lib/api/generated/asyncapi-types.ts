@@ -33,6 +33,7 @@ export type WsFrameType =
   | "media"
   | "agent_switched"
   | "tool_approval_required"
+  | "tool_approval_resolved"
   | "session_state"
   | "system_overload"
   | "replay_warning"
@@ -68,7 +69,10 @@ export type WsFrameType =
   | "browser_input_offer"
   | "browser_input_answer"
   | "browser_input_state"
-  | "browser_input_control_ack";
+  | "browser_input_control_ack"
+  | "browser_handover_notice"
+  | "goal_outcome"
+  | "library_changed";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -142,6 +146,8 @@ export interface DoneStats {
   truncated_result_count?: number;
   replay_error?: boolean;
   turn_failed?: boolean;
+  truncated?: boolean;
+  truncation_reason?: "cancelled" | "max_output_tokens";
   [key: string]: unknown;
 }
 
@@ -153,14 +159,14 @@ export interface DoneFrame {
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "context_unrecoverable" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "context_unrecoverable" | "context_window_unknown" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "context_unrecoverable" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "context_unrecoverable" | "context_window_unknown" | "unknown";
   message: string;
   retryable: boolean;
 }
@@ -342,6 +348,9 @@ export interface ReplayMessageFrame {
   agent_id?: string;
   model?: string;
   turn_id?: string;
+  producing_session_id?: string;
+  truncated?: boolean;
+  truncation_reason?: "cancelled" | "max_output_tokens";
 }
 
 export interface ReplayErrorFrame {
@@ -376,6 +385,13 @@ export interface RateLimitFrame {
   retry_after_seconds: number;
   agent_id?: string;
   tool?: string;
+}
+
+export interface LibraryChangedFrame {
+  type: "library_changed";
+  workspace_id: string;
+  path?: string;
+  reason?: string;
 }
 
 export interface MediaPart {
@@ -414,6 +430,14 @@ export interface ToolApprovalRequiredFrame {
   turn_id: string;
   expires_in_ms: number;
   producing_session_id?: string;
+  workspace_id?: string;
+}
+
+export interface ToolApprovalResolvedFrame {
+  type: "tool_approval_resolved";
+  approval_id: string;
+  state: "approved" | "denied_user" | "denied_timeout" | "denied_cancel" | "denied_restart" | "denied_batch_short_circuit";
+  session_id?: string;
 }
 
 export interface AskUserQuestionCard {
@@ -469,6 +493,13 @@ export interface SessionStatePendingApproval {
   tool_name: string;
   agent_id: string;
   expires_in_ms: number;
+  workspace_id?: string;
+}
+
+export interface SessionStateActiveTurn {
+  turn_id: string;
+  agent_id: string;
+  started_at: string;
 }
 
 export interface SessionStateFrame {
@@ -476,6 +507,8 @@ export interface SessionStateFrame {
   user_id: string;
   pending_approvals: Array<SessionStatePendingApproval>;
   pending_asks?: Array<AskUserQuestionCard>;
+  session_id?: string;
+  active_turn?: SessionStateActiveTurn;
   emitted_at: string;
 }
 
@@ -543,7 +576,7 @@ export interface WhatsAppPairingSubscribeFrame {
 export interface NotificationFrame {
   type: "notification";
   id: string;
-  notification_type: "schedule_failed";
+  notification_type: "schedule_failed" | "knowledge_drift";
   title: string;
   body?: string;
   severity: "info" | "warning" | "error";
@@ -746,7 +779,7 @@ export interface GoalStatusFrame {
   latest_reason: string;
   active_loops: number;
   cap: number;
-  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared";
+  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared" | "judge_refused_god_mode" | "judge_cas_loss" | "blocked" | "claim_overturned" | "expired";
   producing_session_id?: string;
   criteria?: Array<{
     id?: string;
@@ -769,6 +802,7 @@ export interface GoalStatusFrame {
       id: string;
     };
     status: "pending" | "met" | "unmet";
+    clause_count?: number;
   }>;
   dod?: Array<{
     id?: string;
@@ -791,6 +825,7 @@ export interface GoalStatusFrame {
       id: string;
     };
     status: "pending" | "met" | "unmet";
+    clause_count?: number;
   }>;
 }
 
@@ -827,10 +862,58 @@ export interface JudgeVerdictFrame {
     met: boolean;
     reason: string;
     evidence_quote?: string;
+    evidence_source?: "diff" | "transcript" | "machine_check" | "file_read" | "session_read";
+    evidence_target?: string;
+    provenance?: "judge_read" | "deterministic_check" | "diff" | "transcript" | "session_read" | "none";
+    evidence?: Array<{
+      part: string;
+      source?: string;
+      target?: string;
+      quote: string;
+    }>;
   }>;
   model: string;
   judged_at: string;
   judge_agent_id: string;
+  session_id?: string;
+}
+
+export interface BrowserHandoverNoticeFrame {
+  type: "browser_handover_notice";
+  session_id: string;
+  message_id: string;
+  text: string;
+}
+
+export interface GoalOutcomeFrameOutcome {
+  goal_id: string;
+  goal_text: string;
+  ending: "met" | "rounds_exhausted" | "stopped_by_user" | "other";
+  rounds_used: number;
+  max_rounds: number;
+  judge_reason?: string;
+  criteria_total?: number;
+  ended_at: string;
+}
+
+export interface GoalOutcomeFrame {
+  type: "goal_outcome";
+  session_id: string;
+  message_id: string;
+  outcome: GoalOutcomeFrameOutcome;
+}
+
+export interface KnowledgeIndexProgressFrame {
+  type: "knowledge_index_progress";
+  collection_id: string;
+  workspace_id: string;
+  phase: "enumerating" | "indexing" | "idle" | "failed";
+  indexed_files: number;
+  total_known: boolean;
+  total_files?: number;
+  skipped_files?: number;
+  error?: string;
+  updated_at?: string;
 }
 
 export interface ErrorPayload {
@@ -907,9 +990,11 @@ export type WsFrame =
   | ReplayErrorFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
+  | LibraryChangedFrame
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
+  | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
   | AskUserAnswerFrame
   | SessionStateFrame
@@ -942,6 +1027,9 @@ export type WsFrame =
   | LoopStatusFrame
   | PlanStatusFrame
   | JudgeVerdictFrame
+  | BrowserHandoverNoticeFrame
+  | GoalOutcomeFrame
+  | KnowledgeIndexProgressFrame
   | BrowserInputOfferFrame
   | BrowserInputAnswerFrame
   | BrowserInputStateFrame
@@ -991,9 +1079,11 @@ export type ServerFrame =
   | ReplayErrorFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
+  | LibraryChangedFrame
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
+  | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
   | SessionStateFrame
   | SystemOverloadFrame
@@ -1018,6 +1108,9 @@ export type ServerFrame =
   | LoopStatusFrame
   | PlanStatusFrame
   | JudgeVerdictFrame
+  | BrowserHandoverNoticeFrame
+  | GoalOutcomeFrame
+  | KnowledgeIndexProgressFrame
   | BrowserInputAnswerFrame
   | BrowserInputStateFrame
   | BrowserInputControlAckFrame;

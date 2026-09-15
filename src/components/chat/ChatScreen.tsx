@@ -36,11 +36,11 @@ import { Wordmark } from '@/components/shared/Wordmark'
 import { GenericToolCall } from './tools/GenericToolCall'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
 import { WebServeBlock } from './tools/WebServeUI'
+import { SetGoalCardBlock, classifySetGoalCall } from './tools/SetGoalToolUI'
 import { BrowserToolReplayBlock, isReplayBrowserToolName } from './tools/BrowserTool'
 import { RateLimitIndicator } from './RateLimitIndicator'
 import { GoalIndicator } from './GoalIndicator'
 import { GoalPillTray } from './GoalPillTray'
-import { GoalThreadTailCards } from './GoalThreadTailCards'
 import { AskUserQuestionThreadTail } from './AskUserQuestionCard'
 import { JudgeVerdictThreadCard } from './JudgeVerdictThreadCard'
 import { ActivityBar } from './ActivityBar'
@@ -70,6 +70,12 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderSubagentSpan, shouldRenderToolCall, shouldRenderJudgeVerdictInThread } from '@/lib/toolVisibility'
+import { isGoalRecordEmpty } from '@/lib/goalSetupState'
+import { messageSetsGoal } from '@/lib/goalCommandMessage'
+import { getMessageStatusSuffix, INTERRUPTED_SUFFIX_TEXT, CUT_OFF_SUFFIX_TEXT } from '@/lib/truncation'
+import { GoalCommandMarker } from '@/components/chat/GoalCommandMarker'
+import { GoalSetupFailureLine } from './tools/GoalSetupFailureLine'
+import { GoalOutcomeRow } from './GoalOutcomeRow'
 import { fetchAgents, fetchSessionMessages, fetchCommands, fetchSkills } from '@/lib/api'
 import type { SlashCommand, Skill, Agent } from '@/lib/api'
 import { AttachmentCard, AttachmentRemoveX, useFilePreview } from './AttachmentCard'
@@ -167,7 +173,13 @@ export function commandLabelsWithAliases(commands: SlashCommand[]): string[] {
 
 // ── Message components ────────────────────────────────────────────────────────
 
-function UserMessage() {
+// Exported for focused unit tests of the LIVE render path (the
+// VirtualUserMessageRow precedent a few hundred lines down). The two
+// components extract their text differently — this one from AssistantUI's
+// `message.content` parts array, the row from a store `ChatMessage.content`
+// string — so a test that only drives the row cannot see a marker regression
+// here: see ChatScreen.goalCommandMarker.live.test.tsx.
+export function UserMessage() {
   const message = useMessage()
   const { data: skills = [] } = useQuery<Skill[]>({
     queryKey: ['skills'],
@@ -190,12 +202,25 @@ function UserMessage() {
 
   const commandLabels = commandLabelsWithAliases(commands)
 
+  // UAT defect B: a `/goal …` message is the ONE thing about an uncompiled
+  // goal that the transcript actually persists (the gateway appends the raw
+  // inbound text before the command rewrite; replay applies no slash-command
+  // filter). Marking it keeps a goal visible in the thread after a reload
+  // that lands before — or without — any live `goal_status` frame.
+  const setsGoal = messageSetsGoal(content)
+
   return (
-    <MessagePrimitive.Root data-testid="user-message" data-message-id={message.id} className="group flex gap-3 px-4 py-3 flex-row-reverse">
+    <MessagePrimitive.Root
+      data-testid="user-message"
+      data-message-id={message.id}
+      data-goal-command={setsGoal ? 'true' : undefined}
+      className="group flex gap-3 px-4 py-3 flex-row-reverse"
+    >
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
       <div className="flex flex-col items-end gap-1 max-w-[85%] min-w-0">
+        {setsGoal && <GoalCommandMarker />}
         {renderSkillAwareContent(content, skills, commandLabels, () => (
           <div className="rounded-xl px-4 py-3 text-sm leading-relaxed bg-[var(--color-surface-2)] text-[var(--color-secondary)] rounded-tr-sm">
             <MessagePrimitive.Parts>
@@ -212,8 +237,38 @@ function UserMessage() {
 }
 
 function SystemMessage() {
+  const message = useMessage()
+  // Operator-reported UX fix, 2026-09-08: the goal-ack line is a synthetic
+  // `role: 'system'` ChatMessage (chat.ts's `case 'goal_status'` handler,
+  // buildGoalAckInsertion) carrying `goalAckGoalId` — everything else on
+  // this generic system-banner surface (help text, `/new`, etc.) has none,
+  // so this stays a no-op for those. Cross-referencing the store message
+  // (rather than AssistantUI's own `message`) mirrors AssistantMessage's
+  // identical storeMsg lookup a few components up.
+  const storeMsg = useChatStore((s) => s.messagesById[message.id])
+  const isGoalAck = !!storeMsg?.goalAckGoalId
+  // ADR-085 BROWSER-FR-042/FR-044 (wave B8, C-90): the browser-handover
+  // waiting notice is the same kind of synthetic `role: 'system'`
+  // ChatMessage, this time carrying `browserHandoverNoticeId` (chat.ts's
+  // `case 'browser_handover_notice'` handler, buildBrowserHandoverInsertion)
+  // — copying the shipped two-site `isGoalAck` pattern exactly. The e2e spec
+  // (tests/e2e/browser-control-handover.spec.ts) names this discriminator
+  // as its positive observable.
+  const isBrowserHandoverNotice = !!storeMsg?.browserHandoverNoticeId
+  // Goal outcome line (founder decision 2026-09-14): how a goal ended —
+  // always shown, never gated by Verbose chat. See src/lib/goalOutcome.ts.
+  if (storeMsg?.goalOutcome) {
+    return (
+      <MessagePrimitive.Root className="flex justify-center px-4 py-2">
+        <GoalOutcomeRow outcome={storeMsg.goalOutcome} />
+      </MessagePrimitive.Root>
+    )
+  }
   return (
-    <MessagePrimitive.Root className="flex justify-center py-2">
+    <MessagePrimitive.Root
+      className="flex justify-center py-2"
+      data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
+    >
       <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
         <MessagePrimitive.Parts>
           {({ part }) => {
@@ -226,14 +281,40 @@ function SystemMessage() {
   )
 }
 
-// Animated thinking indicator with rotating status messages
+// Animated thinking indicator with rotating status messages. The first
+// shown phrase is always 'Thinking…' (deterministic opening beat); every
+// tick after that picks a random phrase from the pool, never immediately
+// repeating the one just shown. A caller (InlineThinkingIndicator) can
+// override the rotation entirely with a stable, context-specific `label`
+// — e.g. naming the hidden tool currently running — via ThinkingIndicator's
+// `label` prop.
 const THINKING_MESSAGES = [
   'Thinking…',
-  'Composing response…',
+  'Working on it…',
+  'Composing a response…',
   'Processing your request…',
   'Analyzing…',
-  'Generating…',
+  'Considering the details…',
+  'Piecing it together…',
+  'Reasoning it through…',
+  'Working through this…',
+  'Gathering my thoughts…',
+  'Figuring out the approach…',
+  'Reviewing the context…',
+  'Drafting a response…',
+  'Making sense of it…',
+  'Weighing the options…',
 ]
+
+/** Picks a random phrase from THINKING_MESSAGES that differs from `current` — never an immediate repeat. */
+function pickNextThinkingPhrase(current: string): string {
+  if (THINKING_MESSAGES.length <= 1) return THINKING_MESSAGES[0]
+  let next = current
+  while (next === current) {
+    next = THINKING_MESSAGES[Math.floor(Math.random() * THINKING_MESSAGES.length)]
+  }
+  return next
+}
 
 // ADR-051 — cap on the verbose-only "Technical details" disclosure content
 // in VirtualAssistantMessageRow (historical/replay render path). Mirrors
@@ -241,15 +322,190 @@ const THINKING_MESSAGES = [
 // truncated length when a provider's error payload is verbose.
 const ERROR_DETAIL_MAX_CHARS = 512
 
-function ThinkingIndicator() {
-  const [msgIndex, setMsgIndex] = useState(0)
+// Caps a context-specific thinking label (a bash `description`) to a single
+// line and ~48 chars — long enough to be informative, short enough to read
+// as a status word rather than a wrapped paragraph.
+const THINKING_LABEL_MAX_CHARS = 48
+
+/** Trims `value` to its first line and caps it at THINKING_LABEL_MAX_CHARS, appending an ellipsis when cut. */
+function truncateThinkingLabel(value: string): string {
+  const firstLine = value.split(/\r?\n/, 1)[0]?.trim() ?? ''
+  if (firstLine.length === 0) return ''
+  if (firstLine.length <= THINKING_LABEL_MAX_CHARS) return firstLine
+  return `${firstLine.slice(0, THINKING_LABEL_MAX_CHARS).trimEnd()}…`
+}
+
+// Maps the first token of a background `bash` command to a short verb
+// phrase for the thinking indicator (deriveBashThinkingLabel's step 2).
+// Deliberately closed/exact-match — an unrecognized command falls through
+// to the generic "Running a command…" rather than guessing.
+const BASH_COMMAND_VERBS: Record<string, string> = {
+  git: 'Running git…',
+  npm: 'Running npm…',
+  npx: 'Running npm…',
+  pnpm: 'Running npm…',
+  yarn: 'Running npm…',
+  go: 'Running Go…',
+  python: 'Running a script…',
+  python3: 'Running a script…',
+  curl: 'Fetching…',
+  wget: 'Fetching…',
+  docker: 'Running Docker…',
+  make: 'Building…',
+  bash: 'Running a script…',
+  sh: 'Running a script…',
+}
+
+/**
+ * Derives the thinking-indicator label for an in-progress `bash` call that
+ * is hidden from the thread (background dispatch, or the poll/read
+ * sub-case on an already-running background session — toolVisibility.ts).
+ * NEVER renders the raw `command` string (length + secret-leak risk) —
+ * only the call's own `description` (capped to one line/~48 chars) or a
+ * verb mapped from the command's first token.
+ */
+function deriveBashThinkingLabel(args: Record<string, unknown> | undefined): string {
+  const description = typeof args?.description === 'string' ? args.description : ''
+  const truncatedDescription = truncateThinkingLabel(description)
+  if (truncatedDescription) return truncatedDescription
+
+  const command = typeof args?.command === 'string' ? args.command.trim() : ''
+  if (command) {
+    const firstToken = command.split(/\s+/)[0] ?? ''
+    const verbKey = firstToken.split('/').pop() ?? firstToken
+    return BASH_COMMAND_VERBS[verbKey] ?? 'Running a command…'
+  }
+
+  return 'Working in the background…'
+}
+
+/**
+ * Derives the thinking-indicator label for an in-progress `delegate` call's
+ * "run" sub-case — the only delegate sub-case with a specific label (its
+ * `status`-poll sub-case, and any other hidden tool with no rule, fall
+ * through to the generic pool). Resolves the target agent's display name
+ * from the call's `agent_id` arg (pkg/tools/delegate.go's Parameters())
+ * against the agents list; never invents a name — falls back to a bare
+ * "Delegating…" when the id is absent or unresolvable.
+ */
+function deriveDelegateThinkingLabel(args: Record<string, unknown> | undefined, agents: Agent[]): string {
+  const agentId = typeof args?.agent_id === 'string' ? args.agent_id : ''
+  const target = agentId ? agents.find((a) => a.id === agentId) : undefined
+  return target?.name ? `Delegating to ${target.name}…` : 'Delegating…'
+}
+
+/**
+ * Finds the LAST tool-call part in a live message's `content` whose live
+ * status (looked up in the store's resolved ToolCall record, keyed by
+ * toolCallId — the same lookup FallbackToolUI uses) is still 'running', and
+ * — only when that call is hidden from the thread per toolVisibility.ts's
+ * shouldRenderToolCall — derives a specific, stable label for it.
+ *
+ * Returns null (generic rotating pool applies) when: the tool is visible
+ * (its own chip already shows progress), it's ToolSearch or any other
+ * hidden tool with no specific-label rule, or nothing is currently running.
+ * Defensive: never throws — an unexpected message/part shape falls back to
+ * the generic pool via the null return, exactly like "nothing found".
+ */
+function deriveHiddenRunningToolLabel(
+  content: unknown,
+  storeToolCalls: Record<string, { status?: string }>,
+  verboseChatEnabled: boolean,
+  agents: Agent[],
+): string | null {
+  try {
+    if (!Array.isArray(content)) return null
+    for (let i = content.length - 1; i >= 0; i--) {
+      const part = content[i] as
+        | { type?: string; toolCallId?: string; toolName?: string; args?: unknown }
+        | undefined
+      if (!part || part.type !== 'tool-call') continue
+      const { toolCallId, toolName } = part
+      if (typeof toolCallId !== 'string' || typeof toolName !== 'string') continue
+
+      const liveStatus = storeToolCalls[toolCallId]?.status
+      if (liveStatus !== 'running') continue // not the current in-progress step
+
+      const args = part.args as Record<string, unknown> | undefined
+      if (shouldRenderToolCall(toolName, args, verboseChatEnabled, false)) {
+        // Visible — its own chip already communicates progress.
+        return null
+      }
+
+      if (toolName === 'delegate') {
+        const action = typeof args?.action === 'string' ? args.action : 'run'
+        return action === 'run' ? deriveDelegateThinkingLabel(args, agents) : null
+      }
+      if (toolName === 'bash') {
+        return deriveBashThinkingLabel(args)
+      }
+      return null // ToolSearch, or any other hidden tool with no rule — generic pool.
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Goal-aware override for the thinking-indicator label (operator-reported
+ * UX fix, 2026-09-08 — see goalSetupState.ts's file doc comment for the
+ * full "17 minutes of a silent spinner" repro). While a session's goal is
+ * ACTIVE and its record is still EMPTY (isGoalRecordEmpty), the generic
+ * rotating pool is replaced with a purposeful, goal-specific phrase:
+ * "Setting acceptance criteria" while `set_goal` itself is the currently-
+ * running step, "Framing your goal" otherwise (including the very first
+ * beat, before any tool call has started). Returns null once the record is
+ * populated — this override is scoped to the empty-record window only, and
+ * the caller falls through to its existing label logic (deriveHiddenRunningToolLabel
+ * / the plain rotating pool) in that case.
+ *
+ * `runningToolNames` is deliberately a plain string array rather than a
+ * shared "call" shape — the live path derives it from AssistantUI message
+ * parts, the replay path from `PositionedToolCall[]`, and those two shapes
+ * have nothing else in common worth unifying for this one check.
+ */
+function deriveGoalAwareThinkingLabel(runningToolNames: string[], goalRecordEmpty: boolean): string | null {
+  if (!goalRecordEmpty) return null
+  return runningToolNames.includes('set_goal') ? 'Setting acceptance criteria' : 'Framing your goal'
+}
+
+/** Extracts the tool names of currently-`running` tool-call parts from a
+ * LIVE AssistantUI message's `content` array — the same shape
+ * deriveHiddenRunningToolLabel scans, but collecting every running name
+ * (there's normally at most one) rather than stopping at the first hidden
+ * one. Never throws; an unexpected shape yields an empty array. */
+function runningToolNamesFromLiveContent(
+  content: unknown,
+  storeToolCalls: Record<string, { status?: string }>,
+): string[] {
+  if (!Array.isArray(content)) return []
+  const names: string[] = []
+  try {
+    for (const part of content) {
+      const p = part as { type?: string; toolCallId?: string; toolName?: string } | undefined
+      if (!p || p.type !== 'tool-call') continue
+      if (typeof p.toolCallId !== 'string' || typeof p.toolName !== 'string') continue
+      if (storeToolCalls[p.toolCallId]?.status === 'running') names.push(p.toolName)
+    }
+  } catch {
+    return []
+  }
+  return names
+}
+
+function ThinkingIndicator({ label }: { label?: string | null } = {}) {
+  const [rotatingPhrase, setRotatingPhrase] = useState<string>(THINKING_MESSAGES[0])
 
   useEffect(() => {
+    if (label) return // a stable context-specific label overrides rotation entirely.
     const interval = setInterval(() => {
-      setMsgIndex((i) => (i + 1) % THINKING_MESSAGES.length)
+      setRotatingPhrase((prev) => pickNextThinkingPhrase(prev))
     }, 2000)
     return () => clearInterval(interval)
-  }, [])
+  }, [label])
+
+  const displayText = label ?? rotatingPhrase
 
   return (
     <span className="text-[var(--color-muted)] italic flex items-center gap-2.5 py-1">
@@ -258,7 +514,7 @@ function ThinkingIndicator() {
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '150ms' }} />
         <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-accent)] animate-bounce" style={{ animationDelay: '300ms' }} />
       </span>
-      <span className="text-xs transition-opacity duration-300">{THINKING_MESSAGES[msgIndex]}</span>
+      <span className="text-xs transition-opacity duration-300">{displayText}</span>
     </span>
   )
 }
@@ -296,11 +552,38 @@ function AssistantTextPart() {
 // Stays visible the entire turn — including between tool-call steps after some
 // text has streamed — so the user always knows the agent is still working.
 // Uses useMessage() for reactive state (not getState() which is a snapshot).
+//
+// Context-aware: when the current in-progress step is a HIDDEN tool call
+// (ToolSearch, background bash, delegate — see toolVisibility.ts) whose
+// tool-call part is present in message.content but rendered invisible, this
+// shows a specific, stable label for it (e.g. "Delegating to Ray…",
+// "Running the test suite…") instead of the generic rotating pool — see
+// deriveHiddenRunningToolLabel above.
 function InlineThinkingIndicator() {
   const message = useMessage()
   const isRunning = message.status?.type === 'running'
+  const storeToolCalls = useChatStore((s) => s.toolCalls)
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  // Operator-reported UX fix, 2026-09-08: goal-aware override, checked
+  // BEFORE the hidden-tool label — see deriveGoalAwareThinkingLabel's doc
+  // comment. goalStatus is the foreground session's latest goal_status
+  // frame (same field GoalIndicator already reads), so this needs no extra
+  // subscription setup.
+  const goalStatus = useChatStore((s) => s.goalStatus)
+  const { data: agents = [] } = useQuery<Agent[]>({
+    queryKey: ['agents'],
+    queryFn: fetchAgents,
+    staleTime: 60_000,
+  })
+
   if (!isRunning) return null
-  return <ThinkingIndicator />
+
+  const goalRecordEmpty = isGoalRecordEmpty(goalStatus)
+  const goalLabel = goalRecordEmpty
+    ? deriveGoalAwareThinkingLabel(runningToolNamesFromLiveContent(message.content, storeToolCalls), true)
+    : null
+  const label = goalLabel ?? deriveHiddenRunningToolLabel(message.content, storeToolCalls, verboseChatEnabled, agents)
+  return <ThinkingIndicator label={label} />
 }
 
 // Fallback tool UI for tools without a registered makeAssistantToolUI component.
@@ -345,14 +628,43 @@ function FallbackToolUI(props: {
 }) {
   const storeToolCalls = useChatStore((s) => s.toolCalls)
   const activeSessionId = useSessionStore((s) => s.activeSessionId)
+  const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  // Operator-reported UX fix, 2026-09-08: see GoalSetupFailureLine.tsx's
+  // file doc comment. goalStatus drives isGoalRecordEmpty below.
+  const goalStatus = useChatStore((s) => s.goalStatus)
   const liveCall = storeToolCalls[props.toolCallId]
+  const isError = props.isError ?? liveCall?.status === 'error'
+
+  // Narrow override: a FAILED call that would otherwise render visibly
+  // (respects toolVisibility.ts's hidden-tool contract — a failed
+  // background delegate/bash call is still never surfaced here), outside
+  // verbose chat (which already shows the raw call in full), while a goal
+  // is active with an empty record. `set_goal` itself never reaches this
+  // Fallback (it has its own registered makeAssistantToolUI), but the
+  // exclusion is kept explicit rather than assumed.
+  if (
+    isError &&
+    !verboseChatEnabled &&
+    props.toolName !== 'set_goal' &&
+    isGoalRecordEmpty(goalStatus) &&
+    shouldRenderToolCall(props.toolName, props.args as Record<string, unknown> | undefined, false, true)
+  ) {
+    return (
+      <GoalSetupFailureLine
+        toolName={props.toolName}
+        result={liveCall?.result ?? props.result}
+        error={liveCall?.error}
+      />
+    )
+  }
+
   return (
     <GenericToolCall
       toolName={props.toolName}
       args={props.args}
       result={liveCall?.result ?? props.result}
       status={props.status}
-      isError={props.isError ?? liveCall?.status === 'error'}
+      isError={isError}
       error={liveCall?.error}
       durationMs={liveCall?.duration_ms}
       sessionId={activeSessionId ?? ''}
@@ -526,6 +838,27 @@ function wouldToolCallBeVisible(
   errorFlag: boolean,
   verboseChatEnabled: boolean,
 ): boolean {
+  if (tool === 'set_goal') {
+    // ADR-082 D9: set_goal renders via its own dedicated UI
+    // (SetGoalCardBlock), which pre-empts GenericToolCall on both paths.
+    // "Visible" here must mean "that UI actually renders something", so
+    // this consults the SAME decision table the block renders from
+    // (classifySetGoalCall, review S4) — verbose chat shows the raw call,
+    // a failed call shows its quiet failure line, a record shows the card,
+    // a present-but-unparseable result shows a chip; only a still-running
+    // call (no result yet) or a completed call with no result at all is
+    // hidden, so a bubble consisting solely of one still shows the
+    // ThinkingIndicator rather than a blank shell.
+    return (
+      classifySetGoalCall({
+        args: params,
+        result,
+        isRunning: false,
+        isError: errorFlag,
+        verboseChatEnabled,
+      }) !== 'hidden'
+    )
+  }
   const isError = errorFlag || isMarshalErrorSentinel(result) || detectToolResultSentinels(result).any
   return shouldRenderToolCall(tool, params, verboseChatEnabled, isError)
 }
@@ -642,12 +975,26 @@ function AssistantMessageAvatar({ agent }: { agent?: Agent }) {
 // The visible (interrupted) label rendered inside AssistantMessage handles
 // the correct visual positioning within the message bubble for human users.
 // This component is the reliable E2E-detectable fallback.
+//
+// ADR-087 D1 — extended to also render the "(cut off at the output limit)"
+// notice for a truncated (max_output_tokens) assistant message, in a second
+// pass over the same message list, still outside the scroll viewport for the
+// same Playwright-visibility reason. `getMessageStatusSuffix`
+// (src/lib/truncation.ts) is the single source of the precedence rule
+// (interrupted/cancelled always wins over a cutoff) — this component derives
+// which list a message lands in from its return value rather than
+// re-implementing the precedence check, so it can never disagree with the
+// in-bubble renderers below.
 function InterruptedMessageMarkers() {
   const messages = useChatStore((s) => s.messages)
-  const interrupted = messages.filter(
-    (m) => m.role === 'assistant' && m.status === 'interrupted'
-  )
-  if (interrupted.length === 0) return null
+  const interrupted: ChatMessage[] = []
+  const cutOff: ChatMessage[] = []
+  for (const m of messages) {
+    const suffix = getMessageStatusSuffix(m)
+    if (suffix === INTERRUPTED_SUFFIX_TEXT) interrupted.push(m)
+    else if (suffix === CUT_OFF_SUFFIX_TEXT) cutOff.push(m)
+  }
+  if (interrupted.length === 0 && cutOff.length === 0) return null
   return (
     <>
       {interrupted.map((m) => (
@@ -658,6 +1005,16 @@ function InterruptedMessageMarkers() {
           className="text-[10px] text-[var(--color-muted)] italic text-center pb-1"
         >
           (interrupted)
+        </div>
+      ))}
+      {cutOff.map((m) => (
+        <div
+          key={m.id}
+          data-testid="truncated-marker"
+          data-message-id={m.id}
+          className="text-[10px] text-[var(--color-muted)] italic text-center pb-1"
+        >
+          (cut off at the output limit)
         </div>
       ))}
     </>
@@ -729,6 +1086,12 @@ export function VirtualUserMessageRow({
   commandLabels: string[]
 }) {
   const isError = message.status === 'error'
+  // See UserMessage above — the virtualized row is the other half of the same
+  // rendering and must carry the same goal marker, or the trace would appear
+  // and disappear depending on which path renders the thread. Both paths are
+  // covered: this one by ChatScreen.goalCommandMarker.test.tsx, the live one
+  // by ChatScreen.goalCommandMarker.live.test.tsx.
+  const setsGoal = messageSetsGoal(message.content)
 
   return (
     <div
@@ -736,12 +1099,14 @@ export function VirtualUserMessageRow({
       data-message-role="user"
       data-message-id={message.id}
       data-status={message.status}
+      data-goal-command={setsGoal ? 'true' : undefined}
       className="group flex gap-3 px-4 py-3 flex-row-reverse"
     >
       <div className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center bg-[var(--color-accent)]/20 text-[var(--color-accent)]">
         <User size={14} weight="bold" />
       </div>
       <div className="flex flex-col items-end gap-1.5 max-w-[85%] min-w-0">
+        {setsGoal && <GoalCommandMarker />}
         {/* Attachments the user sent — image thumbnails + colour-coded file
             cards, shown above the text like ChatGPT. */}
         {message.media && message.media.length > 0 && (
@@ -783,10 +1148,25 @@ export function VirtualUserMessageRow({
 
 /** Standalone system message row for the virtualizer. */
 function VirtualSystemMessageRow({ message }: { message: ChatMessage }) {
+  // Operator-reported UX fix, 2026-09-08: see SystemMessage's identical
+  // discriminator (live path) for the full rationale.
+  const isGoalAck = !!message.goalAckGoalId
+  // ADR-085 BROWSER-FR-042/FR-044 (wave B8, C-90): see SystemMessage's
+  // identical isBrowserHandoverNotice discriminator for the full rationale.
+  const isBrowserHandoverNotice = !!message.browserHandoverNoticeId
+  // Goal outcome line — see SystemMessage's identical branch (live path).
+  if (message.goalOutcome) {
+    return (
+      <div data-message-role="system" data-message-id={message.id} className="flex justify-center px-4 py-2">
+        <GoalOutcomeRow outcome={message.goalOutcome} />
+      </div>
+    )
+  }
   return (
     <div
       data-message-role="system"
       data-message-id={message.id}
+      data-testid={isGoalAck ? 'goal-ack-line' : isBrowserHandoverNotice ? 'browser-handover-notice' : undefined}
       className="flex justify-center py-2"
     >
       <div className="text-xs text-[var(--color-muted)] bg-[var(--color-surface-2)] px-3 py-1 rounded-full">
@@ -865,11 +1245,19 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // Hooks) — reading getState() instead would silently freeze this row's
   // gating at whatever the preference was on its last actual re-render.
   const verboseChatEnabled = useChatPreferencesStore((s) => s.verboseChatEnabled)
+  // Operator-reported UX fix, 2026-09-08: goal-aware thinking-indicator
+  // label + goal-setup failure line (replay/historical path) — see
+  // deriveGoalAwareThinkingLabel's and GoalSetupFailureLine's doc comments.
+  const goalStatus = useChatStore((s) => s.goalStatus)
+  const goalRecordEmpty = isGoalRecordEmpty(goalStatus)
 
   const messageAgentId = message.agentId ?? activeAgentId
   const agent = agents.find((a) => a.id === messageAgentId)
   const agentDisplayName = agent?.name ?? (messageAgentId || null)
-  const isInterrupted = message.status === 'interrupted'
+  // ADR-087 D1 — the muted footer suffix: "(interrupted)" (FR-21, unchanged)
+  // or "(cut off at the output limit)" for a max_output_tokens truncation.
+  // getMessageStatusSuffix owns the precedence (interrupted/cancelled wins).
+  const statusSuffix = getMessageStatusSuffix(message)
 
   // Render media attachments.
   const mediaItems = message.media ?? []
@@ -940,8 +1328,23 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
   // Fix 2 (user-approved 2026-07-16): the actual render list, filtered
   // through the thread gate (shouldRenderSubagentSpan).
   const visibleSpans = (message.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
-  const showEmptyPlaceholder =
-    !!message.isStreaming && !hasContent && !hasVisibleToolCalls && !hasMedia && !visibleSpans.length
+  const isEmptyContent = !hasContent && !hasVisibleToolCalls && !hasMedia && !visibleSpans.length
+  const showEmptyPlaceholder = !!message.isStreaming && isEmptyContent
+  // D-fix, terminal-empty variant (integrate, kept through the 2026-09-15
+  // merge next to release's goal-aware label): a message that finished
+  // normally yet holds nothing to show has nothing to copy either.
+  const isTerminalEmpty =
+    !message.isStreaming && isEmptyContent && message.status !== 'interrupted' && message.status !== 'error'
+  // Operator-reported UX fix, 2026-09-08: same override as the live path's
+  // InlineThinkingIndicator, applied to the historical/virtualized "still
+  // streaming" placeholder (PlainMessageList renders an in-flight message
+  // through THIS row too — see the D-fix comment on hasContent above).
+  const emptyPlaceholderLabel = goalRecordEmpty
+    ? deriveGoalAwareThinkingLabel(
+        positionedToolCalls.filter((tc) => tc.status === 'running').map((tc) => tc.tool),
+        true,
+      )
+    : null
 
   return (
     <div
@@ -969,7 +1372,7 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
           </span>
         )}
         <div className="text-sm leading-relaxed text-[var(--color-secondary)]">
-          {showEmptyPlaceholder && <ThinkingIndicator />}
+          {showEmptyPlaceholder && <ThinkingIndicator label={emptyPlaceholderLabel} />}
           {/* Media attachments */}
           {!showEmptyPlaceholder && mediaItems.length > 0 && (
             <div className="flex flex-col gap-2 mb-2">
@@ -1089,6 +1492,50 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
                 />
               )
             }
+            // ADR-082 D9: set_goal renders its dedicated record card
+            // (SetGoalCardBlock) at the call's own interleaved position,
+            // built from the call's own result — never GenericToolCall
+            // (which self-gates set_goal to null; see toolVisibility.ts's
+            // `set_goal` case). Mirrors the live registration
+            // (SetGoalToolUI, OmnipusRuntimeProvider.tsx) so replay and
+            // live render identically.
+            if (tc.tool === 'set_goal') {
+              // `tc.result` is passed UNCHANGED (review S12): on replay it
+              // is the persisted `{ text: "<payload json>" }` envelope,
+              // which SetGoalCardBlock's parser unwraps itself. The store's
+              // resolved outcome (`status`/`error`) is passed explicitly so
+              // a failed registration renders its quiet trace (review S4).
+              return (
+                <SetGoalCardBlock
+                  key={callId}
+                  args={tc.params}
+                  result={tc.result}
+                  status={replayPartStatus(tc.status)}
+                  isRunning={tc.status === 'running'}
+                  isError={tc.status === 'error'}
+                  error={tc.error}
+                  durationMs={tc.duration_ms}
+                  sessionId={activeSessionId ?? ''}
+                />
+              )
+            }
+            // Operator-reported UX fix, 2026-09-08: same narrow override as
+            // the live path's FallbackToolUI — see GoalSetupFailureLine.tsx's
+            // file doc comment. Only intercepts a call that would otherwise
+            // render visibly (toolVisibility.ts's hidden-tool contract for
+            // background delegate/bash calls is unaffected — they stay
+            // hidden regardless), outside verbose chat, while a goal is
+            // active with an empty record.
+            if (
+              tc.status === 'error' &&
+              !verboseChatEnabled &&
+              goalRecordEmpty &&
+              shouldRenderToolCall(tc.tool, tc.params as Record<string, unknown> | undefined, false, true)
+            ) {
+              return (
+                <GoalSetupFailureLine key={callId} toolName={tc.tool} result={tc.result} error={tc.error} />
+              )
+            }
             return (
               <GenericToolCall
                 key={callId}
@@ -1120,16 +1567,20 @@ const VirtualAssistantMessageRow = React.memo(function VirtualAssistantMessageRo
 
         {/* Action bar — always visible at reduced opacity, fully opaque on hover.
             Suppressed while showEmptyPlaceholder (D-fix): nothing has streamed
-            in yet, so there is nothing to copy. */}
-        {!showEmptyPlaceholder && (
+            in yet, so there is nothing to copy. Also suppressed for the
+            terminal-empty variant (isTerminalEmpty): the turn finished with
+            nothing to show, so there is still nothing to copy. */}
+        {!showEmptyPlaceholder && !isTerminalEmpty && (
           <div className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
             <StaticCopyButton text={message.content ?? ''} />
           </div>
         )}
 
-        {/* Interrupted label */}
-        {isInterrupted && (
-          <span className="text-[10px] text-[var(--color-muted)] italic px-1">(interrupted)</span>
+        {/* Status suffix — "(interrupted)" (FR-21) or ADR-087 D1's
+            "(cut off at the output limit)"; getMessageStatusSuffix decides
+            which (or neither), never both. */}
+        {statusSuffix && (
+          <span className="text-[10px] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
         )}
 
         {/* ADR-051 — verbose-only "Technical details" disclosure for typed
@@ -1444,8 +1895,9 @@ function AssistantMessage() {
   const agent = agents.find((a) => a.id === messageAgentId)
   // Fallback to the raw agentId string if the agent isn't in the list yet
   const agentDisplayName = agent?.name ?? (messageAgentId || null)
-  // FR-21: show (interrupted) suffix when the store marks this message interrupted.
-  const isInterrupted = storeMsg?.status === 'interrupted'
+  // FR-21 / ADR-087 D1: the muted footer suffix — "(interrupted)" or a
+  // max_output_tokens cutoff notice. getMessageStatusSuffix owns precedence.
+  const statusSuffix = getMessageStatusSuffix(storeMsg ?? {})
 
   // D-fix: the chat store's optimistic assistant placeholder starts as
   // content:'' / status:'streaming' the instant a message is sent (store/chat.ts
@@ -1479,8 +1931,23 @@ function AssistantMessage() {
   )
   const hasMedia = !!storeMsg?.media?.length
   const visibleSpans = (storeMsg?.spans ?? []).filter((span) => shouldRenderSubagentSpan(span, verboseChatEnabled))
-  const showEmptyPlaceholder =
-    isRunning && !hasVisibleText && !hasVisibleToolCall && !hasMedia && !visibleSpans.length
+  const isEmptyContent = !hasVisibleText && !hasVisibleToolCall && !hasMedia && !visibleSpans.length
+  // FR-21: show (interrupted) suffix when the store marks this message interrupted.
+  const isInterrupted = storeMsg?.status === 'interrupted'
+  const showEmptyPlaceholder = isRunning && isEmptyContent
+  // D-fix, terminal-empty variant: the turn ended (not running) — normally
+  // (not interrupted, not a typed error, both of which already have their
+  // own distinct treatment: the '(interrupted)' label and the error
+  // action-bar/detail-disclosure below) — yet still holds nothing to show.
+  // This is reachable when the engine's own empty-response fallback text
+  // (pkg/agent/loop.go's `defaultResponse` sentinel: "The model returned an
+  // empty response...") fails to land on THIS message — see the 'token'
+  // handler's lastMsgIsEmptyTerminal guard in store/chat.ts, which merges
+  // that fallback delivery back into this exact placeholder in the normal
+  // case. Whatever left this message here empty and terminal, an empty
+  // bubble has nothing to copy — do not show the Copy affordance for it,
+  // matching the streaming-case guard immediately above.
+  const isTerminalEmpty = !isRunning && isEmptyContent && !isInterrupted && storeMsg?.status !== 'error'
 
   return (
     <MessagePrimitive.Root
@@ -1499,6 +1966,11 @@ function AssistantMessage() {
             // Nothing has streamed in yet — show only the thinking indicator,
             // not an empty text bubble + Copy affordance (D-fix).
             <InlineThinkingIndicator />
+          ) : isTerminalEmpty ? (
+            // Terminal-empty variant (D-fix): the turn is over and there is
+            // still nothing to show. Render nothing rather than an empty
+            // Copy-only bubble — see isTerminalEmpty's doc comment above.
+            null
           ) : (
             <>
               {/* Media (screenshots, files) renders BEFORE the parts so the image
@@ -1533,8 +2005,10 @@ function AssistantMessage() {
 
         {/* Action bar — Copy + Retry buttons, always visible at reduced opacity.
             Suppressed while showEmptyPlaceholder (D-fix): nothing has streamed
-            in yet, so there is nothing to copy or retry. */}
-        {!showEmptyPlaceholder && (
+            in yet, so there is nothing to copy or retry. Also suppressed for
+            the terminal-empty variant (isTerminalEmpty): the turn is over
+            and there is still nothing to copy or retry. */}
+        {!showEmptyPlaceholder && !isTerminalEmpty && (
           <ActionBarPrimitive.Root className="flex items-center gap-1 opacity-70 hover:opacity-100 transition-opacity duration-150">
             <ActionBarPrimitive.Copy asChild>
               <button tabIndex={0}
@@ -1556,9 +2030,11 @@ function AssistantMessage() {
             <AssistantMessageRetryButton />
           </ActionBarPrimitive.Root>
         )}
-        {/* FR-21: interrupted status label — shown when the turn was cancelled */}
-        {isInterrupted && (
-          <span className="text-[10px] text-[var(--color-muted)] italic px-1">(interrupted)</span>
+        {/* FR-21 / ADR-087 D1: status suffix — shown when the turn was
+            cancelled ("(interrupted)") or cut off at the provider's
+            output-token limit ("(cut off at the output limit)"). */}
+        {statusSuffix && (
+          <span className="text-[10px] text-[var(--color-muted)] italic px-1">{statusSuffix}</span>
         )}
       </div>
     </MessagePrimitive.Root>
@@ -2866,6 +3342,7 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
   // directly by GoalPillTray via its own useChatStore subscription — FE-1.)
   const loopStatus = useChatStore((s) => s.loopStatus ?? null)
   const setMessages = useChatStore((s) => s.setMessages)
+  const mergeJudgeVerdictHistory = useChatStore((s) => s.mergeJudgeVerdictHistory)
   const attachedSessionType = useSessionStore((s) => s.attachedSessionType)
   const attachedTaskTitle = useSessionStore((s) => s.attachedTaskTitle)
   // For the ARIA live region: track the last assistant message id for screen reader announcements.
@@ -2942,6 +3419,46 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
     )
     setMessages(validMessages)
   }, [historyData, isReplaying, storeMessageCount, replayCompletedForSession, activeSessionId, setMessages])
+
+  // ADR-049 D2/D4/SD-C10 (verdict-card fix): backfill any `judge_verdict`
+  // entries from the REST-fetched transcript, independent of the OVERWRITE
+  // condition above (isReplaying/replayCompletedForSession/storeMessageCount
+  // gate whether `setMessages` replaces the whole bucket) but NOT
+  // independent of timing. WS replay never inserts a judge_verdict entry
+  // into the thread at all (it is a GLOBAL frame routed to the
+  // ActivityPanel only, see chat.ts's `case 'judge_verdict'`), so without
+  // this second, narrower effect a verdict card could never appear in the
+  // thread, reload or not, even though `historyData` carries it
+  // (rawToMessage forwards it).
+  //
+  // The `!isReplaying && storeMessageCount > 0` gate is load-bearing, not
+  // cosmetic — reproduced live against a real gateway: `historyData` (REST)
+  // routinely resolves BEFORE WS attach_session + replay has delivered this
+  // session's own messages. Running the timestamp-positioned merge
+  // (chat.ts's `mergeJudgeVerdictHistory`) against an empty or PARTIAL
+  // bucket has nothing (or too little) to position the verdict against, so
+  // it lands at index 0 (or 1, 2, ... for each subsequent round in the same
+  // pass) — and because the merge dedupes by id, a later re-run once the
+  // rest of replay lands can never CORRECT that first, premature placement.
+  // `!isReplaying` alone is not enough (replay's isReplaying flag is only
+  // raised when the FIRST replay frame arrives — an early-arriving
+  // historyData can slip in before it), and neither is
+  // `replayCompletedForSession` (chat.ts only sets it when a live turn was
+  // announced or at a real turn's done — a completed session's
+  // replay-terminator done NEVER sets it, live-verified). So: wait until
+  // replay is not in flight AND the bucket actually has messages. The
+  // effect re-runs whenever either flips, so the normal sequence
+  // (historyData → isReplaying=true → replay_message* → terminator
+  // isReplaying=false) always lands one run of this with the full bucket.
+  // In the WS-unavailable REST-fallback path, `setMessages` above already
+  // includes verdict entries correctly ordered via its own
+  // `role: 'system'` filter — this effect then finds them already present
+  // and no-ops (mergeJudgeVerdictHistory is id-deduped).
+  useEffect(() => {
+    if (!historyData || !activeSessionId || activeSessionId === '__pending') return
+    if (isReplaying || storeMessageCount === 0) return
+    mergeJudgeVerdictHistory(activeSessionId, historyData)
+  }, [historyData, activeSessionId, isReplaying, storeMessageCount, mergeJudgeVerdictHistory])
 
   const liteMode = useConnectionStore((s) => s.liteMode)
 
@@ -3047,8 +3564,17 @@ export function ChatScreen({ agentRemoved = false }: { agentRemoved?: boolean })
           {/* Goal echo / amendment cards — ADR-053 FE-8: the compiled goal is
               echoed IN CHAT (no form/modal) when a pill is in `queued` state
               (newly compiled, awaiting the user's chat confirmation). Renders
-              nothing when no queued pills exist. */}
-          <GoalThreadTailCards />
+              nothing when no queued pills exist.
+              MOVED (operator report, 2026-09-07): this used to render here,
+              in this non-scrolling slot between the message list and the
+              composer — a long criteria/DoD ladder could overflow it with
+              the Confirm/Amend/Cancel buttons pushed off screen and
+              unreachable. It now renders INSIDE the scrollable message-list
+              container instead (see PlainMessageList / VirtualizedMessageListInner
+              below), so it scrolls with the transcript and the buttons are
+              always reachable. AskUserQuestionThreadTail stays here — its
+              tabbed one-question-at-a-time view is short and has no such
+              overflow risk. */}
 
           {/* AskUserQuestion card — askuserquestion-tool-spec v3 (ADR-074
               D4b): the flat, tabbed question zone (pending) or the collapsed

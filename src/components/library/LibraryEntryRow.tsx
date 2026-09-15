@@ -7,10 +7,10 @@
 
 import { useState } from 'react'
 import {
-  Folder,
-  FolderSimpleDashed,
+  Books,
   DotsThree,
   DownloadSimple,
+  FolderSimple,
   PencilSimple,
   ArrowsLeftRight,
   Trash,
@@ -30,6 +30,7 @@ import { libraryDownloadUrl } from '@/lib/api'
 import { classifyLibraryEntry } from './preview/libraryPreviewKind'
 import { cn } from '@/lib/utils'
 import type { LibraryEntry } from '@/lib/api'
+import { MountFolderIcon } from './icons'
 
 /** Format a byte count as a compact human-readable size. */
 export function formatLibrarySize(bytes: number): string {
@@ -76,17 +77,36 @@ export function LibraryEntryRow({
   onUnmount,
 }: LibraryEntryRowProps) {
   // A mount is a real folder on the operator's machine, not workspace storage.
-  // It must never borrow the gold folder icon: gold means "yours, inside the
-  // workspace", and a write inside a mount lands on their actual disk. Broad
-  // grants (home directory, filesystem root) shift to the warning colour so
-  // "you mounted your whole home folder" is legible without opening anything.
+  // It must never borrow the gold vault/folder icon: gold means "yours,
+  // inside the workspace", and a write inside a mount lands on their actual
+  // disk. Broad grants (home directory, filesystem root) shift to the
+  // warning colour so "you mounted your whole home folder" is legible
+  // without opening anything — that safety escalation predates, and survives,
+  // the icon-consistency pass's Mount colour (`--color-mount`).
   const mount = entry.mount
-  const mountColor = mount?.broad ? 'var(--color-warning)' : 'var(--color-info)'
-  const { Icon, color } = mount
-    ? { Icon: FolderSimpleDashed, color: mountColor }
+  const mountColor = mount?.broad ? 'var(--color-warning)' : 'var(--color-mount)'
+
+  // Vault detection (icon-consistency fix, 2026-09-07): is_knowledge_base is
+  // a field the LISTING ITSELF states (LibraryEntry.is_knowledge_base),
+  // computed server-side from the same marker detection
+  // GET /library/{ws}/knowledge?path=… answers per folder. This used to be a
+  // react-query cache lookup keyed on ['knowledge-base-info', workspaceId,
+  // path] — passive, so a directory never opened in THIS session (or a
+  // reload that evicted the cache) rendered as a plain folder even when it
+  // really was a vault, non-deterministically. Reading the wire field
+  // instead makes the icon a fact from the server, not a guess from
+  // whichever folders this session happened to have queried.
+  const isVault = entry.is_dir && entry.is_knowledge_base === true
+
+  const containerIcon = mount
+    ? { Icon: MountFolderIcon, color: mountColor }
     : entry.is_dir
-      ? { Icon: Folder, color: '#D4AF37' }
-      : fileTypeMeta(entry.name, entry.mime)
+      ? isVault
+        ? { Icon: Books, color: 'var(--color-accent)' }
+        : { Icon: FolderSimple, color: 'var(--color-muted)' }
+      : null
+  const fileMeta = containerIcon ? null : fileTypeMeta(entry.name, entry.mime)
+  const color = containerIcon?.color ?? (fileMeta as NonNullable<typeof fileMeta>).color
   const kind = entry.is_dir ? 'other' : classifyLibraryEntry(entry)
   const isMedia = kind === 'image' || kind === 'video'
   // Falls back to the generic type icon if the media itself won't load, so a
@@ -133,8 +153,26 @@ export function LibraryEntryRow({
           a frame rather than the whole file — a directory of large videos must
           not become a directory of large downloads just by being listed. */}
       <div
-        className="shrink-0 w-8 h-8 rounded-md flex items-center justify-center overflow-hidden"
-        style={showThumb ? undefined : { backgroundColor: `${color}22`, color }}
+        className={cn(
+          'shrink-0 w-8 h-8 flex items-center justify-center',
+          // Only a THUMBNAIL needs a fixed, clipped, rounded frame — a real
+          // image/video needs `object-cover` to have somewhere to crop into.
+          // An icon is not a card or a button and must not look like one
+          // (operator direction, icon-consistency pass): no tinted backdrop,
+          // no rounding, just the glyph on the row's own background. The box
+          // itself (w-8 h-8 flex centring) stays in BOTH cases so row text
+          // stays aligned whether this cell holds a thumbnail or a glyph.
+          showThumb && 'rounded-md overflow-hidden',
+        )}
+        style={
+          showThumb
+            ? undefined
+            : // Not chrome — this is how the icon itself gets its tint:
+              // Phosphor (and MountFolderIcon) fill with `currentColor`, and
+              // `color` here is a CSS custom property (`var(--color-accent)`
+              // etc.) that the SVG below inherits.
+              { color }
+        }
         aria-hidden="true"
       >
         {showThumb ? (
@@ -159,8 +197,13 @@ export function LibraryEntryRow({
               className="h-full w-full object-cover"
             />
           )
+        ) : containerIcon ? (
+          // Plain Phosphor components (Books/FolderSimple) plus the one
+          // deliberate exception, MountFolderIcon — no `weight` prop to plumb
+          // through, unlike the Phosphor file icons below.
+          <containerIcon.Icon size={18} />
         ) : (
-          <Icon size={18} weight={entry.is_dir ? 'fill' : 'regular'} />
+          fileMeta && <fileMeta.Icon size={18} weight="regular" />
         )}
       </div>
 
@@ -212,7 +255,19 @@ export function LibraryEntryRow({
       </div>
 
       {/* Row action menu — stop propagation so opening it doesn't also
-          trigger the row's own onClick (navigate/select). */}
+          trigger the row's own onClick (navigate/select).
+
+          KEYDOWN IS STOPPED TOO (UAT D-100, 2026-09-13). The row above opens
+          on Enter/Space from its own onKeyDown, and only `click` used to be
+          stopped here — so Enter on this button bubbled to the row and, on a
+          folder, NAVIGATED INTO IT instead of opening the menu: Rename / Move
+          / Copy / Delete were unreachable by keyboard on any folder, and on a
+          file one Enter opened the menu AND the preview. The menu's content
+          is portalled, but React synthetic events still bubble through the
+          React tree, so Enter on a menu ITEM reached the row the same way;
+          it is stopped on the content as well. Radix's own key handling is
+          composed with these handlers, not replaced by them, so Enter/Space
+          still open the menu and still activate an item. */}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <button
@@ -221,12 +276,17 @@ export function LibraryEntryRow({
             aria-label={`Actions for ${entry.name}`}
             data-testid={`library-row-menu-${entry.path}`}
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
             className="shrink-0 rounded p-1.5 text-[var(--color-muted)] hover:bg-[var(--color-surface-3)] hover:text-[var(--color-secondary)] transition-colors"
           >
             <DotsThree size={18} weight="bold" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
+        <DropdownMenuContent
+          align="end"
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+        >
           {!entry.is_dir && (
             <DropdownMenuItem onSelect={() => onSelectFile(entry)} className="flex items-center gap-2">
               <Eye size={14} /> Details

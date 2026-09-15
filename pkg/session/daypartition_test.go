@@ -537,3 +537,33 @@ func TestAppendMessage_TokensIn_UnpopulatedByRealisticCaller(t *testing.T) {
 		"once a caller sets Tokens on a non-assistant entry, AppendMessage must correctly fold it into TokensIn — "+
 			"proving the aggregation logic itself is not the defect, only the missing caller-side wiring is")
 }
+
+// TestTranscriptEntry_LegacyTruncatedWithoutReason_RoundTrips pins the ADR-087
+// D2 legacy contract: every transcript entry written before TruncationReason
+// existed has truncated:true and NO truncation_reason key at all. Unmarshaling
+// such a line must leave TruncationReason == "" (the documented "absent means
+// cancelled" convention lives in the caller/reader, not in a zero-value
+// default written here), and re-marshaling that struct must omit the
+// truncation_reason key entirely (omitempty) — so a legacy entry that is read
+// and rewritten by unrelated code (e.g. UpdateToolCallStatus) does not grow a
+// key it never had.
+//
+// Traces to: pkg/session/daypartition.go TranscriptEntry (ADR-087 D2, §2.4)
+func TestTranscriptEntry_LegacyTruncatedWithoutReason_RoundTrips(t *testing.T) {
+	legacyJSON := `{"id":"entry-legacy-1","type":"message","role":"assistant","content":"partial","truncated":true}`
+
+	var entry TranscriptEntry
+	require.NoError(t, json.Unmarshal([]byte(legacyJSON), &entry))
+
+	assert.True(t, entry.Truncated, "legacy entry must still unmarshal truncated=true")
+	assert.Empty(t, entry.TruncationReason,
+		"a legacy entry with no truncation_reason key must leave the field empty, not defaulted here")
+
+	remarshaled, err := json.Marshal(entry)
+	require.NoError(t, err)
+	assert.NotContains(t, string(remarshaled), "truncation_reason",
+		"omitempty must drop the key entirely when TruncationReason is empty, "+
+			"so re-marshaling a legacy entry does not fabricate a reason on disk")
+	assert.Contains(t, string(remarshaled), `"truncated":true`,
+		"truncated must still round-trip true")
+}

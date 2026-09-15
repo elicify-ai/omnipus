@@ -26,12 +26,23 @@ func TestFindMatchingBrace(t *testing.T) {
 
 func TestExtractToolCallsFromText(t *testing.T) {
 	t.Run("no tool calls", func(t *testing.T) {
-		if got := extractToolCallsFromText("plain text"); got != nil {
+		got, err := extractToolCallsFromText("plain text")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != nil {
 			t.Errorf("got %v, want nil", got)
 		}
 	})
 	t.Run("unmatched brace", func(t *testing.T) {
-		if got := extractToolCallsFromText(`{"tool_calls": [`); got != nil {
+		// No `{"tool_calls"` object closes, so there is nothing to decode at
+		// all — distinct from a call whose ARGUMENTS are undecodable, which
+		// is an error (see TestExtractToolCallsFromText_TruncatedArguments).
+		got, err := extractToolCallsFromText(`{"tool_calls": [`)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != nil {
 			t.Errorf("got %v, want nil", got)
 		}
 	})
@@ -39,7 +50,10 @@ func TestExtractToolCallsFromText(t *testing.T) {
 		text := `prefix {"tool_calls":[` +
 			`{"id":"1","type":"function","function":{"name":"a","arguments":"{\"x\":1}"}},` +
 			`{"id":"2","type":"function","function":{"name":"b","arguments":"{}"}}]} suffix`
-		got := extractToolCallsFromText(text)
+		got, err := extractToolCallsFromText(text)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
 		if len(got) != 2 {
 			t.Fatalf("got %d tool calls, want 2", len(got))
 		}

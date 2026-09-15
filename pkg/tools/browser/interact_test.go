@@ -343,17 +343,40 @@ func TestActionTools_DeferWhenHumanControls_Table(t *testing.T) {
 	})
 }
 
-// TestSnapshot_NotDeferredByViewer is FR-038's behavioural half, and it is the
-// counterpart the table above needs to not be vacuous.
+// TestSnapshot_DefersButAnExemptToolDoesNot is the counterpart the table above
+// needs to not be vacuous — a table asserting only "the action tools defer"
+// would pass on a build where EVERY browser tool defers.
 //
-// With a human holding the live view, browser_snapshot must still try to reach
-// the browser. On the unreachable-CDP config that means a session/connection
-// error — an error, but a DIFFERENT error, never the deferral text. A test
-// asserting only "the four defer" would pass on a build where every browser
-// tool defers, which would make the one tool that tells an agent what is on
-// the page unavailable exactly when the page is contested.
-func TestSnapshot_NotDeferredByViewer(t *testing.T) {
-	_, mgr := newPermissiveRegistry(t, controlTestCfg(t))
+// RE-POINTED BY ADR-085 D5 (was TestSnapshot_NotDeferredByViewer; the old name
+// is left here so a grep for it lands on this explanation). It asserted the
+// opposite of what it asserts now, on the strength of the capability spec's
+// FR-038 ("browser_snapshot is read-only: no controlledResult, no write
+// lease"). ADR-085 D5 retires the first half of that requirement by name:
+//
+//	"The read-only capture tools — browser_screenshot, browser_get_text,
+//	 browser_snapshot — are deliberately ungated today ('they don't inject
+//	 input'). Under D1 the agent keeps running, so it can screenshot the
+//	 operator's login form while they type into it. D1 makes this worse, so D5
+//	 is required, not optional."
+//
+// The handover spec's FR-033 states the consequence ("browser_screenshot,
+// browser_get_text and browser_snapshot MUST consult the control gate and
+// return the same non-error deferral while the wheel is held"), and FR-035
+// moves them into the new CAPTURE class: gated, but still never write-leased
+// and never per-call audited. The SECOND half of the old FR-038 — no write
+// lease — therefore survives untouched, and is still asserted by
+// snapshot_test.go::TestSnapshot_IsNotWriteClass.
+//
+// This wave's write-set (ADR-085 wave W1) named this file, but only
+// tools_control_test.go was actually updated, which is why the retired
+// expectation shipped red.
+//
+// Both halves are asserted rather than only the new one, so the test still
+// discriminates: browser_snapshot (capture class) MUST defer, and
+// browser_wait (exempt class) MUST NOT — it reaches the unreachable-CDP
+// endpoint and fails there instead, which is a visibly different result.
+func TestSnapshot_DefersButAnExemptToolDoesNot(t *testing.T) {
+	registry, mgr := newPermissiveRegistry(t, controlTestCfg(t))
 	if !mgr.Live().TakeControl(testSessionID, "human-viewer") {
 		t.Fatal("test setup: taking control must succeed")
 	}
@@ -363,11 +386,40 @@ func TestSnapshot_NotDeferredByViewer(t *testing.T) {
 	if result == nil {
 		t.Fatal("browser_snapshot returned no result")
 	}
-	if strings.Contains(result.ForLLM, "human is currently controlling") {
-		t.Errorf("browser_snapshot DEFERRED to a human viewer. FR-038 makes it read-only "+
-			"precisely so it answers while someone else is driving — deferring it means the one "+
-			"tool that reports what is on the page goes dark exactly when the page is contested: %s",
-			result.ForLLM)
+	if result.IsError {
+		t.Errorf("browser_snapshot reported an ERROR while deferring. A deferral is a temporary, "+
+			"non-error condition — an agent that reads it as a failure gives up instead of "+
+			"resuming once the operator sends the next prompt: %s", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "human is currently controlling") {
+		t.Errorf("browser_snapshot did NOT defer to a human viewer. ADR-085 D5/FR-033 moved it out "+
+			"of the exempt roster and into the capture class precisely because, under D1's "+
+			"'the agent keeps running' turn model, an ungated snapshot describes whatever the "+
+			"operator is mid-typing into: %s", result.ForLLM)
+	}
+	if result.Deferred == nil || result.Deferred.Gate != "browser_control" {
+		t.Errorf("browser_snapshot must carry the STRUCTURAL browser_control deferral the turn "+
+			"engine's ledger reads, not only the prose: %+v", result.Deferred)
+	}
+
+	// The discriminator: an EXEMPT-class tool under the same held wheel must
+	// still reach the browser and fail on the unreachable endpoint. Without
+	// this half, the assertions above would pass on a build where the gate
+	// swallowed every browser tool.
+	waitResult := mustGetTool(t, registry, "browser_wait").
+		Execute(context.Background(), map[string]any{"selector": "#anything"})
+	if waitResult == nil {
+		t.Fatal("browser_wait returned no result")
+	}
+	if strings.Contains(waitResult.ForLLM, "human is currently controlling") {
+		t.Errorf("browser_wait DEFERRED to a human viewer. FR-034 keeps it ungated, and if every "+
+			"browser tool defers then the assertions above prove nothing about the gate "+
+			"discriminating at all: %s", waitResult.ForLLM)
+	}
+	if !waitResult.IsError {
+		t.Errorf("browser_wait must attempt real execution and fail on the unreachable CDP "+
+			"endpoint; a non-error result means it was short-circuited somewhere: %s",
+			waitResult.ForLLM)
 	}
 }
 

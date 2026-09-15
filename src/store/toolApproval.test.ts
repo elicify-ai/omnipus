@@ -15,7 +15,7 @@ import type { WsSessionStateFrame } from '@/lib/ws'
 
 beforeEach(() => {
   act(() => {
-    useToolApprovalStore.setState({ queue: [] })
+    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
   })
 })
 

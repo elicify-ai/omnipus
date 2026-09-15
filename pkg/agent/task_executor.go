@@ -12,9 +12,10 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/session"
@@ -93,6 +94,14 @@ type TaskExecutor struct {
 	// parentFollowUp is a test seam ONLY — production leaves it nil.
 	parentFollowUp func(parentID string)
 
+	// liveTaskActivity (founder decision 2026-09-14) is the REST surface's
+	// read seam for a running task's live last-activity stamp: the AgentLoop
+	// itself, wired once at boot via SetLiveTaskActivitySource, answering
+	// from the running turn's progress atomics (which advance on streamed
+	// reasoning as well as tool-call deltas, UAT E-15c). Nil in test
+	// harnesses; LiveTaskLastActivity then reports false.
+	liveTaskActivity TaskLiveActivitySource
+
 	// evidence records the write-set-scoped boundary commit that Play later
 	// resumes a member from (D13/G-12). Wired at the gateway boot seam
 	// alongside PlanEngine.SetCommitResolver — the two are the producer and
@@ -133,23 +142,6 @@ type TaskExecutor struct {
 	// not derived from the HTTP request context and survives request cancellation).
 	goroutineCtxHook func(ctx context.Context, taskID string)
 
-	// evidenceMu guards evidenceRejectStreak (ADR-052 FR-035 evidence-marker
-	// gate bound, Fix-Wave-2). In-memory only, never persisted, and
-	// deliberately NOT AttemptCount: rejectBareEvidenceClaim's free re-dispatch
-	// must not touch AttemptCount (consumeAttemptOrExhaust is the sole writer)
-	// so this streak needs its own storage. A process restart resets it, which
-	// is safe — it is a soft bound against an in-process livelock, not a
-	// durability contract.
-	evidenceMu sync.Mutex
-	// evidenceRejectStreak counts CONSECUTIVE evidence-marker-gate rejections
-	// per task ID (rejectBareEvidenceClaim). Cleared (entry deleted) the
-	// moment the task's evidence gate is no longer being violated — see
-	// clearEvidenceGateStreak's call sites (gate pass/not-applicable in
-	// finishTaskRun, and both terminal-write chokepoints,
-	// completeTaskWithResult and failTask). A nil map is valid for reads
-	// (hasEvidenceGateRejection); bumpEvidenceRejectStreak lazily allocates it.
-	evidenceRejectStreak map[string]int
-
 	// lifecycleStore is the durable S2 session-lifecycle store (ADR-053,
 	// pkg/session/lifecycle.go), wired by the gateway boot seam via
 	// SetLifecycleStore alongside PlanEngine.SetLifecycleStore /
@@ -185,10 +177,10 @@ type TaskExecutor struct {
 	autoSyncDispatchCapacity bool
 
 	// wg tracks every in-flight task-dispatch goroutine (runTask,
-	// runTaskFromInProgress) end-to-end, INCLUDING the goal-loop's own
-	// re-dispatch chain (consumeAttemptOrExhaust/rejectBareEvidenceClaim
-	// flipping a task back to `next` and the owning goroutine's trailing
-	// defer re-entering ExecuteTask/StartTaskNow for another attempt). Add(1)
+	// runTaskFromInProgress) end-to-end, INCLUDING the run loop's own
+	// restart chain (consumeTaskAttempt flipping a task back to `next` and
+	// the owning goroutine's trailing defer re-entering ExecuteTask for the
+	// task's next run). Add(1)
 	// happens at each of the two goroutine-launch sites, immediately before
 	// the `go` statement; Done() is deferred as the OUTERMOST defer in each
 	// goroutine body, so it fires only after that goroutine's own trailing
@@ -230,18 +222,29 @@ type TaskExecutor struct {
 	dispatchGate sync.RWMutex
 }
 
-// evidenceGateMaxConsecutiveRejections is N in ADR-052 FR-035's "after N
-// consecutive bare-evidence-claim rejections, stop the free ride" bound
-// (Fix-Wave-2, closing the four-reviewer-confirmed livelock). The first
-// rejection for a task is always free (a single missing [goal:evidence] line
-// is treated as a one-off mechanical formatting miss, per
-// rejectBareEvidenceClaim's existing doc comment) — reaching the SECOND
-// consecutive rejection (streak == N) is what routes the run through
-// consumeAttemptOrExhaust instead of another free re-dispatch, restoring the
-// hardCeiling guarantee.
-const evidenceGateMaxConsecutiveRejections = 2
-
 // newTaskExecutor creates a TaskExecutor over the unified task store.
+// SetLiveTaskActivitySource wires the executor's live last-activity seam
+// (founder decision 2026-09-14). Called once at boot, right after
+// newTaskExecutor, with the AgentLoop itself (which implements
+// TaskLiveActivitySource); the REST tasks surface reads through
+// TaskExecutor.LiveTaskLastActivity to stamp Task.last_activity_at on the
+// wire. Nil-safe no-op so partial test constructions keep working.
+func (te *TaskExecutor) SetLiveTaskActivitySource(src TaskLiveActivitySource) {
+	if te == nil {
+		return
+	}
+	te.liveTaskActivity = src
+}
+
+// LiveTaskLastActivity forwards to the wired source, returning false when
+// none is wired (test harnesses) — honest absence, never a fabricated stamp.
+func (te *TaskExecutor) LiveTaskLastActivity(taskID string) (time.Time, bool) {
+	if te == nil || te.liveTaskActivity == nil {
+		return time.Time{}, false
+	}
+	return te.liveTaskActivity.TaskLiveLastActivity(taskID)
+}
+
 func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 	// Resolve from the central authority. When al.cfg is nil (test seams
 	// only — production always supplies a config), fall back to what a
@@ -269,7 +272,6 @@ func newTaskExecutor(al *AgentLoop, store *task.Store) *TaskExecutor {
 		store:                    store,
 		running:                  make(map[string]*taskSlot),
 		dispatchSema:             newDispatchSemaphore(capacity),
-		evidenceRejectStreak:     make(map[string]int),
 		autoSyncDispatchCapacity: true,
 	}
 }
@@ -448,7 +450,7 @@ func (te *TaskExecutor) transitionTaskLifecycle(sessionID string, state session.
 // session.LifecycleCompleted for task.StatusDone, session.LifecycleFailed
 // (reason "task_failed") for anything else (task.StatusFailed is the only
 // other terminal task status this function is ever called with). Shared by
-// completeTaskWithResult and finishTaskRun's already-terminal branch so the
+// completeTaskWithResult and the run loop's already-terminal close-out so the
 // status->lifecycle-state mapping lives in exactly one place.
 func (te *TaskExecutor) finalizeTaskLifecycle(sessionID string, status task.Status) {
 	if status == task.StatusDone {
@@ -456,64 +458,6 @@ func (te *TaskExecutor) finalizeTaskLifecycle(sessionID string, status task.Stat
 		return
 	}
 	te.transitionTaskLifecycle(sessionID, session.LifecycleFailed, "task_failed")
-}
-
-// bumpEvidenceRejectStreak increments and returns taskID's consecutive
-// evidence-marker-gate rejection count (ADR-052 FR-035, Fix-Wave-2).
-func (te *TaskExecutor) bumpEvidenceRejectStreak(taskID string) int {
-	te.evidenceMu.Lock()
-	defer te.evidenceMu.Unlock()
-	if te.evidenceRejectStreak == nil {
-		te.evidenceRejectStreak = make(map[string]int)
-	}
-	te.evidenceRejectStreak[taskID]++
-	return te.evidenceRejectStreak[taskID]
-}
-
-// hasEvidenceGateRejection reports whether taskID currently has a pending
-// (unresolved) evidence-marker-gate rejection — i.e. whether buildPrompt's
-// next render for this task must carry evidenceGateSteeringText forward. This
-// is the delivery mechanism the "no free ride" livelock fix required
-// (Fix-Wave-2): rejectBareEvidenceClaim deliberately never increments
-// AttemptCount, so buildPrompt's pre-existing t.AttemptCount>0-guarded
-// feedback block (which renders t.Result) never rendered it — a
-// re-dispatched prompt was byte-identical to the first attempt. Tracking
-// presence here, independent of AttemptCount/t.Result, is what makes the
-// steering actually reach the worker.
-func (te *TaskExecutor) hasEvidenceGateRejection(taskID string) bool {
-	te.evidenceMu.Lock()
-	defer te.evidenceMu.Unlock()
-	return te.evidenceRejectStreak[taskID] > 0
-}
-
-// clearEvidenceGateStreak resets taskID's evidence-marker-gate rejection
-// streak to zero. Called whenever the gate is no longer being violated for
-// this task: it passed (or wasn't applicable) on the latest response
-// (finishTaskRun), or the task reached ANY terminal disposition
-// (completeTaskWithResult, failTask) — the latter also bounds the map's
-// lifetime so a long-running gateway does not accumulate one entry per task
-// ID forever. See ClearEvidenceGateStreak for the THIRD terminal-write path
-// (a user Stop) that also needs this.
-func (te *TaskExecutor) clearEvidenceGateStreak(taskID string) {
-	te.evidenceMu.Lock()
-	defer te.evidenceMu.Unlock()
-	delete(te.evidenceRejectStreak, taskID)
-}
-
-// ClearEvidenceGateStreak is the exported counterpart of
-// clearEvidenceGateStreak (ADR-052 fix-wave, evidence-streak leak item ii):
-// PlanEngine.cancelMemberLocked (plan_engine.go) marks a Stopped task
-// `failed` via a DIRECT store write, bypassing both of TaskExecutor's own
-// terminal-write chokepoints (completeTaskWithResult, failTask) that
-// clearEvidenceGateStreak's own doc comment names as clearing "ANY terminal
-// disposition" — a Stop IS a terminal disposition too, and without this the
-// streak would leak in evidenceRejectStreak for the remainder of the
-// process lifetime. Exposed via the planTaskDispatcher interface so
-// PlanEngine can reach it through its existing narrow test-seam field
-// (dispatcher) rather than holding a second, wider reference to
-// *TaskExecutor.
-func (te *TaskExecutor) ClearEvidenceGateStreak(taskID string) {
-	te.clearEvidenceGateStreak(taskID)
 }
 
 // ExecuteTask starts executing the dispatchable task identified by taskID. It
@@ -720,8 +664,7 @@ func (te *TaskExecutor) executeTask(
 // doc comment for why this matters). Shared by ExecuteTask; StartTaskNow
 // performs the equivalent block inline (its own error-handling — abort the
 // whole call on failure — deliberately differs from ExecuteTask's log-and-
-// continue, so it is not routed through this helper; see finishTaskRun's own
-// doc comment on that intentional divergence).
+// continue, so it is not routed through this helper).
 //
 // Returns ("", nil) when sessStore is nil (no agent store configured for
 // t.AgentID) — callers treat that as "no session", not an error, exactly as
@@ -769,7 +712,234 @@ func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 		logger.WarnCF("task_executor", "Transcript write failed",
 			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
 	}
+	// GOAL-FR-010/FR-012 (E12): bind this task's own goal record (created in
+	// the defining phase at task creation/edit — rest_tasks.go's
+	// syncTaskGoalRecord) into the active phase against the session just
+	// minted. See activateTaskGoal's own doc comment for the full contract.
+	//
+	// silent-SF-9: the error is DELIBERATELY not propagated out of
+	// createTaskSessionSync — GOAL-FR-023 is explicit that a task with no
+	// usable goal still runs — but it is no longer discarded at the point of
+	// failure either: activateTaskGoal has already logged at ERROR and written
+	// the failure into this task's own transcript before returning it.
+	_ = te.activateTaskGoal(t, taskSessionID)
 	return taskSessionID, nil
+}
+
+// activateTaskGoal is GOAL-FR-010/FR-012's task-side activation: transitions
+// the task's own pkg/goal record (created up front in the defining phase at
+// task creation/edit time — pkg/gateway/rest_tasks.go's syncTaskGoalRecord,
+// GOAL-FR-009) into the active phase, bound to the session this dispatch
+// just minted. Called from BOTH createTaskSessionSync (ExecuteTask's own
+// dispatch path) and StartTaskNow's equivalent inline session-creation
+// block — the two places a task session is minted (see createTaskSessionSync's
+// own doc comment for why StartTaskNow does not route through it).
+//
+// A task with no paired goal record (GOAL-FR-023: a task created before
+// D-C's criteria+DoD-mandatory-at-creation rule, or a test fixture that
+// never called syncTaskGoalRecord) is left alone — this is NOT an error.
+// The task still runs; it simply never enters the goal loop, exactly as it
+// did before this wave, and pkg/agent/judge.go's SoftTierCriterion path
+// judges it the same way it always has.
+//
+// R-04 (re-run, GOAL-FR-028): a task-owned goal that already reached a
+// terminal state on a PRIOR run re-enters active via Reactivate rather than
+// minting a second goal record — rest_tasks.go's syncTaskGoalRecord never
+// creates a second record for a task that already has one (GetByOwner finds
+// it and Update()s it in place instead), so this is the ONLY place a
+// re-run's goal state actually flips back to active. An already-active
+// record (double-activation defensiveness — should not happen under the
+// single-dispatch-per-claim invariant ClaimForRun enforces, but a defensive
+// no-op costs nothing) is left untouched.
+//
+// ADR-086 (S6): the session-meta mirror this function used to write after
+// activating the record (GoalID/GoalCondition/GoalCriteriaJSON/
+// GoalRoundsUsed/GoalMaxRounds/GoalLatestReason/GoalStartedAt/
+// GoalLastActivityAt/GoalQuestionRoundsUsed/GoalZeroOutputPushes) is GONE.
+// It existed for exactly one reason — checkGoalLoopAfterTurn (goal_loop.go)
+// and the keeper drivers (goal_triggers.go) read their entry condition off
+// session.UnifiedMeta, so a task-owned goal had to be made to look like a
+// chat-owned one there. Those readers are re-pointed now: they resolve the
+// ACTIVE goal record BOUND to the turn's session (activeGoalForSession,
+// goal_record_wiring.go), which Activate below sets to taskSessionID, so
+// GOAL-FR-013's "one code path" holds without a second copy of the state.
+//
+// The "task_explicit" GoalCriteriaJSON sentinel goes with it, and its
+// purpose survives structurally: the D3 "unregistered goal" nudge ladder
+// now tests the record's own criteria list (len(rec.Criteria) == 0), and a
+// task goal's criteria are fixed on its record at creation (D-C), so the
+// ladder stays unreachable for a task-owned goal (GOAL-FR-020).
+//
+// That unreachability is the NUDGE LADDER's alone, and says nothing about
+// the keeper that hosts it. The quiet-window keeper
+// (goal_triggers.go::goalQuietWindowSettle) selects ACTIVE goal records of
+// BOTH owner kinds (GOAL-FR-015, C-24): once the record below goes active
+// it is swept exactly like a chat goal's, so a task that goes quiet gets
+// the six suppressions (GOAL-FR-016), the bounded continue-push
+// (GOAL-FR-017) and the one-action-per-quiet-spell re-arm (GOAL-FR-018).
+// An earlier revision of this comment asserted the keeper "selects
+// session-owned records only" — it did, and that was the defect
+// GOAL-FR-015 names, not a design. Do not restore that filter.
+//
+// It returns an error (it used to be a void function, silent-SF-9). Neither
+// caller treats that error as fatal — GOAL-FR-023 is explicit that a task
+// with no usable goal record still runs — but the failure is now reported
+// where it happens (ERROR log plus a line in the task's OWN session
+// transcript, reportTaskGoalActivationFailure) rather than swallowed, so a
+// task running with no goal loop is visible instead of merely quiet. A task
+// with no paired record at all is NOT one of those failures and returns nil.
+//
+// Activation also RECORDS THE GOAL'S ROUTING (review finding 10) — the step
+// both chat activation paths take and this one did not, which left every
+// task-owned goal unreachable by the keeper. See the call to
+// recordGoalRouting below for the full failure it closes.
+func (te *TaskExecutor) activateTaskGoal(t *task.Task, taskSessionID string) error {
+	if t == nil || taskSessionID == "" {
+		return fmt.Errorf("task_executor: activate task goal: a task and a session id are both required")
+	}
+	gstore := resolveGoalRecordStore()
+	g, err := gstore.GetByOwner(generated.GoalOwnerKindTask, t.ID)
+	if err != nil {
+		if !errors.Is(err, goal.ErrOwnerNotFound) {
+			return te.reportTaskGoalActivationFailure(t, taskSessionID, "",
+				fmt.Errorf("task_executor: look up goal record for task %q: %w", t.ID, err))
+		}
+		if t.Scratchpad {
+			// A set_todos checklist card never enters the goal loop (FR-048).
+			return nil
+		}
+		// Founder decision 2026-09-14: a task completes ONLY when its goal's
+		// claim is upheld by the Judge, and the worker claims with goal_claim,
+		// which needs an active goal bound to the run's session. A legacy task
+		// with no paired record (created before D-C, GOAL-FR-023) therefore
+		// gets one minted here, at its first run: its own criteria (or none —
+		// the Judge then uses the soft-tier criterion) plus the built-in floor
+		// Definition of Done every compiled goal carries (ADR-080 D-DOD layer
+		// 3). The task still runs and is still judged, as GOAL-FR-023 requires;
+		// it now does so through the one claim path.
+		minted, mErr := te.mintLegacyTaskGoal(t)
+		if mErr != nil {
+			return te.reportTaskGoalActivationFailure(t, taskSessionID, "",
+				fmt.Errorf("task_executor: create a goal record for legacy task %q: %w", t.ID, mErr))
+		}
+		logger.InfoCF("task_executor", "goal: legacy task had no goal record — one was created for this run",
+			map[string]any{"task_id": t.ID, "goal_id": minted.GoalID, "session_id": taskSessionID})
+		g = minted
+	}
+
+	now := time.Now().UTC()
+	// Founder decision 2026-09-14 (D-D/D-E): a task's goal takes the goal try
+	// limit in force when its RUN starts — the same snapshot semantics a chat
+	// goal has at `/goal` set time (activateInstantGoal). The record's
+	// MaxRounds was written at task creation, possibly days and several
+	// Settings changes ago, so it is re-stamped from the live value here, AFTER
+	// the transition (Reactivate archives the previous run's record into
+	// TerminalHistory and must archive that run's own limit, not this one's).
+	// The run loop (task_run_loop.go::runGoalMaxTries) enforces this snapshot, so a later Settings
+	// change never moves the bound of a run already in progress.
+	tryLimit := goalTryLimit(te.agentLoop)
+	if _, uerr := gstore.Update(g.GoalID, func(cur *goal.Goal) error {
+		switch {
+		case cur.IsDefining():
+			if err := cur.Activate(taskSessionID, now); err != nil {
+				return err
+			}
+			cur.MaxRounds = tryLimit
+			return nil
+		case cur.IsTerminal():
+			if err := cur.Reactivate(taskSessionID, now); err != nil {
+				return err
+			}
+			cur.MaxRounds = tryLimit
+			return nil
+		default:
+			// Already active. Under the two-level run model this can only mean
+			// a terminal writer skipped its goal hook: every legitimate path
+			// into a fresh run leaves the record TERMINAL first (a failed run
+			// ends its goal before the restart re-enters here —
+			// consumeTaskAttempt), so Reactivate re-binds it with a fresh try
+			// budget. A record left active by a previous run would make THIS
+			// run inherit that run's rounds, per-criterion statuses, latest
+			// reason and keeper budgets, with no TerminalHistory entry — the
+			// D-2 damage. Forcing a transition is not the answer (Reactivate
+			// refuses a non-terminal record, and inventing one would fake an
+			// adjudication); making it LOUD is. WARN, not Debug.
+			logger.WarnCF("task_executor",
+				"goal: paired goal record was already ACTIVE at run start — Goal.Reactivate is being "+
+					"skipped, so this run inherits the PREVIOUS run's attempts, rounds, criterion "+
+					"statuses and keeper budgets (R-04 re-entry contract not applied). Some terminal "+
+					"writer did not end this record when its task last terminated.",
+				map[string]any{"task_id": t.ID, "goal_id": g.GoalID, "session_id": taskSessionID})
+			return nil
+		}
+	}); uerr != nil {
+		return te.reportTaskGoalActivationFailure(t, taskSessionID, g.GoalID,
+			fmt.Errorf("task_executor: activate goal record %q for task %q: %w", g.GoalID, t.ID, uerr))
+	}
+
+	// Review finding 10: record this goal's ROUTING, exactly as the two chat
+	// activation paths do (goal_loop.go's applyGoalCommandPrompt and
+	// activateInstantGoal both call recordGoalRouting immediately after
+	// activating). This call site did not exist, so a task-owned goal carried
+	// no RouteChannel/RouteChatID on its record and no entry in the in-memory
+	// routing map. Now that goalQuietWindowSettle selects task-owned records
+	// (GOAL-FR-015), that omission was load-bearing: dispatchGoalAsyncFollowUp
+	// resolves its destination through routeFor, which found nothing on either
+	// side, so NO keeper push ever reached a quiet task — and the miss took
+	// routeFor's RecordRoutingLost branch, stamping "keeper cannot reach the
+	// goal's channel — routing lost" into LatestReason, where it surfaced to
+	// the user in the goal status frame as if the goal itself were broken.
+	//
+	// The destination is the task's own SourceChannel/SourceChatID with the
+	// same "system"/"task:<id>" fallback wakeOwnerAttemptsExhausted already
+	// uses for a board/REST-created task with no chat origin —
+	// AsyncNotifier.Notify rejects an empty destination outright (FR-N7), so
+	// the fallback is what makes a board-created task reachable at all.
+	//
+	// The session key is empty by design: GOAL-FR-032 deleted the persisted
+	// session-key field and routeFor reads it from nothing (see
+	// recordGoalRouting's own doc comment).
+	if te.agentLoop != nil {
+		channel, chatID := t.SourceChannel, t.SourceChatID
+		if channel == "" || chatID == "" {
+			channel, chatID = "system", "task:"+t.ID
+		}
+		te.agentLoop.recordGoalRouting(taskSessionID, g.GoalID, channel, chatID, "", t.AgentID)
+	}
+
+	logger.InfoCF("task_executor", "goal: task goal record activated for this run",
+		map[string]any{"task_id": t.ID, "goal_id": g.GoalID, "session_id": taskSessionID})
+	return nil
+}
+
+// reportTaskGoalActivationFailure is silent-SF-9's loud surface: it makes a
+// task-side goal-activation failure as VISIBLE as the chat side's already is.
+//
+// The chat path fails in front of the user — createAndActivateSessionGoalRecord
+// returning an error makes applyGoalCommandPrompt reply "Could not start the
+// goal loop (internal error persisting the goal record)" straight into the
+// chat. The task path used to swallow the identical failure in a void function
+// with one WARN line and a bare return, so a task ran to completion with no
+// goal loop, no adjudication and no criteria ever judged, and nothing anywhere
+// the operator would look said so. That asymmetry breaks ADR-086's
+// identical-behaviour promise (GOAL-FR-013) in exactly the direction that
+// hides a defect.
+//
+// It logs at ERROR and writes a system line into the task's OWN session
+// transcript — the task-side equivalent of the chat reply, and the surface an
+// operator reading the run actually sees — then returns err for the caller to
+// propagate or log.
+func (te *TaskExecutor) reportTaskGoalActivationFailure(t *task.Task, taskSessionID, goalID string, err error) error {
+	logger.ErrorCF("task_executor", "goal: task goal activation failed — this task will run with NO goal loop (no adjudication, no criteria judged)",
+		map[string]any{"task_id": t.ID, "goal_id": goalID, "session_id": taskSessionID, "error": err.Error()})
+	if te.agentLoop != nil {
+		if sessStore := te.agentLoop.GetAgentStore(t.AgentID); sessStore != nil {
+			te.agentLoop.writeGoalSystemTranscript(sessStore, taskSessionID, t.AgentID, fmt.Sprintf(
+				"This task's goal could not be activated (%v). The run continues WITHOUT a goal loop: no acceptance criteria will be adjudicated for it.",
+				err))
+		}
+	}
+	return err
 }
 
 // runTask executes the agent prompt and updates the task on completion.
@@ -778,9 +948,9 @@ func (te *TaskExecutor) createTaskSessionSync(t *task.Task) (string, error) {
 // ExecuteTask's and createTaskSessionSync's doc comments); this goroutine no
 // longer creates the session itself.
 //
-// Goal-loop re-dispatch (SD-B3): when finishTaskRun decides the attempt is
-// unmet with attempts remaining, it flips the task back to `next` and
-// returns its ID so this goroutine's own trailing cleanup can re-enter
+// Task restart (SD-B3): when a run fails as a whole with task attempts
+// remaining, consumeTaskAttempt flips the task back to `next` and the run
+// loop returns its ID so this goroutine's own trailing cleanup can re-enter
 // ExecuteTask — reusing the existing goroutine/dispatch-sema machinery, not
 // a new scheduler. The redispatch call is deliberately made from INSIDE the
 // single combined deferred closure below, AFTER release()/cancel() have
@@ -809,8 +979,8 @@ func (te *TaskExecutor) runTask(
 			// another attempt at the SAME execution episode, not a new one, and
 			// openRun's (taskID, occurrenceMs) idempotency means the redispatch's
 			// own runTask call reopens (not duplicates) the still-open run this
-			// attempt leaves behind — see finishTaskRun/consumeAttemptOrExhaust's
-			// own doc comments for why intermediate redispatches do not close it.
+			// attempt leaves behind — only the task's final outcome closes it
+			// (completeTaskWithResult); an intermediate restart never does.
 			if err := te.ExecuteTask(context.Background(), redispatchTaskID, occurrenceMs); err != nil && !isRoutineAutoDispatchRefusal(err) {
 				logger.WarnCF("task_executor", "goal-loop: re-dispatch failed",
 					map[string]any{"task_id": redispatchTaskID, "error": err.Error()})
@@ -884,647 +1054,27 @@ func (te *TaskExecutor) runTask(
 	// run starts at depth 0 and the gate never trips (see maxTaskDepth).
 	taskCtx = tools.WithDelegationDepth(taskCtx, t.DelegationDepth)
 	// review r2 Chunk 1: mark this turn as THIS task's own executor run so
-	// TaskUpdateTool can tell an in-run done-claim (staged, adjudicated below
-	// by finishTaskRun) from an out-of-band one (rejected — see
+	// TaskUpdateTool refuses any status write on it and goal_claim accepts
+	// this turn's claim at any delegation depth — completion is claimed with
+	// goal_claim and judged by the run loop (founder decision 2026-09-14; see
 	// tools.WithRunningTaskID's doc comment).
 	taskCtx = tools.WithRunningTaskID(taskCtx, t.ID)
 
 	sessionKey := fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID)
-	prompt := te.buildPrompt(t)
 
 	taskChatID := taskSessionID
 	if taskChatID == "" {
 		taskChatID = "task:" + t.ID
 	}
-	resp, err := te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
-	redispatchTaskID = te.finishTaskRun(ctx, t, taskSessionID, resp, err, "", run)
-}
-
-// finishTaskRun handles the shared post-execution logic for both runTask and
-// runTaskFromInProgress. It appends the failure/success transcript entry,
-// updates the session meta, and — when the agent did not call task_update
-// itself — resolves completion from the standardized TASK_STATUS/TASK_SUMMARY
-// marker (ADR-043). The marker (or an explicit update_task terminal write) is
-// now a CLAIM, never the terminal decision by itself (ADR-049 US-5/US-6):
-//
-//   - No parseable signal (FR-045): an UNMET claim — the attempt is consumed
-//     and the task re-dispatches (or wakes the owner on exhaustion) — NOT an
-//     immediate terminal failure.
-//   - An explicit FAILURE marker, or an already-terminal `failed` status from
-//     a real update_task(status:"failed") call (SD-B1): an accepted give-up —
-//     terminal immediately, exactly as before this feature. There is nothing
-//     to verify in a worker's own honest failure report.
-//   - An explicit update_task(status:"done") call on a task WITH acceptance
-//     criteria (hard tier) is now ALSO a CLAIM, not a terminal decision
-//     (SD-B2, review r1 blocker C1 fix): pkg/tools/task.go's TaskUpdateTool
-//     stages it as Task.PendingJudgeClaim instead of writing a terminal
-//     `done` — no DAG-advance, no onComplete, at the tool-call boundary. The
-//     block below detects PendingJudgeClaim and routes it through
-//     adjudicateClaim exactly like a SUCCESS marker. A criteria-less
-//     (soft-tier) explicit done write is UNCHANGED — trusted immediately,
-//     current.Status is already terminal `done`, and the IsTerminal check
-//     just below handles it exactly as before this feature.
-//   - A SUCCESS marker (no explicit terminal tool call, or no
-//     PendingJudgeClaim staged): a CLAIM — routed to the evidence-ladder
-//     judge (judge.go) before it may become terminal `done` (US-5/US-6, the
-//     #1 self-certification failure mode this feature closes).
-//
-// Scratchpad tasks (FR-048/D5) are exempt from the goal loop entirely: every
-// branch below trusts the marker directly, exactly as today, for a
-// Scratchpad task.
-//
-// Returns a non-empty redispatchTaskID when the caller (runTask/
-// runTaskFromInProgress) should re-enter ExecuteTask for another attempt
-// (SD-B3) — see those callers' own doc comments for why the actual
-// ExecuteTask call happens AFTER this function returns, not from inside it.
-//
-// logSuffix is appended to the "Agent execution failed" log message so
-// callers can be identified in structured logs (e.g. " (StartTaskNow path)").
-//
-// Do NOT merge the pre-execution session-setup blocks of runTask and
-// runTaskFromInProgress: runTask logs-and-continues on NewSession failure while
-// runTaskFromInProgress aborts; that divergence is intentional and load-bearing.
-func (te *TaskExecutor) finishTaskRun(
-	ctx context.Context, t *task.Task, taskSessionID, resp string, err error, logSuffix string, run *activeRun,
-) (redispatchTaskID string) {
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
-
-	if err != nil {
-		logger.ErrorCF("task_executor", "Agent execution failed"+logSuffix,
-			map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "error": err.Error()})
-		if taskSessionID != "" && sessStore != nil {
-			if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
-				ID:        t.ID + "-error",
-				Role:      "assistant",
-				Content:   fmt.Sprintf("Task execution failed: %v", err),
-				Status:    "error",
-				Timestamp: time.Now().UTC(),
-			}); appendErr != nil {
-				taskGoalTranscriptWriteFailures.Add(1)
-				logger.WarnCF("task_executor", "Transcript write failed",
-					map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
-			}
-			status := session.StatusInterrupted
-			if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &status}); setErr != nil {
-				logger.WarnCF("task_executor", "Meta update failed",
-					map[string]any{"task_id": t.ID, "error": setErr.Error()})
-			}
-		}
-		// FR-118/G-13: a genuine run-time execution error (distinct from the
-		// boot sweep's own "interrupted" reason for a crash-stranded session —
-		// this run actually completed, badly) terminates the durable lifecycle
-		// record too, so it is never left non-terminal for a later boot sweep
-		// to (correctly, but redundantly) sweep.
-		te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "execution_error")
-		te.failTask(t.ID, fmt.Sprintf("execution error: %v", err))
-		failedTask := *t
-		failedTask.Status = task.StatusFailed
-		failedTask.Result = fmt.Sprintf("execution error: %v", err)
-		te.closeRun(t.ID, run, task.StatusFailed, failedTask.Result)
-		te.notifySourceChannel(&failedTask)
-		return ""
+	turn := func(prompt string) (string, error) {
+		return te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
 	}
-
-	if taskSessionID != "" && resp != "" && sessStore != nil {
-		if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
-			ID:        t.ID + "-response",
-			Role:      "assistant",
-			Content:   resp,
-			Timestamp: time.Now().UTC(),
-		}); appendErr != nil {
-			taskGoalTranscriptWriteFailures.Add(1)
-			logger.WarnCF("task_executor", "Transcript write failed",
-				map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
-		}
-	}
-
-	// Re-read so we see any explicit update_task write the agent made mid-run.
-	current, lerr := te.store.Get(t.ID)
-	if lerr != nil {
-		logger.WarnCF("task_executor", "Could not re-read task after execution",
-			map[string]any{"task_id": t.ID, "error": lerr.Error()})
-		// M1: this early return used to leave any open run stranded in_progress
-		// forever (no reaper backstop) — close it best-effort as failed, since
-		// the task's real outcome cannot be determined without the re-read
-		// that just failed.
-		te.closeRun(t.ID, run, task.StatusFailed,
-			fmt.Sprintf("execution finished but the task record could not be re-read to resolve its outcome: %v", lerr))
-		return ""
-	}
-
-	if task.IsTerminal(current.Status) {
-		// An explicit update_task(done|failed) call already decided (and, for
-		// a criteria-less `done`, already fired DAG-advance at the tool-call
-		// boundary) — trust it directly, exactly as today. A hard-tier done
-		// claim never reaches this branch: TaskUpdateTool deliberately leaves
-		// Status non-terminal for that case (see the PendingJudgeClaim check
-		// below).
-		if taskSessionID != "" && sessStore != nil {
-			statusCompleted := session.StatusArchived
-			if setErr := sessStore.SetMeta(taskSessionID, session.MetaPatch{Status: &statusCompleted}); setErr != nil {
-				logger.WarnCF("task_executor", "Meta update failed",
-					map[string]any{"task_id": t.ID, "error": setErr.Error()})
-			}
-		}
-		// FR-118/G-13: an explicit update_task(done|failed) call already wrote
-		// the task terminal — mirror that outcome onto the durable lifecycle
-		// record too (see finalizeTaskLifecycle's doc comment).
-		te.finalizeTaskLifecycle(taskSessionID, current.Status)
-		// The agent already called update_task — its tool call is the mirror
-		// write; run-close here is purely additive to it (ADR-050 RD5,
-		// task-run-history-spec.md §3.3), which is exactly why update_task/
-		// update_task_in_workspace need no change of their own.
-		te.closeRun(t.ID, run, current.Status, current.Result)
-		te.notifySourceChannel(current)
-		return ""
-	}
-
-	if current.PendingJudgeClaim != "" {
-		// SD-B2/review r1 C1: an explicit update_task(status:"done") call on a
-		// task WITH acceptance criteria was staged here by TaskUpdateTool
-		// instead of writing a terminal `done` directly. Clear the staging
-		// field up front (adjudication is about to consume it one way or
-		// another; leaving it set would leak into the next attempt/read) and
-		// route through the SAME evidence-ladder judge path a TASK_STATUS
-		// marker uses — this explicit claim takes priority over any marker
-		// text that might also be present in resp, so the marker is not
-		// parsed at all in this branch.
-		claimText := current.PendingJudgeClaim
-		cleared := ""
-		if _, cerr := te.store.Update(t.ID, task.Patch{PendingJudgeClaim: &cleared}); cerr != nil {
-			logger.WarnCF("task_executor", "Could not clear pending judge claim",
-				map[string]any{"task_id": t.ID, "error": cerr.Error()})
-		}
-		return te.adjudicateClaim(ctx, current, taskSessionID, claimText, run)
-	}
-
-	// ADR-052 FR-035 (evidence-marker gate, R3-13): scan resp for the gate
-	// BEFORE parseTaskCompletionSignal — checkEvidenceMarkerGate's own doc
-	// comment names this exact call order. A completion claim (marker line
-	// found, success OR failure — the gate does not distinguish) with no
-	// genuine [goal:evidence] line immediately preceding it is REJECTED
-	// pre-judge: the worker is re-prompted with the gate's steering text and
-	// NO verifier is ever dispatched for this run. Scratchpad tasks are
-	// exempt (FR-048 — they trust ANY found marker directly, success or
-	// failure, and never reach the judge/verifier either way, so the gate
-	// would have nothing to protect). The FIRST rejection for a task does NOT
-	// consume an attempt via rejectBareEvidenceClaim — forgetting the evidence
-	// marker once is a mechanical formatting miss, not a genuine
-	// work-verification failure (contrast the "no signal at all" and
-	// judge-"unmet" paths below, both of which DO consume an attempt via
-	// consumeAttemptOrExhaust) — while still actively re-prompting (unlike the
-	// D7 judge-Unavailable case, which pauses silently with no redispatch).
-	// From the SECOND consecutive rejection onward (Fix-Wave-2,
-	// evidenceGateMaxConsecutiveRejections), rejectBareEvidenceClaim itself
-	// routes through consumeAttemptOrExhaust instead — an unbroken streak of
-	// bare claims is no longer treated as one-off and must not be a free,
-	// unbounded re-dispatch loop (four independent gate reviews confirmed
-	// exactly that livelock).
-	if !current.Scratchpad {
-		if gate := checkEvidenceMarkerGate(resp); gate.Applicable && !gate.Honored {
-			return te.rejectBareEvidenceClaim(ctx, current, taskSessionID, gate.SteeringText, run)
-		}
-	}
-	// Gate is no longer being violated for this run (honored, not
-	// applicable, or a Scratchpad task that never checks it at all) — any
-	// earlier rejection streak for this task is resolved; clear it so a
-	// LATER, unrelated bare claim starts counting from zero rather than
-	// inheriting a stale streak.
-	te.clearEvidenceGateStreak(current.ID)
-
-	// Agent did not call task_update — no explicit signal, or an explicit
-	// non-terminal write. Parse the agent's final output for the standardized
-	// TASK_STATUS completion marker instead (ADR-043), uniform across native
-	// and external-CLI (subagent_3p) dispatch — see the marker parser's own
-	// doc comment for why an external-CLI worker ALWAYS lands here.
-	signal := parseTaskCompletionSignal(resp)
-	if !signal.Found() {
-		logger.WarnCF("task_executor",
-			"agent finished with no parseable TASK_STATUS completion signal",
-			map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
-		rawOutput := resp
-		if strings.TrimSpace(rawOutput) == "" {
-			rawOutput = "(agent produced no output)"
-		} else {
-			rawOutput = truncateTaskOutput(rawOutput)
-		}
-		reason := fmt.Sprintf(
-			"agent finished without a completion signal (TASK_STATUS line) — review the run "+
-				"transcript and re-run; raw output follows:\n\n%s",
-			rawOutput,
-		)
-		if current.Scratchpad {
-			// FR-048: Scratchpad (set_todos) tasks are exempt from the goal
-			// loop entirely — today's exact fail-closed-immediately behavior.
-			te.completeTaskWithResult(current, taskSessionID, task.StatusInProgress, false, reason, run)
-			return ""
-		}
-		// FR-045: for a real task, no signal is an UNMET claim (attempt
-		// consumed) — NOT an immediate terminal failure.
-		return te.consumeAttemptOrExhaust(ctx, current, taskSessionID, reason, nil, run)
-	}
-
-	if current.Scratchpad || signal.Status() == task.StatusFailed {
-		// FR-048 (Scratchpad: exempt from the goal loop entirely, even for a
-		// success marker — trust it directly) OR SD-B1 (an explicit failure
-		// marker is an accepted give-up: terminal immediately, no judge).
-		te.completeTaskWithResult(current, taskSessionID, task.StatusInProgress, signal.Status() == task.StatusDone, signal.Result, run)
-		return ""
-	}
-
-	// signal.Status() == task.StatusDone, non-Scratchpad: a success CLAIM —
-	// route to the evidence-ladder judge (US-5/US-6).
-	return te.adjudicateClaim(ctx, current, taskSessionID, signal.Result, run)
-}
-
-// adjudicateClaim routes a worker's SUCCESS claim through the evidence-ladder
-// judge (US-5/US-6, judge.go). Empty Criteria falls back to the ADR-049 D5
-// soft tier (SoftTierCriterion: judge against Prompt, else title+description).
-// When the soft tier applies AND the Judge System Agent is not registered at
-// all (never true post-boot in production, since coreagent.SeedConfig always
-// seeds it — only reachable from a raw pkg/agent harness that never ran
-// SeedConfig), the claim is trusted directly rather than paused forever: a
-// missing Judge in that specific combination is a structural/environment
-// gap, not a transient D7 "unavailable" cause.
-func (te *TaskExecutor) adjudicateClaim(
-	ctx context.Context, t *task.Task, taskSessionID, claimSummary string, run *activeRun,
-) (redispatchTaskID string) {
-	if strings.TrimSpace(claimSummary) == "" {
-		// ADR-052 (7-reviewer gate item 3): an empty completion claim has
-		// nothing to adjudicate — fail closed BEFORE any verifier dispatch,
-		// never a full (potentially D7-backoff-stalled) verifier turn for a
-		// claim carrying no content to check evidence against.
-		reason := "worker reported a completion signal with an empty claim summary — " +
-			"nothing to adjudicate (fail-closed, no verifier dispatched)"
-		return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, reason, nil, run)
-	}
-
-	criteria := t.Criteria
-	usedSoftTier := false
-	if len(criteria) == 0 {
-		if soft := SoftTierCriterion(t.Title, t.Description, t.Prompt); soft != nil {
-			criteria = []task.AcceptanceCriterion{*soft}
-			usedSoftTier = true
-		}
-	}
-
-	if len(criteria) == 0 {
-		// Structurally empty task (no criteria, no prompt, no title/description
-		// text worth judging) — nothing to judge; trust the claim.
-		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary, run)
-		return ""
-	}
-
-	if usedSoftTier {
-		if _, ok := te.agentLoop.GetRegistry().GetAgent(string(coreagent.IDJudge)); !ok {
-			logger.WarnCF("task_executor",
-				"goal-loop: Judge System Agent not configured; trusting the worker's claim "+
-					"directly for this criteria-less task",
-				map[string]any{"task_id": t.ID})
-			te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary, run)
-			return ""
-		}
-	}
-
-	result := te.agentLoop.JudgeCriteria(ctx, JudgeCriteriaInput{
-		Scope:           task.VerdictScopeTask,
-		TaskID:          t.ID,
-		AssigneeAgentID: t.AgentID,
-		Criteria:        criteria,
-		Attempt:         t.AttemptCount + 1,
-		ClaimText:       claimSummary,
-		// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1): the task's
-		// own workspace — every task is required-scoped to one (task.go:246)
-		// — so the Judge's verifier turn roots at the WORK-UNDER-REVIEW's
-		// workspace, not its own agent home. See JudgeCriteriaInput.WorkspaceID.
-		WorkspaceID: t.WorkspaceID,
-	})
-
-	if result.Unavailable {
-		// D7: the judge itself is unavailable and JudgeCriteria's own
-		// internal backoff loop gave up only because ctx was canceled — do
-		// NOT consume the attempt or record a verdict; abandon this run.
-		//
-		// ADR-050: deliberately does NOT closeRun here — the task's own
-		// Task.status also stays in_progress (nothing was written), so the
-		// run correctly mirrors that same "genuinely unresolved, paused"
-		// reality. A LATER retry of this same task re-enters runTask, whose
-		// openRun call is idempotent on (taskID, occurrenceMs) and simply
-		// resumes this SAME still-open run rather than creating a stray
-		// second one. If the task is never retried, boot reconciliation
-		// (reconcileStuckTaskRuns) is the accepted backstop (spec §3.5) —
-		// there is no dedicated in-process reaper.
-		logger.WarnCF("task_executor",
-			"goal-loop: judge cycle abandoned (context canceled during backoff)",
-			map[string]any{"task_id": t.ID, "reason": result.Reason})
-		return ""
-	}
-
-	// FR-014 (member-path parity with plan_engine.go's verdictStillApplicable
-	// — item 4 of the 7-reviewer gate): JudgeCriteria's verifier turn ran
-	// OUTSIDE any lock, by design (the SAME reason the plan-round path
-	// decouples into its own goroutine) — a concurrent Stop
-	// (PlanEngine.StopTask/StopPlan) may have already moved this task out of
-	// in_progress while the judge call was in flight. Re-check BEFORE
-	// writing the verdict transcript or applying its outcome: a task the
-	// Stop fan-out already cancelled/terminated must never have that outcome
-	// silently overwritten by a stale verdict, and must never have an
-	// attempt "consumed" for a run that was actually cancelled.
-	if !te.taskVerdictStillApplicable(t.ID) {
-		// ADR-050: same rationale as the D7 branch above — no closeRun. A
-		// concurrent Stop already moved the task out of in_progress by some
-		// OTHER writer, so this run's fate is that writer's responsibility;
-		// boot reconciliation (reconcileStuckTaskRuns) is the accepted
-		// backstop if it leaves the run open.
-		logger.InfoCF("task_executor",
-			"judge verdict dropped: task left in_progress during adjudication (Stop landed concurrently)",
-			map[string]any{"task_id": t.ID})
-		return ""
-	}
-
-	verdict := result.Verdict
-	te.writeJudgeVerdictTranscript(t, taskSessionID, verdict)
-
-	if verdict.Met {
-		te.completeTaskWithResult(t, taskSessionID, task.StatusInProgress, true, claimSummary, run)
-		return ""
-	}
-
-	return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, claimSummary, verdict, run)
-}
-
-// taskVerdictStillApplicable re-reads taskID's CURRENT status directly from
-// the store (FR-014) and reports whether a judge verdict computed moments
-// ago is still safe to apply: the task must still be in_progress. A store
-// read failure fails SAFE (returns false, drops the verdict) rather than
-// risking a stale-verdict overwrite on an unreadable/uncertain state.
-func (te *TaskExecutor) taskVerdictStillApplicable(taskID string) bool {
-	current, err := te.store.Get(taskID)
-	if err != nil {
-		logger.WarnCF("task_executor",
-			"adjudicateClaim: could not re-read task before applying verdict (fail-safe: dropping verdict)",
-			map[string]any{"task_id": taskID, "error": err.Error()})
-		return false
-	}
-	return current.Status == task.StatusInProgress
-}
-
-// consumeAttemptOrExhaust increments+persists Task.AttemptCount (server-set,
-// FR-042/R4/C17), and either re-dispatches (attempts remain) with steering
-// fed forward into buildPrompt (FR-043), or — once the attempt reaches
-// EffectiveTaskMaxAttempts — marks the task terminal `failed`, writes a
-// graceful wind-down handover to BOTH the task record and the owning session
-// transcript (NFR-3/SD-B9), and wakes the owner via the async-notifier
-// (FR-044). verdict is nil for a no-signal unmet outcome (nothing to judge)
-// and non-nil for a judge-adjudicated unmet outcome.
-//
-// FR-047: the hard ceiling (2x the configured attempt bound) is enforced
-// independently of the normal maxAttempts gate — belt-and-suspenders so a
-// pending re-dispatch can never loop past it "regardless of pending
-// re-dispatch or interrupt state", even though under this function's own
-// invariants (it is the sole writer of AttemptCount) the two gates always
-// coincide.
-//
-// ADR-052 FR-014/§6.4(b) TOCTOU fix (interleaving (a), 7-reviewer +
-// architect gate): this is one of the "no-recheck sibling paths"
-// (finishTaskRun's no-signal branch, adjudicateClaim's empty-claim branch,
-// rejectBareEvidenceClaim's streak-exhaust branch, and adjudicateClaim's own
-// post-recheck unmet branch all funnel through here) that previously wrote
-// via a plain store.Update with NO guard at all against a concurrent Stop
-// having already moved t out of in_progress — a Stop landing between the
-// caller's stale read of t and this write would be silently REVIVED
-// (Status -> next, and CancelReason auto-cleared by updateLocked's own
-// leaving-failed clear) even though the user had just stopped it. The write
-// below is now a compare-and-swap (UpdateIfStatus, expecting t to still be
-// in_progress) — on a conflict the outcome is dropped (logged, never
-// re-dispatched), mirroring the documented drop-stale-verdict semantics
-// adjudicateClaim's taskVerdictStillApplicable fast-path already uses.
-func (te *TaskExecutor) consumeAttemptOrExhaust(
-	ctx context.Context,
-	t *task.Task,
-	taskSessionID string,
-	claimSummary string,
-	verdict *task.JudgeVerdict,
-	run *activeRun,
-) (redispatchTaskID string) {
-	var planningCfg config.PlanningConfig
-	if cfg := te.agentLoop.GetConfig(); cfg != nil {
-		planningCfg = cfg.Planning
-	}
-	maxAttempts := planningCfg.EffectiveTaskMaxAttempts(t.MaxAttempts)
-	hardCeiling := 2 * maxAttempts
-
-	// FR-178: AttemptCount (per member/task scope) and the plan's JudgeRounds
-	// (per goal/plan scope) are TWO DISTINCT brakes, never conflated. This
-	// function is the SOLE writer of Task.AttemptCount — it never touches the
-	// owning plan's JudgeRounds, symmetric to PlanEngine.applyJudgeRoundOutcome
-	// Locked being the sole writer of JudgeRounds (which never touches
-	// AttemptCount). Whichever trips first stops its OWN scope locally; an
-	// attempts-exhaustion here fails the TASK, it does not trip the plan's
-	// rounds brake. Pinned by TestAttemptsVsRounds_DistinctBrakes.
-	newAttempt := t.AttemptCount + 1
-	nextStatus := task.StatusNext
-	updated, uerr := te.store.UpdateIfStatus(t.ID, task.StatusInProgress, task.Patch{AttemptCount: &newAttempt, Status: &nextStatus})
-	if uerr != nil {
-		if errors.Is(uerr, task.ErrStatusConflict) {
-			// ADR-050: deliberately does NOT closeRun — a concurrent Stop
-			// already moved the task out of in_progress by some OTHER writer
-			// (that writer's own outcome is authoritative), so this run's
-			// fate is that writer's responsibility; boot reconciliation
-			// (reconcileStuckTaskRuns) is the accepted backstop if it leaves
-			// the run open (spec §3.5 — no dedicated in-process reaper).
-			logger.WarnCF("task_executor",
-				"goal-loop: dropping unmet outcome — task left in_progress before the attempt could be "+
-					"recorded (Stop landed concurrently); not re-dispatching",
-				map[string]any{"task_id": t.ID})
-			return ""
-		}
-		logger.ErrorCF("task_executor",
-			"goal-loop: could not persist attempt increment; failing the run closed",
-			map[string]any{"task_id": t.ID, "error": uerr.Error()})
-		reason := fmt.Sprintf("goal-loop: could not persist attempt increment: %v", uerr)
-		te.failTask(t.ID, reason)
-		te.closeRun(t.ID, run, task.StatusFailed, reason)
-		return ""
-	}
-
-	if newAttempt < maxAttempts && newAttempt <= hardCeiling {
-		te.writeSteeringPrompt(updated, taskSessionID, claimSummary, verdict)
-		// M6 fix: this attempt's own session is about to be superseded by a
-		// fresh one createTaskSessionSync mints when the caller's deferred
-		// closure re-enters ExecuteTask(updated.ID) — nothing else ever
-		// closes THIS session out otherwise. See supersedeTaskSession's doc
-		// comment for why this is a direct SetMeta, not just the lifecycle
-		// mediator.
-		te.supersedeTaskSession(updated.AgentID, taskSessionID)
-		// ADR-050: deliberately does NOT closeRun — this is a goal-loop
-		// redispatch of the SAME execution episode (steering fed forward,
-		// another attempt at the same claim), not a new one. runTask's own
-		// redispatch defer re-enters ExecuteTask with THIS SAME occurrenceMs,
-		// and openRun's (taskID, occurrenceMs) idempotency means that call
-		// resumes this same still-open run rather than opening a second one —
-		// see runTask's redispatch-defer doc comment.
-		return updated.ID
-	}
-
-	// updated.Status is `next` here (just written above by the CAS write this
-	// function performed) — the terminal write below CASes against THAT
-	// status, not in_progress, chaining the same guarantee: nothing besides
-	// this same goroutine could have touched the task between the two writes
-	// (a real Stop requires in_progress, per StopTask's own guard, so it
-	// cannot land on a `next` task at all — see completeTaskWithResult's
-	// `expected` parameter doc).
-	handover := buildHandover(updated, claimSummary, verdict, maxAttempts)
-	if te.completeTaskWithResult(updated, taskSessionID, task.StatusNext, false, handover, run) {
-		te.wakeOwnerAttemptsExhausted(updated, taskSessionID, handover)
-	}
-	return ""
-}
-
-// writeSteeringPrompt persists the judge's (or the no-signal reminder's)
-// steering text so the NEXT attempt's buildPrompt call carries it forward
-// (FR-043, evaluator-optimizer pattern). t.Result is repurposed as the
-// in-flight steering carrier between attempts — it is NOT yet the FINAL
-// result while the goal loop is still running; the terminal write
-// (completeTaskWithResult) always overwrites it with the real final result.
-func (te *TaskExecutor) writeSteeringPrompt(
-	t *task.Task, taskSessionID, claimSummary string, verdict *task.JudgeVerdict,
-) {
-	steering := buildSteeringText(claimSummary, verdict)
-	if _, uerr := te.store.Update(t.ID, task.Patch{Result: &steering}); uerr != nil {
-		logger.WarnCF("task_executor", "goal-loop: could not persist steering for re-dispatch",
-			map[string]any{"task_id": t.ID, "error": uerr.Error()})
-	}
-	if taskSessionID == "" {
-		return
-	}
-	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
-	if sessStore == nil {
-		return
-	}
-	if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
-		ID:        fmt.Sprintf("%s-steering-%d", t.ID, t.AttemptCount+1),
-		Role:      "system",
-		Content:   steering,
-		Timestamp: time.Now().UTC(),
-	}); appendErr != nil {
-		taskGoalTranscriptWriteFailures.Add(1)
-		logger.WarnCF("task_executor", "goal-loop: steering transcript write failed",
-			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
-	}
-}
-
-// rejectBareEvidenceClaim (ADR-052 FR-035, R3-13) handles a completion claim
-// the evidence-marker gate rejected. The FIRST consecutive rejection for a
-// task re-dispatches WITHOUT incrementing AttemptCount — a missing/empty
-// [goal:evidence] line immediately before the completion marker is a
-// mechanical formatting miss, not a genuine work-verification failure, so it
-// must not cost the worker a real attempt (this is the "does not consume"
-// side of the same D7 distinction JudgeCriteriaResult.Unavailable relies on,
-// kept deliberately separate from — and never routed through —
-// consumeAttemptOrExhaust, which is the sole writer of AttemptCount). Unlike
-// D7's silent pause (no redispatch at all while the judge itself is down),
-// this DOES actively redispatch: the fix is mechanical and the worker is
-// expected to self-correct on the very next turn.
-//
-// From the SECOND consecutive rejection onward (streak reaches
-// evidenceGateMaxConsecutiveRejections, tracked in-memory via
-// bumpEvidenceRejectStreak — Fix-Wave-2), the free ride ends: an unbroken
-// run of bare claims is no longer a one-off slip, and re-dispatching it
-// forever with no AttemptCount movement is an unbounded, silent, full-LLM-
-// spend loop (the exact livelock four independent gate reviews confirmed).
-// This branch instead routes through consumeAttemptOrExhaust — the SAME
-// attempt/hardCeiling budget every other unmet outcome uses — so the task
-// eventually reaches a terminal state even if the worker never emits the
-// marker at all (whether it is trying to succeed or trying to fail out
-// cleanly; the gate does not distinguish, and neither does this bound).
-//
-// Every rejection (bounded or not) is logged at Warn with the consecutive
-// count, per Fix-Wave-2's "make it loud" requirement.
-func (te *TaskExecutor) rejectBareEvidenceClaim(
-	ctx context.Context, t *task.Task, taskSessionID, steeringText string, run *activeRun,
-) (redispatchTaskID string) {
-	streak := te.bumpEvidenceRejectStreak(t.ID)
-	logger.WarnCF("task_executor",
-		"evidence-marker gate: rejected bare completion claim (no [goal:evidence] line immediately before the completion marker)",
-		map[string]any{"task_id": t.ID, "consecutive_rejections": streak})
-
-	if streak >= evidenceGateMaxConsecutiveRejections {
-		te.clearEvidenceGateStreak(t.ID)
-		reason := fmt.Sprintf(
-			"worker repeated a completion claim with no [goal:evidence] line %d consecutive times — "+
-				"treating as an unmet attempt instead of re-dispatching for free",
-			streak,
-		)
-		return te.consumeAttemptOrExhaust(ctx, t, taskSessionID, reason, nil, run)
-	}
-
-	// ADR-052 FR-014/§6.4(b) TOCTOU fix: this is the FREE re-dispatch write
-	// (does not consume an attempt) — but it is still an "outcome" write in
-	// the same sense as consumeAttemptOrExhaust's: an unguarded plain Update
-	// here would just as readily revive a task a concurrent Stop already
-	// moved to failed+stopped_by_user (Status -> next, CancelReason
-	// auto-cleared) as the attempt-consuming path would. CAS it the same way.
-	nextStatus := task.StatusNext
-	updated, uerr := te.store.UpdateIfStatus(t.ID, task.StatusInProgress, task.Patch{Status: &nextStatus})
-	if uerr != nil {
-		if errors.Is(uerr, task.ErrStatusConflict) {
-			// ADR-050: deliberately does NOT closeRun — same rationale as
-			// consumeAttemptOrExhaust's identical CAS-conflict branch (a
-			// concurrent Stop is authoritative; boot reconciliation is the
-			// accepted backstop).
-			logger.WarnCF("task_executor",
-				"evidence-marker gate: dropping free re-dispatch — task left in_progress concurrently "+
-					"(Stop landed); not re-dispatching",
-				map[string]any{"task_id": t.ID})
-			return ""
-		}
-		logger.ErrorCF("task_executor",
-			"evidence-marker gate: could not persist re-dispatch status; failing the run closed",
-			map[string]any{"task_id": t.ID, "error": uerr.Error()})
-		reason := fmt.Sprintf("evidence-marker gate: could not persist re-dispatch status: %v", uerr)
-		te.failTask(t.ID, reason)
-		te.closeRun(t.ID, run, task.StatusFailed, reason)
-		return ""
-	}
-
-	if _, uerr := te.store.Update(updated.ID, task.Patch{Result: &steeringText}); uerr != nil {
-		logger.WarnCF("task_executor",
-			"evidence-marker gate: could not persist steering for re-dispatch",
-			map[string]any{"task_id": updated.ID, "error": uerr.Error()})
-	}
-	if taskSessionID != "" {
-		if sessStore := te.agentLoop.GetAgentStore(updated.AgentID); sessStore != nil {
-			if appendErr := sessStore.AppendTranscriptStrict(taskSessionID, session.TranscriptEntry{
-				ID:        fmt.Sprintf("%s-evidence-gate-%d", updated.ID, time.Now().UnixNano()),
-				Role:      "system",
-				Content:   steeringText,
-				Timestamp: time.Now().UTC(),
-			}); appendErr != nil {
-				taskGoalTranscriptWriteFailures.Add(1)
-				logger.WarnCF("task_executor",
-					"evidence-marker gate: steering transcript write failed",
-					map[string]any{"task_id": updated.ID, "session_id": taskSessionID, "error": appendErr.Error()})
-			}
-		}
-	}
-	// M6 fix: this is the OTHER redispatch path (the free re-dispatch that
-	// does not consume an attempt) — it mints a fresh session for the next
-	// attempt via the same createTaskSessionSync route and leaves THIS
-	// session's own status/lifecycle untouched otherwise. See
-	// supersedeTaskSession's doc comment for the full rationale.
-	te.supersedeTaskSession(updated.AgentID, taskSessionID)
-	// ADR-050: deliberately does NOT closeRun — same rationale as
-	// consumeAttemptOrExhaust's redispatch branch (this is another attempt at
-	// the SAME execution episode; the redispatch reopens this same run via
-	// openRun's idempotency, it does not need it pre-closed).
-	return updated.ID
+	redispatchTaskID = te.executeTaskRun(ctx, t, taskSessionID, "", run, turn)
 }
 
 // supersedeTaskSession closes out a retry-attempt's own session when the
-// goal loop moves on to a fresh attempt (M6, UAT 2026-07-31): both
-// consumeAttemptOrExhaust's attempt-consuming redispatch and
-// rejectBareEvidenceClaim's free redispatch mint a BRAND NEW session for the
+// goal loop moves on to a fresh attempt (M6, UAT 2026-07-31):
+// consumeTaskAttempt's restart mints a BRAND NEW session for the
 // next attempt (createTaskSessionSync's sessStore.NewSession, reached again
 // when the caller's deferred closure re-enters ExecuteTask) but never closed
 // out the PREVIOUS attempt's session — only the FINAL attempt's session was
@@ -1589,36 +1139,6 @@ func buildSteeringText(claimSummary string, verdict *task.JudgeVerdict) string {
 	return sb.String()
 }
 
-// buildHandover renders the graceful wind-down summary written to the task
-// Result and the owning session transcript when the goal loop's attempts are
-// exhausted (FR-044/NFR-3/SD-B9).
-func buildHandover(t *task.Task, claimSummary string, verdict *task.JudgeVerdict, maxAttempts int) string {
-	var sb strings.Builder
-	fmt.Fprintf(&sb,
-		"Goal loop exhausted after %d attempt(s) (max %d) without a judge-confirmed success.\n\n",
-		t.AttemptCount, maxAttempts,
-	)
-	if verdict != nil {
-		sb.WriteString("Last judge verdict:\n")
-		for _, c := range verdict.PerCriterion {
-			status := "met"
-			if !c.Met {
-				status = "UNMET"
-			}
-			fmt.Fprintf(&sb, "- criterion %s: %s (%s)\n", c.CriterionID, status, c.Reason)
-		}
-	} else {
-		sb.WriteString("Last attempt outcome:\n")
-		sb.WriteString(claimSummary)
-		sb.WriteString("\n")
-	}
-	sb.WriteString(
-		"\nProgress/remaining/blockers: review the run transcript for details; the task has " +
-			"been marked failed and its owner notified.",
-	)
-	return sb.String()
-}
-
 // wakeOwnerAttemptsExhausted wakes the task's owning agent via the
 // async-notifier (FR-044/async_notifier.go) once the goal loop's attempts
 // are exhausted. Falls back to a "system"/"task:<id>" destination when the
@@ -1676,19 +1196,27 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 		taskGoalTranscriptWriteFailures.Add(1)
 		logger.WarnCF("task_executor", "goal-loop: judge verdict transcript write failed",
 			map[string]any{"task_id": t.ID, "session_id": taskSessionID, "error": appendErr.Error()})
+		return
 	}
+	// Live push, ONLY once the entry above is durably saved (mirrors
+	// recordGoalOutcome's ordering, goal_outcome.go): the WS forwarder
+	// (websocket.go's EventKindJudgeVerdict case) turns this into a live
+	// generated.JudgeVerdictFrame carrying taskSessionID as session_id, so
+	// the SPA can anchor the card in this task's run session thread — not
+	// just the GLOBAL ActivityPanel.
+	te.agentLoop.emitEvent(EventKindJudgeVerdict, EventMeta{Source: "task_executor", AgentID: t.AgentID},
+		JudgeVerdictPayload{SessionID: taskSessionID, Verdict: *verdict})
 }
 
 // completeTaskWithResult marks task t terminal — Done when success is true,
 // Failed otherwise — with the given result text, archives its session (if
 // any), and runs the shared post-completion hooks (status-changed event,
 // parent follow-up, and — for a Done status only, per onTaskComplete's own
-// gate — blocked-dependent advance) plus source-channel notification. Shared
-// by finishTaskRun's three non-error completion paths (explicit success
-// marker, explicit failure marker, fail-closed no-signal). NOT used by the
-// hard "agent execution error" branch above, which keeps failTask's existing,
-// deliberately narrower shape (no parent follow-up) — that asymmetry predates
-// this change and is out of scope here.
+// gate — blocked-dependent advance) plus source-channel notification. It is
+// the one terminal writer for a task run's outcome (task_run_loop.go): an
+// upheld claim (done); a blocked or waiting claim, a Judge that cannot run or
+// a run that was never dispatched (failed, no attempt used); and the handover
+// once the task's attempts are spent (failed).
 //
 // The success parameter is deliberately a plain bool, not a task.Status
 // (review C1): completeTaskWithResult only ever writes one of the two
@@ -1715,13 +1243,6 @@ func (te *TaskExecutor) writeJudgeVerdictTranscript(t *task.Task, taskSessionID 
 func (te *TaskExecutor) completeTaskWithResult(
 	t *task.Task, taskSessionID string, expected task.Status, success bool, result string, run *activeRun,
 ) (applied bool) {
-	// Fix-Wave-2: this is a terminal write for t.ID — any evidence-marker-gate
-	// rejection streak still tracked for it is now moot (and, left uncleared,
-	// would leak for the process lifetime; see evidenceRejectStreak's doc
-	// comment). Cleared unconditionally, even on a CAS conflict below: either
-	// way the task IS terminal by now (just via a different writer), so the
-	// streak is moot regardless.
-	te.clearEvidenceGateStreak(t.ID)
 	status := task.StatusDone
 	if !success {
 		status = task.StatusFailed
@@ -1777,6 +1298,13 @@ func (te *TaskExecutor) completeTaskWithResult(
 	// dropped-conflict early returns), exactly like the UnifiedMeta archive
 	// this line sits next to.
 	te.finalizeTaskLifecycle(taskSessionID, status)
+	// GOAL-FR-015/FR-027/FR-028: end the paired goal record with its task.
+	// Placed with finalizeTaskLifecycle — AFTER the CAS write above lands and
+	// never on the dropped-conflict early returns, because a dropped write
+	// means some OTHER writer owns this task's outcome and will end the goal
+	// record itself. `final` is read back from the store, so CancelReason is
+	// whatever actually persisted rather than whatever this call was handed.
+	terminateTaskGoalRecord(t.ID, final.Status, final.CancelReason, result)
 	te.closeRun(t.ID, run, status, result)
 	te.recordEvidenceBoundary(final)
 	te.onTaskComplete(final)
@@ -1941,36 +1469,18 @@ func (te *TaskExecutor) notifySourceChannel(t *task.Task) {
 	}
 }
 
-// buildPrompt constructs the prompt sent to the agent for a task.
+// buildPrompt constructs the FIRST prompt of a task run (later turns in the
+// run are the steering prompts task_run_loop.go feeds the same session).
 //
-// ADR-043 (task completion contract): every dispatch kind is instructed to
-// end its final message with a standardized TASK_STATUS/TASK_SUMMARY marker
-// — this is the fail-closed fallback finishTaskRun parses when there is no
-// explicit task_update call. Native agents ADDITIONALLY get the task_update
-// instruction: for a task WITH acceptance criteria, an explicit call and the
-// marker now converge on the SAME evidence-ladder judge path (review r1 C1
-// fix, SD-B2) — neither "wins outright" over the other — so this instruction
-// deliberately does NOT claim the tool call bypasses adjudication.
-//
-// Echo-safety (review B1/B2): with the marker grammar now tolerant of
-// trailing content (parseTaskCompletionSignal / taskStatusLineRe), a model
-// that echoes this instruction block VERBATIM as its own "final message"
-// (without ever emitting a real signal) must not resolve to verdictSuccess —
-// that would be a false success from the instruction text itself, not from
-// anything the agent actually reported. The two TASK_STATUS lines below are
-// listed as separate, clean lines with the FAILURE variant deliberately
-// LAST: parseTaskCompletionSignal's "last occurrence wins" rule means a raw
-// echo of just this block resolves to verdictFailure (the safe direction),
-// never verdictSuccess. TestBuildPrompt_InstructionEchoNeverResolvesToSuccess
-// (task_completion_contract_test.go) pins this invariant for both dispatch
-// kinds — do not reorder the two status lines without re-verifying it holds.
-//
-// FIX 3 (7-reviewer gate, prompt/capability mismatch, predates ADR-043): the
-// task_update instruction stays dispatch-aware. A subagent_3p (external-CLI)
-// worker's tool registry is its own CLI's, never Omnipus's — it has no
-// task_update tool wired at all (see processTaskDirectExternalCLI's doc
-// comment, loop.go) — so telling it to call the tool describes a capability
-// it structurally cannot use; it gets the marker instruction only.
+// Founder decision 2026-09-14 — ONE claim mechanism: a native worker reports
+// completion ONLY by calling the goal_claim tool. A judge checks the claim;
+// the task is done only when the judge upholds it, and the worker is never
+// told it can mark its own task done (update_task refuses a status on the
+// task its own run is executing). The prose completion markers (TASK_STATUS/
+// TASK_SUMMARY + [goal:evidence], ADR-043/ADR-052) are taught ONLY to
+// subagent_3p (external-CLI) workers — their CLI cannot call Omnipus tools,
+// so the marker is their only channel, and the marker claim feeds the SAME
+// adjudication path the tool claim uses (task_run_loop.go::resolveRunClaim).
 func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "# Task: %s\n\n", t.Title)
@@ -1978,66 +1488,48 @@ func (te *TaskExecutor) buildPrompt(t *task.Task) string {
 		sb.WriteString(t.Prompt)
 		sb.WriteString("\n\n")
 	}
-	// FR-043: on a re-dispatch (attempt >= 2), carry the previous attempt's
-	// steering forward — the judge's per-criterion unmet reasons, or the
-	// no-signal reminder (evaluator-optimizer pattern, ADR D2). t.Result is
-	// repurposed as the in-flight steering carrier between attempts (see
-	// writeSteeringPrompt) — it is NOT yet the FINAL result while the goal
-	// loop is still running; completeTaskWithResult always overwrites it with
-	// the real final result at the end of the loop. Attempt 1 (AttemptCount
-	// == 0) never has steering, so first-attempt prompts are unaffected.
+	// On an outer restart (attempt >= 2), t.Result carries why the previous
+	// run failed (consumeTaskAttempt). The fresh run's first prompt carries
+	// it forward; completeTaskWithResult overwrites Result with the real
+	// final result when the task ends.
 	if t.AttemptCount > 0 && t.Result != "" {
-		fmt.Fprintf(&sb, "## Feedback from attempt %d — address this before re-claiming success:\n", t.AttemptCount)
+		fmt.Fprintf(&sb, "## Feedback from attempt %d — address this before claiming success:\n", t.AttemptCount)
 		sb.WriteString(t.Result)
-		sb.WriteString("\n\n")
-	}
-	// ADR-052 FR-035 fix (Fix-Wave-2): a pending evidence-marker-gate
-	// rejection (rejectBareEvidenceClaim) is delivered here, NOT via the
-	// t.AttemptCount>0 block above — rejectBareEvidenceClaim deliberately
-	// never increments AttemptCount (a missing [goal:evidence] line is a
-	// mechanical formatting miss, not a genuine work-verification failure, so
-	// it must not cost a real attempt), so that block's guard is never true
-	// for this path. hasEvidenceGateRejection/evidenceRejectStreak is
-	// in-memory TaskExecutor state kept independent of AttemptCount/t.Result
-	// for exactly this reason — see its doc comment.
-	if te.hasEvidenceGateRejection(t.ID) {
-		sb.WriteString("## Your last attempt was rejected by the evidence-marker gate — address this before re-claiming completion:\n")
-		sb.WriteString(evidenceGateSteeringText)
 		sb.WriteString("\n\n")
 	}
 	fmt.Fprintf(&sb, "Priority: %d (1=highest, 5=lowest)\n", t.EffectivePriority())
 	fmt.Fprintf(&sb, "Task ID: %s\n\n", t.ID)
 
-	// ADR-052 FR-035: teach the evidence marker itself, immediately before the
-	// completion marker it must precede — checkEvidenceMarkerGate
-	// (task_completion_signal.go) requires a non-empty [goal:evidence] line
-	// as the nearest non-blank line above TASK_STATUS. This block sits BEFORE
-	// the external-CLI early return below so both dispatch kinds are taught
-	// it; a subagent_3p worker has no task_update tool escape hatch at all
-	// (see dispatchesExternalCLI's doc comment), so the marker instruction is
-	// its ONLY path to ever satisfy the gate.
-	sb.WriteString("When you are done, verify your work, then end your final message with the " +
-		"evidence line immediately followed by ONE of the two status lines below (never both), " +
-		"plus an optional one-line summary:\n")
-	sb.WriteString("  " + goalEvidenceLabel + " <one line stating what you verified>\n")
-	sb.WriteString("  " + taskStatusLabel + ": success\n")
-	sb.WriteString("  " + taskStatusLabel + ": failure\n")
-	sb.WriteString("  " + taskSummaryLabel + ": <one-paragraph summary of the outcome>\n")
-
 	if te.dispatchesExternalCLI(t.AgentID) {
+		// External-CLI worker: the marker family is its only completion
+		// channel (ADR-043, narrowed to subagent_3p by the founder decision).
+		// The [goal:evidence] line must immediately precede TASK_STATUS
+		// (checkEvidenceMarkerGate); the two status lines stay separate with
+		// the FAILURE variant last so a verbatim echo of this block resolves
+		// to failure, never success (ADR-043 §2.4 echo-safety).
+		sb.WriteString("When you are done, verify your work, then end your final message with the " +
+			"evidence line immediately followed by ONE of the two status lines below (never both), " +
+			"plus an optional one-line summary:\n")
+		sb.WriteString("  " + goalEvidenceLabel + " <one line stating what you verified>\n")
+		sb.WriteString("  " + taskStatusLabel + ": success\n")
+		sb.WriteString("  " + taskStatusLabel + ": failure\n")
+		sb.WriteString("  " + taskSummaryLabel + ": <one-paragraph summary of the outcome>\n")
 		return sb.String()
 	}
 
-	// NOTE: the tool's real registered name is "update_task" (pkg/tools/task.go
-	// TaskUpdateTool.Name()) — this instruction was previously misnamed
-	// "task_update" (a name no registered tool answers to); fixed alongside the
-	// B1 rewrite since this block was already being touched.
-	sb.WriteString("You may also call `update_task` explicitly when you finish " +
-		"(a task with acceptance criteria is adjudicated by the evidence-ladder judge either way — " +
-		"calling the tool does not skip that review):\n")
-	fmt.Fprintf(&sb, "  task_id: %q\n", t.ID)
-	sb.WriteString("  status: \"done\" (or \"failed\" if unsuccessful)\n")
-	sb.WriteString("  result: a brief summary of what was accomplished\n")
+	// Native worker: teach the ONE claim path. status "met" requires a
+	// one-line evidence statement of what the worker verified; "blocked" is
+	// an honest cannot-proceed; neither ends the turn in a terminal task
+	// status the worker could write itself.
+	sb.WriteString("How to report completion — the ONLY way this task can finish:\n")
+	sb.WriteString("  When the work is done and you have verified it, call the goal_claim tool with " +
+		"status \"met\" and evidence: one line stating what you verified. A judge then checks the " +
+		"claim against the task's acceptance criteria — the task is only done when the judge upholds it, " +
+		"which may take a moment and may disagree with you.\n")
+	sb.WriteString("  If you cannot proceed and it is not something the operator can answer directly, " +
+		"call goal_claim with status \"blocked\" and the reason as evidence.\n")
+	sb.WriteString("  Do not try to mark this task done any other way while it runs — a status you write " +
+		"yourself is refused. Keep working, and claim when the work is genuinely verified.\n")
 	return sb.String()
 }
 
@@ -2293,15 +1785,15 @@ func (te *TaskExecutor) emitStatusChanged(t *task.Task, status task.Status) {
 // §3.2/3.3) from the point it is opened in runTask or runTaskFromInProgress
 // (right after each function's own session is available — see openRun's own
 // doc comment for why run-open cannot happen any earlier) through to the
-// point it is closed in finishTaskRun / completeTaskWithResult.
+// point it is closed in completeTaskWithResult.
 //
 // nil means "no run is being tracked for this execution": openRun's own call
 // to Store.OpenRun failed (openRun degrades to nil rather than aborting the
 // dispatch) — the ONE remaining nil case now that runTaskFromInProgress/
 // StartTaskNow also opens a run (BLK-3, operator decision 2026-07-20; every
 // production dispatch path participates in run-history today). Test-only
-// direct calls into finishTaskRun/completeTaskWithResult (see
-// task_completion_contract_test.go) also legitimately pass nil.
+// direct calls into finishRunTurn/completeTaskWithResult (see
+// task_run_loop_test.go) also legitimately pass nil.
 // Task.status/result/session_id keep their exact existing behavior
 // regardless of whether a run is being tracked (RD2) — activeRun only ever
 // ADDS a parallel record, never gates or alters the mirror.
@@ -2344,9 +1836,9 @@ func (te *TaskExecutor) openRun(taskID string, occurrenceMs *int64, kind task.Ru
 
 // closeRun best-effort closes run's TaskRun record with the given terminal
 // status/result (ADR-050 RD5) — a no-op when run is nil (openRun degraded,
-// or this execution never opened one). Called from finishTaskRun and
-// completeTaskWithResult always AFTER the existing Task.status/result mirror
-// write those functions already perform, so run-history strictly observes
+// or this execution never opened one). Called from completeTaskWithResult
+// always AFTER the existing Task.status/result mirror write that function
+// already performs, so run-history strictly observes
 // the SAME completion signal, never a second source of truth for it.
 //
 // closeRun can legitimately be invoked TWICE for the same run (delta-review
@@ -2401,9 +1893,6 @@ func (te *TaskExecutor) emitRunStatus(taskID, runID string, occurrenceMs *int64,
 
 // failTask marks a task as failed with the given reason.
 func (te *TaskExecutor) failTask(taskID, reason string) {
-	// Fix-Wave-2: terminal write — see completeTaskWithResult's identical
-	// clear for why.
-	te.clearEvidenceGateStreak(taskID)
 	now := time.Now().UTC().Format(time.RFC3339)
 	failed := task.StatusFailed
 	updated, err := te.store.Update(taskID, task.Patch{
@@ -2416,6 +1905,10 @@ func (te *TaskExecutor) failTask(taskID, reason string) {
 			map[string]any{"task_id": taskID, "error": err.Error()})
 		return
 	}
+	// GOAL-FR-015: terminal disposition — end the paired goal record too. See
+	// terminateTaskGoalRecord's doc comment for why all three terminal writers
+	// must call it (this one has no chokepoint in common with the other two).
+	terminateTaskGoalRecord(taskID, updated.Status, updated.CancelReason, reason)
 	te.emitStatusChanged(updated, task.StatusFailed)
 }
 
@@ -2578,6 +2071,14 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 			logger.WarnCF("task_executor", "StartTaskNow: transcript write failed",
 				map[string]any{"task_id": taskID, "session_id": taskSessionID, "error": err.Error()})
 		}
+		// GOAL-FR-010/FR-012 (E12): see activateTaskGoal's doc comment —
+		// StartTaskNow is the second of the two task-session-creation
+		// chokepoints and must activate the task's goal record exactly like
+		// createTaskSessionSync does. The error is reported by
+		// activateTaskGoal itself (ERROR log + a line in the task's own
+		// transcript) and is not fatal to the run — see the sibling call in
+		// createTaskSessionSync.
+		_ = te.activateTaskGoal(t, taskSessionID)
 	} else {
 		logger.WarnCF("task_executor", "StartTaskNow: no agent store found, task will have no session",
 			map[string]any{"task_id": taskID, "agent_id": t.AgentID})
@@ -2611,7 +2112,7 @@ func (te *TaskExecutor) StartTaskNow(ctx context.Context, taskID string) (string
 //
 // BLK-3 (operator decision 2026-07-20): it DOES open an ADR-050 RD5/RD7
 // TaskRun record (task-run-history-spec.md §3.2), threading the resulting
-// *activeRun into finishTaskRun so completion closes it. This was previously
+// *activeRun into the run loop so completion closes it. This was previously
 // out of scope — StartTaskNow's raw-PATCH entry point is distinct from the
 // ClaimForRun/SpawnReset-guarded paths §3.2 originally scoped run-open to —
 // but the gateway's "Start Task" and "Create & Run now" UI actions BOTH
@@ -2677,7 +2178,7 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	// performing real agent execution. The hook receives the goroutine's context so
 	// tests can assert it is not canceled by the originating request context.
 	// Deliberately BEFORE the run-open below: this seam never reaches
-	// finishTaskRun, so opening a run here would create one that this
+	// the run loop, so opening a run here would create one that this
 	// (never-executing) test double can never close.
 	if te.goroutineCtxHook != nil {
 		te.goroutineCtxHook(ctx, t.ID)
@@ -2707,14 +2208,15 @@ func (te *TaskExecutor) runTaskFromInProgress(
 	taskCtx = tools.WithRunningTaskID(taskCtx, t.ID)
 
 	sessionKey := fmt.Sprintf("agent:%s:task:%s", t.AgentID, t.ID)
-	prompt := te.buildPrompt(t)
 
 	taskChatID := taskSessionID
 	if taskChatID == "" {
 		taskChatID = "task:" + t.ID
 	}
-	resp, err := te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
-	redispatchTaskID = te.finishTaskRun(ctx, t, taskSessionID, resp, err, " (StartTaskNow path)", run)
+	turn := func(prompt string) (string, error) {
+		return te.agentLoop.processTaskDirect(taskCtx, t.AgentID, prompt, sessionKey, taskChatID)
+	}
+	redispatchTaskID = te.executeTaskRun(ctx, t, taskSessionID, " (StartTaskNow path)", run, turn)
 }
 
 // SpawnTriggeredRun dispatches a fresh run of a task that a time trigger just

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -82,4 +83,42 @@ func Exists(home, id string) bool {
 	}
 	_, err := os.Stat(filepath.Join(dirFor(home), id+".json"))
 	return err == nil
+}
+
+// ListWorkspaceIDs returns every workspace id recorded under home, sorted for
+// a deterministic enumeration order.
+//
+// It exists so a caller that must visit "every workspace" — the knowledge
+// indexer's boot sweep is the first one (docs/internal/design/
+// knowledge-tools-remediation.md, ruling R2) — has a single, minimal answer
+// to draw from, rather than each caller inventing its own directory walk
+// against workspaces/*.json the way pkg/gateway's listWorkspaceFiles and this
+// file's own ResolveDefaultID both already do. It reads only the filename
+// stem, not the record contents, so a malformed workspace file still yields
+// its id here (unlike ResolveDefaultID, which must parse the file to find the
+// is_default flag and therefore skips what it cannot parse) — an id this
+// package cannot vouch for is still one a caller may need to know exists, so
+// it can decide for itself, rather than one this function should hide.
+//
+// Returns (nil, nil) for a home with no workspaces directory yet, matching
+// ResolveDefaultID's and listWorkspaceFiles' own "not an error" reading of
+// os.ErrNotExist.
+func ListWorkspaceIDs(home string) ([]string, error) {
+	dir := dirFor(home)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("workspace: list %q: %w", dir, err)
+	}
+	ids := make([]string, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		ids = append(ids, strings.TrimSuffix(e.Name(), ".json"))
+	}
+	sort.Strings(ids)
+	return ids, nil
 }

@@ -13,7 +13,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/daemon"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // omnipusShutdownTimeout is the maximum time to wait for in-flight operations
@@ -67,6 +66,30 @@ func omnipusGracefulShutdown(
 	// point" reason the comment above documents for cron.
 	if runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()
+	}
+	// ADR-066 rung 4 writes $OMNIPUS_HOME/cache/model_limits.json at the tail
+	// of a background fetch that nothing else waits for. Close it here, with
+	// the other background writers, so the write cannot land after RunContext
+	// returns (2026-09-12: 130 post-shutdown writes in one CI run, one of
+	// them mid-TempDir-RemoveAll). Close aborts the fetch and returns once its
+	// goroutine has exited.
+	if runningServices.LiveLimits != nil {
+		runningServices.LiveLimits.Close()
+	}
+	// The provider-catalog refresh loop is the other post-boot background
+	// writer (providers_catalog.json, 2.4 MB, pulled from a GitHub release).
+	// Cancel it and wait for the goroutine to exit — bounded, because a wedged
+	// transport must not hold shutdown hostage.
+	if runningServices.catalogRefreshCancel != nil {
+		runningServices.catalogRefreshCancel()
+	}
+	if runningServices.catalogRefreshDone != nil {
+		select {
+		case <-runningServices.catalogRefreshDone:
+		case <-time.After(catalogRefreshStopTimeout):
+			slog.Warn("shutdown: catalog refresh loop did not exit in time; continuing",
+				"timeout", catalogRefreshStopTimeout)
+		}
 	}
 
 	// US-7 / FR-008: Wait for active turns to complete before force-closing.
@@ -169,11 +192,11 @@ func omnipusGracefulShutdown(
 		runningServices.stopNagBanner()
 	}
 
-	// Sweep-5: clear the per-thread restrict-failure audit hook so in-process
-	// test scaffolding that boots and tears down multiple gateways does not leak
-	// the hook's closure (which captures agentLoop) from one boot into the next.
-	// SetRestrictAuditHook is thread-safe and idempotent.
-	sandbox.SetRestrictAuditHook(nil)
+	// Sweep-5: clear the sandbox → audit hooks so in-process test scaffolding
+	// that boots and tears down multiple gateways does not leak a closure
+	// (which captures agentLoop) from one boot into the next. Both setters are
+	// thread-safe and idempotent.
+	unwireSandboxAuditHooks()
 
 	// Remove the self-registered PID file so `omnipus status` correctly reports
 	// not-running after a clean shutdown. Best-effort: a missing homePath (e.g.

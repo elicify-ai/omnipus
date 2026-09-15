@@ -327,17 +327,21 @@ func TestReplay_DivertDrainedBeforeFlag_OrderWithRealConcurrency(t *testing.T) {
 // This is Fix B from docs/internal/investigation/bug-5-replay-order.md.
 // Traces to: pkg/gateway/websocket.go wsStreamer.Update
 func TestWsStreamer_Update_RespectsReplayDivert(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
 	wc := &wsConn{
 		sendCh:         make(chan []byte, 256),
 		doneCh:         make(chan struct{}),
 		replayDivertCh: make(chan []byte, replayLiveBufferCap),
 	}
 	wc.isReplayingLive.Store(true)
+	bindTestConnToSession(handler, "test-chat", "test-session", wc)
 
 	s := &wsStreamer{
-		conn:      wc,
 		chatID:    "test-chat",
 		sessionID: "test-session",
+		channel:   newWebchatChannel(handler),
 	}
 
 	err := s.Update(context.Background(), "hello")
@@ -368,17 +372,21 @@ func TestWsStreamer_Update_RespectsReplayDivert(t *testing.T) {
 //
 // Traces to: pkg/gateway/websocket.go wsStreamer.Update
 func TestWsStreamer_Update_DirectToSendChWhenNotReplaying(t *testing.T) {
+	handler, _, _ := newTestWSHandler(t)
+	t.Cleanup(handler.Wait)
+
 	wc := &wsConn{
 		sendCh:         make(chan []byte, 256),
 		doneCh:         make(chan struct{}),
 		replayDivertCh: make(chan []byte, replayLiveBufferCap),
 	}
 	// isReplayingLive is false (default).
+	bindTestConnToSession(handler, "test-chat", "test-session", wc)
 
 	s := &wsStreamer{
-		conn:      wc,
 		chatID:    "test-chat",
 		sessionID: "test-session",
+		channel:   newWebchatChannel(handler),
 	}
 
 	err := s.Update(context.Background(), "world")
@@ -440,7 +448,6 @@ func TestWsStreamer_FanOutToPeer_RespectsReplayDivert(t *testing.T) {
 	handler.mu.Unlock()
 
 	s := &wsStreamer{
-		conn:      originConn,
 		chatID:    originChat,
 		sessionID: sessionID,
 		channel:   newWebchatChannel(handler),
@@ -524,6 +531,11 @@ func TestReplayOrdering_ConcurrentUpdateDuringDrain(t *testing.T) {
 	require.NoError(t, merr)
 	wc.replayDivertCh <- bufferedData
 
+	// ADR-082 D2: Update() now resolves its delivery target(s) from
+	// h.sessions/h.sessionIDs rather than holding wc directly — bind wc under
+	// the same chatID/sessionID the racing goroutine's streamer uses below.
+	bindTestConnToSession(handler, "chat-concurrent-update", meta.ID, wc)
+
 	// Spawn a goroutine that calls wsStreamer.Update() in a tight loop while
 	// handleAttachSession is executing.  The adversarial case: Update snapshots
 	// isReplayingLive==true, the drain empties replayDivertCh and disarms the
@@ -536,9 +548,9 @@ func TestReplayOrdering_ConcurrentUpdateDuringDrain(t *testing.T) {
 	go func() {
 		defer updaterWg.Done()
 		s := &wsStreamer{
-			conn:      wc,
 			chatID:    "chat-concurrent-update",
 			sessionID: meta.ID,
+			channel:   newWebchatChannel(handler),
 		}
 		for {
 			select {

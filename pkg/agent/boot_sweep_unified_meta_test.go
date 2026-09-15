@@ -56,7 +56,7 @@ func newMetaReconcileTestAgentLoop(t *testing.T) (al *AgentLoop, agentID string)
 			},
 		},
 	}
-	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &scriptedProvider{responseBody: successMarkerBody})
+	al = mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &scriptedProvider{responseBody: "Did the work."})
 	t.Cleanup(func() { al.Close() })
 	return al, agentID
 }
@@ -71,7 +71,7 @@ func captureLogFile(t *testing.T, level logger.LogLevel) func() string {
 	t.Helper()
 	logFile := filepath.Join(t.TempDir(), "reconcile-meta.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(level)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)

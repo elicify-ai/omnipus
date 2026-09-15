@@ -105,22 +105,23 @@ func (BaseTool) Category() ToolCategory { return CategoryCore }
 type toolCtxKey struct{ name string }
 
 var (
-	ctxKeyChannel              = &toolCtxKey{"channel"}
-	ctxKeyChatID               = &toolCtxKey{"chatID"}
-	ctxKeyAgentID              = &toolCtxKey{"agentID"}
-	ctxKeySessionKey           = &toolCtxKey{"sessionKey"}
-	ctxKeyTranscriptSessionID  = &toolCtxKey{"transcriptSessionID"}
-	ctxKeyProcTracker          = &toolCtxKey{"procTracker"}
-	ctxKeySessionOwner         = &toolCtxKey{"sessionOwner"}
-	ctxKeyWorkspaceID          = &toolCtxKey{"workspaceID"}
-	ctxKeyTurnWorkspaceDir     = &toolCtxKey{"turnWorkspaceDir"}
-	ctxKeyCitationTracker      = &toolCtxKey{"citationTracker"}
-	ctxKeyDelegationDepth      = &toolCtxKey{"delegationDepth"}
-	ctxKeyToolCallID           = &toolCtxKey{"toolCallID"}
-	ctxKeyRunningTaskID        = &toolCtxKey{"runningTaskID"}
-	ctxKeyVerifierSessionScope = &toolCtxKey{"verifierSessionScope"}
-	ctxKeySearchPromotion      = &toolCtxKey{"searchPromotion"}
-	ctxKeyAutoDenyAsk          = &toolCtxKey{"autoDenyAsk"}
+	ctxKeyChannel               = &toolCtxKey{"channel"}
+	ctxKeyChatID                = &toolCtxKey{"chatID"}
+	ctxKeyAgentID               = &toolCtxKey{"agentID"}
+	ctxKeySessionKey            = &toolCtxKey{"sessionKey"}
+	ctxKeyTranscriptSessionID   = &toolCtxKey{"transcriptSessionID"}
+	ctxKeyProcTracker           = &toolCtxKey{"procTracker"}
+	ctxKeySessionOwner          = &toolCtxKey{"sessionOwner"}
+	ctxKeyWorkspaceID           = &toolCtxKey{"workspaceID"}
+	ctxKeyTurnWorkspaceDir      = &toolCtxKey{"turnWorkspaceDir"}
+	ctxKeyCitationTracker       = &toolCtxKey{"citationTracker"}
+	ctxKeyDelegationDepth       = &toolCtxKey{"delegationDepth"}
+	ctxKeyToolCallID            = &toolCtxKey{"toolCallID"}
+	ctxKeyRunningTaskID         = &toolCtxKey{"runningTaskID"}
+	ctxKeyVerifierSessionScope  = &toolCtxKey{"verifierSessionScope"}
+	ctxKeySearchPromotion       = &toolCtxKey{"searchPromotion"}
+	ctxKeyAutoDenyAsk           = &toolCtxKey{"autoDenyAsk"}
+	ctxKeyToolRootChatSessionID = &toolCtxKey{"toolRootChatSessionID"}
 )
 
 // WithAutoDenyAsk marks a tool context as belonging to a turn with NOBODY to
@@ -229,6 +230,42 @@ func WithTranscriptSessionID(ctx context.Context, id string) context.Context {
 // ToolTranscriptSessionID extracts the transcript session ID, or "" if unset.
 func ToolTranscriptSessionID(ctx context.Context) string {
 	v, _ := ctx.Value(ctxKeyTranscriptSessionID).(string)
+	return v
+}
+
+// WithToolRootChatSessionID returns a child context carrying the ROOT chat
+// turn's routing session id (pkg/agent/turn.go::turnState.routingSessionID,
+// ADR-057 FR-011) — the browser control gate's answer to "which chat's panel
+// would hold the lock for this call" (ADR-085 FR-020/FR-021).
+//
+// Deliberately a sibling of WithTranscriptSessionID / ctxKeyTranscriptSessionID
+// rather than a change to the ManagerResolver interface: the root chat id is a
+// property of the TURN, exactly like the transcript session id already carried
+// here, not of manager resolution. Routing it through ManagerResolver.ManagerFor
+// instead would change an exported interface (breaking every fake implementing
+// it in pkg/tools/browser's test files) and would put register.go — which must
+// stay wholly owned by the browser_handover registration wave — into a second
+// wave for no reason.
+//
+// pkg/agent stamps this where it already builds the tool context for a turn,
+// using the ROOT chat's routingSessionID even for a delegated child's own
+// sub-turn (a delegated worker driving its own tab set must still defer while
+// the operator holds the wheel on the chat that spawned it — ADR-085 FR-023).
+// pkg/tools/browser reads it via ToolRootChatSessionID; it never imports
+// pkg/agent to get there.
+func WithToolRootChatSessionID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, ctxKeyToolRootChatSessionID, id)
+}
+
+// ToolRootChatSessionID extracts the root chat turn's routing session id from
+// ctx, or "" if unset. An empty result means the caller has no root chat to
+// check the browser control gate against — e.g. a cron/heartbeat/task turn
+// with no chat origin at all — and per ADR-085 FR-020 the second (root-chat
+// panel) half of the gate's two-key evaluation is then skipped entirely
+// rather than failing closed: inventing a root chat id here would make every
+// non-chat turn defer forever.
+func ToolRootChatSessionID(ctx context.Context) string {
+	v, _ := ctx.Value(ctxKeyToolRootChatSessionID).(string)
 	return v
 }
 
@@ -344,16 +381,14 @@ func ToolCallID(ctx context.Context) string {
 }
 
 // WithRunningTaskID returns a child context carrying the ID of the task
-// currently being executed by the task-run turn in progress (review r2,
-// Chunk 1). TaskExecutor stamps this onto the turn's tool ctx at
-// task-dispatch time (runTask / runTaskFromInProgress, task_executor.go) so a
-// task-update tool call can tell whether IT is genuinely part of THAT task's
-// own executor run — the only run whose completion (finishTaskRun) ever
-// adjudicates a staged PendingJudgeClaim. An out-of-band call (this context
-// carries no running task, or a different one) must never stage a claim:
-// nothing would ever adjudicate it, stranding the task non-terminal forever.
-// Empty ("") for every non-task-run turn — interactive chat, /goal, /loop,
-// scheduled runs, and sub-turns all leave this unset.
+// currently being executed by the task-run turn in progress. TaskExecutor
+// stamps this onto the turn's tool ctx at dispatch time (runTask /
+// runTaskFromInProgress, task_executor.go) so update_task can REFUSE a status
+// write on the very task its own run is executing: while a task runs, its
+// completion is claimed with goal_claim and decided by the judge (founder
+// decision 2026-09-14), never written by the worker. Empty ("") for every
+// non-task-run turn — interactive chat, /goal, /loop, scheduled runs, and
+// sub-turns all leave this unset.
 func WithRunningTaskID(ctx context.Context, taskID string) context.Context {
 	return context.WithValue(ctx, ctxKeyRunningTaskID, taskID)
 }

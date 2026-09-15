@@ -3,6 +3,11 @@ import { Check, X, CircleDashed, CaretDown, CaretRight } from '@phosphor-icons/r
 import type { AcceptanceCriterion, JudgeVerdict, EvidenceRecord } from '@/lib/api'
 import { EvidenceViewer } from './EvidenceViewer'
 
+// Fallback denominator of the "attempt N of M" counter, used ONLY when the
+// caller has no server-resolved maximum (`Task.effective_max_attempts`). MUST
+// track pkg/config/planning.go's `DefaultTaskMaxAttempts` (3) — the shipped
+// TASK ATTEMPT limit (the outer limit; goal tries within a run are the
+// separate inner budget). See the same constant's comment in TaskCard.tsx.
 export const DEFAULT_TASK_MAX_ATTEMPTS = 3
 
 interface CriteriaVerdictListProps {
@@ -21,16 +26,26 @@ interface CriteriaVerdictListProps {
   verdicts?: JudgeVerdict[]
   /** Evidence records for this task — the latest attempt's record per criterion is shown, expandable. */
   evidence?: EvidenceRecord[]
-  /** `Task.attempt_count` (contract C17) — the current run's attempt index. */
+  /** `Task.attempt_count` (contract C17) — the count of CONSUMED attempts (see `isRunning`). */
   attemptCount?: number
-  /** `Task.max_attempts`, or the inherited PlanningConfig default (3) when absent. */
+  /** `Task.effective_max_attempts` — the task attempt limit the server enforces for this task; the default (3) only when absent. */
   maxAttempts?: number | null
+  /**
+   * `task.status === 'in_progress'` — a new attempt is currently running
+   * that `attemptCount` doesn't reflect yet (it's the sole writer,
+   * consumeTaskAttempt in pkg/agent/task_executor.go, and only
+   * increments it once an attempt's outcome is known, same as
+   * TaskCard.tsx's `goalLoopStatusLabel`). When true, the counter shown is
+   * `attemptCount + 1` — the in-flight attempt — instead of the stale,
+   * already-used count.
+   */
+  isRunning?: boolean
 }
 
 /**
  * Per-attempt acceptance-criteria verdict list (ADR-049 FR-088, US-11 AS-3/4,
  * SD-C12). Shows each criterion's met/unmet/pending status + the judge's
- * latest reason, an "attempt N/M" counter, and an expandable evidence viewer
+ * latest reason, an "attempt N of M" counter, and an expandable evidence viewer
  * per criterion when a machine-check recorded evidence.
  *
  * ADR-080 D-DOD: when a caller passes `dod` (a goal's Definition of Done),
@@ -47,9 +62,12 @@ export function CriteriaVerdictList({
   evidence = [],
   attemptCount,
   maxAttempts,
+  isRunning = false,
 }: CriteriaVerdictListProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const effectiveMax = maxAttempts ?? DEFAULT_TASK_MAX_ATTEMPTS
+  const displayedAttempt =
+    typeof attemptCount === 'number' && isRunning ? attemptCount + 1 : attemptCount
 
   const latestVerdict = verdicts
     .filter((v) => v.scope === 'task')
@@ -79,9 +97,9 @@ export function CriteriaVerdictList({
 
   return (
     <div className="flex flex-col gap-1.5">
-      {typeof attemptCount === 'number' && (
+      {typeof displayedAttempt === 'number' && (
         <p className="text-xs text-[var(--color-muted)]" data-testid="attempt-counter">
-          attempt {attemptCount}/{effectiveMax}
+          attempt {displayedAttempt} of {effectiveMax}
         </p>
       )}
       {criteria.length > 0 && (

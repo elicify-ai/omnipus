@@ -80,7 +80,6 @@ export interface WizardSubmitPayload {
   model_params?: {
     temperature?: number
     max_tokens?: number
-    top_p?: number
   }
   shell_policy?: {
     enable_deny_patterns?: boolean

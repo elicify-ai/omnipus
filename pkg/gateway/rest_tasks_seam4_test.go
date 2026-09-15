@@ -29,7 +29,7 @@ func TestTaskCreate_WriteSetStreamIsJoin_PersistAndRoundTrip(t *testing.T) {
 	wsID := ensureTestWorkspace(t, api)
 
 	body := fmt.Sprintf(
-		`{"title":"shard A","action":"llm","workspace_id":%q,"write_set":["pkg/plan/plan_lint.go","pkg/plan/plan_lint_test.go"],"stream":"stream-schema","is_join":true}`,
+		`{"title":"shard A","action":"llm","workspace_id":%q,"write_set":["pkg/plan/plan_lint.go","pkg/plan/plan_lint_test.go"],"stream":"stream-schema","is_join":true,`+minimalCriteriaDodJSON+`}`,
 		wsID,
 	)
 	w := httptest.NewRecorder()
@@ -76,7 +76,7 @@ func TestTaskPatch_WriteSetStreamIsJoin_UpdatesAndClears(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	wsID := ensureTestWorkspace(t, api)
 
-	createBody := fmt.Sprintf(`{"title":"member","action":"llm","workspace_id":%q}`, wsID)
+	createBody := fmt.Sprintf(`{"title":"member","action":"llm","workspace_id":%q,`+minimalCriteriaDodJSON+`}`, wsID)
 	wCreate := httptest.NewRecorder()
 	rCreate := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(createBody))
 	rCreate.Header.Set("Content-Type", "application/json")

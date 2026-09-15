@@ -32,7 +32,7 @@ func TestHandleWorkspaces_MediaSubpath_DispatchesToWorkspaceMedia(t *testing.T) 
 	const workspaceID = "ws-dispatch-regression"
 	lib := api.agentLoop.GetWorkspaceLibrary(workspaceID)
 	require.NotNil(t, lib)
-	_, _, err := lib.Upload("dispatch-probe.txt", gen.UserUpload, bytes.NewBufferString("media dispatch bytes"))
+	_, _, err := lib.Upload("dispatch-probe.txt", gen.MediaLibraryEntrySourceUserUpload, bytes.NewBufferString("media dispatch bytes"))
 	require.NoError(t, err)
 	store.SetWorkspaceLibraryProvider(func(string) (media.WorkspaceLibraryResolver, error) {
 		return lib, nil

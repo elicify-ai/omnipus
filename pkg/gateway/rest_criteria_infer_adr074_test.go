@@ -68,7 +68,7 @@ func TestRESTTaskCreate_KindInference(t *testing.T) {
 	setWorkspaceCoreTeam(t, api, wsID, []string{"01JXTESTAGENTSTARTTEST001"})
 
 	t.Run("no_payload_inferred_prose", func(t *testing.T) {
-		body := fmt.Sprintf(`{"title":"prose task","action":"llm","workspace_id":%q,"criteria":[%s]}`,
+		body := fmt.Sprintf(`{"title":"prose task","action":"llm","workspace_id":%q,"criteria":[%s],"dod":`+validDoDJSON+`}`,
 			wsID, criterionJSON("the summary reads well", ""))
 		w := postTaskRaw(t, api, body)
 		require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
@@ -80,7 +80,7 @@ func TestRESTTaskCreate_KindInference(t *testing.T) {
 	t.Run("EC8_kind_omitted_all_check_agent_assigned_accepted_ungated", func(t *testing.T) {
 		body := fmt.Sprintf(
 			`{"title":"machine task","action":"llm","workspace_id":%q,`+
-				`"agent_id":"01JXTESTAGENTSTARTTEST001","criteria":[%s]}`,
+				`"agent_id":"01JXTESTAGENTSTARTTEST001","criteria":[%s],"dod":`+validDoDJSON+`}`,
 			wsID, criterionJSON("tests pass",
 				`"check":{"command":"go test ./...","expected_exit_code":0}`))
 		w := postTaskRaw(t, api, body)
@@ -96,7 +96,7 @@ func TestRESTTaskCreate_KindInference(t *testing.T) {
 	})
 
 	t.Run("dual_payload_kind_omitted_400", func(t *testing.T) {
-		body := fmt.Sprintf(`{"title":"ambiguous","action":"llm","workspace_id":%q,"criteria":[%s]}`,
+		body := fmt.Sprintf(`{"title":"ambiguous","action":"llm","workspace_id":%q,"criteria":[%s],"dod":`+validDoDJSON+`}`,
 			wsID, criterionJSON("ambiguous",
 				`"check":{"command":"true","expected_exit_code":0},"behavior":{"tool":"bash"}`))
 		w := postTaskRaw(t, api, body)

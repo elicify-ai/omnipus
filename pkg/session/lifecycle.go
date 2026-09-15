@@ -262,7 +262,7 @@ type LifecycleRecord struct {
 
 	// FailedReason is set only when State==LifecycleFailed. Left open
 	// (not a closed enum) per the generated type's own field doc — e.g.
-	// "interrupted", "budget_exhausted", "judge_rounds_exhausted".
+	// "interrupted", "judge_rounds_exhausted".
 	FailedReason string `json:"failed_reason,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`

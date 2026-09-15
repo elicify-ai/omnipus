@@ -23,6 +23,16 @@ import (
 func TestRootDelegationAdmission_UnsetInheritsCentralValueLive(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "") // keep the unrelated env override inert
 
+	// Pin the memory reading. This test is about central-value inheritance
+	// and live re-resolution, not the live memory gate — left unpinned it
+	// reads THIS machine's real memory state, and on a loaded host the memory
+	// gate clamps every admission to its floor of 2, failing "admit 3 of 40"
+	// regardless of what the resolved cap is. See stubMemory
+	// (memory_admission_test.go) and the precedent fix in
+	// TestWiring_RootDelegationFanOut_BoundedByCentralValueNot16
+	// (wiring_adr057_fix_test.go).
+	stubMemory(t, false, true)
+
 	// SubTurn is left at its zero value (MaxConcurrent == 0, "unset"); a
 	// distinct, explicit Performance.MaxParallelAgents makes the assertion
 	// deterministic regardless of this machine's hardware-autodetected value.
@@ -99,6 +109,10 @@ func TestRootDelegationAdmission_UnsetInheritsCentralValueLive(t *testing.T) {
 // working system right up until a wide fan-out saturates their provider.
 func TestRootDelegationAdmission_NegativeConfigFailsClosedToCentralValue(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
+
+	// Pin the memory reading — see the identical comment in
+	// TestRootDelegationAdmission_UnsetInheritsCentralValueLive above.
+	stubMemory(t, false, true)
 
 	cfg := &config.Config{
 		Agents: config.AgentsConfig{

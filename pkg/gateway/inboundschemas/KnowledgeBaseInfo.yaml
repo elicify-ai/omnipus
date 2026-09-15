@@ -1,0 +1,109 @@
+title: KnowledgeBaseInfo
+description: >
+  Identity and detection result for one knowledge base (ADR-067 D18).
+  Returned by GET /api/v1/library/{workspace_id}/knowledge?path=...
+  for any folder in the workspace work tree.
+
+  Detection is marker-based and never reads file CONTENT (FR-020, FR-021):
+  a folder is a knowledge base when its root contains .omnipus-vault/ or
+  .obsidian/. Omnipus writes only its own marker and never creates
+  .obsidian/ (FR-022, FR-023).
+
+  Deliberately carries NO index counts or percentages. Index progress is a
+  streaming state delivered over the WebSocket as KnowledgeIndexProgressFrame
+  (FR-080); a caller that wants to know how far indexing has got subscribes,
+  it does not poll this endpoint.
+type: object
+additionalProperties: false
+required:
+  - workspace_id
+  - root_path
+  - is_knowledge_base
+  - marker
+properties:
+  workspace_id:
+    type: string
+    minLength: 1
+    description: Workspace whose work tree contains this folder.
+    example: "ws_7f3a"
+  root_path:
+    type: string
+    minLength: 1
+    description: >
+      Workspace-relative path of the collection root, forward-slash
+      separated. Never absolute, never containing a ".." segment. Knowledge
+      bases live inside the workspace tree, never at an arbitrary host path
+      (FR-025).
+    example: "notes/vault"
+  is_knowledge_base:
+    type: boolean
+    description: >
+      True when a marker directory was found at root_path. False means an
+      ordinary folder — NOT "we could not tell"; an unreadable marker is
+      reported through detection_error instead of being silently downgraded
+      (E-9).
+    example: true
+  marker:
+    type: string
+    enum:
+      - omnipus_vault
+      - obsidian
+      - none
+    description: >
+      Which marker directory established the result. "omnipus_vault" is
+      .omnipus-vault/, "obsidian" is .obsidian/, "none" accompanies
+      is_knowledge_base=false. When both markers are present the Omnipus one
+      is reported.
+    example: "omnipus_vault"
+  collection_id:
+    type: string
+    minLength: 1
+    description: >
+      Stable opaque identifier for this collection, derived from the root's
+      RESOLVED REAL PATH (FR-031). Two mounts of the same folder — into one
+      workspace or several — share a collection_id and therefore one index;
+      the index is reference-counted across those mounts. Absent when
+      is_knowledge_base is false. Callers MUST treat this as opaque and MUST
+      NOT parse a filesystem path out of it.
+    example: "kb_3d1c9a7e5b2f4806"
+  display_name:
+    type: string
+    description: >
+      Human-readable collection name recorded in the marker (FR-024).
+      Absent when the marker records none; the SPA then falls back to the
+      root folder's own name.
+    example: "Research vault"
+  template_path:
+    type: string
+    description: >
+      Collection-relative path of the folder holding note templates, as
+      recorded in the marker (FR-024). Reachable without enabling hidden
+      files (FR-101). Absent when the collection defines no templates.
+    example: "templates"
+  detection_error:
+    type: object
+    additionalProperties: false
+    required:
+      - code
+      - message
+    description: >
+      Present when detection could not complete — a marker exists but could
+      not be read, or the root itself could not be stat-ed. Detection then
+      fails LOUDLY: is_knowledge_base carries the last known answer and the
+      caller MUST surface this rather than treating the folder as ordinary
+      (E-9).
+    properties:
+      code:
+        type: string
+        enum:
+          - marker_unreadable
+          - root_unreadable
+          - root_missing
+          - not_a_directory
+        description: Machine-readable reason detection could not complete.
+        example: "marker_unreadable"
+      message:
+        type: string
+        minLength: 1
+        description: Human-readable explanation naming the path involved.
+        example: "cannot read notes/vault/.omnipus-vault: permission denied"

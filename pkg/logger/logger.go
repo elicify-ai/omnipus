@@ -39,6 +39,13 @@ var (
 	logFile            *os.File
 	once               sync.Once
 	mu                 sync.RWMutex
+
+	// consoleDisabled tracks whether the console logger currently discards
+	// output (DisableConsole has run and its restore func has not). It exists
+	// so test-suite hygiene checks (e.g. a package TestMain) can detect a test
+	// that silenced the console and never restored it, without needing to
+	// inspect the unexported zerolog.Logger writer itself. See ConsoleDisabled.
+	consoleDisabled atomic.Bool
 )
 
 func init() {
@@ -97,10 +104,45 @@ func SetLevel(level LogLevel) {
 	zerolog.SetGlobalLevel(level)
 }
 
-func DisableConsole() {
+// DisableConsole silences the console logger (routes it to io.Discard) and
+// returns a restore func that puts the previous console logger back exactly
+// as it was. Production code (e.g. ConfigureFromEnv, which disables the
+// console for the whole process lifetime once file logging takes over) can
+// ignore the return value — behavior there is unchanged.
+//
+// Tests that call DisableConsole MUST capture the restore func and run it via
+// t.Cleanup, e.g.:
+//
+//	restore := logger.DisableConsole()
+//	t.Cleanup(restore)
+//
+// Go runs every test in a package in one process, so a test that silences
+// the console and never restores it leaves every later test in that binary
+// silently unable to log to the console too — see ConsoleDisabled for a
+// package-level way to guard against that.
+func DisableConsole() (restore func()) {
 	mu.Lock()
 	defer mu.Unlock()
+	previous := logger
+	wasDisabled := consoleDisabled.Load()
 	logger = zerolog.New(io.Discard).With().Timestamp().Caller().Logger()
+	consoleDisabled.Store(true)
+	return func() {
+		mu.Lock()
+		defer mu.Unlock()
+		logger = previous
+		consoleDisabled.Store(wasDisabled)
+	}
+}
+
+// ConsoleDisabled reports whether the console logger is currently silenced —
+// i.e. DisableConsole has run and its restore func has not (yet) undone it.
+// It exists for test-suite hygiene: a package's TestMain can call this after
+// m.Run() and fail the whole run if any test left the console silenced,
+// which otherwise hides every subsequent test's console log output (and, in
+// CI, can hide the log text that would have explained a failure).
+func ConsoleDisabled() bool {
+	return consoleDisabled.Load()
 }
 
 func GetLevel() LogLevel {
@@ -242,6 +284,13 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 	}
 
 	skip := getCallerSkip()
+
+	// A registered credential never reaches the console or gateway.log (see
+	// sensitiveValueReplacer): scrubbed once, here, before both sinks below.
+	if r := sensitiveValueReplacer.Load(); r != nil {
+		message = r.Replace(message)
+		fields = scrubFields(r, fields)
+	}
 
 	// Snapshot the two zerolog.Logger globals under a brief read-lock.
 	// zerolog.Logger is a plain value struct (writer interface, level,

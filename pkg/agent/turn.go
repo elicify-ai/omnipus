@@ -109,6 +109,15 @@ type turnResult struct {
 	// whether the turn ended via the engine's error/limit fallback without holding
 	// a reference to the turnState.  Populated by runTurn before it returns.
 	turnFailed bool
+	// goalDeferredAdjudication is JUDGE-FR-098's deferred-dispatch payload
+	// (ADR-084 revision 9 D13, wave E13): checkGoalLoopAfterTurn
+	// (goal_loop.go) populates this instead of calling runGoalAdjudication
+	// synchronously when a turn resolves a `met` claim. nil means no
+	// claim-triggered adjudication is pending. runAgentLoop (loop.go)
+	// dispatches it, in a goroutine, strictly AFTER bus.PublishOutbound of
+	// this turn's own finalContent — see goalDeferredAdjudicationWork's own
+	// doc comment (goal_loop.go) for the full contract.
+	goalDeferredAdjudication *goalDeferredAdjudicationWork
 }
 
 type turnState struct {
@@ -275,10 +284,48 @@ type turnState struct {
 	closeOnce       sync.Once          // Ensures pendingResults channel is closed once
 	finishedChan    chan struct{}      // Closed when turn finishes
 
-	// Token budget tracking
-	tokenBudget      *atomic.Int64        // Shared token budget counter
-	lastFinishReason string               // Last LLM finish_reason
-	lastUsage        *providers.UsageInfo // Last LLM usage info
+	lastUsage *providers.UsageInfo // Last LLM usage info
+
+	// ADR-087 D6.1: the turn-scoped auto-continue accumulator — the
+	// load-bearing object for a truncated answer that gets one or more
+	// bounded continuation rounds. Guarded by mu like every other field
+	// here.
+	//
+	// continuationAccum is the concatenation of every round's own content
+	// produced while runTurn's D4/D6 branch (loop.go's
+	// evaluateTruncatedSuccess) has been handling a truncated-with-no-tool-
+	// calls response — updated on EVERY entry into that branch, whether or
+	// not the round goes on to actually continue. It is the value
+	// finalizeStreamer hands the streamer via SetContinuationContent (when
+	// hadContinuation() is true) and what D4b annotates as the turn's final
+	// content.
+	//
+	// continuationRounds counts how many times a continuation was actually
+	// DISPATCHED (D6.3's bound of 2) — never cleared, so hadContinuation()
+	// (continuationRounds > 0) stays true for the rest of the turn once at
+	// least one continuation has fired, even after the chain resolves. This
+	// is deliberately different from continuationPending (below): the
+	// streamer still needs to render the FULL accumulated answer for the
+	// whole rest of turn finalization, not just while a round is mid-flight.
+	//
+	// continuationPending is true only from the moment a continuation is
+	// dispatched until the chain resolves — a later round completing
+	// normally (clears via resolveContinuation, called both from a
+	// non-truncated/tool-calls response and from D4a/D4b's own
+	// resolution). preserveTruncatedAccumulator (loop.go, D6.8) gates on
+	// THIS field, not on continuationRounds: without the distinction, an
+	// unrelated terminal exit many iterations after an already-resolved
+	// continuation chain would wrongly re-surface stale partial content.
+	continuationAccum   string
+	continuationRounds  int
+	continuationPending bool
+
+	// truncationReason carries ADR-087 D2's narrow enum ("max_output_tokens"
+	// — the only value this package ever writes; "cancelled" is cancel.go's
+	// own, unrelated writer) for a turn whose final content was annotated by
+	// D4a/D4b or preserved mid-continuation by D6.8. Empty means no
+	// truncation annotation is pending for this turn's transcript entry.
+	truncationReason string
 
 	// Accumulated turn-level stats across all LLM iterations in this turn.
 	// Used to populate the "done" WS frame for the session UI (issue #12).
@@ -307,6 +354,41 @@ type turnState struct {
 	// Threaded into the DoneStats.TurnFailed field on the done frame so
 	// CLI/automation clients can detect failure without parsing message content.
 	turnFailed bool
+
+	// goalNarrowMisses is ADR-081 D3's bounded-escape counter (the D3
+	// amendment, 2026-09-08): the number of CONSECUTIVE LLM requests this
+	// turn for which evaluateGoalForcing (loop.go) has offered the narrowed
+	// {set_goal[, AskUserQuestion]} first-move door while the base predicate
+	// (goalTurnRecordState) still held. It is bumped once per narrowed
+	// offering, BEFORE that request's outcome is known — a request that
+	// instead finds the record already written (a prior request's set_goal
+	// succeeded) or that parks the turn (a genuine AskUserQuestion card)
+	// never reaches the bump, because goalTurnRecordState/the turn-ending
+	// park short-circuit evaluateGoalForcing first. Once the counter exceeds
+	// goalForcingMaxNarrowAttempts, evaluateGoalForcing arms
+	// goalNarrowEscaped instead of narrowing that (and every later) request.
+	// Zero value is correct: each turnState is fresh per turn generation, so
+	// there is nothing to reset between turns.
+	goalNarrowMisses int
+	// goalNarrowEscaped is true once ADR-081 D3's bounded escape has fired
+	// for this turn — evaluateGoalForcing then offers the FULL tool surface
+	// for the remainder of the turn even though the base predicate may still
+	// hold (a persistently empty record against a model that keeps failing
+	// or ignoring the narrowed pair). This is the fix for the real-world
+	// defect reproduced 2026-09-08: a /goal set at 11:54:48Z narrowed
+	// iteration 1 to {set_goal, AskUserQuestion}; the model's AskUserQuestion
+	// call FAILED schema validation ("unexpected property \"recommended\""
+	// inside an option); because narrowing used to apply to iteration 1
+	// ONLY, iteration 2 got the full tool surface back with the record still
+	// empty, and the agent ran ToolSearch/write_file×5/bash/serve_web/
+	// browser_navigate for ~17 minutes before finally calling set_goal at
+	// 12:12:26Z — the post-turn correction (checkGoalLoopAfterTurn,
+	// goal_loop.go) never got a chance to run because the turn never ended.
+	// Narrowing now persists across iterations while the predicate holds;
+	// this flag is the escape valve so a persistently-failing model cannot
+	// wedge the turn in the narrowed pair for its whole MaxIterations
+	// budget instead. Never cleared once set.
+	goalNarrowEscaped bool
 
 	// Back-reference to the owning AgentLoop (set for SubTurns only, used for hard abort cascade)
 	al *AgentLoop
@@ -349,13 +431,14 @@ type turnState struct {
 	// store key, transcript write target, ownership predicate, approval-grant
 	// key, uploads-directory key, tool-manifest bucket, lifecycle-record
 	// field, or audit session_id (those all keep using transcriptSessionID
-	// above). Within this file the reads are the three role-B predicates
-	// FR-015 names — GetActiveTurnHookForSession,
-	// resolveSessionIDByChannelChat and getActiveRootTurnStateForSession —
+	// above). Within this file the reads are the role-B predicates FR-015
+	// names — GetActiveTurnHookForSession and resolveSessionIDByChannelChat —
 	// plus claimAnyTurnForSession, the cancel descendant fallback added
 	// post-merge in the same role-B class (see the FR-014 allowlist test,
 	// routing_session_id_consumer_set_adr057_test.go, the authority on the
-	// exact reader census).
+	// exact reader census). ADR-082 D1 deleted this file's third role-B
+	// predicate, getActiveRootTurnStateForSession — it existed solely for
+	// the now-retired orphan-foreground-turn watchdog.
 	// The remaining closed-set readers have all LANDED (U7/U8/U9/U15, this
 	// same branch) — do not go looking for unfinished work here: the
 	// steering.go role-B predicates (U8), the pre-arm latch keys in
@@ -402,6 +485,22 @@ type turnState struct {
 	// denied nothing yet, so no counter or quarantine entry ever survives
 	// into a new turn or crosses into another session's turnState.
 	denialLedger turnDenialLedger
+
+	// browserDeferralLedger is ADR-085's per-turn control-gate deferral
+	// state (BROWSER-FR-013/FR-014/FR-017): a plain aggregate count of how
+	// many control-gated browser tool calls this turn has been deferred on
+	// (BROWSER-FR-013), modelled on denialLedger immediately above but
+	// deliberately a SEPARATE counter — the two refusals share this file's
+	// tool-dispatch point and nothing else (see pkg/agent/loop.go's
+	// shared-file-chain doc: E2's cap counts verifier tool-call denials and
+	// refuses at its own ceiling; this counts control-gate deferrals per
+	// turn and refuses at three). Its type and every method that reads/
+	// mutates it are defined in browser_deferral.go. Guarded by mu above,
+	// same discipline as denialLedger. Zero value (used 0) is correct — a
+	// fresh turnState (one per turn) has deferred nothing yet, and a
+	// delegated child turn gets its OWN turnState and therefore its own
+	// independent count (FR-017).
+	browserDeferralLedger turnBrowserDeferralLedger
 
 	// mediaRetryDone is the per-turn guard for the RD2 media-downgrade retry
 	// (ADR-051 §RD2 / FR-007 / FR-008). When true, the loop's classifier-gated
@@ -484,6 +583,24 @@ type turnState struct {
 	// loop.go's SEC-26-adjacent circuit-breaker check right before the
 	// tool dispatch call.
 	toolCircuitBroken map[string]string
+	// toolCallHistory is the ordered list of dispatched tool-call signatures
+	// this turn (capped at toolCallHistoryCap), scanned by
+	// detectOscillation for a repeating short cycle of calls — the loop shape
+	// the failure streak cannot see (UAT 2026-09-13 D-23). See
+	// tool_failure_circuit_breaker.go.
+	toolCallHistory []string
+
+	// toolRepeatSig and toolRepeatRun track the current run of consecutive
+	// SUCCESSFUL dispatches of one identical (tool name + arguments)
+	// signature, with no other dispatched tool call in between (see
+	// tool_failure_circuit_breaker.go). Any different signature or any failure
+	// ends the run. toolRepeatStopNotice is set once the run reaches
+	// toolRepeatStopThreshold and is consumed at the end of that round, which
+	// ends the turn with the notice as its final content. All three are
+	// guarded by mu, like the failure-streak fields above.
+	toolRepeatSig        string
+	toolRepeatRun        int
+	toolRepeatStopNotice string
 }
 
 // atomicToolCallProgress is the atomics-based store for turnState's live
@@ -503,6 +620,7 @@ type atomicToolCallProgress struct {
 	lastActivityUnixNano atomic.Int64
 	argsBytes            atomic.Int64
 	totalArgsBytes       atomic.Int64
+	reasoningBytes       atomic.Int64
 	// name is an atomic.Pointer rather than an atomic.Value: the callback
 	// stores a fresh *string on every delta (even once the name has
 	// stabilized, since the SSE loop doesn't know that), and
@@ -515,8 +633,10 @@ type atomicToolCallProgress struct {
 // recordToolCallProgress is the write side of G1's progress signal, called
 // synchronously from the provider's SSE read loop via the
 // protocoltypes.OnToolCallProgress callback loop.go passes to ChatStream.
-// Four atomic stores, no lock, no I/O, no allocation beyond the one string
-// copy for Name — safe to call on every argument delta of a live stream.
+// Five atomic stores, no lock, no I/O, no allocation beyond the one string
+// copy for Name — safe to call on every argument or reasoning delta of a live
+// stream. A reasoning event stores its empty Name and zero ArgsBytes as-is, so
+// the snapshot always describes the kind of delta that arrived last.
 // Nil-safe so a callback captured before a turn is fully constructed (should
 // never happen, but costs nothing to guard) degrades to a no-op instead of a
 // panic.
@@ -528,6 +648,7 @@ func (ts *turnState) recordToolCallProgress(p protocoltypes.ToolCallProgress) {
 	ts.toolCallProgress.name.Store(&name)
 	ts.toolCallProgress.argsBytes.Store(int64(p.ArgsBytes))
 	ts.toolCallProgress.totalArgsBytes.Store(int64(p.TotalArgsBytes))
+	ts.toolCallProgress.reasoningBytes.Store(int64(p.ReasoningBytes))
 	// Stamped LAST, deliberately: a concurrent reader that observes a fresh
 	// lastActivityUnixNano is guaranteed to also observe the argsBytes/name
 	// stores that happened-before it (each is its own atomic op, so there is
@@ -594,6 +715,7 @@ func (ts *turnState) ToolCallProgress() tools.ToolCallProgressSnapshot {
 		Name:           name,
 		ArgsBytes:      int(ts.toolCallProgress.argsBytes.Load()),
 		TotalArgsBytes: int(ts.toolCallProgress.totalArgsBytes.Load()),
+		ReasoningBytes: int(ts.toolCallProgress.reasoningBytes.Load()),
 		LastActivity:   lastActivity,
 		Age:            time.Since(lastActivity),
 	}
@@ -767,8 +889,8 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 	// runs unchecked until its own MaxIterations ceiling. CompareAndDelete
 	// only removes the entry if it is STILL this exact ts, so a
 	// since-registered newer turn sharing the same key is left untouched —
-	// mirrors the identical guard orphan_watch.go already uses for
-	// al.orphanWatches (fireOrphanForegroundTurnWatch's CompareAndDelete).
+	// the same compare-and-delete-by-identity pattern used everywhere else in
+	// this file a map entry can race a concurrent replace.
 	al.activeTurnStates.CompareAndDelete(ts.sessionKey, ts)
 	// Design-flaw fix (cancel_prearm.go, turnImminentForIdentity): record
 	// that a turn JUST cleared for this identity so a still-true
@@ -800,9 +922,7 @@ func (al *AgentLoop) clearActiveTurn(ts *turnState) {
 // parent's own ts.sessionKey plus the cancelPreArm bookkeeping that only
 // applies to a finished whole turn — use THIS helper when you only need the
 // bare map-entry guard (a deferred child cleanup) and clearActiveTurn when you
-// are retiring a turn that ran to completion. Mirrors the identical guard
-// orphan_watch.go uses for al.orphanWatches (fireOrphanForegroundTurnWatch's
-// CompareAndDelete).
+// are retiring a turn that ran to completion.
 func (al *AgentLoop) clearActiveTurnStateEntry(sessionKey string, ts *turnState) {
 	al.activeTurnStates.CompareAndDelete(sessionKey, ts)
 }
@@ -1168,55 +1288,6 @@ func (al *AgentLoop) claimAnyTurnForSession(sessionID string) TurnCancelHook {
 	return claimed
 }
 
-// getActiveRootTurnStateForSession returns the ROOT turnState (depth==0 /
-// parentTurnID=="") matching sessionID's ROUTING session ID, or nil when no
-// root turn is currently active for the session — INCLUDING when the only
-// resolvable match is a non-root descendant. Unlike
-// GetActiveTurnHookForSession (which falls back to ANY match, root-preferring
-// but not root-EXCLUSIVE, as a defensive last resort for other callers), this
-// NEVER returns a delegate sub-turn.
-//
-// ADR-057 FR-015 (role-B predicate, one of the seven): rebased from
-// transcriptSessionID onto routingSessionID for the same reason as
-// GetActiveTurnHookForSession's identical rebase — see that function's doc
-// comment. The depth==0/parentTurnID=="" filter below already excludes every
-// descendant regardless of which id field feeds it, so for THIS function the
-// rebase changes no currently-observable input/output pair; it exists so
-// this predicate stays keyed on the same closed-set field as its six
-// siblings (FR-014) rather than reintroducing a transcriptSessionID
-// comparison that would silently diverge the moment any of them depends on
-// this one matching a genuinely-distinct-id descendant in the future.
-//
-// Used exclusively by the orphan-foreground-turn watchdog (ADR-045,
-// pkg/agent/orphan_watch.go) to answer "is there still a genuine foreground
-// turn to reap" without ever mistaking a surviving Critical/background
-// delegate — whose parent root has already finished and been cleared from
-// activeTurnStates via clearActiveTurn (loop.go) — for one. Reusing
-// GetActiveTurnHookForSession's anyMatch fallback for that decision was the
-// root cause of MA-1: it would resolve the delegate as "the turn to reap",
-// and handing that to RequestCancel would trigger RequestCancel's
-// session-wide escalation against the exact turn ADR-045 exists to protect.
-func (al *AgentLoop) getActiveRootTurnStateForSession(sessionID string) *turnState {
-	var root *turnState
-	al.activeTurnStates.Range(func(_, value any) bool {
-		ts, ok := value.(*turnState)
-		if !ok {
-			logger.ErrorCF("agent", "activeTurnStates: invariant violated — unexpected value type, skipping entry",
-				map[string]any{"got_type": fmt.Sprintf("%T", value)})
-			return true
-		}
-		if string(ts.routingSessionID) != sessionID {
-			return true
-		}
-		if ts.depth == 0 || ts.parentTurnID == "" {
-			root = ts
-			return false
-		}
-		return true
-	})
-	return root
-}
-
 func (al *AgentLoop) GetActiveTurnBySession(sessionKey string) *ActiveTurnInfo {
 	ts := al.getActiveTurnState(sessionKey)
 	if ts == nil {
@@ -1292,6 +1363,104 @@ func (ts *turnState) setLastStreamer(s bus.Streamer) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.lastStreamer = s
+}
+
+// appendToAccumulator extends ADR-087 D6.1's turn-scoped accumulator with
+// one more round's content and returns the running total. Does NOT bump
+// continuationRounds/continuationPending — see markContinuationDispatched
+// for that; this method only records what was produced, independent of
+// whether the caller goes on to actually continue.
+func (ts *turnState) appendToAccumulator(content string) string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.continuationAccum += content
+	return ts.continuationAccum
+}
+
+// continuationAccumulated returns the concatenated answer accumulated so
+// far across this turn's ADR-087 D6 continuation rounds.
+func (ts *turnState) continuationAccumulated() string {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.continuationAccum
+}
+
+// markContinuationDispatched records that a D6 continuation round has been
+// sent (bumping the D6.3 round bound) and marks the chain unresolved until
+// resolveContinuation clears it.
+func (ts *turnState) markContinuationDispatched() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.continuationRounds++
+	ts.continuationPending = true
+}
+
+// markContinuationPending marks the D6 chain unresolved WITHOUT counting a
+// dispatched continuation round (ADR-087 D4's "truncated and has complete
+// tool calls" carve-out — the tool calls are executed as normal, but the
+// truncated finish reason means this round produced no resolving text
+// answer, so D6.8 must still be able to rescue the accumulator if the turn
+// ends before a later round resolves it). Deliberately does not bump
+// continuationRounds — this is not a D6.3-counted auto-continue round.
+func (ts *turnState) markContinuationPending() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.continuationPending = true
+}
+
+// resolveContinuation clears the D6.8 "unresolved" flag — called when a
+// later round completes without needing the truncation branch at all
+// (ordinary content or tool calls) and by D4a/D4b once they annotate the
+// final content. No-op (idempotent) when nothing is pending.
+func (ts *turnState) resolveContinuation() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.continuationPending = false
+}
+
+// hadContinuation reports whether this turn has dispatched at least one D6
+// continuation round. Unlike continuationUnresolved, this never clears once
+// set — finalizeStreamer needs it for the rest of the turn's finalization,
+// not just while a round is mid-flight (see the field's own doc comment).
+func (ts *turnState) hadContinuation() bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.continuationRounds > 0
+}
+
+// continuationUnresolved reports whether a dispatched D6 continuation has
+// not yet resolved — the gate preserveTruncatedAccumulator (loop.go, D6.8)
+// uses to decide whether a terminal exit needs to rescue a mid-flight
+// partial answer.
+func (ts *turnState) continuationUnresolved() bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.continuationPending
+}
+
+// continuationRoundsSnapshot returns how many D6 continuation rounds this
+// turn has dispatched so far.
+func (ts *turnState) continuationRoundsSnapshot() int {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.continuationRounds
+}
+
+// setTruncationReason records ADR-087 D2's narrow reason enum for this
+// turn's final content annotation ("max_output_tokens" — the only value
+// this package writes).
+func (ts *turnState) setTruncationReason(reason string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.truncationReason = reason
+}
+
+// getTruncationReason returns the pending truncation annotation reason, or
+// "" when this turn's final content needs no annotation.
+func (ts *turnState) getTruncationReason() string {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.truncationReason
 }
 
 // markLastStreamerProducedModel stamps the model that produced the response
@@ -1437,6 +1606,42 @@ type streamerFailedSetter interface {
 	SetTurnFailed(failed bool)
 }
 
+// streamerContinuationSetter is an optional interface a Streamer may
+// implement to receive the full answer accumulated across this turn's
+// ADR-087 D6 truncation-continuation rounds (D6.1, §9 fixed E→C
+// interface), overriding whatever the streamer accumulated from its own
+// per-call token buffer. Only the LAST streamer is ever finalized (see
+// lastStreamer's own doc comment on the turn-scoped-vs-per-call mismatch,
+// §2.8), and a per-call streamer's buffer holds only the FINAL
+// continuation round's text — without this, a continued answer would
+// persist and render only its last segment, silently dropping every
+// earlier round even though the live bubble showed the full text as it
+// streamed.
+type streamerContinuationSetter interface {
+	SetContinuationContent(full string)
+}
+
+// streamerTruncationSetter is an optional interface a Streamer may implement
+// to receive ADR-087 D2's truncation reason before Finalize is called,
+// mirroring streamerContinuationSetter's calling convention exactly.
+//
+// This is the WP C fix for the streamed (webchat) path's D4a/D4b gap: a
+// streamer's own Finalize call is the choke point that actually persists the
+// assistant transcript entry, so it must stamp Truncated/TruncationReason
+// itself, on the SAME write, rather than have finalizeStreamer call
+// MarkLastEntryTruncated AFTER Finalize returns. That post-hoc call was
+// confirmed live-broken two ways: for a D4a zero-content turn, Finalize's own
+// `content != ""` gate wrote no entry at all, so the backward-walk found
+// nothing to flag (silent no-op — replay showed no assistant entry, and the
+// "(cut off at the output limit)" notice never appeared on reconnect); and
+// when an EARLIER same-turn assistant entry existed (this turn's own TurnID,
+// written by an earlier tool-calling round via
+// appendIntermediateAssistantTranscript), the backward-walk matched and
+// mis-stamped THAT completed narration as truncated instead.
+type streamerTruncationSetter interface {
+	SetTruncation(reason string)
+}
+
 // markTurnFailed records that this turn did NOT end in a real, successful model
 // response. It is called from four sites in loop.go: (1) empty-response-after-
 // retry, (2) tool-iteration limit, (3) generic empty-content exhaustion when the
@@ -1455,6 +1660,34 @@ func (ts *turnState) markTurnFailed() {
 	ts.mu.Lock()
 	ts.turnFailed = true
 	ts.mu.Unlock()
+}
+
+// noteGoalNarrowAttempt bumps ADR-081 D3's bounded-escape counter
+// (goalNarrowMisses, see its doc comment) for one more narrowed first-move
+// offering this turn and returns the running total, so the caller
+// (evaluateGoalForcing, loop.go) can compare it against
+// goalForcingMaxNarrowAttempts.
+func (ts *turnState) noteGoalNarrowAttempt() int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.goalNarrowMisses++
+	return ts.goalNarrowMisses
+}
+
+// armGoalNarrowEscape permanently releases ADR-081 D3's narrowed first-move
+// door for the rest of this turn (see goalNarrowEscaped's doc comment).
+func (ts *turnState) armGoalNarrowEscape() {
+	ts.mu.Lock()
+	ts.goalNarrowEscaped = true
+	ts.mu.Unlock()
+}
+
+// goalNarrowIsEscaped reports whether armGoalNarrowEscape has already fired
+// this turn.
+func (ts *turnState) goalNarrowIsEscaped() bool {
+	ts.mu.RLock()
+	defer ts.mu.RUnlock()
+	return ts.goalNarrowEscaped
 }
 
 // SetFinalContent records the final assistant response on the turnState so
@@ -1514,6 +1747,7 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 	completionTokens := ts.turnCompletionTokens
 	cacheRead := ts.turnCacheRead
 	cacheWrite := ts.turnCacheWrite
+	truncReason := ts.truncationReason
 	ts.lastStreamer = nil
 	ts.mu.Unlock()
 	if s != nil {
@@ -1525,6 +1759,39 @@ func (ts *turnState) finalizeStreamer(ctx context.Context) {
 		}
 		if fsetter, ok := s.(streamerFailedSetter); ok {
 			fsetter.SetTurnFailed(failed)
+		}
+		// ADR-087 D6.1 (§9 fixed E→C interface): a continued answer's
+		// per-call streamer buffer holds only the LAST round's text — hand
+		// it the full accumulated answer instead so persistence and the
+		// live bubble agree with turnResult.finalContent. Called AFTER
+		// ts.mu.Unlock() above — both hadContinuation and
+		// continuationAccumulated take ts.mu.RLock() themselves, and
+		// sync.RWMutex is not reentrant.
+		if cs, ok := s.(streamerContinuationSetter); ok && ts.hadContinuation() {
+			cs.SetContinuationContent(ts.continuationAccumulated())
+		}
+		// ADR-087 D2/D4a/D4b, WP C: stamp the truncation reason on the
+		// streamer BEFORE Finalize, mirroring the continuation-content probe
+		// immediately above, so Finalize can persist Truncated/
+		// TruncationReason on the SAME write that creates (or annotates) the
+		// assistant transcript entry — including the D4a zero-content case,
+		// which Finalize's own content-gate previously skipped writing an
+		// entry for at all. This REPLACES the old post-hoc
+		// MarkLastEntryTruncated call that used to run AFTER Finalize
+		// returned: on the streamed path that call either found no entry to
+		// flag (D4a: Finalize wrote nothing) or, worse, walked back and
+		// mis-stamped an EARLIER same-turn narration entry sharing this
+		// turn's TurnID (written by an earlier tool-calling round via
+		// appendIntermediateAssistantTranscript) as truncated. The
+		// non-streaming path (loop.go's own write choke point, gated on
+		// !hasActiveStreamer) now has an equivalent single-write fix of its
+		// own — appendAssistantTranscriptTruncated — so neither path calls
+		// MarkLastEntryTruncated post-hoc anymore; this streamer probe only
+		// covers the streamed case.
+		if truncReason != "" {
+			if tset, ok := s.(streamerTruncationSetter); ok {
+				tset.SetTruncation(truncReason)
+			}
 		}
 		// Pass finalContent so the streamer can persist the assistant message
 		// even when its own accumulated-from-token buffer is empty — happens
@@ -1863,12 +2130,69 @@ func (ts *turnState) appendIntermediateAssistantTranscript(content string, produ
 // producedModel is the model string that emitted THIS response. Pass ""
 // to fall back to ts.lastProducedModel.
 func (ts *turnState) appendAssistantTranscript(content string, producedModel ...string) {
+	ts.appendAssistantTranscriptImpl(content, false, false, "", producedModel...)
+}
+
+// validTruncationReasonsAgent mirrors pkg/session's unexported
+// validTruncationReasons (ADR-087 D2): the only two values
+// appendAssistantTranscriptTruncated will ever stamp onto a persisted
+// entry. Kept in lockstep with session.MarkLastEntryTruncated's own set —
+// pkg/session cannot be imported for the map itself since it is
+// unexported, but both lists must never diverge.
+var validTruncationReasonsAgent = map[string]bool{
+	"cancelled":         true,
+	"max_output_tokens": true,
+}
+
+// appendAssistantTranscriptTruncated is the ADR-087 D4a/D4b non-streaming
+// write-choke-point fix: it stamps Truncated=true and TruncationReason on
+// the assistant entry in the SAME construction/write appendAssistantTranscript
+// already performs, instead of the pre-fix two-step pattern (append the
+// entry, then have loop.go immediately call session.MarkLastEntryTruncated
+// to re-read, re-parse, and rewrite the whole transcript.jsonl just to
+// stamp two fields on the entry that was built one call earlier). The
+// streaming path already writes truncation state in a single pass via
+// wsStreamer.Finalize (commit 47c086ca); this brings the non-streaming
+// path to parity.
+//
+// content == "" is allowed and always written (D4a: a turn truncated with
+// no output produced still needs a persisted, correctly-flagged entry) —
+// the streamed path's equivalent zero-content write is wsStreamer.Finalize
+// itself (WP C, pkg/gateway/websocket.go), stamped via the
+// streamerTruncationSetter probe in finalizeStreamer below.
+//
+// reason MUST be one of session's two accepted values ("cancelled",
+// "max_output_tokens" — ADR-087 D2, see validTruncationReasonsAgent). Any
+// other value is a programming error at this call site: rather than
+// silently persist an unrecognized reason (which session.MarkLastEntryTruncated
+// would itself have rejected), this logs loudly at Error level and falls
+// back to writing the entry WITHOUT the truncation fields — so the
+// content is never lost, but a bad reason can never masquerade as a valid
+// one on disk.
+func (ts *turnState) appendAssistantTranscriptTruncated(content, reason string, producedModel ...string) {
+	if !validTruncationReasonsAgent[reason] {
+		logger.ErrorCF("agent", "appendAssistantTranscriptTruncated: invalid truncation reason, entry written WITHOUT truncation stamp",
+			map[string]any{"session_id": ts.transcriptSessionID, "turn_id": ts.turnID, "reason": reason})
+		ts.appendAssistantTranscriptImpl(content, true, false, "", producedModel...)
+		return
+	}
+	ts.appendAssistantTranscriptImpl(content, true, true, reason, producedModel...)
+}
+
+// appendAssistantTranscriptImpl is the shared body behind
+// appendAssistantTranscript and appendAssistantTranscriptTruncated —
+// allowEmpty controls only whether a "" content is written (D4a) or
+// no-opped (every other caller); truncated / truncationReason set
+// session.TranscriptEntry's Truncated / TruncationReason fields at
+// construction, so a truncated non-streaming entry is written once instead
+// of appended-then-rewritten.
+func (ts *turnState) appendAssistantTranscriptImpl(content string, allowEmpty bool, truncated bool, truncationReason string, producedModel ...string) {
 	if ts.abandoned.Load() {
 		abandonedWritesSuppressed.Add(1)
 		ts.warnAbandonedTranscriptWrite("appendAssistantTranscript")
 		return
 	}
-	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || content == "" {
+	if ts.transcriptStore == nil || ts.transcriptSessionID == "" || (content == "" && !allowEmpty) {
 		return
 	}
 	agentID := ts.resolveActiveAgentID()
@@ -1911,6 +2235,12 @@ func (ts *turnState) appendAssistantTranscript(content string, producedModel ...
 		// identical stamp for the full rationale — non-empty only for a
 		// child delegation sub-turn's own final-turn text.
 		ParentSpawnCallID: ts.parentSpawnCallID,
+		// Truncated / TruncationReason: set only by
+		// appendAssistantTranscriptTruncated (ADR-087 D4a/D4b) so a
+		// non-streaming truncated turn's Truncated flag lands in this same
+		// write, never via a follow-up rewrite of transcript.jsonl.
+		Truncated:        truncated,
+		TruncationReason: truncationReason,
 	}
 	if err := ts.transcriptStore.AppendTranscriptStrict(ts.transcriptSessionID, entry); err != nil {
 		transcriptWriteFailures.Add(1)
@@ -2261,20 +2591,6 @@ func (ts *turnState) SetOnCancelFinish(fn func(cancelMethod string)) {
 	ts.mu.Lock()
 	defer ts.mu.Unlock()
 	ts.onCancelFinish = fn
-}
-
-// GetLastFinishReason returns the last LLM finish_reason
-func (ts *turnState) GetLastFinishReason() string {
-	ts.mu.RLock()
-	defer ts.mu.RUnlock()
-	return ts.lastFinishReason
-}
-
-// SetLastFinishReason sets the last LLM finish_reason
-func (ts *turnState) SetLastFinishReason(reason string) {
-	ts.mu.Lock()
-	defer ts.mu.Unlock()
-	ts.lastFinishReason = reason
 }
 
 // GetLastUsage returns the last LLM usage info

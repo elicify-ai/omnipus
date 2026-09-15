@@ -60,6 +60,21 @@ type memoryRateLimiterAware interface {
 	SetMemoryRateLimiter(limiter *MemoryRateLimiter)
 }
 
+// argsNormalizer is implemented by a tool that needs to correct a specific,
+// well-understood near-miss in its OWN arguments before the registry's
+// generic validateToolArgs runs against its declared schema — accepting and
+// normalising the mistake instead of hard-rejecting the whole call (fix-wave
+// GX-B evidence: AskUserQuestionTool lifting a misplaced option-level
+// `recommended` onto its question rather than failing a forced first move
+// and stalling the turn). NormalizeArgs runs first; its return value is what
+// BOTH validateToolArgs and Execute see. A tool that does not implement this
+// interface is validated and executed exactly as before — this is an
+// opt-in, per-tool seam, not a change to shared validation strictness.
+// Precedent: mediaStoreAware/auditLoggerAware/memoryRateLimiterAware above.
+type argsNormalizer interface {
+	NormalizeArgs(args map[string]any) map[string]any
+}
+
 func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{
 		tools: make(map[string]*ToolEntry),
@@ -482,9 +497,13 @@ func (r *ToolRegistry) ExecuteWithContext(
 			"args": args,
 		})
 
-	// Capture auditLogger under lock to avoid a data race with SetAuditLogger.
+	// Capture the registry's injected dependencies once, under a single read
+	// lock, so this execution sees a consistent snapshot and neither field
+	// races with its setter (SetAuditLogger / SetMediaStore, which both take
+	// the write lock). Deliberately one RLock for both, not one each.
 	r.mu.RLock()
 	auditLog := r.auditLogger
+	mediaStore := r.mediaStore
 	r.mu.RUnlock()
 
 	tool, ok := r.Get(name)
@@ -503,6 +522,28 @@ func (r *ToolRegistry) ExecuteWithContext(
 				"tool": name,
 			})
 		return ErrorResult(fmt.Sprintf("tool %q not found", name)).WithError(fmt.Errorf("tool not found"))
+	}
+
+	// Give the tool a chance to normalise a near-miss in its own arguments
+	// BEFORE schema validation runs (argsNormalizer, see its doc above) —
+	// opt-in per tool, no effect on any tool that does not implement it.
+	if normalizer, ok := tool.(argsNormalizer); ok {
+		args = normalizer.NormalizeArgs(args)
+	}
+
+	// Recover arguments corrupted by a model that leaked its tool-call
+	// template control tokens into a string value (A1 — see argrepair.go).
+	// Runs before validation so a recoverable call (e.g. op="create_view"
+	// with `type` swallowed into op's value) is repaired into the call the
+	// model meant, rather than rejected with an unusable enum error. A no-op
+	// for every well-formed call: nothing fires unless a value carries BOTH a
+	// literal <arg_key>/<arg_value> template tag AND a per-call hex sentinel —
+	// the fingerprint of a genuine leak, so a legitimate value that merely
+	// mentions the tag is left untouched (A1).
+	if repaired, ok := repairLeakedToolArgs(args); ok {
+		args = repaired
+		logger.WarnCF("tool", "repaired leaked tool-call template tokens in arguments",
+			map[string]any{"tool": name})
 	}
 
 	// Validate arguments against the tool's declared schema.
@@ -563,7 +604,9 @@ func (r *ToolRegistry) ExecuteWithContext(
 		}
 	}
 
-	result = normalizeToolResult(ctx, result, name, r.mediaStore, channel, chatID)
+	// mediaStore is the snapshot taken at entry, not a fresh r.mediaStore
+	// read — see the capture block above.
+	result = normalizeToolResult(ctx, result, name, mediaStore, channel, chatID)
 
 	duration := time.Since(start)
 
@@ -600,14 +643,24 @@ func (r *ToolRegistry) ExecuteWithContext(
 		if result.IsError {
 			decision = audit.DecisionError
 		}
+		// UAT 2026-09-13 D-85: carry WHAT the call acted on (path, id,
+		// operation, property — the identifying keys only, never content) and
+		// which session it ran in, so an auditor can reconstruct which note
+		// changed and how, not merely that a tool ran. audit.SalientToolArgs
+		// owns the allowlist.
+		details := map[string]any{
+			"duration_ms": duration.Milliseconds(),
+		}
+		if salient := audit.SalientToolArgs(name, args); salient != nil {
+			details["args"] = salient
+		}
 		if err := auditLog.Log(&audit.Entry{
-			Event:    audit.EventToolCall,
-			Decision: decision,
-			AgentID:  agentID,
-			Tool:     name,
-			Details: map[string]any{
-				"duration_ms": duration.Milliseconds(),
-			},
+			Event:     audit.EventToolCall,
+			Decision:  decision,
+			AgentID:   agentID,
+			SessionID: ToolTranscriptSessionID(ctx),
+			Tool:      name,
+			Details:   details,
 		}); err != nil {
 			slog.Error("SEC-15: audit log write failed for tool execution",
 				"tool", name, "agent", agentID, "error", err)
@@ -621,6 +674,10 @@ func (r *ToolRegistry) ExecuteWithContext(
 // This is critical for KV cache stability: non-deterministic map iteration would
 // produce different system prompts and tool definitions on each call, invalidating
 // the LLM's prefix cache even when no tools have changed.
+//
+// Reads r.tools without locking: MUST be called with r.mu held. All four
+// callers today already hold RLock — GetDefinitions, ToProviderDefs, List,
+// GetAll.
 func (r *ToolRegistry) sortedToolNames() []string {
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
@@ -729,7 +786,31 @@ func SanitizeToolName(name string) string {
 // UnsanitizeToolName reverses SanitizeToolName — maps LLM tool names back
 // to internal names (e.g., "browser_navigate" → "browser.navigate").
 // Only applies to known prefixes to avoid false positives.
+//
+// Takes r.mu for reading. It is called on the hot dispatch path for every
+// tool call (pkg/agent/loop.go), concurrently with registration writes from
+// the MCP reconcile path — without the read lock this is an unsynchronised
+// map read against a map write, which the Go runtime turns into
+// `fatal error: concurrent map read and map write`. That is a runtime fatal,
+// not a panic: recover() does not catch it and the whole process dies.
+// See issue #660.
+//
+// DO NOT call this from anywhere that already holds r.mu — including
+// indirectly. sync.RWMutex is not reentrant, so a second acquisition
+// self-deadlocks. The indirect route is real: SetMediaStore (line 256),
+// SetAuditLogger (line 272) and SetMemoryRateLimiter (line 294) each iterate
+// r.tools and invoke arbitrary Tool methods while holding r.mu.Lock(). A tool
+// whose setter called back into UnsanitizeToolName would deadlock the
+// registry. Call unsanitizeToolNameLocked instead from any such context.
 func (r *ToolRegistry) UnsanitizeToolName(name string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.unsanitizeToolNameLocked(name)
+}
+
+// unsanitizeToolNameLocked is the body of UnsanitizeToolName. It reads
+// r.tools directly and MUST be called with r.mu held (read or write).
+func (r *ToolRegistry) unsanitizeToolNameLocked(name string) string {
 	// Try the name as-is first (most tools have no dots).
 	if _, ok := r.tools[name]; ok {
 		return name

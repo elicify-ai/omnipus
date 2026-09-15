@@ -40,20 +40,15 @@ func TestWsStreamer_Finalize_SuppressesDuplicateTranscript(t *testing.T) {
 	require.NoError(t, err, "create session")
 	t.Cleanup(func() { _ = store.DeleteSession(meta.ID) })
 
-	wc := &wsConn{
-		sendCh:         make(chan []byte, 256),
-		doneCh:         make(chan struct{}),
-		replayDivertCh: make(chan []byte, replayLiveBufferCap),
-	}
-
 	s := &wsStreamer{
-		conn:       wc,
 		chatID:     "chat-suppress",
 		sessionID:  meta.ID,
 		agentStore: store,
 		agentID:    "main",
-		// channel is nil: markStreamed and fan-out short-circuit, which is fine —
-		// we only assert on the transcript-append behavior here.
+		// channel is nil: markStreamed, connection resolution, and the live
+		// send loop all short-circuit (ADR-082 D2's bare-fixture degrade),
+		// which is fine — we only assert on the transcript-append behavior
+		// here.
 	}
 
 	// Accumulate some narration (as Update would during a tool-call round).
@@ -102,14 +97,7 @@ func TestWsStreamer_Finalize_WritesTranscriptWhenNotSuppressed(t *testing.T) {
 	require.NoError(t, err, "create session")
 	t.Cleanup(func() { _ = store.DeleteSession(meta.ID) })
 
-	wc := &wsConn{
-		sendCh:         make(chan []byte, 256),
-		doneCh:         make(chan struct{}),
-		replayDivertCh: make(chan []byte, replayLiveBufferCap),
-	}
-
 	s := &wsStreamer{
-		conn:       wc,
 		chatID:     "chat-write",
 		sessionID:  meta.ID,
 		agentStore: store,

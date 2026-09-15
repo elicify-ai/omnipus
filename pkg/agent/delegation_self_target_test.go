@@ -216,6 +216,13 @@ func TestTaskCreate_SelfAssignmentAllowedThroughRegisterSharedTools(t *testing.T
 		"prompt":   "do the thing myself",
 		"agent_id": agentID, // SELF
 		"criteria": []any{map[string]any{"kind": "prose", "text": "the thing is done"}},
+		// dod is mandatory on every agent-facing task-creation surface
+		// (GOAL-FR-021 / operator decision D-C, "criteria + definition-of-done
+		// are mandatory at CREATION and EDIT"). This is the only case in this
+		// file that must SUCCEED, so it is the only one that has to satisfy the
+		// business-rule gates; the denial cases below stop at authorization,
+		// which runs first, and deliberately keep omitting them.
+		"dod": []any{map[string]any{"kind": "prose", "text": "nothing else broke"}},
 	})
 	if res == nil {
 		t.Fatal("nil result from create_task")

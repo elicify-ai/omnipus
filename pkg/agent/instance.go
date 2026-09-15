@@ -220,6 +220,35 @@ func NewAgentInstance(
 	// granted (ADR-068 §2.2).
 	toolsRegistry.Register(tools.NewListMountsTool(config.OmnipusHomeDir()))
 
+	// The knowledge tool family (ADR-067 D7, FR-050–FR-055 retrieval and
+	// FR-100–FR-108 authoring): the agent-facing read AND write path over a
+	// knowledge base mounted into the calling agent's workspace. Registered
+	// unconditionally for EVERY agent, exactly like request_mount directly
+	// above and for the same reason — what an agent may DO with them is its
+	// seeded tool POLICY (D17's matrix, pkg/coreagent/core.go +
+	// pkg/config/defaults.go), never conditional registration (Constraint #6).
+	//
+	// Until this call existed the whole of pkg/knowledge was reachable by
+	// nothing, and until it covered the authoring half, seven of the nine
+	// seeded names were a granted posture over a tool no registry offered.
+	// See knowledge_tools.go for the audit wiring.
+	registerKnowledgeTools(toolsRegistry)
+
+	// grep (ADR-081 / docs/internal/specs/unified-search-and-grep-spec.md
+	// FR-008/FR-019/FR-020): recursive file NAME and TEXT-CONTENT search
+	// over the calling agent's OWN workspace root and its mounts only — no
+	// workspace_id argument exists, so another agent's or workspace's files
+	// are never reachable (FR-020, US-3 AS-7). Registered unconditionally
+	// for EVERY agent, exactly like request_mount/list_mounts and the
+	// knowledge tools directly above, and for the identical Constraint #6
+	// reason: registration is not permission. The founder ruling (spec
+	// "Founder rulings" / FR-009) is that grep is allowed for ALL tiers —
+	// Jim/Mia/Ava/Ray, the Worker, and the specialist tier — but that
+	// posture is a POLICY seed (pkg/coreagent/core.go + pkg/config/
+	// defaults.go, owned by ADR-081's governance track, not this file);
+	// this call only makes the tool reachable, it grants nothing.
+	toolsRegistry.Register(tools.NewGrepTool(workspace, readRestrict))
+
 	// Resolve agentID early so the session store can tag sessions with the correct owner.
 	// Empty until an agentCfg supplies one: the "main" sentinel used to stand in
 	// here, which is how it ended up stamped on sessions, transcripts, tasks and
@@ -296,7 +325,19 @@ func NewAgentInstance(
 		maxIter = 200
 	}
 
+	// Sampling params: per-agent override (agentCfg.ModelParams) wins, then
+	// the global default, then the hardcoded fallback — same three-rung
+	// ladder as maxIter above. The per-agent field was persisted (PUT
+	// /api/v1/agents/{id} `model_params`) but never read here before this
+	// fix (Q1): AgentConfig had no ModelParams field at all until it was
+	// added specifically to close this gap, so a caller-set max_tokens/
+	// temperature returned 200 and never once reached a provider call —
+	// the ADR-037 anti-pattern moved to config file rather than fixed by
+	// it. See config.AgentModelParams's doc comment.
 	maxTokens := defaults.MaxTokens
+	if agentCfg != nil && agentCfg.ModelParams != nil && agentCfg.ModelParams.MaxTokens != nil {
+		maxTokens = *agentCfg.ModelParams.MaxTokens
+	}
 	if maxTokens == 0 {
 		maxTokens = 8192
 	}
@@ -304,6 +345,9 @@ func NewAgentInstance(
 	temperature := 0.7
 	if defaults.Temperature != nil {
 		temperature = *defaults.Temperature
+	}
+	if agentCfg != nil && agentCfg.ModelParams != nil && agentCfg.ModelParams.Temperature != nil {
+		temperature = *agentCfg.ModelParams.Temperature
 	}
 
 	var thinkingLevelStr string

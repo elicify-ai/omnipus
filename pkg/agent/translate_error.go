@@ -79,6 +79,16 @@ const (
 	// CodeNetwork: 408 / 5xx / timeout / connection drop. Retryable.
 	CodeNetwork LLMErrorCode = "network"
 
+	// CodeProviderStalled (founder decision 2026-09-14, UAT E-15c): a
+	// STREAMING provider call was aborted because nothing at all — no
+	// content, tool-call, reasoning, or keep-alive bytes — arrived for the
+	// silence limit (`model_list[].stream_stall_timeout`, default 300 s).
+	// Distinct from CodeNetwork (we HAD a connection; it just went mute) and
+	// from CodeTurnTimedOut (no wall clock is involved — a stream that keeps
+	// delivering, however slowly, is never cut). Carried by
+	// common.ErrStreamStalled. Attribution `provider`, retryable.
+	CodeProviderStalled LLMErrorCode = "provider_stalled"
+
 	// CodeContentPolicy: provider flagged content moderation / safety.
 	CodeContentPolicy LLMErrorCode = "content_policy"
 
@@ -94,6 +104,18 @@ const (
 	// win over the body substring — the body substring is a SECONDARY
 	// detector, the status-code path is the PRIMARY gate.
 	CodeToolArgs LLMErrorCode = "tool_args"
+
+	// CodeToolCallTruncated (ADR-087 D5): a tool call's arguments could not
+	// be decoded AND the evidence says why — the generation was cut off at
+	// the output-token cap before the call finished, not the model naming
+	// its arguments wrong. Distinct from CodeToolArgs, which stays for a
+	// genuinely malformed/wrong-shaped payload (e.g. `42` where an object
+	// belongs) with no truncation evidence behind it. Both codes share the
+	// same underlying sentinel (common.ErrToolArgumentsUndecodable) —
+	// common.ToolArgumentsError.Truncated is what tells them apart; see
+	// TranslateTurnError's *common.ToolArgumentsError branch. Attribution
+	// `model`, not retryable: the identical request truncates identically.
+	CodeToolCallTruncated LLMErrorCode = "tool_call_truncated"
 
 	// CodeSchema: JSON-schema validation error (FR-018 / ADR-051 Rev 4).
 	// Pinned body substring: "schema validation". Excluded from the
@@ -229,7 +251,8 @@ type LLMErrorAttribution = generated.LLMErrorAttribution
 //     capability, content, and auth rejections.
 //   - Detail: opaque diagnostic for Verbose Chat. May include provider
 //     identity / model / status / body preview; NEVER persisted; NEVER
-//     rendered outside Verbose Chat.
+//     rendered outside Verbose Chat; every registered credential scrubbed
+//     out of it (buildDetail).
 type LLMError struct {
 	Code      LLMErrorCode
 	Message   string
@@ -743,6 +766,27 @@ func TranslateTurnError(err error) LLMError {
 	if code, ok := typedExitCode(err); ok {
 		return typedExitError(code, err)
 	}
+	// Founder decision 2026-09-14: a streaming call aborted for total
+	// silence (common.ErrStreamStalled) is its own typed code, before any
+	// substring classifier can misread the sentinel's wording. Checked early
+	// for the same reason as the ToolArgumentsError branch below: the typed
+	// value carries information a string match cannot.
+	if errors.Is(err, common.ErrStreamStalled) {
+		code := CodeProviderStalled
+		var se *common.StallError
+		if errors.As(err, &se) && se.SilentFor > 0 {
+			// The curated copy names the shipped default; the Detail carries
+			// the operator's actual limit for Verbose chat.
+			return LLMError{
+				Code:      code,
+				Message:   defaultUserMessage(code),
+				Retryable: isRetryable(code),
+				Detail: buildDetail(nil, fmt.Sprintf(
+					"the model provider stopped responding for %s", se.SilentFor)),
+			}
+		}
+		return typedExitError(code, err)
+	}
 	if errors.Is(err, ErrAgentNotWorkspaceMember) {
 		return LLMError{
 			Code:      CodeAgentNotConfigured,
@@ -793,7 +837,77 @@ func TranslateTurnError(err error) LLMError {
 			Detail:    buildDetail(nil, err.Error()),
 		}
 	}
-	return TranslateLLMError(nil, err.Error())
+	// ADR-087 D5: a *common.ToolArgumentsError in the chain carries real
+	// truncation evidence (finish reason and/or fragment shape) that a bare
+	// errors.Is(err, common.ErrToolArgumentsUndecodable) check cannot see —
+	// that sentinel alone does not prove truncation (it also fires for
+	// well-formed JSON of the wrong shape, e.g. `42`). Check this BEFORE
+	// falling through to the substring classifier so the two faults stay
+	// distinguishable even when this error reached us as a Go value rather
+	// than as a *ProviderError.
+	var tae *common.ToolArgumentsError
+	if errors.As(err, &tae) {
+		code := CodeToolArgs
+		if tae.Truncated {
+			code = CodeToolCallTruncated
+		}
+		return LLMError{
+			Code:      code,
+			Message:   defaultUserMessage(code),
+			Retryable: isRetryable(code),
+			Detail:    buildDetail(nil, err.Error()),
+		}
+	}
+	// Fallback: classify by whatever structured provider data (status/body)
+	// is reachable in err's chain, not just its stringified message.
+	// errorToProviderError walks the chain for a *ProviderError/FailoverError
+	// so a 401/413 buried in err still classifies as auth/too-large instead
+	// of falling through to CodeUnknown (ADR-087 Codex C6) — the prior
+	// TranslateLLMError(nil, err.Error()) here discarded that structure.
+	pe := errorToProviderError(err)
+	if pe != nil && pe.Status == 0 && pe.Body == "" {
+		// errorToProviderError's synthetic "nothing structured found" pe
+		// (Status 0, Body ""). classifyByProviderError prefers a non-nil
+		// pe's Body over the message argument even when that Body is
+		// empty, which would silently defeat the substring classifier for
+		// every plain-text error (e.g. "rate limit exceeded") that carries
+		// no *ProviderError/*FailoverError in its chain. Drop back to nil
+		// so classification falls through to message exactly as it did
+		// before this fallback started threading pe through.
+		pe = nil
+	}
+	return TranslateLLMError(pe, err.Error())
+}
+
+// curatedTurnError is a turn error whose text Omnipus wrote and which carries
+// no provider response: a turn a hook or the tool-denial budget aborted
+// (hookAbortError, abortTurn — the reason is the hook's decision or the
+// budget's own wording), and an external-CLI run that failed, whose CLI output
+// was already replaced by the plain message for its code (SanitizeRunnerError).
+// It lets turnErrorUserText show these actionable, provider-free reasons as
+// written — the chat bubble already does — while every other turn error is
+// shown only as its plain message.
+type curatedTurnError struct{ text string }
+
+func (e *curatedTurnError) Error() string { return e.text }
+
+// turnErrorUserText is what a person or a model may read about a turn that
+// ended on err: the contract's plain message for err's typed code
+// (TranslateTurnError), never err's own text. A provider error's text carries
+// the provider's raw response body — common.ProviderError.Error renders
+// body=%q, and providers.FailoverError / FallbackExhaustedError wrap it — which
+// can echo a credential fragment or the request payload (ADR-051 §RD5
+// CRIT-001). The one exception is a curatedTurnError anywhere in err's chain:
+// its own text (never the wrapping text around it) is shown as written unless
+// the classifier reads a provider-shaped signal in it — abortTurn's rule for
+// the chat bubble, so a task and a chat thread say the same thing.
+func turnErrorUserText(err error) string {
+	llm := TranslateTurnError(err)
+	var curated *curatedTurnError
+	if errors.As(err, &curated) && llm.Code == CodeUnknown {
+		return curated.Error()
+	}
+	return llm.Message
 }
 
 // Typed turn-exit sentinels (ADR-066 D7, FR-034). runTurn's formerly silent
@@ -855,9 +969,12 @@ func typedExitError(code LLMErrorCode, cause error) LLMError {
 // it); an unrecoverable context is not (retrying re-runs the same overflow).
 func isRetryable(code LLMErrorCode) bool {
 	switch code {
-	case CodeRateLimited, CodeNetwork, CodeTurnTimedOut:
+	case CodeRateLimited, CodeNetwork, CodeProviderStalled, CodeTurnTimedOut:
 		return true
 	}
+	// CodeToolCallTruncated falls through to false with everything else:
+	// the same request truncates identically on retry (ADR-087 D1's
+	// rationale for "no retry advice" applies here too).
 	return false
 }
 
@@ -867,6 +984,13 @@ func isRetryable(code LLMErrorCode) bool {
 // May contain provider identity, model, status code, and a body preview —
 // the operator-facing diagnostic that the user-facing Message is generic
 // over.
+//
+// Every registered credential is scrubbed out of it
+// (logger.ScrubSensitiveValues, the replacer config.RegisterSensitiveValues
+// publishes): the detail crosses the WebSocket on every error frame, whether
+// or not the browser shows it, and a provider's body can echo the key it was
+// sent. The body is scrubbed BEFORE its preview is cut, so the cut can never
+// split a credential into a fragment the replacer no longer recognises.
 func buildDetail(pe *ProviderError, message string) string {
 	var parts []string
 	if pe != nil {
@@ -874,7 +998,7 @@ func buildDetail(pe *ProviderError, message string) string {
 			parts = append(parts, "status="+itoa(pe.Status))
 		}
 		if len(pe.Body) > 0 {
-			preview := strings.TrimSpace(pe.Body)
+			preview := strings.TrimSpace(logger.ScrubSensitiveValues(pe.Body))
 			if len(preview) > 512 {
 				preview = preview[:512] + "..."
 			}
@@ -882,7 +1006,7 @@ func buildDetail(pe *ProviderError, message string) string {
 		}
 	}
 	if len(parts) == 0 && message != "" {
-		parts = append(parts, message)
+		parts = append(parts, logger.ScrubSensitiveValues(message))
 	}
 	return strings.Join(parts, " ")
 }

@@ -309,11 +309,22 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 	}
 
 	// Step 6: Verify a retro with trigger=idle was written.
+	//
+	// AppendRetro (memory.go) os.OpenFile(O_CREATE)s the retro path, then
+	// writes its content in a separate syscall — os.ReadDir can observe the
+	// just-created (still-empty) filename before the content lands. The
+	// previous shape of this loop treated "the filename showed up" as proof
+	// the write was complete, reading it exactly once with no retry — a
+	// genuine TOCTOU race (reproduced directly on the identical assertion in
+	// the sibling test this pattern was copied from,
+	// idle_timeout_seam_test.go — see its fix for the reproduction detail).
+	// Keep polling — re-reading the file — until its CONTENT actually
+	// contains trigger=idle, not just its directory entry.
 	retrosDir := filepath.Join(ag.Home, ".omnipus", "retros")
-	var foundRetro bool
 	var retroBytes []byte
+	var sawRetroFile bool
 	retroDeadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(retroDeadline) && !foundRetro {
+	for time.Now().Before(retroDeadline) {
 		dateDirs, rerr := os.ReadDir(retrosDir)
 		if rerr != nil {
 			if !os.IsNotExist(rerr) {
@@ -322,6 +333,8 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 			continue
 		}
+		var content []byte
+		var found bool
 		for _, d := range dateDirs {
 			if !d.IsDir() {
 				continue
@@ -329,16 +342,24 @@ func TestIntegration_IdleTimerFiresRecap(t *testing.T) {
 			files, _ := os.ReadDir(filepath.Join(retrosDir, d.Name()))
 			for _, f := range files {
 				if strings.HasSuffix(f.Name(), "_retro.md") {
-					foundRetro = true
-					retroBytes, _ = os.ReadFile(filepath.Join(retrosDir, d.Name(), f.Name()))
+					found = true
+					data, readErr := os.ReadFile(filepath.Join(retrosDir, d.Name(), f.Name()))
+					if readErr == nil {
+						content = data
+					}
 				}
 			}
 		}
-		if !foundRetro {
-			time.Sleep(20 * time.Millisecond)
+		if found {
+			sawRetroFile = true
+			retroBytes = content
 		}
+		if found && strings.Contains(string(content), "trigger=idle") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
-	if !foundRetro {
+	if !sawRetroFile {
 		t.Fatal("idleIT: no _retro.md produced within 5s after goroutine-fired CloseSession")
 	}
 	if !strings.Contains(string(retroBytes), "trigger=idle") {

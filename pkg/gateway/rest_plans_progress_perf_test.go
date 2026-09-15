@@ -63,7 +63,7 @@ func TestHandleWorkspacePlansList_TaskSnapshotBoundsListCalls(t *testing.T) {
 		planIDs = append(planIDs, created.Id)
 
 		// One done member, one not-done member -> progress == 0.5.
-		doneBody := fmt.Sprintf(`{"workspace_id":%q,"title":"done-member-%d","plan_id":%q}`, wsID, i, created.Id)
+		doneBody := fmt.Sprintf(`{"workspace_id":%q,"title":"done-member-%d","plan_id":%q,`+minimalCriteriaDodJSON+`}`, wsID, i, created.Id)
 		wDone := postTask(t, api, doneBody)
 		require.Equal(t, http.StatusCreated, wDone.Code, "body=%s", wDone.Body.String())
 		var doneTask gen.Task
@@ -71,7 +71,7 @@ func TestHandleWorkspacePlansList_TaskSnapshotBoundsListCalls(t *testing.T) {
 		_, uerr := api.taskStore.Update(doneTask.Id, task.Patch{Status: taskStatusPtr(task.StatusDone)})
 		require.NoError(t, uerr)
 
-		pendingBody := fmt.Sprintf(`{"workspace_id":%q,"title":"pending-member-%d","plan_id":%q}`, wsID, i, created.Id)
+		pendingBody := fmt.Sprintf(`{"workspace_id":%q,"title":"pending-member-%d","plan_id":%q,`+minimalCriteriaDodJSON+`}`, wsID, i, created.Id)
 		wPending := postTask(t, api, pendingBody)
 		require.Equal(t, http.StatusCreated, wPending.Code, "body=%s", wPending.Body.String())
 	}

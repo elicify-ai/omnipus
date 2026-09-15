@@ -111,8 +111,15 @@ func (t *SetTodosTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return ErrorResult(fmt.Sprintf("could not resolve workspace: %v", wsErr))
 	}
 
+	// The checklist is scoped to the calling turn's transcript session
+	// (UAT B-1 runs 3 and 5): one agent's concurrent sessions each get their
+	// own card for the same goal and never see or archive each other's
+	// checklists. Empty session id (no transcript binding on the context)
+	// keeps the pre-scoping agent-wide behavior.
+	sessionID := ToolTranscriptSessionID(ctx)
+
 	// Find this agent's current active SCRATCHPAD task whose Title == goal.
-	existing, findErr := t.findActiveGoalTask(agentID, goal)
+	existing, findErr := t.findActiveGoalTask(agentID, goal, sessionID)
 	if findErr != nil {
 		return ErrorResult(fmt.Sprintf("set_todos: list tasks: %v", findErr))
 	}
@@ -129,8 +136,10 @@ func (t *SetTodosTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		// No matching scratchpad card: archive any OTHER active scratchpad cards
 		// for this agent (different goal) so only one active scratchpad card exists
 		// per agent at a time (board-pollution guard). Real create_task cards
-		// (Scratchpad==false) are never touched.
-		if archErr := t.archiveOtherScratchpadCards(agentID, goal); archErr != nil {
+		// (Scratchpad==false) are never touched. Session-scoped calls archive
+		// only their own session's cards — a concurrent session's open
+		// checklist is not "prior work" to close.
+		if archErr := t.archiveOtherScratchpadCards(agentID, goal, sessionID); archErr != nil {
 			slog.Warn("set_todos: could not archive prior scratchpad cards",
 				"agent_id", agentID,
 				"new_goal", goal,
@@ -143,16 +152,17 @@ func (t *SetTodosTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		// in one store.Create call. This eliminates the partial-failure orphan window
 		// that would occur with a separate SetTodos second write.
 		card := &task.Task{
-			Title:       goal,
-			Prompt:      goal,
-			Action:      task.ActionLLM,
-			AgentID:     agentID,
-			CreatedBy:   agentID,
-			WorkspaceID: wsID,
-			Status:      task.StatusInProgress,
-			Priority:    3,
-			Scratchpad:  true,
-			Todos:       todos,
+			Title:           goal,
+			Prompt:          goal,
+			Action:          task.ActionLLM,
+			AgentID:         agentID,
+			CreatedBy:       agentID,
+			WorkspaceID:     wsID,
+			Status:          task.StatusInProgress,
+			Priority:        3,
+			Scratchpad:      true,
+			OriginSessionID: sessionID,
+			Todos:           todos,
 		}
 		// CreateByAgent, not Create: a scratchpad card is created BY this agent
 		// FOR this agent, so it carries FR-037 provenance
@@ -173,7 +183,13 @@ func (t *SetTodosTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 // whose Title matches goal, or nil when no such task exists. Real create_task
 // cards (Scratchpad==false) are intentionally excluded — this prevents the hijack
 // bug where set_todos could overwrite a user task's checklist if the titles match.
-func (t *SetTodosTool) findActiveGoalTask(agentID, goal string) (*task.Task, error) {
+//
+// sessionID scopes the match to cards created by set_todos calls from that same
+// transcript session (Task.OriginSessionID): with it set, another session's card
+// for the identical goal title is NOT found — the caller creates its own card.
+// An empty sessionID keeps the pre-scoping agent-wide match (legacy cards carry
+// an empty OriginSessionID and only match an unscoped caller).
+func (t *SetTodosTool) findActiveGoalTask(agentID, goal, sessionID string) (*task.Task, error) {
 	tasks, err := t.store.List(task.Filter{AgentID: agentID})
 	if err != nil {
 		return nil, err
@@ -190,6 +206,9 @@ func (t *SetTodosTool) findActiveGoalTask(agentID, goal string) (*task.Task, err
 		if task.IsTerminal(tk.Status) {
 			continue
 		}
+		if sessionID != "" && tk.OriginSessionID != sessionID {
+			continue
+		}
 		// List is sorted priority ASC then created_at ASC; last match is
 		// most-recently-created among equal-priority active scratchpad cards.
 		found = tk
@@ -199,9 +218,15 @@ func (t *SetTodosTool) findActiveGoalTask(agentID, goal string) (*task.Task, err
 
 // archiveOtherScratchpadCards sets Status=done on every active scratchpad card
 // owned by agentID whose Title differs from the new goal. This enforces the
-// "at most one active scratchpad card per agent" invariant without touching real
+// "at most one active scratchpad card" invariant without touching real
 // create_task cards (Scratchpad==false).
-func (t *SetTodosTool) archiveOtherScratchpadCards(agentID, newGoal string) error {
+//
+// sessionID scopes the archival: with it set, only cards from that same
+// transcript session are archived — a concurrent session's open checklist is
+// not "prior work" of this one (UAT B-1: two sessions of one agent used to
+// close each other's cards mid-run). An empty sessionID keeps the
+// pre-scoping agent-wide sweep.
+func (t *SetTodosTool) archiveOtherScratchpadCards(agentID, newGoal, sessionID string) error {
 	tasks, err := t.store.List(task.Filter{AgentID: agentID})
 	if err != nil {
 		return fmt.Errorf("list tasks: %w", err)
@@ -216,6 +241,9 @@ func (t *SetTodosTool) archiveOtherScratchpadCards(agentID, newGoal string) erro
 			continue
 		}
 		if task.IsTerminal(tk.Status) {
+			continue
+		}
+		if sessionID != "" && tk.OriginSessionID != sessionID {
 			continue
 		}
 		if _, updateErr := t.store.Update(tk.ID, task.Patch{Status: &done}); updateErr != nil {

@@ -155,20 +155,15 @@ func TestTaskTrigger_RunScheduled_ThreadsOccurrenceMsToDispatch(t *testing.T) {
 	})
 }
 
-// TestTaskRunHistory_OpenedAtClaim_ClosedOnMarkerCompletion proves the
-// end-to-end marker-completion path (ADR-050 §3.2/3.3): ExecuteTask's claim
-// opens a TaskRun, and finishTaskRun's fallthrough to completeTaskWithResult
-// closes it with the TASK_SUMMARY marker's own result — the same values the
-// Task.status/result mirror carries.
-func TestTaskRunHistory_OpenedAtClaim_ClosedOnMarkerCompletion(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "Implemented the thing.\n" +
-			"[goal:evidence] verified the implementation against the task\n" +
-			"TASK_STATUS: success\n" +
-			"TASK_SUMMARY: All done.",
-	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
-	tk := newCompletionContractTask(t, al, "native-agent", "run history marker path")
+// TestTaskRunHistory_OpenedAtClaim_ClosedOnJudgedClaimCompletion proves the
+// end-to-end completion path (ADR-050 §3.2/3.3): ExecuteTask's claim opens a
+// TaskRun, and the worker's goal_claim, upheld by the Judge, closes it with the
+// claim's own evidence as the result — the same values the Task.status/result
+// mirror carries.
+func TestTaskRunHistory_OpenedAtClaim_ClosedOnJudgedClaimCompletion(t *testing.T) {
+	const evidence = "verified the implementation against the task"
+	al := newNativeTaskCompletionTestLoop(t, newClaimingWorker(turnClaimMet(evidence)))
+	tk := newCompletionContractTask(t, al, "native-agent", "run history claim path")
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
@@ -182,11 +177,10 @@ func TestTaskRunHistory_OpenedAtClaim_ClosedOnMarkerCompletion(t *testing.T) {
 	// waitForRunClosed, not a raw ListRuns right after the Task.status mirror
 	// goes terminal (Constraint #7 fix, matching MirrorStillCycles): the
 	// mirror write (completeTaskWithResult's te.store.Update) happens BEFORE
-	// closeRun in task_executor.go, so waitForCompletionContractTerminal can
-	// observe the terminal mirror moments before the run's own EndedAt lands
-	// — polling the run store directly is what actually waits on the
-	// guarantee under test instead of racing it. See waitForRunClosed's own
-	// doc comment below.
+	// closeRun, so waitForCompletionContractTerminal can observe the terminal
+	// mirror moments before the run's own EndedAt lands — polling the run
+	// store directly is what actually waits on the guarantee under test
+	// instead of racing it. See waitForRunClosed's own doc comment below.
 	run := waitForRunClosed(t, al, tk.ID, 5*time.Second)
 	if run.Kind != task.RunKindScheduled {
 		t.Errorf("kind = %q, want %q (ExecuteTask's default kind)", run.Kind, task.RunKindScheduled)
@@ -197,8 +191,8 @@ func TestTaskRunHistory_OpenedAtClaim_ClosedOnMarkerCompletion(t *testing.T) {
 	if run.Status != task.StatusDone {
 		t.Errorf("run status = %q, want done", run.Status)
 	}
-	if run.Result != "All done." {
-		t.Errorf("run result = %q, want %q", run.Result, "All done.")
+	if run.Result != evidence {
+		t.Errorf("run result = %q, want the upheld claim's evidence %q", run.Result, evidence)
 	}
 	if run.SessionID == "" || run.SessionID != final.SessionID {
 		t.Errorf("run session_id = %q, want the task's own session %q", run.SessionID, final.SessionID)
@@ -211,14 +205,13 @@ func TestTaskRunHistory_OpenedAtClaim_ClosedOnMarkerCompletion(t *testing.T) {
 	}
 }
 
-// TestTaskRunHistory_OpenedAtClaim_ClosedOnUpdateTaskToolCompletion proves the
-// update_task-tool completion path (ADR-050 §3.3/RD5): finishTaskRun's
-// task.IsTerminal branch — reached when the agent calls the real update_task
-// tool instead of relying on the marker — ALSO closes the run, with no change
-// to update_task itself, since the close is driven from the executor
-// observing completion, not from the tool.
-func TestTaskRunHistory_OpenedAtClaim_ClosedOnUpdateTaskToolCompletion(t *testing.T) {
-	provider := newScriptedProvider() // empty; real responses patched in below
+// TestTaskRunHistory_UpdateTaskRefusedInRun_RunClosesOnTheJudgedClaim: while a
+// task's own run executes, its worker's update_task status write is refused
+// (founder decision 2026-09-14, issue #710), so that call neither ends the task
+// nor closes the run. The run closes when the worker's goal_claim is upheld,
+// carrying the claim's evidence — never the refused call's result.
+func TestTaskRunHistory_UpdateTaskRefusedInRun_RunClosesOnTheJudgedClaim(t *testing.T) {
+	provider := newScriptedProvider() // responses patched in once tk.ID is known
 	al := newNativeTaskCompletionTestLoop(t, provider)
 
 	agentInst, ok := al.GetRegistry().GetAgent("native-agent")
@@ -226,27 +219,23 @@ func TestTaskRunHistory_OpenedAtClaim_ClosedOnUpdateTaskToolCompletion(t *testin
 		t.Fatal("native-agent not found in registry")
 	}
 	agentInst.StoreToolPolicy(&tools.ToolPolicyCfg{
-		Policies: map[string]config.ToolPolicy{"update_task": "allow"},
+		Policies: map[string]config.ToolPolicy{"update_task": "allow", tools.GoalClaimToolName: "allow"},
 	})
 
-	tk := newCompletionContractTask(t, al, "native-agent", "run history update_task path")
+	tk := newCompletionContractTask(t, al, "native-agent", "run history update_task refused")
 
+	const evidence = "re-ran the export and compared the output by hand"
 	provider.responses = []*providers.LLMResponse{
-		{
-			ToolCalls: []providers.ToolCall{{
-				ID:   "call-update-task",
-				Type: "function",
-				Name: "update_task",
-				Arguments: map[string]any{
-					"task_id": tk.ID,
-					"status":  "done",
-					"result":  "Done via explicit update_task call.",
-				},
-			}},
-		},
-		{
-			Content: "Wrapping up now, nothing further to report.",
-		},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-update-task", Type: "function", Name: "update_task",
+			Arguments: map[string]any{"task_id": tk.ID, "status": "done", "result": "Done via explicit update_task call."},
+		}}},
+		{Content: "Marked it done."},
+		{ToolCalls: []providers.ToolCall{{
+			ID: "call-goal-claim", Type: "function", Name: tools.GoalClaimToolName,
+			Arguments: map[string]any{"status": tools.GoalClaimStatusMet, "evidence": evidence},
+		}}},
+		{Content: "Claimed."},
 	}
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
@@ -258,21 +247,16 @@ func TestTaskRunHistory_OpenedAtClaim_ClosedOnUpdateTaskToolCompletion(t *testin
 		t.Fatalf("status = %q, want done (result: %s)", final.Status, final.Result)
 	}
 
-	// waitForRunClosed, not a raw ListRuns right after the Task.status mirror
-	// goes terminal (Constraint #7 fix, matching MirrorStillCycles/
-	// OpenedAtClaim_ClosedOnMarkerCompletion/SchedulerFire_...): the mirror
-	// write happens BEFORE closeRun in task_executor.go, so
-	// waitForCompletionContractTerminal can observe the terminal mirror
-	// moments before the run's own EndedAt lands.
 	run := waitForRunClosed(t, al, tk.ID, 5*time.Second)
 	if run.Status != task.StatusDone {
 		t.Errorf("run status = %q, want done", run.Status)
 	}
-	if run.Result != "Done via explicit update_task call." {
-		t.Errorf("run result = %q, want the tool call's own result", run.Result)
+	if run.Result != evidence {
+		t.Errorf("run result = %q, want the judged claim's evidence %q — the refused update_task must not have written it",
+			run.Result, evidence)
 	}
 	if run.EndedAt == nil {
-		t.Error("ended_at must be set — the update_task-tool completion path must also close the run")
+		t.Error("ended_at must be set — the judged claim must close the run")
 	}
 }
 
@@ -285,13 +269,7 @@ func TestTaskRunHistory_OpenedAtClaim_ClosedOnUpdateTaskToolCompletion(t *testin
 // event carrying the same run_id, via the same EventBus emitEvent path
 // task_status_changed already uses.
 func TestTaskRunHistory_MirrorStillCyclesAndEmitsRunStatusFrames(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "Done.\n" +
-			"[goal:evidence] verified the completion\n" +
-			"TASK_STATUS: success\n" +
-			"TASK_SUMMARY: mirror regression check.",
-	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
+	al := newNativeTaskCompletionTestLoop(t, newClaimingWorker(turnClaimMet("verified the completion")))
 	tk := newCompletionContractTask(t, al, "native-agent", "mirror regression")
 
 	sub := al.SubscribeEvents(32)
@@ -357,10 +335,7 @@ func TestTaskRunHistory_MirrorStillCyclesAndEmitsRunStatusFrames(t *testing.T) {
 // StartOccurrenceRun (the new Run-now entry point) records
 // task.RunKindManual.
 func TestTaskRunHistory_ScheduledVsManualKind(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "Done.\n[goal:evidence] verified\nTASK_STATUS: success\nTASK_SUMMARY: kind check.",
-	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
+	al := newNativeTaskCompletionTestLoop(t, newClaimingWorker(turnClaimMet("verified the completion")))
 
 	t.Run("ExecuteTask_defaults_to_scheduled", func(t *testing.T) {
 		tk := newCompletionContractTask(t, al, "native-agent", "kind scheduled")
@@ -407,10 +382,7 @@ func TestTaskRunHistory_ScheduledVsManualKind(t *testing.T) {
 // identity (kind/session_id), only its terminal outcome via the shared
 // close.
 func TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "Done.\n[goal:evidence] verified\nTASK_STATUS: success\nTASK_SUMMARY: idempotency check.",
-	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
+	al := newNativeTaskCompletionTestLoop(t, newClaimingWorker(turnClaimMet("verified the completion")))
 	tk := newCompletionContractTask(t, al, "native-agent", "occurrence idempotency")
 
 	occMs := int64(1_700_000_000_000)
@@ -459,10 +431,7 @@ func TestStartOccurrenceRun_IdempotentAgainstConcurrentSchedulerFire(t *testing.
 // execution's own session — the calendar join key task-run-history-spec.md
 // §3.7's occurrence overlay ultimately reads.
 func TestTaskRunHistory_SchedulerFire_RecordsOccurrenceMsAndScheduledKind(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "Done.\n[goal:evidence] verified\nTASK_STATUS: success\nTASK_SUMMARY: occurrence handled.",
-	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
+	al := newNativeTaskCompletionTestLoop(t, newClaimingWorker(turnClaimMet("verified the completion")))
 
 	clk := newTriggerFakeClock()
 	storePath := filepath.Join(t.TempDir(), "triggers", "jobs.json")
@@ -541,7 +510,7 @@ func TestTaskRunHistory_SchedulerFire_RecordsOccurrenceMsAndScheduledKind(t *tes
 // EndedAt is set, or fails the test after timeout. Used instead of
 // waitForCompletionContractTerminal/waitTaskTerminal for the M1/M5/L5
 // coverage below: those helpers proxy run-closure via Task.status or session
-// archival, but finishTaskRun's error branch sets session status to
+// archival, but a broken run's close-out sets session status to
 // Interrupted (not Archived), and Task.status can go terminal (failTask)
 // slightly BEFORE the run's own closeRun call lands — so polling the run
 // store directly is the only way to deterministically observe the actual
@@ -565,7 +534,7 @@ func waitForRunClosed(t *testing.T, al *AgentLoop, taskID string, timeout time.D
 }
 
 // TestTaskRunHistory_ExecutionErrorBranch_ClosesRunAsFailed is M1 coverage
-// (task-run-history-spec.md §3.3): finishTaskRun's hard "agent execution
+// (task-run-history-spec.md §3.3): the run loop's "agent execution
 // error" branch (err != nil, e.g. a fatal external-CLI driver error) must
 // close the open run as failed with a non-nil ended_at and the failure's own
 // Result — this branch already closed the run before this change (it is the
@@ -587,6 +556,7 @@ func TestTaskRunHistory_ExecutionErrorBranch_ClosesRunAsFailed(t *testing.T) {
 		fr.Cancel()
 	}()
 
+	oneAttempt := 1
 	tk := &task.Task{
 		Title:       "run history execution error",
 		Prompt:      "do the failing task",
@@ -595,6 +565,9 @@ func TestTaskRunHistory_ExecutionErrorBranch_ClosesRunAsFailed(t *testing.T) {
 		Priority:    3,
 		WorkspaceID: "default",
 		Status:      task.StatusNext,
+		// A broken run is one failed task attempt; a limit of 1 ends the task
+		// on it instead of restarting (founder decision 2026-09-14).
+		MaxAttempts: &oneAttempt,
 	}
 	if err := al.taskStore.Create(tk); err != nil {
 		t.Fatalf("create task: %v", err)
@@ -628,18 +601,22 @@ func TestTaskRunHistory_ExecutionErrorBranch_ClosesRunAsFailed(t *testing.T) {
 	}
 }
 
-// TestTaskRunHistory_NoMarkerFailClosedBranch_ClosesRunAsFailed is M1/M5
-// coverage for finishTaskRun's OTHER fail-closed branch
-// (task-run-history-spec.md §3.3): a clean native response with no
-// TASK_STATUS marker routes through completeTaskWithResult's fail-closed
-// path (the store-update-succeeds branch) — the run must close as failed
-// there too, with the same fail-closed Result text as the Task mirror.
-func TestTaskRunHistory_NoMarkerFailClosedBranch_ClosesRunAsFailed(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "I looked into this and made some progress, but didn't finish.",
+// TestTaskRunHistory_NoClaimFailClosedBranch_ClosesRunAsFailed is M1/M5
+// coverage for the fail-closed branch (task-run-history-spec.md §3.3): a
+// native worker that never claims spends its goal tries and, with its task
+// attempts spent, the task fails — the run must close as failed there too,
+// with the same Result as the Task mirror.
+func TestTaskRunHistory_NoClaimFailClosedBranch_ClosesRunAsFailed(t *testing.T) {
+	al := newNativeTaskCompletionTestLoop(t, newClaimingWorker(turnNoClaim("I looked into this and made some progress, but didn't finish.")))
+	if err := al.MutateConfig(func(cfg *config.Config) error { cfg.Planning.GoalMaxRounds = 1; return nil }); err != nil {
+		t.Fatalf("set the goal try limit: %v", err)
 	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
-	tk := newCompletionContractTask(t, al, "native-agent", "run history no marker")
+	tk := newCompletionContractTask(t, al, "native-agent", "run history no claim")
+	one := 1
+	onePtr := &one
+	if _, err := al.taskStore.Update(tk.ID, task.Patch{MaxAttempts: &onePtr}); err != nil {
+		t.Fatalf("pin max_attempts=1: %v", err)
+	}
 
 	if err := al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil); err != nil {
 		t.Fatalf("ExecuteTask: %v", err)
@@ -658,8 +635,8 @@ func TestTaskRunHistory_NoMarkerFailClosedBranch_ClosesRunAsFailed(t *testing.T)
 		t.Errorf("run result = %q, want the same fail-closed result written to the task mirror %q",
 			run.Result, final.Result)
 	}
-	if !strings.Contains(run.Result, "completion signal") {
-		t.Errorf("run result = %q, want it to explain the missing completion signal", run.Result)
+	if !strings.Contains(run.Result, "did not reach a met verdict") {
+		t.Errorf("run result = %q, want it to say the goal did not reach a met verdict", run.Result)
 	}
 }
 
@@ -671,10 +648,7 @@ func TestTaskRunHistory_NoMarkerFailClosedBranch_ClosesRunAsFailed(t *testing.T)
 // the ClaimForRun-guarded ExecuteTask path does: kind=RunKindManual,
 // occurrence_ms=nil (no recurring-fire context).
 func TestTaskRunHistory_StartTaskNow_OpensAndClosesManualRun(t *testing.T) {
-	provider := &scriptedProvider{
-		responseBody: "Done.\n[goal:evidence] verified\nTASK_STATUS: success\nTASK_SUMMARY: start task now run history.",
-	}
-	al := newNativeTaskCompletionTestLoop(t, provider)
+	al := newNativeTaskCompletionTestLoop(t, newClaimingWorker(turnClaimMet("verified the completion")))
 	tk := newCompletionContractTask(t, al, "native-agent", "start task now run history")
 
 	// StartTaskNow's own doc comment: it launches "without requiring the task
@@ -742,7 +716,7 @@ func TestCloseRun_DuplicateCloseAfterAlreadyClosedLogsInfoNotError(t *testing.T)
 
 	logFile := filepath.Join(t.TempDir(), "close-run-dup.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.ERROR)
 	if ferr := logger.EnableFileLogging(logFile); ferr != nil {
 		t.Fatalf("EnableFileLogging: %v", ferr)

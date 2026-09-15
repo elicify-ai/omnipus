@@ -293,8 +293,8 @@ describe('BrowserLiveView — tab strip (ADR-041 D4)', () => {
   })
 })
 
-describe('BrowserLiveView — tab strip actions use the control socket without implicit ownership', () => {
-  it('switching a tab while idle sends browser_tab_action without control:take', () => {
+describe('BrowserLiveView — tab strip actions request ownership before the control action', () => {
+  it('switching a tab while idle sends control:take before browser_tab_action', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
@@ -304,11 +304,12 @@ describe('BrowserLiveView — tab strip actions use the control socket without i
 
     fireEvent.click(screen.getByTestId('browser-tab-1'))
 
-    expect(mockSendControl).not.toHaveBeenCalledWith('take')
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl.mock.invocationCallOrder[0]).toBeLessThan(mockSendTabAction.mock.invocationCallOrder[0])
     expect(mockSendTabAction).toHaveBeenCalledWith('switch', 1)
   })
 
-  it('closing a tab sends browser_tab_action without control:take', () => {
+  it('closing a tab sends control:take before browser_tab_action', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
@@ -318,18 +319,20 @@ describe('BrowserLiveView — tab strip actions use the control socket without i
 
     fireEvent.click(screen.getByTestId('browser-tab-close-1'))
 
-    expect(mockSendControl).not.toHaveBeenCalledWith('take')
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl.mock.invocationCallOrder[0]).toBeLessThan(mockSendTabAction.mock.invocationCallOrder[0])
     expect(mockSendTabAction).toHaveBeenCalledWith('close', 1)
   })
 
-  it('opening a new tab sends browser_tab_action without control:take', () => {
+  it('opening a new tab sends control:take before browser_tab_action', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [{ index: 0, title: 'Only tab', active: true }])
 
     fireEvent.click(screen.getByTestId('browser-tab-new'))
 
-    expect(mockSendControl).not.toHaveBeenCalledWith('take')
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl.mock.invocationCallOrder[0]).toBeLessThan(mockSendTabAction.mock.invocationCallOrder[0])
     expect(mockSendTabAction).toHaveBeenCalledWith('open')
   })
 

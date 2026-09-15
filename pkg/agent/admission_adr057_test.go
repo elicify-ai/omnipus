@@ -147,6 +147,16 @@ func TestRootDelegationCap_UnsetResolvesToCentralValue(t *testing.T) {
 func TestRootDelegationCap_DefaultInstallInheritsCentralValue(t *testing.T) {
 	t.Setenv("OMNIPUS_MAX_PARALLEL_AGENTS", "")
 
+	// Pin the memory reading. This test is about which cap value a
+	// fresh-install config resolves to, not about the live memory gate — left
+	// unpinned it reads THIS machine's real memory state, and on a loaded host
+	// the memory gate clamps every admission to its floor of 2, failing at
+	// admission #3 with "unexpectedly refused" regardless of what rootCap is.
+	// See TestWiring_RootDelegationFanOut_BoundedByCentralValueNot16
+	// (wiring_adr057_fix_test.go) for the same fix applied earlier, and
+	// memory_admission_test.go's stubMemory for the shared helper.
+	stubMemory(t, false, true)
+
 	cfg := config.DefaultConfig()
 
 	if cfg.Agents.Defaults.SubTurn.MaxConcurrent != 0 {
@@ -199,6 +209,16 @@ func TestRootDelegationCap_DefaultInstallInheritsCentralValue(t *testing.T) {
 // slog.Error record naming the cap/delegating agent/target, mirroring
 // pkg/tools/delegate.go:1150-1159's existing shape).
 func TestRootDelegationAdmission_RefusesNotQueues(t *testing.T) {
+	// Pin the memory reading — this test is about the CONFIGURED cap's
+	// refuse-don't-queue behavior, not the live memory gate. Left unpinned it
+	// reads this machine's real memory state; on a loaded host the memory
+	// gate clamps every admission to its floor of 2, failing admission #3
+	// with "unexpectedly refused" regardless of rootCap. See stubMemory
+	// (memory_admission_test.go) and the precedent fix in
+	// TestWiring_RootDelegationFanOut_BoundedByCentralValueNot16
+	// (wiring_adr057_fix_test.go).
+	stubMemory(t, false, true)
+
 	const rootCap = 24
 	gate := NewRootDelegationAdmission(rootCap)
 
@@ -376,6 +396,17 @@ func TestNestedDelegationGating_Unchanged(t *testing.T) {
 // startGate channel additionally makes the "all 200 attempt admission at
 // once" intent explicit rather than relying on goroutine-launch ordering.
 func TestRootDelegationAdmission_ConcurrentAdmitNeverExceedsCap(t *testing.T) {
+	// Pin the memory reading — this test is about the primitive's concurrency
+	// safety (the observed max never exceeds cap), not the live memory gate.
+	// Left unpinned it reads this machine's real memory state; on a loaded
+	// host the memory gate clamps every admission to its floor of 2, so
+	// admittedCount never reaches rootCap and the exact-equality assertion
+	// below fails for reasons unrelated to the property under test. See
+	// stubMemory (memory_admission_test.go) and the precedent fix in
+	// TestWiring_RootDelegationFanOut_BoundedByCentralValueNot16
+	// (wiring_adr057_fix_test.go).
+	stubMemory(t, false, true)
+
 	const rootCap = 8
 	const attempts = 200
 	gate := NewRootDelegationAdmission(rootCap)

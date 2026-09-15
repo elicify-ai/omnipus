@@ -270,8 +270,8 @@ func (l *launch) start(ctx context.Context) error {
 		l.opts.ModifyCmd(cmd)
 	}
 	cmd.Stderr = &lineWriter{fn: l.opts.Errf, prefix: "cdppipe: chrome: ", tail: &l.stderr}
-	// A descendant inheriting stderr must not prevent reaping after Chrome exits.
-	cmd.WaitDelay = time.Second
+	cmd.WaitDelay = stderrDrainDelay
+	startInOwnProcessGroup(cmd)
 	cmd.ExtraFiles = []*os.File{browserInR, browserOutW} // → child fd 3, fd 4
 
 	if err := cmd.Start(); err != nil {
@@ -423,12 +423,22 @@ func (l *launch) teardown() {
 		}
 
 		if l.waitDone != nil {
+			pid := l.cmd.Process.Pid
 			select {
 			case <-l.waitDone:
 			case <-time.After(5 * time.Second):
-				_ = l.cmd.Process.Kill()
-				<-l.waitDone
+				if err := l.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+					l.errf("kill chrome (pid %d): %v", pid, err)
+				}
 			}
+			// Kill what is left of Chrome's process group. A helper that
+			// outlived the browser process otherwise keeps running — and keeps
+			// the stderr pipe open, which is what used to block the Wait above
+			// indefinitely (see reap.go).
+			if err := killProcessGroup(pid); err != nil {
+				l.errf("kill chrome process group (pgid %d): %v", pid, err)
+			}
+			<-l.waitDone
 		}
 
 		l.bridgeWG.Wait()

@@ -39,5 +39,109 @@ properties:
       the quote-emitting rubric. Truncated rune-safe to 500 code points at
       the parser. UNTRUSTED CONTENT — any re-emission into another agent's
       prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as
-      inert quoted text.
+      inert quoted text. FR-071: when `evidence` (below) is present,
+      `evidence_quote` MUST equal `evidence[0].quote`.
     example: "--- PASS: TestPlanStore_CreatePersists (0.02s)"
+  evidence_source:
+    type: string
+    enum:
+      - diff
+      - transcript
+      - machine_check
+      - file_read
+      - session_read
+    description: >
+      JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict
+      came from, derived (never trusted) server-side: `machine_check` when
+      a veto or check evidence decided it, otherwise mapped from the
+      validated evidence_source the investigation recorded. OPTIONAL and a
+      REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a
+      value that does not verify, NEVER flips `met` to anything else; it
+      never gates a verdict, it only explains one.
+    example: "file_read"
+  evidence_target:
+    type: string
+    description: >
+      JUDGE-FR-065 — the specific artifact the grounding evidence was read
+      from (a file path, a diff hunk's changed file, a transcript tool-call
+      id, …), paired with `evidence_source`. OPTIONAL REPORTING field only
+      (D-B) — never a proof gate.
+    example: "neon-2048/index.html"
+  provenance:
+    type: string
+    enum:
+      - judge_read
+      - deterministic_check
+      - diff
+      - transcript
+      - session_read
+      - none
+    description: >
+      JUDGE-FR-065 — the investigation-log provenance of this verdict:
+      `deterministic_check` when a veto or check evidence decided it;
+      `judge_read`/`diff`/`transcript`/`session_read` mapped from the
+      validated `evidence_source` when the Judge's own reading decided it;
+      `none` when neither applies (e.g. a fail-closed verdict, or a legacy
+      rubric that emits no `evidence_source`). OPTIONAL REPORTING field
+      only (D-B) — the Judge's authority to rule `met` on reasoned
+      conviction alone is never conditioned on this field being present or
+      non-`none`.
+    example: "judge_read"
+  evidence:
+    type: array
+    maxItems: 50
+    description: >
+      JUDGE-FR-006 — one entry per clause of the criterion this verdict
+      judges, each answering that clause with its own grounding excerpt.
+      NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own
+      wording) — `evidence_quote` keeps its existing type/length/optionality
+      unchanged for every reader that does not know about this field (C2);
+      when `evidence` is present the engine populates `evidence_quote` from
+      `evidence[0].quote` so no existing persisted-verdict reader, replay
+      frame or SPA render is affected. A criterion with no machine-checkable
+      form and no located evidence for one or more of its clauses is still
+      the NORMAL case and may still be `met` on the Judge's reasoned
+      conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING
+      obligation the Judge uses to show its work and flag any clause it
+      could not ground, never a gate that can turn a `met` into an `unmet`.
+    items:
+      type: object
+      required:
+        - part
+        - quote
+      additionalProperties: false
+      properties:
+        part:
+          type: string
+          maxLength: 1000
+          description: The clause text (a substring of the criterion's own `text`) this entry answers.
+          example: "the button links to https://example.com/pricing"
+        source:
+          type: string
+          description: >
+            Where this clause's grounding excerpt came from. Plain string
+            here (not a closed enum, unlike the verdict-level
+            `evidence_source` above) — a codegen constraint (oapi-codegen
+            cannot auto-name two same-shaped nested enum types across this
+            document without a shared top-level schema, which is out of
+            this wave's write-set) and, independently, a defensible one:
+            this per-entry value is a REPORTING detail (D-B), never
+            compared against by code the way the top-level
+            `evidence_source` is (FR-066's derivation).
+          example: "file_read"
+        target:
+          type: string
+          description: The specific artifact this clause's excerpt was read from.
+          example: "neon-2048/index.html"
+        quote:
+          type: string
+          maxLength: 500
+          description: >
+            The verbatim, rune-truncated (500 code points) grounding
+            excerpt for this clause. UNTRUSTED CONTENT — same framing
+            obligation as `evidence_quote` above. MAY be empty when the
+            Judge could not locate grounding for this clause and is
+            reporting that gap rather than fabricating a quote (D-B: an
+            empty/failed entry here is reported, not fabricated, and never
+            by itself flips the overall verdict).
+          example: "<a href=\"https://example.com/pricing\">Pricing</a>"

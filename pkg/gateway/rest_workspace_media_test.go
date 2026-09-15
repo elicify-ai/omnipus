@@ -25,7 +25,7 @@ func TestHandleMedia_WorkspaceRef_Resolves(t *testing.T) {
 
 	lib := api.agentLoop.GetWorkspaceLibrary(workspaceID)
 	require.NotNil(t, lib)
-	ref, _, err := lib.Upload("note.txt", gen.UserUpload, strings.NewReader("workspace bytes"))
+	ref, _, err := lib.Upload("note.txt", gen.MediaLibraryEntrySourceUserUpload, strings.NewReader("workspace bytes"))
 	require.NoError(t, err)
 	store.SetWorkspaceLibraryProvider(func(id string) (media.WorkspaceLibraryResolver, error) {
 		if id != workspaceID {
@@ -72,7 +72,7 @@ func TestHandleMedia_WorkspaceRef_BadWS_403(t *testing.T) {
 	badWorkspaceID := "ws-bad"
 	lib := api.agentLoop.GetWorkspaceLibrary(goodWorkspaceID)
 	require.NotNil(t, lib)
-	ref, _, err := lib.Upload("note.txt", gen.UserUpload, bytes.NewBufferString("workspace bytes"))
+	ref, _, err := lib.Upload("note.txt", gen.MediaLibraryEntrySourceUserUpload, bytes.NewBufferString("workspace bytes"))
 	require.NoError(t, err)
 	_, mediaID, ok := media.ParseWorkspaceRef(ref)
 	require.True(t, ok)

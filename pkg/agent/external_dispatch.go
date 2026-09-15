@@ -548,7 +548,10 @@ func drainExternalRun(
 						// text and must NEVER cross that boundary. The raw
 						// text is retained ONLY in the structured slog.Warn
 						// below for operator triage via gateway.log.
-						runErr = fmt.Errorf("external-cli run failed: %s", sanitized.AssistantText)
+						// curatedTurnError: the CLI's own output has already been
+						// replaced by the plain message for its code, so a task
+						// run may show this text as written (turnErrorUserText).
+						runErr = &curatedTurnError{text: "external-cli run failed: " + sanitized.AssistantText}
 						slog.Warn("external-cli dispatch: fatal runner error",
 							"run_id", runID, "cli", cli,
 							"assistant_text", sanitized.AssistantText,

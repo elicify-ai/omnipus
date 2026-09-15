@@ -70,9 +70,44 @@ func omnipusBinary(t *testing.T) string {
 	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 	if combined, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("go build ./cmd/omnipus/ failed: %v\n%s", err, combined)
+		t.Fatalf("%s\n%v\n%s", classifyBuildFailure(combined), err, combined)
 	}
 	return out
+}
+
+// hostBuildFailureMarkers are toolchain messages that mean the MACHINE could not
+// complete a link, not that anything about the code changed. They have all been
+// observed on the CI worker, whose build cache and $TMPDIR share one small
+// volume with every other gate's artefacts.
+var hostBuildFailureMarkers = []string{
+	"no space left on device",
+	"cannot allocate memory",
+	"signal: killed",
+}
+
+// classifyBuildFailure labels a failed `go build` as an environment fault or a
+// genuine one.
+//
+// This NEVER converts a failure into a pass or a skip — the caller still
+// t.Fatalf's either way, so the guard stays red and nobody reads "clean" for a
+// binary that was never produced (docs/internal/false-green-patterns.md).
+// It only names the cause, because the two causes want opposite responses and
+// have already been confused once: a CI run exhausted the worker's disk
+// mid-link, and this test's failure was read as "a removed provider id came
+// back in the binary" when no binary had been built at all.
+func classifyBuildFailure(combined []byte) string {
+	lowered := strings.ToLower(string(combined))
+	for _, marker := range hostBuildFailureMarkers {
+		if strings.Contains(lowered, marker) {
+			return "go build ./cmd/omnipus/ failed for an ENVIRONMENT reason (" + marker +
+				"): no binary was produced, so the removed-provider scan did not run. " +
+				"This is NOT evidence that a removed provider id reappeared, and NOT a " +
+				"code regression — free disk/memory on the build host and re-run."
+		}
+	}
+	return "go build ./cmd/omnipus/ failed: the binary under test could not be produced, " +
+		"so the removed-provider scan did not run. Fix the build first; this failure says " +
+		"nothing either way about whether a removed provider id is present."
 }
 
 // ensureSPAStub mirrors deploy/ci-worker/runci.sh's `ensure_spa_stub`.
@@ -198,5 +233,68 @@ func TestBinaryHasNoRemovedProviderLiteral(t *testing.T) {
 				literal, bin,
 			)
 		}
+	}
+}
+
+// TestClassifyBuildFailure_SeparatesEnvironmentFromRegression exercises the
+// classifier by INJECTING the toolchain's output, rather than by actually
+// filling the disk — the same reason this delivery replaced its chmod-based
+// fault injection: a real ENOSPC is not reproducible on demand, and a guard you
+// cannot exercise is a guard nobody knows is wired up.
+func TestClassifyBuildFailure_SeparatesEnvironmentFromRegression(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		combined    string
+		wantEnvFail bool
+	}{
+		{
+			name: "enospc during link",
+			combined: "# github.com/elicify-ai/omnipus/cmd/omnipus\n" +
+				"/usr/local/go/pkg/tool/linux_amd64/link: mapping output file failed: no space left on device\n",
+			wantEnvFail: true,
+		},
+		{
+			name:        "oom killed",
+			combined:    "signal: killed\n",
+			wantEnvFail: true,
+		},
+		{
+			name:        "out of memory",
+			combined:    "compile: cannot allocate memory\n",
+			wantEnvFail: true,
+		},
+		{
+			name:        "genuine compile error",
+			combined:    "./main.go:12:2: undefined: notAThing\n",
+			wantEnvFail: false,
+		},
+		{
+			name:        "empty output",
+			combined:    "",
+			wantEnvFail: false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyBuildFailure([]byte(tc.combined))
+
+			// Whatever the cause, the message must state that the scan did not
+			// run — otherwise a reader can mistake a failed build for a clean
+			// or a dirty binary, and both readings are wrong.
+			if !strings.Contains(got, "did not run") {
+				t.Errorf("message never says the scan did not run: %q", got)
+			}
+
+			isEnvFail := strings.Contains(got, "ENVIRONMENT reason")
+			if isEnvFail != tc.wantEnvFail {
+				t.Errorf("classified as environment-failure=%v, want %v\nmessage: %q",
+					isEnvFail, tc.wantEnvFail, got)
+			}
+
+			// An environment failure must actively deny being a regression, so
+			// it cannot be triaged as "a removed provider id came back".
+			if tc.wantEnvFail && !strings.Contains(got, "NOT a") {
+				t.Errorf("environment failure does not disclaim being a regression: %q", got)
+			}
+		})
 	}
 }

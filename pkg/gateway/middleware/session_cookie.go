@@ -233,9 +233,82 @@ func IssueSessionCookie(
 	return token, nil
 }
 
+// ErrSessionCookieCrossSiteSubresource is returned by ResolveUserFromCookie
+// when the request carries a session cookie but is a cross-site subresource
+// request (see IsCrossSiteSubresourceRequest). The cookie is not evaluated at
+// all — it may be perfectly valid.
+//
+// It WRAPS ErrSessionNotFound, so every existing caller's "no usable cookie"
+// handling applies unchanged: withAuth answers 401, optional auth proceeds
+// anonymously, and the WebSocket handlers fall back to frame auth.
+var ErrSessionCookieCrossSiteSubresource = fmt.Errorf(
+	"%w: session cookie ignored on a cross-site subresource request", ErrSessionNotFound)
+
+// crossSiteSubresourceDests are the Sec-Fetch-Dest values on which a
+// cross-site request's session cookie is ignored: the subresource
+// destinations, plus the two nested-navigation ones (iframe, frame).
+//
+// Deliberately ABSENT: "document" (a top-level navigation, including a login or
+// a link from elsewhere), "empty" (fetch and XHR — the SPA's own calls are
+// same-origin, and a previewed page's are blocked by connect-src 'none'),
+// "websocket", and the worker destinations. Nothing in this list is a flow the
+// product relies on cross-site: see IsCrossSiteSubresourceRequest.
+var crossSiteSubresourceDests = map[string]struct{}{
+	"image": {}, "style": {}, "script": {}, "font": {},
+	"audio": {}, "video": {}, "track": {}, "object": {}, "embed": {},
+	"iframe": {}, "frame": {},
+}
+
+// IsCrossSiteSubresourceRequest reports whether the browser labelled r as a
+// cross-site subresource (or nested-frame) request: Sec-Fetch-Site: cross-site
+// and a Sec-Fetch-Dest in crossSiteSubresourceDests. Header values are compared
+// case-insensitively after trimming, because a proxy or client may not keep the
+// browser's lower-case tokens.
+//
+// THREAT (ADR-067 D15.8, FIX4 preview-cookie-residual, 2026-09-14). WebKit
+// attaches the SameSite=Strict session cookie to a FRAMED preview's subresource
+// requests while itself labelling them Sec-Fetch-Site: cross-site — measured in
+// every framed shape, the product's included. SameSite cannot stop it, because
+// site-for-cookies is computed from the top-level page, and that page is
+// Omnipus. So an untrusted HTML preview could make logged-in GET requests. The
+// preview isolation policy (pkg/gateway/library_isolation_policy.go) now keeps
+// a preview off the API whenever the gateway knows its origin; this check is
+// the defence in depth for the one configuration the policy cannot confine —
+// the 'self' fallback on a wildcard bind with no gateway.public_url — and for
+// any future sandboxed document.
+//
+// WHY IT BREAKS NOTHING LEGITIMATE. Chromium and Firefox never send a
+// SameSite=Strict cookie on a cross-site request, so no working flow can depend
+// on one arriving. The SPA's own subresources are same-origin (measured:
+// Sec-Fetch-Site: same-origin on all three engines); the Library preview frame
+// is a same-origin iframe; provider sign-in is a device-code flow and the SPA's
+// window.open calls are top-level documents. A request with no Fetch Metadata —
+// a CLI, an older browser, a stripping proxy — is not matched. Bearer tokens are
+// not affected at all: this governs the cookie only.
+//
+// NOT A BOUNDARY BY ITSELF. A browser without Fetch Metadata support sends no
+// Sec-Fetch-Site, and then nothing here applies; SameSite=Strict and the
+// preview isolation policy are what stand in that case.
+func IsCrossSiteSubresourceRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "cross-site") {
+		return false
+	}
+	_, subresource := crossSiteSubresourceDests[strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Dest")))]
+	return subresource
+}
+
 // ResolveUserFromCookie reads the omnipus-session cookie and bcrypt-compares
 // its plaintext value against each user's SessionTokenHash, returning the
 // matching user or ErrSessionNotFound.
+//
+// A cookie on a cross-site subresource request is not evaluated at all and
+// yields ErrSessionCookieCrossSiteSubresource, which wraps ErrSessionNotFound
+// (see IsCrossSiteSubresourceRequest for the threat and why nothing legitimate
+// depends on it). The check runs before the bcrypt loop, so such a request
+// also costs no hash comparison.
 //
 // Implementation note: the loop is O(N) in the user count and bcrypt is
 // intentionally slow (~50–100 ms at DefaultCost). For deployments with many
@@ -257,6 +330,9 @@ func ResolveUserFromCookie(r *http.Request, users []config.UserConfig) (*config.
 	cookie, err := r.Cookie(SessionCookieName)
 	if err != nil || cookie == nil || cookie.Value == "" {
 		return nil, ErrSessionNotFound
+	}
+	if IsCrossSiteSubresourceRequest(r) {
+		return nil, ErrSessionCookieCrossSiteSubresource
 	}
 	for i := range users {
 		user := users[i]
@@ -347,7 +423,33 @@ func resolveAuthMismatchLogger(level string) func(msg string, args ...any) {
 // from "cookie sent but didn't match any user" ( — replay attack
 // detection signal). r.Cookie returns http.ErrNoCookie when the named
 // cookie is absent; any other return path means a cookie WAS present.
+//
+// Unexported alias kept for this package's own call sites; HasSessionCookie
+// is the identical exported twin (see its doc for why it exists).
 func hasOmnipusSessionCookie(r *http.Request) bool {
+	return HasSessionCookie(r)
+}
+
+// HasSessionCookie reports whether the request carries the omnipus-session
+// cookie AT ALL, regardless of whether its value matches any account. It is
+// a pure predicate on the request — never an auth decision.
+//
+// Exported for the WebSocket auth path (gateway.WSHandler.authenticateWS and
+// gateway.BrowserWSHandler.authenticate), which must tell three genuinely
+// different failure states apart and report the right one to the operator
+// and the SPA:
+//
+//	cookie present + ResolveUserFromCookie failed → stale/expired session
+//	cookie absent, accounts configured            → never signed in
+//	cookie absent, nothing configured             → setup incomplete
+//
+// Before this existed, all three collapsed into one silent 10-second read
+// timeout on the WS handshake (see classifyWSAuthRefusal in
+// pkg/gateway/websocket.go). The gateway could re-derive this from
+// r.Cookie(SessionCookieName) itself, but cookie-presence semantics belong
+// with the cookie's other invariants, next to ResolveUserFromCookie, so the
+// two can never disagree about what "present" means.
+func HasSessionCookie(r *http.Request) bool {
 	if r == nil {
 		return false
 	}
@@ -393,6 +495,19 @@ func LogInvalidSessionCookiePresent(r *http.Request, cfg *config.Config) {
 		level = cfg.Gateway.AuthMismatchLogLevel
 	}
 	logFn := resolveAuthMismatchLogger(level)
+	if IsCrossSiteSubresourceRequest(r) {
+		// A DIFFERENT signal from an invalid cookie, and logged as one. The
+		// cookie was never evaluated and may be perfectly valid: what arrived is
+		// a browser sending it on a cross-site subresource request — on WebKit, a
+		// framed untrusted preview requesting a gateway path (ADR-067 D15.8).
+		// Calling that "invalid" would send an operator hunting a replay that is
+		// not happening. No path is logged: request paths on this gateway can
+		// carry preview and serve tokens.
+		logFn("auth: session cookie ignored on a cross-site subresource request",
+			"remote_addr", r.RemoteAddr,
+			"sec_fetch_dest", strings.ToLower(strings.TrimSpace(r.Header.Get("Sec-Fetch-Dest"))))
+		return
+	}
 	logFn("auth: cookie present but invalid; falling back to bearer", "remote_addr", r.RemoteAddr)
 }
 

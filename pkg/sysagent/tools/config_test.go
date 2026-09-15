@@ -370,7 +370,10 @@ func TestConfigSet_StringEncodedBoolCoerced(t *testing.T) {
 	tool := systools.NewConfigSetTool(deps)
 
 	rawArgs := json.RawMessage(`{"key": "agents.defaults.split_on_marker", "value": "true"}`)
-	args := providercommon.DecodeToolCallArguments(rawArgs, "set_config")
+	args, decodeErr := providercommon.DecodeToolCallArguments(rawArgs, "set_config")
+	if decodeErr != nil {
+		t.Fatalf("decoding tool arguments: %v", decodeErr)
+	}
 	if _, ok := args["value"].(string); !ok {
 		t.Fatalf("test setup invariant broken: expected args[value] to decode as a Go string, got %T", args["value"])
 	}
@@ -425,7 +428,10 @@ func TestConfigSet_NativeBoolArgStillWorks(t *testing.T) {
 	tool := systools.NewConfigSetTool(deps)
 
 	rawArgs := json.RawMessage(`{"key": "agents.defaults.split_on_marker", "value": true}`)
-	args := providercommon.DecodeToolCallArguments(rawArgs, "set_config")
+	args, decodeErr := providercommon.DecodeToolCallArguments(rawArgs, "set_config")
+	if decodeErr != nil {
+		t.Fatalf("decoding tool arguments: %v", decodeErr)
+	}
 	if _, ok := args["value"].(bool); !ok {
 		t.Fatalf("test setup invariant broken: expected args[value] to decode as a Go bool, got %T", args["value"])
 	}
@@ -480,7 +486,10 @@ func TestConfigSet_OtherTypesStillWorkAfterBoolFix(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rawArgs := json.RawMessage(`{"key": "` + tc.key + `", "value": ` + tc.rawValue + `}`)
-			args := providercommon.DecodeToolCallArguments(rawArgs, "set_config")
+			args, decodeErr := providercommon.DecodeToolCallArguments(rawArgs, "set_config")
+			if decodeErr != nil {
+				t.Fatalf("decoding tool arguments: %v", decodeErr)
+			}
 
 			result := tool.Execute(context.Background(), args)
 			if result.IsError {

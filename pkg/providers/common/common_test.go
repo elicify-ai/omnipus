@@ -296,7 +296,10 @@ func TestParseResponse_InvalidJSON(t *testing.T) {
 
 func TestDecodeToolCallArguments_ObjectJSON(t *testing.T) {
 	raw := json.RawMessage(`{"city":"Seattle","units":"metric"}`)
-	args := DecodeToolCallArguments(raw, "test")
+	args, err := DecodeToolCallArguments(raw, "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if args["city"] != "Seattle" {
 		t.Errorf("city = %v, want Seattle", args["city"])
 	}
@@ -307,35 +310,60 @@ func TestDecodeToolCallArguments_ObjectJSON(t *testing.T) {
 
 func TestDecodeToolCallArguments_StringJSON(t *testing.T) {
 	raw := json.RawMessage(`"{\"city\":\"SF\"}"`)
-	args := DecodeToolCallArguments(raw, "test")
+	args, err := DecodeToolCallArguments(raw, "test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if args["city"] != "SF" {
 		t.Errorf("city = %v, want SF", args["city"])
 	}
 }
 
 func TestDecodeToolCallArguments_EmptyInput(t *testing.T) {
-	args := DecodeToolCallArguments(nil, "test")
+	args, err := DecodeToolCallArguments(nil, "test")
+	if err != nil {
+		t.Fatalf("absent arguments must not be an error, got: %v", err)
+	}
 	if len(args) != 0 {
 		t.Errorf("expected empty map, got %v", args)
 	}
 }
 
 func TestDecodeToolCallArguments_NullInput(t *testing.T) {
-	args := DecodeToolCallArguments(json.RawMessage(`null`), "test")
+	args, err := DecodeToolCallArguments(json.RawMessage(`null`), "test")
+	if err != nil {
+		t.Fatalf("null arguments must not be an error, got: %v", err)
+	}
 	if len(args) != 0 {
 		t.Errorf("expected empty map, got %v", args)
 	}
 }
 
+// TestDecodeToolCallArguments_InvalidJSON pins the REFUSAL.
+//
+// This test previously asserted the opposite — that an undecodable payload
+// produced a map carrying a "raw" key — which is the degraded dispatch the
+// truncation fix removed. It is inverted deliberately, not relaxed: it now
+// requires a typed error AND a nil map, so there is no stand-in for a
+// dispatcher to mistake for parameters.
 func TestDecodeToolCallArguments_InvalidJSON(t *testing.T) {
-	args := DecodeToolCallArguments(json.RawMessage(`not-json`), "test")
-	if _, ok := args["raw"]; !ok {
-		t.Error("expected 'raw' fallback key for invalid JSON")
+	args, err := DecodeToolCallArguments(json.RawMessage(`not-json`), "test")
+	if err == nil {
+		t.Fatal("undecodable arguments must return an error, not a degraded map")
+	}
+	if !errors.Is(err, ErrToolArgumentsUndecodable) {
+		t.Errorf("error = %v, want it to wrap ErrToolArgumentsUndecodable", err)
+	}
+	if args != nil {
+		t.Errorf("args = %v, want nil so nothing can be dispatched", args)
 	}
 }
 
 func TestDecodeToolCallArguments_EmptyStringJSON(t *testing.T) {
-	args := DecodeToolCallArguments(json.RawMessage(`"  "`), "test")
+	args, err := DecodeToolCallArguments(json.RawMessage(`"  "`), "test")
+	if err != nil {
+		t.Fatalf("whitespace-string arguments must not be an error, got: %v", err)
+	}
 	if len(args) != 0 {
 		t.Errorf("expected empty map for whitespace string, got %v", args)
 	}

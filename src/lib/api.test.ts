@@ -1260,6 +1260,64 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
     expect(messages[0].id).toBe('cancel_xyz')
   })
 
+  it('forwards type:"judge_verdict" and the verdict payload onto the SPA message (ADR-049 D2/SD-C10)', async () => {
+    // Regression for the "verdict card never appears" bug: rawToMessage's
+    // `role: 'system'` branch used to build a SystemMessage without ever
+    // reading raw.type/raw.verdict, so a cold-loaded (REST) judge_verdict
+    // transcript entry silently lost the one field
+    // (shouldRenderJudgeVerdictInThread + JudgeVerdictThreadCard,
+    // ChatScreen.tsx) needs to tell it apart from an ordinary system
+    // message and render the card.
+    const wirePayload = [
+      {
+        id: 'goal-sid-verdict-judge-1',
+        type: 'judge_verdict',
+        role: 'system',
+        agent_id: 'judge',
+        timestamp: '2026-09-14T12:05:00Z',
+        verdict: {
+          id: 'verdict-1',
+          scope: 'goal',
+          round: 1,
+          met: true,
+          per_criterion: [{ criterion_id: 'crit-1', met: true, reason: 'confirmed' }],
+          model: 'z-ai/glm-5.3',
+          judged_at: '2026-09-14T12:05:00Z',
+          judge_agent_id: 'judge',
+        },
+      },
+      // The judged turn's own assistant entry, carrying turn_id —
+      // mergeJudgeVerdictHistory anchors the verdict's thread position to
+      // this turn (chat.ts); rawToMessage must forward it.
+      {
+        id: 'assistant-turn-entry',
+        type: 'message',
+        role: 'assistant',
+        agent_id: 'mia',
+        content: 'OK-DONE-VERDICT-TEST',
+        timestamp: '2026-09-14T12:04:00Z',
+        status: 'ok',
+        turn_id: 'mia-turn-2',
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-verdict')
+    expect(messages).toHaveLength(2)
+    expect(messages[0].id).toBe('goal-sid-verdict-judge-1')
+    expect(messages[0].type).toBe('judge_verdict')
+    expect(messages[0].verdict?.id).toBe('verdict-1')
+    expect(messages[0].verdict?.scope).toBe('goal')
+    expect(messages[0].verdict?.met).toBe(true)
+    expect(messages[0].verdict?.per_criterion).toHaveLength(1)
+    expect(messages[1].turnId).toBe('mia-turn-2')
+  })
+
   it('degrades an unknown entry type to a placeholder instead of rejecting the whole list (Issue 3 / library-uat HIGH)', async () => {
     // Updated for the per-item resilience fix. Previously this asserted
     // fetchSessionMessages REJECTED the whole array on a single out-of-enum
@@ -2810,5 +2868,374 @@ describe('fetchAuditLog: per-entry resilience', () => {
 
     const { fetchAuditLog, ApiSchemaError: ApiSchemaErrorCtor } = await loadApi()
     await expect(fetchAuditLog()).rejects.toBeInstanceOf(ApiSchemaErrorCtor)
+  })
+})
+
+// ── ADR-087 (Truncation is an outcome, not a silence) — WP F, §7.2 ─────────────
+//
+// Cold-load (REST) plumbing: layer 1 (generated zod schema, schemas.ts) must
+// not silently strip `truncated`/`truncation_reason`, and layer 3
+// (rawToMessage, exercised here only through the public `fetchSessionMessages`
+// surface — rawToMessage itself is not exported) must carry them onto the
+// SPA-internal `Message`, applying the ADR-087 D2 legacy-default rule
+// (absent reason on a truncated entry means 'cancelled').
+
+describe('ADR-087 D2 — Message.truncated/truncation_reason survive the generated zod schema (guards the silent-strip layer)', () => {
+  it('a Message payload WITH truncation_reason parses with both fields intact, unchanged', async () => {
+    const { Message: MessageSchema } = await import('./api/generated/schemas')
+    const payload = {
+      id: 'm-trunc-1',
+      role: 'assistant',
+      content: 'Cut off mid-',
+      timestamp: '2026-09-10T10:00:00Z',
+      agent_id: 'mia',
+      truncated: true,
+      truncation_reason: 'max_output_tokens',
+    }
+    const result = MessageSchema.parse(payload)
+    expect(result.truncated).toBe(true)
+    expect(result.truncation_reason).toBe('max_output_tokens')
+  })
+
+  it('a legacy Message payload with truncated:true and no reason parses with truncation_reason absent (schema does not invent a default)', async () => {
+    const { Message: MessageSchema } = await import('./api/generated/schemas')
+    const payload = {
+      id: 'm-trunc-legacy',
+      role: 'assistant',
+      content: 'Cancelled here',
+      timestamp: '2026-09-10T10:00:00Z',
+      agent_id: 'mia',
+      truncated: true,
+    }
+    const result = MessageSchema.parse(payload)
+    expect(result.truncated).toBe(true)
+    expect(result.truncation_reason).toBeUndefined()
+  })
+})
+
+describe('ADR-087 D2 — fetchSessionMessages (cold-load) plumbs truncated/truncationReason onto the SPA Message', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.resetModules()
+  })
+
+  it('carries truncated:true + truncationReason:"max_output_tokens" onto the assistant Message', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeOkResponse([
+        {
+          id: 'm-cutoff',
+          role: 'assistant',
+          content: 'The answer starts and then',
+          timestamp: '2026-09-10T10:00:00Z',
+          agent_id: 'mia',
+          truncated: true,
+          truncation_reason: 'max_output_tokens',
+        },
+      ]),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sess-1')
+
+    expect(messages).toHaveLength(1)
+    const msg = messages[0] as { truncated?: boolean; truncationReason?: string }
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncationReason).toBe('max_output_tokens')
+  })
+
+  it('legacy rule: truncated:true with no wire reason cold-loads as truncationReason:"cancelled"', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeOkResponse([
+        {
+          id: 'm-legacy-cancel',
+          role: 'assistant',
+          content: 'Cancelled partial',
+          timestamp: '2026-09-10T10:00:00Z',
+          agent_id: 'mia',
+          truncated: true,
+        },
+      ]),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sess-1')
+
+    expect(messages).toHaveLength(1)
+    const msg = messages[0] as { truncated?: boolean; truncationReason?: string }
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncationReason).toBe('cancelled')
+  })
+
+  it('a non-truncated assistant Message carries no truncated/truncationReason fields', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeOkResponse([
+        {
+          id: 'm-normal',
+          role: 'assistant',
+          content: 'A complete answer.',
+          timestamp: '2026-09-10T10:00:00Z',
+          agent_id: 'mia',
+        },
+      ]),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sess-1')
+
+    expect(messages).toHaveLength(1)
+    const msg = messages[0] as { truncated?: boolean; truncationReason?: string }
+    expect(msg.truncated).toBeUndefined()
+    expect(msg.truncationReason).toBeUndefined()
+  })
+})
+
+// Added from integrate/library-improvements-v0.1.1 (merge 2026-09-15)
+// ── ADR-083 Step 0 (EMB-001/EMB-004/EMB-006/EMB-007/EMB-007a/EMB-007b/
+// EMB-007c) — Library's version-carrying bespoke fetches ──────────────────
+//
+// These are the four functions EMB-007c names directly: request<T>() (used
+// everywhere else in this file) discards response headers entirely, so it
+// can never expose the `ETag` these endpoints declare — these tests are
+// therefore against REAL `fetch` stubs returning REAL `Response` objects
+// (never a hand-rolled shape missing `.headers`/`.text()`), so a header this
+// code fails to read shows up here rather than only in a component test
+// mocking the function away.
+describe('Library version-carrying bespoke fetches (ADR-083 Step 0)', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    stubCookie('__Host-csrf=test-csrf-token')
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    restoreCookie()
+  })
+
+  function makeConflictResponse(): Response {
+    return new Response(
+      JSON.stringify({
+        error: 'report.md changed on disk since you opened it',
+        code: 'library_version_conflict',
+        path: 'report.md',
+        expected_version: 'v1:stale',
+        actual_version: 'v1:fresh',
+      }),
+      { status: 409, headers: { 'Content-Type': 'application/json' } },
+    )
+  }
+
+  describe('fetchLibraryContentVersioned (the read side)', () => {
+    it('returns the bare token stripped from the quoted ETag header', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ path: 'report.md', content: '# Report\n', size: 9, is_text: true, too_large: false }),
+          { status: 200, headers: { 'Content-Type': 'application/json', ETag: '"v1:9f2a7c40"' } },
+        ),
+      )
+
+      const { fetchLibraryContentVersioned } = await import('./api')
+      const result = await fetchLibraryContentVersioned('ws-1', 'report.md')
+
+      expect(result.version).toBe('v1:9f2a7c40')
+      expect(result.data.content).toBe('# Report\n')
+    })
+
+    it('returns version: null when the server sends no ETag at all', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ path: 'report.md', content: '# Report\n', size: 9, is_text: true, too_large: false }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      )
+
+      const { fetchLibraryContentVersioned } = await import('./api')
+      const result = await fetchLibraryContentVersioned('ws-1', 'report.md')
+
+      expect(result.version).toBeNull()
+    })
+  })
+
+  describe('downloadLibraryFileVersioned (the byte-stream door)', () => {
+    it('returns the bytes AND the bare token, from the same quoted-ETag shape', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { 'Content-Type': 'application/octet-stream', ETag: '"v1:9f2a7c40"' },
+        }),
+      )
+
+      const { downloadLibraryFileVersioned } = await import('./api')
+      const result = await downloadLibraryFileVersioned('ws-1', 'reports/doc.pdf')
+
+      expect(result.version).toBe('v1:9f2a7c40')
+      expect(new Uint8Array(result.data)).toEqual(new Uint8Array([1, 2, 3]))
+    })
+
+    it('rethrows the caller’s own AbortError unchanged, instead of relabelling a cancellation as a network failure', async () => {
+      // The blanket `catch` here used to turn EVERY rejection — including the
+      // DOMException `fetch` throws when the CALLER aborts — into
+      // `ApiError(0, 'Network unavailable. Check your connection.')`. Two
+      // harms, both silent: the one production caller
+      // (LibraryPdfPreview's load effect) discriminates cancellation by
+      // `name === 'AbortError'` and that test could never pass, so an unmount
+      // mid-download rendered a red "check your connection" error pane; and a
+      // routine cancellation was reported to the user, and into CI logs, as a
+      // connectivity fault that never happened.
+      const aborted = new DOMException('The user aborted a request.', 'AbortError')
+      fetchSpy.mockRejectedValueOnce(aborted)
+
+      const { downloadLibraryFileVersioned, ApiError: ApiErrorCtor } = await import('./api')
+      const controller = new AbortController()
+
+      // MUTATION THIS DIES ON: dropping the AbortError passthrough — the
+      // rejection would be an ApiError carrying a network message.
+      await expect(
+        downloadLibraryFileVersioned('ws-1', 'reports/doc.pdf', controller.signal),
+      ).rejects.toBe(aborted)
+      await expect(
+        downloadLibraryFileVersioned('ws-1', 'reports/doc.pdf', controller.signal),
+      ).rejects.not.toBeInstanceOf(ApiErrorCtor)
+    })
+
+    it('still reports a genuine transport failure as an ApiError naming the connection', async () => {
+      // The other half: the passthrough must be narrow. A real dropped
+      // connection is exactly what that message is for, and it has to keep
+      // arriving as an ApiError — this is the branch the PDF pane's retry
+      // affordance is shown for.
+      fetchSpy.mockRejectedValue(new TypeError('Failed to fetch'))
+
+      const { downloadLibraryFileVersioned, ApiError: ApiErrorCtor } = await import('./api')
+
+      await expect(downloadLibraryFileVersioned('ws-1', 'reports/doc.pdf')).rejects.toBeInstanceOf(
+        ApiErrorCtor,
+      )
+      await expect(downloadLibraryFileVersioned('ws-1', 'reports/doc.pdf')).rejects.toThrow(
+        /network unavailable/i,
+      )
+    })
+  })
+
+  describe('putLibraryContent (the text write door)', () => {
+    it('refuses locally with a 400 ApiError — and never calls fetch — when expect_version is empty', async () => {
+      const { putLibraryContent, ApiError: ApiErrorCtor } = await import('./api')
+
+      await expect(
+        putLibraryContent('ws-1', { path: 'report.md', content: 'x', expect_version: '' }),
+      ).rejects.toBeInstanceOf(ApiErrorCtor)
+      // MUTATION THIS DIES ON: sending the empty token to the server instead
+      // of refusing before any network call.
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    it('sends the bare expect_version in the body and the CSRF header, and returns {data, version} from the response ETag', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            name: 'report.md',
+            path: 'report.md',
+            is_dir: false,
+            is_hidden: false,
+            size: 30,
+            modified_at: '2026-07-28T10:15:00Z',
+            is_text_editable: true,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json', ETag: '"v1:1b8e330d"' } },
+        ),
+      )
+
+      const { putLibraryContent } = await import('./api')
+      const result = await putLibraryContent('ws-1', {
+        path: 'report.md',
+        content: 'Updated body.',
+        expect_version: 'v1:9f2a7c40',
+      })
+
+      const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(url).toContain('/api/v1/library/ws-1/content')
+      expect((init.method ?? '').toUpperCase()).toBe('PUT')
+      const sentBody = JSON.parse(init.body as string) as { expect_version: string }
+      expect(sentBody.expect_version).toBe('v1:9f2a7c40')
+      expect((init.headers as Record<string, string>)['X-CSRF-Token']).toBe('test-csrf-token')
+      expect(result.version).toBe('v1:1b8e330d')
+      expect(result.data.size).toBe(30)
+    })
+
+    it('throws LibraryVersionConflictError (never a bare ApiError) on a 409 with the typed conflict body', async () => {
+      fetchSpy.mockResolvedValueOnce(makeConflictResponse())
+
+      const { putLibraryContent, isLibraryVersionConflict } = await import('./api')
+
+      let caught: unknown
+      try {
+        await putLibraryContent('ws-1', { path: 'report.md', content: 'x', expect_version: 'v1:stale' })
+      } catch (err) {
+        caught = err
+      }
+
+      // MUTATION THIS DIES ON: falling through to the generic ApiError(409)
+      // path instead of parsing the typed conflict body.
+      expect(isLibraryVersionConflict(caught)).toBe(true)
+      if (isLibraryVersionConflict(caught)) {
+        expect(caught.path).toBe('report.md')
+        expect(caught.expectedVersion).toBe('v1:stale')
+        expect(caught.actualVersion).toBe('v1:fresh')
+      }
+    })
+
+    it('throws a plain 409 ApiError (not recognised by isLibraryVersionConflict) when the body does not match the typed envelope', async () => {
+      fetchSpy.mockResolvedValueOnce(new Response('upstream proxy error', { status: 409 }))
+
+      const { putLibraryContent, isLibraryVersionConflict, ApiError: ApiErrorCtor } = await import('./api')
+
+      let caught: unknown
+      try {
+        await putLibraryContent('ws-1', { path: 'report.md', content: 'x', expect_version: 'v1:stale' })
+      } catch (err) {
+        caught = err
+      }
+
+      expect(caught).toBeInstanceOf(ApiErrorCtor)
+      expect(isLibraryVersionConflict(caught)).toBe(false)
+    })
+  })
+
+  describe('putLibraryContentBinary (the binary write door — same contract, EMB-007b)', () => {
+    it('refuses locally with a 400 ApiError — and never calls fetch — when expect_version is empty', async () => {
+      const { putLibraryContentBinary, ApiError: ApiErrorCtor } = await import('./api')
+
+      await expect(
+        putLibraryContentBinary('ws-1', { path: 'doc.pdf', content_base64: 'AAAA', expect_version: '' }),
+      ).rejects.toBeInstanceOf(ApiErrorCtor)
+      expect(fetchSpy).not.toHaveBeenCalled()
+    })
+
+    it('throws LibraryVersionConflictError on a 409, same as the text door', async () => {
+      fetchSpy.mockResolvedValueOnce(makeConflictResponse())
+
+      const { putLibraryContentBinary, isLibraryVersionConflict } = await import('./api')
+
+      let caught: unknown
+      try {
+        await putLibraryContentBinary('ws-1', {
+          path: 'report.md',
+          content_base64: 'AAAA',
+          expect_version: 'v1:stale',
+        })
+      } catch (err) {
+        caught = err
+      }
+
+      expect(isLibraryVersionConflict(caught)).toBe(true)
+    })
   })
 })

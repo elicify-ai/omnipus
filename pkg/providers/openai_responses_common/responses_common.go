@@ -10,6 +10,7 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/responses"
 
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -220,21 +221,55 @@ func ParseResponseBody(body io.Reader) (*protocoltypes.LLMResponse, error) {
 		return nil, err
 	}
 
-	return parseResponse(&apiResp), nil
+	return parseResponse(&apiResp)
 }
 
 // ParseResponseFromStruct converts a decoded responses.Response into an LLMResponse.
 // Used by providers that receive the Response struct directly (e.g., via streaming SDK).
-func ParseResponseFromStruct(resp *responses.Response) *protocoltypes.LLMResponse {
+//
+// Returns common.ErrToolArgumentsUndecodable when a function_call carries an
+// arguments payload that will not parse — see parseResponse.
+func ParseResponseFromStruct(resp *responses.Response) (*protocoltypes.LLMResponse, error) {
 	return parseResponse(resp)
 }
 
 // parseResponse is the shared implementation for extracting LLMResponse fields
 // from a decoded responses.Response.
-func parseResponse(apiResp *responses.Response) *protocoltypes.LLMResponse {
+//
+// An undecodable function_call arguments payload fails the whole response
+// rather than degrading it. This site used to be the worst of the family: it
+// substituted a `raw` stand-in with NO log line at all, so a truncated call
+// was invisible in both the transcript and the logs.
+func parseResponse(apiResp *responses.Response) (*protocoltypes.LLMResponse, error) {
 	var content strings.Builder
 	var reasoningContent strings.Builder
 	var toolCalls []protocoltypes.ToolCall
+
+	// Computed up front (apiResp.Status/IncompleteDetails/Usage are
+	// top-level fields, not dependent on the output-item loop below) so a
+	// tool-call decode failure can attach this same evidence to the
+	// refusal (ADR-087 D3.9 / D5 / D7) instead of returning bare.
+	//
+	// The Responses API's raw truncation signal is Status=="incomplete"
+	// with IncompleteDetails.Reason=="max_output_tokens" — neither string
+	// matches AttachToolArgumentsEvidence's normalised-spelling matcher
+	// ("length"/"max_tokens"/"truncated"), so it is mapped to "length"
+	// here, the same normalised value this function already used below for
+	// the response's own FinishReason. Status=="incomplete" with
+	// Reason=="content_filter" is a refusal, not a cutoff, so it is
+	// deliberately NOT mapped to truncation evidence.
+	truncationEvidenceReason := ""
+	if apiResp.Status == "incomplete" && apiResp.IncompleteDetails.Reason == "max_output_tokens" {
+		truncationEvidenceReason = "length"
+	}
+	var usage *protocoltypes.UsageInfo
+	if apiResp.Usage.TotalTokens > 0 {
+		usage = &protocoltypes.UsageInfo{
+			PromptTokens:     int(apiResp.Usage.InputTokens),
+			CompletionTokens: int(apiResp.Usage.OutputTokens),
+			TotalTokens:      int(apiResp.Usage.TotalTokens),
+		}
+	}
 
 	for _, item := range apiResp.Output {
 		switch item.Type {
@@ -248,10 +283,11 @@ func parseResponse(apiResp *responses.Response) *protocoltypes.LLMResponse {
 				}
 			}
 		case "function_call":
-			var args map[string]any
-			argStr := item.Arguments.OfString
-			if err := json.Unmarshal([]byte(argStr), &args); err != nil {
-				args = map[string]any{"raw": argStr}
+			args, err := common.DecodeToolCallArguments(
+				json.RawMessage(item.Arguments.OfString), item.Name,
+			)
+			if err != nil {
+				return nil, common.AttachToolArgumentsEvidence(err, truncationEvidenceReason, usage)
 			}
 			toolCalls = append(toolCalls, protocoltypes.ToolCall{
 				ID:        item.CallID,
@@ -273,20 +309,11 @@ func parseResponse(apiResp *responses.Response) *protocoltypes.LLMResponse {
 		finishReason = "length"
 	}
 
-	var usage *protocoltypes.UsageInfo
-	if apiResp.Usage.TotalTokens > 0 {
-		usage = &protocoltypes.UsageInfo{
-			PromptTokens:     int(apiResp.Usage.InputTokens),
-			CompletionTokens: int(apiResp.Usage.OutputTokens),
-			TotalTokens:      int(apiResp.Usage.TotalTokens),
-		}
-	}
-
 	return &protocoltypes.LLMResponse{
 		Content:          content.String(),
 		ReasoningContent: reasoningContent.String(),
 		ToolCalls:        toolCalls,
 		FinishReason:     finishReason,
 		Usage:            usage,
-	}
+	}, nil
 }

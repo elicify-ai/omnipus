@@ -1,0 +1,52 @@
+title: LibraryChangedFrame
+description: >
+  Server → client (D-107, cross-tab listing invalidation). Emitted by the
+  Library REST write handlers (create/rename/move/delete/mkdir/upload/text
+  save) after a mutation has landed, so that every OTHER connected tab can
+  drop its stale folder listing and refetch. Before this frame existed, a
+  listing fetched in one tab stayed wrong until a manual reload: two tabs
+  never reconciled, and a file deleted in one tab kept previewing (broken
+  image and all) from the other tab's stale rows.
+
+
+  Scope is deliberately coarse: the frame names the WORKSPACE that changed
+  and little else. Callers invalidate every cached listing query for that
+  workspace rather than trying to compute which folders were affected — a
+  delete of `a/b/c.md` changes the listing of `a/b` and possibly `a`, and
+  getting that set wrong reintroduces exactly the stale-listing defect this
+  frame exists to remove. `path` and `reason` are informational (for
+  debugging and future refinement), never a scoping instruction.
+
+
+  Broadcast, not addressed: the single-user model fans server frames out to
+  every connected client, and the ORIGINATING tab is expected to receive it
+  too — it has usually already invalidated its own queries locally, and a
+  redundant invalidate is a no-op for TanStack Query (already-fresh data is
+  not refetched twice in parallel).
+type: object
+required:
+  - type
+  - workspace_id
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: library_changed
+  workspace_id:
+    type: string
+    minLength: 1
+    description: The workspace whose file tree changed. Clients invalidate their cached listings for this workspace.
+  path:
+    type: string
+    description: >
+      The workspace-relative path of the affected entry, when the mutation
+      was about one entry. Informational only — never a scoping instruction
+      (see the frame description). Absent for multi-entry mutations such as
+      an upload.
+  reason:
+    type: string
+    maxLength: 64
+    description: >
+      Which REST operation emitted the frame (e.g. "delete", "rename",
+      "mkdir", "upload", "write"). For debugging surfaces and future
+      refinement; clients must not branch their invalidation on it.

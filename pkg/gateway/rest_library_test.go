@@ -9,12 +9,14 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +26,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
 )
 
 // buildLibraryTestAPI creates a minimal restAPI plus one pre-seeded
@@ -67,14 +70,9 @@ func seedLibraryWorkspace(t *testing.T, api *restAPI, name string) string {
 	return id
 }
 
-var ulidCounter int
-
-// ulidLikeID returns a short, unique, path-safe id for test workspaces.
-func ulidLikeID(t *testing.T) string {
-	t.Helper()
-	ulidCounter++
-	return time.Now().Format("20060102150405") + "X" + string(rune('A'+ulidCounter%26))
-}
+// ulidLikeID lives in test_rate_limit_isolation_test.go: the workspace ID is
+// the knowledge limiter's bucket key, so its uniqueness is an isolation
+// guarantee and is pinned there.
 
 func workDir(api *restAPI, workspaceID string) string {
 	return filepath.Join(api.homePath, "workspaces", workspaceID, "work")
@@ -176,7 +174,7 @@ func TestLibraryWorkspaces_ListsWithEntryCounts(t *testing.T) {
 
 	// Write a file via PUT content, then list again — count must reflect it.
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"hi"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"hi","expect_version":"v1:absent"}`).Code)
 	w2 := libGet(t, api, "/api/v1/library/workspaces")
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &nodes))
 	require.Len(t, nodes, 1)
@@ -193,7 +191,7 @@ func TestLibraryEntries_ListRoot_EmptyThenPopulated(t *testing.T) {
 	assert.Equal(t, []gen.LibraryEntry{}, decodeEntries(t, w.Body.Bytes()))
 
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"report.md","content":"# hi"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"report.md","content":"# hi","expect_version":"v1:absent"}`).Code)
 
 	w2 := libGet(t, api, "/api/v1/library/"+id+"/entries")
 	entries := decodeEntries(t, w2.Body.Bytes())
@@ -218,6 +216,42 @@ func TestLibraryEntries_HiddenFiltering(t *testing.T) {
 	w2 := libGet(t, api, "/api/v1/library/"+id+"/entries?include_hidden=true")
 	entries2 := decodeEntries(t, w2.Body.Bytes())
 	require.Len(t, entries2, 2)
+}
+
+// TestLibraryEntries_ReportsIsKnowledgeBase reproduces the icon-consistency
+// defect: a knowledge base's vault-ness used to be knowable ONLY from a
+// react-query cache the SPA had to have already populated by opening
+// GET .../knowledge for that exact folder — a vault the operator had not yet
+// clicked into (or a fresh page load) rendered as an ordinary folder. The
+// listing itself must now STATE the fact, using the identical marker
+// detection GET .../knowledge answers per folder (makeKnowledgeBase writes
+// the same .omnipus-vault/ marker that endpoint's own tests use).
+func TestLibraryEntries_ReportsIsKnowledgeBase(t *testing.T) {
+	api, id := buildLibraryTestAPI(t)
+	work := workDir(api, id)
+	require.NoError(t, os.MkdirAll(work, 0o700))
+	makeKnowledgeBase(t, filepath.Join(work, "UAT Vault"), "UAT Vault")
+	require.NoError(t, os.MkdirAll(filepath.Join(work, "Plain Folder"), 0o755))
+
+	w := libGet(t, api, "/api/v1/library/"+id+"/entries")
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	entries := decodeEntries(t, w.Body.Bytes())
+	require.Len(t, entries, 2)
+
+	byName := make(map[string]gen.LibraryEntry, len(entries))
+	for _, e := range entries {
+		byName[e.Name] = e
+	}
+
+	vault, ok := byName["UAT Vault"]
+	require.True(t, ok)
+	require.NotNil(t, vault.IsKnowledgeBase, "a knowledge base directory must state is_knowledge_base on the wire")
+	assert.True(t, *vault.IsKnowledgeBase)
+
+	plain, ok := byName["Plain Folder"]
+	require.True(t, ok)
+	require.NotNil(t, plain.IsKnowledgeBase, "an ordinary folder is a real answer, not an omission")
+	assert.False(t, *plain.IsKnowledgeBase)
 }
 
 func TestLibraryEntries_UnknownWorkspace_404(t *testing.T) {
@@ -250,7 +284,7 @@ func TestLibraryEntries_WorkspaceIDWithSlashes_404NotFound(t *testing.T) {
 func TestLibraryEntryDelete_RoundTrip(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"x"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 	dw := libDelete(t, api, "/api/v1/library/"+id+"/entries?path=a.txt")
 	require.Equal(t, http.StatusNoContent, dw.Code, "body: %s", dw.Body.String())
@@ -318,7 +352,7 @@ func TestLibrary_DeeplyNestedValidPath_Accepted(t *testing.T) {
 	nested := "a/b/c/d/e/f"
 	require.NoError(t, os.MkdirAll(filepath.Join(workDir(api, id), filepath.FromSlash(nested)), 0o700))
 
-	body := `{"path":"` + nested + `/g.txt","content":"deep"}`
+	body := `{"path":"` + nested + `/g.txt","content":"deep","expect_version":"v1:absent"}`
 	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", body)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
@@ -362,7 +396,7 @@ func TestLibrary_SymlinkEscape_ToSiblingWorkspace_Rejected(t *testing.T) {
 func TestLibraryContent_RoundTrip(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 
-	pw := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"notes.md","content":"# Notes\nhello"}`)
+	pw := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"notes.md","content":"# Notes\nhello","expect_version":"v1:absent"}`)
 	require.Equal(t, http.StatusOK, pw.Code, "body: %s", pw.Body.String())
 	entry := decodeEntry(t, pw.Body.Bytes())
 	assert.Equal(t, "notes.md", entry.Path)
@@ -400,7 +434,7 @@ func TestLibraryContent_GetOnDirectory_404(t *testing.T) {
 
 func TestLibraryContent_MissingParentDir_404(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
-	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"nope/report.md","content":"x"}`)
+	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"nope/report.md","content":"x","expect_version":"v1:absent"}`)
 	assert.Equal(t, http.StatusNotFound, w.Code, "body: %s", w.Body.String())
 }
 
@@ -435,18 +469,48 @@ func TestLibraryContent_InboundSchemaValidation_MissingField(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 }
 
-// TestLibraryContent_ReservedDeviceNameOrIllegalChar_400 proves the
-// pkg/pathsafe cross-platform filename-safety checks reach PUT
-// .../content via CleanRelPath, not only the mkdir endpoint.
-func TestLibraryContent_ReservedDeviceNameOrIllegalChar_400(t *testing.T) {
+// TestLibraryContent_ReservedDeviceNameFollowsActiveRules proves the
+// pkg/pathsafe name-shape checks reach PUT .../content, and that they
+// follow the BUILD TARGET's rule set rather than applying everywhere.
+//
+// This test previously asserted a flat 400 on every OS. ADR-067 Stage 0
+// changed that deliberately: these are Windows-shape rules, and on Linux or
+// macOS a file may legitimately be called "CON.txt" or "bad|name.txt". A
+// flat 400 took away a naming freedom the host filesystem grants, for a
+// portability scenario that does not exist — a mount stores an immutable
+// absolute host path, so a workspace moved to another OS is broken by the
+// path, not by the filenames.
+//
+// The expectation is derived from ActiveRules rather than hardcoded, because
+// hardcoding either answer makes the test wrong on half the CI matrix.
+func TestLibraryContent_ReservedDeviceNameFollowsActiveRules(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
-	for _, body := range []string{
-		`{"path":"CON.txt","content":"x"}`,
-		`{"path":"bad|name.txt","content":"x"}`,
-		`{"path":"trailing.space ","content":"x"}`,
+	for _, tc := range []struct{ path, body string }{
+		{"CON.txt", `{"path":"CON.txt","content":"x","expect_version":"v1:absent"}`},
+		{"bad|name.txt", `{"path":"bad|name.txt","content":"x","expect_version":"v1:absent"}`},
+		{"trailing.space ", `{"path":"trailing.space ","content":"x","expect_version":"v1:absent"}`},
 	} {
-		w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", body)
-		assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s resp=%s", body, w.Body.String())
+		t.Run(tc.path, func(t *testing.T) {
+			w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", tc.body)
+			if pathsafe.ActiveRules().ValidateComponent(tc.path) != nil {
+				assert.Equal(t, http.StatusBadRequest, w.Code,
+					"the active rule set rejects %q, so the endpoint must 400: %s", tc.path, w.Body.String())
+			} else {
+				assert.NotEqual(t, http.StatusBadRequest, w.Code,
+					"the active rule set allows %q, so the endpoint must not 400: %s", tc.path, w.Body.String())
+			}
+		})
+	}
+}
+
+// TestLibraryContent_WindowsRulesStillRejectThoseNames pins the other half:
+// the rules did not disappear, they became conditional. Asserted against the
+// rule set as a VALUE so it holds on every runner — without it, deleting the
+// Windows rules entirely would leave this file green on Linux and macOS.
+func TestLibraryContent_WindowsRulesStillRejectThoseNames(t *testing.T) {
+	for _, name := range []string{"CON.txt", "bad|name.txt", "trailing.space "} {
+		require.Error(t, pathsafe.WindowsRules.ValidateComponent(name),
+			"WindowsRules must still reject %q", name)
 	}
 }
 
@@ -454,13 +518,59 @@ func TestLibraryContent_ReservedDeviceNameOrIllegalChar_400(t *testing.T) {
 // .../content refuses to silently create a duplicate (Linux) or overwrite
 // a different file than the caller named (Windows/macOS) when a
 // case-different sibling already exists.
+//
+// Why this is more than "assert 409": on a case-folding filesystem (APFS,
+// NTFS) the SECOND call's own "report.txt" resolves onto the ALREADY
+// existing "Report.txt" — so a naively reused expect_version:"v1:absent"
+// gets refused by checkLibraryVersion (the optimistic-lock/version check)
+// before root.WriteContent's case-insensitive collision guard is ever
+// reached. That still returns 409, but for the wrong reason: it would keep
+// passing even if the collision guard itself (library.ErrAlreadyExists in
+// content.go's WriteContent) were deleted outright, because the version
+// check alone already 409s first. A prior version of this test asserted
+// only the status code and was blind to that on macOS/NTFS CI.
+//
+// Fixed two ways, deliberately layered:
+//  1. Read "report.txt"'s version the way a real client would (GET first,
+//     PUT with whatever version that GET implies) so expect_version can
+//     never itself be the source of the conflict, on either kind of
+//     filesystem — a case-sensitive host truly has no "report.txt" (GET
+//     404s, so PUT claims v1:absent); a case-folding host's GET resolves
+//     onto "Report.txt" and returns ITS real ETag, so the PUT's version
+//     check is satisfied and the request reaches WriteContent for real.
+//  2. Assert on the conflict's typed body, not just the status: a version
+//     conflict is the typed gen.LibraryConflictError with
+//     Code=="library_version_conflict" (newLibraryConflictErr); the
+//     collision guard's ErrAlreadyExists is mapLibraryErr's plain
+//     gen.ErrorResponse, which has no "code" field at all. Requiring the
+//     absence of that code is what a broken (1) above would also catch.
 func TestLibraryContent_CaseInsensitiveCollision_409(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"original"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"original","expect_version":"v1:absent"}`).Code)
 
-	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"report.txt","content":"new"}`)
-	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+	getW := libGet(t, api, "/api/v1/library/"+id+"/content?path=report.txt")
+	expectVersion := "v1:absent"
+	if getW.Code == http.StatusOK {
+		// Case-folding host: "report.txt" already resolves onto
+		// "Report.txt". Use ITS real ETag so this PUT's own version check
+		// passes cleanly and execution actually reaches the
+		// case-insensitive collision guard under test.
+		expectVersion = strings.Trim(getW.Header().Get("ETag"), `"`)
+		require.NotEmpty(t, expectVersion, "GET report.txt returned 200 but no ETag: %s", getW.Body.String())
+	} else {
+		require.Equal(t, http.StatusNotFound, getW.Code,
+			"GET report.txt must be either a case-fold hit (200) or a genuine miss (404): %s", getW.Body.String())
+	}
+
+	w := libPutJSON(t, api, "/api/v1/library/"+id+"/content",
+		fmt.Sprintf(`{"path":"report.txt","content":"new","expect_version":%q}`, expectVersion))
+	require.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), "body: %s", w.Body.String())
+	assert.NotEqual(t, string(gen.LibraryConflictErrorCodeLibraryVersionConflict), body["code"],
+		"the 409 must come from the case-insensitive collision guard, not a version-token mismatch: body=%s", w.Body.String())
 }
 
 // --- POST /library/{id}/upload ---
@@ -566,7 +676,7 @@ func TestLibraryMkdir_Idempotent_ReturnsOK(t *testing.T) {
 func TestLibraryMkdir_AlreadyExistsAsFile_409(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"taken.txt","content":"x"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"taken.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"taken.txt"}`)
 	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
@@ -590,23 +700,30 @@ func TestLibraryMkdir_InvalidPath_400(t *testing.T) {
 	}
 }
 
-// TestLibraryMkdir_ReservedDeviceNameOrIllegalChar_400 proves the app-wide
-// cross-platform filename-safety fix (pkg/pathsafe) is wired all the way
-// through to this endpoint: a Windows reserved device name or an
-// NTFS-illegal character is rejected with 400 on every OS, not only
-// Windows — a workspace created on this (Linux) test/CI machine must never
-// contain a name that would be unusable the moment it is opened on Windows.
-func TestLibraryMkdir_ReservedDeviceNameOrIllegalChar_400(t *testing.T) {
+// TestLibraryMkdir_ReservedDeviceNameFollowsActiveRules is the mkdir half of
+// the same contract — see the note on the content test above for why a flat
+// 400 on every OS was wrong. Note "notes/COM1": the endpoint checks EVERY
+// segment, not just the leaf, so an illegal intermediate directory is caught
+// where the active rule set has one.
+func TestLibraryMkdir_ReservedDeviceNameFollowsActiveRules(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
-	for _, body := range []string{
-		`{"path":"CON"}`,
-		`{"path":"nul.txt"}`,
-		`{"path":"notes/COM1"}`,
-		`{"path":"bad<name"}`,
-		`{"path":"trailing."}`,
+	for _, tc := range []struct{ path, seg string }{
+		{"CON", "CON"},
+		{"nul.txt", "nul.txt"},
+		{"notes/COM1", "COM1"},
+		{"bad<name", "bad<name"},
+		{"trailing.", "trailing."},
 	} {
-		w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", body)
-		assert.Equal(t, http.StatusBadRequest, w.Code, "body=%s resp=%s", body, w.Body.String())
+		t.Run(tc.path, func(t *testing.T) {
+			w := libPostJSON(t, api, "/api/v1/library/"+id+"/mkdir", `{"path":"`+tc.path+`"}`)
+			if pathsafe.ActiveRules().ValidateComponent(tc.seg) != nil {
+				assert.Equal(t, http.StatusBadRequest, w.Code,
+					"the active rule set rejects %q, so mkdir must 400: %s", tc.seg, w.Body.String())
+			} else {
+				assert.NotEqual(t, http.StatusBadRequest, w.Code,
+					"the active rule set allows %q, so mkdir must not 400: %s", tc.seg, w.Body.String())
+			}
+		})
 	}
 }
 
@@ -631,7 +748,7 @@ func TestLibraryMkdir_CaseInsensitiveExistingDirectory_Idempotent(t *testing.T) 
 func TestLibraryMkdirThenMove_NestedDestination_ClosesUAT4Gap(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"test.txt","content":"x"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"test.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + id + `","from_path":"test.txt","to_workspace_id":"` + id + `","to_path":"subfolder/test.txt"}`
 	failW := libPostJSON(t, api, "/api/v1/library/move", body)
@@ -654,7 +771,7 @@ func TestLibraryMkdirThenMove_NestedDestination_ClosesUAT4Gap(t *testing.T) {
 func TestLibraryDownload_RoundTrip(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"file.txt","content":"downloadme"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"file.txt","content":"downloadme","expect_version":"v1:absent"}`).Code)
 
 	w := libGet(t, api, "/api/v1/library/"+id+"/download?path=file.txt")
 	require.Equal(t, http.StatusOK, w.Code)
@@ -675,7 +792,7 @@ func TestLibraryDownload_Directory_404(t *testing.T) {
 func TestLibraryRename_RoundTrip(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"old.txt","content":"x"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"old.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"old.txt","to":"new.txt"}`)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -691,9 +808,9 @@ func TestLibraryRename_RoundTrip(t *testing.T) {
 func TestLibraryRename_DestinationExists_409(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a","expect_version":"v1:absent"}`).Code)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"b.txt","content":"b"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"b.txt","content":"b","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"a.txt","to":"b.txt"}`)
 	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
@@ -711,7 +828,7 @@ func TestLibraryRename_MissingFrom_404(t *testing.T) {
 func TestLibraryRename_MissingDestinationParent_NamesDirectory(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"a.txt","to":"newfolder/a.txt"}`)
 	require.Equal(t, http.StatusNotFound, w.Code)
@@ -727,7 +844,7 @@ func TestLibraryRename_MissingDestinationParent_NamesDirectory(t *testing.T) {
 func TestLibraryRename_DotDotPrefixedDestination_400(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"a.txt","content":"a","expect_version":"v1:absent"}`).Code)
 
 	for _, to := range []string{
 		"..dana-pwned-encoded.txt",
@@ -753,9 +870,9 @@ func TestLibraryRename_DotDotPrefixedDestination_400(t *testing.T) {
 func TestLibraryRename_CaseInsensitiveCollision_409(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"original"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"original","expect_version":"v1:absent"}`).Code)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"draft.txt","content":"draft"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"draft.txt","content":"draft","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"draft.txt","to":"report.txt"}`)
 	assert.Equal(t, http.StatusConflict, w.Code, "body: %s", w.Body.String())
@@ -775,7 +892,7 @@ func TestLibraryRename_CaseInsensitiveCollision_409(t *testing.T) {
 func TestLibraryRename_CaseOnlyRelabel_Allowed(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"hello"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"Report.txt","content":"hello","expect_version":"v1:absent"}`).Code)
 
 	w := libPostJSON(t, api, "/api/v1/library/"+id+"/rename", `{"from":"Report.txt","to":"report.txt"}`)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -790,7 +907,7 @@ func TestLibraryCopy_CrossWorkspace_RoundTrip(t *testing.T) {
 	api, fromID := buildLibraryTestAPI(t)
 	toID := seedLibraryWorkspace(t, api, "Dest WS")
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"shared.txt","content":"shared"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"shared.txt","content":"shared","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + fromID + `","from_path":"shared.txt","to_workspace_id":"` + toID + `","to_path":"copied.txt"}`
 	w := libPostJSON(t, api, "/api/v1/library/copy", body)
@@ -810,7 +927,7 @@ func TestLibraryMove_CrossWorkspace_RemovesSource(t *testing.T) {
 	api, fromID := buildLibraryTestAPI(t)
 	toID := seedLibraryWorkspace(t, api, "Dest WS 2")
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"movable.txt","content":"m"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"movable.txt","content":"m","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + fromID + `","from_path":"movable.txt","to_workspace_id":"` + toID + `","to_path":"moved.txt"}`
 	w := libPostJSON(t, api, "/api/v1/library/move", body)
@@ -825,7 +942,7 @@ func TestLibraryMove_CrossWorkspace_RemovesSource(t *testing.T) {
 func TestLibraryMove_SameWorkspace_Sugar(t *testing.T) {
 	api, id := buildLibraryTestAPI(t)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"x.txt","content":"x"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"x.txt","content":"x","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + id + `","from_path":"x.txt","to_workspace_id":"` + id + `","to_path":"y.txt"}`
 	w := libPostJSON(t, api, "/api/v1/library/move", body)
@@ -847,7 +964,7 @@ func TestLibraryCopy_MissingDestinationParent_NamesDirectory(t *testing.T) {
 	api, fromID := buildLibraryTestAPI(t)
 	toID := seedLibraryWorkspace(t, api, "Dest WS 4")
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"shared.txt","content":"shared"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"shared.txt","content":"shared","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + fromID + `","from_path":"shared.txt","to_workspace_id":"` + toID + `","to_path":"deep/nested/copied.txt"}`
 	w := libPostJSON(t, api, "/api/v1/library/copy", body)
@@ -859,9 +976,9 @@ func TestLibraryTransfer_DestinationExists_409(t *testing.T) {
 	api, fromID := buildLibraryTestAPI(t)
 	toID := seedLibraryWorkspace(t, api, "Dest WS 3")
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"a.txt","content":"a"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+fromID+"/content", `{"path":"a.txt","content":"a","expect_version":"v1:absent"}`).Code)
 	require.Equal(t, http.StatusOK,
-		libPutJSON(t, api, "/api/v1/library/"+toID+"/content", `{"path":"b.txt","content":"b"}`).Code)
+		libPutJSON(t, api, "/api/v1/library/"+toID+"/content", `{"path":"b.txt","content":"b","expect_version":"v1:absent"}`).Code)
 
 	body := `{"from_workspace_id":"` + fromID + `","from_path":"a.txt","to_workspace_id":"` + toID + `","to_path":"b.txt"}`
 	w := libPostJSON(t, api, "/api/v1/library/copy", body)
@@ -910,7 +1027,7 @@ func TestLibrary_CurlSmokeTest(t *testing.T) {
 
 	putOut := runCurl("-sS", "-X", "PUT", srv.URL+"/api/v1/library/"+id+"/content",
 		"-H", "Content-Type: application/json",
-		"-d", `{"path":"curl-proof.md","content":"# hello from curl"}`)
+		"-d", `{"path":"curl-proof.md","content":"# hello from curl","expect_version":"v1:absent"}`)
 	t.Logf("curl PUT content -> %s", putOut)
 	assert.Contains(t, putOut, `"path":"curl-proof.md"`)
 

@@ -1,0 +1,91 @@
+# FR-105's ORACLE — HAND-DERIVED, COMMITTED AS DATA, NEVER REGENERATED.
+#
+# Every row set below was worked out by a person reading the `.base` files in
+# bases/ against the notes in notes/, using Obsidian's own documented Bases
+# semantics — BEFORE running the importer, and never by copying the
+# importer's output back in. That is the whole point: a fixture whose
+# expectations are recomputed from the thing under test is the importer
+# grading itself, and it would agree with any bug it happened to have.
+#
+# Note names are filename stems, sorted. Derivation is written out per view so
+# a reviewer can check the arithmetic instead of trusting it.
+#
+# The six notes:
+#   Ship the importer        type task, status open,    99-Temp? no
+#   Write the oracle         type task, status open,    99-Temp? no
+#   Retire the plurality rule type task, status done,    99-Temp? no
+#   Draft the ADR            type task, status blocked, 99-Temp? no
+#   Scratch idea             type task, status open,    99-Temp? YES
+#   Records                  type project
+
+views:
+  # Tasks.base outer filter: type == "task"  (no folder clause at all)
+  tasks--open:
+    enabled: true
+    # outer type==task -> 5 notes; AND status == "open" -> drops
+    # "Retire the plurality rule" (done) and "Draft the ADR" (blocked).
+    rows:
+      - Scratch idea
+      - Ship the importer
+      - Write the oracle
+
+  tasks--not-done:
+    enabled: true
+    # outer type==task -> 5 notes; AND status != "done" -> drops only
+    # "Retire the plurality rule".
+    rows:
+      - Draft the ADR
+      - Scratch idea
+      - Ship the importer
+      - Write the oracle
+
+  tasks--everything:
+    enabled: true
+    # outer type==task, no view filter -> every task.
+    # Obsidian renders it as CARDS; this release has no cards rendering, which
+    # is an ANNOTATION loss (FR-109) and changes no row.
+    rows:
+      - Draft the ADR
+      - Retire the plurality rule
+      - Scratch idea
+      - Ship the importer
+      - Write the oracle
+
+  # Scratch.base outer filter: type == "task" AND NOT file.inFolder("99-Temp")
+  scratch--all-but-temp:
+    enabled: true
+    # WAS THE BROADENING CASE, AND IS NOW THE PROOF THAT IT IS FIXED.
+    #
+    # Under the flat AND-only format this replaced, the folder clause had NO
+    # representation at all: the imported filters said only `type == "task"` —
+    # five rows where the Obsidian original says four — so the view had to
+    # import DISABLED. The view format carries it (FR-134: inFolder becomes
+    # file.folder = x OR file.folder LIKE 'x/%'), so the view is enabled and
+    # the row set below is
+    # the assertion that the exclusion actually excludes.
+    #
+    # Four rows: every task except "Scratch idea", which lives in 99-Temp.
+    rows:
+      - Draft the ADR
+      - Retire the plurality rule
+      - Ship the importer
+      - Write the oracle
+
+  scratch--shipping-only:
+    enabled: false
+    # THE BROADENING CASE, replacing the one version 2 fixed. `file.name` is a
+    # PROPERTY, not one of FR-134's four methods, so `file.name.contains("Ship")`
+    # has no translation and never will have one through the method path.
+    #
+    # Obsidian: type == "task" AND NOT inFolder("99-Temp") AND the file name
+    # contains "Ship" — one row.
+    rows:
+      - Ship the importer
+    # With the untranslatable clause dropped, the remaining filters are the
+    # outer ones alone: every task outside 99-Temp. Four rows where the
+    # original has one — the measured broadening, three rows wide.
+    rows_if_wrongly_enabled:
+      - Draft the ADR
+      - Retire the plurality rule
+      - Ship the importer
+      - Write the oracle

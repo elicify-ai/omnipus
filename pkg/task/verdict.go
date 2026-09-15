@@ -19,6 +19,90 @@ const (
 	VerdictScopeGoal = "goal"
 )
 
+// VerdictEvidenceSource is JUDGE-FR-065/FR-066's derived, REPORTING-only
+// origin of a CriterionVerdict's grounding evidence — server-derived, never
+// trusted from model output. OPTIONAL (D-B, ADR-084 revision 9 §10):
+// absence, or a value that does not verify, NEVER flips Met to anything
+// else; it never gates a verdict, it only explains one.
+type VerdictEvidenceSource string
+
+// The five VerdictEvidenceSource values (contracts/components/schemas/CriterionVerdict.yaml).
+const (
+	EvidenceSourceDiff         VerdictEvidenceSource = "diff"
+	EvidenceSourceTranscript   VerdictEvidenceSource = "transcript"
+	EvidenceSourceMachineCheck VerdictEvidenceSource = "machine_check"
+	EvidenceSourceFileRead     VerdictEvidenceSource = "file_read"
+	EvidenceSourceSessionRead  VerdictEvidenceSource = "session_read"
+)
+
+// IsValidVerdictEvidenceSource reports whether s is a known evidence source,
+// or empty (the field is optional and legitimately absent — e.g. a
+// fail-closed verdict, or a legacy rubric that emits no evidence_source).
+func IsValidVerdictEvidenceSource(s VerdictEvidenceSource) bool {
+	switch s {
+	case "", EvidenceSourceDiff, EvidenceSourceTranscript, EvidenceSourceMachineCheck,
+		EvidenceSourceFileRead, EvidenceSourceSessionRead:
+		return true
+	default:
+		return false
+	}
+}
+
+// VerdictProvenance is JUDGE-FR-065's investigation-log provenance for a
+// CriterionVerdict: deterministic_check when a veto or check evidence
+// decided it; judge_read/diff/transcript/session_read mapped from the
+// validated evidence source when the Judge's own reading decided it; none
+// when neither applies. OPTIONAL REPORTING field only (D-B) — the Judge's
+// authority to rule Met on reasoned conviction alone is never conditioned on
+// this field being present or non-none.
+type VerdictProvenance string
+
+// The six VerdictProvenance values (contracts/components/schemas/CriterionVerdict.yaml).
+const (
+	ProvenanceJudgeRead      VerdictProvenance = "judge_read"
+	ProvenanceDeterministic  VerdictProvenance = "deterministic_check"
+	ProvenanceDiffRead       VerdictProvenance = "diff"
+	ProvenanceTranscriptRead VerdictProvenance = "transcript"
+	ProvenanceSessionRead    VerdictProvenance = "session_read"
+	ProvenanceNone           VerdictProvenance = "none"
+)
+
+// IsValidVerdictProvenance reports whether p is a known provenance value, or
+// empty (the field is optional and legitimately absent).
+func IsValidVerdictProvenance(p VerdictProvenance) bool {
+	switch p {
+	case "", ProvenanceJudgeRead, ProvenanceDeterministic, ProvenanceDiffRead,
+		ProvenanceTranscriptRead, ProvenanceSessionRead, ProvenanceNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// CriterionEvidenceEntry is one entry of CriterionVerdict.Evidence — one
+// clause of the judged criterion answered with its own grounding excerpt
+// (JUDGE-FR-006). Part and Quote are always present (Quote MAY be an empty
+// string when the Judge could not locate grounding for this clause and is
+// reporting that gap rather than fabricating a quote — D-B: an empty/failed
+// entry here is reported, never fabricated, and never by itself flips the
+// overall verdict). Source and Target are optional.
+type CriterionEvidenceEntry struct {
+	// Part is the clause text (a substring of the criterion's own Text) this
+	// entry answers.
+	Part string `json:"part"`
+	// Source is where this clause's grounding excerpt came from. Plain
+	// string, not a closed enum (unlike the verdict-level EvidenceSource
+	// above) — a REPORTING detail only, never compared against by code the
+	// way the top-level EvidenceSource is.
+	Source string `json:"source,omitempty"`
+	// Target is the specific artifact this clause's excerpt was read from.
+	Target string `json:"target,omitempty"`
+	// Quote is the verbatim, rune-truncated (500 code points) grounding
+	// excerpt for this clause. UNTRUSTED CONTENT — same framing obligation
+	// as EvidenceQuote below.
+	Quote string `json:"quote"`
+}
+
 // CriterionVerdict is the judge's per-criterion outcome making up one
 // JudgeVerdict. Reason feeds forward as steering context on the next attempt
 // when Met is false (evaluator-optimizer pattern, ADR D2).
@@ -40,6 +124,34 @@ type CriterionVerdict struct {
 	// UNTRUSTED-DATA framing buildJudgeUserContent uses — never bare trusted
 	// text; the UI renders it as inert quoted text.
 	EvidenceQuote string `json:"evidence_quote,omitempty"`
+	// EvidenceSource (JUDGE-FR-070a, C-02) is the derived origin of this
+	// verdict's grounding evidence. OPTIONAL REPORTING field only (D-B) —
+	// see VerdictEvidenceSource. Populated by the mapping loop in
+	// pkg/agent/verifier_adjudication.go (out of this package's scope).
+	EvidenceSource VerdictEvidenceSource `json:"evidence_source,omitempty"`
+	// EvidenceTarget (JUDGE-FR-065/FR-070a) is the specific artifact
+	// EvidenceSource's evidence was read from, paired with EvidenceSource.
+	// OPTIONAL REPORTING field only (D-B) — never a proof gate.
+	EvidenceTarget string `json:"evidence_target,omitempty"`
+	// Provenance (JUDGE-FR-070a) is this verdict's investigation-log
+	// provenance. OPTIONAL REPORTING field only (D-B) — see
+	// VerdictProvenance.
+	Provenance VerdictProvenance `json:"provenance,omitempty"`
+	// Evidence (JUDGE-FR-006/FR-070a) is a new, OPTIONAL sibling field
+	// alongside EvidenceQuote — one entry per clause of the criterion this
+	// verdict judges. EvidenceQuote keeps its existing type/length/
+	// optionality unchanged for every reader that does not know about this
+	// field (C2); when Evidence is present the engine populates
+	// EvidenceQuote from Evidence[0].Quote (FR-071) so no existing
+	// persisted-verdict reader, replay frame or SPA render is affected. A
+	// REPORTING obligation the Judge uses to show its work (D-B) — never a
+	// gate that can turn Met into false.
+	//
+	// NOTE (C-02, D-H): there is deliberately no Outcome field here.
+	// ADR-084 revision 9 withdraws the three-state outcome in full — Met
+	// stays the only verdict-shape bool, and `unable_to_verify` is retired
+	// everywhere. Do not reintroduce either.
+	Evidence []CriterionEvidenceEntry `json:"evidence,omitempty"`
 }
 
 // JudgeVerdict is the Judge System Agent's overall PASS/FAIL verdict for one
