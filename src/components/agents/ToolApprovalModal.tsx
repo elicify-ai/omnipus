@@ -81,7 +81,7 @@ import {
 } from '@/components/ui/dialog'
 import { useToolApprovalStore, isApprovalInScope } from '@/store/toolApproval'
 import { useWorkspacesStore } from '@/store/workspacesStore'
-import { submitToolApproval, isApiError } from '@/lib/api'
+import { submitToolApproval, isApiError, fetchAgents } from '@/lib/api'
 import type { Agent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { forceLogout } from '@/lib/authLogout'
@@ -96,13 +96,28 @@ function useCountdown(expiresAt: number): { remainingMs: number; progressPct: nu
   const [totalMs] = useState(() => Math.max(1, expiresAt - Date.now()))
 
   useEffect(() => {
-    setRemainingMs(Math.max(0, expiresAt - Date.now()))
-    const interval = setInterval(() => {
+    const tick = () => {
       const left = Math.max(0, expiresAt - Date.now())
       setRemainingMs(left)
-      if (left === 0) clearInterval(interval)
+      return left
+    }
+    tick()
+    const interval = setInterval(() => {
+      if (tick() === 0) clearInterval(interval)
     }, 500)
-    return () => clearInterval(interval)
+    // Browsers throttle timers in a background tab to as little as once a
+    // minute, so the displayed countdown lags real time while the tab is
+    // hidden (UAT 2026-09-13 D-16 observed 52 s of countdown over 180 s of
+    // wall-clock). expiresAt is an absolute local timestamp, so one tick on
+    // return to the foreground snaps the display back to the truth.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') tick()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [expiresAt])
 
   return {
@@ -285,8 +300,31 @@ function ToolApprovalCard({
   const hideAlwaysAllow = isReconnectStub || (toolName === 'request_mount' && !mountPath)
 
   // ── Per-tool readable-summary registry (Deliverables 1-3) ─────────────────
-  const resolvedAgentName =
-    queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name || agentId
+  // Agent display name (D-87): a permission prompt is exactly where the human
+  // needs to know WHICH agent is asking, and a raw UUID is not that. The
+  // ['agents'] cache is usually warm (the sidebar and chat both populate it);
+  // when it is not — this dialog can open on any screen — fetch it once and
+  // re-render. The id remains the fallback so the prompt is never blank.
+  const cachedAgentName = queryClient.getQueryData<Agent[]>(['agents'])?.find((a) => a.id === agentId)?.name
+  const [fetchedAgentName, setFetchedAgentName] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    if (cachedAgentName) return
+    let cancelled = false
+    queryClient
+      .ensureQueryData({ queryKey: ['agents'], queryFn: fetchAgents })
+      .then((agents) => {
+        if (cancelled) return
+        const name = agents.find((a) => a.id === agentId)?.name
+        if (name) setFetchedAgentName(name)
+      })
+      .catch(() => {
+        /* the id fallback below stands */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [agentId, cachedAgentName])
+  const resolvedAgentName = cachedAgentName || fetchedAgentName || agentId
   const previewEntry = TOOL_APPROVAL_PREVIEWS[toolName]
   const replaceEntry = previewEntry?.mode === 'replace' ? previewEntry : undefined
   const previewCtx: ToolApprovalPreviewContext = {
@@ -350,8 +388,8 @@ function ToolApprovalCard({
                 'Review the details below before deciding.'
               ) : (
                 <>
-                  Agent <span className="font-mono">{agentId}</span> is requesting permission to run a
-                  tool.
+                  <span className="font-medium text-[var(--color-secondary)]">{resolvedAgentName}</span>{' '}
+                  is requesting permission to run a tool.
                 </>
               )}
             </DialogDescription>
@@ -408,7 +446,7 @@ function ToolApprovalCard({
           {hasExpired ? (
             <p className="text-xs text-[var(--color-error)] flex items-center gap-1">
               <XCircle size={13} weight="fill" aria-hidden="true" />
-              Approval expired — the agent will receive a denial.
+              Approval expired unanswered — the agent is told nobody answered (a timeout, not a denial by you).
             </p>
           ) : (
             <>

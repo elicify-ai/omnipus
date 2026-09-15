@@ -128,7 +128,11 @@ import (
 // knowledge_edit's own "create" op only ever adds a NOTE inside a
 // collection that already exists. Both are POST-MERGE additions, exactly
 // like grep above — see TestCatalog_MergeArithmetic's postMergeAdditions.
-const catalogSizeToday = 104
+// 2026-09-15 merge of release/v0.1.1 (#683): the goal-flow tools release added
+// join the catalog on top of the campaign's arithmetic (104 -> 107). The three
+// names are listed in the merge decision record; the merge arithmetic below is
+// left as the campaign wrote it and the post-merge delta is carried here.
+const catalogSizeToday = 107
 
 // currentKnowledgeToolNames is every knowledge_* tool presently in the
 // catalog: ADR-068 D15.3's original six (the replacement for ADR-067's
@@ -339,7 +343,7 @@ func TestCatalog_MergeArithmetic(t *testing.T) {
 		// alongside (the two knowledge names) their own implementation.
 		// Bump this alongside catalogSizeToday, in the same commit,
 		// whenever a tool is added post-merge.
-		postMergeAdditions = 3
+		postMergeAdditions = 6 // +3: release/v0.1.1 goal-flow tools (2026-09-15 merge)
 	)
 	// Checked against the FROZEN adr068OriginalSixKnowledgeToolNames, not
 	// currentKnowledgeToolNames — this arithmetic is a fact about what the

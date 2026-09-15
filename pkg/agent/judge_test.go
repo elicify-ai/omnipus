@@ -94,19 +94,6 @@ func (f *fakeJudgeProvider) Chat(
 	return f.chatFn(n)
 }
 
-// promptText concatenates the non-system messages of the most recent Chat
-// call — the verifier's user-message evidence bundle as the LLM received it.
-func (f *fakeJudgeProvider) promptText() string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var sb strings.Builder
-	for _, m := range f.lastMessages {
-		sb.WriteString(m.Content)
-		sb.WriteString("\n")
-	}
-	return sb.String()
-}
-
 func (f *fakeJudgeProvider) GetDefaultModel() string { return "fake-judge-model" }
 
 func (f *fakeJudgeProvider) callCount() int {

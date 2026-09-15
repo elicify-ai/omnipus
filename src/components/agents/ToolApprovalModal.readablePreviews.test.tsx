@@ -206,13 +206,12 @@ describe('ToolApprovalModal — request_mount button copy (Deliverable 2/3)', ()
     })
   })
 
-  it('does not offer Cancel for request_mount (closed 2-button spec)', () => {
-    act(() => {
-      useToolApprovalStore.setState({ queue: [MOUNT_APPROVAL] })
-    })
-    render(<ToolApprovalModal />)
-    expect(screen.queryByRole('button', { name: /^Cancel$/i })).not.toBeInTheDocument()
-  })
+  // MERGE 2026-09-15: the "does not offer Cancel for request_mount" case is
+  // dropped. It pinned integrate's D-90 decision (Cancel control removed,
+  // Escape sets the approval aside); the founder ruled tool approval comes
+  // from release/v0.1.1 (#683), whose modal keeps an explicit Cancel action
+  // and treats Escape as the safe-default deny. Recorded as a contested
+  // product decision in the merge decision record.
 })
 
 describe('ToolApprovalModal — registry fallback (Deliverable 1)', () => {

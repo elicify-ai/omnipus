@@ -587,8 +587,7 @@ type turnState struct {
 	// this turn (capped at toolCallHistoryCap), scanned by
 	// detectOscillation for a repeating short cycle of calls — the loop shape
 	// the failure streak cannot see (UAT 2026-09-13 D-23). See
-	// tool_failure_circuit_breaker.go. Ported onto release's turnState in the
-	// 2026-09-15 merge; the breaker file is integrate's.
+	// tool_failure_circuit_breaker.go.
 	toolCallHistory []string
 
 	// toolRepeatSig and toolRepeatRun track the current run of consecutive

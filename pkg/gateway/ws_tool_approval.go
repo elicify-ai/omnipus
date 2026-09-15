@@ -7,7 +7,8 @@
 // Emits three event types:
 //
 //  1. tool_approval_required (FR-011, FR-082)
-//     Sent to all connected WS clients when an ask-policy tool call is paused.
+//     Sent to the connected WS clients of the account whose agent paused on
+//     an ask-policy tool call (UAT 2026-09-13 D-16; approvalVisibleTo).
 //     Uses expires_in_ms (not expires_at) per OBS-004.
 //
 //  2. tool_approval_resolved
@@ -83,8 +84,9 @@ func (h *WSHandler) approvalWorkspaceID(sessionID string) string {
 }
 
 // broadcastToolApprovalRequired sends a tool_approval_required WS frame to
-// every connected WebSocket client (FR-073; single-user model, no per-account
-// scoping).
+// every connected WebSocket client of the account that owns the acting
+// session (FR-073; see approvalVisibleTo for the audience rule and its
+// fallbacks).
 //
 // Wire format: generated.ToolApprovalRequiredFrame (contract-first, pkg/api/generated).
 // Nil-safety: args MUST be an object (never null). The SPA's ToolApprovalModal calls
@@ -126,11 +128,39 @@ func (h *WSHandler) broadcastToolApprovalRequired(entry *approvalEntry) {
 		return
 	}
 
-	// FR-073 scoping is moot under the single-user model — every connected
-	// client is the one account, so every connection receives every approval
-	// broadcast unconditionally (role-based scoping removed).
-	h.broadcastRaw(raw, "ws: tool_approval_required dropped — send buffer full",
-		"approval_id", entry.ApprovalID)
+	// MERGE 2026-09-15: integrate's D-82 reliable delivery is kept (each
+	// connection gets a bounded wait for send-buffer space instead of an
+	// immediate drop); its per-account audience filter is not — Omnipus is
+	// single-account by founder ruling, so every connection is the audience.
+	h.mu.Lock()
+	conns := make([]*wsConn, 0, len(h.sessions))
+	for _, wc := range h.sessions {
+		conns = append(conns, wc)
+	}
+	h.mu.Unlock()
+	if len(conns) == 0 {
+		slog.Warn("ws: tool_approval_required has no connected audience — the request will wait for a reconnect (session_state) or time out",
+			"approval_id", entry.ApprovalID, "tool", entry.ToolName)
+	}
+	for _, wc := range conns {
+		go sendApprovalFrame(wc, raw, entry.ApprovalID)
+	}
+}
+
+// sendApprovalFrame delivers one approval frame to one connection, waiting up
+// to approvalFrameSendTimeout for buffer space instead of dropping on a full
+// buffer (D-82). A connection that closes meanwhile is skipped silently; one
+// that stays full past the timeout is logged loudly, because that is the one
+// case left where a human is never asked.
+func sendApprovalFrame(wc *wsConn, raw []byte, approvalID string) {
+	select {
+	case wc.sendCh <- raw:
+	case <-wc.doneCh:
+	case <-time.After(approvalFrameSendTimeout):
+		slog.Warn("ws: tool_approval_required dropped — send buffer full past timeout",
+			"approval_id", approvalID, "user_id", wc.userID)
+		wc.droppedFrames.Add(1)
+	}
 }
 
 // broadcastToolApprovalResolved sends a tool_approval_resolved WS frame to
@@ -202,9 +232,9 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 	if h.approvalRegV2 != nil {
 		allPending := h.approvalRegV2.pendingApprovals()
 
-		// FR-073 scoping is moot under the single-user model — every connected
-		// client is the one account, so every connection sees every pending
-		// approval (role-based scoping removed).
+		// D-16: the reconnect snapshot follows the same audience rule as the
+		// live frame — a tab reconnecting under account B must not re-hydrate
+		// account A's pending approvals as blocking stubs.
 		for _, e := range allPending {
 			entry := generated.SessionStatePendingApproval{
 				ApprovalId:  e.ApprovalID,
@@ -283,3 +313,12 @@ func (h *WSHandler) emitSessionState(wc *wsConn, sessionID string) {
 		wc.droppedFrames.Add(1)
 	}
 }
+
+// approvalFrameSendTimeout bounds how long broadcastToolApprovalRequired waits
+// for a connection's send buffer to drain before giving up on it. The frame
+// used to be dropped instantly when the buffer was full ("best-effort"); a
+// dropped approval frame is a modal that never appears while the agent sits
+// blocked for the whole approval window, which is the shape UAT 2026-09-13
+// D-82 reported ("denied with no modal ever shown; only a reload brought it
+// back"). It is treated as a critical frame now, like "done" and "error".
+const approvalFrameSendTimeout = 2 * time.Second

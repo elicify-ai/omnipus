@@ -79,8 +79,16 @@ export function RequestMountApprovalPreview({ args, agentName, sessionId }: Tool
         <p className="text-sm text-[var(--color-secondary)]">{workspaceName}</p>
       </div>
 
+      {/* UAT 2026-09-13 D-15: this decision is about WRITE access only.
+          Agents can already read files outside their workspace (ADR-068), so
+          the copy must not imply that declining withholds reading — a founder
+          who declines believing they kept the folder private has been misled. */}
       <p className="text-xs text-[var(--color-warning)] pt-3 border-t border-[var(--color-border)]">
-        {agentName} will be able to read and change files in this folder until you remove it.
+        {agentName} will be able to change files in this folder until you remove it.
+      </p>
+      <p className="text-xs text-[var(--color-muted)]">
+        Agents can already read files anywhere on this Mac that your account can read; declining
+        keeps this folder read-only for {agentName}, it does not hide it.
       </p>
     </div>
   )

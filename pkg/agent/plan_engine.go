@@ -164,19 +164,6 @@ const (
 	// PausePlansOwnedBy (FR-065).
 	pausedReasonOwnerDisabled = "owner_disabled"
 
-	// pausedReasonJudgeUnavailable is the stable PREFIX of the PausedReason a
-	// running plan carries while its in-flight judge round waits out a D7
-	// backoff on an unavailable Judge (noteJudgeUnavailable below). Aliased
-	// from pkg/plan rather than re-typed so the prefix the engine WRITES and
-	// the prefix pkg/plan VALIDATES can never drift.
-	pausedReasonJudgeUnavailable = plan.PausedReasonJudgeUnavailable
-
-	// judgeUnavailableReasonCap bounds the free-text cause spliced into that
-	// PausedReason. The cause can be a raw provider error of arbitrary length;
-	// PausedReason rides the plan_status WS frame and renders in a board chip,
-	// so it is truncated to something a human can actually read at a glance.
-	judgeUnavailableReasonCap = 120
-
 	// DefaultBootSweepBudgetSeconds is the default wall-clock budget for the
 	// boot sweep (FR-118 "within N s") when boot_sweep_budget_seconds is not
 	// configured. The sweep scans non-terminal sessions and persists
@@ -2358,27 +2345,6 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	// which re-checks State==running and applies the outcome as ONE atomic
 	// critical section under planDecisionMu.
 	pe.applyJudgeRoundOutcome(planID, result, false, terminalSig)
-}
-
-// buildJudgeUnavailablePausedReason renders the operator-facing PausedReason
-// for a judge-unavailability pause: the stable prefix pkg/plan validates and
-// the SPA/E2E discriminate on, plus the cause and the retry interval a human
-// needs in order to tell "the judge is down, it's coming back" apart from
-// "this plan is wedged". cause is squashed to one line and capped — it can be
-// a raw provider error of any length, and this string ends up in a board chip.
-func buildJudgeUnavailablePausedReason(cause string, backoff time.Duration) string {
-	out := pausedReasonJudgeUnavailable
-	clean := strings.Join(strings.Fields(cause), " ")
-	if clean != "" {
-		if len(clean) > judgeUnavailableReasonCap {
-			clean = clean[:judgeUnavailableReasonCap] + "…"
-		}
-		out += ": " + clean
-	}
-	if backoff > 0 {
-		out += "; retrying in " + backoff.Round(time.Second).String()
-	}
-	return out
 }
 
 // clearJudgeUnavailablePause retracts a judge-unavailability pause from

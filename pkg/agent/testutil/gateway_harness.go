@@ -282,8 +282,9 @@ func allocateEphemeralPort(t *testing.T) int {
 }
 
 // StartTestGateway boots a real gateway via the registered RunContextFunc on
-// an ephemeral port and returns a TestGateway once the /health endpoint
-// responds 200.
+// a port from the harness's private below-ephemeral window (see the port
+// allocation block at the top of this file) and returns a TestGateway once the
+// /health endpoint responds 200.
 //
 // It requires RegisterGatewayRunner to have been called first (typically from
 // a TestMain in the test package that imports pkg/gateway). If it has not
@@ -292,7 +293,9 @@ func allocateEphemeralPort(t *testing.T) int {
 // It:
 //   - Creates a temp dir for OMNIPUS_HOME via t.TempDir().
 //   - Sets OMNIPUS_MASTER_KEY to a fixed test value via t.Setenv.
-//   - Picks a free ephemeral port using the listen/close/reuse idiom.
+//   - Picks a free port from this process's own region of the harness's
+//     private [portRangeLo, portRangeHi) window, which sits below the kernel's
+//     ephemeral floor so no outbound connect() can be assigned it.
 //   - Writes a config.json seeded with a real OpenRouter+glm provider entry.
 //   - Seeds OPENROUTER_API_KEY (from env, or a stub if env is empty) into
 //     credentials.json so credentials.InjectFromConfig succeeds at boot.
@@ -533,8 +536,9 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 			t.Fatalf(
 				"testutil.StartTestGateway: gateway at %s failed to boot: %v "+
 					"(fast-fail: %d probe attempt(s), %s elapsed — this is a genuine boot "+
-					"error surfaced immediately, not a timeout)",
+					"error surfaced immediately, not a timeout)%s",
 				baseURL, result.bootErr, result.attempts, result.elapsed,
+				portRaceHint(port, result.bootErr),
 			)
 		case pollConsecutiveFailures:
 			var bootErrMsg string
@@ -545,8 +549,9 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 				"testutil.StartTestGateway: gateway at %s never became healthy after "+
 					"%d consecutive failed health probes (%s elapsed) — this indicates a "+
 					"genuine boot failure, not a scheduling stall (a frozen host would "+
-					"produce FEW probes, not failed ones); last probe error: %v%s",
+					"produce FEW probes, not failed ones); last probe error: %v%s%s",
 				baseURL, result.consecutiveFails, result.elapsed, result.lastProbeErr, bootErrMsg,
+				portRaceHint(port, result.bootErr),
 			)
 		case pollHardBackstop:
 			var bootErrMsg string
@@ -557,8 +562,9 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 				"testutil.StartTestGateway: gateway at %s hit the %s hard backstop after "+
 					"only %d probe attempt(s) (%s elapsed) without becoming healthy — this is "+
 					"the absolute ceiling, not the primary failure signal; probes are likely "+
-					"hanging (gateway wedged/hung, not merely slow to boot); last probe error: %v%s",
+					"hanging (gateway wedged/hung, not merely slow to boot); last probe error: %v%s%s",
 				baseURL, healthHardBackstop, result.attempts, result.elapsed, result.lastProbeErr, bootErrMsg,
+				portRaceHint(port, result.bootErr),
 			)
 		}
 	}
@@ -977,4 +983,28 @@ func seedTestCredentials(homeDir string) error {
 		return fmt.Errorf("set OPENROUTER_API_KEY: %w", err)
 	}
 	return nil
+}
+
+// portRaceHint returns a sentence naming the port race when bootErr looks like
+// a failed bind, and "" otherwise. Without it a lost-port boot failure reads as
+// a generic "gateway failed to boot", which is how this defect stayed
+// mis-diagnosed as flakiness: the real cause is that the port written into
+// config.json was taken between allocation and bind.
+func portRaceHint(port int, bootErr error) string {
+	if bootErr == nil {
+		return ""
+	}
+	msg := bootErr.Error()
+	if !strings.Contains(msg, "address already in use") &&
+		!strings.Contains(msg, "bind") &&
+		!strings.Contains(msg, "Only one usage of each socket address") {
+		return ""
+	}
+	return fmt.Sprintf(
+		" — THIS IS THE PORT RACE, not a gateway defect: port %d was free when the harness "+
+			"allocated it (allocateEphemeralPort: kernel-assigned, listener closed again) but "+
+			"something else held it by the time RunContext bound it. Look for another process "+
+			"that grabbed %d in that window (a parallel test binary or an outbound connection)",
+		port, port,
+	)
 }

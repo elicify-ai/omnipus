@@ -1574,38 +1574,95 @@ func NewAgentLoop(
 		}
 	}
 
-	// SEC-15: Initialize structured audit logging (optional) and policy
-	// evaluation (always on). Audit directory is ~/.omnipus/system/ (sibling of
-	// workspace). The audit logger and the policy evaluator are decoupled:
-	// disabling audit logging must NOT disable enforcement.
+	// SEC-15: Initialize structured audit logging (ON by default since the
+	// 2026-09-11 founder decision — see cfg.Sandbox.AuditLog's doc comment)
+	// and policy evaluation (always on). Audit directory is ~/.omnipus/system/
+	// (sibling of workspace). The audit logger and the policy evaluator are
+	// decoupled: disabling audit logging must NOT disable enforcement.
 	if cfg.Sandbox.AuditLog {
 		auditDir := filepath.Join(homePath, "system")
 		auditLogger, auditErr := audit.NewLogger(audit.LoggerConfig{
 			Dir:           auditDir,
 			RetentionDays: 90,
-			// CRIT-2: signal to NewLogger that the operator explicitly enabled
-			// audit. Without this, NewLogger would swallow openCurrentFile
-			// errors and return a degraded logger + nil error — the gateway
-			// would think audit_logger=ok at startup while every subsequent
-			// write rejects in degraded mode. Setting AuditLogRequested makes
-			// openCurrentFile failure surface as a *LoggerConstructionError so
-			// the gateway boot path can fail closed.
+			// CRIT-2: signal to NewLogger that audit logging is genuinely
+			// wanted here. Without this, NewLogger would swallow
+			// openCurrentFile errors and return a degraded logger + nil error
+			// — the gateway would think audit_logger=ok at startup while every
+			// subsequent write rejects in degraded mode. Setting
+			// AuditLogRequested makes openCurrentFile failure surface as a
+			// *LoggerConstructionError instead.
+			//
+			// This stays unconditionally true now that audit is on by default.
+			// It is deliberately NOT wired to AuditLogExplicit: the flag's job
+			// is to stop NewLogger from hiding a failure, and a failure must
+			// never be hidden regardless of who asked. WHAT WE DO about the
+			// surfaced failure is the part that depends on provenance, and
+			// that decision is taken below, at this call site, which is the
+			// only place that knows it.
 			AuditLogRequested: true,
 		})
 		if auditErr != nil {
-			// B1.2(b): when sandbox.audit_log is explicitly enabled,
-			// audit construction failure is a fail-closed boot abort.
-			// CLAUDE.md "audit-everything stance is non-negotiable" —
-			// silently dropping audit while the operator asked for it would
-			// be a security regression. The gateway maps the returned typed
-			// error to a SandboxBootError + EX_CONFIG (78) exit code; see
-			// pkg/gateway/gateway.go around the agent.NewAgentLoop call.
+			// The audit logger could not be built. Two different populations
+			// reach this line and they have earned different answers.
+			//
+			// (1) Somebody WROTE `"audit_log": true` — in config.json, or in
+			//     a Config built directly in Go. Unchanged from B1.2(b):
+			//     fail-closed boot abort. They asked for a compliance
+			//     guarantee we cannot deliver, and running on without it
+			//     would silently break the SEC-15 audit-everything contract.
+			//     The gateway maps the returned typed error to a
+			//     SandboxBootError + EX_CONFIG (78) exit code; see
+			//     pkg/gateway/gateway.go around the agent.NewAgentLoop call,
+			//     whose branch is still gated on cfg.Sandbox.AuditLog being
+			//     true. This is the branch a zero-valued provenance field
+			//     selects, deliberately — see AuditLogFromDefault's doc
+			//     comment on the polarity being the safety property.
+			//
+			// (2) Audit is on because it is now the DEFAULT and this config
+			//     never mentioned it. Degrade loudly and keep booting.
+			//
+			// Why (2) is not also an abort. Fail-closed is justified by
+			// consent: the operator requested a guarantee, so not delivering
+			// it silently is the regression. A default is not a request.
+			// Aborting on it would convert a security improvement into a
+			// denial of service for installs that never opted in and that
+			// booted perfectly well yesterday with audit off — an upgrade
+			// would turn "audit was off" into "the product does not start",
+			// on a read-only filesystem, a full disk, or a partially-mounted
+			// container volume. Strictly compared against the status quo this
+			// branch is still an improvement: that population previously had
+			// audit off AND no error; it now has audit off, a loud error, and
+			// a degraded health endpoint.
+			//
+			// The failure is NOT silent. al.auditLogger stays nil, so
+			// AgentLoop.AuditLogger() returns nil while the gateway's
+			// SetAuditLoggerConfiguredFunc still reports configured=true from
+			// cfg.Sandbox.AuditLog — the exact pair pkg/health/server.go
+			// documents as "audit_logger=unavailable AND operator asked for
+			// audit → degraded (broken)". /health reads degraded, and the
+			// ERROR below names the directory and the underlying cause.
+			//
+			// In practice (2) should be close to unreachable: auditDir is
+			// $OMNIPUS_HOME/system, the same tree that already holds
+			// config.json, master.key, sessions and token_budget.json, so an
+			// install that cannot write it is broken in ways that surface
+			// elsewhere anyway. That is an argument for the blast radius of
+			// this branch being small — not an argument for making a default
+			// the thing that refuses to start.
+			if !cfg.Sandbox.AuditLogFromDefault {
+				logger.ErrorCF("agent",
+					"Audit logger construction failed; aborting boot because sandbox.audit_log=true was explicitly set",
+					map[string]any{"error": auditErr.Error(), "dir": auditDir})
+				return nil, &audit.LoggerConstructionError{Dir: auditDir, Err: auditErr}
+			}
 			logger.ErrorCF("agent",
-				"Audit logger construction failed; aborting boot because sandbox.audit_log=true",
+				"Audit logger construction failed; continuing WITHOUT audit logging because audit_log is on by default, not by explicit configuration. "+
+					"No security audit entries will be recorded for the lifetime of this process. "+
+					"/health reports audit as degraded. Fix the directory, or set sandbox.audit_log=true to make this failure abort boot instead.",
 				map[string]any{"error": auditErr.Error(), "dir": auditDir})
-			return nil, &audit.LoggerConstructionError{Dir: auditDir, Err: auditErr}
+			auditLogger = nil
 		}
-		{
+		if auditLogger != nil {
 			al.auditLogger = auditLogger
 
 			// Log startup event. CRIT-6: route through audit.EmitEntry so a
@@ -3326,6 +3383,16 @@ func registerSharedTools(
 						if !ok {
 							return false, name + " — agent not found"
 						}
+						// UAT 2026-09-13 D-84: a policy deny that bites at
+						// tool-LOAD time used to leave no deny row at all — the
+						// refusal surfaced only as a ToolSearch error, so an
+						// auditor searching for denied writes to a tool found
+						// nothing. Every policy-denied load below goes through
+						// this one closure so the audit row is never forgotten.
+						deniedByPolicy := func() (bool, string) {
+							al.emitToolLoadPolicyDenyAudit(ctx, callerID, name)
+							return false, name + " — denied by this agent's policy"
+						}
 						allAgentTools := callerAgent.Tools.GetAll()
 						policyFiltered, policyVerdicts := tools.FilterToolsByPolicy(
 							allAgentTools,
@@ -3348,7 +3415,7 @@ func registerSharedTools(
 								}
 							}
 							// Policy-denied full-tier (or genuinely not found for this tier).
-							return false, name + " — denied by this agent's policy"
+							return deniedByPolicy()
 						}
 						for _, t := range policyFiltered {
 							if t.Name() == name {
@@ -3386,13 +3453,13 @@ func registerSharedTools(
 								return true, ""
 							}
 							// Tool exists (visible or hidden) but policy denies it.
-							return false, name + " — denied by this agent's policy"
+							return deniedByPolicy()
 						}
 						// Tool is not in GetAll() and not hidden — check if it's in the full
 						// registered set but policy-filtered out (i.e. registered but denied).
 						for _, t := range allAgentTools {
 							if t.Name() == name {
-								return false, name + " — denied by this agent's policy"
+								return deniedByPolicy()
 							}
 						}
 						// Genuinely unknown: suggest the closest registered name so the model
@@ -3684,6 +3751,244 @@ func registerSharedTools(
 			map[string]any{"browsing_key": k})
 	}
 }
+
+// suggestUnknownToolName answers "did you mean …" for a tool name the caller
+// asked for that no registered tool carries (D-96, UAT 2026-09-13). It returns
+// the best candidate and, when the answer is an op-dispatched tool, the `op`
+// value that does what the caller asked for; ("", "") when no candidate is
+// close enough to name — a wrong hint costs the caller a round trip, so no
+// signal means no suggestion.
+//
+// # Why raw edit distance was the defect
+//
+// The observed case: asked for `knowledge_create`, the old ranking answered
+// `knowledge_read` — edit distance 4 beats knowledge_edit's 6 — the one
+// knowledge tool that cannot create anything. The name a model hallucinates is
+// family + VERB ("knowledge_" + what it wants done), and the verb, not the
+// character count, is the intent. So the ranking, strongest signal first:
+//
+//  1. Token-set equality (score 1.0) — `task_update` and `update_task` are the
+//     same words in a different order; distance sees two edits, the caller
+//     meant one tool.
+//  2. Op-enum match (0.90 + 0.02 per suffix segment) — the longest "_"-joined
+//     SUFFIX of the unknown that equals a value in the candidate's `op`
+//     parameter enum, with every remaining prefix segment present in the
+//     candidate's own name segments (the family). `knowledge_create` matches
+//     knowledge_edit's op "create"; `knowledge_create_view` matches
+//     knowledge_configure's op "create_view". This is the signal that also
+//     produces the op hint.
+//  3. Verb synonym (0.88) — the unknown's trailing segment is a synonym of the
+//     candidate's trailing segment under toolVerbSynonyms, with the same first
+//     segment (family). `knowledge_search` → knowledge_find: no lexical overlap
+//     at all, and the intent is exact.
+//  4. Edit distance (1 - d/(len+1), gated at 60% of the longer name) — the
+//     typo signal, `knowledge_reed` → knowledge_read. Kept as the LAST
+//     resort because it is the one signal that ignores intent.
+//
+// Ties keep the first candidate in registration order. The minimum-input
+// guard mirrors pkg/tools' own (very short names suggest everything).
+func suggestUnknownToolName(allTools []tools.Tool, unknown string) (name, hint string) {
+	if len(unknown) < minSuggestInputLen || len(allTools) == 0 {
+		return "", ""
+	}
+	unknownLower := strings.ToLower(unknown)
+	unknownSegs := strings.Split(unknownLower, "_")
+
+	best := ""
+	bestHint := ""
+	bestScore := 0.0
+	for _, t := range allTools {
+		cand := strings.ToLower(t.Name())
+		if cand == unknownLower {
+			return t.Name(), "" // case-only misspelling; the answer is exact
+		}
+		score, opHint := suggestScore(unknown, unknownLower, unknownSegs, cand, t)
+		if score > bestScore {
+			bestScore, best, bestHint = score, t.Name(), opHint
+		}
+	}
+	if bestScore <= 0 {
+		return "", ""
+	}
+	return best, bestHint
+}
+
+// suggestScore scores one candidate against an unknown name. A score of 0
+// means "do not suggest this candidate"; the hint is non-empty only for the
+// op-enum signal, where the caller can be told not just the tool but the op
+// inside it that does what they asked.
+func suggestScore(unknown, unknownLower string, unknownSegs []string, candLower string, t tools.Tool) (score float64, hint string) {
+	candSegs := strings.Split(candLower, "_")
+
+	// 1 — same words, different order.
+	if sameSegmentSet(unknownSegs, candSegs) {
+		return 1.0, ""
+	}
+
+	// 2 — the unknown's longest suffix is an op this tool dispatches, and the
+	// rest of the unknown names the tool's family. Enum values may themselves
+	// contain underscores ("create_view"), so suffixes are tried longest-first
+	// and compared joined.
+	ops := toolOpEnum(t)
+	if len(ops) > 0 && len(unknownSegs) > 1 {
+		for take := len(unknownSegs) - 1; take >= 1; take-- {
+			suffix := strings.Join(unknownSegs[take:], "_")
+			if !ops[suffix] {
+				continue
+			}
+			if segmentsCovered(unknownSegs[:take], candSegs) {
+				return 0.90 + 0.02*float64(len(unknownSegs)-take), `op "` + suffix + `"`
+			}
+		}
+	}
+
+	// 3 — the trailing verb is a synonym and the family agrees.
+	if len(unknownSegs) > 1 && len(candSegs) > 1 &&
+		unknownSegs[0] == candSegs[0] &&
+		toolVerbSynonyms[unknownSegs[len(unknownSegs)-1]][candSegs[len(candSegs)-1]] {
+		return 0.88, ""
+	}
+
+	// 4 — edit distance, the typo signal, gated exactly as pkg/tools gates it
+	// (up to 60% of the longer name as edits, plus one).
+	d := levenshteinToolName(unknownLower, candLower)
+	longer := len(unknownLower)
+	if len(candLower) > longer {
+		longer = len(candLower)
+	}
+	if d <= 6*longer/10+1 {
+		if s := 1.0 - float64(d)/float64(longer+1); s > 0 {
+			return s, ""
+		}
+	}
+	return 0, ""
+}
+
+// toolOpEnum reads the string values of a tool's `op` parameter enum from its
+// parameter schema, lowercased. A tool with no `op` enum answers nil; the
+// caller treats that as "not op-dispatched".
+func toolOpEnum(t tools.Tool) map[string]bool {
+	params := t.Parameters()
+	if params == nil {
+		return nil
+	}
+	props, ok := params["properties"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	op, ok := props["op"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	// The enum arrives as []any when the schema came through JSON and as
+	// []string when a Go-built schema put it there directly; both are read —
+	// the shape of the container is not part of the question.
+	var values []string
+	switch enum := op["enum"].(type) {
+	case []any:
+		for _, v := range enum {
+			if s, ok := v.(string); ok {
+				values = append(values, s)
+			}
+		}
+	case []string:
+		values = enum
+	default:
+		return nil
+	}
+	if len(values) == 0 {
+		return nil
+	}
+	out := make(map[string]bool, len(values))
+	for _, s := range values {
+		if s != "" {
+			out[strings.ToLower(s)] = true
+		}
+	}
+	return out
+}
+
+// segmentsCovered answers whether every segment in want appears in have.
+func segmentsCovered(want, have []string) bool {
+	set := make(map[string]bool, len(have))
+	for _, s := range have {
+		set[s] = true
+	}
+	for _, s := range want {
+		if !set[s] {
+			return false
+		}
+	}
+	return true
+}
+
+// sameSegmentSet answers whether two "_"-split names carry the same multiset
+// of segments (order-insensitive).
+func sameSegmentSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	counts := make(map[string]int, len(a))
+	for _, s := range a {
+		counts[s]++
+	}
+	for _, s := range b {
+		counts[s]--
+		if counts[s] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
+// levenshteinToolName is the plain Wagner-Fischer distance pkg/tools' own
+// suggester uses, restated here because that one is unexported and this
+// ranking must not reach into another package's private table.
+func levenshteinToolName(a, b string) int {
+	prev := make([]int, len(b)+1)
+	curr := make([]int, len(b)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(a); i++ {
+		curr[0] = i
+		for j := 1; j <= len(b); j++ {
+			cost := 1
+			if a[i-1] == b[j-1] {
+				cost = 0
+			}
+			curr[j] = minInt(curr[j-1]+1, minInt(prev[j]+1, prev[j-1]+cost))
+		}
+		prev, curr = curr, prev
+	}
+	return prev[len(b)]
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// toolVerbSynonyms is the closed table of tool-verb equivalences the suggester
+// recognises (signal 3). It is deliberately tiny and hand-curated: every entry
+// is a pair a model plausibly substitutes when hallucinating a name, and every
+// entry risks a wrong hint in the other direction. Read: the key verb, asked
+// for, is done by the mapped verb, which appears in a registered tool's name.
+var toolVerbSynonyms = map[string]map[string]bool{
+	"search": {"find": true},
+	"find":   {"search": true},
+	"query":  {"find": true},
+	"lookup": {"find": true},
+	"get":    {"read": true},
+	"load":   {"read": true},
+	"fetch":  {"read": true},
+}
+
+// minSuggestInputLen mirrors pkg/tools' minFuzzyInputLen: names shorter than
+// this match too much by distance to be worth a guess.
+const minSuggestInputLen = 3
 
 // currentDelegationDepth reports the delegation-chain depth of the turn that is
 // about to delegate, read from the turnState carried on ctx. The root user turn
@@ -8928,6 +9233,12 @@ func (al *AgentLoop) runAgentLoop(
 	al.lastTurnResultMu.Lock()
 	al.lastTurnResult = result
 	al.lastTurnResultMu.Unlock()
+	// MERGE NOTE 2026-09-15: integrate's F2 fix called
+	// al.rearmGoalAfterAbnormalTurn(opts) here (a goal-bearing session whose
+	// turn died on this path never re-armed its idle quiet window and stayed
+	// `active` forever). The helper lived in integrate's goal_triggers.go;
+	// goal logic comes from release (#683) by founder ruling, so the call is
+	// dropped and the fix is recorded as a follow-up candidate.
 	if err != nil {
 		return "", err
 	}
@@ -13050,12 +13361,18 @@ turnLoop:
 			// UAT fix (fix/uat-defects-2026-08-22, Defect 1): update this
 			// exact call's consecutive-failure streak. A success (or a hook
 			// that turned a failure into one) clears the streak outright; a
-			// real failure bumps it and, once it crosses either threshold,
-			// augments the error content the model is about to see (warn),
-			// or trips the pre-dispatch breaker above for every later call
-			// with this identical signature this turn (hard stop). Keyed on
-			// toolCBSig computed before dispatch/hooks so a hook renaming the
-			// tool does not fragment the streak it is meant to track.
+			// real failure bumps it and, once it crosses the warn threshold,
+			// augments the error content the model is about to see. The
+			// REFUSAL side lives entirely in the pre-dispatch check above
+			// (toolCircuitBreakerTripped): D-81 made it refuse attempt
+			// number toolFailureCircuitBreakThreshold of an identical call
+			// BEFORE dispatch, so a streak recorded here can never reach the
+			// break threshold — a post-dispatch arm that tripped the breaker
+			// at streak >= toolFailureCircuitBreakThreshold was unreachable
+			// and is deleted (round-3 cut list, 2026-09-14 review; see the
+			// reachability note in tool_failure_circuit_breaker.go). Keyed
+			// on toolCBSig computed before dispatch/hooks so a hook renaming
+			// the tool does not fragment the streak it is meant to track.
 			if toolResult.IsError {
 				// A failure ends any identical-SUCCESS run; identical failures
 				// are the failure streak's job.
@@ -13087,6 +13404,15 @@ turnLoop:
 				case run >= toolRepeatWarnThreshold:
 					toolResult.ForLLM = toolResult.ContentForLLM() + toolRepeatWarnNotice(toolName, run)
 				}
+			}
+			// UAT 2026-09-13 D-23: a loop of SUCCESSFUL, mutually-cancelling
+			// calls (create X / delete X / create X …) never touches the
+			// streak above. Record every dispatched call's signature and warn
+			// once the turn's history repeats a short cycle; the pre-dispatch
+			// check above (toolCircuitBreakerTripped) refuses the call that
+			// would extend it past the break point.
+			if loopNotice := ts.recordToolCallForLoopDetection(toolCBSig); loopNotice != "" {
+				toolResult.ForLLM = toolResult.ContentForLLM() + loopNotice
 			}
 			// Always deliver any media the tool produced AND tag the result with
 			// artifact references so the LLM can reason about them in the
@@ -15756,6 +16082,25 @@ func (al *AgentLoop) emitPolicyDenyAudit(
 		SessionID: ts.sessionKey,
 		User:      ts.auditUser(), // FR-017
 		Details:   details,
+	})
+}
+
+// emitToolLoadPolicyDenyAudit writes the tool.policy.deny_attempted row for a
+// tool whose LOAD (ToolSearch) was refused by the calling agent's policy
+// (UAT 2026-09-13 D-84). Same event and decision as emitPolicyDenyAudit's
+// dispatch-time deny, so one audit query finds both; Details.context names
+// which gate refused. Nil audit logger is a no-op (audit.EmitEntry).
+func (al *AgentLoop) emitToolLoadPolicyDenyAudit(ctx context.Context, agentID, toolName string) {
+	audit.EmitEntry(al.auditLogger, &audit.Entry{
+		Event:     audit.EventToolPolicyDenyAttempted,
+		Decision:  audit.DecisionDeny,
+		AgentID:   agentID,
+		Tool:      toolName,
+		SessionID: tools.ToolTranscriptSessionID(ctx),
+		Details: map[string]any{
+			"resolved_policy": "deny",
+			"context":         "tool_load",
+		},
 	})
 }
 
