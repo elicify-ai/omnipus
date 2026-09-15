@@ -484,8 +484,10 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   //        in the same run, up to Tries per goal (default 20), and every try is
   //        a worker LLM turn plus a Judge call on the member's Definition of
   //        Done. A check that can never pass therefore kept m2 in progress for
-  //        many minutes and the plan did not reach the hold within Step 1's
-  //        120s (CI run 34917711499: 4 of 4 attempts timed out there). Tries per
+  //        many minutes and the plan did not reach the hold within the then
+  //        120s first-hold deadline (CI run 34917711499: 4 of 4 attempts timed
+  //        out there; that separate deadline is gone — see the observation
+  //        window's comment below). Tries per
   //        goal cannot be lowered for one test either: PUT /api/v1/performance
   //        answers 503 while dev_mode_bypass is on, and every CI e2e gateway
   //        runs with it on. A blocked claim is the documented way a run ends at
@@ -544,36 +546,40 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
 
   const HOLD_PHASE = 'awaiting_supervision'
 
-  // --- Step 1: MANDATORY — reach the hold at least once -------------------
-  // With m2 ending Failed "Blocked: <transient cause>" on its first try, a
-  // round-1 unmet verdict (and the awaiting_supervision hold it triggers) is
-  // expected reliably.
-  let reachedHoldOnce = false
-  const firstHoldDeadline = Date.now() + 120_000
-  while (Date.now() < firstHoldDeadline) {
-    const poll = await apiFetch<{ plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
-    if (!poll.ok) throw new Error(`t3b: GET /plans/{id} poll (first hold) failed ${poll.status}: ${poll.raw}`)
-    if (poll.body.plan_phase === HOLD_PHASE) {
-      reachedHoldOnce = true
-      break
-    }
-    await page.waitForTimeout(1_500)
-  }
-  expect(
-    reachedHoldOnce,
-    `t3b: plan ${planId} must reach plan_phase=awaiting_supervision within 120s of approval — m2 ` +
-      '(its stub worker ends every run Blocked at once) makes a round-1 unmet verdict expected reliably.',
-  ).toBe(true)
-
-  // --- Step 2: observe the REAL correction mechanism over the plan's full
-  // round budget. Same session/transcript plumbing as
-  // Conformance_t3_PlanningReplanningE2E — a NEW session may be minted each
-  // time the plan opens a fresh park, so every session id ever observed is
-  // tracked and all of them are inspected at the end.
+  // --- Observe the plan from approval, over its full round budget ---------
+  // ONE window, starting at approval, covers what used to be two steps with
+  // two deadlines:
+  //   - the plan MUST reach the hold at least once — still mandatory, and
+  //     asserted first once the window closes; and
+  //   - the REAL correction mechanism, observed over the plan's full round
+  //     budget. Same session/transcript plumbing as
+  //     Conformance_t3_PlanningReplanningE2E — a NEW session may be minted
+  //     each time the plan opens a fresh park, so every session id ever
+  //     observed is tracked and all of them are inspected at the end.
+  //
+  // WHY THE FIRST HOLD NO LONGER HAS ITS OWN 120s DEADLINE: nothing on the
+  // path to it has a bound that short. Both members end within seconds of
+  // approval; the plan engine then needs up to two 30s ticks
+  // (defaultPlanEngineTickInterval) to admit the plan and to start its first
+  // judge round; and the Judge must then reach a verdict — a real model turn,
+  // because this DoD is prose by design (it is what steers PlanSupervisor to
+  // targeted_retry, so a deterministic check cannot stand in for it). The
+  // product bounds that turn only at DefaultJudgeTimeoutSeconds (420s). In
+  // release/v0.1.1 CI run 34938204261 (job 104280897259) the failing attempt
+  // was approved 07:03:21, running 07:03:52 and judging 07:04:22, and its
+  // Judge was still on its eighth step when the 120s deadline stopped the plan
+  // at 07:05:22; in the passing retry the first verdict took ~47s and a later
+  // round ~2 minutes. That deadline measured model latency, not a product
+  // property. The total budget from approval is unchanged — the old 120s
+  // first-hold deadline plus the old 420s observation window is this window's
+  // 540s — and the plan is polled at the old 1.5s cadence until the first hold
+  // is seen.
+  const observeWindowMs = 540_000
   const seenSessionIds = new Set<string>()
+  let reachedHoldOnce = false
   let finalPlanState = ''
   let finalPlanPhase = ''
-  const observeDeadline = Date.now() + 420_000
+  const observeDeadline = Date.now() + observeWindowMs
   while (Date.now() < observeDeadline) {
     const poll = await apiFetch<{ state: string; plan_phase?: string; supervision?: { session_id?: string } }>(
       page,
@@ -583,10 +589,11 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
     if (!poll.ok) throw new Error(`t3b: GET /plans/{id} poll (observe) failed ${poll.status}: ${poll.raw}`)
     finalPlanState = poll.body.state
     finalPlanPhase = poll.body.plan_phase ?? ''
+    if (finalPlanPhase === HOLD_PHASE) reachedHoldOnce = true
     const sid = poll.body.supervision?.session_id
     if (sid) seenSessionIds.add(sid)
     if (finalPlanState === 'done' || finalPlanState === 'failed') break
-    await page.waitForTimeout(4_000)
+    await page.waitForTimeout(reachedHoldOnce ? 4_000 : 1_500)
   }
 
   // Collect every plan_correct call (any status) across every adjudication
@@ -601,6 +608,18 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   const diagnostic =
     `plan state="${finalPlanState}" phase="${finalPlanPhase}"; sessions=${[...seenSessionIds].join(',')}; ` +
     `all plan_correct calls: ${JSON.stringify(allCalls)}`
+
+  // MANDATORY, checked first: the plan reached the hold at least once. With
+  // m2 ending Failed "Blocked: <transient cause>" on its first try, a round-1
+  // unmet verdict — and the awaiting_supervision hold it triggers — is
+  // expected reliably; never reaching it inside the whole window means the
+  // unmet verdict or the hold path is broken.
+  expect(
+    reachedHoldOnce,
+    `t3b: plan ${planId} never reached plan_phase=awaiting_supervision within ${observeWindowMs / 1000}s of ` +
+      'approval — m2 (its stub worker ends every run Blocked at once) makes a round-1 unmet verdict expected ' +
+      `reliably. ${diagnostic}`,
+  ).toBe(true)
 
   // MANDATORY: the mechanism actually committed at least one correction.
   // Zero committed corrections after a full round budget with one
