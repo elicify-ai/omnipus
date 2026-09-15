@@ -1,15 +1,23 @@
 # Draft architecture — documentation map
 
-**Status:** draft (2026-09-12; not implemented, not an ADR, not a spec)
-**Companion:** [draft-module-map.md](draft-module-map.md) (code). This note is the same idea for **docs**.
+**Status:** draft (2026-09-12; re-validated 2026-09-15 after the library-improvements merge ff11e8249; not implemented, not an ADR, not a spec)
+**Companion:** [draft-module-map.md](draft-module-map.md) (code). This note is the same idea for **docs**. The companion is adding a **knowledge** product module for the same feature this note calls Knowledge Base — cross-reference it, don't duplicate its module boundary here.
 **Do not:** rewrite user guides or delete `.preview-doc/` until this is accepted.
+
+**Changes 2026-09-15** (re-validation after `ff11e8249` landed on `release/v0.1.1`):
+- Every stale-text citation re-checked line by line against `1f996b01d`; all 14 line numbers in the two tables below held exactly, no drift found.
+- Knowledge Base moved from a TBD placeholder to a scoped new page, and to **step 1** of the Sequence — it's now the single biggest documentation hole, bigger than the Workspaces rewrite.
+- ADR and spec counts refreshed (150 ADRs, 198 specs, both higher than the 2026-09-12 estimate).
+- Nine more product-surface rows added to the gaps table, each confirmed against `pkg/gateway/rest_*.go` or `src/components/`: Knowledge base, Library preview of knowledge markdown, sign-in / Copilot sign-in, host folders / mounts, automations (redirect, already tracked — no new page needed), mailbox, audit log, god mode, rate limits / retention. Voice was already listed; its shipped status is now confirmed with file citations.
+- `docs/tools-reference.md` L25 row corrected: "all five" is five *filesystem tools*, not five agents — dropped as a stale-agent-count finding.
+- Noted that ADR numbers renumbered again on 2026-09-15 (commit `1f996b01d`) after the merge collided two ADR-081s and two ADR-082s — cite ADR title alongside number everywhere in this doc that a bare number could go stale.
 
 ## What we already trust
 
 | Bucket | Where | Stance |
 |---|---|---|
-| ADRs | `docs/internal/architecture/ADR-*.md` (~139) | **Truth.** Continuously maintained. Code + ADR on conflict: code still wins, but these explain *why*. |
-| Specs | `docs/internal/specs/` (~170) | **Truth for in-flight work.** Maintained with the features they describe. |
+| ADRs | `docs/internal/architecture/ADR-*.md` (150 as of 2026-09-15, `ls docs/internal/architecture/ADR-*.md \| wc -l`) | **Truth.** Continuously maintained. Code + ADR on conflict: code still wins, but these explain *why*. |
+| Specs | `docs/internal/specs/` (198 as of 2026-09-15, `find docs/internal/specs -name '*.md' \| wc -l`) | **Truth for in-flight work.** Maintained with the features they describe. |
 | Wire contracts | `contracts/` | **Machine truth.** CI (`make verify-contracts`) already gates drift. |
 | Agent-facing | root `CLAUDE.md` | Operating rules for agents — fat, separate problem (module-map draft). |
 
@@ -35,7 +43,7 @@ So: **yes, the user/operator layer is substantially stale.** ADRs/specs are not 
 
 ## `.preview-doc/` — may be deleted (not done)
 
-~16 HTML concept pages for the v0.3 Workspaces direction. CLAUDE.md already says they supersede the 2026-05 `docs/internal/design/` drafts **in intent**. They are discussion-stage, not shipping docs.
+18 HTML concept pages for the v0.3 Workspaces direction (confirmed 2026-09-15, `ls .preview-doc/*.html | wc -l`). CLAUDE.md already says they supersede the 2026-05 `docs/internal/design/` drafts **in intent**. They are discussion-stage, not shipping docs.
 
 **Recommendation:** delete `.preview-doc/` once this docs map is accepted, *after* any still-true ideas are pointed at from ADRs/specs (or dropped). Do not treat HTML mockups as a third handbook. **Not deleted in this pass.**
 
@@ -49,6 +57,8 @@ No product docs were edited. Findings below.
 
 Highest blast radius: `concepts.md`, `using-omnipus-ui.md`.
 
+All line numbers below re-verified 2026-09-15 against `release/v0.1.1` @ `1f996b01d` — every citation still holds; none drifted.
+
 | File | Action | Why (evidence) |
 |---|---|---|
 | `docs/concepts.md` | **REWRITE** | L5/L9/L22: five teammates including **Max**. L44/L60: watch work on the **Command Center**. |
@@ -58,7 +68,7 @@ Highest blast radius: `concepts.md`, `using-omnipus-ui.md`.
 | `docs/troubleshooting.md` | **EDIT** | L47/L52/L62: ports 5000+5001 and `"preview_port": 5501` (key deleted, ADR-044). |
 | `docs/routing.md` | **EDIT** | L135: Mia knows Jim/Ava/Ray/**Max**. |
 | `docs/channels.md` | **EDIT + new screenshots** | Connectors rename captions; still titled Channels. |
-| `docs/tools-reference.md` | **EDIT** | L25: “all five” agents. |
+| `docs/tools-reference.md` | ~~EDIT~~ **no change** | L25 “All five” is the five *filesystem tools* listed just above it (`read_file`/`write_file`/`edit_file`/`append_file`/`list_dir`), not five agents. Corrected 2026-09-15 — earlier reading of this line was wrong; drop it from the stale-agent-count list. |
 | `docs/README.md` | **REWRITE index** | Channels as the product word; no Workspaces. |
 
 **Missing as first-class guides:** Workspaces (chat as a tab), Calendar, Goals, Board, live browser (WebRTC), agent types Main/Subagent/subagent_3p. Screenshots still show five agents and Command Center.
@@ -69,7 +79,7 @@ Keep with light audit: `memory.md`, `skills.md`, `docker.md` (preview deletion a
 
 `reverse-proxy.md`, `sandbox-config.md`, `sandbox-limitations.md`, credential/security/docker unlock modes: **match CLAUDE.md**.
 
-Stale:
+Stale (line numbers re-verified 2026-09-15, all held):
 
 | File | Action | Why |
 |---|---|---|
@@ -85,7 +95,7 @@ Stale:
 - Roster: 3+1 (General Assistant / Researcher / Content Creator + Omnipus system agent) — not Mia/Jim/Ava/Ray.
 - Appendix D: exclusive 41-tool **system agent** that drives the UI — that agent does not exist.
 - Appendix C: full **Command Center** spec.
-- Confirm-gate for destructive ops — deleted (ADR-088).
+- Confirm-gate for destructive ops — deleted (ADR-088, "work-first goal flow"; guard: `scripts/check-no-goal-confirm-gate.sh`). ADR numbers were renumbered again on 2026-09-15 (commit `1f996b01d`, after the library-improvements merge collided two ADR-081s and two ADR-082s) — cite the title alongside the number, since a future renumber can move ADR-088 again without moving the guard script.
 - Channels tabs, not Connectors; projects/rooms, not Workspaces.
 - **Zero** goals-as-entities, Judge, Plan Supervisor.
 - Appendix A: Windows Job Objects as if they ship — they do not.
@@ -107,6 +117,31 @@ Unique leftovers (optional one-liners in an ADR or git history, not a reason to 
 **Do:** delete `.preview-doc/` when the user handbook rewrite is accepted. Pointer: “historical v0.3 concept is in git (2026-08-12).” Visual QA PNGs need not be preserved. **Not deleted in this pass.**
 
 The 2026-05 `design/` Rooms drafts are a *separate* delete/archive (see above); they are not saved by keeping the HTML.
+
+## Knowledge Base — the biggest hole (found 2026-09-15)
+
+The 2026-09-12 pass marked `knowledge.md` a placeholder because nothing was specified yet. That changed: the feature shipped on `release/v0.1.1` via the library-improvements merge (`ff11e8249`, 2026-09-15). This is now a bigger gap than the Workspaces rewrite, because it is completely undocumented rather than just describing an old product.
+
+**What shipped, in code:** five Go packages, all new 2026-08-23 through 2026-09-15 — `pkg/knowledge` (notes: rename/move without breaking the collection), `pkg/records` (typed records layer), `pkg/vaultimport` (importing an existing Obsidian-style vault), `pkg/vaultprops` (record property schema), `pkg/library` (the path-safe workspace file tree that `pkg/knowledge` sits on). Binary media (images, video, PDF, audio) is a different package, `pkg/media/library` (ADR-051); that one backs `library.md`.
+
+**What shipped, in decisions.** ADR numbers here collided during the 2026-09-15 renumber (see the ADR-088 note above) — cite by title, not number alone, and expect two files under one number until a further renumbering pass:
+- ADR-089 — "Rename 'vault' to 'Knowledge Base', in three staged phases" (`ADR-089-rename-vault-to-knowledge-base.md`)
+- ADR-067 — "Omnipus knowledge base and render-first preview" (`ADR-067-omnipus-knowledge-base-and-render-first-preview.md` — two more, unrelated ADR-067 files also exist: "CI design and build targets" and "registry-fed catalog and provider identity")
+- ADR-068 — "Vault records: typed record layer" (`ADR-068-vault-records-typed-record-layer.md` — two more, unrelated ADR-068 files also exist: "bash text guard, third rule layer" and "subscriptions, provider deletion and provider UX")
+- ADR-081 — "Unified Library search, general file search, and the grep engine" (`ADR-081-unified-library-search-and-grep-engine.md` — this is the ADR-081 that *kept* its number in the 2026-09-15 renumber)
+- ADR-083 — "Embedded content in knowledge-base notes" (`ADR-083-embedded-content-in-knowledge-base-notes.md`), amended by a second ADR-083 covering record creation over REST and the `.seq` identifier allocator
+
+**What shipped, in specs** (`docs/internal/specs/`, roughly 18 files once review rounds are counted): `adr-067-knowledge-base-and-preview-spec.md`, `vault-records-spec-2026-08-25.md`, `unified-search-and-grep-spec.md`, `view-kinds-design-2026-09-03.md`, `library-b-c-design-2026-09-07.md`, `library-spec.md`, `library-improvements-requirements-2026-08-21.md`, `workspace-media-library-and-presentation-layer-spec.md`, plus UAT findings (`uat-vault-records-2026-08-28.md`, `uat-library-records-2026-08-26.md`, `uat-findings-view-kinds-2026-09-05.md`) and an implementation plan (`vault-records-implementation-plan-2026-08-28.md`). Several of these have 2-6 numbered "review round" siblings — write from the base spec, skim the review rounds only for ratified changes.
+
+**What shipped, in the product:** notes/records with typed fields, multiple view kinds (not just a flat note list), a unified find/grep across the workspace's knowledge content, importing an existing vault, and embedding rich content (images, code fences that render, queries) inside a note.
+
+**The feature is reachable in the shipped UI.** The route `src/routes/_app/library.tsx` renders `LibraryExplorer`, which imports and renders `KnowledgePanel` (`src/components/library/LibraryExplorer.tsx` line 92). This is a live screen, not dead packages.
+
+**Zero user-facing pages exist.** `grep -ril 'knowledge base' docs --include='*.md' | grep -v internal` returns nothing. No handbook page mentions notes, records, views, vault import, or embedded content at all.
+
+**library.md vs knowledge.md — the split, decided here:** `library.md` covers the Media tab — binary files a workspace holds (images, video, PDFs, audio) and their preview. `knowledge.md` covers everything textual and structured — notes, typed records, views, find/grep across knowledge content, importing an existing vault, and embedding rich content inside a note. They share the Library UI surface but not the engine. `library.md` is backed by `pkg/media/library` (binary media store). `knowledge.md` is backed by `pkg/knowledge` and `pkg/records` on top of `pkg/library` (text file tree). They are different jobs for a reader: "where do my files live" vs "how do I take and structure notes." If the founder disagrees with this split, it is the one open call in this document — everything else here is a correction of fact, not a decision.
+
+**Sequencing:** because this is a whole undocumented feature rather than a stale-text fix, write `knowledge.md` **before** `concepts.md`/`using-omnipus-ui.md` (see Sequence step 1) — the roster/Command Center rewrite touches existing prose, but Knowledge Base has no prose to correct, so it can be drafted in parallel without waiting on anything else, and skipping it another cycle means the biggest gap keeps growing.
 
 ## Target handbook (same names as the product)
 
@@ -130,8 +165,8 @@ docs/
   skills.md                 # KEEP: reusable playbooks an agent picks up
   tools.md                  # NEW: built-in AND MCP tools; Allow/ask/deny applies to both (MCP via per-server mcp_<server>_*); search_web lives here
   memory.md                 # KEEP: what the team remembers (recap, workspace room) — not a Board feature
-  knowledge.md              # PLACEHOLDER — Knowledge Bases / knowledge management. TBD; not specified yet
-  library.md                # NEW: Media tab + library — files the workspace holds
+  knowledge.md              # NEW, WRITE FIRST (see Sequence step 1): notes, records, views, find/grep, vault import, embedded content
+  library.md                # NEW: Media tab — the files (images, video, PDFs, audio) a workspace holds; not notes
   browser.md                # NEW: live browser, WebRTC only
   previews.md               # NEW: agent-served sites (web_serve) — a link on the main gateway, not a second port; review in the live browser
   security.md               # NEW user: Allow/Deny, sandbox in plain English, credential vault
@@ -157,20 +192,23 @@ Internal:
 
 ## Sequence (after acceptance)
 
-1. Rewrite `concepts.md` + `using-omnipus-ui.md` (Max, Command Center, missing Workspaces).
-2. Rewrite `docs/README.md` index.
-3. `channels.md` → Connectors; new screenshots.
-4. Add `workspaces.md`, `tasks.md`, `plans.md`, `calendar.md`, `goals.md`, `agents.md`, `browser.md`.
-5. Operator EDIT pass: `tools_configuration.md` (`bash`), `troubleshooting.md` (port 5000), `security-considerations.md`, `getting-started.md` docker, `platform-support.md`.
-6. Delete `docs/internal/BRD/`. Archive 2026-05 design drafts.
-7. Delete `.preview-doc/` when (1–5) hold anything still true.
-8. Do **not** rewrite ADRs/specs.
+Re-ordered 2026-09-15: Knowledge Base moved to step 1. It has no stale prose to correct (no page exists at all), so it does not need to wait on the roster/Command Center rewrite and can start in parallel today — while every day it doesn't ship, the gap it fills keeps growing as more of the feature lands.
+
+1. **Write `knowledge.md` and `library.md` (split per the decision above).** Source from ADR-089, ADR-067 ("knowledge base and render-first preview"), ADR-068 ("vault records"), ADR-081, ADR-083 (embedded content + the REST/`.seq` amendment), and the specs listed above.
+2. Rewrite `concepts.md` + `using-omnipus-ui.md` (Max, Command Center, missing Workspaces).
+3. Rewrite `docs/README.md` index.
+4. `channels.md` → Connectors; new screenshots.
+5. Add `workspaces.md`, `tasks.md`, `plans.md`, `calendar.md`, `goals.md`, `agents.md`, `browser.md`, `tools.md`, `previews.md`, `security.md`. Fold `configuration.md`/`tools-reference.md`/`providers.md`/`routing.md`/credential-and-security docs per the "Existing docs the tree never assigned" table below. Keep `memory.md` as-is (light audit only).
+6. Operator EDIT pass: `tools_configuration.md` (`bash`), `troubleshooting.md` (port 5000), `security-considerations.md`, `getting-started.md` docker, `platform-support.md`.
+7. Delete `docs/internal/BRD/`. Archive 2026-05 design drafts.
+8. Delete `.preview-doc/` when (1–6) hold anything still true.
+9. Do **not** rewrite ADRs/specs.
 
 ## Enforcement (later)
 
 `scripts/check-no-stale-user-docs.sh` fails **user** handbook (`docs/*.md` except `internal/`) if it reintroduces `Command Center`, `five teammates`, or `Max` as a core agent. ADRs that explain the deletion are exempt. Same family as `check-no-jpeg-screencast.sh`.
 
-## Critical review — gaps (2026-09-12)
+## Critical review — gaps (2026-09-12; surfaces re-confirmed and extended 2026-09-15)
 
 The handbook is the right *shape*. These holes remain.
 
@@ -178,6 +216,8 @@ The handbook is the right *shape*. These holes remain.
 
 | In the app | Draft today | Gap |
 |---|---|---|
+| **Knowledge base** (notes, records, views, find/grep, vault import, embedded content) | was a TBD placeholder; now scoped, see the Knowledge Base section above | Biggest gap in the handbook. `knowledge.md`, step 1 of the Sequence |
+| **Library preview of knowledge markdown** | missing | The Library preview pane rendering a knowledge note (not just media). Belongs in `knowledge.md` / `library.md`. Keep it distinct from `previews.md` (agent `web_serve` sites on `/preview/`) — this is the Library panel rendering a note, a different surface entirely |
 | Workspace **Graph** tab | mentioned in the UI tour only | Need a short `graph.md` or a section in `workspaces.md` — don’t invent a fifth work page if Graph is just “who delegates to whom” |
 | Workspace **Team** tab | missing | Delegation trust is **per workspace**. Not an Agents-screen global graph (ADR-037). Belongs in `workspaces.md` or `team.md` |
 | **Usage** (`/usage`) | missing | Cost/tokens. Pointer from `settings.md` or a thin `usage.md` |
@@ -186,10 +226,17 @@ The handbook is the right *shape*. These holes remain.
 | **Heartbeats** | missing | Only agent-level schedule left after Command Center died. `agents.md` or `calendar.md` — pick one, don’t orphan it |
 | **Email as a tool** (not a chat connector) | missing | ADR-033. `tools.md` + maybe Connectors “mailboxes” |
 | **Steering / Stop** | missing | Mid-turn redirect and cancel. `using-omnipus-ui.md` chatting section |
-| **Voice** | only Telegram aside today | Keep as a paragraph under chat/connectors, not its own book |
+| **Voice** | only Telegram aside today | Confirmed shipped (`pkg/gateway/rest_voice.go`, `src/components/agents/voice-provider-sub.tsx`). Keep as a paragraph under chat/connectors, not its own book |
 | **External CLI workers** (`subagent_3p`) | missing | `agents.md` |
 | **Onboarding** | `getting-started.md` | Fine; don’t add a second page |
 | **Lite build / WhatsApp** | channel page only | Stay in `connectors/whatsapp` |
+| **Sign-in / Copilot sign-in** | missing | Confirmed shipped (`pkg/gateway/rest_signin_copilot.go`, `rest_sign_in.go`, `src/components/providers/SignInDialog.tsx`, `AuthMethodControl.tsx`). It's a provider auth method, not a new page — fold into `settings.md` / `providers.md` fold target |
+| **Host folders / mounts** | missing | Confirmed shipped (`pkg/gateway/rest_host_folders.go`, `rest_workspace_mounts.go`, `src/components/library/LibraryMounts*.tsx`, `LibraryAddMountDialog.tsx`). Belongs in `library.md` (mounting a folder into the workspace's files) |
+| **Automations** | redirect stub only, already tracked | Confirmed still just a redirect (`src/routes/_app/automations.tsx`, `pkg/gateway/rest_automations.go` backs the Board/Calendar it redirects into). No separate page needed — already covered by the "Retired surfaces" rule in CLAUDE.md |
+| **Mailbox** | missing | Confirmed shipped (`pkg/gateway/rest_mailbox.go`, `src/components/connectors/EmailMailboxPanel.tsx`). This is the Connectors-side email UI — fold into `connectors.md`, distinct from “email as a tool” above |
+| **Audit log** | missing | Confirmed shipped (`pkg/gateway/rest_audit_log.go`, `src/components/settings/AuditLogViewer.tsx`). `security.md` or `settings.md` |
+| **God mode** | missing | Confirmed shipped (`pkg/gateway/rest_god_mode.go`, `src/components/settings/GodModeControl.tsx`). Sandbox `off` opt-in — `security.md`, must say plainly what it disables |
+| **Rate limits / retention / memory settings** | missing | Confirmed shipped (`src/components/settings/DataSection.tsx` — `session_retention_days`, rate limits). Fold into `settings.md` |
 
 **Existing docs the tree never assigned** (keep / fold / delete still open):
 
@@ -209,7 +256,18 @@ The handbook is the right *shape*. These holes remain.
 
 **Two indexes, not one:** README for humans using the app; `operations/` README for running the box. The draft mixes them in one tree.
 
-**Sequence hole:** step 4 lists workspaces/tasks/plans/calendar/goals/agents/browser and omits `tools.md`, `library.md`, `previews.md`, `security.md`, `memory.md` keep.
+**Sequence hole — closed 2026-09-15:** the old step 4 listed workspaces/tasks/plans/calendar/goals/agents/browser and omitted `tools.md`, `library.md`, `previews.md`, `security.md`, `memory.md` keep. Fixed in the Sequence section above (now step 5) and `knowledge.md`/`library.md` moved to their own step 1.
+
+## Validation 2026-09-15 — nothing has been executed
+
+This is a re-validation pass, not an implementation pass. Checked directly against `release/v0.1.1` @ `1f996b01d`:
+
+- **0 of 13 new pages exist**: `workspaces.md`, `tasks.md`, `plans.md`, `calendar.md`, `goals.md`, `agents.md`, `tools.md`, `knowledge.md`, `library.md`, `browser.md`, `previews.md`, `security.md`, `settings.md` — none present in `docs/`. (The `connectors.md` rename and `connectors/` retitle are separate — a rename, not a new page — and also not done.)
+- **No rewrite started**: `concepts.md` and `using-omnipus-ui.md` still teach five teammates including Max and the Command Center, word for word (see the re-verified line citations above).
+- **BRD still live**: `docs/internal/BRD/` (6 files) is still in the tree, not archived or deleted.
+- **`.preview-doc/` still live**: 18 HTML files, not deleted.
+- **2026-05 design drafts still live**: the five `docs/internal/design/*-2026-05.md` files are still in their original location; `_archive/design-2026-05-rooms-era/` does not exist (`ls docs/internal/_archive/` shows no such directory).
+- **No enforcement script**: `scripts/check-no-stale-user-docs.sh` does not exist. For comparison, the repo already has 25 other `scripts/check-no-*.sh` guards (e.g. `check-no-jpeg-screencast.sh`, `check-no-fail-closed-backfill.sh`, `check-no-goal-confirm-gate.sh`) — the precedent for wiring a mechanical guard into CI is well established, this one specifically just hasn't been written yet.
 
 ## Out of scope this pass
 
