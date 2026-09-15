@@ -1,0 +1,13 @@
+# scripts/budgets/files.txt — file-size budget grandfather list (shrink-only)
+# Format: path<TAB>lines. Seeded 2026-09-15 from docs/internal/architecture/
+# size-budget-grandfather-2026-09-15.md, re-measured at release/v0.1.1 @ 0ea1b81b7.
+pkg/agent/loop.go	16515
+pkg/agent/plan_engine.go	6130
+pkg/config/config.go	5278
+pkg/gateway/gateway.go	6645
+pkg/gateway/rest.go	11338
+pkg/gateway/websocket.go	6221
+pkg/tools/browser/manager.go	4167
+pkg/tools/delegate.go	4145
+src/lib/api.ts	5939
+src/store/chat.ts	6695

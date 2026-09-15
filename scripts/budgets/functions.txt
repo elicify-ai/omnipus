@@ -1,0 +1,142 @@
+# Function-size budget grandfather list (shrink-only).
+# Seeded 2026-09-15 from scripts/funlen and scripts/tsfunlen.cjs at this tip (139 entries: 70 Go production, 20 Go test, 13 TS production, 36 TS test — see docs/internal/architecture/size-budget-grandfather-2026-09-15.md). A PR may lower a listed number or delete a line; it may never raise a number or add a new one.
+# file	qualified name	lines
+cmd/omnipus/internal/run/run.go	Run	284
+pkg/agent/cancel.go	AgentLoop.RequestCancel	584
+pkg/agent/external_dispatch.go	runExternalCLISubTurn	277
+pkg/agent/goal_flow_integration_test.go	TestGoalClarify_WebCardRoundtrip	323
+pkg/agent/goal_loop.go	AgentLoop.applyGoalCommandPrompt	285
+pkg/agent/goal_loop.go	AgentLoop.checkGoalLoopAfterTurn	277
+pkg/agent/goal_triggers.go	AgentLoop.runGoalAdjudication	367
+pkg/agent/instance.go	NewAgentInstance	354
+pkg/agent/judge.go	AgentLoop.JudgeCriteria	262
+pkg/agent/loop.go	AgentLoop.processMessage	341
+pkg/agent/loop.go	AgentLoop.runTurn	4364
+pkg/agent/loop.go	AgentLoop.windowTrimForce	243
+pkg/agent/loop.go	NewAgentLoop	427
+pkg/agent/loop.go	registerSharedTools	1346
+pkg/agent/recall_conversation.go	RecallConversationTool.Execute	299
+pkg/agent/session_end.go	AgentLoop.runRecap	383
+pkg/agent/subturn.go	spawnSubTurn	1489
+pkg/agent/task_trigger_rrule_test.go	TestTriggerScheduler_RruleRearmAllPaths	386
+pkg/agent/testutil/gateway_harness.go	StartTestGateway	270
+pkg/agent/verifier_adjudication.go	AgentLoop.runVerifierAdjudication	378
+pkg/agent/verifier_antipatterns_adr052_qa_test.go	TestVerifierAntiPatterns	293
+pkg/audit/logger_test.go	TestAuditLogger_WriteAndRotate	270
+pkg/audit/rotation_test.go	TestRotationBySizeAndDaily	309
+pkg/channels/manager.go	Manager.Reload	302
+pkg/config/config_refs_test.go	TestChannelConfig_AllRefsRoundTrip	377
+pkg/config/defaults.go	DefaultConfig	1003
+pkg/config/validator.go	validateBootConfig	288
+pkg/coreagent/core.go	coreAgentSeed	1060
+pkg/coreagent/core.go	SeedConfig	250
+pkg/gateway/browser_webrtc_e2e_test.go	TestWebRTCEndToEndInProcess	290
+pkg/gateway/gateway.go	restartServices	260
+pkg/gateway/gateway.go	RunContextWithOptions	1090
+pkg/gateway/gateway.go	setupAndStartServices	1258
+pkg/gateway/replay.go	streamReplay	687
+pkg/gateway/rest_executor_smoketest.go	restAPI.runExecutorSmokeTest	271
+pkg/gateway/rest_mailbox.go	restAPI.setAgentMailbox	254
+pkg/gateway/rest_onboarding_probe_test.go	TestProbeProvider_SignIn	283
+pkg/gateway/rest_onboarding_probe_test.go	TestProbeProviderID_Validation	268
+pkg/gateway/rest_onboarding.go	restAPI.HandleCompleteOnboarding	500
+pkg/gateway/rest_onboarding.go	restAPI.HandleOnboardingProbeProvider	254
+pkg/gateway/rest_providers_delete.go	restAPI.runProviderDelete	260
+pkg/gateway/rest_sandbox_config.go	restAPI.putSandboxConfig	307
+pkg/gateway/rest_tasks_occurrences_test.go	TestRestTasks_OccurrencesEndpoint	384
+pkg/gateway/rest_tasks.go	restAPI.handleTaskPatch	587
+pkg/gateway/rest_workspaces.go	restAPI.handleWorkspaceDelete	301
+pkg/gateway/rest_workspaces.go	restAPI.handleWorkspacePut	409
+pkg/gateway/rest.go	restAPI.createAgent	534
+pkg/gateway/rest.go	restAPI.HandleProviders	1041
+pkg/gateway/rest.go	restAPI.HandleUpload	389
+pkg/gateway/rest.go	restAPI.registerAdditionalEndpoints	249
+pkg/gateway/rest.go	restAPI.setChannelRouting	375
+pkg/gateway/rest.go	restAPI.updateAgent	999
+pkg/gateway/rest.go	restAPI.updateAgentTools	373
+pkg/gateway/sandbox_apply.go	applySandbox	504
+pkg/gateway/task_occurrences_overlay_test.go	TestOccurrenceOverlay	373
+pkg/gateway/task_occurrences_test.go	TestOccurrences_BucketingAndCaps	396
+pkg/gateway/websocket.go	WSHandler.eventForwarder	1231
+pkg/gateway/websocket.go	WSHandler.handleAttachSession	386
+pkg/gateway/websocket.go	WSHandler.handleChatMessage	595
+pkg/gateway/websocket.go	WSHandler.readLoop	278
+pkg/gateway/websocket.go	wsStreamer.Finalize	284
+pkg/knowledge/links_test.go	TestKnowledge_NoLanguageModelInTheGraphPath	258
+pkg/plan/store.go	Store.updateLocked	311
+pkg/records/enum_test.go	TestEnum_ClosedAndLexical	247
+pkg/records/formula_eval_test.go	TestFormula_AbsencePropagatesAndArithmeticIsExact	345
+pkg/records/knowledgefind/find.go	findRecords	325
+pkg/records/view.go	ValidateViewAgainstSchemas	292
+pkg/sandbox/seatbelt_profile.go	renderSeatbeltProfile	310
+pkg/sysagent/tools/agent.go	AgentCreateTool.Execute	277
+pkg/sysagent/tools/agent.go	AgentDeleteTool.Execute	257
+pkg/sysagent/tools/mcp.go	MCPAddTool.Execute	241
+pkg/sysagent/tools/task.go	TaskCreateTool.Execute	301
+pkg/sysagent/tools/task.go	TaskUpdateTool.Execute	392
+pkg/task/store.go	Store.updateLocked	310
+pkg/tools/browser/exec_resolver.go	execPathCaches.resolve	277
+pkg/tools/browser/live.go	LiveView.applyViewportAdmitted	337
+pkg/tools/delegate.go	DelegateTool.executeAsync	341
+pkg/tools/delegate.go	DelegateTool.executeRespond	255
+pkg/tools/delegate.go	DelegateTool.executeRun	277
+pkg/tools/message_parent.go	MessageParentTool.Execute	345
+pkg/tools/resolvepath.go	ResolvePath	270
+pkg/tools/set_goal_test.go	TestSetGoalTool_ValidatesAndWrites	246
+pkg/tools/set_goal.go	SetGoalTool.Execute	308
+pkg/tools/task.go	TaskCreateTool.Execute	314
+pkg/tools/task.go	TaskUpdateTool.Execute	397
+pkg/tools/validate_test.go	TestValidateToolArgs	286
+pkg/vaultimport/run.go	RunWithOptions	303
+src/components/agents/AgentProfile.test.tsx	(arg of describe)	402
+src/components/browser/BrowserLiveView.controlToggle.test.tsx	(arg of describe)	251
+src/components/browser/BrowserLiveView.tsx	(arg of useEffect)	284
+src/components/browser/BrowserLiveView.tsx	(arg of useEffect)	365
+src/components/browser/BrowserLiveView.webrtcInputRouting.test.tsx	(arg of describe)	312
+src/components/chat/AskUserQuestionCard.test.tsx	(arg of describe)	247
+src/components/chat/ChatScreen.tool-order.test.tsx	(arg of describe)	282
+src/components/chat/ChatScreen.virtualization.test.tsx	(arg of describe)	344
+src/components/chat/GoalEchoCard.test.tsx	(arg of describe)	285
+src/components/chat/mermaid-renderer.test.tsx	(arg of describe)	458
+src/components/connectors/EmailMailboxPanel.test.tsx	(arg of describe)	304
+src/components/library/knowledge/KnowledgeBacklinks.test.tsx	(arg of describe)	360
+src/components/library/knowledge/KnowledgeNoteView.test.tsx	(arg of describe)	413
+src/components/library/LibraryExplorer.test.tsx	(arg of describe)	257
+src/components/library/LibraryPanel.test.tsx	(arg of describe)	256
+src/components/library/preview/BasePreview.test.tsx	(arg of describe)	415
+src/components/library/preview/knowledgeMarkdown.test.tsx	(arg of describe)	245
+src/components/library/preview/LibraryPdfPreview.tsx	(anonymous)	411
+src/components/library/preview/LibraryPdfPreview.tsx	(arg of useEffect)	594
+src/components/library/preview/useLibraryFileEditor.ts	useLibraryFileEditor	355
+src/components/providers/provider-picker-model.test.ts	(arg of describe)	376
+src/components/providers/SignInDialog.test.tsx	(arg of describe)	274
+src/components/screens/UsageScreen.test.tsx	(arg of describe)	285
+src/components/settings/MemorySection.test.tsx	(arg of describe)	316
+src/components/settings/PerformanceSection.goal.test.tsx	(arg of describe)	321
+src/components/settings/PerformanceSection.test.tsx	(arg of describe)	256
+src/components/settings/PerformanceSection.test.tsx	(arg of describe)	286
+src/components/settings/SandboxSection.test.tsx	(arg of describe)	311
+src/components/ui/model-selector.test.tsx	(arg of describe)	247
+src/components/workspaces/WorkspaceTeamTab.test.tsx	(arg of describe)	453
+src/hooks/useAutoSave.test.tsx	(arg of describe)	1300
+src/hooks/useAutoSave.ts	useAutoSave	488
+src/hooks/useSlashMenu.test.ts	(arg of describe)	441
+src/hooks/useSlashMenu.ts	useSlashMenu	925
+src/lib/api.test.ts	(arg of describe)	312
+src/lib/api.test.ts	(arg of describe)	456
+src/routes/_app/-library.test.tsx	(arg of describe)	257
+src/routes/_app/-sessions.$sessionId.workspace.test.tsx	(arg of describe)	274
+src/store/chat.test.ts	(arg of describe)	255
+src/store/chat.test.ts	(arg of describe)	329
+src/store/chat.test.ts	(arg of describe)	392
+src/store/chat.tool-call-offset.test.ts	(arg of describe)	857
+src/store/chat.ts	(arg of create)	4568
+src/store/chat.ts	(arg of produce)	335
+src/store/chat.ts	(arg of withBucket)	337
+src/store/chat.ts	handleFrame	2775
+src/store/chat.ts	sendMessage	428
+src/store/session.ts	(arg of create)	397
+src/test/contract.test.ts	(arg of describe)	276
+tests/perf/load_2000_sessions_test.go	TestLoad2000Sessions	264
+tests/security/command_injection_test.go	TestExecCommandInjection_WorkspaceRestriction	396
+tests/security/ssrf_matrix_test.go	TestSSRFMatrix	289
