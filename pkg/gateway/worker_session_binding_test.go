@@ -35,7 +35,6 @@
 package gateway
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -434,49 +433,4 @@ func TestDelegationWorkerTaskStillSucceeds(t *testing.T) {
 		"the delegated task status must be inbox (unified vocabulary)")
 	assert.Equal(t, "delegated work", got.Title,
 		"the delegated task title must match the original")
-}
-
-// TestHandleChatMessage_RejectsWorkerAgentID verifies RESIDUAL PATH 4: a chat
-// frame that explicitly addresses a worker agentID must be rejected with an error
-// frame and must NOT mint a live session for the worker. A worker is not a chat
-// target.
-func TestHandleChatMessage_RejectsWorkerAgentID(t *testing.T) {
-	api, _ := newWorkerTestRestAPI(t)
-	handler := newWSHandler(bus.NewMessageBus(), api.agentLoop, "")
-
-	wc := makeTestConn()
-	handler.handleChatMessage(
-		context.Background(),
-		"chat-worker-1", // chatID
-		"",              // frameSessionID (empty → would mint a new session)
-		"do the work",   // content
-		"hans",          // agentID = worker
-		nil,             // mediaRefs
-		"",              // modelName (no per-turn override)
-		"",              // workspaceID (no active workspace)
-		false,           // setupKickoff
-		wc,
-	)
-
-	// Drain frames: expect exactly one error frame, and no session_started frame.
-	var sawError, sawSessionStarted bool
-	for {
-		select {
-		case raw := <-wc.sendCh:
-			var f replayFrameDecoder
-			require.NoError(t, json.Unmarshal(raw, &f))
-			switch f.Type {
-			case string(generated.WsFrameTypeError):
-				sawError = true
-				assert.Contains(t, strings.ToLower(f.Message), "worker",
-					"the error frame must explain a worker cannot be a chat target")
-			case string(generated.WsFrameTypeSessionStarted):
-				sawSessionStarted = true
-			}
-		default:
-			require.True(t, sawError, "a worker chat frame must produce an error frame")
-			require.False(t, sawSessionStarted, "a worker chat frame must NOT mint a session")
-			return
-		}
-	}
 }

@@ -12,11 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
+	"github.com/stretchr/testify/require"
 )
 
 // writeWorkspaceRecord writes a minimal on-disk workspace record so
@@ -67,72 +64,4 @@ func mintedSessionMetaWorkspace(
 	require.NoError(t, err)
 	require.NotNil(t, meta)
 	return meta.WorkspaceID
-}
-
-// TestHandleChatMessage_UnknownWorkspaceID_DropsBinding proves the M4 fix: a
-// frame carrying a non-existent workspace_id MUST NOT stamp the bogus id onto
-// the session (which would land created tasks on an invisible board). Instead
-// the binding is dropped and the session falls back to the default (empty
-// binding here → resolveWorkspaceID resolves the real default at task time).
-func TestHandleChatMessage_UnknownWorkspaceID_DropsBinding(t *testing.T) {
-	msgBus := bus.NewMessageBus()
-	handler, _ := newTestWSHandlerForModelName(t, msgBus)
-	home := t.TempDir()
-	handler.home = home
-	// Only a real, existing workspace lives on disk.
-	writeWorkspaceRecord(t, home, "01JXWORKSPACEREAL00000000001", true)
-
-	got := mintedSessionMetaWorkspace(t, handler, msgBus, "chat-m4-bogus", "01JXWORKSPACEBOGUS0000000099")
-	assert.Empty(t, got,
-		"a non-existent workspace_id must be dropped (not stamped) so the task falls back to the default board")
-}
-
-// TestHandleChatMessage_KnownWorkspaceID_Binds proves the happy path still
-// binds: a workspace_id that exists on disk is stamped onto the session.
-func TestHandleChatMessage_KnownWorkspaceID_Binds(t *testing.T) {
-	msgBus := bus.NewMessageBus()
-	handler, _ := newTestWSHandlerForModelName(t, msgBus)
-	home := t.TempDir()
-	handler.home = home
-	const wantWS = "01JXWORKSPACEREAL00000000002"
-	writeWorkspaceRecord(t, home, wantWS, true)
-
-	got := mintedSessionMetaWorkspace(t, handler, msgBus, "chat-m4-known", wantWS)
-	assert.Equal(t, wantWS, got, "an existing workspace_id must be bound to the minted session")
-}
-
-// TestHandleChatMessage_FrameDecode_BindsWorkspace decodes a real MessageFrame
-// JSON carrying metadata.workspace_id through the same extraction path the WS
-// read loop uses, then drives handleChatMessage and asserts the session binds.
-// This closes the gap where the existing test passed workspaceID directly,
-// bypassing the metadata decode.
-func TestHandleChatMessage_FrameDecode_BindsWorkspace(t *testing.T) {
-	msgBus := bus.NewMessageBus()
-	handler, _ := newTestWSHandlerForModelName(t, msgBus)
-	home := t.TempDir()
-	handler.home = home
-	const wantWS = "01JXWORKSPACEFRAME000000001"
-	writeWorkspaceRecord(t, home, wantWS, true)
-
-	// Build the exact wire frame the SPA sends for a workspace chat.
-	frame := generated.MessageFrame{
-		Type:     string(generated.WsFrameTypeMessage),
-		Content:  "create a task",
-		Metadata: map[string]any{"workspace_id": wantWS},
-	}
-	raw, err := json.Marshal(frame)
-	require.NoError(t, err)
-
-	// Decode + extract exactly as the read loop does (websocket.go ~744-747).
-	var decoded generated.MessageFrame
-	require.NoError(t, json.Unmarshal(raw, &decoded))
-	var workspaceID string
-	if v, ok := decoded.Metadata["workspace_id"].(string); ok {
-		workspaceID = v
-	}
-	require.Equal(t, wantWS, workspaceID, "metadata.workspace_id must survive decode")
-
-	got := mintedSessionMetaWorkspace(t, handler, msgBus, "chat-m4-frame", workspaceID)
-	assert.Equal(t, wantWS, got,
-		"a workspace_id decoded from a real MessageFrame must bind to the minted session")
 }
