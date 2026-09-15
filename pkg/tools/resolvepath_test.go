@@ -815,42 +815,63 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 		file    string
 		tool    string
 		snippet string
+		// family true reads the whole shell*.go family (readShellSourcesForTest)
+		// instead of the single named file, so the pin survives the shell.go
+		// split moving a call site between siblings.
+		family bool
 	}{
 		{
-			toolsDir, "filesystem.go", "read_file",
-			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.patterns)`,
+			dir:     toolsDir,
+			file:    "filesystem.go",
+			tool:    "read_file",
+			snippet: `ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpRead, path, t.patterns)`,
 		},
 		{
-			toolsDir, "filesystem.go", "write_file",
-			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`,
+			dir:     toolsDir,
+			file:    "filesystem.go",
+			tool:    "write_file",
+			snippet: `ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`,
 		},
 		{
-			toolsDir, "filesystem.go", "list_directory",
-			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpList, path, t.patterns)`,
+			dir:     toolsDir,
+			file:    "filesystem.go",
+			tool:    "list_directory",
+			snippet: `ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpList, path, t.patterns)`,
 		},
 		{
-			toolsDir, "edit.go", "edit_file / append_file",
-			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`,
+			dir:     toolsDir,
+			file:    "edit.go",
+			tool:    "edit_file / append_file",
+			snippet: `ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpWrite, path, t.patterns)`,
 		},
 		{
 			// FR-2.3a (ADR-063 / spec unified-file-access-and-mounts):
 			// send_file uses FSOpSend, not FSOpRead, purely for audit —
 			// distinguishing a disclosure to a chat channel from an
 			// ordinary read. It carries no additional path restriction.
-			toolsDir, "send_file.go", "send_file",
-			`ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpSend, path, t.allowPaths)`,
+			dir:     toolsDir,
+			file:    "send_file.go",
+			tool:    "send_file",
+			snippet: `ResolvePathAllowingPatterns(ctx, policy, t.Name(), "", FSOpSend, path, t.allowPaths)`,
 		},
 		{
-			toolsDir, "web_serve.go", "web_serve (static + dev)",
-			`ResolvePath(ctx, policy, ToolNameWebServe, "", FSOpServe, rawPath)`,
+			dir:     toolsDir,
+			file:    "web_serve.go",
+			tool:    "web_serve (static + dev)",
+			snippet: `ResolvePath(ctx, policy, ToolNameWebServe, "", FSOpServe, rawPath)`,
 		},
 		{
-			toolsDir, "shell.go", "bash (cwd resolution)",
-			`ResolvePath(ctx, policyForCWD, "bash", "", FSOpExec, rawCWD)`,
+			dir:     toolsDir,
+			file:    "shell.go",
+			tool:    "bash (cwd resolution)",
+			snippet: `ResolvePath(ctx, policyForCWD, "bash", "", FSOpExec, rawCWD)`,
+			family:  true,
 		},
 		{
-			browserDir, "tools.go", "browser_screenshot",
-			`tools.ResolvePath(ctx, policy, "browser_screenshot", "", tools.FSOpWrite, filename)`,
+			dir:     browserDir,
+			file:    "tools.go",
+			tool:    "browser_screenshot",
+			snippet: `tools.ResolvePath(ctx, policy, "browser_screenshot", "", tools.FSOpWrite, filename)`,
 		},
 		// "workspace_read (REST handler)" (pkg/gateway/rest_workspace.go
 		// HandleWorkspace, FR-2.3c) is deliberately NOT pinned here anymore.
@@ -866,11 +887,17 @@ func TestGenericTools_PassDocumentedFSOp(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join(tc.dir, tc.file))
-			if err != nil {
-				t.Fatalf("read %s: %v", tc.file, err)
+			var data string
+			if tc.family {
+				data = readShellSourcesForTest(t)
+			} else {
+				raw, err := os.ReadFile(filepath.Join(tc.dir, tc.file))
+				if err != nil {
+					t.Fatalf("read %s: %v", tc.file, err)
+				}
+				data = string(raw)
 			}
-			if !strings.Contains(string(data), tc.snippet) {
+			if !strings.Contains(data, tc.snippet) {
 				t.Errorf("%s: expected call site for %q not found (FSOp drifted from its documented value):\n  %s",
 					tc.file, tc.tool, tc.snippet)
 			}
