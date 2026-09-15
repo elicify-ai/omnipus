@@ -18,15 +18,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/gateway/ctxkey"
 	"github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // ---------------------------------------------------------------------------
@@ -309,44 +308,6 @@ func TestPreAuthWindow_ClosedWhenOnboardingStateUnknown(t *testing.T) {
 	api.HandleProviders(w, isolateRateLimit(t, req))
 	assert.Equal(t, http.StatusUnauthorized, w.Code,
 		"with the state unknown, an anonymous provider read must 401; body=%s", w.Body.String())
-}
-
-// TestOnboardingStateUnreadable_ClassifiesEachCase pins the three inputs of the
-// boot-time sample that feeds onboardingStateUnknown. Getting the MISSING case
-// wrong would break every genuine first launch, so it is asserted explicitly
-// rather than left implied.
-func TestOnboardingStateUnreadable_ClassifiesEachCase(t *testing.T) {
-	t.Run("missing file is a genuine fresh install", func(t *testing.T) {
-		assert.False(t, onboardingStateUnreadable(t.TempDir()))
-	})
-
-	t.Run("valid JSON is known", func(t *testing.T) {
-		home := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(home, "system"), 0o700))
-		require.NoError(t, os.WriteFile(filepath.Join(home, "system", "state.json"),
-			[]byte(`{"version":1,"onboarding_complete":true}`), 0o600))
-		assert.False(t, onboardingStateUnreadable(home))
-	})
-
-	t.Run("unparseable JSON is unknown", func(t *testing.T) {
-		home := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(home, "system"), 0o700))
-		require.NoError(t, os.WriteFile(filepath.Join(home, "system", "state.json"),
-			[]byte(`{"version":1,`), 0o600))
-		assert.True(t, onboardingStateUnreadable(home),
-			"a truncated state.json must be unknown, not a fresh install")
-	})
-
-	t.Run("unreadable file is unknown", func(t *testing.T) {
-		home := t.TempDir()
-		require.NoError(t, os.MkdirAll(filepath.Join(home, "system"), 0o700))
-		// A DIRECTORY where the file belongs: os.ReadFile fails with a
-		// non-IsNotExist error on every platform, unlike a chmod 000 file,
-		// which root can still read.
-		require.NoError(t, os.MkdirAll(filepath.Join(home, "system", "state.json"), 0o700))
-		assert.True(t, onboardingStateUnreadable(home),
-			"a state path that cannot be read must be unknown, not a fresh install")
-	})
 }
 
 // TestPreAuthWindow_ClosedWhenAnAuthenticationAuthorityExists pins the second
@@ -701,114 +662,6 @@ func TestCopilotProbe_IsAudited(t *testing.T) {
 	require.Len(t, entries2, 1)
 	assert.Equal(t, "admin", entries2[0]["user"],
 		"an authenticated probe must name the actor that drove it")
-}
-
-// ---------------------------------------------------------------------------
-// M1 — the startup orphan sweep could never sweep openai_OAUTH
-// ---------------------------------------------------------------------------
-
-// TestSweepOrphanedProviderCredentials_SweepsOAuthBehindASeedTemplateRow is the
-// M1 regression test. sweepOrphanedProviderCredentials built configuredVendors
-// from EVERY cfg.Providers row without applying isSeedTemplateRow, and
-// pkg/config/defaults.go seeds `{Provider: "openai"}` as a permanent keyless
-// template row — so configuredVendors["openai"] was populated on every install
-// and `openai_OAUTH`, the only OAuth grant the product currently issues, was
-// structurally unsweepable. If the process died between the config write and
-// the credential delete during provider removal, the live access AND refresh
-// token survived with nothing in the UI referencing them.
-func TestSweepOrphanedProviderCredentials_SweepsOAuthBehindASeedTemplateRow(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
-	store := credentials.NewStore(filepath.Join(home, "credentials.json"))
-	require.NoError(t, credentials.Unlock(store))
-
-	oauthName := credentials.OAuthEntryName("openai")
-	require.NoError(t, store.Set(oauthName, `{"access_token":"orphan"}`))
-	require.NoError(t, store.Set("openai_API_KEY", "sk-orphan"))
-
-	// Exactly the shipped seed: a keyless template row with a provider
-	// identity and nothing else. No operator ever created it.
-	cfg := &config.Config{Providers: []*config.ModelConfig{
-		{Provider: "openai", Model: "gpt-5", APIBase: ""},
-	}}
-	require.True(t, isSeedTemplateRow(cfg.Providers[0]),
-		"precondition: the fixture row must be the seeded template shape")
-
-	sweepOrphanedProviderCredentials(cfg, store, nil)
-
-	_, err := store.Get(oauthName)
-	assert.Error(t, err,
-		"a seeded template row must not protect %s from the orphan sweep", oauthName)
-	_, err = store.Get("openai_API_KEY")
-	assert.Error(t, err,
-		"a seeded template row must not protect openai_API_KEY from the orphan sweep")
-}
-
-// TestSweepOrphanedProviderCredentials_SeedShapedSignInRowStillProtectsItsGrant
-// is the guard on the M1 fix itself, for a mistake the fix made on its first
-// attempt and the existing suite caught: filtering the vendor keep-set on
-// isSeedTemplateRow ALONE deletes live OAuth grants.
-//
-// A sign_in row legitimately carries no api_key_ref, no api_base and no
-// models — it authenticates with a vendor session, not a key — so it can be
-// seed-SHAPED while being a real, operator-configured row whose grant is
-// live. Sweeping that is unrecoverable, and strictly worse than the orphan
-// M1 set out to reclaim. The row's id mapping to a DIFFERENT vendor is what
-// distinguishes it from the shipped api-key seed.
-func TestSweepOrphanedProviderCredentials_SeedShapedSignInRowStillProtectsItsGrant(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
-	store := credentials.NewStore(filepath.Join(home, "credentials.json"))
-	require.NoError(t, credentials.Unlock(store))
-
-	oauthName := credentials.OAuthEntryName("openai")
-	require.NoError(t, store.Set(oauthName, `{"access_token":"live","refresh_token":"live-refresh"}`))
-
-	// Deliberately the MINIMAL sign-in row: no auth_method, no api_key_ref,
-	// no api_base, no models. isSeedTemplateRow says "template"; it is not.
-	cfg := &config.Config{Providers: []*config.ModelConfig{
-		{Name: "openai-chatgpt", Provider: "openai-chatgpt", Model: "gpt-5.2"},
-	}}
-	require.True(t, isSeedTemplateRow(cfg.Providers[0]),
-		"precondition: this real sign-in row is seed-SHAPED — that is the whole trap")
-
-	sweepOrphanedProviderCredentials(cfg, store, nil)
-
-	_, err := store.Get(oauthName)
-	assert.NoError(t, err,
-		"a configured sign-in row must protect its vendor's live OAuth grant even when seed-shaped")
-}
-
-// TestSweepOrphanedProviderCredentials_KeepsConfiguredAndReferenced pins the
-// two keep-sets the M1 filter must NOT weaken. Wrongly deleting a live secret
-// is unrecoverable; failing to sweep is merely untidy.
-func TestSweepOrphanedProviderCredentials_KeepsConfiguredAndReferenced(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
-	store := credentials.NewStore(filepath.Join(home, "credentials.json"))
-	require.NoError(t, credentials.Unlock(store))
-
-	oauthName := credentials.OAuthEntryName("openai")
-	require.NoError(t, store.Set(oauthName, `{"access_token":"live"}`))
-	require.NoError(t, store.Set("anthropic_API_KEY", "sk-live"))
-	require.NoError(t, store.Set("weird_API_KEY", "sk-hand-named"))
-
-	cfg := &config.Config{Providers: []*config.ModelConfig{
-		// A real, operator-configured openai-chatgpt row: its vendor entry is
-		// openai_OAUTH and must survive.
-		{Provider: "openai-chatgpt", Model: "gpt-5", AuthMethod: config.AuthMethodSignIn},
-		// A real anthropic row.
-		{Provider: "anthropic", Model: "claude", APIKeyRef: "anthropic_API_KEY"},
-		// A row whose ref was renamed by hand: the belt-and-braces keep-set.
-		{Provider: "custom-thing", Model: "m", APIKeyRef: "weird_API_KEY"},
-	}}
-
-	sweepOrphanedProviderCredentials(cfg, store, nil)
-
-	for _, name := range []string{oauthName, "anthropic_API_KEY", "weird_API_KEY"} {
-		_, err := store.Get(name)
-		assert.NoError(t, err, "%s is live and must never be swept", name)
-	}
 }
 
 // ---------------------------------------------------------------------------

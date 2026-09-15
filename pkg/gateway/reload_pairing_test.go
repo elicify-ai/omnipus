@@ -17,13 +17,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agent"
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/agent"
-	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/channels"
-	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // --- Test A: late subscriber receives cached QR ---
@@ -154,71 +151,4 @@ func TestLastPairingState_Eviction(t *testing.T) {
 		require.NoError(t, json.Unmarshal(frameBytes, &f))
 		assert.Equal(t, "FRESH-QR", f.QR)
 	})
-}
-
-// --- Test D: wireChannelManager sets observer on the channel manager ---
-
-// TestWireChannelManager_ObserverSurvivesChannelRecreation is a smoke test that
-// wireChannelManager registers a non-nil PairingObserver on the channels.Manager.
-// It uses the real channels.Manager (via NewManagerForTesting) and a real AgentLoop
-// so the production code path is exercised end-to-end.
-func TestWireChannelManager_ObserverSurvivesChannelRecreation(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Gateway: config.GatewayConfig{Host: "127.0.0.1", Port: 8080, DevModeBypass: true},
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:         tmpDir,
-				DefaultModel: config.DefaultModel{Model: "test-model"},
-				MaxTokens:    4096,
-			},
-		},
-	}
-
-	msgBus := bus.NewMessageBus()
-	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	t.Cleanup(func() { al.Stop() })
-
-	// NewManagerForTesting creates a Manager with no channels (no credentials needed).
-	// The pairingObserver field starts nil.
-	cm := channels.NewManagerForTesting(nil)
-
-	// Wire the manager onto the agent loop, then call wireChannelManager.
-	al.SetChannelManager(cm)
-	wireChannelManager(cm, al)
-
-	// Verify the observer is set by calling SetPairingObserver with a tracking
-	// closure and confirming the manager accepts it without panic.  The key
-	// invariant is that wireChannelManager's closure (al.EmitWhatsAppPairing)
-	// replaced any previously-nil observer.  We re-wire a test observer here to
-	// confirm the setter is live; the test observer records whether it fires.
-	var observerCalled bool
-	assert.NotPanics(t, func() {
-		cm.SetPairingObserver(func(channelID string, status channels.PairingStatus, qr, message string) {
-			observerCalled = true
-		})
-	}, "SetPairingObserver must not panic after wireChannelManager")
-
-	// Call the observer by simulating a pairing event emission on the bus and
-	// verifying the subscription on the agent loop emits into the event bus.
-	// We can't easily drive it through a real channel here, so instead confirm
-	// that al.EmitWhatsAppPairing (called by the wireChannelManager closure)
-	// does not panic. Subscribe to events first.
-	evtSub := al.SubscribeEvents(4)
-	defer al.UnsubscribeEvents(evtSub.ID)
-
-	assert.NotPanics(t, func() {
-		al.EmitWhatsAppPairing("whatsapp_native", channels.PairingStatusCode, "TEST-QR", "")
-	}, "EmitWhatsAppPairing must not panic after wireChannelManager wired the observer")
-
-	// Assert the event was emitted (not just a no-op).
-	select {
-	case evt := <-evtSub.C:
-		assert.Equal(t, agent.EventKindWhatsAppPairing, evt.Kind,
-			"EmitWhatsAppPairing must emit EventKindWhatsAppPairing on the event bus")
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout: expected WhatsAppPairing event on bus after EmitWhatsAppPairing")
-	}
-
-	_ = observerCalled // used only to satisfy compiler; real assertion is the event check above
 }

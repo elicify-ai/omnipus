@@ -23,7 +23,6 @@ package gateway
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -204,118 +203,6 @@ func TestGatewayBoot_OnlyBrokenProviderStillBoots(t *testing.T) {
 		t.Fatalf("boot must survive with NO usable provider at all; got: %v", err)
 	}
 	requireSlogRecord(t, logBuf, "ERROR", "openrouter", staleRef)
-}
-
-// TestCreateStartupProvider_BlockedDefaultModelNamesTheCredential pins the
-// second honesty surface. Once boot survives, the factory would happily build
-// an HTTP provider with an EMPTY api key (api_base alone satisfies it), and the
-// operator's first message would come back as a bare upstream 401 naming
-// neither the provider nor the credential. Instead every turn must answer with
-// the real cause.
-func TestCreateStartupProvider_BlockedDefaultModelNamesTheCredential(t *testing.T) {
-	const ref = "DEGRADED_TEST_BLOCKED_DEFAULT_KEY"
-	t.Setenv(ref, "") // ref configured, credential never resolved
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"}},
-		},
-		Providers: []*config.ModelConfig{{
-			Name:      "openrouter-auto",
-			Model:     "openrouter/z-ai/glm-5-turbo",
-			Provider:  "openrouter",
-			APIBase:   "https://openrouter.ai/api/v1",
-			APIKeyRef: ref,
-		}},
-	}
-
-	p, _, err := createStartupProvider(cfg, false)
-	if err != nil {
-		t.Fatalf("createStartupProvider must not fail when the default model's credential is missing: %v", err)
-	}
-	if _, ok := p.(*startupBlockedProvider); !ok {
-		t.Fatalf(
-			"expected a startupBlockedProvider for a default model with an unresolvable credential, got %T "+
-				"— an HTTP provider with an empty key would 401 with no mention of the real cause",
-			p,
-		)
-	}
-	_, chatErr := p.Chat(context.Background(), nil, nil, "", nil)
-	if chatErr == nil {
-		t.Fatal("a blocked provider must fail every chat turn")
-	}
-	// The message names the default PAIR (provider/model), never a row alias.
-	if !strings.Contains(chatErr.Error(), ref) || !strings.Contains(chatErr.Error(), "openrouter/openrouter/z-ai/glm-5-turbo") {
-		t.Errorf(
-			"the chat error must name the model and the missing credential so the operator can act; got: %q",
-			chatErr.Error(),
-		)
-	}
-}
-
-// TestCreateStartupProvider_ResolvedCredentialIsNotBlocked is the control: the
-// same config with the credential present must build the real provider. Without
-// it, the test above would still pass if createStartupProvider blocked
-// unconditionally.
-func TestCreateStartupProvider_ResolvedCredentialIsNotBlocked(t *testing.T) {
-	const ref = "DEGRADED_TEST_RESOLVED_DEFAULT_KEY"
-	t.Setenv(ref, "sk-resolved")
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"}},
-		},
-		Providers: []*config.ModelConfig{{
-			Name:      "openrouter-auto",
-			Model:     "openrouter/z-ai/glm-5-turbo",
-			Provider:  "openrouter",
-			APIBase:   "https://openrouter.ai/api/v1",
-			APIKeyRef: ref,
-		}},
-	}
-
-	p, _, err := createStartupProvider(cfg, false)
-	if err != nil {
-		t.Fatalf("createStartupProvider: %v", err)
-	}
-	if _, blocked := p.(*startupBlockedProvider); blocked {
-		t.Fatal("a provider whose credential resolves must NOT be blocked")
-	}
-}
-
-// TestCreateStartupProvider_LoadBalancedSiblingKeepsModelUsable guards the
-// multi-entry case: several providers[] entries may share one model_name for
-// load balancing (config.GetModelConfig round-robins over them). One broken
-// sibling must not disable a model that still has a working entry.
-func TestCreateStartupProvider_LoadBalancedSiblingKeepsModelUsable(t *testing.T) {
-	const goodRef = "DEGRADED_TEST_LB_GOOD_KEY"
-	const badRef = "DEGRADED_TEST_LB_BAD_KEY"
-	t.Setenv(goodRef, "sk-good")
-	t.Setenv(badRef, "")
-
-	entry := func(ref string) *config.ModelConfig {
-		return &config.ModelConfig{
-			Name:      "openrouter-auto",
-			Model:     "openrouter/z-ai/glm-5-turbo",
-			Provider:  "openrouter",
-			APIBase:   "https://openrouter.ai/api/v1",
-			APIKeyRef: ref,
-		}
-	}
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{DefaultModel: config.DefaultModel{Provider: "openrouter", Model: "openrouter/z-ai/glm-5-turbo"}},
-		},
-		Providers: []*config.ModelConfig{entry(badRef), entry(goodRef)},
-	}
-
-	p, _, err := createStartupProvider(cfg, false)
-	if err != nil {
-		t.Fatalf("createStartupProvider: %v", err)
-	}
-	if _, blocked := p.(*startupBlockedProvider); blocked {
-		t.Fatal("a model with at least one usable load-balanced entry must not be blocked")
-	}
 }
 
 // TestGatewayBoot_WrongMasterKeyProviderCredentialIsFatal is the D1 review

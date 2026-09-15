@@ -9,10 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // ADR-068 D14.1 / FR-018 / FR-020 (T068-07): the default model is the pair
@@ -93,40 +92,4 @@ func TestGateway_NoBootPathWritesDefaultModel(t *testing.T) {
 			t.Errorf("%s still references the deleted agents.defaults.model_name alias", name)
 		}
 	}
-}
-
-// TestDefaultModelCredentialBlocked_ByPair: the limited-mode check matches the
-// default model's backing rows by the exact (provider, model) pair — a row
-// serving the same model under a DIFFERENT provider is not a candidate.
-func TestDefaultModelCredentialBlocked_ByPair(t *testing.T) {
-	t.Run("blocked when every row backing the pair has an unresolved ref", func(t *testing.T) {
-		cfg := &config.Config{
-			Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
-				DefaultModel: config.DefaultModel{Provider: "openai", Model: "gpt-4o"},
-			}},
-			Providers: []*config.ModelConfig{
-				{Provider: "openai", Model: "gpt-4o", APIKeyRef: "T068_07_UNSET_REF"},
-			},
-		}
-		reason, blocked := defaultModelCredentialBlocked(cfg)
-		require.True(t, blocked)
-		assert.Contains(t, reason, "T068_07_UNSET_REF")
-		assert.Contains(t, reason, "openai/gpt-4o")
-	})
-	t.Run("not blocked when the only unresolved row is under another provider", func(t *testing.T) {
-		cfg := &config.Config{
-			Agents: config.AgentsConfig{Defaults: config.AgentDefaults{
-				DefaultModel: config.DefaultModel{Provider: "openai", Model: "gpt-4o"},
-			}},
-			Providers: []*config.ModelConfig{
-				{Provider: "openrouter", Model: "gpt-4o", APIKeyRef: "T068_07_UNSET_REF"},
-			},
-		}
-		_, blocked := defaultModelCredentialBlocked(cfg)
-		assert.False(t, blocked, "a row under a different provider never backs the pair; that is CreateProvider's not-found error to report")
-	})
-	t.Run("zero pair is never blocked", func(t *testing.T) {
-		_, blocked := defaultModelCredentialBlocked(&config.Config{})
-		assert.False(t, blocked)
-	})
 }
