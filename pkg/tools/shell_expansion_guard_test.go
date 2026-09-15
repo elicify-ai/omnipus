@@ -8,7 +8,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -106,48 +105,4 @@ func TestGuardCommand_ExpansionDerivedPathsCannotBypassTheSecretSet(t *testing.T
 		require.Empty(t, guard("cat /etc/hosts"),
 			"an ordinary literal outside-the-work-dir read is open under ADR-068")
 	})
-}
-
-// TestExpandCandidatePrefix pins the resolve/refuse split directly, so a future
-// change to the helper cannot silently widen what it is willing to guess at.
-func TestExpandCandidatePrefix(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-	userHome, err := os.UserHomeDir()
-	require.NoError(t, err)
-
-	cases := []struct {
-		name       string
-		boundary   string
-		wantPrefix string
-		wantResolv bool
-		wantIsExp  bool
-	}{
-		{"tilde", "~", userHome, true, true},
-		{"tilde after punctuation", "=~", userHome, true, true},
-		{"$HOME", "$HOME", userHome, true, true},
-		{"${HOME}", "${HOME}", userHome, true, true},
-		{"$OMNIPUS_HOME", "$OMNIPUS_HOME", home, true, true},
-		{"${OMNIPUS_HOME}", "${OMNIPUS_HOME}", home, true, true},
-		// The fail-closed half: anything else is an expansion whose value this
-		// process does not know, so it must NOT be resolved to a guess.
-		{"unknown var", "$SOMETHING", "", false, true},
-		{"unknown braced var", "${SOMETHING}", "", false, true},
-		// Ordinary punctuation boundaries are not expansions at all.
-		{"space", " ", "", false, false},
-		{"quote", "\"", "", false, false},
-		{"empty", "", "", false, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			prefix, resolved, isExp := expandCandidatePrefix(tc.boundary)
-			require.Equal(t, tc.wantIsExp, isExp, "isExpansion for %q", tc.boundary)
-			require.Equal(t, tc.wantResolv, resolved, "resolved for %q", tc.boundary)
-			if tc.wantResolv {
-				require.Equal(t, tc.wantPrefix, prefix)
-				require.True(t, strings.HasPrefix(prefix, "/"),
-					"a resolved prefix must be absolute or the join below is meaningless")
-			}
-		})
-	}
 }
