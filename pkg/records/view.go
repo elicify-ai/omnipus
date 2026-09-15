@@ -1184,6 +1184,15 @@ func describeJSONValueShape(v string) string {
 // Validation against the schemas
 // ---------------------------------------------------------------------------
 
+// validateViewAgainstSchemas carries the shared state of ValidateViewAgainstSchemas across its stages.
+type validateViewAgainstSchemas struct {
+	v                    *SavedView
+	schemas              *SchemaSet
+	reject               func(code ViewRejectionCode, format string, args ...any) *ViewRejection
+	checkViewProp        func(name string, where string, comparison bool) *ViewRejection
+	checkViewEnumLiteral func(n generated.VaultFilterNode, where string) *ViewRejection
+}
+
 // ValidateViewAgainstSchemas checks that every name a view mentions is still
 // declared, and returns a rejection naming the valid alternatives when one is
 // not — FR-024's pattern, applied to a view instead of a query.
@@ -1198,13 +1207,32 @@ func describeJSONValueShape(v string) string {
 // deliberate narrowing: a view whose type vanished has every property fault as
 // a consequence, and reporting forty derived faults buries the one real cause.
 func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection {
-	if v == nil || schemas == nil {
-		return nil
+	vv := &validateViewAgainstSchemas{v: v, schemas: schemas}
+
+	if r0, stop := vv.prepareValidators(); stop {
+		return r0
 	}
-	reject := func(code ViewRejectionCode, format string, args ...any) *ViewRejection {
+
+	if r0, stop := vv.validateTopLevelFields(); stop {
+		return r0
+	}
+
+	if r0, stop := vv.validateParts(); stop {
+		return r0
+	}
+
+	return vv.validatePropertyConfig()
+}
+
+// prepareValidators resolves the view schema and prepares formula, property, and enum validators.
+func (vv *validateViewAgainstSchemas) prepareValidators() (*ViewRejection, bool) {
+	if vv.v == nil || vv.schemas == nil {
+		return nil, true
+	}
+	vv.reject = func(code ViewRejectionCode, format string, args ...any) *ViewRejection {
 		return &ViewRejection{
-			Paths:  []string{v.SourcePath},
-			Name:   v.Def.Name,
+			Paths:  []string{vv.v.SourcePath},
+			Name:   vv.v.Def.Name,
 			Code:   code,
 			Reason: fmt.Sprintf(format, args...),
 		}
@@ -1225,13 +1253,13 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 	// distinguishes it. RejectViewUnknownType below still fires for a type NO
 	// schema declares: that is drift, not provisioning.
 	var base *Schema
-	if v.Def.Type != nil {
-		declaredType := *v.Def.Type
-		found, ok := schemas.Get(declaredType)
+	if vv.v.Def.Type != nil {
+		declaredType := *vv.v.Def.Type
+		found, ok := vv.schemas.Get(declaredType)
 		if !ok {
-			return reject(RejectViewUnknownType,
+			return vv.reject(RejectViewUnknownType,
 				"view %q queries record type %q, which this knowledge base does not declare; declared types: %s",
-				v.Def.Name, declaredType, joinOrNone(schemas.Types()))
+				vv.v.Def.Name, declaredType, joinOrNone(vv.schemas.Types())), true
 		}
 		base = found
 	}
@@ -1241,9 +1269,9 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 	// checked against a set that is known good. FR-140: the parser lives in
 	// the write path, and the loader re-validates so a hand-edited file is
 	// re-checked.
-	formulas, rej := validateViewFormulas(v, base, reject)
+	formulas, rej := validateViewFormulas(vv.v, base, vv.reject)
 	if rej != nil {
-		return rej
+		return rej, true
 	}
 
 	// Every place a property name can appear, checked against the type it
@@ -1253,9 +1281,9 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 		if _, found := sc.Property(name); found {
 			return nil
 		}
-		return reject(RejectViewUnknownProperty,
+		return vv.reject(RejectViewUnknownProperty,
 			"view %q names property %q in %s, which record type %q does not declare; declared: %s",
-			v.Def.Name, name, where, sc.Type, joinOrNone(sc.PropertyNames()))
+			vv.v.Def.Name, name, where, sc.Type, joinOrNone(sc.PropertyNames()))
 	}
 
 	// checkViewProp is the property-position checker for every position a view
@@ -1268,7 +1296,7 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 	// grouping, aggregate) from a DISPLAY one (`properties`). `file.file` is
 	// the whole note, renderable but not comparable (FR-130), so it is legal
 	// in one and refused in the other.
-	checkViewProp := func(name, where string, comparison bool) *ViewRejection {
+	vv.checkViewProp = func(name, where string, comparison bool) *ViewRejection {
 		switch {
 		case isViewFormulaRef(name):
 			ref := strings.TrimPrefix(name, viewFormulaNamespace)
@@ -1277,19 +1305,19 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 					return nil
 				}
 			}
-			return reject(RejectViewUnknownFormula,
+			return vv.reject(RejectViewUnknownFormula,
 				"view %q names %q in %s, but declares no formula %q; declared formulas: %s",
-				v.Def.Name, name, where, ref, joinOrNone(viewFormulaNames(v)))
+				vv.v.Def.Name, name, where, ref, joinOrNone(viewFormulaNames(vv.v)))
 		case IsFileNamespace(name):
 			if !IsFileProperty(name) {
-				return reject(RejectViewUnknownProperty,
+				return vv.reject(RejectViewUnknownProperty,
 					"view %q names %q in %s, which is not one of the reserved file properties; permitted: %s",
-					v.Def.Name, name, where, strings.Join(FilePropertyNames, ", "))
+					vv.v.Def.Name, name, where, strings.Join(FilePropertyNames, ", "))
 			}
 			if comparison && name == FileSelfProp {
-				return reject(RejectViewUnknownProperty,
+				return vv.reject(RejectViewUnknownProperty,
 					"view %q names %q in %s, but %q is the note itself and is not a comparison target; permitted here: %s",
-					v.Def.Name, name, where, FileSelfProp, strings.Join(FileFilterablePropertyNames, ", "))
+					vv.v.Def.Name, name, where, FileSelfProp, strings.Join(FileFilterablePropertyNames, ", "))
 			}
 			return nil
 		case base == nil:
@@ -1334,7 +1362,7 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 	//     answer is knowable from the schema alone.
 	//   - An untyped view (base == nil). FR-018b resolves its property names by
 	//     name at query time, so there is no declared set to compare against.
-	checkViewEnumLiteral := func(n generated.VaultFilterNode, where string) *ViewRejection {
+	vv.checkViewEnumLiteral = func(n generated.VaultFilterNode, where string) *ViewRejection {
 		if base == nil || n.Property == nil {
 			return nil
 		}
@@ -1363,44 +1391,48 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 			if _, declared := prop.ResolveEnum(lit); declared {
 				continue
 			}
-			return reject(RejectViewUnknownEnumValue,
+			return vv.reject(RejectViewUnknownEnumValue,
 				"view %q compares %s.%s against %q in %s, which is not one of its declared values (matching ignores case); permitted: %s",
-				v.Def.Name, base.Type, name, lit, where, joinOrNone(prop.PermittedValues()))
+				vv.v.Def.Name, base.Type, name, lit, where, joinOrNone(prop.PermittedValues()))
 		}
 		return nil
 	}
+	return nil, false
+}
 
-	if v.Def.Filter != nil {
-		if rej := checkViewFilterTree(*v.Def.Filter, "filter", checkViewProp, checkViewEnumLiteral); rej != nil {
-			return rej
+// validateTopLevelFields checks filter, grouping, sort, displayed properties, and aggregate bindings.
+func (vv *validateViewAgainstSchemas) validateTopLevelFields() (*ViewRejection, bool) {
+	if vv.v.Def.Filter != nil {
+		if rej := checkViewFilterTree(*vv.v.Def.Filter, "filter", vv.checkViewProp, vv.checkViewEnumLiteral); rej != nil {
+			return rej, true
 		}
 	}
-	if v.Def.Grouping != nil {
-		for _, g := range *v.Def.Grouping {
-			if rej := checkViewProp(g.Property, "grouping", true); rej != nil {
-				return rej
+	if vv.v.Def.Grouping != nil {
+		for _, g := range *vv.v.Def.Grouping {
+			if rej := vv.checkViewProp(g.Property, "grouping", true); rej != nil {
+				return rej, true
 			}
 			if g.Direction != nil && !g.Direction.Valid() {
-				return reject(RejectViewUnknownProperty,
+				return vv.reject(RejectViewUnknownProperty,
 					"view %q groups by %q in direction %q, which is not a declared direction; permitted: asc, desc",
-					v.Def.Name, g.Property, string(*g.Direction))
+					vv.v.Def.Name, g.Property, string(*g.Direction)), true
 			}
 		}
 	}
-	if v.Def.Sort != nil {
-		for _, srt := range *v.Def.Sort {
-			if rej := checkViewProp(srt.Property, "sort", true); rej != nil {
-				return rej
+	if vv.v.Def.Sort != nil {
+		for _, srt := range *vv.v.Def.Sort {
+			if rej := vv.checkViewProp(srt.Property, "sort", true); rej != nil {
+				return rej, true
 			}
 		}
 	}
-	for _, p := range derefStrings(v.Def.Properties) {
-		if rej := checkViewProp(p, "properties", false); rej != nil {
-			return rej
+	for _, p := range derefStrings(vv.v.Def.Properties) {
+		if rej := vv.checkViewProp(p, "properties", false); rej != nil {
+			return rej, true
 		}
 	}
-	if v.Def.Aggregates != nil {
-		for _, a := range *v.Def.Aggregates {
+	if vv.v.Def.Aggregates != nil {
+		for _, a := range *vv.v.Def.Aggregates {
 			if a.Property == nil || strings.TrimSpace(*a.Property) == "" {
 				// count takes no property, and the contract says so. A missing
 				// property on sum/min/max is the WRITER's fault to refuse; the
@@ -1408,19 +1440,23 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 				// property name to complain about.
 				continue
 			}
-			if rej := checkViewProp(*a.Property, "aggregates", true); rej != nil {
-				return rej
+			if rej := vv.checkViewProp(*a.Property, "aggregates", true); rej != nil {
+				return rej, true
 			}
 		}
 	}
+	return nil, false
+}
 
+// validateParts checks every property position in the view's explicit part stack.
+func (vv *validateViewAgainstSchemas) validateParts() (*ViewRejection, bool) {
 	// A part's bindings and columns are property positions like any other, and
 	// they are checked like any other. A part is the ONE place a property name
 	// could otherwise reach a renderer unchecked — every position above
 	// predates the part stack — and a `number: amount` binding on a type that
 	// no longer declares `amount` draws a headline figure over nothing.
-	if v.Def.Parts != nil {
-		for i, part := range *v.Def.Parts {
+	if vv.v.Def.Parts != nil {
+		for i, part := range *vv.v.Def.Parts {
 			where := fmt.Sprintf("parts[%d]", i)
 			for _, b := range []struct {
 				key        string
@@ -1436,14 +1472,14 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 				if b.value == nil {
 					continue
 				}
-				if rej := checkViewProp(*b.value, where+"."+b.key, b.comparison); rej != nil {
-					return rej
+				if rej := vv.checkViewProp(*b.value, where+"."+b.key, b.comparison); rej != nil {
+					return rej, true
 				}
 			}
 			if part.Grouping != nil {
 				for gi, g := range *part.Grouping {
-					if rej := checkViewProp(g.Property, fmt.Sprintf("%s.grouping[%d]", where, gi), true); rej != nil {
-						return rej
+					if rej := vv.checkViewProp(g.Property, fmt.Sprintf("%s.grouping[%d]", where, gi), true); rej != nil {
+						return rej, true
 					}
 				}
 			}
@@ -1454,35 +1490,39 @@ func ValidateViewAgainstSchemas(v *SavedView, schemas *SchemaSet) *ViewRejection
 				}
 				sort.Strings(names) // deterministic: a map walk would report a random one
 				for _, name := range names {
-					if rej := checkViewProp(name, where+".subtotals", true); rej != nil {
-						return rej
+					if rej := vv.checkViewProp(name, where+".subtotals", true); rej != nil {
+						return rej, true
 					}
 				}
 			}
 			if part.Properties != nil {
 				for _, p := range *part.Properties {
-					if rej := checkViewProp(p, where+".properties", false); rej != nil {
-						return rej
+					if rej := vv.checkViewProp(p, where+".properties", false); rej != nil {
+						return rej, true
 					}
 				}
 			}
 		}
 	}
+	return nil, false
+}
 
+// validatePropertyConfig checks the presentation configuration's property names.
+func (vv *validateViewAgainstSchemas) validatePropertyConfig() *ViewRejection {
 	// `property_config` is PURE PRESENTATION and the engine never reads it
 	// (FR-018b, keeping Obsidian's own rule verbatim). Its keys are still
 	// property names, and a config entry for a property that does not exist is
 	// a column heading nothing will ever render — checked in the DISPLAY
 	// position, so `file.file` is legal here for the same reason it is legal
 	// in `properties`.
-	if v.Def.PropertyConfig != nil {
-		names := make([]string, 0, len(*v.Def.PropertyConfig))
-		for name := range *v.Def.PropertyConfig {
+	if vv.v.Def.PropertyConfig != nil {
+		names := make([]string, 0, len(*vv.v.Def.PropertyConfig))
+		for name := range *vv.v.Def.PropertyConfig {
 			names = append(names, name)
 		}
 		sort.Strings(names) // deterministic: a map walk would report a random one
 		for _, name := range names {
-			if rej := checkViewProp(name, "property_config", false); rej != nil {
+			if rej := vv.checkViewProp(name, "property_config", false); rej != nil {
 				return rej
 			}
 		}
