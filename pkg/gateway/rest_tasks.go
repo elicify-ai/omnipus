@@ -984,23 +984,72 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	a.writeWireTask(w, http.StatusCreated, *t)
 }
 
+// taskPatch carries the shared state of handleTaskPatch across its stages.
+type taskPatch struct {
+	a                     *restAPI
+	w                     http.ResponseWriter
+	r                     *http.Request
+	id                    string
+	req                   gen.TaskUpdateRequest
+	existingForDefinition *task.Task
+	patch                 task.Patch
+	detachResetsStatus    bool
+	priorTriggerForAudit  *task.Trigger
+	patchCriteria         []task.AcceptanceCriterion
+	patchDoD              []task.AcceptanceCriterion
+	criteriaProvided      bool
+	dodProvided           bool
+	preUpdateStatus       task.Status
+	updated               *task.Task
+	priorForUpdate        *task.Task
+}
+
 // handleTaskPatch handles PATCH /api/v1/tasks/{id}.
 func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id string) {
-	if err := validateEntityID(id); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+	tp := &taskPatch{a: a, w: w, r: r, id: id}
+
+	if tp.validate() {
 		return
 	}
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	var req gen.TaskUpdateRequest
-	if !decodeAndValidate(w, r, "TaskUpdateRequest", &req, validateEnabled) {
+	if tp.buildPatch() {
 		return
+	}
+	if tp.checkDefinitionOfDone() {
+		return
+	}
+	tp.applyRunFields()
+	if tp.capturePriorStatus() {
+		return
+	}
+	if tp.applyUpdate() {
+		return
+	}
+	if tp.syncGoalRecord() {
+		return
+	}
+	if tp.launchIfStarted() {
+		return
+	}
+	tp.finish()
+}
+
+// validate checks the id and body and refuses changes the task's current state forbids.
+func (tp *taskPatch) validate() bool {
+	if err := validateEntityID(tp.id); err != nil {
+		jsonErr(tp.w, http.StatusBadRequest, "invalid task ID")
+		return true
+	}
+	validateEnabled := tp.a.agentLoop.GetConfig().Gateway.ValidateInbound
+
+	if !decodeAndValidate(tp.w, tp.r, "TaskUpdateRequest", &tp.req, validateEnabled) {
+		return true
 	}
 
 	// Fix #6: blocked is a derived side-state; reject it at the gateway seam
 	// before reaching the store (defense-in-depth alongside ErrBlockedNotSettable).
-	if req.Status != nil && task.Status(*req.Status) == task.StatusBlocked {
-		jsonErr(w, http.StatusBadRequest, "blocked is a derived side-state and cannot be set directly")
-		return
+	if tp.req.Status != nil && task.Status(*tp.req.Status) == task.StatusBlocked {
+		jsonErr(tp.w, http.StatusBadRequest, "blocked is a derived side-state and cannot be set directly")
+		return true
 	}
 
 	// Operator decision, 2026-09-12: the judged contract freezes for the
@@ -1014,109 +1063,113 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	// list whenever `criteria` or `dod` is present, so whenever that rule needs
 	// the task's CURRENT criteria (an edit that supplies only `dod`), this read
 	// has already happened and must not be repeated.
-	var existingForDefinition *task.Task
-	if frozen := frozenTaskDefinitionFields(&req); len(frozen) > 0 {
-		existing, gErr := a.taskStore.Get(id)
+
+	if frozen := frozenTaskDefinitionFields(&tp.req); len(frozen) > 0 {
+		existing, gErr := tp.a.taskStore.Get(tp.id)
 		if gErr != nil {
 			if errors.Is(gErr, task.ErrNotFound) {
-				jsonErr(w, http.StatusNotFound, "task not found")
-				return
+				jsonErr(tp.w, http.StatusNotFound, "task not found")
+				return true
 			}
 			slog.Error("rest: task patch: could not read task for the running-definition freeze check",
-				"task_id", id, "error", gErr)
-			jsonErr(w, http.StatusInternalServerError, "could not read task")
-			return
+				"task_id", tp.id, "error", gErr)
+			jsonErr(tp.w, http.StatusInternalServerError, "could not read task")
+			return true
 		}
 		if existing.Status == task.StatusInProgress {
-			jsonErr(w, http.StatusConflict, runningTaskFrozenFieldMessage(frozen))
-			return
+			jsonErr(tp.w, http.StatusConflict, runningTaskFrozenFieldMessage(frozen))
+			return true
 		}
-		existingForDefinition = existing
+		tp.existingForDefinition = existing
 	}
 
 	// Detail #8: advancing a partial (no prompt/description) task to `next` is
 	// rejected — only fully-captured tasks may be triaged.
-	if req.Status != nil && task.Status(*req.Status) == task.StatusNext {
-		existing, gErr := a.taskStore.Get(id)
+	if tp.req.Status != nil && task.Status(*tp.req.Status) == task.StatusNext {
+		existing, gErr := tp.a.taskStore.Get(tp.id)
 		if gErr != nil {
 			if errors.Is(gErr, task.ErrNotFound) {
-				jsonErr(w, http.StatusNotFound, "task not found")
-				return
+				jsonErr(tp.w, http.StatusNotFound, "task not found")
+				return true
 			}
-			jsonErr(w, http.StatusInternalServerError, "could not read task")
-			return
+			jsonErr(tp.w, http.StatusInternalServerError, "could not read task")
+			return true
 		}
 		hasPrompt := existing.Prompt != "" || existing.Description != ""
-		if req.Prompt != nil && *req.Prompt != "" {
+		if tp.req.Prompt != nil && *tp.req.Prompt != "" {
 			hasPrompt = true
 		}
-		if req.Description != nil && *req.Description != "" {
+		if tp.req.Description != nil && *tp.req.Description != "" {
 			hasPrompt = true
 		}
 		if !hasPrompt {
 			jsonErr(
-				w,
+				tp.w,
 				http.StatusUnprocessableEntity,
 				"a partial task cannot be advanced to next — add a prompt or description first",
 			)
-			return
+			return true
 		}
 	}
+	return false
+}
 
-	patch := task.Patch{}
+// buildPatch translates the request's fields into a task.Patch.
+func (tp *taskPatch) buildPatch() bool {
+	tp.patch = task.Patch{}
 	// Set when a plan DETACH (plan_id -> "") optimistically adds `status: inbox`
 	// to the patch; drives the ErrIllegalTransition retry at the Update below so
 	// a terminal/blocked member still detaches instead of 400ing.
-	detachResetsStatus := false
-	if req.Title != nil {
-		patch.Title = req.Title
+	tp.detachResetsStatus = false
+	if tp.req.Title != nil {
+		tp.patch.Title = tp.req.Title
 	}
-	if req.Description != nil {
-		patch.Description = req.Description
+	if tp.req.Description != nil {
+		tp.patch.Description = tp.req.Description
 	}
-	if req.Prompt != nil {
-		patch.Prompt = req.Prompt
+	if tp.req.Prompt != nil {
+		tp.patch.Prompt = tp.req.Prompt
 	}
-	if req.Status != nil {
-		st := task.Status(*req.Status)
-		patch.Status = &st
+	if tp.req.Status != nil {
+		st := task.Status(*tp.req.Status)
+		tp.patch.Status = &st
 	}
-	if req.AgentId != nil {
-		if *req.AgentId != "" {
+	if tp.req.AgentId != nil {
+		if *tp.req.AgentId != "" {
 			// Team-membership validation is workspace-scoped, and a task's
 			// workspace_id is immutable via PATCH (not a TaskUpdateRequest
 			// field) — read the existing task to learn it. A dedicated read
 			// here (rather than threading through the conditional "next"-status
 			// read above) keeps this block correct regardless of which other
 			// fields are present in the same PATCH.
-			existingForAgentCheck, gErr := a.taskStore.Get(id)
+			existingForAgentCheck, gErr := tp.a.taskStore.Get(tp.id)
 			if gErr != nil {
 				if errors.Is(gErr, task.ErrNotFound) {
-					jsonErr(w, http.StatusNotFound, "task not found")
-					return
+					jsonErr(tp.w, http.StatusNotFound, "task not found")
+					return true
 				}
-				jsonErr(w, http.StatusInternalServerError, "could not read task")
-				return
+				jsonErr(tp.w, http.StatusInternalServerError, "could not read task")
+				return true
 			}
-			if err := a.validateTaskAgentID(*req.AgentId, existingForAgentCheck.WorkspaceID); err != nil {
-				jsonErr(w, http.StatusBadRequest, err.Error())
-				return
+			if err := tp.a.validateTaskAgentID(*tp.req.AgentId, existingForAgentCheck.WorkspaceID); err != nil {
+				jsonErr(tp.w, http.StatusBadRequest, err.Error())
+				return true
 			}
 		}
-		patch.AgentID = req.AgentId
+		tp.patch.AgentID = tp.req.AgentId
 	}
-	if req.Priority != nil {
-		patch.Priority = req.Priority
+	if tp.req.Priority != nil {
+		tp.patch.Priority = tp.req.Priority
 	}
-	if req.BlockedBy != nil {
-		patch.BlockedBy = req.BlockedBy
+	if tp.req.BlockedBy != nil {
+		tp.patch.BlockedBy = tp.req.BlockedBy
 	}
-	if req.Todos != nil {
-		todos := make([]task.Todo, 0, len(*req.Todos))
-		for _, td := range *req.Todos {
+	if tp.req.Todos != nil {
+		todos := make([]task.Todo, 0, len(*tp.req.Todos))
+		for _, td := range *tp.req.Todos {
 			todos = append(todos, task.Todo{Text: td.Text, Status: task.TodoStatus(td.Status)})
 		}
-		patch.Todos = &todos
+		tp.patch.Todos = &todos
 	}
 	// FR-022 audit prerequisite: patch.Trigger is built here; the prior
 	// trigger snapshot itself is captured atomically below by
@@ -1128,43 +1181,43 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	// on top of it — leaving the second call's recorded "prior" stale, never
 	// reflecting the first call's write even though both calls' own writes
 	// were correctly serialized by the store's per-task lock).
-	var priorTriggerForAudit *task.Trigger
-	if req.Trigger != nil {
+
+	if tp.req.Trigger != nil {
 		tr := buildTrigger(
-			string(req.Trigger.Type),
-			req.Trigger.Config.AtMs,
-			req.Trigger.Config.EveryMs,
-			req.Trigger.Config.CronExpr,
-			req.Trigger.Config.Rrule,
-			req.Trigger.Config.DtstartMs,
-			req.Trigger.Config.Tz,
+			string(tp.req.Trigger.Type),
+			tp.req.Trigger.Config.AtMs,
+			tp.req.Trigger.Config.EveryMs,
+			tp.req.Trigger.Config.CronExpr,
+			tp.req.Trigger.Config.Rrule,
+			tp.req.Trigger.Config.DtstartMs,
+			tp.req.Trigger.Config.Tz,
 		)
-		patch.Trigger = &tr
+		tp.patch.Trigger = &tr
 	}
-	if req.Due != nil {
-		due := req.Due.UTC().Format(time.RFC3339)
-		patch.Due = &due
-	} else if req.ClearDue != nil && *req.ClearDue {
+	if tp.req.Due != nil {
+		due := tp.req.Due.UTC().Format(time.RFC3339)
+		tp.patch.Due = &due
+	} else if tp.req.ClearDue != nil && *tp.req.ClearDue {
 		// clear_due unambiguously clears the stored due date. Ignored when `due`
 		// is set to a value (the value wins). The store applies *patch.Due
 		// verbatim, so an empty string clears Task.Due (which omits when empty).
 		empty := ""
-		patch.Due = &empty
+		tp.patch.Due = &empty
 	}
-	if req.PlanId != nil {
-		if *req.PlanId != "" {
+	if tp.req.PlanId != nil {
+		if *tp.req.PlanId != "" {
 			// A task's workspace_id is immutable via PATCH (not a
 			// TaskUpdateRequest field) — read the existing task to learn it,
 			// mirroring the AgentId team-membership check's identical
 			// dedicated read above.
-			existingForPlanCheck, gErr := a.taskStore.Get(id)
+			existingForPlanCheck, gErr := tp.a.taskStore.Get(tp.id)
 			if gErr != nil {
 				if errors.Is(gErr, task.ErrNotFound) {
-					jsonErr(w, http.StatusNotFound, "task not found")
-					return
+					jsonErr(tp.w, http.StatusNotFound, "task not found")
+					return true
 				}
-				jsonErr(w, http.StatusInternalServerError, "could not read task")
-				return
+				jsonErr(tp.w, http.StatusInternalServerError, "could not read task")
+				return true
 			}
 			// Same-workspace FK + draft-only membership, via the one choke
 			// point every attach path shares. This is the RE-PARENT/attach
@@ -1172,11 +1225,11 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 			// DETACH half (plan_id -> "") is the else branch below and is
 			// deliberately not gated — leaving a plan is always allowed.
 			if err := tools.ValidateTaskPlanMembership(
-				a.planStore, *req.PlanId, existingForPlanCheck.WorkspaceID); err != nil {
-				jsonErr(w, http.StatusBadRequest, err.Error())
-				return
+				tp.a.planStore, *tp.req.PlanId, existingForPlanCheck.WorkspaceID); err != nil {
+				jsonErr(tp.w, http.StatusBadRequest, err.Error())
+				return true
 			}
-		} else if req.Status == nil {
+		} else if tp.req.Status == nil {
 			// DETACH (plan_id -> ""). Sibling of the plan-delete laundering
 			// hole: detaching a member without touching its status turns a
 			// `next` member of a draft/stopped plan into a STANDALONE `next`
@@ -1201,51 +1254,56 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 			// own recompute; done is frozen), and those must still detach
 			// rather than 400 — history is never rewritten.
 			inbox := task.StatusInbox
-			patch.Status = &inbox
-			detachResetsStatus = true
+			tp.patch.Status = &inbox
+			tp.detachResetsStatus = true
 		}
-		patch.PlanID = req.PlanId
+		tp.patch.PlanID = tp.req.PlanId
 	}
-	if req.WriteSet != nil {
-		patch.WriteSet = req.WriteSet
+	if tp.req.WriteSet != nil {
+		tp.patch.WriteSet = tp.req.WriteSet
 	}
-	if req.Stream != nil {
-		patch.Stream = req.Stream
+	if tp.req.Stream != nil {
+		tp.patch.Stream = tp.req.Stream
 	}
-	if req.IsJoin != nil {
-		patch.IsJoin = req.IsJoin
+	if tp.req.IsJoin != nil {
+		tp.patch.IsJoin = tp.req.IsJoin
 	}
-	if req.Tags != nil {
-		patch.Tags = req.Tags
+	if tp.req.Tags != nil {
+		tp.patch.Tags = tp.req.Tags
 	}
 	// GOAL-FR-021/FR-023/FR-047/FR-048/D-C: the mandatory-count gate binds at
 	// edit too, uniformly with create — an update supplying either list must
 	// not reduce it below one item; a PATCH that does not touch criteria/dod
 	// at all is unaffected (GOAL-FR-023/FR-048 exempt an untouched legacy
 	// task from the rule, never from being edited once it IS touched).
-	var patchCriteria, patchDoD []task.AcceptanceCriterion
-	criteriaProvided, dodProvided := false, false
-	if req.Criteria != nil {
-		criteriaProvided = true
-		if len(*req.Criteria) == 0 {
-			jsonErrField(w, http.StatusBadRequest,
+
+	tp.criteriaProvided, tp.dodProvided = false, false
+	if tp.req.Criteria != nil {
+		tp.criteriaProvided = true
+		if len(*tp.req.Criteria) == 0 {
+			jsonErrField(tp.w, http.StatusBadRequest,
 				"An update that changes the acceptance criteria must leave at least one.",
 				"criteria")
-			return
+			return true
 		}
-		patchCriteria = criteriaFromUpdateWire(*req.Criteria)
-		patch.Criteria = &patchCriteria
+		tp.patchCriteria = criteriaFromUpdateWire(*tp.req.Criteria)
+		tp.patch.Criteria = &tp.patchCriteria
 	}
-	if req.Dod != nil {
-		dodProvided = true
-		if len(*req.Dod) == 0 {
-			jsonErrField(w, http.StatusBadRequest,
+	if tp.req.Dod != nil {
+		tp.dodProvided = true
+		if len(*tp.req.Dod) == 0 {
+			jsonErrField(tp.w, http.StatusBadRequest,
 				"An update that changes the Definition of Done must leave at least one item.",
 				"dod")
-			return
+			return true
 		}
-		patchDoD = dodFromUpdateWire(*req.Dod)
+		tp.patchDoD = dodFromUpdateWire(*tp.req.Dod)
 	}
+	return false
+}
+
+// checkDefinitionOfDone refuses a Definition of Done that duplicates the acceptance criteria, before anything is written.
+func (tp *taskPatch) checkDefinitionOfDone() bool {
 	// GOAL-FR-048 binds the distinctness rule at SAVE, not only at create —
 	// otherwise the rule is a door you walk around: create with a distinct DoD,
 	// then edit it into a duplicate.
@@ -1258,10 +1316,10 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	//
 	// Checked BEFORE UpdateWithPrior, so a refusal writes nothing at all —
 	// matching the freeze check's own "a mixed request leaves nothing behind".
-	if criteriaProvided || dodProvided {
-		effectiveCriteria := patchCriteria
-		if !criteriaProvided {
-			if existingForDefinition == nil {
+	if tp.criteriaProvided || tp.dodProvided {
+		effectiveCriteria := tp.patchCriteria
+		if !tp.criteriaProvided {
+			if tp.existingForDefinition == nil {
 				// A never-firing tripwire, not a fallback:
 				// frozenTaskDefinitionFields reports "criteria"/"dod" whenever
 				// either is present, so the read above has always happened by
@@ -1271,62 +1329,70 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 				// this change exists to close.
 				slog.Error("rest: task patch: the Definition-of-Done distinctness check was reached "+
 					"with no task read — frozenTaskDefinitionFields and the criteria/dod block have "+
-					"drifted apart", "task_id", id)
-				jsonErr(w, http.StatusInternalServerError,
+					"drifted apart", "task_id", tp.id)
+				jsonErr(tp.w, http.StatusInternalServerError,
 					"could not check the Definition of Done against the acceptance criteria")
-				return
+				return true
 			}
-			effectiveCriteria = existingForDefinition.Criteria
+			effectiveCriteria = tp.existingForDefinition.Criteria
 		}
-		effectiveDoD := patchDoD
-		if !dodProvided {
-			persistedDoD, dErr := a.pairedGoalDoD(id)
+		effectiveDoD := tp.patchDoD
+		if !tp.dodProvided {
+			persistedDoD, dErr := tp.a.pairedGoalDoD(tp.id)
 			if dErr != nil {
 				slog.Error("rest: task patch: could not read the paired goal record's "+
-					"Definition of Done for the distinctness check", "task_id", id, "error", dErr)
-				jsonErr(w, http.StatusInternalServerError,
+					"Definition of Done for the distinctness check", "task_id", tp.id, "error", dErr)
+				jsonErr(tp.w, http.StatusInternalServerError,
 					"could not read the task's Definition of Done")
-				return
+				return true
 			}
 			effectiveDoD = persistedDoD
 		}
 		if vErr := task.ValidateDoDDistinct(effectiveCriteria, effectiveDoD); vErr != nil {
-			jsonErr(w, http.StatusBadRequest, vErr.Error())
-			return
+			jsonErr(tp.w, http.StatusBadRequest, vErr.Error())
+			return true
 		}
 	}
-	if req.MaxAttempts != nil {
-		v := *req.MaxAttempts
-		vp := &v
-		patch.MaxAttempts = &vp
-	}
-	if req.Surface != nil {
-		sf := task.Surface(*req.Surface)
-		patch.Surface = &sf
-	}
-	if req.Result != nil {
-		patch.Result = req.Result
-	}
-	if req.Artifacts != nil {
-		patch.Artifacts = req.Artifacts
-	}
-	if req.StartedAt != nil {
-		sa := req.StartedAt.UTC().Format(time.RFC3339)
-		patch.StartedAt = &sa
-	}
-	if req.CompletedAt != nil {
-		ca := req.CompletedAt.UTC().Format(time.RFC3339)
-		patch.CompletedAt = &ca
-	}
+	return false
+}
 
+// applyRunFields copies attempt, surface, result and timing fields into the patch.
+func (tp *taskPatch) applyRunFields() {
+	if tp.req.MaxAttempts != nil {
+		v := *tp.req.MaxAttempts
+		vp := &v
+		tp.patch.MaxAttempts = &vp
+	}
+	if tp.req.Surface != nil {
+		sf := task.Surface(*tp.req.Surface)
+		tp.patch.Surface = &sf
+	}
+	if tp.req.Result != nil {
+		tp.patch.Result = tp.req.Result
+	}
+	if tp.req.Artifacts != nil {
+		tp.patch.Artifacts = tp.req.Artifacts
+	}
+	if tp.req.StartedAt != nil {
+		sa := tp.req.StartedAt.UTC().Format(time.RFC3339)
+		tp.patch.StartedAt = &sa
+	}
+	if tp.req.CompletedAt != nil {
+		ca := tp.req.CompletedAt.UTC().Format(time.RFC3339)
+		tp.patch.CompletedAt = &ca
+	}
+}
+
+// capturePriorStatus records the status before the update and refuses re-running a repeating task via PATCH.
+func (tp *taskPatch) capturePriorStatus() bool {
 	// Capture the pre-update status to detect the in_progress transition below.
-	var preUpdateStatus task.Status
-	if req.Status != nil {
+
+	if tp.req.Status != nil {
 		// Read the current status before applying the patch so we can detect
 		// transitions rather than just the new state. We need the original status
 		// to distinguish "was already in_progress" from "just moved to in_progress".
-		if existing, gErr := a.taskStore.Get(id); gErr == nil {
-			preUpdateStatus = existing.Status
+		if existing, gErr := tp.a.taskStore.Get(tp.id); gErr == nil {
+			tp.preUpdateStatus = existing.Status
 			// ADR-050 RD7, task-run-history-spec.md §3.4 ("the ADR-049
 			// fresh-run reset is superseded by this in the same change...do
 			// not keep both paths"): a "Run now" on a done/failed REPEATING
@@ -1354,22 +1420,27 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 			// permanently "in progress" with a dead session. Reject instead,
 			// before any store write, and point the caller at the run-aware
 			// endpoint.
-			if patch.Status != nil && *patch.Status == task.StatusInProgress &&
+			if tp.patch.Status != nil && *tp.patch.Status == task.StatusInProgress &&
 				task.IsTerminal(existing.Status) &&
 				existing.Trigger.IsRepeating() {
-				jsonErr(w, http.StatusBadRequest,
-					"cannot re-run a repeating task via PATCH status; use POST /api/v1/tasks/"+id+"/runs instead")
-				return
+				jsonErr(tp.w, http.StatusBadRequest,
+					"cannot re-run a repeating task via PATCH status; use POST /api/v1/tasks/"+tp.id+"/runs instead")
+				return true
 			}
 		}
 	}
+	return false
+}
 
+// applyUpdate writes the patch to the task store, retrying once without a status reset on detach.
+func (tp *taskPatch) applyUpdate() bool {
 	// FR-022/M-BE1: UpdateWithPrior (not a plain Update) so the "prior trigger"
 	// snapshot below is captured atomically under the SAME per-task lock as
 	// this write — see priorTriggerForAudit's own doc comment above for the
 	// TOCTOU window a separate pre-patch Get() would have.
-	updated, priorForUpdate, err := a.taskStore.UpdateWithPrior(id, patch)
-	if err != nil && detachResetsStatus && errors.Is(err, task.ErrIllegalTransition) {
+	var err error
+	tp.updated, tp.priorForUpdate, err = tp.a.taskStore.UpdateWithPrior(tp.id, tp.patch)
+	if err != nil && tp.detachResetsStatus && errors.Is(err, task.ErrIllegalTransition) {
 		// The detach above optimistically added `status: inbox`. A terminal or
 		// `blocked` member legitimately refuses that (done is frozen; blocked
 		// may only leave via the store's own recompute), but the DETACH itself
@@ -1378,26 +1449,30 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		// close does not apply to them. Retry with the plan_id clear alone and
 		// let recomputeBlockedStateLocked (which runs at the end of every
 		// Update) settle `blocked`.
-		patch.Status = nil
-		updated, priorForUpdate, err = a.taskStore.UpdateWithPrior(id, patch)
+		tp.patch.Status = nil
+		tp.updated, tp.priorForUpdate, err = tp.a.taskStore.UpdateWithPrior(tp.id, tp.patch)
 	}
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
-			jsonErr(w, http.StatusNotFound, "task not found")
-			return
+			jsonErr(tp.w, http.StatusNotFound, "task not found")
+			return true
 		}
 		if isTaskValidationErr(err) {
-			jsonTaskValidationErr(w, err)
-			return
+			jsonTaskValidationErr(tp.w, err)
+			return true
 		}
-		slog.Error("rest: task update failed", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not update task")
-		return
+		slog.Error("rest: task update failed", "id", tp.id, "error", err)
+		jsonErr(tp.w, http.StatusInternalServerError, "could not update task")
+		return true
 	}
-	if req.Trigger != nil && priorForUpdate != nil {
-		priorTriggerForAudit = priorForUpdate.Trigger
+	if tp.req.Trigger != nil && tp.priorForUpdate != nil {
+		tp.priorTriggerForAudit = tp.priorForUpdate.Trigger
 	}
+	return false
+}
 
+// syncGoalRecord persists changed criteria or Definition of Done on the paired goal record.
+func (tp *taskPatch) syncGoalRecord() bool {
 	// GOAL-FR-029/FR-030: updated.Criteria above already carries the new
 	// criteria (dual-write, via patch.Criteria); this is what actually
 	// persists the change onto the task's paired goal record — creating one
@@ -1418,21 +1493,25 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	// The one caller-fault case (bootstrapping a record with only one of the
 	// two lists) is a 400 — the client can fix it by sending both. Every
 	// other failure is a storage fault and stays a 500.
-	if criteriaProvided || dodProvided {
-		if gErr := a.syncTaskGoalRecord(updated, criteriaProvided, patchDoD, dodProvided); gErr != nil {
+	if tp.criteriaProvided || tp.dodProvided {
+		if gErr := tp.a.syncTaskGoalRecord(tp.updated, tp.criteriaProvided, tp.patchDoD, tp.dodProvided); gErr != nil {
 			slog.Error("rest: task update: failed to sync paired goal record",
-				"id", id, "error", gErr)
+				"id", tp.id, "error", gErr)
 			if errors.Is(gErr, errGoalRecordNeedsBothLists) {
-				jsonErr(w, http.StatusBadRequest, gErr.Error())
-				return
+				jsonErr(tp.w, http.StatusBadRequest, gErr.Error())
+				return true
 			}
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf(
+			jsonErr(tp.w, http.StatusInternalServerError, fmt.Sprintf(
 				"task %q was updated but its Definition of Done could not be persisted: %v",
-				id, gErr))
-			return
+				tp.id, gErr))
+			return true
 		}
 	}
+	return false
+}
 
+// launchIfStarted starts the task run when the update moved it into in_progress, reverting on failure.
+func (tp *taskPatch) launchIfStarted() bool {
 	// If the task transitioned INTO in_progress (from a different state) and has
 	// an assigned agent, launch the agent immediately via StartTaskNow. The
 	// idempotency guard inside StartTaskNow prevents a double-launch if the task
@@ -1458,37 +1537,37 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	// preUpdateStatus would be "" in that case, making the revert call
 	// Update(id, Patch{Status: &""}) which the store rejects (IsValidStatus("")
 	// == false), causing a silent no-op revert and a misleading log entry.
-	if req.Status != nil &&
-		updated.Status == task.StatusInProgress &&
-		preUpdateStatus != task.StatusInProgress &&
-		updated.AgentID != "" &&
-		updated.SessionID == "" {
+	if tp.req.Status != nil &&
+		tp.updated.Status == task.StatusInProgress &&
+		tp.preUpdateStatus != task.StatusInProgress &&
+		tp.updated.AgentID != "" &&
+		tp.updated.SessionID == "" {
 		// buildLaunchRevertPatch assembles the revert-to-prior-state patch shared
 		// by both failure branches below (nil executor, StartTaskNow error).
 		buildLaunchRevertPatch := func() task.Patch {
-			revertStatus := preUpdateStatus
+			revertStatus := tp.preUpdateStatus
 			revertStartedAt := ""
 			return task.Patch{Status: &revertStatus, StartedAt: &revertStartedAt}
 		}
-		if a.taskExecutor == nil {
+		if tp.a.taskExecutor == nil {
 			// Revert the task to its prior status so it is not left stranded.
 			revertPatch := buildLaunchRevertPatch()
-			if _, rErr := a.taskStore.Update(id, revertPatch); rErr != nil {
+			if _, rErr := tp.a.taskStore.Update(tp.id, revertPatch); rErr != nil {
 				slog.Error("rest: could not revert task status after nil-executor failure",
-					"id", id, "revert_to", preUpdateStatus, "error", rErr)
+					"id", tp.id, "revert_to", tp.preUpdateStatus, "error", rErr)
 			}
 			slog.Warn("rest: taskExecutor is nil; rejecting in_progress transition",
-				"id", id, "agent_id", updated.AgentID)
-			jsonErr(w, http.StatusServiceUnavailable, "task executor is not available; retry later")
-			return
+				"id", tp.id, "agent_id", tp.updated.AgentID)
+			jsonErr(tp.w, http.StatusServiceUnavailable, "task executor is not available; retry later")
+			return true
 		}
-		sessID, startErr := a.taskExecutor.StartTaskNow(r.Context(), id)
+		sessID, startErr := tp.a.taskExecutor.StartTaskNow(tp.r.Context(), tp.id)
 		if startErr != nil {
 			// Revert the task to its prior status so it is not left stranded.
 			revertPatch := buildLaunchRevertPatch()
-			if _, rErr := a.taskStore.Update(id, revertPatch); rErr != nil {
+			if _, rErr := tp.a.taskStore.Update(tp.id, revertPatch); rErr != nil {
 				slog.Error("rest: could not revert task status after StartTaskNow failure",
-					"id", id, "revert_to", preUpdateStatus, "error", rErr)
+					"id", tp.id, "revert_to", tp.preUpdateStatus, "error", rErr)
 			}
 			httpStatus := http.StatusInternalServerError
 			switch {
@@ -1511,24 +1590,28 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 			// SAME error is intentionally logged quieter (Debug) inside
 			// TaskExecutor's periodic/event-driven callers.
 			slog.Warn("rest: StartTaskNow failed; task reverted to prior status",
-				"id", id, "agent_id", updated.AgentID, "prior_status", preUpdateStatus, "error", startErr)
-			jsonErr(w, httpStatus, startErr.Error())
-			return
+				"id", tp.id, "agent_id", tp.updated.AgentID, "prior_status", tp.preUpdateStatus, "error", startErr)
+			jsonErr(tp.w, httpStatus, startErr.Error())
+			return true
 		}
 		if sessID != "" {
 			// Re-read the persisted task so the response contains the session_id.
-			if fresh, rerr := a.taskStore.Get(id); rerr == nil {
-				updated = fresh
+			if fresh, rerr := tp.a.taskStore.Get(tp.id); rerr == nil {
+				tp.updated = fresh
 			}
 		}
 	}
+	return false
+}
 
+// finish advances dependents, ends the goal record, audits, emits and writes the response.
+func (tp *taskPatch) finish() {
 	// If the task reached `done`, advance any dependents (blocked → next).
-	if updated.Status == task.StatusDone {
-		if advanced, advErr := a.taskStore.AdvanceBlockedDependents(id); advErr != nil {
-			slog.Warn("rest: task advance dependents failed", "id", id, "error", advErr)
+	if tp.updated.Status == task.StatusDone {
+		if advanced, advErr := tp.a.taskStore.AdvanceBlockedDependents(tp.id); advErr != nil {
+			slog.Warn("rest: task advance dependents failed", "id", tp.id, "error", advErr)
 		} else if len(advanced) > 0 {
-			slog.Info("rest: completed task advanced dependents", "completed_id", id, "advanced_ids", advanced)
+			slog.Info("rest: completed task advanced dependents", "completed_id", tp.id, "advanced_ids", advanced)
 		}
 	}
 
@@ -1551,26 +1634,26 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	// Get() could be. The hook is idempotent, so a nil prior (defensive only —
 	// UpdateWithPrior returns one on every success) falls through to the
 	// terminal test alone rather than skipping the record.
-	if task.IsTerminal(updated.Status) &&
-		(priorForUpdate == nil || !task.IsTerminal(priorForUpdate.Status)) {
+	if task.IsTerminal(tp.updated.Status) &&
+		(tp.priorForUpdate == nil || !task.IsTerminal(tp.priorForUpdate.Status)) {
 		tools.TerminateTaskGoalRecord(
-			tools.GoalStoreForTasks(a.taskStore), id, updated.Status, updated.CancelReason, updated.Result)
+			tools.GoalStoreForTasks(tp.a.taskStore), tp.id, tp.updated.Status, tp.updated.CancelReason, tp.updated.Result)
 	}
 
-	a.auditTask("task.update", id)
-	if req.Trigger != nil {
+	tp.a.auditTask("task.update", tp.id)
+	if tp.req.Trigger != nil {
 		// FR-022: audit a recurrence-trigger change (legacy→RRULE or
 		// RRULE→RRULE) — no-ops on a title-only edit (byte-identical
 		// trigger, FR-024) or a non-recurring new trigger.
-		a.auditTriggerChange(id, priorTriggerForAudit, updated.Trigger)
+		tp.a.auditTriggerChange(tp.id, tp.priorTriggerForAudit, tp.updated.Trigger)
 	}
-	a.emitTaskStatus(updated)
+	tp.a.emitTaskStatus(tp.updated)
 	// Re-sync the task's time trigger: a changed/added/removed trigger or a move
 	// to a terminal status (re)registers or removes its cron job.
-	if a.agentLoop != nil {
-		a.agentLoop.NotifyTaskUpserted(updated)
+	if tp.a.agentLoop != nil {
+		tp.a.agentLoop.NotifyTaskUpserted(tp.updated)
 	}
-	a.writeWireTask(w, http.StatusOK, *updated)
+	tp.a.writeWireTask(tp.w, http.StatusOK, *tp.updated)
 }
 
 // handleTaskDelete handles DELETE /api/v1/tasks/{id} → 204.
