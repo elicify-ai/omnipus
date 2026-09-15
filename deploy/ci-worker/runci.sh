@@ -145,6 +145,11 @@ run_govet()    { ensure_spa_stub; CGO_ENABLED=0 go vet -tags "$TAGS" ./...; }
 GOLANGCI_VERSION=v2.10.1
 run_lint() {
   ensure_spa_stub
+  # The size-budget guards discovered by scripts/guards.sh below need the
+  # repo's own `typescript` package (scripts/tsfunlen.cjs). A lint-only run
+  # never runs the npm-ci step, so make node_modules match this checkout
+  # first; the helper skips the install when the lock stamp already matches.
+  _e2e_ensure_deps || return 1
   if ! command -v golangci-lint >/dev/null 2>&1; then
     log "install golangci-lint $GOLANGCI_VERSION"
     curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
