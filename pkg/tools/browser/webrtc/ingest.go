@@ -613,6 +613,11 @@ func (s *Session) attachIngestTrack(prefix string, pc *webrtc.PeerConnection, re
 	case webrtc.RTPCodecTypeAudio:
 		s.audioCodec = codec.MimeType
 		s.audioFeedID = feedID
+		// Installation owns the audio writer lock; a new feed gets a fresh
+		// source-clock baseline. No payload or capture identity is logged.
+		forward.audioTiming = newAudioTiming(func(summary audioTimingSummary) {
+			logAudioTiming(feedID, codec.ClockRate, summary)
+		})
 	}
 	release()
 	// From here on this goroutine OWNS the feed token, so every exit path must

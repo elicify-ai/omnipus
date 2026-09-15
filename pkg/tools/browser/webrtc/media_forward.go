@@ -15,6 +15,7 @@ import (
 // Control admission acquires writer locks before Session.mu. Never wait for
 // this lock while holding Session.mu. Receipt publication uses its own short lock.
 type mediaForwarder struct {
+	audioTiming     *audioTiming
 	mu              mediaWriterLock
 	feed            int64
 	seq             seqRewriter
@@ -51,6 +52,7 @@ func (f *mediaForwarder) beginWithReceipt(feed int64, clockRate uint32, identity
 // remain intact; only the identity of subsequent accepted packets changes.
 func (f *mediaForwarder) beginWithReceiptLocked(feed int64, clockRate uint32, identity VideoReceipt) {
 	f.feed = feed
+	f.audioTiming = nil
 	f.receiptIdentity = identity
 	f.clockRate = clockRate
 	f.seq = seqRewriter{lastOut: &f.lastSeq}
@@ -77,11 +79,27 @@ func (f *mediaForwarder) retireIfFeed(feed int64) {
 }
 
 func (f *mediaForwarder) write(feed int64, pkt *rtp.Packet, now time.Time, write func(*rtp.Packet) error) (bool, error) {
+	lockStarted := time.Now()
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if feed == 0 || f.feed != feed {
+	diagnostic := f.audioTiming
+	lockWait := time.Duration(0)
+	if diagnostic != nil {
+		lockWait = time.Since(lockStarted)
+	}
+	var sourceTimestamp uint32
+	rate := f.clockRate
+	writeDuration := time.Duration(0)
+	accepted := feed != 0 && f.feed == feed
+	defer func() {
+		f.mu.Unlock()
+		if accepted && diagnostic != nil {
+			diagnostic.recordRTP(now, sourceTimestamp, rate, lockWait, writeDuration)
+		}
+	}()
+	if !accepted {
 		return false, nil
 	}
+	sourceTimestamp = pkt.Timestamp
 	// Source progress is independent of an individual viewer's egress.
 	f.receivedPackets.Add(1)
 	f.receiptMu.Lock()
@@ -121,7 +139,14 @@ func (f *mediaForwarder) write(feed int64, pkt *rtp.Packet, now time.Time, write
 		f.lastAt = now
 		f.haveTimestamp = true
 	}
+	writeStarted := time.Time{}
+	if diagnostic != nil {
+		writeStarted = time.Now()
+	}
 	err := write(pkt)
+	if diagnostic != nil {
+		writeDuration = time.Since(writeStarted)
+	}
 	if err != nil {
 		f.forwardFailures.Add(1)
 	}
@@ -140,14 +165,34 @@ func (f *mediaForwarder) write(feed int64, pkt *rtp.Packet, now time.Time, write
 }
 
 func (f *mediaForwarder) senderReport(feed int64, sr *rtcp.SenderReport, write func(*rtcp.SenderReport)) bool {
+	lockStarted := time.Now()
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	if feed == 0 || f.feed != feed || !f.offsetReady {
+	diagnostic := f.audioTiming
+	lockWait := time.Duration(0)
+	if diagnostic != nil {
+		lockWait = time.Since(lockStarted)
+	}
+	writeDuration := time.Duration(0)
+	accepted := feed != 0 && f.feed == feed && f.offsetReady
+	defer func() {
+		f.mu.Unlock()
+		if accepted && diagnostic != nil {
+			diagnostic.recordRTCP(time.Now(), lockWait, writeDuration)
+		}
+	}()
+	if !accepted {
 		return false
 	}
 	out := *sr
 	out.RTPTime += f.timestampOffset
+	writeStarted := time.Time{}
+	if diagnostic != nil {
+		writeStarted = time.Now()
+	}
 	write(&out)
+	if diagnostic != nil {
+		writeDuration = time.Since(writeStarted)
+	}
 	return true
 }
 

@@ -242,3 +242,19 @@ Analysis: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/repo/.local/browse
 
 
 Installed Chrome 152 follow-up regressions also passed on the same runtime: native document scrolling/latest trusted hover (34.1 seconds), and single-viewer fullscreen handoff with return after actual close (1.7 minutes). Combined result: two tests passed in 2.3 minutes. Evidence: `/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/validation/browser-input-connection/chrome152-regressions-91783b0c1/`.
+
+
+## Remaining audio investigation after input acceptance
+
+Read-only source review found no application-owned audio FIFO or pacer. Native capture adds the audio track directly. The RTP relay reads and forwards synchronously. `media_forward.go` holds its audio writer lock across the outgoing RTP write; sender-report forwarding also uses that lock and synchronously writes RTCP to viewers. These are possible scheduling amplifiers, not confirmed faults. Track replacement also restarts audio, but RTP and sender-report timestamp offsets are translated together; no steady-state clock defect was established.
+
+The viewer already requests zero jitter-buffer target for both track kinds. Per the [WebRTC specification](https://www.w3.org/TR/webrtc/), that request is constrained by the browser's allowed buffering bounds. In the recorded run, audio target delay equalled minimum delay: no extra application-requested or audio/video-sync target delay was measured. Reapplying the same zero hint is therefore not an evidenced fix.
+
+Next discriminating experiment: bounded passive measurements of audio arrival spacing/source RTP deltas, writer-lock waiting, outgoing RTP write duration, and RTCP write duration during host pressure. This separates late source delivery from delay inside forwarding. Do not introduce audio dropping, timestamp rewriting, pacing, or reconnection based solely on the current correlation. The deployed input-accepted candidate remains unchanged and available for manual testing.
+
+The endurance fixture does not generate a controlled audible signal. Its negotiated audio timing/concealment statistics establish a transport/playback concern, not a direct audible-quality result. Any audio remedy must be verified with the existing sound-generating audio-clock fixture, including receiver audio-energy checks. Diagnostic tests now distinguish exact source timestamp wrap/reordering, five-second aggregation, and lock/write attribution; the first two RED checkpoints failed for their intended missing behavior. No diagnostic candidate has been deployed.
+
+
+Opt-in audio timing instrumentation is locally verified. `OMNIPUS_BROWSER_AUDIO_TIMING=1` enables feed-local five-second numeric summaries of completed-read gaps, source RTP progression, writer-lock waits, RTP write time, and aggregate sender-report fanout time. Packet forwarding, timestamp mapping, and write errors are preserved. Logging occurs after writer/aggregate locks are released. Disabled paths incur one additional clock read; enabled synchronous logging can delay a subsequent read, so read-completion gaps must not be treated as pure network delay. There is no background sampling queue.
+
+Focused audio timing, media replacement, source clock, and control-lock regression tests passed after restoration (8.441 seconds). Three compile-valid deliberate mutations (window boundary, source clock conversion, write-duration attribution) each failed the expected test. An initial write-duration mutation failed compilation and was replaced with a compile-valid zero-duration mutation; the compile failure was not counted as proof. Review caught and fixed packet inspection before retired-feed rejection, with a reproducing nil-packet test. Final independent review found no blocker. Live diagnostic collection remains pending.
