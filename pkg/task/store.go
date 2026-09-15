@@ -130,7 +130,7 @@ func ValidatePriority(p int) error {
 // Store manages per-entity JSON task files under a single directory
 // (~/.omnipus/tasks/). It is the unified task store. All read-modify-write
 // paths are serialized by the process-wide TaskFileLock keyed by task ID, plus
-// an advisory flock on the file itself.
+// an advisory flock on the file's sidecar (fileutil.SidecarLockPath).
 type Store struct {
 	dir  string
 	lock *StripedLock
@@ -222,10 +222,20 @@ func (s *Store) write(t *Task) error {
 		return fmt.Errorf("task: marshal %q: %w", t.ID, err)
 	}
 	p := s.path(t.ID)
-	return fileutil.WithFlock(p, func() error {
-		return fileutil.WriteFileAtomic(p, data, 0o600)
+	// Lock the task file's sidecar, never the file this write renames over
+	// (see fileutil.SidecarLockPath). Every other writer of a task file —
+	// DropOrphanEdges, the task migrations, pkg/sysagent/tools' writeEntity —
+	// takes this same sidecar lock.
+	return fileutil.WithFlock(fileutil.SidecarLockPath(p), func() error {
+		return writeFileAtomicFn(p, data, 0o600)
 	})
 }
+
+// writeFileAtomicFn is fileutil.WriteFileAtomic, held in a package variable so
+// a test can pause a write inside its lock (store_lock_test.go). Every locked
+// write in this package — task files, evidence records, run day files — goes
+// through it. Production code never reassigns it.
+var writeFileAtomicFn = fileutil.WriteFileAtomic
 
 // Lock returns the per-task striped mutex for id. Callers performing a manual
 // read-modify-write outside Create/Update should hold this for the whole RMW.
@@ -1643,10 +1653,14 @@ func (s *Store) Delete(id string) (unblockedIDs []string, err error) {
 	}
 	mu := s.lock.Get(id)
 	mu.Lock()
-	rmErr := os.Remove(s.path(id))
+	// RemoveLocked takes the task file's sidecar lock — the lock write takes —
+	// so a writer in another process cannot rename the task back into place,
+	// and removes the sidecar with the task so a deleted task leaves no lock
+	// file behind.
+	rmErr := fileutil.RemoveLocked(s.path(id))
 	mu.Unlock()
 	if rmErr != nil {
-		if os.IsNotExist(rmErr) {
+		if errors.Is(rmErr, os.ErrNotExist) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("task: delete %q: %w", id, rmErr)

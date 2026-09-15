@@ -127,10 +127,19 @@ func saveWorkspaceRecord(home string, w Workspace) error {
 		return fmt.Errorf("workspace: marshal %s: %w", w.ID, err)
 	}
 	path := filepath.Join(dir, w.ID+".json")
-	return fileutil.WithFlock(path, func() error {
-		return fileutil.WriteFileAtomic(path, data, 0o600)
+	// Lock the record's sidecar, never the record this write renames over (see
+	// fileutil.SidecarLockPath). pkg/sysagent/tools' writeEntity writes the same
+	// file under the same sidecar lock.
+	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+		return writeFileAtomicFn(path, data, 0o600)
 	})
 }
+
+// writeFileAtomicFn is fileutil.WriteFileAtomic, held in a package variable so
+// a test can pause a record write inside its lock (store_lock_test.go). The
+// workspace record, mount store and delegation store writers all go through
+// it. Production code never reassigns it.
+var writeFileAtomicFn = fileutil.WriteFileAtomic
 
 // ValidateMountName enforces FR-5.2's shape rule on name alone (no
 // uniqueness/collision check — those need workspace context, see

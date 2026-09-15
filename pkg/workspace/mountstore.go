@@ -234,7 +234,7 @@ func saveMountStore(home, id string, mounts []Mount) error {
 		return err
 	}
 	if len(mounts) == 0 {
-		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+		if rmErr := fileutil.RemoveLocked(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			return fmt.Errorf("workspace: mount store: remove %s: %w", path, rmErr)
 		}
 		return nil
@@ -247,8 +247,10 @@ func saveMountStore(home, id string, mounts []Mount) error {
 	if err != nil {
 		return fmt.Errorf("workspace: mount store: marshal %s: %w", id, err)
 	}
-	return fileutil.WithFlock(path, func() error {
-		return fileutil.WriteFileAtomic(path, data, 0o600)
+	// Lock the record's sidecar, never the record this write renames over (see
+	// fileutil.SidecarLockPath); both removals above take the same lock.
+	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+		return writeFileAtomicFn(path, data, 0o600)
 	})
 }
 
@@ -268,7 +270,7 @@ func DeleteMountStore(home, id string) error {
 	if err != nil {
 		return err
 	}
-	if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+	if rmErr := fileutil.RemoveLocked(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 		return fmt.Errorf("workspace: mount store: remove %s: %w", path, rmErr)
 	}
 	return nil

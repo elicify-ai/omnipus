@@ -325,9 +325,8 @@ func TestListRuns_FoldsAcrossMultipleDayFiles(t *testing.T) {
 	writeRunRecordAt(t, s, taskID, runBClosed, day1)
 
 	// Sanity: two distinct day files exist on disk.
-	entries, err := os.ReadDir(filepath.Join(s.Dir(), taskID, "runs"))
-	require.NoError(t, err)
-	require.Len(t, entries, 2)
+	dayFiles, _ := runsDirEntries(t, filepath.Join(s.Dir(), taskID, "runs"))
+	require.Len(t, dayFiles, 2)
 
 	runs, err := s.ListRuns(taskID)
 	require.NoError(t, err)
@@ -442,13 +441,7 @@ func TestPruneRuns_AgeCutoffDeletesOldFiles(t *testing.T) {
 	cutoff := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	require.NoError(t, s.PruneRuns(taskID, cutoff))
 
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	assert.ElementsMatch(t, []string{recent.Format("2006-01-02") + ".jsonl"}, names,
+	requireRunsDir(t, dir, []string{recent.Format("2006-01-02") + ".jsonl"},
 		"both old1 and old2 (before cutoff) must be deleted; recent (after cutoff) retained")
 }
 
@@ -479,10 +472,8 @@ func TestPruneRuns_FloorOfOneOverridesCutoff(t *testing.T) {
 	// deleted, but the floor-of-one must always retain the newest.
 	require.NoError(t, s.PruneRuns(taskID, time.Now()))
 
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	require.Len(t, entries, 1, "floor-of-one must retain exactly the newest day file")
-	assert.Equal(t, veryOld2.Format("2006-01-02")+".jsonl", entries[0].Name())
+	requireRunsDir(t, dir, []string{veryOld2.Format("2006-01-02") + ".jsonl"},
+		"floor-of-one must retain exactly the newest day file")
 }
 
 func TestPruneRuns_NoRunsDirIsNoop(t *testing.T) {
@@ -590,19 +581,13 @@ func TestPruneRuns_StaleDayFileWithOpenRunIsNotDeleted(t *testing.T) {
 	cutoff := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	require.NoError(t, s.PruneRuns(taskID, cutoff))
 
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	assert.ElementsMatch(
+	requireRunsDir(
 		t,
+		dir,
 		[]string{
 			oldOpenDay.Format("2006-01-02") + ".jsonl",
 			recentDay.Format("2006-01-02") + ".jsonl",
 		},
-		names,
 		"the stale closed-only file must be deleted; the stale file holding the orphaned open run must survive; the newest file is always retained (floor-of-one)",
 	)
 
@@ -674,16 +659,10 @@ func TestPruneRuns_OldFileWithClosedRunClosedInNewerFileIsDeleted(t *testing.T) 
 	cutoff := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	require.NoError(t, s.PruneRuns(taskID, cutoff))
 
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	assert.ElementsMatch(
+	requireRunsDir(
 		t,
+		dir,
 		[]string{recentDay.Format("2006-01-02") + ".jsonl"},
-		names,
 		"both old files hold only a superseded/closed record for the same globally-closed run and must be deleted; only the newest file survives (floor-of-one)",
 	)
 

@@ -488,8 +488,8 @@ func (s *Store) DropOrphanEdges() (int, error) {
 			mu.Unlock()
 			continue
 		}
-		werr := fileutil.WithFlock(path, func() error {
-			return fileutil.WriteFileAtomic(path, newData, 0o600)
+		werr := fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+			return writeFileAtomicFn(path, newData, 0o600)
 		})
 		mu.Unlock()
 		if werr != nil {

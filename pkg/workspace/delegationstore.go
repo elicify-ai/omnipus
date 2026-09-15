@@ -236,7 +236,7 @@ func SaveDelegation(home, id string, edges []DelegationEdge) error {
 		}
 	}
 	if len(edges) == 0 {
-		if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+		if rmErr := fileutil.RemoveLocked(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			return fmt.Errorf("workspace: delegation store: remove %s: %w", path, rmErr)
 		}
 		return nil
@@ -249,8 +249,10 @@ func SaveDelegation(home, id string, edges []DelegationEdge) error {
 	if err != nil {
 		return fmt.Errorf("workspace: delegation store: marshal %s: %w", id, err)
 	}
-	return fileutil.WithFlock(path, func() error {
-		return fileutil.WriteFileAtomic(path, data, 0o600)
+	// Lock the record's sidecar, never the record this write renames over (see
+	// fileutil.SidecarLockPath); both removals take the same lock.
+	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+		return writeFileAtomicFn(path, data, 0o600)
 	})
 }
 
@@ -269,7 +271,7 @@ func DeleteDelegationStore(home, id string) error {
 	if err != nil {
 		return err
 	}
-	if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
+	if rmErr := fileutil.RemoveLocked(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 		return fmt.Errorf("workspace: delegation store: remove %s: %w", path, rmErr)
 	}
 	return nil

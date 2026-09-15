@@ -373,7 +373,10 @@ func (s *Store) appendRunRecord(taskID string, rec TaskRun, at time.Time) error 
 	if err != nil {
 		return fmt.Errorf("task: marshal run record %q: %w", rec.RunID, err)
 	}
-	return fileutil.WithFlock(path, func() error {
+	// Lock the day file's sidecar, never the day file this write renames over
+	// (see fileutil.SidecarLockPath). Every runs-dir lister selects *.jsonl, so
+	// the sidecar is never read as a day file.
+	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
 		existing, readErr := os.ReadFile(path)
 		if readErr != nil && !os.IsNotExist(readErr) {
 			return fmt.Errorf("task: read run day file %q: %w", path, readErr)
@@ -387,7 +390,7 @@ func (s *Store) appendRunRecord(taskID string, rec TaskRun, at time.Time) error 
 		}
 		buf.Write(line)
 		buf.WriteByte('\n')
-		return fileutil.WriteFileAtomic(path, buf.Bytes(), 0o600)
+		return writeFileAtomicFn(path, buf.Bytes(), 0o600)
 	})
 }
 
@@ -907,7 +910,9 @@ func (s *Store) PruneRuns(taskID string, cutoff time.Time) error {
 				"task_id", taskID, "file", path)
 			continue
 		}
-		if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+		// Under the day file's sidecar lock, the lock appendRunRecord takes; the
+		// sidecar goes with the day file so a pruned day leaves no lock file.
+		if rmErr := fileutil.RemoveLocked(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			slog.Warn("task: prune runs: delete failed", "task_id", taskID, "file", path, "error", rmErr)
 		}
 	}

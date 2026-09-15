@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -395,10 +396,19 @@ func writeEntity(dir, id string, v any) error {
 		return fmt.Errorf("marshal entity %s: %w", id, err)
 	}
 	path := entityPath(dir, id)
-	return fileutil.WithFlock(path, func() error {
-		return fileutil.WriteFileAtomic(path, data, 0o600)
+	// Lock the entity file's sidecar, never the file this write renames over
+	// (see fileutil.SidecarLockPath). The task and workspace files written here
+	// are the same files pkg/task and pkg/workspace write under that same
+	// sidecar lock, so the system agent and those stores exclude each other.
+	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+		return writeFileAtomicFn(path, data, 0o600)
 	})
 }
+
+// writeFileAtomicFn is fileutil.WriteFileAtomic, held in a package variable so
+// a test can pause an entity write inside its lock (deps_lock_test.go).
+// Production code never reassigns it.
+var writeFileAtomicFn = fileutil.WriteFileAtomic
 
 // deleteEntity removes dir/<id>.json.
 // A missing file is treated as success (idempotent delete).
@@ -414,26 +424,16 @@ func deleteEntity(dir, id string) error {
 	if err := validateID(id); err != nil {
 		return fmt.Errorf("delete entity: %w", err)
 	}
-	path := entityPath(dir, id)
-	// Fast idempotent path: if the file (or its directory) does not exist there
-	// is nothing to delete and nothing to race. Skipping the flock here also
-	// avoids fileutil.WithFlock's O_CREATE re-creating a lock file inside a
-	// missing/just-removed directory (which would both fail to open AND
-	// resurrect an empty entity).
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		return nil
+	// fileutil.RemoveLocked removes the entity under the SAME sidecar lock
+	// writeEntity holds, so a writer's temp-file + rename cannot land after the
+	// remove and resurrect the entity, and removes the sidecar too so a deleted
+	// entity leaves no lock file behind. A missing file (or directory) comes
+	// back as fs.ErrNotExist without creating a lock file, as does a file
+	// another deleter removed while this call waited — both are success here.
+	if err := fileutil.RemoveLocked(entityPath(dir, id)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("delete entity %s: %w", id, err)
 	}
-	// The file exists: acquire the SAME per-path advisory flock writeEntity
-	// holds, then remove under it. This serializes delete against concurrent
-	// writeEntity so a writer's temp-file + rename cannot land after os.Remove
-	// and resurrect the entity. The os.IsNotExist re-check inside the lock keeps
-	// the delete idempotent if another locked deleter removed the file first.
-	return fileutil.WithFlock(path, func() error {
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("delete entity %s: %w", id, err)
-		}
-		return nil
-	})
+	return nil
 }
 
 // listEntities reads all JSON files in dir and unmarshals them into a slice of T.

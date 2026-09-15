@@ -198,8 +198,10 @@ func (es *EvidenceStore) write(rec *EvidenceRecord) error {
 		return fmt.Errorf("task: evidence: marshal: %w", err)
 	}
 	path := filepath.Join(dir, fmt.Sprintf("%s-%d.json", rec.CriterionID, rec.Attempt))
-	return fileutil.WithFlock(path, func() error {
-		return fileutil.WriteFileAtomic(path, data, 0o600)
+	// Lock the record's sidecar, never the record this write renames over (see
+	// fileutil.SidecarLockPath). List skips the sidecar by its extension.
+	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+		return writeFileAtomicFn(path, data, 0o600)
 	})
 }
 
@@ -219,7 +221,9 @@ func (es *EvidenceStore) List(taskID string) ([]EvidenceRecord, error) {
 	}
 	out := make([]EvidenceRecord, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() {
+		// Records are <criterion_id>-<attempt>.json. Anything else is not a
+		// record — each record's sidecar lock file (<name>.json.lock) above all.
+		if e.IsDir() || filepath.Ext(e.Name()) != ".json" {
 			continue
 		}
 		data, rerr := os.ReadFile(filepath.Join(dir, e.Name()))

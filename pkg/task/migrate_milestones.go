@@ -351,7 +351,7 @@ func rewriteRawTaskFile(path string, raw map[string]json.RawMessage) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	return fileutil.WithFlock(path, func() error {
-		return fileutil.WriteFileAtomic(path, data, 0o600)
+	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+		return writeFileAtomicFn(path, data, 0o600)
 	})
 }

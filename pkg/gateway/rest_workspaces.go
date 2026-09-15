@@ -26,6 +26,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -430,7 +431,9 @@ func deleteTasksForWorkspace(home, workspaceID string) error {
 	if err := scanTasks(home, func(id string, t task.Task) {
 		if t.WorkspaceID == workspaceID {
 			taskPath := filepath.Join(tasksDir, id+".json")
-			if err := os.Remove(taskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+			// RemoveLocked takes the task file's sidecar lock (the lock every
+			// task writer takes) and removes the sidecar with the task.
+			if err := fileutil.RemoveLocked(taskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 				slog.Warn("rest: workspace cascade: failed to delete task",
 					"file", id+".json", "error", err)
 			}
@@ -1461,8 +1464,10 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 
 	// The authoritative delete: remove the workspace JSON file. Still under
 	// the lock — this is the write the lock exists to serialize.
+	// RemoveLocked takes the record's sidecar lock (the lock every writer of
+	// the record takes) and removes the sidecar with the record.
 	path := filepath.Join(a.homePath, "workspaces", id+".json")
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := fileutil.RemoveLocked(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		unlock()
 		slog.Error("rest: delete workspace: remove file", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
