@@ -602,7 +602,7 @@ func TestMidTurnBudget_SameBudgetAsWindowTrim(t *testing.T) {
 	})
 
 	t.Run("every isOverContextBudget site in loop.go reads agentContextBudget", func(t *testing.T) {
-		src := readOwnedFileForTest(t, "loop.go")
+		src := readLoopSourcesForTest(t)
 		// Both forms of the predicate count: the defs form
 		// (isOverContextBudget) and the measured-token form
 		// (isOverContextBudgetTokens), which the pre-turn and
@@ -618,7 +618,7 @@ func TestMidTurnBudget_SameBudgetAsWindowTrim(t *testing.T) {
 			}
 		}
 		// windowTrim derives its suffix fit-check budget from the same helper.
-		wt := src[strings.Index(src, "func (al *AgentLoop) windowTrim("):]
+		wt := sliceFromMarkerForTest(t, src, "func (al *AgentLoop) windowTrim(")
 		if !strings.Contains(wt, "agentContextBudget(agent)") {
 			t.Error("windowTrim must compute its budget via agentContextBudget(agent), not an inline formula")
 		}
@@ -635,7 +635,7 @@ func TestMidTurnBudget_SameBudgetAsWindowTrim(t *testing.T) {
 		// The tool loop hands EVERY admitted result to the check: the count
 		// of loop.go call sites must cover the append sites (8 denial-family
 		// + the main result site + the skipped-results site).
-		loopSrc := readOwnedFileForTest(t, "loop.go")
+		loopSrc := readLoopSourcesForTest(t)
 		if got := strings.Count(loopSrc, "al.midTurnWindowCheck(ts, messages, providerToolDefs)"); got < 10 {
 			t.Errorf("loop.go has %d midTurnWindowCheck sites; every admitted-result append must be followed by the check (want ≥ 10)", got)
 		}

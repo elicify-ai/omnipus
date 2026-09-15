@@ -112,9 +112,7 @@ func TestLoop_BrowserManagerForKey_ZeroKeyIsNamedFailure(t *testing.T) {
 // wrong-proof: the field's doc must name the browsing key, and must not claim
 // the old per-agent keying.
 func TestLoop_BrowserMgrsCommentIsCurrent(t *testing.T) {
-	src, err := os.ReadFile("loop.go")
-	require.NoError(t, err)
-	text := string(src)
+	text := readLoopSourcesForTest(t)
 
 	start := strings.Index(text, "// browserMgrs holds one BrowserManager per")
 	require.GreaterOrEqual(t, start, 0, "the browserMgrs doc comment has moved or been deleted")

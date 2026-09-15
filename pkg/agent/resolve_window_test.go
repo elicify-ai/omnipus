@@ -562,8 +562,8 @@ func TestResolveContextWindow_ByLocality(t *testing.T) {
 	})
 
 	t.Run("gate order: the window gate sits after the workspace gate, before the first budget check", func(t *testing.T) {
-		src := readOwnedFileForTest(t, "loop.go")
-		runTurn := src[strings.Index(src, "func (al *AgentLoop) runTurn("):]
+		src := readLoopSourcesForTest(t)
+		runTurn := sliceFromMarkerForTest(t, src, "func (al *AgentLoop) runTurn(")
 		wsGate := strings.Index(runTurn, "resolveTurnWorkDirOrRefuse(turnCtx")
 		windowGate := strings.Index(runTurn, "ErrContextWindowUnknown")
 		// Either form of the predicate: the pre-turn site uses the
@@ -681,12 +681,12 @@ func TestWindowAgreement_OneBudgetAllSites(t *testing.T) {
 		src := readOwnedFileForTest(t, filepath.Join("..", "config", "config.go"))
 		assert.NotContains(t, src, "OMNIPUS_AGENTS_DEFAULTS_CONTEXT_WINDOW")
 		assert.NotContains(t, src, "Defaults.ContextWindow")
-		loopSrc := readOwnedFileForTest(t, "loop.go")
+		loopSrc := readLoopSourcesForTest(t)
 		assert.NotContains(t, loopSrc, "Defaults.ContextWindow", "every consumer reads the resolved window, never a config default")
 	})
 
 	t.Run("every budget site reads the one resolved window through agentContextBudget", func(t *testing.T) {
-		src := readOwnedFileForTest(t, "loop.go")
+		src := readLoopSourcesForTest(t)
 		// Both forms count: isOverContextBudget (tool-defs) and
 		// isOverContextBudgetTokens (a caller that already measured its SENT
 		// tool surface — the pre-turn and timeout-recovery sites, so they
@@ -696,7 +696,7 @@ func TestWindowAgreement_OneBudgetAllSites(t *testing.T) {
 		for _, c := range calls {
 			assert.Equal(t, "agentContextBudget(ts.agent)", strings.TrimSpace(c[1]))
 		}
-		switchFn := src[strings.Index(src, "func (al *AgentLoop) handleModelSwitch("):]
+		switchFn := sliceFromMarkerForTest(t, src, "func (al *AgentLoop) handleModelSwitch(")
 		switchFn = switchFn[:strings.Index(switchFn, "\n}\n")]
 		assert.Contains(t, switchFn, "ResolveWindow(", "model-switch re-window consolidates onto the resolver")
 		assert.NotContains(t, switchFn, "128000")

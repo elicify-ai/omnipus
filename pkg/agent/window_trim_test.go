@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -656,6 +657,41 @@ func readOwnedFileForTest(t *testing.T, filename string) string {
 	return string(data)
 }
 
+// readLoopSourcesForTest returns the concatenated non-test sources of the agent
+// loop: every loop*.go file in pkg/agent/, in name order, each preceded by a
+// "// ---- file: <name> ----" banner. Guard tests that used to read "loop.go"
+// alone must read this instead: loop.go was split into loop_*.go files by
+// lifecycle on 2026-09-15, so a symbol scanned by name may live in any of them.
+func readLoopSourcesForTest(t *testing.T) string {
+	t.Helper()
+	matches, err := filepath.Glob("loop*.go")
+	require.NoError(t, err, "readLoopSourcesForTest: glob")
+	var b strings.Builder
+	n := 0
+	for _, name := range matches {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		b.WriteString("// ---- file: " + name + " ----\n")
+		b.WriteString(readOwnedFileForTest(t, name))
+		b.WriteString("\n")
+		n++
+	}
+	require.Greater(t, n, 0, "readLoopSourcesForTest: no loop*.go sources found")
+	return b.String()
+}
+
+// sliceFromMarkerForTest returns src from the first occurrence of marker. It
+// fails the calling test when the marker is absent instead of panicking the
+// whole test binary with a negative slice bound, which is what a bare
+// src[strings.Index(src, marker):] does when a scanned function moves file.
+func sliceFromMarkerForTest(t *testing.T, src, marker string) string {
+	t.Helper()
+	i := strings.Index(src, marker)
+	require.GreaterOrEqual(t, i, 0, "marker %q not found in scanned source", marker)
+	return src[i:]
+}
+
 // ---------- CRITICAL-1 archive integrity tests ----------
 
 // archiveLineCount returns the number of messages in the full archive for the
@@ -757,7 +793,7 @@ func TestArchive_ModelSwitchPreservesEvicted(t *testing.T) {
 func TestWindowTrim_SetHistoryNeverCalled(t *testing.T) {
 	// This is equivalent to TestArchive_FloorPathPreservesEvicted but with an
 	// explicit grep of the owned file to assert the symbol is absent.
-	content := readOwnedFileForTest(t, "loop.go")
+	content := readLoopSourcesForTest(t)
 	// SetHistory must not be called in the windowTrim function body.
 	// We look for the pattern "agent.Sessions.SetHistory" inside windowTrim.
 	// The safest check: the pattern must not appear anywhere in loop.go
@@ -887,7 +923,7 @@ func TestWindowTrim_AlreadyFitsEvictsNothing(t *testing.T) {
 // the over-count is tens of thousands of tokens, so the check fired on a
 // conversation windowTrim then measured as fitting.
 func TestBudgetSites_MeasureTheSentToolSurface(t *testing.T) {
-	loop := readOwnedFileForTest(t, "loop.go")
+	loop := readLoopSourcesForTest(t)
 
 	assert.NotContains(t, loop, "toolDefs := ts.agent.Tools.ToProviderDefs()",
 		"a budget site must not charge the whole tool registry — use "+
