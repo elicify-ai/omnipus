@@ -180,6 +180,27 @@ func (t *RecallConversationTool) Parameters() map[string]any {
 	}
 }
 
+// recallConversationToolExecute carries the shared state of Execute across its stages.
+type recallConversationToolExecute struct {
+	t            *RecallConversationTool
+	ctx          context.Context
+	args         map[string]any
+	sessionKey   string
+	queryVal     string
+	hasQuery     bool
+	rangeVal     string
+	hasRange     bool
+	timeRaw      any
+	hasTime      bool
+	maxResults   int
+	archived     []memory.ArchivedMessage
+	turns        []archiveTurn
+	selectedIdxs []int
+	isRangeMode  bool
+	keptIdxs     []int
+	overflow     int
+}
+
 // Execute selects turns by the given mode, bounds them, rewrites IDs, builds
 // and stores the RecallSpan, then returns a short confirmation string to the
 // model (FR-008). The recalled messages reach the model through the span:
@@ -187,33 +208,55 @@ func (t *RecallConversationTool) Parameters() map[string]any {
 // site (ADR-066 D5.4, recall_injection.go) and every from-scratch assembly
 // includes it via BuildMessages.
 func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	rct := &recallConversationToolExecute{t: t, ctx: ctx, args: args}
+
+	if r0, stop := rct.validateRequest(); stop {
+		return r0
+	}
+
+	if r0, stop := rct.loadTurns(); stop {
+		return r0
+	}
+
+	if r0, stop := rct.selectTurns(); stop {
+		return r0
+	}
+
+	rct.applyBounds()
+
+	return rct.buildAndStoreSpan()
+}
+
+// validateRequest derives the session, validates the recall mode and bounds, and handles tool-result recall.
+func (rct *recallConversationToolExecute) validateRequest() (*tools.ToolResult, bool) {
 	// Derive the routing session key from ctx (FR-013 session scope).
 	// ToolSessionKey carries the routing key set by the agent loop on each turn.
-	sessionKey := tools.ToolSessionKey(ctx)
-	if sessionKey == "" {
+	rct.sessionKey = tools.ToolSessionKey(rct.ctx)
+	if rct.sessionKey == "" {
 		// Fallback: transcript session ID (used in integration tests).
-		sessionKey = tools.ToolTranscriptSessionID(ctx)
+		rct.sessionKey = tools.ToolTranscriptSessionID(rct.ctx)
 	}
-	if sessionKey == "" {
+	if rct.sessionKey == "" {
 		incRecallCounter("error")
-		return tools.ErrorResult("recall_conversation: no session context — cannot determine which session to recall")
+		return tools.ErrorResult("recall_conversation: no session context — cannot determine which session to recall"), true
 	}
 
 	// --- mode detection (exactly one of query/turn_range/time/tool_call_id) ---
-	queryVal, hasQuery := stringArg(args, "query")
-	rangeVal, hasRange := stringArg(args, "turn_range")
-	timeRaw, hasTimeKey := args["time"]
-	hasTime := hasTimeKey && timeRaw != nil
-	idVal, hasID := stringArg(args, "tool_call_id")
+	rct.queryVal, rct.hasQuery = stringArg(rct.args, "query")
+	rct.rangeVal, rct.hasRange = stringArg(rct.args, "turn_range")
+	var hasTimeKey bool
+	rct.timeRaw, hasTimeKey = rct.args["time"]
+	rct.hasTime = hasTimeKey && rct.timeRaw != nil
+	idVal, hasID := stringArg(rct.args, "tool_call_id")
 
 	modeCount := 0
-	if hasQuery && queryVal != "" {
+	if rct.hasQuery && rct.queryVal != "" {
 		modeCount++
 	}
-	if hasRange && rangeVal != "" {
+	if rct.hasRange && rct.rangeVal != "" {
 		modeCount++
 	}
-	if hasTime {
+	if rct.hasTime {
 		modeCount++
 	}
 	if hasID && idVal != "" {
@@ -223,13 +266,13 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 		incRecallCounter("error")
 		return tools.ErrorResult(
 			"recall_conversation: provide exactly one of query, turn_range, time, or tool_call_id — " +
-				"empty call returns nothing useful (US-4.6)")
+				"empty call returns nothing useful (US-4.6)"), true
 	}
 	if modeCount > 1 {
 		incRecallCounter("error")
 		return tools.ErrorResult(
 			"recall_conversation: provide exactly one of query, turn_range, time, or tool_call_id — " +
-				"multiple modes are ambiguous (FR-027)")
+				"multiple modes are ambiguous (FR-027)"), true
 	}
 
 	// --- max_results (ADR-066 §15 task 1, FR-040) ---------------------
@@ -238,99 +281,108 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 	// and applied to the three archive-selection modes below. It only ever
 	// NARROWS the built-in bound: widening it would let one recall exceed
 	// the span budget the built-in bound exists to hold.
-	maxResults := 0
-	if v, present, err := intArg(args, "max_results"); err != nil {
+	rct.maxResults = 0
+	if v, present, err := intArg(rct.args, "max_results"); err != nil {
 		incRecallCounter("error")
-		return tools.ErrorResult("recall_conversation: " + err.Error())
+		return tools.ErrorResult("recall_conversation: " + err.Error()), true
 	} else if present {
 		if v < 1 {
 			incRecallCounter("error")
 			return tools.ErrorResult(fmt.Sprintf(
-				"recall_conversation: max_results must be >= 1, got %d", v))
+				"recall_conversation: max_results must be >= 1, got %d", v)), true
 		}
-		maxResults = v
+		rct.maxResults = v
 	}
 
 	// --- tool_call_id mode (ADR-066 §6.3, FR-024…FR-027, T066-14) ------
 	// Handled before any whole-archive read: the id mode streams the archive
 	// and stops at the addressed line (B-31b) instead of loading it all.
 	if hasID && idVal != "" {
-		return t.executeToolCallID(ctx, sessionKey, idVal, args)
+		return rct.t.executeToolCallID(rct.ctx, rct.sessionKey, idVal, rct.args), true
 	}
+	return nil, false
+}
 
+// loadTurns reads the archive and groups its messages into complete conversation turns.
+func (rct *recallConversationToolExecute) loadTurns() (*tools.ToolResult, bool) {
 	// --- 1. Read the full archive (FR-013 / FR-016) -------------------
-	archived, err := t.archive.ReadArchive(ctx, sessionKey)
+	var err error
+	rct.archived, err = rct.t.archive.ReadArchive(rct.ctx, rct.sessionKey)
 	if err != nil {
 		slog.Warn("recall_conversation: ReadArchive failed",
-			"session_key", sessionKey, "error", err)
+			"session_key", rct.sessionKey, "error", err)
 		incRecallCounter("error")
-		return tools.ErrorResult(fmt.Sprintf("recall_conversation: could not read archive: %v", err))
+		return tools.ErrorResult(fmt.Sprintf("recall_conversation: could not read archive: %v", err)), true
 	}
-	if len(archived) == 0 {
+	if len(rct.archived) == 0 {
 		incRecallCounter("empty")
-		return tools.NewToolResult("recall_conversation: no turns found in this session's archive")
+		return tools.NewToolResult("recall_conversation: no turns found in this session's archive"), true
 	}
 
 	// --- 2. Group archived messages into whole Turns (FR-002/FR-008) --
 	// Extract plain providers.Message slice for parseTurnBoundaries.
-	msgs := make([]providers.Message, len(archived))
-	for i, a := range archived {
+	msgs := make([]providers.Message, len(rct.archived))
+	for i, a := range rct.archived {
 		msgs[i] = a.Message
 	}
 	turnStarts := parseTurnBoundaries(msgs)
 	if len(turnStarts) == 0 {
 		// No user messages — nothing coherent to recall.
 		incRecallCounter("empty")
-		return tools.NewToolResult("recall_conversation: no complete turns found in this session")
+		return tools.NewToolResult("recall_conversation: no complete turns found in this session"), true
 	}
 
 	// Build turn slices: turns[i] = archived[turnStarts[i] : turnStarts[i+1]]
-	turns := make([]archiveTurn, len(turnStarts))
+	rct.turns = make([]archiveTurn, len(turnStarts))
 	for i, s := range turnStarts {
-		end := len(archived)
+		end := len(rct.archived)
 		if i+1 < len(turnStarts) {
 			end = turnStarts[i+1]
 		}
-		turns[i] = archiveTurn{startIdx: s, msgs: archived[s:end]}
+		rct.turns[i] = archiveTurn{startIdx: s, msgs: rct.archived[s:end]}
 	}
+	return nil, false
+}
 
+// selectTurns selects matching turns using the requested query, range, or time mode.
+func (rct *recallConversationToolExecute) selectTurns() (*tools.ToolResult, bool) {
 	// --- 3. Select turns by mode --------------------------------------
-	var selectedIdxs []int // indices into turns[]
-	isRangeMode := false
+	// indices into turns[]
+	rct.isRangeMode = false
 
 	switch {
-	case hasQuery && queryVal != "":
+	case rct.hasQuery && rct.queryVal != "":
 		// M6: detect empty tokenizable query before running BM25 (punctuation-only
 		// / non-Latin input produces zero tokens and would fall through to a
 		// misleading "no matching turns" message).
-		if len(retroTokenize(queryVal)) == 0 {
+		if len(retroTokenize(rct.queryVal)) == 0 {
 			incRecallCounter("error")
 			return tools.ErrorResult(
 				"recall_conversation: query has no searchable terms — " +
-					"provide alphanumeric keywords, or use turn_range/time")
+					"provide alphanumeric keywords, or use turn_range/time"), true
 		}
 		// BM25 query over each Turn's concatenated text.
-		turnTexts := make([]string, len(turns))
-		for i, trn := range turns {
+		turnTexts := make([]string, len(rct.turns))
+		for i, trn := range rct.turns {
 			turnTexts[i] = turnSearchText(trn)
 		}
 		// Rank ALL turns (score-ordered). The bounds step below selects the
 		// top-N by relevance FIRST (M1), then the kept subset is sorted
 		// chronologically for re-injection (FR-009).
-		hits := rankTurnsBM25(queryVal, turnTexts, len(turns))
+		hits := rankTurnsBM25(rct.queryVal, turnTexts, len(rct.turns))
 		for _, h := range hits {
-			selectedIdxs = append(selectedIdxs, h.Index)
+			rct.selectedIdxs = append(rct.selectedIdxs, h.Index)
 		}
 		// NOTE: do NOT sort here — selectedIdxs is in score order. The bounds
 		// loop below will keep the top-scoring hits, then chronological sort
 		// happens after bounds are applied (M1 fix).
 
-	case hasRange && rangeVal != "":
-		isRangeMode = true
-		fromTurn, toTurn, parseErr := parseTurnRange(rangeVal)
+	case rct.hasRange && rct.rangeVal != "":
+		rct.isRangeMode = true
+		fromTurn, toTurn, parseErr := parseTurnRange(rct.rangeVal)
 		if parseErr != nil {
 			incRecallCounter("error")
-			return tools.ErrorResult(fmt.Sprintf("recall_conversation: invalid turn_range %q: %v", rangeVal, parseErr))
+			return tools.ErrorResult(fmt.Sprintf("recall_conversation: invalid turn_range %q: %v", rct.rangeVal, parseErr)), true
 		}
 		// Turn indices are 1-based in the API ("turn 1" = turns[0]).
 		fromIdx := fromTurn - 1
@@ -338,26 +390,26 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 		if fromIdx < 0 {
 			fromIdx = 0
 		}
-		if toIdx >= len(turns) {
-			toIdx = len(turns) - 1
+		if toIdx >= len(rct.turns) {
+			toIdx = len(rct.turns) - 1
 		}
 		if fromIdx > toIdx {
 			incRecallCounter("empty")
 			return tools.NewToolResult(fmt.Sprintf(
-				"recall_conversation: turn_range %q is out of bounds (session has %d turns)", rangeVal, len(turns)))
+				"recall_conversation: turn_range %q is out of bounds (session has %d turns)", rct.rangeVal, len(rct.turns))), true
 		}
 		for i := fromIdx; i <= toIdx; i++ {
-			selectedIdxs = append(selectedIdxs, i)
+			rct.selectedIdxs = append(rct.selectedIdxs, i)
 		}
 
-	case hasTime:
+	case rct.hasTime:
 		// Time-window mode.
-		fromTS, toTS, parseErr := parseTimeWindow(timeRaw)
+		fromTS, toTS, parseErr := parseTimeWindow(rct.timeRaw)
 		if parseErr != nil {
 			incRecallCounter("error")
-			return tools.ErrorResult(fmt.Sprintf("recall_conversation: invalid time window: %v", parseErr))
+			return tools.ErrorResult(fmt.Sprintf("recall_conversation: invalid time window: %v", parseErr)), true
 		}
-		for i, trn := range turns {
+		for i, trn := range rct.turns {
 			// First message in the turn carries the TS.
 			ts := trn.msgs[0].TS
 			// TS==0 → legacy pre-FR-017 line; effective timestamp is 0
@@ -366,18 +418,22 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 			// (fromTS > 0) therefore exclude legacy lines — use turn_range
 			// instead to reach them.
 			if ts >= fromTS && (toTS == 0 || ts <= toTS) {
-				selectedIdxs = append(selectedIdxs, i)
+				rct.selectedIdxs = append(rct.selectedIdxs, i)
 			}
 		}
 	}
 
-	if len(selectedIdxs) == 0 {
+	if len(rct.selectedIdxs) == 0 {
 		incRecallCounter("empty")
 		return tools.NewToolResult(
 			"recall_conversation: no matching turns found — try a different query, range, or time window",
-		)
+		), true
 	}
+	return nil, false
+}
 
+// applyBounds applies turn and token limits and orders the retained turns chronologically.
+func (rct *recallConversationToolExecute) applyBounds() {
 	// --- 4. Apply bounds (FR-009) -------------------------------------
 	// M1: for query mode selectedIdxs is in score order (most relevant first).
 	// Apply maxTurns/maxTokens to the score-ordered list to keep the
@@ -386,68 +442,70 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 	// already (isRangeMode path or ascending i loop).
 	maxTurns := recallDefaultTurns
 	maxTokens := recallDefaultTokens
-	if isRangeMode {
+	if rct.isRangeMode {
 		maxTurns = recallRangeTurns
 		maxTokens = recallRangeTokens
 	}
 	// FR-040: max_results narrows the turn bound, never widens it.
-	if maxResults > 0 && maxResults < maxTurns {
-		maxTurns = maxResults
+	if rct.maxResults > 0 && rct.maxResults < maxTurns {
+		maxTurns = rct.maxResults
 	}
 
-	var keptIdxs []int
 	totalTokens := 0
-	for _, idx := range selectedIdxs {
-		if len(keptIdxs) >= maxTurns {
+	for _, idx := range rct.selectedIdxs {
+		if len(rct.keptIdxs) >= maxTurns {
 			break
 		}
 		// Sum token cost directly over archived messages — no throwaway
 		// []providers.Message allocation needed.
 		cost := 0
-		for _, am := range turns[idx].msgs {
+		for _, am := range rct.turns[idx].msgs {
 			cost += estimateMessageTokens(am.Message)
 		}
-		if totalTokens+cost > maxTokens && len(keptIdxs) > 0 {
+		if totalTokens+cost > maxTokens && len(rct.keptIdxs) > 0 {
 			// Adding this turn would exceed the token cap; stop here.
 			break
 		}
-		keptIdxs = append(keptIdxs, idx)
+		rct.keptIdxs = append(rct.keptIdxs, idx)
 		totalTokens += cost
 	}
 
-	overflow := len(selectedIdxs) - len(keptIdxs)
+	rct.overflow = len(rct.selectedIdxs) - len(rct.keptIdxs)
 
 	// M1: now sort the KEPT subset chronologically for re-injection.
 	// (For turn_range/time modes this is a no-op since they're already ordered.)
-	slices.Sort(keptIdxs)
+	slices.Sort(rct.keptIdxs)
+}
 
+// buildAndStoreSpan builds and installs the recall span and returns its confirmation receipt.
+func (rct *recallConversationToolExecute) buildAndStoreSpan() *tools.ToolResult {
 	// --- 5. Build RecallSpan: rewrite IDs, build messages (FR-019 / MAJ-04) ---
 	// Turn indices in the user-visible namespace are 1-based.
-	fromTurnNum := keptIdxs[0] + 1
-	toTurnNum := keptIdxs[len(keptIdxs)-1] + 1
+	fromTurnNum := rct.keptIdxs[0] + 1
+	toTurnNum := rct.keptIdxs[len(rct.keptIdxs)-1] + 1
 
 	// Build the sorted ordinals slice (1-based) for the honest sparse marker.
-	ordinals := make([]int, len(keptIdxs))
-	for i, idx := range keptIdxs {
+	ordinals := make([]int, len(rct.keptIdxs))
+	for i, idx := range rct.keptIdxs {
 		ordinals[i] = idx + 1
 	}
 
-	spanMsgs := buildRecallSpanMessages(keptIdxs, turns, ordinals, t.recallCapPolicy(), archived)
+	spanMsgs := buildRecallSpanMessages(rct.keptIdxs, rct.turns, ordinals, rct.t.recallCapPolicy(), rct.archived)
 	// M7: use newRecallSpan so Tokens is always Σ estimateMessageTokens(Msgs).
 	span := newRecallSpan(fromTurnNum, toTurnNum, spanMsgs, ordinals)
 
 	// --- 6. Store span (FR-019 lifecycle: replaced on next recall) ----
 	// Drop any prior span with reason "replaced" before installing the new one.
-	t.spanSetter.dropRecallSpan(sessionKey, "replaced")
-	t.spanSetter.setRecallSpan(sessionKey, span)
+	rct.t.spanSetter.dropRecallSpan(rct.sessionKey, "replaced")
+	rct.t.spanSetter.setRecallSpan(rct.sessionKey, span)
 
 	// --- 7. Return short confirmation to the model --------------------
 	incRecallCounter("hit")
 	slog.Info("recall_conversation: span installed",
-		"session_key", sessionKey,
+		"session_key", rct.sessionKey,
 		"from_turn", fromTurnNum,
 		"to_turn", toTurnNum,
-		"turns", len(keptIdxs),
+		"turns", len(rct.keptIdxs),
 		"tokens", span.Tokens,
 	)
 
@@ -460,11 +518,11 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 	// is admitted, so no receipt ever says "in your context" unless the
 	// text is in the next request.
 	var resultStr string
-	isContiguous := (toTurnNum - fromTurnNum + 1) == len(keptIdxs)
+	isContiguous := (toTurnNum - fromTurnNum + 1) == len(rct.keptIdxs)
 	if isContiguous {
 		resultStr = fmt.Sprintf(
 			"Recalled %d turn(s) (turns %d–%d); their text is now in your context",
-			len(keptIdxs),
+			len(rct.keptIdxs),
 			fromTurnNum,
 			toTurnNum,
 		)
@@ -475,13 +533,13 @@ func (t *RecallConversationTool) Execute(ctx context.Context, args map[string]an
 		}
 		resultStr = fmt.Sprintf(
 			"Recalled %d turn(s) (ordinals: %s); their text is now in your context",
-			len(keptIdxs),
+			len(rct.keptIdxs),
 			strings.Join(ordParts, ", "),
 		)
 	}
-	if overflow > 0 {
+	if rct.overflow > 0 {
 		resultStr += fmt.Sprintf(
-			"; %d more — narrow the query or use turn_range to retrieve them", overflow)
+			"; %d more — narrow the query or use turn_range to retrieve them", rct.overflow)
 	}
 	return tools.NewToolResult(resultStr)
 }
