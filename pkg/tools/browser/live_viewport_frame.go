@@ -79,10 +79,10 @@ type viewportFrameGeometryAction struct {
 func (a viewportFrameGeometryAction) Do(ctx context.Context) error {
 	w, h, err := readCSSLayoutViewport(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("layout viewport read: %w", err)
 	}
 	if err := chromedp.Evaluate("window.devicePixelRatio", a.scale).Do(ctx); err != nil {
-		return err
+		return fmt.Errorf("device pixel ratio read: %w", err)
 	}
 	*a.width, *a.height = int(w), int(h)
 	return nil
@@ -168,11 +168,11 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 			if before.Width == width && before.Height == height && before.Scale == scale {
 				measured, err := lv.measureCaptureFrame(operation, cs)
 				if err != nil {
-					return false, err
+					return false, fmt.Errorf("viewport initial geometry: %w", err)
 				}
 				if sameViewportGeometry(before, measured) {
 					if err := lv.acceptViewportConvergence(operation, tabCtx, measured, !converge); err != nil {
-						return false, err
+						return false, fmt.Errorf("viewport cached convergence: %w", err)
 					}
 					lv.mu.Lock()
 					lv.lastRequestedW, lv.lastRequestedH, lv.lastRequestedScale = width, height, scale
@@ -207,18 +207,25 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 				}
 			}
 			anyApplied = anyApplied || applied
-			if err != nil || cs == nil {
-				return anyApplied, err
+			if err != nil {
+				stage := "viewport apply"
+				if attempt > 0 {
+					stage = "viewport contents resize/settle"
+				}
+				return anyApplied, fmt.Errorf("%s: %w", stage, err)
+			}
+			if cs == nil {
+				return anyApplied, nil
 			}
 			measured, err := lv.measureCaptureFrame(operation, cs)
 			if err != nil {
-				return anyApplied, err
+				return anyApplied, fmt.Errorf("viewport final geometry: %w", err)
 			}
 			matches := true
 			if converge {
 				matches, err = lv.viewportMatchesRequest(operation, measured, width, height)
 				if err != nil {
-					return anyApplied, err
+					return anyApplied, fmt.Errorf("viewport convergence measurement: %w", err)
 				}
 			}
 			if !matches {
@@ -228,10 +235,13 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 				return anyApplied, fmt.Errorf("browser live: new tab viewport did not converge: requested %dx%d, measured %dx%d", width, height, measured.Width, measured.Height)
 			}
 			if err := lv.acceptViewportConvergence(operation, tabCtx, measured, !converge); err != nil {
-				return anyApplied, err
+				return anyApplied, fmt.Errorf("viewport convergence acceptance: %w", err)
 			}
 			ready, err = cs.BeginFrameTransition(measured.TargetID, measured.Width, measured.Height, measured.Scale)
-			return anyApplied, err
+			if err != nil {
+				return anyApplied, fmt.Errorf("viewport frame publication: %w", err)
+			}
+			return anyApplied, nil
 		}
 	}, func(operation context.Context) error {
 		if cs != nil && ready.Generation != 0 && ready.Width > 0 && ready.Height > 0 && !cs.RecaptureFrameContext(operation, ready) {

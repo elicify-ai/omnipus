@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -58,14 +59,19 @@ func (lv *LiveView) withViewportAdmission(caller, tabCtx context.Context, work f
 	// reaches the target-derived operation context asynchronously.
 	defer func() {
 		if ended := viewportContextError(caller, operation); ended != nil {
-			err = ended
+			if err == nil {
+				err = fmt.Errorf("viewport completion: %w", ended)
+			} else if !errors.Is(err, ended) {
+				// Caller cancellation still wins, without erasing the failed stage.
+				err = fmt.Errorf("%v: %w", err, ended)
+			}
 		}
 	}()
 	apply := func() (bool, error) {
 		if lv.mgr != nil {
 			release, admissionErr := lv.mgr.acquireLiveTabCommand(operation, lv.sessionID)
 			if admissionErr != nil {
-				return false, admissionErr
+				return false, fmt.Errorf("viewport tab admission: %w", admissionErr)
 			}
 			defer release()
 		}
@@ -73,7 +79,7 @@ func (lv *LiveView) withViewportAdmission(caller, tabCtx context.Context, work f
 		state := lv.inputStateLocked()
 		lv.mu.Unlock()
 		if inputErr := acquireInputGate(operation, state.gate); inputErr != nil {
-			return false, inputErr
+			return false, fmt.Errorf("viewport input admission: %w", inputErr)
 		}
 		defer func() { <-state.gate }()
 		if operationErr := viewportContextError(caller, operation); operationErr != nil {
@@ -82,7 +88,7 @@ func (lv *LiveView) withViewportAdmission(caller, tabCtx context.Context, work f
 		if lv.mgr != nil {
 			active, _, snapshotErr := lv.mgr.activeTargetSnapshot(lv.sessionID)
 			if snapshotErr != nil {
-				return false, snapshotErr
+				return false, fmt.Errorf("viewport active target lookup: %w", snapshotErr)
 			}
 			if active != tabCtx {
 				return false, fmt.Errorf("browser live: viewport target changed before resize")
