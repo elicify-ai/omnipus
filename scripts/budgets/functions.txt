@@ -8,7 +8,6 @@ pkg/agent/goal_flow_integration_test.go	TestGoalClarify_WebCardRoundtrip	323
 pkg/agent/goal_loop_command.go	AgentLoop.applyGoalCommandPrompt	285
 pkg/agent/goal_loop.go	AgentLoop.checkGoalLoopAfterTurn	277
 pkg/agent/goal_triggers.go	AgentLoop.runGoalAdjudication	367
-pkg/agent/instance.go	NewAgentInstance	354
 pkg/agent/judge.go	AgentLoop.JudgeCriteria	262
 pkg/agent/loop_window.go	AgentLoop.windowTrimForce	243
 pkg/agent/loop_wire.go	registerSharedTools	1297
