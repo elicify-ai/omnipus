@@ -326,11 +326,34 @@ func (s *Store) Update(id string, patch Patch) (*Plan, error) {
 	return s.updateLocked(id, patch)
 }
 
+// storeUpdateLocked carries the shared state of updateLocked across its stages.
+type storeUpdateLocked struct {
+	s                  *Store
+	id                 string
+	patch              Patch
+	p                  *Plan
+	onDiskFailedReason FailedReason
+}
+
 // updateLocked is the body of Update; the caller must hold the per-plan lock.
 func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
-	p, err := s.load(id)
+	su := &storeUpdateLocked{s: s, id: id, patch: patch}
+
+	if r0, r1, stop := su.loadAndApplyFields(); stop {
+		return r0, r1
+	}
+	if r0, r1, stop := su.applyTransition(); stop {
+		return r0, r1
+	}
+	return su.persist()
+}
+
+// loadAndApplyFields loads the plan, captures persisted restart state, then validates and applies every non-lifecycle patch field.
+func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, error, bool) {
+	var err error
+	su.p, err = su.s.load(su.id)
 	if err != nil {
-		return nil, err
+		return nil, err, true
 	}
 
 	// Fix-wave finding #4 (restart-guard ordering / crafted-patch attack):
@@ -343,9 +366,9 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 	// e.g. judge_rounds_exhausted (never restartable) by supplying a forged
 	// reason in the same patch. The restart guard below is validated against
 	// this captured pre-patch value, never the patch-mutated one.
-	onDiskFailedReason := p.FailedReason
+	su.onDiskFailedReason = su.p.FailedReason
 
-	if patch.Title != nil {
+	if su.patch.Title != nil {
 		// Trim before validating (S2 UAT finding B sibling — see plan.go's
 		// normalize() matching comment, mirrors task.Store.updateLocked's
 		// identical fix): a whitespace-only patch title is rejected as empty;
@@ -357,104 +380,109 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 		// function's doc comment): a patch title made ENTIRELY of zero-width/
 		// format codepoints (or the Cf-adjacent BRAILLE PATTERN BLANK) is
 		// rejected the same as "".
-		trimmedTitle := strings.TrimSpace(*patch.Title)
+		trimmedTitle := strings.TrimSpace(*su.patch.Title)
 		if trimmedTitle == "" || !task.HasVisibleContent(trimmedTitle) {
-			return nil, verr("title must not be empty")
+			return nil, verr("title must not be empty"), true
 		}
 		if len([]rune(trimmedTitle)) > maxPlanTitleRunes {
-			return nil, verr("title must be %d characters or fewer", maxPlanTitleRunes)
+			return nil, verr("title must be %d characters or fewer", maxPlanTitleRunes), true
 		}
-		p.Title = trimmedTitle
+		su.p.Title = trimmedTitle
 	}
-	if patch.Goal != nil {
-		if len([]rune(*patch.Goal)) > maxPlanGoalRunes {
-			return nil, verr("goal must be %d characters or fewer", maxPlanGoalRunes)
+	if su.patch.Goal != nil {
+		if len([]rune(*su.patch.Goal)) > maxPlanGoalRunes {
+			return nil, verr("goal must be %d characters or fewer", maxPlanGoalRunes), true
 		}
-		p.Goal = *patch.Goal
+		su.p.Goal = *su.patch.Goal
 	}
-	if patch.Description != nil {
-		if len([]rune(*patch.Description)) > maxPlanDescriptionRunes {
-			return nil, verr("description must be %d characters or fewer", maxPlanDescriptionRunes)
+	if su.patch.Description != nil {
+		if len([]rune(*su.patch.Description)) > maxPlanDescriptionRunes {
+			return nil, verr("description must be %d characters or fewer", maxPlanDescriptionRunes), true
 		}
-		p.Description = *patch.Description
+		su.p.Description = *su.patch.Description
 	}
-	if patch.OwnerAgentID != nil {
-		if *patch.OwnerAgentID == "" {
-			return nil, verr("owner_agent_id must not be empty")
+	if su.patch.OwnerAgentID != nil {
+		if *su.patch.OwnerAgentID == "" {
+			return nil, verr("owner_agent_id must not be empty"), true
 		}
-		p.OwnerAgentID = *patch.OwnerAgentID
+		su.p.OwnerAgentID = *su.patch.OwnerAgentID
 	}
-	if patch.DoD != nil {
-		normalized, err := task.NormalizeCriteria(*patch.DoD)
+	if su.patch.DoD != nil {
+		normalized, err := task.NormalizeCriteria(*su.patch.DoD)
 		if err != nil {
 			// See plan.go's normalize() comment: wrap ErrValidation on top of
 			// task.NormalizeCriteria's task.ErrValidation so both sentinels
 			// are satisfiable via errors.Is.
-			return nil, fmt.Errorf("%w: %w", ErrValidation, err)
+			return nil, fmt.Errorf("%w: %w", ErrValidation, err), true
 		}
-		p.DoD = normalized
-		if len(p.DoD) == 0 {
-			p.DoD = nil
+		su.p.DoD = normalized
+		if len(su.p.DoD) == 0 {
+			su.p.DoD = nil
 		}
 	}
-	if patch.Bounds != nil {
-		newBounds := *patch.Bounds
+	if su.patch.Bounds != nil {
+		newBounds := *su.patch.Bounds
 		if err := validatePlanBounds(newBounds); err != nil {
-			return nil, err
+			return nil, err, true
 		}
-		p.Bounds = newBounds
+		su.p.Bounds = newBounds
 	}
-	if patch.JudgeRounds != nil {
-		if *patch.JudgeRounds < 0 {
-			return nil, verr("judge_rounds must not be negative")
+	if su.patch.JudgeRounds != nil {
+		if *su.patch.JudgeRounds < 0 {
+			return nil, verr("judge_rounds must not be negative"), true
 		}
-		p.JudgeRounds = *patch.JudgeRounds
+		su.p.JudgeRounds = *su.patch.JudgeRounds
 	}
-	if patch.PausedReason != nil {
+	if su.patch.PausedReason != nil {
 		// Fix-wave finding 6(b): closed-set validation, mirroring the
 		// PlanPhase/FailedReason checks immediately below.
-		if *patch.PausedReason != "" && !IsValidPausedReason(*patch.PausedReason) {
-			return nil, verr("invalid paused_reason %q", *patch.PausedReason)
+		if *su.patch.PausedReason != "" && !IsValidPausedReason(*su.patch.PausedReason) {
+			return nil, verr("invalid paused_reason %q", *su.patch.PausedReason), true
 		}
-		p.PausedReason = *patch.PausedReason
+		su.p.PausedReason = *su.patch.PausedReason
 	}
-	if patch.LastActivityAt != nil {
-		p.LastActivityAt = *patch.LastActivityAt
+	if su.patch.LastActivityAt != nil {
+		su.p.LastActivityAt = *su.patch.LastActivityAt
 	}
-	if patch.PlanPhase != nil {
-		if *patch.PlanPhase != "" && !IsValidPlanPhase(*patch.PlanPhase) {
-			return nil, verr("invalid plan_phase %q", *patch.PlanPhase)
+	if su.patch.PlanPhase != nil {
+		if *su.patch.PlanPhase != "" && !IsValidPlanPhase(*su.patch.PlanPhase) {
+			return nil, verr("invalid plan_phase %q", *su.patch.PlanPhase), true
 		}
-		p.PlanPhase = *patch.PlanPhase
+		su.p.PlanPhase = *su.patch.PlanPhase
 	}
-	if patch.FailedReason != nil {
-		if *patch.FailedReason != "" && !IsValidFailedReason(*patch.FailedReason) {
-			return nil, verr("invalid failed_reason %q", *patch.FailedReason)
+	if su.patch.FailedReason != nil {
+		if *su.patch.FailedReason != "" && !IsValidFailedReason(*su.patch.FailedReason) {
+			return nil, verr("invalid failed_reason %q", *su.patch.FailedReason), true
 		}
-		p.FailedReason = *patch.FailedReason
+		su.p.FailedReason = *su.patch.FailedReason
 	}
-	if patch.HandoverText != nil {
+	if su.patch.HandoverText != nil {
 		// No length gate here on purpose: an over-long handover is CLAMPED by
 		// normalize() below (and again by write()), never rejected. A refused
 		// write is how a plan whose members all succeeded ended up failed
 		// because one provider error string was verbose — see
 		// handover_clamp.go.
-		p.HandoverText = *patch.HandoverText
+		su.p.HandoverText = *su.patch.HandoverText
 	}
-	if patch.LastUnmetTerminalSignature != nil {
-		p.LastUnmetTerminalSignature = *patch.LastUnmetTerminalSignature
+	if su.patch.LastUnmetTerminalSignature != nil {
+		su.p.LastUnmetTerminalSignature = *su.patch.LastUnmetTerminalSignature
 	}
-	if patch.OwnerSessionID != nil {
-		p.OwnerSessionID = *patch.OwnerSessionID
+	if su.patch.OwnerSessionID != nil {
+		su.p.OwnerSessionID = *su.patch.OwnerSessionID
 	}
-	if err := applySupervisionPatch(p, patch); err != nil {
-		return nil, err
+	if err := applySupervisionPatch(su.p, su.patch); err != nil {
+		return nil, err, true
 	}
-	if patch.State != nil {
-		if !IsValidState(*patch.State) {
-			return nil, verr("invalid state %q", *patch.State)
+	return nil, nil, false
+}
+
+// applyTransition validates and applies the requested lifecycle transition and its reset semantics.
+func (su *storeUpdateLocked) applyTransition() (*Plan, error, bool) {
+	if su.patch.State != nil {
+		if !IsValidState(*su.patch.State) {
+			return nil, verr("invalid state %q", *su.patch.State), true
 		}
-		from, to := p.State, *patch.State
+		from, to := su.p.State, *su.patch.State
 
 		// restarting recognizes the ADR-052 §6.7 / spec FR-016/DS-1 RESTART
 		// transition (failed -> approved, gated to FailedReason ==
@@ -476,39 +504,39 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 			// to also set either field in the same patch, and allowing it
 			// is exactly the shape of the crafted-patch attack this guard
 			// closes (see onDiskFailedReason's doc comment above).
-			if patch.FailedReason != nil {
-				return nil, verr("failed_reason must not be set alongside a restart (failed[stopped_by_user] -> approved) transition")
+			if su.patch.FailedReason != nil {
+				return nil, verr("failed_reason must not be set alongside a restart (failed[stopped_by_user] -> approved) transition"), true
 			}
-			if patch.JudgeRounds != nil {
-				return nil, verr("judge_rounds must not be set alongside a restart (failed[stopped_by_user] -> approved) transition")
+			if su.patch.JudgeRounds != nil {
+				return nil, verr("judge_rounds must not be set alongside a restart (failed[stopped_by_user] -> approved) transition"), true
 			}
 			// Validate against the CAPTURED on-disk reason — never
 			// p.FailedReason at this point, which (for a legitimate
 			// non-restart caller that combines State+FailedReason in one
 			// patch, e.g. running->failed) may already reflect THIS same
 			// patch's own FailedReason field.
-			if err := ValidateRestartTransition(from, onDiskFailedReason); err != nil {
-				return nil, err
+			if err := ValidateRestartTransition(from, su.onDiskFailedReason); err != nil {
+				return nil, err, true
 			}
 		} else if err := ValidateStateTransition(from, to); err != nil {
-			return nil, err
+			return nil, err, true
 		}
 
 		if from != to {
 			now := time.Now().UTC().Format(time.RFC3339)
 			switch to {
 			case StateApproved:
-				p.ApprovedAt = now
+				su.p.ApprovedAt = now
 			case StateRunning:
-				p.StartedAt = now
-				p.LastActivityAt = now
-				p.ActiveLoop = true
+				su.p.StartedAt = now
+				su.p.LastActivityAt = now
+				su.p.ActiveLoop = true
 			case StateDone, StateFailed:
-				p.CompletedAt = now
-				p.ActiveLoop = false
+				su.p.CompletedAt = now
+				su.p.ActiveLoop = false
 			}
 		}
-		p.State = to
+		su.p.State = to
 
 		if restarting {
 			// ADR-052 §6.7 / spec FR-016-FR-017 (A4): a restart is a clean
@@ -529,8 +557,8 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 			// restart HANDLER's job over pkg/task's store — out of this
 			// package's ownership (pkg/plan never imports pkg/task's
 			// Store, only its types/Filter via the TaskLister interface).
-			p.FailedReason = ""
-			p.JudgeRounds = 0
+			su.p.FailedReason = ""
+			su.p.JudgeRounds = 0
 			// PlanPhase resets for exactly the JudgeRounds reason stated
 			// above, one level up: a plan restarted near a cap fails
 			// immediately, and a stale phase IS a spent cap.
@@ -597,20 +625,25 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 			// caller that legitimately batches a phase write with the restart
 			// transition, and this reset needs no cooperation from any caller
 			// to be correct.
-			p.PlanPhase = ""
-			if p.Supervision != nil {
-				p.Supervision.WakeAt = ""
-				p.Supervision.WakeError = ""
-				p.Supervision.Attempts = 0
+			su.p.PlanPhase = ""
+			if su.p.Supervision != nil {
+				su.p.Supervision.WakeAt = ""
+				su.p.Supervision.WakeError = ""
+				su.p.Supervision.Attempts = 0
 			}
 		}
 	}
+	return nil, nil, false
+}
+
+// persist applies the final override, normalizes, persists, and publishes the updated plan.
+func (su *storeUpdateLocked) persist() (*Plan, error) {
 	// ActiveLoop is applied AFTER the State-transition stamping above so an
 	// explicit caller-supplied value in the same patch wins over the
 	// transition's own stamped value (mirrors task.Update's StartedAt-wins
 	// pattern for the in_progress transition).
-	if patch.ActiveLoop != nil {
-		p.ActiveLoop = *patch.ActiveLoop
+	if su.patch.ActiveLoop != nil {
+		su.p.ActiveLoop = *su.patch.ActiveLoop
 	}
 
 	// review r1 type-design: route the fully-patched plan through the SAME
@@ -625,18 +658,18 @@ func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 	// value that passed normalize() at Create time or a prior Update, so
 	// these re-checks are a no-op whenever the field itself wasn't patched
 	// this call.
-	if err := p.normalize(); err != nil {
+	if err := su.p.normalize(); err != nil {
 		return nil, err
 	}
 
-	p.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := s.write(p); err != nil {
+	su.p.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := su.s.write(su.p); err != nil {
 		return nil, err
 	}
-	if s.OnChange != nil {
-		s.OnChange(p)
+	if su.s.OnChange != nil {
+		su.s.OnChange(su.p)
 	}
-	return p, nil
+	return su.p, nil
 }
 
 // applySupervisionPatch applies the five discrete supervision pointers of
