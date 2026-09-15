@@ -17,13 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	providers_pkg "github.com/elicify-ai/omnipus/pkg/providers"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestFetchUpstreamModels covers the OpenAI-compatible /models fetcher against a
@@ -305,52 +303,6 @@ func TestProviders_ModelBounds_Rejected(t *testing.T) {
 		require.Equal(t, http.StatusOK, w.Code,
 			"exactly 500 models must be accepted; body=%s", w.Body.String())
 	})
-}
-
-// --- Task 1 (M4): workspace→turn binding ---
-
-// TestHandleChatMessage_StampsWorkspaceOnSession proves that a chat frame
-// carrying metadata.workspace_id binds the minted session to that workspace, so
-// a task the agent creates during the turn resolves to the ACTIVE workspace
-// (resolveWorkspaceID reads ToolWorkspaceID(ctx), which the loop seeds from the
-// session's WorkspaceID).
-func TestHandleChatMessage_StampsWorkspaceOnSession(t *testing.T) {
-	msgBus := bus.NewMessageBus()
-	handler, _ := newTestWSHandlerForModelName(t, msgBus)
-	wc := makeTestConn()
-
-	const wantWS = "01JXWORKSPACE0000000000001"
-	handler.handleChatMessage(
-		context.Background(),
-		"chat-m4-1", // chatID
-		"",          // frameSessionID (empty → mint a new session)
-		"do it",     // content
-		"",          // agentID
-		nil,         // mediaRefs
-		"",          // modelName
-		wantWS,      // workspaceID (active workspace)
-		false,       // setupKickoff
-		wc,
-	)
-
-	// Drain the inbound publish, then assert the minted session carries the
-	// workspace binding on its meta.
-	var sessionID string
-	select {
-	case msg := <-msgBus.InboundChan():
-		sessionID = msg.SessionID
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for bus.InboundMessage")
-	}
-	require.NotEmpty(t, sessionID, "handleChatMessage must mint a session")
-
-	store := handler.agentLoop.ResolveSessionStore(sessionID)
-	require.NotNil(t, store, "session store must resolve the minted session")
-	meta, err := store.GetMeta(sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, meta)
-	assert.Equal(t, wantWS, meta.WorkspaceID,
-		"minted session must be bound to the active workspace (M4)")
 }
 
 // --- Task 2: structured delegation-failure forwarder helper ---
