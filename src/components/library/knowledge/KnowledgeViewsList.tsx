@@ -132,7 +132,17 @@ export function KnowledgeViewsList({
   if (viewsQuery.isPending || views.length === 0) return null
 
   return (
-    <div data-testid="knowledge-views-list" className="flex flex-col gap-1">
+    // The list is capped at roughly a third of the docked Library panel and
+    // scrolls ITSELF beyond that (UAT layout finding, 2026-09-14): unbounded,
+    // 69 saved views made this list 3,524px tall inside a 900px viewport,
+    // pushing the file listing ~3.5kpx off-screen in a clipped container the
+    // mouse wheel cannot scroll (scrollTop stays 0) — the folder was
+    // effectively unnavigable. max-height on the wrapper with overflow-y-auto
+    // keeps every view reachable by scrolling the list, never the page.
+    <div
+      data-testid="knowledge-views-list"
+      className="flex max-h-[min(384px,45vh)] flex-col gap-1 overflow-y-auto"
+    >
       <p className="px-2 text-[10px] font-medium uppercase tracking-wide text-[var(--color-muted)]">
         Saved views
       </p>
