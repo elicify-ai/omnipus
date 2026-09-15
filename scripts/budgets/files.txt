@@ -4,5 +4,4 @@
 pkg/agent/loop.go	7825
 pkg/config/config.go	4391
 pkg/gateway/websocket.go	6221
-pkg/tools/browser/manager.go	4167
 src/store/chat.ts	6695

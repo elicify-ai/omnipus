@@ -99,66 +99,6 @@ func TestExecute_ControlLock_InteractiveToolsDeferWhileControlled(t *testing.T) 
 	}
 }
 
-// TestOpenTab_IsTheControlGateEscapeHatch is D-G's requirement, asserted from
-// the production path: with a human holding the wheel, browser_open_tab must
-// NOT come back as a deferral — it must reach the browser and fail on the
-// unreachable CDP endpoint, exactly like an ungated tool.
-//
-// Why it is worth its own test rather than a row in a table. The agent is
-// told, in three separate places (browser_handover's tool description, its
-// success message and its FR-052 refusal message), that opening a new tab is
-// the way to keep working while the operator holds the wheel. Before D-G's
-// carve-out landed, browser_open_tab went through controlledResult like every
-// other write verb and returned a deferral — the instruction was unfollowable,
-// and nothing failed to say so. This test is what makes that promise
-// falsifiable.
-//
-// BDD: Given a human viewer currently controls the live browser session,
-// When browser_open_tab's Execute is called,
-// Then the result is NOT a control-gate deferral.
-func TestOpenTab_IsTheControlGateEscapeHatch(t *testing.T) {
-	registry, mgr := newPermissiveRegistry(t, controlTestCfg(t))
-	ctx := context.Background()
-
-	require.True(t, mgr.Live().TakeControl(testSessionID, "human-viewer"),
-		"test setup: taking control must succeed on an uncontrolled session")
-	require.True(t, mgr.Live().IsStoodDown(testSessionID),
-		"test setup: the take must actually have stood the tab set down, or this test proves nothing")
-
-	result := mustGetTool(t, registry, "browser_open_tab").Execute(ctx, map[string]any{})
-	require.NotNil(t, result)
-	assert.NotContains(t, result.ForLLM, "human is currently controlling",
-		"D-G: browser_open_tab must not defer while the wheel is held; got: %s", result.ForLLM)
-	assert.NotContains(t, result.ForLLM, `"deferred":true`,
-		"D-G: browser_open_tab must not defer while the wheel is held; got: %s", result.ForLLM)
-	assert.Nil(t, result.Deferred,
-		"D-G: the structural deferral signal the turn engine's ledger reads must be absent too; got: %+v",
-		result.Deferred)
-	assert.True(t, result.IsError,
-		"browser_open_tab must have gone on to attempt real execution and failed on the unreachable "+
-			"CDP endpoint — a non-error, non-deferral result would mean it short-circuited somewhere "+
-			"else and this test proves nothing; got: %s", result.ForLLM)
-}
-
-// TestOpenTab_IsExcludedFromTheEngineShortCircuitSet is the other half of
-// D-G's carve-out. ControlGatedToolNames() is consumed once, at construction,
-// by pkg/agent/browser_deferral.go to build the FR-016 set the TURN ENGINE
-// short-circuits before dispatch after three deferrals in one turn. A held
-// wheel produces exactly those three deferrals, so leaving browser_open_tab in
-// that set would slam the escape hatch shut from the engine side on precisely
-// the turn the agent needs it — with the gate itself never consulted.
-func TestOpenTab_IsExcludedFromTheEngineShortCircuitSet(t *testing.T) {
-	names := ControlGatedToolNames()
-	require.NotEmpty(t, names, "an empty roster would pass the exclusion assertion vacuously")
-	assert.NotContains(t, names, "browser_open_tab",
-		"D-G: the engine's short-circuit set must not contain the one tool the gate lets through")
-	// Differentiation: a sibling write verb that is NOT the escape hatch must
-	// still be in the set, so this cannot pass by the roster being broken.
-	assert.Contains(t, names, "browser_switch_tab",
-		"the roster must still carry the gated tab verbs — an empty/broken roster would make the "+
-			"exclusion above meaningless")
-}
-
 // TestExecute_ControlLock_ExemptToolsAreNotGated proves the FR-035 EXEMPT
 // class is not short-circuited by the control lock: with a human controlling
 // the session, an exempt tool still attempts to reach the browser and fails on

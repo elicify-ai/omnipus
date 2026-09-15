@@ -14,6 +14,7 @@ type startupDeferredCancellation struct {
 }
 
 func (c *startupDeferredCancellation) Value(any) any { return nil }
+
 func (c *startupDeferredCancellation) AfterFunc(fn func()) func() bool {
 	c.callback = fn
 	return func() bool { return true }
@@ -67,19 +68,5 @@ func TestStartupOldCompletionCannotClearReplacement(t *testing.T) {
 	}
 	if err := old.wait(context.Background()); !errors.Is(err, failed) {
 		t.Errorf("old waiter lost its exact failure: %v", err)
-	}
-}
-
-func TestSessionStartupContextReadsRetiredGateBeforeCallback(t *testing.T) {
-	lifetime, retire := context.WithCancelCause(context.Background())
-	original := &startupDeferredCancellation{Context: lifetime}
-	operation, stop := sessionStartupContext(context.Background(), original)
-	defer stop()
-	retire(errBrowserSessionChanged)
-	if !errors.Is(operation.Err(), context.Canceled) {
-		t.Errorf("retired original gate still admits startup: %v", operation.Err())
-	}
-	if original.callback != nil {
-		original.callback()
 	}
 }

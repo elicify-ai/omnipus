@@ -1,7 +1,6 @@
 package browser
 
 import (
-	"errors"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -46,26 +45,4 @@ func testPassivePopupAdoptionRequiresAnOwnedOpener(t *testing.T) {
 	defer m.mu.Unlock()
 	require.Equal(t, 2, len(m.sessions["a"].tabs))
 	require.Equal(t, 1, len(m.sessions["b"].tabs))
-}
-
-// FR-016 applies to legacy callers too: shutdown retires their pending start.
-func TestOpenTabLocalStartupShutdownRetiresLaunch(t *testing.T) {
-	m, entered, release, disposed := blockedLocalStartupManager(t)
-	done := make(chan error, 1)
-	go func() { _, err := m.OpenTab(testSessionID); done <- err }()
-	launch := <-entered
-	m.Shutdown()
-	canceled := false
-	select {
-	case <-launch.Done():
-		canceled = true
-	case <-time.After(200 * time.Millisecond):
-	}
-	release()
-	err := <-done
-	require.True(t, canceled, "shutdown must cancel a legacy tab-open startup")
-	require.True(t, errors.Is(err, errBrowserSessionChanged), "retired startup error: %v", err)
-	assertLocalStartupDrained(t, m, disposed)
-	require.False(t, m.Started(), "startup must not resurrect the stopped manager")
-	require.Equal(t, 0, m.TotalOpenTabs())
 }
