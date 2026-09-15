@@ -168,3 +168,17 @@ The founder's decisions of 2026-09-14 change two things this ADR decided. The te
 §2.2's parser, §2.6's context-eviction breadcrumb (which now teaches `goal_claim` on native runs) and §3's accepted limitations are unchanged.
 
 Code: `pkg/agent/task_run_loop.go` (`executeTaskRun`, `finishRunTurn`, `resolveRunClaim`, `adjudicateRunClaim`, `consumeTaskAttempt`, `endTaskWithoutAttempt`); `pkg/agent/task_executor.go::buildPrompt`; the in-run status refusal in `pkg/tools/task.go` and `pkg/sysagent/tools/task.go`. `finishTaskRun` no longer exists.
+
+## 9. Amendment — 2026-09-15 (issue #710): an error only an operator can fix ends the task at once
+
+The founder's decision of 2026-09-15 narrows one rule in §8. The text above is kept unchanged as the record of what was decided on 2026-09-14.
+
+**§8 (with ADR-086 §8) said:** a run that breaks — an execution error — fails as a whole, uses one attempt, and the task restarts in a fresh run, up to its attempt limit.
+
+**Now:**
+
+- A worker turn refused for a reason **only an operator can fix** ends the task **Failed at once**, with the reason and how to fix it. No attempt is used and the task does not restart: every fresh run would be refused the same way until someone changes a setting. The reasons are: the provider rejected the key, or no usable key is set (the provider answers 401 or 403); the provider sign-in has expired; the agent's provider is not configured; the agent has no model; the model's context window is unknown; the agent is on no workspace team; the agent's working folder cannot be opened. A Judge refused for one of these reasons ends the task the same way ("The Judge could not run: …").
+- A **temporary** error — a rate limit, a network or provider outage, a stalled stream, a timeout, or an error nothing recognises — still breaks the run: it uses one attempt and the task restarts, up to its attempt limit.
+- What the task result, the restarted run's prompt, the run's transcript and the goal's outcome line say about the error is plain wording: for an operator-only refusal, the reason and the fix, built from the agent's settings; for a temporary error, the contract's message for its error code. The provider's raw error text, which can repeat a credential or the request, is never copied there; it stays in the gateway log, with registered credentials scrubbed.
+
+Code: `pkg/agent/operator_only_turn_error.go::classifyOperatorOnlyTurnError`; `pkg/agent/task_run_loop.go::finishRunTurn` and `taskOperatorFixReason`; `pkg/agent/translate_error.go::turnErrorUserText`.
