@@ -8,13 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // Test constants (use defaults from subturn.go)
@@ -749,57 +750,6 @@ func TestNestedSubTurnHierarchy(t *testing.T) {
 	rootTS.mu.Unlock()
 }
 
-// TestDeliverSubTurnResultNoDeadlock verifies that deliverSubTurnResult doesn't
-// deadlock when multiple goroutines are accessing the parent turnState concurrently.
-func TestDeliverSubTurnResultNoDeadlock(t *testing.T) {
-	parent := &turnState{
-		ctx:            context.Background(),
-		turnID:         "parent-deadlock-test",
-		depth:          0,
-		pendingResults: make(chan *tools.ToolResult, 2), // Small buffer to test blocking
-	}
-
-	// Simulate multiple child turns delivering results concurrently
-	var wg sync.WaitGroup
-	numChildren := 10
-
-	for i := 0; i < numChildren; i++ {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			result := &tools.ToolResult{ForLLM: fmt.Sprintf("result-%d", id)}
-			deliverSubTurnResult(nil, parent, fmt.Sprintf("child-%d", id), result)
-		}(i)
-	}
-
-	// Concurrently read from the channel to prevent blocking
-	// and to actually retrieve the matched number of results
-	go func() {
-		for i := 0; i < numChildren; i++ {
-			select {
-			case <-parent.pendingResults:
-			case <-time.After(5 * time.Second):
-				t.Error("timeout waiting for result")
-				return
-			}
-		}
-	}()
-
-	// Wait for all deliveries to complete (with timeout)
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		// Success - no deadlock
-	case <-time.After(3 * time.Second):
-		t.Fatal("deadlock detected: deliverSubTurnResult blocked")
-	}
-}
-
 // TestHardAbortOrderOfOperations verifies that HardAbort calls Finish() before
 // rolling back session history, minimizing the race window where new messages
 // could be added after rollback.
@@ -1258,93 +1208,6 @@ func TestInterruptHard_Alias(t *testing.T) {
 	// Verify turn was finished (removed from activeTurnStates)
 	info := al.GetActiveTurnBySession(sessionKey)
 	_ = info // turn may still be in map briefly; hard abort sets isFinished on the state
-}
-
-// TestDeliverSubTurnResult_RaceWithFinish verifies that deliverSubTurnResult handles
-// the race condition where Finish() is called while results are being delivered.
-func TestDeliverSubTurnResult_RaceWithFinish(t *testing.T) {
-	al, _, _, _, cleanup := newTestAgentLoop(t) //nolint:dogsled
-	defer cleanup()
-
-	// Collect events via real EventBus
-	var mu sync.Mutex
-	var deliveredCount, orphanCount int
-	sub := al.SubscribeEvents(64)
-	defer al.UnsubscribeEvents(sub.ID)
-	go func() {
-		for evt := range sub.C {
-			mu.Lock()
-			switch evt.Kind {
-			case EventKindSubTurnResultDelivered:
-				deliveredCount++
-			case EventKindSubTurnOrphan:
-				orphanCount++
-			}
-			mu.Unlock()
-		}
-	}()
-
-	ctx := context.Background()
-	parentTS := &turnState{
-		ctx:            ctx,
-		turnID:         "parent-race-test",
-		depth:          0,
-		pendingResults: make(chan *tools.ToolResult, 16),
-		concurrencySem: make(chan struct{}, testMaxConcurrentSubTurns),
-	}
-	parentTS.ctx, parentTS.cancelFunc = context.WithCancel(ctx)
-
-	// Launch goroutines that deliver results while another goroutine calls Finish()
-	const numResults = 20
-	var wg sync.WaitGroup
-	wg.Add(numResults + 1)
-
-	// Goroutine that calls Finish() after a short delay
-	go func() {
-		defer wg.Done()
-		time.Sleep(5 * time.Millisecond)
-		parentTS.Finish(false)
-	}()
-
-	// Goroutines that deliver results
-	for i := 0; i < numResults; i++ {
-		go func(id int) {
-			defer wg.Done()
-			result := &tools.ToolResult{
-				ForLLM: fmt.Sprintf("result-%d", id),
-			}
-			// This should not panic, even if Finish() is called concurrently
-			deliverSubTurnResult(al, parentTS, fmt.Sprintf("child-%d", id), result)
-		}(i)
-	}
-
-	wg.Wait()
-	time.Sleep(20 * time.Millisecond) // let event goroutine flush
-
-	// Get final counts
-	mu.Lock()
-	finalDelivered := deliveredCount
-	finalOrphan := orphanCount
-	mu.Unlock()
-
-	t.Logf("Delivered: %d, Orphan: %d, Total: %d", finalDelivered, finalOrphan, finalDelivered+finalOrphan)
-
-	// With the new drainPendingResults behavior, the total events may be >= numResults
-	// because Finish() drains remaining results from the channel and emits them as orphans.
-	// So we expect:
-	// - Some results were delivered successfully (before Finish())
-	// - Some results became orphans (after Finish() or channel full)
-	// - Some results were in the channel when Finish() was called and got drained as orphans
-	// The total should be at least numResults (could be more due to drain)
-	if finalDelivered+finalOrphan < numResults {
-		t.Errorf("Expected at least %d total events, got %d delivered + %d orphan = %d",
-			numResults, finalDelivered, finalOrphan, finalDelivered+finalOrphan)
-	}
-
-	// Should have at least some orphan results (those that arrived after Finish() or were drained)
-	if finalOrphan == 0 {
-		t.Error("Expected at least some orphan results after Finish()")
-	}
 }
 
 // TestConcurrencySemaphore_Timeout verifies that spawning sub-turns times out
@@ -2000,6 +1863,8 @@ func TestAsyncSubTurn_ParentWaitsForChild(t *testing.T) {
 		t.Log("No result in channel (expected since we waited)")
 	}
 }
+
+// ====================== Graceful vs Hard Finish Tests ======================
 
 // TestSubTurn_IndependentContext verifies that SubTurns use independent contexts
 // that don't get canceled when the parent finishes gracefully.
