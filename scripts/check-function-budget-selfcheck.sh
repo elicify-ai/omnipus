@@ -42,7 +42,7 @@ fresh_tree() {
 # gen_go_func <out> <func-name> <total-lines>: a Go file whose one function
 # spans exactly <total-lines> (func keyword line through closing brace).
 gen_go_func() {
-  local out="$1" name="$2" total="$3" body=$(( $3 - 2 )) i=0
+  local out="$1" name="$2" body=$(( $3 - 2 )) i=0
   { echo "package fixture"; echo; printf 'func %s() {\n' "$name"; } > "$out"
   while [ "$i" -lt "$body" ]; do printf '\t_ = %d\n' "$i" >> "$out"; i=$((i + 1)); done
   echo "}" >> "$out"
