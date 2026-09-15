@@ -2378,7 +2378,7 @@ func writeUnifiedMetaDirect(sessionDir string, meta *UnifiedMeta) error {
 		return fmt.Errorf("unified_store: marshal meta: %w", err)
 	}
 	metaPath := filepath.Join(sessionDir, "meta.json")
-	return fileutil.WithFlock(metaPath, func() error {
+	return fileutil.WithFlock(sessionFileLockPath(metaPath), func() error {
 		return fileutil.WriteFileAtomic(metaPath, data, 0o600)
 	})
 }
