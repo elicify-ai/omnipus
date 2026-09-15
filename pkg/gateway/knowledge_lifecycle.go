@@ -677,9 +677,24 @@ func (kl *KnowledgeLifecycle) ReleaseDemotedCollection(collectionRoot string) bo
 	}
 	realRoot, err := knowledge.ResolveCollectionRoot(collectionRoot)
 	if err != nil {
-		return false
-	}
-	if isKB, detectErr := knowledge.IsKnowledgeBase(realRoot); detectErr != nil || isKB {
+		// 2026-09-15: a root that no longer resolves at all — the whole
+		// collection folder was deleted out from under the index, by bash or
+		// Finder rather than any Library verb — must RELEASE, not stick. The
+		// byRoot key is already the resolved form, so fall back to the cleaned
+		// lexical path and release whatever holds it. (EvalSymlinks fails on
+		// a missing leaf; that is the whole case being handled here.)
+		fallback, absErr := filepath.Abs(collectionRoot)
+		if absErr != nil {
+			return false
+		}
+		realRoot = filepath.Clean(fallback)
+		kl.mu.Lock()
+		_, held := kl.byRoot[realRoot]
+		kl.mu.Unlock()
+		if !held {
+			return false
+		}
+	} else if isKB, detectErr := knowledge.IsKnowledgeBase(realRoot); detectErr != nil || isKB {
 		return false
 	}
 
@@ -761,6 +776,14 @@ func (kl *KnowledgeLifecycle) AttachCollection(ctx context.Context, workspaceID,
 	// check runs against a reconciled index rather than an empty one.
 	reconcileErr := kl.reconcile(ctx, collection)
 	kl.startServices(collection)
+
+	// POST-ATTACH DEMOTION CHECK (2026-09-15): the marker may have been
+	// deleted between acquire and startServices — the same race
+	// ReleaseDemotedCollection's doc names for RevokeMount. Closing it here
+	// is one line: if the folder stopped being a knowledge base while this
+	// attach was running, release NOW, leaving nothing (drift schedule,
+	// watcher, index handle) running against a demoted folder.
+	kl.ReleaseDemotedCollection(realRoot)
 	return reconcileErr
 }
 
@@ -820,6 +843,38 @@ func (kl *KnowledgeLifecycle) AttachAllMounts() {
 	}
 }
 
+// ReleaseStaleCollections releases every attached collection whose root has
+// stopped being a knowledge base, whatever removed the marker — a bash
+// `rm`, Finder, a whole-folder delete — closing the gap where only the
+// three Library doors called ReleaseDemotedCollection (U-58's follow-ups,
+// 2026-09-15: "a marker removed outside the Library is not released until
+// restart"). It is the release half of attachWorkspaceScope's attach half:
+// the sweep attaches everything in scope, this detaches everything out of
+// it.
+//
+// Nil-receiver-safe. Returns how many collections it released. Safe to call
+// as often as the sweep runs: ReleaseDemotedCollection re-verifies under the
+// lock and no-ops for anything still healthy, and a concurrent release of
+// the same root is idempotent (the second finds nothing in byRoot).
+func (kl *KnowledgeLifecycle) ReleaseStaleCollections() int {
+	if kl == nil {
+		return 0
+	}
+	kl.mu.Lock()
+	roots := make([]string, 0, len(kl.byRoot))
+	for root := range kl.byRoot {
+		roots = append(roots, root)
+	}
+	kl.mu.Unlock()
+	released := 0
+	for _, root := range roots {
+		if kl.ReleaseDemotedCollection(root) {
+			released++
+		}
+	}
+	return released
+}
+
 // ---------------------------------------------------------------------------
 // D3 — THE SWEEP IS NOT ONLY A BOOT EVENT
 //
@@ -868,6 +923,11 @@ func (kl *KnowledgeLifecycle) AttachWorkspace(workspaceID string) {
 		return
 	}
 	kl.attachWorkspaceScope(workspaceID)
+	// The release half of the sweep (2026-09-15): whatever removed a marker
+	// outside the Library — bash, Finder, a whole-folder delete — the next
+	// workspace sweep notices and releases. attachWorkspaceScope is the
+	// attach half; this keeps the two halves on the same triggers.
+	kl.ReleaseStaleCollections()
 }
 
 // EnsureCollectionAttached attaches ONE already-resolved in-scope collection if
