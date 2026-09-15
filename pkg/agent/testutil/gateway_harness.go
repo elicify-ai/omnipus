@@ -281,6 +281,17 @@ func allocateEphemeralPort(t *testing.T) int {
 	return port
 }
 
+// startTestGateway carries the shared state of StartTestGateway across its stages.
+type startTestGateway struct {
+	t          *testing.T
+	opts       []Option
+	rcFn       func(context.Context, bool, string, string, bool) error
+	hc         *harnessConfig
+	homeDir    string
+	configPath string
+	gw         *TestGateway
+}
+
 // StartTestGateway boots a real gateway via the registered RunContextFunc on
 // a port from the harness's private below-ephemeral window (see the port
 // allocation block at the top of this file) and returns a TestGateway once the
@@ -306,40 +317,55 @@ func allocateEphemeralPort(t *testing.T) int {
 // Tests that exercise LLM behavior require OPENROUTER_API_KEY in the env;
 // the scripted-scenario override hook was removed 2026-05-10.
 func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
-	t.Helper()
+	sg := &startTestGateway{t: t, opts: opts}
 
+	sg.t.Helper()
+
+	sg.prepare()
+
+	sg.bootUntilReady()
+
+	sg.t.Cleanup(func() {
+		sg.gw.Close()
+	})
+
+	return sg.gw
+}
+
+// prepare validates the registered runner and prepares the isolated gateway configuration and credentials.
+func (sg *startTestGateway) prepare() {
 	runContextMu.RLock()
-	rcFn := runContextFunc
+	sg.rcFn = runContextFunc
 	runContextMu.RUnlock()
 
-	if rcFn == nil {
-		t.Fatal("testutil.StartTestGateway: gateway runner not registered — " +
+	if sg.rcFn == nil {
+		sg.t.Fatal("testutil.StartTestGateway: gateway runner not registered — " +
 			"call testutil.RegisterGatewayRunner(gateway.RunContext) from TestMain " +
 			"before running tests that require the full gateway stack")
 	}
 
-	hc := &harnessConfig{
+	sg.hc = &harnessConfig{
 		allowEmpty: true,
 	}
-	for _, o := range opts {
-		o(hc)
+	for _, o := range sg.opts {
+		o(sg.hc)
 	}
 
-	if hc.scenario == nil {
-		hc.scenario = NewScenario()
+	if sg.hc.scenario == nil {
+		sg.hc.scenario = NewScenario()
 	}
 
 	// Set the master key in the test environment so credentials unlock cleanly.
-	t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
+	sg.t.Setenv("OMNIPUS_MASTER_KEY", testMasterKey)
 
 	// Wire bearer token into the environment so checkBearerAuth's legacy
 	// OMNIPUS_BEARER_TOKEN path accepts requests from gw.NewRequest.
-	if hc.bearerAuth {
-		t.Setenv("OMNIPUS_BEARER_TOKEN", testBearerToken)
+	if sg.hc.bearerAuth {
+		sg.t.Setenv("OMNIPUS_BEARER_TOKEN", testBearerToken)
 	}
 
-	homeDir := t.TempDir()
-	configPath := filepath.Join(homeDir, "config.json")
+	sg.homeDir = sg.t.TempDir()
+	sg.configPath = filepath.Join(sg.homeDir, "config.json")
 
 	// Pin OMNIPUS_HOME to this gateway's private temp home.
 	//
@@ -358,7 +384,7 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 	// gives each test gateway its own isolated data root, exactly as production
 	// has it, so the lock contention disappears. t.Setenv is safe because these
 	// integration tests do not run in parallel (no t.Parallel()).
-	t.Setenv("OMNIPUS_HOME", homeDir)
+	sg.t.Setenv("OMNIPUS_HOME", sg.homeDir)
 
 	// Seed the OPENROUTER_API_KEY credential so the gateway's
 	// credentials.InjectFromConfig step succeeds at boot. The seeded provider
@@ -371,10 +397,13 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 	// Done ONCE, before the bind-retry loop below: it writes credentials.json
 	// into homeDir and has nothing to do with which port we end up on, so
 	// re-running it per attempt would be pure waste.
-	if err := seedTestCredentials(homeDir); err != nil {
-		t.Fatalf("testutil.StartTestGateway: seed credentials: %v", err)
+	if err := seedTestCredentials(sg.homeDir); err != nil {
+		sg.t.Fatalf("testutil.StartTestGateway: seed credentials: %v", err)
 	}
+}
 
+// bootUntilReady boots and probes the gateway, retrying only when port allocation loses its bind race.
+func (sg *startTestGateway) bootUntilReady() {
 	// BOOT, RETRYING WHEN THE PORT RACE IS LOST.
 	//
 	// The port comes from the listen/close/reuse idiom: bind :0, read the
@@ -406,24 +435,21 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 	// boot bug.
 	const maxBindAttempts = 5
 
-	var (
-		gw      *TestGateway
-		baseURL string
-		cancel  context.CancelFunc
-		done    chan struct{}
-	)
+	var baseURL string
+	var cancel context.CancelFunc
+	var done chan struct{}
 
 	for attempt := 1; ; attempt++ {
-		port := allocateEphemeralPort(t)
+		port := allocateEphemeralPort(sg.t)
 
-		cfg := buildConfig(hc, homeDir, port)
+		cfg := buildConfig(sg.hc, sg.homeDir, port)
 
 		rawCfg, marshalErr := json.Marshal(cfg)
 		if marshalErr != nil {
-			t.Fatalf("testutil.StartTestGateway: marshal config: %v", marshalErr)
+			sg.t.Fatalf("testutil.StartTestGateway: marshal config: %v", marshalErr)
 		}
-		if writeErr := os.WriteFile(configPath, rawCfg, 0o600); writeErr != nil {
-			t.Fatalf("testutil.StartTestGateway: write config: %v", writeErr)
+		if writeErr := os.WriteFile(sg.configPath, rawCfg, 0o600); writeErr != nil {
+			sg.t.Fatalf("testutil.StartTestGateway: write config: %v", writeErr)
 		}
 
 		baseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
@@ -432,25 +458,25 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 		cancel = ctxCancel
 		done = make(chan struct{})
 
-		gw = &TestGateway{
+		sg.gw = &TestGateway{
 			URL:        baseURL,
 			HTTPClient: &http.Client{Timeout: 10 * time.Second},
-			Provider:   hc.scenario,
-			homeDir:    homeDir,
-			configPath: configPath,
+			Provider:   sg.hc.scenario,
+			homeDir:    sg.homeDir,
+			configPath: sg.configPath,
 			cancel:     cancel,
 			done:       done,
-			t:          t,
+			t:          sg.t,
 		}
 
-		if hc.bearerAuth {
-			gw.bearerToken = testBearerToken
+		if sg.hc.bearerAuth {
+			sg.gw.bearerToken = testBearerToken
 		}
 
-		bootGW := gw
+		bootGW := sg.gw
 		go func() {
 			defer close(done)
-			runErr := rcFn(ctx, false, homeDir, configPath, hc.allowEmpty)
+			runErr := sg.rcFn(ctx, false, sg.homeDir, sg.configPath, sg.hc.allowEmpty)
 			if runErr != nil {
 				bootGW.bootErr.Store(&runErr)
 			}
@@ -525,7 +551,7 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 		if attempt < maxBindAttempts &&
 			result.kind == pollFatalBootError &&
 			errors.Is(result.bootErr, syscall.EADDRINUSE) {
-			t.Logf("testutil.StartTestGateway: port %d was taken between allocation and bind "+
+			sg.t.Logf("testutil.StartTestGateway: port %d was taken between allocation and bind "+
 				"(attempt %d/%d) — retrying with a fresh port. This is the known listen/close/reuse "+
 				"race, not a gateway defect: %v", port, attempt, maxBindAttempts, result.bootErr)
 			continue
@@ -533,7 +559,7 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 
 		switch result.kind {
 		case pollFatalBootError:
-			t.Fatalf(
+			sg.t.Fatalf(
 				"testutil.StartTestGateway: gateway at %s failed to boot: %v "+
 					"(fast-fail: %d probe attempt(s), %s elapsed — this is a genuine boot "+
 					"error surfaced immediately, not a timeout)%s",
@@ -545,7 +571,7 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 			if result.bootErr != nil {
 				bootErrMsg = fmt.Sprintf("; boot error: %v", result.bootErr)
 			}
-			t.Fatalf(
+			sg.t.Fatalf(
 				"testutil.StartTestGateway: gateway at %s never became healthy after "+
 					"%d consecutive failed health probes (%s elapsed) — this indicates a "+
 					"genuine boot failure, not a scheduling stall (a frozen host would "+
@@ -558,7 +584,7 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 			if result.bootErr != nil {
 				bootErrMsg = fmt.Sprintf("; boot error: %v", result.bootErr)
 			}
-			t.Fatalf(
+			sg.t.Fatalf(
 				"testutil.StartTestGateway: gateway at %s hit the %s hard backstop after "+
 					"only %d probe attempt(s) (%s elapsed) without becoming healthy — this is "+
 					"the absolute ceiling, not the primary failure signal; probes are likely "+
@@ -568,12 +594,6 @@ func StartTestGateway(t *testing.T, opts ...Option) *TestGateway {
 			)
 		}
 	}
-
-	t.Cleanup(func() {
-		gw.Close()
-	})
-
-	return gw
 }
 
 // Close stops the gateway. Normally you rely on t.Cleanup; call Close only when
