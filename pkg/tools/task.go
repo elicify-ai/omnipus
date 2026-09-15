@@ -707,6 +707,10 @@ type TaskCreateTool struct {
 	// bashPolicyChecker resolves an assignee agent's effective "bash" tool
 	// policy (ADR-049 D2 rule 5, FR-017/052). Set via SetBashPolicyChecker.
 	bashPolicyChecker func(assigneeAgentID string) (policy string, ok bool)
+	// assigneeCannotFinish answers whether the assignee can finish the task at
+	// all (founder decision 2026-09-15, task_assignee_readiness.go). Set via
+	// SetAssigneeReadinessChecker.
+	assigneeCannotFinish AssigneeReadinessChecker
 	// planStore, when set, backs the optional plan_id linkage arg (ADR-052
 	// FR-002): validates the same-workspace FK and refuses any plan that has
 	// left draft (ValidateTaskPlanMembership, plan.go). A nil planStore with
@@ -1298,6 +1302,13 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	if vErr := task.ValidateDoDDistinct(criteria, dod); vErr != nil {
 		return ErrorResult(fmt.Sprintf("task_create failed: %v", vErr)).WithError(vErr)
 	}
+	// Founder decision 2026-09-15: refuse an assignee that cannot finish this
+	// task — denied goal_claim, or a check its bash policy cannot run — before
+	// anything is written (task_assignee_readiness.go).
+	if res := assigneeCannotFinishResult("create_task", t.assigneeCannotFinish, agentID,
+		append(append([]task.AcceptanceCriterion{}, criteria...), dod...)); res != nil {
+		return res
+	}
 
 	parentTaskID, _ := args["parent_task_id"].(string)
 
@@ -1435,6 +1446,9 @@ type TaskUpdateTool struct {
 	// for the first time via an edit); updating an existing record never
 	// touches the budget.
 	goalMaxRoundsFn func() int
+	// assigneeCannotFinish mirrors TaskCreateTool.assigneeCannotFinish (set via
+	// SetAssigneeReadinessChecker).
+	assigneeCannotFinish AssigneeReadinessChecker
 }
 
 func NewTaskUpdateTool(store *task.Store) *TaskUpdateTool {
@@ -1942,6 +1956,14 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		if vErr := task.ValidateDoDDistinct(effectiveCriteria, effectiveDoD); vErr != nil {
 			return ErrorResult(fmt.Sprintf("task_update failed: %v", vErr)).WithError(vErr)
 		}
+	}
+
+	// Founder decision 2026-09-15: a reassignment, or a change to what the task
+	// is judged against, may not leave it with an agent that cannot finish it.
+	// Checked before store.Update, so a refusal writes nothing.
+	if res := t.updateAssigneeCannotFinish(existing, patch.AgentID,
+		newCriteria, newDoD, criteriaProvided, dodProvided); res != nil {
+		return res
 	}
 
 	if len(updatedFields) == 0 {

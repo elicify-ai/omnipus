@@ -7172,6 +7172,20 @@ export interface components {
              * @example 2026-06-20T10:04:55Z
              */
             readonly last_activity_at?: string;
+            /** @description Read-time only, never stored (founder decision 2026-09-15): present when the task is not done or failed and its assigned agent cannot finish it as configured — a native agent whose tool policy denies `goal_claim` can never report the task as done, and a task with a `check` criterion or Definition of Done item needs the agent's `bash` policy to be `allow`, because the Judge runs checks with nobody there to approve them. Saving such a task is not refused on this API: an operator may assign first and fix the agent's permissions afterwards (ADR-049 D2 rule 5 — agent tool paths reject, the UI warns). A run of the task in this state ends `failed` at once with this same message, using no attempt. Absent when the task has no agent, is done or failed, or nothing knowable stops the agent. */
+            readonly assignee_warning?: {
+                /**
+                 * @description Plain-language reason the assigned agent cannot finish this task, naming the fix.
+                 * @example Worker isn't allowed to report tasks as done. Allow 'goal_claim' for it in Agents → Tools, or assign another agent.
+                 */
+                message: string;
+                /**
+                 * @description The task field the warning is about, so a form can show it next to that control.
+                 * @example agent_id
+                 * @enum {string}
+                 */
+                field: "agent_id";
+            };
             /** @description Read-time only (Detail #6): derived list of live child sub-agent runs used to render board roll-up badges ("▸ N sub-agents running"). COMPUTED on read from the children whose `parent_task_id` equals this task's id — NEVER stored on the task record. Absent when the task has no live children. */
             rollup?: {
                 /**

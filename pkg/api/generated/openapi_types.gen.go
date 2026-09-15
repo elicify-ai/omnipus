@@ -6842,6 +6842,21 @@ func (e TaskAction) Valid() bool {
 	}
 }
 
+// Defines values for TaskAssigneeWarningField.
+const (
+	TaskAssigneeWarningFieldAgentId TaskAssigneeWarningField = "agent_id"
+)
+
+// Valid indicates whether the value is a known member of the TaskAssigneeWarningField enum.
+func (e TaskAssigneeWarningField) Valid() bool {
+	switch e {
+	case TaskAssigneeWarningFieldAgentId:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskCancelReason.
 const (
 	TaskCancelReasonStoppedByUser TaskCancelReason = "stopped_by_user"
@@ -16340,6 +16355,15 @@ type Task struct {
 	// Artifacts Paths to output files / artifact references produced by the task.
 	Artifacts *[]string `json:"artifacts,omitempty"`
 
+	// AssigneeWarning Read-time only, never stored (founder decision 2026-09-15): present when the task is not done or failed and its assigned agent cannot finish it as configured — a native agent whose tool policy denies `goal_claim` can never report the task as done, and a task with a `check` criterion or Definition of Done item needs the agent's `bash` policy to be `allow`, because the Judge runs checks with nobody there to approve them. Saving such a task is not refused on this API: an operator may assign first and fix the agent's permissions afterwards (ADR-049 D2 rule 5 — agent tool paths reject, the UI warns). A run of the task in this state ends `failed` at once with this same message, using no attempt. Absent when the task has no agent, is done or failed, or nothing knowable stops the agent.
+	AssigneeWarning *struct {
+		// Field The task field the warning is about, so a form can show it next to that control.
+		Field TaskAssigneeWarningField `json:"field"`
+
+		// Message Plain-language reason the assigned agent cannot finish this task, naming the fix.
+		Message string `json:"message"`
+	} `json:"assignee_warning,omitempty"`
+
 	// AttemptCount Task attempts already used: how many runs of this task have failed as a whole and been started over (ADR-049 D7). A run fails as a whole when its goal ends not met after all its tries, when the run breaks, or after two reasoning-only tries in a row. Read-only, server-set; the UI renders "attempt N of M" against `effective_max_attempts`. Separate from the goal's tries within a run (`judge_rounds`/`goal_max_rounds`).
 	AttemptCount *int `json:"attempt_count,omitempty"`
 
@@ -16604,6 +16628,9 @@ type Task struct {
 
 // TaskAction What kind of work the task performs. Tier 2 ships **`llm` only** (run an agent). The enum reserves room for v0.3 action types — `human` (approval gate), `tool` (run a tool directly), `notify` (send a notification), and `sub_workflow` (expand into a child workflow) — which will be added additively to this enum without a breaking change.
 type TaskAction string
+
+// TaskAssigneeWarningField The task field the warning is about, so a form can show it next to that control.
+type TaskAssigneeWarningField string
 
 // TaskCancelReason Cancelled-task discriminator (ADR-052 FR-028), mirroring `Plan.failed_reason`. Set only when `status == failed` AND the task was terminated via POST /tasks/{id}/stop (distinguishes a user-cancelled task, rendered with an orange "Cancelled" marker in the Failed column, from a genuine failure, e.g. attempts exhausted, which leaves this field null/absent). POST /tasks/{id}/restart clears it — a restarted task is no longer "stopped by user"; a later genuine failure records its own outcome via `result` with this field absent.
 type TaskCancelReason string

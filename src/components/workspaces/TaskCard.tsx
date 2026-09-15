@@ -1,7 +1,7 @@
 import { useId } from 'react'
 import { cn } from '@/lib/utils'
 import type { Task, Agent, Plan } from '@/lib/api'
-import { CheckSquare } from '@phosphor-icons/react'
+import { CheckSquare, WarningCircle } from '@phosphor-icons/react'
 import { RollupBadge } from './RollupBadge'
 import { TaskChildren } from './TaskChildren'
 import { TaskActionButton } from './TaskActionButton'
@@ -322,6 +322,19 @@ export function TaskCard({
             {task.agent_name ?? task.agent_id}
           </span>
         </div>
+      )}
+
+      {/* Founder decision 2026-09-15: the server's Task.assignee_warning — the
+          assigned agent cannot finish this task as configured. The text names
+          the fix; starting the task anyway ends it failed at once. */}
+      {task.assignee_warning && (
+        <p
+          data-testid="task-assignee-warning"
+          className="mt-2 flex items-start gap-1.5 text-[10px] leading-snug text-[color:var(--color-warning)]"
+        >
+          <WarningCircle size={11} weight="bold" className="mt-px flex-shrink-0" aria-hidden="true" />
+          <span>{task.assignee_warning.message}</span>
+        </p>
       )}
 
       {/* Tag chips (ADR-049 — replaces the milestone chip, SD-C14). Migrated

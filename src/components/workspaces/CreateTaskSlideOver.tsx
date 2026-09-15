@@ -308,13 +308,25 @@ export function CreateTaskSlideOver({
     addToast({ message: msg, variant: 'error' })
   }
 
+  // Founder decision 2026-09-15: the server saves a task assigned to an agent
+  // that cannot finish it (an operator may fix the agent's permissions after
+  // assigning) and says so in Task.assignee_warning. This dialog closes on
+  // success, so the warning is surfaced as a toast; the card and the task's
+  // detail panel keep showing it until the agent can finish the task.
+  function warnIfAssigneeCannotFinish(saved: Task | undefined) {
+    if (saved?.assignee_warning) {
+      addToast({ message: saved.assignee_warning.message, variant: 'warning' })
+    }
+  }
+
   // Create only — lands in inbox
   const createMutation = useMutation({
     mutationFn: () => createTask(buildBody()),
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
       addToast({ message: 'Task created', variant: 'success' })
+      warnIfAssigneeCannotFinish(created)
       resetAndClose()
     },
     onError: handleMutationError,
@@ -326,10 +338,11 @@ export function CreateTaskSlideOver({
       const task = await createTask(buildBody())
       return updateTask(task.id, { status: 'in_progress' })
     },
-    onSuccess: () => {
+    onSuccess: (started) => {
       queryClient.invalidateQueries({ queryKey: tasksQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
       addToast({ message: 'Task created and started', variant: 'success' })
+      warnIfAssigneeCannotFinish(started)
       resetAndClose()
     },
     onError: handleMutationError,

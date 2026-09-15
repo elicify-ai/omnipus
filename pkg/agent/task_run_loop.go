@@ -45,6 +45,12 @@
 //	failed run either: the task ends Failed "Stopped: <why>" with no attempt
 //	used and no restart.
 //
+//	A run whose assigned agent cannot finish the task as configured never
+//	starts (founder decision 2026-09-15, task_assignee_readiness.go): a native
+//	worker denied goal_claim, or a machine check its bash policy cannot run.
+//	Before the first turn the task ends Failed with the fix — no attempt, no
+//	restart, no model call.
+//
 //	goal_claim(blocked) is not a failed run: the task ends Failed with
 //	"Blocked: <why>" — no attempt consumed, no Judge call, no restart.
 //	goal_claim(waiting_on_user) has no operator reply channel on a task run,
@@ -135,6 +141,10 @@ func (te *TaskExecutor) executeTaskRun(
 	run *activeRun,
 	turn func(prompt string) (string, error),
 ) (redispatchTaskID string) {
+	if reason := te.preRunCannotFinishReason(t, taskSessionID); reason != "" {
+		te.endTaskAssigneeCannotFinish(t, taskSessionID, reason, run)
+		return ""
+	}
 	state := &taskRunState{claimWatermark: time.Now().UTC()}
 	firstPrompt := te.buildPrompt(t)
 	prompt := firstPrompt

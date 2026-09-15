@@ -995,6 +995,18 @@ export function TaskDetailPanel({ task, onClose, onTaskSelect }: TaskDetailPanel
             Team list unavailable — showing all agents
           </p>
         ) : null}
+        {/* Founder decision 2026-09-15: Task.assignee_warning is routed to this
+            field (field: "agent_id") — the agent cannot finish this task as
+            configured, and the server's text names the fix. */}
+        {task.assignee_warning?.field === 'agent_id' && (
+          <p
+            data-testid="task-assignee-warning"
+            role="status"
+            className="text-xs text-[color:var(--color-warning)] mt-1.5"
+          >
+            {task.assignee_warning.message}
+          </p>
+        )}
       </Field>
 
       {/* Trigger — GOAL-FR-060: the manual-kind CONTROL (the SmartSelect

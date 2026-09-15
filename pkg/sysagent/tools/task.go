@@ -230,6 +230,40 @@ func parseCriteriaArgsFromWorkspaceTool(raw []any, authorAgentID string) ([]task
 	return out, nil
 }
 
+// workspaceUpdateAssigneeCannotFinish is update_task_in_workspace's readiness
+// question (founder decision 2026-09-15) — the same rule as the plain
+// update_task tool: asked only when the update changes who does the task or
+// what it is judged against, over the effective post-update agent, criteria
+// and Definition of Done. A stored Definition of Done that cannot be read is
+// left out with a warning, acting only on what is known.
+func workspaceUpdateAssigneeCannotFinish(
+	checker tools.AssigneeReadinessChecker, home string, existing *task.Task, newAgentID *string,
+	newCriteria, newDoD []task.AcceptanceCriterion, criteriaProvided, dodProvided bool,
+) *tools.AssigneeCannotFinishError {
+	agentChanged := newAgentID != nil && *newAgentID != existing.AgentID
+	if !agentChanged && !criteriaProvided && !dodProvided {
+		return nil
+	}
+	agentID := existing.AgentID
+	if agentChanged {
+		agentID = *newAgentID
+	}
+	criteria := newCriteria
+	if !criteriaProvided {
+		criteria = existing.Criteria
+	}
+	judged := append([]task.AcceptanceCriterion{}, criteria...)
+	if dodProvided {
+		judged = append(judged, newDoD...)
+	} else if persisted, err := pairedWorkspaceGoalDoD(home, existing.ID); err != nil {
+		slog.Warn("update_task_in_workspace: the task's Definition of Done could not be read — checking the "+
+			"assignee against its acceptance criteria only", "task_id", existing.ID, "error", err)
+	} else {
+		judged = append(judged, persisted...)
+	}
+	return tools.AssigneeCannotFinishRefusal("update_task_in_workspace", checker, agentID, judged)
+}
+
 // allCheckCriteriaWorkspace reports whether criteria is non-empty and EVERY
 // entry is kind=check (ADR-049 D2 rule 5 gate condition). Mirrors
 // pkg/tools/task.go's allCheckCriteria.
@@ -539,6 +573,13 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 					tk.AgentID, resolved,
 				), "criteria"))
 			}
+		}
+		// Founder decision 2026-09-15 (parity with the plain create_task tool):
+		// refuse an assignee that cannot finish this task — denied goal_claim,
+		// or a check its bash policy cannot run — before anything is written.
+		if refusal := tools.AssigneeCannotFinishRefusal("create_task_in_workspace", t.deps.AssigneeCannotFinish,
+			tk.AgentID, append(append([]task.AcceptanceCriterion{}, criteria...), dod...)); refusal != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", refusal.Reason, refusal.Field)).WithError(refusal)
 		}
 		tk.Criteria = criteria
 	}
@@ -1069,6 +1110,15 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		if vErr := task.ValidateDoDDistinct(effectiveCriteria, effectiveDoD); vErr != nil {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod")).WithError(vErr)
 		}
+	}
+
+	// Founder decision 2026-09-15 (parity with the plain update_task tool): a
+	// reassignment, or a change to what the task is judged against, may not
+	// leave it with an agent that cannot finish it. Checked before
+	// store.Update, so a refusal writes nothing.
+	if refusal := workspaceUpdateAssigneeCannotFinish(t.deps.AssigneeCannotFinish, t.deps.Home, existing,
+		patch.AgentID, goalCriteria, goalDoD, criteriaProvided, dodProvided); refusal != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", refusal.Reason, refusal.Field)).WithError(refusal)
 	}
 
 	// Apply the field patch via the store (DAG validation + atomic write).

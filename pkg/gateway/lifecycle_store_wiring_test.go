@@ -75,6 +75,10 @@ func TestSetupAndStartServices_TaskExecutorLifecycleStoreWiring(t *testing.T) {
 			List: []config.AgentConfig{{ID: "mia"}},
 		},
 	}
+	// Production seeds goal_claim "allow" for every agent (pkg/config/defaults.go).
+	// Without it the task below would end before its first turn (founder
+	// decision 2026-09-15) instead of exercising a real run's lifecycle writes.
+	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 

@@ -642,6 +642,36 @@ func (a *restAPI) taskLastActivityAt(t task.Task) (time.Time, bool) {
 	}
 }
 
+// taskAssigneeWarning resolves Task.assignee_warning (founder decision
+// 2026-09-15): why t's assigned agent cannot finish it, from the SAME answer
+// the task run's pre-run check and the agent task tools use
+// (agent.AgentLoop.TaskAssigneeCannotFinish), judged against the criteria and
+// Definition of Done on its goal record g — else the task's own criteria.
+// Returns "" when the task has no agent, is done or failed, is a checklist
+// card, or nothing knowable stops the agent.
+//
+// This surface warns and never refuses. The agent task tools reject the same
+// assignment, but an operator using the task form may assign first and fix
+// the agent's permissions afterwards — ADR-049 D2 rule 5's split, and the
+// planning-goals-spec scenario "the same shape via the human UI path is
+// accepted with a warning". A run of such a task ends Failed at once with this
+// same text.
+func (a *restAPI) taskAssigneeWarning(t task.Task, g *goal.Goal) string {
+	if a.agentLoop == nil || t.AgentID == "" || t.Scratchpad || task.IsTerminal(t.Status) {
+		return ""
+	}
+	var judged []task.AcceptanceCriterion
+	if g != nil && len(g.Criteria) > 0 {
+		judged = append(judged, g.Criteria...)
+	} else {
+		judged = append(judged, t.Criteria...)
+	}
+	if g != nil {
+		judged = append(judged, g.DoD...)
+	}
+	return a.agentLoop.TaskAssigneeCannotFinish(t.AgentID, judged)
+}
+
 // toWireTask converts an internal task.Task to the generated wire type, filling
 // the read-time agent_name and rollup fields from the registry / store. idx is
 // an optional shared rollupIndex (see its doc comment) for batch callers; pass
@@ -757,6 +787,15 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (
 	}
 	if g != nil && len(g.DoD) > 0 {
 		out.Dod = toWireDod(g.DoD)
+	}
+	// Founder decision 2026-09-15: a task whose agent cannot finish it as
+	// configured says so, next to the agent picker. Read-time only; it warns
+	// and never refuses (see taskAssigneeWarning).
+	if msg := a.taskAssigneeWarning(t, g); msg != "" {
+		out.AssigneeWarning = &struct {
+			Field   gen.TaskAssigneeWarningField `json:"field"`
+			Message string                       `json:"message"`
+		}{Field: gen.TaskAssigneeWarningFieldAgentId, Message: msg}
 	}
 	// The goal's tries (issue #710): the tries its current (or last) run has
 	// used and the try limit that run started with, both read off the goal

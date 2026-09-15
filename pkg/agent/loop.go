@@ -2827,6 +2827,9 @@ func registerSharedTools(
 			// task run starts a fresh turn at depth 0 (see processTaskDirect depth
 			// seeding); this hard ceiling closes that gap.
 			taskCreate.SetMaxDelegationDepth(maxTaskDepth)
+			// Founder decision 2026-09-15: refuse assigning a task to an agent
+			// that cannot finish it (task_assignee_readiness.go).
+			taskCreate.SetAssigneeReadinessChecker(al.TaskAssigneeCannotFinish)
 			// D2 rule 5 (FR-017/052, review r1 major M5): reject an all-check
 			// criteria create outright when the assignee's effective bash
 			// policy is deny or ask — structurally unsatisfiable, mirrors
@@ -2863,6 +2866,7 @@ func registerSharedTools(
 			// Same live goal try limit as taskCreate above, for the goal record
 			// update_task creates when a legacy task gets criteria/dod.
 			taskUpdate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(al) })
+			taskUpdate.SetAssigneeReadinessChecker(al.TaskAssigneeCannotFinish)
 			taskUpdate.SetOnComplete(func(t *task.Task) {
 				if al.taskExecutor != nil {
 					al.taskExecutor.onTaskComplete(t)

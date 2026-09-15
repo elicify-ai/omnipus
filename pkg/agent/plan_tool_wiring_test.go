@@ -54,6 +54,10 @@ func newPlanToolWiringTestLoop(t *testing.T) (*AgentLoop, *AgentInstance, string
 			},
 		},
 	}
+	// Production seeds goal_claim "allow" for every agent (pkg/config/defaults.go).
+	// Without it create_task refuses to assign planner-agent a task it could
+	// never report done (founder decision 2026-09-15).
+	cfg.Sandbox.ToolPolicies = map[string]string{"goal_claim": "allow"}
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})
 	t.Cleanup(func() { al.Close() })
 

@@ -138,7 +138,18 @@ func TestTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgent(t *t
 
 	stub := &deniedBashStub{}
 	al.RegisterTool(stub)
-	setAskPolicyForAllAgents(t, al, toolName, config.ToolPolicyAsk)
+	// StoreToolPolicy replaces an agent's whole policy snapshot, so goal_claim
+	// is stated alongside the ask entry: production seeds it "allow" for every
+	// agent, and a task whose worker is denied goal_claim now ends before its
+	// first turn (founder decision 2026-09-15) — which would never reach the
+	// denial budget this test is about.
+	for _, agentID := range al.GetRegistry().ListAgentIDs() {
+		if agentInst, ok := al.GetRegistry().GetAgent(agentID); ok {
+			agentInst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{
+				toolName: config.ToolPolicyAsk, tools.GoalClaimToolName: config.ToolPolicyAllow,
+			}})
+		}
+	}
 
 	approver := &countingDenyApprover{reason: denialReason}
 	al.SetToolApprover(approver)

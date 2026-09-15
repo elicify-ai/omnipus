@@ -2909,6 +2909,10 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// DelegationDeny above) per systools.Deps.ResolveBashPolicy's doc
 		// comment.
 		ResolveBashPolicy: agentLoop.NewSysagentBashPolicyResolver(),
+		// Founder decision 2026-09-15: create/update_task_in_workspace refuse an
+		// assignee that cannot finish the task — the same answer as the plain
+		// task tools and the task run's pre-run check.
+		AssigneeCannotFinish: agentLoop.TaskAssigneeCannotFinish,
 		// ADR-057 U9 changed ListAllSessions' signature to
 		// (limit, offset int, parentSessionID string, flat bool), so it can no
 		// longer be assigned here as a bare method value — this field's type

@@ -409,6 +409,42 @@ properties:
       Nothing is written to produce it (it is not a heartbeat). Unrelated to
       `Plan.last_activity_at`, which is a plan's idle-expiry clock.
     example: "2026-06-20T10:04:55Z"
+  assignee_warning:
+    type: object
+    readOnly: true
+    required:
+      - message
+      - field
+    additionalProperties: false
+    properties:
+      message:
+        type: string
+        maxLength: 2000
+        description: >
+          Plain-language reason the assigned agent cannot finish this task,
+          naming the fix.
+        example: "Worker isn't allowed to report tasks as done. Allow 'goal_claim' for it in Agents → Tools, or assign another agent."
+      field:
+        type: string
+        enum:
+          - agent_id
+        description: >
+          The task field the warning is about, so a form can show it next to
+          that control.
+        example: "agent_id"
+    description: >
+      Read-time only, never stored (founder decision 2026-09-15): present when
+      the task is not done or failed and its assigned agent cannot finish it as
+      configured — a native agent whose tool policy denies `goal_claim` can
+      never report the task as done, and a task with a `check` criterion or
+      Definition of Done item needs the agent's `bash` policy to be `allow`,
+      because the Judge runs checks with nobody there to approve them. Saving
+      such a task is not refused on this API: an operator may assign first and
+      fix the agent's permissions afterwards (ADR-049 D2 rule 5 — agent tool
+      paths reject, the UI warns). A run of the task in this state ends
+      `failed` at once with this same message, using no attempt. Absent when
+      the task has no agent, is done or failed, or nothing knowable stops the
+      agent.
   rollup:
     type: array
     items:
