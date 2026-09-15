@@ -499,6 +499,19 @@ lint-no-removed-providers:
 	bash scripts/check-no-removed-providers-selfcheck.sh
 	bash scripts/check-no-removed-providers.sh
 
+## lint-budgets: Fail if a file or function is over its size budget (founder ruling, 2026-09-15)
+## File: warns over 2,000 lines, fails over 4,000. Function: warns over 120, fails over 240.
+## Grandfathered files/functions may only shrink (scripts/budgets/*.txt). Runs each gate's own
+## self-check first so a guard that can no longer fail is itself a failure. This target is a thin
+## delegate for muscle memory and direct invocation — scripts/guards.sh (via `lint-guards` below)
+## discovers check-file-budget.sh / check-function-budget.sh automatically and is what `lint`
+## actually depends on; this target requires no separate wiring into `lint`.
+lint-budgets:
+	bash scripts/check-file-budget-selfcheck.sh
+	bash scripts/check-file-budget.sh
+	bash scripts/check-function-budget-selfcheck.sh
+	bash scripts/check-function-budget.sh
+
 ## lint-guards: Run every discovered guard under scripts/ (scripts/guards.sh)
 ## The eight targets above remain as thin delegates to their own guard for muscle memory and
 ## direct references; this is the aggregate that `lint` actually depends on. Adding a guard to

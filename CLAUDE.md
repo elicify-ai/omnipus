@@ -257,6 +257,8 @@ make verify-contracts  # exit 0
 
 **WARNING — typecheck trap.** `tsconfig.json` is a project-references root with no `include`/`files`. `tsc --noEmit` (without `-b`) is a silent no-op (always exits 0). Use `npm run typecheck` (wired to `tsc -b --noEmit`).
 
+**Size budgets (founder ruling, 2026-09-15):** one file, one job; one function, one job. A file warns over 2,000 lines and fails over 4,000; a function warns over 120 lines and fails over 240 — same numbers for production and test code, but a React component only warns, never fails. Grandfathered files/functions (`scripts/budgets/*.txt`) may only shrink — do not add to one, extract first. `make lint-budgets` runs both gates with their self-checks.
+
 ## Build & E2E Testing
 
 ### Testing & building — CI is the authority (MANDATORY)
