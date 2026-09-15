@@ -24,8 +24,6 @@
 package gateway
 
 import (
-	"os"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,18 +34,12 @@ import (
 )
 
 // newBrowserWSHandlerBody returns the source text of newBrowserWSHandler's
-// body, for the registration assertions below.
+// body, for the registration assertions below. It reads the whole
+// browser_ws*.go family, not browser_ws.go by name, so the guard keeps
+// covering the constructor wherever a job split moves it.
 func newBrowserWSHandlerBody(t *testing.T) string {
 	t.Helper()
-	raw, err := os.ReadFile("browser_ws.go")
-	require.NoError(t, err, "reading browser_ws.go")
-	src := string(raw)
-	start := strings.Index(src, "func newBrowserWSHandler(")
-	require.GreaterOrEqual(t, start, 0, "newBrowserWSHandler must exist in browser_ws.go")
-	rest := src[start:]
-	end := strings.Index(rest, "\n}\n")
-	require.GreaterOrEqual(t, end, 0, "newBrowserWSHandler's body must be delimited")
-	return rest[:end]
+	return sliceFromMarkerForTest(t, readBrowserWsSourcesForTest(t), "func newBrowserWSHandler(")
 }
 
 // TestNewBrowserWSHandler_RegistersEveryADR085Seam is the guard whose absence
@@ -87,15 +79,8 @@ func TestNewBrowserWSHandler_RegistersEveryADR085Seam(t *testing.T) {
 // latch standing, so the gate keeps deferring every browser tool after the
 // operator has visibly given the wheel back.
 func TestHandleControlRelease_ClearsTheStandDownLatchNotJustTheLock(t *testing.T) {
-	raw, err := os.ReadFile("browser_ws.go")
-	require.NoError(t, err)
-	src := string(raw)
-	start := strings.Index(src, "func (h *BrowserWSHandler) handleControlContext(")
-	require.GreaterOrEqual(t, start, 0)
-	body := src[start:]
-	if end := strings.Index(body, "\n}\n"); end >= 0 {
-		body = body[:end]
-	}
+	body := sliceFromMarkerForTest(t, readBrowserWsSourcesForTest(t),
+		"func (h *BrowserWSHandler) handleControlContext(")
 
 	assert.Contains(t, body, "ReleaseStoodDownForViewer(",
 		"the release action must clear the lock, the FR-026a latch and any handover-pending state "+

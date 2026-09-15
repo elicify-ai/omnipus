@@ -11,7 +11,6 @@ package gateway
 
 import (
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 
@@ -137,10 +136,7 @@ func TestOnVideoHealth_UnknownViewerIsSkippedNotFatal(t *testing.T) {
 // (the inert start page, the default-agent singleton nothing wrote), which is
 // why pkg/agent/window_trim_test.go uses the same technique.
 func TestHandleAttach_RegistersTheVideoHealthObserver(t *testing.T) {
-	src, err := os.ReadFile("browser_ws.go")
-	require.NoError(t, err)
-
-	body := funcBodyByName(t, string(src), "func (h *BrowserWSHandler) handleAttach(")
+	body := funcBodyByName(t, readBrowserWsSourcesForTest(t), "func (h *BrowserWSHandler) handleAttach(")
 	require.Contains(t, body, "mgr.SetVideoHealthObserver(h.onVideoHealth)",
 		"handleAttach must register the video-health observer on the manager — without it the gateway "+
 			"still knows the instant the capture's video dies and still runs its bounded recovery, but "+
