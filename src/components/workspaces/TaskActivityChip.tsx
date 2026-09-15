@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import type { Task } from '@/lib/api'
+import { useToolApprovalStore, type PendingToolApproval } from '@/store/toolApproval'
 
 // ── Last activity on a running task (founder decision 2026-09-14) ───────────
 //
@@ -60,6 +61,28 @@ export function taskActivity(
   return { age: formatActivityAge(ageMs), stale: ageMs >= TASK_ACTIVITY_STALE_MS }
 }
 
+// ── Waiting for an approval (founder decision 2026-09-15) ───────────────────
+//
+// An "ask" tool inside a task run asks the operator: the run registers a
+// normal tool approval and waits for it server-side, with or without a browser
+// attached. Its last activity then goes quiet for as long as nobody answers,
+// which on its own reads as a hung task. The approval queue is the source of
+// truth for the wait — every tab receives every tool_approval_required frame,
+// and the session_state snapshot restores the queue after a reload — so the
+// chip names the wait instead of a stale age. The approval is matched on the
+// task run's own session; a delegated helper's approval carries the helper's
+// session and still shows in the approval dialog and the cross-workspace
+// banner, just not on this chip.
+
+/** The pending approval `task`'s run is waiting on, or null. */
+export function taskAwaitingApproval(
+  task: Pick<Task, 'status' | 'session_id'>,
+  queue: readonly Pick<PendingToolApproval, 'sessionId' | 'toolName'>[],
+): Pick<PendingToolApproval, 'sessionId' | 'toolName'> | null {
+  if (task.status !== 'in_progress' || !task.session_id) return null
+  return queue.find((approval) => approval.sessionId === task.session_id) ?? null
+}
+
 /** Current time, re-read every `intervalMs` while `active`; idle otherwise. */
 function useNowWhile(active: boolean, intervalMs: number): number {
   const [now, setNow] = useState(() => Date.now())
@@ -72,7 +95,7 @@ function useNowWhile(active: boolean, intervalMs: number): number {
 }
 
 interface TaskActivityChipProps {
-  task: Pick<Task, 'status' | 'last_activity_at'>
+  task: Pick<Task, 'status' | 'last_activity_at' | 'session_id'>
   /**
    * 'card' (default) renders "In progress · last activity 5 s ago" in its own
    * row. 'panel' renders "Last activity 5 s ago" inline, for placement next to
@@ -82,8 +105,26 @@ interface TaskActivityChipProps {
 }
 
 export function TaskActivityChip({ task, variant = 'card' }: TaskActivityChipProps) {
-  const visible = task.status === 'in_progress' && !!task.last_activity_at
+  const queue = useToolApprovalStore((s) => s.queue)
+  const waiting = taskAwaitingApproval(task, queue)
+  const visible = !waiting && task.status === 'in_progress' && !!task.last_activity_at
   const now = useNowWhile(visible, 1000)
+
+  if (waiting) {
+    const waitingChip = (
+      <span
+        data-testid="task-awaiting-approval"
+        className="rounded-full px-2 py-0.5 text-[10px] font-medium bg-[var(--color-warning)]/10 text-[color:var(--color-warning)]"
+      >
+        {variant === 'card'
+          ? `In progress · waiting for your approval to use ${waiting.toolName}`
+          : `Waiting for your approval to use ${waiting.toolName}`}
+      </span>
+    )
+    if (variant === 'panel') return waitingChip
+    return <div className="mt-2 flex items-center gap-1.5">{waitingChip}</div>
+  }
+
   const activity = taskActivity(task, now)
   if (!activity) return null
 

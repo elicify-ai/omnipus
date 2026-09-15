@@ -12609,8 +12609,12 @@ turnLoop:
 				denialReason := ""
 				if !approved {
 					// About to block on a human, for up to the approval
-					// registry's timeout (300 s by default — see
-					// pkg/gateway/approvals.go). Record the call as `pending`
+					// registry's timeout (600 s by default, configurable —
+					// pkg/gateway/gateway.go's defaultToolApprovalTimeout). The
+					// wait is server-side and needs no browser attached: a task
+					// run's approval waits exactly like a chat turn's (ADR-082;
+					// pinned by pkg/gateway/task_run_ask_approval_test.go).
+					// Record the call as `pending`
 					// FIRST so the thread shows what the turn is waiting on for
 					// the whole wait, and so a reload mid-wait still shows it:
 					// the tool_approval_required WS frame is live-only and does
