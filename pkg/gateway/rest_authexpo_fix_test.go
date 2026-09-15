@@ -552,15 +552,8 @@ func TestCopilotProbe_ConcurrentHTTPCallsSpawnOneVendorProcess(t *testing.T) {
 // (the sign-in transition) without swapping PATH.
 func writeFakeCopilot(t *testing.T, dir, stdout, stderr string, exitCode int) {
 	t.Helper()
-	body := "#!/bin/bash\n"
-	if stdout != "" {
-		body += "cat <<'OMNIPUS_EOF'\n" + stdout + "\nOMNIPUS_EOF\n"
-	}
-	if stderr != "" {
-		body += "cat >&2 <<'OMNIPUS_EOF'\n" + stderr + "\nOMNIPUS_EOF\n"
-	}
-	body += "exit " + strconv.Itoa(exitCode) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "copilot"), []byte(body), 0o755))
+	// Builtins only — dir is the whole PATH (see writeFakeCopilotBinary).
+	writeFakeCopilotBinary(t, dir, "", stdout, stderr, exitCode)
 }
 
 // putCountingCopilotOnPath installs a `copilot` stand-in that appends one line
@@ -574,15 +567,10 @@ func putCountingCopilotOnPath(t *testing.T, stdout, stderr string, exitCode int)
 	}
 	dir := t.TempDir()
 	tally := filepath.Join(dir, "invocations")
-	body := "#!/bin/bash\necho x >> " + tally + "\n"
-	if stdout != "" {
-		body += "cat <<'OMNIPUS_EOF'\n" + stdout + "\nOMNIPUS_EOF\n"
-	}
-	if stderr != "" {
-		body += "cat >&2 <<'OMNIPUS_EOF'\n" + stderr + "\nOMNIPUS_EOF\n"
-	}
-	body += "exit " + strconv.Itoa(exitCode) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "copilot"), []byte(body), 0o755))
+	require.NotContainsf(t, tally, "'", "tally path %q cannot be single-quoted", tally)
+	// `echo` is a bash builtin; the output half is writeFakeCopilotBinary's,
+	// builtins only, because dir is the whole PATH.
+	writeFakeCopilotBinary(t, dir, "echo x >> '"+tally+"'\n", stdout, stderr, exitCode)
 	t.Setenv("PATH", dir)
 	return tally
 }

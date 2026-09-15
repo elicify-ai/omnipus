@@ -6,11 +6,14 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -43,16 +46,82 @@ func putFakeCopilotOnPath(t *testing.T, stdout, stderr string, exitCode int) {
 		t.Skip("fake CLI uses a #!/bin/bash shebang with no Windows equivalent (see #113)")
 	}
 	dir := t.TempDir()
-	body := "#!/bin/bash\n"
-	if stdout != "" {
-		body += "cat <<'OMNIPUS_EOF'\n" + stdout + "\nOMNIPUS_EOF\n"
-	}
-	if stderr != "" {
-		body += "cat >&2 <<'OMNIPUS_EOF'\n" + stderr + "\nOMNIPUS_EOF\n"
-	}
-	body += "exit " + strconv.Itoa(exitCode) + "\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "copilot"), []byte(body), 0o755))
+	writeFakeCopilotBinary(t, dir, "", stdout, stderr, exitCode)
 	t.Setenv("PATH", dir)
+}
+
+// writeFakeCopilotBinary writes a `copilot` stand-in into dir that prints
+// stdout and then stderr (each followed by one newline, when non-empty) and
+// exits with exitCode. preamble is bash run before that, e.g. an invocation
+// tally.
+//
+// The stand-in uses bash builtins only, because dir is the WHOLE PATH its
+// callers give the handler, and an external command such as `cat` is "command
+// not found" there. An earlier version printed with `cat`: it printed nothing
+// it was given, and bash's own complaint — which quotes the script's path,
+// random temp directory name included — became the CLI's stderr. The sign-in
+// classifier then read that path, so a directory name containing "401" (an
+// expired-session marker) turned "not signed in" into "expired" (CI
+// ubuntu-latest, 2026-09-15), while the "expired session" case only ever
+// passed because its directory is named after the subtest.
+//
+// The text lives in files outside dir, and every stand-in is run once under
+// PATH=dir before it is handed over, so one that does not print exactly what
+// it was given fails here instead of as a wrong state further down.
+func writeFakeCopilotBinary(t *testing.T, dir, preamble, stdout, stderr string, exitCode int) {
+	t.Helper()
+	data := t.TempDir()
+	outputs := ""
+	for _, out := range []struct{ name, text, redirect string }{
+		{name: "stdout", text: stdout},
+		{name: "stderr", text: stderr, redirect: " >&2"},
+	} {
+		if out.text == "" {
+			continue
+		}
+		require.Falsef(t, strings.HasSuffix(out.text, "\n"),
+			"fake copilot %s must not end in a newline: the stand-in adds exactly one", out.name)
+		file := filepath.Join(data, out.name)
+		require.NotContainsf(t, file, "'", "fake copilot data path %q cannot be single-quoted", file)
+		require.NoError(t, os.WriteFile(file, []byte(out.text), 0o600))
+		// "$(<file)" is bash reading the file itself — no `cat`, no PATH lookup.
+		outputs += "printf '%s\\n' \"$(<'" + file + "')\"" + out.redirect + "\n"
+	}
+	outputs += "exit " + strconv.Itoa(exitCode) + "\n"
+
+	script := filepath.Join(dir, "copilot")
+	require.NoError(t, os.WriteFile(script, []byte("#!/bin/bash\n"+outputs), 0o755))
+	verifyFakeCopilotBinary(t, dir, stdout, stderr, exitCode)
+	if preamble != "" {
+		// Checked above WITHOUT the preamble, so a tally preamble never counts
+		// the check itself as an invocation.
+		require.NoError(t, os.WriteFile(script, []byte("#!/bin/bash\n"+preamble+outputs), 0o755))
+	}
+}
+
+// verifyFakeCopilotBinary runs dir's stand-in with PATH=dir — the PATH the
+// handler under test sees — and requires the exact output and exit code.
+func verifyFakeCopilotBinary(t *testing.T, dir, stdout, stderr string, exitCode int) {
+	t.Helper()
+	withNewline := func(s string) string {
+		if s == "" {
+			return ""
+		}
+		return s + "\n"
+	}
+	cmd := exec.Command(filepath.Join(dir, "copilot"))
+	cmd.Env = []string{"PATH=" + dir}
+	var gotOut, gotErr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &gotOut, &gotErr
+	gotExit := 0
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		require.Truef(t, errors.As(err, &exitErr), "run the fake copilot under PATH=%s: %v", dir, err)
+		gotExit = exitErr.ExitCode()
+	}
+	require.Equalf(t, withNewline(stdout), gotOut.String(), "fake copilot stdout under PATH=%s", dir)
+	require.Equalf(t, withNewline(stderr), gotErr.String(), "fake copilot stderr under PATH=%s", dir)
+	require.Equalf(t, exitCode, gotExit, "fake copilot exit code under PATH=%s", dir)
 }
 
 // clearCopilotFromPath points PATH at an empty directory: the CLI is not
