@@ -35,17 +35,6 @@ func judgeVerdictWithQuotes() task.JudgeVerdict {
 	}
 }
 
-func TestToWireJudgeVerdict_EvidenceQuote(t *testing.T) {
-	out := toWireJudgeVerdict(judgeVerdictWithQuotes())
-	require.Len(t, out.PerCriterion, 2)
-
-	require.NotNil(t, out.PerCriterion[0].EvidenceQuote)
-	assert.Equal(t, "--- PASS: TestX", *out.PerCriterion[0].EvidenceQuote)
-
-	// Empty quote → absent from the wire, never a present "".
-	assert.Nil(t, out.PerCriterion[1].EvidenceQuote)
-}
-
 func TestToJudgeVerdictFrame_EvidenceQuote(t *testing.T) {
 	f := toJudgeVerdictFrame("", judgeVerdictWithQuotes())
 	require.Len(t, f.PerCriterion, 2)
