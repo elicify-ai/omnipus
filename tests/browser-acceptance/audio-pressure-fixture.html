@@ -1,0 +1,109 @@
+<!doctype html><meta charset="utf-8"><title>Controlled audio under mixed input stress</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#151515;color:white;font:16px sans-serif}canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}input,button,#scroll,#drag{position:fixed;box-sizing:border-box}input{left:8%;top:64%;width:38%;height:9%;font-size:20px}button{left:54%;top:64%;width:38%;height:9%;font-size:20px}#scroll{left:8%;top:78%;width:38%;height:17%;overflow:auto;background:#183650}#scroll>div{height:2000px;background:repeating-linear-gradient(#183650 0px,#183650 49px,#276c91 50px,#276c91 99px)}#drag{left:54%;top:78%;width:38%;height:17%;background:#335522;touch-action:none;user-select:none}
+</style>
+<canvas id="pixels"></canvas><input id="text" aria-label="Exact Unicode text"><button id="click">Count click</button><div id="scroll"><div>Scroll exactly 300 CSS pixels</div></div><div id="drag">Drag left to right</div>
+<script>
+const nonce=Number(new URL(location.href).searchParams.get('nonce'));
+if(!Number.isInteger(nonce)||nonce<1||nonce>65535)throw Error('Valid fixture nonce required');
+const text=document.getElementById('text'),button=document.getElementById('click'),scroll=document.getElementById('scroll'),drag=document.getElementById('drag'),canvas=document.getElementById('pixels'),ctx=canvas.getContext('2d');
+const state={nonce,clicks:0,downs:0,ups:0,held:0,scroll:0,drags:0,errors:0};
+
+// Diagnostic-only schedule. The original input counters/handlers and their
+// pixel protocol below remain unchanged. First trusted ArrowLeft starts time.
+// Separate strip: x10..90%, y57.5..62.3%, four rows of 32 LSB-first bits.
+// Word0: magic0xA531 bits0..15, phase bits16..17 (none/silent/tone/none),
+// native context state bits18..19 (absent/suspended/running/closed), started
+// bit20, latched fault bit21; remaining bits zero. Words1..3: wall elapsed ms,
+// native AudioContext.currentTime ms (zero absent/closed), analyser RMS*1e6.
+let audioStartedAt=null,audioPhase=0,audioFault=false,audioTimer=null;
+let audioContext=null,audioOscillator=null,audioGain=null,audioAnalyser=null;
+let audioEpoch=0,audioCreatedAt=0;
+let audioWords=[0xA531,0,0,0];
+const audioSamples=new Float32Array(2048);
+function paintAudioBand(){
+ const w=canvas.width,h=canvas.height;
+ audioWords.forEach((word,row)=>{for(let bit=0;bit<32;bit++){
+  ctx.fillStyle=(word>>>bit)&1?'#fff':'#000';
+  ctx.fillRect(w*(.1+bit*.8/32),h*(.575+row*.012),w*.8/32,h*.012);
+ }});
+}
+function changeAudioPhase(next){
+ audioPhase=next;
+ if(next===1){
+  try{
+   const owned=audioContext=new AudioContext();
+   const epoch=++audioEpoch;
+   audioCreatedAt=performance.now();
+   audioOscillator=owned.createOscillator();audioGain=owned.createGain();audioAnalyser=owned.createAnalyser();
+   audioAnalyser.fftSize=audioSamples.length;
+   audioOscillator.frequency.value=440;audioGain.gain.value=0;
+   audioOscillator.connect(audioGain).connect(audioAnalyser).connect(owned.destination);
+   audioOscillator.start();
+   void owned.resume().then(()=>{if(audioEpoch===epoch&&owned.state!=='running')audioFault=true},()=>{if(audioEpoch===epoch)audioFault=true});
+  }catch{audioFault=true}
+ }else if(next===2){
+  if(!audioContext||!audioGain){audioFault=true;return}
+  audioGain.gain.setTargetAtTime(.02,audioContext.currentTime,.01);
+ }else if(next===3){
+  const owned=audioContext,epoch=++audioEpoch;
+  try{audioOscillator?.stop()}catch{audioFault=true}
+  audioOscillator=null;audioGain=null;audioAnalyser=null;
+  if(owned)void owned.close().then(()=>{if(audioEpoch===epoch)audioContext=null},()=>{if(audioEpoch===epoch)audioFault=true});
+ }
+}
+function sampleAudio(){
+ const elapsed=audioStartedAt===null?0:Math.max(0,performance.now()-audioStartedAt);
+ const phase=elapsed<480000?0:elapsed<720000?1:elapsed<960000?2:3;
+ if(phase!==audioPhase)changeAudioPhase(phase);
+ const nativeState=audioContext?.state;
+ const contextState=!audioContext?0:nativeState==='running'?2:nativeState==='closed'?3:1;
+ if((audioPhase===1||audioPhase===2)&&audioContext&&nativeState!=='running'&&performance.now()-audioCreatedAt>5000)audioFault=true;
+ let rms=0;
+ if(audioAnalyser&&nativeState==='running'){
+  audioAnalyser.getFloatTimeDomainData(audioSamples);
+  let squares=0;for(const value of audioSamples)squares+=value*value;
+  rms=Math.sqrt(squares/audioSamples.length);
+ }
+ const sourceMs=audioContext&&nativeState!=='closed'?Math.round(audioContext.currentTime*1000):0;
+ if(!Number.isFinite(sourceMs)||!Number.isFinite(rms)){audioFault=true;rms=0}
+ audioWords=[(0xA531|(audioPhase<<16)|(contextState<<18)|((audioStartedAt!==null?1:0)<<20)|((audioFault?1:0)<<21))>>>0,Math.round(elapsed)>>>0,sourceMs>>>0,Math.round(rms*1e6)>>>0];
+ paintAudioBand();
+}
+addEventListener('keydown',e=>{
+ if(!e.isTrusted||e.code!=='ArrowLeft'||audioStartedAt!==null)return;
+ audioStartedAt=performance.now();sampleAudio();
+ // Identical sampling/painting cadence in every phase, including no graph.
+ audioTimer=setInterval(sampleAudio,1000);
+},true);
+addEventListener('pagehide',()=>{
+ if(audioTimer!==null)clearInterval(audioTimer);
+ audioEpoch++;
+ try{audioOscillator?.stop()}catch{}
+ if(audioContext&&audioContext.state!=='closed')void audioContext.close().catch(()=>{});
+});
+
+let dragging=false;
+const delay=Number(new URL(location.href).searchParams.get('delay')||0);
+if(![0,120].includes(delay))throw Error('Invalid deliberate delay');
+function busy(ms){const end=performance.now()+ms;while(performance.now()<end){}}
+function paint(){
+ const w=canvas.width=innerWidth,h=canvas.height=innerHeight;
+ ctx.fillStyle='#ff00ff';ctx.fillRect(0,0,w,h);ctx.fillStyle='#151515';ctx.fillRect(w*.025,h*.025,w*.95,h*.95);
+ const words=[...Object.values(state),...Array.from({length:32},(_,i)=>text.value.charCodeAt(i)||0)];
+ const bits=[];words.forEach((v,index)=>{for(let i=0;i<(index<8?32:16);i++)bits.push((v>>>i)&1)});
+ bits.forEach((b,i)=>{ctx.fillStyle=b?'#fff':'#000';ctx.fillRect(w*(.1+(i%32)*.8/32),h*(.06+Math.floor(i/32)*.5/24),w*.8/32,h*.5/24)});
+ paintAudioBand();
+}
+function trusted(e){if(!e.isTrusted)state.errors++;}
+button.addEventListener('click',e=>{trusted(e);state.clicks++;paint()});
+text.addEventListener('input',e=>{trusted(e);if(text.value.length>32)state.errors++;paint()});
+scroll.addEventListener('wheel',e=>{trusted(e);e.preventDefault();busy(delay?75:0);state.scroll+=e.deltaY;paint()},{passive:false});
+addEventListener('mousedown',e=>{trusted(e);state.downs++;state.held|=1;paint()});
+addEventListener('mouseup',e=>{trusted(e);state.ups++;state.held&=~1;paint()});
+addEventListener('keydown',e=>{if(e.code==='ArrowLeft'){trusted(e);e.preventDefault();busy(delay);state.downs++;state.held|=2;paint()}});
+addEventListener('keyup',e=>{if(e.code==='ArrowLeft'){trusted(e);e.preventDefault();state.ups++;state.held&=~2;paint()}});
+drag.addEventListener('pointerdown',e=>{trusted(e);const r=drag.getBoundingClientRect();dragging=e.clientX<r.left+r.width*.35;drag.setPointerCapture(e.pointerId)});
+drag.addEventListener('pointerup',e=>{trusted(e);const r=drag.getBoundingClientRect();if(dragging&&e.clientX>r.left+r.width*.7)state.drags++;else state.errors++;dragging=false;paint()});
+addEventListener('resize',paint);paint();
+</script>

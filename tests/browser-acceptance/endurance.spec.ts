@@ -1,4 +1,5 @@
 import { browserTestWorkspacePath } from './test-workspace';
+import { installAudioPressureProbe, sampleAudioPressure } from './audio-pressure-probe';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { randomInt } from 'node:crypto';
@@ -8,30 +9,37 @@ import { installPixels, instrumentRoutes, point, routeEvidence, stateIs, type In
 
 // User acceptance: at least twenty minutes of real mixed input with an independent video oracle.
 // Expected counters derive from authored gestures, independently of dispatch logs.
-const fixture = fs.readFileSync(fileURLToPath(new URL('./pressure-stress-fixture.html', import.meta.url)), 'utf8');
+const stimulusMode = process.env.BROWSER_ENDURANCE_AUDIO_STIMULUS;
+if (stimulusMode !== undefined && stimulusMode !== '0' && stimulusMode !== '1') throw Error('BROWSER_ENDURANCE_AUDIO_STIMULUS must be 0 or 1');
+const audioStimulus = stimulusMode === '1';
+const fixture = fs.readFileSync(fileURLToPath(new URL(audioStimulus ? './audio-pressure-fixture.html' : './pressure-stress-fixture.html', import.meta.url)), 'utf8');
 const target = new URL(JSON.parse(fs.readFileSync(process.env.BROWSER_INPUT_FIXTURE_CONFIG!, 'utf8')).url);
 if (target.origin !== 'https://uat-omnipus.fly.dev' || !target.pathname.startsWith('/preview/') || target.search || target.hash || target.username || target.password) throw Error('Exact approved fixture URL required');
 const provenance = JSON.parse(fs.readFileSync(process.env.BROWSER_INPUT_PROVENANCE!, 'utf8'));
 
 const seconds = Number(process.env.BROWSER_ENDURANCE_SECONDS || 1200);
 if (![15, 120, 1200].includes(seconds)) throw Error('Use 15 seconds for calibration, 120 for diagnosis, or 1200 for acceptance');
+if (audioStimulus && seconds !== 1200) throw Error('Audio stimulus requires 1200 seconds for all four fixed phases');
 const resizeEvery = Number(process.env.BROWSER_ENDURANCE_RESIZE_EVERY || 12);
 if (![2, 12].includes(resizeEvery)) throw Error('Use 2 rounds for accelerated resize diagnosis or 12 for standard endurance');
 const audioMode = process.env.BROWSER_ENDURANCE_AUDIO_INACTIVE;
 if (audioMode !== undefined && audioMode !== '0' && audioMode !== '1') throw Error('BROWSER_ENDURANCE_AUDIO_INACTIVE must be 0 or 1');
 const audioInactive = audioMode === '1';
-const diagnosticMode = audioInactive ? 'audio-inactive' : 'normal';
-const fullFeatureAcceptanceEligible = !audioInactive && seconds === 1200 && resizeEvery === 12;
+if (audioStimulus && audioInactive) throw Error('Audio stimulus requires negotiated active audio');
+const diagnosticMode = audioStimulus ? 'audio-stimulus' : audioInactive ? 'audio-inactive' : 'normal';
+const fullFeatureAcceptanceEligible = !audioStimulus && !audioInactive && seconds === 1200 && resizeEvery === 12;
 const delay = 120;
 test(`${seconds}-second continuous mixed input endurance (${diagnosticMode})`, async ({ page }, info) => {
   let state: InputState = { nonce: randomInt(1, 65536), clicks: 0, downs: 0, ups: 0, held: 0, scroll: 0, drags: 0, errors: 0, text: '' };
   let rounds = 0, started = 0, clientStart = 0;
   const mediaStats: unknown[] = [];
+  const audioStimulusSamples: Array<NonNullable<Awaited<ReturnType<typeof sampleAudioPressure>>>> = [];
   let videoPlayoutNegotiated = false;
   const clientBrowserVersion = page.context().browser()?.version() ?? 'unavailable';
   const errors: string[] = [], marks: Array<{ label: string; at: string; ms?: number }> = [];
   page.on('pageerror', error => errors.push(error.message));
   await instrumentRoutes(page, audioInactive);
+  if (audioStimulus) await installAudioPressureProbe(page);
   const ready = async () => {
     await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
     await expect(browserLivePanel(page).getByRole('status').filter({ hasText: /Waiting for the current page|Pointer input is unavailable|Browser input is unavailable|Reconnecting video to restore browser input/ })).toHaveCount(0);
@@ -50,6 +58,9 @@ test(`${seconds}-second continuous mixed input endurance (${diagnosticMode})`, a
     const url = new URL(target); url.searchParams.set('nonce', String(state.nonce)); url.searchParams.set('delay', String(delay));
     const address = page.getByRole('textbox', { name: 'Address bar' }); await address.fill(url.href); await address.press('Enter');
     await installPixels(page); await stateIs(page, state); await ready();
+    if (audioStimulus) {
+      await page.locator('[data-testid="browser-live-video"]').evaluate(node => { (node as HTMLVideoElement).muted = false; });
+    }
     const initialMediaStats = await page.evaluate(async () => (window as unknown as { __inputSmoke: { mediaStats(): Promise<Array<Record<string, unknown>>> } }).__inputSmoke.mediaStats());
     const videoReceivers = initialMediaStats.filter(row => row.type === 'receiver' && row.kind === 'video' && (row.currentDirection === 'recvonly' || row.currentDirection === 'sendrecv'));
     videoPlayoutNegotiated = videoReceivers.length > 0 && videoReceivers.every(row =>
@@ -132,6 +143,24 @@ test(`${seconds}-second continuous mixed input endurance (${diagnosticMode})`, a
       await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 12 }); await page.mouse.up();
       state = { ...state, drags: state.drags + 1, downs: state.downs + 1, ups: state.ups + 1 }; await stateIs(page, state); await ready();
       mediaStats.push(await page.evaluate(async () => ({ at: new Date().toISOString(), stats: await (window as unknown as { __inputSmoke: { mediaStats(): Promise<unknown> } }).__inputSmoke.mediaStats() })));
+      if (audioStimulus) {
+        let stimulus: Awaited<ReturnType<typeof sampleAudioPressure>> = null;
+        await expect.poll(async () => { stimulus = await sampleAudioPressure(page); return stimulus !== null; }, { timeout: 5000 }).toBe(true);
+        const captured = stimulus as NonNullable<Awaited<ReturnType<typeof sampleAudioPressure>>> | null;
+        if (!captured) throw Error('Video stimulus observation required');
+        audioStimulusSamples.push(captured);
+        expect(captured.muted).toBe(false);
+        expect(captured.started).toBe(true);
+        expect(captured.fault).toBe(false);
+        expect(captured.matchingMediaPeers).toBe(1);
+        expect(captured.audio).toHaveLength(1);
+        for (const key of ['totalAudioEnergy', 'totalSamplesDuration', 'totalSamplesReceived', 'packetsReceived']) {
+          const value = captured.audio[0][key];
+          expect(typeof value, `required stimulus receiver metric ${key}`).toBe('number');
+          expect(Number.isFinite(value), `finite stimulus receiver metric ${key}`).toBe(true);
+          expect(Number(value), `nonnegative stimulus receiver metric ${key}`).toBeGreaterThanOrEqual(0);
+        }
+      }
       rounds++;
       if (rounds % resizeEvery === 0) {
         await page.setViewportSize(rounds % (resizeEvery * 2) === 0 ? {width:1440,height:1000} : {width:1600,height:1100});
@@ -164,6 +193,24 @@ test(`${seconds}-second continuous mixed input endurance (${diagnosticMode})`, a
       expect(audio.every(row => row.currentDirection === 'inactive'), 'audio must be negotiated inactive, not just muted').toBe(true);
       expect(stats.some(row => row.type === 'inbound-rtp' && row.kind === 'video' && Number(row.framesReceived) > 0 && Number(row.framesDecoded) > 0), 'diagnostic must still receive and decode video').toBe(true);
     }
+    if (audioStimulus) {
+      for (const phase of [0, 1, 2, 3]) expect(audioStimulusSamples.some(sample => sample.phase === phase), `video must show stimulus phase ${phase}`).toBe(true);
+      for (const phase of [1, 2]) {
+        const samples = audioStimulusSamples.filter(sample => sample.phase === phase && sample.contextState === 2);
+        expect(samples.length, `running source observations in phase ${phase}`).toBeGreaterThanOrEqual(2);
+        expect(samples.at(-1)!.contextMs, `source clock must advance in phase ${phase}`).toBeGreaterThan(samples[0].contextMs);
+      }
+      // Verify the authored stimulus itself after its transition ramp, without
+      // imposing a receiver quality or real-time clock-rate threshold.
+      expect(audioStimulusSamples.some(sample => sample.phase === 1 && sample.elapsedMs >= 490000 && sample.analyserRMS === 0), 'steady zero-gain source must measure zero').toBe(true);
+      expect(audioStimulusSamples.some(sample => sample.phase === 2 && sample.elapsedMs >= 730000 && sample.analyserRMS >= 0.005 && sample.analyserRMS <= 0.025), 'steady source must contain the authored tone').toBe(true);
+      const closedSamples = audioStimulusSamples.filter(sample => sample.phase === 3 && sample.elapsedMs >= 970000);
+      expect(closedSamples.length, 'settled source observations after audio shutdown').toBeGreaterThanOrEqual(2);
+      for (const sample of closedSamples) {
+        expect([0, 3], 'audio context must be absent or closed after shutdown').toContain(sample.contextState);
+        expect(sample.contextMs, 'closed source clock must be cleared').toBe(0);
+      }
+    }
     expect(errors).toEqual([]);
   } finally {
     // Do not wait forever for getStats during teardown. An unfinished request
@@ -177,7 +224,7 @@ test(`${seconds}-second continuous mixed input endurance (${diagnosticMode})`, a
     const route = await routeEvidence(page).catch(() => null);
     const recentVideoFrames = await page.evaluate(() => (window as unknown as { __inputSmoke?: { frameTiming(): unknown } }).__inputSmoke?.frameTiming()).catch(() => null);
     const viewerStates = await page.evaluate(() => {const w=window as unknown as {__enduranceStates:unknown;__enduranceObserver:MutationObserver};w.__enduranceObserver?.disconnect();return w.__enduranceStates}).catch(()=>null);
-    fs.writeFileSync(info.outputPath('pressure-stress-evidence.json'), JSON.stringify({ testWorkspace: browserTestWorkspacePath, videoPlayoutNegotiated, clientBrowserVersion, audioVideoTimingSeries, diagnosticMode, fullFeatureAcceptanceEligible, mediaStats, recentVideoFrames, requestedSeconds:seconds, resizeEvery, activeSeconds:started ? (performance.now()-started)/1000 : 0, rounds, viewerStates, provenance, deliberateKeyHandlerMs: delay, deliberateWheelHandlerMs: delay ? 75 : 0, marks, expected: state, final, route, errors }, null, 2));
+    fs.writeFileSync(info.outputPath('pressure-stress-evidence.json'), JSON.stringify({ audioStimulusSamples, testWorkspace: browserTestWorkspacePath, videoPlayoutNegotiated, clientBrowserVersion, audioVideoTimingSeries, diagnosticMode, fullFeatureAcceptanceEligible, mediaStats, recentVideoFrames, requestedSeconds:seconds, resizeEvery, activeSeconds:started ? (performance.now()-started)/1000 : 0, rounds, viewerStates, provenance, deliberateKeyHandlerMs: delay, deliberateWheelHandlerMs: delay ? 75 : 0, marks, expected: state, final, route, errors }, null, 2));
     await info.attach('pressure-stress-evidence', { path: info.outputPath('pressure-stress-evidence.json'), contentType: 'application/json' });
     await page.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }).catch(() => {});
   }
