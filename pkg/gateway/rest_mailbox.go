@@ -206,13 +206,46 @@ func (a *restAPI) getAgentMailbox(w http.ResponseWriter, agentID, workspaceID st
 	jsonOK(w, mailboxToWire(agentID, workspaceID, mb, configured))
 }
 
+// restAPISetAgentMailbox carries the shared state of setAgentMailbox across its stages.
+type restAPISetAgentMailbox struct {
+	a                *restAPI
+	w                http.ResponseWriter
+	r                *http.Request
+	agentID          string
+	workspaceID      string
+	req              gen.MailboxConfigureRequest
+	refName          string
+	passwordProvided bool
+	clearPassword    bool
+	persistedRef     string
+}
+
 // setAgentMailbox handles PUT /api/v1/agents/{id}/mailboxes/{workspaceId}.
 // The workspace is addressed entirely by the path — the request body no
 // longer carries a workspace_id field (path is authoritative, 2026-07-03).
 func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentID, workspaceID string) {
-	if !a.agentExists(agentID) {
-		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
+	sm := &restAPISetAgentMailbox{a: a, w: w, r: r, agentID: agentID, workspaceID: workspaceID}
+
+	if sm.validateAccessAndRequest() {
 		return
+	}
+
+	if sm.storePassword() {
+		return
+	}
+
+	if sm.persistConfig() {
+		return
+	}
+
+	sm.reloadAndPrepareResponse()
+}
+
+// validateAccessAndRequest validates the agent, workspace membership, and mailbox request fields.
+func (sm *restAPISetAgentMailbox) validateAccessAndRequest() bool {
+	if !sm.a.agentExists(sm.agentID) {
+		jsonErr(sm.w, http.StatusNotFound, fmt.Sprintf("agent %q not found", sm.agentID))
+		return true
 	}
 
 	// Verify the workspace exists before saving — a mailbox addressed by a
@@ -220,9 +253,9 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	// workspace-scoped surface would ever list it) and would silently drift
 	// from the workspace-delete cascade (removeMailboxesForWorkspace), which
 	// only cleans up pairs whose workspace it can see got deleted.
-	ws, ok := a.loadWorkspace(w, workspaceID)
+	ws, ok := sm.a.loadWorkspace(sm.w, sm.workspaceID)
 	if !ok {
-		return
+		return true
 	}
 
 	// ADR-033 (operator-decided 2026-07-03): the owning agent MUST be a
@@ -233,49 +266,48 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	// never offers them, and a delegation-only worker has no inbox-working
 	// heartbeat persona. Both reject with 422, same messages as the channel
 	// routing gate.
-	cfg := a.agentLoop.GetConfig()
+	cfg := sm.a.agentLoop.GetConfig()
 	var owningAgent *config.AgentConfig
 	for i := range cfg.Agents.List {
-		if cfg.Agents.List[i].ID == agentID {
+		if cfg.Agents.List[i].ID == sm.agentID {
 			ac := cfg.Agents.List[i]
 			owningAgent = &ac
 			break
 		}
 	}
 	if owningAgent != nil && owningAgent.IsWorker() {
-		jsonErr(w, http.StatusUnprocessableEntity,
+		jsonErr(sm.w, http.StatusUnprocessableEntity,
 			"workers cannot own a mailbox")
-		return
+		return true
 	}
 	inTeam := false
 	for _, memberID := range ws.CoreTeam {
-		if memberID == agentID {
+		if memberID == sm.agentID {
 			inTeam = true
 			break
 		}
 	}
 	if !inTeam {
-		jsonErr(w, http.StatusUnprocessableEntity,
-			fmt.Sprintf("agent %q is not a member of workspace %q", agentID, workspaceID))
-		return
+		jsonErr(sm.w, http.StatusUnprocessableEntity,
+			fmt.Sprintf("agent %q is not a member of workspace %q", sm.agentID, sm.workspaceID))
+		return true
 	}
 
-	var req gen.MailboxConfigureRequest
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "MailboxConfigureRequest", &req, validateEnabled) {
-		return
+	validateEnabled := sm.a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(sm.w, sm.r, "MailboxConfigureRequest", &sm.req, validateEnabled) {
+		return true
 	}
-	if strings.TrimSpace(req.ImapHost) == "" {
-		jsonErr(w, http.StatusBadRequest, "imap_host is required")
-		return
+	if strings.TrimSpace(sm.req.ImapHost) == "" {
+		jsonErr(sm.w, http.StatusBadRequest, "imap_host is required")
+		return true
 	}
-	if strings.TrimSpace(req.SmtpHost) == "" {
-		jsonErr(w, http.StatusBadRequest, "smtp_host is required")
-		return
+	if strings.TrimSpace(sm.req.SmtpHost) == "" {
+		jsonErr(sm.w, http.StatusBadRequest, "smtp_host is required")
+		return true
 	}
-	if strings.TrimSpace(req.Username) == "" {
-		jsonErr(w, http.StatusBadRequest, "username is required")
-		return
+	if strings.TrimSpace(sm.req.Username) == "" {
+		jsonErr(sm.w, http.StatusBadRequest, "username is required")
+		return true
 	}
 
 	// NOTE: the 0.1.0 cap-1-per-workspace rule was removed 2026-07-03
@@ -283,22 +315,29 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	// Pair-addressing (same day) further lifted "one mailbox per agent" — an
 	// agent may hold a distinct mailbox in each workspace it belongs to.
 
-	refName := mailboxCredKey(agentID, workspaceID)
-	passwordProvided := req.Password != nil
-	clearPassword := passwordProvided && strings.TrimSpace(*req.Password) == ""
+	sm.refName = mailboxCredKey(sm.agentID, sm.workspaceID)
+	sm.passwordProvided = sm.req.Password != nil
+	sm.clearPassword = sm.passwordProvided && strings.TrimSpace(*sm.req.Password) == ""
+	return false
+}
 
+// storePassword stores a supplied non-empty mailbox password before persisting its reference.
+func (sm *restAPISetAgentMailbox) storePassword() bool {
 	// Route the password into the credential store BEFORE the config write so the
 	// stored mailbox can authenticate the moment its ref is persisted.
-	if passwordProvided && !clearPassword {
-		if _, err := a.storeCredential(refName, *req.Password); err != nil {
-			slog.Error("rest: store mailbox credential", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not store mailbox password: %v", err))
-			return
+	if sm.passwordProvided && !sm.clearPassword {
+		if _, err := sm.a.storeCredential(sm.refName, *sm.req.Password); err != nil {
+			slog.Error("rest: store mailbox credential", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
+			jsonErr(sm.w, http.StatusInternalServerError, fmt.Sprintf("could not store mailbox password: %v", err))
+			return true
 		}
 	}
+	return false
+}
 
-	var persistedRef string
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+// persistConfig updates the mailbox config while preserving password and tool-policy semantics.
+func (sm *restAPISetAgentMailbox) persistConfig() bool {
+	if err := sm.a.safeUpdateConfigJSON(func(m map[string]any) error {
 		mailboxes, _ := m["mailboxes"].(map[string]any)
 		if mailboxes == nil {
 			mailboxes = map[string]any{}
@@ -308,12 +347,12 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 		// Normalize the agent's entry into the nested workspace-keyed shape,
 		// folding in (or discarding, if unaddressable) any still-on-disk
 		// legacy flat entry from a pre-pair-addressing install.
-		byWorkspace, err := mailboxAgentEntryToNested(mailboxes[agentID])
+		byWorkspace, err := mailboxAgentEntryToNested(mailboxes[sm.agentID])
 		if err != nil {
 			return err
 		}
 
-		existing, _ := byWorkspace[workspaceID].(map[string]any)
+		existing, _ := byWorkspace[sm.workspaceID].(map[string]any)
 		if existing == nil {
 			existing = map[string]any{}
 		}
@@ -326,33 +365,33 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 		// overwritten with the request's new value a few lines down.
 		wasEnabled, _ := existing["enabled"].(bool)
 
-		existing["enabled"] = req.Enabled
-		existing["workspace_id"] = workspaceID
-		existing["imap_host"] = req.ImapHost
-		existing["smtp_host"] = req.SmtpHost
-		existing["username"] = req.Username
-		if req.ImapPort != nil {
-			existing["imap_port"] = *req.ImapPort
+		existing["enabled"] = sm.req.Enabled
+		existing["workspace_id"] = sm.workspaceID
+		existing["imap_host"] = sm.req.ImapHost
+		existing["smtp_host"] = sm.req.SmtpHost
+		existing["username"] = sm.req.Username
+		if sm.req.ImapPort != nil {
+			existing["imap_port"] = *sm.req.ImapPort
 		}
-		if req.SmtpPort != nil {
-			existing["smtp_port"] = *req.SmtpPort
+		if sm.req.SmtpPort != nil {
+			existing["smtp_port"] = *sm.req.SmtpPort
 		}
 
 		// Password handling: stored → set ref; cleared → drop ref; omitted → keep.
 		switch {
-		case clearPassword:
+		case sm.clearPassword:
 			existing["password_ref"] = ""
-		case passwordProvided:
-			existing["password_ref"] = refName
+		case sm.passwordProvided:
+			existing["password_ref"] = sm.refName
 		}
 		if pr, _ := existing["password_ref"].(string); pr != "" {
-			persistedRef = pr
+			sm.persistedRef = pr
 		}
 		// Never persist a plaintext password key.
 		delete(existing, "password")
 
-		byWorkspace[workspaceID] = existing
-		mailboxes[agentID] = byWorkspace
+		byWorkspace[sm.workspaceID] = existing
+		mailboxes[sm.agentID] = byWorkspace
 
 		// Tool-policy grant: enabling a mailbox is the operator's explicit
 		// opt-in to the email tools for this agent (the wire contract's
@@ -381,30 +420,34 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 		// tool the operator had just locked down — a privilege-widening
 		// regression, the mirror image of the dead-mailbox bug this grant
 		// exists to fix (found live, silent-failure-hunter, 2026-07-06).
-		if req.Enabled && !wasEnabled {
-			grantEmailToolAllows(a.homePath, agentID)
+		if sm.req.Enabled && !wasEnabled {
+			grantEmailToolAllows(sm.a.homePath, sm.agentID)
 		}
 		return nil
 	}); err != nil {
 		if errors.Is(err, errMailboxEntryMalformed) {
-			msg := fmt.Sprintf("mailboxes entry for agent %q is malformed (mixed legacy/nested shape)", agentID)
+			msg := fmt.Sprintf("mailboxes entry for agent %q is malformed (mixed legacy/nested shape)", sm.agentID)
 			slog.Error(
 				"rest: configure mailbox: malformed entry",
 				"agent_id",
-				agentID,
+				sm.agentID,
 				"workspace_id",
-				workspaceID,
+				sm.workspaceID,
 				"error",
 				err,
 			)
-			jsonErr(w, http.StatusInternalServerError, msg)
-			return
+			jsonErr(sm.w, http.StatusInternalServerError, msg)
+			return true
 		}
-		slog.Error("rest: configure mailbox", "agent_id", agentID, "workspace_id", workspaceID, "error", err)
-		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
-		return
+		slog.Error("rest: configure mailbox", "agent_id", sm.agentID, "workspace_id", sm.workspaceID, "error", err)
+		jsonErr(sm.w, http.StatusInternalServerError, fmt.Sprintf("could not save config: %v", err))
+		return true
 	}
+	return false
+}
 
+// reloadAndPrepareResponse reloads agent tools and prepares the persisted mailbox representation.
+func (sm *restAPISetAgentMailbox) reloadAndPrepareResponse() {
 	// Re-wire the agent's tools so the email tools are (de)registered to match
 	// the new mailbox state. triggerReloadAndWait (not a bare TriggerReload) —
 	// mirrors createAgent/updateAgent/updateAgentTools: registerEmailToolsForAgent
@@ -417,51 +460,51 @@ func (a *restAPI) setAgentMailbox(w http.ResponseWriter, r *http.Request, agentI
 	// run. triggerReloadAndWait absorbs ErrReloadNotConfigured (the normal
 	// no-op path in unit tests without the full reload pipeline wired)
 	// internally, so a non-nil error here is always a genuine reload failure.
-	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
+	if confirmed, err := sm.a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error(
 			"rest: mailbox configure reload failed",
 			"agent_id",
-			agentID,
+			sm.agentID,
 			"workspace_id",
-			workspaceID,
+			sm.workspaceID,
 			"error",
 			err,
 		)
-		jsonErr(w, http.StatusServiceUnavailable,
+		jsonErr(sm.w, http.StatusServiceUnavailable,
 			"config saved but in-memory reload failed; restart the gateway or retry")
 		return
 	} else if !confirmed {
 		slog.Warn(
 			"rest: mailbox configure reload did not confirm within the poll window; "+
 				"email tools may not yet reflect the new mailbox state",
-			"agent_id", agentID,
-			"workspace_id", workspaceID,
+			"agent_id", sm.agentID,
+			"workspace_id", sm.workspaceID,
 		)
 	}
 
-	configured := strings.TrimSpace(persistedRef) != ""
+	configured := strings.TrimSpace(sm.persistedRef) != ""
 	if configured {
-		ok, err := a.credentialRefResolves(persistedRef)
+		ok, err := sm.a.credentialRefResolves(sm.persistedRef)
 		if err == nil {
 			configured = ok
 		}
 	}
 
 	out := config.MailboxConfig{
-		Enabled:     req.Enabled,
-		WorkspaceID: workspaceID,
-		IMAPHost:    req.ImapHost,
-		SMTPHost:    req.SmtpHost,
-		Username:    req.Username,
-		PasswordRef: persistedRef,
+		Enabled:     sm.req.Enabled,
+		WorkspaceID: sm.workspaceID,
+		IMAPHost:    sm.req.ImapHost,
+		SMTPHost:    sm.req.SmtpHost,
+		Username:    sm.req.Username,
+		PasswordRef: sm.persistedRef,
 	}
-	if req.ImapPort != nil {
-		out.IMAPPort = *req.ImapPort
+	if sm.req.ImapPort != nil {
+		out.IMAPPort = *sm.req.ImapPort
 	}
-	if req.SmtpPort != nil {
-		out.SMTPPort = *req.SmtpPort
+	if sm.req.SmtpPort != nil {
+		out.SMTPPort = *sm.req.SmtpPort
 	}
-	jsonOK(w, mailboxToWire(agentID, workspaceID, out, configured))
+	jsonOK(sm.w, mailboxToWire(sm.agentID, sm.workspaceID, out, configured))
 }
 
 // deleteAgentMailbox handles DELETE /api/v1/agents/{id}/mailboxes/{workspaceId}.
