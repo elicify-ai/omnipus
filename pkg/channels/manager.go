@@ -1738,24 +1738,59 @@ func (m *Manager) GetEnabledChannels() []string {
 	return names
 }
 
+// managerReload carries the shared state of Reload across its stages.
+type managerReload struct {
+	m           *Manager
+	ctx         context.Context
+	cfg         *config.Config
+	secrets     credentials.SecretBundle
+	oldConfig   *config.Config
+	oldSecrets  credentials.SecretBundle
+	list        map[string]string
+	added       []string
+	removed     []string
+	oldTask     *asyncTask
+	dispatchCtx context.Context
+	cancel      context.CancelFunc
+	deferFuncs  []func()
+	cc          map[string]config.ChannelInstanceConfig
+}
+
 // Reload applies configuration changes to the channel manager. It compares
 // channel config hashes to detect additions and removals: removed channels are
 // stopped, added channels are initialized and started, and existing (unchanged)
 // channel workers are restarted on a fresh context to ensure continued routing.
 func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets credentials.SecretBundle) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	mr := &managerReload{m: m, ctx: ctx, cfg: cfg, secrets: secrets}
 
+	mr.m.mu.Lock()
+	defer mr.m.mu.Unlock()
+
+	mr.prepareDispatch()
+
+	mr.quiesceDispatch()
+
+	mr.removeChannels()
+	if r0, stop := mr.initializeAdded(); stop {
+		return r0
+	}
+	mr.startAdded()
+
+	return mr.restartExisting()
+}
+
+// prepareDispatch saves rollback state, installs the new configuration, and refreshes the dispatch context.
+func (mr *managerReload) prepareDispatch() {
 	// Save old config and secrets so we can revert on error.
-	oldConfig := m.config
-	oldSecrets := m.secrets
+	mr.oldConfig = mr.m.config
+	mr.oldSecrets = mr.m.secrets
 
 	// Update config and secrets early: initChannel uses m.config and m.secrets via factory call.
-	m.config = cfg
-	m.secrets = secrets
+	mr.m.config = mr.cfg
+	mr.m.secrets = mr.secrets
 
-	list := toChannelHashes(cfg)
-	added, removed := compareChannels(m.channelHashes, list)
+	mr.list = toChannelHashes(mr.cfg)
+	mr.added, mr.removed = compareChannels(mr.m.channelHashes, mr.list)
 
 	// Fix 16: cancel the existing dispatcher before creating a new one to prevent context leak.
 	//
@@ -1763,9 +1798,9 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	// (below) immediately overwrites m.dispatchTask/m.dispatchCtx with a fresh
 	// generation, so oldTask is the only reference we will have left to wait on
 	// the OLD generation's goroutines in the quiesce phase further down.
-	oldTask := m.dispatchTask
-	if oldTask != nil {
-		oldTask.cancel()
+	mr.oldTask = mr.m.dispatchTask
+	if mr.oldTask != nil {
+		mr.oldTask.cancel()
 	}
 
 	// Refresh the dispatch context (and m.dispatchCtx, used by RegisterChannel and
@@ -1777,8 +1812,11 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	// quiesce wait releases m.mu: a concurrent RegisterChannel landing in that
 	// released window must bind its worker to this live context, not the one we
 	// just cancelled above.
-	dispatchCtx, cancel := m.newDispatchContext(ctx)
+	mr.dispatchCtx, mr.cancel = mr.m.newDispatchContext(mr.ctx)
+}
 
+// quiesceDispatch waits for the previous dispatch generation to exit without holding the manager lock.
+func (mr *managerReload) quiesceDispatch() {
 	// Quiesce the OLD dispatch generation before ANY worker queue for a removed
 	// channel is closed (see unregisterChannelLocked, invoked from deferFuncs at
 	// the end of this function).
@@ -1813,18 +1851,21 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	// m.config/m.secrets paired with the OLD m.channels/m.workers/m.channelHashes
 	// during this window, but none of those readers combine config with the
 	// channel set, so that transient mismatch is not observable as a bug.
-	if oldTask != nil {
-		m.mu.Unlock()
-		oldTask.wg.Wait() // OLD dispatchers have EXITED; nothing can send on a removed channel's queue now
-		m.mu.Lock()
+	if mr.oldTask != nil {
+		mr.m.mu.Unlock()
+		mr.oldTask.wg.Wait() // OLD dispatchers have EXITED; nothing can send on a removed channel's queue now
+		mr.m.mu.Lock()
 	}
+}
 
+// removeChannels stops removed channels and schedules their locked unregister operations.
+func (mr *managerReload) removeChannels() {
 	// Fix 14 (removed loop): capture loop variable with a local copy to avoid Go closure capture bug.
-	deferFuncs := make([]func(), 0, len(removed)+len(added))
-	for _, name := range removed {
+	mr.deferFuncs = make([]func(), 0, len(mr.removed)+len(mr.added))
+	for _, name := range mr.removed {
 		n := name // local copy — prevents closure from capturing the loop variable
 		// Stop all channels
-		channel := m.channels[n]
+		channel := mr.m.channels[n]
 		// Defense-in-depth: a "removed" name that never resolved to a registered
 		// channel (e.g. it failed to construct on a prior boot/reload) leaves
 		// m.channels[n] nil. Calling Stop would panic and crash the gateway. Skip the
@@ -1833,38 +1874,43 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 			logger.WarnCF("channels", "Skipping stop for unregistered channel", map[string]any{
 				"channel": n,
 			})
-			deferFuncs = append(deferFuncs, func() {
-				m.unregisterChannelLocked(n)
+			mr.deferFuncs = append(mr.deferFuncs, func() {
+				mr.m.unregisterChannelLocked(n)
 			})
 			continue
 		}
 		logger.InfoCF("channels", "Stopping channel", map[string]any{
 			"channel": n,
 		})
-		if err := channel.Stop(ctx); err != nil {
+		if err := channel.Stop(mr.ctx); err != nil {
 			logger.ErrorCF("channels", "Error stopping channel", map[string]any{
 				"channel": n,
 				"error":   err.Error(),
 			})
 		}
-		deferFuncs = append(deferFuncs, func() {
-			m.unregisterChannelLocked(n)
+		mr.deferFuncs = append(mr.deferFuncs, func() {
+			mr.m.unregisterChannelLocked(n)
 		})
 	}
+}
+
+// initializeAdded builds added-channel configuration, filters stale failures, and initializes new channels.
+func (mr *managerReload) initializeAdded() (error, bool) {
 	// dispatchCtx/cancel were already created above (before the quiesce wait), so
 	// added-channel workers below bind to that same refreshed generation.
-	cc, err := toChannelConfig(cfg, added)
+	var err error
+	mr.cc, err = toChannelConfig(mr.cfg, mr.added)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("toChannelConfig error: %v", err))
-		m.config = oldConfig
-		m.secrets = oldSecrets
-		cancel()
-		return err
+		mr.m.config = mr.oldConfig
+		mr.m.secrets = mr.oldSecrets
+		mr.cancel()
+		return err, true
 	}
 	// Capture the current failure list before clearing so we can revert it if
 	// initChannels fails — preventing a false-positive degraded signal after a
 	// rolled-back reload.
-	oldFailed := append([]ChannelInitError(nil), m.failedChannels...)
+	oldFailed := append([]ChannelInitError(nil), mr.m.failedChannels...)
 
 	// Scope the clear to (a) the channels being re-attempted (the added set)
 	// and (b) any channel that is no longer enabled in the NEW config at all.
@@ -1894,34 +1940,39 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	// all right now", independent of whether it was ever hash-committed.
 	// Disabling a channel is a clean state, never a degraded one, regardless
 	// of whether it was running, never-started, or already failed.
-	addedNames := make(map[string]struct{}, len(added))
-	for _, n := range added {
+	addedNames := make(map[string]struct{}, len(mr.added))
+	for _, n := range mr.added {
 		addedNames[n] = struct{}{}
 	}
-	kept := m.failedChannels[:0]
-	for _, f := range m.failedChannels {
-		if _, stillEnabled := list[f.Name]; !stillEnabled {
+	kept := mr.m.failedChannels[:0]
+	for _, f := range mr.m.failedChannels {
+		if _, stillEnabled := mr.list[f.Name]; !stillEnabled {
 			continue // no longer enabled in the new config — stale, drop it
 		}
 		if _, inAdded := addedNames[f.Name]; !inAdded {
 			kept = append(kept, f)
 		}
 	}
-	m.failedChannels = kept
+	mr.m.failedChannels = kept
 
-	err = m.initChannels(cc)
+	err = mr.m.initChannels(mr.cc)
 	if err != nil {
 		logger.ErrorC("channels", fmt.Sprintf("initChannels error: %v", err))
-		m.config = oldConfig
-		m.secrets = oldSecrets
-		m.failedChannels = oldFailed
-		cancel()
-		return err
+		mr.m.config = mr.oldConfig
+		mr.m.secrets = mr.oldSecrets
+		mr.m.failedChannels = oldFailed
+		mr.cancel()
+		return err, true
 	}
+	return nil, false
+}
+
+// startAdded starts newly initialized channels and creates their workers.
+func (mr *managerReload) startAdded() {
 	// Fix 14 (added loop): capture loop variables with local copies.
-	for _, name := range added {
+	for _, name := range mr.added {
 		n := name // local copy — prevents closure from capturing the loop variable
-		channel := m.channels[n]
+		channel := mr.m.channels[n]
 		// Defense-in-depth: if the diff produced an "added" name that does not resolve
 		// to a constructed channel (e.g. a config-key/registered-name mismatch, or an
 		// initChannels if-ladder that skipped a misconfigured channel), m.channels[n]
@@ -1944,7 +1995,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 			reason := fmt.Errorf(
 				"reload: channel %q was marked for start but is not registered "+
 					"(config/registration name mismatch or skipped init)", n)
-			if inst, ok := cc[n]; ok {
+			if inst, ok := mr.cc[n]; ok {
 				instType := inst.Type
 				if instType == "" {
 					instType = n
@@ -1957,43 +2008,46 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 					}
 				}
 			}
-			m.recordChannelFailure(n, n, reason)
-			delete(list, n)
+			mr.m.recordChannelFailure(n, n, reason)
+			delete(mr.list, n)
 			continue
 		}
 		logger.InfoCF("channels", "Starting channel", map[string]any{
 			"channel": n,
 		})
-		if err := channel.Start(ctx); err != nil {
+		if err := channel.Start(mr.ctx); err != nil {
 			logger.ErrorCF("channels", "Failed to start channel", map[string]any{
 				"channel": n,
 				"error":   err.Error(),
 			})
 			// Fix 35: don't commit the hash for channels that failed to start.
-			delete(list, n)
+			delete(mr.list, n)
 			continue
 		}
 		// Lazily create worker only after channel starts successfully. Resolve
 		// TYPE from instance ID for rate limiting (see channelTypeForRateLimit).
-		w := newChannelWorker(m.channelTypeForRateLimit(n), channel)
-		m.workers[n] = w
+		w := newChannelWorker(mr.m.channelTypeForRateLimit(n), channel)
+		mr.m.workers[n] = w
 		// Snapshot m.config (already the NEW cfg, assigned above) while still
 		// holding m.mu.Lock() — see runWorker's doc comment.
-		go m.runWorker(dispatchCtx, n, w, m.config)
-		go m.runMediaWorker(dispatchCtx, n, w)
-		deferFuncs = append(deferFuncs, func() {
-			m.registerChannelLocked(n, channel)
+		go mr.m.runWorker(mr.dispatchCtx, n, w, mr.m.config)
+		go mr.m.runMediaWorker(mr.dispatchCtx, n, w)
+		mr.deferFuncs = append(mr.deferFuncs, func() {
+			mr.m.registerChannelLocked(n, channel)
 		})
 	}
+}
 
+// restartExisting commits channel hashes and restarts dispatchers and unchanged-channel workers.
+func (mr *managerReload) restartExisting() error {
 	// Commit hashes only for successfully started channels.
-	m.channelHashes = list
+	mr.m.channelHashes = mr.list
 
 	// Restart the bus dispatchers + TTL janitor against the new dispatchCtx so
 	// outbound routing and stale-entry eviction resume after the old context was
 	// canceled above. (Reload previously forgot the janitor here — startDispatchers
 	// keeps StartAll and Reload in lockstep so it can't be omitted again.)
-	m.startDispatchers(dispatchCtx)
+	mr.m.startDispatchers(mr.dispatchCtx)
 
 	// Restart workers for existing (unchanged) channels on the new dispatch context.
 	// Without this, unchanged channel workers retain the old (canceled) context
@@ -2003,11 +2057,11 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	// on exit) and then reset those channels before launching new goroutines.
 	// Without this, the new goroutines' defer close() would panic with
 	// "close of closed channel".
-	addedSet := make(map[string]struct{}, len(added))
-	for _, n := range added {
+	addedSet := make(map[string]struct{}, len(mr.added))
+	for _, n := range mr.added {
 		addedSet[n] = struct{}{}
 	}
-	for name, w := range m.workers {
+	for name, w := range mr.m.workers {
 		if _, isNew := addedSet[name]; isNew {
 			continue // already started above
 		}
@@ -2019,8 +2073,8 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 		w.mediaDone = make(chan struct{})
 		// Snapshot m.config (already the NEW cfg) while still holding
 		// m.mu.Lock() — see runWorker's doc comment.
-		go m.runWorker(dispatchCtx, name, w, m.config)
-		go m.runMediaWorker(dispatchCtx, name, w)
+		go mr.m.runWorker(mr.dispatchCtx, name, w, mr.m.config)
+		go mr.m.runMediaWorker(mr.dispatchCtx, name, w)
 	}
 
 	// Execute the register/unregister mutations while STILL holding m.mu.
@@ -2039,7 +2093,7 @@ func (m *Manager) Reload(ctx context.Context, cfg *config.Config, secrets creden
 	// on the lock we hold. The *Locked helpers must never acquire m.mu themselves
 	// (only their exported wrappers RegisterChannel/UnregisterChannel do) — calling
 	// them here while holding the lock relies on that invariant.
-	for _, f := range deferFuncs {
+	for _, f := range mr.deferFuncs {
 		f()
 	}
 	return nil
