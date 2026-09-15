@@ -603,8 +603,6 @@ func TestAgentLoop_EmitsContextCompressEventOnRetry(t *testing.T) {
 				DefaultModel:      config.DefaultModel{Model: "test-model"},
 				MaxTokens:         4096,
 				MaxToolIterations: 10,
-				// Explicit ContextWindow so the PROACTIVE budget check (loop.go
-				// isOverContextBudget, the preferred compression path per
 			},
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},

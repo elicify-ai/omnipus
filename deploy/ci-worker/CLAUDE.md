@@ -1,4 +1,4 @@
-# CLAUDE.md — CI worker (`ci-omnipus`)
+# CLAUDE.md — CI workers (`ci-omnipus`, `ci-omnipus-3`)
 
 Scoped guidance for the `deploy/ci-worker/` directory. Loaded automatically by Claude Code
 whenever a file in this directory (or a descendant) is read. See the root `CLAUDE.md`'s
@@ -50,12 +50,21 @@ as if it were a full pass):
    them on here is not the answer: this box has no dbus and a slow shared Chrome, so they
    fail on the environment (`page load failed: context deadline exceeded`) rather than on
    the code, which is precisely how a false RED trains people to ignore a gate.
-2. **`run_gotest` excuses flakes.** A package that fails the parallel run but passes the
-   isolated `-p 1` re-run prints `FLAKE (passed isolated)` and the gate still returns 0.
-   That is intentional for timing-sensitive integration tests — but it means a green
-   verdict can contain an absorbed failure. **Read the log for `FLAKE (passed isolated)`
-   before treating a green as clean.** (This is exactly how a real `pkg/agent` failure
-   was absorbed on 2026-07-26 and reported upstream as an unqualified pass.)
+2. **`run_gotest` and `run_gorace` excuse HANG-SHAPED flakes only — never assertion
+   failures.** A package that fails the contended run but passes the isolated `-p 1`
+   re-run prints `FLAKE (passed isolated)` and the gate still returns 0. That is
+   intentional for timing-sensitive integration tests. **Since 2026-09-12 both gates
+   refuse to excuse any output containing `--- FAIL`**: contention causes timeouts and
+   hangs, it does not cause a named assertion to fail, so a `--- FAIL` line is real
+   under any load and is reported as `REAL FAILURE (assertion failure detected — never
+   excused)`. What can still be excused is exclusively a bare `FAIL <pkg>` summary with
+   no `--- FAIL` anywhere — the hang/contention signature. This closes the hole that
+   absorbed a real `pkg/agent` failure on 2026-07-26 and reported it upstream as an
+   unqualified pass; `.github/workflows/pr.yml`'s plain step had the guard, the race
+   step and this worker did not. **Still read the log for `FLAKE (passed isolated)`**
+   — an excused hang is worth knowing about, and on 2026-09-12 one turned out to be a
+   harness port race that needed no contention at all (`pkg/agent/testutil`'s
+   `allocatePort` doc comment has the three mechanisms).
 
    A detected `DATA RACE` is now carved out and can never be flake-excused (mirrors the
    guard in `pr.yml`) — but since nothing here runs with `-race`, that carve-out only
@@ -74,7 +83,7 @@ The Go test/build suite is run on a dedicated Fly worker, **never in the dev pod
   ```bash
   fly ssh console --app ci-omnipus -C "/cache/runci.sh <ref> <gate>"
   ```
-- **Gates**: `all | go-build | go-vet | go-test | contracts | spa | gofmt | quick | embed-build | e2e`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE"). `e2e` runs the full Playwright matrix (40 specs, ~20–30 min) — see "E2E gate" below.
+- **Gates**: `all | go-build | go-vet | go-test | go-race | records-no-sqlite | contracts | spa | gofmt | quick | embed-build | e2e`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE"). `records-no-sqlite` (added for review finding F7) runs `pkg/gateway/rest_knowledge_find_propindexless_test.go`'s two tests under `-tags goolm,stdjson,records_no_sqlite` — the `records_no_sqlite` build tag otherwise appears nowhere in CI, so this is the only gate (here or in `.github/workflows/pr.yml`'s mirrored step) that ever exercises that honesty-contract carve-out. `e2e` runs the full Playwright matrix (40 specs, ~20–30 min) — see "E2E gate" below.
 - **When to use it**:
   - Pre-push verification on a feature branch **before** opening a PR (when you want a signal without burning a PR slot).
   - Pre-merge gate on a hotfix / release branch (faster turnaround than the public PR workflow).
@@ -104,7 +113,33 @@ v0.1.0 epic, 2026-06-14; the third on 2026-07-26):
    install. If the e2e gate ever goes broadly red again, check the failure DURATIONS
    before reading it as a regression.
 
-**E2E gate (Playwright).** The `e2e` gate (and the `e2e` step inside `all`) builds the SPA + gateway binary once, then **fans the Playwright suite out across the shards defined in `tests/e2e/shards.json`** — the SAME plan `.github/workflows/pr.yml` uses (both consume `scripts/e2e-shards.sh`), so the two CI surfaces can never drift. Each shard boots its OWN isolated gateway (own port `6060`–`6064`, own `OMNIPUS_HOME`, own `credentials.json`, own auth + skip-manifest files), completes onboarding via the public API, runs its slice of the matrix with `--reporter=list --output=/tmp/e2e-<shard>-results`, and is torn down via a per-shard `trap RETURN`. A whole-run interrupt reaps survivors by **exact pid** from `/tmp/e2e-shard-*.gwpid` — never pkill-by-pattern (self-kill risk). Because the shards run concurrently, wall-clock drops from the old ~3 h single serial run to roughly the slowest single shard (~15 min). `scripts/e2e-shards.sh check` runs first and **FAILS the gate** if any `tests/e2e/*.spec.ts` is unassigned (it would silently never run) or the plan references a deleted spec. Per-shard PASS/FAIL is printed at the end, and each failing shard's full log (`/tmp/e2e-shard-<name>.log`) is dumped.
+4. **Missing-display false-RED (headed shard).** `playwright.config.ts`'s `preview-headed`
+   project runs `headless: false` on purpose — ADR-067 tests 57/58 measure what a REAL
+   browser's PDF viewer does, which headless cannot answer. This box has no X display, so
+   without a virtual one every headed test dies inside `browserType.launch` in **2–4 ms**
+   with `Target page, context or browser has been closed`, across specs that share
+   nothing. Same tell as trap 3: a real assertion cannot finish in 4 ms. Fixed 2026-09-11:
+   `run_e2e` starts one `Xvfb :99` and exports `DISPLAY` before any shard launches (NOT
+   `xvfb-run`, which needs `xauth`, which this image lacks — measured). If the shard goes
+   red this way again, the gate prints a WARNING on stderr naming it as environmental.
+
+5. **Disk-full false-RED (`ENOSPC`).** Each e2e shard's `OMNIPUS_HOME` is ~400 MB and
+   there are 15 shards; until 2026-09-11 they were hardcoded to `/tmp`, which shares the
+   **7.8 GB root overlay**, and the matrix filled it to 96 % — shards then failed with
+   `no space left on device`, which reads as a test failure. Shard state now lives under
+   `$E2E_DIR=/cache/e2e` on the 40 GB volume, wiped at the start of every run. If a
+   shard log contains `ENOSPC`, it is the environment, not the code: check `df -h /`.
+
+**Where the evidence goes, and how long it lives.** `$E2E_DIR` is wiped at the START of
+every e2e run so a stale log can never be mistaken for this run's (two-day-old shard
+logs were read as current failures twice on 2026-09-11). Failed shards leave a
+`e2e-shard-<name>.FAILED` marker the moment they fail, and the NEXT run copies those
+shards' console log, Playwright trace/screenshot/video/error-context and gateway logs to
+`$E2E_DIR.last-failed/<shard>/` before wiping — overwritten each run, so it cannot grow.
+The `~400 MB` session data is not copied. Read `last-failed` before re-running: on
+2026-09-12 a re-run destroyed the only artifacts that would have explained a failure.
+
+**E2E gate (Playwright).** The `e2e` gate (and the `e2e` step inside `all`) builds the SPA + gateway binary once, then **fans the Playwright suite out across the shards defined in `tests/e2e/shards.json`** — the SAME plan `.github/workflows/pr.yml` uses (both consume `scripts/e2e-shards.sh`), so the two CI surfaces can never drift. Each shard boots its OWN isolated gateway (own port `6060`–`6064`, own `OMNIPUS_HOME`, own `credentials.json`, own auth + skip-manifest files), completes onboarding via the public API, runs its slice of the matrix with `--reporter=list --output=$E2E_DIR/e2e-<shard>-results`, and is torn down via a per-shard `trap RETURN`. A whole-run interrupt reaps survivors by **exact pid** from `$E2E_DIR/e2e-shard-*.gwpid` — never pkill-by-pattern (self-kill risk). Because the shards run concurrently, wall-clock drops from the old ~3 h single serial run to roughly the slowest single shard (~15 min). `scripts/e2e-shards.sh check` runs first and **FAILS the gate** if any `tests/e2e/*.spec.ts` is unassigned (it would silently never run) or the plan references a deleted spec. Per-shard PASS/FAIL is printed at the end, and each failing shard's full log (`$E2E_DIR/e2e-shard-<name>.log`) is dumped.
 
   **Env knobs:** `E2E_SPECS="<space-separated specs>"` runs the OLD single-gateway path for a fast targeted re-verify (keeps the HTML report); `E2E_SHARDED=0` forces the single-gateway path for the full matrix.
 
@@ -148,4 +183,55 @@ pattern-kill (self-kill risk, above). **Redeploying `/cache/runci.sh` while a ru
 flight still mutates the script underneath it** — the lock does not protect against that,
 so hold redeploys until the worker is idle.
 
+**Second worker: `ci-omnipus-3` (added 2026-09-12).** When `ci-omnipus` is held by another
+session's run (the flock above can queue you for up to 90 minutes), use the clone instead of
+waiting or killing anything. It is the same image, same `fly.toml` shape (`sin`,
+`performance-8x/16GB`, its own `ci_cache` volume at `/cache`), same secrets slot `a`
+(`OPENROUTER_API_KEY`), and its own independent `/tmp/runci.lock`, so a run there never
+touches the first worker's checkout, binary, or shard homes. Everything in this file applies
+verbatim with `--app ci-omnipus-3`:
+
+```bash
+fly ssh console --app ci-omnipus-3 -C "/cache/runci.sh <ref> <gate>"
+```
+
+Three things to know before trusting it:
+
+1. **`/cache/runci.sh` is deployed PER WORKER.** A redeploy to one does not reach the other;
+   compare `md5sum /cache/runci.sh` on each against the repo file before reading a verdict,
+   or you will run an older script on one box and a newer one on the other.
+2. **`fly ssh console -C` does not forward stdin**, so the base64-pipe recipe above echoes the
+   payload instead of writing it. Use `fly ssh sftp put deploy/ci-worker/runci.sh
+   /cache/runci.sh --app <app>` then `chmod +x` over the console. (Found when first provisioning
+   this worker.)
+3. **Key slots.** All three (`OPENROUTER_API_KEY`, `_B`, `_C`) are set since 2026-09-13,
+   distinct keys, so the shard plan's `key_slot` spread works here as on `ci-omnipus`. For the
+   first day it ran on slot `a` alone, and all nine LLM shards shared one key. What that
+   looks like is NOT 429s (zero were logged on 2026-09-12) but
+   **slow completions**: judge calls of ~80 s, a supervisor re-plan turn of 3 min, a
+   goal test taking 5+ min in the matrix and 2 min when run alone. The tests with the
+   tightest real-time windows lose the race first — `Conformance_t3b_TargetedRetryOnlyE2E`
+   (4 judge rounds inside a 7-min window) failed in the matrix and passed in 8.8 min in
+   isolation on the same commit, and the judge's own 120 s call timeout tripped three times
+   in one conformance-chat shard. Before reading such a failure as a regression, re-run the
+   ONE spec with `E2E_SPECS=…` (no contention) and compare durations; then set the extra
+   keys with `fly secrets set --app ci-omnipus-3` so the matrix stops sharing one window.
+
+Detached runs (`nohup … > /tmp/ci-run.log &` over the console) survive an SSH drop and a
+session restart; resume by reading `/tmp/ci-run.log` and `ps -eo pid,etime,cmd | grep
+'[r]unci.sh'`. A second `runci.sh` pid with the same argv and a younger `etime` is the shard
+runner's forked subshell, not a duplicate run.
+
+**Trap 6 — leftover `/cache/tmp/Test*` directories are post-shutdown writers.** Go's
+`t.TempDir` removes a test's home dir at cleanup; a directory that still exists after the
+run means something wrote into it AFTER the gateway reported stopped (the writer re-created
+the path). Usually that is silent — the test passes and the residue accumulates — and
+occasionally the write lands mid-`RemoveAll` and fails an otherwise green test with
+`directory not empty`. Read the residue as the defect, not the failure as the flake:
+`ls -d /cache/tmp/Test*/ | wc -l` should be 0 after a run, and
+`find /cache/tmp/Test*/ -type f` names the file, hence the subsystem. On 2026-09-12 it was
+130 dirs, all `cache/model_limits.json` (ADR-066 rung 4's fetch on a background context).
+
 **Cost / lifecycle**: the worker is stopped when idle (no public service). If `fly status` shows the machine `stopped`, run `fly machines start <id> --app ci-omnipus` once before invoking `runci.sh`; the SSH console will auto-start it otherwise. Watch the persistent `/cache` volume for disk pressure — `fly ssh console --app ci-omnipus -C 'df -h /cache'`.
+
+**Trap 7 — stopping a run: kill the exact pid, never a process group.** `ps -o pgid` can print `0` for a nohup'd `runci.sh`; `kill -TERM -0` then signals every process on the VM, including init, and the Fly machine stops (2026-09-14, `ci-omnipus-3`, recovered with `fly machines start <id>`; `/cache` survived). Stop a superseded run with `kill -TERM <runci pid>` and, if its children linger, `pkill -TERM -P <runci pid>`. Note also that a GATE FAILURE in `go-build` does not end the run: the remaining gates still execute, so a superseded run holds the lock for the full duration unless stopped.

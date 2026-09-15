@@ -122,6 +122,23 @@ func recallInjectionFixture(
 		},
 	}
 	cfg.Context.DefaultContextWindow = intPtr(cw)
+	// Compressed manifest ON — the shipped default (config.DefaultConfig(),
+	// pkg/config/defaults.go). This bare cfg literal bypasses DefaultConfig()
+	// like most of this package's fixtures (see mustNewAgentLoop's own
+	// ensureTestIsolatedAgentHome doc), so without this line
+	// sentToolSurfaceTokens silently takes its "compressed manifest off"
+	// fallback (loop.go) and charges a full JSON schema for EVERY registered
+	// tool regardless of manifest tier or allow/deny policy — an
+	// order-of-magnitude over-count vs. what a real install (or this
+	// fixture's own wire request, policy-filtered to one or two tools) ever
+	// sends. TestRunTurn_InjectedSpanSubjectToD5 measured that over-count at
+	// ~45.2k, then ~47.4k tokens once the ADR-068 knowledge tools grew past
+	// six — both times more than a same-sized real (compressed) surface,
+	// which charges full schemas only for the small ManifestFull/Infra set
+	// and one manifest-note line per lazy tool. Catalog growth must not keep
+	// tripping this fixture's budget arithmetic through a code path no real
+	// deployment takes by default.
+	cfg.Tools.Manifest.Compressed = true
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
 	t.Cleanup(al.Close)
 

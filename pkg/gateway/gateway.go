@@ -174,7 +174,14 @@ func selfHealWriteHook(reg *configSelfWriteRegistry) config.SelfHealWriteHook {
 
 type services struct {
 	CronService *cron.CronService
-	TaskTrigger *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
+	// LiveLimits is ADR-066 rung 4; retained so shutdown can Close it (abort
+	// in-flight fetches, forbid cache writes) — see agent.LiveLimits.Close.
+	LiveLimits *agent.LiveLimits
+	// catalogRefreshCancel / catalogRefreshDone are startCatalogRefreshLoop's
+	// handles; shutdown cancels, then waits on done (bounded).
+	catalogRefreshCancel context.CancelFunc
+	catalogRefreshDone   <-chan struct{}
+	TaskTrigger          *agent.TaskTriggerScheduler // fires once/every/recurring task triggers via a dedicated CronService
 	// TaskDrain owns the queued-task (`next` → dispatch) poll unconditionally,
 	// independent of which heartbeat path is active. The now-removed global
 	// HeartbeatService was skipped whenever a per-agent heartbeat was active,
@@ -1287,6 +1294,70 @@ func buildKnownBuiltinToolNames() map[string]struct{} {
 		for _, name := range []string{"create_plan", "execute_plan", "run_task", "inspect_session"} {
 			out[name] = struct{}{}
 		}
+		// ADR-068 D15.3 (FR-070/FR-071) — the knowledge-base tool names (six
+		// under ADR-068, plus KB-1/KB-2's knowledge_list and
+		// knowledge_base_create — defect-list-knowledge-base-ux-2026-09-08.md,
+		// founder-ratified 2026-09-08) are unioned in explicitly here for the
+		// same reason, and under the same rule, as the ADR-052 four directly
+		// above: independent of their pkg/knowledge/pkg/vaultprops
+		// implementation landing, so the
+		// tool-policy coverage universe (config.ValidateToolPolicyCoverage /
+		// RepairIncompleteToolPolicyCoverage) recognizes them from the
+		// config-seeding side immediately. Mirrors pkg/coreagent/core.go's
+		// allStaticToolNames literal-for-literal
+		// (TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog
+		// enforces the two stay in sync). Idempotent once the real
+		// implementations register themselves (same names, no duplicate
+		// entries in a set).
+		//
+		// Why the union is load-bearing rather than tidy-up: BOTH the coverage
+		// validator and the load-path repair derive their gap list from this
+		// map, and neither reports anything for a name it does not contain. A
+		// knowledge tool seeded in pkg/config/defaults.go and
+		// pkg/coreagent/core.go but MISSING here is invisible to both — the
+		// boot check passes, no gap is reported, and any test asserting "no
+		// knowledge_* entry was backfilled to deny" passes vacuously because
+		// nothing could ever have been backfilled. That is FR-071's failure
+		// mode, and it is silent: repairAndValidateToolPolicyCoverage below
+		// repairs BEFORE it validates, so a genuine gap ships as an explicit
+		// deny plus one WARN line rather than aborting boot.
+		//
+		// ADR-067's nine (knowledge_search, knowledge_graph, knowledge_create,
+		// knowledge_link, knowledge_set_property, knowledge_append_section,
+		// knowledge_tasks, knowledge_move, knowledge_rename) are RETIRED and
+		// deliberately absent below — see knowledge_tools_wire.go's header for
+		// why their Go implementations are not deleted even though they are no
+		// longer part of the agent-callable catalog.
+		for _, name := range []string{
+			// READ tier — touch nothing outside what the caller asked for.
+			"knowledge_describe", "knowledge_find", "knowledge_read",
+			// knowledge_list (KB-2a) — also read tier: which knowledge bases
+			// this agent can reach.
+			"knowledge_list",
+			// EDIT — one named file.
+			"knowledge_edit",
+			// RESTRUCTURE — cascades: rewrites files the caller never named.
+			"knowledge_restructure",
+			// CONFIGURE — control plane: changes what existing notes MEAN.
+			"knowledge_configure",
+			// knowledge_base_create (KB-1) — makes a NEW knowledge base.
+			"knowledge_base_create",
+		} {
+			out[name] = struct{}{}
+		}
+		// ADR-081 D11 (unified-search-and-grep-spec.md FR-008/FR-009) — the
+		// grep agent tool is unioned in explicitly here, for the same reason
+		// and under the same rule as the ADR-052 four and the ADR-068 six
+		// directly above: independent of its own implementation package
+		// landing, so the tool-policy coverage universe
+		// (config.ValidateToolPolicyCoverage / RepairIncompleteToolPolicyCoverage)
+		// recognizes it from the config-seeding side immediately. Mirrors
+		// pkg/coreagent/core.go's allStaticToolNames literal-for-literal
+		// (TestBuildKnownBuiltinToolNames_MatchesCoreagentStaticToolCatalog
+		// enforces the two stay in sync). Idempotent once the real tool
+		// implementation registers itself (same name, no duplicate entry in
+		// a set).
+		out["grep"] = struct{}{}
 		knownBuiltinToolNamesCache = out
 	})
 	return knownBuiltinToolNamesCache
@@ -2355,8 +2426,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// The credential comes from the store via the provider's api_key_ref
 	// (InjectFromConfig's env injection first); a cloud row without one is
 	// skipped, never queried.
-	agent.SetLiveWindowLookup(
-		newLiveLimitsForBoot(homePath, credStore, agentLoop, reloadOnLiveWindow(agentLoop)).Lookup)
+	// The instance is RETAINED (runningServices.LiveLimits, below) so
+	// shutdown can Close it: a fetch that is still in flight when the gateway
+	// stops must not write cache/model_limits.json after RunContext returns.
+	liveLimits := newLiveLimitsForBoot(homePath, credStore, agentLoop, reloadOnLiveWindow(agentLoop))
+	agent.SetLiveWindowLookup(liveLimits.Lookup)
 
 	// FR-007 / US-2.AC2: an agent on a `locality: local` row the catalog
 	// cannot size resolved UNKNOWN above (the rung was not installed yet) and
@@ -2434,31 +2508,10 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		}()
 	}
 
-	// B1.2(d): wire the per-thread restrict-failure audit emitter into the
-	// sandbox package now that the agent loop (and thus the audit logger) is
-	// constructed. The hook bridges sandbox → audit without an import cycle —
-	// sandbox only knows about the *audit.Entry type, not the agent loop.
-	// SetRestrictAuditHook is idempotent so this is safe across hot reloads
-	// and the test gateway helpers that re-boot in-process.
-	{
-		al := agentLoop
-		sandbox.SetRestrictAuditHook(func(entry *audit.Entry) {
-			if al == nil {
-				return
-			}
-			logger := al.AuditLogger()
-			if logger == nil {
-				slog.Error("sandbox: per-thread restrict failed (audit logger disabled)",
-					"event", entry.Event, "details", entry.Details)
-				return
-			}
-			// B1.2(a): logger.Log is nil-safe; no further guard needed.
-			if logErr := logger.Log(entry); logErr != nil {
-				slog.Error("sandbox: restrict-failure audit write failed",
-					"event", entry.Event, "error", logErr)
-			}
-		})
-	}
+	// B1.2(d) + ADR-053 D17: wire the sandbox → audit bridges now that the
+	// agent loop (and thus the audit logger) is constructed. See
+	// sandbox_audit_hooks.go; unwired symmetrically in shutdown.go.
+	wireSandboxAuditHooks(agentLoop)
 
 	// Spec-4 FR-5.3 (M-4): GC orphaned external-CLI run directories left behind by
 	// a prior process (crash / SIGKILL / power loss). Runs ONCE at boot, BEFORE any
@@ -2626,32 +2679,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// metadata-only instances (deps-free, never executed — per ADR-018 D-A1).
 	// After sysAgentDeps is wired (below), the registry is re-populated with live deps.
 	// MCPRegistry starts empty; MCP servers populate it at connection time.
-	centralBuiltinReg := tools.NewBuiltinRegistry()
-	for _, t := range systools.AllTools(nil) {
-		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
-			slog.Warn("gateway: central builtin registry pre-population skipped duplicate",
-				"tool", t.Name(), "error", regErr)
-		}
-	}
-	// Register general-builtin metadata (SC-108 / Issue #350): these instances
-	// expose Name/Description/Category for /api/v1/tools but are NEVER Execute()d.
-	// Constructor errors are logged and skipped per the log-and-skip invariant.
-	for _, t := range tools.GeneralBuiltinMetadata() {
-		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
-			slog.Warn("gateway: central builtin registry general-builtin skipped",
-				"tool", t.Name(), "error", regErr)
-		}
-	}
-	// Register browser.* metadata (Issue #350 / catalog gap): browser tools register
-	// into the per-agent registry at agent-loop boot, so without this they were absent
-	// from GET /api/v1/tools. These metadata-only instances (nil *BrowserManager) are
-	// never Execute()d — they expose Name/Description/Category only (ADR-018 D-A1).
-	for _, t := range browser.BrowserBuiltinMetadata() {
-		if regErr := centralBuiltinReg.RegisterBuiltin(t); regErr != nil {
-			slog.Warn("gateway: central builtin registry browser-builtin skipped",
-				"tool", t.Name(), "error", regErr)
-		}
-	}
+	centralBuiltinReg, _ := buildCentralBuiltinRegistry(nil)
 	centralMCPReg := tools.NewMCPRegistry()
 	// Wire the central registries into the agent loop so ReconcileMCP (triggered
 	// by REST/sysagent MCP writes and hot-reload) populates the SAME registry
@@ -2687,9 +2715,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	)
 	if err != nil {
 		stopNag() // don't leak the nag goroutine if service setup fails.
+		liveLimits.Close()
 		return err
 	}
 	runningServices.stopNagBanner = stopNag
+	runningServices.LiveLimits = liveLimits
 
 	// Boot-time browser warm-up steps 1 and 2 — the first TAB and the WebRTC
 	// CAPTURE (see startBrowserWarmBoot's block comment). Deliberately here,
@@ -2941,45 +2971,17 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// (constructed inside setupAndStartServices) would retain the pre-sysAgentDeps
 	// registry. The restAPIRef field was stored by setupAndStartServices exactly
 	// for this late-wire step.
-	centralBuiltinReg = tools.NewBuiltinRegistry()
-	for _, t := range systools.AllTools(sysAgentDeps) {
-		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
-			slog.Warn("gateway: central builtin registry re-population skipped duplicate",
-				"tool", t.Name(), "error", err)
-		}
-	}
-	// Re-register general-builtin metadata in the live-deps registry (metadata-only,
-	// never executed; duplicates skipped). These instances expose correct
-	// Name/Description/Category for /api/v1/tools without executing anything.
-	generalBuiltinsRegistered := 0
-	for _, t := range tools.GeneralBuiltinMetadata() {
-		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
-			slog.Warn("gateway: central builtin registry general-builtin re-population skipped",
-				"tool", t.Name(), "error", err)
-		} else {
-			generalBuiltinsRegistered++
-		}
-	}
-	// Re-register browser.* metadata (metadata-only, never executed; duplicates
-	// skipped) — same catalog-gap fix as the pre-deps block above.
-	browserBuiltinsRegistered := 0
-	for _, t := range browser.BrowserBuiltinMetadata() {
-		if err := centralBuiltinReg.RegisterBuiltin(t); err != nil {
-			slog.Warn("gateway: central builtin registry browser-builtin re-population skipped",
-				"tool", t.Name(), "error", err)
-		} else {
-			browserBuiltinsRegistered++
-		}
-	}
+	centralBuiltinReg, centralBuiltinCounts := buildCentralBuiltinRegistry(sysAgentDeps)
 	// Propagate the updated registry to the already-constructed restAPI (SC-108 fix).
 	if runningServices.restAPIRef != nil {
 		runningServices.restAPIRef.builtinRegistry = centralBuiltinReg
 	}
 	slog.Info("gateway: central BuiltinRegistry re-populated with live deps",
-		"system_tools", centralBuiltinReg.Count()-generalBuiltinsRegistered-browserBuiltinsRegistered,
-		"general_builtins", generalBuiltinsRegistered,
-		"browser_builtins", browserBuiltinsRegistered,
-		"total", centralBuiltinReg.Count())
+		"system_tools", centralBuiltinCounts.system,
+		"general_builtins", centralBuiltinCounts.general,
+		"browser_builtins", centralBuiltinCounts.browser,
+		"knowledge_builtins", centralBuiltinCounts.knowledge,
+		"total", centralBuiltinCounts.total())
 
 	// centralBuiltinReg was just reassigned to a fresh instance above — re-wire
 	// it (and centralMCPReg, unchanged but re-asserted for clarity) into the
@@ -5164,6 +5166,14 @@ func setupAndStartServices(
 		taskLock:               task.TaskFileLock,               // shared striped lock for board task RMW
 	}
 	api.cronService.Store(runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	// D-107: the Library REST write handlers broadcast a library_changed WS
+	// frame after every landed mutation, so a second tab's folder listing
+	// reconciles without a reload. wsHandler was built earlier in boot; store
+	// its broadcast method behind the restAPI's nil-safe hook
+	// (library_change_broadcast.go) — nil until here, no-op after shutdownless
+	// tests that never wire it.
+	libraryChangeFn := func(f gen.LibraryChangedFrame) { wsHandler.broadcastLibraryChange(f) }
+	api.libraryChangeBroadcast.Store(&libraryChangeFn)
 	// ADR-067 FR-037 (T067-11): a catalog refresh invalidates the
 	// entitlement cache — the intersection behind every cached answer was
 	// computed against a document that is no longer the served one.
@@ -5208,6 +5218,16 @@ func setupAndStartServices(
 	// discoverable one per-turn refusal at a time. Surface the full list ONCE
 	// at boot, after workspaces are ensured, so it's visible up front instead.
 	logWorkspacelessAgents(homePath, cfg)
+
+	// ADR-067 W3 (FR-030..FR-034a, FR-038a, FR-039, FR-080): open the index for
+	// every already-mounted knowledge base, push indexing progress over the
+	// WebSocket, and start each collection's drift schedule. Runs after the
+	// workspaces are ensured (it reads their mount records) and before the
+	// listener accepts connections. Interval 0 means FR-038a's six-hour default:
+	// there is no config key for it yet, and KnowledgeLifecycleOptions.DriftInterval
+	// is where one would be passed in.
+	startKnowledgeLifecycle(homePath, wsHandler, 0,
+		knowledgeDriftNotifier(runningServices.notifStore, agentLoop, agentLoop.GetConfig))
 
 	// Recover tasks left "in_progress" by a crashed/abandoned previous process.
 	// Runs before the HTTP listener accepts connections (StartAll, below), so no
@@ -5259,7 +5279,15 @@ func setupAndStartServices(
 	// Serve the embedded SPA (Sovereign Deep UI) as the default handler.
 	// API routes registered above take priority; anything else serves the SPA.
 	// If no SPA was embedded at build time, skip registration (UI not available).
-	if spaHandler := newSPAHandler(); spaHandler != nil {
+	// The allow-list accessor is a closure over the LIVE config (ADR-083
+	// EMB-081): gateway.video_embed_hosts is read per response, so an operator
+	// who empties it stops the external frame source reaching the served policy
+	// on the next page load rather than at the next restart. The same resolver
+	// feeds GET /api/v1/state, which is what keeps the browser's list and the
+	// browser's policy equal (EMB-080).
+	if spaHandler := newSPAHandler(func() []string {
+		return ResolveVideoEmbedHosts(agentLoop.GetConfig())
+	}); spaHandler != nil {
 		runningServices.ChannelManager.RegisterHTTPHandler("/", spaHandler)
 	} else {
 		fmt.Println("Note: No embedded SPA (run 'pnpm build' in web/frontend to enable UI)")
@@ -5304,7 +5332,7 @@ func setupAndStartServices(
 			logger := api.agentLoop.AuditLogger()
 			if logger == nil {
 				slog.Warn("csrf: token mismatch (no audit logger)",
-					"source_ip", sourceIP, "route", route, "method", r.Method)
+					"source_ip", sourceIP, "route", redactRequestPath(route), "method", r.Method)
 				return
 			}
 			// Named logErr to avoid shadowing the outer err declared in
@@ -5315,7 +5343,7 @@ func setupAndStartServices(
 				Decision: audit.DecisionDeny,
 				Details: map[string]any{
 					"source_ip": sourceIP,
-					"route":     route,
+					"route":     redactRequestPath(route),
 					"method":    r.Method,
 				},
 				PolicyRule: "csrf: cookie/header mismatch on state-changing request",
@@ -5386,7 +5414,11 @@ func setupAndStartServices(
 	// of these forever per boot, each capable of landing a straggler write in
 	// homePath — including a t.TempDir() root already mid-RemoveAll —
 	// well after RunContext had already returned.
-	go runCatalogRefreshLoop(
+	// Cancel-and-wait, not fire-and-forget: the loop stops on ctx, but
+	// RunContext must not return while a refresh is still between "pull
+	// completed" and "file written". startCatalogRefreshLoop hands shutdown
+	// a cancel plus a done channel it waits on (step 1, shutdown.go).
+	runningServices.catalogRefreshCancel, runningServices.catalogRefreshDone = startCatalogRefreshLoop(
 		ctx,
 		providerCatalog,
 		catalog.NewFileStore(homePath),
@@ -5705,6 +5737,33 @@ func skipStartupPull(store persistedCatalogAger, window time.Duration) bool {
 // Every failure is non-fatal by construction: catalog.Refresh retains the
 // currently served document and logs its own reason-keyed WARN, so this
 // loop only records that the attempt failed and carries on ticking.
+// startCatalogRefreshLoop runs runCatalogRefreshLoop on its own goroutine
+// under a child context and returns the child's cancel plus a channel closed
+// when the goroutine has EXITED. Shutdown calls cancel and then waits on
+// done, so no refresh can be mid-persist when RunContext returns. On
+// 2026-09-12 the fire-and-forget form left providers_catalog.json being
+// written into integration-test home dirs after their gateway had stopped.
+func startCatalogRefreshLoop(
+	ctx context.Context,
+	cat *catalog.Catalog,
+	store persistedCatalogAger,
+	interval, refreshTimeout, skipWindow time.Duration,
+) (cancel context.CancelFunc, done <-chan struct{}) {
+	loopCtx, loopCancel := context.WithCancel(ctx)
+	ch := make(chan struct{})
+	go func() {
+		defer close(ch)
+		runCatalogRefreshLoop(loopCtx, cat, store, interval, refreshTimeout, skipWindow)
+	}()
+	return loopCancel, ch
+}
+
+// catalogRefreshStopTimeout bounds how long shutdown waits for the refresh
+// loop to exit after cancelling it. The loop's own attempt context is
+// cancelled with it, so an in-flight pull aborts at once; this only guards
+// against a wedged transport.
+const catalogRefreshStopTimeout = 10 * time.Second
+
 func runCatalogRefreshLoop(
 	ctx context.Context,
 	cat *catalog.Catalog,
@@ -5773,6 +5832,32 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	}
 	if runningServices.CronService != nil {
 		runningServices.CronService.Stop()
+	}
+	// ADR-067 W3: stop every knowledge drift schedule and close every open
+	// collection index. Keyed by $OMNIPUS_HOME rather than carried on
+	// runningServices — see knowledgeLifecycles' doc comment.
+	//
+	// RELOAD MUST NOT STOP IT — same rule as the channel manager above, and
+	// for a sharper reason. startKnowledgeLifecycle has exactly ONE production
+	// call site (setupAndStartServices, boot only); restartServices does not
+	// mention knowledge at all. So a reload that stopped the lifecycle would
+	// never get one back, a.knowledgeLifecycle() would return nil for the rest
+	// of the process's life, and AttachMountAsync's nil-receiver guard — right
+	// for a harness that wires no lifecycle — would turn every later mount
+	// into a silent no-op. Mounting a vault would 201 and index nothing, with
+	// no error and no log line, until the process restarted. That shipped and
+	// was found in manual testing; see
+	// docs/internal/design/knowledge-lifecycle-reload-survival-2026-08-24.md.
+	//
+	// Nothing the lifecycle captured goes stale across a reload: homePath is
+	// fixed for the process, wsHandler is never rebuilt, and the drift
+	// notifier closes over agentLoop.GetConfig, which reads the CURRENT config
+	// off the same *AgentLoop that handleConfigReload mutates in place. If a
+	// config key ever needs to reach the lifecycle live (a drift-interval knob
+	// is the obvious candidate — see setupAndStartServices), restart it from
+	// restartServices rather than deleting this guard.
+	if !isReload {
+		stopKnowledgeLifecycles()
 	}
 	if runningServices.PlanEngine != nil {
 		runningServices.PlanEngine.Stop()

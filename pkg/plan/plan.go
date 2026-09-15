@@ -394,17 +394,67 @@ func IsValidFailedReason(r FailedReason) bool { return validFailedReasons[r] }
 // FailedReason/PlanPhase's validity CONCEPT without their Go type.
 const PausedReasonOwnerDisabled = "owner_disabled"
 
-// validPausedReasons is the closed set IsValidPausedReason checks against.
-// The empty string ("not paused") is handled separately by every caller
-// (never a member of this set), exactly like PlanPhase/FailedReason's own
-// "empty means unset" convention.
+// PausedReasonJudgeUnavailable is the stable PREFIX of the PausedReason a
+// running plan carries while its in-flight plan-level judge round is waiting
+// out the D7 backoff on an unavailable Judge (provider outage, SEC-26 denial,
+// turn timeout, Judge agent not registered). pkg/agent's plan engine sets it
+// before each backoff sleep and clears it the moment a judge call succeeds or
+// the round ends by any path.
+//
+// Unlike PausedReasonOwnerDisabled this is a PREFIX, not a whole value: the
+// operator-facing string carries the cause and the retry interval after a
+// colon ("judge temporarily unavailable: provider outage; retrying in 1m0s"),
+// because the whole point of the field here is telling a human on the board
+// WHY a plan has been sitting at plan_phase=judging. The reason KIND stays
+// closed (only the two constants in this block are ever valid); only the
+// human-readable detail after the colon varies. Keep the prefix itself stable
+// — the SPA chip and tests/e2e/conformance-design-plan-e2e.spec.ts both
+// discriminate this pause from an owner-disabled one by prefix match.
+const PausedReasonJudgeUnavailable = "judge temporarily unavailable"
+
+// validPausedReasons is the closed set of exact-match paused reasons
+// IsValidPausedReason checks against. The empty string ("not paused") is
+// handled separately by every caller (never a member of this set), exactly
+// like PlanPhase/FailedReason's own "empty means unset" convention.
+// PausedReasonJudgeUnavailable is deliberately NOT here — it is prefix-matched
+// (see IsJudgeUnavailablePausedReason).
 var validPausedReasons = map[string]bool{ //nolint:gochecknoglobals
 	PausedReasonOwnerDisabled: true,
 }
 
 // IsValidPausedReason reports whether r is a known, explicit non-empty
-// paused reason (fix-wave finding 6(b)).
-func IsValidPausedReason(r string) bool { return validPausedReasons[r] }
+// paused reason (fix-wave finding 6(b)) — an exact member of the closed set,
+// or the judge-unavailability reason with its variable detail suffix.
+func IsValidPausedReason(r string) bool {
+	return validPausedReasons[r] || IsJudgeUnavailablePausedReason(r)
+}
+
+// IsJudgeUnavailablePausedReason reports whether r is the judge-unavailability
+// paused reason — the bare prefix, or the prefix followed by a detail suffix
+// introduced by one of the two documented separators: ":" (the cause) or ";"
+// (the retry interval, when there is no cause to state). This is the ONE place
+// the prefix rule lives: pkg/agent's plan engine uses it as the guard that
+// stops a judge-round pause from clobbering (or later clearing) an
+// owner-disabled pause.
+//
+// The separator requirement is deliberate. A bare strings.HasPrefix would also
+// accept "judge temporarily unavailableXYZ" — i.e. it would silently open the
+// closed reason-KIND set to anything sharing a leading substring, which is the
+// exact property the closed set exists to deny.
+func IsJudgeUnavailablePausedReason(r string) bool {
+	if r == PausedReasonJudgeUnavailable {
+		return true
+	}
+	if !strings.HasPrefix(r, PausedReasonJudgeUnavailable) {
+		return false
+	}
+	switch r[len(PausedReasonJudgeUnavailable)] {
+	case ':', ';':
+		return true
+	default:
+		return false
+	}
+}
 
 // PlanBounds holds per-plan overrides of the global config.PlanningConfig
 // bounds (ADR D7/FR-9, spec Part A §A). A nil field inherits that field's

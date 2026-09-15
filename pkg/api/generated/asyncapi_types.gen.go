@@ -514,6 +514,29 @@ type JudgeVerdictFrame struct {
 	Type      string  `json:"type"`
 }
 
+// KnowledgeIndexProgressFrame — Server → client. Indexing progress for ONE knowledge base (ADR-067 D18 `KnowledgeIndexProgress`, FR-080). WHY THIS IS A FRAME AND NOT A REST FIELD. Progress is a value that moves — enumerating a large collection can take seconds and indexing it minutes. A REST field means the client either polls (lagging behind, and hammering the gateway to lag less) or shows a number that quietly goes stale. Pushing it means the reader sees the count move and the gateway does no work it was not already doing. A REST surface that exposed progress would invite exactly the polling loop this decision exists to prevent, which is why KnowledgeBaseInfo carries no counts at all. NOT THE SAME THING AS KnowledgeSearchResponse.incompleteness. That object rides on a search response and qualifies THAT ANSWER — "these results were drawn from a partially built index". This frame is the live state of the indexer, independent of any query. Both exist deliberately; neither replaces the other. HONESTY WHILE ENUMERATING. total_files is ABSENT until enumeration finishes, and total_known says so (FR-036). A client MUST render an indeterminate state in that window and MUST NOT compute a ratio against a total it does not have — a progress bar built on an invented denominator is a confidently wrong answer, which is the one outcome this feature refuses everywhere else too.
+type KnowledgeIndexProgressFrame struct {
+	// The collection being indexed — KnowledgeBaseInfo.collection_id, derived from the root's resolved real path (FR-031). Opaque to the client. Two mounts of one folder share it, so a client that shows the same collection twice updates both from one frame.
+	CollectionId string `json:"collection_id"`
+	// Human-readable failure reason. Present if and only if phase is "failed".
+	Error *string `json:"error,omitempty"`
+	// Files indexed and therefore searchable right now. Monotonic within one indexing run; resets when a rebuild starts.
+	IndexedFiles int64 `json:"indexed_files"`
+	// "enumerating" — walking the tree to discover files; total_files is not yet known. "indexing" — parsing and writing index documents; total_files is known. "idle" — nothing in flight and the index is current; this is the terminal success state and the client should stop showing progress. "failed" — indexing stopped with an error, described in `error`; the client MUST surface it rather than leaving a bar stalled at some percentage forever.
+	Phase string `json:"phase"`
+	// Files deliberately not indexed and reported — symbolic links, paths resolving outside the collection root, unreadable or evicted files (FR-044, FR-043, FR-111, FR-112). Non-zero here is not a failure, but it is never silent: it is the client's cue to offer the detail rather than let files vanish unmentioned.
+	SkippedFiles *int64 `json:"skipped_files,omitempty"`
+	// Total files in the collection. Present if and only if total_known is true.
+	TotalFiles *int64 `json:"total_files,omitempty"`
+	// False while enumerating. When false, total_files is absent and the client MUST show an indeterminate state (FR-036).
+	TotalKnown bool   `json:"total_known"`
+	Type       string `json:"type"`
+	// When the server produced this frame. Lets a client discard a frame that arrives out of order rather than letting a stale count overwrite a fresher one.
+	UpdatedAt *string `json:"updated_at,omitempty"`
+	// Workspace through which this collection is mounted.
+	WorkspaceId string `json:"workspace_id"`
+}
+
 // LLMError — Translated provider/LLM error safe for the live WebSocket boundary.
 type LLMError struct {
 	Code string `json:"code"`
@@ -528,6 +551,17 @@ type LLMErrorReplay struct {
 	Code      string `json:"code"`
 	Message   string `json:"message"`
 	Retryable bool   `json:"retryable"`
+}
+
+// LibraryChangedFrame — Server → client (D-107, cross-tab listing invalidation). Emitted by the Library REST write handlers after a mutation has landed, so every OTHER connected tab can drop its stale folder listing and refetch. Scope is deliberately coarse: clients invalidate every cached listing query for the named workspace; `path` and `reason` are informational (debugging, future refinement), never a scoping instruction. Broadcast, not addressed — the originating tab receives it too, where its own local invalidation makes the redundant one a no-op.
+type LibraryChangedFrame struct {
+	// The workspace-relative path of the affected entry, when the mutation was about one entry. Informational only — never a scoping instruction. Absent for multi-entry mutations such as an upload.
+	Path *string `json:"path,omitempty"`
+	// Which REST operation emitted the frame (e.g. "delete", "rename", "mkdir", "upload", "write"). For debugging surfaces; clients must not branch their invalidation on it.
+	Reason *string `json:"reason,omitempty"`
+	Type   string  `json:"type"`
+	// The workspace whose file tree changed. Clients invalidate their cached listings for this workspace.
+	WorkspaceId string `json:"workspace_id"`
 }
 
 // LoopStatusFrame — Server → client. Status push for a session's active /loop (ADR-049 D6/D7/US-9). Emitted on run completion, state change, and stop. Session-scoped (registered in SESSION_SCOPED_FRAME_TYPES). Class not yet assigned by the ADR-057 W5 audit (FR-089) — do not assume presence or absence of producing_session_id until the audit classifies it.
@@ -582,10 +616,11 @@ type MessageFrame struct {
 
 // NotificationFrame — Server → client. A notification raised for the recipient user (e.g. a scheduled run failed). Delivered only to that user's connections; the SPA adds it to the header notification center (#264).
 type NotificationFrame struct {
-	AgentId          *string `json:"agent_id,omitempty"`
-	Body             *string `json:"body,omitempty"`
-	CreatedAtMs      int64   `json:"created_at_ms"`
-	Id               string  `json:"id"`
+	AgentId     *string `json:"agent_id,omitempty"`
+	Body        *string `json:"body,omitempty"`
+	CreatedAtMs int64   `json:"created_at_ms"`
+	Id          string  `json:"id"`
+	// The event class. Mirrors Notification.type in openapi.yaml. "knowledge_drift" (ADR-067 FR-038a) means the drift check found a knowledge base's search index out of step with the folder on disk and the index is being rebuilt; it is never emitted for a healthy check.
 	NotificationType string  `json:"notification_type"`
 	Read             bool    `json:"read"`
 	ScheduleId       *string `json:"schedule_id,omitempty"`
@@ -1063,4 +1098,5 @@ const (
 	WsFrameTypeAskUserAnswer            WsFrameType = "ask_user_answer"
 	WsFrameTypeBrowserHandoverNotice    WsFrameType = "browser_handover_notice"
 	WsFrameTypeGoalOutcome              WsFrameType = "goal_outcome"
+	WsFrameTypeLibraryChanged           WsFrameType = "library_changed"
 )

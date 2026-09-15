@@ -72,18 +72,39 @@ type fakeJudgeProvider struct {
 	mu      sync.Mutex
 	calls   int
 	lastCtx context.Context
-	chatFn  func(callNum int) (*providers.LLMResponse, error)
+	// lastMessages records the message list of the most recent Chat call, so
+	// a test can assert what the engine actually PUT IN FRONT of the verifier
+	// — the evidence bundle itself, not just the verdict that came back. The
+	// goal-scope machine-check evidence regression (the Judge was shown "(no
+	// machine-check results on this attempt)" for a check that had just
+	// passed) is invisible to any assertion that only reads the verdict.
+	lastMessages []providers.Message
+	chatFn       func(callNum int) (*providers.LLMResponse, error)
 }
 
 func (f *fakeJudgeProvider) Chat(
-	ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
+	ctx context.Context, msgs []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
 ) (*providers.LLMResponse, error) {
 	f.mu.Lock()
 	f.calls++
 	n := f.calls
 	f.lastCtx = ctx
+	f.lastMessages = append([]providers.Message(nil), msgs...)
 	f.mu.Unlock()
 	return f.chatFn(n)
+}
+
+// promptText concatenates the non-system messages of the most recent Chat
+// call — the verifier's user-message evidence bundle as the LLM received it.
+func (f *fakeJudgeProvider) promptText() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var sb strings.Builder
+	for _, m := range f.lastMessages {
+		sb.WriteString(m.Content)
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 func (f *fakeJudgeProvider) GetDefaultModel() string { return "fake-judge-model" }

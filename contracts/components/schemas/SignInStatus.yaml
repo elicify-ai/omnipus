@@ -43,3 +43,15 @@ properties:
     format: date-time
     description: The access token's expiry when known. Absent otherwise.
     example: "2026-09-01T12:00:00Z"
+  reason:
+    type: string
+    maxLength: 200
+    description: >
+      Plain-language explanation, for the operator, of why a check reported
+      `not_signed_in` when the check itself could not run or could not be
+      interpreted (the CLI is missing, could not start, timed out, or printed
+      an unrecognised message). Absent for every definite state — signed in,
+      expired, a recognised not-signed-in, and pending — and absent when the
+      reason is already implied by the state. Safe for display: it names the
+      stage that failed, never the CLI's raw output or a filesystem path.
+    example: the Copilot CLI is not installed on this machine

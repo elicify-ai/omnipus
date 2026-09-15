@@ -758,6 +758,90 @@ func (e AgentToolsUpdateRequestBuiltinPolicies) Valid() bool {
 	}
 }
 
+// Defines values for AgentToolsUpdateRequestConfigBuiltinPolicies.
+const (
+	AgentToolsUpdateRequestConfigBuiltinPoliciesAllow AgentToolsUpdateRequestConfigBuiltinPolicies = "allow"
+	AgentToolsUpdateRequestConfigBuiltinPoliciesAsk   AgentToolsUpdateRequestConfigBuiltinPolicies = "ask"
+	AgentToolsUpdateRequestConfigBuiltinPoliciesDeny  AgentToolsUpdateRequestConfigBuiltinPolicies = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestConfigBuiltinPolicies enum.
+func (e AgentToolsUpdateRequestConfigBuiltinPolicies) Valid() bool {
+	switch e {
+	case AgentToolsUpdateRequestConfigBuiltinPoliciesAllow:
+		return true
+	case AgentToolsUpdateRequestConfigBuiltinPoliciesAsk:
+		return true
+	case AgentToolsUpdateRequestConfigBuiltinPoliciesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsUpdateRequestToolsConfiguredPolicy.
+const (
+	AgentToolsUpdateRequestToolsConfiguredPolicyAllow AgentToolsUpdateRequestToolsConfiguredPolicy = "allow"
+	AgentToolsUpdateRequestToolsConfiguredPolicyAsk   AgentToolsUpdateRequestToolsConfiguredPolicy = "ask"
+	AgentToolsUpdateRequestToolsConfiguredPolicyDeny  AgentToolsUpdateRequestToolsConfiguredPolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestToolsConfiguredPolicy enum.
+func (e AgentToolsUpdateRequestToolsConfiguredPolicy) Valid() bool {
+	switch e {
+	case AgentToolsUpdateRequestToolsConfiguredPolicyAllow:
+		return true
+	case AgentToolsUpdateRequestToolsConfiguredPolicyAsk:
+		return true
+	case AgentToolsUpdateRequestToolsConfiguredPolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsUpdateRequestToolsEffectivePolicy.
+const (
+	AgentToolsUpdateRequestToolsEffectivePolicyAllow AgentToolsUpdateRequestToolsEffectivePolicy = "allow"
+	AgentToolsUpdateRequestToolsEffectivePolicyAsk   AgentToolsUpdateRequestToolsEffectivePolicy = "ask"
+	AgentToolsUpdateRequestToolsEffectivePolicyDeny  AgentToolsUpdateRequestToolsEffectivePolicy = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestToolsEffectivePolicy enum.
+func (e AgentToolsUpdateRequestToolsEffectivePolicy) Valid() bool {
+	switch e {
+	case AgentToolsUpdateRequestToolsEffectivePolicyAllow:
+		return true
+	case AgentToolsUpdateRequestToolsEffectivePolicyAsk:
+		return true
+	case AgentToolsUpdateRequestToolsEffectivePolicyDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsUpdateRequestToolsManifestTier.
+const (
+	AgentToolsUpdateRequestToolsManifestTierCompressed AgentToolsUpdateRequestToolsManifestTier = "compressed"
+	AgentToolsUpdateRequestToolsManifestTierFull       AgentToolsUpdateRequestToolsManifestTier = "full"
+	AgentToolsUpdateRequestToolsManifestTierInfra      AgentToolsUpdateRequestToolsManifestTier = "infra"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestToolsManifestTier enum.
+func (e AgentToolsUpdateRequestToolsManifestTier) Valid() bool {
+	switch e {
+	case AgentToolsUpdateRequestToolsManifestTierCompressed:
+		return true
+	case AgentToolsUpdateRequestToolsManifestTierFull:
+		return true
+	case AgentToolsUpdateRequestToolsManifestTierInfra:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentUpdateRequestExecutorKind.
 const (
 	AgentUpdateRequestExecutorKindExternalCli AgentUpdateRequestExecutorKind = "external-cli"
@@ -1925,6 +2009,27 @@ func (e EntitlementResponseModelsLimits) Valid() bool {
 	}
 }
 
+// Defines values for EnumValueDefGroup.
+const (
+	EnumValueDefGroupCancelled EnumValueDefGroup = "cancelled"
+	EnumValueDefGroupDone      EnumValueDefGroup = "done"
+	EnumValueDefGroupOpen      EnumValueDefGroup = "open"
+)
+
+// Valid indicates whether the value is a known member of the EnumValueDefGroup enum.
+func (e EnumValueDefGroup) Valid() bool {
+	switch e {
+	case EnumValueDefGroupCancelled:
+		return true
+	case EnumValueDefGroupDone:
+		return true
+	case EnumValueDefGroupOpen:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ExecutorCommandPreviewResponsePromptDelivery.
 const (
 	ExecutorCommandPreviewResponsePromptDeliveryPositionalArgumentAfter ExecutorCommandPreviewResponsePromptDelivery = "positional argument after --"
@@ -1979,6 +2084,99 @@ func (e ExternalCliTool) Valid() bool {
 	case ExternalCliToolCodex:
 		return true
 	case ExternalCliToolOpencode:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FileSearchHitMatchKind.
+const (
+	FileSearchHitMatchKindContent FileSearchHitMatchKind = "content"
+	FileSearchHitMatchKindName    FileSearchHitMatchKind = "name"
+)
+
+// Valid indicates whether the value is a known member of the FileSearchHitMatchKind enum.
+func (e FileSearchHitMatchKind) Valid() bool {
+	switch e {
+	case FileSearchHitMatchKindContent:
+		return true
+	case FileSearchHitMatchKindName:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FileSearchRequestCase.
+const (
+	FileSearchRequestCaseInsensitive FileSearchRequestCase = "insensitive"
+	FileSearchRequestCaseSensitive   FileSearchRequestCase = "sensitive"
+	FileSearchRequestCaseSmart       FileSearchRequestCase = "smart"
+)
+
+// Valid indicates whether the value is a known member of the FileSearchRequestCase enum.
+func (e FileSearchRequestCase) Valid() bool {
+	switch e {
+	case FileSearchRequestCaseInsensitive:
+		return true
+	case FileSearchRequestCaseSensitive:
+		return true
+	case FileSearchRequestCaseSmart:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FileSearchResponseHitsMatchKind.
+const (
+	FileSearchResponseHitsMatchKindContent FileSearchResponseHitsMatchKind = "content"
+	FileSearchResponseHitsMatchKindName    FileSearchResponseHitsMatchKind = "name"
+)
+
+// Valid indicates whether the value is a known member of the FileSearchResponseHitsMatchKind enum.
+func (e FileSearchResponseHitsMatchKind) Valid() bool {
+	switch e {
+	case FileSearchResponseHitsMatchKindContent:
+		return true
+	case FileSearchResponseHitsMatchKindName:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FileSearchResponseTruncatedReason.
+const (
+	FileSearchResponseTruncatedReasonCanceled   FileSearchResponseTruncatedReason = "canceled"
+	FileSearchResponseTruncatedReasonDeadline   FileSearchResponseTruncatedReason = "deadline"
+	FileSearchResponseTruncatedReasonMaxBytes   FileSearchResponseTruncatedReason = "max_bytes"
+	FileSearchResponseTruncatedReasonMaxDepth   FileSearchResponseTruncatedReason = "max_depth"
+	FileSearchResponseTruncatedReasonMaxFiles   FileSearchResponseTruncatedReason = "max_files"
+	FileSearchResponseTruncatedReasonMaxMatches FileSearchResponseTruncatedReason = "max_matches"
+	FileSearchResponseTruncatedReasonMaxOutput  FileSearchResponseTruncatedReason = "max_output"
+	FileSearchResponseTruncatedReasonRootLost   FileSearchResponseTruncatedReason = "root_lost"
+)
+
+// Valid indicates whether the value is a known member of the FileSearchResponseTruncatedReason enum.
+func (e FileSearchResponseTruncatedReason) Valid() bool {
+	switch e {
+	case FileSearchResponseTruncatedReasonCanceled:
+		return true
+	case FileSearchResponseTruncatedReasonDeadline:
+		return true
+	case FileSearchResponseTruncatedReasonMaxBytes:
+		return true
+	case FileSearchResponseTruncatedReasonMaxDepth:
+		return true
+	case FileSearchResponseTruncatedReasonMaxFiles:
+		return true
+	case FileSearchResponseTruncatedReasonMaxMatches:
+		return true
+	case FileSearchResponseTruncatedReasonMaxOutput:
+		return true
+	case FileSearchResponseTruncatedReasonRootLost:
 		return true
 	default:
 		return false
@@ -2960,6 +3158,366 @@ func (e JudgeVerdictScope) Valid() bool {
 	}
 }
 
+// Defines values for KnowledgeBaseInfoDetectionErrorCode.
+const (
+	KnowledgeBaseInfoDetectionErrorCodeMarkerUnreadable KnowledgeBaseInfoDetectionErrorCode = "marker_unreadable"
+	KnowledgeBaseInfoDetectionErrorCodeNotADirectory    KnowledgeBaseInfoDetectionErrorCode = "not_a_directory"
+	KnowledgeBaseInfoDetectionErrorCodeRootMissing      KnowledgeBaseInfoDetectionErrorCode = "root_missing"
+	KnowledgeBaseInfoDetectionErrorCodeRootUnreadable   KnowledgeBaseInfoDetectionErrorCode = "root_unreadable"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeBaseInfoDetectionErrorCode enum.
+func (e KnowledgeBaseInfoDetectionErrorCode) Valid() bool {
+	switch e {
+	case KnowledgeBaseInfoDetectionErrorCodeMarkerUnreadable:
+		return true
+	case KnowledgeBaseInfoDetectionErrorCodeNotADirectory:
+		return true
+	case KnowledgeBaseInfoDetectionErrorCodeRootMissing:
+		return true
+	case KnowledgeBaseInfoDetectionErrorCodeRootUnreadable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeBaseInfoMarker.
+const (
+	KnowledgeBaseInfoMarkerNone         KnowledgeBaseInfoMarker = "none"
+	KnowledgeBaseInfoMarkerObsidian     KnowledgeBaseInfoMarker = "obsidian"
+	KnowledgeBaseInfoMarkerOmnipusVault KnowledgeBaseInfoMarker = "omnipus_vault"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeBaseInfoMarker enum.
+func (e KnowledgeBaseInfoMarker) Valid() bool {
+	switch e {
+	case KnowledgeBaseInfoMarkerNone:
+		return true
+	case KnowledgeBaseInfoMarkerObsidian:
+		return true
+	case KnowledgeBaseInfoMarkerOmnipusVault:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeConflictErrorCode.
+const (
+	KnowledgeConflictErrorCodeKnowledgeVersionConflict KnowledgeConflictErrorCode = "knowledge_version_conflict"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeConflictErrorCode enum.
+func (e KnowledgeConflictErrorCode) Valid() bool {
+	switch e {
+	case KnowledgeConflictErrorCodeKnowledgeVersionConflict:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphEdgeResolution.
+const (
+	KnowledgeGraphEdgeResolutionExactPath      KnowledgeGraphEdgeResolution = "exact_path"
+	KnowledgeGraphEdgeResolutionLexicographic  KnowledgeGraphEdgeResolution = "lexicographic"
+	KnowledgeGraphEdgeResolutionShortestPath   KnowledgeGraphEdgeResolution = "shortest_path"
+	KnowledgeGraphEdgeResolutionUniqueBasename KnowledgeGraphEdgeResolution = "unique_basename"
+	KnowledgeGraphEdgeResolutionUnresolved     KnowledgeGraphEdgeResolution = "unresolved"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphEdgeResolution enum.
+func (e KnowledgeGraphEdgeResolution) Valid() bool {
+	switch e {
+	case KnowledgeGraphEdgeResolutionExactPath:
+		return true
+	case KnowledgeGraphEdgeResolutionLexicographic:
+		return true
+	case KnowledgeGraphEdgeResolutionShortestPath:
+		return true
+	case KnowledgeGraphEdgeResolutionUniqueBasename:
+		return true
+	case KnowledgeGraphEdgeResolutionUnresolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphEdgeUnresolvedReason.
+const (
+	KnowledgeGraphEdgeUnresolvedReasonNoMatch     KnowledgeGraphEdgeUnresolvedReason = "no_match"
+	KnowledgeGraphEdgeUnresolvedReasonOutsideRoot KnowledgeGraphEdgeUnresolvedReason = "outside_root"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphEdgeUnresolvedReason enum.
+func (e KnowledgeGraphEdgeUnresolvedReason) Valid() bool {
+	switch e {
+	case KnowledgeGraphEdgeUnresolvedReasonNoMatch:
+		return true
+	case KnowledgeGraphEdgeUnresolvedReasonOutsideRoot:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphResponseEdgesResolution.
+const (
+	KnowledgeGraphResponseEdgesResolutionExactPath      KnowledgeGraphResponseEdgesResolution = "exact_path"
+	KnowledgeGraphResponseEdgesResolutionLexicographic  KnowledgeGraphResponseEdgesResolution = "lexicographic"
+	KnowledgeGraphResponseEdgesResolutionShortestPath   KnowledgeGraphResponseEdgesResolution = "shortest_path"
+	KnowledgeGraphResponseEdgesResolutionUniqueBasename KnowledgeGraphResponseEdgesResolution = "unique_basename"
+	KnowledgeGraphResponseEdgesResolutionUnresolved     KnowledgeGraphResponseEdgesResolution = "unresolved"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphResponseEdgesResolution enum.
+func (e KnowledgeGraphResponseEdgesResolution) Valid() bool {
+	switch e {
+	case KnowledgeGraphResponseEdgesResolutionExactPath:
+		return true
+	case KnowledgeGraphResponseEdgesResolutionLexicographic:
+		return true
+	case KnowledgeGraphResponseEdgesResolutionShortestPath:
+		return true
+	case KnowledgeGraphResponseEdgesResolutionUniqueBasename:
+		return true
+	case KnowledgeGraphResponseEdgesResolutionUnresolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphResponseEdgesUnresolvedReason.
+const (
+	KnowledgeGraphResponseEdgesUnresolvedReasonNoMatch     KnowledgeGraphResponseEdgesUnresolvedReason = "no_match"
+	KnowledgeGraphResponseEdgesUnresolvedReasonOutsideRoot KnowledgeGraphResponseEdgesUnresolvedReason = "outside_root"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphResponseEdgesUnresolvedReason enum.
+func (e KnowledgeGraphResponseEdgesUnresolvedReason) Valid() bool {
+	switch e {
+	case KnowledgeGraphResponseEdgesUnresolvedReasonNoMatch:
+		return true
+	case KnowledgeGraphResponseEdgesUnresolvedReasonOutsideRoot:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphResponseKind.
+const (
+	KnowledgeGraphResponseKindBacklinks     KnowledgeGraphResponseKind = "backlinks"
+	KnowledgeGraphResponseKindLinks         KnowledgeGraphResponseKind = "links"
+	KnowledgeGraphResponseKindNeighbourhood KnowledgeGraphResponseKind = "neighbourhood"
+	KnowledgeGraphResponseKindOrphans       KnowledgeGraphResponseKind = "orphans"
+	KnowledgeGraphResponseKindUnresolved    KnowledgeGraphResponseKind = "unresolved"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphResponseKind enum.
+func (e KnowledgeGraphResponseKind) Valid() bool {
+	switch e {
+	case KnowledgeGraphResponseKindBacklinks:
+		return true
+	case KnowledgeGraphResponseKindLinks:
+		return true
+	case KnowledgeGraphResponseKindNeighbourhood:
+		return true
+	case KnowledgeGraphResponseKindOrphans:
+		return true
+	case KnowledgeGraphResponseKindUnresolved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphResponseSkippedReason.
+const (
+	KnowledgeGraphResponseSkippedReasonHopLimit       KnowledgeGraphResponseSkippedReason = "hop_limit"
+	KnowledgeGraphResponseSkippedReasonNodeLimit      KnowledgeGraphResponseSkippedReason = "node_limit"
+	KnowledgeGraphResponseSkippedReasonNotAddressable KnowledgeGraphResponseSkippedReason = "not_addressable"
+	KnowledgeGraphResponseSkippedReasonOutsideRoot    KnowledgeGraphResponseSkippedReason = "outside_root"
+	KnowledgeGraphResponseSkippedReasonSymlink        KnowledgeGraphResponseSkippedReason = "symlink"
+	KnowledgeGraphResponseSkippedReasonUnreadable     KnowledgeGraphResponseSkippedReason = "unreadable"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphResponseSkippedReason enum.
+func (e KnowledgeGraphResponseSkippedReason) Valid() bool {
+	switch e {
+	case KnowledgeGraphResponseSkippedReasonHopLimit:
+		return true
+	case KnowledgeGraphResponseSkippedReasonNodeLimit:
+		return true
+	case KnowledgeGraphResponseSkippedReasonNotAddressable:
+		return true
+	case KnowledgeGraphResponseSkippedReasonOutsideRoot:
+		return true
+	case KnowledgeGraphResponseSkippedReasonSymlink:
+		return true
+	case KnowledgeGraphResponseSkippedReasonUnreadable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeGraphSkipReason.
+const (
+	KnowledgeGraphSkipReasonHopLimit       KnowledgeGraphSkipReason = "hop_limit"
+	KnowledgeGraphSkipReasonNodeLimit      KnowledgeGraphSkipReason = "node_limit"
+	KnowledgeGraphSkipReasonNotAddressable KnowledgeGraphSkipReason = "not_addressable"
+	KnowledgeGraphSkipReasonOutsideRoot    KnowledgeGraphSkipReason = "outside_root"
+	KnowledgeGraphSkipReasonSymlink        KnowledgeGraphSkipReason = "symlink"
+	KnowledgeGraphSkipReasonUnreadable     KnowledgeGraphSkipReason = "unreadable"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeGraphSkipReason enum.
+func (e KnowledgeGraphSkipReason) Valid() bool {
+	switch e {
+	case KnowledgeGraphSkipReasonHopLimit:
+		return true
+	case KnowledgeGraphSkipReasonNodeLimit:
+		return true
+	case KnowledgeGraphSkipReasonNotAddressable:
+		return true
+	case KnowledgeGraphSkipReasonOutsideRoot:
+		return true
+	case KnowledgeGraphSkipReasonSymlink:
+		return true
+	case KnowledgeGraphSkipReasonUnreadable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KnowledgeMountConflictErrorCode.
+const (
+	KnowledgeMountConflictErrorCodeKnowledgeMountConflict KnowledgeMountConflictErrorCode = "knowledge_mount_conflict"
+)
+
+// Valid indicates whether the value is a known member of the KnowledgeMountConflictErrorCode enum.
+func (e KnowledgeMountConflictErrorCode) Valid() bool {
+	switch e {
+	case KnowledgeMountConflictErrorCodeKnowledgeMountConflict:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryConflictErrorCode.
+const (
+	LibraryConflictErrorCodeLibraryVersionConflict LibraryConflictErrorCode = "library_version_conflict"
+)
+
+// Valid indicates whether the value is a known member of the LibraryConflictErrorCode enum.
+func (e LibraryConflictErrorCode) Valid() bool {
+	switch e {
+	case LibraryConflictErrorCodeLibraryVersionConflict:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryInlineDispositionDisposition.
+const (
+	LibraryInlineDispositionDispositionAttachment LibraryInlineDispositionDisposition = "attachment"
+	LibraryInlineDispositionDispositionInline     LibraryInlineDispositionDisposition = "inline"
+)
+
+// Valid indicates whether the value is a known member of the LibraryInlineDispositionDisposition enum.
+func (e LibraryInlineDispositionDisposition) Valid() bool {
+	switch e {
+	case LibraryInlineDispositionDispositionAttachment:
+		return true
+	case LibraryInlineDispositionDispositionInline:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryInlineDispositionRenderer.
+const (
+	LibraryInlineDispositionRendererAudio    LibraryInlineDispositionRenderer = "audio"
+	LibraryInlineDispositionRendererCode     LibraryInlineDispositionRenderer = "code"
+	LibraryInlineDispositionRendererHtml     LibraryInlineDispositionRenderer = "html"
+	LibraryInlineDispositionRendererImage    LibraryInlineDispositionRenderer = "image"
+	LibraryInlineDispositionRendererMarkdown LibraryInlineDispositionRenderer = "markdown"
+	LibraryInlineDispositionRendererNone     LibraryInlineDispositionRenderer = "none"
+	LibraryInlineDispositionRendererPdf      LibraryInlineDispositionRenderer = "pdf"
+	LibraryInlineDispositionRendererText     LibraryInlineDispositionRenderer = "text"
+	LibraryInlineDispositionRendererVideo    LibraryInlineDispositionRenderer = "video"
+)
+
+// Valid indicates whether the value is a known member of the LibraryInlineDispositionRenderer enum.
+func (e LibraryInlineDispositionRenderer) Valid() bool {
+	switch e {
+	case LibraryInlineDispositionRendererAudio:
+		return true
+	case LibraryInlineDispositionRendererCode:
+		return true
+	case LibraryInlineDispositionRendererHtml:
+		return true
+	case LibraryInlineDispositionRendererImage:
+		return true
+	case LibraryInlineDispositionRendererMarkdown:
+		return true
+	case LibraryInlineDispositionRendererNone:
+		return true
+	case LibraryInlineDispositionRendererPdf:
+		return true
+	case LibraryInlineDispositionRendererText:
+		return true
+	case LibraryInlineDispositionRendererVideo:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryPreviewTokenRequestScope.
+const (
+	LibraryPreviewTokenRequestScopeBundle LibraryPreviewTokenRequestScope = "bundle"
+	LibraryPreviewTokenRequestScopeFile   LibraryPreviewTokenRequestScope = "file"
+)
+
+// Valid indicates whether the value is a known member of the LibraryPreviewTokenRequestScope enum.
+func (e LibraryPreviewTokenRequestScope) Valid() bool {
+	switch e {
+	case LibraryPreviewTokenRequestScopeBundle:
+		return true
+	case LibraryPreviewTokenRequestScopeFile:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for LibraryPreviewTokenResponseScope.
+const (
+	LibraryPreviewTokenResponseScopeBundle LibraryPreviewTokenResponseScope = "bundle"
+	LibraryPreviewTokenResponseScopeFile   LibraryPreviewTokenResponseScope = "file"
+)
+
+// Valid indicates whether the value is a known member of the LibraryPreviewTokenResponseScope enum.
+func (e LibraryPreviewTokenResponseScope) Valid() bool {
+	switch e {
+	case LibraryPreviewTokenResponseScopeBundle:
+		return true
+	case LibraryPreviewTokenResponseScopeFile:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for McpServerStatus.
 const (
 	McpServerStatusConnected    McpServerStatus = "connected"
@@ -3538,12 +4096,15 @@ func (e NotificationSeverity) Valid() bool {
 
 // Defines values for NotificationType.
 const (
+	NotificationTypeKnowledgeDrift NotificationType = "knowledge_drift"
 	NotificationTypeScheduleFailed NotificationType = "schedule_failed"
 )
 
 // Valid indicates whether the value is a known member of the NotificationType enum.
 func (e NotificationType) Valid() bool {
 	switch e {
+	case NotificationTypeKnowledgeDrift:
+		return true
 	case NotificationTypeScheduleFailed:
 		return true
 	default:
@@ -3574,12 +4135,15 @@ func (e NotificationListNotificationsSeverity) Valid() bool {
 
 // Defines values for NotificationListNotificationsType.
 const (
+	NotificationListNotificationsTypeKnowledgeDrift NotificationListNotificationsType = "knowledge_drift"
 	NotificationListNotificationsTypeScheduleFailed NotificationListNotificationsType = "schedule_failed"
 )
 
 // Valid indicates whether the value is a known member of the NotificationListNotificationsType enum.
 func (e NotificationListNotificationsType) Valid() bool {
 	switch e {
+	case NotificationListNotificationsTypeKnowledgeDrift:
+		return true
 	case NotificationListNotificationsTypeScheduleFailed:
 		return true
 	default:
@@ -4664,6 +5228,42 @@ func (e PromptGuardUpdateResponseAppliedLevel) Valid() bool {
 	}
 }
 
+// Defines values for PropertyDefType.
+const (
+	PropertyDefTypeCheckbox PropertyDefType = "checkbox"
+	PropertyDefTypeDate     PropertyDefType = "date"
+	PropertyDefTypeDecimal  PropertyDefType = "decimal"
+	PropertyDefTypeEnum     PropertyDefType = "enum"
+	PropertyDefTypeInteger  PropertyDefType = "integer"
+	PropertyDefTypePerson   PropertyDefType = "person"
+	PropertyDefTypeRelation PropertyDefType = "relation"
+	PropertyDefTypeText     PropertyDefType = "text"
+)
+
+// Valid indicates whether the value is a known member of the PropertyDefType enum.
+func (e PropertyDefType) Valid() bool {
+	switch e {
+	case PropertyDefTypeCheckbox:
+		return true
+	case PropertyDefTypeDate:
+		return true
+	case PropertyDefTypeDecimal:
+		return true
+	case PropertyDefTypeEnum:
+		return true
+	case PropertyDefTypeInteger:
+		return true
+	case PropertyDefTypePerson:
+		return true
+	case PropertyDefTypeRelation:
+		return true
+	case PropertyDefTypeText:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ProviderAuthMethod.
 const (
 	ProviderAuthMethodApiKey ProviderAuthMethod = "api_key"
@@ -5183,6 +5783,453 @@ func (e ProvidersCatalogServedFrom) Valid() bool {
 	case ProvidersCatalogServedFromEmbedded:
 		return true
 	case ProvidersCatalogServedFromPulled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordAggregateOp.
+const (
+	RecordAggregateOpAvg       RecordAggregateOp = "avg"
+	RecordAggregateOpChecked   RecordAggregateOp = "checked"
+	RecordAggregateOpCount     RecordAggregateOp = "count"
+	RecordAggregateOpEarliest  RecordAggregateOp = "earliest"
+	RecordAggregateOpEmpty     RecordAggregateOp = "empty"
+	RecordAggregateOpFilled    RecordAggregateOp = "filled"
+	RecordAggregateOpLatest    RecordAggregateOp = "latest"
+	RecordAggregateOpMax       RecordAggregateOp = "max"
+	RecordAggregateOpMedian    RecordAggregateOp = "median"
+	RecordAggregateOpMin       RecordAggregateOp = "min"
+	RecordAggregateOpRange     RecordAggregateOp = "range"
+	RecordAggregateOpStddev    RecordAggregateOp = "stddev"
+	RecordAggregateOpSum       RecordAggregateOp = "sum"
+	RecordAggregateOpUnchecked RecordAggregateOp = "unchecked"
+	RecordAggregateOpUnique    RecordAggregateOp = "unique"
+)
+
+// Valid indicates whether the value is a known member of the RecordAggregateOp enum.
+func (e RecordAggregateOp) Valid() bool {
+	switch e {
+	case RecordAggregateOpAvg:
+		return true
+	case RecordAggregateOpChecked:
+		return true
+	case RecordAggregateOpCount:
+		return true
+	case RecordAggregateOpEarliest:
+		return true
+	case RecordAggregateOpEmpty:
+		return true
+	case RecordAggregateOpFilled:
+		return true
+	case RecordAggregateOpLatest:
+		return true
+	case RecordAggregateOpMax:
+		return true
+	case RecordAggregateOpMedian:
+		return true
+	case RecordAggregateOpMin:
+		return true
+	case RecordAggregateOpRange:
+		return true
+	case RecordAggregateOpStddev:
+		return true
+	case RecordAggregateOpSum:
+		return true
+	case RecordAggregateOpUnchecked:
+		return true
+	case RecordAggregateOpUnique:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordAggregateResultOp.
+const (
+	RecordAggregateResultOpAvg       RecordAggregateResultOp = "avg"
+	RecordAggregateResultOpChecked   RecordAggregateResultOp = "checked"
+	RecordAggregateResultOpCount     RecordAggregateResultOp = "count"
+	RecordAggregateResultOpEarliest  RecordAggregateResultOp = "earliest"
+	RecordAggregateResultOpEmpty     RecordAggregateResultOp = "empty"
+	RecordAggregateResultOpFilled    RecordAggregateResultOp = "filled"
+	RecordAggregateResultOpLatest    RecordAggregateResultOp = "latest"
+	RecordAggregateResultOpMax       RecordAggregateResultOp = "max"
+	RecordAggregateResultOpMedian    RecordAggregateResultOp = "median"
+	RecordAggregateResultOpMin       RecordAggregateResultOp = "min"
+	RecordAggregateResultOpRange     RecordAggregateResultOp = "range"
+	RecordAggregateResultOpStddev    RecordAggregateResultOp = "stddev"
+	RecordAggregateResultOpSum       RecordAggregateResultOp = "sum"
+	RecordAggregateResultOpUnchecked RecordAggregateResultOp = "unchecked"
+	RecordAggregateResultOpUnique    RecordAggregateResultOp = "unique"
+)
+
+// Valid indicates whether the value is a known member of the RecordAggregateResultOp enum.
+func (e RecordAggregateResultOp) Valid() bool {
+	switch e {
+	case RecordAggregateResultOpAvg:
+		return true
+	case RecordAggregateResultOpChecked:
+		return true
+	case RecordAggregateResultOpCount:
+		return true
+	case RecordAggregateResultOpEarliest:
+		return true
+	case RecordAggregateResultOpEmpty:
+		return true
+	case RecordAggregateResultOpFilled:
+		return true
+	case RecordAggregateResultOpLatest:
+		return true
+	case RecordAggregateResultOpMax:
+		return true
+	case RecordAggregateResultOpMedian:
+		return true
+	case RecordAggregateResultOpMin:
+		return true
+	case RecordAggregateResultOpRange:
+		return true
+	case RecordAggregateResultOpStddev:
+		return true
+	case RecordAggregateResultOpSum:
+		return true
+	case RecordAggregateResultOpUnchecked:
+		return true
+	case RecordAggregateResultOpUnique:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordFilterOp.
+const (
+	RecordFilterOpContains RecordFilterOp = "contains"
+	RecordFilterOpEq       RecordFilterOp = "eq"
+	RecordFilterOpGt       RecordFilterOp = "gt"
+	RecordFilterOpGte      RecordFilterOp = "gte"
+	RecordFilterOpIsAbsent RecordFilterOp = "is_absent"
+	RecordFilterOpLt       RecordFilterOp = "lt"
+	RecordFilterOpLte      RecordFilterOp = "lte"
+)
+
+// Valid indicates whether the value is a known member of the RecordFilterOp enum.
+func (e RecordFilterOp) Valid() bool {
+	switch e {
+	case RecordFilterOpContains:
+		return true
+	case RecordFilterOpEq:
+		return true
+	case RecordFilterOpGt:
+		return true
+	case RecordFilterOpGte:
+		return true
+	case RecordFilterOpIsAbsent:
+		return true
+	case RecordFilterOpLt:
+		return true
+	case RecordFilterOpLte:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordProblemCode.
+const (
+	RecordProblemCodeAggregateRefused          RecordProblemCode = "aggregate_refused"
+	RecordProblemCodeArityViolation            RecordProblemCode = "arity_violation"
+	RecordProblemCodeCandidateCapExceeded      RecordProblemCode = "candidate_cap_exceeded"
+	RecordProblemCodeCardinalityViolation      RecordProblemCode = "cardinality_violation"
+	RecordProblemCodeComparisonUndefined       RecordProblemCode = "comparison_undefined"
+	RecordProblemCodeDanglingRelation          RecordProblemCode = "dangling_relation"
+	RecordProblemCodeDateFormatAmbiguous       RecordProblemCode = "date_format_ambiguous"
+	RecordProblemCodeDecimalScaleExceeded      RecordProblemCode = "decimal_scale_exceeded"
+	RecordProblemCodeDuplicateId               RecordProblemCode = "duplicate_id"
+	RecordProblemCodeDuplicateTypeDeclaration  RecordProblemCode = "duplicate_type_declaration"
+	RecordProblemCodeEmptyInList               RecordProblemCode = "empty_in_list"
+	RecordProblemCodeEmptyLikePattern          RecordProblemCode = "empty_like_pattern"
+	RecordProblemCodeEnumViolation             RecordProblemCode = "enum_violation"
+	RecordProblemCodeEvaluationBoundExceeded   RecordProblemCode = "evaluation_bound_exceeded"
+	RecordProblemCodeFrontmatterMalformed      RecordProblemCode = "frontmatter_malformed"
+	RecordProblemCodeHopLimitExceeded          RecordProblemCode = "hop_limit_exceeded"
+	RecordProblemCodeHopTraversalBoundExceeded RecordProblemCode = "hop_traversal_bound_exceeded"
+	RecordProblemCodeIndexUnavailable          RecordProblemCode = "index_unavailable"
+	RecordProblemCodeIntegerNotWhole           RecordProblemCode = "integer_not_whole"
+	RecordProblemCodeIntegerOutOfRange         RecordProblemCode = "integer_out_of_range"
+	RecordProblemCodeLiteralTypeMismatch       RecordProblemCode = "literal_type_mismatch"
+	RecordProblemCodeMissingRequired           RecordProblemCode = "missing_required"
+	RecordProblemCodeMissingSchemaVersion      RecordProblemCode = "missing_schema_version"
+	RecordProblemCodeNearUnresolved            RecordProblemCode = "near_unresolved"
+	RecordProblemCodeOrderingOnManyProperty    RecordProblemCode = "ordering_on_many_property"
+	RecordProblemCodeOrphanRow                 RecordProblemCode = "orphan_row"
+	RecordProblemCodePageSizeClamped           RecordProblemCode = "page_size_clamped"
+	RecordProblemCodeRelationTypeMismatch      RecordProblemCode = "relation_type_mismatch"
+	RecordProblemCodeSchemaBadProperty         RecordProblemCode = "schema_bad_property"
+	RecordProblemCodeSchemaInvalidYaml         RecordProblemCode = "schema_invalid_yaml"
+	RecordProblemCodeSchemaLoadFailed          RecordProblemCode = "schema_load_failed"
+	RecordProblemCodeSchemaMissingType         RecordProblemCode = "schema_missing_type"
+	RecordProblemCodeSchemaNoProperties        RecordProblemCode = "schema_no_properties"
+	RecordProblemCodeSchemaUnknownKey          RecordProblemCode = "schema_unknown_key"
+	RecordProblemCodeSchemaUnreadable          RecordProblemCode = "schema_unreadable"
+	RecordProblemCodeSchemaUnsupportedVersion  RecordProblemCode = "schema_unsupported_version"
+	RecordProblemCodeScopeTruncated            RecordProblemCode = "scope_truncated"
+	RecordProblemCodeStaleCursor               RecordProblemCode = "stale_cursor"
+	RecordProblemCodeStaleRecord               RecordProblemCode = "stale_record"
+	RecordProblemCodeTextSearchRelaxed         RecordProblemCode = "text_search_relaxed"
+	RecordProblemCodeTextSearchTruncated       RecordProblemCode = "text_search_truncated"
+	RecordProblemCodeTypeMismatch              RecordProblemCode = "type_mismatch"
+	RecordProblemCodeUnknownEnumValue          RecordProblemCode = "unknown_enum_value"
+	RecordProblemCodeUnknownProperty           RecordProblemCode = "unknown_property"
+	RecordProblemCodeUnknownRecordType         RecordProblemCode = "unknown_record_type"
+	RecordProblemCodeUnknownView               RecordProblemCode = "unknown_view"
+	RecordProblemCodeUnsupportedOperator       RecordProblemCode = "unsupported_operator"
+	RecordProblemCodeUnsupportedParameter      RecordProblemCode = "unsupported_parameter"
+	RecordProblemCodeViewPartIneligible        RecordProblemCode = "view_part_ineligible"
+)
+
+// Valid indicates whether the value is a known member of the RecordProblemCode enum.
+func (e RecordProblemCode) Valid() bool {
+	switch e {
+	case RecordProblemCodeAggregateRefused:
+		return true
+	case RecordProblemCodeArityViolation:
+		return true
+	case RecordProblemCodeCandidateCapExceeded:
+		return true
+	case RecordProblemCodeCardinalityViolation:
+		return true
+	case RecordProblemCodeComparisonUndefined:
+		return true
+	case RecordProblemCodeDanglingRelation:
+		return true
+	case RecordProblemCodeDateFormatAmbiguous:
+		return true
+	case RecordProblemCodeDecimalScaleExceeded:
+		return true
+	case RecordProblemCodeDuplicateId:
+		return true
+	case RecordProblemCodeDuplicateTypeDeclaration:
+		return true
+	case RecordProblemCodeEmptyInList:
+		return true
+	case RecordProblemCodeEmptyLikePattern:
+		return true
+	case RecordProblemCodeEnumViolation:
+		return true
+	case RecordProblemCodeEvaluationBoundExceeded:
+		return true
+	case RecordProblemCodeFrontmatterMalformed:
+		return true
+	case RecordProblemCodeHopLimitExceeded:
+		return true
+	case RecordProblemCodeHopTraversalBoundExceeded:
+		return true
+	case RecordProblemCodeIndexUnavailable:
+		return true
+	case RecordProblemCodeIntegerNotWhole:
+		return true
+	case RecordProblemCodeIntegerOutOfRange:
+		return true
+	case RecordProblemCodeLiteralTypeMismatch:
+		return true
+	case RecordProblemCodeMissingRequired:
+		return true
+	case RecordProblemCodeMissingSchemaVersion:
+		return true
+	case RecordProblemCodeNearUnresolved:
+		return true
+	case RecordProblemCodeOrderingOnManyProperty:
+		return true
+	case RecordProblemCodeOrphanRow:
+		return true
+	case RecordProblemCodePageSizeClamped:
+		return true
+	case RecordProblemCodeRelationTypeMismatch:
+		return true
+	case RecordProblemCodeSchemaBadProperty:
+		return true
+	case RecordProblemCodeSchemaInvalidYaml:
+		return true
+	case RecordProblemCodeSchemaLoadFailed:
+		return true
+	case RecordProblemCodeSchemaMissingType:
+		return true
+	case RecordProblemCodeSchemaNoProperties:
+		return true
+	case RecordProblemCodeSchemaUnknownKey:
+		return true
+	case RecordProblemCodeSchemaUnreadable:
+		return true
+	case RecordProblemCodeSchemaUnsupportedVersion:
+		return true
+	case RecordProblemCodeScopeTruncated:
+		return true
+	case RecordProblemCodeStaleCursor:
+		return true
+	case RecordProblemCodeStaleRecord:
+		return true
+	case RecordProblemCodeTextSearchRelaxed:
+		return true
+	case RecordProblemCodeTextSearchTruncated:
+		return true
+	case RecordProblemCodeTypeMismatch:
+		return true
+	case RecordProblemCodeUnknownEnumValue:
+		return true
+	case RecordProblemCodeUnknownProperty:
+		return true
+	case RecordProblemCodeUnknownRecordType:
+		return true
+	case RecordProblemCodeUnknownView:
+		return true
+	case RecordProblemCodeUnsupportedOperator:
+		return true
+	case RecordProblemCodeUnsupportedParameter:
+		return true
+	case RecordProblemCodeViewPartIneligible:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordPropertyValueType.
+const (
+	RecordPropertyValueTypeCheckbox RecordPropertyValueType = "checkbox"
+	RecordPropertyValueTypeDate     RecordPropertyValueType = "date"
+	RecordPropertyValueTypeDecimal  RecordPropertyValueType = "decimal"
+	RecordPropertyValueTypeEnum     RecordPropertyValueType = "enum"
+	RecordPropertyValueTypeInteger  RecordPropertyValueType = "integer"
+	RecordPropertyValueTypePerson   RecordPropertyValueType = "person"
+	RecordPropertyValueTypeRelation RecordPropertyValueType = "relation"
+	RecordPropertyValueTypeText     RecordPropertyValueType = "text"
+)
+
+// Valid indicates whether the value is a known member of the RecordPropertyValueType enum.
+func (e RecordPropertyValueType) Valid() bool {
+	switch e {
+	case RecordPropertyValueTypeCheckbox:
+		return true
+	case RecordPropertyValueTypeDate:
+		return true
+	case RecordPropertyValueTypeDecimal:
+		return true
+	case RecordPropertyValueTypeEnum:
+		return true
+	case RecordPropertyValueTypeInteger:
+		return true
+	case RecordPropertyValueTypePerson:
+		return true
+	case RecordPropertyValueTypeRelation:
+		return true
+	case RecordPropertyValueTypeText:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordSortDirection.
+const (
+	RecordSortDirectionAsc  RecordSortDirection = "asc"
+	RecordSortDirectionDesc RecordSortDirection = "desc"
+)
+
+// Valid indicates whether the value is a known member of the RecordSortDirection enum.
+func (e RecordSortDirection) Valid() bool {
+	switch e {
+	case RecordSortDirectionAsc:
+		return true
+	case RecordSortDirectionDesc:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordValueType.
+const (
+	RecordValueTypeCheckbox RecordValueType = "checkbox"
+	RecordValueTypeDate     RecordValueType = "date"
+	RecordValueTypeDecimal  RecordValueType = "decimal"
+	RecordValueTypeEnum     RecordValueType = "enum"
+	RecordValueTypeInteger  RecordValueType = "integer"
+	RecordValueTypePerson   RecordValueType = "person"
+	RecordValueTypeRelation RecordValueType = "relation"
+	RecordValueTypeText     RecordValueType = "text"
+)
+
+// Valid indicates whether the value is a known member of the RecordValueType enum.
+func (e RecordValueType) Valid() bool {
+	switch e {
+	case RecordValueTypeCheckbox:
+		return true
+	case RecordValueTypeDate:
+		return true
+	case RecordValueTypeDecimal:
+		return true
+	case RecordValueTypeEnum:
+		return true
+	case RecordValueTypeInteger:
+		return true
+	case RecordValueTypePerson:
+		return true
+	case RecordValueTypeRelation:
+		return true
+	case RecordValueTypeText:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordWriteRequestCreateMode.
+const (
+	RecordWriteRequestCreateModeCreate RecordWriteRequestCreateMode = "create"
+)
+
+// Valid indicates whether the value is a known member of the RecordWriteRequestCreateMode enum.
+func (e RecordWriteRequestCreateMode) Valid() bool {
+	switch e {
+	case RecordWriteRequestCreateModeCreate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RecordWriteRequestUpdateMode.
+const (
+	RecordWriteRequestUpdateModeUpdate RecordWriteRequestUpdateMode = "update"
+)
+
+// Valid indicates whether the value is a known member of the RecordWriteRequestUpdateMode enum.
+func (e RecordWriteRequestUpdateMode) Valid() bool {
+	switch e {
+	case RecordWriteRequestUpdateModeUpdate:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RelationWriteRequestOp.
+const (
+	RelationWriteRequestOpAdd     RelationWriteRequestOp = "add"
+	RelationWriteRequestOpRemove  RelationWriteRequestOp = "remove"
+	RelationWriteRequestOpReplace RelationWriteRequestOp = "replace"
+)
+
+// Valid indicates whether the value is a known member of the RelationWriteRequestOp enum.
+func (e RelationWriteRequestOp) Valid() bool {
+	switch e {
+	case RelationWriteRequestOpAdd:
+		return true
+	case RelationWriteRequestOpRemove:
+		return true
+	case RelationWriteRequestOpReplace:
 		return true
 	default:
 		return false
@@ -8168,6 +9215,555 @@ func (e ToolRegistryEntrySource) Valid() bool {
 	}
 }
 
+// Defines values for VaultFilterNodeOp.
+const (
+	VaultFilterNodeOpEqual               VaultFilterNodeOp = "="
+	VaultFilterNodeOpGreaterThan         VaultFilterNodeOp = ">"
+	VaultFilterNodeOpGreaterThanEqual    VaultFilterNodeOp = ">="
+	VaultFilterNodeOpIN                  VaultFilterNodeOp = "IN"
+	VaultFilterNodeOpISNOTNULL           VaultFilterNodeOp = "IS NOT NULL"
+	VaultFilterNodeOpISNULL              VaultFilterNodeOp = "IS NULL"
+	VaultFilterNodeOpLIKE                VaultFilterNodeOp = "LIKE"
+	VaultFilterNodeOpLessThan            VaultFilterNodeOp = "<"
+	VaultFilterNodeOpLessThanEqual       VaultFilterNodeOp = "<="
+	VaultFilterNodeOpLessThanGreaterThan VaultFilterNodeOp = "<>"
+)
+
+// Valid indicates whether the value is a known member of the VaultFilterNodeOp enum.
+func (e VaultFilterNodeOp) Valid() bool {
+	switch e {
+	case VaultFilterNodeOpEqual:
+		return true
+	case VaultFilterNodeOpGreaterThan:
+		return true
+	case VaultFilterNodeOpGreaterThanEqual:
+		return true
+	case VaultFilterNodeOpIN:
+		return true
+	case VaultFilterNodeOpISNOTNULL:
+		return true
+	case VaultFilterNodeOpISNULL:
+		return true
+	case VaultFilterNodeOpLIKE:
+		return true
+	case VaultFilterNodeOpLessThan:
+		return true
+	case VaultFilterNodeOpLessThanEqual:
+		return true
+	case VaultFilterNodeOpLessThanGreaterThan:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindAggregateOp.
+const (
+	VaultFindAggregateOpAvg       VaultFindAggregateOp = "avg"
+	VaultFindAggregateOpChecked   VaultFindAggregateOp = "checked"
+	VaultFindAggregateOpCount     VaultFindAggregateOp = "count"
+	VaultFindAggregateOpEarliest  VaultFindAggregateOp = "earliest"
+	VaultFindAggregateOpEmpty     VaultFindAggregateOp = "empty"
+	VaultFindAggregateOpFilled    VaultFindAggregateOp = "filled"
+	VaultFindAggregateOpLatest    VaultFindAggregateOp = "latest"
+	VaultFindAggregateOpMax       VaultFindAggregateOp = "max"
+	VaultFindAggregateOpMedian    VaultFindAggregateOp = "median"
+	VaultFindAggregateOpMin       VaultFindAggregateOp = "min"
+	VaultFindAggregateOpRange     VaultFindAggregateOp = "range"
+	VaultFindAggregateOpStddev    VaultFindAggregateOp = "stddev"
+	VaultFindAggregateOpSum       VaultFindAggregateOp = "sum"
+	VaultFindAggregateOpUnchecked VaultFindAggregateOp = "unchecked"
+	VaultFindAggregateOpUnique    VaultFindAggregateOp = "unique"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindAggregateOp enum.
+func (e VaultFindAggregateOp) Valid() bool {
+	switch e {
+	case VaultFindAggregateOpAvg:
+		return true
+	case VaultFindAggregateOpChecked:
+		return true
+	case VaultFindAggregateOpCount:
+		return true
+	case VaultFindAggregateOpEarliest:
+		return true
+	case VaultFindAggregateOpEmpty:
+		return true
+	case VaultFindAggregateOpFilled:
+		return true
+	case VaultFindAggregateOpLatest:
+		return true
+	case VaultFindAggregateOpMax:
+		return true
+	case VaultFindAggregateOpMedian:
+		return true
+	case VaultFindAggregateOpMin:
+		return true
+	case VaultFindAggregateOpRange:
+		return true
+	case VaultFindAggregateOpStddev:
+		return true
+	case VaultFindAggregateOpSum:
+		return true
+	case VaultFindAggregateOpUnchecked:
+		return true
+	case VaultFindAggregateOpUnique:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindCellType.
+const (
+	VaultFindCellTypeCheckbox VaultFindCellType = "checkbox"
+	VaultFindCellTypeDate     VaultFindCellType = "date"
+	VaultFindCellTypeDecimal  VaultFindCellType = "decimal"
+	VaultFindCellTypeEnum     VaultFindCellType = "enum"
+	VaultFindCellTypeInteger  VaultFindCellType = "integer"
+	VaultFindCellTypePerson   VaultFindCellType = "person"
+	VaultFindCellTypeRelation VaultFindCellType = "relation"
+	VaultFindCellTypeText     VaultFindCellType = "text"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindCellType enum.
+func (e VaultFindCellType) Valid() bool {
+	switch e {
+	case VaultFindCellTypeCheckbox:
+		return true
+	case VaultFindCellTypeDate:
+		return true
+	case VaultFindCellTypeDecimal:
+		return true
+	case VaultFindCellTypeEnum:
+		return true
+	case VaultFindCellTypeInteger:
+		return true
+	case VaultFindCellTypePerson:
+		return true
+	case VaultFindCellTypeRelation:
+		return true
+	case VaultFindCellTypeText:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindGroupByDirection.
+const (
+	VaultFindGroupByDirectionAsc        VaultFindGroupByDirection = "asc"
+	VaultFindGroupByDirectionAscending  VaultFindGroupByDirection = "ascending"
+	VaultFindGroupByDirectionDesc       VaultFindGroupByDirection = "desc"
+	VaultFindGroupByDirectionDescending VaultFindGroupByDirection = "descending"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindGroupByDirection enum.
+func (e VaultFindGroupByDirection) Valid() bool {
+	switch e {
+	case VaultFindGroupByDirectionAsc:
+		return true
+	case VaultFindGroupByDirectionAscending:
+		return true
+	case VaultFindGroupByDirectionDesc:
+		return true
+	case VaultFindGroupByDirectionDescending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindPlanStepSource.
+const (
+	VaultFindPlanStepSourceGoComparator    VaultFindPlanStepSource = "go_comparator"
+	VaultFindPlanStepSourceNone            VaultFindPlanStepSource = "none"
+	VaultFindPlanStepSourcePropertiesIndex VaultFindPlanStepSource = "properties_index"
+	VaultFindPlanStepSourceSchema          VaultFindPlanStepSource = "schema"
+	VaultFindPlanStepSourceTextIndex       VaultFindPlanStepSource = "text_index"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindPlanStepSource enum.
+func (e VaultFindPlanStepSource) Valid() bool {
+	switch e {
+	case VaultFindPlanStepSourceGoComparator:
+		return true
+	case VaultFindPlanStepSourceNone:
+		return true
+	case VaultFindPlanStepSourcePropertiesIndex:
+		return true
+	case VaultFindPlanStepSourceSchema:
+		return true
+	case VaultFindPlanStepSourceTextIndex:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindPlanStepStage.
+const (
+	VaultFindPlanStepStageAggregate VaultFindPlanStepStage = "aggregate"
+	VaultFindPlanStepStageCompare   VaultFindPlanStepStage = "compare"
+	VaultFindPlanStepStageGroup     VaultFindPlanStepStage = "group"
+	VaultFindPlanStepStageJoin      VaultFindPlanStepStage = "join"
+	VaultFindPlanStepStageNarrow    VaultFindPlanStepStage = "narrow"
+	VaultFindPlanStepStageRender    VaultFindPlanStepStage = "render"
+	VaultFindPlanStepStageRetrieve  VaultFindPlanStepStage = "retrieve"
+	VaultFindPlanStepStageScope     VaultFindPlanStepStage = "scope"
+	VaultFindPlanStepStageSort      VaultFindPlanStepStage = "sort"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindPlanStepStage enum.
+func (e VaultFindPlanStepStage) Valid() bool {
+	switch e {
+	case VaultFindPlanStepStageAggregate:
+		return true
+	case VaultFindPlanStepStageCompare:
+		return true
+	case VaultFindPlanStepStageGroup:
+		return true
+	case VaultFindPlanStepStageJoin:
+		return true
+	case VaultFindPlanStepStageNarrow:
+		return true
+	case VaultFindPlanStepStageRender:
+		return true
+	case VaultFindPlanStepStageRetrieve:
+		return true
+	case VaultFindPlanStepStageScope:
+		return true
+	case VaultFindPlanStepStageSort:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindRequestDetail.
+const (
+	VaultFindRequestDetailMinimal  VaultFindRequestDetail = "minimal"
+	VaultFindRequestDetailStandard VaultFindRequestDetail = "standard"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindRequestDetail enum.
+func (e VaultFindRequestDetail) Valid() bool {
+	switch e {
+	case VaultFindRequestDetailMinimal:
+		return true
+	case VaultFindRequestDetailStandard:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindRequestKind.
+const (
+	VaultFindRequestKindAttachment VaultFindRequestKind = "attachment"
+	VaultFindRequestKindNote       VaultFindRequestKind = "note"
+	VaultFindRequestKindRecord     VaultFindRequestKind = "record"
+	VaultFindRequestKindTask       VaultFindRequestKind = "task"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindRequestKind enum.
+func (e VaultFindRequestKind) Valid() bool {
+	switch e {
+	case VaultFindRequestKindAttachment:
+		return true
+	case VaultFindRequestKindNote:
+		return true
+	case VaultFindRequestKindRecord:
+		return true
+	case VaultFindRequestKindTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindRowStatus.
+const (
+	VaultFindRowStatusDone VaultFindRowStatus = "done"
+	VaultFindRowStatusOpen VaultFindRowStatus = "open"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindRowStatus enum.
+func (e VaultFindRowStatus) Valid() bool {
+	switch e {
+	case VaultFindRowStatusDone:
+		return true
+	case VaultFindRowStatusOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindSortDirection.
+const (
+	VaultFindSortDirectionAsc        VaultFindSortDirection = "asc"
+	VaultFindSortDirectionAscending  VaultFindSortDirection = "ascending"
+	VaultFindSortDirectionDesc       VaultFindSortDirection = "desc"
+	VaultFindSortDirectionDescending VaultFindSortDirection = "descending"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindSortDirection enum.
+func (e VaultFindSortDirection) Valid() bool {
+	switch e {
+	case VaultFindSortDirectionAsc:
+		return true
+	case VaultFindSortDirectionAscending:
+		return true
+	case VaultFindSortDirectionDesc:
+		return true
+	case VaultFindSortDirectionDescending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultFindTotalOp.
+const (
+	VaultFindTotalOpAvg       VaultFindTotalOp = "avg"
+	VaultFindTotalOpChecked   VaultFindTotalOp = "checked"
+	VaultFindTotalOpCount     VaultFindTotalOp = "count"
+	VaultFindTotalOpEarliest  VaultFindTotalOp = "earliest"
+	VaultFindTotalOpEmpty     VaultFindTotalOp = "empty"
+	VaultFindTotalOpFilled    VaultFindTotalOp = "filled"
+	VaultFindTotalOpLatest    VaultFindTotalOp = "latest"
+	VaultFindTotalOpMax       VaultFindTotalOp = "max"
+	VaultFindTotalOpMedian    VaultFindTotalOp = "median"
+	VaultFindTotalOpMin       VaultFindTotalOp = "min"
+	VaultFindTotalOpRange     VaultFindTotalOp = "range"
+	VaultFindTotalOpStddev    VaultFindTotalOp = "stddev"
+	VaultFindTotalOpSum       VaultFindTotalOp = "sum"
+	VaultFindTotalOpUnchecked VaultFindTotalOp = "unchecked"
+	VaultFindTotalOpUnique    VaultFindTotalOp = "unique"
+)
+
+// Valid indicates whether the value is a known member of the VaultFindTotalOp enum.
+func (e VaultFindTotalOp) Valid() bool {
+	switch e {
+	case VaultFindTotalOpAvg:
+		return true
+	case VaultFindTotalOpChecked:
+		return true
+	case VaultFindTotalOpCount:
+		return true
+	case VaultFindTotalOpEarliest:
+		return true
+	case VaultFindTotalOpEmpty:
+		return true
+	case VaultFindTotalOpFilled:
+		return true
+	case VaultFindTotalOpLatest:
+		return true
+	case VaultFindTotalOpMax:
+		return true
+	case VaultFindTotalOpMedian:
+		return true
+	case VaultFindTotalOpMin:
+		return true
+	case VaultFindTotalOpRange:
+		return true
+	case VaultFindTotalOpStddev:
+		return true
+	case VaultFindTotalOpSum:
+		return true
+	case VaultFindTotalOpUnchecked:
+		return true
+	case VaultFindTotalOpUnique:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ViewDefKind.
+const (
+	ViewDefKindBoard     ViewDefKind = "board"
+	ViewDefKindBreakdown ViewDefKind = "breakdown"
+	ViewDefKindCalendar  ViewDefKind = "calendar"
+	ViewDefKindList      ViewDefKind = "list"
+	ViewDefKindSummary   ViewDefKind = "summary"
+	ViewDefKindTable     ViewDefKind = "table"
+	ViewDefKindTiles     ViewDefKind = "tiles"
+	ViewDefKindTrend     ViewDefKind = "trend"
+)
+
+// Valid indicates whether the value is a known member of the ViewDefKind enum.
+func (e ViewDefKind) Valid() bool {
+	switch e {
+	case ViewDefKindBoard:
+		return true
+	case ViewDefKindBreakdown:
+		return true
+	case ViewDefKindCalendar:
+		return true
+	case ViewDefKindList:
+		return true
+	case ViewDefKindSummary:
+		return true
+	case ViewDefKindTable:
+		return true
+	case ViewDefKindTiles:
+		return true
+	case ViewDefKindTrend:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ViewDefLayout.
+const (
+	ViewDefLayoutBoard    ViewDefLayout = "board"
+	ViewDefLayoutCalendar ViewDefLayout = "calendar"
+	ViewDefLayoutCards    ViewDefLayout = "cards"
+	ViewDefLayoutGallery  ViewDefLayout = "gallery"
+	ViewDefLayoutMap      ViewDefLayout = "map"
+	ViewDefLayoutTable    ViewDefLayout = "table"
+)
+
+// Valid indicates whether the value is a known member of the ViewDefLayout enum.
+func (e ViewDefLayout) Valid() bool {
+	switch e {
+	case ViewDefLayoutBoard:
+		return true
+	case ViewDefLayoutCalendar:
+		return true
+	case ViewDefLayoutCards:
+		return true
+	case ViewDefLayoutGallery:
+		return true
+	case ViewDefLayoutMap:
+		return true
+	case ViewDefLayoutTable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ViewGroupByDirection.
+const (
+	ViewGroupByDirectionAsc  ViewGroupByDirection = "asc"
+	ViewGroupByDirectionDesc ViewGroupByDirection = "desc"
+)
+
+// Valid indicates whether the value is a known member of the ViewGroupByDirection enum.
+func (e ViewGroupByDirection) Valid() bool {
+	switch e {
+	case ViewGroupByDirectionAsc:
+		return true
+	case ViewGroupByDirectionDesc:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ViewPartPart.
+const (
+	ViewPartPartCalendar ViewPartPart = "calendar"
+	ViewPartPartChart    ViewPartPart = "chart"
+	ViewPartPartColumns  ViewPartPart = "columns"
+	ViewPartPartCrosstab ViewPartPart = "crosstab"
+	ViewPartPartFigures  ViewPartPart = "figures"
+	ViewPartPartList     ViewPartPart = "list"
+	ViewPartPartTable    ViewPartPart = "table"
+	ViewPartPartTiles    ViewPartPart = "tiles"
+)
+
+// Valid indicates whether the value is a known member of the ViewPartPart enum.
+func (e ViewPartPart) Valid() bool {
+	switch e {
+	case ViewPartPartCalendar:
+		return true
+	case ViewPartPartChart:
+		return true
+	case ViewPartPartColumns:
+		return true
+	case ViewPartPartCrosstab:
+		return true
+	case ViewPartPartFigures:
+		return true
+	case ViewPartPartList:
+		return true
+	case ViewPartPartTable:
+		return true
+	case ViewPartPartTiles:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ViewPartAggregate.
+const (
+	ViewPartAggregateAvg   ViewPartAggregate = "avg"
+	ViewPartAggregateCount ViewPartAggregate = "count"
+	ViewPartAggregateMax   ViewPartAggregate = "max"
+	ViewPartAggregateMin   ViewPartAggregate = "min"
+	ViewPartAggregateSum   ViewPartAggregate = "sum"
+)
+
+// Valid indicates whether the value is a known member of the ViewPartAggregate enum.
+func (e ViewPartAggregate) Valid() bool {
+	switch e {
+	case ViewPartAggregateAvg:
+		return true
+	case ViewPartAggregateCount:
+		return true
+	case ViewPartAggregateMax:
+		return true
+	case ViewPartAggregateMin:
+		return true
+	case ViewPartAggregateSum:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ViewResultPartPart.
+const (
+	ViewResultPartPartCalendar ViewResultPartPart = "calendar"
+	ViewResultPartPartChart    ViewResultPartPart = "chart"
+	ViewResultPartPartColumns  ViewResultPartPart = "columns"
+	ViewResultPartPartCrosstab ViewResultPartPart = "crosstab"
+	ViewResultPartPartFigures  ViewResultPartPart = "figures"
+	ViewResultPartPartList     ViewResultPartPart = "list"
+	ViewResultPartPartTable    ViewResultPartPart = "table"
+	ViewResultPartPartTiles    ViewResultPartPart = "tiles"
+)
+
+// Valid indicates whether the value is a known member of the ViewResultPartPart enum.
+func (e ViewResultPartPart) Valid() bool {
+	switch e {
+	case ViewResultPartPartCalendar:
+		return true
+	case ViewResultPartPartChart:
+		return true
+	case ViewResultPartPartColumns:
+		return true
+	case ViewResultPartPartCrosstab:
+		return true
+	case ViewResultPartPartFigures:
+		return true
+	case ViewResultPartPartList:
+		return true
+	case ViewResultPartPartTable:
+		return true
+	case ViewResultPartPartTiles:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceMountsStatus.
 const (
 	WorkspaceMountsStatusBroken WorkspaceMountsStatus = "broken"
@@ -8339,6 +9935,33 @@ const (
 func (e DeleteCredential200JSONResponseBodyStatus) Valid() bool {
 	switch e {
 	case DeleteCredential200JSONResponseBodyStatusRemoved:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GetKnowledgeGraphParamsKind.
+const (
+	GetKnowledgeGraphParamsKindBacklinks     GetKnowledgeGraphParamsKind = "backlinks"
+	GetKnowledgeGraphParamsKindLinks         GetKnowledgeGraphParamsKind = "links"
+	GetKnowledgeGraphParamsKindNeighbourhood GetKnowledgeGraphParamsKind = "neighbourhood"
+	GetKnowledgeGraphParamsKindOrphans       GetKnowledgeGraphParamsKind = "orphans"
+	GetKnowledgeGraphParamsKindUnresolved    GetKnowledgeGraphParamsKind = "unresolved"
+)
+
+// Valid indicates whether the value is a known member of the GetKnowledgeGraphParamsKind enum.
+func (e GetKnowledgeGraphParamsKind) Valid() bool {
+	switch e {
+	case GetKnowledgeGraphParamsKindBacklinks:
+		return true
+	case GetKnowledgeGraphParamsKindLinks:
+		return true
+	case GetKnowledgeGraphParamsKindNeighbourhood:
+		return true
+	case GetKnowledgeGraphParamsKindOrphans:
+		return true
+	case GetKnowledgeGraphParamsKindUnresolved:
 		return true
 	default:
 		return false
@@ -9398,7 +11021,11 @@ type AgentToolsResponseToolsEffectivePolicy string
 type AgentToolsResponseToolsManifestTier string
 
 // AgentToolsUpdateRequest Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.policies, a complete map) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
+// ROUND-TRIP SHAPE (UAT 2026-09-13 D-86): the body of a GET /api/v1/agents/{id}/tools response (AgentToolsResponse — config + tools + agent_type) is ALSO accepted as-is. When the top-level `builtin` is absent and `config.builtin` is present, the server reads the policy map from `config.builtin` (and MCP bindings from `config.mcp`); `tools` and `agent_type` are read-only echoes and are ignored on write. A body carrying neither `builtin` nor `config.builtin` is rejected with 400, never persisted as an empty policy map.
 type AgentToolsUpdateRequest struct {
+	// AgentType Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); an agent's type is not editable here. Deliberately NOT an enum: a second copy of the agent-type enum changes oapi-codegen's collision-avoidance constant naming for the whole file and breaks the hand-written pkg/api/generated/fixtures.go.
+	AgentType *string `json:"agent_type,omitempty"`
+
 	// Builtin Builtin tool policy configuration for this agent.
 	Builtin *struct {
 		// Mode Legacy format, retained for one release of transitional compatibility. Ignored outright when a complete policies map is also present (policies always wins). Sent ALONE (no policies), mode does not successfully "build" a working policy on its own any more: under the mandatory coverage-validation model (no default_policy fallback), "explicit" converts visible[] into agent-level "allow" entries for just those names — it does not synthesize a deny-all baseline for every other static builtin tool — and "inherit" produces no per-tool entries at all. Both leave most static builtin tools without an explicit policy entry, so the request is rejected with 400 (a coverage-gap error) unless the global sandbox.tool_policies floor happens to cover every remaining tool. Callers must send a complete policies map to reliably succeed.
@@ -9411,6 +11038,27 @@ type AgentToolsUpdateRequest struct {
 		Visible *[]string `json:"visible,omitempty"`
 	} `json:"builtin,omitempty"`
 
+	// Config Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
+	Config *struct {
+		// Builtin Controls builtin tool visibility for this agent.
+		Builtin *struct {
+			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			Policies map[string]AgentToolsUpdateRequestConfigBuiltinPolicies `json:"policies"`
+		} `json:"builtin,omitempty"`
+
+		// Mcp MCP server bindings for this agent.
+		Mcp *struct {
+			// Servers List of MCP server bindings.
+			Servers *[]struct {
+				// Id MCP server identifier as registered in config.json.
+				Id string `json:"id"`
+
+				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+				Tools *[]string `json:"tools,omitempty"`
+			} `json:"servers,omitempty"`
+		} `json:"mcp,omitempty"`
+	} `json:"config,omitempty"`
+
 	// Mcp MCP server bindings for this agent.
 	Mcp *struct {
 		// Servers List of MCP server bindings.
@@ -9422,6 +11070,21 @@ type AgentToolsUpdateRequest struct {
 			Tools *[]string `json:"tools,omitempty"`
 		} `json:"servers,omitempty"`
 	} `json:"mcp,omitempty"`
+
+	// Tools Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); the effective per-tool list is always recomputed by the server.
+	Tools *[]struct {
+		// ConfiguredPolicy The policy as written in the agent's config.
+		ConfiguredPolicy AgentToolsUpdateRequestToolsConfiguredPolicy `json:"configured_policy"`
+
+		// EffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
+		EffectivePolicy AgentToolsUpdateRequestToolsEffectivePolicy `json:"effective_policy"`
+
+		// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
+		ManifestTier AgentToolsUpdateRequestToolsManifestTier `json:"manifest_tier"`
+
+		// Name Canonical tool name.
+		Name string `json:"name"`
+	} `json:"tools,omitempty"`
 }
 
 // AgentToolsUpdateRequestBuiltinMode Legacy format, retained for one release of transitional compatibility. Ignored outright when a complete policies map is also present (policies always wins). Sent ALONE (no policies), mode does not successfully "build" a working policy on its own any more: under the mandatory coverage-validation model (no default_policy fallback), "explicit" converts visible[] into agent-level "allow" entries for just those names — it does not synthesize a deny-all baseline for every other static builtin tool — and "inherit" produces no per-tool entries at all. Both leave most static builtin tools without an explicit policy entry, so the request is rejected with 400 (a coverage-gap error) unless the global sandbox.tool_policies floor happens to cover every remaining tool. Callers must send a complete policies map to reliably succeed.
@@ -9429,6 +11092,18 @@ type AgentToolsUpdateRequestBuiltinMode string
 
 // AgentToolsUpdateRequestBuiltinPolicies defines model for AgentToolsUpdateRequest.Builtin.Policies.
 type AgentToolsUpdateRequestBuiltinPolicies string
+
+// AgentToolsUpdateRequestConfigBuiltinPolicies defines model for AgentToolsUpdateRequest.Config.Builtin.Policies.
+type AgentToolsUpdateRequestConfigBuiltinPolicies string
+
+// AgentToolsUpdateRequestToolsConfiguredPolicy The policy as written in the agent's config.
+type AgentToolsUpdateRequestToolsConfiguredPolicy string
+
+// AgentToolsUpdateRequestToolsEffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
+type AgentToolsUpdateRequestToolsEffectivePolicy string
+
+// AgentToolsUpdateRequestToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
+type AgentToolsUpdateRequestToolsManifestTier string
 
 // AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. Exception (ADR-052 FR-038): locked `type: system` agents (e.g. the Judge) DO accept `soul` mutations — soul/rubric unification means the Judge's soul is its judging rubric, editable while the agent stays otherwise locked. model, timeout_seconds, and max_tool_iterations may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type.
 type AgentUpdateRequest struct {
@@ -9592,6 +11267,9 @@ type AppState struct {
 
 	// OnboardingComplete Whether the first-run onboarding wizard has been completed.
 	OnboardingComplete bool `json:"onboarding_complete"`
+
+	// VideoEmbedHosts Allow-listed video-embed hostnames (ADR-083 D-C/D9, EMB-075/EMB-081). A note's markdown-link video embed is drawn as a locally-rendered, click-to-play frame only when its URL's host EXACTLY matches an entry here — never a prefix or suffix match, so a look-alike domain is never framed. This is the same allow-list the served Content-Security-Policy's frame-src directive carries (EMB-079); a test asserts the two are equal (EMB-080). The shipped default contains exactly one entry. An operator who empties this list turns video framing off entirely: no external host reaches the served policy, and every video embed falls back to a plain link. Read-only — this reflects an operator configuration key, not settable via this endpoint.
+	VideoEmbedHosts *[]string `json:"video_embed_hosts,omitempty"`
 }
 
 // AppStatePatchRequest Request body for PATCH /api/v1/state. Partial update to application state. Currently only supports marking onboarding as complete (onboarding_complete must be true — setting it to false is rejected 400).
@@ -10293,6 +11971,15 @@ type ContextSettingsUpdate struct {
 // ContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 type ContextWindowSource string
 
+// CreateVaultRequest Request body for POST /api/v1/library/{workspace_id}/vaults. Creates a new Omnipus knowledge base ("vault") as a folder inside the workspace's work tree (pkg/knowledge.CreateInWorkspace — FR-022/FR-023/FR-025), writing the .omnipus-vault/ marker plus empty records/ and views/ control-plane directories so the vault is immediately usable by knowledge_configure. workspace_id is NOT a body field — it is already the {workspace_id} path parameter, matching every other per-workspace Library create/write route (LibraryMkdirRequest, LibraryContentRequest, ...) rather than duplicating it and risking the two disagreeing.
+type CreateVaultRequest struct {
+	// Name The new vault folder's name — a single path segment, never containing "/" or "\" and never "." or "..". Also becomes the vault's marker display_name. Rejected (400) if it fails either check, or the workspace's own portable-name rules; rejected (409) if an entry already exists at the resulting path.
+	Name string `json:"name"`
+
+	// ParentRelPath Workspace-relative folder the vault is created inside, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). Omit or pass "" to create the vault at the workspace's work-tree root.
+	ParentRelPath *string `json:"parent_rel_path,omitempty"`
+}
+
 // CredentialRotateRequest Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022).
 type CredentialRotateRequest struct {
 	// NewPassphrase New passphrase used to derive the new vault key. Must not be empty.
@@ -10926,6 +12613,25 @@ type EntitlementResponse struct {
 // EntitlementResponseModelsLimits "known" when the model is in the served catalog (window/output/modality limits available); "unknown" when the provider returned a model the catalog lacks.
 type EntitlementResponseModelsLimits string
 
+// EnumValueDef One value of a closed, ORDERED enum (ADR-068 D4). Order is data, carried in `position`, so nobody has to encode it into the spelling — the "1-Pending / 7-DoNotContact" prefix hack in real vaults exists only because the tool sorted lexically and offered no other way to state sequence.
+// Sorting an enum property sorts by `position`, never lexically (FR-010). A value outside the declared set is REJECTED with the permitted values named (FR-011); it is never silently auto-created as a second de-facto value.
+type EnumValueDef struct {
+	// Group Optional lifecycle grouping (D4) so "is this finished?" is answerable across record types whose vocabularies differ. Omitted means ungrouped.
+	Group *EnumValueDefGroup `json:"group,omitempty"`
+
+	// Label Human-readable label for display. Absent means render `value`.
+	Label *string `json:"label,omitempty"`
+
+	// Position Zero-based declared position. Sort order for this property (FR-010).
+	Position int `json:"position"`
+
+	// Value The token as written in the record's frontmatter.
+	Value string `json:"value"`
+}
+
+// EnumValueDefGroup Optional lifecycle grouping (D4) so "is this finished?" is answerable across record types whose vocabularies differ. Omitted means ungrouped.
+type EnumValueDefGroup string
+
 // ErrorResponse Standard error envelope returned by all non-2xx responses.
 type ErrorResponse struct {
 	// Code Machine-readable error code for programmatic branching (e.g. "csrf_missing", "rate_limited").
@@ -11138,6 +12844,190 @@ type FallbackModel struct {
 	// Provider Routing key (e.g. "openrouter", "anthropic", "openai"). When set, the fallback uses this provider's API credentials — independent of the agent's primary model's provider. This is the FR-007 contract: a rate-limited primary does NOT poison the fallback's provider.
 	Provider *string `json:"provider,omitempty"`
 }
+
+// FileSearchHit One file-search hit (ADR-081; spec MV-14). A hit is ONE matching line — the first match position on that line is what `line` reports; two matches on one line are still one hit. A name/path match is one hit with match_kind "name" and no line.
+// KB-7b exception: when the request set match_all_words, a hit is instead ONE matching DOCUMENT — every query word must be present somewhere in the file (not necessarily on the same line), and every matching file collapses to this ONE row regardless of how many lines actually matched. match_count carries how many lines that was; line/excerpt/context describe the FIRST (file-order) matching line as the representative one.
+type FileSearchHit struct {
+	// ContextAfter Up to context_lines lines following the match, in file order.
+	ContextAfter *[]string `json:"context_after,omitempty"`
+
+	// ContextBefore Up to context_lines lines preceding the match, in file order.
+	ContextBefore *[]string `json:"context_before,omitempty"`
+
+	// Excerpt Bounded window of the matching line around the first match — at most 512 BYTES (MV-6; maxLength here is a character-level outer guard), always valid UTF-8 (runes never split). Omitted when unavailable.
+	Excerpt *string `json:"excerpt,omitempty"`
+
+	// IsDir True when this hit is a directory rather than a file — always true (never omitted) for a directory hit; always false for a content hit (directories are never content-scanned). Deliberately carries no `default` keyword despite always being false-when-absent in practice: a `default` makes openapi-typescript emit this as a non-optional field regardless of the `required` list, which would force every existing FileSearchHit fixture built before this field existed to add it just to keep compiling. Absent (or false) means "this is a file" — an existing consumer keeps its prior, file-only reading with no changes required.
+	IsDir *bool `json:"is_dir,omitempty"`
+
+	// Line 1-based line number of the matching line (content hits only).
+	Line *int `json:"line,omitempty"`
+
+	// MatchCount Present only on a match_all_words collapsed hit (KB-7b/KB-6a): how many lines in the file matched at least one query word. Absent on every ordinary (one-line-one-hit) content hit and on every name hit — absence means "this row already IS the one match", never "zero matches".
+	MatchCount *int `json:"match_count,omitempty"`
+
+	// MatchKind Whether the file matched by its name/path or by a content line.
+	MatchKind FileSearchHitMatchKind `json:"match_kind"`
+
+	// Path Workspace-relative path of the matched file or directory (see is_dir).
+	Path string `json:"path"`
+}
+
+// FileSearchHitMatchKind Whether the file matched by its name/path or by a content line.
+type FileSearchHitMatchKind string
+
+// FileSearchRequest Request body for POST /api/v1/library/{workspace_id}/files/search — the bounded, index-free file search over a workspace's confined Library root (work tree + mounts), per ADR-081 and docs/internal/specs/unified-search-and-grep-spec.md.
+// The HUMAN bar always sends regex:false — a person's query is a literal with smart-case (FR-016) and can never produce a regex parse error. regex:true is the explicit opt-in used by API callers and by the agent grep tool's shared engine semantics.
+// Every bound is a downward-only override of the server defaults (MV-3); an override above a cap is CLAMPED and the clamp is disclosed in the response's limits_applied echo — never silent. Bounds are deliberately not operator-configurable in v1.
+type FileSearchRequest struct {
+	// Case Case mode for BOTH name and content matching. smart (default) derives the mode from the pattern: any uppercase letter makes it sensitive, otherwise insensitive.
+	Case *FileSearchRequestCase `json:"case,omitempty"`
+
+	// ContextLines Lines of context to attach before and after each content hit. KB-6c SUPERSEDES the earlier v1 decision (spec R2-MIN-005) to leave this at 0 from the SPA: one bare line is rarely enough to judge a hit, and raising it to 1 needed no backend, contract or engine change — the engine already fills context_before/context_after, the SPA simply was not asking. The SPA bar now sends 1.
+	ContextLines *int `json:"context_lines,omitempty"`
+
+	// ExcludeGlobs doublestar patterns removed from consideration.
+	ExcludeGlobs *[]string `json:"exclude_globs,omitempty"`
+
+	// IncludeGlobs doublestar patterns (e.g. "**/*.md"); when non-empty, only matching paths are considered.
+	IncludeGlobs *[]string `json:"include_globs,omitempty"`
+
+	// IncludeHidden Include dot-prefixed USER files/directories. Regardless of this flag, .git/, .library/ and .omnipus-vault/ are always pruned — Omnipus internals and git object noise are never scanned. .gitignore files are still read for pruning even when hidden files are excluded from results.
+	IncludeHidden *bool `json:"include_hidden,omitempty"`
+
+	// Limits Downward-only overrides of the server bounds (MV-3). Values above the server defaults are clamped and disclosed via limits_applied.
+	Limits *struct {
+		// Bytes Max content bytes scanned (server default 268435456).
+		Bytes *int `json:"bytes,omitempty"`
+
+		// DeadlineMs Wall-clock budget in milliseconds (server default 10000; the SPA sends 3000 for interactive searches).
+		DeadlineMs *int `json:"deadline_ms,omitempty"`
+
+		// Depth Max directory depth (server default 32).
+		Depth *int `json:"depth,omitempty"`
+
+		// Files Max files visited (server default 50000).
+		Files *int `json:"files,omitempty"`
+
+		// Matches Max total hits (server default 1000).
+		Matches *int `json:"matches,omitempty"`
+
+		// MatchesPerFile Max hits contributed by one file (server default 50).
+		MatchesPerFile *int `json:"matches_per_file,omitempty"`
+
+		// OutputBytes Accumulated output budget (server default 1048576).
+		OutputBytes *int `json:"output_bytes,omitempty"`
+	} `json:"limits,omitempty"`
+
+	// MatchAllWords KB-7b: split query on whitespace into words and require every word to be present somewhere in the file — not necessarily on the same line — collapsing a matching file to ONE hit (FileSearchHit.match_count carries how many lines actually matched) instead of one hit per matching line. The SPA bar always sets this true, so "quarterly report" finds a file that discusses both words in different paragraphs, matching how a person reads the query. Ignored when regex is true — a regex pattern is one expression written on purpose, never split on whitespace. Default false so an API caller that wants today's literal-substring, one-hit-per-line behavior (e.g. the agent grep tool's own semantics) gets it without asking.
+	MatchAllWords *bool `json:"match_all_words,omitempty"`
+
+	// Path Workspace-relative folder to scope the search to. Omitted or empty means the workspace root. Must resolve inside the confined root; a path outside it is refused with the Library's standard taxonomy.
+	Path *string `json:"path,omitempty"`
+
+	// Query The search text. With regex:false (default) it is matched literally under the selected case mode against file names/paths and text-file content. With regex:true it is an RE2 pattern (linear-time; no backreferences/lookaround — which is what makes agent-supplied patterns safe).
+	Query string `json:"query"`
+
+	// Regex Treat query as an RE2 pattern. The SPA bar never sets this.
+	Regex *bool `json:"regex,omitempty"`
+}
+
+// FileSearchRequestCase Case mode for BOTH name and content matching. smart (default) derives the mode from the pattern: any uppercase letter makes it sensitive, otherwise insensitive.
+type FileSearchRequestCase string
+
+// FileSearchResponse Response from POST /api/v1/library/{workspace_id}/files/search (ADR-081).
+// HONESTY CONTRACT: a bounded result is never presented as complete. Whenever any request-level bound stopped the walk, `truncated` is true and `truncated_reason` names which bound (MV-3). Layering rule (MV-3a): the ENGINE enforces the accumulated output-byte budget (reason "max_output"); the agent grep tool's 64,000-char serialization cap is applied after and only overrides the reason when the engine set none. The per-file content cap is a per-file skip counted in stats, NOT a request-level truncation.
+// Every array is always present — empty means [], never null (MV-5).
+type FileSearchResponse struct {
+	// Hits The bounded hit list. Ordering is deterministic path-lexicographic (spec A3).
+	Hits []struct {
+		// ContextAfter Up to context_lines lines following the match, in file order.
+		ContextAfter *[]string `json:"context_after,omitempty"`
+
+		// ContextBefore Up to context_lines lines preceding the match, in file order.
+		ContextBefore *[]string `json:"context_before,omitempty"`
+
+		// Excerpt Bounded window of the matching line around the first match — at most 512 BYTES (MV-6; maxLength here is a character-level outer guard), always valid UTF-8 (runes never split). Omitted when unavailable.
+		Excerpt *string `json:"excerpt,omitempty"`
+
+		// IsDir True when this hit is a directory rather than a file — always true (never omitted) for a directory hit; always false for a content hit (directories are never content-scanned). Deliberately carries no `default` keyword despite always being false-when-absent in practice: a `default` makes openapi-typescript emit this as a non-optional field regardless of the `required` list, which would force every existing FileSearchHit fixture built before this field existed to add it just to keep compiling. Absent (or false) means "this is a file" — an existing consumer keeps its prior, file-only reading with no changes required.
+		IsDir *bool `json:"is_dir,omitempty"`
+
+		// Line 1-based line number of the matching line (content hits only).
+		Line *int `json:"line,omitempty"`
+
+		// MatchCount Present only on a match_all_words collapsed hit (KB-7b/KB-6a): how many lines in the file matched at least one query word. Absent on every ordinary (one-line-one-hit) content hit and on every name hit — absence means "this row already IS the one match", never "zero matches".
+		MatchCount *int `json:"match_count,omitempty"`
+
+		// MatchKind Whether the file matched by its name/path or by a content line.
+		MatchKind FileSearchResponseHitsMatchKind `json:"match_kind"`
+
+		// Path Workspace-relative path of the matched file or directory (see is_dir).
+		Path string `json:"path"`
+	} `json:"hits"`
+
+	// LimitsApplied Echo of the EFFECTIVE limits after clamping (R2-MIN-007) — the clamp disclosure that keeps this surface as honest as the vault search's limit_clamped. Compare against what you requested to detect a clamp.
+	LimitsApplied struct {
+		Bytes          int `json:"bytes"`
+		DeadlineMs     int `json:"deadline_ms"`
+		Depth          int `json:"depth"`
+		Files          int `json:"files"`
+		Matches        int `json:"matches"`
+		MatchesPerFile int `json:"matches_per_file"`
+		OutputBytes    int `json:"output_bytes"`
+	} `json:"limits_applied"`
+
+	// Stats Walk accounting — what was covered and what was skipped, observable not silent.
+	Stats struct {
+		// BytesScanned Content bytes actually scanned.
+		BytesScanned int `json:"bytes_scanned"`
+
+		// DirsVisited Directories the walk reached (name-checked and glob-filtered), the directory-entry counterpart of files_visited. Counted separately — not folded into files_visited — but the two share one Files budget, so a directory-heavy search that stops at max_matches or max_files never reports files_visited alone as though nothing else happened. Deliberately left OUT of this object's `required` list (unlike its five siblings above) even though a current engine always populates it: adding a new field to `required` breaks every existing FileSearchResponse fixture built before this field existed, forcing an unrelated update just to keep compiling — the same reasoning FileSearchHit.is_dir documents. Absent means "not reported" (treat as 0 / not yet upgraded), never "definitely zero directories".
+		DirsVisited *int `json:"dirs_visited,omitempty"`
+
+		// FilesFilteredGlob Files or directories the walk reached but rejected via include_globs/exclude_globs. Distinct from files_pruned_ignored: a request-scoped glob filter is a different reason than a repository-level .gitignore/.ignore/always-pruned/hidden rule, and conflating the two would hide which one actually explains a given search's shape. Left optional for the same backward-compatibility reason as dirs_visited above.
+		FilesFilteredGlob *int `json:"files_filtered_glob,omitempty"`
+
+		// FilesPrunedIgnored Entries pruned by .gitignore/.ignore or the always-pruned set — hidden-by-ignore is observable.
+		FilesPrunedIgnored int `json:"files_pruned_ignored"`
+
+		// FilesSkippedBinary Finding F-A: files whose content was never scanned because their first 8 KiB contained a NUL byte (FR-005 — binary files are name-matchable, never content-scanned). Such a file IS still counted in files_visited (it was reached and name-checked); this is what makes that count honest rather than silently implying every visited file's content was searched. Left optional for the same backward-compatibility reason as dirs_visited above.
+		FilesSkippedBinary *int `json:"files_skipped_binary,omitempty"`
+
+		// FilesSkippedLongLine Finding C1: files whose content scan was abandoned because a single line (no newline seen, or one absurdly far away) grew past the engine's per-line cap before ever terminating — a file with no newline anywhere (a single-line JSON export, a minified bundle, a base64 blob) used to be read entirely into memory before any budget could reject it. Such a file IS still counted in files_visited (it was reached and name-checked, and any hits found earlier in the same file before the cap was hit are kept); this is what makes that count honest rather than silently implying the whole file was scanned. Left optional for the same backward-compatibility reason as dirs_visited above.
+		FilesSkippedLongLine *int `json:"files_skipped_long_line,omitempty"`
+
+		// FilesSkippedPerFileCap Files whose content remainder was skipped at the per-file byte cap.
+		FilesSkippedPerFileCap int `json:"files_skipped_per_file_cap"`
+
+		// FilesSkippedProblems Files skipped because unreadable/vanished mid-walk (per-file failures; a lost ROOT is truncated_reason root_lost instead).
+		FilesSkippedProblems int `json:"files_skipped_problems"`
+
+		// FilesVisited Files the walk reached (name-checked).
+		FilesVisited int `json:"files_visited"`
+
+		// HitsCappedPerFile Files whose hits were cut at the per-file match cap.
+		HitsCappedPerFile int `json:"hits_capped_per_file"`
+
+		// IgnoreFilesUnreadable Finding F-E: a .gitignore/.ignore file the walk found but could NOT read (permission denied, an I/O error) — as opposed to one simply not existing, which is the routine, uncounted case. When nonzero, at least one directory's filtering did not apply the rules that file would have added (it degrades to "no additional rules from this file", same as a missing one). Left optional for the same backward-compatibility reason as dirs_visited above.
+		IgnoreFilesUnreadable *int `json:"ignore_files_unreadable,omitempty"`
+	} `json:"stats"`
+
+	// Truncated True whenever any request-level bound stopped the search early.
+	Truncated bool `json:"truncated"`
+
+	// TruncatedReason Which bound fired (present exactly when truncated is true). root_lost means the walk root or a mount root became unreadable mid-search — a visible outcome, never a quiet empty result (FR-021). canceled (finding F-H) is distinct from deadline: the CALLER's own request context was canceled (client disconnected, an interrupted agent turn) rather than the search genuinely running past its deadline — the two used to be conflated into "deadline" for every caller.
+	TruncatedReason *FileSearchResponseTruncatedReason `json:"truncated_reason,omitempty"`
+
+	// TruncatedRoot Present only when truncated_reason is root_lost AND more than one root was searched (a work tree plus mounts): names the FIRST root (the empty string for the workspace work tree, the mount name otherwise) that became unreadable (finding F-C). Every OTHER root is still searched to completion — one dead mount does not silence hits from healthy ones — so this exists to say WHICH root's coverage is missing rather than leaving the caller to guess.
+	TruncatedRoot *string `json:"truncated_root,omitempty"`
+}
+
+// FileSearchResponseHitsMatchKind Whether the file matched by its name/path or by a content line.
+type FileSearchResponseHitsMatchKind string
+
+// FileSearchResponseTruncatedReason Which bound fired (present exactly when truncated is true). root_lost means the walk root or a mount root became unreadable mid-search — a visible outcome, never a quiet empty result (FR-021). canceled (finding F-H) is distinct from deadline: the CALLER's own request context was canceled (client disconnected, an interrupted agent turn) rather than the search genuinely running past its deadline — the two used to be conflated into "deadline" for every caller.
+type FileSearchResponseTruncatedReason string
 
 // GatewayRestartResponse Acknowledgement returned by POST /api/v1/gateway/restart. The gateway accepts the request, replies immediately, then drains in-flight work and re-execs the process (or exits cleanly for a supervisor). The SPA uses this response to start polling /health (and the WS reconnect path) to detect the gateway going down and coming back up.
 type GatewayRestartResponse struct {
@@ -12024,10 +13914,381 @@ type JudgeVerdictPerCriterionProvenance string
 // JudgeVerdictScope Whether this verdict judges a task attempt, a plan round, or a `/goal` session round (ADR-049 Part B US-8). A `goal` verdict carries neither `task_id` nor `plan_id` — it is correlated by the session the `judge_verdict` transcript entry is written into.
 type JudgeVerdictScope string
 
+// KnowledgeBaseInfo Identity and detection result for one knowledge base (ADR-067 D18). Returned by GET /api/v1/library/{workspace_id}/knowledge?path=... for any folder in the workspace work tree.
+// Detection is marker-based and never reads file CONTENT (FR-020, FR-021): a folder is a knowledge base when its root contains .omnipus-vault/ or .obsidian/. Omnipus writes only its own marker and never creates .obsidian/ (FR-022, FR-023).
+// Deliberately carries NO index counts or percentages. Index progress is a streaming state delivered over the WebSocket as KnowledgeIndexProgressFrame (FR-080); a caller that wants to know how far indexing has got subscribes, it does not poll this endpoint.
+type KnowledgeBaseInfo struct {
+	// CollectionId Stable opaque identifier for this collection, derived from the root's RESOLVED REAL PATH (FR-031). Two mounts of the same folder — into one workspace or several — share a collection_id and therefore one index; the index is reference-counted across those mounts. Absent when is_knowledge_base is false. Callers MUST treat this as opaque and MUST NOT parse a filesystem path out of it.
+	CollectionId *string `json:"collection_id,omitempty"`
+
+	// DetectionError Present when detection could not complete — a marker exists but could not be read, or the root itself could not be stat-ed. Detection then fails LOUDLY: is_knowledge_base carries the last known answer and the caller MUST surface this rather than treating the folder as ordinary (E-9).
+	DetectionError *struct {
+		// Code Machine-readable reason detection could not complete.
+		Code KnowledgeBaseInfoDetectionErrorCode `json:"code"`
+
+		// Message Human-readable explanation naming the path involved.
+		Message string `json:"message"`
+	} `json:"detection_error,omitempty"`
+
+	// DisplayName Human-readable collection name recorded in the marker (FR-024). Absent when the marker records none; the SPA then falls back to the root folder's own name.
+	DisplayName *string `json:"display_name,omitempty"`
+
+	// IsKnowledgeBase True when a marker directory was found at root_path. False means an ordinary folder — NOT "we could not tell"; an unreadable marker is reported through detection_error instead of being silently downgraded (E-9).
+	IsKnowledgeBase bool `json:"is_knowledge_base"`
+
+	// Marker Which marker directory established the result. "omnipus_vault" is .omnipus-vault/, "obsidian" is .obsidian/, "none" accompanies is_knowledge_base=false. When both markers are present the Omnipus one is reported.
+	Marker KnowledgeBaseInfoMarker `json:"marker"`
+
+	// RootPath Workspace-relative path of the collection root, forward-slash separated. Never absolute, never containing a ".." segment. Knowledge bases live inside the workspace tree, never at an arbitrary host path (FR-025).
+	RootPath string `json:"root_path"`
+
+	// TemplatePath Collection-relative path of the folder holding note templates, as recorded in the marker (FR-024). Reachable without enabling hidden files (FR-101). Absent when the collection defines no templates.
+	TemplatePath *string `json:"template_path,omitempty"`
+
+	// WorkspaceId Workspace whose work tree contains this folder.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// KnowledgeBaseInfoDetectionErrorCode Machine-readable reason detection could not complete.
+type KnowledgeBaseInfoDetectionErrorCode string
+
+// KnowledgeBaseInfoMarker Which marker directory established the result. "omnipus_vault" is .omnipus-vault/, "obsidian" is .obsidian/, "none" accompanies is_knowledge_base=false. When both markers are present the Omnipus one is reported.
+type KnowledgeBaseInfoMarker string
+
+// KnowledgeBaseUnloadableView One view file that names a `.base` as its `source` but FAILED TO LOAD — malformed YAML, an unknown key, a property the record type no longer declares — reported by name and reason (UAT 2026-09-13 D-70).
+// `unloadable_count` alone told a reader "2 views from this file could not be loaded" and nothing else: which two analyses were missing, and why, was known to the server (records.ViewRejection carries the name, the file paths, the code and the reason) and withheld. This entry surfaces exactly that record, so the preview can name the missing tabs and state the operator's remedy in the same words knowledge_describe would use.
+type KnowledgeBaseUnloadableView struct {
+	// Code The loader's rejection code, verbatim (e.g. `view_unknown_property`).
+	Code string `json:"code"`
+
+	// Name The view's declared name, when the file was readable enough to hold one. Absent for a file so broken that no `name:` key could be read.
+	Name *string `json:"name,omitempty"`
+
+	// Paths Every file involved, vault-relative. A duplicate-name conflict names both files, for the reason FR-003 gives for schemas.
+	Paths []string `json:"paths"`
+
+	// Reason Why the view could not be loaded, in the operator's own vocabulary.
+	Reason string `json:"reason"`
+}
+
+// KnowledgeBaseView One saved view that was imported from a given `.base` file, as the server knows it (view-kinds-design-2026-09-03 §7).
+// THE SERVER'S SLUG IS THE ONLY ADDRESS. Import is one-shot (FR-102): a `.base` file's views were translated into `<vault>/.omnipus-vault/views/<slug>.yaml` and the source file is never read again on the query path. The importer's own SlugRegistry (pkg/vaultimport/util.go) derives that slug — kebab(base stem) + "--" + kebab(view name), plus a numeric suffix when two view names kebab to the same string — and the suffix is a COUNTER over everything already handed out, which nothing outside the importer can reconstruct. A client that re-derived the slug by parsing the `.base` file therefore mapped two colliding view names onto ONE slug: the second tab silently rendered the first view's rows under the second view's name. `name` here is read from the saved view file itself, so there is nothing left to re-derive.
+type KnowledgeBaseView struct {
+	// Kind The view kind that authored this view (design §2.3), when the file declares one. Provenance — nothing renders from it.
+	Kind *string `json:"kind,omitempty"`
+
+	// Label What to show a reader: the view's declared `label` when it has one, otherwise its `name`. Resolved server-side (records.SavedView's DisplayLabel) so no two consumers can invent different fallbacks.
+	Label string `json:"label"`
+
+	// Name The saved view's own name — the authoritative slug, to be passed VERBATIM as the `view` query parameter of GET /library/{workspace_id}/knowledge/view. Never reconstructed by a client.
+	Name string `json:"name"`
+
+	// Source The vault-relative path of the `.base` file this view was imported from, when the saved view file records one (UAT D-13). Absent for a view authored in place (knowledge_configure create_view / write_view) — such a view belongs to the collection, not to any file, which is exactly why a views list addressed by collection exists at all.
+	Source *string `json:"source,omitempty"`
+
+	// Unservable True when the view loaded but CANNOT be served — it is stored `disabled` (FR-105), or its filter cannot be carried into the query grammar. Absent or false means it can be evaluated normally.
+	//
+	// Reported rather than hidden: a view the vault declares and this surface silently omits is indistinguishable from a view that was never imported, and the operator's fix differs completely between the two.
+	Unservable *bool `json:"unservable,omitempty"`
+
+	// UnservableReason Why it cannot be served, in the operator's own vocabulary, together with the remedy — records.ViewServeRefusal's Reason and Remedy. Present exactly when `unservable` is true.
+	UnservableReason *string `json:"unservable_reason,omitempty"`
+}
+
+// KnowledgeBaseViews The saved views that belong to one `.base` file, plus everything needed to evaluate them — the answer to "open this base as its views" (view-kinds-design-2026-09-03 §7).
+// WHY THIS ENDPOINT EXISTS. Nothing listed which saved views came from which source file, so the SPA read the `.base` file itself and re-derived each view's slug by mirroring the importer's slugger. Two things that cost: the importer's collision COUNTER cannot be mirrored (two view names that kebab alike collapsed onto one slug, and the second tab rendered the first view's rows), and a hand-rolled YAML walk mistook a nested `name:` key for the view's own name (a valid view then answered `unknown_view`). Both are re-derivations of a fact the server already holds: every imported view file records the `source` it came from, its own `name`, and its `label`. This endpoint reports them, and the client re-derives nothing.
+// MATCHING IS ON `source`, NOT ON THE FILENAME. A view's `source` is the vault-relative path of the `.base` it was imported from, written by the importer; the slug's spelling is a convenience, not an index.
+type KnowledgeBaseViews struct {
+	// BasePath The workspace-relative path that was asked about, echoed back, so a cached answer can never be shown against the wrong file.
+	BasePath string `json:"base_path"`
+
+	// CollectionId The enclosing collection, to be passed as `collection_id` when evaluating one of these views. Absent exactly when `is_knowledge_base` is false. Opaque — never parse a path out of it.
+	CollectionId *string `json:"collection_id,omitempty"`
+
+	// CollectionRoot Workspace-relative path of that collection's root, forward-slash separated, matching KnowledgeBaseInfo.root_path. The SPA joins it with a vault-relative attachment path to build a download URL. Absent exactly when `is_knowledge_base` is false.
+	CollectionRoot *string `json:"collection_root,omitempty"`
+
+	// IsKnowledgeBase Whether the file sits inside a knowledge base at all. False means its views have nowhere to run — nothing imported them, and there is no collection to evaluate them against — and `views` is then empty. This is a stated answer, not an error: an ordinary `.base` file sitting outside a vault is an ordinary file.
+	IsKnowledgeBase bool `json:"is_knowledge_base"`
+
+	// Source The vault-relative path the views were matched on — the value an imported view carries in its own `source` field. Present exactly when `is_knowledge_base` is true. Reported so a base with zero views can be diagnosed without guessing what was looked for.
+	Source *string `json:"source,omitempty"`
+
+	// Unloadable The rejections behind `unloadable_count`, one per rejection (a duplicate-name conflict is ONE entry naming several files, so this list can be shorter than the count) — name, files, code and reason (UAT 2026-09-13 D-70). Present exactly when `is_knowledge_base` is true; empty when nothing failed.
+	Unloadable *[]KnowledgeBaseUnloadableView `json:"unloadable,omitempty"`
+
+	// UnloadableCount How many view files name this base as their `source` but FAILED TO LOAD — malformed YAML, an unknown key, a property the schema no longer declares. They cannot appear in `views` because they have no usable name to address, so they are counted here instead, and the caller says "N views could not be loaded" rather than quietly showing fewer tabs than the base has views.
+	//
+	// A file so broken that its own `source` key is unreadable cannot be attributed to any base and is counted against none.
+	UnloadableCount int `json:"unloadable_count"`
+
+	// Views The views imported from this base, in the collection's own load order (filename order, so it is stable across runs). Always present — an empty array is the honest answer for a `.base` nothing imported, and the caller must render it as such rather than as a blank.
+	Views []KnowledgeBaseView `json:"views"`
+}
+
+// KnowledgeCollectionViews Every saved view a collection owns, addressed by collection rather than by a `.base` file (UAT D-13, web half).
+//
+// WHY THIS EXISTS. `knowledge_configure create_view` writes `<vault>/.omnipus-vault/views/<slug>.yaml` and produces NO `.base` file, so a collection without a `.base` still has saved views that answered correctly over the API while having no UI surface at all — the base-views endpoint (`GET .../knowledge/base-views?path=<.base>`) is file-addressed and cannot list them. This response is the collection-addressed list: every view file the loader accepts, each with the slug it is actually addressed by, its label, its kind, whether it can be served, and — for an imported view — the `.base` it came from.
+//
+// Base previews and dashboard embeds keep listing by `source`; this is the list for the collection itself. Every `name` is read from the saved view file and must be passed VERBATIM to GET .../knowledge/view (the same no-rederivation rule KnowledgeBaseView states).
+// A collection outside the caller's workspace scope returns this same empty-but-complete shape (US-9 / FR-052 / FR-053) — never a 403, never a 404, which would confirm the collection exists.
+type KnowledgeCollectionViews struct {
+	// CollectionId The collection whose saved views are listed, echoed from the request.
+	CollectionId string `json:"collection_id"`
+
+	// Unloadable Each rejected view file, with the loader's own code and reason (UAT D-70's naming rule: a count alone says nothing a reader can act on). Present whenever unloadable_count is greater than zero.
+	Unloadable *[]KnowledgeBaseUnloadableView `json:"unloadable,omitempty"`
+
+	// UnloadableCount How many view FILES could not be loaded at all (rejected by the loader, e.g. a duplicate view name or an unloadable file) and are therefore not in `views`. Reported rather than hidden: silently showing fewer views than the vault declares is indistinguishable from a vault that never declared them.
+	UnloadableCount int `json:"unloadable_count"`
+
+	// Views The collection's servable and unservable-but-listable saved views, ordered by the loader's own stable order. Always an array, never null — an empty array is the positive statement that the collection authored no views.
+	Views []KnowledgeBaseView `json:"views"`
+}
+
+// KnowledgeConflictError Typed 409 body for a refused knowledge-base write (ADR-067 D18 / D14). Returned when the version token a write carried does not match the file on disk (FR-106) — the file changed underneath the caller and applying the write would silently lose whatever changed.
+// The refusal NAMES THE PATH, because "conflict" without a path is not actionable in a collection of thousands of notes.
+// THE VERSION TOKEN, defined here because this is the type that carries it: an opaque string the server computes over the file's CONTENT — not its modification time, which is not sufficient on its own to detect an external change (FR-107). Every read that a write may follow returns the current token, every write MUST send back the token it read, and the server compares them. Callers MUST treat the token as opaque: never parse it, never compare it for ordering, never construct one. The encoding is the server's to change without a contract change, and a client that has not decoded it cannot be broken by that.
+// Shares the "error" and "code" fields of the standard ErrorResponse envelope so a generic error handler still works on it unchanged; the extra fields are what a conflict-aware handler uses.
+type KnowledgeConflictError struct {
+	// ActualVersion The opaque version token of the file as it now stands. A caller that re-reads, merges and retries sends this one back. Absent when the file has been deleted since.
+	ActualVersion *string `json:"actual_version,omitempty"`
+
+	// Code Machine-readable discriminator. A single value, so a client can branch on it without string matching on the message.
+	Code KnowledgeConflictErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display.
+	Error string `json:"error"`
+
+	// ExpectedVersion The opaque version token the caller sent — what it believed the file was. Absent when the caller sent none, which is itself a refusal (FR-106 requires a token on every write).
+	ExpectedVersion *string `json:"expected_version,omitempty"`
+
+	// Path Collection-relative path of the file that was NOT written.
+	Path string `json:"path"`
+}
+
+// KnowledgeConflictErrorCode Machine-readable discriminator. A single value, so a client can branch on it without string matching on the message.
+type KnowledgeConflictErrorCode string
+
+// KnowledgeGraphEdge One directed link between two nodes, plus how it was resolved. Resolution order is fixed (FR-040): exact path, then unique basename, then shortest path, then lexicographic order. An ambiguous basename still RESOLVES by that rule and is ALSO reported as ambiguous (FR-041) — resolving it is not a licence to stay quiet about it.
+type KnowledgeGraphEdge struct {
+	// Alias Display alias, for an aliased wikilink such as [[note|alias]].
+	Alias *string `json:"alias,omitempty"`
+
+	// Ambiguous True when more than one file matched and the tie-break decided it. The alternatives are listed in candidates.
+	Ambiguous bool `json:"ambiguous"`
+
+	// Block Block anchor with the leading "#^" removed, for a link to an anchored block such as [[note#^abc123]] (ADR-083 EMB-036). Its own property, separate from "heading" — a block reference never populates "heading", and "heading_found" is meaningless when this field is set. Present only for a block link.
+	Block *string `json:"block,omitempty"`
+
+	// Candidates Every path that matched, in tie-break order, when ambiguous is true. Present only then.
+	Candidates *[]string `json:"candidates,omitempty"`
+
+	// Embed True when the link is a transclusion (![[note]]) rather than a plain link.
+	Embed *bool `json:"embed,omitempty"`
+
+	// FromPath Collection-relative path of the note containing the link.
+	FromPath string `json:"from_path"`
+
+	// Heading Heading fragment, for a heading link such as [[note#Section]].
+	Heading *string `json:"heading,omitempty"`
+
+	// HeadingFound Whether the text in "heading" matched an actual heading in the resolved target (ADR-083 EMB-035/EMB-039). Meaningful ONLY when the target is a markdown file AND "heading" is non-empty — the graph builder records headings for markdown files alone, so this MUST be set FALSE BY CONSTRUCTION for a ".base" target (heading is then a view label, not a heading) and for a link carrying "block" instead of "heading". A reader MUST NOT render a "no such heading" refusal from this flag in either of those two cases.
+	// This field is REQUIRED (see the top-level "required" list above) and is ALWAYS present — the handler that emits it (pkg/gateway/rest_knowledge.go::knowledgeEdge) always sets it, and the SPA test fixtures that once constructed a KnowledgeGraphEdge literal without it (Test 110's Go pairing, Test 122's reader pairing) have been migrated to include it (EMB-039).
+	HeadingFound bool `json:"heading_found"`
+
+	// LinkText The link target exactly as written in the source note.
+	LinkText *string `json:"link_text,omitempty"`
+
+	// Resolution Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
+	Resolution KnowledgeGraphEdgeResolution `json:"resolution"`
+
+	// ToPath Collection-relative path of the resolved target, or the normalised link text when resolution is "unresolved".
+	ToPath string `json:"to_path"`
+
+	// UnresolvedReason Why resolution is "unresolved" (ADR-083 EMB-006's containment case, US-4). "no_match" is an ordinary broken link — nothing in the collection carries that path or name, and an operator can fix it. "outside_root" is a link that tried to leave the collection root entirely, reported on its own terms rather than lumped in with "no_match" so the reader's refusal text can distinguish "this note does not exist" from "this note is outside what I can show you". Present only when resolution is "unresolved"; absent when it resolved.
+	UnresolvedReason *KnowledgeGraphEdgeUnresolvedReason `json:"unresolved_reason,omitempty"`
+}
+
+// KnowledgeGraphEdgeResolution Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
+type KnowledgeGraphEdgeResolution string
+
+// KnowledgeGraphEdgeUnresolvedReason Why resolution is "unresolved" (ADR-083 EMB-006's containment case, US-4). "no_match" is an ordinary broken link — nothing in the collection carries that path or name, and an operator can fix it. "outside_root" is a link that tried to leave the collection root entirely, reported on its own terms rather than lumped in with "no_match" so the reader's refusal text can distinguish "this note does not exist" from "this note is outside what I can show you". Present only when resolution is "unresolved"; absent when it resolved.
+type KnowledgeGraphEdgeUnresolvedReason string
+
+// KnowledgeGraphNode One note or attachment appearing in a KnowledgeGraphResponse. A node may describe a target that does not exist on disk — that is how an unresolved wikilink is represented (FR-042).
+type KnowledgeGraphNode struct {
+	// Exists False for the target of an unresolved link. The client MUST mark such a node visibly and MUST NOT navigate on click (FR-065).
+	Exists bool `json:"exists"`
+
+	// Path Collection-relative path, forward-slash separated. For a node that does not exist, this is the link text as written, normalised — it is NOT a path the caller may read.
+	Path string `json:"path"`
+
+	// Title Display title. Absent for a node that does not exist.
+	Title *string `json:"title,omitempty"`
+}
+
+// KnowledgeGraphResponse Response for GET /api/v1/library/{workspace_id}/knowledge/graph (ADR-067 D18). One shape serves all five graph queries (FR-051) — links, backlinks, unresolved, orphans and neighbourhood — because they differ only in which subgraph is selected, not in what a link is.
+// Every query is bounded (FR-054) and reports its own truncation, so a caller can always tell a small graph from a clipped one.
+type KnowledgeGraphResponse struct {
+	// CollectionId The collection queried.
+	CollectionId string `json:"collection_id"`
+
+	// Edges Every edge in this graph. Empty for "orphans". Always an array, never null.
+	Edges []KnowledgeGraphEdge `json:"edges"`
+
+	// HopLimitApplied Maximum hops walked from source_path (FR-054). Present for "neighbourhood".
+	HopLimitApplied *int `json:"hop_limit_applied,omitempty"`
+
+	// Kind Which query produced this graph. "links" and "backlinks" are outbound and inbound edges of source_path; "unresolved" lists edges whose target does not exist; "orphans" lists nodes with no inbound edge; "neighbourhood" is the bounded subgraph around source_path.
+	Kind KnowledgeGraphResponseKind `json:"kind"`
+
+	// NodeLimitApplied Maximum nodes this response may contain (FR-054).
+	NodeLimitApplied *int `json:"node_limit_applied,omitempty"`
+
+	// Nodes Every node referenced by this graph, including non-existent link targets (exists=false). Always an array, never null.
+	Nodes []KnowledgeGraphNode `json:"nodes"`
+
+	// Skipped Paths the walk did not follow, with reasons. Always an array, never null — an empty array is a positive statement that nothing was skipped.
+	Skipped []KnowledgeGraphSkip `json:"skipped"`
+
+	// SourcePath The note the query was about. Required in practice for links, backlinks and neighbourhood; absent for unresolved and orphans, which are collection-wide.
+	SourcePath *string `json:"source_path,omitempty"`
+
+	// Truncated True when a bound stopped the walk before it was exhausted, so this graph is a clipped view. The bounds that applied are in hop_limit_applied and node_limit_applied.
+	Truncated bool `json:"truncated"`
+}
+
+// KnowledgeGraphResponseEdgesResolution Which rule in the FR-040 ladder produced to_path. "unresolved" means no target matched, or the target lay outside the collection root — in which case the target was NOT read (FR-043).
+type KnowledgeGraphResponseEdgesResolution string
+
+// KnowledgeGraphResponseEdgesUnresolvedReason Why resolution is "unresolved" (ADR-083 EMB-006's containment case, US-4). "no_match" is an ordinary broken link — nothing in the collection carries that path or name, and an operator can fix it. "outside_root" is a link that tried to leave the collection root entirely, reported on its own terms rather than lumped in with "no_match" so the reader's refusal text can distinguish "this note does not exist" from "this note is outside what I can show you". Present only when resolution is "unresolved"; absent when it resolved.
+type KnowledgeGraphResponseEdgesUnresolvedReason string
+
+// KnowledgeGraphResponseKind Which query produced this graph. "links" and "backlinks" are outbound and inbound edges of source_path; "unresolved" lists edges whose target does not exist; "orphans" lists nodes with no inbound edge; "neighbourhood" is the bounded subgraph around source_path.
+type KnowledgeGraphResponseKind string
+
+// KnowledgeGraphResponseSkippedReason "symlink" — a symbolic link, skipped and reported rather than followed (FR-044); this is also how a symlink loop terminates (E-8). "outside_root" — the resolved target lay outside the collection root and was not read (FR-043). "unreadable" — permissions or I/O error; an evicted or unreadable file fails loudly and is never indexed as empty (FR-111). "not_addressable" — the name cannot be represented on this platform. "node_limit" / "hop_limit" — the neighbourhood bound was reached (FR-054).
+type KnowledgeGraphResponseSkippedReason string
+
+// KnowledgeGraphSkip One path the walk deliberately did not follow, and why. Reported rather than omitted: a file the system cannot address must be visible to the caller, never silently absent (FR-112).
+type KnowledgeGraphSkip struct {
+	// Detail Human-readable explanation, safe to display.
+	Detail *string `json:"detail,omitempty"`
+
+	// Path Collection-relative path that was skipped.
+	Path string `json:"path"`
+
+	// Reason "symlink" — a symbolic link, skipped and reported rather than followed (FR-044); this is also how a symlink loop terminates (E-8). "outside_root" — the resolved target lay outside the collection root and was not read (FR-043). "unreadable" — permissions or I/O error; an evicted or unreadable file fails loudly and is never indexed as empty (FR-111). "not_addressable" — the name cannot be represented on this platform. "node_limit" / "hop_limit" — the neighbourhood bound was reached (FR-054).
+	Reason KnowledgeGraphSkipReason `json:"reason"`
+}
+
+// KnowledgeGraphSkipReason "symlink" — a symbolic link, skipped and reported rather than followed (FR-044); this is also how a symlink loop terminates (E-8). "outside_root" — the resolved target lay outside the collection root and was not read (FR-043). "unreadable" — permissions or I/O error; an evicted or unreadable file fails loudly and is never indexed as empty (FR-111). "not_addressable" — the name cannot be represented on this platform. "node_limit" / "hop_limit" — the neighbourhood bound was reached (FR-054).
+type KnowledgeGraphSkipReason string
+
+// KnowledgeMountConflictError Typed 409 body for a refused knowledge-base mount. A knowledge base is exactly ONE mounted folder (FR-026): a second root is refused, and the error NAMES BOTH so the operator can see which existing collection is in the way rather than guessing.
+// Beyond ADR-067 D18's seven-type table, added because FR-026 requires a "typed error naming both" and that is by definition a cross-boundary type. Without it here, the first implementer hand-writes the struct and trips the Hard Constraint #8 lint gate.
+type KnowledgeMountConflictError struct {
+	// Code Machine-readable discriminator.
+	Code KnowledgeMountConflictErrorCode `json:"code"`
+
+	// Error Human-readable message naming both roots.
+	Error string `json:"error"`
+
+	// ExistingCollectionId collection_id of the already-mounted collection, when known.
+	ExistingCollectionId *string `json:"existing_collection_id,omitempty"`
+
+	// ExistingRootPath Workspace-relative root of the collection already mounted.
+	ExistingRootPath string `json:"existing_root_path"`
+
+	// RequestedRootPath Workspace-relative root the caller asked to mount.
+	RequestedRootPath string `json:"requested_root_path"`
+}
+
+// KnowledgeMountConflictErrorCode Machine-readable discriminator.
+type KnowledgeMountConflictErrorCode string
+
+// KnowledgeOutline Response for GET /api/v1/library/{workspace_id}/knowledge/outline (ADR-067 D18). The heading tree for the reading rail.
+// Available for ANY markdown file, whether or not it belongs to a knowledge base (FR-062): an outline is parsed from the one file in hand and needs no index. Search and backlinks stay knowledge-base-only precisely because they do need one — is_knowledge_base tells the client which of the rail's panels it may offer.
+type KnowledgeOutline struct {
+	// CollectionId The collection containing this file. Present only when is_knowledge_base is true.
+	CollectionId *string `json:"collection_id,omitempty"`
+
+	// FrontmatterMalformed True when the file opens with a frontmatter block that is not valid YAML. The file is still outlined and still indexed for body text; the malformed frontmatter is reported rather than silently dropped (E-17).
+	FrontmatterMalformed *bool `json:"frontmatter_malformed,omitempty"`
+
+	// Headings Headings in document order. Always an array, never null; empty for a file with no headings.
+	Headings []KnowledgeOutlineHeading `json:"headings"`
+
+	// IsKnowledgeBase True when this file sits inside a detected knowledge base, so the client may additionally offer search and backlinks. False means the outline is all that is available for this file — not an error.
+	IsKnowledgeBase bool `json:"is_knowledge_base"`
+
+	// Path Workspace-relative path of the file this outline describes.
+	Path string `json:"path"`
+}
+
+// KnowledgeOutlineHeading One heading in a markdown file's outline. The outline is a FLAT list ordered as the headings appear in the document, with nesting carried by level — not a recursive tree. A flat list has one representation for any document, including one that skips from H1 to H3, where a tree would force the server to invent an intermediate node the author never wrote.
+type KnowledgeOutlineHeading struct {
+	// ByteOffset Absolute byte offset of the heading within the whole file, for jump-to-heading without re-parsing.
+	ByteOffset *int64 `json:"byte_offset,omitempty"`
+
+	// Level Heading level, 1 for "#" through 6 for "######".
+	Level int `json:"level"`
+
+	// Line 1-based line number of the heading in the source file.
+	Line *int `json:"line,omitempty"`
+
+	// Slug URL fragment identifying this heading, used to make a heading addressable and to resolve a heading link ([[note#Section]]). Unique within one outline — a repeated heading text gets a numeric suffix.
+	Slug string `json:"slug"`
+
+	// Text Heading text with markdown inline formatting removed. May be empty for a heading marker with no text.
+	Text string `json:"text"`
+}
+
+// LibraryBinaryContentRequest Request body for PUT /api/v1/library/{workspace_id}/content-binary. Writes BINARY content to a file at the given workspace-relative path, creating the file if it does not already exist and overwriting any existing content entirely. The sibling of LibraryContentRequest/PUT .../content, which is UTF-8 text only — a filled PDF or other binary attachment written through that route would corrupt, because its content field is a `string` decoded as UTF-8 text before being written as `[]byte(req.Content)`. This route instead carries the raw bytes as standard base64, so any byte sequence survives the JSON transport unmodified. The path's parent directory must already exist within the workspace's work tree.
+type LibraryBinaryContentRequest struct {
+	// ContentBase64 Full replacement content for the file, as standard (RFC 4648 §4) base64 of the raw bytes — no URL-safe alphabet, no line wrapping. The DECODED byte length is capped at 26214400 bytes (25 MB); a base64 string decoding to more than that is rejected with 400 before any bytes are written.
+	ContentBase64 string `json:"content_base64"`
+
+	// ExpectVersion Same contract as LibraryContentRequest.expect_version (ADR-083 EMB-001/EMB-007, founder ruling N2) — MANDATORY BY SERVER POLICY on every binary save, no exemption. This is the door the annotated-PDF editor saves through: it has no JSON read on its own path, so it captures the bare token from the ETag header of the GET .../download response its raw fetch already holds, and replaces it from this write's own response before a second save in the same session. Absent or empty is refused with 400; a stale token is refused with 409 (LibraryConflictError); the RFC-quoted wire form is a shape error, refused with 400 and never 409.
+	// This field is REQUIRED (see the top-level "required" list above) — same contract as LibraryContentRequest.expect_version. The PDF annotation editor's save call (LibraryPdfPreview.tsx) now sends it too (EMB-007c's loader/header plumbing). The 409 LibraryConflictError response carries both the expected_version the caller sent and the file's current actual_version, so a caller can reload, merge, and retry.
+	ExpectVersion string `json:"expect_version"`
+
+	// Path Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). Same validation as LibraryContentRequest.path.
+	Path string `json:"path"`
+}
+
+// LibraryConflictError Typed 409 body for a refused Library whole-file save — PUT /api/v1/library/{workspace_id}/content or PUT .../content-binary (ADR-083 EMB-001/EMB-007, founder ruling N2). Returned when the request's expect_version does not match the file's current version — the file changed since the caller last read it (by another Omnipus writer, an agent, or an external editor), and applying the write would silently discard whatever changed.
+// Uses the SAME version token as the knowledge base's own write guard (KnowledgeConflictError) — one token, produced by pkg/knowledge/version.go's ComputeVersionToken / ReadNoteVersion (founder ruling closing ADR-083 Ambiguity A-11), never a second definition of "changed" invented for the Library door.
+// Shares the "error" and "code" fields of the standard ErrorResponse envelope so a generic error handler still works on it unchanged; the extra fields are what a conflict-aware handler uses to offer a reload-and-retry.
+type LibraryConflictError struct {
+	// ActualVersion The opaque version token of the file as it now stands. A caller that re-reads, merges and retries sends this one back. Absent when the file has been deleted since.
+	ActualVersion *string `json:"actual_version,omitempty"`
+
+	// Code Machine-readable discriminator. A single value, so a client can branch on it without string matching on the message.
+	Code LibraryConflictErrorCode `json:"code"`
+
+	// Error Human-readable message, safe to display.
+	Error string `json:"error"`
+
+	// ExpectedVersion The opaque version token the caller sent in expect_version — what it believed the file was.
+	ExpectedVersion *string `json:"expected_version,omitempty"`
+
+	// Path Workspace-relative path of the file that was NOT written.
+	Path string `json:"path"`
+}
+
+// LibraryConflictErrorCode Machine-readable discriminator. A single value, so a client can branch on it without string matching on the message.
+type LibraryConflictErrorCode string
+
 // LibraryContentRequest Request body for PUT /api/v1/library/{workspace_id}/content. Writes text content to a file at the given workspace-relative path (library-spec.md D-5 editing scope), creating the file if it does not already exist and overwriting any existing content entirely. The path's parent directory must already exist within the workspace's work tree.
 type LibraryContentRequest struct {
 	// Content Full replacement text content for the file, UTF-8. Maximum 10485760 bytes (10 MB) — matches the threshold GET .../content uses to set too_large=true, so a file this endpoint can write is always one the read endpoint can subsequently render inline.
 	Content string `json:"content"`
+
+	// ExpectVersion The version token the caller last read for this file (ADR-083 EMB-001/EMB-007, founder ruling N2) — the bare, UNQUOTED value of the ETag response header GET .../content or GET .../download most recently returned for this path, or the token echoed back by a previous PUT to this same endpoint. MANDATORY BY SERVER POLICY, with no exemption: a request with no expect_version, or an empty one, is refused with 400 rather than treated as "overwrite unconditionally". The write is refused with 409 (LibraryConflictError) when the file's current token no longer matches, so a change made by another writer since the caller's last read is never silently discarded. Sending the RFC-quoted wire form (with surrounding quotes) instead of the bare token is a shape error and is refused with 400, never 409, so it can never be mistaken for a genuine conflict. The comparison and the write happen inside one acquisition of the same lock the agent write path takes.
+	// This field is REQUIRED (see the top-level "required" list above) — every caller, including the PDF annotation editor's save call and the plain-text editor's save call, now sends it (EMB-007c). The 409 LibraryConflictError response carries both the expected_version the caller sent and the file's current actual_version, so a caller can reload, merge, and retry.
+	ExpectVersion string `json:"expect_version"`
 
 	// Path Workspace-relative path of the file to write, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints).
 	Path string `json:"path"`
@@ -12061,6 +14322,9 @@ type LibraryEntry struct {
 
 	// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
 	IsHidden bool `json:"is_hidden"`
+
+	// IsKnowledgeBase True when this DIRECTORY is itself a knowledge base, using the exact same marker-based detection GET /library/{workspace_id}/knowledge answers per folder (KnowledgeBaseInfo.is_knowledge_base) — computed once per directory entry during listing so the Library explorer's Vault icon is a fact the server states, not something the client infers from whichever folders it happens to have queried this session (a directory never opened yet, or a session whose cache was evicted, used to render as a plain folder even though it was a real knowledge base). Present (true or false) for a directory whenever detection could complete; absent when the entry is a file, or when detection could not complete for this one row (a listing failure on a single entry never fails the whole directory listing). Optional on the wire so SPA builds and fixtures that predate this field keep working.
+	IsKnowledgeBase *bool `json:"is_knowledge_base,omitempty"`
 
 	// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 	IsTextEditable bool `json:"is_text_editable"`
@@ -12107,11 +14371,93 @@ type LibraryEntryMount struct {
 	Name string `json:"name"`
 }
 
+// LibraryInlineDisposition Inline-preview metadata for one Library file (ADR-067 D18 / D15). Returned by GET /api/v1/library/{workspace_id}/inline-disposition?path=...
+// Answers one question before the SPA commits to a renderer: may these bytes be shown inline, as what type, and does showing them require the sandboxed token path? The SPA MUST NOT re-derive any of this from the file extension — the allow-list and the extension-to-type table are compiled into the binary and are the single source of truth (FR-015a, FR-015b), and a second copy in TypeScript is a second answer waiting to disagree.
+// This describes the file, not a grant. Fetching the bytes inline still requires a preview token (LibraryPreviewTokenRequest).
+type LibraryInlineDisposition struct {
+	// ContentType The Content-Type the server will send, derived from the EXTENSION and never from sniffing the content (FR-015). Compiled into the binary, so the same build answers identically on every machine (FR-015b). "application/octet-stream" for an extension not in the table.
+	ContentType string `json:"content_type"`
+
+	// Disposition "inline" when the extension is on the allow-list; "attachment" for everything else, which is the default and includes .pdf (FR-008). A .pdf is an attachment deliberately: PDF.js fetches its bytes from the AUTHENTICATED Library endpoint, so a PDF never becomes a browser document at all.
+	Disposition LibraryInlineDispositionDisposition `json:"disposition"`
+
+	// Extension Lower-cased filename extension including the leading dot, or empty for a file with none.
+	Extension string `json:"extension"`
+
+	// Path Workspace-relative path this answer describes.
+	Path string `json:"path"`
+
+	// Reason Why disposition is "attachment", when it is. Present only then, so the SPA can say something better than a blank download card.
+	Reason *string `json:"reason,omitempty"`
+
+	// Renderer Which SPA surface should draw this file. "html" is the only value that makes the bytes a browser document; every other value names a component Omnipus draws itself, which is why only "html" is sandboxed (FR-014, FR-017). "none" means offer a download card.
+	Renderer LibraryInlineDispositionRenderer `json:"renderer"`
+
+	// RequiresSandbox True when displaying this file makes the browser execute it, so it MUST be loaded through the preview-token path inside a sandboxed iframe. True for renderer "html" — including .svg, which is scriptable when opened as a document. False for everything Omnipus renders itself.
+	RequiresSandbox bool `json:"requires_sandbox"`
+}
+
+// LibraryInlineDispositionDisposition "inline" when the extension is on the allow-list; "attachment" for everything else, which is the default and includes .pdf (FR-008). A .pdf is an attachment deliberately: PDF.js fetches its bytes from the AUTHENTICATED Library endpoint, so a PDF never becomes a browser document at all.
+type LibraryInlineDispositionDisposition string
+
+// LibraryInlineDispositionRenderer Which SPA surface should draw this file. "html" is the only value that makes the bytes a browser document; every other value names a component Omnipus draws itself, which is why only "html" is sandboxed (FR-014, FR-017). "none" means offer a download card.
+type LibraryInlineDispositionRenderer string
+
 // LibraryMkdirRequest Request body for POST /api/v1/library/{workspace_id}/mkdir. Creates a directory at path within the workspace's work tree, creating any missing intermediate directories along the way (mkdir -p semantics) — the sole directory-creation primitive the Library API exposes. Added to close a UAT gap: without it, there was no way to create a folder at all, and a clean, non-malicious nested Move/Copy destination whose parent didn't exist yet (e.g. "subfolder/test.txt") had no path to success — see POST /api/v1/library/move and POST /api/v1/library/copy, which deliberately still require the destination's immediate parent directory to already exist rather than auto-creating it (matching `mv`/`cp` semantics — this endpoint is the explicit, deliberate way to create that folder first). Idempotent: if a directory already exists at path, the request succeeds (200) rather than erroring; rejected 409 if a regular FILE already exists there.
 type LibraryMkdirRequest struct {
 	// Path Workspace-relative directory path to create, forward-slash separated. Never absolute and never containing a ".." segment (library-spec.md Constraints). May name a nested path whose intermediate directories do not exist yet — all of them are created, matching `mkdir -p`.
 	Path string `json:"path"`
 }
+
+// LibraryPreviewTokenRequest Request body for POST /api/v1/library/preview-token (FR-003f). Mints a short-lived, path-bearing credential that lets a SANDBOXED document — which has an opaque origin and can therefore send neither the SameSite=Strict session cookie nor an Authorization header — load itself and its relative subresources (FR-003a, FR-003).
+// Minting is authenticated and NEVER WIDENS ACCESS (FR-003b): the caller must already be able to read the path, and the token is scoped to one workspace and one path. There is no whole-workspace scope, by design.
+// No workspace_id in the route: this is a mint operation over the Library as a whole, matching the existing /library/move and /library/copy shape, and the workspace it applies to is part of the request rather than the path.
+type LibraryPreviewTokenRequest struct {
+	// EntryPath For scope "bundle", the bundle-root-relative document to open first, used to build the returned url. Defaults to "index.html". Ignored for scope "file".
+	EntryPath *string `json:"entry_path,omitempty"`
+
+	// Path Workspace-relative path, forward-slash separated. For scope "file", the file itself. For scope "bundle", the DIRECTORY that is the bundle root. Never absolute and never containing a ".." segment; resolution is confined to the workspace work tree at the syscall boundary, not merely by string cleaning (FR-003i).
+	Path string `json:"path"`
+
+	// Scope "file" grants exactly one file. "bundle" grants one directory and its descendants, which is what an HTML page with its own stylesheets, scripts, fonts and media needs. Nothing wider exists (FR-003b).
+	Scope LibraryPreviewTokenRequestScope `json:"scope"`
+
+	// WorkspaceId Workspace whose work tree contains path.
+	WorkspaceId string `json:"workspace_id"`
+}
+
+// LibraryPreviewTokenRequestScope "file" grants exactly one file. "bundle" grants one directory and its descendants, which is what an HTML page with its own stylesheets, scripts, fonts and media needs. Nothing wider exists (FR-003b).
+type LibraryPreviewTokenRequestScope string
+
+// LibraryPreviewTokenResponse Response for POST /api/v1/library/preview-token (FR-003f). The minted credential, where to point an iframe at it, and when it dies.
+// Lifetime is 15 minutes (FR-003d) — long enough to load and read a bundle, short enough that a token found later in a log is already dead. Expiry alone is not revocation: a token is ALSO invalidated when the minting session logs out, when the workspace mount is revoked, and when the named path is deleted or moved. The store is in memory, so a gateway restart invalidates every live preview.
+// RE-MINTING RETURNS A NEW VALUE AND INVALIDATES THE PREVIOUS ONE (FR-003m). Do not copy the same-token-for-the-same-directory behaviour of the agent web_serve path: re-registering there returns the SAME string, so the credential survives as long as the tab is open — exactly the property a 15-minute lifetime exists to prevent.
+// There is no renewal endpoint and no silent timer-driven reload. The SPA uses expires_at to show a visible expiry notice in Omnipus chrome OUTSIDE the frame, with an explicit Reload, because the frame is cross-origin and opaque: the embedder cannot detect that its request failed, and onload fires for an error page exactly as it does for content.
+type LibraryPreviewTokenResponse struct {
+	// ExpiresAt Absolute RFC3339 UTC instant at which the token stops working. Drives the visible expiry notice (FR-003m).
+	ExpiresAt time.Time `json:"expires_at"`
+
+	// ExpiresInSeconds Seconds from the moment this response was produced until expires_at — 900 for the 15-minute lifetime. Present alongside the absolute instant because a client whose clock is wrong would compute a wrong countdown from expires_at alone, and a preview that claims to have expired while it still works is as confusing as the reverse.
+	ExpiresInSeconds int `json:"expires_in_seconds"`
+
+	// Scope The granted scope, echoed from the request.
+	Scope LibraryPreviewTokenResponseScope `json:"scope"`
+
+	// ScopeRoot Workspace-relative path this token is confined to — the file itself for scope "file", the bundle root for scope "bundle". Every request on the token path resolves inside THIS root, not merely inside the workspace (FR-003i).
+	ScopeRoot string `json:"scope_root"`
+
+	// Token The credential: 32 bytes from a cryptographic random source, encoded base64url without padding — 43 characters (FR-003h). Minting FAILS CLOSED if the entropy source errors: no token, no fallback, no shortened value. This string is the entire security of an unauthenticated bearer path, so it MUST NOT be logged, put in an audit record, or sent in a Referer header (FR-003e).
+	Token string `json:"token"`
+
+	// Url Gateway-relative URL to put in the iframe's src. Serves GET and HEAD only; every other method is 405 (FR-003j). Use it as <iframe src="…"> and never as srcdoc — srcdoc resolves relative URLs against the EMBEDDER, so no bundle subresource would load, and it has no response to carry the isolation policy.
+	Url string `json:"url"`
+
+	// WorkspaceId Workspace the token is scoped to, echoed from the request.
+	WorkspaceId *string `json:"workspace_id,omitempty"`
+}
+
+// LibraryPreviewTokenResponseScope The granted scope, echoed from the request.
+type LibraryPreviewTokenResponseScope string
 
 // LibraryRenameRequest Request body for POST /api/v1/library/{workspace_id}/rename. Renames or moves a file or directory within the workspace's work tree — "to" may name a different parent directory than "from", so this operation doubles as a move.
 type LibraryRenameRequest struct {
@@ -12147,6 +14493,9 @@ type LibraryUploadResponse struct {
 
 		// IsHidden True when this entry's name begins with a dot (".") — the sole, explicit definition of "hidden" for the Library, so client and server cannot drift on it. Excluded from GET .../entries by default (see that operation's include_hidden parameter); the reserved work-tree directory where uploads land, work/.library/, is the prototypical hidden entry. Included and set true here so the SPA can still style a hidden entry distinctly when the caller explicitly asks to see it.
 		IsHidden bool `json:"is_hidden"`
+
+		// IsKnowledgeBase True when this DIRECTORY is itself a knowledge base, using the exact same marker-based detection GET /library/{workspace_id}/knowledge answers per folder (KnowledgeBaseInfo.is_knowledge_base) — computed once per directory entry during listing so the Library explorer's Vault icon is a fact the server states, not something the client infers from whichever folders it happens to have queried this session (a directory never opened yet, or a session whose cache was evicted, used to render as a plain folder even though it was a real knowledge base). Present (true or false) for a directory whenever detection could complete; absent when the entry is a file, or when detection could not complete for this one row (a listing failure on a single entry never fails the whole directory listing). Optional on the wire so SPA builds and fixtures that predate this field keep working.
+		IsKnowledgeBase *bool `json:"is_knowledge_base,omitempty"`
 
 		// IsTextEditable Whether the SPA should offer this entry for CodeMirror text editing (library-spec.md D-5 / section 4 scope table). Always false for directories. This is a best-effort hint from the directory listing, not a guarantee — GET .../content's is_text/too_large fields are the authoritative check at read time.
 		IsTextEditable bool `json:"is_text_editable"`
@@ -12947,7 +15296,7 @@ type ModelTokens struct {
 	Total int `json:"total"`
 }
 
-// Notification A user-facing notification (#264) surfaced in the header notification center. Currently raised on scheduled-run failures, but the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
+// Notification A user-facing notification (#264) surfaced in the header notification center. Raised on scheduled-run failures and on knowledge-base drift repair (ADR-067 FR-038a); the type is open for future sources. Coalesced per source where noted (e.g. one item per schedule, updated).
 type Notification struct {
 	// AgentId The agent the notification concerns.
 	AgentId *string `json:"agent_id,omitempty"`
@@ -12969,6 +15318,8 @@ type Notification struct {
 	Title     string               `json:"title"`
 
 	// Type The event class. Extensible; consumers must tolerate unknown values.
+	//
+	// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
 	Type NotificationType `json:"type"`
 
 	// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -12979,6 +15330,8 @@ type Notification struct {
 type NotificationSeverity string
 
 // NotificationType The event class. Extensible; consumers must tolerate unknown values.
+//
+// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
 type NotificationType string
 
 // NotificationList The authenticated user's notifications plus the unread count (#264).
@@ -13005,6 +15358,8 @@ type NotificationList struct {
 		Title     string                                `json:"title"`
 
 		// Type The event class. Extensible; consumers must tolerate unknown values.
+		//
+		// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
 		Type NotificationListNotificationsType `json:"type"`
 
 		// UpdatedAtMs Set when a coalesced notification is updated (e.g. repeated schedule failure).
@@ -13019,6 +15374,8 @@ type NotificationList struct {
 type NotificationListNotificationsSeverity string
 
 // NotificationListNotificationsType The event class. Extensible; consumers must tolerate unknown values.
+//
+// "knowledge_drift" (ADR-067 FR-038a) means the automatic drift check found that a knowledge base's search index no longer matched the folder on disk, and the index is being rebuilt from that folder. It is raised ONLY when something was actually wrong — a healthy check produces no notification — and it never reports a change to the operator's own files.
 type NotificationListNotificationsType string
 
 // OnboardingCompleteRequest Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point). `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014).
@@ -14107,6 +16464,71 @@ type PromptGuardUpdateResponse struct {
 // PromptGuardUpdateResponseAppliedLevel The prompt guard level now active.
 type PromptGuardUpdateResponseAppliedLevel string
 
+// PropertyDef One declared property of a record type (ADR-068 D2, D3). EIGHT property types exist and no more: text, enum, relation, date, integer, decimal, person, checkbox.
+// The count was seven through Draft 9. `checkbox` joined in spec Draft 11 (FR-004c, ADR-068 D24.5) and this line is the record of when it changed — a rewrite of this sentence back to "seven" re-creates the staleness UAT case C-8 was written to catch. Before that, in ADR-068 revision 7, the membership changed while the count did not: `money` was deleted and `number` was split into `integer` and `decimal`.
+// ARITY AND PRESENCE ARE BOTH REQUIRED FIELDS, deliberately. `many` and `required` carry no default and are never inferred, because the single most-reported failure in the research corpus is a scalar property silently becoming a list the moment a second value is added — after which every query written against it returns nothing, with no error (D3.1). A property whose arity is merely "absent" reproduces exactly that ambiguity on the wire.
+// Property types are scoped to their record type (D3.3, FR-009): `status` on one type and `status` on another are unrelated declarations. This contract therefore never carries a vault-wide property table.
+// ADR-068 D0: the product ships NO record types and NO properties of its own. Every PropertyDef on the wire came from a schema file the operator's vault declared. The names used in the examples here are illustrative of the mechanism only.
+type PropertyDef struct {
+	// Formula DECLARED HERE, THIS KEY IS REFUSED, AND THE SCHEMA FILE IS REJECTED NAMING IT. It stays DEFINED in this contract so the refusal has something to be about: an author who writes `formula:` on a schema property gets one message at load, at authoring time, telling them where a formula actually goes. A key silently ignored is how a promise becomes a blank column.
+	//
+	// WHY. Nothing evaluates it. A query reaches a formula only as `formula.<name>` (FR-140), and that name is served by a saved VIEW's `formulas:` map (ADR-068 D24.3, FR-140/FR-141). A schema property is read from the note's own frontmatter, where a computed value never appears — so a type-level formula would render BLANK on every row while the answer still reported itself COMPLETE. Measured, on a `plant` type declaring `double_height: height_cm * 2` over a note holding `height_cm: 12.5`: the column came back empty and the result said "COMPLETE: yes — 1 of 1 shown". A blank that claims completeness is indistinguishable from a note with no value, so the operator concludes their DATA is wrong rather than that the feature was never wired.
+	//
+	// REFUSED RATHER THAN WIRED, deliberately. The surface is specified nowhere: wiring it needs an ADR amendment saying where a type-level formula is addressed, whether a view formula of the same name shadows it, and what an unqualified `select` renders for it. Refusing is the reading that leaves the specification and the behaviour agreeing.
+	//
+	// REFUSED AT LOAD, PER FILE. Only the schema file declaring it is rejected; every other record type in the vault goes on loading and answering. The query path deliberately does NOT raise this — a schema that loaded clean used to kill its whole record type on a query that had nothing to do with formulas.
+	//
+	// THE REMEDY, which the refusal states: delete `formula:` from this property and declare the same expression in a saved view's `formulas:` map, where a query reaches it as `formula.` + this property's name — or, if the value belongs on the note itself, drop `formula:` and keep this as an ordinary stored property that notes write.
+	Formula *string `json:"formula,omitempty"`
+
+	// Inverse Name of the DERIVED reverse direction (D5). The inverse is computed from the index and is NEVER stored in any file (FR-032) — the hand-maintained reverse list is the field that drifts the first time anyone forgets.
+	Inverse *string `json:"inverse,omitempty"`
+
+	// Label Human-readable label for display. Absent means render `name`.
+	Label *string `json:"label,omitempty"`
+
+	// Many Declared ARITY (D3.1). True means a list, false means a scalar. Writing a list to a scalar property is rejected with the expected shape named (FR-006), rather than silently widening the property.
+	Many bool `json:"many"`
+
+	// Name The frontmatter key, exactly as the operator declared it. Never renamed and never prefixed by us — only fields Omnipus itself maintains carry the `omni_` prefix (D8), so removing Omnipus leaves a working note.
+	Name string `json:"name"`
+
+	// Required True when a record of this type MUST carry the property. A record missing a required property is named by validation with the property and the reason (RecordProblem.code = missing_required).
+	Required bool `json:"required"`
+
+	// To Target record type name. Present only when type is "relation" or "person". A relation pointing at a note that exists but is not of this type is a validation finding, not a silent accept (FR-034).
+	To *string `json:"to,omitempty"`
+
+	// Type "text" — prose, never validated. On the CURRENT query grammar (ruling R-B, the ten SQL operators of VaultFilterNode) a text property answers `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL` and `IS NOT NULL`. Comparison is case-INSENSITIVE over the folded value (ruling R-D) and `LIKE` is anchored as written — `%` and `_` are the only wildcards and they must be spelled. Full-text relevance retrieval is ADR-067's search surface, not this one.
+	//
+	// *The legacy seven-op vocabulary (`contains`, `is_absent`) survives ONLY in RecordFilter.yaml, which is RecordQueryRequest's own filter shape. The flat view format that also used it is deleted; a saved view and a knowledge_find request both speak the ten SQL operators above and nothing else.* "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways. "checkbox" — a YAML boolean (FR-004c, ADR-068 D24.5). The strings `true` and `false`, case-folded, parse; anything else is NON-CONFORMING and reported, never coerced. ABSENT IS THE THIRD STATE — "days I did not meditate" is a native question here rather than a trick with text. Defined operators: `=`, `<>`, `IN`, `IS NULL`, `IS NOT NULL`; the ordering operators are REFUSED naming the remedy (R-13's pattern), because a boolean has no order to compare on. It is the domain of the `checked` and `unchecked` aggregates (RecordAggregate.yaml, FR-150).
+	Type PropertyDefType `json:"type"`
+
+	// Unit Unit of measure for an "integer" or "decimal" property, declared as metadata rather than glued into the property name (D3). Absent means unitless.
+	//
+	// IT IS THE FIXED UNIT, THE SAME ON EVERY RECORD. A number whose unit VARIES per record — an amount that is SGD on one invoice and EUR on the next — declares `unit_property` instead, naming the sibling property that carries it.
+	Unit *string `json:"unit,omitempty"`
+
+	// UnitProperty Name of a SIBLING property on this same record type that carries this number's unit PER RECORD (view-kinds-design-2026-09-03 §5). Optional, and valid only on "integer" and "decimal".
+	//
+	// WHY IT IS DECLARED AND NEVER INFERRED. Pairing a number with any nearby enum works perfectly on invoices and is wrong the first time a record holds two amounts — a `total` in the record's currency beside a `tax_rate` that is a percentage. Where a number and a unit-like enum coexist UNDECLARED, knowledge_describe may MENTION the candidate pairing; nothing acts on it.
+	//
+	// WHAT IT BUYS. The pair renders as ONE value ("12,480.00 SGD") and the unit property loses its own row. More importantly it makes the totalling rule enforceable: a number with a unit totals ONCE PER UNIT VALUE and NEVER across units (design §3 G2), and a row whose unit is missing is shown, EXCLUDED from every total, and counted separately (G3). Without the declaration there is nothing to enforce that against, and summing across currencies produces a wrong number that looks right — the one failure mode in this area that reports nothing at all.
+	//
+	// VALIDATED AT LOAD, PER FILE, AND REFUSED BY NAME. The named property must EXIST on this record type, must be a DIFFERENT property (a number cannot be its own unit), and must be an "enum" or a "text" — a unit is a label, and a date or a second number is not one. A violation rejects this schema file naming the property and the reason; every other record type in the vault goes on loading.
+	UnitProperty *string `json:"unit_property,omitempty"`
+
+	// Values The closed value set. Present only when type is "enum", and then non-empty. THIS ORDER IS NOT THE SORT ORDER — it is the order a REJECTION lists the permitted values in, so the operator reads their own file back.
+	//
+	// Sorting and the `min`/`max` aggregates are LEXICAL OVER THE CASE-FOLDED VALUE (ruling R-5/R-E, FR-010): there is no declared-position ordinal, and `Won`, `won` and `WON` sort together exactly as they group together. A domain order is expressed by PREFIXING the values (`1-lead`, `2-qualified`) — visible in the operator's own file, doing exactly what it appears to do.
+	Values *[]EnumValueDef `json:"values,omitempty"`
+}
+
+// PropertyDefType "text" — prose, never validated. On the CURRENT query grammar (ruling R-B, the ten SQL operators of VaultFilterNode) a text property answers `=`, `<>`, `<`, `<=`, `>`, `>=`, `LIKE`, `IN`, `IS NULL` and `IS NOT NULL`. Comparison is case-INSENSITIVE over the folded value (ruling R-D) and `LIKE` is anchored as written — `%` and `_` are the only wildcards and they must be spelled. Full-text relevance retrieval is ADR-067's search surface, not this one.
+//
+// *The legacy seven-op vocabulary (`contains`, `is_absent`) survives ONLY in RecordFilter.yaml, which is RecordQueryRequest's own filter shape. The flat view format that also used it is deleted; a saved view and a knowledge_find request both speak the ten SQL operators above and nothing else.* "enum" — one of a closed SET (`values`). The set is closed; it is not ordered — sorting is lexical over the folded value (D4, R-5), and an author who wants a domain order prefixes the values: `1-lead`, `2-qualified`. "relation" — a typed edge to another record (D5); `to` names the target record type and `inverse` names the derived reverse direction. "date" — a day or an instant, comparable. "integer" — a signed 64-bit whole number, bound-checked and REFUSED outside int64 rather than saturated or widened to a float. `unit` is declared metadata, never glued into the property name. "decimal" — an exact, arbitrary-precision number, at most 100 decimal places; a value past the bound is refused naming it, never rounded. `unit` applies here too. "person" — a relation to a person record, kept distinct from a name typed as text so one vault cannot model the same concept both ways. "checkbox" — a YAML boolean (FR-004c, ADR-068 D24.5). The strings `true` and `false`, case-folded, parse; anything else is NON-CONFORMING and reported, never coerced. ABSENT IS THE THIRD STATE — "days I did not meditate" is a native question here rather than a trick with text. Defined operators: `=`, `<>`, `IN`, `IS NULL`, `IS NOT NULL`; the ordering operators are REFUSED naming the remedy (R-13's pattern), because a boolean has no order to compare on. It is the domain of the `checked` and `unchecked` aggregates (RecordAggregate.yaml, FR-150).
+type PropertyDefType string
+
 // Provider A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue.
 type Provider struct {
 	// AccountLabel Account identifier of the signed-in session (tokens.account_id). Present only when status is signed_in or expired.
@@ -14397,6 +16819,519 @@ type ReAuthResponse struct {
 
 	// Verified Whether the re-typed password matched.
 	Verified bool `json:"verified"`
+}
+
+// RecordAggregate One summary to compute over the matched records (ADR-068 D9, D13, D24.4; spec FR-150 to FR-155).
+// ONE NAME, FIFTEEN FUNCTIONS (founder ruling, spec Draft 11). Obsidian Bases calls these "summaries" and carries them under a `summaries` key. There is NO `summaries` key here and there never will be: parity is CAPABILITY, not key names, so the nine functions Bases had and we did not simply became new ops of this existing surface. The importer TRANSLATES Obsidian's top-level `summaries` block and its per-view summary map into entries of this shape.
+// THE "THERE IS DELIBERATELY NO AVG" PARAGRAPH THAT STOOD HERE IS SUPERSEDED (FR-152), and the way it is superseded matters more than the fact. It refused `avg` as "a number whose precision nobody declared" — a correct objection, answered rather than argued with. Average, Median (at an even count) and Stddev are computed EXACTLY, in rationals, and RENDERED at a DECLARED scale: the property's declared scale + 2, round-half-even. The response labels such a value as ROUNDED, so no caller mistakes a rendered figure for an exact one, and FR-013's no-binary-float rule is untouched — nothing here ever enters a float64.
+// TWO COMPUTATIONAL CLASSES, AND ONLY ONE OF THEM BUFFERS (FR-151). Thirteen of the fifteen stream through an O(1) accumulator — including `stddev`, which streams exactly via count, sum and sum-of-squares in rational arithmetic and rounds only at the final square root. `median` and `unique` are the two population-class ops: they buffer ONE COLUMN of the summarised property's values (never rows), and they are bounded by their own named refusal, B3 — a population-class op ABORTS MID-SCAN above 100,000 buffered values or 8 MB of buffered bytes, whichever comes first, reporting the count reached and the remedy (narrow the filter, or summarise a scalar property).
+// NO SUMMARY IS EVER COMPUTED OVER A TRUNCATED SET (FR-154, FR-066). A bound that refuses returns NO summary at all; it is never partial. A median quietly taken over whatever fit is the precise failure this whole surface exists to remove, and Median is the first op for which that shortcut is tempting.
+// A SUMMARY THE PROPERTY'S TYPE DOES NOT DEFINE IS REFUSED BY NAME (FR-155) — `stddev` over text, `checked` over a date — listing the summaries the type does define. FR-024's posture, applied to summaries: never a zero, never a blank cell.
+type RecordAggregate struct {
+	// Op The reduction. Fifteen, and the list is closed (FR-150).
+	//
+	// NEEDS NO PROPERTY: "count" — number of matched records; the only op valid with `property` omitted.
+	//
+	// NUMBER DOMAIN (integer and decimal are ONE comparison domain, R-1): "sum" — exact decimal total, computed in arbitrary precision and never through a binary float (FR-020b). "avg" — exact mean, rendered at the declared scale and labelled rounded (FR-152). "median" — the middle value; at an even count the exact mean of the two middle values, same rendering rule. "stddev" — POPULATION standard deviation, and the response label SAYS population (FR-153). Obsidian's documentation does not state which theirs is, so ours declares its own definition rather than guessing at a match, and the importer records the divergence risk by name rather than in silence.
+	//
+	// NUMBER OR DATE DOMAIN: "min" / "max" — the extreme value; for an enum that is the LEXICAL extreme over the folded value (R-5), not a declared position. "range" — max minus min, defined in the number domain AND the date domain; a date range renders as a DURATION, not as a date.
+	//
+	// DATE DOMAIN: "earliest" / "latest" — the date domain's extremes. They are spelled separately from min/max because a reader scanning a view should not have to know that a date sorts.
+	//
+	// CHECKBOX DOMAIN (PropertyDef type `checkbox`, FR-004c): "checked" / "unchecked" — how many records hold `true` and how many hold `false`. Absent is the third state and is counted by NEITHER; "checked + unchecked" is not the record count and must not be read as one.
+	//
+	// ANY TYPE: "empty" / "filled" — how many records are ABSENT and how many PRESENT on the property. Defined for every type, which is what makes them the honest answer to "how much of this column is actually filled in". "unique" — the number of DISTINCT values, compared under the same folding the comparator uses everywhere else (R-5/R-D), so `Won` and `won` are one value here exactly as they are one group in a grouping.
+	Op RecordAggregateOp `json:"op"`
+
+	// Property The property to summarise. Required for every op except "count", which counts records rather than values and forbids it. Validated against the schema before evaluation (FR-023); a name the schema does not declare REJECTS the query with the declared names listed (FR-024), never returning a zero that reads like a real total.
+	//
+	// The reserved namespaces are valid here: `file.*` (FR-130) and `formula.*` (FR-140s) are summarised exactly like a declared property.
+	Property *string `json:"property,omitempty"`
+}
+
+// RecordAggregateOp The reduction. Fifteen, and the list is closed (FR-150).
+//
+// NEEDS NO PROPERTY: "count" — number of matched records; the only op valid with `property` omitted.
+//
+// NUMBER DOMAIN (integer and decimal are ONE comparison domain, R-1): "sum" — exact decimal total, computed in arbitrary precision and never through a binary float (FR-020b). "avg" — exact mean, rendered at the declared scale and labelled rounded (FR-152). "median" — the middle value; at an even count the exact mean of the two middle values, same rendering rule. "stddev" — POPULATION standard deviation, and the response label SAYS population (FR-153). Obsidian's documentation does not state which theirs is, so ours declares its own definition rather than guessing at a match, and the importer records the divergence risk by name rather than in silence.
+//
+// NUMBER OR DATE DOMAIN: "min" / "max" — the extreme value; for an enum that is the LEXICAL extreme over the folded value (R-5), not a declared position. "range" — max minus min, defined in the number domain AND the date domain; a date range renders as a DURATION, not as a date.
+//
+// DATE DOMAIN: "earliest" / "latest" — the date domain's extremes. They are spelled separately from min/max because a reader scanning a view should not have to know that a date sorts.
+//
+// CHECKBOX DOMAIN (PropertyDef type `checkbox`, FR-004c): "checked" / "unchecked" — how many records hold `true` and how many hold `false`. Absent is the third state and is counted by NEITHER; "checked + unchecked" is not the record count and must not be read as one.
+//
+// ANY TYPE: "empty" / "filled" — how many records are ABSENT and how many PRESENT on the property. Defined for every type, which is what makes them the honest answer to "how much of this column is actually filled in". "unique" — the number of DISTINCT values, compared under the same folding the comparator uses everywhere else (R-5/R-D), so `Won` and `won` are one value here exactly as they are one group in a grouping.
+type RecordAggregateOp string
+
+// RecordAggregateResult The outcome of one requested aggregate — WHICH MAY BE A REFUSAL, stated as such (ADR-068 D13, FR-014, FR-066).
+// A refusal is a first-class result here, not an error and not a missing entry. The alternative — omitting the aggregate, or returning a number computed over whatever happened to parse — is exactly the confidently-wrong total this ADR exists to prevent. Every record excluded from an aggregate is additionally named in the response's `problems` with the reason (FR-026).
+type RecordAggregateResult struct {
+	// Count The count, when op is "count" and refused is false. Also the number of records that CONTRIBUTED to a sum, min or max, so a caller can see how many were excluded without subtracting.
+	Count *int64 `json:"count,omitempty"`
+
+	// ExcludedRecords How many matched records were excluded from this aggregate because their value could not be read as the declared type. Every one of them is named in the response's `problems` (FR-026) — this field is the headline, not a substitute for the list.
+	ExcludedRecords *int64 `json:"excluded_records,omitempty"`
+
+	// Op The summary requested, echoed back. This list MUST stay identical to RecordAggregate's (FR-150's fifteen). A response op the request grammar can express but this echo cannot is not a cosmetic gap: the SPA edge validates every incoming payload against the generated Zod schema and DROPS what does not validate, so a `median` computed correctly by the engine would vanish between the wire and the screen with no error anywhere.
+	Op RecordAggregateResultOp `json:"op"`
+
+	// Property The property aggregated. Absent for count.
+	Property *string `json:"property,omitempty"`
+
+	// Refused True when NO figure is returned. Set for an aggregate over a refused candidate set (FR-066), and whenever a figure could not be computed exactly — an exactness this contract can promise because every numeric value on the wire is a decimal string, never a binary float. When true, `value` and `count` are absent and the reason is in the response's `problems`.
+	Refused bool `json:"refused"`
+
+	// Value ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the eight value fields is populated, and which one is named by `type`.
+	// THE COUNT IS EIGHT, AND IT MATCHES PropertyDef. `checkbox` (FR-004c, ADR-068 D24.5) joined the property types in spec Draft 11; this schema was left at seven, so `PropertyDef.type` accepted a type that had no wire representation at all — a property an operator could declare and the wire could never carry one value of. Do not "correct" the count back to seven.
+	// NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
+	// ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
+	Value *RecordValue `json:"value,omitempty"`
+}
+
+// RecordAggregateResultOp The summary requested, echoed back. This list MUST stay identical to RecordAggregate's (FR-150's fifteen). A response op the request grammar can express but this echo cannot is not a cosmetic gap: the SPA edge validates every incoming payload against the generated Zod schema and DROPS what does not validate, so a `median` computed correctly by the engine would vanish between the wire and the screen with no error anywhere.
+type RecordAggregateResultOp string
+
+// RecordFilter One structured filter clause (ADR-068 D13, FR-022). The query surface takes a STRUCTURED filter object and deliberately accepts no text query language: a query language would have to be parsed, and a parse failure that degrades to "returns nothing" is the silent-empty-result failure this ADR exists to end.
+// Every property name and enum value here is validated against the schema BEFORE evaluation (FR-023). A clause naming something the schema does not declare REJECTS the query with the valid names listed — it MUST NOT return zero records (FR-024), because a typo and a genuinely empty result look identical and the caller cannot tell which it got.
+// A "text" property supports exactly two operators: `contains` — case-sensitive substring matching (§8 R-10) — and `is_absent`. Equality and ordering are NOT defined for text, because text is prose, never validated and never compared for equality (D3); `eq`/`lt`/`lte`/`gt`/`gte` on a text property are REFUSED with the reason named, not answered. Relevance search over prose is ADR-067's surface, not this one.
+// Corrected 2026-08-25: this paragraph previously read "supports only is_absent / is_present". `is_present` is in neither this schema's `op` enum nor the engine's operator set, and `contains` — which the engine DOES define for text (compare_oracle.go's operatorDefinedForType[text][contains] is true, with cell-by-cell truth-table coverage) — was missing. "Is it present?" is spelled {op: is_absent, negate: true}.
+type RecordFilter struct {
+	// IncludeAbsent Whether records where the property is ABSENT still satisfy this clause. MEANINGFUL ONLY WHEN `negate` IS TRUE.
+	//
+	// On a NEGATED clause (FR-008): absent records are INCLUDED by default, because "days I did not meditate" must contain the days carrying no value at all — precisely the days being asked about. Send `include_absent: false` to opt out. That opt-out is the wire spelling of the engine's `records.Filter.ExcludeAbsent`, which holds `!include_absent`; this schema therefore carries no separate `exclude_absent` field, because a second field meaning the same thing is how a contract starts contradicting itself.
+	//
+	// On a NON-NEGATED clause: absent records NEVER satisfy the clause, and this field is IGNORED — no value of it can admit them. §8 R-2 makes a comparison with an absent operand false for every operator except `is_absent`, and `records.Filter.MatchWith` returns that verdict unchanged when the clause is not negated: `ExcludeAbsent` is read only inside its `f.Negate` branch, and no field on `records.Filter` admits an absent record to a POSITIVE clause.
+	//
+	// That is OUT OF SCOPE, not an unbuilt feature — nothing is owed here and no engine change is pending. FR-008 mandates inclusion for NEGATIVE filters only, and "status is done, or has no status at all" is a UNION of two clauses rather than one clause with a knob: ask it as {op: eq, values: ["done"]} together with {op: is_absent}.
+	//
+	// `op: is_absent` is exempt at either polarity: it TESTS absence, so absence is its subject rather than a case to re-admit.
+	//
+	// Carries no JSON Schema `default:`, for the reason spelled out on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would split the two generated languages on one field. Omitted means "the default for this clause", which is the FR-008 inclusion above.
+	//
+	// Corrected 2026-08-26: this description previously claimed "a non-negated clause excludes them unless this is explicitly true" — i.e. that `include_absent: true` admits absent records to a POSITIVE clause. No code performs that and none is planned. A handler written to the old wording would have had to drop the flag silently or grow a SECOND engine field, which is the very duplication the paragraph above refuses.
+	IncludeAbsent *bool `json:"include_absent,omitempty"`
+
+	// Negate Invert this clause. `status != done` is {op: eq, values: ["done"], negate: true}, and "is it present?" is {op: is_absent, negate: true}.
+	//
+	// Negation is a FLAG rather than a family of `not_` operators (no `neq`, no `not_in`) so that there is exactly one place negation is applied and exactly one place FR-008's absence rule can be forgotten — which mirrors the engine, where `records.Filter.Negate` is a single bool consulted at one point in `Filter.MatchWith`.
+	//
+	// Two consequences the caller must be able to predict:
+	//
+	// (a) FR-008 — a negated clause INCLUDES records where the property is absent, because "days I did not meditate" must contain the days with no value at all, which are precisely the days being asked about. Override with `include_absent: false`.
+	//
+	// (b) Negation does NOT re-admit a comparison that could not be made. A non-conforming value (§8 R-4), an unresolved relation (R-8) or an operator undefined for the declared type is REPORTED in `problems` and the record EXCLUDED — from the negated clause as well as the plain one. Counting a corrupt value as "not done" by double negation would be a silent wrong answer.
+	//
+	// Omitted is identical to false: an unset flag can never turn a clause into its opposite. Stated in prose rather than as a JSON Schema `default:` deliberately — openapi-typescript promotes a defaulted property to REQUIRED, which would have made `negate` mandatory in TypeScript while oapi-codegen still emitted an optional `*bool`, so the two generated languages would disagree about the same field.
+	Negate *bool `json:"negate,omitempty"`
+
+	// Op The comparison to apply. This set is exactly the operators the engine implements and the §8 truth table covers — no more and no fewer.
+	//
+	// `contains` is whole-element membership on a list (§8 R-9) and substring matching on text (§8 R-10). It is NEVER substring matching on a list. Against a `many` property it is one of only two defined operators; the rest are refused with the remedy named (§8 R-13).
+	//
+	// Corrected 2026-08-25. This enum previously read [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]: it OMITTED `contains` — a spec rule with cell-by-cell truth-table coverage and no wire representation at all — while offering `neq`, `in`, `not_in` and `is_present`, none of which the engine implements. Negation is not an operator here; it is the separate `negate` flag, so `status != done` is {op: eq, negate: true} and `neq` was redundant as well as unimplemented. Ordered comparison (lt/lte/gt/gte) is valid on date, integer and decimal — and `integer` and `decimal` are ONE comparison domain, so 3 and 3.0 compare equal (§8 R-1). On an enum it is LEXICAL over the folded value (R-5): there is no declared-position ordinal, and a domain order is expressed by prefixing the values. `is_absent` tests the third state (D3.2) explicitly.
+	Op RecordFilterOp `json:"op"`
+
+	// Property The declared property to filter on, in the record type reached after following `via`. Property types are scoped to their record type (D3.3), so this name is resolved against that type's schema and no other.
+	Property string `json:"property"`
+
+	// Values Operand values. Empty or omitted for is_absent; exactly one for every other operator. The engine takes a single lexical literal — the same text a frontmatter file would hold — so it is parsed by the same code path as a record's own value (§8 R-12).
+	Values *[]RecordValue `json:"values,omitempty"`
+
+	// Via Relation properties to follow before applying this clause, in order — the two-hop question of ADR-068 section 1.2 expressed as data. At most two hops (FR-065); a third is REFUSED rather than walked implicitly, because a deeper traversal is a follow-up query the caller should make knowingly. Omitted or empty means the clause applies to the queried type itself.
+	Via *[]string `json:"via,omitempty"`
+}
+
+// RecordFilterOp The comparison to apply. This set is exactly the operators the engine implements and the §8 truth table covers — no more and no fewer.
+//
+// `contains` is whole-element membership on a list (§8 R-9) and substring matching on text (§8 R-10). It is NEVER substring matching on a list. Against a `many` property it is one of only two defined operators; the rest are refused with the remedy named (§8 R-13).
+//
+// Corrected 2026-08-25. This enum previously read [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]: it OMITTED `contains` — a spec rule with cell-by-cell truth-table coverage and no wire representation at all — while offering `neq`, `in`, `not_in` and `is_present`, none of which the engine implements. Negation is not an operator here; it is the separate `negate` flag, so `status != done` is {op: eq, negate: true} and `neq` was redundant as well as unimplemented. Ordered comparison (lt/lte/gt/gte) is valid on date, integer and decimal — and `integer` and `decimal` are ONE comparison domain, so 3 and 3.0 compare equal (§8 R-1). On an enum it is LEXICAL over the folded value (R-5): there is no declared-position ordinal, and a domain order is expressed by prefixing the values. `is_absent` tests the third state (D3.2) explicitly.
+type RecordFilterOp string
+
+// RecordGroup One group of matched records (ADR-068 D10, FR-027 to FR-029).
+// Two levels of grouping are supported, and the second level is carried as a SECOND ENTRY IN `keys` rather than as a nested group, so the structure is flat, non-recursive and cannot express a third level by accident. A published CRM design specified "group by company, then jurisdiction" and shipped with one level, the second being inexpressible; two levels is the requirement, and exactly two is what this type can hold.
+// A record with several values in the grouping property APPEARS IN EVERY GROUP IT BELONGS TO (FR-028). This is a deliberate departure from Obsidian, whose single combined group ("Finance Business" for a record tagged Finance and Business) is confirmed intentional by its authors and is useless for the categorisation case it appears in. The consequence is that the group counts can sum to MORE than the number of matched records; that is correct, not a double count.
+// Grouping by a RELATION is supported (FR-029). Notion's own answer to this is "Not currently", which is why their first-party guidance flattens relations into selects; we do not inherit the constraint that caused it.
+type RecordGroup struct {
+	// Aggregates Per-group aggregate results, in the order requested. A refusal inside one group is stated on THAT group, so one group whose values could not be totalled cannot silently void the totals of the others.
+	Aggregates *[]RecordAggregateResult `json:"aggregates,omitempty"`
+
+	// Count Records in this group. May sum across groups to more than the total matched, when a multi-value property placed a record in several groups (FR-028).
+	Count int64 `json:"count"`
+
+	// Keys This group's key, one entry per grouping level, outermost first. Two entries means a second-level group (FR-027).
+	Keys []RecordGroupKey `json:"keys"`
+
+	// RecordIds Identifiers of the records in this group, in the response's sort order. Always present — an empty array, never null. Ids rather than whole records, so a record appearing in several groups is carried once in `records` and referenced from each.
+	RecordIds []string `json:"record_ids"`
+}
+
+// RecordGroupKey One level of a group's key (ADR-068 D10).
+// ABSENT IS ITS OWN GROUP. `absent: true` with no `value` is the group of records that hold no value for the grouping property (D3.2) — it is not merged into an empty-string group and it is not dropped. Grouping that silently discards the records with nothing in the column loses exactly the rows a triage view is looking for.
+type RecordGroupKey struct {
+	// Absent True when this group holds the records for which the property is absent. When true, `value` is omitted.
+	Absent bool `json:"absent"`
+
+	// Label Display label for the group heading. For an enum this is the declared label, and groups are ordered by declared position, not by spelling (FR-010).
+	Label *string `json:"label,omitempty"`
+
+	// Property The property this level grouped by.
+	Property string `json:"property"`
+
+	// Value ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the eight value fields is populated, and which one is named by `type`.
+	// THE COUNT IS EIGHT, AND IT MATCHES PropertyDef. `checkbox` (FR-004c, ADR-068 D24.5) joined the property types in spec Draft 11; this schema was left at seven, so `PropertyDef.type` accepted a type that had no wire representation at all — a property an operator could declare and the wire could never carry one value of. Do not "correct" the count back to seven.
+	// NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
+	// ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
+	Value *RecordValue `json:"value,omitempty"`
+}
+
+// RecordProblem One thing a record operation could not do, named rather than dropped (ADR-068 D13). This is the type the whole ADR exists to serve: the failure mode being corrected is SILENCE — a query that quietly omits the records it could not understand and returns a confident total over what is left.
+// A problem names the records affected, the reason, and where possible the expected shape and the remedy. The community's accepted debugging advice for the incumbent tools today is "keep testing until something is returned"; that is what a system with no error channel forces on people.
+// A RecordProblem is NOT an HTTP error. Bounded, refused and partially evaluated answers all arrive as a normal response carrying `complete: false` and one or more of these (D15.1b).
+type RecordProblem struct {
+	// Code Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "integer_not_whole" — a fractional value in an "integer" property. It is a DIFFERENT cause from "type_mismatch" because the value parses perfectly well as a number: the fault is the declared type, and the remedy is to declare the property "decimal", not to fix the digits (FR-013). "integer_out_of_range" — a whole number outside signed 64-bit range in an "integer" property. REFUSED naming the bound, never saturated to the maximum and never widened to a binary float (FR-013). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "hop_traversal_bound_exceeded" — building the relation graph `near`/`hops` walks (undirected, every resolved edge in workspace scope, because a path between two record types crosses the query's own `type`/`kind` narrowing by definition) visited more than 50,000 relation-edge rows before the scan that assembles it finished. A DIFFERENT cause from "evaluation_bound_exceeded" and "candidate_cap_exceeded", which both count RECORDS; this counts EDGES, and the store exposes no pre-scan count over them (ruling R-A keeps every aggregate off the SQL path), so it is a streaming abort in FR-064's B2 pattern that borrows FR-065a's B1-sized ceiling of 50,000 — "the same ceiling ... so there is one number to reason about". No partial neighbourhood is ever returned; the remedy narrows `near` or drops a hop level, never "add a filter", which does not shrink the graph scan at all (FR-076). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "text_search_truncated" — code review A, F6. `words` is answered by the text index FIRST and intersected with the typed filter SECOND (the typed half cannot run until it knows which paths the text half kept), so the text index is asked for more candidates than the page size — a fanout — to leave room for the typed filter to narrow afterward. When the corpus holds more matching documents than the fanout, the text half is cut off before the typed filter ever sees the rest, and a record that would have matched everything, ranked outside the fanout, is silently absent — indistinguishable from "nothing in the vault matches". Reported, with Complete: false, whenever the fanout was exhausted; the zero-hit path (NearestTerms, "did you mean") is refused to a truncated query for the same reason — it would suggest vocabulary as though the search had actually seen the whole corpus. The remedy is real: a typed `filter` (unlike `words`) is evaluated by the properties index over the FULL narrowed candidate population (bounded by candidate_cap_exceeded / evaluation_bound_exceeded, not by this fanout), so replacing or narrowing `words` with an equivalent typed condition on a declared property is not answered by this same bound. "text_search_relaxed" — UAT 2026-09-13, D-07 / D-01. The text index answers `words` in two tiers: strict first (every word present somewhere in the file), and only when that finds nothing an OR-ranked, typo- tolerant fallback where a hit may satisfy only SOME of the words, or a near spelling of one. The fallback used to be silent at this door: `words: "Collision zzqqxx"` (one word absent from the whole vault) answered "COMPLETE: yes — 1 of 1 shown", and a single misspelled word returned its edit-distance-1 neighbour as an exact hit. Reported, with Complete: false, whenever the fallback tier answered; where the searcher can count per word the reason carries the breakdown ("Collision: 1, zzqqxx: 0") so the caller sees which word was not found. The rows are still returned — a near match is often the useful answer — but they can no longer be mistaken for files containing every word. "frontmatter_malformed" — UAT 2026-09-13, D-06. The note's frontmatter could not be read (typically an opening `---` fence that never closes), so the note declares NOTHING it appears to declare: no type, no properties. The row is still returned — it is a real note at a real path — but it is named here so a reader never takes it for a healthy ordinary note. The indexer had always detected this and thrown the detection away as a log line. Non-fatal; the reason carries the parser's own message. "near_unresolved" — UAT 2026-09-13, D-58. `near` names a NOTE (a path or a [[wikilink]]) and walks the link graph out from it; it is not a free-text search. A `near` that resolves to no note in the knowledge base is refused by name rather than answered with a confident zero, and the remedy points at `words` for text and at `knowledge_describe` for the note names that exist. "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a). "evaluation_bound_exceeded" — FR-064's B1. The narrowed CANDIDATE population exceeded 50,000 before anything was retrieved. It is a DIFFERENT cause from "candidate_cap_exceeded", which is B2 and counts SURVIVORS during evaluation, and the two must stay distinct because they name different remedies: B1 is reduced by narrowing the scope or the kind, and NOT by adding a filter, which does not change the number that fired. B1's count is exact and is quoted; B2's is not, because the count aborts at the cap and never reaches a true total — quoting one would state a number nobody computed. "unsupported_operator" — a SQL construct the filter does not implement (JOIN, BETWEEN, COALESCE, CASE, a subquery, a function call). REFUSED naming the ten supported operators and the parameter that does the job instead (FR-022c) — never parsed, never silently dropped. "unsupported_parameter" — an argument name the request does not declare, refused with the accepted names listed rather than ignored (FR-022c). "empty_like_pattern" — a LIKE pattern of '' or '%', which matches every record; refused naming IS NOT NULL as the operator that means it (FR-022a). "empty_in_list" — IN was given an empty list, which can match nothing (FR-022d). "literal_type_mismatch" — a literal that cannot be read in the property's declared type (FR-022e). Never coerced. "ordering_on_many_property" — an ordering comparison against a list- valued property, which section 8 R-13 leaves undefined; refused naming =, IN and LIKE as the operators that are defined there. "comparison_undefined" — the comparison oracle could not decide this pair: a non-conforming value (R-4), an unresolved relation (R-8), or an operator no rule defines for the declared type. The record is EXCLUDED and NAMED, and it is not re-admitted by negation — counting a corrupt value as "not done" by double negation would be a silent wrong answer. "date_format_ambiguous" — a date whose format cannot be read without guessing, or whose month or day is not zero-padded (FR-021d). It is never guessed. "decimal_scale_exceeded" — more decimal places than a decimal property carries. The value is NOT rounded to fit (FR-013). "stale_record" — this row's source_hash and the text index's disagree, or one side holds none (FR-020c). Reported as a DISAGREEMENT, never as "the properties index is stale": the comparison establishes that the two differ, not which is behind. "orphan_row" — the properties index holds a row for a path where no indexed note exists (D16.5). "stale_cursor" — the cursor was issued against a different index epoch. An ERROR, never a silent restart from page one. "unknown_view" — a saved view name the vault does not define, refused with the views in scope listed. "unknown_record_type" — a record type the schema set does not declare, refused with the declared types listed (FR-024). "view_part_ineligible" — a saved view declares a part whose BINDINGS do not satisfy what that part requires: a `figures` or `chart` part with no number, a `chart` whose `date` names something the record type does not declare as a date, a `tiles` part bound to a property that is not image-capable, a `columns` part bound to something that is not a small enum. The part draws NOTHING, and this is the renderer saying so (view-kinds-design-2026-09-03 D6). The composer (op=create_view) refuses to write such a part; this code exists because a parts-bearing file can reach the renderer by other routes — a hand-edited file, an import, or a binary written before D6 closed op=write_view — and a part that computes nothing because its bindings are absent must never be served as an empty but clean rendering.
+	// THE EIGHT `schema_*` CODES (ADR-083 review H2/F9) report a schema FILE that could not be loaded. They exist because a knowledge base whose schemas fail to load used to answer `{types: [], problems: []}` — byte for byte the SAME answer a healthy vault that declares no record types returns. Those two are not the same fact and must not share a rendering: in the first, every record editor in every view silently declines to appear and nothing on screen says why; the operator's only evidence was a WARN line in a server log they cannot reach from a browser. Seven of them mirror pkg/records' SchemaRejectionCode one-for-one, so no rejection is ever dropped or reported under a code that means something else: "schema_unreadable" — the schema file could not be read from disk. "schema_invalid_yaml" — the file is not parseable YAML (the common case: an indentation slip while adding a property). "schema_unsupported_version" — the file declares a schema_version this build does not implement. "schema_missing_type" — the file declares no `type`, so it describes nothing. "schema_no_properties" — the file declares a type with no properties. "schema_bad_property" — one property declaration is malformed (a bad type name, a bad enum member, a bad `group`). "schema_unknown_key" — the file mentions a key a schema file is not entitled to mention. "schema_load_failed" — the schema DIRECTORY itself could not be enumerated, so this knowledge base contributed no types at all. This is the one with no SchemaRejection behind it: there is no single file to blame, so `paths` is absent and `reason` names the collection.
+	// `paths` names the offending file(s) for the seven file-level codes; `reason` carries the loader's own explanation verbatim in all eight.
+	Code RecordProblemCode `json:"code"`
+
+	// Expected The shape that WAS expected, stated plainly. A rejection that does not say what correct looks like leaves the caller guessing (FR-042).
+	Expected *string `json:"expected,omitempty"`
+
+	// Fix The remedy. For a refusal this is the narrowing instruction naming the filter that would help (FR-064) — a bound is never reported without one.
+	Fix *string `json:"fix,omitempty"`
+
+	// Paths Vault-relative paths implicated. Carries BOTH paths for a duplicate type declaration (FR-003) or a duplicate identifier (FR-039), where naming only one leaves the conflict unfixable.
+	Paths *[]string `json:"paths,omitempty"`
+
+	// Permitted The permitted values or valid names, listed so the caller can correct itself. Populated for unknown_property, unknown_enum_value and enum_violation (FR-011, FR-024). Scope is resolved BEFORE this list is built, so it can never reveal schemas outside the caller's workspace (FR-024, FR-062).
+	Permitted *[]string `json:"permitted,omitempty"`
+
+	// Property The property at fault, when the problem is attributable to one.
+	Property *string `json:"property,omitempty"`
+
+	// Reason Human-readable statement of what went wrong, ready to render. Never empty — a problem with no reason is indistinguishable from silence, which is the failure this type exists to end.
+	Reason string `json:"reason"`
+
+	// Records Record identifiers this problem applies to. Always present — an empty array, never null — so a caller may render it without a nil check. Empty when the problem is a property of the QUERY rather than of particular records (a clamp, a refusal, a truncated scope).
+	Records []string `json:"records"`
+}
+
+// RecordProblemCode Machine-readable cause, so a caller can branch without parsing prose. "missing_schema_version" — a schema file lacking schema_version; no records of that type are validated against it (FR-002). "duplicate_type_declaration" — two schema files declare the same record type; both paths are named in `paths` (FR-003). "unknown_property" / "unknown_enum_value" — a query named something the schema does not declare. The query is REJECTED with the valid names listed; it never returns an empty result set (FR-024). "missing_required" — a required property is absent from a record. "arity_violation" — a list where a scalar was declared, or the reverse (FR-006). "enum_violation" — a value outside the declared, closed set (FR-011). "type_mismatch" — the stored value cannot be read as its declared type. "dangling_relation" — the relation target does not exist (FR-033). "relation_type_mismatch" — the target exists but is not of the declared target type (FR-034). "cardinality_violation" — more values than the declared cardinality permits (FR-035). "duplicate_id" — two records share an identifier; both paths are named (FR-039). "integer_not_whole" — a fractional value in an "integer" property. It is a DIFFERENT cause from "type_mismatch" because the value parses perfectly well as a number: the fault is the declared type, and the remedy is to declare the property "decimal", not to fix the digits (FR-013). "integer_out_of_range" — a whole number outside signed 64-bit range in an "integer" property. REFUSED naming the bound, never saturated to the maximum and never widened to a binary float (FR-013). "candidate_cap_exceeded" — the candidate set exceeded the 10,000-record materialisation bound; the query is refused with a narrowing instruction and NO partial answer is returned (FR-064). "hop_limit_exceeded" — more than two relation hops were requested (FR-065). "hop_traversal_bound_exceeded" — building the relation graph `near`/`hops` walks (undirected, every resolved edge in workspace scope, because a path between two record types crosses the query's own `type`/`kind` narrowing by definition) visited more than 50,000 relation-edge rows before the scan that assembles it finished. A DIFFERENT cause from "evaluation_bound_exceeded" and "candidate_cap_exceeded", which both count RECORDS; this counts EDGES, and the store exposes no pre-scan count over them (ruling R-A keeps every aggregate off the SQL path), so it is a streaming abort in FR-064's B2 pattern that borrows FR-065a's B1-sized ceiling of 50,000 — "the same ceiling ... so there is one number to reason about". No partial neighbourhood is ever returned; the remedy narrows `near` or drops a hop level, never "add a filter", which does not shrink the graph scan at all (FR-076). "page_size_clamped" — the requested page size exceeded the cap and was reduced; the clamp is REPORTED, never silent (FR-063). "scope_truncated" — workspace scope resolution was itself incomplete (ADR-067 Scope.Truncated), so a whole mounted folder may be missing. The answer MUST NOT claim success (FR-062a). "text_search_truncated" — code review A, F6. `words` is answered by the text index FIRST and intersected with the typed filter SECOND (the typed half cannot run until it knows which paths the text half kept), so the text index is asked for more candidates than the page size — a fanout — to leave room for the typed filter to narrow afterward. When the corpus holds more matching documents than the fanout, the text half is cut off before the typed filter ever sees the rest, and a record that would have matched everything, ranked outside the fanout, is silently absent — indistinguishable from "nothing in the vault matches". Reported, with Complete: false, whenever the fanout was exhausted; the zero-hit path (NearestTerms, "did you mean") is refused to a truncated query for the same reason — it would suggest vocabulary as though the search had actually seen the whole corpus. The remedy is real: a typed `filter` (unlike `words`) is evaluated by the properties index over the FULL narrowed candidate population (bounded by candidate_cap_exceeded / evaluation_bound_exceeded, not by this fanout), so replacing or narrowing `words` with an equivalent typed condition on a declared property is not answered by this same bound. "text_search_relaxed" — UAT 2026-09-13, D-07 / D-01. The text index answers `words` in two tiers: strict first (every word present somewhere in the file), and only when that finds nothing an OR-ranked, typo- tolerant fallback where a hit may satisfy only SOME of the words, or a near spelling of one. The fallback used to be silent at this door: `words: "Collision zzqqxx"` (one word absent from the whole vault) answered "COMPLETE: yes — 1 of 1 shown", and a single misspelled word returned its edit-distance-1 neighbour as an exact hit. Reported, with Complete: false, whenever the fallback tier answered; where the searcher can count per word the reason carries the breakdown ("Collision: 1, zzqqxx: 0") so the caller sees which word was not found. The rows are still returned — a near match is often the useful answer — but they can no longer be mistaken for files containing every word. "frontmatter_malformed" — UAT 2026-09-13, D-06. The note's frontmatter could not be read (typically an opening `---` fence that never closes), so the note declares NOTHING it appears to declare: no type, no properties. The row is still returned — it is a real note at a real path — but it is named here so a reader never takes it for a healthy ordinary note. The indexer had always detected this and thrown the detection away as a log line. Non-fatal; the reason carries the parser's own message. "near_unresolved" — UAT 2026-09-13, D-58. `near` names a NOTE (a path or a [[wikilink]]) and walks the link graph out from it; it is not a free-text search. A `near` that resolves to no note in the knowledge base is refused by name rather than answered with a confident zero, and the remedy points at `words` for text and at `knowledge_describe` for the note names that exist. "aggregate_refused" — no aggregate is returned over a refused candidate set; it is never partial (FR-066). "index_unavailable" — the index predates record support and cannot hold the properties queried. A silent no-op returning complete:true over zero properties is impossible (FR-020a). "evaluation_bound_exceeded" — FR-064's B1. The narrowed CANDIDATE population exceeded 50,000 before anything was retrieved. It is a DIFFERENT cause from "candidate_cap_exceeded", which is B2 and counts SURVIVORS during evaluation, and the two must stay distinct because they name different remedies: B1 is reduced by narrowing the scope or the kind, and NOT by adding a filter, which does not change the number that fired. B1's count is exact and is quoted; B2's is not, because the count aborts at the cap and never reaches a true total — quoting one would state a number nobody computed. "unsupported_operator" — a SQL construct the filter does not implement (JOIN, BETWEEN, COALESCE, CASE, a subquery, a function call). REFUSED naming the ten supported operators and the parameter that does the job instead (FR-022c) — never parsed, never silently dropped. "unsupported_parameter" — an argument name the request does not declare, refused with the accepted names listed rather than ignored (FR-022c). "empty_like_pattern" — a LIKE pattern of ” or '%', which matches every record; refused naming IS NOT NULL as the operator that means it (FR-022a). "empty_in_list" — IN was given an empty list, which can match nothing (FR-022d). "literal_type_mismatch" — a literal that cannot be read in the property's declared type (FR-022e). Never coerced. "ordering_on_many_property" — an ordering comparison against a list- valued property, which section 8 R-13 leaves undefined; refused naming =, IN and LIKE as the operators that are defined there. "comparison_undefined" — the comparison oracle could not decide this pair: a non-conforming value (R-4), an unresolved relation (R-8), or an operator no rule defines for the declared type. The record is EXCLUDED and NAMED, and it is not re-admitted by negation — counting a corrupt value as "not done" by double negation would be a silent wrong answer. "date_format_ambiguous" — a date whose format cannot be read without guessing, or whose month or day is not zero-padded (FR-021d). It is never guessed. "decimal_scale_exceeded" — more decimal places than a decimal property carries. The value is NOT rounded to fit (FR-013). "stale_record" — this row's source_hash and the text index's disagree, or one side holds none (FR-020c). Reported as a DISAGREEMENT, never as "the properties index is stale": the comparison establishes that the two differ, not which is behind. "orphan_row" — the properties index holds a row for a path where no indexed note exists (D16.5). "stale_cursor" — the cursor was issued against a different index epoch. An ERROR, never a silent restart from page one. "unknown_view" — a saved view name the vault does not define, refused with the views in scope listed. "unknown_record_type" — a record type the schema set does not declare, refused with the declared types listed (FR-024). "view_part_ineligible" — a saved view declares a part whose BINDINGS do not satisfy what that part requires: a `figures` or `chart` part with no number, a `chart` whose `date` names something the record type does not declare as a date, a `tiles` part bound to a property that is not image-capable, a `columns` part bound to something that is not a small enum. The part draws NOTHING, and this is the renderer saying so (view-kinds-design-2026-09-03 D6). The composer (op=create_view) refuses to write such a part; this code exists because a parts-bearing file can reach the renderer by other routes — a hand-edited file, an import, or a binary written before D6 closed op=write_view — and a part that computes nothing because its bindings are absent must never be served as an empty but clean rendering.
+// THE EIGHT `schema_*` CODES (ADR-083 review H2/F9) report a schema FILE that could not be loaded. They exist because a knowledge base whose schemas fail to load used to answer `{types: [], problems: []}` — byte for byte the SAME answer a healthy vault that declares no record types returns. Those two are not the same fact and must not share a rendering: in the first, every record editor in every view silently declines to appear and nothing on screen says why; the operator's only evidence was a WARN line in a server log they cannot reach from a browser. Seven of them mirror pkg/records' SchemaRejectionCode one-for-one, so no rejection is ever dropped or reported under a code that means something else: "schema_unreadable" — the schema file could not be read from disk. "schema_invalid_yaml" — the file is not parseable YAML (the common case: an indentation slip while adding a property). "schema_unsupported_version" — the file declares a schema_version this build does not implement. "schema_missing_type" — the file declares no `type`, so it describes nothing. "schema_no_properties" — the file declares a type with no properties. "schema_bad_property" — one property declaration is malformed (a bad type name, a bad enum member, a bad `group`). "schema_unknown_key" — the file mentions a key a schema file is not entitled to mention. "schema_load_failed" — the schema DIRECTORY itself could not be enumerated, so this knowledge base contributed no types at all. This is the one with no SchemaRejection behind it: there is no single file to blame, so `paths` is absent and `reason` names the collection.
+// `paths` names the offending file(s) for the seven file-level codes; `reason` carries the loader's own explanation verbatim in all eight.
+type RecordProblemCode string
+
+// RecordPropertyValue One property of one record, with all of its values (ADR-068 D3).
+// `values` is ALWAYS an array, whatever the declared arity, and arity is enforced against the schema rather than guessed from the wire shape: a scalar property carrying two values is rejected with the expected shape named (FR-006), and it is never silently widened into a list. The single most-reported failure in the research corpus is precisely that silent widening, after which every query written against the property returns nothing with no error.
+// AN EMPTY `values` ARRAY MEANS ABSENT (D3.2, FR-007), and absent is a state distinct from every value. On a write, an empty array clears the property.
+// Used in both directions. On a READ the server also populates `type`. On a WRITE (RecordWriteRequest) `type` may be omitted — the schema is the authority — and relation and person properties are NOT writable here: they are modified through RelationWriteRequest's explicit add / remove / replace verbs (FR-045), because a read-then-write round trip that silently replaces a relation list is how the incumbent deletes relations and returns success.
+type RecordPropertyValue struct {
+	// Property The declared property name. Validated against the record type's schema BEFORE evaluation or write; an unknown name is rejected with the valid names listed (FR-023, FR-024).
+	Property string `json:"property"`
+
+	// Type The declared property type, echoed by the server on reads. Optional on a write request, where the schema is the authority.
+	Type *RecordPropertyValueType `json:"type,omitempty"`
+
+	// Values The values held. Always present — an empty array, never null. Empty means the property is ABSENT on this record (D3.2), which a filter can test for explicitly and which a negative filter includes by default (FR-008).
+	Values []RecordValue `json:"values"`
+}
+
+// RecordPropertyValueType The declared property type, echoed by the server on reads. Optional on a write request, where the schema is the authority.
+type RecordPropertyValueType string
+
+// RecordQueryRequest A structured record query (ADR-068 D13, D15.1b; FR-022 to FR-029).
+// Structured, never a text query language (FR-022): every property name, enum value and relation target is checked against the schema BEFORE anything is evaluated (FR-023), and a query naming something the schema does not declare is REJECTED with the valid names listed rather than returning zero records (FR-024). A mistyped property that returns an empty result is indistinguishable from a correct query over an empty vault, and the accepted community workaround for that today is "keep testing until something is returned".
+// Scope is not negotiable by the caller. Every record tool resolves through the calling agent's workspace (FR-060); records in a vault mounted only into another workspace are invisible, and that case is indistinguishable from an empty vault (FR-062). Scope is resolved BEFORE a rejection is built, so the valid-names list in an error can never reveal schemas outside that scope (FR-024).
+// Bounds are stated and every breach is REPORTED, never silently applied — see RecordQueryResponse.
+type RecordQueryRequest struct {
+	// Aggregates Aggregates to compute over the matched set, and per group when group_by is present. None are returned over a refused candidate set (FR-066).
+	Aggregates *[]RecordAggregate `json:"aggregates,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response's next_cursor. A cursor that cannot be honoured is an ERROR, never a silent restart from the beginning (D15.1b) — a silent restart returns page one while the caller believes it is reading page four.
+	Cursor *string `json:"cursor,omitempty"`
+
+	// Filters Filter clauses, combined with AND. Omitted or empty matches every record of the type within scope.
+	Filters *[]RecordFilter `json:"filters,omitempty"`
+
+	// GroupBy Properties to group by, outermost first. Two levels are supported (FR-027); grouping by a relation is supported (FR-029); a record with several values appears in every group it belongs to (FR-028).
+	GroupBy *[]string `json:"group_by,omitempty"`
+
+	// Hops Maximum relation hops this query may follow. At most 2; a query requesting more is REFUSED with the reason (FR-065) rather than rejected by the schema, so the caller is told the bound and not merely that its body was invalid.
+	Hops *int `json:"hops,omitempty"`
+
+	// Limit Records per page. Default 50. A value above the server cap of 200 is CLAMPED, not rejected, and the clamp is REPORTED on the response (limit_clamped / limit_applied, FR-063) — deliberately no `maximum` here, so an over-large request comes back with a stated clamp rather than a bare schema error that says nothing about what was applied.
+	Limit *int `json:"limit,omitempty"`
+
+	// Select Properties to return on each record. Omitted returns every declared property. Narrowing this changes what is RETURNED, never what is matched.
+	Select *[]string `json:"select,omitempty"`
+
+	// Sort Sort keys, applied in order. Enums sort by declared position (FR-010).
+	Sort *[]RecordSort `json:"sort,omitempty"`
+
+	// Type The record type to query. Exactly one; a query does not span record types, it follows relations between them via RecordFilter.via.
+	Type string `json:"type"`
+}
+
+// RecordQueryResponse The answer to a record query — records AND the account of everything the query could not include, in the SAME response (ADR-068 D13, FR-025).
+// THERE IS NO CALL SHAPE THAT RETURNS RECORDS ALONE. `complete` and `problems` are REQUIRED fields, not optional ones, and that is the load-bearing decision of this whole contract. If either were optional, a client could receive a total without the caveats attached to it, a server could omit them under load and still be conformant, and the generated types would carry them as nullable — at which point the guarantee is a convention rather than a structure, and conventions are exactly what fails silently. Required here means: a caller physically cannot hold these records without also holding the verdict on them.
+// Every bound in D15.1b sets complete: false with the reason and the remedy — a clamped page, a refused candidate set, a hop limit, a truncated scope, an index that cannot answer. So a caller that ignores `problems` entirely still cannot mistake a bounded answer for a whole one, because the boolean it did read already said so.
+// A refusal arrives HERE, not as an HTTP error: refused: true with records empty and a narrowing instruction in problems (FR-064, FR-066). No partial answer and no partial total is ever returned in that case.
+// An out-of-scope query is not an error either — it returns records: [] with complete: true, indistinguishable from an empty vault (FR-061, FR-062), so the error channel cannot be used to probe for records the caller may not see.
+type RecordQueryResponse struct {
+	// Aggregates Aggregate results over the whole matched set, in the order requested. A refused aggregate is present and marked refused — never omitted (FR-014, FR-066).
+	Aggregates *[]RecordAggregateResult `json:"aggregates,omitempty"`
+
+	// Complete REQUIRED. True only when the query covered everything it was asked to cover: no record excluded for a type violation, no clamp, no refusal, no truncated scope, no unavailable index. False whenever ANY of those applies, with the reason and the remedy in `problems`.
+	// Never optional. The completeness verdict travelling separately from the records — or not travelling at all — is the failure mode this response type was designed to make impossible.
+	Complete bool `json:"complete"`
+
+	// Groups Grouped results, present only when the request carried group_by. The records themselves stay in `records`; groups reference them by id.
+	Groups *[]RecordGroup `json:"groups,omitempty"`
+
+	// LimitApplied The page size actually used for this query.
+	LimitApplied int `json:"limit_applied"`
+
+	// LimitClamped True when the requested page size exceeded the server cap of 200 and was reduced to limit_applied. The clamp is REPORTED, never silent (FR-063) — silent truncation is the incumbent behaviour this ADR cites as motivating evidence, and shipping our own would be indefensible.
+	LimitClamped bool `json:"limit_clamped"`
+
+	// LimitRequested The page size the caller asked for. Present only when limit_clamped is true, so the caller can see exactly what was refused.
+	LimitRequested *int `json:"limit_requested,omitempty"`
+
+	// NextCursor Opaque cursor for the next page. Absent means this was the last page. Cursor-based, so a page boundary cannot silently repeat or skip records when the corpus changes between calls.
+	NextCursor *string `json:"next_cursor,omitempty"`
+
+	// Problems REQUIRED. Everything the query could not include, and why. Always present — an EMPTY ARRAY when there is nothing to report, never null and never absent, so "no problems" is stated rather than inferred from a missing field.
+	// A record excluded from an aggregate is named here with the reason (FR-026). So is a clamp, a refusal, a hop limit and a truncated scope.
+	Problems []RecordProblem `json:"problems"`
+
+	// Records The matched records, in the requested sort order. Always present — an empty array, never null — so a client may map over it without a nil check. Each record appears ONCE even when grouping placed it in several groups; the groups reference it by id.
+	Records []VaultRecord `json:"records"`
+
+	// Refused REQUIRED. True when the query was refused outright and NO answer was computed — the candidate set exceeded the 10,000-record materialisation bound (FR-064), or more than two relation hops were requested (FR-065). Records is then empty, no aggregate is returned (FR-066), and `problems` carries the narrowing instruction naming the filter that would help.
+	// Distinct from complete: false, which also covers a partial answer that WAS computed. A caller must be able to tell "here is some of it" from "here is none of it, narrow and re-ask" without parsing prose.
+	Refused bool `json:"refused"`
+
+	// TotalMatched Records matching the filters across all pages, when it is known exactly. ABSENT rather than estimated when it is not — an invented denominator is the confidently-wrong answer this response type exists to prevent.
+	TotalMatched *int64 `json:"total_matched,omitempty"`
+}
+
+// RecordRef A reference from one record to another — the wire form of a "relation" or "person" value (ADR-068 D5, D5.1).
+// What is stored ON DISK is a quoted wikilink, and nothing else. It renders and navigates in Obsidian and carries no Omnipus-specific encoding, so removing Omnipus leaves a working link (D8's no-lock-in promise). What the INDEX joins on is the target's record ID, resolved by following the wikilink to a file and reading its id — so a rename cannot break a relation from either direction.
+// This type therefore carries BOTH, and `link` is the required half because it is the half that always exists. `id` is absent exactly when the reference could not be resolved, and `resolved` says so explicitly rather than leaving the caller to infer it from a missing field. An unresolvable or ambiguous wikilink is a validation finding (RecordProblem.dangling_relation), never a silent drop and never rendered as a distinct group of one.
+type RecordRef struct {
+	// Id The target's stable record identifier (D7). Present only when resolved is true.
+	Id *string `json:"id,omitempty"`
+
+	// Link The wikilink target text as stored in the file, without the surrounding brackets. This is the durable, human-editable form.
+	Link string `json:"link"`
+
+	// Resolved True when the link resolved to exactly one record of the declared target type. False for a dangling, ambiguous or wrong-type target — in which case the query still returns the reference and the response carries a matching RecordProblem (FR-033, FR-034).
+	Resolved bool `json:"resolved"`
+
+	// Title Display title of the target, for rendering without a second fetch.
+	Title *string `json:"title,omitempty"`
+
+	// Type The target's record type. Present only when resolved is true. A target that resolves to a record of the WRONG type is reported as relation_type_mismatch, not silently accepted (FR-034).
+	Type *string `json:"type,omitempty"`
+}
+
+// RecordSchema Every record type visible to the caller (ADR-068 D2, D15, record_schema).
+// ADR-068 D0: this list is whatever the operator's vault declares. Omnipus ships NO record types of its own — not one, and not as an overridable default — so an empty `types` array on a vault that has declared nothing is the correct and expected answer, not a broken installation.
+// `problems` is REQUIRED here, not optional, for the same reason it is on a query response: a schema listing that quietly omits a type it could not load — an unversioned file (FR-002), a type declared twice in two files (FR-003) — tells the caller the type does not exist, which is a different and wrong answer. Both paths of a duplicate declaration are named in the problem (FR-003).
+// The listing is scoped to the calling agent's workspace (FR-060). A schema in a vault mounted only into another workspace is simply not in this list, and that is indistinguishable from it not existing (FR-062).
+// Note for the agent-facing tool: record_schema returns a COMPACT TEXTUAL schema to the model, not this object serialised as JSON — Notion measured a ~91% context-token reduction making that change. This type is the structured form for the gateway/SPA boundary.
+type RecordSchema struct {
+	// Problems REQUIRED. Schema files that could not be loaded, and why. Always present — an EMPTY ARRAY when every schema loaded cleanly, never null.
+	Problems []RecordProblem `json:"problems"`
+
+	// Types The declared record types, ordered by type name. Always present — an empty array, never null.
+	Types []RecordType `json:"types"`
+}
+
+// RecordSort One sort key (ADR-068 D4, FR-010, §8 R-5).
+// SORTING IS LEXICAL, and the SORT KEY IS THE FOLDED VALUE. An enum is no exception — there is no declared-position ordinal, and an author who wants a domain order writes it into the values: "1-lead", "2-qualified". The prefix sits in the operator's own file and does exactly what it looks like it does.
+// Two clauses of R-5 a caller can rely on. The key is the FOLDED form, not the raw bytes, so "Won", "won" and "WON" — one value under case-insensitive matching — sort to one place instead of three while grouping collapses them into one group. TIES on the folded key break on RAW BYTE ORDER, so the order is TOTAL and byte-identical across runs and rebuilds. What renders is always the file's own spelling, never the sort key.
+type RecordSort struct {
+	// Direction Ascending or descending, along the lexical order described above.
+	Direction RecordSortDirection `json:"direction"`
+
+	// Property The declared property to sort by, validated against the schema first (FR-023).
+	Property string `json:"property"`
+}
+
+// RecordSortDirection Ascending or descending, along the lexical order described above.
+type RecordSortDirection string
+
+// RecordType One record type as declared by the vault in `<vault>/.omnipus-vault/records/<type>.yaml` (ADR-068 D2).
+// ADR-068 D0 is binding here: Omnipus ships the MECHANISM and the vault ships the CONVENTION. There are NO built-in record types — no company, contact, deal or interaction, not even as an overridable default — because a shipped default becomes the de-facto standard and quietly gives the product opinions about the operator's business that it has no basis for. Every RecordType on this wire was read from a file in the operator's own vault.
+// `schema_version` is mandatory from the first release (FR-002): a schema file without it is rejected and NO records of that type are validated against it. Obsidian's `.base` format broke in five consecutive releases across eight weeks, two of them unannounced; machine-generated schemas make an unversioned format worse, not better.
+type RecordType struct {
+	// IdentityPrefix Prefix for minted record identifiers (D7) — a prefix of "CO" yields "CO-0142". Identity is a stable ID, not the filename, so a rename can neither break a relation nor fork a group.
+	IdentityPrefix *string `json:"identity_prefix,omitempty"`
+
+	// Label Human-readable label for display. Absent means render `type`.
+	Label *string `json:"label,omitempty"`
+
+	// Properties The declared properties, in declaration order. Always present — an empty array, never null.
+	Properties []PropertyDef `json:"properties"`
+
+	// SchemaVersion Declared schema version. Mandatory (FR-002) — a schema file lacking it is rejected outright rather than loaded with an assumed version.
+	SchemaVersion int `json:"schema_version"`
+
+	// SourcePath Vault-relative path of the schema file that declared this type. Carried so a duplicate declaration can name BOTH paths (FR-003) instead of reporting an unlocatable conflict.
+	SourcePath *string `json:"source_path,omitempty"`
+
+	// Type The record type name, matching the `type` key in a record's frontmatter (D1). A note whose type matches no schema is an ordinary note and NOT an error (FR-005).
+	Type string `json:"type"`
+}
+
+// RecordValue ONE value of one property, tagged with the property type that governs it (ADR-068 D3). Exactly one of the eight value fields is populated, and which one is named by `type`.
+// THE COUNT IS EIGHT, AND IT MATCHES PropertyDef. `checkbox` (FR-004c, ADR-068 D24.5) joined the property types in spec Draft 11; this schema was left at seven, so `PropertyDef.type` accepted a type that had no wire representation at all — a property an operator could declare and the wire could never carry one value of. Do not "correct" the count back to seven.
+// NUMBERS ARE CARRIED AS DECIMAL STRINGS, never as JSON numbers — both `integer` and `decimal`. A JSON `type: number` in this contract generates a Go float32 (float64 only with `format: double`) and a JavaScript number; binary floating point cannot represent 0.1 exactly, and it cannot represent 2^53+1 at all, so a value would drift on a round trip nobody performed deliberately. FR-020b forbids a binary float anywhere in the storage or retrieval path, and the wire is part of that path.
+// ABSENCE IS NOT A VALUE. A property with no value carries no RecordValue at all — its RecordPropertyValue.values array is empty (D3.2, FR-007). This matters: "days I did not meditate" must be answerable, and it is not answerable in a model where absent and false are the same state.
+type RecordValue struct {
+	// Checkbox Populated when type is "checkbox" (FR-004c, ADR-068 D24.5). A real JSON boolean, and that is deliberate rather than inconsistent with `integer` and `decimal` above: those are strings because a JSON number becomes a binary float and loses exactness, and a boolean has no such hazard — `true` round-trips as `true` in both generated languages.
+	// ABSENT IS THE THIRD STATE and it is NOT `false`. A property with no value carries no RecordValue at all (D3.2, FR-007), so a `checkbox: false` on the wire means the note WROTE `false`, never that it said nothing. "Days I did not meditate" is the days with no value; "days I recorded not meditating" is this field set to false. They are different questions and this schema keeps them different.
+	Checkbox *bool `json:"checkbox,omitempty"`
+
+	// Date Populated when type is "date". Either a calendar day as YYYY-MM-DD or an instant as RFC 3339. Comparable in both forms — the failure this closes is a date stored as free text, which sorts and filters as nothing.
+	Date *string `json:"date,omitempty"`
+
+	// Decimal Populated when type is "decimal". An exact, arbitrary-precision number carried as a decimal STRING, for the same reason as `integer`: a quantity that cannot survive a round trip unchanged is not a quantity a caller can reconcile. At most 100 decimal places (FR-013) — deliberately generous; a value past the bound is refused naming it, never rounded, because rounding to satisfy a bound is a silent change to a number.
+	// THE 100-PLACE BOUND IS IN THE PATTERN, not only in `maxLength`, so the wire refuses exactly what the parser refuses. A `maxLength` alone cannot express it — the integer part has no fixed width, so any single length cap either admits a 110-place value with a short integer part or rejects a 2-place value with a long one. A boundary that accepts what the engine rejects is a value a caller can PUT and never read back. `maxLength` admits a 100-place value with a sign, a leading digit and the point. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
+	Decimal *string `json:"decimal,omitempty"`
+
+	// Enum Populated when type is "enum". The declared token, which MUST appear in the property's declared value set; anything else is rejected with the permitted values named (FR-011).
+	Enum *string `json:"enum,omitempty"`
+
+	// Integer Populated when type is "integer". A signed 64-bit whole number, carried as a decimal STRING: a JSON number becomes a binary float in both generated languages, and a float64 cannot represent 2^53+1 — precisely the large-identifier case this type exists to keep exact (FR-013). A value outside int64 is REFUSED, never saturated and never widened. The unit, if any, is declared once on the PropertyDef and is never glued into the value.
+	Integer *string `json:"integer,omitempty"`
+
+	// Person A reference from one record to another — the wire form of a "relation" or "person" value (ADR-068 D5, D5.1).
+	// What is stored ON DISK is a quoted wikilink, and nothing else. It renders and navigates in Obsidian and carries no Omnipus-specific encoding, so removing Omnipus leaves a working link (D8's no-lock-in promise). What the INDEX joins on is the target's record ID, resolved by following the wikilink to a file and reading its id — so a rename cannot break a relation from either direction.
+	// This type therefore carries BOTH, and `link` is the required half because it is the half that always exists. `id` is absent exactly when the reference could not be resolved, and `resolved` says so explicitly rather than leaving the caller to infer it from a missing field. An unresolvable or ambiguous wikilink is a validation finding (RecordProblem.dangling_relation), never a silent drop and never rendered as a distinct group of one.
+	Person *RecordRef `json:"person,omitempty"`
+
+	// Relation A reference from one record to another — the wire form of a "relation" or "person" value (ADR-068 D5, D5.1).
+	// What is stored ON DISK is a quoted wikilink, and nothing else. It renders and navigates in Obsidian and carries no Omnipus-specific encoding, so removing Omnipus leaves a working link (D8's no-lock-in promise). What the INDEX joins on is the target's record ID, resolved by following the wikilink to a file and reading its id — so a rename cannot break a relation from either direction.
+	// This type therefore carries BOTH, and `link` is the required half because it is the half that always exists. `id` is absent exactly when the reference could not be resolved, and `resolved` says so explicitly rather than leaving the caller to infer it from a missing field. An unresolvable or ambiguous wikilink is a validation finding (RecordProblem.dangling_relation), never a silent drop and never rendered as a distinct group of one.
+	Relation *RecordRef `json:"relation,omitempty"`
+
+	// Text Populated when type is "text". Prose; never compared for equality (D3).
+	Text *string `json:"text,omitempty"`
+
+	// Type Which of the eight property types governs this value, and therefore which field below is populated.
+	Type RecordValueType `json:"type"`
+}
+
+// RecordValueType Which of the eight property types governs this value, and therefore which field below is populated.
+type RecordValueType string
+
+// RecordWriteRequest Body for POST .../knowledge/records. Discriminated by `mode`, because CREATE and UPDATE are two operations with different required fields and different consequences, and the flat shape this replaced could not tell them apart.
+//
+// THE DEFECT THIS CLOSES. The flat request required only `type` and `properties`, leaving `id`, `path` and `version_token` as three independent optionals — so `id` present meant update and `id` absent meant create. A caller that MEANT to update and lost its `id` (a bug, a dropped field, a response shape that changed) was silently reinterpreted as a create: it wrote a DUPLICATE note, DISCARDED the version token it had supplied, and got a success back. Nothing in the contract could refuse it, because the request it sent was a perfectly valid create.
+//
+// Now the caller states the operation and the server checks the fields against it. `version_token` is required on update and rejected on create; `path` is required on create and rejected on update. A field sent on the wrong variant is a 400 that names it, never a field quietly ignored — and a quietly ignored `version_token` is the one that matters, since a caller that sent one believed it was protected against a concurrent write when it was not.
+type RecordWriteRequest struct {
+	union json.RawMessage
+}
+
+// RecordWriteRequestCreate CREATE one record: a new note at `path`, carrying a server-minted identifier (ADR-068 D14, FR-036, FR-040 to FR-044).
+// THE CALLER SAYS `mode: create`. It is not inferred from the absence of `id`. The flat shape this replaced required only `type` and `properties` and left `id`, `path` and `version_token` as three independent optionals, so a caller that MEANT to update and omitted `id` — a bug, a dropped field, a response shape that changed — was silently reinterpreted as a create: it wrote a duplicate note, discarded the version token it had carefully supplied, and returned success. The two operations differ in what they do to a vault, so the caller declares which one it wants and a mistake is a 400 instead of a second note nobody asked for.
+// `id` AND `version_token` ARE NOT ACCEPTED HERE (`additionalProperties: false`), and that is the half that makes the split worth having. A create has no prior version to compare, so a `version_token` sent with one could only ever be ignored — and a caller that sent one believed it was protected against a concurrent write when it was not. Sending either field on this variant is a schema violation, named in the 400, never dropped.
+// A write is a SPLICE, never a re-serialisation. Comments, key order, blank lines and quoting style survive, and the file is byte-identical outside the patched span (FR-041). This is not a nicety: the vault is simultaneously a human's working notes, and a writer that re-serialises YAML degrades it a little on every touch until the operator stops trusting the agent.
+// A write that violates the schema is REJECTED with the expected shape named, and no note is created (FR-042). Nothing is half-written.
+// RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE. They are modified through RelationWriteRequest's three explicit verbs (FR-045), because a read-then-write round trip that silently replaces a relation list is how the incumbent deletes relations and returns success.
+// Derived values are never written into frontmatter (D9, FR-046) — a request naming a derived property is rejected, not honoured.
+type RecordWriteRequestCreate struct {
+	// Mode Discriminator. Must be exactly "create" for this variant.
+	Mode RecordWriteRequestCreateMode `json:"mode"`
+
+	// Path Vault-relative path of the note to create. REQUIRED here — a create has to put the note somewhere, and the server never invents a location. A note already at this path is refused (the create is an O_EXCL create, not an overwrite), which is an ordinary caller-fixable outcome rather than a server fault.
+	Path string `json:"path"`
+
+	// Properties The properties to write, and only those. An entry whose `values` array is empty CLEARS that property (D3.2) — on a create that is a property the new note simply will not carry. A write of a list into a scalar property, or of a value outside a closed enum, is rejected with the expected shape named (FR-006, FR-011, FR-042).
+	// The record's `type` and `id` are seeded by the server and cannot be named here (ADR-068 D1/D7): writing through the identity keys would rename the record, and clearing one would leave it unreachable through every record door.
+	Properties []RecordPropertyValue `json:"properties"`
+
+	// Type The record type being created. Always required, on create and update alike.
+	Type string `json:"type"`
+}
+
+// RecordWriteRequestCreateMode Discriminator. Must be exactly "create" for this variant.
+type RecordWriteRequestCreateMode string
+
+// RecordWriteRequestUpdate UPDATE one existing record's properties, by splice, under a version compare-and-swap (ADR-068 D14, FR-040 to FR-044, ADR-083 EMB-085/EMB-086).
+// THE CALLER SAYS `mode: update`. It is not inferred from the presence of `id`. In the flat shape this replaced, an update that lost its `id` — a bug, a dropped field, a response shape that changed — silently became a CREATE: it wrote a duplicate note at whatever `path` happened to be set, discarded the `version_token` the caller had supplied, and returned success. A caller now states which operation it wants, so that mistake is a 400 naming the missing field instead of a second note nobody asked for.
+// `path` IS NOT ACCEPTED HERE (`additionalProperties: false`). The `id` already locates the record, and a rename is a separate operation — a `path` sent alongside an `id` could only ever be ignored, and a caller that sent one believed it was moving the note (EMB-089: a record's title and path are never editable through this request).
+// A write is a SPLICE, never a re-serialisation. Comments, key order, blank lines and quoting style survive, and the file is byte-identical outside the patched span (FR-041). This is not a nicety: the vault is simultaneously a human's working notes, and a writer that re-serialises YAML degrades it a little on every touch until the operator stops trusting the agent.
+// A write that violates the schema is REJECTED with the expected shape named, and the file is left unmodified (FR-042). Nothing is half-written.
+// RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE HERE. They are modified through RelationWriteRequest's three explicit verbs (FR-045), because a read-then-write round trip that silently replaces a relation list is how the incumbent deletes relations and returns success.
+// Derived values are never written into frontmatter (D9, FR-046) — a request naming a derived property is rejected, not honoured.
+type RecordWriteRequestUpdate struct {
+	// Id The record to update. REQUIRED here — the identifier is what locates the record, and it is never supplied on a create, where the server mints it (FR-036) so two concurrent creators cannot choose the same one.
+	Id string `json:"id"`
+
+	// Mode Discriminator. Must be exactly "update" for this variant.
+	Mode RecordWriteRequestUpdateMode `json:"mode"`
+
+	// Properties The properties to write, and only those — every other byte of the file is untouched. An entry whose `values` array is empty CLEARS that property (D3.2). A write of a list into a scalar property, or of a value outside a closed enum, is rejected with the expected shape named (FR-006, FR-011, FR-042).
+	// The record's `type` and `id` cannot be named here (ADR-068 D1/D7): writing through the identity keys would rename the record, and clearing one would leave it unreachable through every record door and invisible to the identifier allocator's collision check.
+	Properties []RecordPropertyValue `json:"properties"`
+
+	// Type The record type being written. Always required, on create and update alike. A record whose stored type differs from this is refused rather than rewritten — naming the wrong type is a caller error, not an instruction to change the record's type.
+	Type string `json:"type"`
+
+	// VersionToken ADR-067 D14's opaque content-hash token, as returned on the record that is being updated. REQUIRED on every update: a stale token means the file changed since it was read, and the write is REFUSED and the refusal AUDITED (FR-043, FR-044) rather than overwriting an edit nobody saw. There is no variant of this operation that updates without one — that was the point of splitting create from update, since an optional token is one a caller can lose without being told.
+	// THE `pattern` IS ON THIS INBOUND FIELD AND DELIBERATELY NOT ON THE THREE OUTBOUND ONES (VaultRecord, VaultFindRow, KnowledgeConflictError), which carry the same token with no pattern. The asymmetry is the decision, not an oversight. Inbound, a token that is not one of the two shapes this server ever MINTS cannot be a stale token — it is a malformed request, and 400 is the truthful answer, caught before the compare-and-swap rather than surfacing as a 409 that blames a concurrent editor who does not exist. Outbound, a pattern would be validated by the SPA's Zod edge, where a single non-conforming field DROPS THE WHOLE RESPONSE — so a server-side anomaly on one row would blank an entire dashboard. The outbound guarantee is held in Go instead, by NoteVersion.TokenIfPresent (pkg/knowledge/version.go), which makes emitting the absent-sentinel for a note that exists syntactically impossible at the source.
+	// "Opaque" (FR-107) still binds: a client never PARSES, orders or constructs a token. This pattern lets the server reject a shape it could not have issued; it is not a licence to build one.
+	VersionToken string `json:"version_token"`
+}
+
+// RecordWriteRequestUpdateMode Discriminator. Must be exactly "update" for this variant.
+type RecordWriteRequestUpdateMode string
+
+// RelationWriteRequest A change to one relation property, through THREE DISTINCT VERBS (ADR-068 D15, FR-045).
+// `replace` must be named explicitly, and that is the entire point of this type existing separately from RecordWriteRequest. The incumbent offers only replace, so the ordinary read-then-write pattern — read the list, append, write it back — deletes every relation added by anyone else in between and returns success. Making add and remove first-class means the common case never has to send the whole list, and making replace a named verb means clearing a list is something a caller did on purpose.
+// A relation is stored ONCE, on one side, as a quoted wikilink (D5.1). The inverse is derived from the index and is never written to any file (FR-032); writing the reverse direction is not something this request can do, and not something anyone needs to remember to do.
+type RelationWriteRequest struct {
+	// Id The record whose relation property is being changed.
+	Id string `json:"id"`
+
+	// Op "add" — add the targets, leaving existing ones in place. Adding a target already present is a no-op, not a duplicate. "remove" — remove the targets, leaving the rest in place. Removing a target that is not present is a no-op, not an error. "replace" — the existing targets are DISCARDED and replaced by `targets`. An empty `targets` clears the property. Named explicitly so that destroying a list is never the accidental outcome of a read-modify- write (FR-045).
+	Op RelationWriteRequestOp `json:"op"`
+
+	// Property The relation or person property to change. Must be declared as type "relation" or "person" in the record type's schema; anything else is rejected with the expected shape named. Declared cardinality is enforced (FR-035) — adding a second target to a scalar relation is refused.
+	Property string `json:"property"`
+
+	// Targets The relation targets, each a wikilink target text or a record identifier. Always present — an empty array, never null; empty is valid ONLY with op "replace", where it clears the property, and is rejected for add and remove, which would otherwise be silent no-ops that look like successful writes.
+	// A target that does not exist, or that exists but is not of the declared target type, is REPORTED (FR-033, FR-034) — never silently stored as a link that will render as a distinct group of one.
+	Targets []string `json:"targets"`
+
+	// VersionToken ADR-067 D14's opaque content-hash token for that record. A stale token is REFUSED and the refusal AUDITED (FR-043, FR-044).
+	VersionToken string `json:"version_token"`
+}
+
+// RelationWriteRequestOp "add" — add the targets, leaving existing ones in place. Adding a target already present is a no-op, not a duplicate. "remove" — remove the targets, leaving the rest in place. Removing a target that is not present is a no-op, not an error. "replace" — the existing targets are DISCARDED and replaced by `targets`. An empty `targets` clears the property. Named explicitly so that destroying a list is never the accidental outcome of a read-modify- write (FR-045).
+type RelationWriteRequestOp string
+
+// RelationWriteResponse Response body for POST .../knowledge/records/{id}/relation (GAP-02 / #700, 2026-09-14 fix round). The record as it stands AFTER the write — carrying a fresh `version_token`, exactly like RecordWriteRequest's update response — plus the facts a picker needs to reconcile its chips without a second read: whether the verb changed anything at all, and the exact stored spelling of each target.
+// `changed: false` is a DEFINED outcome, not a soft failure: the agent door's contract makes an add of an already-present target and a remove of an absent one idempotent no-ops that say "(unchanged — already so)", and this response preserves that honesty for the web door. A no-op still rotates no token — the returned `record.version_token` describes the same bytes the caller read.
+type RelationWriteResponse struct {
+	// Changed True when the write changed bytes on disk. False when the verb was a defined no-op (an add of a target already present, a remove of one absent, a replace that arrived at the same list) — never an error.
+	Changed bool `json:"changed"`
+
+	// Record One record: an ordinary Markdown note in the operator's own vault that declares a record type in its frontmatter (ADR-068 D1). There is no separate database — a record IS the note, and a note whose type matches no schema is simply an ordinary note, not an error (FR-005).
+	// Derived values — counts, sums, last-interaction dates, relation inverses — are NEVER present as stored properties here (D9, FR-046). They are computed at query time, because an agent reading frontmatter cannot tell a stale derived value from a fact, and every hand-maintained derived field found in the research is wrong in somebody's vault right now.
+	// NAMED VaultRecord, NOT Record. A component named "Record" generates a TypeScript `export type Record = ...` that shadows the built-in Record<K, V> utility type throughout the generated module, and tsc then fails with "Type 'Record' is not generic" on every unrelated use of it in the same file. That is a property of the generator's output, so no hand-edit could survive a regeneration.
+	Record VaultRecord `json:"record"`
+
+	// StoredTargets Every target this property now carries, in stored order and stored spelling (the "[[name]]" wikilink form). Always present — an empty array, never null; empty means the property is now absent or cleared.
+	StoredTargets []string `json:"stored_targets"`
+
+	// Warnings Non-fatal problems the write surfaced (e.g. a search index that could not be refreshed after the change). Always present — an empty array, never null. The write itself is on disk regardless.
+	Warnings []string `json:"warnings"`
 }
 
 // RestoreBackupRequest Request body for POST /api/v1/restore. Extracts a backup tar.gz archive over ~/.omnipus/, skipping config.json to preserve current settings.
@@ -16153,6 +19088,9 @@ type SignInStatus struct {
 	// ExpiresAt The access token's expiry when known. Absent otherwise.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 
+	// Reason Plain-language explanation, for the operator, of why a check reported `not_signed_in` when the check itself could not run or could not be interpreted (the CLI is missing, could not start, timed out, or printed an unrecognised message). Absent for every definite state — signed in, expired, a recognised not-signed-in, and pending — and absent when the reason is already implied by the state. Safe for display: it names the stage that failed, never the CLI's raw output or a filesystem path.
+	Reason *string `json:"reason,omitempty"`
+
 	// State not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
 	State SignInStatusState `json:"state"`
 }
@@ -17657,6 +20595,707 @@ type ValidateTokenResponse struct {
 	Username string `json:"username"`
 }
 
+// ValidationReport The result of running the schema across records (ADR-068 D15, record_validate).
+// Its purpose is to turn "the view looks wrong" into a clearable worklist: every failure named per record, with the reason and the expected shape.
+// `complete` and `problems` are REQUIRED for the same structural reason they are on RecordQueryResponse: a validation run that could not cover everything it was asked to cover, and does not say so, is worse than no validation at all — it certifies a corpus nobody checked. An empty `problems` array with `complete: true` is the only combination that means "this corpus is clean".
+type ValidationReport struct {
+	// Complete REQUIRED. True only when every record of every requested type within scope was checked. False when scope resolution was itself incomplete (FR-062a), when a bound stopped the run, or when a schema could not be loaded — with the reason in `problems`.
+	Complete bool `json:"complete"`
+
+	// Problems REQUIRED. Every finding, named per record with the reason and, where applicable, the expected shape. Always present — an EMPTY ARRAY when the corpus is clean, never null and never absent.
+	Problems []RecordProblem `json:"problems"`
+
+	// RecordsChecked How many records were actually examined. Stated so a clean report over zero records cannot be mistaken for a clean report over the corpus.
+	RecordsChecked int64 `json:"records_checked"`
+
+	// Types The record types examined, by name. Present so the caller can see what the run covered without inferring it from the findings.
+	Types *[]string `json:"types,omitempty"`
+
+	// TypesChecked How many record types were examined.
+	TypesChecked int64 `json:"types_checked"`
+}
+
+// VaultFilterNode One node of a `knowledge_find` filter tree (ADR-068 D15.3, spec FR-022, ruling R-B). A node is EITHER a boolean combinator — `all`, `any`, `not` — OR a leaf carrying `property`, `op` and `value`. Exactly one form per node; a node that sets both a combinator and a leaf field is REFUSED, never silently resolved to one of them.
+// HOSTED INLINE HERE, NOT IN ITS OWN FILE, and the reason is mechanical: this schema is RECURSIVE — `all`, `any` and `not` take VaultFilterNode children — and oapi-codegen v2.7.0 INLINES a cross-file $ref at its use site, so a cross-file SELF-reference expands until the generator dies with a stack overflow. An internal `#/components/schemas/` reference resolves to the named type instead. This is the same exception, for the same reason, that ADR-034 records for the discriminated unions.
+// THE OPERATORS ARE SQL'S, AND THAT IS THE WHOLE POINT (ruling R-B, revision 5). They replaced seven we invented — `eq`, `lt`, `lte`, `gt`, `gte`, `contains`, `is_absent` — and the argument is retrieval accuracy rather than style: our vocabulary has appeared in a model's training data zero times and SQL's an enormous number of times, so a model reaching for `LIKE` is recalling where a model reaching for `contains` was guessing.
+// BOTH HALVES OF ADR-068 O-3 STILL HOLD, AMENDED NOT OVERTURNED. This is a STRUCTURED OBJECT and there is NO PARSER. Nothing recognises SQL text. A model fluent in SQL that puts `JOIN`, `BETWEEN`, `COALESCE`, a `CASE` or a subquery in the operator position is REFUSED BY NAME, listing the ten supported operators and naming the parameter that does the job instead (FR-022c) — never parsed, never silently dropped, and never answered with an empty result set.
+// AND NOTHING HERE IS EVALUATED BY SQLITE (ruling R-A). The properties index narrows candidates on record type, note kind and path prefix; every comparison in this tree is then decided in Go by the tested comparator. Three of spec section 8's rules cannot hold otherwise: SQL's `NOT` is three-valued so every absent row falls out of a negation, SQLite's `LIKE` and `COLLATE NOCASE` fold two of the fourteen case pairs the spec requires and none of the twelve non-ASCII ones, and comparison affinity makes `3 = '3'` answer differently depending on which side is a column.
+type VaultFilterNode struct {
+	// All Every child must hold. Conjunction.
+	All *[]VaultFilterNode `json:"all,omitempty"`
+
+	// Any At least one child must hold. Disjunction.
+	Any *[]VaultFilterNode `json:"any,omitempty"`
+
+	// Not The child must NOT hold. This is the TREE negation, and it is not a synonym for the `<>` leaf — the distinction is ruled explicitly in spec section 8 R-2 and it decides what happens to records that never said.
+	//
+	// `{not: {p, "=", v}}` INCLUDES records where `p` is absent (FR-008): "days I did not meditate" must contain the days carrying no value at all, precisely the days being asked about. `{p, "<>", v}` EXCLUDES them, because in SQL `x <> 'v'` over a NULL `x` drops the row, and adopting SQL's names without SQL's semantics is exactly what ruling R-B forbids.
+	//
+	// A comparison that could not be MADE is not re-admitted by negation either. A non-conforming value (R-4), an unresolved relation (R-8) or an operator no rule defines for the declared type is REPORTED in `problems` and the record EXCLUDED — from the negated node as well as the plain one. Counting a corrupt value as "not done" by double negation would be a silent wrong answer, which is the failure this whole surface exists to remove.
+	Not *VaultFilterNode `json:"not,omitempty"`
+
+	// Op LEAF FORM. The comparison, spelled as SQL spells it. These ten are exactly what the engine implements and the section 8 truth table covers — no more and no fewer.
+	//
+	// `=` and `<>` are case-insensitive on text and enum labels (FR-011a) and element-wise on a `many` property (R-9). The four ordering operators are UNDEFINED against a `many` property and are refused naming the remedy rather than answered (R-13). `LIKE` is anchored to the WHOLE value, never a substring: `%` and `_` are the wildcards, `\` escapes, and a pattern with no unescaped wildcard is exactly `=`. `IN` is `=` over a set and its `values` list must be non-empty. `IS NULL` is the one operator an absent operand does not make false, and `IS NOT NULL` is its complement — an empty string, an empty list and a zero are all VALUES, not absence (R-3).
+	Op *VaultFilterNodeOp `json:"op,omitempty"`
+
+	// Property LEAF FORM. The declared property to compare, resolved against the queried record type's schema and no other (property types are scoped to their record type, D3.3). A name the schema does not declare REJECTS the query with the declared names listed (FR-024) — it MUST NOT return zero records, because a typo and a genuinely empty result look identical to the caller and the typo is far more common.
+	Property *string `json:"property,omitempty"`
+
+	// Value LEAF FORM, every operator except `IS NULL` and `IS NOT NULL`. The operand in LEXICAL form — the same text a frontmatter file would hold — so it is read by exactly the same parser as a record's own value (R-12: the rules apply identically whether a value came from a query literal or from a note).
+	//
+	// A STRING IS THE CANONICAL FORM, and every other accepted shape is converted to it BEFORE the engine sees it, from the literal's own bytes, never through a binary float (UAT 2026-09-13, D-11): a JSON number is taken as the exact digits the caller wrote (`100000`, `12.50`), a boolean as `true`/`false`, and an ARRAY is accepted as the `IN` operand — it is moved to `values` element by element. The old string-only typing made `IN` uninvokable (the array was rejected by the decoder while the operator demanded one) and forced numbers to be quoted. The Go type stays `string` (x-go-type) because the engine's single parser reads lexical form; the decoder is the one place the conversion happens. A literal that cannot be read in the property's declared type is still REFUSED naming both (FR-022e), never coerced.
+	Value *string `json:"value,omitempty"`
+
+	// Values LEAF FORM, `IN` only. The candidate set, in the same lexical form as `value`. It MUST be non-empty: an empty `IN` list can match nothing, so honouring one would return zero records for a query the caller believes selects something — the silent empty result this surface exists to prevent, arriving through a different door. It is REFUSED instead (FR-022d). A single-element list means `=`.
+	Values *[]string `json:"values,omitempty"`
+}
+
+// VaultFilterNodeOp LEAF FORM. The comparison, spelled as SQL spells it. These ten are exactly what the engine implements and the section 8 truth table covers — no more and no fewer.
+//
+// `=` and `<>` are case-insensitive on text and enum labels (FR-011a) and element-wise on a `many` property (R-9). The four ordering operators are UNDEFINED against a `many` property and are refused naming the remedy rather than answered (R-13). `LIKE` is anchored to the WHOLE value, never a substring: `%` and `_` are the wildcards, `\` escapes, and a pattern with no unescaped wildcard is exactly `=`. `IN` is `=` over a set and its `values` list must be non-empty. `IS NULL` is the one operator an absent operand does not make false, and `IS NOT NULL` is its complement — an empty string, an empty list and a zero are all VALUES, not absence (R-3).
+type VaultFilterNodeOp string
+
+// VaultFindAction One addressable next call (spec FR-126).
+// In an agentic loop every response is the prompt for the next call, so a response that ends without one forces the model to invent arguments — and an invented property name is the failure the whole schema check exists to prevent. Each action is a CALL the caller can issue verbatim, not a description of one.
+type VaultFindAction struct {
+	// Call The call, ready to issue.
+	Call string `json:"call"`
+
+	// Label What this call is for, in one word where possible — `page`, `narrow`, `widen`, `fix`, `retry`.
+	Label string `json:"label"`
+}
+
+// VaultFindAggregate One total to compute over the matched set (spec FR-123, FR-125, FR-125a, and FR-150 to FR-155 for the fifteen ops).
+// ONE NAME, FIFTEEN FUNCTIONS (founder ruling, spec Draft 11). Obsidian's "summaries" are these ops; there is no separate `summaries` key on this surface or on a view. The op set here is byte-identical in spelling to RecordAggregate's, deliberately — pkg/records/view_find_bridge.go maps a saved view's summaries onto this request by copying the op string, and two spellings for one function is how that mapping starts lying.
+// Precision is DECLARED, not avoided (FR-152): `avg`, `median` and `stddev` are computed exactly in rationals and rendered at the property's declared scale + 2, round-half-even, with the response labelling the value ROUNDED. `stddev` is POPULATION standard deviation and the label says so (FR-153).
+// `median` and `unique` are the two population-class ops (FR-151): they buffer ONE COLUMN of values, never rows, and abort mid-scan at B3's bound — 100,000 buffered values or 8 MB, whichever first — naming the count reached and the remedy. No total is ever computed over a truncated set (FR-154); a refused bound returns no total at all, never a partial one.
+type VaultFindAggregate struct {
+	// Op The reduction; fifteen, and the list is closed (FR-150). `count` needs no property and counts evaluated rows; every other op requires one.
+	//
+	// Number domain (`integer` and `decimal` are ONE comparison domain, R-1): `sum`, `avg`, `median`, `stddev`, `min`, `max`, `range`. Date domain: `earliest`, `latest`, `min`, `max`, and `range`, which renders as a DURATION. Checkbox domain (FR-004c): `checked`, `unchecked` — absent is counted by neither, so their sum is not the row count. Any type: `empty`, `filled`, `unique`; `unique` counts DISTINCT values under the comparator's own case folding (R-5/R-D), so `Won` and `won` are one.
+	//
+	// An op the property's declared type does not define is REFUSED naming the ops that type does define (FR-155) — never answered with a zero.
+	Op VaultFindAggregateOp `json:"op"`
+
+	// Property The property to reduce. Required for every op except `count`, which counts rows rather than values and forbids it. The reserved namespaces `file.*` (FR-130) and `formula.*` (FR-140s) are valid here.
+	Property *string `json:"property,omitempty"`
+}
+
+// VaultFindAggregateOp The reduction; fifteen, and the list is closed (FR-150). `count` needs no property and counts evaluated rows; every other op requires one.
+//
+// Number domain (`integer` and `decimal` are ONE comparison domain, R-1): `sum`, `avg`, `median`, `stddev`, `min`, `max`, `range`. Date domain: `earliest`, `latest`, `min`, `max`, and `range`, which renders as a DURATION. Checkbox domain (FR-004c): `checked`, `unchecked` — absent is counted by neither, so their sum is not the row count. Any type: `empty`, `filled`, `unique`; `unique` counts DISTINCT values under the comparator's own case folding (R-5/R-D), so `Won` and `won` are one.
+//
+// An op the property's declared type does not define is REFUSED naming the ops that type does define (FR-155) — never answered with a zero.
+type VaultFindAggregateOp string
+
+// VaultFindCell One rendered column of one row (spec 4.2). The value is TEXT, exactly as it will be shown, and never a JSON number — a decimal that round-tripped through a binary float would render digits the note does not contain, and the whole type system exists to stop that.
+// A `decimal` renders at its property's DECLARED scale where the schema declares one, and otherwise at the value's own scale as written in the note. Thousands separators are a choice of the compact-text projection and are never part of a stored or compared value.
+// ADR-083 CW-5 (EMB-088, EMB-094): `type`, `values`, `derived`, `relation` and `many` are the metadata an inline editor needs to decide whether it may offer an editor for this cell AT ALL — today a cell is a property name and a rendered string, and nothing more, so none of EMB-088's editor-gating rows are evaluable without them. All five are OPTIONAL and OMITTED, never an empty/false placeholder, when the cell does not correspond to a declared record property (an ordinary note's frontmatter, a task-row column, or a property no loaded schema describes) — an editor MUST treat an absent `type` exactly like an undescribed field: no editor, a way to open the note instead. They stay optional so that a view answer produced by code that does not yet populate them remains a valid VaultFindCell.
+type VaultFindCell struct {
+	// Derived True when this cell's value is COMPUTED — a view's own `formulas:` entry, an aggregate, or any other value the record itself does not store — rather than a value read from the record's own frontmatter (ADR-068 D9, FR-046). A derived cell MUST get no editor and a way to open the note instead (EMB-088): writing it back through RecordWriteRequest is refused server-side regardless (EMB-085), but the browser must not offer an editor that will always fail. Omitted means false — this cell is an ordinary stored value.
+	Derived *bool `json:"derived,omitempty"`
+
+	// Many True when this cell's declared property is LIST-VALUED (PropertyDef.many). Carried because `value` is a single rendered string either way — a list renders as its members joined with ", " — so `many` is the ONLY thing on the wire that distinguishes "the text `a, b`" from "the two values `a` and `b`", and a client cannot recover the difference from `value`'s shape without guessing.
+	// A list-valued cell MUST get no editor and a way to open the note instead (ADR-083 §4.6: "a list-valued property — none; a scope decision, not a platform limit"). Offering one collapses the whole list into a single joined string on save, which is silent data loss, not a rendering defect. The server refuses the same write independently (a client is not trusted to have respected this flag, exactly as with `derived` and `relation` — §4.2c); this field exists so the UI knows what to OFFER, not so the server can skip checking. Omitted means false — a scalar property.
+	Many     *bool  `json:"many,omitempty"`
+	Property string `json:"property"`
+
+	// Relation True when this cell's declared property type is "relation" or "person". Carried as its own flag, distinct from `type`, so a client does not have to enumerate two type values to find the one gate that matters: RELATIONS AND PERSON PROPERTIES ARE NOT WRITABLE THROUGH RecordWriteRequest (ADR-068 FR-045) — they are modified through RelationWriteRequest's explicit add/remove/replace verbs instead. A relation cell MUST get no editor and a way to open the note instead (EMB-088). Omitted means false.
+	Relation *bool `json:"relation,omitempty"`
+
+	// Type The cell's DECLARED property type (PropertyDef.type), echoed so an editor can pick the right control — a dropdown for "enum", a date input for "date", an inline text field for "text", and so on. Absent when the cell has no declared type: an ordinary note's frontmatter property, a task-row column (`line`/`status`/`text` cover those), or a property name no loaded schema for the record's type describes. Absence, not a placeholder value, is how "anything the definition does not describe" (EMB-088) is represented — an editor must never guess a type from `value`'s shape.
+	Type *VaultFindCellType `json:"type,omitempty"`
+
+	// Value The rendered value. An EMPTY STRING is a legitimate rendering — of an empty string property, or of a property the record leaves absent — so a renderer must not treat empty as "omit this cell".
+	Value string `json:"value"`
+
+	// Values The property's closed value set, in declaration order. Present only when `type` is "enum", and then non-empty — mirrors PropertyDef.values. Reused rather than re-derived from `value` because a dropdown needs the FULL set, not just the one token this row happens to hold.
+	Values *[]EnumValueDef `json:"values,omitempty"`
+}
+
+// VaultFindCellType The cell's DECLARED property type (PropertyDef.type), echoed so an editor can pick the right control — a dropdown for "enum", a date input for "date", an inline text field for "text", and so on. Absent when the cell has no declared type: an ordinary note's frontmatter property, a task-row column (`line`/`status`/`text` cover those), or a property name no loaded schema for the record's type describes. Absence, not a placeholder value, is how "anything the definition does not describe" (EMB-088) is represented — an editor must never guess a type from `value`'s shape.
+type VaultFindCellType string
+
+// VaultFindCounts The four numbers a completeness verdict is built from (spec FR-121, FR-125a).
+// They are separate fields because they are separate facts and they routinely disagree. A design in which they cannot disagree is a design whose test for FR-125a cannot fail — which is precisely the defect an earlier revision of the worked example shipped, stating "14 evaluated" in its header and "over 12 of 12 rows" in its total, the same number twice.
+// selected >= evaluated >= shown, always. `selected - evaluated` is the count of records that were narrowed to but could not be read, and every one of them is named in `problems`.
+type VaultFindCounts struct {
+	// Evaluated Records the comparator could actually read and decide on. Every total is computed over THIS set.
+	Evaluated int `json:"evaluated"`
+
+	// Selected Records the narrowing predicates selected — the candidate population, before any comparison was made.
+	Selected int `json:"selected"`
+
+	// Shown Rows the byte budget allowed into this response. Never larger than `evaluated`, and smaller whenever the budget bit.
+	Shown int `json:"shown"`
+}
+
+// VaultFindGroup One group of a grouped answer (spec FR-027, FR-028, FR-029).
+// A record holding SEVERAL values of the grouped property appears in EVERY group it belongs to (FR-028), so the group counts legitimately sum to more than the row count. That is why each group states its own count rather than leaving a reader to add them up: the sum of the parts is not the size of the whole, and a rendering that implied otherwise would be arithmetically wrong.
+type VaultFindGroup struct {
+	// Absent True when this group holds the records where the property is ABSENT, which `key` alone cannot express — an empty string is itself a value (R-3) and must not collide with absence.
+	Absent *bool `json:"absent,omitempty"`
+
+	// Count Evaluated records in this group.
+	Count int `json:"count"`
+
+	// Key The group's value, rendered. An EMPTY key is the ABSENT group — the records that carry no value for this property at all. It is a real group and it is labelled as absence rather than dropped: the records nobody recorded a value for are frequently the ones being asked about.
+	Key string `json:"key"`
+
+	// Paths The member rows, by path. Always present — an empty array, never null. Groups reference rows rather than repeating them, so a record that landed in three groups is still rendered once.
+	Paths []string `json:"paths"`
+
+	// Property The property this level groups by.
+	Property string `json:"property"`
+
+	// Subgroups The second grouping level, when `group_by` named two.
+	//
+	// It refs a DISTINCT, childless type rather than this one. That is deliberate and it is not a codegen workaround: two levels is the stated limit (FR-027), and a self-referential schema would advertise unbounded nesting — a depth the engine refuses and no caller can reach. A contract should not describe a shape the system will not produce.
+	Subgroups *[]VaultFindSubgroup `json:"subgroups,omitempty"`
+}
+
+// VaultFindGroupBy One grouping key of a knowledge_find request (spec FR-027, FR-018b).
+// IT CARRIES A DIRECTION, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS. `group_by` used to be a bare list of property names. A saved view's own `grouping` keys have carried a direction since ADR-068 D24.1, so a view that recorded `DESC` was written to disk faithfully and then REFUSED at serve time (records.ServeRefusalGroupDirection) — the request had nowhere to ask for what the view had recorded. Refusing was right; the missing field was the defect. This is that field.
+// Shaped exactly like `sort` (VaultFindSort) — same name kept, same optional `direction`, same "omitted means asc" — because a request that expressed one ordering as objects and the other as bare strings taught every caller two grammars for one idea.
+type VaultFindGroupBy struct {
+	// Direction Order of the GROUPS themselves — not of the records inside them, which is `sort`'s job.
+	//
+	// `ascending` / `descending` are exact aliases of `asc` / `desc` (UAT 2026-09-13, D-10): a saved view written with the long spelling was accepted at write time and then refused at every query, so the two parsers now share one vocabulary. Anything else is still refused by name.
+	//
+	// Omitted means `asc`. That default is stated here rather than declared as a JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would make the two generated languages disagree about one field.
+	//
+	// `desc` IS THE EXACT REVERSE OF `asc` OVER THE VALUES, and what "the values" means is the comparator's own answer (ruling R-1's comparison domains), never a per-position rule invented for grouping:
+	//
+	// * `enum` and `text` order LEXICALLY over the case-folded value — `Won`,
+	//   `won` and `WON` order as one, exactly as they GROUP as one (R-5c). An
+	//   enum has NO declared-position ordinal: `desc` on a `status` declared
+	//   `[lead, qualified, won]` returns `won, qualified, lead` because `w` >
+	//   `q` > `l`, and would return them in a different order the moment a
+	//   value were renamed. A domain order is expressed by prefixing the
+	//   declared values (`1-lead`, `2-qualified`), which is visible in the
+	//   operator's own file and does what it appears to do.
+	// * `integer`, `decimal`, `date` and `datetime` order NATURALLY —
+	//   numerically and chronologically. `desc` over a backlink count returns
+	//   12 before 9; it does not return "9" before "12" because `9` > `1` as
+	//   text.
+	// * every other declared type (`relation`, `person`, `checkbox`) orders
+	//   lexically over the rendered group label, which is what the group is
+	//   identified BY.
+	//
+	//
+	// THE ABSENT GROUP SORTS LAST IN BOTH DIRECTIONS. This is a decision, not the comparator's leftover: a record with no value has not got a small value, and it has not got a large one either — absence is outside the order rather than at one end of it. Reversing it into first place on `desc` would put "nobody recorded this" exactly where a reader looking for the biggest group is looking. It is the same rule row sorting already applies (assemble.go's compareByProperty), stated once and applied to both.
+	Direction *VaultFindGroupByDirection `json:"direction,omitempty"`
+
+	// Property The property to group on. Grouping by a relation is supported (FR-029), and a record holding several values appears in EVERY group it belongs to (FR-028) rather than being assigned to one arbitrarily. The reserved namespaces `file.*` (FR-130) and `formula.*` (FR-140s) are valid here.
+	Property string `json:"property"`
+}
+
+// VaultFindGroupByDirection Order of the GROUPS themselves — not of the records inside them, which is `sort`'s job.
+//
+// `ascending` / `descending` are exact aliases of `asc` / `desc` (UAT 2026-09-13, D-10): a saved view written with the long spelling was accepted at write time and then refused at every query, so the two parsers now share one vocabulary. Anything else is still refused by name.
+//
+// Omitted means `asc`. That default is stated here rather than declared as a JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would make the two generated languages disagree about one field.
+//
+// `desc` IS THE EXACT REVERSE OF `asc` OVER THE VALUES, and what "the values" means is the comparator's own answer (ruling R-1's comparison domains), never a per-position rule invented for grouping:
+//
+//   - `enum` and `text` order LEXICALLY over the case-folded value — `Won`,
+//     `won` and `WON` order as one, exactly as they GROUP as one (R-5c). An
+//     enum has NO declared-position ordinal: `desc` on a `status` declared
+//     `[lead, qualified, won]` returns `won, qualified, lead` because `w` >
+//     `q` > `l`, and would return them in a different order the moment a
+//     value were renamed. A domain order is expressed by prefixing the
+//     declared values (`1-lead`, `2-qualified`), which is visible in the
+//     operator's own file and does what it appears to do.
+//   - `integer`, `decimal`, `date` and `datetime` order NATURALLY —
+//     numerically and chronologically. `desc` over a backlink count returns
+//     12 before 9; it does not return "9" before "12" because `9` > `1` as
+//     text.
+//   - every other declared type (`relation`, `person`, `checkbox`) orders
+//     lexically over the rendered group label, which is what the group is
+//     identified BY.
+//
+// THE ABSENT GROUP SORTS LAST IN BOTH DIRECTIONS. This is a decision, not the comparator's leftover: a record with no value has not got a small value, and it has not got a large one either — absence is outside the order rather than at one end of it. Reversing it into first place on `desc` would put "nobody recorded this" exactly where a reader looking for the biggest group is looking. It is the same rule row sorting already applies (assemble.go's compareByProperty), stated once and applied to both.
+type VaultFindGroupByDirection string
+
+// VaultFindJoin Columns BORROWED onto a row through a relation (spec FR-124).
+// It is a separate structure rather than extra cells on the row because the rendering rule is a correctness rule, not a layout preference: a borrowed value MUST render visibly as borrowed — `company [[Acme Ltd]]: status active` — and must never be merged into the row's own columns. It is not a property of this record, and a reader who takes it for one has been told something false about the record in front of them.
+type VaultFindJoin struct {
+	// Cells The borrowed columns. Always present — an empty array, never null — so a relation that resolved to a note carrying none of the requested properties still renders as a resolved relation rather than vanishing.
+	Cells []VaultFindCell `json:"cells"`
+
+	// Relation The relation property the values were borrowed through.
+	Relation string `json:"relation"`
+
+	// Target The related note, as written — the wikilink the row points at.
+	Target string `json:"target"`
+}
+
+// VaultFindPlanStep One line of an `explain` plan (spec FR-073, AC-F3).
+// The plan names EVERY property the query touches and the index each will be answered from. That specificity is the point: a criterion that only asked for "a plan" passed for a constant-returning stub, so the plan must be derived from the actual request and schema, and it must be BYTE-IDENTICAL across a corpus mutation chosen to change it if evaluation were happening.
+type VaultFindPlanStep struct {
+	// Detail What the step does, in one clause.
+	Detail string `json:"detail"`
+
+	// Property The property this step touches, when it touches one.
+	Property *string `json:"property,omitempty"`
+
+	// Source Where the step is answered from. `properties_index` NARROWS — record type, note kind, path prefix, nothing else. `go_comparator` DECIDES every comparison. A plan that shows a comparison sourced from `properties_index` is reporting a ruling violation.
+	Source *VaultFindPlanStepSource `json:"source,omitempty"`
+
+	// Stage Which phase of the pipeline this step describes.
+	Stage VaultFindPlanStepStage `json:"stage"`
+}
+
+// VaultFindPlanStepSource Where the step is answered from. `properties_index` NARROWS — record type, note kind, path prefix, nothing else. `go_comparator` DECIDES every comparison. A plan that shows a comparison sourced from `properties_index` is reporting a ruling violation.
+type VaultFindPlanStepSource string
+
+// VaultFindPlanStepStage Which phase of the pipeline this step describes.
+type VaultFindPlanStepStage string
+
+// VaultFindRequest A call to `knowledge_find` — the ONE retrieval path (ADR-068 D15.3, spec 4.1.2). It absorbs `record_query`, `record_explain`, `knowledge_search`, `knowledge_tasks` and link-neighbourhood traversal. There is no second retrieval tool, and there is no call shape that returns rows without the verdict on them.
+// HOSTED INLINE rather than in its own file because it references the recursive VaultFilterNode by internal `#/components/schemas/` reference — see that schema's note for why a cross-file reference cannot be used there.
+// A parameter name this schema does not declare is REFUSED listing the accepted names (FR-022c), never ignored. Silently dropping an argument is how a caller comes to believe a constraint was applied that never was.
+// Scope is not negotiable by the caller. Every vault tool resolves through the CALLING AGENT'S workspace (FR-060); notes in a vault mounted only into another workspace are invisible, and that case is deliberately indistinguishable from an empty vault (FR-062) so the error channel cannot be used to probe for what the caller may not see. Scope is resolved BEFORE any refusal is built, so the valid-names list in an error can never disclose a schema outside it.
+type VaultFindRequest struct {
+	// Aggregate Totals to compute. Each states its own scope in the rendered response; a total that does not say what it covers is a bare number (FR-125). Every total is computed over the FULL EVALUATED SET, never over the rendered page (FR-125a). No total is returned over a refused candidate set.
+	Aggregate *[]VaultFindAggregate `json:"aggregate,omitempty"`
+
+	// Collection Which knowledge base to query, by name, when more than one is mounted into the calling agent's workspace (UAT 2026-09-13 D-46, #698). Omitted means "the one knowledge base in scope"; with two or more in scope and no `collection`, the call is refused naming them — the same rule and the same argument `knowledge_describe` and `knowledge_read` already take. A name outside the caller's scope is refused listing the names in scope; it can never widen scope (FR-060/FR-062). Every row and the response itself carry the collection they came from (`collection` on VaultFindRow / VaultFindResponse), so a reader with several knowledge bases can tell which one answered.
+	Collection *string `json:"collection,omitempty"`
+
+	// Cursor Opaque pagination cursor from a previous response. A cursor that cannot be honoured is an ERROR naming the epoch it was issued against (FR-020c), never a silent restart — a silent restart returns page one while the caller believes it is reading page four.
+	Cursor *string `json:"cursor,omitempty"`
+
+	// Detail Rendering density. Omitted means `standard`. `minimal` drops columns and borrowed values to roughly 80 bytes per hit; the completeness header and the problem COUNT always survive the trim, because the caveat is the one thing a shorter answer must not lose.
+	Detail *VaultFindRequestDetail `json:"detail,omitempty"`
+
+	// Explain Report the plan and EVALUATE NOTHING (FR-073). Omitted means false.
+	//
+	// An `explain` response names every property the query touches and the index each would be answered from, performs ZERO candidate retrievals, and carries no `index_epoch` — a plan is not a result, so it should not observe an epoch at all. Two `explain` calls over an unchanged schema are byte-identical, including across a corpus mutation, which is what makes the assertion capable of failing against an implementation that quietly evaluates.
+	Explain *bool `json:"explain,omitempty"`
+
+	// Filter A structured filter tree. Applied AFTER `view` when both are given, so a saved view is refined rather than replaced.
+	Filter *VaultFilterNode `json:"filter,omitempty"`
+
+	// GroupBy Group the answer, outermost first. Two levels (FR-027); grouping by a relation is supported (FR-029); a record holding several values appears in every group it belongs to (FR-028).
+	//
+	// EACH KEY CARRIES ITS OWN DIRECTION, and that is not decoration. This was a bare list of names, so a saved view whose `grouping` recorded `direction: desc` — written to its file faithfully, and read back faithfully — had nowhere to land in a request, and serving it was REFUSED (records.ServeRefusalGroupDirection) rather than answered with the groups quietly reordered ascending. The refusal was the right call; the absent field was the defect.
+	//
+	// Omitted direction means `asc`. `desc` is the exact reverse of `asc` over the values, and the ABSENT group sorts last in BOTH directions — see VaultFindGroupBy for what "the values" means per declared type, which is the comparator's answer (R-1) and not a rule invented for grouping.
+	GroupBy *[]VaultFindGroupBy `json:"group_by,omitempty"`
+
+	// Hops Link steps from `near`. Meaningful only with `near`; omitted means 1. A third hop is REFUSED naming the limit and the remedy (FR-065) rather than walked implicitly, because a deeper traversal is a follow-up query the caller should make knowingly.
+	Hops *int `json:"hops,omitempty"`
+
+	// Join Relation properties whose columns to BORROW onto each row (FR-124). A borrowed value renders visibly as borrowed and is never merged into the row's own columns: it is not a property of this record and must never read as one.
+	Join *[]string `json:"join,omitempty"`
+
+	// Kind What sort of row to return. Omitted means `note`.
+	//
+	// `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX LINES, not notes: each row carries `path`, `line`, `status` and `text`, and renders with its line number so a reader can never mistake it for the note that contains it (FR-076a). This narrowly amends the rule that a row is one note: a row is one real THING AT A PATH — a note, or a checkbox line within one. The whole-collection regex walk that `knowledge_tasks` performed does not survive; checkboxes are indexed, so the ordinary bounds apply and the old 5,000-file read cap is gone.
+	Kind *VaultFindRequestKind `json:"kind,omitempty"`
+
+	// Limit Rows per page. Omitted means 50. A value above the cap of 200 is CLAMPED and the clamp is REPORTED (FR-063) — deliberately no `maximum` here, so an over-large request comes back with a stated clamp rather than a bare schema error that says nothing about what was applied.
+	Limit *int `json:"limit,omitempty"`
+
+	// Near A note path or wikilink. Restricts the answer to notes within `hops` link steps of it. It COMPOSES with `words` and `filter` — that composition is the capability worth having, and no system this design surveyed can express it: each has text search OR graph traversal, none composes them.
+	Near *string `json:"near,omitempty"`
+
+	// Select Which properties to render as columns. Omitted uses the schema's own declaration order, so a report reads the way the operator wrote it. Narrowing this changes what is RENDERED, never what is matched.
+	Select *[]string `json:"select,omitempty"`
+
+	// Sort Sort keys in order. Omitted sorts by relevance.
+	//
+	// An enum sorts LEXICALLY over its case-folded form, so `Won`, `won` and `WON` sort together exactly as they group together (ruling R-E, R-5c); ties on the folded key break on raw bytes so the order is deterministic. There is no declared-position ordinal — a domain order is expressed by prefixing the declared values (`1-lead`, `2-qualified`), which is visible in the operator's own file and does exactly what it appears to do.
+	//
+	// The sort is computed in Go by the comparator, never by an emitted `ORDER BY` (ruling R-A).
+	Sort *[]VaultFindSort `json:"sort,omitempty"`
+
+	// Type The record type to search. Unknown → refusal listing the declared types (FR-024), never an empty result.
+	Type *string `json:"type,omitempty"`
+
+	// View A saved view, applied first. Unknown name → refusal listing the saved views in scope.
+	View *string `json:"view,omitempty"`
+
+	// Words Free text, ranked (FR-112). Composes with every other parameter: the answer is the INTERSECTION, never a union. When `words` finds nothing the response reports the vocabulary the index actually holds and STOPS there — it does not broaden the query on the caller's behalf (FR-114), because a user who searched for one thing and silently received results for a broader thing has been given a wrong answer with no error channel.
+	Words *string `json:"words,omitempty"`
+}
+
+// VaultFindRequestDetail Rendering density. Omitted means `standard`. `minimal` drops columns and borrowed values to roughly 80 bytes per hit; the completeness header and the problem COUNT always survive the trim, because the caveat is the one thing a shorter answer must not lose.
+type VaultFindRequestDetail string
+
+// VaultFindRequestKind What sort of row to return. Omitted means `note`.
+//
+// `task` is the replacement for `knowledge_tasks` and it returns CHECKBOX LINES, not notes: each row carries `path`, `line`, `status` and `text`, and renders with its line number so a reader can never mistake it for the note that contains it (FR-076a). This narrowly amends the rule that a row is one note: a row is one real THING AT A PATH — a note, or a checkbox line within one. The whole-collection regex walk that `knowledge_tasks` performed does not survive; checkboxes are indexed, so the ordinary bounds apply and the old 5,000-file read cap is gone.
+type VaultFindRequestKind string
+
+// VaultFindResponse The answer to `knowledge_find` — rows AND the account of everything the query could not include, in the SAME response (ADR-068 D13, D22; spec FR-025, FR-121).
+// THERE IS NO CALL SHAPE THAT RETURNS ROWS ALONE. `complete`, `counts`, `problems`, `rows`, `totals` and `next` are REQUIRED, and that is the load-bearing decision of this contract. If any were optional a caller could hold a total without the caveats attached to it, a producer could omit them and still be conformant, and the generated types would carry them as nullable — at which point the guarantee is a convention, and conventions are exactly what fail silently.
+// THE RENDERING IS PART OF THE CONTRACT, not a presentation detail. This object is projected to COMPACT TEXT for the model, never to JSON: measurement puts the reduction from a JSON schema object to compact text at roughly 91% of the context tokens, and moving results from inline text to a file collapsed agent accuracy from 93.1% to 55.2% — as large a swing as changing the retriever. The projection is fixed:
+//
+//  1. COMPLETENESS FIRST, in the header. The verdict precedes the evidence so
+//     that no conclusion forms before the caveat arrives. A reader must never
+//     have to reach the bottom of a table to learn the answer was partial.
+//  2. The query ECHOED AS EXECUTED, so a clamp or a default is visible without
+//     a second call.
+//  3. Rows. Borrowed values marked visibly as borrowed, never merged in.
+//  4. Totals, each stating its scope in the same sentence as its number.
+//  5. Problems — one record, one reason, one FIX, inline. "value is '50k'
+//     where a number is required" and not "3 records excluded".
+//  6. NEXT: addressable calls. In an agentic loop every response is the prompt
+//     for the next call.
+//
+// A REFUSAL ARRIVES HERE, not as a transport error, and never as an empty success: `refused: true` with no rows and the remedy in `problems`. An out-of-scope query is not an error either — it returns no rows with `complete: true`, deliberately indistinguishable from an empty vault.
+type VaultFindResponse struct {
+	// Collection The display name of the knowledge base this whole answer was evaluated over (UAT 2026-09-13 D-46, #698). One answer is always one knowledge base — `collection` on the request selects it — and the name is repeated on every row so a row copied out of context keeps its provenance. Absent only from an in-process evaluation that named none.
+	Collection *string `json:"collection,omitempty"`
+
+	// Complete REQUIRED. True only when the query covered everything it was asked to cover: nothing excluded for a type violation, no clamp, no refusal, no stale row, no truncated scope, no unavailable index.
+	//
+	// A response whose `complete` is false and whose `problems` is EMPTY is a defect: either the reason is named or the verdict is wrong.
+	//
+	// THE ONE STATED EXCEPTION IS WORKSPACE SCOPE. A caller can receive `complete: true` over zero rows while records exist in a vault mounted only into another workspace. That is deliberate and required, and it means the verdict is honest about everything EXCEPT scope. It is written down here rather than left to be discovered, because an unstated exception to a headline guarantee is how a guarantee stops being believed.
+	Complete bool `json:"complete"`
+
+	// CompleteReason Why the verdict is what it is, ready to render on the header line immediately after it. Empty when `complete` is true.
+	CompleteReason *string `json:"complete_reason,omitempty"`
+
+	// Counts REQUIRED. The numbers behind the verdict.
+	Counts VaultFindCounts `json:"counts"`
+
+	// Elided Rows that were evaluated and are being reported as existing, but which the byte budget could not render. Absent when nothing was elided. It is stated rather than dropped so the row count on screen never reads as the size of the answer.
+	Elided *int `json:"elided,omitempty"`
+
+	// ElidedSummary A one-line trace of the elided rows — enough for a reader to see the shape of what was cut without paging. Empty when nothing was elided.
+	ElidedSummary *string `json:"elided_summary,omitempty"`
+
+	// Groups Grouped results, present only when the request carried `group_by`. Rows stay in `rows`; groups reference them by path.
+	Groups *[]VaultFindGroup `json:"groups,omitempty"`
+
+	// Index Per-record freshness across the two indexes. ABSENT on an `explain` response, which evaluates nothing and therefore observes no epoch.
+	Index *VaultIndexState `json:"index,omitempty"`
+
+	// LimitApplied The page size actually used.
+	LimitApplied *int `json:"limit_applied,omitempty"`
+
+	// LimitClamped True when the requested page size exceeded the cap of 200 and was reduced. The clamp is REPORTED, never silent — silent truncation is the incumbent behaviour this design cites as motivating evidence, and shipping our own would be indefensible.
+	LimitClamped *bool `json:"limit_clamped,omitempty"`
+
+	// LimitRequested What the caller asked for. Present only when `limit_clamped` is true, so the caller can see exactly what was refused.
+	LimitRequested *int `json:"limit_requested,omitempty"`
+
+	// NearestTerms On a zero-hit word search, the vocabulary the index actually holds. Reported INSTEAD of broadening the query, never as well as.
+	NearestTerms *[]VaultTermCount `json:"nearest_terms,omitempty"`
+
+	// Next REQUIRED. Addressable follow-up calls. Always present — an empty array, never null. A response that ends without one forces the model to invent arguments, and an invented property name is the failure the schema check exists to prevent.
+	Next []VaultFindAction `json:"next"`
+
+	// NextCursor Opaque cursor for the next page. Absent means this was the last page.
+	NextCursor *string `json:"next_cursor,omitempty"`
+
+	// Plan Present only on an `explain` response, and then INSTEAD of any evaluation — zero candidate retrievals occur.
+	Plan *[]VaultFindPlanStep `json:"plan,omitempty"`
+
+	// Problems REQUIRED. Everything the query could not include, and why. Always present — an EMPTY array, never null and never absent, so "no problems" is stated rather than inferred.
+	//
+	// Each entry names the records affected, the reason, and the FIX. A problem list that says only what went wrong fails the requirement: an exclusion is reported with its remedy in the same line, because the reader's next action is the point of telling them at all.
+	Problems []RecordProblem `json:"problems"`
+
+	// QueryEcho REQUIRED. The query AS EXECUTED, including defaults filled in and clamps applied — so a caller sees what actually ran rather than what it sent. Empty only when there was nothing to echo, which no real call produces.
+	QueryEcho string `json:"query_echo"`
+
+	// Refused REQUIRED. True when the query was refused outright and NO answer was computed — a bound exceeded, a third hop, an unsupported operator, a capability this build does not have. Rows are then empty, no total is returned, and `problems` carries the remedy.
+	//
+	// Distinct from `complete: false`, which also covers a partial answer that WAS computed. A caller must be able to tell "here is some of it" from "here is none of it, narrow and re-ask" without parsing prose.
+	Refused bool `json:"refused"`
+
+	// Rows REQUIRED. The matched rows in the requested order. Always present — an empty array, never null.
+	Rows []VaultFindRow `json:"rows"`
+
+	// Totals REQUIRED. Computed totals, each carrying the scope it covers. Always present — an empty array, never null, so "no totals were asked for" is stated rather than inferred from a missing field.
+	Totals []VaultFindTotal `json:"totals"`
+}
+
+// VaultFindRow One row of a `knowledge_find` answer (spec 4.2, D22.4 as amended by ADR-068 D15.3).
+// A row is ONE REAL THING AT A PATH — a note, or a checkbox line within one. The checkbox case is a deliberate, narrow amendment rather than a silent absorption: `kind: task` returns many rows per file, so a task row carries `line` and `status` and renders with its line number, and a reader is therefore never able to mistake it for the note that contains it.
+type VaultFindRow struct {
+	// Cells The row's OWN columns, in `select` order or the schema's declaration order. Always present — an empty array, never null.
+	Cells []VaultFindCell `json:"cells"`
+
+	// Collection The display name of the knowledge base this row came from — per-row provenance (UAT 2026-09-13 D-46, #698), so a caller working across several knowledge bases in one workspace never has to infer it from the path. Present whenever the engine was told which collection it is answering for (every tool and gateway call); absent only from an in-process evaluation that named none.
+	Collection *string `json:"collection,omitempty"`
+
+	// Id The record identifier, byte-exact and NEVER case-folded: `CO-0142` and `co-0142` are two distinct records (R-8). Absent on an ordinary note, which is the majority of every real vault and not an error (FR-005) — such a row is addressed by `path`.
+	Id *string `json:"id,omitempty"`
+
+	// Joins Values borrowed through a relation, rendered visibly as borrowed and never merged into `cells`. Always present — an empty array, never null.
+	Joins []VaultFindJoin `json:"joins"`
+
+	// Line TASK ROWS ONLY. The 1-based line of the checkbox, counted from the first byte of the file including any frontmatter block, because that is the line the operator's editor shows.
+	Line *int `json:"line,omitempty"`
+
+	// Path The vault-relative path. Always present, because it is what the caller passes to `knowledge_read` next, and a row a caller cannot address is a row that ends the loop.
+	Path string `json:"path"`
+
+	// Stale True when this row's `source_hash` does not agree with the text index's, or when either side holds no hash at all. Omitted means the two indexes agree.
+	//
+	// The reason a stale row is RETURNED and FLAGGED rather than dropped is that dropping it would make the answer quietly smaller with nothing saying so. A flagged row moves the response's completeness verdict to `no` and appears in `problems` by name.
+	Stale *bool `json:"stale,omitempty"`
+
+	// Status TASK ROWS ONLY. The checkbox state.
+	Status *VaultFindRowStatus `json:"status,omitempty"`
+
+	// Text TASK ROWS ONLY. The checkbox text, trimmed.
+	Text *string `json:"text,omitempty"`
+
+	// Title The note's display title.
+	Title string `json:"title"`
+
+	// VersionToken ADR-083 CW-6 (EMB-086): the SAME opaque content-hash token defined on KnowledgeConflictError and carried on VaultRecord — computed by pkg/knowledge/version.go's ComputeVersionToken / ReadNoteVersion over the file this row is at. There is exactly one version-token scheme in this codebase; this field reuses it rather than minting a second one.
+	// Present so an inline editor drawn from a view answer can send a RecordWriteRequest straight from the row it already has, with no preceding per-record read. Reading each record separately before every edit is not an acceptable substitute (EMB-086): it is one extra request per edit, AND it opens a fresh race window between that read and the write — the exact lost-update shape the version-token mechanism exists to close.
+	// OPTIONAL and OMITTED, not an empty placeholder, wherever the code producing this row does not yet compute it — an inline editor MUST treat an absent token the same as an ungoverned field: no direct write from this row, open the note instead.
+	VersionToken *string `json:"version_token,omitempty"`
+}
+
+// VaultFindRowStatus TASK ROWS ONLY. The checkbox state.
+type VaultFindRowStatus string
+
+// VaultFindSort One sort key (spec 4.1.2, ruling R-E). Computed in Go by the comparator, never by an emitted `ORDER BY` — SQLite's collations fold two of the fourteen case pairs the spec requires and none of the twelve non-ASCII ones, so a sort delegated to the store would order differently from the equality that grouped the same values.
+type VaultFindSort struct {
+	// Direction `ascending` / `descending` are exact aliases of `asc` / `desc` (UAT 2026-09-13, D-10): a saved view written with the long spelling was accepted at write time and then refused at every query, so the two parsers now share one vocabulary. Anything else is still refused by name.
+	//
+	// Rows with NO value for the sorted property sort LAST in BOTH directions (UAT 2026-09-13, D-33), and the response's QUERY echo says so.
+	//
+	// Omitted means `asc`. Stated in prose rather than as a JSON Schema `default:` deliberately: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional field, so a `default:` here would split the two generated languages on one field.
+	Direction *VaultFindSortDirection `json:"direction,omitempty"`
+
+	// Property The declared property to sort on. Unknown → refusal listing the declared names (FR-024).
+	Property string `json:"property"`
+}
+
+// VaultFindSortDirection `ascending` / `descending` are exact aliases of `asc` / `desc` (UAT 2026-09-13, D-10): a saved view written with the long spelling was accepted at write time and then refused at every query, so the two parsers now share one vocabulary. Anything else is still refused by name.
+//
+// Rows with NO value for the sorted property sort LAST in BOTH directions (UAT 2026-09-13, D-33), and the response's QUERY echo says so.
+//
+// Omitted means `asc`. Stated in prose rather than as a JSON Schema `default:` deliberately: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional field, so a `default:` here would split the two generated languages on one field.
+type VaultFindSortDirection string
+
+// VaultFindSubgroup The INNER level of a two-level grouping (spec FR-027).
+// It carries no children of its own, which is how the two-level limit is expressed in the contract rather than only in the engine. A record holding several values of the grouped property appears in every subgroup it belongs to (FR-028), so subgroup counts can sum to more than the parent's count — which is why each states its own.
+type VaultFindSubgroup struct {
+	// Absent True when this group holds the records where the property is absent.
+	Absent *bool `json:"absent,omitempty"`
+
+	// Count Evaluated records in this subgroup.
+	Count int `json:"count"`
+
+	// Key The group's value, rendered. An empty key is the ABSENT group; read it with `absent`, because an empty string is itself a value (R-3) and must not collide with absence.
+	Key string `json:"key"`
+
+	// Paths The member rows, by path. Always present — an empty array, never null.
+	Paths []string `json:"paths"`
+
+	// Property The property this level groups by.
+	Property string `json:"property"`
+}
+
+// VaultFindTotal One computed total, WITH THE SCOPE IT COVERS (spec FR-125, FR-125a).
+// `scope` is not decoration and it is not optional. A total that does not say what it covers is a bare number, and a bare number over a partially-evaluated set is the confidently-wrong answer this whole surface exists to remove. The scope clause is rendered in the SAME SENTENCE as the value, so a reader cannot acquire the number without the qualification.
+// The value is computed over the FULL EVALUATED SET, never over the rendered page. Those two counts genuinely differ whenever the byte budget elides rows, and a design where they cannot differ is a design whose test for this cannot fail.
+// ONE TOTAL PER UNIT VALUE (view-kinds-design-2026-09-03 §3 G2, D7). A number property the record type pairs with a companion unit (PropertyDef.unit_property) is reduced ONCE PER DISTINCT UNIT VALUE and NEVER across units, so ONE requested aggregate yields N of these — one per unit, each carrying its own `unit`, its own count and its own scope clause. No field anywhere can hold a combined figure: 100.50 SGD + 200.00 EUR is a number in no currency, stated with the same confidence as a correct one.
+// A number with NO companion unit still yields exactly ONE entry with `unit` absent, unchanged in shape and value from before D7. The two cases are told apart by the FIELD'S PRESENCE, never by a sentinel — an empty string is a legitimate unit value.
+type VaultFindTotal struct {
+	// Label The total as named in the request, e.g. `sum(arr)`.
+	Label string `json:"label"`
+
+	// Op The reduction this total came from, echoed back. Identical to VaultFindAggregate's list (FR-150's fifteen) and required to stay so: the SPA validates responses against the generated Zod schema and drops what fails, so an op the request can ask for but the response cannot name is a correct answer that disappears silently on its way to a reader.
+	Op VaultFindTotalOp `json:"op"`
+
+	// Refused True when no total could be returned — over a refused candidate set, or over a property whose values could not all be read. A refused total is PRESENT and marked, never omitted: an absent total reads as "there was nothing to add up".
+	Refused *bool `json:"refused,omitempty"`
+
+	// Scope What the number covers, ready to render immediately after it.
+	Scope string `json:"scope"`
+
+	// Unit The unit value this total covers (e.g. "SGD"). ABSENT when the reduced property declares no companion unit property — then the single entry covers every included value. Present exactly when the total is unit-scoped, which is exactly when several of these share one `label`.
+	//
+	// The same field, with the same meaning, as ViewUnitTotal.unit: one rule (G2), one vocabulary, whichever surface answers.
+	Unit *string `json:"unit,omitempty"`
+
+	// UnitProperty The property `unit` was read from — the companion the RECORD TYPE declares for this number (PropertyDef.unit_property). Present exactly when `unit` is present.
+	//
+	// It travels WITH the unit value because the two are one fact: a reader that acquired "SGD" without knowing it came from `currency` would have to guess which column to pair the figure with.
+	UnitProperty *string `json:"unit_property,omitempty"`
+
+	// Value The exact result as text. Never a JSON number: a decimal total that round-tripped through a binary float would state digits nobody computed. EMPTY when `refused` is true — a refused total carries no value, rather than a zero a reader would take for an answer.
+	Value string `json:"value"`
+}
+
+// VaultFindTotalOp The reduction this total came from, echoed back. Identical to VaultFindAggregate's list (FR-150's fifteen) and required to stay so: the SPA validates responses against the generated Zod schema and drops what fails, so an op the request can ask for but the response cannot name is a correct answer that disappears silently on its way to a reader.
+type VaultFindTotalOp string
+
+// VaultIndexState What the two indexes say about the rows THIS response returned (spec FR-020c, FR-020c1, ADR-068 D16.5).
+// Freshness is PER RETURNED RECORD, not per index. Each row's `source_hash` from the properties index is compared against the bleve document's stored `source_hash`; a row that fails moves to `problems` and the completeness verdict becomes `no`.
+// The reason a disagreement is reported as "the two indexes disagree" and never as "the properties index is stale" is that the comparison establishes DISAGREEMENT, not which side is behind. Claiming the second is a precision the mechanism does not have.
+// An EMPTY hash on either side is UNKNOWN freshness, which is flagged — never assumed fresh. That case is real rather than theoretical: an attachment is deliberately indexed with no hash, because its bytes must not be opened.
+// The count covers WHAT THE QUERY RETURNED, NOT WHAT IT DID NOT (FR-020c1). This is one of exactly two stated exceptions to the headline guarantee that a response names everything it excluded; the other is workspace scope.
+type VaultIndexState struct {
+	// Agreeing Of those, how many had matching hashes on both sides. Equal to `returned` in the healthy case; anything less means named rows are in `problems`.
+	Agreeing int `json:"agreeing"`
+
+	// Epoch The properties index's generation counter, which a cursor is issued against. ABSENT on an `explain` response: explain evaluates nothing, so it observes no epoch, and two explain calls over an unchanged schema are byte-identical.
+	Epoch *int64 `json:"epoch,omitempty"`
+
+	// Returned Rows in this response whose freshness was checked.
+	Returned int `json:"returned"`
+}
+
+// VaultRecord One record: an ordinary Markdown note in the operator's own vault that declares a record type in its frontmatter (ADR-068 D1). There is no separate database — a record IS the note, and a note whose type matches no schema is simply an ordinary note, not an error (FR-005).
+// Derived values — counts, sums, last-interaction dates, relation inverses — are NEVER present as stored properties here (D9, FR-046). They are computed at query time, because an agent reading frontmatter cannot tell a stale derived value from a fact, and every hand-maintained derived field found in the research is wrong in somebody's vault right now.
+// NAMED VaultRecord, NOT Record. A component named "Record" generates a TypeScript `export type Record = ...` that shadows the built-in Record<K, V> utility type throughout the generated module, and tsc then fails with "Type 'Record' is not generic" on every unrelated use of it in the same file. That is a property of the generator's output, so no hand-edit could survive a regeneration.
+type VaultRecord struct {
+	// Id The stable record identifier, minted on creation and immutable (D7, FR-036) — identity is an ID, not the filename, so a rename cannot break a relation. Unique within its type; a duplicate is a hard validation error naming both paths (FR-039).
+	Id string `json:"id"`
+
+	// Path Vault-relative path of the note. Always within the calling agent's workspace scope — a record in a vault mounted only into another workspace is not visible at all, and that case is indistinguishable from an empty vault (FR-060, FR-062).
+	Path string `json:"path"`
+
+	// Properties The record's declared properties and their values, in the schema's declaration order. Always present — an empty array, never null. A property whose values array is empty is ABSENT (D3.2).
+	Properties []RecordPropertyValue `json:"properties"`
+
+	// Title Display title, for rendering without opening the file.
+	Title *string `json:"title,omitempty"`
+
+	// Type The declared record type this record belongs to.
+	Type string `json:"type"`
+
+	// VersionToken ADR-067 D14's opaque content-hash version token for this note. Present on reads, and required back on a write; a stale token is REFUSED and the refusal is audited (FR-043). Opaque — never parsed, compared only for equality.
+	VersionToken *string `json:"version_token,omitempty"`
+}
+
+// VaultSearchAttachmentHit One attachment matched by FILENAME (ADR-081 / spec CRIT-001 parity: the retired knowledge-search surface answered attachments by name, and the surviving bar must too). Attachments are never content-scanned by this surface — the text index records an attachment by filename and path only (pkg/knowledge/index.go::indexAttachment); this hit reflects exactly that.
+type VaultSearchAttachmentHit struct {
+	// Name The attachment's basename — what the query matched against.
+	Name string `json:"name"`
+
+	// Path Collection-relative path of the attachment, forward-slash separated.
+	Path string `json:"path"`
+}
+
+// VaultSearchNoteHit One note matched by body text (library-b-c-design-2026-09-07 §C1). The match decision and ranking come from the knowledge_find engine (hits arrive in that engine's relevance order); the snippet is a render-time excerpt of the note as it is on disk.
+type VaultSearchNoteHit struct {
+	// ExcerptUnavailable True when no excerpt could be produced for this hit (the match moved, or the file could not be re-read). A deliberate reduction of the retired surface's 5-reason enum to a boolean — the find path cannot attribute the old re-read reasons (spec R2-MIN-010). The hit still renders by title and path; an absent snippet with this flag false simply means no term was located.
+	ExcerptUnavailable *bool `json:"excerpt_unavailable,omitempty"`
+
+	// Path Collection-relative path of the matched note, forward-slash separated. Open it in the preview.
+	Path string `json:"path"`
+
+	// Snippet A short excerpt of the note body around the first matched term, read from the file at query time. ABSENT when no term could be located in the current file (the match may have moved, or the file could not be read) — the hit is still returned with path and title rather than fabricating an excerpt or dropping the result.
+	Snippet *string `json:"snippet,omitempty"`
+
+	// Title Display title — the note's frontmatter title or first heading, falling back to the basename. May be empty.
+	Title string `json:"title"`
+}
+
+// VaultSearchRecordHit One record matched by the query (library-b-c-design-2026-09-07 §C1). A record is a note that declares a record type; its typed property values are carried as cells so the caller can see WHICH values matched without a second read.
+type VaultSearchRecordHit struct {
+	// Cells The record's rendered typed property values, in the engine's column order. Always present — an empty array, never null.
+	Cells []VaultFindCell `json:"cells"`
+
+	// Id The record identifier, byte-exact and never case-folded. Absent on a record note that declares no id.
+	Id *string `json:"id,omitempty"`
+
+	// Path Collection-relative path of the matched record note.
+	Path string `json:"path"`
+
+	// RecordType The declared record type, when the row resolved one.
+	RecordType *string `json:"record_type,omitempty"`
+
+	// Title The record note's display title.
+	Title string `json:"title"`
+}
+
+// VaultSearchRequest Request body for POST /api/v1/library/{workspace_id}/knowledge/find — the HUMAN vault search (library-b-c-design-2026-09-07 §C1). One free-text query is answered across three kinds at once: notes matched by body text, records matched by their typed property values, and saved views matched by name or label.
+// It runs over the SAME engine the agent's knowledge_find tool uses (pkg/vaultprops.OpenFindEnv + pkg/records/knowledgefind.Find), so it inherits that engine's prefix-matching, coverage and freshness behaviour rather than standing up a second search path.
+// Scope is not negotiable by the caller beyond naming a collection: the gateway restricts every search to knowledge bases mounted into the calling agent's workspace, and a collection outside that scope yields an EMPTY result set rather than a permission error — so a caller can never use the error channel to probe for collections it may not see.
+type VaultSearchRequest struct {
+	// CollectionId The KnowledgeBaseInfo.collection_id to search. Exactly one — a knowledge base is exactly one mounted folder and no query resolves across two collections.
+	CollectionId string `json:"collection_id"`
+
+	// Limit Maximum hits to return PER KIND (notes, records and views are counted separately). A value above the server cap is CLAMPED, not rejected.
+	Limit *int `json:"limit,omitempty"`
+
+	// Query Free-text query, matched against note bodies, record properties and view names.
+	Query string `json:"query"`
+}
+
+// VaultSearchResponse The human vault search result (library-b-c-design-2026-09-07 §C1): three grouped hit lists for one query, plus an honest completeness verdict.
+// An empty result is EMPTY, not an error — every hit array is always present and may be empty. When the index is not ready (never built, or still catching up with the files on disk), `complete` is false and `complete_reason` carries the engine's freshness signal, so the caller can say "still indexing" rather than "no results". A collection outside the caller's workspace scope returns this same empty-but-complete shape.
+type VaultSearchResponse struct {
+	// Attachments Attachments matched by FILENAME (ADR-081 attachment parity). The HANDLER always sends it (empty array, never null); it is wire-OPTIONAL only for additive compatibility with pre-existing clients and fixtures (MV-9's additive rule) — a consumer treats absence as []. PLATFORM CARVE-OUT (spec MV-9): on builds without the properties index (records_no_sqlite, mipsle, netbsd, freebsd-arm) this group is empty WITH complete=false and the engine's refusal reason in complete_reason — never a silently bare empty group.
+	Attachments *[]VaultSearchAttachmentHit `json:"attachments,omitempty"`
+
+	// CollectionId The collection this result covers, echoed from the request.
+	CollectionId string `json:"collection_id"`
+
+	// Complete True only when the search covered the whole vault: the index was built, current, and no kind's result was clamped or refused. False whenever the index is not ready — see complete_reason.
+	Complete bool `json:"complete"`
+
+	// CompleteReason Why the verdict is false, ready to render (e.g. "the text index has never finished indexing this vault — it currently reflects 3 of 68 files…"). Absent when complete is true.
+	CompleteReason *string `json:"complete_reason,omitempty"`
+
+	// LimitClamped True when the requested limit exceeded the server cap and was clamped (the clamp is REPORTED, never silent).
+	LimitClamped *bool `json:"limit_clamped,omitempty"`
+
+	// LimitRequested The limit the caller asked for, echoed when a clamp occurred.
+	LimitRequested *int `json:"limit_requested,omitempty"`
+
+	// Notes Notes matched by body text. Always present — an empty array, never null.
+	Notes []VaultSearchNoteHit `json:"notes"`
+
+	// NotesCappedAtLimit True when the notes group was cut at the per-kind limit — the count is a lower bound and the UI renders "N+", never an exact total.
+	NotesCappedAtLimit *bool `json:"notes_capped_at_limit,omitempty"`
+
+	// NotesSearched How many notes the engine actually searched for this answer (the "X" of the coverage statement). OMITTED when unknown — never fabricated (FR-036's never-invent-a-denominator rule).
+	NotesSearched *int `json:"notes_searched,omitempty"`
+
+	// NotesTotalKnown The engine's best-known total note count (the "Y"). OMITTED when the total is not known; a renderer must then say "X so far", not invent Y.
+	NotesTotalKnown *int `json:"notes_total_known,omitempty"`
+
+	// Records Records matched by their typed property values. Always present — an empty array, never null.
+	Records []VaultSearchRecordHit `json:"records"`
+
+	// Statement Server-authored, render-ready coverage sentence (composed by the HANDLER, mirroring the retired surface's knowledgeStatement). The one string a UI may show verbatim for the partial-results notice.
+	Statement *string `json:"statement,omitempty"`
+
+	// Views Saved views whose name or label matched. Always present — an empty array, never null.
+	Views []VaultSearchViewHit `json:"views"`
+}
+
+// VaultSearchViewHit One saved view (or imported base view) whose name or label matched the query (library-b-c-design-2026-09-07 §C1). Opening it evaluates the view — the same result the GET .../knowledge/view endpoint returns.
+type VaultSearchViewHit struct {
+	// Kind The view's declared kind, when it has one (table, board, gallery, …).
+	Kind *string `json:"kind,omitempty"`
+
+	// Label The view's display label — its declared label, falling back to its name.
+	Label string `json:"label"`
+
+	// Type The record type the view is scoped to, when it declares one.
+	Type *string `json:"type,omitempty"`
+
+	// View The view's identifier, passed VERBATIM to GET .../knowledge/view.
+	View string `json:"view"`
+}
+
+// VaultTermCount One term the text index actually holds, with its document frequency (spec FR-114, FR-115).
+// It is what a zero-hit answer reports INSTEAD of broadening the query. The system states the vocabulary it has and stops: a user who searched for one thing and silently received results for a broader thing has been given a wrong answer with no error channel.
+type VaultTermCount struct {
+	// Documents How many indexed notes contain it.
+	Documents int    `json:"documents"`
+	Term      string `json:"term"`
+}
+
 // VersionResponse Response from GET /api/v1/version. Returns build identity information. Used by the frontend to detect version drift and show "New version available" prompts (issue #110). No authentication required.
 type VersionResponse struct {
 	// BuildSha VCS revision SHA embedded at build time via debug.ReadBuildInfo(). Value is "dev" when built outside a version-controlled tree or when vcs.revision is not set (e.g. go run). Otherwise a 7-40 character lowercase hex SHA.
@@ -17664,6 +21303,447 @@ type VersionResponse struct {
 
 	// Version Omnipus gateway version string (e.g. "0.1.0"). Must follow semver format.
 	Version string `json:"version"`
+}
+
+// ViewDef A saved query, stored as data (ADR-068 D10). A view names filters, grouping, sort and the properties to show; it lives in `<vault>/.omnipus-vault/views/<name>.yaml`, so an agent can author one and a human can diff it.
+// A view naming a property or enum value that does not exist is REJECTED at write time (D15), not stored and discovered broken later.
+// THERE IS EXACTLY ONE VIEW FORMAT, AND IT CARRIES NO VERSION NUMBER. A view is: ONE `filter` tree of `all`/`any`/`not` over the ten SQL operators — the same grammar knowledge_find evaluates, so a view's filter needs no translation to be served — `grouping` keys that each carry a direction, an OPTIONAL `type`, plus `layout`, `formulas` and `property_config`.
+// THE FLAT, AND-ONLY PREDECESSOR IS GONE. An earlier shape stored `filters` (a flat AND-list in a separate seven-operator vocabulary) and `group_by` (a bare name list with no direction). It was carried alongside this one only so files written under it stayed readable. Nothing was ever written under it outside this project's own tooling and no such file exists on disk, so it is deleted rather than versioned around: two formats in one schema is a permanent tax on every reader, and the second one had no remaining constituency.
+// The rule that partition existed to protect still holds, and it is the one rule this surface will not break: A VIEW IS NEVER BROADENED ON THE OPERATOR'S BEHALF (FR-105). The retired vocabulary's `contains` meant whole-element membership, and rewriting it as `LIKE '%…%'` would have turned that into substring matching — `labels contains "in"` newly matching `indoor`, `printing` and `min`. That translation was specified in spec Draft 10 and withdrawn in Draft 11 as review finding F5, and it is still prohibited: knowledge_configure refuses any rewrite that changes the row set. What is gone is the OLD FORMAT, not the prohibition.
+// `untranslated` and `disabled` exist for the one-shot .base importer (FR-100 to FR-102, FR-105, FR-106). An expression this system cannot translate is preserved VERBATIM in `untranslated` and reported, never approximated and never silently dropped — an approximation that looks like a translation is worse than an honest gap, because nobody reviews a filter that appears to have imported cleanly. Import is one-shot: `.base` files are never read on the query path (FR-102).
+type ViewDef struct {
+	// Aggregates Summaries to compute for this view, and per group when grouped.
+	//
+	// ONE NAME, FIFTEEN FUNCTIONS (founder ruling, FR-150). Obsidian's top-level `summaries` key and its per-view summary map TRANSLATE at import into entries of this list. There is deliberately NO `summaries` key on a view: parity is capability, not key names, and a second spelling for one concept is how two surfaces start disagreeing about which is authoritative.
+	Aggregates *[]RecordAggregate `json:"aggregates,omitempty"`
+
+	// Disabled The view is stored but MUST NOT be applied; applying it is REFUSED naming the expression in `untranslated` that disabled it (FR-105).
+	//
+	// THIS IS THE BROADENING PROHIBITION MADE STRUCTURAL, and it is the one import rule that admits no exception: an imported view must never return MORE rows than its original while looking correct. An untranslatable expression in any ROW-SET-AFFECTING position — a filter, anywhere in its tree — disables the view rather than importing it with the clause quietly dropped. The standing example: a base filtering `type == "decision"` AND NOT `inFolder("99-Temp")` AND NOT `inFolder("00-Inbox")`. Drop the two folder clauses and the view still runs, still looks right, and now silently includes every scratch note in the vault.
+	//
+	// An untranslatable expression in an ANNOTATION position — display config, a summary, an unrenderable `layout` — cannot change which rows appear, so the view imports ENABLED with the loss declared in `untranslated` (FR-106).
+	//
+	// Omitted is identical to false. Carries no JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: a `default:` makes openapi-typescript promote the field to REQUIRED while oapi-codegen still emits an optional pointer, and the two generated languages then disagree about one field.
+	Disabled *bool `json:"disabled,omitempty"`
+
+	// Filter The view's filter, as ONE VaultFilterNode tree — the same `all`/`any`/`not` combinators and ten SQL operators knowledge_find already evaluates (ADR-068 D24.1, FR-018b).
+	//
+	// ONE FILTER GRAMMAR, ONE SPELLING OF IT. The product used to speak two filter languages and the bridge between them refused two of the older one's leaves outright. Obsidian's `and`/`or`/`not` map 1:1 onto `all`/`any`/`not`; its `contains` translates as an escaped `LIKE '%…%'`; its relation traversal is the request's own join shape rather than a per-leaf hop.
+	//
+	// FR-023c's bound applies to a view's tree identically to a request's: at most 64 leaves and depth 8, refused above either naming which.
+	Filter *VaultFilterNode `json:"filter,omitempty"`
+
+	// Formulas Computed properties, keyed by name, each value the expression's SOURCE TEXT (FR-141) — human-diffable and directly comparable against the Obsidian original it was translated from. A formula is referenced from any property position as `formula.<name>`.
+	//
+	// THE PARSER LIVES IN THE WRITE PATH AND ONLY THERE (FR-140). knowledge_configure and the importer parse an expression when it is written and REFUSE one that does not parse, naming the position and the reason; it is never stored. The view loader re-validates on load, so a hand-edited file is re-checked. knowledge_find accepts NO text expression anywhere — a query reaches a formula only as a reference to something already validated — which is what keeps both halves of ADR-068 O-3 true on the query path: no text language, no parser, and therefore no parse failure that could degrade into an empty result.
+	//
+	// Bounded, and refused above each bound naming which (FR-146): one formula at most 64 nodes and depth 8; a view at most 16 formulas; a view's formulas at most 256 nodes in total. A reference CYCLE (`a: formula.b + 1`, `b: formula.a + 1`) parses clean and would recurse forever, so the reference graph is validated at write AND at load and a cycle is REFUSED naming its path (FR-148).
+	Formulas *map[string]string `json:"formulas,omitempty"`
+
+	// Grouping Grouping keys, outermost first, each carrying its own direction (FR-018b). Two levels (FR-027); grouping by a relation is supported (FR-029) and a record holding several values appears in every group it belongs to (FR-028).
+	//
+	// THE DIRECTION IS PART OF THE KEY, not an afterthought: a bare name list is why every `groupBy` direction in an imported base was unrepresentable rather than merely untranslated.
+	Grouping *[]ViewGroupBy `json:"grouping,omitempty"`
+
+	// Kind WHICH OF THE EIGHT VIEW KINDS AUTHORED THIS VIEW (view-kinds-design-2026-09-03 §2.3, §4). Optional, and absent on every view written before the kinds existed.
+	//
+	// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what the agent asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
+	//
+	// The eight and what each stacks: `table` → table. `list` → list. `tiles` → tiles (needs an image property). `board` → columns (needs an enum property with at most 8 values). `calendar` → calendar (needs a date property). `summary` → figures then a grouped table with subtotals (needs a number). `trend` → figures then chart then table (needs a date and a number). `breakdown` → figures then crosstab (needs two groupable properties and a number).
+	//
+	// A kind is OFFERED only when the collection holds what it requires, and a refusal names the missing property (design §3 G1). That gate lives in the composer, which is the only thing that writes this field on the normal path.
+	Kind *ViewDefKind `json:"kind,omitempty"`
+
+	// Label Human-readable title. Absent means render `name`.
+	Label *string `json:"label,omitempty"`
+
+	// Layout Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`. Every layout renders except `map`, which has no renderer yet; `records.ViewLayoutIsRendered` is the source of truth. All five non-table layouts stay declared here so the importer can record what an Obsidian view actually asked for: a layout the SPA cannot draw yet imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table nobody knows was ever anything else.
+	//
+	// This field exists because of a measured failure, not a hypothesis. An Obsidian CARDS view imported as a table, recorded no loss at all, and scored CLEAN under the parity exit criterion — a green number over an undetected loss, which is the exact failure this whole surface is written against. An unrenderable layout is a visible gap; a silently flattened one is a wrong answer.
+	Layout *ViewDefLayout `json:"layout,omitempty"`
+
+	// Limit Page size for this view. Clamped at the server cap of 200, with the clamp reported on the response (FR-063).
+	Limit *int `json:"limit,omitempty"`
+
+	// Name View identifier, unique within the vault.
+	Name string `json:"name"`
+
+	// Parts THE ORDERED STACK THE RENDERER WALKS (view-kinds-design-2026-09-03 §4). Optional.
+	//
+	// ABSENT MEANS THE VIEW IS READ EXACTLY AS IT WAS BEFORE THIS FIELD EXISTED: one part, derived from `layout` plus the view's own grouping and properties. All 69 views in the founder's imported vault load unchanged, and no file has to be migrated for the renderer to keep working. The loader exposes one accessor for both shapes, so no consumer downstream has to know which of the two it is looking at — a consumer that branched on `parts == nil` is a consumer that would eventually branch differently from the next one.
+	//
+	// `filter` is SHARED BY EVERY PART and is never per-part. One view answers one question about one row set; a part that could narrow the rows under it would make the figures row and the table beneath it disagree about what they are counting, with nothing on screen to say so.
+	Parts *[]ViewPart `json:"parts,omitempty"`
+
+	// Properties Properties to display, in this order. Omitted shows every declared property. Narrowing this changes what is RENDERED, never what is matched.
+	Properties *[]string `json:"properties,omitempty"`
+
+	// PropertyConfig Per-property presentation, keyed by PROPERTY name (FR-018b) — Obsidian's top-level `properties` block, which is display configuration rather than a projection list.
+	//
+	// PURE PRESENTATION; THE ENGINE NEVER READS IT. Obsidian's own rule is kept verbatim: a display name is never usable in a filter, a sort, a grouping or a formula, so renaming a column can never quietly change which records a view returns.
+	PropertyConfig *map[string]ViewPropertyConfig `json:"property_config,omitempty"`
+
+	// Sort Sort keys, applied in order.
+	Sort *[]RecordSort `json:"sort,omitempty"`
+
+	// Source Vault-relative path of the file this view was IMPORTED from, when it was imported rather than authored. Recorded so the provenance of a partially translated view is visible; the source is never re-read afterwards (FR-102).
+	Source *string `json:"source,omitempty"`
+
+	// Type The record type this view queries.
+	//
+	// OPTIONAL (FR-018b). An UNTYPED view queries every note in scope — which is what four of the founder's eighteen bases do, scoping purely by folder and spanning record types. In an untyped view a property resolves BY NAME over the rows the index holds for every note (FR-021e): a note that CARRIES the key holds its value, parsed in the domain the name resolves to; a value that does not parse there is NON-CONFORMING and reported; and ONLY a note not carrying the key at all is ABSENT. A note whose file says `status: open` must never answer TRUE to `status IS NULL`. Two in-scope types declaring one name with DIFFERENT types REFUSE the query naming both declarations — loud, never a silent domain split. A name no in-scope type declares resolves in the TEXT domain over the raw values.
+	//
+	// A declared type holding ZERO records is a VALID, EMPTY view (FR-018d) carrying the ordinary completeness verdict — "0 records, complete" — which is distinguishable from the silent empty this design exists to prevent. Six of the founder's eighteen bases reference types provisioned ahead of their data. A type NO schema declares is still rejected: that is drift, not provisioning.
+	//
+	// A `type:` that is PRESENT but blank is REFUSED. An empty string is not "untyped" — it is a typo for a type name, and treating it as a deliberate absence would turn a misspelling into a vault-wide query. Omit the key entirely to mean untyped.
+	Type *string `json:"type,omitempty"`
+
+	// Untranslated Expressions from the imported source that could NOT be translated, preserved verbatim (FR-101). Present only on an imported view, and non-empty only when something was genuinely left behind. Never an approximation of the original.
+	//
+	// UNDER PARITY, EVERY RESIDUAL ENTRY HERE IS A DEFECT TO FILE, NOT AN ACCEPTED LOSS, and the import report must say so in those words (FR-107). The neutral "reported and moved on" posture survives only for genuinely UNDOCUMENTED upstream behaviour, which the report labels as such — the standing example being that Obsidian's documentation never says whether its standard deviation is population or sample, so ours declares its own definition (FR-153) and records the divergence risk by name.
+	Untranslated *[]string `json:"untranslated,omitempty"`
+}
+
+// ViewDefKind WHICH OF THE EIGHT VIEW KINDS AUTHORED THIS VIEW (view-kinds-design-2026-09-03 §2.3, §4). Optional, and absent on every view written before the kinds existed.
+//
+// IT IS PROVENANCE AND A RE-EDIT AFFORDANCE, NOT AN INSTRUCTION. The renderer walks `parts` and only `parts`; nothing switches on this field at render time. It records what the agent asked for, so a later "make that summary group by month instead" can be answered by re-composing the same kind rather than by reverse-engineering a part stack.
+//
+// The eight and what each stacks: `table` → table. `list` → list. `tiles` → tiles (needs an image property). `board` → columns (needs an enum property with at most 8 values). `calendar` → calendar (needs a date property). `summary` → figures then a grouped table with subtotals (needs a number). `trend` → figures then chart then table (needs a date and a number). `breakdown` → figures then crosstab (needs two groupable properties and a number).
+//
+// A kind is OFFERED only when the collection holds what it requires, and a refusal names the missing property (design §3 G1). That gate lives in the composer, which is the only thing that writes this field on the normal path.
+type ViewDefKind string
+
+// ViewDefLayout Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`. Every layout renders except `map`, which has no renderer yet; `records.ViewLayoutIsRendered` is the source of truth. All five non-table layouts stay declared here so the importer can record what an Obsidian view actually asked for: a layout the SPA cannot draw yet imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table nobody knows was ever anything else.
+//
+// This field exists because of a measured failure, not a hypothesis. An Obsidian CARDS view imported as a table, recorded no loss at all, and scored CLEAN under the parity exit criterion — a green number over an undetected loss, which is the exact failure this whole surface is written against. An unrenderable layout is a visible gap; a silently flattened one is a wrong answer.
+type ViewDefLayout string
+
+// ViewGroupBy One grouping key of a saved view (ADR-068 D24.1, spec FR-018b).
+// IT CARRIES A DIRECTION, AND THAT IS THE WHOLE REASON THIS TYPE EXISTS. The retired flat view format grouped by a bare list of property names with no direction field at all, so every `groupBy` direction in an imported Obsidian base was UNREPRESENTABLE ON THE WIRE — not merely untranslated. The founder's own vault carried 24 of them and every one was flattened to the default order in silence, which is the shape of failure this whole surface is written against: a view that imports without an error and then sorts its groups the wrong way, with nothing anywhere to say so.
+type ViewGroupBy struct {
+	// Direction Order of the GROUPS themselves — not of the records inside them, which is `sort`'s job.
+	//
+	// Omitted means `asc`. That default is stated here rather than declared as a JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would make the two generated languages disagree about one field.
+	//
+	// Group order is LEXICAL over the case-folded key (ruling R-5/R-E) — an enum has no declared-position ordinal, and a domain order is expressed by prefixing the values (`1-lead`, `2-qualified`).
+	Direction *ViewGroupByDirection `json:"direction,omitempty"`
+
+	// Property The property to group on. Grouping by a relation is supported (FR-029), and a record holding several values appears in EVERY group it belongs to (FR-028) rather than being assigned to one arbitrarily. The reserved namespaces `file.*` (FR-130) and `formula.*` (FR-140s) are valid here.
+	Property string `json:"property"`
+}
+
+// ViewGroupByDirection Order of the GROUPS themselves — not of the records inside them, which is `sort`'s job.
+//
+// Omitted means `asc`. That default is stated here rather than declared as a JSON Schema `default:` for the reason RecordFilter.yaml gives on `negate`: openapi-typescript promotes a defaulted property to REQUIRED while oapi-codegen still emits an optional pointer, so a `default:` here would make the two generated languages disagree about one field.
+//
+// Group order is LEXICAL over the case-folded key (ruling R-5/R-E) — an enum has no declared-position ordinal, and a domain order is expressed by prefixing the values (`1-lead`, `2-qualified`).
+type ViewGroupByDirection string
+
+// ViewPart One drawn element of a saved view's part stack (view-kinds-design-2026-09-03 §2.2, §4).
+// A view used to be ONE flat layout, and nothing composed. A financial report is a figures row plus a grouped table with subtotals plus an aging cross-table; a performance report is figures plus a chart plus a worst-offenders table. Neither fits "one layout", so all 69 views in the founder's imported vault were flat tables that totalled nothing.
+// PARTS ARE NOT AN AUTHORING SURFACE. The agent picks one of the eight named view KINDS (ViewDef.kind); the composer emits the part stack that kind stands for, and the renderer walks it. Free part composition was considered and deliberately left out (design §2.3): it is untestable, and the raw `write_view` path already covers the tail.
+// THE BINDING FIELDS ARE OPTIONAL HERE AND REQUIRED BY THE PART. This schema cannot say "a chart needs a date AND a number" without a per-part oneOf that oapi-codegen would inline as eight anonymous structs. The requirement table lives in the composer's gate G1, which refuses by NAME — "board needs an enum with at most 8 values; `status` has 26" — and that refusal is the surface an agent actually reads. What this schema does enforce is that a binding, when present, is a real non-empty property name: the loader refuses a blank one rather than rendering a part bound to nothing.
+type ViewPart struct {
+	// Aggregate The reduction `figures` and `crosstab` apply to `number`. Omitted means the part draws no aggregate of its own.
+	Aggregate *ViewPartAggregate `json:"aggregate,omitempty"`
+
+	// Choice The enum property `columns` draws its board columns from. The composer's gate G1 additionally requires it to hold at most 8 values — a board with 26 columns is not a board.
+	Choice *string `json:"choice,omitempty"`
+
+	// Date The date property this part lays out or plots against. Used by `calendar` and `chart`.
+	Date *string `json:"date,omitempty"`
+
+	// Grouping Grouping keys for this part, outermost first, each carrying its own direction — the SAME shape as ViewDef.grouping, deliberately, so a part's grouping and a view's grouping can never mean two different things.
+	//
+	// Omitted means this part declares NO grouping of its own, and the view's own `grouping` is what stands. The loader never copies one into the other: a part is returned exactly as its file wrote it, so a reader can always tell a part that asked for something from a part that inherited it.
+	Grouping *[]ViewGroupBy `json:"grouping,omitempty"`
+
+	// Image The file/image property `tiles` draws its grid from.
+	Image *string `json:"image,omitempty"`
+
+	// Number The number property this part totals or plots. Required in practice by `figures`, `chart` and `crosstab`; meaningless on the others.
+	//
+	// If the property declares a companion unit (PropertyDef.unit_property), every total this part draws is computed ONCE PER UNIT VALUE and never across units (design §3 G2).
+	Number *string `json:"number,omitempty"`
+
+	// Part Which element this draws. Eight, and the list is closed.
+	//
+	// "table" — rows by columns. "list" — a name and one detail per row. "tiles" — a grid keyed on an image property. "columns" — status columns, i.e. a board, keyed on an enum property. "calendar" — a month grid keyed on a date property. "figures" — a headline row of numbers. "chart" — a line or bar over time, needing a date and a number. "crosstab" — rows by columns with aggregated cells, needing two group properties and a number.
+	//
+	// A value outside this set is a LOAD REJECTION, not a part that renders as a table. That is the same rule `layout` already carries and for the same measured reason: an unrecognised layout that fell back to a table scored CLEAN under the parity criterion while silently losing what the view actually asked for.
+	Part ViewPartPart `json:"part"`
+
+	// Properties Columns for the table-ish parts (`table`, `list`, `crosstab`), in this order. Omitted means this part names no columns of its own, and the view's own `properties` is what stands — which in turn, omitted, shows every declared property.
+	//
+	// Narrowing this changes what is RENDERED, never what is matched — the same rule ViewDef.properties carries, restated because a part-level column list is exactly where somebody would expect a filter to hide.
+	Properties *[]string `json:"properties,omitempty"`
+
+	// Subtotals Per-group subtotal row, keyed by PROPERTY name, valued by the reduction to apply to it (design §4's `subtotals: {amount: sum}`).
+	//
+	// PER GROUP AND PER UNIT. A subtotal over a number carrying a companion unit is drawn once per unit value under G2, with the rows whose unit is missing shown, excluded and counted separately under G3 — never one combined figure, because a combined figure across currencies is a wrong number that looks right.
+	Subtotals *map[string]ViewPartAggregate `json:"subtotals,omitempty"`
+
+	// Unit The companion unit property of `number`, named explicitly so the part records which pairing it was composed against.
+	//
+	// IT IS NEVER INFERRED. Pairing any number with any nearby enum works on invoices and is wrong the first time a record holds two amounts, which is why the pairing is declared on the record type (PropertyDef.unit_property) and merely restated here. A `unit` naming a property that is not the declared companion of `number` is the composer's to refuse.
+	Unit *string `json:"unit,omitempty"`
+}
+
+// ViewPartPart Which element this draws. Eight, and the list is closed.
+//
+// "table" — rows by columns. "list" — a name and one detail per row. "tiles" — a grid keyed on an image property. "columns" — status columns, i.e. a board, keyed on an enum property. "calendar" — a month grid keyed on a date property. "figures" — a headline row of numbers. "chart" — a line or bar over time, needing a date and a number. "crosstab" — rows by columns with aggregated cells, needing two group properties and a number.
+//
+// A value outside this set is a LOAD REJECTION, not a part that renders as a table. That is the same rule `layout` already carries and for the same measured reason: an unrecognised layout that fell back to a table scored CLEAN under the parity criterion while silently losing what the view actually asked for.
+type ViewPartPart string
+
+// ViewPartAggregate The reduction one part of a view applies to a number (view-kinds-design-2026-09-03 §4). FIVE, and the list is closed.
+// IT IS DELIBERATELY NARROWER THAN RecordAggregate's FIFTEEN. RecordAggregate is the query surface's full vocabulary, including the two population-class ops that buffer a column (`median`, `unique`) and the domain-specific ones (`earliest`, `checked`, `stddev`). A view PART's figure row and per-group subtotal row are drawn for a reader, per unit value, on every render — so the set here is the one every number answers and nothing here can abort mid-scan. A view that genuinely needs a median asks for it through `aggregates`, which is RecordAggregate's own field and is unchanged.
+// THE UNIT RULE IS NOT OPTIONAL AND IS NOT EXPRESSIBLE HERE. A number carrying a companion unit property (PropertyDef.unit_property) totals ONCE PER UNIT VALUE and NEVER across units (design §3 G2), and a row whose unit is missing is shown, excluded from every total, and counted separately (G3). Those are composer and renderer rules; this enum only names which reduction is asked for.
+type ViewPartAggregate string
+
+// ViewPropertyConfig Per-property presentation for one column of a saved view (ADR-068 D24.1, spec FR-018b — the `properties` key of an Obsidian base, which is display configuration rather than a projection list).
+// PURE PRESENTATION. THE ENGINE NEVER READS THIS. Obsidian's own rule is kept verbatim and it is the rule that matters: a display name is NEVER usable in a filter, a sort, a grouping or a formula. Those positions name the PROPERTY, always — so renaming a column in the UI can never quietly change which records a view returns.
+type ViewPropertyConfig struct {
+	// DisplayName Column heading to render instead of the property name. Absent means render the property name itself.
+	DisplayName *string `json:"display_name,omitempty"`
+}
+
+// ViewResult The evaluated answer of one saved view — everything the SPA needs to draw it (view-kinds-design-2026-09-03 §7). The server evaluates the view's filter, grouping and aggregation through the SAME engine knowledge_find uses (there is exactly one query engine) and precomputes every aggregate under the gate rules, so the SPA only draws:
+// G2 — a number with a companion unit totals once per unit value, never across units. Every total anywhere in this object is a LIST of per-unit entries (ViewUnitTotal); no field can hold a combined figure.
+// G3 — a row whose unit is missing or unconfirmed is in `rows` (shown), excluded from every total, and counted in the owning part's excluded_count.
+// A view that cannot be answered arrives as a 200 with `refusal` set and empty parts/rows — the SPA shows WHY, exactly as knowledge_describe's own "NOT SERVABLE" line would state it — never as a transport error and never as a silent empty table.
+type ViewResult struct {
+	// Aggregates The view's own `aggregates:` results — the LEGACY, pre-part-stack summary key, which 69 saved views still use — carried through from the engine with the scope clause it computed them with (FR-125).
+	//
+	// They are SEPARATE from a part's `totals`, and the shapes differ because the guarantees differ. A part total is a ViewUnitTotal: reduced once per unit value, never across units (G2), because this endpoint does that reduction itself. These come from the engine's `aggregate`, which is unit-blind — so an entry over a number with a DECLARED companion unit is NOT surfaced here at all; it is refused, and the refusal is in `problems`. Only summaries that cannot cross a unit (count, empty, filled, unique) and numbers no record type pairs with a unit appear.
+	//
+	// Absent when the view declares no `aggregates`.
+	Aggregates *[]VaultFindTotal `json:"aggregates,omitempty"`
+
+	// Complete True only when the evaluation covered everything the view asked to cover — the same verdict, with the same workspace-scope exception, as VaultFindResponse.complete, from which it is carried.
+	Complete bool `json:"complete"`
+
+	// CompleteReason Why the verdict is what it is. Empty when `complete` is true.
+	CompleteReason *string `json:"complete_reason,omitempty"`
+
+	// Kind The view kind that authored this view (ViewDef.kind), echoed verbatim when declared. Provenance — the renderer walks `parts`, never this.
+	Kind *string `json:"kind,omitempty"`
+
+	// Label The display label — the view's own `label` when declared, else the name, resolved server-side so no two renderers invent different fallbacks.
+	Label string `json:"label"`
+
+	// Parts The resolved part stack in render order — the view's own `parts`, or the single part a legacy `layout`-only view maps to (a no-parts view still serves as one table part). Always present — an empty array, never null; empty exactly when `refusal` is set.
+	Parts []ViewResultPart `json:"parts"`
+
+	// Problems Everything the evaluation could not include, and why — carried through from the engine unchanged. Always present — an empty array, never null.
+	Problems []RecordProblem `json:"problems"`
+
+	// PropertyConfig The view's own per-property PRESENTATION map (ViewDef.property_config — the `.base` file's top-level `properties:` block), echoed verbatim so a renderer can print a declared `display_name` as the column heading instead of the machine key (UAT 2026-09-13 D-35). Keyed by property name. Pure presentation: the engine never read it to produce `rows`, and a display name is never usable in a filter, sort or grouping. Absent when the view declares none.
+	PropertyConfig *map[string]ViewPropertyConfig `json:"property_config,omitempty"`
+
+	// Refusal Present exactly when the view could not be answered; `parts` and `rows` are then empty and `complete` is false.
+	Refusal *ViewResultRefusal `json:"refusal,omitempty"`
+
+	// Rows Every evaluated row, in the view's own order, shared by all parts — one view answers one question about one row set (ViewDef.parts: `filter` is shared and never per-part). Groups and crosstabs reference these by path. Always present — an empty array, never null.
+	Rows []VaultFindRow `json:"rows"`
+
+	// RowsTruncated True when the row set exceeded the server's render bound and `rows` holds only the first page of it. Totals and subtotals are then NOT computed (`complete` is false and complete_reason says why) — a total over a truncated set would be a wrong number that looks right, which is the one output this surface exists to make impossible.
+	RowsTruncated *bool `json:"rows_truncated,omitempty"`
+
+	// Source The vault-relative path of the `.base` file this view was imported from — the saved view's own `source:` key, echoed verbatim (UAT 2026-09-13 D-136). Absent for a view authored directly (no `.base` behind it). Provenance for a surface that reaches a view by name alone (a search hit) and must be able to say which file it lives in and offer to open it.
+	Source *string `json:"source,omitempty"`
+
+	// Type The record type the view queries. Absent for an untyped view.
+	Type *string `json:"type,omitempty"`
+
+	// View The view's name, exactly as addressed.
+	View string `json:"view"`
+}
+
+// ViewResultCrosstab The precomputed grid of a crosstab part (view-kinds-design-2026-09-03 §2.2, §7): two group properties and a number, reduced server-side into cells so the SPA only draws. Key order in `row_keys`/`column_keys` is the grid's render order (lexical over the case-folded key, ruling R-5/R-E — the same order grouping itself uses).
+type ViewResultCrosstab struct {
+	// Cells The aggregated cells. SPARSE — a (row, column) position with no values simply has no cell, and the SPA renders it empty rather than as a zero nobody computed. Always present — an empty array, never null.
+	Cells []ViewResultCrosstabCell `json:"cells"`
+
+	// ColumnKeys Every column key, in render order. An empty string is the ABSENT group. Always present — an empty array, never null.
+	ColumnKeys []string `json:"column_keys"`
+
+	// ColumnProperty The property the grid's columns group by (the part's inner grouping key).
+	ColumnProperty string `json:"column_property"`
+
+	// ExcludedCount Rows excluded from every cell because their unit value is missing or unconfirmed (G3). Absent when the aggregated number declares no companion unit, or when nothing was excluded.
+	ExcludedCount *int `json:"excluded_count,omitempty"`
+
+	// ExcludedPaths The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+	//
+	// The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+	ExcludedPaths *[]string `json:"excluded_paths,omitempty"`
+
+	// ExcludedReason Why those rows were excluded, ready to render.
+	ExcludedReason *string `json:"excluded_reason,omitempty"`
+
+	// RowKeys Every row key, in render order. An empty string is the ABSENT group. Always present — an empty array, never null.
+	RowKeys []string `json:"row_keys"`
+
+	// RowProperty The property the grid's rows group by (the part's outer grouping key).
+	RowProperty string `json:"row_property"`
+}
+
+// ViewResultCrosstabCell One aggregated cell of a crosstab part (view-kinds-design-2026-09-03 §2.2, §7). Cells are precomputed server-side; the SPA lays them out on the row/column grid and draws. A cell over a number with a companion unit exists ONCE PER UNIT VALUE (G2) — two currencies at the same grid position are two cells, never one combined figure.
+type ViewResultCrosstabCell struct {
+	// Column The column group's rendered key. An empty string is the ABSENT group.
+	Column string `json:"column"`
+
+	// Count How many values were aggregated into this cell.
+	Count int `json:"count"`
+
+	// Row The row group's rendered key. An empty string is the ABSENT group, exactly as in ViewResultGroup.key.
+	Row string `json:"row"`
+
+	// Unit The unit value this cell covers. Absent when the aggregated number declares no companion unit property.
+	Unit *string `json:"unit,omitempty"`
+
+	// Value The aggregated value, as exact text (never a JSON number).
+	Value string `json:"value"`
+}
+
+// ViewResultGroup One group of a grouped view part (view-kinds-design-2026-09-03 §4, §7).
+// Groups REFERENCE rows by path rather than repeating them — the same shape VaultFindGroup takes, and for the same reason: a record holding several values of the grouped property appears in every group it belongs to (FR-028), and repeating it would render it three times.
+// The per-group subtotal row is PER UNIT under G2: `subtotals` is a list of ViewUnitTotal, one entry per (property, op, unit value), never one combined figure. Rows whose unit is missing or unconfirmed are counted in this group's own `excluded_count` (G3) — shown in the group, excluded from every subtotal.
+type ViewResultGroup struct {
+	// Absent True when this group holds the records where the grouped property is ABSENT, which `key` alone cannot express.
+	Absent *bool `json:"absent,omitempty"`
+
+	// Count Evaluated rows in this group.
+	Count int `json:"count"`
+
+	// ExcludedCount Rows in this group excluded from every subtotal because their unit value is missing or unconfirmed (G3). Absent when the subtotalled numbers declare no companion unit, or when nothing was excluded.
+	ExcludedCount *int `json:"excluded_count,omitempty"`
+
+	// ExcludedPaths The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+	//
+	// The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+	ExcludedPaths *[]string `json:"excluded_paths,omitempty"`
+
+	// ExcludedReason Why those rows were excluded, ready to render. Present exactly when excluded_count is present and greater than zero.
+	ExcludedReason *string `json:"excluded_reason,omitempty"`
+
+	// Key The group's value, rendered. An EMPTY key is the ABSENT group — read it with `absent`, because an empty string is itself a value (R-3) and must not collide with absence.
+	Key string `json:"key"`
+
+	// Paths The member rows, by path into the result's own `rows` list. Always present — an empty array, never null.
+	Paths []string `json:"paths"`
+
+	// PathsOmitted How many of this group's members are NOT named in `paths` because the answer does not carry them. Absent when every member is named.
+	//
+	// `paths` references rows in the result's own `rows` list, and `rows` is capped. A group's `count` is its size over the FULL evaluated set, so once the cap binds, count and len(paths) legitimately differ — and the difference has to be STATED. Copying every member path instead would make the payload grow with the corpus rather than with the cap (a 100k record match produced ~100k path strings per grouped part), and naming rows the answer does not carry would leave the references dangling.
+	PathsOmitted *int `json:"paths_omitted,omitempty"`
+
+	// Subtotals Per-group totals, one entry per (property, op, unit value) under G2. Always present — an empty array, never null, so "this part declares no subtotals" is stated rather than inferred.
+	Subtotals []ViewUnitTotal `json:"subtotals"`
+}
+
+// ViewResultPart One rendered element of a view result's part stack (view-kinds-design-2026-09-03 §7): the resolved part definition plus whatever the server precomputed for it, so the SPA only draws.
+// WHICH DATA FIELDS ARE SET DEPENDS ON THE PART. `table`/`list`/`tiles`/ `columns`/`calendar` draw from the result's shared `rows` (plus `groups` when the part or the view groups); `figures` carries `totals`; `chart` carries `series`; `crosstab` carries `crosstab`. A per-part oneOf was considered and rejected for the reason ViewPart.yaml gives — oapi-codegen inlines it as eight anonymous structs — so absence of a data field means "this part draws nothing of that kind", never "the server forgot".
+type ViewResultPart struct {
+	// Columns Resolved column property names for the table-ish parts, in render order: the part's own `properties`, else the view's, else the record type's declaration order. Absent on parts that draw no columns.
+	Columns *[]string `json:"columns,omitempty"`
+
+	// Crosstab Crosstab parts only: the precomputed grid.
+	Crosstab *ViewResultCrosstab `json:"crosstab,omitempty"`
+
+	// ExcludedCount Rows excluded from every total of this part because their unit value is missing or unconfirmed (G3). The rows themselves are still in `rows` — shown, excluded, counted. Absent when the part's numbers declare no companion unit, or when the part computes no totals.
+	ExcludedCount *int `json:"excluded_count,omitempty"`
+
+	// ExcludedPaths The excluded rows BY PATH, so a renderer can MARK them rather than only count them. Present exactly when excluded_count is present.
+	//
+	// The count alone was not enough. The unit a row is excluded for is resolved from the RECORD TYPE (design section 5: declared, never inferred), which the SPA cannot read — so a part carrying no `unit:` stamp of its own left the renderer able to say "1 row excluded" and unable to say which one. Naming the rows here is what makes the answer self-sufficient: nothing downstream re-derives the exclusion, and the list can never disagree with the count beside it.
+	ExcludedPaths *[]string `json:"excluded_paths,omitempty"`
+
+	// ExcludedReason Why those rows were excluded, ready to render as the G3 footer line. Present exactly when excluded_count is present and greater than zero.
+	ExcludedReason *string `json:"excluded_reason,omitempty"`
+
+	// Groups Grouped rows with per-group, per-unit subtotals, present when this part groups (its own `grouping`, else the view's). Group order is the grouping's own order. Rows are referenced by path into the result's shared `rows`.
+	Groups *[]ViewResultGroup `json:"groups,omitempty"`
+
+	// Part Which element this draws — the same closed set as ViewPart.part, echoed at the top level so a renderer can switch without descending into `source`. Always equal to source.part by construction.
+	Part ViewResultPartPart `json:"part"`
+
+	// Series Chart parts only: the precomputed series, one per unit value (G2), points aggregated per date bucket server-side.
+	Series *[]ViewResultSeries `json:"series,omitempty"`
+
+	// Source The RESOLVED part this element was drawn from — the entry of the view's own `parts` stack, or the single part EffectiveParts synthesises from a legacy `layout`-only view. Echoed so a reader can always tell what was asked for, including the bindings (number/unit/date/choice/image) the precomputed data was computed against.
+	Source ViewPart `json:"source"`
+
+	// Totals Whole-result totals for this part, one entry per (property, op, unit value) — the figures row, or a grouped table's footer. NEVER a combined figure across units (G2): the list shape is the enforcement, and the footer line explaining why is the renderer's to draw from it.
+	Totals *[]ViewUnitTotal `json:"totals,omitempty"`
+
+	// UnitProperty The companion unit property this part's `number` binding RESOLVED to, from the record type's own declaration (design section 5). Absent when the number declares no companion unit, or when the part totals nothing.
+	//
+	// THE SCHEMA IS THE AUTHORITY AND THIS IS ITS ANSWER. A part's own `unit:` key records what the composer stamped when the view was written; it is provenance, and a record type edited afterwards can leave it stale. The server resolves the unit from the schema, refuses the total outright when the two disagree (naming both sides), and states the resolved answer here — so no consumer ever re-derives a unit from `source.unit` and no two consumers can derive different ones.
+	UnitProperty *string `json:"unit_property,omitempty"`
+}
+
+// ViewResultPartPart Which element this draws — the same closed set as ViewPart.part, echoed at the top level so a renderer can switch without descending into `source`. Always equal to source.part by construction.
+type ViewResultPartPart string
+
+// ViewResultPoint One aggregated point of a chart series (view-kinds-design-2026-09-03 §2.2, §7). The server aggregates; the SPA only draws — a chart part's data arrives as points, never as raw rows the client would have to reduce itself, because a client-side reduction is a second implementation of G2 waiting to disagree with the first.
+type ViewResultPoint struct {
+	// Count How many values were aggregated into this point.
+	Count int `json:"count"`
+
+	// Key The date bucket, rendered exactly as the date property renders (ISO 8601), so lexical order is chronological order.
+	Key string `json:"key"`
+
+	// Value The aggregated value at this point, as exact text (never a JSON number).
+	Value string `json:"value"`
+}
+
+// ViewResultRefusal WHY a saved view cannot be answered (view-kinds-design-2026-09-03 §7, FR-018b's "the reason is NAMED"). It is the wire form of the same refusal the backend already states in prose — records.ViewServeRefusal, the shape knowledge_describe's "NOT SERVABLE by knowledge_find" line reads — so the SPA can show the operator WHY a view cannot answer instead of a blank panel.
+// A refusal is a 200 with this object set and no data, never a transport error: the view is real, the request was well-formed, and the reason is the answer.
+type ViewResultRefusal struct {
+	// Code Machine-readable refusal code. NOT a closed enum, deliberately: the codes are owned by the backend's own refusal vocabularies and new ones must be able to arrive without a contract change silently dropping them at the SPA's validation edge. Current emitters: "unknown_view" (no view of that name is addressable here — which is also what an out-of-scope collection answers, indistinguishably, per FR-053), "view_disabled" (records.ServeRefusalDisabled: stored but never applied, FR-105), "no_drawable_parts" (a layout with no part equivalent, e.g. `map`, and no explicit parts), every records.ViewRejectionCode (a view file that exists but was refused at load, e.g. "view_unknown_property"), and every RecordProblem.code a refused evaluation names (e.g. "index_unavailable").
+	Code string `json:"code"`
+
+	// Reason What cannot be done, in the operator's own vocabulary.
+	Reason string `json:"reason"`
+
+	// Remedy What to do about it. May be empty when the underlying refusal named none, but the field is always present so a renderer never invents one.
+	Remedy string `json:"remedy"`
+}
+
+// ViewResultSeries One line of a chart part (view-kinds-design-2026-09-03 §7). A chart over a number with a companion unit draws ONE SERIES PER UNIT VALUE (G2) — the series are never merged into one line, because a line that sums euros and hours is a wrong picture that looks right. A number with no companion unit produces exactly one series with `unit` absent.
+type ViewResultSeries struct {
+	// Points The aggregated points in date order. Always present — an empty array, never null.
+	Points []ViewResultPoint `json:"points"`
+
+	// Unit The unit value this series covers. Absent when the plotted number declares no companion unit property.
+	Unit *string `json:"unit,omitempty"`
+}
+
+// ViewUnitTotal One computed reduction over one number property, FOR ONE UNIT VALUE (view-kinds-design-2026-09-03 §3 G2).
+// A number carrying a companion unit (PropertyDef.unit_property) totals ONCE PER UNIT VALUE and NEVER across units, so a view result carries a LIST of these — one entry per distinct unit value — and no field anywhere in the result can hold a combined figure. That is the load-bearing decision of this type: a sum across currencies is a wrong number that looks right, and the shape makes it inexpressible rather than merely discouraged.
+// A number with NO companion unit produces exactly one entry with `unit` absent. The two cases are distinguished by the FIELD'S PRESENCE, never by a sentinel value, because an empty string is a legitimate enum value (R-3).
+type ViewUnitTotal struct {
+	// Count How many values were included in this total. Rows excluded under G3 (missing/unconfirmed unit) are NOT in this count — they are in the enclosing scope's excluded_count.
+	Count int `json:"count"`
+
+	// Op The reduction applied.
+	Op ViewPartAggregate `json:"op"`
+
+	// Property The number property this total reduces.
+	Property string `json:"property"`
+
+	// Unit The unit value this total covers (e.g. "SGD"). ABSENT when the number declares no companion unit property — then the single entry covers every included value. Present exactly when the total is unit-scoped.
+	Unit *string `json:"unit,omitempty"`
+
+	// UnitProperty The property `unit` was read from — the companion the RECORD TYPE declares for this number (PropertyDef.unit_property). Present exactly when `unit` is present.
+	//
+	// It travels WITH the unit value rather than beside it, one level up, because a unit and the property it was read from are one fact: a renderer that acquired "SGD" without knowing it came from `currency` would have to guess which column to pair the figure with, and the schema it would need in order to stop guessing is not something the SPA has.
+	UnitProperty *string `json:"unit_property,omitempty"`
+
+	// Value The exact result as TEXT, never a JSON number: a decimal total that round-tripped through a binary float would state digits nobody computed — the same rule VaultFindTotal.value carries, for the same reason.
+	Value string `json:"value"`
 }
 
 // VoiceProvider Response body for GET /api/v1/voice/provider. Describes the active voice provider configuration so the SPA can decide which widget variant (dropdown / free-text / disabled) to render in the agent edit slide-over.
@@ -17967,6 +22047,69 @@ type ListLibraryEntriesParams struct {
 	IncludeHidden *bool `form:"include_hidden,omitempty" json:"include_hidden,omitempty"`
 }
 
+// GetLibraryInlineDispositionParams defines parameters for GetLibraryInlineDisposition.
+type GetLibraryInlineDispositionParams struct {
+	// Path Workspace-relative path of the file to classify.
+	Path string `form:"path" json:"path"`
+}
+
+// GetKnowledgeBaseInfoParams defines parameters for GetKnowledgeBaseInfo.
+type GetKnowledgeBaseInfoParams struct {
+	// Path Workspace-relative path of the folder to test. Use "" or "." for the work-tree root.
+	Path string `form:"path" json:"path"`
+}
+
+// GetKnowledgeBaseViewsParams defines parameters for GetKnowledgeBaseViews.
+type GetKnowledgeBaseViewsParams struct {
+	// Path Workspace-relative path of the .base file.
+	Path string `form:"path" json:"path"`
+}
+
+// GetKnowledgeGraphParams defines parameters for GetKnowledgeGraph.
+type GetKnowledgeGraphParams struct {
+	// CollectionId The KnowledgeBaseInfo.collection_id to query.
+	CollectionId string `form:"collection_id" json:"collection_id"`
+
+	// Kind Which graph query to run.
+	Kind GetKnowledgeGraphParamsKind `form:"kind" json:"kind"`
+
+	// Path Collection-relative path of the note the query is about. Required for links, backlinks and neighbourhood; ignored for unresolved and orphans, which are collection-wide.
+	Path *string `form:"path,omitempty" json:"path,omitempty"`
+
+	// Paths Collection-relative paths of SEVERAL notes whose outbound links are wanted in one answer (UAT D-135). Only valid with kind=links, and mutually exclusive with path — a caller sends one or the other. The response is the UNION of every listed note's outbound edges; each edge still names its own from_path, and source_path is absent because the query is not about any single note. A caller rendering many rows (a base view's relation cells) sends this instead of one request per row, which is what tripped the gateway's own rate limiter. Bounded: at most 64 paths per query, refused up front with a 400 naming the cap when exceeded.
+	Paths *[]string `form:"paths,omitempty" json:"paths,omitempty"`
+
+	// Hops Maximum hops for a neighbourhood query. Clamped to the server bound; the value actually used is echoed as hop_limit_applied.
+	Hops *int `form:"hops,omitempty" json:"hops,omitempty"`
+
+	// Limit Maximum nodes in the response. Clamped to the server bound; the value actually used is echoed as node_limit_applied.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetKnowledgeGraphParamsKind defines parameters for GetKnowledgeGraph.
+type GetKnowledgeGraphParamsKind string
+
+// GetKnowledgeOutlineParams defines parameters for GetKnowledgeOutline.
+type GetKnowledgeOutlineParams struct {
+	// Path Workspace-relative path of the markdown file.
+	Path string `form:"path" json:"path"`
+}
+
+// GetKnowledgeViewResultParams defines parameters for GetKnowledgeViewResult.
+type GetKnowledgeViewResultParams struct {
+	// CollectionId The KnowledgeBaseInfo.collection_id holding the view.
+	CollectionId string `form:"collection_id" json:"collection_id"`
+
+	// View The saved view's name, exactly as declared.
+	View string `form:"view" json:"view"`
+}
+
+// ListKnowledgeViewsParams defines parameters for ListKnowledgeViews.
+type ListKnowledgeViewsParams struct {
+	// CollectionId The KnowledgeBaseInfo.collection_id whose saved views are listed.
+	CollectionId string `form:"collection_id" json:"collection_id"`
+}
+
 // UploadLibraryFilesMultipartBody defines parameters for UploadLibraryFiles.
 type UploadLibraryFilesMultipartBody struct {
 	// Files One or more files to upload.
@@ -18186,8 +22329,26 @@ type CopyLibraryEntryJSONRequestBody = LibraryTransferRequest
 // MoveLibraryEntryJSONRequestBody defines body for MoveLibraryEntry for application/json ContentType.
 type MoveLibraryEntryJSONRequestBody = LibraryTransferRequest
 
+// MintLibraryPreviewTokenJSONRequestBody defines body for MintLibraryPreviewToken for application/json ContentType.
+type MintLibraryPreviewTokenJSONRequestBody = LibraryPreviewTokenRequest
+
 // PutLibraryContentJSONRequestBody defines body for PutLibraryContent for application/json ContentType.
 type PutLibraryContentJSONRequestBody = LibraryContentRequest
+
+// PutLibraryContentBinaryJSONRequestBody defines body for PutLibraryContentBinary for application/json ContentType.
+type PutLibraryContentBinaryJSONRequestBody = LibraryBinaryContentRequest
+
+// SearchFilesJSONRequestBody defines body for SearchFiles for application/json ContentType.
+type SearchFilesJSONRequestBody = FileSearchRequest
+
+// FindVaultJSONRequestBody defines body for FindVault for application/json ContentType.
+type FindVaultJSONRequestBody = VaultSearchRequest
+
+// WriteVaultRecordJSONRequestBody defines body for WriteVaultRecord for application/json ContentType.
+type WriteVaultRecordJSONRequestBody = RecordWriteRequest
+
+// WriteVaultRecordRelationJSONRequestBody defines body for WriteVaultRecordRelation for application/json ContentType.
+type WriteVaultRecordRelationJSONRequestBody = RelationWriteRequest
 
 // CreateLibraryDirectoryJSONRequestBody defines body for CreateLibraryDirectory for application/json ContentType.
 type CreateLibraryDirectoryJSONRequestBody = LibraryMkdirRequest
@@ -18197,6 +22358,9 @@ type RenameLibraryEntryJSONRequestBody = LibraryRenameRequest
 
 // UploadLibraryFilesMultipartRequestBody defines body for UploadLibraryFiles for multipart/form-data ContentType.
 type UploadLibraryFilesMultipartRequestBody UploadLibraryFilesMultipartBody
+
+// CreateVaultJSONRequestBody defines body for CreateVault for application/json ContentType.
+type CreateVaultJSONRequestBody = CreateVaultRequest
 
 // AddMcpServerJSONRequestBody defines body for AddMcpServer for application/json ContentType.
 type AddMcpServerJSONRequestBody = McpServerCreate
@@ -19990,6 +24154,95 @@ func (t OnboardingCompleteRequest_Provider) MarshalJSON() ([]byte, error) {
 }
 
 func (t *OnboardingCompleteRequest_Provider) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsRecordWriteRequestCreate returns the union data inside the RecordWriteRequest as a RecordWriteRequestCreate
+func (t RecordWriteRequest) AsRecordWriteRequestCreate() (RecordWriteRequestCreate, error) {
+	var body RecordWriteRequestCreate
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRecordWriteRequestCreate overwrites any union data inside the RecordWriteRequest as the provided RecordWriteRequestCreate
+func (t *RecordWriteRequest) FromRecordWriteRequestCreate(v RecordWriteRequestCreate) error {
+	v.Mode = "create"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRecordWriteRequestCreate performs a merge with any union data inside the RecordWriteRequest, using the provided RecordWriteRequestCreate
+func (t *RecordWriteRequest) MergeRecordWriteRequestCreate(v RecordWriteRequestCreate) error {
+	v.Mode = "create"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsRecordWriteRequestUpdate returns the union data inside the RecordWriteRequest as a RecordWriteRequestUpdate
+func (t RecordWriteRequest) AsRecordWriteRequestUpdate() (RecordWriteRequestUpdate, error) {
+	var body RecordWriteRequestUpdate
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromRecordWriteRequestUpdate overwrites any union data inside the RecordWriteRequest as the provided RecordWriteRequestUpdate
+func (t *RecordWriteRequest) FromRecordWriteRequestUpdate(v RecordWriteRequestUpdate) error {
+	v.Mode = "update"
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeRecordWriteRequestUpdate performs a merge with any union data inside the RecordWriteRequest, using the provided RecordWriteRequestUpdate
+func (t *RecordWriteRequest) MergeRecordWriteRequestUpdate(v RecordWriteRequestUpdate) error {
+	v.Mode = "update"
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t RecordWriteRequest) Discriminator() (string, error) {
+	var discriminator struct {
+		Discriminator string `json:"mode"`
+	}
+	err := json.Unmarshal(t.union, &discriminator)
+	return discriminator.Discriminator, err
+}
+
+func (t RecordWriteRequest) ValueByDiscriminator() (interface{}, error) {
+	discriminator, err := t.Discriminator()
+	if err != nil {
+		return nil, err
+	}
+	switch discriminator {
+	case "create":
+		return t.AsRecordWriteRequestCreate()
+	case "update":
+		return t.AsRecordWriteRequestUpdate()
+	default:
+		return nil, errors.New("unknown discriminator value: " + discriminator)
+	}
+}
+
+func (t RecordWriteRequest) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *RecordWriteRequest) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
 	return err
 }

@@ -716,7 +716,7 @@ func TestCloseRun_DuplicateCloseAfterAlreadyClosedLogsInfoNotError(t *testing.T)
 
 	logFile := filepath.Join(t.TempDir(), "close-run-dup.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.ERROR)
 	if ferr := logger.EnableFileLogging(logFile); ferr != nil {
 		t.Fatalf("EnableFileLogging: %v", ferr)

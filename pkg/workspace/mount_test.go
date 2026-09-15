@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -623,4 +624,181 @@ func TestMountBoundary_HardlinkEscape_DocumentedGap(t *testing.T) {
 	mutated, err := os.ReadFile(outsideFile)
 	require.NoError(t, err)
 	require.Equal(t, "mutated via the mount", string(mutated), "FR-6.5 gap confirmed: a write through the hardlink inside the mount reached a file OUTSIDE it")
+}
+
+// ---------------------------------------------------------------------------
+// UAT 2026-09-13 D-117 — system directories are refused; /tmp and per-user
+// homes are broad (warned), on real paths as well as typed ones.
+// ---------------------------------------------------------------------------
+
+func TestCheckMountTarget_D117_SystemDirsRefusedBroadDirsWarned(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX system-directory layout")
+	}
+	omnipusHome := filepath.Join(t.TempDir(), ".omnipus")
+	require.NoError(t, os.MkdirAll(omnipusHome, 0o700))
+
+	for _, sys := range []string{"/etc", "/usr", "/private"} {
+		if _, err := os.Stat(sys); err != nil {
+			continue
+		}
+		_, _, err := CheckMountTarget(sys, omnipusHome)
+		require.Error(t, err, "%s must be refused", sys)
+		require.True(t, errors.Is(err, ErrMountRefused), "%s: %v", sys, err)
+		assert.Contains(t, err.Error(), "operating-system directory")
+	}
+
+	for _, broad := range []string{"/tmp", "/opt", "/Users", "/home"} {
+		if _, err := os.Stat(broad); err != nil {
+			continue
+		}
+		resolved, warning, err := CheckMountTarget(broad, omnipusHome)
+		require.NoError(t, err, "%s is broad, not refused (warn-and-allow)", broad)
+		assert.NotEmpty(t, warning, "%s (resolved %s) must carry a breadth warning", broad, resolved)
+		assert.True(t, IsBroadMountTarget(resolved), "IsBroadMountTarget must agree on the real path %s", resolved)
+	}
+
+	// Somebody's home directory is broad even though it is not on any list.
+	if home, err := os.UserHomeDir(); err == nil {
+		assert.True(t, IsBroadMountTarget(filepath.Clean(home)))
+	}
+	assert.True(t, IsBroadMountTarget("/Users/somebody"))
+	assert.True(t, IsBroadMountTarget("/home/somebody"))
+
+	// A subdirectory of a system tree is neither refused nor broad.
+	sub := t.TempDir()
+	_, warning, err := CheckMountTarget(sub, omnipusHome)
+	require.NoError(t, err)
+	assert.Empty(t, warning)
+	assert.False(t, IsSystemMountTarget(sub))
+}
+
+// ---------------------------------------------------------------------------
+// Claude review 2026-09-14 C9 (+ CI go-test #2) — isSystemMountTarget must
+// (a) never classify the CURRENT process's own home as a system directory
+// (the root-running CI worker has $HOME=/root, which made the broad-target
+// warn-and-allow test fail as a refusal), (b) fold letter case the way
+// pkg/sandbox's comparisonForms/pathCoversFold does (/PRIVATE/etc, /system,
+// /USR must be refused on case-insensitive APFS), and (c) refuse DIRECT
+// CHILDREN of the refused tree roots (/etc/ssh, /usr/bin, /var/root,
+// /Library/LaunchDaemons) without refusing arbitrary deeper user paths
+// (a mount of /Applications/Subdir must stay allowed; so must every
+// t.TempDir()-shaped target, which on macOS lives deep inside
+// /private/var/folders).
+// ---------------------------------------------------------------------------
+
+// pickSystemRoot returns an existing, stat-able system root for this OS so
+// end-to-end CheckMountTarget tests are deterministic on darwin, linux and
+// the root-running CI worker alike.
+func pickSystemRoot(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX system-directory layout")
+	}
+	for _, candidate := range []string{"/usr", "/etc", "/Library", "/root"} {
+		if fi, err := os.Stat(candidate); err == nil && fi.IsDir() {
+			return candidate
+		}
+	}
+	t.Skip("no stat-able system root on this host")
+	return ""
+}
+
+func TestCheckMountTarget_OwnHomeIsNeverASystemTarget(t *testing.T) {
+	sysRoot := pickSystemRoot(t)
+	omnipusHome := filepath.Join(t.TempDir(), ".omnipus")
+	require.NoError(t, os.MkdirAll(omnipusHome, 0o700))
+
+	// The current process's own home — even when it IS a system root — gets
+	// the broad-target WARNING, not the refusal (CI go-test #2: on the
+	// root-running worker $HOME is /root). This is the exact shape
+	// TestRequestMount_BroadTargetWarnsInsteadOfRefusing drives.
+	t.Setenv("HOME", sysRoot)
+	resolved, warning, err := CheckMountTarget(sysRoot, omnipusHome)
+	require.NoError(t, err, "the process's own home must warn-and-allow even when it is a system root: %v", err)
+	assert.NotEmpty(t, warning, "the own-home exemption must fall through to the broad-target warning")
+	assert.Equal(t, sysRoot, resolved)
+	assert.False(t, IsSystemMountTarget(resolved), "the classifier itself must not call the own home a system dir")
+
+	// Another user's home — same path, HOME pointed elsewhere — stays
+	// REFUSED (the D-117 case, unchanged): the exemption is keyed on the
+	// CURRENT process's own home only.
+	t.Setenv("HOME", t.TempDir())
+	_, _, err = CheckMountTarget(sysRoot, omnipusHome)
+	require.Error(t, err, "a system root that is NOT the current process's own home must stay refused")
+	assert.True(t, errors.Is(err, ErrMountRefused), "got %v", err)
+}
+
+// TestIsSystemMountTarget_CaseFoldedSpellings pins the folding at the
+// classifier level so it is deterministic on every filesystem: the refusal
+// must not depend on how the operator spelled the path on a case-insensitive
+// volume (Claude review verified /PRIVATE/etc, /system and /USR pass on
+// APFS before this fix).
+func TestIsSystemMountTarget_CaseFoldedSpellings(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX system-directory layout")
+	}
+	for _, spelling := range []string{"/ETC", "/PRIVATE/etc", "/Usr", "/USR", "/system", "/System", "/PRIVATE/VAR"} {
+		assert.True(t, IsSystemMountTarget(spelling),
+			"%s is a case-variant spelling of a system root and must be refused on a case-insensitive filesystem", spelling)
+	}
+	for _, spelling := range []string{"/ETC/ssh", "/USR/bin", "/VAR/root", "/LIBRARY/LaunchDaemons"} {
+		assert.True(t, IsSystemMountTarget(spelling),
+			"%s is a case-folded direct child of a system root and must be refused", spelling)
+	}
+}
+
+// TestIsSystemMountTarget_DirectChildrenRefusedDeeperPathsAllowed pins the
+// depth rule: the system tree root and its DIRECT children are refused;
+// anything deeper is a user path and stays allowed.
+func TestIsSystemMountTarget_DirectChildrenRefusedDeeperPathsAllowed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX system-directory layout")
+	}
+	for _, child := range []string{"/etc/ssh", "/usr/bin", "/var/root", "/Library/LaunchDaemons", "/usr/local", "/private/var/root"} {
+		assert.True(t, IsSystemMountTarget(child), "%s is a direct child of a system root and must be refused", child)
+	}
+	for _, deep := range []string{
+		"/Applications/Subdir",              // broad root's child: allowed, not system
+		"/Applications/Utilities/Deep/Nest", // arbitrary depth under a broad root
+		"/etc/ssh/subdir",                   // deeper than direct child: a user path, allowed
+		"/usr/local/src/project",            // deeper than direct child: allowed
+		"/private/var/folders/ab/abcd/T/x",  // macOS t.TempDir() shape: allowed
+		"/opt/toolbox",                      // /opt is broad, not system
+	} {
+		assert.False(t, IsSystemMountTarget(deep), "%s is deeper than a direct child of any system root and must stay allowed", deep)
+	}
+}
+
+// The carve-out that keeps the depth rule from re-refusing the deliberately
+// warn-and-allow tmp family: /tmp resolves to /private/tmp on macOS, which
+// is a DIRECT CHILD of the system root /private — it must still be judged
+// broad (warned), never refused (UAT 2026-09-13 D-117).
+func TestIsSystemMountTarget_TmpFamilyStaysBroadNotRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX system-directory layout")
+	}
+	for _, tmp := range []string{"/tmp", "/private/tmp", "/var/tmp", "/private/var/tmp"} {
+		assert.False(t, IsSystemMountTarget(tmp), "%s must never be refused by the system-dir rule", tmp)
+		assert.True(t, IsBroadMountTarget(tmp), "%s must still be classified broad (warn-and-allow)", tmp)
+	}
+}
+
+// End-to-end: the deep user path mounts without refusal and without warning,
+// and (on darwin, where /Applications/Utilities exists) so does a real
+// broad-root child.
+func TestCheckMountTarget_DeepUserPathsStillMount(t *testing.T) {
+	omnipusHome := filepath.Join(t.TempDir(), ".omnipus")
+	require.NoError(t, os.MkdirAll(omnipusHome, 0o700))
+
+	deep := t.TempDir() // on macOS: /private/var/folders/... — deep inside a system tree
+	_, warning, err := CheckMountTarget(deep, omnipusHome)
+	require.NoError(t, err, "an arbitrary deep user path inside a system tree must stay mountable: %v", err)
+	assert.Empty(t, warning)
+
+	if runtime.GOOS == "darwin" {
+		_, warning, err = CheckMountTarget("/Applications/Utilities", omnipusHome)
+		require.NoError(t, err, "a child of the broad /Applications root must stay mountable: %v", err)
+		assert.Empty(t, warning, "/Applications/Utilities is not itself broad — allowed, no warning")
+	}
 }

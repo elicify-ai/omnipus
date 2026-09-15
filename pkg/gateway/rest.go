@@ -183,6 +183,34 @@ type restAPI struct {
 	// that will only take effect after a restart.
 	appliedConfig *config.Config
 
+	// libraryChangeBroadcast is the D-107 cross-tab listing-invalidation hook:
+	// the Library REST write handlers call emitLibraryChange
+	// (library_change_broadcast.go) after a mutation lands, which fans a
+	// library_changed WS frame out through the chat WS handler so every OTHER
+	// connected tab drops its stale folder listing. A func-in-pointer rather
+	// than a *WSHandler field for the same reason previewTokens is one: the
+	// write handlers live in files that never see the WS route registrar, and
+	// a nil value (unwired tests, partial boots) must degrade to a no-op —
+	// wired in gateway.go right after this struct is built, once wsHandler
+	// exists.
+	libraryChangeBroadcast atomic.Pointer[func(gen.LibraryChangedFrame)]
+
+	// previewTokens is the live ADR-067 preview-token store (rest_library_preview.go),
+	// published by newLibraryPreviewRoutes at registration time.
+	//
+	// It lives on the restAPI, and not in a package variable, because FR-003d's
+	// three revocation events are handled in three OTHER files —
+	// HandleLogout (rest_auth.go), handleWorkspaceMountDelete
+	// (rest_workspace_mounts.go) and the Library delete/rename/move handlers
+	// (rest_library.go) — none of which ever sees the route registrar. Without a
+	// reachable handle every one of them silently degrades to "expiry is the only
+	// revocation", which FR-003d names as the omission that turns a preview token
+	// into a standing unauthenticated read grant.
+	//
+	// Nil until the preview routes are registered; every reader goes through
+	// previewTokenStore(), which is nil-safe.
+	previewTokens atomic.Pointer[PreviewTokenStore]
+
 	// devServers is the gateway-wide Tier 3 dev-server registry. Shared with
 	// the web_serve tool (dev mode) and workspace.shell_bg tool via the agent
 	// instance. HandlePreview reads this to validate tokens and resolve the
@@ -5746,7 +5774,17 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// decodeAndValidate, so relaxing the outer limit does not widen the
 	// attack surface for the non-upload operations.
 	cm.RegisterHTTPHandler("/api/v1/library", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
-	cm.RegisterHTTPHandler("/api/v1/library/", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
+	// ADR-067 stage 2: the subtree entry point is HandleLibraryTree, which peels
+	// off /library/{id}/knowledge* (rest_knowledge.go) and hands everything else
+	// to HandleLibrary unchanged. It is a shim rather than four more
+	// registrations because the workspace id sits in the MIDDLE of those
+	// patterns and this mux has no path wildcards — see HandleLibraryTree's doc.
+	cm.RegisterHTTPHandler("/api/v1/library/", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibraryTree)))
+	// ADR-067 stage 1 (FR-003f): the preview-token mint endpoint and the bare
+	// /library-preview/ serving prefix. Registered from rest_library_preview.go
+	// so the two halves share one token store. The mint path is an EXACT
+	// pattern, so it outranks the "/api/v1/library/" subtree above.
+	a.registerLibraryPreviewRoutes(cm)
 	// GET/PUT /api/v1/providers/default-model (ADR-068 FR-018/FR-042,
 	// T068-11): its OWN route with the high-blast-radius adminWrap chain
 	// (withAuth → RequireNotBypass — 401 unauthenticated, 503 under
@@ -6059,6 +6097,21 @@ type httpHandlerRegistrar interface {
 
 // --- App State ---
 
+// videoEmbedHosts returns the allow-list this install advertises to the reader.
+//
+// The nil-agent-loop branch resolves to the SHIPPED DEFAULT rather than to an
+// empty list, and that choice is deliberate: it is exactly what
+// newSPAHandler(nil) puts in the served Content-Security-Policy when it has no
+// config either. Answering "none" here while the policy says "one host" would
+// manufacture the drift EMB-080 forbids — out of a defensive nil check, in the
+// one code path where nothing else would notice.
+func (a *restAPI) videoEmbedHosts() []string {
+	if a.agentLoop == nil {
+		return ResolveVideoEmbedHosts(nil)
+	}
+	return ResolveVideoEmbedHosts(a.agentLoop.GetConfig())
+}
+
 // HandleState handles GET/PATCH /api/v1/state (onboarding state).
 func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
@@ -6073,6 +6126,21 @@ func (a *restAPI) HandleState(w http.ResponseWriter, r *http.Request) {
 		}
 		resp := map[string]any{
 			"onboarding_complete": complete,
+			// ADR-083 CW-3 / EMB-080 — the video-embed allow-list the READER
+			// uses to decide whether to draw a play control at all.
+			//
+			// It is resolved by the SAME function that renders the served
+			// Content-Security-Policy's frame-src sources
+			// (ResolveVideoEmbedHosts), because the two must be equal: a
+			// reader offering a play control for a host the policy refuses
+			// gives a control that does nothing, and a policy permitting a
+			// host the reader will not draw gives a feature nobody can reach.
+			//
+			// ALWAYS PRESENT, and `[]` when the operator has declined the
+			// external host — never absent. The reader has to tell "this
+			// installation says no" from "the server did not answer", and an
+			// omitted field collapses the two into the same undefined.
+			"video_embed_hosts": a.videoEmbedHosts(),
 		}
 		if lastRun != nil {
 			resp["last_doctor_run"] = lastRun.Format(time.RFC3339)
@@ -6574,9 +6642,11 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			// machine the row stays `disconnected` and carries the operator
 			// hint. Whether the operator is SIGNED IN is never computed by
 			// running the CLI here — that check costs a premium request, so
-			// it stays the explicit Check sign-in action's alone
-			// (cheapSignInRowStatus never reports "known" for a cli_login id
-			// other than codex-cli, github-copilot included).
+			// it stays the explicit Check sign-in action's alone. The row
+			// CAN still say signed_in/expired for github-copilot — from the
+			// cached result of the operator's last explicit Check
+			// (copilotRowSignInStatus, never a probe), codex-cli from its
+			// saved login file.
 			copilotHint := copilotRowHint(name)
 			hasEndpointCopy := hasEndpoint
 			// ADR-068 T068-08: the row's auth method comes from the config row
@@ -8407,16 +8477,34 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// malformed request. This is the one defect of the three that failed in
 	// the ALLOW direction, so it is rejected here at the earliest possible
 	// point, before any normalization can make a partial body look valid.
-	if req.Builtin == nil {
+	//
+	// UAT 2026-09-13 D-86: the body of a GET /agents/{id}/tools response
+	// (AgentToolsResponse: config + tools + agent_type) is accepted as-is,
+	// so a client can read, modify and write back the same shape. When the
+	// top-level `builtin` is absent and `config.builtin` is present, the
+	// policy map (and MCP bindings, from `config.mcp`) are read from there;
+	// `tools` and `agent_type` are read-only echoes and are ignored. A body
+	// carrying NEITHER `builtin` nor `config.builtin` is still rejected.
+	roundTrip := req.Builtin == nil && req.Config != nil && req.Config.Builtin != nil
+	if req.Builtin == nil && !roundTrip {
 		jsonErr(w, http.StatusBadRequest,
 			"builtin.policies is required: this endpoint replaces the agent's complete tool-policy map, "+
-				"so a body with no \"builtin\" object is rejected rather than persisted as an empty policy")
+				"so a body with no \"builtin\" object (and no \"config.builtin\" object, the GET response shape) "+
+				"is rejected rather than persisted as an empty policy")
 		return
 	}
 	// Extract builtin fields. There is no default_policy field on the wire
 	// any more (CLAUDE.md hard constraint 6).
 	var builtinPolicies map[string]string
-	if req.Builtin != nil && req.Builtin.Policies != nil {
+	switch {
+	case roundTrip:
+		if req.Config.Builtin.Policies != nil {
+			builtinPolicies = make(map[string]string, len(req.Config.Builtin.Policies))
+			for k, v := range req.Config.Builtin.Policies {
+				builtinPolicies[k] = string(v)
+			}
+		}
+	case req.Builtin.Policies != nil:
 		builtinPolicies = make(map[string]string, len(req.Builtin.Policies))
 		for k, v := range req.Builtin.Policies {
 			builtinPolicies[k] = string(v)
@@ -8479,9 +8567,28 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		ID    string
 		Tools []string
 	}
-	if req.Mcp != nil && req.Mcp.Servers != nil {
-		configuredServers := cfg.Tools.MCP.Servers
+	// The MCP binding list comes from the top-level `mcp` when present, or
+	// from `config.mcp` on a D-86 round-trip body; the two are the same
+	// shape on the wire but distinct generated types, so they are normalised
+	// into one list before validation.
+	type mcpBindingWire struct {
+		Id    string
+		Tools *[]string
+	}
+	var mcpBindings []mcpBindingWire
+	switch {
+	case req.Mcp != nil && req.Mcp.Servers != nil:
 		for _, s := range *req.Mcp.Servers {
+			mcpBindings = append(mcpBindings, mcpBindingWire{Id: s.Id, Tools: s.Tools})
+		}
+	case roundTrip && req.Config.Mcp != nil && req.Config.Mcp.Servers != nil:
+		for _, s := range *req.Config.Mcp.Servers {
+			mcpBindings = append(mcpBindings, mcpBindingWire{Id: s.Id, Tools: s.Tools})
+		}
+	}
+	if mcpBindings != nil {
+		configuredServers := cfg.Tools.MCP.Servers
+		for _, s := range mcpBindings {
 			if s.Id == "" {
 				jsonErr(w, http.StatusUnprocessableEntity, "mcp.servers[].id must not be empty")
 				return
@@ -11064,9 +11171,22 @@ func (a *restAPI) HandleServeUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Content-Disposition", "inline")
-	http.ServeFile(w, r, resolved)
+	// ADR-067 FR-008b/FR-015: this route used to set a bare
+	// "Content-Disposition: inline" and hand the file to http.ServeFile, which
+	// types it from the host MIME registry and then sniffs the bytes. An
+	// uploaded .html was therefore served as a real document on the gateway
+	// origin with no policy. serveLibraryPath decides the type from the
+	// extension, attaches anything off the §10.4 allow-list, and carries the
+	// §10.3 isolation policy on whatever it does serve inline.
+	if err := serveLibraryPath(w, r, resolved, filename); err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errLibraryBytesNotAFile) {
+			jsonErr(w, http.StatusNotFound, "file not found")
+			return
+		}
+		slog.Error("rest: uploads: serve failed", "session_id", sessionID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, "could not read file")
+		return
+	}
 }
 
 // --- Media ---
@@ -11188,13 +11308,31 @@ func (a *restAPI) serveMedia(
 		return
 	}
 
-	h := w.Header()
-	h.Set("X-Content-Type-Options", "nosniff")
-	if meta.ContentType != "" {
-		h.Set("Content-Type", meta.ContentType)
+	// ADR-067 FR-008b, and this is the round-4 LIVE exposure, not a preview
+	// feature: this route is registered withOptionalAuth and used to serve
+	// workspace-library bytes with a bare "inline" disposition, the media
+	// entry's own recorded ContentType, and NO policy — so an .html entry
+	// (pkg/library/entries.go types it text/html) rendered as a real document
+	// on the gateway origin, same-origin with the session cookie.
+	//
+	// meta.ContentType is deliberately no longer consulted. It is the type an
+	// UPSTREAM claimed — a channel, an MCP server, an upload form — and
+	// FR-015b makes the compiled-in extension table the only source. The
+	// storage path is only a fallback for a legacy registry entry with no
+	// recorded filename: a workspace-library entry lives at <libdir>/<mediaID>
+	// with no extension, so it can never supply one.
+	displayName := meta.Filename
+	if libraryExtOf(displayName) == "" {
+		displayName = filepath.Base(localPath)
 	}
-	if meta.Filename != "" {
-		h.Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", meta.Filename))
+	if err := serveLibraryPath(w, r, localPath, displayName); err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, errLibraryBytesNotAFile) {
+			slog.Warn("rest: media: resolved path is not a readable file", "ref", logRef, "error", err.Error())
+			jsonErr(w, http.StatusNotFound, "media not found")
+			return
+		}
+		slog.Error("rest: media: serve failed", "ref", logRef, "error", err.Error())
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
 	}
-	http.ServeFile(w, r, localPath)
 }

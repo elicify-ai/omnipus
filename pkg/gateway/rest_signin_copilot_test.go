@@ -6,6 +6,7 @@
 package gateway
 
 import (
+	"crypto/rand"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -376,4 +377,99 @@ func TestSignInStatus_CopilotRowReportsDisconnected(t *testing.T) {
 	assert.True(t, strings.Contains(*row.Error, "not found on this machine"),
 		"error = %q, want the missing-CLI hint", *row.Error)
 	assert.Equal(t, gen.ProviderAuthMethodSignIn, row.AuthMethod)
+}
+
+func installFakeCopilot(t *testing.T, dir, stdout, stderr string, exitCode int, tally string) {
+	t.Helper()
+	if !hasBash() {
+		t.Skip("fake CLI uses a #!/bin/bash shebang with no Windows equivalent (see #113)")
+	}
+	if tally != "" {
+		if err := os.Remove(tally); err != nil && !os.IsNotExist(err) {
+			require.NoError(t, err)
+		}
+	}
+	script := filepath.Join(dir, "copilot")
+	require.NoError(t, os.WriteFile(script, []byte(fakeCopilotScript(stdout, stderr, exitCode, tally)), 0o755))
+
+	cmd := exec.Command(script)
+	cmd.Env = append(os.Environ(), "PATH="+dir)
+	var gotOut, gotErr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &gotOut, &gotErr
+	gotCode := 0
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		require.True(t, errors.As(err, &exitErr), "the fake copilot could not be run at all: %v", err)
+		gotCode = exitErr.ExitCode()
+	}
+	require.Equal(t, strings.TrimSpace(stderr), strings.TrimSpace(gotErr.String()),
+		"the fake copilot must write exactly its scripted stderr with PATH=%s", dir)
+	require.Equal(t, strings.TrimSpace(stdout), strings.TrimSpace(gotOut.String()),
+		"the fake copilot must write exactly its scripted stdout with PATH=%s", dir)
+	require.Equal(t, exitCode, gotCode, "the fake copilot must exit with its scripted code")
+
+	if tally != "" {
+		require.Equal(t, 1, countInvocations(t, tally),
+			"positive control: one run of the counting fake must record exactly one invocation")
+		require.NoError(t, os.Remove(tally))
+	}
+}
+
+// unrecognisedCopilotMessageLog is the fragment of the warning
+// providers.CopilotSignIn logs when a failed check matched no marker and fell
+// back to not_signed_in. Its ABSENCE is how a test proves the classifier
+// recognised the scripted message on purpose.
+const unrecognisedCopilotMessageLog = "unrecognised message"
+
+// neutralFakeCLIDir creates a directory for a fake vendor CLI whose own name
+// carries neither the test's name nor a decimal number. t.TempDir() embeds
+// both, and both once decided a Copilot sign-in result: the subtest named
+// "expired session" put "expired" into the path, and a random suffix
+// containing "401" did the same for not_signed_in. The suffix here is base32
+// (A–Z, 2–7), which can never spell 401, and is re-drawn in the
+// vanishingly rare case it spells "expired".
+//
+// The directory sits under os.TempDir(), so a run whose TMPDIR itself contains
+// such text still exercises the case that matters: the classifier must be
+// handed the fake's scripted message, never its path.
+func neutralFakeCLIDir(t *testing.T) string {
+	t.Helper()
+	name := "omnipus-fakecli-" + rand.Text()
+	for strings.Contains(strings.ToLower(name), "expired") {
+		name = "omnipus-fakecli-" + rand.Text()
+	}
+	dir := filepath.Join(os.TempDir(), name)
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+// fakeCopilotScript is the body of a stand-in `copilot`. It uses bash
+// BUILT-INS ONLY (printf, echo, redirection), because every caller makes the
+// fake's own directory the whole PATH. An external command such as `cat` or
+// `touch` is then "command not found": the scripted text is never written, and
+// bash's own error line — which carries the fake's temp path — reaches the
+// sign-in classifier instead. That is how a random "401" in a temp folder name
+// turned not_signed_in into expired on CI (commit 829e26253, go-race gate).
+//
+// tally, when non-empty, is a file the fake appends one line to per run.
+func fakeCopilotScript(stdout, stderr string, exitCode int, tally string) string {
+	body := "#!/bin/bash\n"
+	if tally != "" {
+		body += "echo x >> " + fakeCopilotShellQuote(tally) + "\n"
+	}
+	if stdout != "" {
+		body += "printf '%s\\n' " + fakeCopilotShellQuote(stdout) + "\n"
+	}
+	if stderr != "" {
+		body += "printf '%s\\n' " + fakeCopilotShellQuote(stderr) + " >&2\n"
+	}
+	body += "exit " + strconv.Itoa(exitCode) + "\n"
+	return body
+}
+
+// fakeCopilotShellQuote single-quotes s for bash, so scripted CLI text with
+// quotes, backticks or dollar signs is written verbatim.
+func fakeCopilotShellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

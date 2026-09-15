@@ -5,13 +5,14 @@ import { useUiStore } from '@/store/ui'
 import { useConnectionStore } from '@/store/connection'
 import { useSessionStore, registerChatSetReplaying, registerChatResetForReplay } from '@/store/session'
 import { queryClient } from '@/lib/queryClient'
-import { tasksQueryKeys } from '@/lib/api'
+import { tasksQueryKeys, libraryQueryKeys } from '@/lib/api'
 import type { Message, ToolCall, AgentKind, Agent } from '@/lib/api'
 import type { WsReceiveFrame, WsReplayMessageFrame, WsRateLimitFrame, WsSubagentStartFrame, WsSubagentEndFrame } from '@/lib/ws'
 import type {
   ToolResultRef,
   TruncatedResult,
   WhatsAppPairingFrame,
+  KnowledgeIndexProgressFrame,
   NotificationFrame,
   GoalStatusFrame,
   LoopStatusFrame,
@@ -27,6 +28,7 @@ import type {
 import { useJudgeActivityStore } from '@/store/judgeActivity'
 import { MessageFrame as MessageFrameSchema } from '@/lib/api/generated/schemas'
 import { useWhatsAppPairingStore } from '@/store/whatsappPairing'
+import { useKnowledgeIndexStore } from '@/store/knowledgeIndex'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import { useNotificationsStore } from '@/store/notifications'
 import { useToolApprovalStore } from '@/store/toolApproval'
@@ -1076,11 +1078,75 @@ function applyMessageArray(
   }
 }
 
-/** Advance lastReceivedEventTime if the provided timestamp is newer (lexicographic ISO-8601 comparison). */
-function advanceEventTime(current: string | null, incoming: string | null | undefined): string | null {
+/** Captures an ISO-8601 timestamp's head, its fractional-seconds digits, and any trailing zone designator. */
+const ISO_FRACTIONAL_SECONDS = /^(.*T\d{2}:\d{2}:\d{2})\.(\d+)(.*)$/
+
+/**
+ * Splits an ISO-8601 timestamp into its whole-second-plus-milliseconds part and
+ * the sub-millisecond remainder, so two timestamps can be ordered CHRONOLOGICALLY.
+ *
+ * Why this is not a plain string compare, and not a plain `Date.parse` either:
+ *
+ * The gateway writes these timestamps with Go's `time.RFC3339Nano`
+ * (pkg/gateway/replay.go, `buildReplayErrorFrame`), which STRIPS trailing zeros
+ * from the fractional seconds. Two chronologically ordered instants can therefore
+ * arrive with different fractional widths:
+ *
+ *   "2026-09-12T10:00:00.5Z"        (earlier)
+ *   "2026-09-12T10:00:00.5000001Z"  (later)
+ *
+ *   - A string compare gets this BACKWARDS: at the first differing character it
+ *     compares '0' (0x30) against 'Z' (0x5A), so the later timestamp sorts BELOW
+ *     the earlier one and the cursor refuses to advance past it.
+ *   - `Date.parse` alone cannot separate them either: JS `Date` has only
+ *     millisecond resolution, so both collapse to the same epoch value and the
+ *     `>` test is false — the cursor again fails to advance.
+ *
+ * Either way the cursor is left behind the newest entry the SPA has actually
+ * seen, the next reconnect sends a `since` that is too early, and the server
+ * (whose `applySinceCursor` compares real parsed instants with `.After()`)
+ * correctly replays entries the SPA already has — duplicate bubbles.
+ *
+ * So: take the first three fractional digits as milliseconds and hand those to
+ * `Date.parse` explicitly (never relying on how a given engine truncates or
+ * rounds the rest), and keep the remaining digits as an integer tiebreaker
+ * normalised to a FIXED six-digit width so they compare as plain numbers. Go
+ * emits at most nine fractional digits, so three + six covers the whole wire
+ * range with nothing to truncate.
+ *
+ * Returns null when the value is not a parseable timestamp.
+ */
+function parseEventTime(value: string): { ms: number; subMs: number } | null {
+  const match = ISO_FRACTIONAL_SECONDS.exec(value)
+  if (!match) {
+    const whole = Date.parse(value)
+    return Number.isNaN(whole) ? null : { ms: whole, subMs: 0 }
+  }
+  const [, head, digits, tail] = match
+  const ms = Date.parse(`${head}.${digits.slice(0, 3).padEnd(3, '0')}${tail}`)
+  if (Number.isNaN(ms)) return null
+  return { ms, subMs: Number(digits.slice(3, 9).padEnd(6, '0')) }
+}
+
+/**
+ * Advance lastReceivedEventTime if `incoming` is chronologically newer than
+ * `current`. Monotonic: it never moves the cursor backwards.
+ *
+ * Exported for direct unit testing — see chat.replay-cursor.test.ts.
+ */
+export function advanceEventTime(current: string | null, incoming: string | null | undefined): string | null {
   if (!incoming) return current
   if (!current) return incoming
-  return incoming > current ? incoming : current
+  const inc = parseEventTime(incoming)
+  // An unparseable incoming value must never move the cursor: erring towards a
+  // stale cursor costs a duplicate replay, erring forwards would lose messages.
+  if (!inc) return current
+  const cur = parseEventTime(current)
+  // A cursor we can no longer parse is useless — the server rejects it and falls
+  // back to a full replay — so a parseable incoming value is strictly better.
+  if (!cur) return incoming
+  if (inc.ms !== cur.ms) return inc.ms > cur.ms ? incoming : current
+  return inc.subMs > cur.subMs ? incoming : current
 }
 
 interface ChatStore {
@@ -1538,6 +1604,38 @@ function schedulePlanStatusInvalidate(planId: string): void {
   pendingPlanStatusIds.add(planId)
   if (planStatusInvalidateTimer) return
   planStatusInvalidateTimer = setTimeout(flushPlanStatusInvalidation, PLAN_STATUS_INVALIDATE_DEBOUNCE_MS)
+}
+
+// F3 (SILENT-FAILURES-rate-limits-dd25339bf.md): `library_changed` fires on
+// EVERY Library write — a bulk operation (e.g. trashing 54 files) or several
+// tabs writing at once broadcasts a burst of these in quick succession. Each
+// one used to trigger its OWN full invalidation pass (the listing prefix for
+// its workspace, plus the shared workspaces list), so a burst of N frames
+// cost N full reload passes — competing with the very same shared
+// per-workspace knowledge rate limiter this fix round exists to stop
+// tripping. Mirrors `schedulePlanStatusInvalidate` above exactly: same
+// trailing-edge debounce shape, same "collect ids, flush once" pattern.
+const LIBRARY_CHANGED_INVALIDATE_DEBOUNCE_MS = 1000
+let libraryChangedInvalidateTimer: ReturnType<typeof setTimeout> | undefined
+const pendingLibraryChangedWorkspaceIds = new Set<string>()
+
+function flushLibraryChangedInvalidation(): void {
+  const workspaceIds = Array.from(pendingLibraryChangedWorkspaceIds)
+  pendingLibraryChangedWorkspaceIds.clear()
+  libraryChangedInvalidateTimer = undefined
+  for (const workspaceId of workspaceIds) {
+    queryClient.invalidateQueries({ queryKey: ['library', workspaceId] })
+  }
+  // The workspaces list carries entry_count for every workspace — one shared
+  // invalidation covers all of them, fired once per flush regardless of how
+  // many distinct workspaces' frames arrived in this window.
+  queryClient.invalidateQueries({ queryKey: libraryQueryKeys.workspaces() })
+}
+
+function scheduleLibraryChangedInvalidate(workspaceId: string): void {
+  pendingLibraryChangedWorkspaceIds.add(workspaceId)
+  if (libraryChangedInvalidateTimer) return
+  libraryChangedInvalidateTimer = setTimeout(flushLibraryChangedInvalidation, LIBRARY_CHANGED_INVALIDATE_DEBOUNCE_MS)
 }
 
 // UAT (browser-panel "Take over"): session ids with an explicit
@@ -3848,13 +3946,35 @@ export const useChatStore = create<ChatStore>((set, get) => {
       // HIGH-2: reset unknown-frame counter on every known-good frame.
       unknownFrameCount = 0
 
-      // I1: advance the reconnect `since` cursor for ANY frame that carries a
-      // sequence timestamp — not only replay_message. The cursor is sent as
-      // `since` on attach_session so the gateway skips frames the SPA already
-      // saw; if it only advanced on replay_message, every replayed/live frame
-      // that DID carry a timestamp would be re-replayed on the next reconnect.
-      // advanceEventTime is monotonic (only moves forward), so this is safe to
-      // run before the per-frame reducer regardless of dedup/early-return paths.
+      // I1: advance the reconnect `since` cursor from whatever frame carries a
+      // `timestamp` field. The cursor is sent as `since` on attach_session so the
+      // gateway skips transcript entries the SPA already saw.
+      //
+      // What this actually covers today — the generic `frame.timestamp` read
+      // below reads broadly, but the set of frames that can satisfy it is small
+      // and worth stating plainly rather than leaving as "any frame":
+      //   - `replay_error` is the ONLY frame the gateway currently sends with a
+      //     populated timestamp (pkg/gateway/replay.go, `buildReplayErrorFrame`
+      //     is the single `Timestamp:` assignment in the replay path).
+      //   - `replay_message` declares an OPTIONAL `timestamp` in the contract
+      //     (contracts/components/schemas/ReplayMessageFrame.yaml) but neither
+      //     gateway construction site populates it, so in production it never
+      //     advances the cursor. The reducer still honours it if that changes.
+      //   - `token` / `done` / `session_state` have no `timestamp` field at all
+      //     and never advance the cursor.
+      //
+      // So the cursor moves rarely and lags the true high-water mark. That is
+      // conservative in the SAFE direction: too-old a `since` costs a duplicate
+      // replay the dedup paths absorb, whereas too-new would silently skip
+      // messages. Do not "fix" the lag by advancing on a frame whose timestamp
+      // is not a transcript-entry time — the server compares `since` against
+      // TranscriptEntry.Timestamp, so only those values are meaningful here.
+      //
+      // advanceEventTime is monotonic (only moves forward) and compares
+      // chronologically, not lexicographically — see its doc comment for why the
+      // difference matters on RFC3339Nano's variable-width fractional seconds.
+      // Being monotonic, it is safe to run before the per-frame reducer
+      // regardless of dedup/early-return paths.
       {
         const frameTimestamp = (frame as { timestamp?: string }).timestamp
         if (frameTimestamp && targetSid) {
@@ -4057,13 +4177,49 @@ export const useChatStore = create<ChatStore>((set, get) => {
                 // different producer's bubble than the one the tool call
                 // actually started on.
                 let abandonedMsgId: string | null = null
+                // Empty-response variant of the "delivered twice" defect
+                // documented on the status==='error' guard above: when the
+                // LLM call itself produced no tokens at all (not a
+                // classified error — the engine's success-path empty-content
+                // fallback, pkg/agent/loop.go's `defaultResponse` sentinel),
+                // NO `error` frame is ever sent, so the guard above never
+                // fires. The turn still finalizes the optimistic placeholder
+                // via `done` with content:'' (nothing was ever streamed to
+                // abandon it against), and THEN webchatChannel.Send()'s
+                // markStreamed fallback (pkg/gateway/webchat_channel.go —
+                // markStreamed is only called when `accumulated.Len() > 0`)
+                // delivers the actual fallback text as a second token+done
+                // pair so the turn doesn't strand the user on a stuck
+                // "thinking" spinner. Without this check, the boundary rule
+                // right below (closed bubble = new segment) abandons the
+                // now-closed EMPTY placeholder and mints a brand-new bubble
+                // for that fallback text — leaving the original placeholder
+                // stranded on screen as a permanent empty bubble with a Copy
+                // button that copies nothing (D-fix's terminal-empty
+                // variant). A closed bubble that finalized holding
+                // absolutely nothing — no text, no tool call, no media, no
+                // subagent span — was never actually shown as content, so
+                // reusing it here (rather than abandoning it) collapses the
+                // two deliveries back into the single bubble the user
+                // actually needs to see.
+                const lastMsg = lastMsgId ? draft.messagesById[lastMsgId] : null
+                const lastMsgIsEmptyTerminal =
+                  !!lastMsg &&
+                  !lastMsg.isStreaming &&
+                  !lastMsg.content?.trim().length &&
+                  !lastMsg.tool_calls?.length &&
+                  !lastMsg.media?.length &&
+                  !lastMsg.spans?.length
                 // Only reuse the last assistant bubble if it is still
-                // streaming. A closed bubble (status=done) means the prior
-                // LLM call has finalized and any new tokens are part of a
-                // *new* turn-segment — typically a follow-up call after a
-                // tool returned. Stuffing them back into the closed bubble
-                // is what produced the "text-then-image-at-bottom" ordering.
-                if (lastMsgId && !draft.messagesById[lastMsgId].isStreaming) {
+                // streaming (or, per the empty-terminal case just above, if
+                // it finalized holding nothing at all). A closed bubble
+                // that DID hold something (status=done, real content/tool
+                // calls/media/spans already shown) means the prior LLM call
+                // has finalized and any new tokens are part of a *new*
+                // turn-segment — typically a follow-up call after a tool
+                // returned. Stuffing them back into that closed bubble is
+                // what produced the "text-then-image-at-bottom" ordering.
+                if (lastMsgId && !draft.messagesById[lastMsgId].isStreaming && !lastMsgIsEmptyTerminal) {
                   abandonedMsgId = lastMsgId
                   lastMsgId = null
                 }
@@ -5395,6 +5551,30 @@ export const useChatStore = create<ChatStore>((set, get) => {
           queryClient.invalidateQueries({ queryKey: ['tasks'] })
           break
 
+        // D-107 (2026-09-14): a Library write landed on the REST surface —
+        // usually in ANOTHER tab, which is the whole point. GLOBAL frame (no
+        // session_id — it describes a workspace's file tree, not a chat).
+        // Invalidate EVERY cached library query for the named workspace
+        // (partial-key ['library', workspace_id] covers entries in every
+        // folder, both include_hidden variants, and content) rather than
+        // trying to compute which folders were affected — a wrong folder set
+        // would reintroduce exactly the stale-listing defect this exists to
+        // remove. The workspaces list carries entry_count, so it goes too.
+        // The originating tab's redundant invalidate is a no-op (its own
+        // mutation already invalidated), and the focus-path pull half lives
+        // in useLibraryCrossTabRefresh for tabs that never see a WS event.
+        //
+        // F3 (2026-09-14, SILENT-FAILURES-rate-limits-dd25339bf.md): routed
+        // through scheduleLibraryChangedInvalidate rather than invalidating
+        // synchronously here — a burst of these frames (bulk trash, several
+        // tabs writing at once) used to cost one full reload pass PER FRAME.
+        // See that function's own doc comment for the debounce/coalesce
+        // rationale; a real change still refreshes every open view, just
+        // once per short window instead of once per frame.
+        case 'library_changed':
+          scheduleLibraryChangedInvalidate(frame.workspace_id)
+          break
+
         // Per-task run history (ADR-050 / task-run-history-spec §3.8): fires
         // at run open AND close (not just terminal), so the calendar chip
         // flips to "In progress" immediately, not only on completion. Unlike
@@ -6269,6 +6449,19 @@ export const useChatStore = create<ChatStore>((set, get) => {
           if (verdictFrame.session_id) {
             withBucket(verdictFrame.session_id, (b) => buildJudgeVerdictInsertion(b, verdictFrame) ?? {})
           }
+          break
+        }
+
+        case 'knowledge_index_progress': {
+          // ADR-067 FR-080: GLOBAL frame (no session_id — it describes a
+          // knowledge base, not a chat). Same shape as the whatsapp_pairing /
+          // notification cases: applied through getState() at frame time so
+          // chatStore stays decoupled from the knowledge store.
+          //
+          // Without this case the frame was validated, counted as known, and
+          // then dropped on the floor — which is why every knowledge base in
+          // the Library reported "no indexing progress received" forever.
+          useKnowledgeIndexStore.getState().apply(frame as KnowledgeIndexProgressFrame)
           break
         }
 

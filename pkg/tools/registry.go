@@ -531,6 +531,21 @@ func (r *ToolRegistry) ExecuteWithContext(
 		args = normalizer.NormalizeArgs(args)
 	}
 
+	// Recover arguments corrupted by a model that leaked its tool-call
+	// template control tokens into a string value (A1 — see argrepair.go).
+	// Runs before validation so a recoverable call (e.g. op="create_view"
+	// with `type` swallowed into op's value) is repaired into the call the
+	// model meant, rather than rejected with an unusable enum error. A no-op
+	// for every well-formed call: nothing fires unless a value carries BOTH a
+	// literal <arg_key>/<arg_value> template tag AND a per-call hex sentinel —
+	// the fingerprint of a genuine leak, so a legitimate value that merely
+	// mentions the tag is left untouched (A1).
+	if repaired, ok := repairLeakedToolArgs(args); ok {
+		args = repaired
+		logger.WarnCF("tool", "repaired leaked tool-call template tokens in arguments",
+			map[string]any{"tool": name})
+	}
+
 	// Validate arguments against the tool's declared schema.
 	if err := validateToolArgs(tool.Parameters(), args); err != nil {
 		logger.WarnCF("tool", "Tool argument validation failed",
@@ -628,14 +643,24 @@ func (r *ToolRegistry) ExecuteWithContext(
 		if result.IsError {
 			decision = audit.DecisionError
 		}
+		// UAT 2026-09-13 D-85: carry WHAT the call acted on (path, id,
+		// operation, property — the identifying keys only, never content) and
+		// which session it ran in, so an auditor can reconstruct which note
+		// changed and how, not merely that a tool ran. audit.SalientToolArgs
+		// owns the allowlist.
+		details := map[string]any{
+			"duration_ms": duration.Milliseconds(),
+		}
+		if salient := audit.SalientToolArgs(name, args); salient != nil {
+			details["args"] = salient
+		}
 		if err := auditLog.Log(&audit.Entry{
-			Event:    audit.EventToolCall,
-			Decision: decision,
-			AgentID:  agentID,
-			Tool:     name,
-			Details: map[string]any{
-				"duration_ms": duration.Milliseconds(),
-			},
+			Event:     audit.EventToolCall,
+			Decision:  decision,
+			AgentID:   agentID,
+			SessionID: ToolTranscriptSessionID(ctx),
+			Tool:      name,
+			Details:   details,
 		}); err != nil {
 			slog.Error("SEC-15: audit log write failed for tool execution",
 				"tool", name, "agent", agentID, "error", err)

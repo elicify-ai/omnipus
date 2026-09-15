@@ -834,6 +834,111 @@ func TestVisibility_SearchOnlyToolsRemainInSearchIndex(t *testing.T) {
 	}
 }
 
+// knowledgeManifestToolNames is ADR-068 D15.3's six-tool vault-records
+// family (knowledge_describe, knowledge_find, knowledge_read, knowledge_edit,
+// knowledge_restructure, knowledge_configure — see
+// pkg/agent/knowledge_tools.go's registerKnowledgeTools and
+// pkg/coreagent/catalog_count_test.go's currentKnowledgeToolNames). Declared here
+// (not merged into tier3SearchOnlyToolNames above) because that list is
+// documented as "ADR-071 §4.1's literal Tier 3 list, transcribed verbatim" —
+// a closed historical snapshot of an ADR that predates ADR-068 and never
+// mentions these names; folding them in would misrepresent the transcription
+// as covering an ADR it does not.
+var knowledgeManifestToolNames = []string{
+	"knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list",
+	"knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create",
+}
+
+// TestVisibility_KnowledgeToolsAreSearchOnly pins the ADR-068 knowledge
+// family's manifest exposure (widened by KB-1/KB-2's knowledge_list and
+// knowledge_base_create, defect-list-knowledge-base-ux-2026-09-08.md,
+// founder-ratified 2026-09-08): all eight resolve to ManifestLazy +
+// ManifestSearchOnly, deliberately (per ADR-071 §4.4's default — "search-only
+// by default... itself deliberate, not a silent fallthrough"), never
+// ManifestFull and never previewed.
+//
+// Registration is unconditional for every agent (instance.go's
+// registerKnowledgeTools), so the every-turn token cost of these six names
+// is governed entirely by this tier assignment: ManifestFull/ManifestInfra
+// tools are charged a full JSON schema on every turn regardless of whether
+// they were used (sentToolSurfaceTokens, loop.go); ManifestLazy tools are
+// charged nothing until loaded, and — being search-only rather than
+// previewed — cost zero manifest-block text either (BuildCompressedManifest
+// skips any name whose ToolManifestVisibility is not ManifestPreviewed). A
+// tool moved from this set into fullManifestToolNames or
+// previewedLazyToolNames would silently reintroduce a fixed per-turn cost
+// across every agent; this test exists so that move can only ever be
+// deliberate.
+//
+// All EIGHT resolve the same way, not just the four read tools: retrieval
+// (describe/find/read/list) and write (edit/restructure/configure/
+// base_create) are equally niche — meaningful only in a workspace with a
+// knowledge base mounted or one about to be created — and none of the eight
+// has the "no natural discovery moment" property that justifies a Tier 2
+// preview line (contrast bash, list_mounts, recall_conversation in
+// fullManifestToolNames's own doc comment). Maximal payload cut for the
+// whole family, consistent with ADR-071 D3's design intent for a niche,
+// workspace-gated tool surface.
+func TestVisibility_KnowledgeToolsAreSearchOnly(t *testing.T) {
+	previewed := make(map[string]bool)
+	for _, n := range PreviewedLazyToolNames() {
+		previewed[n] = true
+	}
+	for _, name := range knowledgeManifestToolNames {
+		if got := ToolManifestTier(name); got != ManifestLazy {
+			t.Errorf("ToolManifestTier(%q) = %v, want ManifestLazy", name, got)
+		}
+		if IsFullManifestTool(name) {
+			t.Errorf("IsFullManifestTool(%q) = true, want false — knowledge tools must never be Full-tier", name)
+		}
+		if got := ToolManifestVisibility(name); got != ManifestSearchOnly {
+			t.Errorf("ToolManifestVisibility(%q) = %v, want ManifestSearchOnly", name, got)
+		}
+		if previewed[name] {
+			t.Errorf("%q must not be in previewedLazyToolNames (knowledge tools stay fully search-only)", name)
+		}
+	}
+}
+
+// TestVisibility_GrepIsSearchOnly pins the ADR-081 D11 tier ruling for the
+// new "grep" agent tool (unified-search-and-grep-spec.md MV-7): search-only
+// by default, like the knowledge family — ADR-071 §4.4's default applies
+// ("search-only by default... itself deliberate, not a silent fallthrough"),
+// never ManifestFull and never previewed.
+//
+// This is its OWN sibling test rather than an extension of
+// TestVisibility_KnowledgeToolsAreSearchOnly / knowledgeManifestToolNames:
+// grep is not part of ADR-068's vault-records family, and folding it into
+// that list would misrepresent the family it documents. "grep" is asserted
+// with no entry in fullManifestToolNames, infraManifestToolNames or
+// previewedLazyToolNames anywhere in this package — it reaches
+// ManifestLazy + ManifestSearchOnly purely by ABSENCE from those three maps
+// (ToolManifestTier's default branch), which is exactly why this pin exists:
+// nothing else in this package would fail if a future edit accidentally
+// added "grep" to one of them, so this test is the only thing that would
+// catch that regression.
+func TestVisibility_GrepIsSearchOnly(t *testing.T) {
+	const name = "grep"
+
+	previewed := make(map[string]bool)
+	for _, n := range PreviewedLazyToolNames() {
+		previewed[n] = true
+	}
+
+	if got := ToolManifestTier(name); got != ManifestLazy {
+		t.Errorf("ToolManifestTier(%q) = %v, want ManifestLazy", name, got)
+	}
+	if IsFullManifestTool(name) {
+		t.Errorf("IsFullManifestTool(%q) = true, want false — grep must never be Full-tier", name)
+	}
+	if got := ToolManifestVisibility(name); got != ManifestSearchOnly {
+		t.Errorf("ToolManifestVisibility(%q) = %v, want ManifestSearchOnly", name, got)
+	}
+	if previewed[name] {
+		t.Errorf("%q must not be in previewedLazyToolNames (grep stays fully search-only, ADR-081 D11)", name)
+	}
+}
+
 // TestVisibility_EveryCatalogNameHasRecordedLevel mirrors the existing
 // TestManifestNamesResolveInCatalog / TestCatalog_MatchesGlobalCeilingEntryForEntry
 // drift-test pattern: every name GeneralBuiltinMetadata() returns must resolve

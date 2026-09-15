@@ -3403,8 +3403,19 @@ func registerSharedTools(
 						// policyFiltered, so a near-miss typo of a hidden MCP tool's name
 						// gets a bare "unknown tool" with no "did you mean" hint. That's the
 						// correct tradeoff (never suggest a name the agent can't call).
-						if suggestion := tools.FindClosestToolName(policyFiltered, name); suggestion != "" {
-							return false, name + " — unknown tool (did you mean '" + suggestion + "'?)"
+						//
+						// D-96 (UAT 2026-09-13): the ranking is suggestUnknownToolName's,
+						// not raw edit distance — asked for `knowledge_create`, raw
+						// distance answered `knowledge_read`, the one knowledge tool that
+						// cannot create anything. The suffix the caller named is matched
+						// against each tool's `op` enum first, so the hint names the tool
+						// AND the op that does what the caller asked for.
+						if suggestion, opHint := suggestUnknownToolName(policyFiltered, name); suggestion != "" {
+							msg := name + " — unknown tool (did you mean '" + suggestion + "'?"
+							if opHint != "" {
+								msg += " with " + opHint
+							}
+							return false, msg + "?)"
 						}
 						return false, name + " — unknown tool name"
 					},

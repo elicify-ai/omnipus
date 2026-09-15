@@ -1,0 +1,1205 @@
+// Omnipus — ADR-067 stage 2: the knowledge-base READ surface over REST.
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package gateway
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"net/http"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+
+	"gopkg.in/yaml.v3"
+
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/knowledge"
+	"github.com/elicify-ai/omnipus/pkg/library"
+	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
+)
+
+// ---------------------------------------------------------------------------
+// WHAT THIS FILE IS
+//
+// pkg/knowledge was complete, tested and reachable by NOTHING: the binary did
+// not import it at all. This file is one of the two seams that connect it —
+// the operator's knowledge endpoints:
+//
+//	GET  /api/v1/library/{workspace_id}/knowledge          detection + identity
+//	POST /api/v1/library/{workspace_id}/knowledge/find      human vault search (notes+records+views+attachments, rest_knowledge_find.go — US-5/ADR-081 retired the former relevance-search endpoint here; this is the ONE surviving human search)
+//	GET  /api/v1/library/{workspace_id}/knowledge/graph     links/backlinks/…
+//	GET  /api/v1/library/{workspace_id}/knowledge/outline   heading outline
+//	GET  /api/v1/library/{workspace_id}/knowledge/view      saved-view result (rest_knowledge_view.go)
+//	GET  /api/v1/library/{workspace_id}/knowledge/base-views a .base file's imported views (rest_knowledge_base_views.go)
+//	GET  /api/v1/library/{workspace_id}/knowledge/views     EVERY saved view a collection owns, file or no file (UAT D-13, rest_knowledge_views.go)
+//	GET  /api/v1/library/{workspace_id}/knowledge/record-schema declared record types (ADR-083 CW-4, rest_knowledge_record.go)
+//	GET  /api/v1/library/{workspace_id}/knowledge/records/{id}  one typed record (CW-4, rest_knowledge_record.go)
+//	POST /api/v1/library/{workspace_id}/knowledge/records     create/update one record by splice (CW-7, rest_knowledge_record.go)
+//
+// The list is exhaustive and is deliberately a LIST rather than a count; see
+// handleKnowledge's own comment for why.
+//
+// Every one of them CALLS pkg/knowledge. None of them reimplements it: link
+// resolution, containment, the index, the incompleteness report and the
+// query-time excerpt all live there, and a second copy of any of them here
+// would be a second thing to keep honest.
+//
+// THE CONFINEMENT CHAIN IS THE EXISTING ONE, NOT A SECOND ONE. Path-addressed
+// endpoints (detect, outline) resolve exactly as every rest_library.go handler
+// does — workspace.Exists → library.CleanRelPath → library.OpenRoot →
+// Root.Stat*, which enforces containment through os.Root at the syscall
+// boundary — and only then hand the resulting host path to pkg/knowledge.
+// Collection-addressed endpoints (search, graph) resolve through
+// knowledge.ResolveScope, which is the security-reviewed accessor for "what may
+// this workspace address": workspace → workspace.AllowedMountRoots → the
+// knowledge bases within those roots, plus the workspace's own work tree.
+//
+// US-9 (P0) IS A PROPERTY OF THAT SECOND CHAIN. A collection_id that names a
+// knowledge base mounted into a DIFFERENT workspace matches nothing in this
+// workspace's scope, and the answer is an EMPTY RESULT SET — never 403, never
+// 404 (FR-052, FR-053). A permission error would confirm the collection exists,
+// which is itself the disclosure the requirement forbids.
+//
+// NO INDEX COUNTS ON THE DETECT ENDPOINT. KnowledgeBaseInfo deliberately
+// carries none: index progress is a streaming state delivered as the
+// knowledge_index_progress WS frame (FR-080). A REST field would invite the
+// polling loop that decision exists to prevent, so do not add one here however
+// convenient it looks.
+// ---------------------------------------------------------------------------
+
+// Rate limiting for the knowledge-base endpoints (FR-055's principle, applied
+// to the operator surface). Every knowledge route that does real work — find,
+// graph, view, views, record-schema, one record, the record write door, and
+// files/search — calls allowKnowledgeRetrieval before doing any of it.
+//
+// It used to be a pair — this outer instance plus an inner one
+// knowledge.SearchTool checked for itself, split because only this layer
+// could turn a refusal into the 429 (with Retry-After) that
+// contracts/openapi.yaml documents. US-5/ADR-081 retired the REST search
+// endpoint that was SearchTool's only caller here, so the inner instance
+// (knowledgeToolLimiter) went with it — there is no longer a second call site
+// for it to guard.
+//
+// THREE BUDGETS, CHOSEN BY WHO IS ASKING (2026-09-14). This used to be ONE
+// bucket of 60 requests a minute per workspace, shared by every account and
+// every tab in that workspace, reads and writes together. Ordinary signed-in
+// work overran it, and D-109's larger read allowance never helped, because
+// that covers only the IP-keyed limiters in rest_auth.go:
+//
+//   - An inline cell edit is one write, after which BasePreview reloads every
+//     view over the edited collection. On a dashboard with five embedded
+//     views that is six requests an edit, so the 11th edit in a minute was
+//     refused.
+//   - Every Library write (trash, rename, move, upload, save) sends
+//     library_changed, which reloads every mounted knowledge query in the
+//     workspace. Beside one open base, a bulk trash exhausted the bucket after
+//     about 30 files.
+//
+// Now:
+//
+//   - A request with NO signed-in account keeps the old strict budget:
+//     knowledgeAnonymousPerMinute per workspace, reads and writes together.
+//     Every production route to these handlers requires authentication, so
+//     this is defence in depth, not a path the web app takes.
+//   - A signed-in account gets its OWN buckets in each workspace. One
+//     account's runaway tab cannot refuse another account's work, and one
+//     workspace's traffic still cannot starve another workspace's.
+//   - Reads and writes are counted apart, so a burst of edits cannot refuse
+//     the view reloads it triggers. Writes keep the far tighter ceiling: each
+//     one walks every markdown file in scope (findVaultRecordByID).
+//
+// The ceilings, from measured and code-derived traffic:
+//
+//   - knowledgeSignedInReadsPerMinute = 600. The heaviest ordinary minute
+//     found is a bulk trash at D-109's measured pace (54 deletes in ~90 s, so
+//     36 a minute) beside a five-embed dashboard: each delete reloads up to
+//     five view results and five link graphs, 360 reads. 600 covers that with
+//     room to spare and is still only 10 a second per account per workspace.
+//   - knowledgeSignedInWritesPerMinute = 120. Brisk inline editing is about
+//     one cell every two seconds, 30 writes a minute; the text editor's double
+//     submit (D-112) doubles that to 60. 120 is twice that again, and half of
+//     the 240 POSTs a minute the outer per-IP configLimiter already allows.
+//
+// A GENUINE FLOOD IS STILL REFUSED at each ceiling, with the same 429 body and
+// Retry-After as before. rest_knowledge_rate_budget_test.go pins both halves.
+var knowledgeRESTLimiter = newKnowledgeRateLimits()
+
+// knowledgeCallKind says which signed-in budget a knowledge call draws on.
+type knowledgeCallKind int
+
+const (
+	// knowledgeRead is every knowledge route except the record write door.
+	knowledgeRead knowledgeCallKind = iota
+	// knowledgeWrite is POST .../knowledge/records.
+	knowledgeWrite
+)
+
+// The per-minute ceilings. See knowledgeRESTLimiter for where each number
+// comes from; change one only against new traffic evidence.
+const (
+	knowledgeAnonymousPerMinute      = 60
+	knowledgeSignedInReadsPerMinute  = 600
+	knowledgeSignedInWritesPerMinute = 120
+)
+
+// knowledgeRateLimits holds the three budgets. Each is a sliding one-minute
+// window.
+type knowledgeRateLimits struct {
+	anonymous *knowledge.RetrievalRateLimiter
+	reads     *knowledge.RetrievalRateLimiter
+	writes    *knowledge.RetrievalRateLimiter
+}
+
+func newKnowledgeRateLimits() *knowledgeRateLimits {
+	perMinute := func(limit int) *knowledge.RetrievalRateLimiter {
+		return knowledge.NewRetrievalRateLimiter(knowledge.RetrievalRateLimitConfig{
+			PerAgentLimit: limit,
+			Window:        time.Minute,
+		})
+	}
+	return &knowledgeRateLimits{
+		anonymous: perMinute(knowledgeAnonymousPerMinute),
+		reads:     perMinute(knowledgeSignedInReadsPerMinute),
+		writes:    perMinute(knowledgeSignedInWritesPerMinute),
+	}
+}
+
+// knowledgeRateKey is the strict bucket every request with no signed-in
+// account shares. It is the WORKSPACE, not the process: a runaway client in
+// one workspace must not rate-limit another workspace's operator out of their
+// own notes.
+func knowledgeRateKey(workspaceID string) string { return "library-ui:" + workspaceID }
+
+// knowledgeAccountRateKey is one signed-in account's bucket in one workspace.
+// The username's length is part of the key, so no (username, workspace) pair
+// can spell another pair's key however either one is written.
+func knowledgeAccountRateKey(username, workspaceID string) string {
+	return "library-ui:user:" + strconv.Itoa(len(username)) + ":" + username + ":" + workspaceID
+}
+
+// budgetFor returns the limiter and key one knowledge call is counted against.
+// username is the caller's signed-in account name, empty when there is none.
+func (l *knowledgeRateLimits) budgetFor(username, workspaceID string, kind knowledgeCallKind) (*knowledge.RetrievalRateLimiter, string) {
+	username = strings.TrimSpace(username)
+	if username == "" {
+		return l.anonymous, knowledgeRateKey(workspaceID)
+	}
+	key := knowledgeAccountRateKey(username, workspaceID)
+	if kind == knowledgeWrite {
+		return l.writes, key
+	}
+	return l.reads, key
+}
+
+// HandleLibraryTree is the /api/v1/library/ subtree entry point.
+//
+// WHY A SHIM RATHER THAN A ROUTE. The knowledge paths carry the workspace id in
+// the MIDDLE of the pattern (/library/{id}/knowledge/...), and the gateway's mux
+// (pkg/channels/dynamic_mux.go) matches exact paths and trailing-slash subtrees
+// only — it has no path wildcards, so "/api/v1/library/{id}/knowledge" cannot be
+// registered at all. The subtree registration therefore enters here, this
+// function peels off the knowledge sub-paths, and everything else is handed to
+// HandleLibrary byte-for-byte unchanged.
+func (a *restAPI) HandleLibraryTree(w http.ResponseWriter, r *http.Request) {
+	trimmed := strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), "/api/v1/library")
+	trimmed = strings.TrimPrefix(trimmed, "/")
+	segs := strings.Split(trimmed, "/")
+	if len(segs) >= 2 && segs[1] == "knowledge" {
+		a.handleKnowledge(w, r, segs[0], segs[2:])
+		return
+	}
+	a.HandleLibrary(w, r)
+}
+
+// handleKnowledge dispatches this workspace's knowledge sub-paths: detection
+// (the empty sub-path), find, graph, outline, view, base-views, views,
+// record-schema, records/{id} and records/{id}/relation.
+//
+// NINE, and the count is spelled out as a list rather than a number because
+// the number went stale twice — it said "four" while six cases existed, and
+// ADR-083 Step 5 then added the last two without touching it. A list cannot
+// drift silently in the same way: adding a case beside a comment that names
+// every case reads as an omission, where adding one beside a bare count reads
+// as nothing at all.
+func (a *restAPI) handleKnowledge(w http.ResponseWriter, r *http.Request, workspaceID string, rest []string) {
+	if err := validateEntityID(workspaceID); err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
+		return
+	}
+	// The WORKSPACE is the addressed resource, so an unknown one is the 404.
+	// A folder that does not exist inside a real workspace is NOT — it is
+	// described in the body, through detection_error (E-9).
+	if !workspace.Exists(a.homePath, workspaceID) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+
+	sub, extra := "", ""
+	switch {
+	case len(rest) == 0:
+	case len(rest) == 1:
+		sub = rest[0]
+	// ADR-083 Step 5: "records/{id}" is the ONLY two-segment sub-path this
+	// dispatcher accepts. The length check has to name it, not just allow a
+	// second segment generally: every other sub-path here is one segment, so
+	// a general rule would turn URLs that used to 404 (/knowledge/find/junk)
+	// into silent successes that ignore the trailing segment.
+	case len(rest) == 2 && rest[0] == "records" && rest[1] != "":
+		sub, extra = rest[0], rest[1]
+	// GAP-02 / #700 (2026-09-14 fix round): "records/{id}/relation" is the
+	// one THREE-segment sub-path — the web door for RelationWriteRequest's
+	// verbs, handled in rest_knowledge_relation.go. Named as narrowly as the
+	// two-segment case above it, for the same reason.
+	case len(rest) == 3 && rest[0] == "records" && rest[1] != "" && rest[2] == "relation":
+		sub, extra = "records-relation", rest[1]
+	default:
+		http.NotFound(w, r)
+		return
+	}
+
+	switch sub {
+	case "":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeInfo(w, r, workspaceID)
+	case "find":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeVaultSearch(w, r, workspaceID)
+	case "graph":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeGraph(w, r, workspaceID)
+	case "outline":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeOutline(w, r, workspaceID)
+	case "view":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeViewResult(w, r, workspaceID)
+	case "base-views":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeBaseViews(w, r, workspaceID)
+	case "views":
+		// UAT D-13 (web half): the collection-addressed saved-views list —
+		// distinct from "view" (evaluate one) and from "base-views" (one
+		// .base file's imported views).
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeViews(w, r, workspaceID)
+	case "record-schema":
+		if r.Method != http.MethodGet {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeRecordSchema(w, r, workspaceID)
+	case "records":
+		switch {
+		case extra == "" && r.Method == http.MethodPost:
+			a.handleKnowledgeRecordWrite(w, r, workspaceID)
+		case extra != "" && r.Method == http.MethodGet:
+			a.handleKnowledgeRecordGet(w, r, workspaceID, extra)
+		default:
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		}
+	case "records-relation":
+		if r.Method != http.MethodPost {
+			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+			return
+		}
+		a.handleKnowledgeRecordRelation(w, r, workspaceID, extra)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Collection identity
+// ---------------------------------------------------------------------------
+
+// knowledgeCollectionID derives the opaque collection_id from a collection
+// root's RESOLVED REAL PATH (FR-031).
+//
+// The real path, not the spelling the caller used, is what makes two mounts of
+// one folder — into one workspace or several — carry the same id and therefore
+// share one index. It is also why the id is opaque: it is a hash, callers are
+// told not to parse it, and nothing here or in the SPA may reconstruct a
+// filesystem path from it. Deriving it from the same input as the index key
+// (pkg/knowledge/index.go's indexKeyFor) keeps "same collection" meaning one
+// thing across the feature.
+func knowledgeCollectionID(realRoot string) string {
+	sum := sha256.Sum256([]byte(filepath.Clean(realRoot)))
+	return "kb_" + hex.EncodeToString(sum[:])[:16]
+}
+
+// resolveScopedCollection maps a collection_id to the knowledge base it names,
+// WITHIN this workspace's scope and nowhere else.
+//
+// The only candidates are knowledge.ResolveScope's own collections, which is
+// what makes cross-workspace addressing impossible rather than merely refused
+// (US-9 AS-2): an id naming another workspace's collection matches nothing here
+// and is indistinguishable from an id that names nothing anywhere.
+func (a *restAPI) resolveScopedCollection(workspaceID, collectionID string) (knowledge.ScopedCollection, bool) {
+	collectionID = strings.TrimSpace(collectionID)
+	if collectionID == "" {
+		return knowledge.ScopedCollection{}, false
+	}
+	for _, c := range knowledge.ResolveScope(a.homePath, workspaceID).Collections() {
+		if knowledgeCollectionID(c.Root) == collectionID {
+			// D3: a collection that is IN SCOPE but was never attached — it
+			// appeared after the boot sweep — is attached here, at the moment
+			// the product first agrees it exists. Without this, every endpoint
+			// below answers `index_unavailable` indefinitely while telling the
+			// caller to "re-open the knowledge base", which is not an action the
+			// product offers. It is a no-op (one map lookup) for the
+			// overwhelmingly common case of a collection attached at boot.
+			a.knowledgeLifecycle().EnsureCollectionAttached(workspaceID, c)
+			return c, true
+		}
+	}
+	return knowledge.ScopedCollection{}, false
+}
+
+// collectionContaining reports which in-scope knowledge base holds absPath, if
+// any. Used by the outline endpoint, which serves ANY markdown file (FR-062)
+// and must say whether the client may additionally offer search and backlinks.
+func (a *restAPI) collectionContaining(workspaceID, absPath string) (knowledge.ScopedCollection, bool) {
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		realPath = filepath.Clean(absPath)
+	}
+	for _, c := range knowledge.ResolveScope(a.homePath, workspaceID).Collections() {
+		if realPath == c.Root || strings.HasPrefix(realPath, c.Root+string(filepath.Separator)) {
+			// D3, same reason as resolveScopedCollection: the outline endpoint
+			// tells a client whether search and backlinks are on offer for
+			// this file, and an unattached collection would say yes to a
+			// search that cannot answer.
+			a.knowledgeLifecycle().EnsureCollectionAttached(workspaceID, c)
+			return c, true
+		}
+	}
+	return knowledge.ScopedCollection{}, false
+}
+
+// ---------------------------------------------------------------------------
+// GET /library/{workspace_id}/knowledge — detection and identity
+// ---------------------------------------------------------------------------
+
+func (a *restAPI) handleKnowledgeInfo(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	rel, err := library.CleanRelPath(r.URL.Query().Get("path"))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	rootPath := rel
+	if rootPath == "" {
+		// The contract's root_path has minLength 1 and forbids an absolute or
+		// dot-dot spelling; "." is the honest non-empty name for the work-tree
+		// root, and is the same spelling the query parameter accepts for it.
+		rootPath = "."
+	}
+	info := gen.KnowledgeBaseInfo{
+		WorkspaceId:     workspaceID,
+		RootPath:        rootPath,
+		IsKnowledgeBase: false,
+		Marker:          gen.KnowledgeBaseInfoMarkerNone,
+	}
+
+	if _, statErr := root.StatDir(rel); statErr != nil {
+		switch {
+		case errors.Is(statErr, library.ErrOutsideRoot):
+			// The only way to reach this after CleanRelPath is a symlink that
+			// leaves the work tree, which is a refusal, not a description.
+			jsonErr(w, http.StatusForbidden, "path resolves outside the workspace work tree")
+		case errors.Is(statErr, library.ErrNotFound):
+			setKnowledgeDetectionError(&info, gen.KnowledgeBaseInfoDetectionErrorCodeRootMissing,
+				fmt.Sprintf("no such folder in this workspace: %s", rootPath))
+			jsonOK(w, info)
+		case errors.Is(statErr, library.ErrNotDir):
+			setKnowledgeDetectionError(&info, gen.KnowledgeBaseInfoDetectionErrorCodeNotADirectory,
+				fmt.Sprintf("%s is a file, not a folder", rootPath))
+			jsonOK(w, info)
+		default:
+			setKnowledgeDetectionError(&info, gen.KnowledgeBaseInfoDetectionErrorCodeRootUnreadable,
+				fmt.Sprintf("cannot read %s: %v", rootPath, statErr))
+			jsonOK(w, info)
+		}
+		return
+	}
+
+	abs := root.HostPath(rel)
+
+	// FR-021: detection reads DIRECTORY ENTRIES ONLY. Nothing below opens a
+	// note, and the marker document itself is read only AFTER the verdict is
+	// already decided.
+	det, detErr := knowledge.Detect(abs)
+	if detErr != nil {
+		setKnowledgeDetectionError(&info, gen.KnowledgeBaseInfoDetectionErrorCodeRootUnreadable,
+			fmt.Sprintf("cannot read %s: %v", rootPath, detErr))
+		jsonOK(w, info)
+		return
+	}
+
+	info.IsKnowledgeBase = det.IsKnowledgeBase()
+	switch {
+	case det.HasOmnipusMarker:
+		// Both markers present reports the Omnipus one, per the contract.
+		info.Marker = gen.KnowledgeBaseInfoMarkerOmnipusVault
+	case det.HasObsidianMarker:
+		info.Marker = gen.KnowledgeBaseInfoMarkerObsidian
+	default:
+		info.Marker = gen.KnowledgeBaseInfoMarkerNone
+	}
+	if !info.IsKnowledgeBase {
+		jsonOK(w, info)
+		return
+	}
+
+	realRoot, realErr := knowledge.ResolveCollectionRoot(abs)
+	if realErr != nil {
+		setKnowledgeDetectionError(&info, gen.KnowledgeBaseInfoDetectionErrorCodeRootUnreadable,
+			fmt.Sprintf("cannot resolve %s: %v", rootPath, realErr))
+		jsonOK(w, info)
+		return
+	}
+	id := knowledgeCollectionID(realRoot)
+	info.CollectionId = &id
+
+	// D3 — THIS IS THE MOMENT THE VAULT BECOMES VISIBLE AT RUNTIME.
+	//
+	// This handler is what the Library asks before it offers anything, and
+	// what the UAT's own setup script polled. Throughout the 120 s of nothing
+	// happening it answered is_knowledge_base: true with a collection_id, for
+	// a collection whose index was never opened. Saying "yes, this is a
+	// knowledge base, here is its id" while nothing is arranging for it to be
+	// readable is precisely the silence the freshness design's sweep exists to
+	// prevent, so the sweep runs here — scoped to this one workspace, and a
+	// no-op when the collection is already attached.
+	//
+	// The full workspace sweep (rather than EnsureCollectionAttached on one
+	// resolved collection) is deliberate: this path resolved the collection by
+	// PATH, not out of knowledge.ResolveScope, so it does not know whether the
+	// folder it just described is even in scope. AttachWorkspace answers that
+	// from the one authority, and picks up any sibling collection that arrived
+	// in the same copy.
+	a.knowledgeLifecycle().AttachWorkspace(workspaceID)
+
+	// The marker document. ErrNoMarker is the ORDINARY case for a folder
+	// detected through .obsidian/ alone — not an error, and not a downgrade of
+	// is_knowledge_base. Anything else is reported loudly rather than defaulted
+	// away (E-9): a corrupt marker that silently became {DisplayName: ""} would
+	// rename the operator's collection to nothing and report success.
+	m, markerErr := knowledge.ReadMarker(realRoot)
+	switch {
+	case markerErr == nil:
+		if name := strings.TrimSpace(m.DisplayName); name != "" {
+			info.DisplayName = &name
+		}
+		if tp, tpOK := knowledgeTemplatePath(realRoot, m); tpOK {
+			info.TemplatePath = &tp
+		}
+	case errors.Is(markerErr, knowledge.ErrNoMarker):
+		// Nothing to add; the SPA falls back to the folder's own name.
+	default:
+		setKnowledgeDetectionError(&info, gen.KnowledgeBaseInfoDetectionErrorCodeMarkerUnreadable,
+			fmt.Sprintf("cannot read the marker in %s: %v", rootPath, markerErr))
+	}
+
+	jsonOK(w, info)
+}
+
+// setKnowledgeDetectionError attaches the typed detection failure. It never
+// touches is_knowledge_base: E-9 requires the field to carry the last known
+// answer rather than being silently downgraded to "ordinary folder".
+func setKnowledgeDetectionError(info *gen.KnowledgeBaseInfo, code gen.KnowledgeBaseInfoDetectionErrorCode, msg string) {
+	info.DetectionError = &struct {
+		Code    gen.KnowledgeBaseInfoDetectionErrorCode `json:"code"`
+		Message string                                  `json:"message"`
+	}{Code: code, Message: msg}
+}
+
+// knowledgeTemplatePath returns the COLLECTION-relative templates folder, and
+// whether the collection actually has one.
+//
+// Templates live inside the marker directory (.omnipus-vault/templates by
+// default, ADR-067 D2/D12), so the collection-relative spelling is the marker
+// directory plus the marker's own templates_dir. It is reported only when the
+// folder is really there: a path to a directory that does not exist is worse
+// than no path at all, and FR-101 is about reaching templates without enabling
+// hidden files, not about advertising a location nothing has created yet.
+func knowledgeTemplatePath(realRoot string, m knowledge.Marker) (string, bool) {
+	abs := knowledge.TemplatesPath(realRoot, m)
+	fi, err := os.Stat(abs)
+	if err != nil || !fi.IsDir() {
+		return "", false
+	}
+	rel, err := filepath.Rel(realRoot, abs)
+	if err != nil {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
+// allowKnowledgeRetrieval admits one knowledge call, or writes the 429 itself.
+// kind is knowledgeWrite for the record write door and knowledgeRead for every
+// other route; the caller's signed-in account, if any, picks the bucket (see
+// knowledgeRESTLimiter for the budgets and where their sizes come from).
+func (a *restAPI) allowKnowledgeRetrieval(w http.ResponseWriter, r *http.Request, workspaceID string, kind knowledgeCallKind) bool {
+	limiter, key := knowledgeRESTLimiter.budgetFor(a.callerIdentity(r).Username, workspaceID, kind)
+	d := limiter.Allow(key)
+	if d.Allowed {
+		return true
+	}
+	retry := int(d.RetryAfter.Round(time.Second) / time.Second)
+	if retry < 1 {
+		retry = 1
+	}
+	// A refusal is evidence (a flood, or a budget set too small) and was
+	// previously invisible: no log, no audit row. Match the IP limiter's
+	// shape (rest_auth.go's withRateLimit). The audit half is deliberately
+	// not written — see FIX4-REPORT-knowledge-limiter-tests.md.
+	slog.Warn("api: knowledge rate limit exceeded",
+		"ip", clientIP(r), "path", redactRequestPath(r.URL.Path),
+		"workspace", workspaceID, "retry_after", retry)
+	w.Header().Set("Retry-After", strconv.Itoa(retry))
+	jsonErr(w, http.StatusTooManyRequests, fmt.Sprintf(
+		"too many knowledge requests — at most %d per %s. Retry in %ds.",
+		d.Limit, d.Window, retry))
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// GET /library/{workspace_id}/knowledge/graph
+// ---------------------------------------------------------------------------
+
+// knowledgeGraphMaxPaths bounds the multi-path kind=links query (UAT D-135,
+// contracts/openapi.yaml's `paths` parameter). 64 comfortably covers the
+// SPA-side row cap (COLLECTION_LINK_ROW_QUERY_CAP, 40) while still refusing
+// the "send the whole collection" shape up front rather than walking it.
+const knowledgeGraphMaxPaths = 64
+
+func (a *restAPI) handleKnowledgeGraph(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	q := r.URL.Query()
+	collectionID := strings.TrimSpace(q.Get("collection_id"))
+	if collectionID == "" {
+		jsonErr(w, http.StatusBadRequest, "collection_id is required")
+		return
+	}
+	kind := gen.KnowledgeGraphResponseKind(strings.TrimSpace(q.Get("kind")))
+	if !kind.Valid() {
+		jsonErr(w, http.StatusBadRequest,
+			"kind must be one of links, backlinks, unresolved, orphans, neighbourhood")
+		return
+	}
+	notePath, pathErr := library.CleanRelPath(q.Get("path"))
+	if pathErr != nil {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	// UAT D-135: `paths` — several notes whose outbound links are wanted in
+	// ONE answer. Valid for kind=links only, and mutually exclusive with
+	// `path`: an answer that silently meant "path plus everything in paths"
+	// would be a third semantics nobody asked for.
+	rawPaths := q["paths"]
+	if len(rawPaths) > 0 {
+		if kind != gen.KnowledgeGraphResponseKindLinks {
+			jsonErr(w, http.StatusBadRequest,
+				"paths is only valid with kind=links — the other kinds answer the whole collection or a single path")
+			return
+		}
+		if strings.TrimSpace(q.Get("path")) != "" {
+			jsonErr(w, http.StatusBadRequest,
+				"send path or paths, one or the other — path answers one note, paths answers several")
+			return
+		}
+		if len(rawPaths) > knowledgeGraphMaxPaths {
+			jsonErr(w, http.StatusBadRequest, fmt.Sprintf(
+				"paths names %d notes; the limit is %d — split the request into batches of at most %d",
+				len(rawPaths), knowledgeGraphMaxPaths, knowledgeGraphMaxPaths))
+			return
+		}
+	}
+	needsPath := kind == gen.KnowledgeGraphResponseKindLinks ||
+		kind == gen.KnowledgeGraphResponseKindBacklinks ||
+		kind == gen.KnowledgeGraphResponseKindNeighbourhood
+	if needsPath && notePath == "" && len(rawPaths) == 0 {
+		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("path is required for kind %q", kind))
+		return
+	}
+
+	resp := gen.KnowledgeGraphResponse{
+		CollectionId: collectionID,
+		Kind:         kind,
+		Nodes:        []gen.KnowledgeGraphNode{},
+		Edges:        []gen.KnowledgeGraphEdge{},
+		Skipped:      []gen.KnowledgeGraphSkip{},
+	}
+	// A multi-path links query is about no single note, so source_path —
+	// "the note the query was about" — stays absent (the contract's own
+	// wording for the `paths` parameter); each edge names its own from_path.
+	if needsPath && len(rawPaths) == 0 {
+		p := notePath
+		resp.SourcePath = &p
+	}
+
+	// US-9 AS-2, again as an empty answer rather than an error: another
+	// workspace's knowledge base is not addressable, and saying so with a 403
+	// would confirm it exists.
+	col, inScope := a.resolveScopedCollection(workspaceID, collectionID)
+	if !inScope {
+		jsonOK(w, resp)
+		return
+	}
+
+	if !a.allowKnowledgeRetrieval(w, r, workspaceID, knowledgeRead) {
+		return
+	}
+
+	root, rootErr := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), col.Root)
+	if rootErr != nil {
+		logger.ErrorCF("rest", "knowledge: open collection root",
+			map[string]any{"workspace_id": workspaceID, "error": rootErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	g, gErr := knowledge.BuildLinkGraph(knowledge.OSLinkFS(), root)
+	if gErr != nil {
+		logger.ErrorCF("rest", "knowledge: build link graph",
+			map[string]any{"workspace_id": workspaceID, "error": gErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	// FR-044/FR-112: what the walk refused to follow is REPORTED, never
+	// omitted. An empty array is the positive statement that nothing was.
+	for _, s := range g.Skipped() {
+		resp.Skipped = append(resp.Skipped, knowledgeSkip(s))
+	}
+
+	exists := make(map[string]struct{}, len(g.Files()))
+	for _, f := range g.Files() {
+		exists[f] = struct{}{}
+	}
+	nodes := newKnowledgeNodeSet(exists)
+
+	switch kind {
+	case gen.KnowledgeGraphResponseKindLinks:
+		// UAT D-135 multi-path arm: the union of every listed note's outbound
+		// edges, de-duplicated on input so a repeated path is one row, not
+		// two identical edges.
+		if len(rawPaths) > 0 {
+			seen := make(map[string]struct{}, len(rawPaths))
+			for _, raw := range rawPaths {
+				p, err := library.CleanRelPath(raw)
+				if err != nil || p == "" {
+					jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid path in paths: %q", raw))
+					return
+				}
+				if _, dup := seen[p]; dup {
+					continue
+				}
+				seen[p] = struct{}{}
+				nodes.add(p)
+				for _, l := range g.Links(p) {
+					resp.Edges = append(resp.Edges, knowledgeEdge(l))
+					nodes.add(knowledgeEdgeTarget(l))
+				}
+			}
+			break
+		}
+		nodes.add(notePath)
+		for _, l := range g.Links(notePath) {
+			resp.Edges = append(resp.Edges, knowledgeEdge(l))
+			nodes.add(knowledgeEdgeTarget(l))
+		}
+	case gen.KnowledgeGraphResponseKindBacklinks:
+		nodes.add(notePath)
+		for _, l := range g.Backlinks(notePath) {
+			resp.Edges = append(resp.Edges, knowledgeEdge(l))
+			nodes.add(l.From)
+		}
+	case gen.KnowledgeGraphResponseKindUnresolved:
+		for _, l := range g.Unresolved() {
+			resp.Edges = append(resp.Edges, knowledgeEdge(l))
+			nodes.add(l.From)
+			nodes.add(knowledgeEdgeTarget(l))
+		}
+	case gen.KnowledgeGraphResponseKindOrphans:
+		for _, n := range g.Orphans() {
+			nodes.add(n)
+		}
+	case gen.KnowledgeGraphResponseKindNeighbourhood:
+		hops := knowledgeIntParam(q.Get("hops"), 1)
+		maxNodes := knowledgeIntParam(q.Get("limit"), knowledge.MaxNeighborhoodNodes)
+		n := g.Neighborhood(notePath, hops, maxNodes)
+		inSet := make(map[string]struct{}, len(n.Nodes))
+		for _, p := range n.Nodes {
+			inSet[p] = struct{}{}
+			nodes.add(p)
+		}
+		// Only the edges WITHIN the returned node set. An edge to a node the
+		// bound cut off would describe a neighbourhood wider than the one
+		// reported, which is the clipped-graph-read-as-whole failure FR-054's
+		// truncation flag exists to prevent.
+		for _, p := range n.Nodes {
+			for _, l := range g.Links(p) {
+				if _, ok := inSet[l.To]; ok && l.State == knowledge.ResolveResolved {
+					resp.Edges = append(resp.Edges, knowledgeEdge(l))
+				}
+			}
+		}
+		hopLimit, nodeLimit := n.Hops, n.MaxNodes
+		resp.HopLimitApplied = &hopLimit
+		resp.NodeLimitApplied = &nodeLimit
+		resp.Truncated = n.HopsClamped || n.NodesClamped
+	}
+
+	resp.Nodes = nodes.sorted()
+	jsonOK(w, resp)
+}
+
+// knowledgeNodeSet collects the nodes one graph answer mentions, de-duplicated
+// and with each one's existence taken from the walk rather than guessed.
+type knowledgeNodeSet struct {
+	exists map[string]struct{}
+	seen   map[string]struct{}
+	order  []string
+}
+
+func newKnowledgeNodeSet(exists map[string]struct{}) *knowledgeNodeSet {
+	return &knowledgeNodeSet{exists: exists, seen: map[string]struct{}{}}
+}
+
+func (s *knowledgeNodeSet) add(p string) {
+	if p == "" {
+		return
+	}
+	if _, dup := s.seen[p]; dup {
+		return
+	}
+	s.seen[p] = struct{}{}
+	s.order = append(s.order, p)
+}
+
+func (s *knowledgeNodeSet) sorted() []gen.KnowledgeGraphNode {
+	sort.Strings(s.order)
+	out := make([]gen.KnowledgeGraphNode, 0, len(s.order))
+	for _, p := range s.order {
+		_, ok := s.exists[p]
+		node := gen.KnowledgeGraphNode{Path: p, Exists: ok}
+		if ok {
+			// The display title is derived from the FILENAME. A graph answer
+			// opens no note to build itself, and a node that does not exist
+			// gets no title at all — FR-065's client must be able to tell a
+			// real note from a link target that was never written.
+			title := knowledgeStemTitle(p)
+			node.Title = &title
+		}
+		out = append(out, node)
+	}
+	return out
+}
+
+// knowledgeEdgeTarget is the to_path an edge reports: the resolved target, or
+// the normalised link text when there is none. Never empty — the contract's
+// to_path has minLength 1, and an unresolved link still has to name what it
+// tried to reach.
+func knowledgeEdgeTarget(l knowledge.ResolvedLink) string {
+	if l.State == knowledge.ResolveResolved && l.To != "" {
+		return l.To
+	}
+	if t := strings.TrimSpace(l.Target); t != "" {
+		return t
+	}
+	if raw := strings.TrimSpace(l.Raw); raw != "" {
+		return raw
+	}
+	return "(empty link)"
+}
+
+func knowledgeEdge(l knowledge.ResolvedLink) gen.KnowledgeGraphEdge {
+	e := gen.KnowledgeGraphEdge{
+		FromPath:   l.From,
+		ToPath:     knowledgeEdgeTarget(l),
+		Resolution: knowledgeEdgeResolution(l),
+		Ambiguous:  l.Ambiguous,
+	}
+	if t := strings.TrimSpace(l.Target); t != "" {
+		e.LinkText = &t
+	}
+	if l.Alias != "" {
+		alias := l.Alias
+		e.Alias = &alias
+	}
+	if l.Heading != "" {
+		heading := l.Heading
+		e.Heading = &heading
+	}
+	if l.Embed {
+		embed := true
+		e.Embed = &embed
+	}
+	if l.Ambiguous && len(l.Candidates) > 0 {
+		candidates := append([]string(nil), l.Candidates...)
+		e.Candidates = &candidates
+	}
+	// heading_found (CW-2, ADR-083 EMB-035/EMB-039). Always set, never
+	// conditional: pkg/knowledge already computes this false-by-construction
+	// for a ".base" target and for a block reference (graph.go only records
+	// headings for markdown paths, and only checks the flag when l.Heading is
+	// non-empty), so this is a straight projection, not a second decision.
+	// A VALUE, not a pointer: heading_found is `required` in
+	// KnowledgeGraphEdge, so it is always present on the wire and the
+	// generated type cannot express absence.
+	e.HeadingFound = l.HeadingFound
+	// block (CW-2, ADR-083 EMB-036) — its own field, separate from heading.
+	// This is BlockID's first projection onto the wire; it was parsed and
+	// otherwise unread until now.
+	if l.BlockID != "" {
+		block := l.BlockID
+		e.Block = &block
+	}
+	// unresolved_reason (CW-2, ADR-083 EMB-006/EMB-023) — present only when
+	// unresolved, mapped through knowledgeEdgeUnresolvedReason rather than
+	// cast, because pkg/knowledge.ReasonOutsideRoot's own string
+	// ("outside_collection") is not a value the wire enum permits.
+	if l.State == knowledge.ResolveUnresolved {
+		reason := knowledgeEdgeUnresolvedReason(l.Reason)
+		e.UnresolvedReason = &reason
+	}
+	return e
+}
+
+// knowledgeEdgeResolution names WHICH rung of FR-040's ladder produced the
+// target.
+//
+// pkg/knowledge resolves by that ladder but does not record which rung fired,
+// so the rung is derived here from what it does record. The derivation reads
+// the ladder backwards and touches no filesystem:
+//
+//   - Unresolved is unresolved.
+//   - Only a BARE wikilink — no slash — is ever resolved by basename at all
+//     (NoteIndex.Resolve applies the basename rungs to that shape and nothing
+//     else). Every other link, including every markdown link, can only have
+//     matched at rung 1.
+//   - A bare wikilink whose target IS the resolved path (with or without the
+//     .md extension) matched rung 1 too — that is a note at the collection
+//     root, which the exact-path rung reaches first.
+//   - Otherwise it came through the basename rungs: unique when nothing else
+//     matched, and when something did, shortest-path when the winner is
+//     strictly shorter than the runner-up, lexicographic when they tie.
+//
+// This is a mapping, not a second resolver: it never decides where a link
+// points, only how to describe a decision already made.
+func knowledgeEdgeResolution(l knowledge.ResolvedLink) gen.KnowledgeGraphEdgeResolution {
+	if l.State != knowledge.ResolveResolved {
+		return gen.KnowledgeGraphEdgeResolutionUnresolved
+	}
+	target := strings.TrimSpace(l.Target)
+	if l.Kind != knowledge.LinkWikilink || strings.Contains(target, "/") {
+		return gen.KnowledgeGraphEdgeResolutionExactPath
+	}
+	if l.To == target || l.To == target+".md" || l.To == target+".markdown" {
+		return gen.KnowledgeGraphEdgeResolutionExactPath
+	}
+	if !l.Ambiguous || len(l.Candidates) < 2 {
+		return gen.KnowledgeGraphEdgeResolutionUniqueBasename
+	}
+	if len(l.Candidates[0]) < len(l.Candidates[1]) {
+		return gen.KnowledgeGraphEdgeResolutionShortestPath
+	}
+	return gen.KnowledgeGraphEdgeResolutionLexicographic
+}
+
+// knowledgeEdgeUnresolvedReason maps pkg/knowledge's UnresolvedReason onto
+// the wire's two-member enum (CW-2, KnowledgeGraphEdge.unresolved_reason:
+// "no_match" | "outside_root"). This is NOT a direct cast — pkg/knowledge's
+// own ReasonOutsideRoot constant is the STRING "outside_collection", which
+// is not a value the wire enum permits at all. A direct cast would compile
+// (both are named string types) and then fail at request time: the SPA's
+// generated Zod validator rejects the whole payload on an out-of-enum
+// value, which drops the ENTIRE knowledge-graph response — a silent, total
+// failure indistinguishable from an empty graph.
+//
+// The Go side has four non-empty reasons (see knowledge.AllUnresolvedReasons,
+// the source of truth TestKnowledgeEdgeUnresolvedReason_MapsEveryGoConstant
+// checks this switch against); the wire deliberately collapses them into the
+// same two-way split pkg/knowledge's own doc comment on UnresolvedReason
+// draws: an ordinary, fixable broken link versus a link that tried to leave
+// the collection root entirely (US-10, EMB-006's containment case).
+//
+//   - ReasonNoMatch and ReasonEmptyTarget both land on "no_match" — an empty
+//     target names nothing, which is exactly what "nothing in the collection
+//     carries that name" already says; neither is a containment attempt.
+//   - ReasonAbsoluteTarget and ReasonOutsideRoot both land on "outside_root"
+//     — an absolute filesystem path is itself an attempt to address
+//     something outside the collection, before any "../" traversal check
+//     even runs, so it belongs with the relative-traversal case rather than
+//     with an ordinary typo.
+//
+// There is no default case reachable by a value knowledge.AllUnresolvedReasons
+// returns: every member is named explicitly. A reason that reaches the
+// default is an unmapped constant — a bug in THIS function, not a value fit
+// for a silent "no_match" fallback — so it panics rather than emitting a
+// value nobody decided was correct. net/http recovers a panicking handler
+// per-request (it does not take the process down); ensureMap's existing
+// panic elsewhere in this package (rest.go) is the same "this can only be an
+// internal invariant violation" idiom.
+func knowledgeEdgeUnresolvedReason(r knowledge.UnresolvedReason) gen.KnowledgeGraphEdgeUnresolvedReason {
+	switch r {
+	case knowledge.ReasonNoMatch, knowledge.ReasonEmptyTarget:
+		return gen.KnowledgeGraphEdgeUnresolvedReasonNoMatch
+	case knowledge.ReasonAbsoluteTarget, knowledge.ReasonOutsideRoot:
+		return gen.KnowledgeGraphEdgeUnresolvedReasonOutsideRoot
+	default:
+		panic(fmt.Sprintf("knowledgeEdgeUnresolvedReason: unmapped knowledge.UnresolvedReason %q", string(r)))
+	}
+}
+
+func knowledgeSkip(s knowledge.SkippedEntry) gen.KnowledgeGraphSkip {
+	out := gen.KnowledgeGraphSkip{Path: s.RelPath, Reason: gen.KnowledgeGraphSkipReasonUnreadable}
+	switch s.Reason {
+	case knowledge.SkipSymlink:
+		out.Reason = gen.KnowledgeGraphSkipReasonSymlink
+	case knowledge.SkipOutsideRoot:
+		out.Reason = gen.KnowledgeGraphSkipReasonOutsideRoot
+	case knowledge.SkipIrregular:
+		// Not a regular file and not a symlink — a device node, socket or FIFO.
+		// "not_addressable" is the contract's value for a thing this system
+		// cannot name as a note; reporting it as "unreadable" would suggest a
+		// permissions problem the operator could fix.
+		out.Reason = gen.KnowledgeGraphSkipReasonNotAddressable
+	case knowledge.SkipUnreadable:
+		out.Reason = gen.KnowledgeGraphSkipReasonUnreadable
+	}
+	if s.Detail != "" {
+		detail := s.Detail
+		out.Detail = &detail
+	}
+	return out
+}
+
+func knowledgeIntParam(raw string, fallback int) int {
+	if strings.TrimSpace(raw) == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
+}
+
+// ---------------------------------------------------------------------------
+// GET /library/{workspace_id}/knowledge/outline
+// ---------------------------------------------------------------------------
+
+// knowledgeFrontmatterScanBytes bounds how far the frontmatter check reads
+// looking for the closing delimiter. Frontmatter is metadata at the head of a
+// file; a block that has not closed within this much of it is not one.
+const knowledgeFrontmatterScanBytes = 64 << 10
+
+func (a *restAPI) handleKnowledgeOutline(w http.ResponseWriter, r *http.Request, workspaceID string) {
+	raw := r.URL.Query().Get("path")
+	if strings.TrimSpace(raw) == "" {
+		jsonErr(w, http.StatusBadRequest, "path is required")
+		return
+	}
+	rel, err := library.CleanRelPath(raw)
+	if err != nil || rel == "" {
+		jsonErr(w, http.StatusBadRequest, "invalid path")
+		return
+	}
+	if !knowledge.IsMarkdownPath(rel) {
+		jsonErr(w, http.StatusBadRequest, "path is not a markdown file")
+		return
+	}
+
+	root, ok := a.openLibraryRoot(w, workspaceID, "root")
+	if !ok {
+		return
+	}
+	defer root.Close()
+
+	f, _, openErr := root.OpenFileForDownload(rel)
+	if openErr != nil {
+		mapLibraryErr(w, "knowledge outline", workspaceID, openErr)
+		return
+	}
+	defer func() { _ = f.Close() }()
+
+	malformed := knowledgeFrontmatterMalformed(f)
+	if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+		logger.ErrorCF("rest", "knowledge: rewind for outline",
+			map[string]any{"workspace_id": workspaceID, "error": seekErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	// ScanNote STREAMS. FR-034a refuses a note size cap anywhere in this
+	// feature, so the outline of a 200 MB note is produced without ever holding
+	// it in memory.
+	scan, scanErr := knowledge.ScanNote(f)
+	if scanErr != nil {
+		logger.ErrorCF("rest", "knowledge: scan note for outline",
+			map[string]any{"workspace_id": workspaceID, "error": scanErr.Error()})
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+
+	out := gen.KnowledgeOutline{
+		Path:                 rel,
+		IsKnowledgeBase:      false,
+		FrontmatterMalformed: &malformed,
+		// Empty, not null: "always an array, never null; empty for a file with
+		// no headings" — a file with no headings is an ordinary file, and the
+		// client must not have to nil-check it.
+		Headings: []gen.KnowledgeOutlineHeading{},
+	}
+	if col, inKB := a.collectionContaining(workspaceID, root.HostPath(rel)); inKB {
+		out.IsKnowledgeBase = true
+		id := knowledgeCollectionID(col.Root)
+		out.CollectionId = &id
+	}
+
+	used := map[string]int{}
+	for _, h := range scan.Headings {
+		line := h.Line
+		offset := h.Offset
+		entry := gen.KnowledgeOutlineHeading{
+			Level: h.Level,
+			Slug:  knowledgeHeadingSlug(h.Text, used),
+			Text:  h.Text,
+		}
+		if line > 0 {
+			entry.Line = &line
+		}
+		if offset >= 0 {
+			entry.ByteOffset = &offset
+		}
+		out.Headings = append(out.Headings, entry)
+	}
+
+	jsonOK(w, out)
+}
+
+// knowledgeHeadingSlug builds the fragment that makes a heading addressable.
+//
+// Uniqueness within one outline is a contract requirement, so a repeated
+// heading text gets a numeric suffix rather than two identical anchors — the
+// second of which no client could ever scroll to. An empty heading ("###" with
+// no text, which the contract explicitly allows) still needs a non-empty slug.
+func knowledgeHeadingSlug(text string, used map[string]int) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(strings.TrimSpace(text)) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r):
+			b.WriteRune(r)
+			lastDash = false
+		case !lastDash:
+			b.WriteRune('-')
+			lastDash = true
+		}
+	}
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		slug = "section"
+	}
+	n := used[slug]
+	used[slug] = n + 1
+	if n > 0 {
+		slug = fmt.Sprintf("%s-%d", slug, n)
+	}
+	return slug
+}
+
+// knowledgeFrontmatterMalformed reports E-17: the file opens with a
+// frontmatter block that is not valid YAML.
+//
+// It is a REPORT, never a refusal — the file is still outlined and still
+// indexed for its body text either way. Three shapes count as malformed: a
+// block that never closes within the head of the file, one that does not parse
+// as YAML, and one that parses as something other than a mapping (frontmatter
+// is a set of properties; a bare scalar is not one).
+func knowledgeFrontmatterMalformed(r io.Reader) bool {
+	head := make([]byte, knowledgeFrontmatterScanBytes)
+	n, err := io.ReadFull(r, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return false
+	}
+	text := string(head[:n])
+	rest, isFM := strings.CutPrefix(text, "---\n")
+	if !isFM {
+		if rest, isFM = strings.CutPrefix(text, "---\r\n"); !isFM {
+			return false
+		}
+	}
+	end := -1
+	for _, delim := range []string{"\n---\n", "\n---\r\n", "\n...\n"} {
+		if i := strings.Index(rest, delim); i >= 0 && (end < 0 || i < end) {
+			end = i
+		}
+	}
+	if end < 0 {
+		if strings.HasSuffix(strings.TrimRight(rest, "\r\n"), "\n---") {
+			end = len(strings.TrimRight(rest, "\r\n")) - len("\n---")
+		} else {
+			// Never closed within the head of the file: this opened as
+			// frontmatter and is not a frontmatter block.
+			return true
+		}
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(rest[:end]), &doc); err != nil {
+		return true
+	}
+	return false
+}
+
+// knowledgeStemTitle is the filename-derived display title: the basename with
+// its markdown extension removed. It is the same fallback pkg/knowledge uses
+// when a note carries neither a frontmatter title nor a heading.
+func knowledgeStemTitle(relPath string) string {
+	base := path.Base(relPath)
+	ext := path.Ext(base)
+	if strings.EqualFold(ext, ".md") || strings.EqualFold(ext, ".markdown") {
+		return strings.TrimSuffix(base, ext)
+	}
+	return base
+}

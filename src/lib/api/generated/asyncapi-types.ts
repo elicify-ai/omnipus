@@ -67,7 +67,8 @@ export type WsFrameType =
   | "ask_user_question"
   | "ask_user_answer"
   | "browser_handover_notice"
-  | "goal_outcome";
+  | "goal_outcome"
+  | "library_changed";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -382,6 +383,13 @@ export interface RateLimitFrame {
   tool?: string;
 }
 
+export interface LibraryChangedFrame {
+  type: "library_changed";
+  workspace_id: string;
+  path?: string;
+  reason?: string;
+}
+
 export interface MediaPart {
   type: "image" | "audio" | "video" | "file";
   url: string;
@@ -564,7 +572,7 @@ export interface WhatsAppPairingSubscribeFrame {
 export interface NotificationFrame {
   type: "notification";
   id: string;
-  notification_type: "schedule_failed";
+  notification_type: "schedule_failed" | "knowledge_drift";
   title: string;
   body?: string;
   severity: "info" | "warning" | "error";
@@ -846,6 +854,19 @@ export interface GoalOutcomeFrame {
   outcome: GoalOutcomeFrameOutcome;
 }
 
+export interface KnowledgeIndexProgressFrame {
+  type: "knowledge_index_progress";
+  collection_id: string;
+  workspace_id: string;
+  phase: "enumerating" | "indexing" | "idle" | "failed";
+  indexed_files: number;
+  total_known: boolean;
+  total_files?: number;
+  skipped_files?: number;
+  error?: string;
+  updated_at?: string;
+}
+
 export interface ErrorPayload {
   llm_error: LLMError;
 }
@@ -880,6 +901,7 @@ export type WsFrame =
   | ReplayErrorFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
+  | LibraryChangedFrame
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
@@ -917,7 +939,8 @@ export type WsFrame =
   | PlanStatusFrame
   | JudgeVerdictFrame
   | BrowserHandoverNoticeFrame
-  | GoalOutcomeFrame;
+  | GoalOutcomeFrame
+  | KnowledgeIndexProgressFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -962,6 +985,7 @@ export type ServerFrame =
   | ReplayErrorFrame
   | ToolResultProjectionFrame
   | RateLimitFrame
+  | LibraryChangedFrame
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
@@ -991,4 +1015,5 @@ export type ServerFrame =
   | PlanStatusFrame
   | JudgeVerdictFrame
   | BrowserHandoverNoticeFrame
-  | GoalOutcomeFrame;
+  | GoalOutcomeFrame
+  | KnowledgeIndexProgressFrame;

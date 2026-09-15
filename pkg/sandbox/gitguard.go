@@ -56,6 +56,7 @@ package sandbox
 
 import (
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 )
@@ -609,7 +610,15 @@ func (g *GitGuard) inspectShell(args []string, cwd string) ExecDecision {
 	if script == "" {
 		return allowExec()
 	}
-	lower := strings.ToLower(script)
+	// Normalise BEFORE matching: the substring patterns below are keyed on
+	// "git <verb>", so any global option between the two ("git -c a=b commit",
+	// "git -C . commit", "git --git-dir=.git commit") would hide the verb from
+	// every pattern while the direct-argv path (inspectGitArgs) skips those
+	// same options correctly. That asymmetry was exercised live on 2026-09-12:
+	// `git commit -m evidence` was denied 182 times in a protected evidence
+	// repo, then `git -c user.name=Jim -c user.email=… commit -m …` went
+	// straight through. Collapse "git <options…> verb" to "git verb" first.
+	lower := stripGitGlobalOptions(strings.ToLower(script))
 
 	resolvedCwd := resolvePathBestEffort(cwd, "")
 	_, cwdProtected := g.enclosingProtectedWorkdir(resolvedCwd)
@@ -641,6 +650,34 @@ func (g *GitGuard) inspectShell(args []string, cwd string) ExecDecision {
 		}
 	}
 	return allowExec()
+}
+
+// gitGlobalOptionRun matches the run of git GLOBAL options that may sit
+// between "git" and its verb: value-taking options (with or without "=",
+// the value bare or quoted) and flag options. Mirrors the option list in
+// inspectGitArgs. It is not a shell parser (LIM-02): a quoted value
+// containing an unbalanced quote or a shell expansion can still defeat it —
+// the same limit every pattern in this file already accepts.
+var gitGlobalOptionRun = regexp.MustCompile(
+	`\bgit\s+(?:` +
+		// value-taking option with a separate value token: -c k=v, -C dir, --git-dir x …
+		`(?:-c|--git-dir|--work-tree|--namespace|--exec-path|--config-env)\s+` + gitShellWord + `\s+` +
+		`|` +
+		// any other single-token option, including glued forms (-cK=V, --git-dir=x,
+		// --no-pager) and a quoted tail (-cuser.name="Jim Bot").
+		`-` + gitShellWord + `\s+` +
+		`)+`)
+
+// gitShellWord is one shell word: runs of unquoted non-space characters and
+// balanced double/single-quoted segments (which may contain spaces), in any
+// order — so user.name="Jim Bot" is ONE token, as the shell would read it.
+const gitShellWord = `(?:[^\s"']+|"[^"]*"|'[^']*')+`
+
+// stripGitGlobalOptions rewrites every "git <global options…> <verb>" in an
+// already-lowercased script to "git <verb>" so the substring patterns see
+// the verb. Non-git text and "git" with no following option are untouched.
+func stripGitGlobalOptions(lower string) string {
+	return gitGlobalOptionRun.ReplaceAllString(lower, "git ")
 }
 
 // gitMutatingScriptPatterns returns lowercase substrings that indicate a

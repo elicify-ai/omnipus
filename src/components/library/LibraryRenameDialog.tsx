@@ -41,6 +41,10 @@ interface LibraryRenameDialogProps {
    * its idle state with no explanation. The parent clears this whenever the
    * dialog is (re)opened or a new attempt starts. */
   error?: string
+  /** True when the entry is a note inside a knowledge base — the server then
+   *  rewrites every inbound wikilink as part of the rename (UAT #701 /
+   *  D-123), and the dialog says so instead of leaving the reader to guess. */
+  rewritesLinks?: boolean
 }
 
 export function LibraryRenameDialog({
@@ -51,6 +55,7 @@ export function LibraryRenameDialog({
   onSubmit,
   isPending,
   error,
+  rewritesLinks = false,
 }: LibraryRenameDialogProps) {
   const [name, setName] = useState('')
 
@@ -63,8 +68,22 @@ export function LibraryRenameDialog({
   const trimmed = name.trim()
   const parentDir = entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : ''
   const hasSlash = trimmed.includes('/')
+  const isDotName = trimmed === '.' || trimmed === '..'
+  // Claude review 2026-09-14, cut-list: the listing hides any name beginning
+  // with "." (library-spec.md D-8, the one definition of "hidden", applied in
+  // pkg/library/entries.go::List) unless "Show hidden" is on — the dialog
+  // used to accept ".hidden", the server renamed onto it, and the entry then
+  // vanished from the default listing with no explanation. Refused here with
+  // the reason, mirroring D-116's New-knowledge-base rule.
+  //
+  // A name starting with ".." is deliberately NOT this rule's business: the
+  // server refuses it as directory traversal (library.CleanRelPath rejects
+  // every ".."-prefixed segment) and that refusal must keep surfacing
+  // through the dialog's persistent error banner, the way it always has —
+  // swallowing it under a "hidden name" message would hide the real reason.
+  const hiddenName = !isDotName && !trimmed.startsWith('..') && trimmed.startsWith('.')
   const collides = trimmed.length > 0 && trimmed !== entry.name && siblingNames.has(trimmed)
-  const invalid = trimmed.length === 0 || hasSlash || collides
+  const invalid = trimmed.length === 0 || hasSlash || isDotName || hiddenName || collides
 
   function handleSubmit() {
     if (invalid || !entry) return
@@ -95,9 +114,26 @@ export function LibraryRenameDialog({
               A name can't contain "/" — use Move… to change its folder.
             </p>
           )}
+          {!hasSlash && isDotName && (
+            <p className="text-xs text-[var(--color-error)]" data-testid="library-rename-dot">
+              "{trimmed}" isn't a valid name.
+            </p>
+          )}
+          {!hasSlash && hiddenName && (
+            <p className="text-xs text-[var(--color-error)]" data-testid="library-rename-hidden">
+              A name starting with "." would make this a hidden {entry.is_dir ? 'folder' : 'file'} —
+              it wouldn't show in the list unless "Show hidden" is on. Choose a name without the
+              leading dot.
+            </p>
+          )}
           {collides && !hasSlash && (
             <p className="text-xs text-[var(--color-error)]" data-testid="library-rename-collision">
               An entry named "{trimmed}" already exists here.
+            </p>
+          )}
+          {rewritesLinks && !entry.is_dir && (
+            <p className="text-xs text-[var(--color-muted)]" data-testid="library-rename-links-note">
+              Links to this note from other notes in this knowledge base will be updated to the new name.
             </p>
           )}
           {error && (

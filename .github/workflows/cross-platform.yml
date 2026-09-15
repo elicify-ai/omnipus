@@ -1,10 +1,27 @@
 name: Cross-Platform
 
 # Required blocking matrix: Linux amd64 + arm64, and macOS arm64.
-# Windows amd64 is covered by cross-platform-extra.yml (informational only)
-# because the codebase has ~15+ pre-existing POSIX-specific test
-# assumptions that block a fully-green Windows leg. Tracked in #113.
-# When #113 closes, fold Windows back in here and delete the extra file.
+#
+# WINDOWS IS NOT IN THIS MATRIX, and until 2026-08-22 this comment said it was
+# "covered by cross-platform-extra.yml (informational only)" — a file that has
+# never existed in this repository, not in the tree and not anywhere in its
+# history (`git log --all -- '.github/workflows/cross-platform-extra.yml'`
+# returns nothing). The one place a reader would look for Windows coverage
+# pointed at a file that does not exist, which reads as coverage and is not.
+#
+# What actually exists today, named so it can be checked:
+#   * pr.yml → job `windows-pathsafe` — runs on windows-latest. Builds
+#     ./pkg/pathsafe/... and ./pkg/library/..., and RUNS ./pkg/pathsafe/...
+#     tests. That is the whole of the Windows runtime coverage (ADR-067
+#     Stage 0).
+#   * pr.yml → job `cgo-gate`, step "GOOS=windows vet" — type-checks every
+#     package and every _test.go for windows/amd64 on the Linux runner.
+#   * Makefile → `make build-all` and `make vet-windows` — cross-compilation
+#     only; proves the code compiles, asserts nothing about behaviour.
+#
+# The full suite still does not run on Windows: ~15+ POSIX-specific test
+# assumptions block a fully-green Windows leg (#113). When #113 closes, add a
+# windows leg to the matrix below — there is no "extra file" to fold in.
 
 on:
   pull_request:

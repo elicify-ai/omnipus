@@ -583,6 +583,13 @@ type turnState struct {
 	// loop.go's SEC-26-adjacent circuit-breaker check right before the
 	// tool dispatch call.
 	toolCircuitBroken map[string]string
+	// toolCallHistory is the ordered list of dispatched tool-call signatures
+	// this turn (capped at toolCallHistoryCap), scanned by
+	// detectOscillation for a repeating short cycle of calls — the loop shape
+	// the failure streak cannot see (UAT 2026-09-13 D-23). See
+	// tool_failure_circuit_breaker.go. Ported onto release's turnState in the
+	// 2026-09-15 merge; the breaker file is integrate's.
+	toolCallHistory []string
 
 	// toolRepeatSig and toolRepeatRun track the current run of consecutive
 	// SUCCESSFUL dispatches of one identical (tool name + arguments)

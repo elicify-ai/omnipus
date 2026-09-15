@@ -1,0 +1,750 @@
+// BasePreview.test.tsx — the .base surface: tabs from the SERVER's list of
+// the views this base owns (first selected), each result fetched by the slug
+// the server gave verbatim, and every non-happy state a stated answer
+// (view-kinds-design-2026-09-03 §7).
+//
+// THE POINT OF THE REWRITE. This suite used to feed the component .base YAML
+// and assert on slugs the component derived itself. That derivation was the
+// defect (code-review findings #3 and #7): it could not reproduce the
+// importer's collision counter, so two view names that kebab alike collapsed
+// onto one slug and the second tab rendered the first view's rows; and a
+// nested `name:` key clobbered the display name, so a valid view answered
+// `unknown_view`. The component now asks the server, and the tests assert
+// that it uses what it is told — including the collision case a client-side
+// derivation cannot get right.
+//
+// The fetch boundary is the injected loaders (the KnowledgeNoteView test-seam
+// convention); no module mock, no network.
+//
+// react-shiki is mocked at its own module boundary, the same convention
+// LibraryPreviewPane.test.tsx and KnowledgeNoteView.test.tsx already use —
+// this file is about OUR wiring (the raw-view escape hatch mounts the real
+// edit path and shows the real content), not about re-verifying Shiki's own
+// syntax highlighting.
+
+import { describe, it, expect, vi } from 'vitest'
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query'
+import type {
+  KnowledgeBaseViews,
+  KnowledgeGraphEdge,
+  KnowledgeGraphResponse,
+  ViewResult,
+} from '@/lib/api/generated/openapi-types'
+import type { LibraryEntry } from '@/lib/api'
+import type { KnowledgeGraphLoader } from '../knowledge/KnowledgeBacklinks'
+import { BasePreview } from './BasePreview'
+
+vi.mock('react-shiki', () => ({
+  ShikiHighlighter: ({ children }: { children?: React.ReactNode }) => <pre data-testid="shiki">{children}</pre>,
+  // markdown-shared.tsx passes Shiki its pure-JS regex engine (the SPA's CSP
+  // refuses the WebAssembly default); the module is mocked here, so this only
+  // has to exist.
+  createJavaScriptRegexEngine: () => ({}),
+}))
+
+function makeClient() {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } })
+}
+
+const BASE_CONTENT = `views:
+  - type: table
+    name: Outstanding
+  - type: table
+    name: Aged
+`
+
+function entry(over: Partial<LibraryEntry> = {}): LibraryEntry {
+  return {
+    name: 'Invoices.base',
+    path: 'vault/Invoices.base',
+    is_dir: false,
+    is_hidden: false,
+    size: BASE_CONTENT.length,
+    modified_at: '2026-09-01T10:00:00Z',
+    is_text_editable: true,
+    ...over,
+  }
+}
+
+function baseViews(over: Partial<KnowledgeBaseViews> = {}): KnowledgeBaseViews {
+  return {
+    base_path: 'vault/Invoices.base',
+    is_knowledge_base: true,
+    collection_id: 'kb_1',
+    collection_root: 'vault',
+    source: 'Invoices.base',
+    views: [
+      { name: 'invoices--outstanding', label: 'Outstanding' },
+      { name: 'invoices--aged', label: 'Aged' },
+    ],
+    unloadable_count: 0,
+    ...over,
+  }
+}
+
+function result(over: Partial<ViewResult> = {}): ViewResult {
+  return {
+    view: 'invoices--outstanding',
+    label: 'Outstanding',
+    parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name'] }],
+    rows: [{ path: 'a.md', title: 'INV-A', cells: [], joins: [] }],
+    complete: true,
+    problems: [],
+    ...over,
+  }
+}
+
+// WL-1's remaining half (docs/internal/defect-list-wikilink-rendering-
+// 2026-09-08.md): BasePreview's new collection-wide resolver fetches
+// `kind: 'links'` for each loaded row's own path. `graph()`/`linkEdge()`
+// mirror KnowledgeNoteView.test.tsx's own fixture shape exactly, since this
+// is the SAME wire type answered by the SAME mechanism.
+function graph(over: Partial<KnowledgeGraphResponse> = {}): KnowledgeGraphResponse {
+  return {
+    collection_id: 'kb_1',
+    kind: 'links',
+    nodes: [],
+    edges: [],
+    skipped: [],
+    truncated: false,
+    ...over,
+  }
+}
+
+function linkEdge(over: Partial<KnowledgeGraphEdge> = {}): KnowledgeGraphEdge {
+  return {
+    heading_found: false,
+    from_path: 'a.md',
+    to_path: 'companies/korn-ferry.md',
+    link_text: 'Korn Ferry',
+    resolution: 'exact_path',
+    ambiguous: false,
+    ...over,
+  }
+}
+
+interface Loaders {
+  loadContent?: (ws: string, path: string) => Promise<{ content?: string; is_text: boolean; too_large: boolean }>
+  loadBaseViews?: (ws: string, path: string) => Promise<KnowledgeBaseViews>
+  loadViewResult?: (ws: string, collectionId: string, view: string) => Promise<ViewResult>
+  loadGraph?: KnowledgeGraphLoader
+}
+
+function renderBase(loaders: Loaders = {}, e = entry(), onOpenNote?: (workspacePath: string) => void) {
+  const loadContent =
+    loaders.loadContent ?? vi.fn().mockResolvedValue({ content: BASE_CONTENT, is_text: true, too_large: false })
+  const loadBaseViews = loaders.loadBaseViews ?? vi.fn().mockResolvedValue(baseViews())
+  const loadViewResult = loaders.loadViewResult ?? vi.fn().mockResolvedValue(result())
+  // Default: an empty answer for every row queried. Every existing test in
+  // this suite predates WL-1's row-link-graph fetch and must see it find
+  // nothing, so its own row-scoped fallback behaves exactly as before.
+  const loadGraph = loaders.loadGraph ?? vi.fn().mockResolvedValue(graph())
+  render(
+    <QueryClientProvider client={makeClient()}>
+      <BasePreview
+        workspaceId="ws-1"
+        entry={e}
+        loadContent={loadContent}
+        loadBaseViews={loadBaseViews}
+        loadViewResult={loadViewResult}
+        loadGraph={loadGraph}
+        {...(onOpenNote ? { onOpenNote } : {})}
+      />
+    </QueryClientProvider>,
+  )
+  return { loadContent, loadBaseViews, loadViewResult, loadGraph }
+}
+
+describe('BasePreview — tabs over the views the server says this base owns', () => {
+  it('renders one tab per view, first selected, and fetches its result by the server slug', async () => {
+    const { loadBaseViews, loadViewResult } = renderBase()
+
+    await waitFor(() => expect(loadBaseViews).toHaveBeenCalledWith('ws-1', 'vault/Invoices.base'))
+
+    const first = await screen.findByTestId('base-view-tab-invoices--outstanding')
+    expect(first).toHaveAttribute('aria-selected', 'true')
+    expect(screen.getByTestId('base-view-tab-invoices--aged')).toHaveAttribute('aria-selected', 'false')
+
+    await waitFor(() =>
+      expect(loadViewResult).toHaveBeenCalledWith('ws-1', 'kb_1', 'invoices--outstanding'),
+    )
+    // The result renders: its one row count appears on the active tab.
+    await waitFor(() => expect(first.textContent).toContain('1'))
+    expect(loadViewResult).not.toHaveBeenCalledWith('ws-1', 'kb_1', 'invoices--aged')
+  })
+
+  // Finding #3, the defect this endpoint exists to close. The importer's
+  // SlugRegistry appends a collision counter over everything it has already
+  // handed out, so "A/B" and "A B" become `invoices--a-b` and
+  // `invoices--a-b-2`. A client re-deriving slugs from the .base file cannot
+  // reproduce that counter and produced `invoices--a-b` for BOTH: the second
+  // tab fetched the first view, rendered its rows under the second view's
+  // name, and both tabs shared a React key. Nothing here derives anything —
+  // the two slugs come from the server, so the two tabs are two views.
+  it('keeps two views whose names kebab alike distinct — separate tabs, separate fetches', async () => {
+    const { loadViewResult } = renderBase({
+      loadBaseViews: vi.fn().mockResolvedValue(
+        baseViews({
+          views: [
+            { name: 'invoices--a-b', label: 'A/B' },
+            { name: 'invoices--a-b-2', label: 'A B' },
+          ],
+        }),
+      ),
+    })
+
+    const first = await screen.findByTestId('base-view-tab-invoices--a-b')
+    const second = await screen.findByTestId('base-view-tab-invoices--a-b-2')
+    expect(first).not.toBe(second)
+    expect(first.textContent).toContain('A/B')
+    expect(second.textContent).toContain('A B')
+
+    await waitFor(() => expect(loadViewResult).toHaveBeenCalledWith('ws-1', 'kb_1', 'invoices--a-b'))
+    fireEvent.click(second)
+    await waitFor(() => expect(loadViewResult).toHaveBeenCalledWith('ws-1', 'kb_1', 'invoices--a-b-2'))
+  })
+
+  // Finding #7: a view whose display name differs from its slug must still be
+  // addressed by the slug. The old walk derived the address from whatever
+  // `name:` line it saw last, and a nested mapping key sent it looking for a
+  // view file that does not exist.
+  it('addresses a view by its slug even when the label shares nothing with it', async () => {
+    const { loadViewResult } = renderBase({
+      loadBaseViews: vi.fn().mockResolvedValue(
+        baseViews({
+          views: [{ name: 'invoices--outstanding', label: 'Everything still owed to us' }],
+        }),
+      ),
+    })
+    const tab = await screen.findByTestId('base-view-tab-invoices--outstanding')
+    expect(tab.textContent).toContain('Everything still owed to us')
+    await waitFor(() =>
+      expect(loadViewResult).toHaveBeenCalledWith('ws-1', 'kb_1', 'invoices--outstanding'),
+    )
+  })
+
+  it('says out loud when some of this base view files could not be loaded', async () => {
+    renderBase({ loadBaseViews: vi.fn().mockResolvedValue(baseViews({ unloadable_count: 2 })) })
+    const notice = await screen.findByTestId('base-preview-unloadable')
+    expect(notice.textContent).toContain('2 views')
+    expect(notice.textContent).toContain('could not be loaded')
+  })
+
+  it('marks a view the server says cannot be served, and still offers it', async () => {
+    renderBase({
+      loadBaseViews: vi.fn().mockResolvedValue(
+        baseViews({
+          views: [
+            { name: 'invoices--outstanding', label: 'Outstanding' },
+            {
+              name: 'invoices--everything',
+              label: 'Everything',
+              unservable: true,
+              unservable_reason: 'stored disabled because a filter clause could not be translated',
+            },
+          ],
+        }),
+      ),
+    })
+    await screen.findByTestId('base-view-tab-invoices--everything')
+    expect(screen.getByTestId('base-view-tab-unservable-invoices--everything')).toBeInTheDocument()
+    expect(
+      screen.queryByTestId('base-view-tab-unservable-invoices--outstanding'),
+    ).not.toBeInTheDocument()
+  })
+
+  // code-review finding #3(c) — the view-result query is a full server-side
+  // view EVALUATION, not a static file read; TanStack Query's library
+  // default (`refetchOnWindowFocus: true`) would refire it every time the
+  // reader alt-tabs back into the app once its staleTime has elapsed, which
+  // for an expensive fetch is wasted work on every refocus. It must stay
+  // fetched exactly once across a long idle period plus a refocus.
+  it('does not refire the (expensive) view-result fetch merely because the window regained focus', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const loadViewResult = vi.fn().mockResolvedValue(result())
+      renderBase({ loadViewResult })
+      await vi.waitFor(() => expect(loadViewResult).toHaveBeenCalledTimes(1))
+
+      // Cross well past any sensible staleTime for this fetch.
+      await vi.advanceTimersByTimeAsync(120_000)
+
+      // Simulate the window losing then regaining focus (alt-tab away and back).
+      focusManager.setFocused(false)
+      focusManager.setFocused(true)
+      await vi.advanceTimersByTimeAsync(50)
+
+      expect(loadViewResult).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('switching tabs fetches the newly selected view', async () => {
+    const { loadViewResult } = renderBase()
+    const aged = await screen.findByTestId('base-view-tab-invoices--aged')
+    fireEvent.click(aged)
+    await waitFor(() => expect(loadViewResult).toHaveBeenCalledWith('ws-1', 'kb_1', 'invoices--aged'))
+    expect(aged).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('renders a server refusal with its reason — never a blank panel', async () => {
+    renderBase({
+      loadViewResult: vi.fn().mockResolvedValue(
+        result({
+          parts: [],
+          rows: [],
+          complete: false,
+          refusal: {
+            code: 'unknown_view',
+            reason: 'No view named invoices--outstanding is addressable here.',
+            remedy: '',
+          },
+        }),
+      ),
+    })
+    const refusal = await screen.findByTestId('view-refusal')
+    expect(refusal.textContent).toContain('No view named invoices--outstanding')
+  })
+
+  it('renders the empty state naming what the view draws', async () => {
+    renderBase({
+      loadViewResult: vi.fn().mockResolvedValue(result({ rows: [], parts: [], type: 'invoice' })),
+    })
+    const empty = await screen.findByTestId('view-empty')
+    expect(empty.textContent).toContain('Nothing matches this view.')
+    expect(empty.textContent).toContain('every invoice record')
+  })
+
+  it('never reads the base file itself while it has views to draw', async () => {
+    const { loadContent } = renderBase()
+    await screen.findByTestId('base-view-tab-invoices--outstanding')
+    expect(loadContent).not.toHaveBeenCalled()
+  })
+
+  it('states plainly when the file is not inside a knowledge base', async () => {
+    renderBase({
+      loadBaseViews: vi.fn().mockResolvedValue(
+        baseViews({
+          is_knowledge_base: false,
+          collection_id: undefined,
+          collection_root: undefined,
+          source: undefined,
+          views: [],
+        }),
+      ),
+    })
+    const msg = await screen.findByTestId('base-preview-no-collection')
+    expect(msg.textContent).toContain('not inside a knowledge base')
+  })
+
+  it('surfaces a failed base-views lookup as a retryable error, never a blank', async () => {
+    renderBase({ loadBaseViews: vi.fn().mockRejectedValue(new Error('boom')) })
+    expect(await screen.findByTestId('base-preview-content-error')).toBeInTheDocument()
+  })
+
+  // code-review finding #9 — a base with no drawable views must never be a
+  // dead end. The two zero-views facts are DISTINGUISHED by the server now
+  // (it is the side that read the view files): nothing imported at all, vs.
+  // every view file this base owns failing to load. Both keep the escape
+  // hatch.
+  describe('a base with no views to draw', () => {
+    it('says nothing was imported when nothing failed either', async () => {
+      renderBase({ loadBaseViews: vi.fn().mockResolvedValue(baseViews({ views: [] })) })
+      const msg = await screen.findByTestId('base-preview-no-views')
+      expect(msg.textContent).toContain('No views were imported')
+      expect(msg.textContent).not.toContain('could not be loaded')
+    })
+
+    it('says the views failed to load when they did, never that there were none', async () => {
+      renderBase({
+        loadBaseViews: vi.fn().mockResolvedValue(baseViews({ views: [], unloadable_count: 3 })),
+      })
+      const msg = await screen.findByTestId('base-preview-no-views')
+      expect(msg.textContent).toContain('could not be loaded')
+      expect(msg.textContent).not.toContain('No views were imported')
+    })
+
+    it('offers a raw-view escape hatch that shows the actual file content', async () => {
+      renderBase({
+        loadBaseViews: vi.fn().mockResolvedValue(baseViews({ views: [] })),
+        loadContent: vi
+          .fn()
+          .mockResolvedValue({ content: 'views: [{name: All}]\n', is_text: true, too_large: false }),
+      })
+      await screen.findByTestId('base-preview-no-views')
+      fireEvent.click(screen.getByTestId('base-preview-view-raw'))
+      const shiki = await screen.findByTestId('shiki')
+      expect(shiki.textContent).toContain('views: [{name: All}]')
+    })
+
+    describe('KB-8 — rows open in place, relation cells render as real links', () => {
+      it('wires no row-open button when onOpenNote is not supplied (unchanged default)', async () => {
+        renderBase()
+        await screen.findByTestId('viewpart-table')
+        expect(screen.queryByTestId('viewpart-row-open')).not.toBeInTheDocument()
+      })
+
+      it('opens the WORKSPACE-relative path of the clicked row (translated from the collection-relative row.path)', async () => {
+        const onOpenNote = vi.fn()
+        renderBase({}, entry(), onOpenNote)
+        const openButton = await screen.findByTestId('viewpart-row-open')
+        fireEvent.click(openButton)
+        // baseViews().collection_root = 'vault'; result().rows[0].path = 'a.md'.
+        expect(onOpenNote).toHaveBeenCalledWith('vault/a.md')
+        expect(onOpenNote).toHaveBeenCalledTimes(1)
+      })
+
+      it('renders a relation cell whose [[wikilink]] target matches another row in this view as a real, resolved link — and opens THAT row on click', async () => {
+        const onOpenNote = vi.fn()
+        renderBase(
+          {
+            loadViewResult: vi.fn().mockResolvedValue(
+              result({
+                parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+                rows: [
+                  { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+                  { path: 'companies/korn-ferry.md', title: 'Korn Ferry', cells: [], joins: [] },
+                ],
+              }),
+            ),
+          },
+          entry(),
+          onOpenNote,
+        )
+        await screen.findByTestId('viewpart-table')
+        expect(screen.queryByText('[[Korn Ferry]]')).not.toBeInTheDocument()
+        const link = screen.getByTestId('viewpart-cell-link')
+        expect(link).toHaveAttribute('data-kb-state', 'resolved')
+        fireEvent.click(link)
+        expect(onOpenNote).toHaveBeenCalledWith('vault/companies/korn-ferry.md')
+        // The row's own open action must not ALSO have fired from the link click.
+        expect(onOpenNote).toHaveBeenCalledTimes(1)
+      })
+
+      it('renders a relation cell whose target matches nothing in this view as honestly UNKNOWN, never a confident broken or working link', async () => {
+        renderBase({
+          loadViewResult: vi.fn().mockResolvedValue(
+            result({
+              parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+              rows: [
+                { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Nobody Here]]' }], joins: [] },
+              ],
+            }),
+          ),
+        })
+        await screen.findByTestId('viewpart-table')
+        const link = screen.getByTestId('viewpart-cell-link')
+        expect(link).toHaveAttribute('data-kb-state', 'unknown')
+        expect(link.textContent).toContain('Nobody Here')
+      })
+
+      // WL-1's remaining half (docs/internal/defect-list-wikilink-rendering-
+      // 2026-09-08.md): a relation link inside a base opened DIRECTLY in the
+      // Library must resolve against the collection, exactly as the same
+      // wikilink resolves gold inside a note — not merely against the
+      // handful of rows this one view happened to load.
+      describe('WL-1 — the standalone pane resolves against the collection, not just this view\'s rows', () => {
+        it('resolves a target that names NO row in this view, but IS a real wikilink recorded in a loaded row\'s own file — the case that used to read UNKNOWN', async () => {
+          const loadGraph: KnowledgeGraphLoader = vi.fn(async (req) => {
+            // "Korn Ferry" is not the title/id/basename of any row THIS view
+            // loaded (there is only one row, "INV-A") — the old row-scoped
+            // resolver could never resolve it. It IS, however, a real
+            // wikilink written in that row's own file ("a.md"), so the
+            // collection's link graph resolves it. D-135: the whole row set
+            // arrives as ONE multi-path request now, never one per row.
+            if (req.paths?.includes('a.md')) {
+              return graph({ edges: [linkEdge()], nodes: [{ path: 'companies/korn-ferry.md', exists: true }] })
+            }
+            return graph()
+          })
+          renderBase({
+            loadGraph,
+            loadViewResult: vi.fn().mockResolvedValue(
+              result({
+                parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+                rows: [
+                  { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+                ],
+              }),
+            ),
+          })
+          await screen.findByTestId('viewpart-table')
+          await waitFor(() =>
+            expect(loadGraph).toHaveBeenCalledWith(
+              expect.objectContaining({ collectionId: 'kb_1', kind: 'links', paths: ['a.md'] }),
+            ),
+          )
+          const link = await screen.findByTestId('viewpart-cell-link')
+          await waitFor(() => expect(link).toHaveAttribute('data-kb-state', 'resolved'))
+        })
+
+        it('control: a target that resolves NOWHERE — not as a row, not as any loaded row\'s own link — still never reads as resolved', async () => {
+          const loadGraph = vi.fn().mockResolvedValue(graph()) // every row's own graph answers empty
+          renderBase({
+            loadGraph,
+            loadViewResult: vi.fn().mockResolvedValue(
+              result({
+                parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+                rows: [
+                  { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Nobody Anywhere]]' }], joins: [] },
+                ],
+              }),
+            ),
+          })
+          await screen.findByTestId('viewpart-table')
+          await waitFor(() => expect(loadGraph).toHaveBeenCalled())
+          const link = screen.getByTestId('viewpart-cell-link')
+          expect(link).not.toHaveAttribute('data-kb-state', 'resolved')
+          expect(link).toHaveAttribute('data-kb-state', 'unknown')
+        })
+
+        // Silent-failure audit M4. Every one of these graph queries is
+        // `retry: false`, and a failed one contributes no edges. Without a
+        // statement, the whole collection-wide resolver silently reverts to
+        // the pre-WL-1 row-title-match tier — relation cells rendering white
+        // again, which is EXACTLY the symptom WL-1 was written to fix, with
+        // nothing on screen to show the fix had stopped working.
+        it('states, once at page level, that link checking is incomplete when a row\'s graph query FAILS', async () => {
+          const loadGraph: KnowledgeGraphLoader = vi.fn(async () => {
+            throw new Error('graph endpoint 500')
+          })
+          renderBase({
+            loadGraph,
+            loadViewResult: vi.fn().mockResolvedValue(
+              result({
+                parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+                rows: [
+                  { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+                ],
+              }),
+            ),
+          })
+          await screen.findByTestId('viewpart-table')
+
+          const banner = await screen.findByTestId('base-preview-link-graph-degraded')
+          expect(banner).toHaveTextContent(/link checking is incomplete/i)
+          // ONE statement, never one marker per cell — the same treatment
+          // `graph_unavailable` gets in the note reader.
+          expect(screen.getAllByTestId('base-preview-link-graph-degraded')).toHaveLength(1)
+          // And a real Retry, not a dead control.
+          expect(screen.getByTestId('base-preview-link-graph-retry')).toBeInTheDocument()
+
+          // The table still renders — this degrades honestly, it does not
+          // replace the content with an error.
+          expect(screen.getByTestId('viewpart-cell-link')).toBeInTheDocument()
+        })
+
+        it('control: when every row\'s graph query SUCCEEDS, no such statement is shown', async () => {
+          renderBase({
+            loadGraph: vi.fn().mockResolvedValue(graph()),
+            loadViewResult: vi.fn().mockResolvedValue(
+              result({
+                parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+                rows: [
+                  { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+                ],
+              }),
+            ),
+          })
+          await screen.findByTestId('viewpart-table')
+          await waitFor(() => expect(screen.getByTestId('viewpart-cell-link')).toBeInTheDocument())
+          expect(screen.queryByTestId('base-preview-link-graph-degraded')).not.toBeInTheDocument()
+        })
+      })
+    })
+
+    it('offers a working Download action', async () => {
+      const clickSpy = vi.fn()
+      const originalCreateElement = document.createElement.bind(document)
+      vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+        const el = originalCreateElement(tag)
+        if (tag === 'a') el.addEventListener('click', clickSpy)
+        return el
+      })
+      renderBase({ loadBaseViews: vi.fn().mockResolvedValue(baseViews({ views: [] })) })
+      await screen.findByTestId('base-preview-no-views')
+      fireEvent.click(screen.getByTestId('base-preview-download'))
+      expect(clickSpy).toHaveBeenCalledTimes(1)
+      vi.restoreAllMocks()
+    })
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UAT 2026-09-13 — D-70 (unloadable views named) and D-78 (duplicate labels,
+// default tab)
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('UAT D-70 — the unloadable notice names each missing view and its reason', () => {
+  it('lists the view name and the loader reason beneath the count', async () => {
+    renderBase({
+      loadBaseViews: vi.fn().mockResolvedValue(
+        baseViews({
+          unloadable_count: 2,
+          unloadable: [
+            {
+              name: 'projects--active-projects',
+              paths: ['.omnipus-vault/views/projects--active-projects.yaml'],
+              code: 'view_unknown_property',
+              reason: 'view "projects--active-projects" names property "priority" in properties, which record type "project" does not declare',
+            },
+            {
+              paths: ['.omnipus-vault/views/broken.yaml'],
+              code: 'view_malformed',
+              reason: 'yaml: line 3: could not find expected key',
+            },
+          ],
+        }),
+      ),
+    })
+    const notice = await screen.findByTestId('base-preview-unloadable')
+    // DIES ON the old notice: only "2 views ... could not be loaded".
+    const entries = within(notice).getAllByTestId('base-preview-unloadable-entry')
+    expect(entries).toHaveLength(2)
+    expect(entries[0]?.textContent).toContain('projects--active-projects')
+    expect(entries[0]?.textContent).toContain('does not declare')
+    expect(entries[1]?.textContent).toContain('broken.yaml')
+    expect(entries[1]?.textContent).toContain('could not find expected key')
+  })
+})
+
+describe('UAT D-78 — two views sharing a label are told apart, and the default tab is servable', () => {
+  const twins = [
+    {
+      name: 'projects--all-projects',
+      label: 'All Projects',
+      unservable: true,
+      unservable_reason: 'sort direction "descending" is not one the query grammar accepts',
+    },
+    { name: 'All Projects', label: 'All Projects' },
+  ]
+
+  it('suffixes a duplicated label with the view name on each tab', async () => {
+    renderBase({ loadBaseViews: vi.fn().mockResolvedValue(baseViews({ views: twins })) })
+    const tablist = await screen.findByTestId('base-preview-tablist')
+    // DIES ON the old tablist: both tabs read exactly "All Projects".
+    expect(within(tablist).getByTestId('base-view-tab-projects--all-projects').textContent).toContain(
+      'All Projects (projects--all-projects)',
+    )
+    expect(within(tablist).getByTestId('base-view-tab-All Projects').textContent).toContain('All Projects (All Projects)')
+  })
+
+  it('lands on the first SERVABLE view, not on an unservable twin that sorts first', async () => {
+    const loadViewResult = vi.fn().mockResolvedValue(result())
+    renderBase({ loadBaseViews: vi.fn().mockResolvedValue(baseViews({ views: twins })), loadViewResult })
+    await screen.findByTestId('base-preview-tablist')
+    // DIES ON the old default (`views[0]`): the broken twin was selected.
+    await waitFor(() =>
+      expect(screen.getByTestId('base-view-tab-All Projects').getAttribute('aria-selected')).toBe('true'),
+    )
+    await waitFor(() => expect(loadViewResult.mock.calls.some((c) => c[2] === 'All Projects')).toBe(true))
+    expect(loadViewResult.mock.calls.some((c) => c[2] === 'projects--all-projects')).toBe(false)
+  })
+
+  it('leaves a lone label untouched', async () => {
+    renderBase()
+    const tablist = await screen.findByTestId('base-preview-tablist')
+    expect(within(tablist).getByTestId('base-view-tab-invoices--outstanding').textContent).not.toContain('(')
+  })
+})
+
+// ── UAT 2026-09-13 D-135 — link-graph fan-out and hidden 429s ───────────────
+import { rowCarriesWikilink, withLinkGraphSlot, linkGraphInFlightCount, LINK_GRAPH_MAX_IN_FLIGHT } from './BasePreview'
+import { ApiError } from '@/lib/api-error'
+
+describe('UAT D-135 — a base view no longer fires one graph request per row', () => {
+  it('rowCarriesWikilink: only a row with a [[wikilink]] cell needs the link graph', () => {
+    expect(rowCarriesWikilink({ cells: [{ value: '[[Korn Ferry]]' }] })).toBe(true)
+    expect(rowCarriesWikilink({ cells: [{ value: 'plain' }, { value: '42' }] })).toBe(false)
+    expect(rowCarriesWikilink({ cells: [] })).toBe(false)
+    expect(rowCarriesWikilink({})).toBe(false)
+  })
+
+  it('issues ONE graph request naming the wikilink-bearing row ONLY — rows with no [[wikilink]] are not in it', async () => {
+    const loadGraph = vi.fn().mockResolvedValue(graph())
+    renderBase({
+      loadGraph,
+      loadViewResult: vi.fn().mockResolvedValue(
+        result({
+          parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+          rows: [
+            { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+            { path: 'b.md', title: 'INV-B', cells: [{ property: 'client', value: 'Acme' }], joins: [] },
+            { path: 'c.md', title: 'INV-C', cells: [{ property: 'client', value: 'Bolt' }], joins: [] },
+          ],
+        }),
+      ),
+    })
+    await screen.findByTestId('viewpart-table')
+    // DIES ON the pre-multi-path code: the request carried `path: 'a.md'`
+    // (one request per row, b.md and c.md queued behind it); DIES ON the
+    // pre-D-135 code with three requests at all.
+    await waitFor(() => expect(loadGraph).toHaveBeenCalledTimes(1))
+    expect(loadGraph).toHaveBeenCalledWith(expect.objectContaining({ kind: 'links', paths: ['a.md'] }))
+    expect(loadGraph).not.toHaveBeenCalledWith(expect.objectContaining({ path: 'a.md' }))
+  })
+
+  it('a view with SEVERAL wikilink rows still makes exactly ONE request, carrying every path (D-135 full fix)', async () => {
+    const loadGraph = vi.fn().mockResolvedValue(graph())
+    renderBase({
+      loadGraph,
+      loadViewResult: vi.fn().mockResolvedValue(
+        result({
+          parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+          rows: [
+            { path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] },
+            { path: 'b.md', title: 'INV-B', cells: [{ property: 'client', value: '[[Acme Ltd]]' }], joins: [] },
+            { path: 'c.md', title: 'INV-C', cells: [{ property: 'client', value: '[[Bolt Inc]]' }], joins: [] },
+          ],
+        }),
+      ),
+    })
+    await screen.findByTestId('viewpart-table')
+    await waitFor(() => expect(loadGraph).toHaveBeenCalledTimes(1))
+    // DIES ON the code this replaces: three separate requests (one per row).
+    expect(loadGraph).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: 'links', paths: ['a.md', 'b.md', 'c.md'] }),
+    )
+  })
+
+  it(`withLinkGraphSlot: never more than ${LINK_GRAPH_MAX_IN_FLIGHT} link-graph requests on the wire at once`, async () => {
+    const resolvers: Array<() => void> = []
+    const runs = Array.from({ length: 7 }, () =>
+      withLinkGraphSlot(() => new Promise<void>((resolve) => resolvers.push(resolve))),
+    )
+    await Promise.resolve()
+    // DIES ON the old code, which had no limiter at all (7 in flight).
+    expect(linkGraphInFlightCount()).toBe(LINK_GRAPH_MAX_IN_FLIGHT)
+    expect(resolvers).toHaveLength(LINK_GRAPH_MAX_IN_FLIGHT)
+    resolvers.shift()?.()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(linkGraphInFlightCount()).toBe(LINK_GRAPH_MAX_IN_FLIGHT)
+    expect(resolvers).toHaveLength(LINK_GRAPH_MAX_IN_FLIGHT + 1 - 1)
+    while (resolvers.length > 0) {
+      resolvers.shift()?.()
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+    await Promise.all(runs)
+    expect(linkGraphInFlightCount()).toBe(0)
+  })
+
+  it('names a gateway rate limit (HTTP 429) in the degraded-links banner instead of hiding it', async () => {
+    const loadGraph = vi.fn().mockRejectedValue(new ApiError(429, 'Too many requests'))
+    renderBase({
+      loadGraph,
+      loadViewResult: vi.fn().mockResolvedValue(
+        result({
+          parts: [{ part: 'table', source: { part: 'table' }, columns: ['file.name', 'client'] }],
+          rows: [{ path: 'a.md', title: 'INV-A', cells: [{ property: 'client', value: '[[Korn Ferry]]' }], joins: [] }],
+        }),
+      ),
+    })
+    const banner = await screen.findByTestId('base-preview-link-graph-degraded')
+    // DIES ON the old code: the banner never distinguished a 429.
+    expect(within(banner).getByTestId('base-preview-link-graph-rate-limited').textContent).toMatch(/429/)
+  })
+})

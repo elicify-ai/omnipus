@@ -250,7 +250,7 @@ func (a *restAPI) emitPreviewAuditEntry(
 	if !tokenPrefixRE.MatchString(tokenPrefix) {
 		tokenPrefix = "<invalid>"
 	}
-	sanitisedPath := sanitisePreviewPath(r.URL.Path, token)
+	sanitisedPath := redactRequestPath(r.URL.Path)
 	// F-14: only trust X-Forwarded-For when cfg.Gateway.TrustXFF is set.
 	// On plain-HTTP deployments without a trusted proxy, clients can spoof the
 	// audit IP by sending this header. Pull config from context (set by

@@ -824,6 +824,80 @@ jobs:
       - name: Run every discovered guard (scripts/guards.sh)
         run: bash scripts/guards.sh
 
+      - name: Run tool-error-from-status lint
+        # python3-based (not `grep -P`) so it behaves identically on
+        # contributors' local macOS/BSD-grep machines and on this
+        # ubuntu-latest runner — see the script's header comment.
+        run: bash scripts/check-no-tool-error-from-status.sh
+
+      - name: Run JPEG-screencast removal guard
+        # ADR-061: the JPEG live-browser fallback is deleted and WebRTC is the
+        # only live-video path. Long-lived branches cut before the removal
+        # still contain the whole pipeline, so a merge re-adds it as an
+        # ordinary, conflict-free addition. This is the mechanical half of
+        # CLAUDE.md's "Retired surfaces — do NOT reintroduce" rule.
+        run: bash scripts/check-no-jpeg-screencast.sh
+
+      - name: Run fail-closed tool-policy backfill removal guard
+        # ADR-077: the fail-closed per-agent tool-policy deny backfill
+        # (RepairIncompleteToolPolicyCoverage / ValidateAgentOwnToolPolicyCoverage)
+        # is deleted — tool policy is exactly two layers, the reconciled
+        # global ceiling IS the default. Long-lived branches cut before the
+        # removal still contain both functions and their wiring, so a merge
+        # re-adds them as an ordinary, conflict-free addition. This is the
+        # mechanical half of CLAUDE.md's "Retired surfaces — do NOT
+        # reintroduce" rule.
+        run: bash scripts/check-no-fail-closed-backfill.sh
+
+      - name: Run duplicate-renderer removal guard
+        # ADR-083 EMB-027: LibraryAudioPreview must be defined exactly once,
+        # in its canonical module (src/components/library/preview/
+        # LibraryAudioPreview.tsx), shared between the Library preview pane
+        # and the inline note embed. A branch cut before the extraction still
+        # contains the old private copy inside LibraryPreviewPane.tsx, so a
+        # merge re-adds it as an ordinary, conflict-free addition alongside
+        # the new module — git has no idea the duplication is the defect
+        # EMB-027 exists to prevent.
+        run: bash scripts/check-no-duplicate-renderer.sh
+
+      - name: Run E2E auth cross-talk guard
+        # POST /api/v1/auth/login re-mints the SINGLE-SLOT session_token_hash,
+        # invalidating the shared storageState cookie for every spec that runs
+        # after the caller. dev_mode_bypass masks that on every route except
+        # GET /api/v1/providers, so the failure surfaces far from its cause.
+        # Self-test first — a guard that cannot fail is no guard
+        # (docs/internal/false-green-patterns.md).
+        run: |
+          bash scripts/check-e2e-login-crosstalk.sh --self-test
+          bash scripts/check-e2e-login-crosstalk.sh
+
+      - name: Run removed-providers guard self-check
+        # Proves the guard below can still go red (ADR-068 spec SC-001) before
+        # its verdict is trusted — see docs/internal/false-green-patterns.md.
+        run: bash scripts/check-no-removed-providers-selfcheck.sh
+
+      - name: Run removed-providers guard
+        # ADR-068 §2.4: antigravity, claude-cli and the OpenAI device-code flow
+        # are deleted greenfield with no trace outside the historical records in
+        # scripts/no-removed-providers.allow. Branches cut before the deletion
+        # re-add them on merge as an ordinary addition — keep the deletion.
+        run: bash scripts/check-no-removed-providers.sh
+
+      - name: Run ADR-067 greenfield guard self-test
+        # Proves the guard below can still go red (11 planted violations, one
+        # per rule) before its verdict is trusted — see
+        # docs/internal/false-green-patterns.md.
+        run: bash scripts/check-greenfield-providers.sh --self-test
+
+      - name: Run ADR-067 greenfield guard
+        # ADR-067 SC-008 / SC-009 / US-11.AC2: pkg/providers/capabilities is
+        # folded into pkg/providers/catalog, the prefix-stripping resolver is
+        # gone, neither pkg/providers nor pkg/config carries alias / migration
+        # / deprecation machinery, and the SPA's bundled catalog is deleted.
+        # A branch cut before ADR-067 re-adds the alias path on merge as an
+        # ordinary addition — KEEP THE DELETION.
+        run: bash scripts/check-greenfield-providers.sh
+
   verify-contracts:
     name: Verify Contracts
     # Ensure generated wire-format types (TS + Go) match the spec files.
@@ -1408,6 +1482,41 @@ jobs:
             exit 1
           fi
 
+      - name: Run records_no_sqlite propindexless honesty-contract tests
+        # Review finding F7: pkg/gateway/rest_knowledge_find_propindexless_test.go
+        # is gated `//go:build records_no_sqlite || mipsle || netbsd || (freebsd &&
+        # arm)` — the platform/feature carve-out for a build with no SQLite-backed
+        # properties index (ADR-081 / MV-9). That tag combination appeared NOWHERE
+        # in CI: every other step here, and deploy/ci-worker/runci.sh, builds and
+        # tests with `-tags goolm,stdjson` only — so deleting this file's whole
+        # attachment carve-out (the honesty contract it exists to pin: a
+        # properties-index-only request group must refuse with complete:false and
+        # the engine's own reason, never a silently bare empty group) would have
+        # left every other gate green. Same #615/Landlock-step shape: a build-tag
+        # branch nothing runs is silent coverage loss, not merely untested code.
+        #
+        # -p 1: matches this file's own doc comment (its documented run command)
+        # and this package's existing convention for the sibling propindex-backed
+        # suite — the propindexless tests flip package-level state to simulate the
+        # carve-out and must not run concurrently with anything else in the same
+        # test binary.
+        #
+        # Pass-floor mirrors the Landlock step above (docs/internal/false-green-
+        # patterns.md: "ok with zero --- PASS lines" is a build-tag miscompile or a
+        # silently-skipped suite, not a real pass) — 2 is exact (grep this test
+        # file for `^func Test` before changing it).
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 go test -v -tags goolm,stdjson,records_no_sqlite -count=1 -timeout 300s \
+            -run '^TestVaultSearch_Propindexless' -p 1 ./pkg/gateway/ 2>&1 | tee /tmp/records-no-sqlite.log
+
+          passes=$(grep -c -- '--- PASS' /tmp/records-no-sqlite.log || true)
+          echo "records_no_sqlite propindexless passing tests: $passes"
+          if [ "$passes" -lt 2 ]; then
+            echo "::error::Only $passes of the 2 known records_no_sqlite propindexless tests passed. This build-tag honesty contract has silently lost coverage (or a test was added/renamed without updating this step)." >&2
+            exit 1
+          fi
+
   # Split out of `test` (ADR-067 parallelism pass). Measured on a real run,
   # the single Tests job spent 355s on `go test` and then a further 648s on
   # `go test -race` — 58% of an 18.7-minute job, running strictly AFTER the
@@ -1639,7 +1748,35 @@ jobs:
             fi
             exit 1
           fi
-          # No race detected — now the ordinary short-circuit applies.
+          # --- FAIL carve-out, matching the PLAIN test step above.
+          #
+          # The flake filter below exists for ONE signature: CPU/IO contention
+          # on a loaded runner, which makes a test exceed a wall-clock budget
+          # or a package hit its timeout. Contention produces TIMEOUTS and bare
+          # `FAIL <pkg>` summaries — it does not produce assertion failures. So
+          # an `--- FAIL` line means a test evaluated its own assertion and the
+          # assertion was false, and re-running it alone can only ever hide
+          # that. An assertion failure is never excused by an isolated re-run.
+          #
+          # Same native-substring reasoning as DATA RACE above — no grep -q on
+          # the multi-megabyte $out.
+          if [[ $out == *"--- FAIL"* ]]; then
+            echo ""
+            echo "=== --- FAIL detected — an assertion failure is never excused by an isolated re-run ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (assertion failure detected — never excused): $p"
+              done
+            else
+              echo "REAL FAILURE (assertion failure detected — never excused): --- FAIL detected but no package-level FAIL line matched; see full output above"
+            fi
+            exit 1
+          fi
+          # No race and no assertion failure detected — now the ordinary
+          # short-circuit applies. What reaches the flake filter below is
+          # exclusively the hang/contention signature: a bare `FAIL <pkg>`
+          # summary with no `--- FAIL` line anywhere in the run.
           [ $code -eq 0 ] && exit 0
           failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
           [ -z "$failed" ] && exit $code
@@ -1647,7 +1784,17 @@ jobs:
           echo "=== FLAKE FILTER (-race): re-running failed packages isolated (-p 1): $failed ==="
           rc=0
           for p in $failed; do
-            if go test -race -tags goolm,stdjson -count=1 -timeout 900s -p 1 "$p" >/tmp/rr_race.log 2>&1; then
+            # The isolated re-run is grepped for DATA RACE, not just checked
+            # for a zero exit — deploy/ci-worker/runci.sh's run_gorace already
+            # does this and the two must stay in lockstep.
+            #
+            # The carve-out above exists because "a race can be reported
+            # without flipping go test's exit code". That is equally true of
+            # THIS run, so testing only its exit code let a race reported in
+            # the SECOND run be stamped "FLAKE (passed isolated)" and excused
+            # — precisely what the carve-out forbids.
+            if go test -race -tags goolm,stdjson -count=1 -timeout 900s -p 1 "$p" >/tmp/rr_race.log 2>&1 \
+               && ! grep -aq "DATA RACE" /tmp/rr_race.log; then
               echo "FLAKE (passed isolated): $p"
             else
               echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL|DATA RACE' /tmp/rr_race.log | head; rc=1

@@ -115,19 +115,22 @@ func TestListProviders_NoStoredEntry_StaysDisconnected(t *testing.T) {
 // CLI and spends one premium request against the operator's subscription
 // (rest_signin_copilot.go's handleCopilotSignInStatus). GET /providers must
 // NEVER pay that cost for a background list render. A fake `copilot` binary
-// on PATH leaves a sentinel file behind if it is ever invoked; the test
-// fails if that file exists after the GET.
+// on PATH records every run in a tally file; the test fails if the GET left
+// any run behind.
+//
+// The fake used to record its run with `touch`, which is not a bash built-in.
+// With PATH narrowed to the fake's own directory `touch` was "command not
+// found", so the sentinel was never written EVEN WHEN the CLI ran, and this
+// guard could not fail. putCountingCopilotOnPath writes its tally with a
+// built-in and proves, before this test relies on it, that one run of the
+// fake records exactly one invocation.
 func TestListProviders_NoCopilotVendorFanOut(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("fake CLI uses a #!/bin/bash shebang with no Windows equivalent (see #113)")
 	}
 	api := newTestRestAPIWithHome(t)
 
-	binDir := t.TempDir()
-	sentinel := filepath.Join(binDir, "invoked")
-	script := "#!/bin/bash\ntouch '" + sentinel + "'\necho ok\nexit 0\n"
-	require.NoError(t, os.WriteFile(filepath.Join(binDir, "copilot"), []byte(script), 0o755))
-	t.Setenv("PATH", binDir)
+	tally := putCountingCopilotOnPath(t, "ok", "", 0)
 
 	cfg := api.agentLoop.GetConfig()
 	cfg.Providers = append(cfg.Providers, &config.ModelConfig{
@@ -142,9 +145,8 @@ func TestListProviders_NoCopilotVendorFanOut(t *testing.T) {
 	assert.Equal(t, gen.ProviderStatusDisconnected, provs[0].Status)
 	assert.Nil(t, provs[0].AccountLabel)
 
-	_, statErr := os.Stat(sentinel)
-	assert.True(t, os.IsNotExist(statErr),
-		"GET /providers must never invoke the Copilot CLI — sentinel file exists, meaning it was invoked")
+	assert.Equal(t, 0, countInvocations(t, tally),
+		"GET /providers must never invoke the Copilot CLI — the fake recorded a run")
 }
 
 // --- GAP 2: PUT /providers/{id} auth_method: sign_in wiring --------------

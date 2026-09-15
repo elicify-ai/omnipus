@@ -369,6 +369,14 @@ var blockedConfigKeys = []blockedConfigKey{
 			"web_serve preview links from it (ADR-044)",
 	},
 	{
+		Key: "gateway.video_embed_hosts",
+		Reason: "every entry becomes a frame-src source in the SPA's own Content-Security-Policy " +
+			"(ADR-083 D9) — writing it lets an agent authorise a third-party frame inside the " +
+			"application's origin, which is the one external content this product permits at all",
+		ReadOKReason: "the allow-list is already public to the browser on /api/v1/state — an agent " +
+			"may say which video hosts a note can embed; adding one stays blocked",
+	},
+	{
 		Key: "gateway.trust_xff",
 		Reason: "it makes the client IP attacker-controlled, which is what auth rate limiting " +
 			"and audit attribution key on",

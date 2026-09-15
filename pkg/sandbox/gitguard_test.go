@@ -188,10 +188,42 @@ func TestGitSandbox_BlocksShellWrappers(t *testing.T) {
 		{"sh", "-c", "rm -rf .git"},
 		{"bash", "-c", "echo hacked > .git/HEAD"},
 		{"sh", "-c", "cd . && git reset --hard"},
+		// 2026-09-12 CI finding: global options between "git" and the verb hid
+		// the verb from every substring pattern. The first line is the exact
+		// command that went through live after 182 denials of the bare form.
+		{"bash", "-c", `git -c user.name="Jim" -c user.email="jim@omnipus.local" commit -m "Record goal" && git log --oneline -1`},
+		{"sh", "-c", "git -c a=b commit -m x"},
+		{"sh", "-c", "git -C . commit -m x"},
+		{"sh", "-c", "git --no-pager -c color.ui=false rebase -i HEAD~2"},
+		{"sh", "-c", "git --git-dir=.git --work-tree=. commit -m x"},
+		{"sh", "-c", "git -cuser.name=jim commit -m x"},
+		{"sh", "-c", `git -c user.name="Jim Bot" commit -m x`},
+		{"sh", "-c", "git -c a=b reset --hard"},
+		{"sh", "-c", "git -c a=b push origin main"},
 	} {
 		d := g.InspectExec(argv, work)
 		if d.Allowed {
 			t.Errorf("argv %v: shell wrapper must be DENIED, got allowed", argv)
+		}
+	}
+}
+
+// TestGitSandbox_ShellWrapperOptionStrippingKeepsReadsOpen guards the other
+// direction of the option-stripping fix: a read-only git verb behind global
+// options must stay ALLOWED, and an option value must never be mistaken for
+// a verb.
+func TestGitSandbox_ShellWrapperOptionStrippingKeepsReadsOpen(t *testing.T) {
+	g, work := newProtectedWork(t)
+	for _, argv := range [][]string{
+		{"sh", "-c", "git -c color.ui=false log --oneline -5"},
+		{"sh", "-c", "git --no-pager -C . status"},
+		{"sh", "-c", "git -c core.pager=cat diff HEAD~1"},
+		{"sh", "-c", `git -c alias.st="status" st`},
+		{"sh", "-c", "git --version"},
+	} {
+		d := g.InspectExec(argv, work)
+		if !d.Allowed {
+			t.Errorf("argv %v: read-only git behind global options must stay ALLOWED, got denied (%s)", argv, d.PolicyRule)
 		}
 	}
 }

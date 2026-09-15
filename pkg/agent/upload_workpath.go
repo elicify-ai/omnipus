@@ -149,13 +149,13 @@ func resetUploadWorkPathRegistryForTest() {
 // (pkg/gateway/rest.go's chat upload and rest_library.go's Library upload,
 // the two callers of this shared sanitizer) rather than only at rename.
 //
-// It also runs the result through pkg/pathsafe.ValidateComponent, the
-// shared cross-platform filename-safety check every filename-accepting
-// surface in Omnipus now uses (Windows reserved device names, NTFS-illegal
+// It also runs the result through pkg/pathsafe.SanitizeRules — the STRICT
+// rule set, on every platform (Windows reserved device names, NTFS-illegal
 // characters, a trailing dot/space Win32 silently strips, and a
-// conservative length cap — see that package's doc for why these rules
-// apply unconditionally rather than only when actually running on
-// Windows). This replaces the previous local length cap
+// conservative length cap). Since ADR-067 Stage 0 those rules apply only
+// where a Windows filesystem will see the file, so "unconditional" now has
+// to be asked for by name; see the comment at the call site for why this
+// caller is one of the few that must ask. This replaces the previous local length cap
 // (maxUploadFilenameRunes, 256, measured in bytes not runes) with
 // pathsafe.MaxComponentNameLength (100, measured in runes) — a 210-rune
 // filename used to pass here and is now correctly rejected; see
@@ -176,7 +176,25 @@ func SanitizeUploadFilename(name string) (string, error) {
 			return "", fmt.Errorf("upload filename contains a control character")
 		}
 	}
-	if err := pathsafe.ValidateComponent(trimmed); err != nil {
+	// SanitizeRules, NOT the package-level ValidateComponent: this call site
+	// must stay strict on every platform, and the package-level function is
+	// selected by GOOS since ADR-067 Stage 0.
+	//
+	// Stage 0's argument for relaxing name-shape rules on Linux and macOS is
+	// "these are the operator's own files, and we never chose their names".
+	// That argument is FALSE here. An upload filename arrives from a remote
+	// party — a browser, or an inbound attachment from Discord, Telegram,
+	// Feishu or QQ — and Omnipus then creates a file with it. So nothing here
+	// may relax, on any platform.
+	//
+	// pkg/pathsafe names SanitizeRules for exactly this reason and warns that
+	// "the most natural implementation of Stage 0 relaxes the sanitizer too,
+	// as a side effect". That is precisely what happened: this line kept
+	// compiling, kept reading correctly, and quietly started accepting "CON",
+	// "a<b.txt", "report." and a 210-rune name on every non-Windows build.
+	// pathsafe's own guard test could not see it — it guards
+	// SanitizeComponent, which lives in that package; this caller does not.
+	if err := pathsafe.SanitizeRules.ValidateComponent(trimmed); err != nil {
 		return "", fmt.Errorf("invalid upload filename: %w", err)
 	}
 	return trimmed, nil

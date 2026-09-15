@@ -31,6 +31,42 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { fetchHostFolders, type HostFolderListing, type HostFolderEntry } from '@/lib/api'
 
+/** Lexically canonicalize a typed host path — collapse `//` runs, drop `.`
+ *  segments, resolve `..` segments, strip trailing slashes — with NO
+ *  filesystem access.
+ *
+ *  Claude review 2026-09-14, cut-list: the pre-submit verdict gate used to
+ *  match the TYPED string against the folder listing, so "/tmp/" (or
+ *  "/tmp/.", or "/a/../tmp") dodged the breadth banner and the "Add anyway"
+ *  second click entirely while naming the same folder as "/tmp". The gate —
+ *  and the submit — now run on the canonical spelling, so every way of
+ *  writing a folder gets the same verdict. Lexical only, deliberately: the
+ *  SERVER stays the authority on what the path resolves to through symlinks
+ *  (a system directory is still refused there even if this normalization
+ *  cannot see it); this exists so spelling cannot route around the gate. */
+export function canonicalizeHostPath(input: string): string {
+  const trimmed = input.trim()
+  if (trimmed === '') return ''
+  const absolute = trimmed.startsWith('/')
+  const segments: string[] = []
+  for (const segment of trimmed.split('/')) {
+    if (segment === '' || segment === '.') continue
+    if (segment === '..') {
+      if (segments.length > 0 && segments[segments.length - 1] !== '..') {
+        segments.pop()
+      } else if (!absolute) {
+        // A relative path cannot climb above where it started; keep the
+        // (leading) ".." rather than silently resolving it against the root.
+        segments.push('..')
+      }
+      continue
+    }
+    segments.push(segment)
+  }
+  const joined = segments.join('/')
+  return absolute ? `/${joined}` : joined
+}
+
 interface LibraryAddMountDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -39,6 +75,23 @@ interface LibraryAddMountDialogProps {
   isPending: boolean
   /** Server-side failure text, surfaced verbatim rather than re-worded. */
   error?: string
+  /**
+   * D-117 response half: the server REFUSED the grant (403). The reason it
+   * gave, rendered as the refused banner. Distinct from `error` on purpose —
+   * a policy refusal and a transport failure must not read the same, and the
+   * parent decides which prop a failure lands in (it sees the status code).
+   */
+  refusal?: string
+  /**
+   * D-117 response half: the server CREATED the mount (201) but its body
+   * carries `warning` — a broad grant it let through. Shown in THIS dialog
+   * (which the parent holds open) rather than a toast: a toast auto-dismisses
+   * and this is the one place the operator is already reading about the grant
+   * they just made.
+   */
+  createdWarning?: string
+  /** Fired when the operator acknowledges `createdWarning` (the "Done" click). */
+  onAcknowledgeWarning?: () => void
 }
 
 export function LibraryAddMountDialog({
@@ -47,6 +100,9 @@ export function LibraryAddMountDialog({
   onConfirm,
   isPending,
   error,
+  refusal,
+  createdWarning,
+  onAcknowledgeWarning,
 }: LibraryAddMountDialogProps) {
   const [path, setPath] = useState('')
   const [browsing, setBrowsing] = useState(false)
@@ -63,6 +119,20 @@ export function LibraryAddMountDialog({
   const [selectedVerdict, setSelectedVerdict] = useState<HostFolderEntry | null>(null)
   const [listError, setListError] = useState<string>()
   const [loading, setLoading] = useState(false)
+  // UAT D-127 (2026-09-13): the server's refusal is for the path that was
+  // SUBMITTED. It used to stay on screen beside a corrected path right up
+  // until the next attempt succeeded; now it is shown only while the field
+  // still holds the path it was about to.
+  const [attemptedPath, setAttemptedPath] = useState<string>()
+  // UAT D-117, dialog half (2026-09-13): a TYPED path carries no verdict —
+  // only a browsed row does — so `/tmp` mounted in one click with nothing
+  // said about its breadth. Before submitting an unverified path the dialog
+  // now asks the server for the verdict on that exact folder; a broad one
+  // is shown and needs a second, explicit click ("Add anyway"), a refused
+  // one is refused here. If the lookup itself fails the submit proceeds and
+  // the server's own check (W5's backend refusal) is the authority.
+  const [verifying, setVerifying] = useState(false)
+  const [broadAcknowledged, setBroadAcknowledged] = useState(false)
 
   // Reset on every open so a previous attempt's path and error never bleed
   // into a fresh one — this dialog grants disk access, and a stale prefill is
@@ -74,6 +144,12 @@ export function LibraryAddMountDialog({
       setListing(null)
       setListError(undefined)
       setSelectedVerdict(null)
+      setAttemptedPath(undefined)
+      setVerifying(false)
+      setBroadAcknowledged(false)
+      // D-117 response half: the parent owns these (it owns the create call);
+      // clearing LOCAL attempt state here is enough — the parent clears its
+      // own the same way it always cleared `error`, in onOpenChange.
     }
   }, [open])
 
@@ -99,10 +175,64 @@ export function LibraryAddMountDialog({
   // The selected row's verdict, when the current path is one we have listed.
   // Prefer the remembered verdict; fall back to the listing for the case where
   // the path matches a row that is still on screen (a refused row, which does
-  // not navigate).
-  const selected = selectedVerdict ?? listing?.entries.find((e) => e.path === path)
-  const trimmed = path.trim()
-  const canSubmit = trimmed.length > 0 && !isPending && selected?.mountable !== false
+  // not navigate). Both this lookup and everything below run on the
+  // CANONICAL spelling, so "/tmp/" cannot dodge the gate that "/tmp" hits.
+  const canonical = canonicalizeHostPath(path)
+  const selected = selectedVerdict ?? listing?.entries.find((e) => e.path === canonical)
+  // D-117 response half: once the server has ANSWERED, the dialog stops being
+  // a form and becomes the verdict. `createdWarning` (201 + warning) is the
+  // terminal state — the mount exists, so there is nothing left to submit;
+  // only Done. `refusal` (403) is scoped to the attempted path exactly like
+  // `error` (D-127): it describes THAT path, so editing the path retires it.
+  const showingCreatedWarning = createdWarning !== undefined
+  const canSubmit =
+    !showingCreatedWarning &&
+    canonical.length > 0 &&
+    !isPending &&
+    !verifying &&
+    selected?.mountable !== false
+  const needsBroadAck = selected?.broad === true && selected.mountable !== false && !broadAcknowledged
+  const showServerError = error !== undefined && attemptedPath === canonical
+  const showRefusal = refusal !== undefined && attemptedPath === canonical
+
+  /** Resolve the verdict for a typed path from its parent's listing. Returns
+   *  the entry when the server lists it, undefined when it does not (or the
+   *  lookup failed) — never throws. */
+  async function lookUpVerdict(target: string): Promise<HostFolderEntry | undefined> {
+    const cut = target.lastIndexOf('/')
+    const parent = cut <= 0 ? '/' : target.slice(0, cut)
+    try {
+      const parentListing = await fetchHostFolders(parent)
+      return parentListing.entries.find((e) => e.path === target)
+    } catch {
+      return undefined
+    }
+  }
+
+  async function handleConfirm() {
+    if (!canSubmit) return
+    if (needsBroadAck) {
+      // "Add anyway": the warning has been on screen since the previous
+      // click; this click is the acknowledgement AND the submit.
+      setBroadAcknowledged(true)
+      setAttemptedPath(canonical)
+      onConfirm(canonical)
+      return
+    }
+    let verdict = selected
+    if (verdict === undefined) {
+      setVerifying(true)
+      verdict = await lookUpVerdict(canonical)
+      setVerifying(false)
+      if (verdict !== undefined) {
+        setSelectedVerdict(verdict)
+        if (verdict.mountable === false) return
+        if (verdict.broad) return
+      }
+    }
+    setAttemptedPath(canonical)
+    onConfirm(canonical)
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -125,6 +255,7 @@ export function LibraryAddMountDialog({
             onChange={(e) => {
               setPath(e.target.value)
               setSelectedVerdict(null)
+              setBroadAcknowledged(false)
             }}
             placeholder="/Users/you/Documents/projects/my-repo"
             className="font-mono text-sm"
@@ -153,6 +284,29 @@ export function LibraryAddMountDialog({
             <p className="flex items-start gap-2 text-sm text-[var(--color-success)]">
               <CheckCircle size={16} className="mt-0.5 shrink-0" />
               Scoped to this folder and what is inside it.
+            </p>
+          )}
+
+          {/* D-117 response half — the SERVER's own verdict, distinct from the
+              pre-submission banners above (which reflect a folder listing).
+              A 403's reason and a 201's broad-grant warning are the two
+              answers that must never live in a toast. */}
+          {showRefusal && (
+            <p
+              className="flex items-start gap-2 text-sm text-[var(--color-error)]"
+              data-testid="library-add-mount-dialog-refused"
+            >
+              <Prohibit size={16} className="mt-0.5 shrink-0" />
+              {refusal}
+            </p>
+          )}
+          {showingCreatedWarning && (
+            <p
+              className="flex items-start gap-2 text-sm text-[var(--color-warning)]"
+              data-testid="library-add-mount-dialog-broad"
+            >
+              <Warning size={16} className="mt-0.5 shrink-0" />
+              {createdWarning}
             </p>
           )}
 
@@ -230,7 +384,7 @@ export function LibraryAddMountDialog({
             </div>
           )}
 
-          {error && (
+          {showServerError && (
             <p className="text-sm text-[var(--color-error)]" data-testid="library-add-mount-error">
               {error}
             </p>
@@ -238,15 +392,29 @@ export function LibraryAddMountDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>
-            Cancel
+          <Button
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+            disabled={isPending || showingCreatedWarning}
+          >
+            {showingCreatedWarning ? 'Close' : 'Cancel'}
           </Button>
           <Button
-            onClick={() => onConfirm(trimmed)}
-            disabled={!canSubmit}
+            onClick={() =>
+              showingCreatedWarning ? onAcknowledgeWarning?.() : void handleConfirm()
+            }
+            disabled={showingCreatedWarning ? false : !canSubmit}
             data-testid="library-add-mount-confirm"
           >
-            {isPending ? 'Adding…' : 'Add folder'}
+            {showingCreatedWarning
+              ? 'Done'
+              : isPending
+                ? 'Adding…'
+                : verifying
+                  ? 'Checking…'
+                  : needsBroadAck
+                    ? 'Add anyway'
+                    : 'Add folder'}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -5,6 +5,7 @@ import {
   Robot,
   PlugsConnected,
   PuzzlePiece,
+  Buildings,
   ChartBar,
   Gear,
   PushPin,
@@ -206,8 +207,13 @@ export function Sidebar() {
     },
   })
 
-  // Workspace accordion expansion state.
-  const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Set<string>>(new Set())
+  // Workspace accordion expansion state. Seeded with the active workspace so
+  // the one the user is already in opens without an extra click; the lazy
+  // initializer runs once at mount only, so it never overrides a collapse the
+  // user made afterward.
+  const [expandedWorkspaceIds, setExpandedWorkspaceIds] = useState<Set<string>>(
+    () => new Set(activeWorkspaceId ? [activeWorkspaceId] : []),
+  )
   const toggleWorkspaceExpansion = useCallback((workspaceId: string) => {
     setExpandedWorkspaceIds((prev) => {
       const next = new Set(prev)
@@ -219,6 +225,26 @@ export function Sidebar() {
       return next
     })
   }, [])
+  // One-shot expand when the active workspace actually CHANGES (not on every
+  // render) — gated on the dependency array, so it never re-fires just
+  // because something else caused Sidebar to re-render. That gate is what
+  // lets a deliberate manual collapse of the still-active workspace survive:
+  // nothing re-adds it to the set until activeWorkspaceId moves to a
+  // different id. The previously-active workspace is only ever ADDED to,
+  // never removed from, the set, so switching workspaces never collapses the
+  // one just left.
+  const prevActiveWorkspaceIdRef = useRef(activeWorkspaceId)
+  useEffect(() => {
+    const prevId = prevActiveWorkspaceIdRef.current
+    prevActiveWorkspaceIdRef.current = activeWorkspaceId
+    if (!activeWorkspaceId || activeWorkspaceId === prevId) return
+    setExpandedWorkspaceIds((prev) => {
+      if (prev.has(activeWorkspaceId)) return prev
+      const next = new Set(prev)
+      next.add(activeWorkspaceId)
+      return next
+    })
+  }, [activeWorkspaceId])
 
   // Inbox workspace (is_default: true) always appears first; other workspaces: pinned then unpinned.
   const inboxProject = projects.find((p) => p.is_default)
@@ -385,7 +411,7 @@ export function Sidebar() {
               + adds an editable row right in the list; Enter creates, Escape cancels. */}
           {creatingWorkspace && (
             <div className="flex items-center gap-2 px-4 py-1.5">
-              <Tray size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
+              <Buildings size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
               <input tabIndex={0}
                 autoFocus
                 type="text"
@@ -513,10 +539,13 @@ export function Sidebar() {
                     aria-current={isActive ? 'page' : undefined}
                     className="flex items-center gap-2 flex-1 min-w-0 text-left"
                   >
-                    {/* One icon for every workspace (the Inbox Tray glyph); the
-                        ACTIVE workspace keeps its icon too — gold + text styling
-                        mark it, not a pulsing dot swap. */}
-                    <Tray
+                    {/* One icon for every workspace (icon-consistency pass,
+                        2026-09-07: Buildings, the same glyph every other
+                        surface — Library virtual root, workspace tab bar —
+                        now uses for "workspace"); the ACTIVE workspace keeps
+                        its icon too — gold + text styling mark it, not a
+                        pulsing dot swap. */}
+                    <Buildings
                       size={14}
                       weight={isActive ? 'fill' : 'regular'}
                       className={cn('flex-shrink-0', isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-muted)]')}
@@ -633,7 +662,7 @@ export function Sidebar() {
                 }}
                 className="flex items-center gap-2 w-full px-4 py-2 mx-0 text-sm transition-colors text-left opacity-70 text-[var(--color-secondary)] hover:bg-[var(--color-surface-2)]"
               >
-                <Tray size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
+                <Buildings size={14} className="flex-shrink-0 text-[var(--color-muted)]" />
                 <span className="flex-1 truncate">{project.name}</span>
               </button>
             )

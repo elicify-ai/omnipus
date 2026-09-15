@@ -27,10 +27,21 @@ Method: parallel testers driving a real browser via Playwright MCP. Observation,
 | 4 | MP4 video | short clip | `<video controls>`, must actually play |
 | 5 | Markdown | `.md` with headings, list, table | rendered markdown, view/edit toggle |
 | 6 | Markdown with Mermaid | ```mermaid fence | rendered DIAGRAM, not code |
-| 7 | Mermaid file | `.mmd` | rendered diagram, editable source |
+| 7 | Mermaid file | `.mmd` | rendered diagram, editable source — **when OPENED in the Library preview pane, which is this column's subject** |
 | 8 | Code — TypeScript | `.ts` | syntax-highlighted, editable |
 | 9 | Code — Go / Python / JSON / YAML | any | syntax-highlighted, editable |
 | 10 | Binary / unsupported | `.pptx`, `.zip`, `.bin` | metadata card + Download. Must NOT attempt to render |
+
+> **Three diagram cases, deliberately not the same thing** (ADR-083 §15, founder ruling N8).
+> Rows 6 and 7 above are both **supported and in scope for this UAT**; only the third case is out.
+>
+> | Case | Written as | Status |
+> |---|---|---|
+> | Fenced diagram block inside a note | ` ```mermaid ` … ` ``` ` | **Supported** — renders. 163 in the founder's vault (row 6) |
+> | A `.mmd` file opened in the Library preview pane | select the file | **Supported** — renders (row 7). Not in scope of N8 |
+> | A `.mmd` file EMBEDDED inside a note | `![[chart.mmd]]` | **Out of scope, permanently** — renders as a link, never a diagram. Zero uses measured |
+>
+> Do not report the third case as a bug, and do not read it as denying the first two.
 
 ## Functional scenarios
 

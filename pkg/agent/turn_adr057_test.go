@@ -73,7 +73,7 @@ func u3EnableFileLogWarn(t *testing.T) (readLog func() string) {
 	t.Helper()
 	logFile := filepath.Join(t.TempDir(), "u3-warn.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	require.NoError(t, logger.EnableFileLogging(logFile))
 	t.Cleanup(func() {

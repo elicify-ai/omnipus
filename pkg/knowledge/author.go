@@ -1,0 +1,1908 @@
+// Authoring: creating and editing notes without ever silently losing what the
+// operator wrote (ADR-067 US-12, US-14, US-15; FR-100..FR-102, FR-105..FR-107,
+// FR-090).
+//
+// This file is the CONTENT half of the write path: it decides what bytes a new
+// note starts from, and how an existing note's bytes change when one property
+// is set or one section is appended. It deliberately does NOT own mutual
+// exclusion — see "What this file does not do" below.
+//
+// # Three rules that shape everything here
+//
+//  1. AN EDIT IS A SPLICE, NEVER A RE-SERIALISATION. Frontmatter is edited by
+//     replacing the bytes of exactly one line and copying every other byte
+//     through untouched. Nothing here parses YAML into a map and writes it back
+//     out: a round trip through a YAML library reorders keys, drops comments,
+//     re-quotes strings and normalises anchors — all of which are "the rest of
+//     the file" that FR-105 says must survive. The strongest form of that
+//     requirement is testable as a byte comparison, which is exactly what
+//     author_test.go asserts.
+//
+//  2. APPENDING ONLY EVER APPENDS. AppendSection's output always has the
+//     original file as a literal byte prefix. That is a property a test can
+//     assert in one line (bytes.HasPrefix) and it is impossible to satisfy
+//     while destroying anything earlier in the file.
+//
+//  3. NAME SHAPE APPLIES TO WHAT WE CREATE, AND ONLY THEN. Reading, listing,
+//     indexing and linking never apply name-shape rules (FR-0001) — the
+//     operator's existing files are theirs, colons, emoji and all. Creating a
+//     NEW name is Omnipus choosing a name, so the create path checks it
+//     (FR-0001a) using pkg/pathsafe's rule set via the library Root helper, and
+//     skips the check inside a mount (FR-0001b), where the host filesystem is
+//     the only authority that matters. That decision is not re-made here: it is
+//     supplied as a NameShapeCheck by the caller who knows which population the
+//     destination belongs to.
+//
+// # What this file does NOT do, and must not start doing
+//
+//   - It does not IMPLEMENT locks — but it does take them. Every write below
+//     runs inside WithNoteWriteLock (version.go), which is the one and only
+//     implementation of D14 tier 1's mutual exclusion in this package: a
+//     process-wide striped mutex plus a per-note advisory flock. An earlier
+//     revision of this header said these primitives took no lock at all and
+//     left that to "the write-safety layer that wraps them"; nothing ever
+//     wrapped them, and the measured consequence was twelve concurrent
+//     writers all told they had succeeded with one surviving on disk. A
+//     layering note is not a guarantee. The lock is taken here, on the path
+//     production actually calls, and the version check remains what it always
+//     was — the D14 tier-3 DETECTOR for writers no lock can reach (Obsidian,
+//     git, a sync agent).
+//   - It does not rename, move, or rewrite links. That is the journalled
+//     multi-file operation (US-13), a different unit with a different failure
+//     model.
+//
+// License: MIT
+// Copyright (c) 2026 Omnipus contributors
+
+package knowledge
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"os"
+	"path"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
+	"github.com/elicify-ai/omnipus/pkg/library"
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
+	"github.com/elicify-ai/omnipus/pkg/records"
+	"github.com/elicify-ai/omnipus/pkg/records/propindex"
+)
+
+// Errors the authoring path returns. Every one of them is a sentinel so a
+// caller can act on the KIND of refusal — the REST layer turns
+// ErrNoteVersionStale into a KnowledgeConflictError the operator can resolve,
+// and ErrNoteExists into "pick another name", and those are not the same
+// conversation.
+var (
+	// ErrNoteExists means a create would have overwritten a file that is
+	// already there. Create NEVER clobbers: on a case-insensitive filesystem
+	// this also catches "Meeting.md" landing on an existing "meeting.md",
+	// because the refusal comes from O_EXCL in the kernel rather than from a
+	// name comparison in Go.
+	ErrNoteExists = errors.New("knowledge: note already exists")
+
+	// ErrNoteNotFound means the note an edit names is not there.
+	ErrNoteNotFound = errors.New("knowledge: note not found")
+
+	// ErrNoteNameRefused means the destination name fails the name-shape
+	// rules that apply to what Omnipus CREATES (FR-0001a). It wraps the
+	// pkg/pathsafe sentinel underneath, so a caller can still tell "too long"
+	// from "illegal character" without parsing a message.
+	ErrNoteNameRefused = errors.New("knowledge: note name refused")
+
+	// ErrNoteVersionStale means the file changed underneath us: the version
+	// token supplied with the write does not match the file's current content
+	// (D14, FR-106). This is the typed conflict US-14 AS-1 requires, and it
+	// names the path.
+	//
+	// IT IS version.go's ErrVersionConflict, not a second sentinel that means
+	// the same thing. They were two, and the cost was visible: the tool layer
+	// carried two conflict shapes, and the one this file produced could not
+	// report actual_version because it was not a *ConflictError. One value
+	// means errors.Is finds it under either name and every conflict — whoever
+	// raised it — is a *ConflictError carrying the path and both tokens.
+	ErrNoteVersionStale = ErrVersionConflict
+
+	// ErrReservedLocation means the destination is inside a tool-state
+	// directory — .omnipus-vault/ or .obsidian/. Notes never belong there,
+	// and an agent that could write into either could rewrite the
+	// collection's identity or another application's configuration.
+	ErrReservedLocation = errors.New("knowledge: reserved location")
+
+	// ErrFrontmatterUnterminated means the note opens a frontmatter block
+	// that never closes. Refused rather than repaired: "repair" here means
+	// guessing where the operator meant the block to end, and guessing wrong
+	// turns their prose into metadata or vice versa.
+	ErrFrontmatterUnterminated = errors.New("knowledge: unterminated frontmatter")
+
+	// ErrInvalidProperty means the frontmatter key or value cannot be
+	// represented on one line — a newline in either, an empty key, a key
+	// carrying a colon. Refused, because writing it anyway produces a
+	// frontmatter block that no longer parses, which loses every property in
+	// the note and not just this one.
+	ErrInvalidProperty = errors.New("knowledge: invalid frontmatter property")
+
+	// ErrInvalidSection means the section heading is empty, multi-line, or at
+	// an impossible level.
+	ErrInvalidSection = errors.New("knowledge: invalid section")
+)
+
+// noteFilePerm is the mode a NEW note is created with, matching
+// pkg/library's own 0o600 for files it creates. An EXISTING note keeps
+// whatever mode it already had: an operator who chmodded a note to 0600 did
+// so on purpose, and an edit that quietly widened it to 0644 would be a
+// security regression nobody would ever see.
+const noteFilePerm fs.FileMode = 0o600
+
+// noteDirPerm is the mode intermediate directories are created with. 0o700
+// rather than 0o755 for the same reason the marker directory is: this is
+// Omnipus creating structure inside the operator's collection, and the
+// narrower default is the one that cannot leak.
+const noteDirPerm fs.FileMode = 0o700
+
+// defaultNoteExt is appended when a create names a path with no extension at
+// all. A "note" with no extension is not a note — it would be classified as an
+// attachment by scan.go and never indexed as prose.
+const defaultNoteExt = ".md"
+
+// ---------------------------------------------------------------------------
+// Name shape (FR-0001a / FR-0001b)
+// ---------------------------------------------------------------------------
+
+// NameShapeCheck decides whether a collection-relative path is acceptably
+// NAMED for something Omnipus is about to create. It is never applied on the
+// read path (FR-0001).
+//
+// It is a parameter rather than a fixed rule because the answer depends on the
+// destination's population, which this package cannot see: a knowledge base
+// reached through a mount is the operator's own disk, where FR-0001b says no
+// portability rule applies, while one living in workspace storage is named by
+// Omnipus and should stay portable (FR-0001c).
+type NameShapeCheck func(relPath string) error
+
+// PortableNameShape applies pkg/pathsafe's ACTIVE rule set — the build
+// target's — to every segment, plus the whole-path length budget. It is the
+// same rule set, reached through the same exported functions, that
+// library.Root.ValidateCreateName applies to workspace storage; the rules
+// themselves are decided in pkg/pathsafe and nowhere else.
+//
+// This is the DEFAULT when a request supplies no check, deliberately: an unset
+// policy must fail closed. "No check supplied" meaning "no checking" is how a
+// create path acquires a silent hole.
+func PortableNameShape(relPath string) error {
+	if relPath == "" || relPath == "." {
+		return nil
+	}
+	for _, seg := range strings.Split(relPath, "/") {
+		if err := pathsafe.ValidateComponent(seg); err != nil {
+			return fmt.Errorf("%w: %w", ErrNoteNameRefused, err)
+		}
+	}
+	if err := pathsafe.ValidateRelPathLength(relPath); err != nil {
+		return fmt.Errorf("%w: %w", ErrNoteNameRefused, err)
+	}
+	return nil
+}
+
+// OperatorNameShape applies NO name-shape rule. It is the correct check for a
+// collection reached through a mount (FR-0001b): those files are the
+// operator's, the host filesystem is the authority on what it will accept, and
+// it says so in its own error. Addressing safety — traversal, absolute paths,
+// control characters — is NOT part of name shape and still applies; it is
+// enforced by library.CleanRelPath and CollectionRoot.ResolveContained on every
+// path in this package, mounted or not.
+func OperatorNameShape(string) error { return nil }
+
+// LibraryNameShape routes the decision through the Library's own enforcement
+// point, library.Root.ValidateCreateName (ADR-067 FR-0001a), which already
+// knows which paths are inside a mount and which are workspace storage.
+//
+// baseRel is the collection root's path relative to the Library root, in slash
+// form. Use this whenever a *library.Root is available: it is what keeps the
+// mount predicate stated ONCE, in pkg/library, instead of a sixth copy here.
+func LibraryNameShape(r *library.Root, baseRel string) NameShapeCheck {
+	return func(relPath string) error {
+		if r == nil {
+			return PortableNameShape(relPath)
+		}
+		if err := r.ValidateCreateName(path.Join(baseRel, relPath)); err != nil {
+			return fmt.Errorf("%w: %w", ErrNoteNameRefused, err)
+		}
+		return nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Audit (FR-090, US-15)
+// ---------------------------------------------------------------------------
+
+// AuthorOperation names the mutation being audited.
+type AuthorOperation string
+
+const (
+	// AuthorOpCreate is a note creation.
+	AuthorOpCreate AuthorOperation = "knowledge.note.create"
+	// AuthorOpEdit is an in-place edit of an existing note.
+	AuthorOpEdit AuthorOperation = "knowledge.note.edit"
+)
+
+// AuthorOutcome is what happened. There are exactly two, and "refused" is one
+// of them: FR-090 requires every REFUSAL on the record too, and an audit trail
+// that only holds successes cannot answer the question an operator actually
+// asks after a surprise, which is "what did it try to do?".
+type AuthorOutcome string
+
+const (
+	// AuthorOutcomeApplied means the bytes on disk changed.
+	AuthorOutcomeApplied AuthorOutcome = "applied"
+	// AuthorOutcomeRefused means nothing on disk changed and the caller got
+	// an error.
+	AuthorOutcomeRefused AuthorOutcome = "refused"
+)
+
+// AuthorAuditRecord is one audit entry for one authoring operation. It carries
+// everything US-15 AS-1 enumerates: who, which collection, which paths, which
+// operation, which outcome.
+type AuthorAuditRecord struct {
+	Operation AuthorOperation
+	Outcome   AuthorOutcome
+
+	// AgentID and WorkspaceID identify the actor. They come from the caller
+	// (the tool layer reads them off the turn's context) rather than being
+	// discovered here.
+	AgentID     string
+	WorkspaceID string
+
+	// Collection is the collection's display name; Root is its real path.
+	// Both are recorded because the name is what the operator recognises and
+	// the path is what survives a rename of the display name.
+	Collection string
+	Root       string
+
+	// Paths are the collection-relative paths this operation touched, or
+	// would have touched. Plural from the start: US-15 AS-2 requires the FULL
+	// set for a multi-file rewrite, and a single-path field is the shape that
+	// makes that requirement impossible to satisfy later.
+	Paths []string
+
+	// Reason is the refusal's cause, empty when applied.
+	Reason string
+
+	// At is when it happened.
+	At time.Time
+}
+
+// AuthorAudit receives one record per authoring operation, applied or refused.
+//
+// It is a narrow interface rather than a direct pkg/audit dependency so this
+// package does not have to know about audit event-name registration, log
+// rotation or HMAC chaining — and so a test can assert on records without a
+// logger on disk. The gateway wiring adapts it to the real audit logger.
+type AuthorAudit interface {
+	RecordKnowledgeWrite(rec AuthorAuditRecord)
+}
+
+// AuthorAuditFunc adapts a plain function to AuthorAudit.
+type AuthorAuditFunc func(rec AuthorAuditRecord)
+
+// RecordKnowledgeWrite implements AuthorAudit.
+func (f AuthorAuditFunc) RecordKnowledgeWrite(rec AuthorAuditRecord) { f(rec) }
+
+// AuthorActor identifies who is writing, for the audit record.
+type AuthorActor struct {
+	AgentID     string
+	WorkspaceID string
+}
+
+// ---------------------------------------------------------------------------
+// Version tokens (D14, FR-106, FR-107)
+// ---------------------------------------------------------------------------
+
+// NoteContentVersion is the opaque version token for a note's bytes, as a
+// plain string.
+//
+// It is ComputeVersionToken and nothing else. There is exactly ONE token
+// format in this package — the "v1:"-prefixed one the wire contract's
+// KnowledgeConflictError carries — because a token is only useful if the path
+// that HANDS it out and the path that ACCEPTS it agree on what it is. They
+// did not: this function used to return a bare 64-hex SHA-256 while
+// ConflictError.Wire published a "v1:" token, so a token obtained from one
+// write path was silently invalid on the other, which turns "send back what
+// you read" into a refusal loop the caller cannot escape.
+//
+// It is a CONTENT hash and not an mtime, and that is the whole point of D14:
+// Syncthing replicates a file with the source's mtime preserved, and several
+// filesystems store mtime at one-second granularity, so two writes inside one
+// timestamp tick are indistinguishable by time. Content is not.
+func NoteContentVersion(src []byte) string {
+	return string(ComputeVersionToken(src))
+}
+
+// ---------------------------------------------------------------------------
+// Create (US-12, FR-100..FR-102)
+// ---------------------------------------------------------------------------
+
+// CreateNoteRequest describes one note to create.
+type CreateNoteRequest struct {
+	// RelPath is the note's path relative to the collection root, in slash
+	// form. A path with no extension gets ".md".
+	RelPath string
+
+	// Template names a template in the collection's templates directory. When
+	// empty, Body is used as-is.
+	Template string
+
+	// Body is the literal content for a template-less create. It is NEVER
+	// placeholder-expanded: a caller-supplied body is content, not a
+	// template, and expanding it would make "{{title}}" typed by a user into
+	// something else.
+	Body []byte
+
+	// Title is what {{title}} expands to. Empty means the note's filename
+	// stem, which is what a new note is called.
+	Title string
+
+	// Now is this operation's clock. It is the instant the time-derived
+	// template placeholders render, and the audit record's timestamp.
+	//
+	// The zero value means different things to the two, on purpose: template
+	// expansion leaves {{date}} LITERAL (a visibly unexpanded placeholder
+	// beats a confidently wrong "0001-01-01" in the operator's file), while
+	// the audit record falls back to time.Now() (a record with a zero
+	// timestamp is worse than one stamped from the wall clock).
+	Now time.Time
+
+	// NameShape is the create-time name-shape rule. Nil means
+	// PortableNameShape — fail closed, never "no check".
+	NameShape NameShapeCheck
+
+	// Audit receives the record. Nil disables auditing, which is correct for
+	// a direct unit-level call and WRONG for anything an agent can reach:
+	// FR-090 makes the tool layer responsible for supplying one.
+	Audit AuthorAudit
+
+	// Actor identifies the writer for the audit record.
+	Actor AuthorActor
+
+	// Lock configures D14 tier 1's mutual exclusion for this write. The
+	// zero value still takes the process-wide striped mutex; it skips only
+	// the cross-process advisory lock, which needs a LockDir under
+	// $OMNIPUS_HOME. See NoteLockConfig.
+	Lock NoteLockConfig
+}
+
+// CreateNoteResult reports what was created.
+type CreateNoteResult struct {
+	// RelPath is the note's final collection-relative path — which may
+	// differ from the request's by the added ".md".
+	RelPath string
+	// AbsPath is its absolute path on disk.
+	AbsPath string
+	// Bytes is the size written.
+	Bytes int
+	// Version is the new note's version token, ready to be passed to a
+	// subsequent edit with no intervening read.
+	Version string
+	// Template is the template used, empty when none.
+	Template string
+	// RecordID is the ADR-068 D7 identifier minted for this note, empty when
+	// none was — the note is not a record, or it already carried one. It is
+	// reported rather than left implicit so a caller can show the operator
+	// the identifier their new record was given without re-reading the file.
+	RecordID string
+}
+
+// CreateNote writes a new note into the collection, refusing anything that
+// escapes it and refusing to overwrite anything already there.
+//
+// Order of refusal — each stage exists because skipping it has a specific
+// consequence:
+//
+//  1. Addressing (library.CleanRelPath): traversal, absolute paths, control
+//     characters and backslashes are refused before anything touches disk.
+//  2. Name shape (FR-0001a): applied AFTER the path is known and only to what
+//     we are creating.
+//  3. Destination (authorWriteTarget): the tool-state refusal and the
+//     containment-with-no-symlink refusal, in the one place the whole write
+//     path shares with the read path.
+//  4. O_EXCL create: the kernel, not a Stat-then-write race, decides whether
+//     the file was already there.
+func CreateNote(fsys LinkFS, c *Collection, req CreateNoteRequest) (CreateNoteResult, error) {
+	if c == nil {
+		return CreateNoteResult{}, fmt.Errorf("%w: nil collection", ErrCollectionRootInvalid)
+	}
+	audit := newAuthorAuditor(req.Audit, AuthorOpCreate, c, req.Actor, req.Now)
+
+	rel, err := authorCleanNotePath(req.RelPath)
+	if err != nil {
+		return CreateNoteResult{}, audit.refuse([]string{req.RelPath}, err)
+	}
+	shape := req.NameShape
+	if shape == nil {
+		shape = PortableNameShape
+	}
+	if serr := shape(rel); serr != nil {
+		return CreateNoteResult{}, audit.refuse([]string{rel}, serr)
+	}
+	root, err := NewCollectionRoot(fsys, c.Root())
+	if err != nil {
+		return CreateNoteResult{}, audit.refuse([]string{rel}, err)
+	}
+	abs, err := authorWriteTarget(fsys, root, rel)
+	if err != nil {
+		return CreateNoteResult{}, audit.refuse([]string{rel}, err)
+	}
+
+	content := req.Body
+	if strings.TrimSpace(req.Template) != "" {
+		raw, terr := ReadTemplate(fsys, c, req.Template)
+		if terr != nil {
+			return CreateNoteResult{}, audit.refuse([]string{rel}, terr)
+		}
+		title := req.Title
+		if title == "" {
+			title = strings.TrimSuffix(path.Base(rel), path.Ext(rel))
+		}
+		content = ExpandTemplate(raw, TemplateVars{Title: title, Now: req.Now})
+	}
+
+	// A record note acquires its D7 identifier here, without the caller
+	// asking — this is the choke point all three in-process creation doors
+	// (knowledge_edit's create op, knowledge_create_note, and the REST record
+	// create) already funnel through, so no door can add a record with no
+	// `id:`. Inert for an ordinary note; see stampNewRecordIdentity for the
+	// full list of cases it declines, and for why it runs BEFORE the note's
+	// own write lock rather than inside it.
+	//
+	// UAT 2026-09-13 D-52: an occupied path is checked BEFORE minting, so a
+	// create that O_EXCL is about to refuse does not first burn an
+	// identifier from the type's counter (the counter is never lowered,
+	// FR-038, so every such gap was permanent). O_EXCL below still decides
+	// the race; this is only the cheap, non-authoritative early answer.
+	if _, statErr := fsys.Lstat(abs); statErr == nil {
+		return CreateNoteResult{}, audit.refuse([]string{rel}, fmt.Errorf("%w: %q", ErrNoteExists, rel))
+	}
+	content, mintedID, mintErr := stampNewRecordIdentity(req.Lock, c.Root(), content)
+	if mintErr != nil {
+		return CreateNoteResult{}, audit.refuse([]string{rel}, mintErr)
+	}
+
+	// Everything that touches disk runs inside the note's tier-1 lock, for
+	// the same reason an edit does: two creates of one path racing is exactly
+	// the case where O_EXCL alone tells the loser "already exists" while a
+	// concurrent EditNote on the same path is midway through a read.
+	lock := req.Lock
+	lock.CollectionRoot = c.Root()
+	lockErr := WithNoteWriteLock(lock, rel, func() error {
+		if mkErr := os.MkdirAll(filepath.Dir(abs), noteDirPerm); mkErr != nil {
+			return fmt.Errorf("knowledge: create %q: %w", rel, mkErr)
+		}
+		// O_EXCL is the "never clobber" primitive. Deliberately NOT a
+		// temp-file-plus-rename: rename REPLACES the destination, so the
+		// atomic write helper used for edits is exactly the wrong tool for a
+		// create that must fail when something is already there.
+		f, oerr := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, noteFilePerm)
+		if oerr != nil {
+			if errors.Is(oerr, fs.ErrExist) {
+				return fmt.Errorf("%w: %q", ErrNoteExists, rel)
+			}
+			return fmt.Errorf("knowledge: create %q: %w", rel, oerr)
+		}
+		if _, werr := f.Write(content); werr != nil {
+			_ = f.Close()
+			_ = os.Remove(abs)
+			return fmt.Errorf("knowledge: write %q: %w", rel, werr)
+		}
+		if serr := f.Sync(); serr != nil {
+			_ = f.Close()
+			_ = os.Remove(abs)
+			return fmt.Errorf("knowledge: sync %q: %w", rel, serr)
+		}
+		if cerr := f.Close(); cerr != nil {
+			return fmt.Errorf("knowledge: close %q: %w", rel, cerr)
+		}
+		return nil
+	})
+	if lockErr != nil {
+		return CreateNoteResult{}, audit.refuse([]string{rel}, lockErr)
+	}
+
+	audit.applied([]string{rel})
+	return CreateNoteResult{
+		RelPath:  rel,
+		AbsPath:  abs,
+		Bytes:    len(content),
+		Version:  NoteContentVersion(content),
+		Template: strings.TrimSpace(req.Template),
+		RecordID: mintedID,
+	}, nil
+}
+
+// authorCleanNotePath validates addressing and supplies the default extension.
+func authorCleanNotePath(raw string) (string, error) {
+	cleaned, err := library.CleanRelPath(raw)
+	if err != nil {
+		return "", fmt.Errorf("%w: %q: %w", ErrOutsideCollection, raw, err)
+	}
+	if cleaned == "" {
+		return "", fmt.Errorf("%w: %q names the collection root, not a note", ErrOutsideCollection, raw)
+	}
+	if path.Ext(cleaned) == "" {
+		cleaned += defaultNoteExt
+	}
+	return cleaned, nil
+}
+
+// authorRefuseReserved refuses a destination inside a tool-state directory.
+// Both names are checked at EVERY level, not just the first: a note at
+// "projects/.obsidian/plugins/x.md" is inside Obsidian's configuration just as
+// surely as one at the root.
+func authorRefuseReserved(rel string) error {
+	for _, seg := range strings.Split(rel, "/") {
+		// scanSkippedDirNames is the AUTHORITY, not a hand-copied subset of it.
+		//
+		// This function previously tested MarkerDirName and ObsidianMarkerDirName
+		// only — two of that set's four names — so a write into .git/ or .trash/
+		// was accepted. Those directories are skipped by every walker, so a note
+		// moved there vanishes from search, backlinks and the orphan check at
+		// once: an untracked hard delete reachable through an operation named
+		// "move". .trash matters most in practice, because Obsidian's own
+		// soft-delete writes there, so it exists in most real vaults and is the
+		// folder an agent asked to "archive" a note would reach for.
+		//
+		// Deriving the check from scanSkippedDirNames means adding a name to the
+		// walker's skip set cannot silently open a new hole here.
+		if _, reserved := scanSkippedDirNames[seg]; reserved {
+			return fmt.Errorf("%w: %q is inside %s/", ErrReservedLocation, rel, seg)
+		}
+	}
+	return nil
+}
+
+// IsReservedLocation reports whether a collection-relative, slash-separated
+// path is, or lies inside, a tool-state directory (`.omnipus-vault`,
+// `.obsidian`, `.git`, `.trash`) — exactly the paths every Renamer, Trasher
+// and authoring write refuses with ErrReservedLocation. It exists so a door
+// outside this package can decide NOT to route such a path here, instead of
+// keeping its own copy of the name set (UAT re-test U-58: the Library's delete
+// door sent a knowledge base's own `.omnipus-vault` here and got a 400).
+func IsReservedLocation(rel string) bool {
+	return authorRefuseReserved(rel) != nil
+}
+
+// authorWriteTarget turns a caller-supplied collection-relative path into the
+// absolute path a write may touch, or refuses.
+//
+// IT IS THE ONLY WAY THE AUTHORING PATH IS ALLOWED TO PRODUCE AN ABSOLUTE
+// PATH. Both refusals it makes existed in this package already and both were
+// wired into the side that can only mislead while being omitted from the side
+// that destroys:
+//
+//   - authorRefuseReserved had exactly two call sites — CreateNote and
+//     Renamer.Plan — and none on the edit path. Measured through the
+//     knowledge_edit tool, set_property / append_section / link / replace_body
+//     each wrote into .obsidian/app.json, a real .git/config, .trash/ and
+//     Omnipus's own .omnipus-vault/ state, and the audit record said
+//     "applied". replace_body could rewrite an arbitrary span of any of them.
+//
+//   - ResolveContainedNoSymlink's lexical comparison was in tools.go, used by
+//     retrieval only. The write path resolved with bare ResolveContained,
+//     which dereferences every symlink, and then lstat'ed the ALREADY
+//     dereferenced path — so its IsRegular check could never observe that a
+//     link had been followed. That is the same defect c06bb051 fixed for the
+//     read path, still live on the write path: `create path="Inbox/New.md"`
+//     with Inbox a symlink to Archive/ landed the file at Archive/New.md,
+//     audited it as Inbox/New.md, and knowledge_read then refused to open the
+//     path the agent had just been told it wrote.
+//
+// Ordering: reserved first, because "this destination is not a place notes go"
+// is a decision about the NAME and does not need the filesystem, and because a
+// tool-state path inside the collection passes containment perfectly well.
+func authorWriteTarget(fsys LinkFS, root CollectionRoot, rel string) (string, error) {
+	if rerr := authorRefuseReserved(rel); rerr != nil {
+		return "", rerr
+	}
+	return root.ResolveContainedNoSymlink(fsys, rel)
+}
+
+// ---------------------------------------------------------------------------
+// Edit (US-14, FR-105..FR-107)
+// ---------------------------------------------------------------------------
+
+// NoteEdit transforms a note's bytes. Every edit in this package is a pure
+// function of the note's current content, which is what makes an edit testable
+// without a filesystem and re-appliable by the caller after a conflict.
+type NoteEdit func(src []byte) ([]byte, error)
+
+// EditNoteRequest describes one in-place edit.
+type EditNoteRequest struct {
+	// RelPath is the note's collection-relative path. NO name-shape rule is
+	// applied: the file already exists, and FR-0001 says its name is the
+	// operator's business.
+	RelPath string
+
+	// Edits are applied in order, each to the previous one's output.
+	Edits []NoteEdit
+
+	// ExpectVersion is the version token of the content this edit was
+	// computed against, and FR-106 makes it MANDATORY: "the system MUST
+	// require a version token for every write". A token that does not match
+	// what is on disk is REFUSED with a *ConflictError naming the path and
+	// carrying both tokens, and the file is left exactly as it was.
+	//
+	// EMPTY IS REFUSED TOO, and that is the requirement rather than
+	// strictness for its own sake. Accepting an empty token would make
+	// compare-and-swap opt-in, and every caller that forgot — including a
+	// language model reading a tool description — would silently be back to
+	// last-writer-wins. The refusal is not a dead end: it carries the note's
+	// CURRENT token in ConflictError.Actual, so a caller with no token gets
+	// one and retries. That is the whole protocol, and it costs one round
+	// trip exactly once per note.
+	ExpectVersion string
+
+	// Now, Audit and Actor behave exactly as in CreateNoteRequest.
+	Now   time.Time
+	Audit AuthorAudit
+	Actor AuthorActor
+
+	// Lock configures D14 tier 1's mutual exclusion for this write; see
+	// CreateNoteRequest.Lock and NoteLockConfig.
+	Lock NoteLockConfig
+}
+
+// EditNoteResult reports what an edit did.
+type EditNoteResult struct {
+	RelPath string
+	AbsPath string
+	// Version is the token AFTER the edit — or the unchanged file's token
+	// when Changed is false.
+	Version string
+	// PriorVersion is the token the edit was applied to.
+	PriorVersion string
+	// Changed is false when the edits produced byte-identical content. In
+	// that case nothing is written at all, so the file's mtime is not
+	// disturbed and no sync tool is woken up for a no-op.
+	Changed bool
+	Bytes   int
+
+	// Content is the note's bytes AS OF THIS EDIT — the exact bytes Version
+	// is the token of, captured INSIDE the write lock.
+	//
+	// It exists so a caller that must answer "what does the record hold now"
+	// does not re-read the file after the lock is released (ADR-083 review
+	// F8/H5). That re-read is wrong in two independent ways, and both have
+	// already shipped on this branch once (defect R-1/B1, fixed at b9149a615):
+	//
+	//	CORRECTNESS  a writer landing between the unlock and the re-read makes
+	//	             the response carry THEIR field values beside OUR token.
+	//	             The client renders that value and stores that token; its
+	//	             next edit is refused with a 409 nobody can explain.
+	//
+	//	HONESTY      a transient read failure after a write that COMMITTED
+	//	             turns a successful save into a 500. The user retypes and
+	//	             saves again with a now-stale token, and gets the same
+	//	             inexplicable conflict.
+	//
+	// Nil when Changed is false only in the sense that it then holds the
+	// unchanged bytes — it is always the content Version describes.
+	Content []byte
+}
+
+// EditNote reads a note, applies the edits, and writes the result atomically —
+// or refuses.
+//
+// The concurrency discipline, precisely, and in this order because the order
+// is what makes it a compare-and-SWAP rather than a compare and a hope:
+//
+//  1. The note's tier-1 lock is taken, bounded (FR-108). Everything below
+//     happens inside it, so no other Omnipus writer — in this process or in
+//     another one on the same machine — can interleave with any of it.
+//     Without this the read, the comparison and the write are three separate
+//     moments and twelve concurrent callers can all pass the comparison and
+//     all write; measured, that is eleven silently lost operator edits and
+//     twelve callers told they succeeded.
+//  2. The file is read THROUGH ReadNoteContent and hashed INSIDE the lock, and
+//     ExpectVersion must equal that hash. Reading through the guarded reader
+//     is load-bearing rather than tidy: a cloud-evicted note reads as empty
+//     with no error at all, and hashing that produces a token the caller can
+//     be handed by a conflict and then use to destroy the file (FR-111).
+//     An absent or mismatched token is a *ConflictError
+//     naming the path and carrying the note's current token, the file is
+//     untouched, and the refusal is audited (US-14 AS-1, AS-5; FR-106).
+//  3. Immediately before writing, the file is read again and re-hashed. That
+//     is the D14 tier-3 detector and it is NOT redundant with the lock: it
+//     catches the writers no lock reaches — Obsidian, git, a sync agent —
+//     which is the population D14 says can only be refused, never excluded.
+//
+// The write itself preserves the file's existing permissions and goes through
+// fileutil.WriteFileAtomic (temp file, fsync, rename in the same directory) —
+// the same shape ADR-067 D14 records as `ev`'s proven prior art, so a reader
+// never sees a half-written note.
+func EditNote(fsys LinkFS, c *Collection, req EditNoteRequest) (EditNoteResult, error) {
+	if c == nil {
+		return EditNoteResult{}, fmt.Errorf("%w: nil collection", ErrCollectionRootInvalid)
+	}
+	audit := newAuthorAuditor(req.Audit, AuthorOpEdit, c, req.Actor, req.Now)
+
+	rel, err := library.CleanRelPath(req.RelPath)
+	if err != nil || rel == "" {
+		return EditNoteResult{}, audit.refuse([]string{req.RelPath},
+			fmt.Errorf("%w: %q", ErrOutsideCollection, req.RelPath))
+	}
+	root, err := NewCollectionRoot(fsys, c.Root())
+	if err != nil {
+		return EditNoteResult{}, audit.refuse([]string{rel}, err)
+	}
+	// The same destination guard a create passes, and for the same two
+	// reasons — see authorWriteTarget. An edit is the operation with the
+	// larger blast radius of the two: a create refuses to overwrite anything,
+	// an edit rewrites whatever it lands on.
+	abs, err := authorWriteTarget(fsys, root, rel)
+	if err != nil {
+		return EditNoteResult{}, audit.refuse([]string{rel}, err)
+	}
+
+	var result EditNoteResult
+	lock := req.Lock
+	lock.CollectionRoot = c.Root()
+	lockErr := WithNoteWriteLock(lock, rel, func() error {
+		fi, serr := fsys.Lstat(abs)
+		if serr != nil {
+			if errors.Is(serr, fs.ErrNotExist) {
+				return fmt.Errorf("%w: %q", ErrNoteNotFound, rel)
+			}
+			return fmt.Errorf("knowledge: stat %q: %w", rel, serr)
+		}
+		// A regular-file requirement, so an edit never truncates a directory
+		// or a device node into a "note".
+		//
+		// This is NOT where the symlink refusal happens, and an earlier
+		// revision of this comment claimed it was ("an edit must never follow
+		// a symlink out of the collection"). It cannot: abs arrives with
+		// every link already dereferenced, so a symlink to a real file lstats
+		// as a regular file here every time. The refusal is authorWriteTarget's,
+		// above, and it is made by comparing the resolved path against the
+		// lexical one — the only test that can see a link at all.
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("%w: %q is not a regular file", ErrNoteNotFound, rel)
+		}
+
+		// ReadNoteContent, not a bare Open + ReadAll, and this is the whole
+		// reason that function exists (FR-111). A note evicted by OneDrive,
+		// rclone or Google Drive FS stats with its real size and opens to a
+		// clean EOF: read it bare and `before` is empty, the edits splice
+		// themselves onto nothing, and the atomic write replaces eight hundred
+		// words with a twenty-two byte stub. The version token does not save
+		// anyone — it is the hash of the EMPTY content, so the conflict the
+		// caller gets back hands them the very token that makes the second
+		// attempt succeed, and the retry protocol the tool description teaches
+		// walks a model straight into the clobber. There is still no size cap
+		// (FR-034a): ReadNoteContent reads the note in full, whatever its size.
+		before, rerr := ReadNoteContent(fsys, abs)
+		if rerr != nil {
+			return fmt.Errorf("knowledge: read %q: %w", rel, rerr)
+		}
+		priorVersion := NoteContentVersion(before)
+
+		// FR-106's compare, delegated to the one function that implements it,
+		// so "no token" and "wrong token" are refused by the same rule the
+		// Writer uses and produce the same typed error with the same fields.
+		if conflict := checkVersion(rel, VersionToken(req.ExpectVersion), NoteVersion{
+			Path: rel, Exists: true, Token: VersionToken(priorVersion),
+			Size: fi.Size(), ModTime: fi.ModTime(),
+		}); conflict != nil {
+			return conflict
+		}
+
+		after := before
+		for _, edit := range req.Edits {
+			if edit == nil {
+				continue
+			}
+			next, eerr := edit(after)
+			if eerr != nil {
+				return eerr
+			}
+			after = next
+		}
+		if bytes.Equal(after, before) {
+			result = EditNoteResult{
+				RelPath: rel, AbsPath: abs,
+				Version: priorVersion, PriorVersion: priorVersion,
+				Changed: false, Bytes: len(before),
+				Content: append([]byte(nil), before...),
+			}
+			return nil
+		}
+
+		// The tier-3 detector. Inside the lock this can only fire for a writer
+		// the lock does not reach, which is exactly the population it is for.
+		current, cerr := ReadNoteContent(fsys, abs)
+		if cerr != nil {
+			return fmt.Errorf("knowledge: re-read %q: %w", rel, cerr)
+		}
+		if !bytes.Equal(current, before) {
+			return &ConflictError{
+				Path:     rel,
+				Expected: VersionToken(req.ExpectVersion),
+				Actual:   ComputeVersionToken(current),
+			}
+		}
+
+		// The same widening seam version.go's Writer uses, and the same
+		// reason: the defect this lock prevents has a window measured in
+		// microseconds, and a concurrency test that does not widen it passes
+		// just as happily against an implementation with no lock at all.
+		if hookBeforeApplyWrite != nil {
+			hookBeforeApplyWrite()
+		}
+		if werr := fileutil.WriteFileAtomic(abs, after, fi.Mode().Perm()); werr != nil {
+			return fmt.Errorf("knowledge: write %q: %w", rel, werr)
+		}
+		result = EditNoteResult{
+			RelPath: rel, AbsPath: abs,
+			Version: NoteContentVersion(after), PriorVersion: priorVersion,
+			Changed: true, Bytes: len(after),
+			Content: append([]byte(nil), after...),
+		}
+		return nil
+	})
+	if lockErr != nil {
+		return EditNoteResult{}, audit.refuse([]string{rel}, lockErr)
+	}
+	audit.applied([]string{rel})
+	return result, nil
+}
+
+// NOTE: there used to be an authorReadAll here — a bare Open plus io.ReadAll
+// through the LinkFS seam — and it was the edit path's reader. It is gone
+// rather than kept alongside ReadNoteContent, deliberately: two readers in one
+// package is how the guarded one ends up on the side that only displays bytes
+// and the unguarded one on the side that replaces them, which is exactly what
+// had happened. Its one genuine contribution, "no size cap on the edit path"
+// (FR-034a), holds unchanged in ReadNoteContent, which also has none.
+//
+// ---------------------------------------------------------------------------
+// The two edits (FR-105)
+// ---------------------------------------------------------------------------
+
+// SetProperty returns an edit that sets ONE frontmatter property, leaving
+// every other byte of the note exactly as it was.
+//
+// Behaviour, in the three cases that exist:
+//
+//   - The key is already present at the top level: its line's value is
+//     replaced, and any continuation lines belonging to it (an indented block,
+//     a block sequence) are removed, because they were part of the old value.
+//     Line ending and key ordering are preserved.
+//   - The key is absent: a new line is inserted at the END of the frontmatter
+//     block. Appending rather than inserting alphabetically is deliberate —
+//     re-sorting an operator's frontmatter is a destructive reorder that no
+//     requirement asked for.
+//   - There is no frontmatter at all: a block is created at the top of the
+//     file and the original content follows it, unchanged.
+func SetProperty(key, value string) NoteEdit { return setPropertyWith(key, value, false) }
+
+// SetPropertyPlain is SetProperty for a value the CALLER has already
+// validated as a number or a boolean against the note's own schema (UAT
+// 2026-09-13 D-49): it is written bare — `budget: 480000`, `done: true` —
+// never double-quoted. SetProperty quotes anything that looks numeric or
+// boolean because, on an ungoverned note, it cannot tell the number 480000
+// from the text "480000"; a caller holding the schema can, and every other
+// YAML reader of the file expects a declared number to look like one. The
+// caller is responsible for only passing a value that IS a plain number or
+// `true`/`false` (see knowledgeEditWritesPlain); anything else must go
+// through SetProperty's quoting.
+func SetPropertyPlain(key, value string) NoteEdit { return setPropertyWith(key, value, true) }
+
+func setPropertyWith(key, value string, plain bool) NoteEdit {
+	return func(src []byte) ([]byte, error) {
+		if err := authorValidatePropertyKey(key); err != nil {
+			return nil, err
+		}
+		encoded, err := authorEncodeScalar(value)
+		if err != nil {
+			return nil, err
+		}
+		if plain && (authorLooksNumeric(value) || value == "true" || value == "false") {
+			encoded = value
+		}
+		block, err := fmParse(src)
+		if err != nil {
+			return nil, err
+		}
+		if !block.present {
+			eol := authorDominantEOL(src)
+			var out bytes.Buffer
+			out.WriteString("---" + eol)
+			out.WriteString(key + ": " + encoded + eol)
+			out.WriteString("---" + eol)
+			if len(src) > 0 {
+				// One blank line between the new block and the note's
+				// existing first line, so the note still reads as prose
+				// rather than as a run-on with the fence.
+				out.WriteString(eol)
+			}
+			out.Write(src)
+			return out.Bytes(), nil
+		}
+		return fmSpliceKey(src, block, key, encoded)
+	}
+}
+
+// RemoveProperty returns an edit that deletes ONE frontmatter property
+// entirely — its key line and every continuation line fmFindKey attributes
+// to it — leaving every other byte of the note untouched.
+//
+// It exists for ADR-068 D3.2 / ADR-083 EMB-085: a RecordWriteRequest whose
+// values array is empty CLEARS the property, and D3.2 defines "cleared" as
+// ABSENT, the same state a key that was never written is in — not a
+// present-but-empty placeholder. SetPropertyList's "key: []" is the right
+// splice for a DECLARED empty list elsewhere in this package (R-3, the
+// general-purpose knowledge_edit tool), but it is the wrong one here: D3.2's
+// contract is that an empty values array reads back exactly like the
+// property was never set, for a scalar and a list property alike, and the
+// only splice that satisfies that for both shapes is removing the key.
+//
+// Idempotent: a key that is not present leaves src unchanged — the state was
+// already "cleared". That mirrors AddListValue's OTHER idempotent case (a
+// value already present leaves src unchanged), NOT its absent-key case, which
+// is deliberately not a no-op at all: AddListValue on an absent key produces a
+// fresh one-item list. The two cases are named explicitly here because the
+// earlier wording said only "the parallel case", which reads as the absent-key
+// one and describes the opposite of what AddListValue does.
+//
+// THE RECORD-IDENTITY KEYS ARE REFUSED (ADR-083 review M8). `type` and `id`
+// are not ordinary properties whose removal clears a value — they are what
+// makes a note a record (D1) and what makes it findable and unique (D7).
+// Removing either succeeds silently at the YAML level and is catastrophic
+// above it: a record with no `id` is invisible to findVaultRecordByID, so it
+// can never be read or written again through the record doors, AND it becomes
+// invisible to the identity allocator's collision check — which then mints
+// that same identifier to a SECOND record, breaking the "unique within its
+// type" invariant the allocator's own comment claims to hold. The refusal
+// lives here, at the splice, rather than only at the gateway door, because
+// every caller of this edit has the same exposure: the reachable route is a
+// schema that happens to declare a property literally named `id` (an external
+// system's identifier is a plausible thing to want), which nothing else
+// forbids.
+func RemoveProperty(key string) NoteEdit {
+	return func(src []byte) ([]byte, error) {
+		if err := authorValidatePropertyKey(key); err != nil {
+			return nil, err
+		}
+		if err := authorRefuseRecordIdentityKey("remove", key); err != nil {
+			return nil, err
+		}
+		block, err := fmParse(src)
+		if err != nil {
+			return nil, err
+		}
+		if !block.present {
+			return src, nil
+		}
+		start, end, found := fmFindKey(src, block, key)
+		if !found {
+			return src, nil
+		}
+		out := make([]byte, 0, len(src)-(end-start))
+		out = append(out, src[:start]...)
+		out = append(out, src[end:]...)
+		return out, nil
+	}
+}
+
+// AppendSection returns an edit that appends a level-2 section to the note.
+func AppendSection(heading, body string) NoteEdit { return AppendSectionAt(2, heading, body) }
+
+// AppendSectionAt returns an edit that appends a section at the given heading
+// level (1-6).
+//
+// The output ALWAYS has the input as a literal byte prefix. That is the whole
+// safety property of this operation and it is asserted as such in the tests:
+// an append that can be shown never to modify a preceding byte cannot destroy
+// frontmatter, cannot corrupt a code fence, and cannot lose a paragraph, no
+// matter what the note contained.
+//
+// body is inserted verbatim. It is never parsed, expanded, or interpreted —
+// text that looks like a template placeholder or an instruction stays exactly
+// what the caller passed.
+func AppendSectionAt(level int, heading, body string) NoteEdit {
+	return func(src []byte) ([]byte, error) {
+		if level < 1 || level > 6 {
+			return nil, fmt.Errorf("%w: heading level %d is not between 1 and 6", ErrInvalidSection, level)
+		}
+		h := strings.TrimSpace(heading)
+		if h == "" {
+			return nil, fmt.Errorf("%w: empty heading", ErrInvalidSection)
+		}
+		if strings.ContainsAny(h, "\r\n") {
+			return nil, fmt.Errorf("%w: heading spans more than one line", ErrInvalidSection)
+		}
+		eol := authorDominantEOL(src)
+
+		var out bytes.Buffer
+		out.Write(src)
+		if len(src) > 0 {
+			if !authorEndsWithNewline(src) {
+				out.WriteString(eol)
+			}
+			if !authorEndsWithBlankLine(src) {
+				out.WriteString(eol)
+			}
+		}
+		out.WriteString(strings.Repeat("#", level) + " " + h + eol)
+		if body != "" {
+			out.WriteString(eol)
+			out.WriteString(body)
+			if !authorEndsWithNewline([]byte(body)) {
+				out.WriteString(eol)
+			}
+		}
+		return out.Bytes(), nil
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Frontmatter, as bytes
+// ---------------------------------------------------------------------------
+
+// fmBlock locates a note's YAML frontmatter in BYTE offsets. Nothing here
+// understands YAML beyond "a fence line, some lines, a fence line" — which is
+// exactly as much as a splice needs, and exactly as little as it takes to
+// guarantee the rest of the block is copied through untouched.
+type fmBlock struct {
+	present bool
+	// innerStart is the offset of the first byte after the opening fence's
+	// line terminator; innerEnd is the offset of the first byte of the
+	// closing fence line. The bytes between them are the block's properties.
+	innerStart int
+	innerEnd   int
+	// eol is the line ending the opening fence used.
+	eol string
+}
+
+// fmParse locates the frontmatter block, if there is one.
+//
+// A block exists only when the note's FIRST line is exactly "---" (trailing
+// whitespace tolerated). A "---" further down is a horizontal rule, and
+// treating it as frontmatter would move a slab of the operator's prose into
+// metadata.
+func fmParse(src []byte) (fmBlock, error) {
+	first, firstEnd, ok := authorLineAt(src, 0)
+	if !ok {
+		return fmBlock{}, nil
+	}
+	if strings.TrimRight(string(first), " \t\r") != "---" {
+		return fmBlock{}, nil
+	}
+	eol := "\n"
+	if bytes.HasSuffix(src[:firstEnd], []byte("\r\n")) {
+		eol = "\r\n"
+	}
+	for pos := firstEnd; pos < len(src); {
+		line, end, lok := authorLineAt(src, pos)
+		if !lok {
+			break
+		}
+		trimmed := strings.TrimRight(string(line), " \t\r")
+		if trimmed == "---" || trimmed == "..." {
+			return fmBlock{present: true, innerStart: firstEnd, innerEnd: pos, eol: eol}, nil
+		}
+		pos = end
+	}
+	return fmBlock{}, fmt.Errorf("%w: opening fence has no closing fence", ErrFrontmatterUnterminated)
+}
+
+// fmSpliceKey replaces or inserts one property inside an existing block.
+func fmSpliceKey(src []byte, block fmBlock, key, encoded string) ([]byte, error) {
+	keyStart, keyEnd, found := fmFindKey(src, block, key)
+	if !found {
+		// Insert immediately before the closing fence, preserving the block's
+		// existing order.
+		var out bytes.Buffer
+		out.Write(src[:block.innerEnd])
+		out.WriteString(key + ": " + encoded + block.eol)
+		out.Write(src[block.innerEnd:])
+		return out.Bytes(), nil
+	}
+	// Preserve the replaced line's own terminator: a file with CRLF endings
+	// must not acquire a single LF line in the middle of its frontmatter.
+	lineEOL := block.eol
+	if keyEnd >= 2 && bytes.HasSuffix(src[:keyEnd], []byte("\r\n")) {
+		lineEOL = "\r\n"
+	} else if keyEnd >= 1 && src[keyEnd-1] == '\n' {
+		lineEOL = "\n"
+	}
+	var out bytes.Buffer
+	out.Write(src[:keyStart])
+	out.WriteString(key + ": " + encoded + lineEOL)
+	out.Write(src[keyEnd:])
+	return out.Bytes(), nil
+}
+
+// fmFindKey returns the byte range of the line (and any continuation lines)
+// belonging to a TOP-LEVEL key in the block.
+//
+// Top-level means column zero. An indented "key:" is a property of some other
+// mapping — replacing it because the names matched would edit a nested value
+// the caller never named, which is precisely the "destroyed the rest of the
+// file" failure FR-105 forbids.
+func fmFindKey(src []byte, block fmBlock, key string) (start, end int, found bool) {
+	prefix := key + ":"
+	for pos := block.innerStart; pos < block.innerEnd; {
+		line, lineEnd, ok := authorLineAt(src, pos)
+		if !ok {
+			break
+		}
+		text := string(line)
+		if strings.HasPrefix(text, prefix) {
+			// Consume the continuation lines that carry this key's value:
+			// anything indented, and a block sequence written at column zero
+			// ("- item"), both of which YAML attaches to the key above.
+			consumed := lineEnd
+			for consumed < block.innerEnd {
+				nextLine, nextEnd, nok := authorLineAt(src, consumed)
+				if !nok {
+					break
+				}
+				nt := string(nextLine)
+				if strings.HasPrefix(nt, " ") || strings.HasPrefix(nt, "\t") || strings.HasPrefix(nt, "- ") {
+					consumed = nextEnd
+					continue
+				}
+				break
+			}
+			return pos, consumed, true
+		}
+		pos = lineEnd
+	}
+	return 0, 0, false
+}
+
+// authorLineAt returns the line beginning at pos WITHOUT its terminator, the
+// offset just past its terminator, and whether there was a line at all.
+func authorLineAt(src []byte, pos int) (line []byte, next int, ok bool) {
+	if pos >= len(src) {
+		return nil, pos, false
+	}
+	rest := src[pos:]
+	idx := bytes.IndexByte(rest, '\n')
+	if idx < 0 {
+		return rest, len(src), true
+	}
+	return rest[:idx], pos + idx + 1, true
+}
+
+// authorDominantEOL reports the line ending to use for text this package adds.
+// A file that already uses CRLF keeps CRLF: mixing terminators inside one file
+// is a diff the operator did not ask for and some editors "helpfully" rewrite
+// the whole file to fix.
+func authorDominantEOL(src []byte) string {
+	if bytes.Contains(src, []byte("\r\n")) {
+		return "\r\n"
+	}
+	return "\n"
+}
+
+func authorEndsWithNewline(src []byte) bool {
+	return len(src) > 0 && src[len(src)-1] == '\n'
+}
+
+// authorEndsWithBlankLine reports whether src already ends with an empty line,
+// so an append does not accumulate blank lines on repeated use.
+func authorEndsWithBlankLine(src []byte) bool {
+	if !authorEndsWithNewline(src) {
+		return false
+	}
+	trimmed := src[:len(src)-1]
+	if len(trimmed) > 0 && trimmed[len(trimmed)-1] == '\r' {
+		trimmed = trimmed[:len(trimmed)-1]
+	}
+	if len(trimmed) == 0 {
+		return true
+	}
+	idx := bytes.LastIndexByte(trimmed, '\n')
+	last := trimmed[idx+1:]
+	return strings.TrimSpace(string(last)) == ""
+}
+
+// authorValidatePropertyKey refuses a key that cannot be written as a plain
+// YAML key on one line.
+func authorValidatePropertyKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("%w: empty key", ErrInvalidProperty)
+	}
+	if key != strings.TrimSpace(key) {
+		return fmt.Errorf("%w: key %q has leading or trailing whitespace", ErrInvalidProperty, key)
+	}
+	if strings.ContainsAny(key, ":\r\n") {
+		return fmt.Errorf("%w: key %q contains a colon or a line break", ErrInvalidProperty, key)
+	}
+	for _, r := range key {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("%w: key contains control character %#U", ErrInvalidProperty, r)
+		}
+	}
+	if strings.HasPrefix(key, "#") || strings.HasPrefix(key, "-") {
+		return fmt.Errorf("%w: key %q starts with a YAML structural character", ErrInvalidProperty, key)
+	}
+	return nil
+}
+
+// authorRefuseRecordIdentityKey refuses an edit that would delete or overwrite
+// the two frontmatter keys a record's identity is made of (ADR-083 review M8).
+//
+// It is separate from authorValidatePropertyKey because the two answer
+// different questions. That one asks "can this key be written as YAML at all"
+// — a syntax rule that applies to every note in the vault, record or not.
+// This one asks "may this particular key be touched by this particular
+// operation", which is a RECORD rule: `type` is what makes a note a record
+// (ADR-068 D1) and `id` is D7's identifier, unique within its type. Both are
+// perfectly legal YAML keys, which is exactly why a syntax check cannot catch
+// them.
+//
+// Deliberately NOT applied to SetProperty: seeding `type` and `id` is how a
+// record is created in the first place (the record create door assembles
+// frontmatter with exactly those two calls). The asymmetry is the point —
+// writing an identity is a create, removing one is a corruption.
+func authorRefuseRecordIdentityKey(op, key string) error {
+	switch key {
+	case records.RecordTypeKey, records.RecordIDKey, records.RecordIDKeyNamespaced:
+		return fmt.Errorf("%w: cannot %s %q — it carries the record's identity "+
+			"(ADR-068 D1/D7); a record with no type is not a record, and a record with no id "+
+			"can never be found or written again and lets its identifier be minted to another record",
+			ErrInvalidProperty, op, key)
+	}
+	return nil
+}
+
+// authorEncodeScalar renders value as a YAML scalar that reads back as the
+// same string.
+//
+// The rule is conservative on purpose: anything that could possibly be
+// re-interpreted (a leading structural character, an embedded ": ", a trailing
+// space, something that looks like a number or a boolean) is double-quoted.
+// Over-quoting is invisible to a reader; under-quoting turns a wikilink
+// "[[Note]]" into a YAML flow sequence and loses the value.
+//
+// A newline in a value is REFUSED rather than folded into a block scalar:
+// writing it wrong destroys every property after it, and this primitive has no
+// requirement to carry multi-line values.
+func authorEncodeScalar(value string) (string, error) {
+	if strings.ContainsAny(value, "\r\n") {
+		return "", fmt.Errorf("%w: value spans more than one line", ErrInvalidProperty)
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return "", fmt.Errorf("%w: value contains control character %#U", ErrInvalidProperty, r)
+		}
+	}
+	if authorNeedsQuoting(value) {
+		var b strings.Builder
+		b.WriteByte('"')
+		for _, r := range value {
+			switch r {
+			case '"':
+				b.WriteString(`\"`)
+			case '\\':
+				b.WriteString(`\\`)
+			default:
+				b.WriteRune(r)
+			}
+		}
+		b.WriteByte('"')
+		return b.String(), nil
+	}
+	return value, nil
+}
+
+// authorYAMLReserved are the plain scalars YAML 1.1 readers turn into
+// something other than a string. Quoting them keeps "no" the word rather than
+// the boolean.
+var authorYAMLReserved = map[string]bool{
+	"true": true, "false": true, "yes": true, "no": true,
+	"on": true, "off": true, "null": true, "~": true,
+	"True": true, "False": true, "Yes": true, "No": true,
+	"On": true, "Off": true, "Null": true, "NULL": true, "TRUE": true, "FALSE": true,
+}
+
+func authorNeedsQuoting(value string) bool {
+	if value == "" {
+		return true
+	}
+	if value != strings.TrimSpace(value) {
+		return true
+	}
+	if authorYAMLReserved[value] {
+		return true
+	}
+	if strings.Contains(value, ": ") || strings.Contains(value, " #") || strings.HasSuffix(value, ":") {
+		return true
+	}
+	switch value[0] {
+	case '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', '\'', '"', '%', '@', '`':
+		return true
+	}
+	return authorLooksNumeric(value)
+}
+
+// authorLooksNumeric reports whether a plain scalar would be read back as a
+// number rather than a string.
+func authorLooksNumeric(value string) bool {
+	hasDigit := false
+	for i, r := range value {
+		switch {
+		case r >= '0' && r <= '9':
+			hasDigit = true
+		case r == '.' || r == '_':
+		case (r == '+' || r == '-') && i == 0:
+		case (r == 'e' || r == 'E') && hasDigit:
+		default:
+			return false
+		}
+	}
+	return hasDigit
+}
+
+// ---------------------------------------------------------------------------
+// Audit plumbing
+// ---------------------------------------------------------------------------
+
+// authorAuditor stamps and emits one record per operation. It exists so that
+// EVERY exit from CreateNote and EditNote goes through the same two calls —
+// refuse() or applied() — rather than each refusal site remembering to audit
+// itself. A refusal that forgot to audit is the exact failure FR-090 names,
+// and it is invisible in review.
+type authorAuditor struct {
+	sink AuthorAudit
+	base AuthorAuditRecord
+}
+
+func newAuthorAuditor(sink AuthorAudit, op AuthorOperation, c *Collection, actor AuthorActor, now time.Time) authorAuditor {
+	at := now
+	if at.IsZero() {
+		at = time.Now()
+	}
+	rec := AuthorAuditRecord{
+		Operation:   op,
+		AgentID:     actor.AgentID,
+		WorkspaceID: actor.WorkspaceID,
+		At:          at,
+	}
+	if c != nil {
+		rec.Collection = c.DisplayName()
+		rec.Root = c.Root()
+	}
+	return authorAuditor{sink: sink, base: rec}
+}
+
+// refuse records a refusal and returns the error unchanged, so every refusal
+// site can read `return X{}, audit.refuse(paths, err)` and cannot accidentally
+// return an audited error without auditing it.
+func (a authorAuditor) refuse(paths []string, err error) error {
+	if a.sink != nil {
+		rec := a.base
+		rec.Outcome = AuthorOutcomeRefused
+		rec.Paths = append([]string(nil), paths...)
+		if err != nil {
+			rec.Reason = err.Error()
+		}
+		a.sink.RecordKnowledgeWrite(rec)
+	}
+	return err
+}
+
+func (a authorAuditor) applied(paths []string) {
+	if a.sink == nil {
+		return
+	}
+	rec := a.base
+	rec.Outcome = AuthorOutcomeApplied
+	rec.Paths = append([]string(nil), paths...)
+	a.sink.RecordKnowledgeWrite(rec)
+}
+
+// ---------------------------------------------------------------------------
+// Index freshness — instant updates after Omnipus's own writes
+// (docs/internal/design/knowledge-index-freshness.md §2-4, §8, §10)
+//
+// # Why this lives here, duplicated rather than shared with pkg/vaultprops
+//
+// pkg/vaultprops/sync.go already builds a properties-index row from a note's
+// bytes (records.ParseRecord -> propindex.BuildNoteRows), but it does so for a
+// WHOLE COLLECTION at a time, and it cannot be called from here: it imports
+// pkg/knowledge (Scan, ReadNoteContent, CollectionRoot), so pkg/knowledge
+// importing it back would be a cycle. propindex itself depends only on
+// pkg/records, which pkg/knowledge already imports, so the per-PATH slice of
+// that same derivation is reimplemented below rather than factored out. A
+// future change that wants one implementation would need to MOVE this section
+// (or vaultprops/sync.go's per-file body) into a package both sides can import
+// — not attempted here, to keep this change to the two tools it is scoped to.
+//
+// # What is called, from where
+//
+// knowledge_edit.go calls refreshIndexesForNote once per successful
+// create/set_property/append_section/link/replace_body that actually changed
+// bytes (a no-op edit changes nothing on disk, so there is nothing to index).
+// knowledge_restructure.go calls refreshIndexesForRename after a completed
+// rename/move (the old path plus every path rename.go's RenameResult.Touched
+// names — the destination and every note whose inbound links were rewritten),
+// removeFromIndexesForNote after a trash, and refreshIndexesForNote after a
+// restore. That is every write path in this package's two owning tools; see
+// each call site's own comment for why it is the right event to fire on.
+//
+// # The decision this section embodies: a failed refresh warns, it never
+// undoes or refuses the write
+//
+// The note is already correct on disk by the time any of these run — that is
+// what "AFTER the write" means. Refusing the tool call at this point would
+// tell the caller their write failed when it did not, which is a worse lie
+// than a stale index entry: an agent told "refused" retries, and a retried
+// create collides with ErrNoteExists or a retried edit either no-ops on an
+// unchanged version token or silently repeats a list-add. A refusal here would
+// also leave NO record of the write that, in fact, landed — the opposite of
+// FR-090/US-15's whole purpose. So every path below is exactly the same shape
+// as epoch.go's bumpIndexEpochOrWarn: the mutation has already applied
+// regardless of whether this secondary bookkeeping can be updated afterwards,
+// so a failure here is reported LOUDLY (logged at Error, AND folded into the
+// tool's own rendered response so the caller — human or agent — sees it
+// without reading a log) and the write stands.
+//
+// This is not "degrading silently" in the sense design doc §8 forbids — §8 is
+// about the WATCHER going quiet with no record anywhere that it stopped. Here
+// every failure is both logged and surfaced in the same response the caller
+// already reads, and layers 2-4 (design doc §3: watcher, periodic sweep,
+// startup sweep) still reach the file on their own schedule, so what is lost
+// is timeliness for THIS one path, never the fact that something needs
+// re-indexing, and never the write itself.
+//
+// # The properties index may not exist yet, or may not exist on this platform
+//
+// A collection that has never been synced has no properties.db yet;
+// openPropertiesIndexStore creates it exactly as vaultprops.Sync's own
+// preamble does (FR-030's directory, FR-032's permissions), so "no index yet"
+// is not a distinct failure — the first write simply becomes the first row.
+// A platform without SQLite (mipsle, netbsd, freebsd/arm) is different: it
+// can never succeed, records.RequirePropertyIndex already logged that once by
+// name at boot, and repeating the same fact on every single write would be
+// noise about something this call cannot change. indexRefreshOutcome.propsProblem
+// filters exactly that one sentinel (records.ErrPropertyIndexUnavailable) and
+// nothing else — any other properties-index error (a corrupt file that could
+// not self-heal, a permissions failure, a full disk) is reported the same way
+// the text index's failures are.
+// ---------------------------------------------------------------------------
+
+// indexRefreshOutcome accumulates what one call below actually managed, across
+// the text index, the properties index, and — for a rename — across every path
+// touched, so a caller reports ONE line naming every index that could not be
+// kept current rather than a wall of per-path errors or, worse, silence.
+type indexRefreshOutcome struct {
+	problems []string
+}
+
+// textProblem records a text-index failure for one path. A nil err is a no-op
+// so every call site can write `out.textProblem(path, err)` unconditionally.
+func (o *indexRefreshOutcome) textProblem(path string, err error) {
+	if err == nil {
+		return
+	}
+	slog.Error("knowledge: could not refresh the text search index after a write; "+
+		"the note is saved to disk, but a knowledge_search issued right now may not find it "+
+		"until the next scheduled reconcile",
+		"path", path, "error", err)
+	o.problems = append(o.problems, fmt.Sprintf("text index (%s): %v", path, err))
+}
+
+// propsProblem records a properties-index failure for one path, except the
+// one failure that is not new information — see this section's header.
+func (o *indexRefreshOutcome) propsProblem(path string, err error) {
+	if err == nil {
+		return
+	}
+	if errors.Is(err, records.ErrPropertyIndexUnavailable) {
+		return
+	}
+	slog.Error("knowledge: could not refresh the properties index after a write; "+
+		"the note is saved to disk, but a knowledge_find issued right now may not see it "+
+		"until the next scheduled reconcile",
+		"path", path, "error", err)
+	o.problems = append(o.problems, fmt.Sprintf("properties index (%s): %v", path, err))
+}
+
+// summary renders every problem collected so far as one sentence, or "" when
+// nothing went wrong — the value knowledge_edit.go and knowledge_restructure.go
+// fold into their own rendered response.
+func (o *indexRefreshOutcome) summary() string {
+	if len(o.problems) == 0 {
+		return ""
+	}
+	return "the write is saved, but could not be made instantly searchable (" +
+		strings.Join(o.problems, "; ") + "); a scheduled reconcile will pick it up"
+}
+
+// refreshIndexesForNote re-derives one note's (or attachment's) entry in both
+// indexes after its bytes changed on disk — the read-your-own-write guarantee
+// design doc §4 requires. Returns "" when both indexes are current, or a
+// sentence naming what could not be refreshed (see this section's header for
+// why that is a warning and not a refusal).
+func refreshIndexesForNote(ctx context.Context, home, collectionRoot, relPath string) string {
+	var out indexRefreshOutcome
+
+	ix, err := OpenIndex(home, collectionRoot)
+	if err != nil {
+		out.textProblem(relPath, err)
+	} else {
+		out.textProblem(relPath, ix.UpdatePath(ctx, relPath))
+		if cerr := ix.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the text index after a direct update",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+
+	store, serr := openPropertiesIndexStore(ctx, home, collectionRoot)
+	if serr != nil {
+		out.propsProblem(relPath, serr)
+	} else {
+		out.propsProblem(relPath, upsertPropertiesNote(ctx, store, collectionRoot, relPath))
+		if cerr := store.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the properties index after a direct update",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+
+	return out.summary()
+}
+
+// removeFromIndexesForNote drops one path's entry from both indexes after it
+// left the collection (a trash, or a rename's old path) — the mirror of
+// refreshIndexesForNote. It is a no-op, not an error, when a given index holds
+// no record for relPath (Index.RemovePath and Store.DeleteNote are both
+// documented to behave that way already).
+func removeFromIndexesForNote(ctx context.Context, home, collectionRoot, relPath string) string {
+	var out indexRefreshOutcome
+
+	ix, err := OpenIndex(home, collectionRoot)
+	if err != nil {
+		out.textProblem(relPath, err)
+	} else {
+		out.textProblem(relPath, ix.RemovePath(ctx, relPath))
+		if cerr := ix.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the text index after a direct removal",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+
+	store, serr := openPropertiesIndexStore(ctx, home, collectionRoot)
+	if serr != nil {
+		out.propsProblem(relPath, serr)
+	} else {
+		out.propsProblem(relPath, store.DeleteNote(ctx, relPath))
+		if cerr := store.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the properties index after a direct removal",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+
+	return out.summary()
+}
+
+// refreshIndexesForRename handles a completed rename/move's wider blast
+// radius in one pass: `from` (the old path, which no longer exists) leaves
+// both indexes, and every path in touched — the new location plus every note
+// whose inbound links rename.go rewrote — is re-derived. Both indexes are
+// opened once and reused across the whole set, rather than once per path,
+// because a rename's blast radius is not bounded to one file the way a
+// knowledge_edit write is.
+//
+// `from` is never re-derived even if it appears in touched (it should not:
+// RenameResult.Touched is "written or moved", and the old path is neither
+// after a real move — but a defensive dedupe costs nothing and a stray
+// UpdatePath against a path that no longer exists would only produce a
+// confusing warning about a file the caller was never told still existed).
+func refreshIndexesForRename(ctx context.Context, home, collectionRoot, from string, touched []string) string {
+	var out indexRefreshOutcome
+
+	ix, ixErr := OpenIndex(home, collectionRoot)
+	if ixErr != nil {
+		out.textProblem(from, ixErr)
+	} else {
+		out.textProblem(from, ix.RemovePath(ctx, from))
+	}
+
+	store, stErr := openPropertiesIndexStore(ctx, home, collectionRoot)
+	if stErr != nil {
+		out.propsProblem(from, stErr)
+	} else {
+		out.propsProblem(from, store.DeleteNote(ctx, from))
+	}
+
+	seen := map[string]struct{}{from: {}}
+	for _, p := range touched {
+		if _, dup := seen[p]; dup {
+			continue
+		}
+		seen[p] = struct{}{}
+		if ix != nil {
+			out.textProblem(p, ix.UpdatePath(ctx, p))
+		}
+		if store != nil {
+			out.propsProblem(p, upsertPropertiesNote(ctx, store, collectionRoot, p))
+		}
+	}
+
+	if ix != nil {
+		if cerr := ix.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the text index after a rename's index refresh",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+	if store != nil {
+		if cerr := store.Close(); cerr != nil {
+			slog.Warn("knowledge: closing the properties index after a rename's index refresh",
+				"root", collectionRoot, "error", cerr)
+		}
+	}
+
+	return out.summary()
+}
+
+// openPropertiesIndexStore opens the properties index for one collection,
+// creating its directory and database file on first use — the same preamble
+// vaultprops.Sync performs (FR-030's directory, FR-032's permissions),
+// reimplemented here for the reason this section's header states.
+//
+// On a platform without SQLite this returns records.ErrPropertyIndexUnavailable
+// (wrapped), via propindex.Open's own platform gate, without creating anything
+// on disk — the gate is checked before the MkdirAll rather than left to
+// propindex.Open alone, so a build that cannot open the store never creates a
+// directory for one it can never write.
+//
+// # One handle per collection, shared and reference-counted
+//
+// The returned Store is a process-shared handle, not a fresh one: every
+// per-cell record edit and every Library text save calls this, and opening
+// SQLite per call minted a new *sql.DB (plus schema checks) per keystroke-sized
+// write. The handle is shared the way the text index is (acquireSharedIndex),
+// with three differences that follow from SQLite being a file anyone may
+// delete:
+//
+//   - Close releases a reference; the handle stays open for
+//     propsStoreIdleTimeout after the last release, so a burst of edits reuses
+//     it, and is then closed so no file stays held open indefinitely.
+//   - Before reuse the database file's identity is re-checked. Deleting
+//     properties.db is the documented way to ask for a rebuild (propindex.Open);
+//     a handle still pointing at the unlinked file would write rows nobody can
+//     read, so a changed or missing file retires the handle and a new one opens.
+//   - A write that fails retires the handle too, so the next call reopens and
+//     gets propindex.Open's corruption self-heal, exactly as a per-call open did.
+//
+// Writes stay serialized exactly as before: propindex's public write methods
+// take the per-index-file reconcile lock (propindex/reconcile.go) whatever
+// handle they are called on, so sharing one handle changes nothing about how a
+// direct write queues behind Store.Reconcile.
+func openPropertiesIndexStore(ctx context.Context, home, collectionRoot string) (propindex.Store, error) {
+	if err := records.RequirePropertyIndex(records.CapabilityOpenIndex); err != nil {
+		return nil, err
+	}
+	idxPath, err := PropertiesIndexPath(home, collectionRoot)
+	if err != nil {
+		return nil, err
+	}
+	key := filepath.Clean(idxPath)
+
+	propsStores.mu.Lock()
+	defer propsStores.mu.Unlock()
+
+	if e, ok := propsStores.entries[key]; ok {
+		fi, statErr := os.Stat(key)
+		if statErr == nil && os.SameFile(fi, e.file) {
+			e.refs++
+			if e.idle != nil {
+				e.idle.Stop()
+				e.idle = nil
+			}
+			return &sharedPropsStore{Store: e.store, key: key, entry: e}, nil
+		}
+		// The file was deleted or replaced under the handle: retire it.
+		retirePropsStoreLocked(key, e)
+	}
+
+	// Open runs under the registry mutex so two concurrent first callers for
+	// one collection cannot both open (and both cache) a handle.
+	dir := filepath.Dir(idxPath)
+	if mkErr := os.MkdirAll(dir, 0o700); mkErr != nil {
+		return nil, fmt.Errorf("knowledge: create properties index directory %s: %w", dir, mkErr)
+	}
+	if chErr := os.Chmod(dir, 0o700); chErr != nil {
+		return nil, fmt.Errorf("knowledge: set permissions on properties index directory %s: %w", dir, chErr)
+	}
+	store, err := propindexOpen(ctx, idxPath, propindex.Options{})
+	if err != nil {
+		return nil, err
+	}
+	fi, statErr := os.Stat(key)
+	if statErr != nil {
+		// Cannot record the file's identity, so cannot safely reuse the handle
+		// later: hand it back unshared, closed by the caller as before.
+		return store, nil
+	}
+	e := &propsStoreEntry{store: store, file: fi, refs: 1}
+	propsStores.entries[key] = e
+	return &sharedPropsStore{Store: store, key: key, entry: e}, nil
+}
+
+// propindexOpen is the one place this file mints a properties-index handle
+// (a fresh *sql.DB). It is a variable only so a test can count how often a
+// direct refresh opens SQLite; production never reassigns it.
+var propindexOpen = propindex.Open
+
+// propsStoreIdleTimeout is how long a released properties handle stays open
+// for the next edit before it is closed.
+var propsStoreIdleTimeout = 30 * time.Second
+
+var propsStores = struct {
+	mu      sync.Mutex
+	entries map[string]*propsStoreEntry
+}{entries: make(map[string]*propsStoreEntry)}
+
+type propsStoreEntry struct {
+	store   propindex.Store
+	file    os.FileInfo // identity of the database file when the handle opened
+	refs    int
+	retired bool // removed from the registry; close when refs reaches 0
+	idle    *time.Timer
+}
+
+// retirePropsStoreLocked removes e from the registry and closes it now if no
+// caller holds it, or when its last holder releases it. propsStores.mu held.
+func retirePropsStoreLocked(key string, e *propsStoreEntry) {
+	if propsStores.entries[key] == e {
+		delete(propsStores.entries, key)
+	}
+	e.retired = true
+	if e.idle != nil {
+		e.idle.Stop()
+		e.idle = nil
+	}
+	if e.refs == 0 {
+		closePropsStoreQuietly(key, e.store)
+	}
+}
+
+func closePropsStoreQuietly(key string, store propindex.Store) {
+	if err := store.Close(); err != nil {
+		slog.Warn("knowledge: closing a shared properties index handle", "path", key, "error", err)
+	}
+}
+
+// closeIdlePropertiesStores closes every shared handle no caller currently
+// holds, and retires the held ones so they close on release. Test seam.
+func closeIdlePropertiesStores() {
+	propsStores.mu.Lock()
+	defer propsStores.mu.Unlock()
+	for key, e := range propsStores.entries {
+		retirePropsStoreLocked(key, e)
+	}
+}
+
+// sharedPropsStore is one caller's lease on a shared handle. Close releases the
+// lease; failed writes retire the handle (see openPropertiesIndexStore).
+type sharedPropsStore struct {
+	propindex.Store
+	key      string
+	entry    *propsStoreEntry
+	released bool
+}
+
+func (s *sharedPropsStore) retireOnError(err error) error {
+	if err != nil {
+		propsStores.mu.Lock()
+		if !s.entry.retired {
+			// Still leased by s, so this never closes under a live caller.
+			retirePropsStoreLocked(s.key, s.entry)
+		}
+		propsStores.mu.Unlock()
+	}
+	return err
+}
+
+func (s *sharedPropsStore) UpsertNote(ctx context.Context, rows propindex.NoteRows) error {
+	return s.retireOnError(s.Store.UpsertNote(ctx, rows))
+}
+
+func (s *sharedPropsStore) DeleteNote(ctx context.Context, path string) error {
+	return s.retireOnError(s.Store.DeleteNote(ctx, path))
+}
+
+func (s *sharedPropsStore) Close() error {
+	propsStores.mu.Lock()
+	defer propsStores.mu.Unlock()
+	if s.released {
+		return nil
+	}
+	s.released = true
+	e := s.entry
+	e.refs--
+	if e.refs > 0 {
+		return nil
+	}
+	if e.retired {
+		return e.store.Close()
+	}
+	e.idle = time.AfterFunc(propsStoreIdleTimeout, func() {
+		propsStores.mu.Lock()
+		defer propsStores.mu.Unlock()
+		if e.refs == 0 && !e.retired {
+			retirePropsStoreLocked(s.key, e)
+		}
+	})
+	return nil
+}
+
+// upsertPropertiesNote re-derives and writes one path's row (and its
+// property/tag/link/task children) into an already-open properties index —
+// the same derivation vaultprops.Sync performs for a whole-collection
+// reconcile (records.ParseRecord -> propindex.BuildNoteRows), applied to one
+// path so a single write does not pay for a walk of the collection.
+//
+// It never reads an attachment's bytes (FR-039a). ScanKindFor (via StatEntry)
+// decides the kind from the file's NAME alone, before anything is opened, and
+// an attachment's row carries only its stat — the same shape
+// vaultprops.Sync's own attachment branch writes.
+func upsertPropertiesNote(ctx context.Context, store propindex.Store, collectionRoot, relPath string) error {
+	entry, err := StatEntry(collectionRoot, relPath)
+	if err != nil {
+		return err
+	}
+	if entry.Kind == ScanKindAttachment {
+		return store.UpsertNote(ctx, propindex.NoteRows{
+			Path: relPath, Kind: propindex.KindAttachment,
+			Size: entry.Size, MtimeNanos: entry.ModTimeNanos,
+			CtimeNanos: entry.CtimeNanos, HasCtime: entry.HasCtime,
+		})
+	}
+
+	fsys := OSLinkFS()
+	root, err := NewCollectionRoot(fsys, collectionRoot)
+	if err != nil {
+		return err
+	}
+	abs, err := root.ResolveContainedNoSymlink(fsys, relPath)
+	if err != nil {
+		return err
+	}
+	src, err := ReadNoteContent(fsys, abs)
+	if err != nil {
+		return err
+	}
+
+	hash := propindex.SourceHash(src)
+	rec := records.ParseRecord(relPath, src)
+	var schema *records.Schema
+	if t := rec.TypeName(); t != "" {
+		schemas, _, serr := records.LoadSchemas(root.Path())
+		if serr != nil {
+			return fmt.Errorf("loading record schemas: %w", serr)
+		}
+		if sc, ok := schemas.Get(t); ok {
+			schema = sc
+		}
+		// t != "" and no matching schema: FR-005, an ordinary note — schema
+		// stays nil, matching vaultprops.Sync's identical branch.
+	}
+
+	rows := propindex.BuildNoteRows(rec, schema, src, hash)
+	rows.Size, rows.MtimeNanos = entry.Size, entry.ModTimeNanos
+	rows.CtimeNanos, rows.HasCtime = entry.CtimeNanos, entry.HasCtime
+	return store.UpsertNote(ctx, rows)
+}

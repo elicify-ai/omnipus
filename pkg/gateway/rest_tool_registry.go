@@ -399,6 +399,7 @@ func resolveConfiguredPolicy(toolName string, cfg *config.AgentToolsCfg, globalP
 //   - 200 OK        action processed
 //   - 400 Bad Request  malformed body or unknown action
 //   - 401 Unauthorized  missing/invalid token (enforced by withAuth)
+//   - 403 Forbidden   the approval belongs to another account
 //   - 404 Not Found    approval_id not found
 //   - 410 Gone       approval already resolved (FR-018)
 func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
@@ -460,6 +461,12 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("approval %q not found", approvalID))
 		return
 	}
+
+	// MERGE NOTE 2026-09-15: integrate's per-account owner gate (Claude review
+	// C4 / D-16 parity — 403 when another account decides an approval) is
+	// dropped here. The founder ruled tool approval comes from release (#683)
+	// and that Omnipus is single-account, so there is no other account to
+	// scope against; release's ws_tool_approval.go has no audience rule.
 
 	// Attempt the state transition.
 	resolved, gone := a.approvalReg.resolve(approvalID, action)

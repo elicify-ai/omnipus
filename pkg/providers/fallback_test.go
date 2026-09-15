@@ -728,7 +728,7 @@ func TestResolveCandidatesWithLookup_UnknownBareSlug_Warns(t *testing.T) {
 	// DisableConsole disables stdout; EnableFileLogging routes to a file at
 	// WARN-or-higher. SetLevel(WARN) ensures our WARN fires but INFO is
 	// suppressed.
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)
@@ -796,7 +796,7 @@ func TestResolveCandidatesWithLookup_KnownBareSlug_NoWarn(t *testing.T) {
 	logFile := tmpDir + "/providers-nowarn.log"
 
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)

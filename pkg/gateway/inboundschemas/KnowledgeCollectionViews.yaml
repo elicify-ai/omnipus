@@ -1,0 +1,66 @@
+title: KnowledgeCollectionViews
+description: >
+  Every saved view a collection owns, addressed by collection rather than by
+  a `.base` file (UAT D-13, web half).
+
+
+  WHY THIS EXISTS. `knowledge_configure create_view` writes
+  `<vault>/.omnipus-vault/views/<slug>.yaml` and produces NO `.base` file, so
+  a collection without a `.base` still has saved views that answered correctly
+  over the API while having no UI surface at all — the base-views endpoint
+  (`GET .../knowledge/base-views?path=<.base>`) is file-addressed and cannot
+  list them. This response is the collection-addressed list: every view file
+  the loader accepts, each with the slug it is actually addressed by, its
+  label, its kind, whether it can be served, and — for an imported view —
+  the `.base` it came from.
+
+
+  Base previews and dashboard embeds keep listing by `source`; this is the
+  list for the collection itself. Every `name` is read from the saved view
+  file and must be passed VERBATIM to GET .../knowledge/view (the same
+  no-rederivation rule KnowledgeBaseView states).
+
+  A collection outside the caller's workspace scope returns this same
+  empty-but-complete shape (US-9 / FR-052 / FR-053) — never a 403, never a
+  404, which would confirm the collection exists.
+type: object
+additionalProperties: false
+required:
+  - collection_id
+  - views
+  - unloadable_count
+properties:
+  collection_id:
+    type: string
+    minLength: 1
+    description: The collection whose saved views are listed, echoed from the request.
+    example: "kb_3d1c9a7e5b2f4806"
+  views:
+    type: array
+    description: >
+      The collection's servable and unservable-but-listable saved views,
+      ordered by the loader's own stable order. Always an array, never null —
+      an empty array is the positive statement that the collection authored
+      no views.
+    items:
+      $ref: "./KnowledgeBaseView.yaml"
+      x-go-type: KnowledgeBaseView
+  unloadable_count:
+    type: integer
+    minimum: 0
+    description: >
+      How many view FILES could not be loaded at all (rejected by the loader,
+      e.g. a duplicate view name or an unloadable file) and are therefore not
+      in `views`. Reported rather than hidden: silently showing fewer views
+      than the vault declares is indistinguishable from a vault that never
+      declared them.
+    example: 0
+  unloadable:
+    type: array
+    description: >
+      Each rejected view file, with the loader's own code and reason (UAT
+      D-70's naming rule: a count alone says nothing a reader can act on).
+      Present whenever unloadable_count is greater than zero.
+    items:
+      $ref: "./KnowledgeBaseUnloadableView.yaml"
+      x-go-type: KnowledgeBaseUnloadableView

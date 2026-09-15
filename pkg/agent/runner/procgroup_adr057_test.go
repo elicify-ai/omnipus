@@ -1,3 +1,10 @@
+//go:build !windows
+
+// Not built on Windows: process GROUPS are a POSIX concept. These tests set
+// SysProcAttr.Setpgid and signal the group with syscall.Kill, neither of
+// which exists in the Windows syscall package. The Windows equivalent is a
+// Job Object (pkg/sandbox/hardened_exec_windows.go) and needs its own test.
+
 // procgroup_adr057_test.go — ADR-057 U22 (W9c, FR-029, BDD-86, test #68a).
 //
 // Regression coverage for the process-group gap procgroup_unix.go closes: a
@@ -27,7 +34,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -131,10 +137,6 @@ func u22AssertGroupKillReapsGrandchild(t *testing.T, pidFile string, cancel func
 // just the direct `claude` process, so a subprocess tree the CLI spawned
 // does not survive as an orphan.
 func TestU22ClaudeDriver_CancelKillsProcessGroup(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("stub uses a POSIX shell script; FR-029 group-kill is POSIX-only")
-	}
-
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
 	stub := u22ProcessGroupStubScript(t, pidFile)
 
@@ -158,10 +160,6 @@ func TestU22ClaudeDriver_CancelKillsProcessGroup(t *testing.T) {
 //
 //nolint:dupl // parallel test scaffolding intentionally mirrors the claude/opencode variants (same mechanism, different driver/bin var)
 func TestU22CodexDriver_CancelKillsProcessGroup(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("stub uses a POSIX shell script; FR-029 group-kill is POSIX-only")
-	}
-
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
 	stub := u22ProcessGroupStubScript(t, pidFile)
 
@@ -185,10 +183,6 @@ func TestU22CodexDriver_CancelKillsProcessGroup(t *testing.T) {
 //
 //nolint:dupl // parallel test scaffolding intentionally mirrors the claude/codex variants (same mechanism, different driver/bin var)
 func TestU22OpencodeDriver_CancelKillsProcessGroup(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("stub uses a POSIX shell script; FR-029 group-kill is POSIX-only")
-	}
-
 	pidFile := filepath.Join(t.TempDir(), "grandchild.pid")
 	stub := u22ProcessGroupStubScript(t, pidFile)
 
@@ -213,10 +207,6 @@ func TestU22OpencodeDriver_CancelKillsProcessGroup(t *testing.T) {
 // Mirrors pkg/sandbox/hardened_exec_pgroup_test.go's
 // TestInstallProcessGroupCancel_SetsCancel for the same shape of guard.
 func TestU22SetupProcessGroup_InstallsGroupCancel(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Setpgid / group-kill cmd.Cancel override is POSIX-only (FR-029)")
-	}
-
 	cmd := exec.Command("true")
 	u22SetupProcessGroup(cmd)
 	u22InstallGroupCancel(cmd)

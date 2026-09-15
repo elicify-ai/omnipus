@@ -371,7 +371,7 @@ func TestAppendFields_ErrorUsesErrorString(t *testing.T) {
 }
 
 func TestDisableConsole(t *testing.T) {
-	DisableConsole()
+	t.Cleanup(DisableConsole())
 	Info("this should go to nowhere")
 }
 

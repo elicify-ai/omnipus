@@ -2,15 +2,32 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// pathsafe_integration_test.go — regression tests for the app-wide
-// cross-platform filename-safety fix (pkg/pathsafe): CleanRelPath now also
-// rejects Windows reserved device names, NTFS-illegal characters, a
-// trailing dot/space, and an over-long component or relative path — on
-// every OS, not only Windows — and every collision-sensitive Root
-// operation (Rename, CopyInto, CreateUnique, Mkdir, WriteContent) now
-// detects a colliding sibling case-INsensitively, so the exact same
-// behavior is produced whether the underlying host filesystem is
-// case-sensitive (ext4) or not (NTFS, default APFS/HFS+).
+// pathsafe_integration_test.go — regression tests for filename safety in
+// the Library root, as ADR-067 Stage 0 leaves it.
+//
+// Stage 0 drew TWO independent lines through what used to be one blanket
+// rule, and both are asserted below. Conflating them is the mistake this
+// file previously encoded, so they are named separately:
+//
+//  1. READ vs CREATE. Name-SHAPE rules (reserved device names, characters
+//     Windows forbids, a trailing dot or space, length caps) apply only to
+//     a name Omnipus is about to CREATE. They never apply to reading,
+//     listing, indexing or linking, because a mount holds files the
+//     operator already has and never asked us to name.
+//
+//  2. POSIX vs WINDOWS. Those same Windows-shape rules are enforced only
+//     where a Windows filesystem will actually see the file. On Linux and
+//     macOS a file may legitimately be called "CON" or "a<b.txt"; refusing
+//     it there would take away a naming freedom the host grants. Selection
+//     is by GOOS inside pkg/pathsafe, so nothing here needs a build tag.
+//
+// Addressing safety ("..", absolute paths, NUL) is neither of those and did
+// not move: it is refused everywhere, always.
+//
+// Separately, every collision-sensitive Root operation (Rename, CopyInto,
+// CreateUnique, Mkdir, WriteContent) detects a colliding sibling
+// case-INsensitively, so behaviour is identical whether the host
+// filesystem is case-sensitive (ext4) or not (NTFS, default APFS/HFS+).
 
 package library
 
@@ -18,64 +35,216 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/pathsafe"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// --- CleanRelPath: the new pathsafe-backed checks ---
+// --- Windows-shape rules: create-only, and Windows-only ---
 
-func TestCleanRelPath_ReservedDeviceName_Rejected(t *testing.T) {
-	cases := []string{"CON", "con", "nul.txt", "COM1.log", "notes/LPT1", "notes/con/report.txt"}
-	for _, raw := range cases {
-		t.Run(raw, func(t *testing.T) {
-			_, err := CleanRelPath(raw)
-			require.Error(t, err, "raw=%q", raw)
-			assert.ErrorIs(t, err, ErrInvalidPath)
+// windowsHostileNames are single components that a Windows filesystem
+// refuses and a POSIX one accepts. Each row is checked against all four
+// corners of the Stage 0 contract, so a regression in any one of them
+// fails here rather than surfacing as a file the operator cannot open.
+var windowsHostileNames = []struct {
+	name string
+	want error // the pathsafe sentinel WindowsRules must produce
+}{
+	{"CON", pathsafe.ErrReservedName},
+	{"con", pathsafe.ErrReservedName},
+	{"nul.txt", pathsafe.ErrReservedName},
+	{"COM1.log", pathsafe.ErrReservedName},
+	{"LPT1", pathsafe.ErrReservedName},
+	{"bad<name.txt", pathsafe.ErrIllegalChar},
+	{"bad>name.txt", pathsafe.ErrIllegalChar},
+	{"bad:name.txt", pathsafe.ErrIllegalChar},
+	{`bad"name.txt`, pathsafe.ErrIllegalChar},
+	{"bad|name.txt", pathsafe.ErrIllegalChar},
+	{"bad?name.txt", pathsafe.ErrIllegalChar},
+	{"bad*name.txt", pathsafe.ErrIllegalChar},
+	{"report.", pathsafe.ErrTrailingDotOrSpace},
+	{"report ", pathsafe.ErrTrailingDotOrSpace},
+}
+
+// The rule still exists and still bites — asserted against the rule set as
+// a VALUE, so this runs identically on a Mac, a Linux runner and a Windows
+// runner. Without this test, deleting every Windows rule would still leave
+// the suite green on the machines we develop on.
+func TestWindowsRules_StillRejectHostileNames(t *testing.T) {
+	for _, tc := range windowsHostileNames {
+		t.Run(tc.name, func(t *testing.T) {
+			err := pathsafe.WindowsRules.ValidateComponent(tc.name)
+			require.Error(t, err, "WindowsRules must reject %q on every platform", tc.name)
+			assert.ErrorIs(t, err, tc.want)
 		})
 	}
 }
 
-func TestCleanRelPath_IllegalCharacters_Rejected(t *testing.T) {
-	cases := []string{
-		"bad<name.txt", "bad>name.txt", "bad:name.txt", `bad"name.txt`,
-		"bad|name.txt", "bad?name.txt", "bad*name.txt",
-	}
-	for _, raw := range cases {
-		t.Run(raw, func(t *testing.T) {
-			_, err := CleanRelPath(raw)
-			require.Error(t, err, "raw=%q", raw)
-			assert.ErrorIs(t, err, ErrInvalidPath)
+// The founder requirement, stated as a test: Linux and macOS support all
+// filenames. If someone "helpfully" re-adds a Windows rule to POSIXRules,
+// this fails — which is the only way that regression gets noticed on a
+// non-Windows machine.
+func TestPOSIXRules_AcceptWindowsHostileNames(t *testing.T) {
+	for _, tc := range windowsHostileNames {
+		t.Run(tc.name, func(t *testing.T) {
+			require.NoError(t, pathsafe.POSIXRules.ValidateComponent(tc.name),
+				"POSIXRules must accept %q — the host filesystem allows it", tc.name)
 		})
 	}
 }
 
-func TestCleanRelPath_TrailingDotOrSpace_Rejected(t *testing.T) {
-	cases := []string{"report.", "report ", "notes/report."}
-	for _, raw := range cases {
-		t.Run(raw, func(t *testing.T) {
-			_, err := CleanRelPath(raw)
-			require.Error(t, err, "raw=%q", raw)
-			assert.ErrorIs(t, err, ErrInvalidPath)
+// The read path never applies shape rules, on ANY platform. A file already
+// sitting in a mount must be addressable whatever it is called; refusing it
+// would make the operator's own file invisible in their own library.
+func TestCleanRelPath_AcceptsWindowsHostileNames(t *testing.T) {
+	for _, tc := range windowsHostileNames {
+		t.Run(tc.name, func(t *testing.T) {
+			rel, err := CleanRelPath(tc.name)
+			require.NoError(t, err, "reading must not apply name-shape rules")
+			assert.Equal(t, tc.name, rel, "the name must survive unaltered")
 		})
 	}
+	// Nested, too: the walk resolves every segment and must not trip on an
+	// intermediate directory the operator named years ago.
+	rel, err := CleanRelPath("notes/con/report.txt")
+	require.NoError(t, err)
+	assert.Equal(t, "notes/con/report.txt", rel)
 }
 
-func TestCleanRelPath_ComponentTooLong_Rejected(t *testing.T) {
-	// A 210-rune filename is realistic (UAT precedent) and, before this
-	// fix, passed every existing check.
-	_, err := CleanRelPath(strings.Repeat("a", 210) + ".txt")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidPath)
-}
+// The create path enforces whatever the BUILD TARGET's filesystem enforces.
+// Expectation is derived from ActiveRules() rather than hardcoded, because
+// hardcoding either answer makes the test wrong on half the CI matrix — and
+// a test that is wrong on Windows is a test nobody runs on Windows.
+func TestValidateCreateName_FollowsActiveRules(t *testing.T) {
+	root, _ := buildTestRoot(t)
+	active := pathsafe.ActiveRules()
 
-func TestCleanRelPath_RelPathTooLong_Rejected(t *testing.T) {
-	var b strings.Builder
-	for i := 0; i < 50; i++ {
-		b.WriteString("dir/")
+	for _, tc := range windowsHostileNames {
+		t.Run(tc.name, func(t *testing.T) {
+			err := root.ValidateCreateName(tc.name)
+			if active.ValidateComponent(tc.name) != nil {
+				require.Error(t, err, "the active rule set rejects %q, so create must too", tc.name)
+				assert.ErrorIs(t, err, ErrInvalidPath, "must still map to a 400")
+				assert.ErrorIs(t, err, tc.want, "the pathsafe sentinel must stay reachable through the wrap")
+			} else {
+				require.NoError(t, err, "the active rule set allows %q, so create must not refuse it", tc.name)
+			}
+		})
 	}
-	_, err := CleanRelPath(b.String() + "file.txt")
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrInvalidPath)
+
+	// Intermediate segments are checked, not just the leaf: creating
+	// "CON/report.txt" on Windows would otherwise leave an unopenable
+	// directory behind that no later per-leaf check ever revisits.
+	err := root.ValidateCreateName("CON/report.txt")
+	if active.ValidateComponent("CON") != nil {
+		require.Error(t, err, "an illegal INTERMEDIATE segment must be caught")
+	} else {
+		require.NoError(t, err)
+	}
+}
+
+// ADR-067 Stage 0 moved the LENGTH rules from the read path to the create
+// path. These two tests previously asserted CleanRelPath rejects an over-long
+// name; that was the pre-Stage-0 contract and it is now wrong in a specific,
+// deliberate way.
+//
+// Why the contract changed: a component-rune cap and a whole-path-rune cap
+// both exist for Windows MAX_PATH headroom. They are name-SHAPE rules, not
+// addressing-safety rules, so under FR-0001 they must not refuse a file that
+// is already on the operator's disk — a name Omnipus never chose. Under
+// FR-0004d they still apply to what Omnipus CREATES.
+//
+// So each test below keeps its original assertion and gains its opposite:
+// the name is refused on create, and accepted on read. Coverage grows; the
+// guarantee that a long name cannot be created is unchanged.
+
+func TestLengthRules_RefusedOnCreate_AcceptedOnRead(t *testing.T) {
+	root, _ := buildTestRoot(t)
+
+	t.Run("component over the rune cap", func(t *testing.T) {
+		// A 210-rune filename is realistic (UAT precedent).
+		name := strings.Repeat("a", 210) + ".txt"
+
+		// Create: refused. This is the half that must never regress —
+		// Stage 0 relaxes what Omnipus READS, never what it writes.
+		// The rune cap is a Windows MAX_PATH budget, so like every other
+		// shape rule it binds only where the active rule set says so.
+		// POSIX keeps a 255-BYTE cap instead, which 211 ASCII bytes clears.
+		if pathsafe.ActiveRules().MaxComponentRunes > 0 {
+			require.Error(t, root.ValidateCreateName(name),
+				"a 210-rune component must be refused when Omnipus creates it")
+		}
+
+		// Read: accepted. A file with this name can exist on a mounted
+		// disk; refusing to address it makes the operator's own file
+		// invisible, which is the defect Stage 0 exists to fix.
+		_, err := CleanRelPath(name)
+		require.NoError(t, err,
+			"an existing file must be addressable regardless of its length")
+	})
+
+	t.Run("whole path over the rune cap", func(t *testing.T) {
+		var b strings.Builder
+		for i := 0; i < 50; i++ {
+			b.WriteString("dir/")
+		}
+		rel := b.String() + "file.txt"
+
+		if pathsafe.ActiveRules().MaxRelPathRunes > 0 {
+			require.Error(t, root.ValidateCreateName(rel),
+				"a 200+ rune path must be refused on create")
+		}
+
+		_, err := CleanRelPath(rel)
+		require.NoError(t, err,
+			"a deep existing path must remain readable")
+	})
+}
+
+// The length caps themselves, asserted as values so they hold on every
+// platform — the conditional assertions above would otherwise let both caps
+// be deleted without a single red test on a Mac.
+func TestWindowsRules_LengthCapsStillBite(t *testing.T) {
+	long := strings.Repeat("a", 210) + ".txt"
+	require.ErrorIs(t, pathsafe.WindowsRules.ValidateComponent(long), pathsafe.ErrNameTooLong)
+	require.NoError(t, pathsafe.POSIXRules.ValidateComponent(long),
+		"210 ASCII bytes is under the POSIX 255-byte cap")
+
+	deep := strings.Repeat("dir/", 50) + "file.txt"
+	require.ErrorIs(t, pathsafe.WindowsRules.ValidateRelPathLength(deep), pathsafe.ErrNameTooLong)
+	require.NoError(t, pathsafe.POSIXRules.ValidateRelPathLength(deep),
+		"POSIX sets no whole-path rune budget")
+}
+
+// Addressing safety is NOT length, and did not move. This is the guard that
+// must hold on every platform and every build — if it ever goes green while
+// the create-side length rules are disabled, the split has been mis-drawn.
+func TestCleanRelPath_AddressingSafetyStillRejects(t *testing.T) {
+	for _, raw := range []string{
+		"../etc/passwd",
+		"notes/../../etc/passwd",
+		"..",
+		"/etc/passwd",
+		"notes/report\x00.md",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := CleanRelPath(raw)
+			require.Error(t, err, "raw=%q must be refused on every platform", raw)
+		})
+	}
+
+	// "." is deliberately NOT in that list: it addresses the work-tree root
+	// itself and returns ("", nil) by design. ".." is traversal; "." is not.
+	// Asserting it here would have been testing my own misreading.
+	rel, err := CleanRelPath(".")
+	require.NoError(t, err, `"." addresses the root itself and is valid`)
+	require.Equal(t, "", rel)
+
+	// Positive control: without it, a CleanRelPath that refused EVERYTHING
+	// would pass the whole list above.
+	_, err = CleanRelPath("notes/report.md")
+	require.NoError(t, err, "an ordinary relative path must still be accepted")
 }
 
 func TestCleanRelPath_RealWorldUATNames_Allowed(t *testing.T) {

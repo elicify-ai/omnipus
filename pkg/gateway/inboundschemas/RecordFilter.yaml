@@ -1,0 +1,190 @@
+title: RecordFilter
+description: >
+  One structured filter clause (ADR-068 D13, FR-022). The query surface takes
+  a STRUCTURED filter object and deliberately accepts no text query language:
+  a query language would have to be parsed, and a parse failure that degrades
+  to "returns nothing" is the silent-empty-result failure this ADR exists to
+  end.
+
+  Every property name and enum value here is validated against the schema
+  BEFORE evaluation (FR-023). A clause naming something the schema does not
+  declare REJECTS the query with the valid names listed — it MUST NOT return
+  zero records (FR-024), because a typo and a genuinely empty result look
+  identical and the caller cannot tell which it got.
+
+  A "text" property supports exactly two operators: `contains` — case-sensitive
+  substring matching (§8 R-10) — and `is_absent`. Equality and ordering are
+  NOT defined for text, because text is prose, never validated and never
+  compared for equality (D3); `eq`/`lt`/`lte`/`gt`/`gte` on a text property are
+  REFUSED with the reason named, not answered. Relevance search over prose is
+  ADR-067's surface, not this one.
+
+  Corrected 2026-08-25: this paragraph previously read "supports only
+  is_absent / is_present". `is_present` is in neither this schema's `op` enum
+  nor the engine's operator set, and `contains` — which the engine DOES define
+  for text (compare_oracle.go's operatorDefinedForType[text][contains] is
+  true, with cell-by-cell truth-table coverage) — was missing. "Is it
+  present?" is spelled {op: is_absent, negate: true}.
+type: object
+additionalProperties: false
+required:
+  - property
+  - op
+properties:
+  property:
+    type: string
+    minLength: 1
+    description: >
+      The declared property to filter on, in the record type reached after
+      following `via`. Property types are scoped to their record type (D3.3),
+      so this name is resolved against that type's schema and no other.
+    example: "status"
+  op:
+    type: string
+    enum:
+      - eq
+      - lt
+      - lte
+      - gt
+      - gte
+      - contains
+      - is_absent
+    description: >
+      The comparison to apply. This set is exactly the operators the engine
+      implements and the §8 truth table covers — no more and no fewer.
+
+
+      `contains` is whole-element membership on a list (§8 R-9) and substring
+      matching on text (§8 R-10). It is NEVER substring matching on a list.
+      Against a `many` property it is one of only two defined operators; the
+      rest are refused with the remedy named (§8 R-13).
+
+
+      Corrected 2026-08-25. This enum previously read
+      [eq, neq, in, not_in, lt, lte, gt, gte, is_absent, is_present]:
+      it OMITTED `contains` — a spec rule with cell-by-cell truth-table
+      coverage and no wire representation at all — while offering `neq`,
+      `in`, `not_in` and `is_present`, none of which the engine implements.
+      Negation is not an operator here; it is the separate `negate` flag, so
+      `status != done` is {op: eq, negate: true} and `neq` was redundant as
+      well as unimplemented.
+      Ordered comparison (lt/lte/gt/gte) is valid on date, integer and decimal
+      — and `integer` and `decimal` are ONE comparison domain, so 3 and 3.0
+      compare equal (§8 R-1). On an enum it is LEXICAL over the folded value
+      (R-5): there is no declared-position ordinal, and a domain order is
+      expressed by prefixing the values. `is_absent` tests the third state
+      (D3.2) explicitly.
+    example: "eq"
+  values:
+    type: array
+    description: >
+      Operand values. Empty or omitted for is_absent; exactly one for every
+      other operator. The engine takes a single lexical literal — the same text
+      a frontmatter file would hold — so it is parsed by the same code path as
+      a record's own value (§8 R-12).
+    items:
+      $ref: "./RecordValue.yaml"
+      x-go-type: RecordValue
+  negate:
+    type: boolean
+    description: >
+      Invert this clause. `status != done` is {op: eq, values: ["done"],
+      negate: true}, and "is it present?" is {op: is_absent, negate: true}.
+
+
+      Negation is a FLAG rather than a family of `not_` operators (no `neq`,
+      no `not_in`) so that there is exactly one place negation is applied and
+      exactly one place FR-008's absence rule can be forgotten — which mirrors
+      the engine, where `records.Filter.Negate` is a single bool consulted at
+      one point in `Filter.MatchWith`.
+
+
+      Two consequences the caller must be able to predict:
+
+
+      (a) FR-008 — a negated clause INCLUDES records where the property is
+      absent, because "days I did not meditate" must contain the days with no
+      value at all, which are precisely the days being asked about. Override
+      with `include_absent: false`.
+
+
+      (b) Negation does NOT re-admit a comparison that could not be made. A
+      non-conforming value (§8 R-4), an unresolved relation (R-8) or an
+      operator undefined for the declared type is REPORTED in `problems` and
+      the record EXCLUDED — from
+      the negated clause as well as the plain one. Counting a corrupt value as
+      "not done" by double negation would be a silent wrong answer.
+
+
+      Omitted is identical to false: an unset flag can never turn a clause
+      into its opposite. Stated in prose rather than as a JSON Schema
+      `default:` deliberately — openapi-typescript promotes a defaulted
+      property to REQUIRED, which would have made `negate` mandatory in
+      TypeScript while oapi-codegen still emitted an optional `*bool`, so the
+      two generated languages would disagree about the same field.
+    example: true
+  include_absent:
+    type: boolean
+    description: >
+      Whether records where the property is ABSENT still satisfy this clause.
+      MEANINGFUL ONLY WHEN `negate` IS TRUE.
+
+
+      On a NEGATED clause (FR-008): absent records are INCLUDED by default,
+      because "days I did not meditate" must contain the days carrying no
+      value at all — precisely the days being asked about. Send
+      `include_absent: false` to opt out. That opt-out is the wire spelling of
+      the engine's `records.Filter.ExcludeAbsent`, which holds
+      `!include_absent`; this schema therefore carries no separate
+      `exclude_absent` field, because a second field meaning the same thing is
+      how a contract starts contradicting itself.
+
+
+      On a NON-NEGATED clause: absent records NEVER satisfy the clause, and
+      this field is IGNORED — no value of it can admit them. §8 R-2 makes a
+      comparison with an absent operand false for every operator except
+      `is_absent`, and `records.Filter.MatchWith` returns that verdict
+      unchanged when the clause is not negated: `ExcludeAbsent` is read only
+      inside its `f.Negate` branch, and no field on `records.Filter` admits an
+      absent record to a POSITIVE clause.
+
+
+      That is OUT OF SCOPE, not an unbuilt feature — nothing is owed here and
+      no engine change is pending. FR-008 mandates inclusion for NEGATIVE
+      filters only, and "status is done, or has no status at all" is a UNION
+      of two clauses rather than one clause with a knob: ask it as
+      {op: eq, values: ["done"]} together with {op: is_absent}.
+
+
+      `op: is_absent` is exempt at either polarity: it TESTS absence, so
+      absence is its subject rather than a case to re-admit.
+
+
+      Carries no JSON Schema `default:`, for the reason spelled out on
+      `negate`: openapi-typescript promotes a defaulted property to REQUIRED
+      while oapi-codegen still emits an optional pointer, so a `default:` here
+      would split the two generated languages on one field. Omitted means "the
+      default for this clause", which is the FR-008 inclusion above.
+
+
+      Corrected 2026-08-26: this description previously claimed "a non-negated
+      clause excludes them unless this is explicitly true" — i.e. that
+      `include_absent: true` admits absent records to a POSITIVE clause. No
+      code performs that and none is planned. A handler written to the old
+      wording would have had to drop the flag silently or grow a SECOND engine
+      field, which is the very duplication the paragraph above refuses.
+    example: false
+  via:
+    type: array
+    maxItems: 2
+    description: >
+      Relation properties to follow before applying this clause, in order —
+      the two-hop question of ADR-068 section 1.2 expressed as data. At most
+      two hops (FR-065); a third is REFUSED rather than walked implicitly,
+      because a deeper traversal is a follow-up query the caller should make
+      knowingly. Omitted or empty means the clause applies to the queried type
+      itself.
+    items:
+      type: string
+      minLength: 1
+    example: ["company"]

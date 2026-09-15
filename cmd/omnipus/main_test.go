@@ -22,7 +22,8 @@ import (
 // TestNewOmnipusCommand_KeptCommandsPresent verifies that the minimized command
 // tree registers exactly the kept subcommands and no removed verbs.
 //
-// Kept: onboard, start (+ gateway/g aliases), stop, credentials, audit, doctor, version.
+// Kept: onboard, start (+ gateway/g aliases), stop, credentials, audit, doctor,
+// records, version.
 // Removed: agent, auth, status, cron, migrate, model, skills.
 func TestNewOmnipusCommand_KeptCommandsPresent(t *testing.T) {
 	cmd := NewOmnipusCommand()
@@ -37,6 +38,11 @@ func TestNewOmnipusCommand_KeptCommandsPresent(t *testing.T) {
 		"credentials",
 		"doctor",
 		"onboard",
+		// "records" (omnipus records import-obsidian) was added deliberately in
+		// 9b0280dd4 ("feat(records): add the Obsidian-vault importer (FR-100)")
+		// as a one-shot operator/CLI command, per FR-100/FR-103 — never an agent
+		// tool. It belongs in the kept-command list, not the removed-verb list.
+		"records",
 		"start",
 		"stop",
 		"version",

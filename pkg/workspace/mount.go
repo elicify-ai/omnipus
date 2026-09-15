@@ -253,26 +253,199 @@ func isBroadMountTarget(resolved string) bool {
 	if resolved == string(filepath.Separator) {
 		return true
 	}
-	if home, err := os.UserHomeDir(); err == nil && filepath.Clean(home) == resolved {
+	// Own home, in BOTH spellings (cleaned $HOME and its realpath — C9): the
+	// warning classification must agree with isSystemMountTarget's own-home
+	// exemption, or a symlink-spelled home would be exempted from the refusal
+	// yet never warned, i.e. a quiet broad grant, which FR-7.4 forbids.
+	if isOwnHomeMountTarget(resolved) {
 		return true
 	}
-	switch resolved {
-	case "/etc", "/usr", "/var", "/System", "/Library", "/bin", "/sbin", "/opt", "/Users", "/home":
+	if isSystemMountTarget(resolved) {
+		return true
+	}
+	if _, listed := broadMountRoots[resolved]; listed {
+		return true
+	}
+	// Compare on real paths too: on macOS /tmp and /var are symlinks into
+	// /private, so a target the operator typed as /tmp arrives here as
+	// /private/tmp and must still be judged as the broad location it is
+	// (UAT 2026-09-13 D-117: /tmp mounted with no warning at all).
+	for root := range broadMountRoots {
+		if realPath, err := filepath.EvalSymlinks(root); err == nil && realPath == resolved {
+			return true
+		}
+	}
+	// Somebody's home directory: a direct child of /Users or /home.
+	if parent := filepath.Dir(resolved); parent == "/Users" || parent == "/home" {
 		return true
 	}
 	return false
 }
+
+// broadMountRoots are locations that are LEGITIMATE to mount but so wide that
+// the operator must be warned (FR-7.4 warn-and-allow): every file under them
+// becomes writable by every agent on the workspace.
+var broadMountRoots = map[string]struct{}{
+	"/tmp": {}, "/private/tmp": {}, "/var/tmp": {}, "/private/var/tmp": {},
+	"/opt": {}, "/Users": {}, "/home": {}, "/Volumes": {}, "/Applications": {},
+	"/mnt": {}, "/media": {}, "/srv": {},
+}
+
+// systemMountRoots are operating-system-owned trees that no agent workspace
+// legitimately lives in. Mounting the root of one — or a DIRECT child of it
+// (Claude review 2026-09-14 C9: /etc/ssh, /usr/bin, /var/root,
+// /Library/LaunchDaemons were previously never refused at any spelling) — is
+// refused outright (UAT 2026-09-13 D-117): writing there is never "a folder
+// the agent works in", it is a machine-wide change, and a refusal here is
+// the one case the founder's 2026-08-12 warn-and-allow ruling did not
+// contemplate (that ruling addressed $HOME and /, which remain
+// warn-and-allow). Anything DEEPER than a direct child is a user path and is
+// not refused by this list — that is what keeps macOS's per-user temp tree
+// (/private/var/folders/…) mountable, and it is why the deliberately broad
+// tmp family (/tmp, /private/tmp, /var/tmp — all direct children of system
+// roots) is carved out below (isBroadMountLocation) rather than re-refused
+// here.
+var systemMountRoots = map[string]struct{}{
+	"/etc": {}, "/private/etc": {}, "/usr": {}, "/bin": {}, "/sbin": {}, "/lib": {}, "/lib64": {},
+	"/var": {}, "/private/var": {}, "/private": {}, "/System": {}, "/Library": {},
+	"/dev": {}, "/proc": {}, "/sys": {}, "/boot": {}, "/root": {}, "/cores": {},
+	`C:\Windows`: {}, `C:\Program Files`: {}, `C:\Program Files (x86)`: {},
+}
+
+// isOwnHomeMountTarget reports whether resolved is the CURRENT process's own
+// home directory, comparing both spellings that matter: the cleaned value of
+// $HOME and that path's realpath (on macOS a home spelled /var/root resolves
+// to /private/var/root — both forms are the user's own home). It is the
+// CI go-test #2 fix: on the root-running worker $HOME IS /root, a system
+// root, and before this exemption that made the user's own home arrive as a
+// D-117 refusal instead of the broad-target warning the founder's
+// 2026-08-12 ruling grants it. The comparison is deliberately NOT
+// case-folded: an exemption may miss a case variant of the home (fail
+// closed, the refusal stands) but must never fire on anything the process
+// did not literally configure as its home.
+func isOwnHomeMountTarget(resolved string) bool {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return false
+	}
+	if filepath.Clean(home) == resolved {
+		return true
+	}
+	if realHome, rerr := resolveExistingDir(home); rerr == nil && realHome == resolved {
+		return true
+	}
+	return false
+}
+
+// foldedSameOrDirectChild reports whether child is parent itself or exactly
+// one path segment below it, compared WITHOUT regard to letter case.
+//
+// Case folding is unconditional, mirroring pkg/sandbox's pathCoversFold
+// (exec_paths.go) and for the same two reasons its doc comment gives: case
+// sensitivity is a property of the MOUNT, not of the OS (case-insensitive
+// APFS accepted /PRIVATE/etc, /system and /USR past the old exact-match
+// refusal — verified empirically in the Claude review), and the two failure
+// directions are not symmetric — a false MATCH here costs one mount target
+// the operator can see and re-scope, while a false MISS silently re-opens a
+// system tree. Both sides are lowercased in full before the segment test
+// (never sliced by byte length) so a multi-byte directory name cannot be
+// split mid-rune.
+func foldedSameOrDirectChild(parent, child string) bool {
+	sep := string(filepath.Separator)
+	p := strings.ToLower(strings.TrimSuffix(filepath.Clean(parent), sep))
+	c := strings.ToLower(strings.TrimSuffix(filepath.Clean(child), sep))
+	if p == "" {
+		// Clean+Trim collapses the filesystem root to "": "/" covers everything.
+		return true
+	}
+	if c == p {
+		return true
+	}
+	if !strings.HasPrefix(c, p+sep) {
+		return false
+	}
+	rest := c[len(p)+1:]
+	return rest != "" && !strings.Contains(rest, sep)
+}
+
+// pathComparisonForms returns every form a path must be compared in: the
+// cleaned declared form plus its symlink-resolved form when it differs —
+// the same additive pair pkg/sandbox's comparisonForms keeps, so the macOS
+// /etc -> /private/etc pair is judged identically whichever spelling
+// arrives. A form that cannot be resolved (does not exist on this host) is
+// simply absent, never an error.
+func pathComparisonForms(p string) []string {
+	clean := filepath.Clean(p)
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil || resolved == clean {
+		return []string{clean}
+	}
+	return []string{clean, resolved}
+}
+
+// isBroadMountLocation reports whether resolved IS one of the deliberately
+// warn-and-allow broad locations (folded, real paths included). It exists as
+// a CARVE-OUT from the system-root refusal: the tmp family (/tmp ->
+// /private/tmp, /var/tmp -> /private/var/tmp) consists of direct children of
+// system roots that D-117 and the founder's ruling explicitly keep as
+// warn-and-allow, so the depth rule must not re-refuse them.
+func isBroadMountLocation(resolved string) bool {
+	for root := range broadMountRoots {
+		for _, form := range pathComparisonForms(root) {
+			if foldedSameOrDirectChild(form, resolved) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isSystemMountTarget reports whether resolved is a system tree root or a
+// direct child of one, folded case-insensitively and judged on real paths
+// as well as typed ones. Two exemptions run BEFORE the list, both fail-safe
+// in the "refuse" direction they narrow:
+//
+//   - the current process's own home is never a system target (it gets the
+//     broad-target warning instead — CI go-test #2);
+//   - a deliberately broad location (the tmp family) is never re-refused by
+//     the depth rule (D-117 keeps /tmp warn-and-allow).
+//
+// Deeper-than-direct-child paths are NOT refused by this function, on
+// purpose: see systemMountRoots' doc comment.
+func isSystemMountTarget(resolved string) bool {
+	if isOwnHomeMountTarget(resolved) {
+		return false
+	}
+	if isBroadMountLocation(resolved) {
+		return false
+	}
+	for root := range systemMountRoots {
+		for _, form := range pathComparisonForms(root) {
+			if foldedSameOrDirectChild(form, resolved) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// IsSystemMountTarget is the exported form of isSystemMountTarget, for the
+// host-folder picker, so it greys out the same directories the create path
+// refuses.
+func IsSystemMountTarget(resolved string) bool { return isSystemMountTarget(resolved) }
 
 // CheckMountTarget resolves rawHostPath to its realpath and classifies it
 // against omnipusHome (spec FR-7.4-FR-7.7, ADR-063 D6, operator decision
 // 2026-08-12 overruling ADR-063 D6's original wider-refusal text: "warn and
 // allow applies to all but the omnipus directory").
 //
-//   - REFUSES (FR-7.5, non-nil error wrapping ErrMountRefused) only when the
+//   - REFUSES (FR-7.5, non-nil error wrapping ErrMountRefused) when the
 //     REALPATH-RESOLVED target IS omnipusHome or lies INSIDE it — so a
 //     symlink pointing at $OMNIPUS_HOME is refused too, which is the form
 //     FR-7.5 calls out as the one nobody would reach for directly but must
-//     still be covered.
+//     still be covered — and (UAT 2026-09-13 D-117) when the target IS the
+//     root of an operating-system tree (systemMountRoots: /etc, /usr,
+//     /System, …). / and $HOME stay warn-and-allow per the 2026-08-12 ruling.
 //   - Otherwise WARNS AND ALLOWS (FR-7.6/FR-7.4): a non-empty warning string
 //     is returned (nil error) when the target CONTAINS omnipusHome (mounting
 //     $HOME or / when $OMNIPUS_HOME lives underneath — FR-7.6) or is
@@ -304,6 +477,12 @@ func CheckMountTarget(rawHostPath, omnipusHome string) (resolved string, warning
 		return "", "", fmt.Errorf(
 			"%w: %q %s the Omnipus data directory (%q) — mounting it would make config.json and master.key writable and let an agent disable its own sandbox (FR-7.5, ADR-063 D6)",
 			ErrMountRefused, resolved, relation, resolvedHome,
+		)
+	}
+	if isSystemMountTarget(resolved) {
+		return "", "", fmt.Errorf(
+			"%w: %q is an operating-system directory — no agent workspace lives there, and writing into it changes the whole machine. Mount a specific folder inside it if you really need one (UAT D-117)",
+			ErrMountRefused, resolved,
 		)
 	}
 
@@ -358,7 +537,26 @@ func MountStatus(m Mount) string {
 // unreadable file, malformed JSON, id mismatch); a workspace that simply has
 // no mounts returns (nil, true). Individual entries failing Mount.Validate are
 // dropped with a WARN rather than trusted — see loadMountStore.
+//
+// This two-value shape cannot tell "no mounts recorded" apart from "some
+// mounts were recorded but dropped" — both return ok=true. Most callers only
+// ever act on the surviving mounts, for which that distinction is
+// irrelevant. A caller whose own correctness answer depends on having opened
+// EVERY recorded mount (e.g. a "did this search cover the whole workspace?"
+// claim) needs LoadMountsWithDropStatus instead.
 func LoadMounts(home, id string) ([]Mount, bool) {
+	mounts, ok, _ := loadMountStore(home, id)
+	return mounts, ok
+}
+
+// LoadMountsWithDropStatus is LoadMounts plus the one bit LoadMounts cannot
+// express: droppedInvalid is true when ok=true but at least one recorded
+// mount entry was silently dropped by loadMountStore (it failed
+// Mount.Validate, or repeated an earlier entry's name). Added for I4
+// (2026-09 code review): a caller that reports "I searched everything" needs
+// to know when that is false even though ok itself is true. See
+// loadMountStore's own doc comment for the full failure-mode table.
+func LoadMountsWithDropStatus(home, id string) (mounts []Mount, ok bool, droppedInvalid bool) {
 	return loadMountStore(home, id)
 }
 
@@ -447,7 +645,7 @@ func CreateMount(home, id, name, rawHostPath string) (Mount, string, error) {
 		return Mount{}, "", fmt.Errorf("workspace: create mount: load workspace %s: %w", id, err)
 	}
 
-	existing, ok := loadMountStore(home, id)
+	existing, ok, _ := loadMountStore(home, id)
 	if !ok {
 		// The store exists but could not be parsed. Appending to it would
 		// silently discard whatever the operator had recorded, so refuse
@@ -526,7 +724,7 @@ func DeleteMount(home, id, name string) error {
 		return fmt.Errorf("workspace: delete mount: load workspace %s: %w", id, err)
 	}
 
-	mounts, ok := loadMountStore(home, id)
+	mounts, ok, _ := loadMountStore(home, id)
 	if !ok {
 		return fmt.Errorf("workspace: delete mount: mount store for %s is unreadable or malformed", id)
 	}

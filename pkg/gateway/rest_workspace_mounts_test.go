@@ -159,3 +159,42 @@ func TestHandleWorkspaces_CreateAndUpdate_RejectMountsField(t *testing.T) {
 		assert.Contains(t, w.Body.String(), "mounts")
 	})
 }
+
+// TestHandleWorkspaceMountCreate_D117_SystemDirectoryRefused pins UAT
+// 2026-09-13 D-117 at the REST door: POST /workspaces/{id}/mounts for an
+// operating-system directory is a 403 refusal that names the reason, while a
+// broad-but-legitimate folder mounts with a warning in the response.
+func TestHandleWorkspaceMountCreate_D117_SystemDirectoryRefused(t *testing.T) {
+	if _, err := os.Stat("/etc"); err != nil {
+		t.Skip("POSIX layout required")
+	}
+	api := newTestRestAPIWithHome(t)
+	id := createTestWorkspace(t, api, "D-117 mounts")
+
+	post := func(name, hostPath string) *httptest.ResponseRecorder {
+		body := `{"name":` + strconvQuote(name) + `,"host_path":` + strconvQuote(hostPath) + `}`
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/workspaces/"+id+"/mounts", strings.NewReader(body))
+		r.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		api.handleWorkspaceMountCreate(w, r, id)
+		return w
+	}
+
+	refused := post("etc", "/etc")
+	assert.Equal(t, http.StatusForbidden, refused.Code, refused.Body.String())
+	assert.Contains(t, refused.Body.String(), "operating-system directory")
+
+	if _, err := os.Stat("/tmp"); err == nil {
+		broad := post("scratch", "/tmp")
+		require.Equal(t, http.StatusCreated, broad.Code, broad.Body.String())
+		var resp gen.WorkspaceMountCreateResponse
+		require.NoError(t, json.Unmarshal(broad.Body.Bytes(), &resp))
+		require.NotNil(t, resp.Warning, "a broad location must carry a warning the dialog can show")
+		assert.Contains(t, *resp.Warning, "broad location")
+	}
+}
+
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}

@@ -1,11 +1,45 @@
 import '@testing-library/jest-dom'
 import { afterEach } from 'vitest'
 import { cleanup } from '@testing-library/react'
+import {
+  installTestIntersectionObserver,
+  resetTestIntersectionObservers,
+} from './intersectionObserver'
 
 // Unmount rendered components after each test to prevent DOM bleed between tests
 // when running the full vitest suite (N5 fix: 5 tests failed due to leaked DOM state).
 afterEach(() => {
   cleanup()
+})
+
+// IntersectionObserver (ADR-083 EMB-065/066 — the inline-embed mount budget).
+//
+// jsdom ships none, and `LazyEmbedMount` FAILS OPEN without one: `mounted`
+// starts `true` when the constructor is absent. Correct in a browser, but it
+// meant the mount budget was never exercised anywhere in this suite — the
+// four Step 6 mount files each advertise "the same lazy-mount budget
+// (EMB-065)" in their header and, until this was installed, not one assertion
+// in any of them ran with the gate switched on. The query fence matters most:
+// it issues a REAL network request, which is the whole reason for gating.
+//
+// COMPATIBILITY: the default mode reports every observed element as VISIBLE,
+// synchronously, on `observe()` — so an embed still mounts inside the same
+// `act()` that `render()` wraps and every existing suite settles to the same
+// RENDERED state it saw before. Not byte-identical behaviour: a caller's
+// `onMountedChange` now fires `false` then `true` instead of once with
+// `true`. That module's header states the difference in full. A test that
+// wants the gate switched on calls `holdEmbedsOutOfView()` from
+// `./intersectionObserver`.
+//
+// A suite that specifically wants the no-IntersectionObserver degradation
+// path (LazyEmbedMount.test.tsx has one) still gets it the usual way, with
+// `vi.stubGlobal('IntersectionObserver', undefined)`.
+installTestIntersectionObserver()
+
+// Reset after every test so one test's `holdEmbedsOutOfView()` cannot leak the
+// gate into the next.
+afterEach(() => {
+  resetTestIntersectionObservers()
 })
 
 // Relative-URL fetch guard (Vitest "unhandled error" flake, CI shard

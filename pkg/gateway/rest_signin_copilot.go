@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -54,17 +55,31 @@ func (a *restAPI) handleCopilotSignInStart(w http.ResponseWriter, _ *http.Reques
 	})
 }
 
-// copilotProbeCacheTTL is how long a COST-BEARING Copilot probe result is
-// reused (C2). Only signed_in / expired are cached: those are the outcomes
-// that spend a premium request, and they are stable — an operator who is
-// signed in stays signed in. not_signed_in and cli_missing are never cached,
-// so the one transition an operator actually waits on (run `copilot login`,
-// click Check sign-in) is always answered by a fresh probe, and that probe
-// costs nothing because there is no session to bill against.
+// copilotProbeCacheTTL is how long a signed_in Copilot probe result is reused
+// (C2). Only signed_in is cached: it is the outcome that spends a premium
+// request, and it is stable — an operator who is signed in stays signed in.
 //
-// The only staleness this introduces is the reverse transition (signed in →
-// signed out), which no UI flow waits on.
+// Every other outcome is answered by a fresh probe, because each one is
+// exactly what the operator is about to fix. not_signed_in and expired both
+// tell them to run `copilot login` and click Check sign-in again, and that
+// click must see the new login. expired used to be cached as well, so an
+// operator who had just signed in again kept seeing "expired" for up to five
+// minutes, with nothing on screen saying the answer was old.
+//
+// Re-probing those outcomes keeps C2's bounds: the single-flight slot below
+// still allows one child process at a time, and a login the vendor rejects has
+// no session to bill against. (That last point is inference: the Copilot CLI's
+// expired-session behaviour is unverified without a live subscription.)
+//
+// The only staleness left is the reverse transition (signed in → signed out),
+// which no UI flow waits on.
 const copilotProbeCacheTTL = 5 * time.Minute
+
+// copilotSignInCheck runs one Copilot sign-in check. It is a variable only so a
+// test can make the check return a state this gateway does not recognise,
+// which the real providers.CopilotSignIn cannot be made to do. Tests that swap
+// it restore it in t.Cleanup and never run in parallel.
+var copilotSignInCheck = providers_pkg.CopilotSignIn
 
 // copilotProbeRetryAfterSeconds is the Retry-After a caller gets when another
 // probe is already running. Bounded by copilotSignInCheckTimeout above.
@@ -103,6 +118,41 @@ type copilotProbeGuard struct {
 	inFlight bool
 	cached   *gen.SignInStatus
 	cachedAt time.Time
+	// last/lastAt hold the most recent FRESH check result, whatever its state.
+	// They answer the provider row (copilotRowSignInStatus) and never decide
+	// whether a check re-probes — that is cached/cachedAt's job alone.
+	last   *gen.SignInStatus
+	lastAt time.Time
+}
+
+// lastResult returns the most recent fresh check result while it is younger
+// than copilotProbeCacheTTL, and whether there was one.
+func (g *copilotProbeGuard) lastResult() (gen.SignInStatus, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.last == nil || time.Since(g.lastAt) >= copilotProbeCacheTTL {
+		return gen.SignInStatus{}, false
+	}
+	return *g.last, true
+}
+
+// forgetLast drops the remembered check result, so the provider row reports
+// nothing until the next check the gateway can interpret.
+func (g *copilotProbeGuard) forgetLast() {
+	g.mu.Lock()
+	g.last = nil
+	g.lastAt = time.Time{}
+	g.mu.Unlock()
+}
+
+// recordLast remembers a fresh check result, whatever its state, for the
+// provider row.
+func (g *copilotProbeGuard) recordLast(st gen.SignInStatus) {
+	g.mu.Lock()
+	last := st
+	g.last = &last
+	g.lastAt = time.Now()
+	g.mu.Unlock()
 }
 
 // hit returns a cached probe result when one is live, and whether there was one.
@@ -133,12 +183,12 @@ func (g *copilotProbeGuard) release() {
 	g.mu.Unlock()
 }
 
-// store caches a probe result if and only if it is one of the cost-bearing
-// outcomes. Caching not_signed_in would make the operator's post-login Check
-// sign-in click answer stale, and would save nothing: that outcome spends no
-// premium request.
+// store caches a probe result if and only if it is signed_in, the one stable,
+// cost-bearing outcome. Caching not_signed_in or expired would make the
+// operator's post-login Check sign-in click answer stale (see
+// copilotProbeCacheTTL).
 func (g *copilotProbeGuard) store(st gen.SignInStatus) {
-	if st.State != gen.SignInStatusStateSignedIn && st.State != gen.SignInStatusStateExpired {
+	if st.State != gen.SignInStatusStateSignedIn {
 		return
 	}
 	g.mu.Lock()
@@ -176,7 +226,7 @@ func (a *restAPI) handleCopilotSignInStatus(w http.ResponseWriter, r *http.Reque
 		// trace it leaves — a refused call never reaches auditCopilotProbe,
 		// because nothing was probed and nothing was spent.
 		slog.Warn("api: copilot sign-in probe refused, another is already running",
-			"ip", a.clientIPWithLiveFallback(r), "path", r.URL.Path,
+			"ip", a.clientIPWithLiveFallback(r), "path", redactRequestPath(r.URL.Path),
 			"retry_after", copilotProbeRetryAfterSeconds)
 		w.Header().Set("Retry-After", strconv.Itoa(copilotProbeRetryAfterSeconds))
 		jsonErr(w, http.StatusTooManyRequests,
@@ -197,9 +247,20 @@ func (a *restAPI) handleCopilotSignInStatus(w http.ResponseWriter, r *http.Reque
 	ctx, cancel := context.WithTimeout(r.Context(), copilotSignInCheckTimeout)
 	defer cancel()
 
-	res := providers_pkg.CopilotSignIn(ctx, "", a.copilotCheckWorkspace())
-	status := copilotSignInStatusResponse(res)
+	res := a.runCopilotSignInCheck(ctx)
+	status, known := copilotSignInStatusResponse(res)
+	if !known {
+		// Nothing about an uninterpreted result is remembered: not cached for
+		// the next check, and not shown on the provider row. The response is
+		// an error, which the sign-in dialog shows as a failed check.
+		a.copilotProbe.forgetLast()
+		a.auditCopilotProbe(r, gen.SignInStatus{State: gen.SignInStatusState(res.State)}, false)
+		jsonErr(w, http.StatusInternalServerError,
+			"the Copilot sign-in check returned a result this gateway does not recognise; see the gateway log")
+		return
+	}
 	a.copilotProbe.store(status)
+	a.copilotProbe.recordLast(status)
 	a.auditCopilotProbe(r, status, false)
 	jsonOK(w, status)
 }
@@ -249,13 +310,36 @@ func auditActor(r *http.Request) string {
 	return ""
 }
 
-// copilotCheckWorkspace is the directory the sign-in check runs in — the
-// Omnipus home, never the gateway's own working directory.
-func (a *restAPI) copilotCheckWorkspace() string {
+// copilotCheckWorkspace returns the directory the sign-in check runs in, and a
+// cleanup to call once the check is done: the Omnipus home when the gateway has
+// one, otherwise a fresh private directory that the cleanup removes. Never the
+// gateway's own working directory — the check runs the CLI with
+// --allow-all-tools, whose tools are rooted in the directory it runs in, and
+// the gateway may have been started from a source checkout or a home folder.
+func (a *restAPI) copilotCheckWorkspace() (dir string, cleanup func(), err error) {
 	if a.homePath != "" {
-		return a.homePath
+		return a.homePath, func() {}, nil
 	}
-	return ""
+	private, err := os.MkdirTemp("", "omnipus-copilot-check-")
+	if err != nil {
+		return "", func() {}, err
+	}
+	return private, func() { _ = os.RemoveAll(private) }, nil
+}
+
+// runCopilotSignInCheck runs one Copilot sign-in check in copilotCheckWorkspace.
+// A workspace that cannot be created is a check that could not run — never a
+// fallback to the gateway's working directory.
+func (a *restAPI) runCopilotSignInCheck(ctx context.Context) providers_pkg.CopilotSignInResult {
+	workspace, cleanup, err := a.copilotCheckWorkspace()
+	if err != nil {
+		return providers_pkg.CopilotSignInResult{
+			State:  providers_pkg.CopilotCheckFailed,
+			Detail: "could not create a private directory to run the check in: " + err.Error(),
+		}
+	}
+	defer cleanup()
+	return copilotSignInCheck(ctx, "", workspace)
 }
 
 // copilotSignInStatusResponse maps the CLI's state onto the FR-009 wire enum.
@@ -266,7 +350,17 @@ func (a *restAPI) copilotCheckWorkspace() string {
 // the operator hint (see listProviders). On this endpoint it degrades to
 // not_signed_in, which is exactly what SignInStatus.yaml prescribes for a login
 // that cannot be read.
-func copilotSignInStatusResponse(res providers_pkg.CopilotSignInResult) gen.SignInStatus {
+//
+// `check_failed` (the CLI could not be started, or timed out) degrades to
+// not_signed_in with a `reason` on the wire (SignInStatus.reason,
+// 2026-09-14), so the operator is told the check itself failed rather than
+// being pointed at `copilot login`. Every outcome other than signed_in and a
+// recognised not_signed_in is also logged server-side with the detail that
+// produced it.
+//
+// known is false for a state this mapping has no case for. The caller must then
+// answer with an error, never with any sign-in state.
+func copilotSignInStatusResponse(res providers_pkg.CopilotSignInResult) (gen.SignInStatus, bool) {
 	status := gen.SignInStatus{State: gen.SignInStatusStateNotSignedIn}
 
 	switch res.State {
@@ -282,13 +376,58 @@ func copilotSignInStatusResponse(res providers_pkg.CopilotSignInResult) gen.Sign
 		}
 	case providers_pkg.CopilotSignInExpired:
 		status.State = gen.SignInStatusStateExpired
+		// This is the answer that sends the operator to sign in again, so the
+		// text that produced it must be findable afterwards.
+		slog.Warn("copilot sign-in check: the CLI's login was rejected; reporting expired",
+			"provider", copilotProviderID, "detail", res.Detail)
+	case providers_pkg.CopilotCheckFailed:
+		slog.Warn("copilot sign-in check could not run; reporting not_signed_in, which says nothing about the login",
+			"provider", copilotProviderID, "detail", res.Detail)
+		// The reason field (SignInStatus.reason, 2026-09-14): the operator
+		// sees WHY the check could not run instead of an unexplained
+		// "not signed in" that reads as "run copilot login". Stage-named,
+		// never the CLI's raw output (Detail) or a path.
+		reason := "the sign-in check could not run (the CLI failed to start or timed out); this says nothing about the login"
+		status.Reason = &reason
 	case providers_pkg.CopilotCLIMissing:
 		slog.Warn("copilot sign-in status requested but the CLI is not installed",
 			"provider", copilotProviderID, "hint", providers_pkg.CopilotCLIMissingHint)
+		reason := "the Copilot CLI is not installed on this machine"
+		status.Reason = &reason
 	case providers_pkg.CopilotNotSignedIn:
+		// A recognised message needs no log; an unrecognised one was already
+		// logged, with its text, by the classifier.
+	default:
+		// A state with no case here — for example one added to pkg/providers
+		// without a matching case. Nobody has interpreted it, so it must not
+		// be answered as not_signed_in ("run copilot login") or any other
+		// sign-in state.
+		slog.Error("copilot sign-in check returned a state this gateway does not recognise; answering with an error",
+			"provider", copilotProviderID, "state", string(res.State), "detail", res.Detail)
+		return status, false
 	}
 
-	return status
+	return status, true
+}
+
+// copilotRowSignInStatus is what a github-copilot provider ROW may say about the
+// login without running the CLI (ADR-068 FR-034 row states): the result of the
+// operator's most recent explicit Check sign-in, while it is younger than
+// copilotProbeCacheTTL and the CLI is still on this machine. Otherwise it
+// reports nothing and the row keeps its default.
+//
+// It never probes. Running the CLI spends a premium request, and a list render
+// must never pay that (TestListProviders_NoCopilotVendorFanOut); the "still
+// installed" check is a PATH lookup only.
+func (a *restAPI) copilotRowSignInStatus() (gen.SignInStatus, bool) {
+	st, ok := a.copilotProbe.lastResult()
+	if !ok {
+		return gen.SignInStatus{}, false
+	}
+	if !providers_pkg.CopilotCLIAvailable("") {
+		return gen.SignInStatus{}, false
+	}
+	return st, true
 }
 
 // copilotRowHint returns the operator hint for a github-copilot provider row

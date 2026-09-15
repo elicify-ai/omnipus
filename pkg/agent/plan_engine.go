@@ -164,6 +164,19 @@ const (
 	// PausePlansOwnedBy (FR-065).
 	pausedReasonOwnerDisabled = "owner_disabled"
 
+	// pausedReasonJudgeUnavailable is the stable PREFIX of the PausedReason a
+	// running plan carries while its in-flight judge round waits out a D7
+	// backoff on an unavailable Judge (noteJudgeUnavailable below). Aliased
+	// from pkg/plan rather than re-typed so the prefix the engine WRITES and
+	// the prefix pkg/plan VALIDATES can never drift.
+	pausedReasonJudgeUnavailable = plan.PausedReasonJudgeUnavailable
+
+	// judgeUnavailableReasonCap bounds the free-text cause spliced into that
+	// PausedReason. The cause can be a raw provider error of arbitrary length;
+	// PausedReason rides the plan_status WS frame and renders in a board chip,
+	// so it is truncated to something a human can actually read at a glance.
+	judgeUnavailableReasonCap = 120
+
 	// DefaultBootSweepBudgetSeconds is the default wall-clock budget for the
 	// boot sweep (FR-118 "within N s") when boot_sweep_budget_seconds is not
 	// configured. The sweep scans non-terminal sessions and persists
@@ -2253,6 +2266,15 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	defer pe.judgeWG.Done()
 	defer release()
 	defer pe.registry().Unregister(verifierUnitForPlan(planID))
+	// Belt-and-braces for the judge-unavailability pause (noteJudgeUnavailable):
+	// the round's OWN cleanup clears it on EVERY exit path, including the ones
+	// that never reach applyJudgeRoundOutcome at all (the ctx timeout,
+	// the reload/list bails above, a Stop landing mid-round so the outcome is
+	// dropped). Without this a cancelled round could leave a plan paused
+	// forever on a reason that no longer describes anything — a worse failure
+	// than the silent stall this whole mechanism exists to replace. Prefix-
+	// guarded inside, so it can never clear an owner-disabled pause.
+	defer pe.clearJudgeUnavailablePause(planID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), planJudgeRoundTimeout)
 	defer cancel()
@@ -2318,6 +2340,13 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 		// own workspace (plan.go:264) — same rationale as task_executor.go's
 		// task-scope call. See JudgeCriteriaInput.WorkspaceID.
 		WorkspaceID: p.WorkspaceID,
+		// MERGE NOTE 2026-09-15 (release/v0.1.1 + library-improvements):
+		// integrate carried a silent-stall fix here — OnUnavailable/OnRecovered
+		// hooks on JudgeCriteriaInput that surfaced "waiting on the judge,
+		// retrying in …" as Plan.PausedReason. The founder ruled the judge
+		// comes from release (#683), whose JudgeCriteriaInput has no such
+		// hooks, so the wiring is dropped here. Re-apply as a follow-up on the
+		// release judge if the stall notice is still wanted.
 	})
 
 	// FR-014 (US-6 acceptance 3, Test 7): JudgeCriteria runs OUTSIDE
@@ -2329,6 +2358,65 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	// which re-checks State==running and applies the outcome as ONE atomic
 	// critical section under planDecisionMu.
 	pe.applyJudgeRoundOutcome(planID, result, false, terminalSig)
+}
+
+// buildJudgeUnavailablePausedReason renders the operator-facing PausedReason
+// for a judge-unavailability pause: the stable prefix pkg/plan validates and
+// the SPA/E2E discriminate on, plus the cause and the retry interval a human
+// needs in order to tell "the judge is down, it's coming back" apart from
+// "this plan is wedged". cause is squashed to one line and capped — it can be
+// a raw provider error of any length, and this string ends up in a board chip.
+func buildJudgeUnavailablePausedReason(cause string, backoff time.Duration) string {
+	out := pausedReasonJudgeUnavailable
+	clean := strings.Join(strings.Fields(cause), " ")
+	if clean != "" {
+		if len(clean) > judgeUnavailableReasonCap {
+			clean = clean[:judgeUnavailableReasonCap] + "…"
+		}
+		out += ": " + clean
+	}
+	if backoff > 0 {
+		out += "; retrying in " + backoff.Round(time.Second).String()
+	}
+	return out
+}
+
+// clearJudgeUnavailablePause retracts a judge-unavailability pause from
+// planID, and ONLY that: a PausedReason set by anything else (owner_disabled)
+// is left exactly as it is. It is called from three places, all of which must
+// be individually sufficient — OnRecovered (the judge came back mid-round),
+// applyJudgeRoundOutcome's Unavailable branch (the round gave up and reverted
+// to dispatching), and runPlanJudgeRound's unconditional defer (every other
+// exit path, including ones that reach neither of the first two).
+//
+// Deliberately NOT gated on State==running: a round that ends after a Stop
+// must still retract its marker from the now-failed plan.
+func (pe *PlanEngine) clearJudgeUnavailablePause(planID string) {
+	pe.planDecisionMu.Lock()
+	defer pe.planDecisionMu.Unlock()
+	pe.clearJudgeUnavailablePauseLocked(planID)
+}
+
+// clearJudgeUnavailablePauseLocked is clearJudgeUnavailablePause's body for
+// callers that ALREADY hold planDecisionMu (applyJudgeRoundOutcome).
+// planDecisionMu is a plain sync.Mutex — re-entering it would deadlock.
+func (pe *PlanEngine) clearJudgeUnavailablePauseLocked(planID string) {
+	current, err := pe.planStore.Get(planID)
+	if err != nil {
+		if !errors.Is(err, plan.ErrNotFound) {
+			logger.WarnCF("plan_engine", "judge round: could not reload plan to clear judge-unavailability pause",
+				map[string]any{"plan_id": planID, "error": err.Error()})
+		}
+		return
+	}
+	if !plan.IsJudgeUnavailablePausedReason(current.PausedReason) {
+		return
+	}
+	cleared := ""
+	if _, uerr := pe.planStore.Update(planID, plan.Patch{PausedReason: &cleared}); uerr != nil {
+		logger.WarnCF("plan_engine", "judge round: could not clear judge-unavailability pause",
+			map[string]any{"plan_id": planID, "error": uerr.Error()})
+	}
 }
 
 // applyJudgeRoundOutcome applies a just-computed plan-level judge
@@ -2402,6 +2490,12 @@ func (pe *PlanEngine) applyJudgeRoundOutcome(planID string, result JudgeCriteria
 			logger.WarnCF("plan_engine", "judge round: could not revert plan_phase after unavailability",
 				map[string]any{"plan_id": current.ID, "error": uerr.Error()})
 		}
+		// The round is over, so its judge-unavailability pause marker no
+		// longer describes anything live — retract it in the SAME critical
+		// section that reverts the phase, so the plan is never observable as
+		// "dispatching AND paused on a judge that is no longer being waited
+		// for". Prefix-guarded: an owner-disabled pause is left alone.
+		pe.clearJudgeUnavailablePauseLocked(current.ID)
 		logger.WarnCF("plan_engine", "plan judge round abandoned (judge unavailable)",
 			map[string]any{"plan_id": current.ID, "reason": result.Reason})
 		return

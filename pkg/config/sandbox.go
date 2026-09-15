@@ -416,7 +416,76 @@ type OmnipusSandboxConfig struct {
 
 	// AuditLog enables the structured security audit log per SEC-17.
 	// Written to ~/.omnipus/system/audit.jsonl.
-	AuditLog bool `json:"audit_log,omitempty"`
+	//
+	// DEFAULT: TRUE, seeded in defaults.go (founder decision, 2026-09-11).
+	// A new install must record who changed what from its first minute.
+	//
+	// Before that decision this was a plain false-defaulting bool with no
+	// entry in defaults.go at all. A freshly onboarded instance has no
+	// "sandbox" block in its config.json, so audit resolved to false and NO
+	// REST mutation of any kind was recorded for the lifetime of the
+	// process — the symptom being the live gateway logging "no audit logger
+	// is wired to the record write door". That put the shipped default in
+	// direct conflict with CLAUDE.md's non-negotiable audit-everything
+	// stance; the default is what moved, not the stance.
+	//
+	// UPGRADES self-heal forward. loadConfig (migration.go) unmarshals the
+	// operator's JSON over DefaultConfig(), so a config.json written before
+	// this change — which has no `audit_log` key — picks up `true` on its
+	// next load. This is the same additive repair-forward mechanism ADR-076
+	// uses for the tool-policy ceiling and ADR-062 uses for
+	// filesystem_model, and it carries the same guarantee: it never
+	// overwrites a value the operator actually set. An explicit
+	// `"audit_log": false` in config.json unmarshals over the seed and wins.
+	//
+	// NO `omitempty` HERE — deliberate, and DO NOT RE-ADD IT. With a default
+	// of true, `omitempty` makes the operator's explicit `false`
+	// UNREPRESENTABLE on the whole-struct marshal path: SaveConfig
+	// (config.go) serializes via json.MarshalIndent(cfg), which would drop a
+	// false from the file entirely, and the very next load would read the
+	// now-absent key as the seeded `true` and switch audit back on behind
+	// the operator's back. That path is live in production — pkg/gateway
+	// wires SaveConfig in as the sysagent tools' SaveConfigLocked, so any
+	// `system.*` config write would trip it. A default that cannot express
+	// its own opposite is worse than having no default at all.
+	AuditLog bool `json:"audit_log"`
+
+	// AuditLogFromDefault reports that AuditLog above holds the SHIPPED
+	// DEFAULT rather than a value anybody wrote down — i.e. `audit_log` was
+	// absent from config.json. It is provenance, not configuration.
+	//
+	// `json:"-"` keeps it out of both directions of serialization: it is
+	// never written to config.json, and it can never be forged by operator
+	// JSON. DefaultConfig() and loadConfig (migration.go) are its only
+	// writers.
+	//
+	// It exists for exactly ONE decision, taken in pkg/agent/loop.go's
+	// audit-construction block: whether failing to construct the audit
+	// logger aborts boot or degrades loudly. Fail-closed is justified by
+	// someone having asked for a guarantee we then could not deliver; a
+	// default is not a request, and turning one on must not convert a
+	// working install into one that refuses to boot.
+	//
+	// THE POLARITY IS THE SAFETY PROPERTY, and it is why this field says
+	// "from default" rather than the more natural-sounding "explicit".
+	// The zero value of a bool is false, and false here means "somebody set
+	// this" — which selects the STRICTER behaviour, boot abort. Any config
+	// built as a Go struct literal (every test fixture, every caller that
+	// constructs an OmnipusSandboxConfig by hand) therefore keeps the
+	// pre-existing fail-closed contract for free, with no field to remember.
+	// Phrased the other way round — an `AuditLogExplicit` whose zero value
+	// meant "nobody asked, so degrade" — a forgotten field would silently
+	// downgrade a fail-closed boot into a degraded one, which is a
+	// fail-OPEN default on a security control. Only the two writers named
+	// above, both of which genuinely know the answer, ever set it true.
+	//
+	// One consequence worth stating plainly: SaveConfig writes `audit_log`
+	// out explicitly (the field carries no omitempty), so an install whose
+	// config.json is rewritten in full stops being "from default" and
+	// becomes an explicit request on its next load — moving it from degrade
+	// to abort. That direction is the safe one, and it is honest: the value
+	// really is written in their file at that point.
+	AuditLogFromDefault bool `json:"-"`
 
 	// SkillTrust controls how skills without a verifiable SHA-256 hash are handled (SEC-09).
 	// Valid values: SkillTrustBlockUnverified, SkillTrustWarnUnverified (default), SkillTrustAllowAll.

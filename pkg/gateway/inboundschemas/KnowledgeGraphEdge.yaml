@@ -1,0 +1,117 @@
+title: KnowledgeGraphEdge
+description: >
+  One directed link between two nodes, plus how it was resolved. Resolution
+  order is fixed (FR-040): exact path, then unique basename, then shortest
+  path, then lexicographic order. An ambiguous basename still RESOLVES by
+  that rule and is ALSO reported as ambiguous (FR-041) — resolving it is not
+  a licence to stay quiet about it.
+type: object
+additionalProperties: false
+required:
+  - from_path
+  - to_path
+  - resolution
+  - ambiguous
+  - heading_found
+properties:
+  from_path:
+    type: string
+    minLength: 1
+    description: Collection-relative path of the note containing the link.
+    example: "index.md"
+  to_path:
+    type: string
+    minLength: 1
+    description: >
+      Collection-relative path of the resolved target, or the normalised link
+      text when resolution is "unresolved".
+    example: "architecture/sandboxing.md"
+  link_text:
+    type: string
+    description: The link target exactly as written in the source note.
+    example: "sandboxing"
+  alias:
+    type: string
+    description: Display alias, for an aliased wikilink such as [[note|alias]].
+    example: "how sandboxing works"
+  heading:
+    type: string
+    description: Heading fragment, for a heading link such as [[note#Section]].
+    example: "Section"
+  heading_found:
+    type: boolean
+    description: >
+      Whether the text in "heading" matched an actual heading in the
+      resolved target (ADR-083 EMB-035/EMB-039). Meaningful ONLY when the
+      target is a markdown file AND "heading" is non-empty — the graph
+      builder records headings for markdown files alone, so this MUST be
+      set FALSE BY CONSTRUCTION for a ".base" target (heading is then a
+      view label, not a heading) and for a link carrying "block" instead
+      of "heading". A reader MUST NOT render a "no such heading" refusal
+      from this flag in either of those two cases.
+
+      This field is REQUIRED (see the top-level "required" list above)
+      and is ALWAYS present — the handler that emits it
+      (pkg/gateway/rest_knowledge.go::knowledgeEdge) always sets it, and
+      the SPA test fixtures that once constructed a KnowledgeGraphEdge
+      literal without it (Test 110's Go pairing, Test 122's reader
+      pairing) have been migrated to include it (EMB-039).
+    example: true
+  block:
+    type: string
+    description: >
+      Block anchor with the leading "#^" removed, for a link to an
+      anchored block such as [[note#^abc123]] (ADR-083 EMB-036). Its own
+      property, separate from "heading" — a block reference never
+      populates "heading", and "heading_found" is meaningless when this
+      field is set. Present only for a block link.
+    example: "abc123"
+  unresolved_reason:
+    type: string
+    enum:
+      - no_match
+      - outside_root
+    description: >
+      Why resolution is "unresolved" (ADR-083 EMB-006's containment case,
+      US-4). "no_match" is an ordinary broken link — nothing in the
+      collection carries that path or name, and an operator can fix it.
+      "outside_root" is a link that tried to leave the collection root
+      entirely, reported on its own terms rather than lumped in with
+      "no_match" so the reader's refusal text can distinguish "this note
+      does not exist" from "this note is outside what I can show you".
+      Present only when resolution is "unresolved"; absent when it
+      resolved.
+    example: "no_match"
+  resolution:
+    type: string
+    enum:
+      - exact_path
+      - unique_basename
+      - shortest_path
+      - lexicographic
+      - unresolved
+    description: >
+      Which rule in the FR-040 ladder produced to_path. "unresolved" means no
+      target matched, or the target lay outside the collection root — in
+      which case the target was NOT read (FR-043).
+    example: "unique_basename"
+  ambiguous:
+    type: boolean
+    description: >
+      True when more than one file matched and the tie-break decided it. The
+      alternatives are listed in candidates.
+    example: false
+  candidates:
+    type: array
+    items:
+      type: string
+    description: >
+      Every path that matched, in tie-break order, when ambiguous is true.
+      Present only then.
+    example: ["notes/setup.md", "archive/setup.md"]
+  embed:
+    type: boolean
+    description: >
+      True when the link is a transclusion (![[note]]) rather than a plain
+      link.
+    example: false

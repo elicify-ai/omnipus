@@ -383,7 +383,7 @@ func TestSwitchTime_UnknownModel_LogsWarn(t *testing.T) {
 	logFile := tmpDir + "/switch-unknown-model.log"
 
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)

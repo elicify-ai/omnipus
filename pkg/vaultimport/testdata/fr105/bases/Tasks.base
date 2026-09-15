@@ -1,0 +1,20 @@
+filters:
+  and:
+    - type == "task"
+views:
+  - type: table
+    name: Open
+    filters:
+      and:
+        - status == "open"
+    order:
+      - file.name
+      - status
+      - owner
+  - type: table
+    name: Not done
+    filters:
+      and:
+        - status != "done"
+  - type: cards
+    name: Everything

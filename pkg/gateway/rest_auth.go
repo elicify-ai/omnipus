@@ -110,6 +110,23 @@ type apiRateLimiter struct {
 	windows map[string]*slidingWindow
 	limit   int           // max requests in window
 	window  time.Duration // sliding window duration
+
+	// reads is the separate, larger budget withRateLimit draws on for an
+	// AUTHENTICATED GET/HEAD (UAT 2026-09-13 D-109 / D-135). Created on
+	// first use by readBudget; nil until then. Its own map means a burst of
+	// listing refreshes never consumes the strict budget above and a burst
+	// of writes never consumes the read budget.
+	readsOnce sync.Once
+	reads     *apiRateLimiter
+
+	// readSized marks a limiter whose declared limit was ALREADY chosen for
+	// reads — every request it counts is a GET/HEAD, so the number at its
+	// declaration is the read ceiling. withRateLimit counts such a limiter
+	// directly and never gives it the companion read budget; otherwise the
+	// declared ceiling would silently become readBudgetMultiplier times
+	// larger (fix4 rate-limit-reads: taskReadLimiter's 240/min had become
+	// 1200/min). Set only via newReadSizedAPIRateLimiter.
+	readSized bool
 }
 
 type slidingWindow struct {
@@ -122,6 +139,17 @@ func newAPIRateLimiter(limit int, window time.Duration) *apiRateLimiter {
 		limit:   limit,
 		window:  window,
 	}
+}
+
+// newReadSizedAPIRateLimiter builds a limiter for routes that only serve
+// reads, whose limit is the exact per-IP ceiling for authenticated GET/HEAD
+// too (see apiRateLimiter.readSized). Use newAPIRateLimiter for limiters
+// sized for writes, pre-auth traffic, or mixed read/write routes — those
+// keep the larger companion read budget (D-109).
+func newReadSizedAPIRateLimiter(limit int, window time.Duration) *apiRateLimiter {
+	l := newAPIRateLimiter(limit, window)
+	l.readSized = true
+	return l
 }
 
 // allow checks whether the given IP is within rate limits. Returns true if
@@ -175,7 +203,9 @@ func (l *apiRateLimiter) retryAfter(ip string) int {
 // Global rate limiters for auth-sensitive endpoints.
 var (
 	// /api/v1/auth/validate — 30 requests/minute per IP.
-	validateLimiter = newAPIRateLimiter(30, 1*time.Minute)
+	// GET-only, so read-sized: the 30/min is the exact ceiling for
+	// authenticated callers too.
+	validateLimiter = newReadSizedAPIRateLimiter(30, 1*time.Minute)
 	// /api/v1/onboarding/complete — 3 requests/minute per IP (highly sensitive).
 	onboardingCompleteLimiter = newAPIRateLimiter(3, 1*time.Minute)
 	// /api/v1/config and /api/v1/workspaces* (incl. read GETs: list, single,
@@ -203,8 +233,10 @@ var (
 	// existing task CRUD routes (/api/v1/tasks, /api/v1/tasks/{id}, …),
 	// which remain plain withAuth with no limiter at all. Matches
 	// configLimiter's post-incident ceiling, which calendar navigation
-	// cadence is known to fit.
-	taskReadLimiter = newAPIRateLimiter(240, 1*time.Minute)
+	// cadence is known to fit. Read-sized: also guards GET /tasks/{id}/runs
+	// (rest_tasks.go), and 240/min is the contract for authenticated reads —
+	// it must never receive the 5x companion read budget.
+	taskReadLimiter = newReadSizedAPIRateLimiter(240, 1*time.Minute)
 	// /api/v1/providers/{id}/sign-in — 10 requests/minute per IP. ADR-068
 	// FR-008: "rate-limited like the auth endpoints" — matches
 	// reauthLimiter's ceiling. Starting a NEW device-code (or reading a
@@ -229,8 +261,10 @@ var (
 	// incomplete) could drive outbound vendor traffic or process spawns at
 	// will. Shares signInPollLimiter's ceiling rather than the tighter
 	// start/auth one because the sign-in dialog legitimately re-reads
-	// status alongside every poll.
-	signInStatusLimiter = newAPIRateLimiter(60, 1*time.Minute)
+	// status alongside every poll. Read-sized: both status routes are GET,
+	// and the ceiling bounds vendor refreshes and CLI spawns, so an
+	// authenticated caller must not get 5x of it.
+	signInStatusLimiter = newReadSizedAPIRateLimiter(60, 1*time.Minute)
 	// /api/v1/providers/openai-chatgpt/sign-in/import — 10 requests/minute
 	// per IP (M2). This route was called BARE while its four FR-050 siblings
 	// were all wrapped. It is the most write-heavy of the five: every call
@@ -545,15 +579,69 @@ func (a *restAPI) requireAuthOutsideOnboarding(w http.ResponseWriter, r *http.Re
 	return false
 }
 
+// readBudgetMultiplier sizes the read budget relative to a limiter's strict
+// limit: an authenticated client may issue readBudgetMultiplier times as
+// many GET/HEAD requests per window as it may issue writes. Five was chosen
+// against the two measured incidents: D-109 (54 deletes plus two listing
+// refreshes each, ~90 s, on a 240/min limiter) and D-135 (ten base views at
+// 41 requests each in ~30 s, i.e. ~820/min) both fit inside 240*5 = 1200/min
+// with room to spare, while 20 reads per second per IP is still far below
+// what a scripted client would need to make a read endpoint expensive.
+const readBudgetMultiplier = 5
+
+// readBudget returns the limiter's companion budget for authenticated reads
+// (readBudgetMultiplier times the strict limit, same window), creating it on
+// first use. A read-sized limiter is its own read budget.
+func (l *apiRateLimiter) readBudget() *apiRateLimiter {
+	if l.readSized {
+		return l
+	}
+	l.readsOnce.Do(func() {
+		l.reads = newAPIRateLimiter(l.limit*readBudgetMultiplier, l.window)
+	})
+	return l.reads
+}
+
+// isAuthenticatedRead reports whether r is a GET or HEAD from a caller that
+// has already passed authentication — the only shape that draws on the read
+// budget. "Authenticated" is read from the request context: every auth path
+// (accounts, CLI token, dev-mode bypass, OMNIPUS_BEARER_TOKEN) stores a
+// non-nil *config.UserConfig under UserContextKey before the wrapped handler
+// runs, and withOptionalAuth leaves it absent for anonymous callers. Login,
+// onboarding and the pre-auth provider routes therefore stay on the strict
+// budget regardless of method.
+func isAuthenticatedRead(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	return ok && user != nil
+}
+
 // withRateLimit wraps a handler with per-IP rate limiting. On limit exceeded,
 // returns 429 with a Retry-After header and JSON error body.
+//
+// Two budgets (UAT 2026-09-13 D-109 / D-135): a request is counted against
+// the limiter's strict budget unless it is an authenticated GET/HEAD, which
+// is counted against the limiter's separate, larger read budget
+// (readBudget). The strict budget was sized for mutations and pre-auth
+// traffic (login attempts, onboarding, provider probes) and must stay that
+// size; ordinary signed-in UI work is dominated by listing refreshes, which
+// arrive in bursts that a write-sized budget refused — invisibly, since the
+// SPA retried them. Both refusals carry Retry-After. A read-sized limiter
+// (newReadSizedAPIRateLimiter) has no companion budget: its declared limit
+// already is the read ceiling, so every request counts against it directly.
 func withRateLimit(limiter *apiRateLimiter, handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
-		if !limiter.allow(ip) {
-			retryAfter := limiter.retryAfter(ip)
+		budget := limiter
+		if !limiter.readSized && isAuthenticatedRead(r) {
+			budget = limiter.readBudget()
+		}
+		if !budget.allow(ip) {
+			retryAfter := budget.retryAfter(ip)
 			w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-			slog.Warn("api: rate limit exceeded", "ip", ip, "path", r.URL.Path, "retry_after", retryAfter)
+			slog.Warn("api: rate limit exceeded", "ip", ip, "path", redactRequestPath(r.URL.Path), "retry_after", retryAfter)
 			jsonErr(
 				w,
 				http.StatusTooManyRequests,
@@ -822,6 +910,26 @@ func (a *restAPI) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusUnauthorized, "not authenticated")
 		return
 	}
+
+	// ADR-067 FR-003d — revoke this session's live preview tokens FIRST, before
+	// any of the three early returns below can skip it.
+	//
+	// A preview token is an UNAUTHENTICATED bearer credential in a URL path. It
+	// keeps working after the session that minted it ends unless something
+	// explicitly kills it, and expiry is fifteen minutes away. FR-003d states
+	// the consequence plainly: without this call an administrator's token stays
+	// a valid read grant on the workspace after they log out.
+	//
+	// It is placed here, not beside the cookie clearing at the bottom, because
+	// the CLI-token and dev-bypass branches both return early — and a CLI or
+	// bypass caller can hold preview tokens exactly like a browser one. It also
+	// runs before the config write, so a 500 from that write still leaves the
+	// tokens dead: failing closed is the correct direction for a revocation.
+	//
+	// PreviewSessionKey reads the same credential the mint request carried
+	// (session cookie, else bearer token), so the key matches by construction —
+	// the logout request still has both at this point.
+	a.revokePreviewTokensForSession(r)
 
 	// A CLI-token-authenticated caller's synthetic "cli" identity is not
 	// backed by any Gateway.Users row (see CLITokenContextKey's doc) — the

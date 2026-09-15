@@ -1,6 +1,7 @@
 package notifications
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,15 +98,23 @@ func newTestStore(t *testing.T) *Store {
 	return NewStore(t.TempDir())
 }
 
-// TestCreate_CoalescesByScheduleID asserts a second UNREAD notification for the
-// same schedule_id+recipient updates the existing item in place rather than
-// appending a new row (Ambiguity #6).
-func TestCreate_CoalescesByScheduleID(t *testing.T) {
+// TestCreate_CoalescesByCoalesceKey asserts a second UNREAD notification for
+// the same coalesce_key+recipient updates the existing item in place rather
+// than appending a new row (Ambiguity #6).
+//
+// This keyed on ScheduleID until 2026-08-24. The rename is not cosmetic: it
+// made coalescing available to producers that are not the scheduler. The
+// drift checker sets no ScheduleID, so under the old key its every-six-hours
+// report appended a new row forever, and drift a re-index cannot clear (an
+// unreadable file, a stale rename journal) evicted every other notification
+// from the 50-item cap. ScheduleID is now routing data only.
+func TestCreate_CoalescesByCoalesceKey(t *testing.T) {
 	s := newTestStore(t)
 
 	first, err := s.Create(Notification{
 		Recipient: "alice", Type: TypeScheduleFailed, Title: "Schedule x failed",
 		Body: "boom1", Severity: SeverityError, ScheduleID: "sched-1",
+		CoalesceKey: "schedule:sched-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -114,6 +123,7 @@ func TestCreate_CoalescesByScheduleID(t *testing.T) {
 	second, err := s.Create(Notification{
 		Recipient: "alice", Type: TypeScheduleFailed, Title: "Schedule x failed again",
 		Body: "boom2", Severity: SeverityError, ScheduleID: "sched-1",
+		CoalesceKey: "schedule:sched-1",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -317,4 +327,98 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+// TestCreate_RepeatedUnclearableEventStaysOneRow is the regression guard for
+// the bell-flooding defect fixed 2026-08-24.
+//
+// The scenario is not hypothetical. knowledge drift is re-checked every six
+// hours, and some findings are PERMANENT under re-indexing: a file the process
+// cannot read is reported, dropped from the manifest, and found again on the
+// next sweep. Before CoalesceKey existed, Create keyed on ScheduleID, the
+// drift path set none, and each sweep appended a row. Twenty sweeps is five
+// days; retain() caps the list at 50 newest-first, so one unreadable file
+// silently evicted every schedule-failure notification the operator had.
+//
+// The assertion is deliberately on the LIST, not on the returned value: an
+// implementation that returns the coalesced item while still appending would
+// satisfy an id-only check and flood the store anyway.
+func TestCreate_RepeatedUnclearableEventStaysOneRow(t *testing.T) {
+	s := newTestStore(t)
+
+	const sweeps = 20
+	for i := 0; i < sweeps; i++ {
+		if _, err := s.Create(Notification{
+			Recipient: "alice", Type: TypeKnowledgeDrift,
+			Title:       "Knowledge base out of date",
+			Body:        fmt.Sprintf("sweep %d", i),
+			Severity:    SeverityWarning,
+			CoalesceKey: "knowledge_drift:/vault",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	list, err := s.ListForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 {
+		t.Fatalf("%d identical drift sweeps must coalesce to 1 row, got %d — "+
+			"the 50-item cap turns this into an eviction engine for every "+
+			"other notification the operator has", sweeps, len(list))
+	}
+	if got := list[0].Body; got != fmt.Sprintf("sweep %d", sweeps-1) {
+		t.Fatalf("the surviving row must carry the LATEST report, got %q", got)
+	}
+}
+
+// TestCreate_DifferentCollectionsDoNotCoalesce is the anti-vacuity control for
+// the test above. A coalescing key that collapsed everything would satisfy the
+// "1 row" assertion perfectly while hiding real, distinct problems.
+func TestCreate_DifferentCollectionsDoNotCoalesce(t *testing.T) {
+	s := newTestStore(t)
+
+	for _, root := range []string{"/vault-a", "/vault-b"} {
+		if _, err := s.Create(Notification{
+			Recipient: "alice", Type: TypeKnowledgeDrift,
+			Title: "Knowledge base out of date", Severity: SeverityWarning,
+			CoalesceKey: "knowledge_drift:" + root,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	list, err := s.ListForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("two DIFFERENT collections are two problems and must stay two "+
+			"rows, got %d", len(list))
+	}
+}
+
+// TestCreate_NoCoalesceKeyStillAppends pins the opt-in nature of the mechanism:
+// a producer that sets no key gets a new row every time, which is the correct
+// default for one-off events.
+func TestCreate_NoCoalesceKeyStillAppends(t *testing.T) {
+	s := newTestStore(t)
+
+	for i := 0; i < 3; i++ {
+		if _, err := s.Create(Notification{
+			Recipient: "alice", Type: TypeScheduleFailed,
+			Title: "one-off", Severity: SeverityError,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	list, err := s.ListForUser("alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("keyless notifications must not coalesce, got %d rows", len(list))
+	}
 }

@@ -19,14 +19,18 @@ import (
 // verifier-scoped inspect_session tool, plus ToolSearch and Skill — the two
 // structural floors every agent gets (CLAUDE.md constraint 6; ADR-072 D1) so
 // it can reach any tiered (lazy/search-only) tool or any skill's content at
-// all, applying even to a System Agent. Every other static builtin name must
-// resolve to explicit deny.
+// all, applying even to a System Agent — and, as of ADR-081 D11, grep
+// (FR-009's founder ruling: explicit allow for every agent tier including
+// system agents; a natural extension of the Judge's existing read_file/
+// list_directory grant, not a new capability class). Every other static
+// builtin name must resolve to explicit deny.
 var judgeAllowedTools = map[string]bool{
 	"read_file":       true,
 	"list_directory":  true,
 	"inspect_session": true,
 	"ToolSearch":      true,
 	"Skill":           true,
+	"grep":            true,
 }
 
 // TestSeed_JudgeSystemAgent verifies ADR-049 D3 / US-4 Acceptance Scenario 1,
