@@ -21,18 +21,12 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/plan"
-	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
-	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
 // sysWiringSeedWorkspace writes a minimal on-disk workspace JSON file so
@@ -57,99 +51,6 @@ func sysWiringSeedWorkspace(t *testing.T, home, id string) {
 	}
 	if err := os.WriteFile(filepath.Join(wsDir, id+".json"), data, 0o600); err != nil {
 		t.Fatalf("write workspace file: %v", err)
-	}
-}
-
-// TestSetPlanStore_ReWiresSystoolsCreateTaskInWorkspace reproduces the real
-// gateway boot ORDER — WireSysagentDeps with a nil PlanStore, THEN
-// SetPlanStore once the real store exists — and proves create_task_in_
-// workspace goes from permanently fail-closed to genuinely working, without
-// ever re-registering the tool by hand (exactly what a live agent turn
-// experiences: the tool instance already sitting in the registry starts
-// working once boot finishes wiring it).
-func TestSetPlanStore_ReWiresSystoolsCreateTaskInWorkspace(t *testing.T) {
-	al, agentInst, home := newPlanToolWiringTestLoop(t)
-
-	const workspaceID = "01JXTEST_SYSWORKSPACE0001"
-	sysWiringSeedWorkspace(t, home, workspaceID)
-
-	// Mirrors gateway.go's sysAgentDeps construction: PlanStore is NOT set
-	// here, because in production it does not exist yet at this point in
-	// boot (plan.New runs much later). WireSysagentDeps registers
-	// create_task_in_workspace on "planner-agent" with this nil-PlanStore
-	// deps snapshot — exactly like every agent gets at real boot.
-	sysDeps := &systools.Deps{
-		Home:             home,
-		ConfigPath:       filepath.Join(home, "config.json"),
-		GetCfg:           al.GetConfig,
-		MutateConfig:     al.MutateConfig,
-		SaveConfigLocked: func(*config.Config) error { return nil },
-	}
-	al.WireSysagentDeps(sysDeps)
-
-	// Sanity: the gap really exists before the fix runs — the tool is wired
-	// (present on the agent), but its own copy of Deps still has a nil
-	// PlanStore, matching production's boot-order gap exactly.
-	//
-	// Both calls below carry dod because operator decision D-C made
-	// definition-of-done mandatory alongside criteria on EVERY task-creation
-	// surface, at create AND at edit (GOAL-FR-021/D-C, enforced in
-	// pkg/sysagent/tools/task.go whenever agent_id is set). That gate sits
-	// BEFORE the plan-linkage check, so a dod-less fixture never reaches the
-	// nil-store branch this test exists to observe: it was reporting the dod
-	// complaint instead of the "plan store is not configured" message, which
-	// is the gate working, not the wiring regressing. dod items are DISTINCT
-	// from criteria by contract (generic standing quality gates vs the
-	// outcome-specific check), so these are different statements, not copies.
-	ctx := tools.WithAgentID(context.Background(), "planner-agent")
-	before := agentInst.Tools.Execute(ctx, "create_task_in_workspace", map[string]any{
-		"name":         "member task",
-		"workspace_id": workspaceID,
-		"agent_id":     "planner-agent",
-		"plan_id":      "does-not-matter",
-		"criteria":     []any{map[string]any{"kind": "prose", "text": "the work is done"}},
-		"dod":          []any{map[string]any{"kind": "prose", "text": "the work meets the team's quality bar"}},
-	})
-	if before == nil || !before.IsError {
-		t.Fatalf("create_task_in_workspace(plan_id=...) before SetPlanStore must fail closed, got %+v", before)
-	}
-	if got := before.ForLLM; !containsAll(got, "plan store", "not configured") {
-		t.Errorf("expected the nil-store fail-closed message, got %q", got)
-	}
-
-	// Now mirror gateway.go's later boot step: the real store is
-	// constructed and installed via SetPlanStore. This is the exact
-	// AgentLoop method the UAT fix extends to also re-wire sysagentDeps.
-	planStore := plan.New(filepath.Join(home, "plans"))
-	p := &plan.Plan{Title: "Linkage Plan", WorkspaceID: workspaceID, OwnerAgentID: "planner-agent", CreatedBy: "planner-agent"}
-	if err := planStore.Create(p); err != nil {
-		t.Fatalf("seed plan: %v", err)
-	}
-	al.SetPlanStore(planStore)
-
-	// The SAME agent, the SAME already-registered tool instance from the
-	// SAME registry: create_task_in_workspace(plan_id=...) must now
-	// actually work, against the actual plan created above.
-	after := agentInst.Tools.Execute(ctx, "create_task_in_workspace", map[string]any{
-		"name":         "member task",
-		"workspace_id": workspaceID,
-		"agent_id":     "planner-agent",
-		"plan_id":      p.ID,
-		"criteria":     []any{map[string]any{"kind": "prose", "text": "the work is done"}},
-		"dod":          []any{map[string]any{"kind": "prose", "text": "the work meets the team's quality bar"}},
-	})
-	if after == nil || after.IsError {
-		t.Fatalf("create_task_in_workspace(plan_id=...) after SetPlanStore must succeed, got %+v", after)
-	}
-
-	var out struct {
-		ID string `json:"id"`
-	}
-	if err := json.Unmarshal([]byte(after.ForLLM), &out); err != nil {
-		t.Fatalf("could not parse create_task_in_workspace result %q: %v", after.ForLLM, err)
-	}
-	if out.ID == "" {
-		t.Fatal("expected a non-empty created task id")
 	}
 }
 

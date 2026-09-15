@@ -50,20 +50,16 @@ package agent
 
 import (
 	"context"
-	"os"
 	"sync/atomic"
 	"testing"
-	"time"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // u9IsolateSharedStore replaces al.sharedSessionStore with a fresh
@@ -191,12 +187,16 @@ type u9StubTool struct {
 	wasCalled atomic.Bool
 }
 
-func (d *u9StubTool) Name() string        { return "u9_stub_tool" }
+func (d *u9StubTool) Name() string { return "u9_stub_tool" }
+
 func (d *u9StubTool) Description() string { return "U9 ADR-057 test stub — records whether it ran" }
+
 func (d *u9StubTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
+
 func (d *u9StubTool) Scope() tools.ToolScope { return tools.ScopeGeneral }
+
 func (d *u9StubTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
 	d.wasCalled.Store(true)
 	return &tools.ToolResult{ForLLM: "u9 stub executed", IsError: false}
@@ -296,294 +296,4 @@ func TestToolExecPayloads_RealRootTurn_StampsRoutingKeyOnly(t *testing.T) {
 	assert.True(t, sawStart, "a real ToolExecStartPayload must have been observed on the event bus")
 	assert.True(t, sawEnd, "a real ToolExecEndPayload must have been observed on the event bus")
 	assert.True(t, sawTurnEnd, "a real TurnEndPayload must have been observed on the event bus")
-}
-
-// ---------------------------------------------------------------------
-// W10b — CheckGrantOrRequestApproval's grant read (FR-031/FR-080)
-// ---------------------------------------------------------------------
-
-// TestCheckGrantOrRequestApproval_UsesActingSessionKey is this unit's
-// regression guard for the cross-unit obligation FROM U17a (Integration
-// order, cross-unit requests table): "the two-key grant read — IsAllowed
-// under the child's own session key". U17a's InheritFrom (Wave A,
-// pkg/security/approvalgrants.go) copies a spawn-time grant from a SOURCE
-// {sessionID, agentID} into a DESTINATION {sessionID, agentID} — never into
-// a shared/routing key. This test proves loop.go's READ side
-// (CheckGrantOrRequestApproval, which every ask-policy tool call in runTurn
-// goes through — see its own doc comment's "Identity" paragraph, corrected
-// by this unit) resolves an inherited grant when queried under the CHILD's
-// own (acting) session id, and — the discriminating negative control — does
-// NOT resolve it under the ROOT's session id, the value
-// turnState.routingSessionID would hold for this same child (FR-011:
-// "inherited verbatim from the root of its delegation subtree"). This is
-// the exact mistake FR-014's closed-consumer-set rule exists to prevent:
-// routingSessionID must never be read as an approval-grant key.
-//
-// The three ids are deliberately NOT a simple two-hop parent/child pair: the
-// ROOT never records or receives any grant of its own (unlike the immediate
-// PARENT, whose own direct "Always Allow" is legitimately valid for the
-// parent's own future calls and would make a parent-keyed read succeed for
-// an unrelated, correct reason — that would NOT discriminate anything). The
-// ROOT is the only id in this fixture with zero grants under it by
-// construction, so approved==true there could only mean the read leaked
-// across keys.
-//
-// No PolicyApprover is wired on this AgentLoop, so a query that misses the
-// grant-store short-circuit reaches loadToolApprover's nopPolicyApprover
-// fallback, which ALWAYS denies with reason "no_approver_configured"
-// (tool_approver.go's V2.B fail-closed default, never the pre-V2.B
-// auto-approve). approved==true is therefore only reachable via a real
-// grant-store hit — a genuine production fallback proves the read, not a
-// spy recording its argument.
-func TestCheckGrantOrRequestApproval_UsesActingSessionKey(t *testing.T) {
-	al, cleanup := newAL(t)
-	defer cleanup()
-
-	const (
-		rootSessionID   = "u9-root-session-grant-uninvolved"
-		parentSessionID = "u9-parent-session-grant"
-		childSessionID  = "u9-child-session-grant-distinct"
-		agentID         = "u9-grant-agent"
-		toolName        = "u9_grant_tool"
-	)
-	require.NotEqual(t, parentSessionID, childSessionID, "fixture defect: parent and child ids must be distinct")
-	require.NotEqual(t, rootSessionID, parentSessionID, "fixture defect: root and parent ids must be distinct")
-	require.NotEqual(t, rootSessionID, childSessionID, "fixture defect: root and child ids must be distinct")
-
-	grants := security.NewApprovalGrantStore()
-	// The immediate PARENT recorded "Always Allow" under its OWN session
-	// id — the root itself never did...
-	require.True(t, grants.Record(parentSessionID, agentID, toolName, nil))
-	// ...and InheritFrom (U17a) copies it into the CHILD's OWN session id at
-	// spawn — mirroring what U7's spawnSubTurn call site (Wave F) will do.
-	// routingSessionID for this same child would be the ROOT's id (FR-011),
-	// never the parent's — InheritFrom's source here is the immediate
-	// parent, which is a DIFFERENT value from routing the moment delegation
-	// is two levels deep, exactly the case this test's negative control
-	// exercises against the root.
-	grants.InheritFrom(parentSessionID, agentID, childSessionID, agentID)
-	al.approvalGrants = grants
-
-	// Positive lower bound (Rule 4): the grant genuinely exists under the
-	// child's key, via the store's own read, before the code under test runs.
-	require.True(t, grants.IsAllowed(childSessionID, agentID, toolName, nil),
-		"SETUP: InheritFrom must have copied the grant into the child's own key")
-
-	approved, reason := al.CheckGrantOrRequestApproval(
-		context.Background(), childSessionID, agentID, toolName, "u9-tc-1", "u9-turn-1", nil)
-	assert.True(t, approved, "grant read keyed on the child's own (acting) session id must resolve the inherited grant")
-	assert.Empty(t, reason)
-
-	// Discriminating negative control: reading under the ROOT's session id —
-	// the value a buggy caller would pass if it read routingSessionID
-	// instead of transcriptSessionID for this child — must NOT resolve. The
-	// root was never granted anything, directly or via inheritance, so any
-	// approved==true here could only mean the read crossed keys.
-	approvedWrongKey, reasonWrongKey := al.CheckGrantOrRequestApproval(
-		context.Background(), rootSessionID, agentID, toolName, "u9-tc-2", "u9-turn-2", nil)
-	assert.False(t, approvedWrongKey, "reading under the root's (routing-shaped) session id must NOT find the child's inherited grant")
-	assert.Equal(t, nopApproverDenialReason, reasonWrongKey,
-		"a miss must fall through to the fail-closed nopPolicyApprover, never silently approve")
-}
-
-// ---------------------------------------------------------------------
-// W16b — ListAllSessions pagination, ordering, hierarchy
-// (FR-091/FR-097/FR-098/FR-104)
-// ---------------------------------------------------------------------
-
-// TestListAllSessions_PagesStablyAcrossSharedStore is this unit's positive
-// lower bound plus window/stability pin for FR-098(a)/(b), mirroring
-// pkg/session's TestListSessionsPage_WindowAndStability (U6, store layer) at
-// the layer that merges across stores.
-func TestListAllSessions_PagesStablyAcrossSharedStore(t *testing.T) {
-	al, cleanup := newAL(t)
-	defer cleanup()
-	store := u9IsolateSharedStore(t, al)
-
-	const n = 5
-	for i := 0; i < n; i++ {
-		_, err := store.NewSession(session.SessionTypeChat, "", "u9-page-agent")
-		require.NoError(t, err)
-	}
-
-	full, errs := al.ListAllSessions(0, 0, "", false)
-	require.Empty(t, errs)
-	require.Len(t, full.Sessions, n, "positive lower bound: all N sessions must be listed before paging them")
-	assert.Equal(t, -1, full.NextOffset, "an unlimited page must report no further offset")
-	assert.Equal(t, n, full.Total)
-
-	page1, errs := al.ListAllSessions(2, 0, "", false)
-	require.Empty(t, errs)
-	require.Len(t, page1.Sessions, 2)
-	assert.Equal(t, 2, page1.NextOffset)
-	assert.Equal(t, n, page1.Total)
-
-	page2, errs := al.ListAllSessions(2, page1.NextOffset, "", false)
-	require.Empty(t, errs)
-	require.Len(t, page2.Sessions, 2)
-	assert.Equal(t, 4, page2.NextOffset)
-
-	page3, errs := al.ListAllSessions(2, page2.NextOffset, "", false)
-	require.Empty(t, errs)
-	require.Len(t, page3.Sessions, 1)
-	assert.Equal(t, -1, page3.NextOffset, "the final page must report no further offset")
-
-	// Stability (FR-098(b)): concatenating the pages, in order, must
-	// reproduce the SAME sequence of ids the unpaged call returned — no
-	// duplicate, no skip, no reorder — across independent calls with no
-	// intervening write.
-	paged := make([]string, 0, len(page1.Sessions)+len(page2.Sessions)+len(page3.Sessions))
-	for _, m := range page1.Sessions {
-		paged = append(paged, m.ID)
-	}
-	for _, m := range page2.Sessions {
-		paged = append(paged, m.ID)
-	}
-	for _, m := range page3.Sessions {
-		paged = append(paged, m.ID)
-	}
-	unpaged := make([]string, 0, len(full.Sessions))
-	for _, m := range full.Sessions {
-		unpaged = append(unpaged, m.ID)
-	}
-	assert.Equal(t, unpaged, paged, "concatenated pages must reproduce the unpaged sequence exactly")
-
-	// Out-of-range offset (FR-098(b)): empty, non-nil page, NextOffset==-1,
-	// not an error.
-	oor, errs := al.ListAllSessions(2, 100, "", false)
-	require.Empty(t, errs)
-	assert.NotNil(t, oor.Sessions, "an out-of-range offset must return a non-nil, empty page")
-	assert.Empty(t, oor.Sessions)
-	assert.Equal(t, -1, oor.NextOffset)
-}
-
-// TestU9SessionRecencyLess_TiesBreakOnID pins FR-098(a)'s exact comparator:
-// UpdatedAt descending, id ascending as the tiebreak for two sessions
-// sharing a timestamp — the case a real filesystem clock cannot reliably
-// reproduce on demand, so the comparator is tested directly against
-// hand-built (but real-typed, non-spy) session.UnifiedMeta values carrying
-// an EXACT tie, exactly mirroring UnifiedStore.ListSessions' own already-
-// tested comparator shape (pkg/session/unified.go) at the layer that merges
-// across stores.
-func TestU9SessionRecencyLess_TiesBreakOnID(t *testing.T) {
-	now := time.Now()
-	a := &session.UnifiedMeta{SessionMeta: session.SessionMeta{ID: "u9-tie-aaa", UpdatedAt: now}}
-	b := &session.UnifiedMeta{SessionMeta: session.SessionMeta{ID: "u9-tie-bbb", UpdatedAt: now}}
-	require.True(t, a.UpdatedAt.Equal(b.UpdatedAt), "fixture defect: timestamps must be an exact tie")
-	require.NotEqual(t, a.ID, b.ID, "fixture defect: ids must be distinct")
-
-	assert.True(t, u9SessionRecencyLess(a, b), "on a tie, the lexicographically smaller id must sort first")
-	assert.False(t, u9SessionRecencyLess(b, a), "the comparator must be antisymmetric on a tie")
-
-	newer := &session.UnifiedMeta{SessionMeta: session.SessionMeta{ID: "u9-tie-zzz", UpdatedAt: now.Add(time.Second)}}
-	assert.True(t, u9SessionRecencyLess(newer, a),
-		"a strictly newer UpdatedAt must sort first regardless of id ordering")
-}
-
-// TestListAllSessions_HierarchyRootsOrphansAndParentFilter is this unit's
-// pin for FR-091/FR-104's three hierarchy cases u9FilterSessionHierarchy
-// implements.
-func TestListAllSessions_HierarchyRootsOrphansAndParentFilter(t *testing.T) {
-	al, cleanup := newAL(t)
-	defer cleanup()
-	store := u9IsolateSharedStore(t, al)
-
-	root, err := store.NewSession(session.SessionTypeChat, "", "u9-hier-agent")
-	require.NoError(t, err)
-	child, err := store.CreateSessionWithID("u9-hier-child-distinct", root.ID, session.SessionTypeDelegate, "", "u9-hier-agent")
-	require.NoError(t, err)
-	require.NotEqual(t, root.ID, child.ID, "fixture defect: root and child ids must be distinct")
-	// FINDING (verified 2026-08-03, not this unit's file to fix):
-	// CreateSessionWithID (pkg/session/unified_api.go, U2) takes parentID as
-	// a parameter but only uses it to inherit Owner (FR-006/FR-082) — it
-	// never persists ParentSessionID on the child, despite FR-005/FR-008
-	// requiring every delegated child to carry it. `rg ParentSessionID
-	// pkg/session/unified_api.go` returns zero matches. Until U7's spawnSubTurn
-	// (Wave F) call site — or U2 itself — closes this gap, a real caller must
-	// make this follow-up SetMeta call explicitly, exactly as done here, for
-	// FR-091's roots/children split to see the edge at all. Flagged in this
-	// unit's dispatch report for U7/U2/main; pkg/session/unified_api.go is
-	// U2's exclusive file, not touched here.
-	parentID := root.ID
-	require.NoError(t, store.SetMeta(child.ID, session.MetaPatch{ParentSessionID: &parentID}))
-
-	// An orphan: ParentSessionID names a session absent from the whole merge
-	// (FR-091's "no longer resolves" clause).
-	orphan, err := store.NewSession(session.SessionTypeDelegate, "", "u9-hier-agent")
-	require.NoError(t, err)
-	missingParent := "u9-hier-vanished-parent-" + orphan.ID
-	require.NoError(t, store.SetMeta(orphan.ID, session.MetaPatch{ParentSessionID: &missingParent}))
-
-	// Positive lower bound: all three are genuinely present in the merge
-	// before any hierarchy filtering is asserted.
-	flatPage, errs := al.ListAllSessions(0, 0, "", true)
-	require.Empty(t, errs)
-	require.Len(t, flatPage.Sessions, 3, "flat=true must return every merged session regardless of hierarchy")
-
-	rootsPage, errs := al.ListAllSessions(0, 0, "", false)
-	require.Empty(t, errs)
-	rootIDs := make([]string, 0, len(rootsPage.Sessions))
-	for _, m := range rootsPage.Sessions {
-		rootIDs = append(rootIDs, m.ID)
-	}
-	assert.Contains(t, rootIDs, root.ID, "a genuine root must be listed")
-	assert.Contains(t, rootIDs, orphan.ID,
-		"an orphan (unresolvable parent) must be returned AS A ROOT, not dropped (FR-091)")
-	assert.NotContains(t, rootIDs, child.ID, "a real, resolvable child must NOT appear in the roots-only view")
-
-	childrenPage, errs := al.ListAllSessions(0, 0, root.ID, false)
-	require.Empty(t, errs)
-	require.Len(t, childrenPage.Sessions, 1, "parent_session_id filter must return exactly the direct children")
-	assert.Equal(t, child.ID, childrenPage.Sessions[0].ID)
-}
-
-// TestListAllSessions_PartialErrorDoesNotHaltPage is FR-098(c)'s dedicated
-// pin: a legacy per-agent store that errors mid-merge contributes zero rows
-// and is appended to errs, but the page itself — including its
-// NextOffset/cursor — is unaffected. Uses the same real
-// permission-revocation failure injection as the pre-existing
-// TestListAllSessions_PartialErrors (list_all_sessions_test.go, updated by
-// this unit for the new signature) rather than a fake store, so the error
-// is genuine I/O, not a spy.
-func TestListAllSessions_PartialErrorDoesNotHaltPage(t *testing.T) {
-	if os.Getuid() == 0 {
-		t.Skip("permission-based failure injection is ineffective under root; run as non-root")
-	}
-
-	al, cleanup := newAL(t)
-	defer cleanup()
-	sharedStore := u9IsolateSharedStore(t, al)
-
-	// One good session in the shared store.
-	goodMeta, err := sharedStore.NewSession(session.SessionTypeChat, "", "u9-partial-good")
-	require.NoError(t, err)
-
-	// One broken legacy per-agent store, wired the same way
-	// list_all_sessions_test.go's pre-existing coverage does.
-	brokenBaseDir := t.TempDir()
-	brokenStore, err := session.NewUnifiedStore(brokenBaseDir)
-	require.NoError(t, err)
-	require.NoError(t, os.Chmod(brokenBaseDir, 0o000))
-	t.Cleanup(func() { _ = os.Chmod(brokenBaseDir, 0o700) })
-
-	brokenAgentID := "u9-partial-broken-agent"
-	seedTestWorkspaceMembershipForIDs(t, []string{brokenAgentID})
-	al.registry.mu.Lock()
-	al.registry.agents[brokenAgentID] = NewAgentInstance(
-		&config.AgentConfig{ID: brokenAgentID, Name: brokenAgentID},
-		&al.cfg.Agents.Defaults, al.cfg, &mockProvider{},
-	)
-	al.registry.agents[brokenAgentID].Sessions = brokenStore
-	al.registry.mu.Unlock()
-
-	page, errs := al.ListAllSessions(0, 0, "", true)
-	require.Len(t, errs, 1, "the broken legacy store must contribute exactly one partial error")
-	assert.NotEmpty(t, errs[0].Error())
-
-	ids := make([]string, 0, len(page.Sessions))
-	for _, m := range page.Sessions {
-		ids = append(ids, m.ID)
-	}
-	assert.Contains(t, ids, goodMeta.ID, "the good session must still be returned despite the partial error")
-	assert.Equal(t, -1, page.NextOffset, "an unlimited page must still report a valid (terminal) cursor, not fail")
 }

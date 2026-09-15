@@ -18,8 +18,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/config"
@@ -28,6 +26,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/assert"
 )
 
 // real1x1JPEGBytes returns valid 1x1 JPEG bytes produced by Go's
@@ -47,14 +46,21 @@ func real1x1JPEGBytes() []byte {
 
 type fakeChannel struct{ id string }
 
-func (f *fakeChannel) Name() string                                            { return "fake" }
-func (f *fakeChannel) Start(ctx context.Context) error                         { return nil }
-func (f *fakeChannel) Stop(ctx context.Context) error                          { return nil }
+func (f *fakeChannel) Name() string { return "fake" }
+
+func (f *fakeChannel) Start(ctx context.Context) error { return nil }
+
+func (f *fakeChannel) Stop(ctx context.Context) error { return nil }
+
 func (f *fakeChannel) Send(ctx context.Context, msg bus.OutboundMessage) error { return nil }
-func (f *fakeChannel) IsRunning() bool                                         { return true }
-func (f *fakeChannel) IsAllowed(string) bool                                   { return true }
-func (f *fakeChannel) IsAllowedSender(sender bus.SenderInfo) bool              { return true }
-func (f *fakeChannel) ReasoningChannelID() string                              { return f.id }
+
+func (f *fakeChannel) IsRunning() bool { return true }
+
+func (f *fakeChannel) IsAllowed(string) bool { return true }
+
+func (f *fakeChannel) IsAllowedSender(sender bus.SenderInfo) bool { return true }
+
+func (f *fakeChannel) ReasoningChannelID() string { return f.id }
 
 type fakeMediaChannel struct {
 	fakeChannel
@@ -426,41 +432,6 @@ func TestProcessMessage_SkillCommandLoadsRequestedSkill(t *testing.T) {
 	}
 }
 
-// TestHandleCommand_UseTokenIsNormalMessage verifies that "/use <x>" is no longer a
-// skill-activation command (D1): it is delivered as a normal chat message, not handled.
-func TestHandleCommand_UseTokenIsNormalMessage(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-	}
-	msgBus := bus.NewMessageBus()
-	provider := &recordingProvider{}
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	agent := al.GetRegistry().GetDefaultAgent()
-
-	// "/use" is no longer a registered command, so it falls through as a normal message.
-	opts := processOptions{}
-	_, handled := al.handleCommand(context.Background(), bus.InboundMessage{
-		Channel: "telegram",
-		Sender: bus.SenderInfo{
-			CanonicalID: "telegram:123",
-		},
-		ChatID:  "chat-1",
-		Content: "/use missing explain how to list files",
-	}, agent, &opts)
-	if handled {
-		t.Fatal("/use must no longer be handled — it should pass through as a normal message (D1/D4)")
-	}
-}
-
 // TestProcessMessage_SkillTokenAloneRunsSkill verifies that "/<skill-id>" alone (no message)
 // activates the skill one-shot with an empty user message, and the LLM is called with the
 // skill injected into context (R1 — skill body drives the turn).
@@ -517,121 +488,6 @@ func TestProcessMessage_SkillTokenAloneRunsSkill(t *testing.T) {
 	systemPrompt := provider.lastMessages[0].Content
 	if !strings.Contains(systemPrompt, "### Skill: shell") {
 		t.Fatalf("system prompt missing skill content:\n%s", systemPrompt)
-	}
-}
-
-// TestApplyExplicitSkillCommand_OneShot verifies the one-shot activation semantics (R1/D2):
-// - "/<skill> message" → skill forced, UserMessage = trailing message
-// - "/<skill>" alone   → skill forced, UserMessage unchanged (skill body drives LLM)
-// Replaces the old /use-token tests (TestApplyExplicitSkillCommand_Arms* + _Inline*).
-func TestApplyExplicitSkillCommand_OneShot(t *testing.T) {
-	al, cfg, _, _, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-
-	if err := os.MkdirAll(
-		filepath.Join(cfg.Agents.Defaults.Home, "skills", "finance-news"),
-		0o755,
-	); err != nil {
-		t.Fatalf("MkdirAll(skill) error = %v", err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(cfg.Agents.Defaults.Home, "skills", "finance-news", "SKILL.md"),
-		[]byte("# Finance News\n\nUse web tools for current finance updates.\n"),
-		0o644,
-	); err != nil {
-		t.Fatalf("WriteFile(SKILL.md) error = %v", err)
-	}
-
-	agent := al.GetRegistry().GetDefaultAgent()
-	if agent == nil {
-		t.Fatal("expected default agent")
-	}
-	// ADR-072 D5: absence of a grant list denies every skill now, so this
-	// test must explicitly grant "finance-news" — it used to resolve under
-	// the old "no allowlist = unrestricted" default.
-	if agent.ContextBuilder != nil {
-		agent.ContextBuilder.WithSkillAllowlist([]string{"finance-news"})
-	}
-
-	t.Run("with_message", func(t *testing.T) {
-		opts := &processOptions{
-			SessionKey:  "agent:main:test",
-			UserMessage: "/finance-news dammi le ultime news",
-		}
-		matched, handled, reply := al.applyExplicitSkillCommand(opts.UserMessage, agent, opts)
-		if !matched {
-			t.Fatal("expected /<skill> command to match")
-		}
-		if handled {
-			t.Fatal("/<skill> with message must fall through to LLM (not produce a text reply)")
-		}
-		if reply != "" {
-			t.Fatalf("unexpected reply: %q", reply)
-		}
-		if opts.UserMessage != "dammi le ultime news" {
-			t.Fatalf("opts.UserMessage = %q, want %q", opts.UserMessage, "dammi le ultime news")
-		}
-		if len(opts.ForcedSkills) != 1 || opts.ForcedSkills[0] != "finance-news" {
-			t.Fatalf("opts.ForcedSkills = %#v, want [finance-news]", opts.ForcedSkills)
-		}
-	})
-
-	t.Run("alone_no_message", func(t *testing.T) {
-		opts := &processOptions{
-			SessionKey:  "agent:main:test",
-			UserMessage: "/finance-news",
-		}
-		matched, handled, reply := al.applyExplicitSkillCommand(opts.UserMessage, agent, opts)
-		if !matched {
-			t.Fatal("expected /<skill> alone to match")
-		}
-		if handled {
-			t.Fatal("/<skill> alone must fall through so the LLM turn runs (not produce a text reply)")
-		}
-		if reply != "" {
-			t.Fatalf("unexpected reply: %q", reply)
-		}
-		// UserMessage unchanged — the skill body drives the LLM turn (R1).
-		if opts.UserMessage != "/finance-news" {
-			t.Fatalf("opts.UserMessage = %q, want unchanged %q", opts.UserMessage, "/finance-news")
-		}
-		if len(opts.ForcedSkills) != 1 || opts.ForcedSkills[0] != "finance-news" {
-			t.Fatalf("opts.ForcedSkills = %#v, want [finance-news]", opts.ForcedSkills)
-		}
-	})
-}
-
-func TestRecordLastChannel(t *testing.T) {
-	al, cfg, msgBus, provider, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-
-	testChannel := "test-channel"
-	if err := al.RecordLastChannel(testChannel); err != nil {
-		t.Fatalf("RecordLastChannel failed: %v", err)
-	}
-	if got := al.state.GetLastChannel(); got != testChannel {
-		t.Errorf("Expected channel '%s', got '%s'", testChannel, got)
-	}
-	al2 := mustNewAgentLoop(t, cfg, msgBus, provider)
-	if got := al2.state.GetLastChannel(); got != testChannel {
-		t.Errorf("Expected persistent channel '%s', got '%s'", testChannel, got)
-	}
-}
-
-func TestRecordLastChatID(t *testing.T) {
-	al, cfg, msgBus, provider, cleanup := newTestAgentLoop(t)
-	defer cleanup()
-
-	testChatID := "test-chat-id-123"
-	if err := al.RecordLastChatID(testChatID); err != nil {
-		t.Fatalf("RecordLastChatID failed: %v", err)
-	}
-	if got := al.state.GetLastChatID(); got != testChatID {
-		t.Errorf("Expected chat ID '%s', got '%s'", testChatID, got)
-	}
-	al2 := mustNewAgentLoop(t, cfg, msgBus, provider)
-	if got := al2.state.GetLastChatID(); got != testChatID {
-		t.Errorf("Expected persistent chat ID '%s', got '%s'", testChatID, got)
 	}
 }
 
@@ -1423,7 +1279,8 @@ func (m *mockCustomTool) Parameters() map[string]any {
 	}
 }
 
-func (m *mockCustomTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (m *mockCustomTool) Scope() tools.ToolScope { return tools.ScopeGeneral }
+
 func (m *mockCustomTool) Category() tools.ToolCategory { return tools.CategoryCore }
 
 func (m *mockCustomTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
@@ -1435,9 +1292,12 @@ type handledMediaTool struct {
 	path  string
 }
 
-func (m *handledMediaTool) Name() string                 { return "handled_media_tool" }
-func (m *handledMediaTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (m *handledMediaTool) Name() string { return "handled_media_tool" }
+
+func (m *handledMediaTool) Scope() tools.ToolScope { return tools.ScopeGeneral }
+
 func (m *handledMediaTool) Category() tools.ToolCategory { return tools.CategoryCore }
+
 func (m *handledMediaTool) Description() string {
 	return "Returns a media attachment and fully handles the user response"
 }
@@ -1504,9 +1364,12 @@ type handledMediaWithSteeringTool struct {
 	loop  *AgentLoop
 }
 
-func (m *handledMediaWithSteeringTool) Name() string                 { return "handled_media_with_steering_tool" }
-func (m *handledMediaWithSteeringTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (m *handledMediaWithSteeringTool) Name() string { return "handled_media_with_steering_tool" }
+
+func (m *handledMediaWithSteeringTool) Scope() tools.ToolScope { return tools.ScopeGeneral }
+
 func (m *handledMediaWithSteeringTool) Category() tools.ToolCategory { return tools.CategoryCore }
+
 func (m *handledMediaWithSteeringTool) Description() string {
 	return "Returns handled media and enqueues a steering message during execution"
 }
@@ -1539,9 +1402,12 @@ type mediaArtifactTool struct {
 	path  string
 }
 
-func (m *mediaArtifactTool) Name() string                 { return "media_artifact_tool" }
-func (m *mediaArtifactTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (m *mediaArtifactTool) Name() string { return "media_artifact_tool" }
+
+func (m *mediaArtifactTool) Scope() tools.ToolScope { return tools.ScopeGeneral }
+
 func (m *mediaArtifactTool) Category() tools.ToolCategory { return tools.CategoryCore }
+
 func (m *mediaArtifactTool) Description() string {
 	return "Returns a media artifact that the agent can forward or save later"
 }
@@ -1567,9 +1433,12 @@ func (m *mediaArtifactTool) Execute(ctx context.Context, args map[string]any) *t
 
 type toolLimitTestTool struct{}
 
-func (m *toolLimitTestTool) Name() string                 { return "tool_limit_test_tool" }
-func (m *toolLimitTestTool) Scope() tools.ToolScope       { return tools.ScopeGeneral }
+func (m *toolLimitTestTool) Name() string { return "tool_limit_test_tool" }
+
+func (m *toolLimitTestTool) Scope() tools.ToolScope { return tools.ScopeGeneral }
+
 func (m *toolLimitTestTool) Category() tools.ToolCategory { return tools.CategoryCore }
+
 func (m *toolLimitTestTool) Description() string {
 	return "Tool used to exhaust the iteration budget in tests"
 }

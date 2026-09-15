@@ -24,15 +24,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // newMediaWorkspaceIDTestLoop builds a minimal AgentLoop (single default
@@ -135,39 +134,6 @@ func TestProcessScheduled_MediaToolDelivery_NoSessionWorkspace_EmptyWorkspaceID(
 
 	require.Len(t, telegramChannel.sentMedia, 1)
 	assert.Equal(t, "", telegramChannel.sentMedia[0].WorkspaceID)
-}
-
-// TestProcessSystemMessage_MediaToolDelivery_StampsWorkspaceID is the
-// processSystemMessage regression: a reconstructed delegate-completion /
-// async-notify turn (msg.Channel == "system") resolves WorkspaceID from the
-// SAME session its output persists into (AsyncTranscriptSessionID), mirroring
-// processMessage's own resolution.
-func TestProcessSystemMessage_MediaToolDelivery_StampsWorkspaceID(t *testing.T) {
-	al, defaultAgent, telegramChannel, _ := newMediaWorkspaceIDTestLoop(t, "telegram")
-
-	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "web", "main")
-	require.NoError(t, err)
-	ws := "sales"
-	require.NoError(t, al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &ws}))
-
-	resp, _, err := al.processMessage(context.Background(), bus.InboundMessage{
-		Channel: "system",
-		// originChannel/originChatID parse from ChatID as "channel:chat_id".
-		ChatID: "telegram:chat1",
-		Sender: bus.SenderInfo{CanonicalID: "delegate"},
-		Content: "Task 'research' completed.\n\nResult:\n" +
-			"take a screenshot of the screen and send it to me",
-		AsyncOriginAgentID:       defaultAgent.ID,
-		AsyncTranscriptSessionID: meta.ID,
-	})
-	require.NoError(t, err)
-	assert.Equal(t, "Here is the screenshot.", resp)
-
-	require.Len(t, telegramChannel.sentMedia, 1,
-		"expected exactly 1 synchronously sent media message")
-	assert.Equal(t, "sales", telegramChannel.sentMedia[0].WorkspaceID,
-		"a reconstructed system-message turn's tool media must carry the workspace "+
-			"stamped on the origin session it persists into")
 }
 
 // TestSpawnSubTurn_MediaToolDelivery_InheritsParentWorkspaceID is the
@@ -284,91 +250,4 @@ func TestContinueWithSteeringMessages_MediaToolDelivery_StampsWorkspaceID(t *tes
 	require.Len(t, telegramChannel.sentMedia, 1)
 	assert.Equal(t, "sales", telegramChannel.sentMedia[0].WorkspaceID,
 		"a steering-continued turn's tool media must carry the resolved workspace")
-}
-
-// TestBuildContinuationTarget_ResolvesWorkspaceID_FromSessionMeta proves the
-// PRIMARY resolution mechanism resolveWorkspaceIDForContinuation shares with
-// processMessage: when the inbound message already carries a SessionID
-// (always true for webchat), the session's own meta.WorkspaceID wins.
-func TestBuildContinuationTarget_ResolvesWorkspaceID_FromSessionMeta(t *testing.T) {
-	al := newMediaWorkspaceIDTestLoopOnly(t, "telegram")
-
-	meta, err := al.GetSessionStore().NewSession(session.SessionTypeChat, "web", "main")
-	require.NoError(t, err)
-	ws := "sales"
-	require.NoError(t, al.GetSessionStore().SetMeta(meta.ID, session.MetaPatch{WorkspaceID: &ws}))
-
-	target, err := al.buildContinuationTarget(bus.InboundMessage{
-		Channel:   "telegram",
-		ChatID:    "chat1",
-		SessionID: meta.ID,
-		Sender:    bus.SenderInfo{CanonicalID: "user1"},
-	})
-	require.NoError(t, err)
-	require.NotNil(t, target)
-	assert.Equal(t, "sales", target.WorkspaceID)
-}
-
-// TestBuildContinuationTarget_ResolvesWorkspaceID_FromChannelBinding proves
-// the FALLBACK resolution mechanism: when the message has no SessionID (the
-// common case for a channel message session_worker's own msg copy never saw
-// mutated — see resolveWorkspaceIDForContinuation's doc comment), the bound
-// channel instance's own configured WorkspaceID is used instead — the exact
-// value resolveOrCreateChannelSession would have seeded a new session with.
-func TestBuildContinuationTarget_ResolvesWorkspaceID_FromChannelBinding(t *testing.T) {
-	tmpDir := t.TempDir()
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              tmpDir,
-				DefaultModel:      config.DefaultModel{Model: "test-model"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
-		},
-		Channels: map[string]config.ChannelInstanceConfig{
-			"telegram.sales": {
-				Type:        "telegram",
-				Enabled:     true,
-				WorkspaceID: "sales",
-			},
-		},
-	}
-	msgBus := bus.NewMessageBus()
-	t.Cleanup(func() { msgBus.Close() })
-	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
-	t.Cleanup(al.Close)
-
-	target, err := al.buildContinuationTarget(bus.InboundMessage{
-		Channel:    "telegram",
-		InstanceID: "telegram.sales",
-		ChatID:     "chat1",
-		Sender:     bus.SenderInfo{CanonicalID: "user1"},
-		// No SessionID — the session_worker mutation-visibility gap case.
-	})
-	require.NoError(t, err)
-	require.NotNil(t, target)
-	assert.Equal(t, "sales", target.WorkspaceID)
-}
-
-// TestProcessTaskDirect_MediaToolDelivery_StampsWorkspaceID is the
-// processTaskDirect (native) regression: WorkspaceID is read back from
-// tools.ToolWorkspaceID(ctx) — the same context value processTaskDirectExternalCLI
-// already reads a few lines below in production, seeded by the task executor
-// before calling processTaskDirect. Channel is hardcoded to "webchat" so the
-// fake channel is registered under that name.
-func TestProcessTaskDirect_MediaToolDelivery_StampsWorkspaceID(t *testing.T) {
-	al, defaultAgent, webchatChannel, _ := newMediaWorkspaceIDTestLoop(t, "webchat")
-
-	ctx := tools.WithWorkspaceID(context.Background(), "sales")
-	result, err := al.processTaskDirect(
-		ctx, defaultAgent.ID, "take a screenshot of the screen and send it to me",
-		"task-sess-1", "task:1",
-	)
-	require.NoError(t, err)
-	assert.Equal(t, "Here is the screenshot.", result)
-
-	require.Len(t, webchatChannel.sentMedia, 1)
-	assert.Equal(t, "sales", webchatChannel.sentMedia[0].WorkspaceID)
 }

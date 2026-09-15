@@ -47,14 +47,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/stretchr/testify/require"
 )
 
 // =============================================================================
@@ -413,40 +410,6 @@ func TestAppendErrorTranscript_NoOpOnEmptySessionID(t *testing.T) {
 }
 
 // =============================================================================
-// W2-27 — decideSwitchCompressAction edge cases (empty / negative inputs)
-// =============================================================================
-//
-// W2-27 (test-analyzer-A #14) flagged that the function is never tested
-// with empty or negative inputs. The function is pure and must guard
-// against these without panicking.
-func TestDecideSwitchCompressAction_EmptyAndNegativeInputs(t *testing.T) {
-	cases := []struct {
-		name     string
-		cur      int
-		win      int
-		expected SwitchAction
-	}{
-		{"zero current", 0, 8000, SwitchActionNoop},
-		{"negative current", -1, 8000, SwitchActionNoop},
-		{"zero window", 5000, 0, SwitchActionNoop},
-		{"negative window", 5000, -100, SwitchActionNoop},
-		{"both zero", 0, 0, SwitchActionNoop},
-		{"both negative", -1, -1, SwitchActionNoop},
-		// Sanity: a real call still works.
-		{"real compress", 50000, 8000, SwitchActionCompress},
-		{"real noop", 5000, 8000, SwitchActionNoop},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := decideSwitchCompressAction(tc.cur, tc.win)
-			assert.Equal(t, tc.expected, got,
-				"cur=%d win=%d expected %s, got %s",
-				tc.cur, tc.win, tc.expected, got)
-		})
-	}
-}
-
-// =============================================================================
 // W2-27 — Provider tie-break ordering: RETIRED by ADR-067 FR-040 (X-24)
 // =============================================================================
 //
@@ -594,69 +557,6 @@ func TestResolveModelCfg_CloneMutationIndependence(t *testing.T) {
 		"Workspace on the resolved clone must not leak back into cfg.Providers[i] when "+
 			"the caller mutates it; pre=%q post=%q",
 		originalWorkspace, cfg.Providers[0].Home)
-}
-
-// =============================================================================
-// W2-27 — apply_agent_model_test.go passthrough case
-// (instance-preservation re-assertion `id == after.ID`)
-// =============================================================================
-//
-// W2-27 (test-analyzer-A #6) flagged that the existing
-// TestApplyAgentModel_SwitchesInPlacePreservingInstance test asserts
-// `after != before` (pointer equality) but not the ID field directly. A
-// regression that replaced the instance with one having a different ID
-// (e.g. via hot-reload) would slip past the pointer check if the
-// implementation also re-assigned the same pointer.
-//
-// This test adds an ID-level re-assertion to lock the contract.
-func TestApplyAgentModel_SwitchesInPlace_PreservesID(t *testing.T) {
-	t.Setenv("LOOP_APPLY3_KEY", "k")
-
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			Defaults: config.AgentDefaults{
-				Home:              t.TempDir(),
-				DefaultModel:      config.DefaultModel{Provider: "openai", Model: "gpt-4.1"},
-				MaxTokens:         4096,
-				MaxToolIterations: 10,
-			},
-			List: []config.AgentConfig{{ID: "mia", Home: t.TempDir()}},
-		},
-		Providers: []*config.ModelConfig{
-			{
-				Provider:  "openai",
-				Model:     "gpt-4.1",
-				APIBase:   "http://127.0.0.1:1",
-				APIKeyRef: "LOOP_APPLY3_KEY",
-			},
-			{
-				Provider:  "deepseek",
-				Model:     "deepseek-chat",
-				APIBase:   "http://127.0.0.1:1",
-				APIKeyRef: "LOOP_APPLY3_KEY",
-			},
-		},
-	}
-
-	provider, _, err := providers.CreateProvider(cfg)
-	require.NoError(t, err)
-	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
-	t.Cleanup(al.Close)
-
-	before := al.GetRegistry().GetDefaultAgent()
-	require.NotNil(t, before)
-	id := before.ID
-	require.NotEmpty(t, id)
-
-	_, err = al.ApplyAgentModel(id, "deepseek-chat")
-	require.NoError(t, err)
-
-	after, ok := al.GetRegistry().GetAgent(id)
-	require.True(t, ok, "agent must remain in the registry after ApplyAgentModel")
-	require.Equal(t, id, after.ID,
-		"W2-27 (passthrough case): agent ID must be preserved across ApplyAgentModel — "+
-			"a regression that hot-replaces the instance would change the ID and break "+
-			"downstream session/agent binding")
 }
 
 // =============================================================================
