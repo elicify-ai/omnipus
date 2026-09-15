@@ -412,42 +412,87 @@ func (t *SetGoalTool) Parameters() map[string]any {
 	}
 }
 
+// setGoalToolExecute carries the shared state of Execute across its stages.
+type setGoalToolExecute struct {
+	t                 *SetGoalTool
+	ctx               context.Context
+	args              map[string]any
+	access            GoalRecordAccess
+	sessionID         string
+	goalID            string
+	currentRecordJSON string
+	mode              setGoalMode
+	authorID          string
+	definition        string
+	oldRec            setGoalRecord
+	normCriteria      []task.AcceptanceCriterion
+	normDoD           []task.AcceptanceCriterion
+	assessment        *setGoalAssessment
+	diffSummary       string
+}
+
 // Execute implements Tool. See the file doc comment for the seam contract.
 func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	access := t.access()
-	if access == nil {
-		return ErrorResult("set_goal: no goal-record store is wired on this deployment")
+	sg := &setGoalToolExecute{t: t, ctx: ctx, args: args}
+
+	if r0, stop := sg.validateScopeAndMode(); stop {
+		return r0
 	}
 
-	sessionID := ToolTranscriptSessionID(ctx)
-	if sessionID == "" {
-		return ErrorResult("set_goal: no session context — this tool needs a real, store-backed session to write a goal record")
+	if r0, stop := sg.normalizeRecord(); stop {
+		return r0
+	}
+
+	if r0, stop := sg.rejectDuplicateOrInfeasible(); stop {
+		return r0
+	}
+
+	if r0, stop := sg.persistRecord(); stop {
+		return r0
+	}
+
+	return sg.buildResult()
+}
+
+// validateScopeAndMode checks the store, session scope, active goal, mode, and authoring inputs.
+func (sg *setGoalToolExecute) validateScopeAndMode() (*ToolResult, bool) {
+	sg.access = sg.t.access()
+	if sg.access == nil {
+		return ErrorResult("set_goal: no goal-record store is wired on this deployment"), true
+	}
+
+	sg.sessionID = ToolTranscriptSessionID(sg.ctx)
+	if sg.sessionID == "" {
+		return ErrorResult("set_goal: no session context — this tool needs a real, store-backed session to write a goal record"), true
 	}
 
 	// --- Scope preconditions (ADR-088 D2 / FR-005) — checked BEFORE any
 	// payload parsing, so a delegated or goalless caller gets the scope
 	// refusal rather than a validation error that might read as "try again
 	// with a corrected payload" when no payload could ever succeed here. ---
-	if depth := ToolDelegationDepth(ctx); depth > 0 {
+	if depth := ToolDelegationDepth(sg.ctx); depth > 0 {
 		return ErrorResult("set_goal is owner-session-only: a delegated sub-turn cannot author or amend " +
-			"the parent session's goal record (ADR-088 FR-005) — report your findings back to the parent instead")
+			"the parent session's goal record (ADR-088 FR-005) — report your findings back to the parent instead"), true
 	}
 
-	goalID, goalCondition, currentRecordJSON, err := access.ReadGoalState(sessionID)
+	var goalCondition string
+	var err error
+	sg.goalID, goalCondition, sg.currentRecordJSON, err = sg.access.ReadGoalState(sg.sessionID)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("set_goal: could not read this session's goal state: %v", err)).WithError(err)
+		return ErrorResult(fmt.Sprintf("set_goal: could not read this session's goal state: %v", err)).WithError(err), true
 	}
 	if strings.TrimSpace(goalCondition) == "" {
 		return ErrorResult("set_goal refuses: this session has no active goal — there is nothing to " +
-			"register a record against (ADR-088 FR-005)")
+			"register a record against (ADR-088 FR-005)"), true
 	}
 
-	mode, mErr := parseSetGoalMode(args)
+	var mErr error
+	sg.mode, mErr = parseSetGoalMode(sg.args)
 	if mErr != nil {
-		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", mErr))
+		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", mErr)), true
 	}
-	hadExistingRecord := strings.TrimSpace(currentRecordJSON) != ""
-	if mode == setGoalModeRegister && hadExistingRecord {
+	hadExistingRecord := strings.TrimSpace(sg.currentRecordJSON) != ""
+	if sg.mode == setGoalModeRegister && hadExistingRecord {
 		// fix-wave GX-B (operator-ratified, 2026-09-08 evidence): a SECOND
 		// mode:register on a goal that already has a record is never a new
 		// goal — it is the agent steering the one it already registered
@@ -459,10 +504,10 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		// path (diff seam, mergeCriterionKindFromOld) run unchanged — the
 		// result reports mode:update so the card renders as a revision.
 		logger.InfoCF("goal", "set_goal: register normalised to update — a record already exists for this goal",
-			map[string]any{"session_id": sessionID})
-		mode = setGoalModeUpdate
+			map[string]any{"session_id": sg.sessionID})
+		sg.mode = setGoalModeUpdate
 	}
-	if mode == setGoalModeUpdate && !hadExistingRecord {
+	if sg.mode == setGoalModeUpdate && !hadExistingRecord {
 		// The mirror image of the GX-B rule above, for the same reason. UAT
 		// 2026-09-14 (B-1 run 4): on a freshly activated goal the model sent a
 		// complete, valid record with mode:update. The old hard refusal here
@@ -477,40 +522,44 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		// result reports mode:register so the SPA renders a new-goal card
 		// rather than a revision of a record that never existed.
 		logger.InfoCF("goal", "set_goal: update normalised to register — no record has been registered on this goal yet",
-			map[string]any{"session_id": sessionID})
-		mode = setGoalModeRegister
+			map[string]any{"session_id": sg.sessionID})
+		sg.mode = setGoalModeRegister
 	}
 
-	authorID := ToolAgentID(ctx)
-	if authorID == "" {
-		return ErrorResult("set_goal: no calling-agent identity in context — cannot attribute the record's authorship")
+	sg.authorID = ToolAgentID(sg.ctx)
+	if sg.authorID == "" {
+		return ErrorResult("set_goal: no calling-agent identity in context — cannot attribute the record's authorship"), true
 	}
 
-	definition := strings.TrimSpace(argString(args, "definition"))
-	if definition == "" {
-		return ErrorResult("set_goal rejected: definition is required — one clear sentence restating the goal")
+	sg.definition = strings.TrimSpace(argString(sg.args, "definition"))
+	if sg.definition == "" {
+		return ErrorResult("set_goal rejected: definition is required — one clear sentence restating the goal"), true
 	}
+	return nil, false
+}
 
+// normalizeRecord parses and normalizes the prior record, criteria, DoD, and assessment.
+func (sg *setGoalToolExecute) normalizeRecord() (*ToolResult, bool) {
 	// Parse whatever record already existed BEFORE building the new one —
 	// mode:update's merge logic below (review-round-1 finding #7) needs it
 	// for both the criteria/dod Kind carry-over and the omitted-dod
 	// carry-forward. Also still used, as before, to carry Intent/Prompt
 	// through unchanged (this tool only ever sets Definition/Criteria/DoD).
-	var oldRec setGoalRecord
-	if strings.TrimSpace(currentRecordJSON) != "" {
-		if uErr := json.Unmarshal([]byte(currentRecordJSON), &oldRec); uErr != nil {
+
+	if strings.TrimSpace(sg.currentRecordJSON) != "" {
+		if uErr := json.Unmarshal([]byte(sg.currentRecordJSON), &sg.oldRec); uErr != nil {
 			logger.WarnCF("goal", "set_goal: current record JSON failed to parse; proceeding without its prior-record carry-over",
-				map[string]any{"session_id": sessionID, "error": uErr.Error()})
-			oldRec = setGoalRecord{}
+				map[string]any{"session_id": sg.sessionID, "error": uErr.Error()})
+			sg.oldRec = setGoalRecord{}
 		}
 	}
 
-	rawCriteria, _ := args["criteria"].([]any)
-	criteria, cErr := parseSetGoalCriteria(rawCriteria, authorID)
+	rawCriteria, _ := sg.args["criteria"].([]any)
+	criteria, cErr := parseSetGoalCriteria(rawCriteria, sg.authorID)
 	if cErr != nil {
-		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", cErr))
+		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", cErr)), true
 	}
-	if mode == setGoalModeUpdate {
+	if sg.mode == setGoalModeUpdate {
 		// finding #7(a): a criterion whose normalized text matches one in the
 		// PRIOR record keeps that prior criterion's Kind and any
 		// check/behavior payload — this tool's schema only ever authors
@@ -518,12 +567,13 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		// marker-authored machine-verifiable criterion by text (as part of an
 		// otherwise-unrelated steering update) would silently downgrade it.
 		for i := range criteria {
-			criteria[i] = mergeCriterionKindFromOld(criteria[i], oldRec.Criteria)
+			criteria[i] = mergeCriterionKindFromOld(criteria[i], sg.oldRec.Criteria)
 		}
 	}
-	normCriteria, nErr := task.NormalizeCriteria(criteria)
+	var nErr error
+	sg.normCriteria, nErr = task.NormalizeCriteria(criteria)
 	if nErr != nil {
-		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", nErr))
+		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", nErr)), true
 	}
 
 	// finding #7(b): distinguish an OMITTED/null `dod` arg from an
@@ -532,31 +582,30 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// deliberately clearing it. Only the second case (or register mode,
 	// where there is no prior record to carry forward) means "apply the
 	// floor here".
-	rawDoDVal, dodKeyPresent := args["dod"]
+	rawDoDVal, dodKeyPresent := sg.args["dod"]
 	dodTouched := dodKeyPresent && rawDoDVal != nil
 	var rawDoD []any
 	if dodTouched {
 		rawDoD, _ = rawDoDVal.([]any)
 	}
-	dod, dErr := parseSetGoalDoD(rawDoD, authorID)
+	dod, dErr := parseSetGoalDoD(rawDoD, sg.authorID)
 	if dErr != nil {
-		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", dErr))
+		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", dErr)), true
 	}
 
-	var normDoD []task.AcceptanceCriterion
 	switch {
 	case len(dod) > 0:
-		if mode == setGoalModeUpdate {
+		if sg.mode == setGoalModeUpdate {
 			// Same Kind/check/behavior carry-over as criteria, above.
 			for i := range dod {
-				dod[i] = mergeCriterionKindFromOld(dod[i], oldRec.DoD)
+				dod[i] = mergeCriterionKindFromOld(dod[i], sg.oldRec.DoD)
 			}
 		}
-		normDoD, nErr = task.NormalizeCriteria(dod)
+		sg.normDoD, nErr = task.NormalizeCriteria(dod)
 		if nErr != nil {
-			return ErrorResult(fmt.Sprintf("set_goal rejected: %v", nErr))
+			return ErrorResult(fmt.Sprintf("set_goal rejected: %v", nErr)), true
 		}
-	case mode == setGoalModeUpdate && !dodTouched:
+	case sg.mode == setGoalModeUpdate && !dodTouched:
 		// finding #7(b): an omitted dod on update means "leave my existing
 		// DoD alone" — NOT "replace it with the generic floor". Already
 		// normalized/validated from when it was originally written; no
@@ -564,9 +613,9 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		// result is ITSELF empty (a pre-ADR-080 legacy record with no DoD
 		// field at all) does the floor backfill apply — the same
 		// "result empty → floor" rule mode:register always followed.
-		normDoD = oldRec.DoD
-		if len(normDoD) == 0 {
-			normDoD = setGoalFloorDoD()
+		sg.normDoD = sg.oldRec.DoD
+		if len(sg.normDoD) == 0 {
+			sg.normDoD = setGoalFloorDoD()
 		}
 	default:
 		// register mode with no dod, OR update mode with an EXPLICIT empty
@@ -574,7 +623,7 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		// ADR-088 D2 — the DoD floor: pkg/agent.newFloorDoD's built-in floor
 		// (ADR-080 D-DOD layer 3). Already normalized (fixed sentinel IDs,
 		// valid shape) — no NormalizeCriteria pass needed.
-		normDoD = setGoalFloorDoD()
+		sg.normDoD = setGoalFloorDoD()
 	}
 
 	// JUDGE-FR-006b's second clause (E-20, DD-3, C-59/OQ-16 — assigned here
@@ -586,21 +635,26 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// verdict for it already exists — has to live here, because this is
 	// the only call path that can shorten a criterion's text after a
 	// verdict has been rendered against it.
-	if mode == setGoalModeUpdate {
-		existingVerdict := lookupGoalLatestVerdictForClauseCountGuard(goalID)
-		if cErr := rejectLoweredClauseCountWithVerdict(oldRec.Criteria, normCriteria, existingVerdict); cErr != nil {
-			return ErrorResult(fmt.Sprintf("set_goal rejected: %v", cErr))
+	if sg.mode == setGoalModeUpdate {
+		existingVerdict := lookupGoalLatestVerdictForClauseCountGuard(sg.goalID)
+		if cErr := rejectLoweredClauseCountWithVerdict(sg.oldRec.Criteria, sg.normCriteria, existingVerdict); cErr != nil {
+			return ErrorResult(fmt.Sprintf("set_goal rejected: %v", cErr)), true
 		}
-		if cErr := rejectLoweredClauseCountWithVerdict(oldRec.DoD, normDoD, existingVerdict); cErr != nil {
-			return ErrorResult(fmt.Sprintf("set_goal rejected: %v", cErr))
+		if cErr := rejectLoweredClauseCountWithVerdict(sg.oldRec.DoD, sg.normDoD, existingVerdict); cErr != nil {
+			return ErrorResult(fmt.Sprintf("set_goal rejected: %v", cErr)), true
 		}
 	}
 
-	assessment, aErr := parseSetGoalAssessment(args)
+	var aErr error
+	sg.assessment, aErr = parseSetGoalAssessment(sg.args)
 	if aErr != nil && !errors.Is(aErr, errAssessmentNotProvided) {
-		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", aErr))
+		return ErrorResult(fmt.Sprintf("set_goal rejected: %v", aErr)), true
 	}
+	return nil, false
+}
 
+// rejectDuplicateOrInfeasible returns unchanged duplicates and rejects criteria that cannot be verified.
+func (sg *setGoalToolExecute) rejectDuplicateOrInfeasible() (*ToolResult, bool) {
 	// fix-wave GX-B, rule (b): an update (real or normalised-from-register,
 	// above) whose content is SEMANTICALLY IDENTICAL to the record already
 	// on disk is a no-op — no write, no diff, no revision bump. Comparison
@@ -608,18 +662,18 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// duplicateSubmission's doc: the model mints a fresh id every call, so
 	// two genuinely-identical submissions never share one). Checked only in
 	// mode:update — mode:register with no existing record always creates.
-	if mode == setGoalModeUpdate && duplicateSubmission(oldRec, definition, normCriteria, normDoD) {
+	if sg.mode == setGoalModeUpdate && duplicateSubmission(sg.oldRec, sg.definition, sg.normCriteria, sg.normDoD) {
 		logger.InfoCF("goal", "set_goal: duplicate submission ignored — record already matches, no write",
-			map[string]any{"session_id": sessionID})
+			map[string]any{"session_id": sg.sessionID})
 		core := SetGoalResultCore{
-			Mode:       string(mode),
-			GoalID:     goalID,
-			Definition: definition,
-			Criteria:   normCriteria,
-			DoD:        normDoD,
+			Mode:       string(sg.mode),
+			GoalID:     sg.goalID,
+			Definition: sg.definition,
+			Criteria:   sg.normCriteria,
+			DoD:        sg.normDoD,
 		}
-		if assessment != nil {
-			core.Assessment = assessment
+		if sg.assessment != nil {
+			core.Assessment = sg.assessment
 		}
 		payload := SetGoalResultPayload(core)
 		// unchanged (documented alongside SetGoalResultPayload's own shape
@@ -629,65 +683,72 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		encoded, payloadErr := json.Marshal(payload)
 		if payloadErr != nil {
 			logger.ErrorCF("goal", "set_goal: could not encode unchanged result payload",
-				map[string]any{"session_id": sessionID, "error": payloadErr.Error()})
-			return NewToolResult(fmt.Sprintf("goal record %s: unchanged (%d criteria, %d DoD items)", mode, len(normCriteria), len(normDoD)))
+				map[string]any{"session_id": sg.sessionID, "error": payloadErr.Error()})
+			return NewToolResult(fmt.Sprintf("goal record %s: unchanged (%d criteria, %d DoD items)", sg.mode, len(sg.normCriteria), len(sg.normDoD))), true
 		}
-		return NewToolResult(string(encoded))
+		return NewToolResult(string(encoded)), true
 	}
 
-	if t.feasibilityFn != nil {
-		union := make([]task.AcceptanceCriterion, 0, len(normCriteria)+len(normDoD))
-		union = append(union, normCriteria...)
-		union = append(union, normDoD...)
-		if fErr := t.feasibilityFn(ctx, union); fErr != nil {
-			return ErrorResult(fmt.Sprintf("set_goal rejected: %v", fErr))
+	if sg.t.feasibilityFn != nil {
+		union := make([]task.AcceptanceCriterion, 0, len(sg.normCriteria)+len(sg.normDoD))
+		union = append(union, sg.normCriteria...)
+		union = append(union, sg.normDoD...)
+		if fErr := sg.t.feasibilityFn(sg.ctx, union); fErr != nil {
+			return ErrorResult(fmt.Sprintf("set_goal rejected: %v", fErr)), true
 		}
 	}
+	return nil, false
+}
 
+// persistRecord builds, diffs, persists, and logs the replacement goal record.
+func (sg *setGoalToolExecute) persistRecord() (*ToolResult, bool) {
 	newRec := setGoalRecord{
-		Intent:             oldRec.Intent,
-		Prompt:             oldRec.Prompt,
-		Definition:         definition,
-		Criteria:           normCriteria,
-		DoD:                normDoD,
-		SupersededCriteria: oldRec.SupersededCriteria,
+		Intent:             sg.oldRec.Intent,
+		Prompt:             sg.oldRec.Prompt,
+		Definition:         sg.definition,
+		Criteria:           sg.normCriteria,
+		DoD:                sg.normDoD,
+		SupersededCriteria: sg.oldRec.SupersededCriteria,
 	}
-	if mode == setGoalModeUpdate && (len(oldRec.Criteria) > 0 || len(oldRec.DoD) > 0) {
+	if sg.mode == setGoalModeUpdate && (len(sg.oldRec.Criteria) > 0 || len(sg.oldRec.DoD) > 0) {
 		// fix 5b (operator-ratified, 2026-09-08 evidence): this is a REAL,
 		// content-changing update (the duplicateSubmission no-op already
 		// returned above) — the outgoing criteria/dod set oldRec carries is
 		// about to be overwritten and, if a judge already rendered a verdict
 		// against it, that verdict would otherwise reference criteria that
 		// exist nowhere. Preserve it in the bounded history before it's gone.
-		newRec.SupersededCriteria = appendSupersededCriteria(oldRec.SupersededCriteria, oldRec.Criteria, oldRec.DoD)
+		newRec.SupersededCriteria = appendSupersededCriteria(sg.oldRec.SupersededCriteria, sg.oldRec.Criteria, sg.oldRec.DoD)
 	}
 	newJSON, encErr := json.Marshal(newRec)
 	if encErr != nil {
-		return ErrorResult(fmt.Sprintf("set_goal: failed to encode the goal record: %v", encErr)).WithError(encErr)
+		return ErrorResult(fmt.Sprintf("set_goal: failed to encode the goal record: %v", encErr)).WithError(encErr), true
 	}
 
-	var diffSummary string
-	if mode == setGoalModeUpdate {
-		if t.diffFn != nil {
-			diffSummary = t.diffFn(currentRecordJSON, string(newJSON))
+	if sg.mode == setGoalModeUpdate {
+		if sg.t.diffFn != nil {
+			sg.diffSummary = sg.t.diffFn(sg.currentRecordJSON, string(newJSON))
 		} else {
-			diffSummary = localDiffSummary(currentRecordJSON, string(newJSON))
+			sg.diffSummary = localDiffSummary(sg.currentRecordJSON, string(newJSON))
 		}
 	}
 
-	if wErr := access.WriteRecord(sessionID, string(newJSON)); wErr != nil {
-		return ErrorResult(fmt.Sprintf("set_goal: failed to persist the goal record: %v", wErr)).WithError(wErr)
+	if wErr := sg.access.WriteRecord(sg.sessionID, string(newJSON)); wErr != nil {
+		return ErrorResult(fmt.Sprintf("set_goal: failed to persist the goal record: %v", wErr)).WithError(wErr), true
 	}
 
 	logger.InfoCF("goal", "set_goal write",
-		map[string]any{"session_id": sessionID, "mode": string(mode),
-			"criteria_count": len(normCriteria), "dod_count": len(normDoD)})
-	if assessment != nil {
+		map[string]any{"session_id": sg.sessionID, "mode": string(sg.mode),
+			"criteria_count": len(sg.normCriteria), "dod_count": len(sg.normDoD)})
+	if sg.assessment != nil {
 		logger.InfoCF("goal", "set_goal assessment",
-			map[string]any{"session_id": sessionID,
-				"clarity": assessment.Clarity, "assumption_count": len(assessment.Assumptions)})
+			map[string]any{"session_id": sg.sessionID,
+				"clarity": sg.assessment.Clarity, "assumption_count": len(sg.assessment.Assumptions)})
 	}
+	return nil, false
+}
 
+// buildResult builds and encodes the successful set_goal result payload.
+func (sg *setGoalToolExecute) buildResult() *ToolResult {
 	// ADR-082 D9/FR-016: the result carries goal_id and the full registered
 	// record (definition/criteria/dod), not just the counts — the SPA's
 	// dedicated set_goal tool UI (SetGoalToolUI, live path) and its
@@ -698,26 +759,26 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	// is built by SetGoalResultPayload (the single definition — pkg/agent's
 	// engine-anchored synthetic calls reuse it, review CR8).
 	core := SetGoalResultCore{
-		Mode:       string(mode),
-		GoalID:     goalID,
-		Definition: definition,
-		Criteria:   normCriteria,
-		DoD:        normDoD,
-		Diff:       diffSummary,
-		DiffSet:    mode == setGoalModeUpdate,
+		Mode:       string(sg.mode),
+		GoalID:     sg.goalID,
+		Definition: sg.definition,
+		Criteria:   sg.normCriteria,
+		DoD:        sg.normDoD,
+		Diff:       sg.diffSummary,
+		DiffSet:    sg.mode == setGoalModeUpdate,
 	}
-	if assessment != nil {
+	if sg.assessment != nil {
 		// Only a non-nil pointer is boxed: a typed-nil *setGoalAssessment
 		// inside an `any` would read as non-nil to SetGoalResultPayload and
 		// emit `"assessment": null`.
-		core.Assessment = assessment
+		core.Assessment = sg.assessment
 	}
 	payload := SetGoalResultPayload(core)
 	encoded, payloadErr := json.Marshal(payload)
 	if payloadErr != nil {
 		logger.ErrorCF("goal", "set_goal: could not encode result payload",
-			map[string]any{"session_id": sessionID, "error": payloadErr.Error()})
-		return NewToolResult(fmt.Sprintf("goal record %s: %d criteria, %d DoD items", mode, len(normCriteria), len(normDoD)))
+			map[string]any{"session_id": sg.sessionID, "error": payloadErr.Error()})
+		return NewToolResult(fmt.Sprintf("goal record %s: %d criteria, %d DoD items", sg.mode, len(sg.normCriteria), len(sg.normDoD)))
 	}
 	return NewToolResult(string(encoded))
 }
