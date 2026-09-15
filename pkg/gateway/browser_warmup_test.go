@@ -1,5 +1,19 @@
 package gateway
 
+// Fix Wave B, Task 2 regression coverage: the shared Chrome coordinator must
+// be launched at gateway boot (not left entirely lazy until an agent's first
+// browser tool call), gated on cfg.Tools.Browser.Enabled/CDPURL and
+// OMNIPUS_SKIP_BROWSER_PREPROVISION=1. browserWarmUpEnabled and
+// findSharedBrowserCoordinator (gateway.go) are the exact decision/lookup
+// logic RunContextWithOptions' boot-time warm-up block calls — extracted so
+// they are unit-testable here without booting a full gateway (which would
+// additionally require either a testutil harness option this task's file
+// ownership does not include, or re-implementing credential-store seeding
+// from scratch). The launch mechanism itself (BrowserCoordinator.WarmUp
+// actually starting a real Chrome process) is covered by
+// pkg/tools/browser/warmup_test.go's
+// TestBrowserCoordinator_WarmUp_LaunchesRealChrome.
+
 import (
 	"testing"
 

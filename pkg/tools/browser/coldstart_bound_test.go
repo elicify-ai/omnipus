@@ -1,5 +1,19 @@
 package browser
 
+// Fix Wave B, Task 1: regression coverage for two unbounded CDP calls on the
+// cold-start critical path — BrowserCoordinator.LoadExtension's dead ctx
+// parameter (coordinator.go), and BrowserManager.createTab/bootstrapBrowserCtx's
+// unbounded target-attach chromedp.Run (manager.go). Both fed a CRITICAL
+// defect another wave fixed: a slow cold start could exceed the browser
+// WebSocket's 60s read deadline and tear down the connection.
+//
+// Split into two tiers:
+//   - Pure-logic unit tests for the extracted bound-computing helpers
+//     (boundedCallContext, runFirstAttach) — fast, deterministic, no Chrome.
+//   - One real-Chrome integration test per fix proving the PRODUCTION call
+//     site (LoadExtension, createTab via createFirstTab) is actually wired
+//     to the bound, not just that the helper exists in isolation.
+
 import (
 	"context"
 	"errors"

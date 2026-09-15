@@ -1,5 +1,10 @@
 package agent
 
+// bound_drift_route_test.go — ADR-029 WS-A agent-loop routing tests.
+// Covers TDD plan items #10 (drift drop skips GetDefaultAgent), #11 (unbound
+// default unchanged), #23d (routing-change audit event stub), and the
+// no-double-emit regression guard (fix-wave finding #1).
+
 import (
 	"context"
 	"path/filepath"

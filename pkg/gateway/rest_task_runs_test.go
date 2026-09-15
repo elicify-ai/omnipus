@@ -4,6 +4,14 @@
 
 package gateway
 
+// rest_task_runs_test.go — tests for GET /api/v1/tasks/{id}/runs (ADR-050
+// docs/internal/architecture/ADR-050-task-run-history-model.md,
+// docs/internal/specs/task-run-history-spec.md §3.6). Exercises the real
+// dispatch path (api.HandleTasks) the same way rest_tasks_test.go's
+// putTaskTodos/putTaskDependencies/deleteTask helpers do, so the "runs" case
+// wired into HandleTasks' sub-resource switch is covered end to end, not
+// just handleTaskRuns in isolation.
+
 import (
 	"bytes"
 	"context"

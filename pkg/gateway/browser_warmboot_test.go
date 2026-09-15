@@ -1,5 +1,19 @@
 package gateway
 
+// Warm-boot coverage: the boot-time browser warm-up ladder's two NEW steps —
+// the first TAB (tools.browser.warm_tab_at_boot) and the WebRTC CAPTURE
+// (tools.browser.warm_capture_at_boot, with its idle stop). Step 0, the Chrome
+// PROCESS, is covered by browser_warmup_test.go and unchanged here.
+//
+// What is testable off a live host, and what is not: the DECISIONS are
+// (gating, agent selection, the idle-stop/handover rule), and they are what
+// this file pins. Actually launching Chrome, loading the capture extension,
+// negotiating WebRTC and producing a frame are not — they need a real browser,
+// a real encoder page and a real relay, so those stay covered by the
+// browser-package e2e tests and by live UAT. The idle watcher is written
+// against a small interface (warmCaptureHandle) precisely so its rule can be
+// proven here without any of that.
+
 import (
 	"os"
 	"path/filepath"

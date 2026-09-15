@@ -4,6 +4,12 @@
 
 package gateway
 
+// rest_tasks.go — the unified /api/v1/tasks REST surface (Sprint 2). One store
+// (pkg/task), one wire schema (gen.Task), one create/update path. It folds in
+// the legacy /board/tasks and workflow-task handlers: GET/POST /tasks,
+// GET/PATCH/DELETE /tasks/{id}, GET /tasks/{id}/subtasks,
+// PUT /tasks/{id}/todos, PUT /tasks/{id}/dependencies.
+
 import (
 	"encoding/json"
 	"errors"

@@ -4,6 +4,29 @@
 
 package gateway
 
+// rest_task_runs.go — GET /api/v1/tasks/{id}/runs (ADR-050
+// docs/internal/architecture/ADR-050-task-run-history-model.md RD8,
+// docs/internal/specs/task-run-history-spec.md §3.6): the authoritative,
+// projection-independent run-history list for a task. Read-only: this file
+// only translates the domain task.TaskRun (pkg/task/run_store.go) into the
+// generated gen.TaskRun wire type and maps errors to HTTP status codes,
+// mirroring HandleTaskOccurrences' split (rest_tasks.go) between REST
+// plumbing and pure domain logic (task_occurrences.go handles the separate
+// occurrence-run OVERLAY, not this file).
+//
+// Routed from HandleTasks' sub-resource dispatch (rest_tasks.go's "runs"
+// case) rather than its own top-level registerAdditionalEndpoints entry —
+// unlike the FIXED "/api/v1/tasks/occurrences" path, "/api/v1/tasks/{id}/runs"
+// has a dynamic {id} segment between two fixed path parts, and
+// dynamicServeMux (pkg/channels/dynamic_mux.go) only supports exact-path or
+// trailing-slash PREFIX matches — it cannot route on a pattern with a
+// variable middle segment. HandleTasks already owns the "/api/v1/tasks/"
+// prefix and already parses {id}/{sub} for "subtasks"/"todos"/"dependencies",
+// so a "runs" case there is the only integration point. The DEDICATED
+// taskReadLimiter (240/min, rest_auth.go) — the SAME limiter
+// /tasks/occurrences uses per spec §3.6 — is applied at that dispatch point
+// since HandleTasks itself carries no rate limiter.
+
 import (
 	"encoding/json"
 	"errors"

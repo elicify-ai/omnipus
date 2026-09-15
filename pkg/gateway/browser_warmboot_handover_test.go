@@ -1,5 +1,30 @@
 package gateway
 
+// Round-2 finding F2 — the handover half of the fix.
+//
+// The defect: warm-boot step 2 starts a REAL capture at boot, with no viewer,
+// by default, for up to five minutes. The encoder page runs a bounded
+// resolution-adaptation loop that steps the picture down whenever the encoder
+// reports it is CPU-limited — and a boot-warmed capture is a full software
+// encode running during the busiest minute of the process's life, watched by
+// nobody. On a hosted Linux box it can reach the loop's hard floor (a QUARTER
+// of the pixels) within seconds. The user's FIRST panel open then rendered at
+// that resolution: a decision taken about a stream no human ever saw.
+//
+// The gateway's half of the fix is the only half that can exist here, because
+// viewers are the one thing the encoder page cannot see: when a real viewer
+// adopts a capture that has been warming unwatched for longer than
+// warmCaptureAdaptResetMinAge, tell the encoder to RESET ITS ADAPTATION so the
+// viewer starts at full quality. A viewer who arrives before any adaptation
+// could have happened must NOT be sent one — that is the case the warm-up was
+// built for (6,655ms -> 1,041ms to first frame).
+//
+// CHANGED 2026-08-19: the handover used to force a capture REBUILD. Measured
+// on the hosted box, that cost ~17s to first frame against ~4s without it,
+// which made keeping a warm capture alive past its idle window worse than
+// letting it stop — the opposite of the point. adapt_reset restores full
+// quality without tearing the capture down.
+
 import (
 	"testing"
 	"time"

@@ -1,5 +1,21 @@
 package browser
 
+// execpath_test.go — coverage for resolveExecPath's PATH-candidate
+// validation (probeChromiumBinary), its in-process cache (execPathCache/
+// execPathMu), and Preprovision's boot-time resolution. Mirrors
+// installer_test.go's harness style (globalManifestURLForTesting +
+// httptest, findInstalledBinary's on-disk layout) so the "falls through to
+// managed" and "downloads" cases never touch the real network.
+//
+// The motivating bug (the live repro on the devpod this fix shipped from):
+// /usr/bin/chromium-browser is an Ubuntu snap redirector script — a valid,
+// executable file that passes exec.LookPath — which exits with "... requires
+// the chromium snap" the moment it actually runs, on any host with no snapd
+// (e.g. a Fly.io machine). The pre-fix resolveExecPath trusted LookPath alone
+// and committed to that broken candidate; every browser tool then failed at
+// first use instead of falling through to the next PATH candidate or the
+// managed chrome-for-testing install.
+
 import (
 	"archive/zip"
 	"bytes"

@@ -1,5 +1,12 @@
 package browser
 
+// Coordinator invariant tests (ADR-043 spec TDD plan). Guard the load-bearing
+// invariants the grill surfaced: CRIT-002/C1 (manager.Shutdown drops the
+// connection, never the Chrome process or the agent's context), M2 (one Chrome
+// for N agents, each in its own context), and FR-008 (coordinator.Shutdown is
+// the sole process kill). Integration tests — they launch a real Chrome via the
+// coordinator, so they skip when no managed binary can be obtained.
+
 import (
 	"context"
 	"os"

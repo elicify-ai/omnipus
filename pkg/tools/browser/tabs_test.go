@@ -1,5 +1,15 @@
 package browser
 
+// tabs_test.go — ADR-041 D1/D2/D3 unit coverage for the tab-set model:
+// add/switch/close/neighbor-activation, the FR-060 memory gate on both
+// Session() and adoption, Session(default) following the active tab,
+// ReconcileTabs adopting a newly-detected target, and the
+// never-zero-tabs invariant. Every test here uses BrowserManager.createTabFn
+// (a test seam mirroring evalCDP/listTargets' exact rationale — see its doc
+// comment in manager.go) to fabricate tabs without a real Chromium/CDP
+// connection, so these run in any environment, including this devpod which
+// has no Chromium binary.
+
 import (
 	"context"
 	"fmt"

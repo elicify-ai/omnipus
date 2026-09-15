@@ -4,6 +4,33 @@
 
 package agent
 
+// plan_wake_delivery_test.go is the ADR-055 regression suite for the plan-wake
+// delivery path (FR-012c/FR-012d/FR-016b/FR-016c/FR-021/FR-022/FR-029/FR-044).
+//
+// ⚠ EVERY test here asserts an OUTCOME, never a mechanism. That is the whole
+// point of the file. The defect it exists to prevent survived four reviews
+// because the in-package convention was a fake notifier that CAPTURES
+// AsyncNotifyEvents — a recorder sitting three hops upstream of the guard that
+// discarded every one of them. "Notify was called with AgentID=plansupervisor"
+// was green for years while no agent turn had ever run for any plan wake.
+//
+// So, concretely, in this file:
+//
+//   - "the wake reached the supervisor" means AN LLM CALL WAS MADE ON THE
+//     SUPERVISOR'S OWN PROVIDER and its transcript session has entries — not
+//     that an event was recorded, not that an id was written to the plan.
+//   - "stop halts the supervision turn" means THE TURN RETURNED, observed from
+//     inside the provider call — not that a session id appeared in a cancel
+//     fan-out set. The pre-existing fakeSessionCanceller records the string it
+//     is handed and returns (true, nil) unconditionally, so a set-membership
+//     assertion is green against a control that cancels nothing. It is banned
+//     here.
+//   - "an origin-less plan is healthy" means ITS ATTEMPT COUNTER DID NOT MOVE
+//     and its failed_reason is not supervision_unavailable — the limb that
+//     catches a naive fix which routes an empty origin through the notifier's
+//     empty-destination rejection and escalates a perfectly healthy UI-created
+//     plan to "the supervisor is unavailable".
+
 import (
 	"context"
 	"fmt"

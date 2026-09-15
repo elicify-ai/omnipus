@@ -1,5 +1,25 @@
 package browser
 
+// switch_tab_same_index_recapture_test.go — coverage for the SECOND half of
+// the tab-switch defect class, and for the three paths that moved the model's
+// active tab without ever telling Chrome.
+//
+// The coverage gap that let this ship: live_test.go's
+// TestLiveView_OnTabsChanged_ActiveTabSwitch_TriggersCaptureSessionRecapture
+// pins the case where the MODEL moved — LiveView.onTabsChanged sees a
+// different active-tab context and fires the recapture. Nothing pinned the
+// mirror case, where the model did NOT move but Chrome's own idea of the
+// active tab had drifted away from it (measured cause: a page-opened tab
+// whose adoption failed, so Chrome activated a tab our model never learned
+// about). In that state the user clicks the tab strip entry that is ALREADY
+// active, SwitchTab genuinely corrects Chrome via Page.bringToFront, returns
+// success — and the picture never follows, because onTabsChanged's
+// activeTabChanged check is false and nobody asks for a recapture.
+//
+// These tests assert on the RECAPTURE REQUEST reaching the encoder, because
+// that is the only observable the real defect had: no error, no console
+// message, no failed call. Just a picture that stayed on the wrong tab.
+
 import (
 	"context"
 	"sync"

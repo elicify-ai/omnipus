@@ -4,6 +4,19 @@
 
 package gateway
 
+// Tests for the egress-proxy boot-abort fix: when an operator has explicitly
+// configured sandbox.egress_allow_list (opted into egress restriction) and
+// sandbox.NewEgressProxy fails to construct, boot must abort with a
+// *SandboxBootError rather than silently continuing with a nil proxy.
+//
+// A nil *sandbox.EgressProxy is NOT a "feature disabled" signal downstream —
+// pkg/tools/web_serve.go's proxyAddr() and pkg/tools/shell.go's
+// sandboxLimitsEnv both interpret an empty EgressProxyAddr as "skip
+// HTTP_PROXY/HTTPS_PROXY entirely", so web_serve dev-mode children and bash's
+// hardened-exec children would run with fully unrestricted egress — the
+// opposite of what the operator asked for. See buildEgressProxyOrAbort's doc
+// comment in gateway.go for the full trace.
+
 import (
 	"errors"
 	"strings"

@@ -1,5 +1,27 @@
 package tools
 
+// G1 regression coverage (review finding, criticality 9): before this fix,
+// `delegate action=status` could only ever see a running native child's
+// PERSISTED transcript entries (recentActivityLines), which are written only
+// at full-LLM-round completion. A model spending tens of seconds streaming a
+// large tool-call argument (a multi-kilobyte SVG body, a long file write)
+// therefore produced NOTHING an orchestrator's status poll could see — bit
+// for bit indistinguishable from a hung generation. That ambiguity had a
+// real production consequence: an orchestrator polled a delegated worker 75
+// times over 46 seconds, saw no activity, concluded it had hung, and killed
+// it mid-write — repeatedly.
+//
+// DelegateProgressReader (delegate.go) is the fix's consumer-side seam:
+// action:"status" now also reads a LIVE tool-call-argument progress
+// snapshot, sourced from the child turn's own in-memory state
+// (pkg/agent.turnState.recordToolCallProgress, wired through
+// AgentLoop.ProgressForSession) rather than the persisted transcript alone.
+// These tests exercise that seam end-to-end through the real DelegateTool
+// (mirroring delegate_status_snapshot_test.go's existing pattern for
+// recentActivityLines) using a stub DelegateProgressReader, so pkg/tools
+// stays decoupled from pkg/agent exactly like every sibling seam on this
+// tool (SubTurnSpawner, DelegateAgentRegistry, DelegateSessionStore).
+
 import (
 	"context"
 	"strings"

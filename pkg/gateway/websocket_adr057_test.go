@@ -4,6 +4,40 @@
 
 package gateway
 
+// websocket_adr057_test.go — tests for ADR-057 unit U11 (pkg/gateway/websocket.go):
+// W3 (the streamed-assistant transcript write becomes strict), W5b (WS frame
+// stamping / the FR-089 six-type classification), and W10c (the
+// approval-cancel descendant-set re-key).
+//
+// Per the ADR-057 session-unification spec's binding rule 5, every unit's new
+// tests go in a NEW file named `<subject>_adr057_test.go`; this file is
+// U11's. Rule 6: this file's own new package-level helpers are prefixed
+// `u11` so a same-wave collision with another unit's new package-level test
+// helper is a compile error, not a silent shadow — but it deliberately
+// REUSES pkg/gateway/approvals_adr057_test.go's already-landed
+// chatRoutingSid/childActingSid/newTestApprovalRegistry fixtures rather than
+// redeclaring them, since U11 and U17a's approval-cancel work is one
+// end-to-end property (FR-032/FR-080) split across two files by ownership,
+// not two independent properties.
+//
+// Binding rule 1 (real state, never a spy): every test below reads a REAL
+// session.LifecycleStore rooted at t.TempDir(), a REAL approvalRegistryV2,
+// and — in TestU11BuildCancelHooks_CancelPendingApprovals_ReachesRealDescendant
+// — a REAL *WSHandler wired to a REAL *agent.AgentLoop via
+// SetSessionMessagingStores. Nothing here asserts "a function was called";
+// every assertion lands on an observable artefact (the registry entry's own
+// state, what arrived on its resultCh, what the walk actually returned).
+//
+// Binding rule 4 (positive lower bound before any exclusion/zero-count
+// assertion): TestU11CollectDescendantSessionIDs_MultiLevelWalk asserts it
+// found >= 2 real descendants before asserting the unrelated sibling is
+// excluded; TestU11ApprovalCancel_SingleIDMissesDescendant_SetFormReaches
+// asserts the fixture's single pending entry was accepted before asserting
+// anything about cancellation reaching or missing it.
+//
+// Corollary "distinct ids everywhere": every root/child/grandchild pair below
+// is constructed as three distinct, non-equal literal strings.
+
 import (
 	"testing"
 

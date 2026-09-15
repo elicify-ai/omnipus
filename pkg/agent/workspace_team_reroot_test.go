@@ -4,6 +4,21 @@
 
 package agent
 
+// workspace_team_reroot_test.go — drives runTurn end-to-end (via ProcessDirect)
+// to prove the CoreTeam-membership-driven filesystem re-rooting in runTurn
+// (pkg/agent/loop.go): an agent that belongs to a Workspace's core_team writes
+// into that Workspace's own shared directory instead of its private per-agent
+// directory, regardless of whether the turn carries a channel-bound
+// workspace_id (ts.opts.WorkspaceID is empty here — ProcessDirect is not
+// channel-bound — which is exactly the divergence case the re-rooting design
+// is meant to cover: CoreTeam membership, not the turn-carried workspace_id,
+// drives the re-root).
+//
+// Uses the ScenarioProvider harness (already bridged into runTurn by
+// scenario_runturn_test.go) to script a single write_file tool call, avoiding
+// any real LLM call — the effective root is asserted purely from where the
+// file actually landed on disk.
+
 import (
 	"context"
 	"errors"
