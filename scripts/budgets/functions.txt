@@ -11,7 +11,7 @@ pkg/agent/goal_triggers.go	AgentLoop.runGoalAdjudication	367
 pkg/agent/instance.go	NewAgentInstance	354
 pkg/agent/judge.go	AgentLoop.JudgeCriteria	262
 pkg/agent/loop_window.go	AgentLoop.windowTrimForce	243
-pkg/agent/loop_wire.go	registerSharedTools	1346
+pkg/agent/loop_wire.go	registerSharedTools	1297
 pkg/agent/loop.go	AgentLoop.processMessage	341
 pkg/agent/loop.go	AgentLoop.runTurn	4364
 pkg/agent/loop.go	NewAgentLoop	427
