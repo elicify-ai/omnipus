@@ -268,34 +268,99 @@ type Options struct {
 	LockDir string
 }
 
+// runWithOptions carries the shared state of RunWithOptions across its stages.
+type runWithOptions struct {
+	vaultRoot         string
+	opts              Options
+	write             bool
+	inv               *Inventory
+	err               error
+	notes             []NoteRecord
+	loadProblems      []LoadProblem
+	disc              TypeDiscriminatorCheck
+	rejectedTypes     []RejectedType
+	inferred          map[string][]InferredProperty
+	typeSummaries     []TypeSchemaSummary
+	ambiguities       []AmbiguousInference
+	relationSplits    []RelationSplitReport
+	aritySplits       []AritySplitReport
+	nameEvidenced     []NameEvidencedInference
+	typeInference     TypeInferenceReport
+	baseRelPaths      []string
+	parsedBases       map[string]*ParsedBase
+	baseReadOutcomes  map[string]BaseOutcome
+	provisioned       []ProvisionedType
+	provisionedByType map[string]ProvisionedType
+	schemaSet         *records.SchemaSet
+	schemaReload      *records.SchemaLoadReport
+	identityStamps    IdentityStampReport
+	baseOutcomes      []BaseOutcome
+	allProduced       []ProducedView
+	viewRoot          string
+	viewReload        *records.ViewLoadReport
+}
+
 // RunWithOptions is Run with every knob exposed.
 func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
-	write := opts.Write
-	inv, err := ScanVault(vaultRoot)
-	if err != nil {
-		return nil, err
+	rwo := &runWithOptions{vaultRoot: vaultRoot, opts: opts}
+
+	if r0, r1, stop := rwo.scanAndInfer(); stop {
+		return r0, r1
 	}
 
-	notes, loadProblems, err := LoadNotes(inv)
-	if err != nil {
-		return nil, err
+	// FR-104b (founder ruling): untyped notes are not left stranded. This
+	// runs AFTER every schema is inferred — the shapes it matches against
+	// are the schemas this run just produced — and BEFORE validation, so a
+	// note whose `type:` was written this run is validated as the record it
+	// has just become rather than reported as "not a record at all" by the
+	// same run that typed it.
+	rwo.enrichSchemas()
+
+	if r0, r1, stop := rwo.reloadAndStamp(); stop {
+		return r0, r1
 	}
 
-	disc := CheckTypeDiscriminator(notes)
-	groups, rejectedTypes := partitionTypeGroups(CollectTypeGroups(notes))
-	nameIdx := BuildNameIndex(notes)
+	rwo.translateBases()
+	if !rwo.write {
+		stage, stageErr := os.MkdirTemp("", "omnipus-import-dryrun-views-")
+		if stageErr != nil {
+			return nil, fmt.Errorf("vaultimport: staging a dry-run views directory: %w", stageErr)
+		}
+		defer os.RemoveAll(stage)
+		rwo.viewRoot = stage
+	}
+	if r0, r1, stop := rwo.writeAndReloadViews(); stop {
+		return r0, r1
+	}
 
-	inferred := map[string][]InferredProperty{}
-	var typeSummaries []TypeSchemaSummary
-	var ambiguities []AmbiguousInference
-	var relationSplits []RelationSplitReport
-	var aritySplits []AritySplitReport
+	return rwo.validateAndReport()
+}
+
+// scanAndInfer scans the vault and infers schemas from its contents.
+func (rwo *runWithOptions) scanAndInfer() (*Report, error, bool) {
+	rwo.write = rwo.opts.Write
+	rwo.inv, rwo.err = ScanVault(rwo.vaultRoot)
+	if rwo.err != nil {
+		return nil, rwo.err, true
+	}
+
+	rwo.notes, rwo.loadProblems, rwo.err = LoadNotes(rwo.inv)
+	if rwo.err != nil {
+		return nil, rwo.err, true
+	}
+
+	rwo.disc = CheckTypeDiscriminator(rwo.notes)
+	var groups map[string]*TypeGroup
+	groups, rwo.rejectedTypes = partitionTypeGroups(CollectTypeGroups(rwo.notes))
+	nameIdx := BuildNameIndex(rwo.notes)
+
+	rwo.inferred = map[string][]InferredProperty{}
 
 	typeNames := sortedGroupKeys(groups)
 	for _, t := range typeNames {
 		g := groups[t]
 		props := InferSchema(g, nameIdx)
-		inferred[t] = props
+		rwo.inferred[t] = props
 
 		summary := TypeSchemaSummary{Type: t, NoteCount: g.NoteCount, PropertyCount: len(props)}
 		for _, p := range props {
@@ -322,16 +387,16 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 				summary.TextCount++
 			}
 			if p.Ambiguity != nil {
-				ambiguities = append(ambiguities, *p.Ambiguity)
+				rwo.ambiguities = append(rwo.ambiguities, *p.Ambiguity)
 			}
 			if p.RelationSplit != nil {
-				relationSplits = append(relationSplits, *p.RelationSplit)
+				rwo.relationSplits = append(rwo.relationSplits, *p.RelationSplit)
 			}
 			if p.AritySplit != nil {
-				aritySplits = append(aritySplits, *p.AritySplit)
+				rwo.aritySplits = append(rwo.aritySplits, *p.AritySplit)
 			}
 		}
-		typeSummaries = append(typeSummaries, summary)
+		rwo.typeSummaries = append(rwo.typeSummaries, summary)
 	}
 
 	// Every property typed from its NAME because the vault held no value for
@@ -340,15 +405,13 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 	// decisions the inference pass made. A guess this run made and did not
 	// print is a guess the operator cannot correct, which is the whole reason
 	// the inference pass records it.
-	nameEvidenced := CollectNameEvidencedInferences(inferred)
+	rwo.nameEvidenced = CollectNameEvidencedInferences(rwo.inferred)
+	return nil, nil, false
+}
 
-	// FR-104b (founder ruling): untyped notes are not left stranded. This
-	// runs AFTER every schema is inferred — the shapes it matches against
-	// are the schemas this run just produced — and BEFORE validation, so a
-	// note whose `type:` was written this run is validated as the record it
-	// has just become rather than reported as "not a record at all" by the
-	// same run that typed it.
-	typeInference := InferTypesForUntypedNotes(notes, inferred, write)
+// enrichSchemas infers note types and uses base-file evidence to refine the schemas.
+func (rwo *runWithOptions) enrichSchemas() {
+	rwo.typeInference = InferTypesForUntypedNotes(rwo.notes, rwo.inferred, rwo.write)
 
 	// The `.base` files are read and parsed HERE, before a single schema is
 	// written, and the parse results are carried into the translation loop
@@ -357,14 +420,15 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 	// the schema set is still being decided, because a type declared by a
 	// base and by no note has to be IN that set before writeSchemas runs and
 	// before records.LoadSchemas reads it back.
-	baseRelPaths, baseByRel := sortedBaseRelPaths(inv)
-	parsedBases, baseReadOutcomes := parseAllBases(baseRelPaths, baseByRel)
+	var baseByRel map[string]string
+	rwo.baseRelPaths, baseByRel = sortedBaseRelPaths(rwo.inv)
+	rwo.parsedBases, rwo.baseReadOutcomes = parseAllBases(rwo.baseRelPaths, baseByRel)
 
-	provisioned := provisionTypesFromBases(baseRelPaths, parsedBases, inferred, notes)
-	provisionedByType := map[string]ProvisionedType{}
-	for _, p := range provisioned {
-		provisionedByType[p.Type] = p
-		inferred[p.Type] = provisionedProperties(p)
+	rwo.provisioned = provisionTypesFromBases(rwo.baseRelPaths, rwo.parsedBases, rwo.inferred, rwo.notes)
+	rwo.provisionedByType = map[string]ProvisionedType{}
+	for _, p := range rwo.provisioned {
+		rwo.provisionedByType[p.Type] = p
+		rwo.inferred[p.Type] = provisionedProperties(p)
 	}
 
 	// An inferred enum's closed set is what the NOTES happen to hold, and the
@@ -397,7 +461,7 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 	// promoting its property text->date on stale evidence could invalidate the
 	// very note this run just typed — the one bar this package admits no
 	// exception to.
-	TypePropertiesFromBaseFormulas(inferred, notes, baseRelPaths, parsedBases)
+	TypePropertiesFromBaseFormulas(rwo.inferred, rwo.notes, rwo.baseRelPaths, rwo.parsedBases)
 
 	// The number half of the same evidence class: a view that totals a
 	// property is its operator stating the property holds a number. Runs
@@ -405,7 +469,7 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 	// for the same reason — both read a `.base` file as a statement about a
 	// schema, and both are contained by "data beats a base file", so neither
 	// can speak about a property the notes have already decided.
-	TypePropertiesFromBaseSummaries(inferred, notes, baseRelPaths, parsedBases)
+	TypePropertiesFromBaseSummaries(rwo.inferred, rwo.notes, rwo.baseRelPaths, rwo.parsedBases)
 	// A record type that observed NOTHING for a property is standing on this
 	// package's `text` fallback, not on a reading of its own data — and that
 	// fallback used to stand as an equal partner to seven hundred observations
@@ -431,13 +495,16 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 	// schema_write.go's propertyAccountComment. The returned slices are the same
 	// decisions in list form, for the tests that grade this rule; a REPORT row
 	// for them is owed and belongs in report.go, which this change does not own.
-	_, _ = AdoptObservedDomains(inferred, notes)
+	_, _ = AdoptObservedDomains(rwo.inferred, rwo.notes)
 
-	WidenEnumsFromBases(inferred, baseRelPaths, parsedBases)
+	WidenEnumsFromBases(rwo.inferred, rwo.baseRelPaths, rwo.parsedBases)
+}
 
-	if write {
-		if writeErr := writeSchemas(inv.Root, inferred, provisionedByType); writeErr != nil {
-			return nil, writeErr
+// reloadAndStamp writes or stages schemas, reloads them, and stamps record identities.
+func (rwo *runWithOptions) reloadAndStamp() (*Report, error, bool) {
+	if rwo.write {
+		if writeErr := writeSchemas(rwo.inv.Root, rwo.inferred, rwo.provisionedByType); writeErr != nil {
+			return nil, writeErr, true
 		}
 	}
 
@@ -446,15 +513,14 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 	// run the same loader reads a staged copy, so the validation below is
 	// against the schemas this run produced either way (see
 	// schemaSetFromRendered).
-	var schemaSet *records.SchemaSet
-	var schemaReload *records.SchemaLoadReport
-	if write {
-		schemaSet, schemaReload, err = records.LoadSchemas(inv.Root)
+
+	if rwo.write {
+		rwo.schemaSet, rwo.schemaReload, rwo.err = records.LoadSchemas(rwo.inv.Root)
 	} else {
-		schemaSet, schemaReload, err = schemaSetFromRendered(inferred, provisionedByType)
+		rwo.schemaSet, rwo.schemaReload, rwo.err = schemaSetFromRendered(rwo.inferred, rwo.provisionedByType)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("vaultimport: reloading schemas: %w", err)
+	if rwo.err != nil {
+		return nil, fmt.Errorf("vaultimport: reloading schemas: %w", rwo.err), true
 	}
 
 	// IDENTIFIER STAMPING, HERE AND NOT EARLIER OR LATER.
@@ -466,62 +532,64 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 	// is stamped in the same run rather than needing a second one. Before
 	// records.Validate below, so validation sees the `id:` the run just wrote
 	// and the report cannot contradict the files on disk.
-	identityStamps := StampIdentities(inv.Root, notes, schemaSet, opts.LockDir, write)
+	rwo.identityStamps = StampIdentities(rwo.inv.Root, rwo.notes, rwo.schemaSet, rwo.opts.LockDir, rwo.write)
+	return nil, nil, false
+}
 
-	schemaIdx := NewSchemaIndex(inferred)
+// translateBases translates every parsed base into produced views.
+func (rwo *runWithOptions) translateBases() {
+	schemaIdx := NewSchemaIndex(rwo.inferred)
 	slugs := NewSlugRegistry()
 
-	var baseOutcomes []BaseOutcome
-	var allProduced []ProducedView
-	for _, rel := range baseRelPaths {
-		if bad, failed := baseReadOutcomes[rel]; failed {
-			baseOutcomes = append(baseOutcomes, bad)
+	for _, rel := range rwo.baseRelPaths {
+		if bad, failed := rwo.baseReadOutcomes[rel]; failed {
+			rwo.baseOutcomes = append(rwo.baseOutcomes, bad)
 			continue
 		}
-		outcome, produced := TranslateBase(parsedBases[rel], rel, schemaIdx, slugs)
-		baseOutcomes = append(baseOutcomes, outcome)
-		allProduced = append(allProduced, produced...)
+		outcome, produced := TranslateBase(rwo.parsedBases[rel], rel, schemaIdx, slugs)
+		rwo.baseOutcomes = append(rwo.baseOutcomes, outcome)
+		rwo.allProduced = append(rwo.allProduced, produced...)
 	}
 
-	viewRoot := inv.Root
-	if !write {
-		stage, stageErr := os.MkdirTemp("", "omnipus-import-dryrun-views-")
-		if stageErr != nil {
-			return nil, fmt.Errorf("vaultimport: staging a dry-run views directory: %w", stageErr)
-		}
-		defer os.RemoveAll(stage)
-		viewRoot = stage
-	}
-	viewsDir := records.ViewsDir(viewRoot)
-	for _, pv := range allProduced {
+	rwo.viewRoot = rwo.inv.Root
+}
+
+// writeAndReloadViews writes the produced views and reloads the resulting view set.
+func (rwo *runWithOptions) writeAndReloadViews() (*Report, error, bool) {
+	viewsDir := records.ViewsDir(rwo.viewRoot)
+	for _, pv := range rwo.allProduced {
 		path := filepath.Join(viewsDir, filepath.Base(pv.RelPath))
 		if writeErr := fileutil.WriteFileAtomic(path, pv.Bytes, generatedFilePerm); writeErr != nil {
-			return nil, fmt.Errorf("vaultimport: writing view %q: %w", path, writeErr)
+			return nil, fmt.Errorf("vaultimport: writing view %q: %w", path, writeErr), true
 		}
 	}
-	_, viewReload, err := records.LoadViews(viewRoot, schemaSet)
-	if err != nil {
-		return nil, fmt.Errorf("vaultimport: reloading views: %w", err)
+	_, rwo.viewReload, rwo.err = records.LoadViews(rwo.viewRoot, rwo.schemaSet)
+	if rwo.err != nil {
+		return nil, fmt.Errorf("vaultimport: reloading views: %w", rwo.err), true
 	}
+	return nil, nil, false
+}
 
-	recs := make([]records.Record, 0, len(notes))
-	for _, n := range notes {
+// validateAndReport validates the imported records and assembles the final report.
+func (rwo *runWithOptions) validateAndReport() (*Report, error) {
+	recs := make([]records.Record, 0, len(rwo.notes))
+	for _, n := range rwo.notes {
 		recs = append(recs, n.Rec)
 	}
-	valReport := records.Validate(schemaSet, recs, records.ValidateOptions{ReportUndeclaredProperties: true})
+	valReport := records.Validate(rwo.schemaSet, recs, records.ValidateOptions{ReportUndeclaredProperties: true})
 
 	// The discriminator check ran BEFORE FR-104b wrote anything, so its
 	// counts describe the vault as it ARRIVED. The validation summary must
 	// describe the vault as it now IS, or the report contradicts the files
 	// this run wrote — so the typed/untyped split is re-derived here rather
 	// than carried over.
-	postDisc := CheckTypeDiscriminator(notes)
+	postDisc := CheckTypeDiscriminator(rwo.notes)
 	vs := ValidationSummary{
 		TotalNotes:       postDisc.TotalNotes,
 		NotesWithoutType: postDisc.WithoutType,
 		NotesWithType:    postDisc.WithType,
 		NotRecordsAtAll:  postDisc.WithoutType,
-		DryRun:           !write,
+		DryRun:           !rwo.write,
 	}
 	for _, rr := range valReport.Records {
 		if !rr.Recognised {
@@ -546,29 +614,29 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 	}
 
 	return &Report{
-		VaultRoot:     inv.Root,
-		DryRun:        !write,
-		Discriminator: disc,
-		LoadProblems:  loadProblems,
-		RejectedTypes: rejectedTypes,
-		NameEvidenced: nameEvidenced,
+		VaultRoot:     rwo.inv.Root,
+		DryRun:        !rwo.write,
+		Discriminator: rwo.disc,
+		LoadProblems:  rwo.loadProblems,
+		RejectedTypes: rwo.rejectedTypes,
+		NameEvidenced: rwo.nameEvidenced,
 		// Asked for HERE rather than captured from WidenEnumsFromBases's
 		// return value, deliberately. Every account is stored on the property
 		// it belongs to, so this reads the same source the written schema was
 		// built from — a widening that reached the schema and not this list
 		// is not expressible.
-		EnumWidenings:    CollectEnumWidenings(inferred),
-		FormulaEvidenced: CollectFormulaEvidencedTypes(inferred),
-		Provisioned:      provisioned,
-		Types:            typeSummaries,
-		Ambiguities:      ambiguities,
-		RelationSplits:   relationSplits,
-		AritySplits:      aritySplits,
-		Bases:            baseOutcomes,
-		TypeInference:    typeInference,
-		IdentityStamps:   identityStamps,
-		SchemaReload:     schemaReload,
-		ViewReload:       viewReload,
+		EnumWidenings:    CollectEnumWidenings(rwo.inferred),
+		FormulaEvidenced: CollectFormulaEvidencedTypes(rwo.inferred),
+		Provisioned:      rwo.provisioned,
+		Types:            rwo.typeSummaries,
+		Ambiguities:      rwo.ambiguities,
+		RelationSplits:   rwo.relationSplits,
+		AritySplits:      rwo.aritySplits,
+		Bases:            rwo.baseOutcomes,
+		TypeInference:    rwo.typeInference,
+		IdentityStamps:   rwo.identityStamps,
+		SchemaReload:     rwo.schemaReload,
+		ViewReload:       rwo.viewReload,
 		Validation:       vs,
 	}, nil
 }
