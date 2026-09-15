@@ -437,6 +437,15 @@ type execPathCaches struct {
 	failPath  string
 }
 
+// execPathCachesResolve carries the shared state of resolve across its stages.
+type execPathCachesResolve struct {
+	e                  *execPathCaches
+	ctx                context.Context
+	cfg                BrowserConfig
+	pathResolved       string
+	rejectedPathChrome string
+}
+
 // resolve returns the path to the Chromium binary chromedp should launch.
 // Full resolution order (ADR-052 D2/M1 — Phase 1, security review applied):
 //
@@ -470,32 +479,34 @@ type execPathCaches struct {
 // lock held; the only state it touches is this struct's own mu-guarded
 // caches.
 func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string, error) {
-	if cfg.ExecPath != "" {
-		info, err := os.Stat(cfg.ExecPath)
+	ep := &execPathCachesResolve{e: e, ctx: ctx, cfg: cfg}
+
+	if ep.cfg.ExecPath != "" {
+		info, err := os.Stat(ep.cfg.ExecPath)
 		if err != nil {
-			return "", fmt.Errorf("configured exec_path %s: %w", cfg.ExecPath, err)
+			return "", fmt.Errorf("configured exec_path %s: %w", ep.cfg.ExecPath, err)
 		}
 		if info.IsDir() {
 			return "", fmt.Errorf(
-				"configured exec_path %s is a directory, not an executable file", cfg.ExecPath,
+				"configured exec_path %s is a directory, not an executable file", ep.cfg.ExecPath,
 			)
 		}
 		// Exec-bit check is POSIX-only: on Windows os.FileMode does not carry
 		// Unix execute bits, so this guard would wrongly reject every .exe.
 		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
 			return "", fmt.Errorf(
-				"configured exec_path %s is not executable (check its file mode)", cfg.ExecPath,
+				"configured exec_path %s is not executable (check its file mode)", ep.cfg.ExecPath,
 			)
 		}
-		return cfg.ExecPath, nil
+		return ep.cfg.ExecPath, nil
 	}
 
-	e.mu.Lock()
-	cached := e.success
-	failErr := e.failErr
-	failUntil := e.failUntil
-	failPath := e.failPath
-	e.mu.Unlock()
+	ep.e.mu.Lock()
+	cached := ep.e.success
+	failErr := ep.e.failErr
+	failUntil := ep.e.failUntil
+	failPath := ep.e.failPath
+	ep.e.mu.Unlock()
 
 	// Success cache hit — validate the binary is still on disk (L2). A cached
 	// path whose binary was since deleted would otherwise make every launch fail
@@ -504,9 +515,9 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 		if info, statErr := os.Stat(cached); statErr == nil && !info.IsDir() {
 			return cached, nil
 		}
-		e.mu.Lock()
-		e.success = ""
-		e.mu.Unlock()
+		ep.e.mu.Lock()
+		ep.e.success = ""
+		ep.e.mu.Unlock()
 	}
 
 	// Negative cache (L1): within the TTL, return the SAME error without
@@ -529,17 +540,17 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 				logger.InfoCF("browser",
 					"cached chromium resolution failure is stale — binary now exists, evicting and re-resolving",
 					map[string]any{"path": failPath})
-				e.mu.Lock()
+				ep.e.mu.Lock()
 				// Only clear if nothing else already superseded this entry
 				// (e.g. a concurrent resolve() already succeeded/failed
 				// again) — compare-and-clear on failUntil avoids clobbering
 				// a newer cache entry with a stale eviction.
-				if e.failUntil.Equal(failUntil) {
-					e.failErr = nil
-					e.failUntil = time.Time{}
-					e.failPath = ""
+				if ep.e.failUntil.Equal(failUntil) {
+					ep.e.failErr = nil
+					ep.e.failUntil = time.Time{}
+					ep.e.failPath = ""
 				}
-				e.mu.Unlock()
+				ep.e.mu.Unlock()
 				// Fall through to a full re-resolution below rather than
 				// returning here — the freshly-discovered binary still
 				// needs the same --version probe every other candidate
@@ -588,10 +599,63 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 		}
 	}
 
+	ep.discoverPathChrome()
+
+	// Step 3 (ADR-052 D2 — package Chrome): inspect the runtime-computed
+	// package root. When cfg.PreferPackaged is true the package Chrome
+	// outranks $PATH (regardless of TrustPathChrome). When PreferPackaged
+	// is false but $PATH either missed or was discarded above, the package
+	// Chrome is the floor.
+	if ep.pathResolved == "" || ep.cfg.PreferPackaged {
+		pkgRoot, pkgStatus := packageChromeRootProbe()
+		if pkgStatus == ProbeUsable && pkgRoot != "" {
+			pkgBin, pkgSHA := findPackageChrome(pkgRoot)
+			if pkgBin != "" {
+				// SEC-ADR052-001 + SEC-ADR052-004: chrome.sha256 is REQUIRED
+				// for the package Chrome path (findPackageChrome refused
+				// the binary when the manifest is missing). Verify with
+				// the hardened parser + constant-time compare.
+				if verr := cachedVerifyChromeSHA256(pkgBin, pkgSHA); verr != nil {
+					logger.WarnCF("browser",
+						"package Chrome failed integrity verification — falling through to managed download",
+						map[string]any{
+							"binary":     pkgBin,
+							"sha256_man": pkgSHA,
+							"error":      verr.Error(),
+							"reason":     "WARN-CFTSHA-001",
+						})
+					// fall through to step 4
+				} else {
+					logger.InfoCF("browser", "using package-managed Chrome (ADR-052 D2 step 3)",
+						map[string]any{
+							"binary":          pkgBin,
+							"prefer_packaged": ep.cfg.PreferPackaged,
+							"path_was_set":    ep.pathResolved != "",
+						})
+					ep.e.cacheSuccess(pkgBin)
+					return pkgBin, nil
+				}
+			}
+		}
+	}
+
+	// If step 2 found a system Chrome on $PATH and step 3 didn't override it
+	// (either because the package root was empty, or the package binary was
+	// absent, or PreferPackaged was false), return the PATH result now.
+	if ep.pathResolved != "" {
+		ep.e.cacheSuccess(ep.pathResolved)
+		return ep.pathResolved, nil
+	}
+
+	return ep.resolveManagedChrome()
+}
+
+// discoverPathChrome discovers a system Chrome candidate and applies the operator trust policy.
+func (ep *execPathCachesResolve) discoverPathChrome() {
 	// Operators can force the managed install path (skipping the $PATH lookup)
 	// by setting OMNIPUS_BROWSER_FORCE_MANAGED=1.
 	forceManaged := os.Getenv("OMNIPUS_BROWSER_FORCE_MANAGED") == "1"
-	pathResolved := ""
+	ep.pathResolved = ""
 	if !forceManaged {
 		for _, name := range []string{"google-chrome", "google-chrome-stable", "chromium", "chromium-browser"} {
 			path, err := exec.LookPath(name)
@@ -600,11 +664,11 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 			}
 			// Even --version executes the candidate with gateway privileges.
 			// Record discovery without probing until the operator grants trust.
-			if !cfg.TrustPathChrome {
-				pathResolved = path
+			if !ep.cfg.TrustPathChrome {
+				ep.pathResolved = path
 				break
 			}
-			if ok, reason := probeChromiumBinary(ctx, path); !ok {
+			if ok, reason := probeChromiumBinary(ep.ctx, path); !ok {
 				logger.WarnCF("browser", "chromium candidate on PATH did not execute successfully — skipping",
 					map[string]any{
 						"name":   name,
@@ -613,7 +677,7 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 					})
 				continue
 			}
-			pathResolved = path
+			ep.pathResolved = path
 			break
 		}
 	}
@@ -638,79 +702,36 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 	// a bare network/manifest error with no hint that a working Chrome was
 	// sitting right there on $PATH the whole time, or which setting to
 	// flip to use it.
-	rejectedPathChrome := ""
-	if pathResolved != "" && !cfg.TrustPathChrome {
+	ep.rejectedPathChrome = ""
+	if ep.pathResolved != "" && !ep.cfg.TrustPathChrome {
 		logger.WarnCF(
 			"browser",
 			"WARN-BROWSER-007: system Chrome on $PATH ignored — operator must set tools.browser.trust_path_chrome=true to use a non-package Chrome",
 			map[string]any{
-				"path_resolved": pathResolved,
+				"path_resolved": ep.pathResolved,
 				"policy":        "trust_path_chrome=false",
 			},
 		)
-		rejectedPathChrome = pathResolved
-		pathResolved = ""
+		ep.rejectedPathChrome = ep.pathResolved
+		ep.pathResolved = ""
 	}
+}
 
-	// Step 3 (ADR-052 D2 — package Chrome): inspect the runtime-computed
-	// package root. When cfg.PreferPackaged is true the package Chrome
-	// outranks $PATH (regardless of TrustPathChrome). When PreferPackaged
-	// is false but $PATH either missed or was discarded above, the package
-	// Chrome is the floor.
-	if pathResolved == "" || cfg.PreferPackaged {
-		pkgRoot, pkgStatus := packageChromeRootProbe()
-		if pkgStatus == ProbeUsable && pkgRoot != "" {
-			pkgBin, pkgSHA := findPackageChrome(pkgRoot)
-			if pkgBin != "" {
-				// SEC-ADR052-001 + SEC-ADR052-004: chrome.sha256 is REQUIRED
-				// for the package Chrome path (findPackageChrome refused
-				// the binary when the manifest is missing). Verify with
-				// the hardened parser + constant-time compare.
-				if verr := cachedVerifyChromeSHA256(pkgBin, pkgSHA); verr != nil {
-					logger.WarnCF("browser",
-						"package Chrome failed integrity verification — falling through to managed download",
-						map[string]any{
-							"binary":     pkgBin,
-							"sha256_man": pkgSHA,
-							"error":      verr.Error(),
-							"reason":     "WARN-CFTSHA-001",
-						})
-					// fall through to step 4
-				} else {
-					logger.InfoCF("browser", "using package-managed Chrome (ADR-052 D2 step 3)",
-						map[string]any{
-							"binary":          pkgBin,
-							"prefer_packaged": cfg.PreferPackaged,
-							"path_was_set":    pathResolved != "",
-						})
-					e.cacheSuccess(pkgBin)
-					return pkgBin, nil
-				}
-			}
-		}
-	}
-
-	// If step 2 found a system Chrome on $PATH and step 3 didn't override it
-	// (either because the package root was empty, or the package binary was
-	// absent, or PreferPackaged was false), return the PATH result now.
-	if pathResolved != "" {
-		e.cacheSuccess(pathResolved)
-		return pathResolved, nil
-	}
-
+// resolveManagedChrome falls back to the managed Chromium installation and verifies its binary.
+func (ep *execPathCachesResolve) resolveManagedChrome() (string, error) {
 	// Step 4 — managed download (first-use): bare-binary / no-package
 	// installs land here. The installer-side findInstalledBuild also runs
 	// chromeintegrity.VerifyChromeSHA256 when chrome.sha256 is present (ADR-052 M2), so the
 	// downloaded build's integrity is verified before it can ever launch.
-	installRoot := InstallRootForProfileDir(cfg.ProfileDir)
-	managedPath, err := EnsureChromium(ctx, installRoot)
+	installRoot := InstallRootForProfileDir(ep.cfg.ProfileDir)
+	managedPath, err := EnsureChromium(ep.ctx, installRoot)
 	if err != nil {
-		err = augmentWithRejectedPathChrome(err, rejectedPathChrome)
+		err = augmentWithRejectedPathChrome(err, ep.rejectedPathChrome)
 		// No single on-disk binary path to re-verify later (this is an
 		// install/network-level failure, not a probe of a specific file) —
 		// cacheFailure's "" path means the replay path skips the B2c(ii)
 		// re-stat and relies solely on the cache-age annotation.
-		e.cacheFailure(err, "")
+		ep.e.cacheFailure(err, "")
 		return "", err
 	}
 	// FIX-CRIT-001: mirror step 2's $PATH probe. EnsureChromium resolving a
@@ -728,22 +749,22 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 	// is the single, no-fallback managed binary, and on macOS its first
 	// execution after download pays Gatekeeper's whole-bundle signature
 	// verification (see that constant's doc comment).
-	if ok, reason := probeChromiumBinaryWithTimeout(ctx, managedPath, managedChromiumProbeTimeout); !ok {
+	if ok, reason := probeChromiumBinaryWithTimeout(ep.ctx, managedPath, managedChromiumProbeTimeout); !ok {
 		probeErr := fmt.Errorf(
 			"managed chromium binary %s did not execute successfully (--version probe failed: %s); the install may be corrupt — remove %s and retry",
 			managedPath,
 			reason,
 			installRoot,
 		)
-		probeErr = augmentWithRejectedPathChrome(probeErr, rejectedPathChrome)
+		probeErr = augmentWithRejectedPathChrome(probeErr, ep.rejectedPathChrome)
 		// B2c(ii): record managedPath as the specific binary this failure is
 		// about, so the negative-cache replay branch above can cheaply
 		// re-os.Stat it and evict a now-stale "does not exist"/"corrupt"
 		// verdict instead of replaying it as still true.
-		e.cacheFailure(probeErr, managedPath)
+		ep.e.cacheFailure(probeErr, managedPath)
 		return "", probeErr
 	}
-	e.cacheSuccess(managedPath)
+	ep.e.cacheSuccess(managedPath)
 	return managedPath, nil
 }
 
