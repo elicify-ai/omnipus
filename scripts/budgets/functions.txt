@@ -45,7 +45,6 @@ pkg/gateway/rest_onboarding.go	restAPI.HandleOnboardingProbeProvider	254
 pkg/gateway/rest_providers_delete.go	restAPI.runProviderDelete	260
 pkg/gateway/rest_sandbox_config.go	restAPI.putSandboxConfig	307
 pkg/gateway/rest_tasks_occurrences_test.go	TestRestTasks_OccurrencesEndpoint	384
-pkg/gateway/rest_tools.go	restAPI.updateAgentTools	373
 pkg/gateway/rest_uploads.go	restAPI.HandleUpload	389
 pkg/gateway/rest_workspaces.go	restAPI.handleWorkspaceDelete	301
 pkg/gateway/rest_workspaces.go	restAPI.handleWorkspacePut	409
