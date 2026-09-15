@@ -40,6 +40,7 @@ export function GoalOutcomeRow({ outcome }: GoalOutcomeRowProps): ReactNode {
       className="group w-full max-w-2xl rounded-lg bg-[var(--color-surface-2)] px-3 py-1.5 text-xs"
     >
       <summary
+        tabIndex={0}
         className="flex cursor-pointer list-none items-start gap-2 [&::-webkit-details-marker]:hidden"
         title="Show the full text"
       >

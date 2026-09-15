@@ -69,6 +69,7 @@ export function CrossWorkspaceApprovalBanner() {
       {summary && (
         <button
           type="button"
+          tabIndex={0}
           data-testid="cross-workspace-approval-banner"
           onClick={() => goToWorkspace(summary.targetWorkspaceId)}
           className="flex w-full items-center gap-2 px-4 py-2 bg-[var(--color-accent)]/10 border-b border-[var(--color-accent)]/30 text-xs font-medium text-[var(--color-accent)] hover:bg-[var(--color-accent)]/15 transition-colors text-left"
