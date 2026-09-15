@@ -3,7 +3,6 @@
 # file	qualified name	lines
 cmd/omnipus/internal/run/run.go	Run	284
 pkg/agent/cancel.go	AgentLoop.RequestCancel	584
-pkg/agent/external_dispatch.go	runExternalCLISubTurn	277
 pkg/agent/goal_flow_integration_test.go	TestGoalClarify_WebCardRoundtrip	323
 pkg/agent/goal_loop_command.go	AgentLoop.applyGoalCommandPrompt	285
 pkg/agent/goal_loop.go	AgentLoop.checkGoalLoopAfterTurn	277
