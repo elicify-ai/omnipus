@@ -827,6 +827,16 @@ func perCandidateTimeoutFromConfig(cfg *config.Config) time.Duration {
 	return 0
 }
 
+// newAgentLoop carries the shared state of NewAgentLoop across its stages.
+type newAgentLoop struct {
+	cfg      *config.Config
+	msgBus   *bus.MessageBus
+	provider providers.LLMProvider
+	registry *AgentRegistry
+	al       *AgentLoop
+	homePath string
+}
+
 // NewAgentLoop constructs an AgentLoop from the given config, message bus, and LLM provider.
 // Returns (*AgentLoop, nil) on success or (nil, error) on a fatal configuration error.
 func NewAgentLoop(
@@ -834,21 +844,36 @@ func NewAgentLoop(
 	msgBus *bus.MessageBus,
 	provider providers.LLMProvider,
 ) (*AgentLoop, error) {
-	registry := NewAgentRegistry(cfg, provider)
+	nal := &newAgentLoop{cfg: cfg, msgBus: msgBus, provider: provider}
+
+	nal.initializeCore()
+
+	if r0, r1, stop := nal.initializeAudit(); stop {
+		return r0, r1
+	}
+
+	nal.initializeSecurity()
+
+	return nal.initializeRuntime()
+}
+
+// initializeCore builds the registry, shared routing state, task executor, and session store.
+func (nal *newAgentLoop) initializeCore() {
+	nal.registry = NewAgentRegistry(nal.cfg, nal.provider)
 
 	// Apply configurable default agent override.
-	if cfg.Agents.Defaults.DefaultAgentID != "" {
-		registry.SetDefaultAgentOverride(cfg.Agents.Defaults.DefaultAgentID)
+	if nal.cfg.Agents.Defaults.DefaultAgentID != "" {
+		nal.registry.SetDefaultAgentOverride(nal.cfg.Agents.Defaults.DefaultAgentID)
 	}
 
 	// Set up shared fallback chain with per-candidate timeout so a primary
 	// provider timeout does not strand fallback candidates with an exhausted
 	// context deadline (#235).
 	cooldown := providers.NewCooldownTracker()
-	fallbackChain := providers.NewFallbackChainWithTimeout(cooldown, perCandidateTimeoutFromConfig(cfg))
+	fallbackChain := providers.NewFallbackChainWithTimeout(cooldown, perCandidateTimeoutFromConfig(nal.cfg))
 
 	// Create state manager using default agent's workspace for channel recording
-	defaultAgent := registry.GetDefaultAgent()
+	defaultAgent := nal.registry.GetDefaultAgent()
 	var stateManager *state.Manager
 	if defaultAgent != nil {
 		stateManager = state.NewManager(defaultAgent.Home)
@@ -867,22 +892,22 @@ func NewAgentLoop(
 	// central value either way, never nil (nil would mean UNLIMITED root
 	// fan-out — the "silently reinterpreted as no gate" outcome ADR-037
 	// bans).
-	if _, err := ResolveRootDelegationCap(cfg); err != nil {
+	if _, err := ResolveRootDelegationCap(nal.cfg); err != nil {
 		logger.ErrorCF("agent",
 			"agents.defaults.subturn.max_concurrent is configured to a negative value — the root-delegation admission gate falls back to the central Performance.EffectiveMaxParallelAgents() authority; set it to 0 (inherit the central value) or a positive explicit override",
 			map[string]any{"error": err.Error()})
 	}
 
 	eventBus := NewEventBus()
-	al := &AgentLoop{
-		bus:                     msgBus,
-		cfg:                     cfg,
-		registry:                registry,
+	nal.al = &AgentLoop{
+		bus:                     nal.msgBus,
+		cfg:                     nal.cfg,
+		registry:                nal.registry,
 		state:                   stateManager,
 		eventBus:                eventBus,
 		fallback:                fallbackChain,
 		cmdRegistry:             commands.NewRegistry(commands.BuiltinDefinitions()),
-		steering:                newSteeringQueue(parseSteeringMode(cfg.Agents.Defaults.SteeringMode)),
+		steering:                newSteeringQueue(parseSteeringMode(nal.cfg.Agents.Defaults.SteeringMode)),
 		contextBuilderRegistry:  NewContextBuilderRegistry(),
 		loadedTools:             make(map[string]map[string]bool),
 		pendingSearchPromotions: make(map[string]map[string]int),
@@ -897,8 +922,8 @@ func NewAgentLoop(
 	// AdmissionController.resolveCap's doc comment (admission.go) for why
 	// this must be resolved fresh on every check rather than cached once
 	// here at construction time.
-	al.admission = newAdmissionControllerWithResolver(func() int {
-		n, _ := al.GetConfig().Performance.EffectiveMaxParallelAgents()
+	nal.al.admission = newAdmissionControllerWithResolver(func() int {
+		n, _ := nal.al.GetConfig().Performance.EffectiveMaxParallelAgents()
 		return n
 	})
 	// ADR-057 W17, same live-resolution treatment: root-level delegate()
@@ -906,8 +931,8 @@ func NewAgentLoop(
 	// ResolveRootDelegationCap's error branch (a NEGATIVE configured value)
 	// this falls back directly to EffectiveMaxParallelAgents() so the gate
 	// stays GATED at the central value rather than degrading to unlimited.
-	al.rootDelegationAdmission = newRootDelegationAdmissionWithResolver(func() int {
-		liveCfg := al.GetConfig()
+	nal.al.rootDelegationAdmission = newRootDelegationAdmissionWithResolver(func() int {
+		liveCfg := nal.al.GetConfig()
 		if resolvedCap, capErr := ResolveRootDelegationCap(liveCfg); capErr == nil {
 			return resolvedCap
 		}
@@ -917,34 +942,34 @@ func NewAgentLoop(
 		}
 		return 1
 	})
-	al.hooks = NewHookManager(eventBus)
-	configureHookManagerFromConfig(al.hooks, cfg)
+	nal.al.hooks = NewHookManager(eventBus)
+	configureHookManagerFromConfig(nal.al.hooks, nal.cfg)
 
 	// Initialize the unified task store at ~/.omnipus/tasks/ (the single store —
 	// the legacy GTD tasks/ and workflow-tasks/ split was removed in Sprint 2).
-	homePath := filepath.Dir(cfg.AgentHomeBasePath())
-	al.homePath = homePath
-	al.taskStore = task.New(filepath.Join(homePath, "tasks"))
-	al.taskExecutor = newTaskExecutor(al, al.taskStore)
+	nal.homePath = filepath.Dir(nal.cfg.AgentHomeBasePath())
+	nal.al.homePath = nal.homePath
+	nal.al.taskStore = task.New(filepath.Join(nal.homePath, "tasks"))
+	nal.al.taskExecutor = newTaskExecutor(nal.al, nal.al.taskStore)
 	// Founder decision 2026-09-14: expose the running task's live progress
 	// stamp (reasoning counts) so the REST tasks surface can stamp
 	// Task.last_activity_at. The loop is the authority; the executor is the
 	// holder because the REST side already reaches the task engine here.
-	al.taskExecutor.SetLiveTaskActivitySource(al)
+	nal.al.taskExecutor.SetLiveTaskActivitySource(nal.al)
 
 	// Initialize shared session store at $OMNIPUS_HOME/sessions/.
 	// All new chat sessions are created here (joined session model).
-	sharedDir := filepath.Join(homePath, "sessions")
+	sharedDir := filepath.Join(nal.homePath, "sessions")
 	if err := os.MkdirAll(sharedDir, 0o700); err != nil {
 		logger.ErrorCF("agent", "Shared session store unavailable — new sessions will use per-agent stores",
 			map[string]any{"dir": sharedDir, "error": err.Error()})
 	} else {
-		sharedStore, ssErr := session.NewUnifiedStoreWithHome(sharedDir, homePath)
+		sharedStore, ssErr := session.NewUnifiedStoreWithHome(sharedDir, nal.homePath)
 		if ssErr != nil {
 			logger.ErrorCF("agent", "Shared session store init failed — new sessions will use per-agent stores",
 				map[string]any{"dir": sharedDir, "error": ssErr.Error()})
 		} else {
-			al.sharedSessionStore = sharedStore
+			nal.al.sharedSessionStore = sharedStore
 			// FR-067/SC-048 (ADR-057): apply the operator's resolved
 			// stats-flush override onto the store's live periodic flusher.
 			// Without this call, startStatsFlusher (unified_stats_flush.go,
@@ -956,18 +981,21 @@ func NewAgentLoop(
 			// EffectiveStatsFlushInterval() resolves the operator's value (or
 			// the same 5s default when unset), exactly matching
 			// startStatsFlusher's own doc comment naming this call site.
-			sharedStore.SetStatsFlushInterval(cfg.Session.EffectiveStatsFlushInterval())
-			al.rebuildChannelSessionIndex()
+			sharedStore.SetStatsFlushInterval(nal.cfg.Session.EffectiveStatsFlushInterval())
+			nal.al.rebuildChannelSessionIndex()
 		}
 	}
+}
 
+// initializeAudit constructs audit logging and wires it into registries when enabled.
+func (nal *newAgentLoop) initializeAudit() (*AgentLoop, error, bool) {
 	// SEC-15: Initialize structured audit logging (ON by default since the
 	// 2026-09-11 founder decision — see cfg.Sandbox.AuditLog's doc comment)
 	// and policy evaluation (always on). Audit directory is ~/.omnipus/system/
 	// (sibling of workspace). The audit logger and the policy evaluator are
 	// decoupled: disabling audit logging must NOT disable enforcement.
-	if cfg.Sandbox.AuditLog {
-		auditDir := filepath.Join(homePath, "system")
+	if nal.cfg.Sandbox.AuditLog {
+		auditDir := filepath.Join(nal.homePath, "system")
 		auditLogger, auditErr := audit.NewLogger(audit.LoggerConfig{
 			Dir:           auditDir,
 			RetentionDays: 90,
@@ -1036,11 +1064,11 @@ func NewAgentLoop(
 			// elsewhere anyway. That is an argument for the blast radius of
 			// this branch being small — not an argument for making a default
 			// the thing that refuses to start.
-			if !cfg.Sandbox.AuditLogFromDefault {
+			if !nal.cfg.Sandbox.AuditLogFromDefault {
 				logger.ErrorCF("agent",
 					"Audit logger construction failed; aborting boot because sandbox.audit_log=true was explicitly set",
 					map[string]any{"error": auditErr.Error(), "dir": auditDir})
-				return nil, &audit.LoggerConstructionError{Dir: auditDir, Err: auditErr}
+				return nil, &audit.LoggerConstructionError{Dir: auditDir, Err: auditErr}, true
 			}
 			logger.ErrorCF("agent",
 				"Audit logger construction failed; continuing WITHOUT audit logging because audit_log is on by default, not by explicit configuration. "+
@@ -1050,7 +1078,7 @@ func NewAgentLoop(
 			auditLogger = nil
 		}
 		if auditLogger != nil {
-			al.auditLogger = auditLogger
+			nal.al.auditLogger = auditLogger
 
 			// Log startup event. CRIT-6: route through audit.EmitEntry so a
 			// Log failure bumps the audit-skipped counter (/health audit_degraded).
@@ -1068,7 +1096,7 @@ func NewAgentLoop(
 			// method's doc comment) — without this, every agent's remember/
 			// run_retrospective tools would silently lose audit logging (SEC-15)
 			// the first time config reloads.
-			al.wireMemoryAuditLoggerOn(registry, auditLogger)
+			nal.al.wireMemoryAuditLoggerOn(nal.registry, auditLogger)
 
 			// ADR-072 D6.1.1/R4 fix: install the process-wide skills write-audit
 			// logger. tools.SetSkillsWriteAuditLogger's own doc comment names
@@ -1084,7 +1112,11 @@ func NewAgentLoop(
 			tools.SetSkillsWriteAuditLogger(auditLogger)
 		}
 	}
+	return nil, nil, false
+}
 
+// initializeSecurity builds policy enforcement, sandboxing, prompt protection, and the exec proxy.
+func (nal *newAgentLoop) initializeSecurity() {
 	// SEC-05/SEC-07: Build the policy evaluator from the live config.
 	// `cfg.Tools.Exec.AllowedBinaries` is the single source of truth for the
 	// exec allowlist (the same field the UI writes to via
@@ -1099,15 +1131,15 @@ func NewAgentLoop(
 	// This preserves backward compatibility for agents that never touched the
 	// allowlist, while honoring fail-closed semantics for agents that did.
 	defaultPolicy := policy.PolicyAllow
-	if len(cfg.Tools.Exec.AllowedBinaries) > 0 {
+	if len(nal.cfg.Tools.Exec.AllowedBinaries) > 0 {
 		defaultPolicy = policy.PolicyDeny
 	}
 	secCfg := &policy.SecurityConfig{
 		DefaultPolicy: defaultPolicy,
 		Policy: policy.PolicySection{
 			Exec: policy.ExecPolicy{
-				AllowedBinaries: cfg.Tools.Exec.AllowedBinaries,
-				Approval:        cfg.Tools.Exec.Approval,
+				AllowedBinaries: nal.cfg.Tools.Exec.AllowedBinaries,
+				Approval:        nal.cfg.Tools.Exec.Approval,
 			},
 		},
 	}
@@ -1118,19 +1150,19 @@ func NewAgentLoop(
 	// PolicyAuditor tolerates a nil logger and still enforces — enforcement
 	// must NOT depend on audit logging being enabled.
 	var auditBridgeImpl *auditBridge
-	if al.auditLogger != nil {
-		auditBridgeImpl = newAuditBridge(al.auditLogger)
+	if nal.al.auditLogger != nil {
+		auditBridgeImpl = newAuditBridge(nal.al.auditLogger)
 	}
 	var policyAuditorLogger policy.AuditLogger
 	if auditBridgeImpl != nil {
 		policyAuditorLogger = auditBridgeImpl
 	}
-	al.policyAuditor = policy.NewPolicyAuditor(policyEval, policyAuditorLogger, "")
+	nal.al.policyAuditor = policy.NewPolicyAuditor(policyEval, policyAuditorLogger, "")
 
 	// SEC-01/02/03: Select the best-available sandbox backend. This never
 	// fails: on unsupported kernels SelectBackend returns a FallbackBackend.
 	backend, backendName := sandbox.SelectBackend()
-	al.sandboxBackend = backend
+	nal.al.sandboxBackend = backend
 	logger.InfoCF("agent", "Sandbox backend selected", map[string]any{"backend": backendName})
 
 	// SEC-25: Initialize the prompt-injection guard. NewPromptGuardFromConfig
@@ -1138,11 +1170,11 @@ func NewAgentLoop(
 	// is cheap and cannot fail, so we always build it — runTurn checks the
 	// untrusted-tool allowlist before invoking it, so trusted results are
 	// never sanitized even when the guard is non-nil.
-	al.promptGuard = security.NewPromptGuardFromConfig(policy.PromptGuardConfig{
-		Strictness: string(cfg.Sandbox.PromptInjectionLevel),
+	nal.al.promptGuard = security.NewPromptGuardFromConfig(policy.PromptGuardConfig{
+		Strictness: string(nal.cfg.Sandbox.PromptInjectionLevel),
 	})
 	logger.InfoCF("agent", "Prompt guard initialized",
-		map[string]any{"strictness": string(al.promptGuard.Strictness())})
+		map[string]any{"strictness": string(nal.al.promptGuard.Strictness())})
 
 	// SEC-24: Build the singleton SSRFChecker from config. When SSRF is enabled,
 	// all outbound HTTP tool surfaces receive this checker so allow_internal is
@@ -1158,16 +1190,16 @@ func NewAgentLoop(
 	// "10.0.0.5" in AllowInternal AND "10.0.0.0/8" in EgressAllowCIDRs gets
 	// both — the more specific exact-IP entry takes O(1) precedence in
 	// CheckIP's lookup map.
-	if cfg.Sandbox.SSRF.Enabled {
+	if nal.cfg.Sandbox.SSRF.Enabled {
 		merged := make([]string, 0,
-			len(cfg.Sandbox.SSRF.AllowInternal)+len(cfg.Sandbox.EgressAllowCIDRs))
-		merged = append(merged, cfg.Sandbox.SSRF.AllowInternal...)
-		merged = append(merged, cfg.Sandbox.EgressAllowCIDRs...)
-		al.ssrfChecker = security.NewSSRFChecker(merged)
+			len(nal.cfg.Sandbox.SSRF.AllowInternal)+len(nal.cfg.Sandbox.EgressAllowCIDRs))
+		merged = append(merged, nal.cfg.Sandbox.SSRF.AllowInternal...)
+		merged = append(merged, nal.cfg.Sandbox.EgressAllowCIDRs...)
+		nal.al.ssrfChecker = security.NewSSRFChecker(merged)
 		logger.InfoCF("agent", "SSRF protection enabled",
 			map[string]any{
-				"allow_internal_count":     len(cfg.Sandbox.SSRF.AllowInternal),
-				"egress_allow_cidrs_count": len(cfg.Sandbox.EgressAllowCIDRs),
+				"allow_internal_count":     len(nal.cfg.Sandbox.SSRF.AllowInternal),
+				"egress_allow_cidrs_count": len(nal.cfg.Sandbox.EgressAllowCIDRs),
 			})
 	}
 
@@ -1176,43 +1208,46 @@ func NewAgentLoop(
 	// processes run without HTTP_PROXY env vars — LIM-02) rather than
 	// failing startup, because exec is a core tool and a proxy bind failure
 	// on a shared port should not take the whole agent loop down.
-	if cfg.Tools.Exec.EnableProxy {
+	if nal.cfg.Tools.Exec.EnableProxy {
 		// Reuse the singleton SSRF checker (which may be nil when SSRF is disabled).
-		proxy := security.NewExecProxy(al.ssrfChecker, nil)
+		proxy := security.NewExecProxy(nal.al.ssrfChecker, nil)
 		if err := proxy.Start(); err != nil {
 			logger.ErrorCF("agent", "Failed to start exec SSRF proxy; child processes will run without proxy env vars",
 				map[string]any{"error": err.Error()})
 		} else {
-			al.execProxy = proxy
+			nal.al.execProxy = proxy
 			logger.InfoCF("agent", "Exec SSRF proxy started",
 				map[string]any{"addr": proxy.Addr()})
 		}
 	}
+}
 
+// initializeRuntime installs runtime limiters and finishes shared tool wiring.
+func (nal *newAgentLoop) initializeRuntime() (*AgentLoop, error) {
 	// Initialize cancel abuse detector (shared across all four cancel entry points).
-	al.cancelAbuse = newCancelAbuseDetector()
+	nal.al.cancelAbuse = newCancelAbuseDetector()
 
 	// Initialize the pre-registration cancel latch table (cancel_prearm.go).
-	al.cancelPreArm = newCancelPreArm()
+	nal.al.cancelPreArm = newCancelPreArm()
 
 	// SEC-26: Initialize rate limiter registry. The registry always exists
 	// so per-agent windows can be created even when no limit is configured.
-	al.rateLimiter = security.NewRateLimiterRegistry()
+	nal.al.rateLimiter = security.NewRateLimiterRegistry()
 	logger.InfoCF("agent", "Rate limiter initialized",
 		map[string]any{
-			"max_agent_llm_calls_per_hour":    cfg.Sandbox.RateLimits.MaxAgentLLMCallsPerHour,
-			"max_agent_tool_calls_per_minute": cfg.Sandbox.RateLimits.MaxAgentToolCallsPerMinute,
+			"max_agent_llm_calls_per_hour":    nal.cfg.Sandbox.RateLimits.MaxAgentLLMCallsPerHour,
+			"max_agent_tool_calls_per_minute": nal.cfg.Sandbox.RateLimits.MaxAgentToolCallsPerMinute,
 		})
 
 	// Session-scoped tool-approval grant store (consent boundary fix): shared
 	// by the gateway's tool-approval REST path and the delegate tool's
 	// async/await paths. Always non-nil.
-	al.approvalGrants = security.NewApprovalGrantStore()
+	nal.al.approvalGrants = security.NewApprovalGrantStore()
 
 	// Process-wide AsyncNotifier (async-notifier-spec.md): the reusable
 	// "wake the conversation when background work finishes" primitive,
 	// extracted from the asyncCallback closure below. Always non-nil.
-	al.asyncNotifier = newAsyncNotifier(al)
+	nal.al.asyncNotifier = newAsyncNotifier(nal.al)
 
 	// v0.2 #155 item 6: build the shared memory-write rate limiter and
 	// propagate it to every agent's tool registry. One limiter is shared
@@ -1232,29 +1267,29 @@ func NewAgentLoop(
 	// the freshly-built registry via wireMemoryRateLimiterOn — constructing a
 	// new limiter on every reload would reset every agent's sliding-window
 	// buckets on any unrelated config change.
-	al.memoryRateLimiter = tools.NewMemoryRateLimiter(tools.MemoryRateLimitConfig{})
-	al.wireMemoryRateLimiterOn(registry, al.memoryRateLimiter)
+	nal.al.memoryRateLimiter = tools.NewMemoryRateLimiter(tools.MemoryRateLimitConfig{})
+	nal.al.wireMemoryRateLimiterOn(nal.registry, nal.al.memoryRateLimiter)
 	logger.InfoCF("agent", "Memory write rate limiter initialized",
 		map[string]any{
-			"per_agent_per_minute":  al.memoryRateLimiter.PerAgentLimit(),
-			"per_caller_per_minute": al.memoryRateLimiter.PerCallerLimit(),
+			"per_agent_per_minute":  nal.al.memoryRateLimiter.PerAgentLimit(),
+			"per_caller_per_minute": nal.al.memoryRateLimiter.PerCallerLimit(),
 		})
 
 	// Register shared tools to all agents (now that al is created)
-	registerSharedTools(al, cfg, msgBus, registry, provider)
+	registerSharedTools(nal.al, nal.cfg, nal.msgBus, nal.registry, nal.provider)
 
 	// Replace the exec tool in each agent's registry with a version that has
 	// the policy auditor and sandbox backend wired in. Registering the same
 	// tool name overwrites the previous entry (see ToolRegistry.Register).
-	al.wireExecToolDeps()
+	nal.al.wireExecToolDeps()
 
 	// Fix A (FR-057): wire the environment provider into every agent's
 	// ContextBuilder now that the sandbox backend is known. Also register each
 	// ContextBuilder into the registry so config-change invalidation (FR-061)
 	// can broadcast across all agents.
-	al.wireEnvProviders(cfg, registry)
+	nal.al.wireEnvProviders(nal.cfg, nal.registry)
 
-	return al, nil
+	return nal.al, nil
 }
 
 // recordRateLimitDenial writes an audit entry and emits a RateLimit event for
@@ -2272,39 +2307,26 @@ func (al *AgentLoop) ProcessScheduled(
 	return resp, err
 }
 
+// agentLoopProcessMessage carries the shared state of processMessage across its stages.
+type agentLoopProcessMessage struct {
+	al                  *AgentLoop
+	ctx                 context.Context
+	msg                 bus.InboundMessage
+	sessionKey          string
+	transcriptSessionID string
+	transcriptStore     *session.UnifiedStore
+	workspaceID         string
+	opts                processOptions
+}
+
 func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage) (string, *AgentInstance, error) {
-	// Add message preview to log (show full content for error messages)
-	var logContent string
-	if strings.Contains(msg.Content, "Error:") || strings.Contains(msg.Content, "error") {
-		logContent = msg.Content // Full content for errors
-	} else {
-		logContent = utils.Truncate(msg.Content, 80)
-	}
-	logger.InfoCF(
-		"agent",
-		fmt.Sprintf("Processing message from %s:%s: %s", msg.Channel, msg.Sender.CanonicalID, logContent),
-		map[string]any{
-			"channel":     msg.Channel,
-			"chat_id":     msg.ChatID,
-			"sender_id":   msg.Sender.CanonicalID,
-			"session_key": msg.SessionKey,
-		},
-	)
+	pm := &agentLoopProcessMessage{al: al, ctx: ctx, msg: msg}
 
-	var hadAudio bool
-	msg, hadAudio = al.transcribeAudioInMessage(ctx, msg)
-
-	// For audio messages the placeholder was deferred by the channel.
-	// Now that transcription (and optional feedback) is done, send it.
-	if hadAudio {
-		if cm := al.getChannelManager(); cm != nil {
-			cm.SendPlaceholder(ctx, msg.Channel, msg.ChatID)
-		}
-	}
+	pm.prepareInbound()
 
 	// Route system messages to processSystemMessage
-	if msg.Channel == "system" {
-		resp, err := al.processSystemMessage(ctx, msg)
+	if pm.msg.Channel == "system" {
+		resp, err := pm.al.processSystemMessage(pm.ctx, pm.msg)
 		return resp, nil, err
 	}
 
@@ -2316,18 +2338,18 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// originating channel like any assistant reply — no error frame, no
 	// transcript entry, no turn id. Media refs ride in msg.Media and are not
 	// counted. See user_message_bound.go.
-	if reply, refused := al.refuseOversizedUserMessage(msg); refused {
+	if reply, refused := pm.al.refuseOversizedUserMessage(pm.msg); refused {
 		logger.InfoCF("agent", "Refused oversized user message before turn start (ADR-066 D4)",
 			map[string]any{
-				"channel":     msg.Channel,
-				"chat_id":     msg.ChatID,
-				"size_chars":  UserMessageChars(msg.Content),
-				"bound_chars": al.UserMessageBound(),
+				"channel":     pm.msg.Channel,
+				"chat_id":     pm.msg.ChatID,
+				"size_chars":  UserMessageChars(pm.msg.Content),
+				"bound_chars": pm.al.UserMessageBound(),
 			})
 		return reply, nil, nil
 	}
 
-	route, agent, routeErr := al.resolveMessageRoute(msg)
+	route, agent, routeErr := pm.al.resolveMessageRoute(pm.msg)
 	if routeErr != nil {
 		// ADR-029 FR-028/MAJ-003: emit the drift-drop counter and audit event
 		// exactly once — here, at the single point where the message is actually
@@ -2337,27 +2359,27 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		// w.r.t. this counter so that its multiple callers (resolveSteeringTarget,
 		// buildContinuationTarget) do not double-count the same drop.
 		if route.Drop {
-			instanceID := inboundInstanceID(msg)
+			instanceID := inboundInstanceID(pm.msg)
 			wsID := ""
 			intendedAgent := ""
-			if identity := al.resolveInboundIdentity(instanceID); identity != nil {
+			if identity := pm.al.resolveInboundIdentity(instanceID); identity != nil {
 				intendedAgent = strings.TrimSpace(identity.ID)
 			}
-			if cfg := al.GetConfig(); cfg != nil {
+			if cfg := pm.al.GetConfig(); cfg != nil {
 				if inst, ok := cfg.Channels[instanceID]; ok {
 					wsID = inst.WorkspaceID
 				}
 			}
-			al.driftDropped.Add(1)
-			if al.auditLogger != nil {
-				_ = al.auditLogger.Log(&audit.Entry{
+			pm.al.driftDropped.Add(1)
+			if pm.al.auditLogger != nil {
+				_ = pm.al.auditLogger.Log(&audit.Entry{
 					Event:    audit.EventChannelRoutingDriftDrop,
 					Decision: audit.DecisionDeny,
 					Details: map[string]any{
 						"instance_id":       instanceID,
 						"workspace_id":      wsID,
 						"intended_agent_id": intendedAgent,
-						"chat_id":           msg.ChatID,
+						"chat_id":           pm.msg.ChatID,
 						"reason":            "bound agent unresolvable (deleted or worker — not a chat target)",
 					},
 				})
@@ -2374,14 +2396,14 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	}
 
 	// Resolve session key from route, while preserving explicit agent-scoped keys.
-	scopeKey := resolveScopeKey(route, msg.SessionKey)
-	sessionKey := scopeKey
+	scopeKey := resolveScopeKey(route, pm.msg.SessionKey)
+	pm.sessionKey = scopeKey
 
 	logger.InfoCF("agent", "Routed message",
 		map[string]any{
 			"agent_id":      agent.ID,
 			"scope_key":     scopeKey,
-			"session_key":   sessionKey,
+			"session_key":   pm.sessionKey,
 			"matched_by":    route.MatchedBy,
 			"route_agent":   route.AgentID,
 			"route_channel": route.Channel,
@@ -2391,35 +2413,34 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// resume a persistent shared session so they appear in the session history panel.
 	// FR-022 (ADR-029): for a bound channel instance, stamp the session with the
 	// instance's workspace_id so it appears linked to the right workspace.
-	if msg.SessionID == "" && msg.Channel != "webchat" && msg.Channel != "system" && msg.Channel != "" {
-		instanceSessionID := inboundInstanceID(msg)
+	if pm.msg.SessionID == "" && pm.msg.Channel != "webchat" && pm.msg.Channel != "system" && pm.msg.Channel != "" {
+		instanceSessionID := inboundInstanceID(pm.msg)
 		sessionWorkspaceID := ""
 		if instanceSessionID != "" {
-			if sessionCfg := al.GetConfig(); sessionCfg != nil {
+			if sessionCfg := pm.al.GetConfig(); sessionCfg != nil {
 				if instCfg, ok := sessionCfg.Channels[instanceSessionID]; ok {
 					sessionWorkspaceID = instCfg.WorkspaceID
 				}
 			}
 		}
-		if sid := al.resolveOrCreateChannelSession(
-			msg.Channel, instanceSessionID, msg.ChatID, agent.ID, msg.Sender.DisplayName, sessionWorkspaceID,
+		if sid := pm.al.resolveOrCreateChannelSession(
+			pm.msg.Channel, instanceSessionID, pm.msg.ChatID, agent.ID, pm.msg.Sender.DisplayName, sessionWorkspaceID,
 		); sid != "" {
-			msg.SessionID = sid
+			pm.msg.SessionID = sid
 		}
 	}
 
 	// Resolve transcript store for tool call recording. SessionID is now
 	// authoritative — populated directly by the gateway from frame.SessionID.
-	var transcriptSessionID string
-	var transcriptStore *session.UnifiedStore
-	if msg.SessionID != "" {
-		transcriptSessionID = msg.SessionID
-		transcriptStore = al.ResolveSessionStore(msg.SessionID)
-		if transcriptStore == nil {
+
+	if pm.msg.SessionID != "" {
+		pm.transcriptSessionID = pm.msg.SessionID
+		pm.transcriptStore = pm.al.ResolveSessionStore(pm.msg.SessionID)
+		if pm.transcriptStore == nil {
 			logger.WarnCF(
 				"agent",
 				"session_id present but store not found — tool calls will not be recorded",
-				map[string]any{"session_id": msg.SessionID},
+				map[string]any{"session_id": pm.msg.SessionID},
 			)
 		}
 	}
@@ -2429,23 +2450,135 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// turn starts (websocket.go); this path covers every other channel
 	// (Telegram, Slack, Discord, etc.) so that replays show the user's prompt
 	// alongside tool calls and assistant responses.
-	channelNeedsTranscript := transcriptStore != nil &&
-		msg.Channel != "webchat" && msg.Channel != "system" &&
-		strings.TrimSpace(msg.Content) != ""
+	channelNeedsTranscript := pm.transcriptStore != nil &&
+		pm.msg.Channel != "webchat" && pm.msg.Channel != "system" &&
+		strings.TrimSpace(pm.msg.Content) != ""
 	if channelNeedsTranscript {
 		entry := session.TranscriptEntry{
 			ID:        fmt.Sprintf("user-%d", time.Now().UnixNano()),
 			Role:      "user",
 			AgentID:   agent.ID,
-			Content:   msg.Content,
+			Content:   pm.msg.Content,
 			Timestamp: time.Now().UTC(),
 		}
-		if err := transcriptStore.AppendTranscript(transcriptSessionID, entry); err != nil {
+		if err := pm.transcriptStore.AppendTranscript(pm.transcriptSessionID, entry); err != nil {
 			logger.WarnCF("agent", "could not record channel user message to transcript",
-				map[string]any{"session_id": transcriptSessionID, "channel": msg.Channel, "error": err.Error()})
+				map[string]any{"session_id": pm.transcriptSessionID, "channel": pm.msg.Channel, "error": err.Error()})
 		}
 	}
 
+	pm.resolveWorkspace()
+
+	pm.prepareTurn()
+
+	// FR-025: reset idle ticker on every user turn, using transcript session ID
+	// when available (web-chat sessions). This starts the ticker on the first
+	// turn and resets it on every subsequent turn.
+	if pm.transcriptSessionID != "" {
+		pm.al.resetIdleTicker(pm.transcriptSessionID)
+		// FR-024: track current session per agent for lazy CAS on switch.
+		pm.al.agentCurrentSession.Store(agent.ID, pm.transcriptSessionID)
+
+		// Self-heal: rebuild the agent's per-session history from the shared
+		// transcript when the in-memory copy is missing or stale. We rehydrate
+		// not only when the bucket is empty (handoff, fresh process, etc.) but
+		// also when the bucket has *no* assistant/tool entries while the
+		// transcript carries tool_calls owned by this agent — the symptom of
+		// the prior wsStreamer bug that wrote assistant text with empty AgentID
+		// and left the per-agent bucket stuck on user messages only. Without
+		// this stronger trigger, an old session keeps starting from scratch
+		// every turn because GetHistory returns the broken cached state and
+		// the empty-only check above is satisfied.
+		if agent.Sessions != nil {
+			cur := agent.Sessions.GetHistory(pm.sessionKey)
+			needsHydrate := len(cur) == 0
+			if !needsHydrate && pm.transcriptStore != nil {
+				hasAssistantOrTool := false
+				for _, m := range cur {
+					if m.Role == "assistant" || m.Role == "tool" {
+						hasAssistantOrTool = true
+						break
+					}
+				}
+				if !hasAssistantOrTool {
+					if entries, err := pm.transcriptStore.ReadTranscript(pm.transcriptSessionID); err == nil {
+						for i := range entries {
+							e := &entries[i]
+							if (e.AgentID == agent.ID || e.AgentID == "") &&
+								(e.Type == session.EntryTypeToolCall || e.Role == "assistant") {
+								needsHydrate = true
+								break
+							}
+						}
+					}
+				}
+			}
+			// ADR-066 D5.5 (FR-045): this emptiness condition is unchanged;
+			// hydration itself now refuses to touch an agent archive that
+			// already has lines, so a window that is empty only because Skip
+			// reached the end of a non-empty archive is never rebuilt.
+			if needsHydrate {
+				if err := pm.al.HydrateAgentHistoryFromTranscript(pm.transcriptSessionID); err != nil {
+					logger.WarnCF("agent", "self-heal hydrate failed", map[string]any{
+						"agent_id":   agent.ID,
+						"session_id": pm.transcriptSessionID,
+						"error":      err.Error(),
+					})
+				}
+			}
+		}
+	}
+
+	// context-dependent commands check their own Runtime fields and report
+	// "unavailable" when the required capability is nil.
+	if response, handled := pm.al.handleCommand(pm.ctx, pm.msg, agent, &pm.opts); handled {
+		return response, agent, nil
+	}
+
+	// ADR-088 D1/D9: the ADR-074 D4a pending-goal reply-routing hook
+	// (applyGoalPendingReply) is retired — goals activate instantly now, so
+	// there is no more pending/clarification state for a bare chat message to
+	// resolve against (FR-022: bare "confirm" is ordinary chat, no
+	// interception exists). Nothing stands between handleCommand above and
+	// runAgentLoop below anymore.
+	resp, err := pm.al.runAgentLoop(pm.ctx, agent, pm.opts)
+	return resp, agent, err
+}
+
+// prepareInbound logs the inbound message, transcribes audio, and sends any deferred placeholder.
+func (pm *agentLoopProcessMessage) prepareInbound() {
+	// Add message preview to log (show full content for error messages)
+	var logContent string
+	if strings.Contains(pm.msg.Content, "Error:") || strings.Contains(pm.msg.Content, "error") {
+		logContent = pm.msg.Content // Full content for errors
+	} else {
+		logContent = utils.Truncate(pm.msg.Content, 80)
+	}
+	logger.InfoCF(
+		"agent",
+		fmt.Sprintf("Processing message from %s:%s: %s", pm.msg.Channel, pm.msg.Sender.CanonicalID, logContent),
+		map[string]any{
+			"channel":     pm.msg.Channel,
+			"chat_id":     pm.msg.ChatID,
+			"sender_id":   pm.msg.Sender.CanonicalID,
+			"session_key": pm.msg.SessionKey,
+		},
+	)
+
+	var hadAudio bool
+	pm.msg, hadAudio = pm.al.transcribeAudioInMessage(pm.ctx, pm.msg)
+
+	// For audio messages the placeholder was deferred by the channel.
+	// Now that transcription (and optional feedback) is done, send it.
+	if hadAudio {
+		if cm := pm.al.getChannelManager(); cm != nil {
+			cm.SendPlaceholder(pm.ctx, pm.msg.Channel, pm.msg.ChatID)
+		}
+	}
+}
+
+// resolveWorkspace selects the active workspace from session, channel, or inbound metadata.
+func (pm *agentLoopProcessMessage) resolveWorkspace() {
 	// M4: bind the active workspace into this turn so a task an agent creates
 	// (task_create / delegation) lands on the ACTIVE workspace's board rather
 	// than the agent's default workspace. A web-chat / channel session that was
@@ -2454,22 +2587,22 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// context (loop.go: WithWorkspaceID) carries it through to resolveWorkspaceID.
 	// Falls back to the inbound metadata key when present (e.g. board-task runs),
 	// and finally to "" — task_create then resolves the real default workspace.
-	workspaceID := ""
-	if transcriptStore != nil && transcriptSessionID != "" {
+	pm.workspaceID = ""
+	if pm.transcriptStore != nil && pm.transcriptSessionID != "" {
 		// FIX 1 (re-review of the re-review): distinguish a real meta-read
 		// failure from "no workspace bound" — see
 		// resolveWorkspaceIDForContinuation's doc comment (above,
 		// ~line 3099) for the full rationale.
-		if meta, mErr := transcriptStore.GetMeta(transcriptSessionID); mErr != nil {
+		if meta, mErr := pm.transcriptStore.GetMeta(pm.transcriptSessionID); mErr != nil {
 			if !errors.Is(mErr, os.ErrNotExist) {
 				logger.WarnCF("agent", "could not read session meta while resolving workspace; workspace unresolved",
-					map[string]any{"session_id": transcriptSessionID, "error": mErr.Error()})
+					map[string]any{"session_id": pm.transcriptSessionID, "error": mErr.Error()})
 			}
 		} else if meta != nil {
-			workspaceID = meta.WorkspaceID
+			pm.workspaceID = meta.WorkspaceID
 		}
 	}
-	if workspaceID == "" {
+	if pm.workspaceID == "" {
 		// The channel instance itself, before falling back to inbound metadata.
 		//
 		// resolveWorkspaceIDForContinuation has had this rung all along; this
@@ -2489,24 +2622,27 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		// handler still resolves correctly — and so the two ladders stop
 		// disagreeing on this axis, which is the same defect shape as the
 		// default-agent divergence.
-		if instanceID := inboundInstanceID(msg); instanceID != "" {
-			if cfg := al.GetConfig(); cfg != nil {
+		if instanceID := inboundInstanceID(pm.msg); instanceID != "" {
+			if cfg := pm.al.GetConfig(); cfg != nil {
 				if inst, ok := cfg.Channels[instanceID]; ok && inst.WorkspaceID != "" {
-					workspaceID = inst.WorkspaceID
+					pm.workspaceID = inst.WorkspaceID
 				}
 			}
 		}
 	}
-	if workspaceID == "" {
-		workspaceID = inboundMetadata(msg, "workspace_id")
+	if pm.workspaceID == "" {
+		pm.workspaceID = inboundMetadata(pm.msg, "workspace_id")
 	}
+}
 
-	opts := processOptions{
-		SessionKey:        sessionKey,
-		Channel:           msg.Channel,
-		ChatID:            msg.ChatID,
-		SenderID:          msg.Sender.CanonicalID,
-		SenderDisplayName: msg.Sender.DisplayName,
+// prepareTurn builds the turn options and releases browser ownership for an operator prompt.
+func (pm *agentLoopProcessMessage) prepareTurn() {
+	pm.opts = processOptions{
+		SessionKey:        pm.sessionKey,
+		Channel:           pm.msg.Channel,
+		ChatID:            pm.msg.ChatID,
+		SenderID:          pm.msg.Sender.CanonicalID,
+		SenderDisplayName: pm.msg.Sender.DisplayName,
 		// FR-017: thread the authenticated gateway principal into the turn for
 		// audit attribution. Only the gateway webchat WS path sets
 		// msg.GatewayUserID (= wc.userID, the WS-authenticated identity, e.g.
@@ -2515,19 +2651,19 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		// We deliberately do NOT read msg.Sender.Username here: channels populate
 		// it with the platform handle (e.g. "@alice"), which is not a gateway
 		// principal and must never be stamped as audit User.
-		UserID:              gatewayPrincipal(msg),
-		UserInitiated:       userInitiated(msg),
-		UserMessage:         msg.Content,
-		Media:               msg.Media,
+		UserID:              gatewayPrincipal(pm.msg),
+		UserInitiated:       userInitiated(pm.msg),
+		UserMessage:         pm.msg.Content,
+		Media:               pm.msg.Media,
 		DefaultResponse:     defaultResponse,
 		SendResponse:        false,
-		TranscriptSessionID: transcriptSessionID,
-		TranscriptStore:     transcriptStore,
-		WorkspaceID:         workspaceID,
+		TranscriptSessionID: pm.transcriptSessionID,
+		TranscriptStore:     pm.transcriptStore,
+		WorkspaceID:         pm.workspaceID,
 		// Carry inbound metadata so runTurn can detect a per-thread model
 		// switch (FR-011). The map is copied by reference — the turn flow
 		// only reads from it.
-		Metadata: msg.Metadata,
+		Metadata: pm.msg.Metadata,
 	}
 
 	// ADR-085 BROWSER-FR-029: release a held browser wheel BEFORE this turn
@@ -2538,80 +2674,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 	// gateway wired — headless/test builds) is a silent no-op. See
 	// browser_deferral.go for the hook's registration and the fail-closed
 	// contract on OperatorPrompt itself.
-	invokeBrowserWheelReleaseHookIfOperatorPrompt(ctx, msg, transcriptSessionID)
-
-	// FR-025: reset idle ticker on every user turn, using transcript session ID
-	// when available (web-chat sessions). This starts the ticker on the first
-	// turn and resets it on every subsequent turn.
-	if transcriptSessionID != "" {
-		al.resetIdleTicker(transcriptSessionID)
-		// FR-024: track current session per agent for lazy CAS on switch.
-		al.agentCurrentSession.Store(agent.ID, transcriptSessionID)
-
-		// Self-heal: rebuild the agent's per-session history from the shared
-		// transcript when the in-memory copy is missing or stale. We rehydrate
-		// not only when the bucket is empty (handoff, fresh process, etc.) but
-		// also when the bucket has *no* assistant/tool entries while the
-		// transcript carries tool_calls owned by this agent — the symptom of
-		// the prior wsStreamer bug that wrote assistant text with empty AgentID
-		// and left the per-agent bucket stuck on user messages only. Without
-		// this stronger trigger, an old session keeps starting from scratch
-		// every turn because GetHistory returns the broken cached state and
-		// the empty-only check above is satisfied.
-		if agent.Sessions != nil {
-			cur := agent.Sessions.GetHistory(sessionKey)
-			needsHydrate := len(cur) == 0
-			if !needsHydrate && transcriptStore != nil {
-				hasAssistantOrTool := false
-				for _, m := range cur {
-					if m.Role == "assistant" || m.Role == "tool" {
-						hasAssistantOrTool = true
-						break
-					}
-				}
-				if !hasAssistantOrTool {
-					if entries, err := transcriptStore.ReadTranscript(transcriptSessionID); err == nil {
-						for i := range entries {
-							e := &entries[i]
-							if (e.AgentID == agent.ID || e.AgentID == "") &&
-								(e.Type == session.EntryTypeToolCall || e.Role == "assistant") {
-								needsHydrate = true
-								break
-							}
-						}
-					}
-				}
-			}
-			// ADR-066 D5.5 (FR-045): this emptiness condition is unchanged;
-			// hydration itself now refuses to touch an agent archive that
-			// already has lines, so a window that is empty only because Skip
-			// reached the end of a non-empty archive is never rebuilt.
-			if needsHydrate {
-				if err := al.HydrateAgentHistoryFromTranscript(transcriptSessionID); err != nil {
-					logger.WarnCF("agent", "self-heal hydrate failed", map[string]any{
-						"agent_id":   agent.ID,
-						"session_id": transcriptSessionID,
-						"error":      err.Error(),
-					})
-				}
-			}
-		}
-	}
-
-	// context-dependent commands check their own Runtime fields and report
-	// "unavailable" when the required capability is nil.
-	if response, handled := al.handleCommand(ctx, msg, agent, &opts); handled {
-		return response, agent, nil
-	}
-
-	// ADR-088 D1/D9: the ADR-074 D4a pending-goal reply-routing hook
-	// (applyGoalPendingReply) is retired — goals activate instantly now, so
-	// there is no more pending/clarification state for a bare chat message to
-	// resolve against (FR-022: bare "confirm" is ordinary chat, no
-	// interception exists). Nothing stands between handleCommand above and
-	// runAgentLoop below anymore.
-	resp, err := al.runAgentLoop(ctx, agent, opts)
-	return resp, agent, err
+	invokeBrowserWheelReleaseHookIfOperatorPrompt(pm.ctx, pm.msg, pm.transcriptSessionID)
 }
 
 // runAgentLoop remains the top-level shell that starts a turn and publishes
