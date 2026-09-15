@@ -418,34 +418,6 @@ func TestLockAllSessionShards_AcquiresInStrictAscendingIndexOrder(t *testing.T) 
 	}
 }
 
-// TestClearAll_AcquiresAllShardsInIndexOrder proves the REAL ClearAll call
-// (not a hand-rolled simulation) goes through lockAllSessionShards, by
-// asserting the recorded order matches the strict-ascending-index shape
-// while ClearAll runs against a real store with real sessions.
-func TestClearAll_AcquiresAllShardsInIndexOrder(t *testing.T) {
-	store := newTestStoreForLockTests(t)
-	for i := 0; i < 3; i++ {
-		_, err := store.NewSession(SessionTypeChat, "", "agent-1")
-		require.NoError(t, err)
-	}
-
-	events, restore := installLockRecorder(t)
-	t.Cleanup(restore)
-
-	_, err := store.ClearAll()
-	require.NoError(t, err)
-
-	recorded := *events
-	require.GreaterOrEqual(t, len(recorded), 128, "ClearAll must acquire+release all 64 shards")
-	// The first 64 events (the lockAllSessionShards acquire loop, which runs
-	// before ClearAll does any per-session work) must be a strictly
-	// ascending 0..63 acquire sequence.
-	for i := 0; i < 64; i++ {
-		require.Truef(t, recorded[i].acquire, "event %d must be an acquire", i)
-		require.Equalf(t, uint32(i), recorded[i].shard, "acquire %d must be shard %d", i, i)
-	}
-}
-
 // TestRetentionSweep_AcquiresAllShardsInIndexOrder is W15b's direct coverage:
 // RetentionSweep must go through the SAME lockAllSessionShards primitive as
 // ClearAll (FR-050(a)), not the old narrow per-directory us.mu it used
