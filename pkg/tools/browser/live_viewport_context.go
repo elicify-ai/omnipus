@@ -109,3 +109,44 @@ func (lv *LiveView) withViewportAdmission(caller, tabCtx context.Context, work f
 	}
 	return applied, err
 }
+
+// --- moved from live.go 2026-09-15 ---
+
+// SetViewport resizes sessionID's captured tab to width x height CSS pixels
+// and renders it at deviceScaleFactor. Thin wrapper: it resolves the live view
+// and the tab context currently bound to it, then hands both to applyViewport,
+// which carries the whole mechanism and its doc comment.
+//
+// Returns false if no live view exists for sessionID (nothing to resize).
+func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, deviceScaleFactor float64) (bool, error) {
+	return r.SetViewportContext(context.Background(), sessionID, width, height, deviceScaleFactor)
+}
+
+// CSSViewport returns sessionID's cached CSS layout viewport — SetViewport's
+// Page.getLayoutMetrics read-back (including its at-most-one chrome-delta
+// compensation re-read), the CDP-verified truth of the tab's actual size
+// (see SetViewport's mechanism doc comment). ok is false when no live view
+// exists for sessionID, or the cache is unset/invalidated (zero — either
+// SetViewport has never run for this session, or its last read-back failed
+// or came back degenerate; see invalidateCSSViewportCache).
+//
+// Follow-up to
+// docs/internal/browser-viewport-input-rootcause-2026-07-31.md (measured
+// 2026-07-31): the gateway's browser_ws.go handleViewport calls this right
+// after a successful SetViewport so it can thread the verified dimensions
+// through to CaptureSession.RecaptureAt — without them, the encoder's own
+// chrome.tabs.get-based resolution can race the OS window reflow and pin
+// the WebRTC stream to a stale tab size.
+func (r *LiveViewRegistry) CSSViewport(sessionID string) (w, h int, ok bool) {
+	sessionID = r.resolveSessionID(sessionID)
+	lv, exists := r.lookup(sessionID)
+	if !exists {
+		return 0, 0, false
+	}
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	if lv.cssViewportW <= 0 || lv.cssViewportH <= 0 {
+		return 0, 0, false
+	}
+	return lv.cssViewportW, lv.cssViewportH, true
+}

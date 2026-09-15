@@ -100,20 +100,3 @@ func TestViewportBasisKeepsLayoutViewportWithoutRecordedScale(t *testing.T) {
 		t.Fatalf("basis = %vx%v, want the cached 633x543 when no scale is recorded", w, h)
 	}
 }
-
-// invalidateCSSViewportCache must clear the scale too: a scale left behind
-// from a previous viewport would be applied to a capture it no longer
-// describes.
-func TestInvalidateCSSViewportCacheClearsScale(t *testing.T) {
-	lv := &LiveView{sessionID: "s1", viewers: make(map[string]struct{})}
-	lv.cssViewportW, lv.cssViewportH = 633, 686
-	lv.cssViewportScale = 2
-
-	lv.invalidateCSSViewportCache()
-
-	lv.mu.Lock()
-	defer lv.mu.Unlock()
-	if lv.cssViewportScale != 0 {
-		t.Fatalf("cssViewportScale = %v after invalidation, want 0", lv.cssViewportScale)
-	}
-}

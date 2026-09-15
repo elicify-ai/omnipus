@@ -665,3 +665,152 @@ func (in *LiveInput) observeTiming(stage string) {
 		in.Timing.Observe(stage)
 	}
 }
+
+// --- moved from live.go 2026-09-15 ---
+
+// Input dispatches an attached viewer's event with a bounded lifetime. Human
+// viewers share input; the presentation-only control label is not a gate.
+func (r *LiveViewRegistry) Input(sessionID, viewerID string, in LiveInput) error {
+	return r.InputContext(context.Background(), sessionID, viewerID, in)
+}
+
+// LiveInputErrorKind classifies a LiveViewRegistry.Input / dispatchInput
+// failure (ADR-038 finding #4) so the gateway's handleInput can decide
+// whether it's worth surfacing to the user as a browser_status(error) frame.
+type LiveInputErrorKind int
+
+func (e *LiveInputError) Error() string { return e.err.Error() }
+
+func (e *LiveInputError) Unwrap() error { return e.err }
+
+const (
+	// LiveInputErrorBenign covers expected, high-frequency rejections: the
+	// viewer doesn't currently hold control (e.g. a stray event sent just
+	// after losing control) or the per-second rate limit was hit. These are
+	// routine and NOT worth a status frame — the previous behavior (Debug
+	// log only, no status frame) is preserved for this kind.
+	LiveInputErrorBenign LiveInputErrorKind = iota
+	// LiveInputErrorReal covers everything else: no live view/session ever
+	// attached, the tab context is missing, an unknown/malformed input kind,
+	// or — most importantly — a genuine chromedp.Run transport failure,
+	// which is the signal that the browser tab crashed or is unreachable.
+	// Before this fix ALL of these were logged at Debug and invisible to the
+	// user; a dead browser looked identical to a healthy, idle one.
+	LiveInputErrorReal
+)
+
+// LiveInputError wraps a LiveViewRegistry.Input failure with its
+// classification. Implements error (via Unwrap, so errors.Is/As still see
+// through to the underlying cause).
+type LiveInputError struct {
+	Kind LiveInputErrorKind
+	err  error
+}
+
+func benignInputError(format string, args ...any) error {
+	return &LiveInputError{Kind: LiveInputErrorBenign, err: fmt.Errorf(format, args...)}
+}
+
+// ErrViewerNotController is the specific benign rejection meaning "this
+// viewer sent input but does not hold the session's control lock".
+//
+// 2026-07-30 UAT — why this needs to be distinguishable from every other
+// benign rejection: it is the only one that indicates the CLIENT'S BELIEF IS
+// WRONG rather than that the input was merely unwanted. A rate-limit
+// rejection is self-correcting (slow down and the next event lands); this
+// one never self-corrects, because the client goes on believing it is
+// driving and the server goes on discarding everything it sends. The
+// operator hit exactly that: the panel read "You're driving" while 448
+// consecutive inputs were rejected and silently dropped at debug level.
+// Callers use IsNotControllerLiveInputError to detect it and push the
+// authoritative control state back to that viewer so the UI can correct
+// itself. See pkg/gateway/browser_webrtc.go's data-channel input handler.
+var ErrViewerNotController = errors.New("browser live: viewer does not hold control of this session")
+
+// IsNotControllerLiveInputError reports whether err is the "viewer does not
+// hold control" rejection — see ErrViewerNotController.
+func IsNotControllerLiveInputError(err error) bool {
+	return errors.Is(err, ErrViewerNotController)
+}
+
+func realInputError(format string, args ...any) error {
+	return &LiveInputError{Kind: LiveInputErrorReal, err: fmt.Errorf(format, args...)}
+}
+
+// IsBenignLiveInputError reports whether err (returned by
+// LiveViewRegistry.Input) is a benign, high-frequency rejection that callers
+// should log quietly rather than surface to the user (ADR-038 finding #4).
+// An error that isn't a *LiveInputError at all (shouldn't happen — every
+// return path in this file uses the classified constructors) is treated as
+// real/not-benign, the fail-safe direction for a security-adjacent surface.
+func IsBenignLiveInputError(err error) bool {
+	var liveErr *LiveInputError
+	return errors.As(err, &liveErr) && liveErr.Kind == LiveInputErrorBenign
+}
+
+// dispatchInput is the internal compatibility entry point. Public callers use
+// InputContext, which also verifies viewer attachment and binds its lifetime.
+func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
+	return lv.dispatchInputContext(context.Background(), viewerID, in)
+}
+
+// allowInputLocked applies a simple fixed-window rate limiter. Must be called
+// with mu held.
+// isCoalescibleInputKind reports whether a dropped event of this kind is
+// self-healing: a later event of the same kind fully supersedes it. Position
+// updates are; state transitions are not, and must not share their budget.
+func isCoalescibleInputKind(kind string) bool {
+	return kind == "mouse_move" || kind == "wheel"
+}
+
+// Input rate limiting (ADR-038 D6: "browser_input is rate-limited") is split
+// into two budgets by event kind, because a single shared one made the limiter
+// itself a source of the bug it was meant to be neutral about.
+//
+// The budget is per SESSION, not per connection — and since the exclusive
+// controller lock was removed (2026-08-03) so a human and the agent can drive
+// together, several senders now draw from it concurrently. Under one shared
+// counter a sustained pointer stream could consume the whole allowance and the
+// NEXT mouse_up would be refused. A dropped mouse_move is self-healing (the
+// following one supersedes it); a dropped mouse_up is not — the remote page
+// keeps believing the button is held, which is a stuck drag or a runaway text
+// selection with nothing in the UI explaining why.
+//
+// So: coalescible position kinds get a large bucket, and discrete state
+// transitions get their own, which a flood of movement can no longer exhaust.
+// Both remain bounded, so a runaway or malicious client is still capped.
+const (
+	// maxCoalescibleInputEventsPerSecond bounds mouse_move and wheel. The
+	// client paces each at ~40/s (MOVE_FLUSH_MS) and coalesces both, so this
+	// leaves room for several concurrent viewers plus the agent before anyone
+	// is throttled. The old value of 50 sat BELOW what a single 60Hz pointer
+	// stream produces on its own, so legitimate input was being dropped
+	// routinely — reported as "clicks work only sometimes".
+	maxCoalescibleInputEventsPerSecond = 300
+	// maxDiscreteInputEventsPerSecond bounds button and key transitions. No
+	// human produces anywhere near this; it exists purely to cap automation.
+	maxDiscreteInputEventsPerSecond = 100
+)
+
+// allowInputLocked charges the event against the bucket for its kind and
+// reports whether it may proceed. Both buckets share one fixed window.
+func (lv *LiveView) allowInputLocked(kind string) bool {
+	now := time.Now()
+	if now.Sub(lv.inputWindowStart) >= time.Second {
+		lv.inputWindowStart = now
+		lv.inputCount = 0
+		lv.discreteCount = 0
+	}
+	if isCoalescibleInputKind(kind) {
+		if lv.inputCount >= maxCoalescibleInputEventsPerSecond {
+			return false
+		}
+		lv.inputCount++
+		return true
+	}
+	if lv.discreteCount >= maxDiscreteInputEventsPerSecond {
+		return false
+	}
+	lv.discreteCount++
+	return true
+}

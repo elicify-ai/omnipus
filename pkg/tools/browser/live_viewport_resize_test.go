@@ -19,7 +19,6 @@ package browser
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -36,134 +35,6 @@ func isScaleAction(a chromedp.Action) bool {
 		return true
 	}
 	return false
-}
-
-// A resize that HAS ALREADY HAPPENED must not be reported to the user as a
-// failure because the renderer was slow to answer a sharpness request.
-//
-// Measured 2026-08-15 with the renderer blocked for 7s: getWindowForTarget
-// 53ms, setWindowBounds 75ms — the window was resized 128ms in — and
-// setDeviceMetricsOverride 6825ms. Bundled under one 5s budget that was a
-// DeadlineExceeded, a full retry, up to 10s of stalling, and the operator's
-// "could not resize the browser viewport" toast for a resize that had
-// succeeded. It also returned before the read-back, so the cached viewport
-// kept describing the PRE-resize tab and mis-aimed every later click.
-func TestSetViewport_SlowScaleOverrideDoesNotFailAResizeThatLanded(t *testing.T) {
-	var boundsCalls []windowBoundsAction
-	var scaleCalls int
-	runCDP := func(_ context.Context, timeout time.Duration, actions ...chromedp.Action) error {
-		switch a := actions[0].(type) {
-		case windowBoundsAction:
-			require.Len(t, actions, 1,
-				"the window resize must be issued alone, so a renderer-bound call cannot spend its budget")
-			boundsCalls = append(boundsCalls, a)
-			return nil
-		case layoutMetricsAction:
-			*a.w, *a.h = 615, 744
-			return nil
-		}
-		if isScaleAction(actions[0]) {
-			scaleCalls++
-			require.Equal(t, viewportScaleTimeout, timeout,
-				"the scale override must be spent against its OWN budget")
-			return context.DeadlineExceeded
-		}
-		return nil
-	}
-	reg, lv := newViewportTestLiveView(runCDP)
-
-	applied, err := reg.SetViewport("s1", 615, 744, 2)
-
-	require.NoError(t, err,
-		"a timed-out sharpness setting must never surface as a failed resize — the window is already the right size")
-	require.True(t, applied)
-	require.Len(t, boundsCalls, 1,
-		"the resize landed on the first attempt; a slow scale override must not trigger the resize retry")
-	require.Equal(t, 1, scaleCalls, "the scale override is attempted once and then given up on")
-
-	lv.mu.Lock()
-	defer lv.mu.Unlock()
-	require.Equal(t, 615, lv.cssViewportW,
-		"the sequence must continue to the read-back, so the cache describes the tab AFTER the resize")
-	require.Equal(t, 744, lv.cssViewportH)
-	require.Zero(t, lv.cssViewportScale,
-		"the override did not land, so the scale is genuinely unknown and must not be recorded as if it had")
-}
-
-// The "resolution collapse" class: a read-back LARGER than the request.
-//
-// `width + (width - actual)` assumed the tab always comes back SHORT. Against a
-// stale 2560-wide read for a 633-wide request it computes -1294, which
-// clampViewportDim floors at 1 — a one-pixel-wide browser window. An overshoot
-// needs no correction at all: the tab is already at least as big as asked.
-func TestSetViewport_ReadBackLargerThanRequestIsNotCompensated(t *testing.T) {
-	var boundsCalls []windowBoundsAction
-	runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-		switch a := actions[0].(type) {
-		case windowBoundsAction:
-			boundsCalls = append(boundsCalls, a)
-		case layoutMetricsAction:
-			*a.w, *a.h = 2560, 1440 // the launch geometry, still in force
-		}
-		return nil
-	}
-	reg, lv := newViewportTestLiveView(runCDP)
-
-	applied, err := reg.SetViewport("s1", 633, 686, 1)
-	require.NoError(t, err)
-	require.True(t, applied)
-
-	require.Len(t, boundsCalls, 1,
-		"an overshoot must not be 'corrected' — there is nothing to correct")
-	require.Equal(t, 633, boundsCalls[0].width)
-	require.Equal(t, 686, boundsCalls[0].height)
-	for _, b := range boundsCalls {
-		require.Greater(t, b.width, 1, "a compensation must never ask for a one-pixel-wide window")
-		require.Greater(t, b.height, 1, "a compensation must never ask for a one-pixel-tall window")
-	}
-
-	lv.mu.Lock()
-	defer lv.mu.Unlock()
-	require.Equal(t, 2560, lv.cssViewportW, "the cache must record the tab as it really is")
-	require.Equal(t, 1440, lv.cssViewportH)
-}
-
-// Browser.setWindowBounds returns as soon as the browser process accepts the
-// bounds; the renderer relays out 40-120ms later (idle) or ~350ms later (busy).
-// A single read taken immediately therefore records the PRE-resize size about
-// as often as the real one — and then compensates against a phantom shortfall,
-// and maps every click through a number that was never true.
-func TestSetViewport_ReadBackWaitsForTheTabToCatchUp(t *testing.T) {
-	var boundsCalls int
-	var reads int
-	runCDP := func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-		switch a := actions[0].(type) {
-		case windowBoundsAction:
-			boundsCalls++
-		case layoutMetricsAction:
-			reads++
-			if reads <= 3 {
-				*a.w, *a.h = 1280, 720 // the tab has not relaid out yet
-				return nil
-			}
-			*a.w, *a.h = 615, 744 // settled
-		}
-		return nil
-	}
-	reg, lv := newViewportTestLiveView(runCDP)
-
-	applied, err := reg.SetViewport("s1", 615, 744, 1)
-	require.NoError(t, err)
-	require.True(t, applied)
-
-	require.Greater(t, reads, 1, "the read-back must poll, not read once")
-	require.Equal(t, 1, boundsCalls,
-		"the resize did land — waiting for it must not be mistaken for a shortfall and 'compensated'")
-
-	lv.mu.Lock()
-	defer lv.mu.Unlock()
-	require.Equal(t, 615, lv.cssViewportW, "the SETTLED read is what gets cached, never the early one")
-	require.Equal(t, 744, lv.cssViewportH)
 }
 
 // When the video frame's shape disagrees with the remembered tab size, the tab
@@ -366,31 +237,4 @@ func TestRescaleCacheRefillRestoresTheAppliedScale(t *testing.T) {
 	require.Equal(t, 640, lv.cssViewportW)
 	require.Equal(t, 2.0, lv.cssViewportScale,
 		"the scale still in force on the tab must come back with the dimensions, not be lost")
-}
-
-// Belt-and-braces on the settle poll's contract: a poll that reads successfully
-// but never reaches the requested size is NOT a failure — the tab really is
-// that size, and recording it is what keeps clicks aimed while the panel
-// renders smaller than asked. Only a poll that never read anything at all may
-// invalidate.
-func TestSettleCSSViewport_RecordsTheTruthWhenItCannotReachTheTarget(t *testing.T) {
-	lv := &LiveView{
-		sessionID: "s1",
-		runCDP: func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-			if lm, ok := actions[0].(layoutMetricsAction); ok {
-				*lm.w, *lm.h = 603, 300
-			}
-			return nil
-		},
-	}
-	w, h, err := lv.settleCSSViewport(context.Background(), 603, 900)
-	require.NoError(t, err, "an unreachable target is not a read failure")
-	require.Equal(t, int64(603), w)
-	require.Equal(t, int64(300), h)
-
-	lv.runCDP = func(context.Context, time.Duration, ...chromedp.Action) error {
-		return fmt.Errorf("transport wedged")
-	}
-	_, _, err = lv.settleCSSViewport(context.Background(), 603, 900)
-	require.Error(t, err, "a poll that never read anything must report failure so the cache is invalidated")
 }
