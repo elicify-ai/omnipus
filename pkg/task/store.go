@@ -1160,14 +1160,37 @@ func (s *Store) UpdateWithPrior(id string, patch Patch) (updated *Task, prior *T
 	return updated, &priorCopy, nil
 }
 
+// storeUpdateLocked carries the shared state of updateLocked across its stages.
+type storeUpdateLocked struct {
+	s     *Store
+	id    string
+	patch Patch
+	t     *Task
+}
+
 // updateLocked is the body of Update; the caller must hold the per-task lock.
 func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
-	t, err := s.load(id)
-	if err != nil {
-		return nil, err
+	su := &storeUpdateLocked{s: s, id: id, patch: patch}
+
+	if r0, r1, stop := su.applyLifecycleFields(); stop {
+		return r0, r1
+	}
+	if r0, r1, stop := su.applyRemainingFields(); stop {
+		return r0, r1
 	}
 
-	if patch.Title != nil {
+	return su.validateAndPersist()
+}
+
+// applyLifecycleFields loads the task and applies lifecycle-sensitive patch fields.
+func (su *storeUpdateLocked) applyLifecycleFields() (*Task, error, bool) {
+	var err error
+	su.t, err = su.s.load(su.id)
+	if err != nil {
+		return nil, err, true
+	}
+
+	if su.patch.Title != nil {
 		// Trim before validating (S2 UAT finding B sibling — see normalize()'s
 		// matching comment): a whitespace-only patch title is rejected as
 		// empty; a legitimate title's incidental leading/trailing whitespace
@@ -1176,53 +1199,53 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		// misses (round-2 S3 finding, see HasVisibleContent's doc comment) — a
 		// patch title made ENTIRELY of those codepoints is rejected the same
 		// as "".
-		trimmedTitle := strings.TrimSpace(*patch.Title)
+		trimmedTitle := strings.TrimSpace(*su.patch.Title)
 		if trimmedTitle == "" || !HasVisibleContent(trimmedTitle) {
-			return nil, verr("title must not be empty")
+			return nil, verr("title must not be empty"), true
 		}
 		if len([]rune(trimmedTitle)) > 200 {
-			return nil, verr("title must be 200 characters or fewer")
+			return nil, verr("title must be 200 characters or fewer"), true
 		}
-		t.Title = trimmedTitle
+		su.t.Title = trimmedTitle
 	}
-	if patch.Description != nil {
-		if len(*patch.Description) > 2000 {
-			return nil, verr("description must be 2000 characters or fewer")
+	if su.patch.Description != nil {
+		if len(*su.patch.Description) > 2000 {
+			return nil, verr("description must be 2000 characters or fewer"), true
 		}
-		t.Description = *patch.Description
+		su.t.Description = *su.patch.Description
 	}
-	if patch.Prompt != nil {
-		if len(*patch.Prompt) > 10000 {
-			return nil, verr("prompt must be 10000 characters or fewer")
+	if su.patch.Prompt != nil {
+		if len(*su.patch.Prompt) > 10000 {
+			return nil, verr("prompt must be 10000 characters or fewer"), true
 		}
-		t.Prompt = *patch.Prompt
+		su.t.Prompt = *su.patch.Prompt
 	}
-	if patch.Status != nil {
-		if !IsValidStatus(*patch.Status) {
-			return nil, verr("invalid status %q", *patch.Status)
+	if su.patch.Status != nil {
+		if !IsValidStatus(*su.patch.Status) {
+			return nil, verr("invalid status %q", *su.patch.Status), true
 		}
 		// `blocked` is a derived side-state — it is never settable through the
 		// public update path. The store sets it when a dependency is unmet and
 		// clears it to `next` when every blocker reaches done. allowBlockedSet is
 		// the internal escape hatch used by the dependency-recompute paths only.
-		if *patch.Status == StatusBlocked && !patch.allowBlockedSet {
-			return nil, ErrBlockedNotSettable
+		if *su.patch.Status == StatusBlocked && !su.patch.allowBlockedSet {
+			return nil, ErrBlockedNotSettable, true
 		}
 		// Reject illegal lifecycle transitions (N1). A no-op (same status) and any
 		// transition out of the derived `blocked` state via the internal hatch are
 		// always allowed; done→in_progress is additionally allowed when t's
 		// trigger repeats (see validateTransition's doc comment).
-		repeatingTrigger := t.Trigger.IsRepeating()
-		if err := validateTransition(t.Status, *patch.Status, patch.allowBlockedSet, repeatingTrigger); err != nil {
-			return nil, err
+		repeatingTrigger := su.t.Trigger.IsRepeating()
+		if err := validateTransition(su.t.Status, *su.patch.Status, su.patch.allowBlockedSet, repeatingTrigger); err != nil {
+			return nil, err, true
 		}
 		// ADR-052 FR-014/§6.4(b) Stop guarantee backstop: reject
 		// failed[stopped_by_user] -> done unconditionally, even though
 		// validateTransition's own matrix permits failed -> * generally (a
 		// genuine failure must stay retryable). See validateStopGuard's doc
 		// comment for the full TOCTOU rationale this closes.
-		if err := validateStopGuard(t, *patch.Status); err != nil {
-			return nil, err
+		if err := validateStopGuard(su.t, *su.patch.Status); err != nil {
+			return nil, err, true
 		}
 		// A genuine transition INTO in_progress (not a same-status no-op) stamps
 		// the task's real execution start, unless the caller already supplied an
@@ -1237,10 +1260,10 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 		// StartedAt itself — so this is unaffected there. A retry (failed →
 		// in_progress) re-stamps to the new attempt's start time, which is the
 		// correct "most recent execution start" semantics.
-		if *patch.Status == StatusInProgress && t.Status != StatusInProgress && patch.StartedAt == nil {
-			t.StartedAt = time.Now().UTC().Format(time.RFC3339)
+		if *su.patch.Status == StatusInProgress && su.t.Status != StatusInProgress && su.patch.StartedAt == nil {
+			su.t.StartedAt = time.Now().UTC().Format(time.RFC3339)
 		}
-		t.Status = *patch.Status
+		su.t.Status = *su.patch.Status
 	}
 	// Fix-wave finding #3 (run_task on a stopped task breaks): when THIS
 	// patch moves Status OFF failed and the caller did NOT also touch
@@ -1256,8 +1279,8 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	// falls through to patch.CancelReason's own handling below and is caught
 	// by the merged check as before (explicit conflicting data is rejected,
 	// never silently dropped; the merged check stays the backstop).
-	if patch.Status != nil && *patch.Status != StatusFailed && patch.CancelReason == nil {
-		t.CancelReason = ""
+	if su.patch.Status != nil && *su.patch.Status != StatusFailed && su.patch.CancelReason == nil {
+		su.t.CancelReason = ""
 	}
 	// Deliberate NON-decision on AttemptCount (ADR-052 spec, "Run vs. Restart
 	// split" deviation note #1): unlike CancelReason immediately above,
@@ -1283,149 +1306,158 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	// `< maxAttempts` gate) — one supervised extra shot per Run click, never
 	// a free budget refill. This is judged defensible and is NOT changed;
 	// see TestAttemptCount_NotResetOnRunRoute for the pinned regression.
-	if patch.CancelReason != nil {
-		if *patch.CancelReason != "" && !IsValidCancelReason(*patch.CancelReason) {
-			return nil, verr("invalid cancel_reason %q", *patch.CancelReason)
+	if su.patch.CancelReason != nil {
+		if *su.patch.CancelReason != "" && !IsValidCancelReason(*su.patch.CancelReason) {
+			return nil, verr("invalid cancel_reason %q", *su.patch.CancelReason), true
 		}
-		t.CancelReason = *patch.CancelReason
+		su.t.CancelReason = *su.patch.CancelReason
 	}
-	if patch.AgentID != nil {
-		t.AgentID = *patch.AgentID
+	return nil, nil, false
+}
+
+// applyRemainingFields validates and applies the remaining independent patch fields.
+func (su *storeUpdateLocked) applyRemainingFields() (*Task, error, bool) {
+	if su.patch.AgentID != nil {
+		su.t.AgentID = *su.patch.AgentID
 	}
-	if patch.Priority != nil {
+	if su.patch.Priority != nil {
 		// Patch.Priority is already a *int, so presence is never ambiguous here:
 		// a non-nil pointer to 0 IS an explicit priority:0 and must be rejected,
 		// unlike normalize()'s Create-time check above (which operates on a bare
 		// int with no such signal). See ValidatePriority's doc comment.
-		if err := ValidatePriority(*patch.Priority); err != nil {
-			return nil, err
+		if err := ValidatePriority(*su.patch.Priority); err != nil {
+			return nil, err, true
 		}
-		t.Priority = *patch.Priority
+		su.t.Priority = *su.patch.Priority
 	}
-	if patch.BlockedBy != nil {
-		newDeps := *patch.BlockedBy
+	if su.patch.BlockedBy != nil {
+		newDeps := *su.patch.BlockedBy
 		if len(newDeps) > 0 {
-			if err := s.validateBlockedByLocked(t.ID, newDeps); err != nil {
-				return nil, err
+			if err := su.s.validateBlockedByLocked(su.t.ID, newDeps); err != nil {
+				return nil, err, true
 			}
 		}
-		t.BlockedBy = newDeps
-		if len(t.BlockedBy) == 0 {
-			t.BlockedBy = nil
+		su.t.BlockedBy = newDeps
+		if len(su.t.BlockedBy) == 0 {
+			su.t.BlockedBy = nil
 		}
 		// The derived `blocked` side-state is recomputed once, unconditionally,
 		// at the end of this function (after every patch field — including a
 		// same-call Status change — has been merged); see that call's doc
 		// comment for why a second recompute here would be redundant.
 	}
-	if patch.Todos != nil {
-		if err := validateTodos(*patch.Todos); err != nil {
-			return nil, err
+	if su.patch.Todos != nil {
+		if err := validateTodos(*su.patch.Todos); err != nil {
+			return nil, err, true
 		}
-		t.Todos = *patch.Todos
-		if len(t.Todos) == 0 {
-			t.Todos = nil
+		su.t.Todos = *su.patch.Todos
+		if len(su.t.Todos) == 0 {
+			su.t.Todos = nil
 		}
 	}
-	if patch.Trigger != nil {
-		newTrigger := *patch.Trigger
+	if su.patch.Trigger != nil {
+		newTrigger := *su.patch.Trigger
 		if newTrigger != nil {
 			if err := ValidateTrigger(newTrigger); err != nil {
-				return nil, err
+				return nil, err, true
 			}
 		}
-		t.Trigger = newTrigger
+		su.t.Trigger = newTrigger
 	}
-	if patch.Due != nil {
-		t.Due = *patch.Due
+	if su.patch.Due != nil {
+		su.t.Due = *su.patch.Due
 	}
-	if patch.PlanID != nil {
-		t.PlanID = *patch.PlanID
+	if su.patch.PlanID != nil {
+		su.t.PlanID = *su.patch.PlanID
 	}
-	if patch.Tags != nil {
-		normalizedTags, err := normalizeTags(*patch.Tags)
+	if su.patch.Tags != nil {
+		normalizedTags, err := normalizeTags(*su.patch.Tags)
 		if err != nil {
-			return nil, err
+			return nil, err, true
 		}
-		t.Tags = normalizedTags
+		su.t.Tags = normalizedTags
 	}
-	if patch.Criteria != nil {
-		normalizedCriteria, err := normalizeCriteria(*patch.Criteria)
+	if su.patch.Criteria != nil {
+		normalizedCriteria, err := normalizeCriteria(*su.patch.Criteria)
 		if err != nil {
-			return nil, err
+			return nil, err, true
 		}
-		t.Criteria = normalizedCriteria
-		if len(t.Criteria) == 0 {
-			t.Criteria = nil
+		su.t.Criteria = normalizedCriteria
+		if len(su.t.Criteria) == 0 {
+			su.t.Criteria = nil
 		}
 	}
-	if patch.WriteSet != nil {
-		newWriteSet := *patch.WriteSet
+	if su.patch.WriteSet != nil {
+		newWriteSet := *su.patch.WriteSet
 		if len(newWriteSet) == 0 {
-			t.WriteSet = nil
+			su.t.WriteSet = nil
 		} else {
-			t.WriteSet = newWriteSet
+			su.t.WriteSet = newWriteSet
 		}
 	}
-	if patch.Stream != nil {
-		t.Stream = *patch.Stream
+	if su.patch.Stream != nil {
+		su.t.Stream = *su.patch.Stream
 	}
-	if patch.IsJoin != nil {
-		t.IsJoin = *patch.IsJoin
+	if su.patch.IsJoin != nil {
+		su.t.IsJoin = *su.patch.IsJoin
 	}
-	if patch.MaxAttempts != nil {
-		newMax := *patch.MaxAttempts
+	if su.patch.MaxAttempts != nil {
+		newMax := *su.patch.MaxAttempts
 		if newMax != nil && *newMax < 1 {
-			return nil, verr("max_attempts must be at least 1")
+			return nil, verr("max_attempts must be at least 1"), true
 		}
-		t.MaxAttempts = newMax
+		su.t.MaxAttempts = newMax
 	}
-	if patch.AttemptCount != nil {
-		if *patch.AttemptCount < 0 {
-			return nil, verr("attempt_count must not be negative")
+	if su.patch.AttemptCount != nil {
+		if *su.patch.AttemptCount < 0 {
+			return nil, verr("attempt_count must not be negative"), true
 		}
-		t.AttemptCount = *patch.AttemptCount
+		su.t.AttemptCount = *su.patch.AttemptCount
 	}
-	if patch.ResumeFromCommit != nil {
-		t.ResumeFromCommit = *patch.ResumeFromCommit
+	if su.patch.ResumeFromCommit != nil {
+		su.t.ResumeFromCommit = *su.patch.ResumeFromCommit
 	}
-	if patch.Surface != nil {
-		if !IsValidSurface(*patch.Surface) {
-			return nil, verr("invalid surface %q", *patch.Surface)
+	if su.patch.Surface != nil {
+		if !IsValidSurface(*su.patch.Surface) {
+			return nil, verr("invalid surface %q", *su.patch.Surface), true
 		}
-		t.Surface = *patch.Surface
+		su.t.Surface = *su.patch.Surface
 	}
-	if patch.Result != nil {
-		if len(*patch.Result) > 50000 {
-			return nil, verr("result must be 50000 characters or fewer")
+	if su.patch.Result != nil {
+		if len(*su.patch.Result) > 50000 {
+			return nil, verr("result must be 50000 characters or fewer"), true
 		}
-		t.Result = *patch.Result
+		su.t.Result = *su.patch.Result
 	}
-	if patch.Artifacts != nil {
-		t.Artifacts = *patch.Artifacts
-		if len(t.Artifacts) == 0 {
-			t.Artifacts = nil
+	if su.patch.Artifacts != nil {
+		su.t.Artifacts = *su.patch.Artifacts
+		if len(su.t.Artifacts) == 0 {
+			su.t.Artifacts = nil
 		}
 	}
-	if patch.SessionID != nil {
-		t.SessionID = *patch.SessionID
+	if su.patch.SessionID != nil {
+		su.t.SessionID = *su.patch.SessionID
 	}
-	if patch.StartedAt != nil {
-		t.StartedAt = *patch.StartedAt
+	if su.patch.StartedAt != nil {
+		su.t.StartedAt = *su.patch.StartedAt
 	}
-	if patch.CompletedAt != nil {
-		t.CompletedAt = *patch.CompletedAt
+	if su.patch.CompletedAt != nil {
+		su.t.CompletedAt = *su.patch.CompletedAt
 	}
-	if patch.FollowedUp != nil {
-		t.FollowedUp = *patch.FollowedUp
+	if su.patch.FollowedUp != nil {
+		su.t.FollowedUp = *su.patch.FollowedUp
 	}
-	if patch.SourceChannel != nil {
-		t.SourceChannel = *patch.SourceChannel
+	if su.patch.SourceChannel != nil {
+		su.t.SourceChannel = *su.patch.SourceChannel
 	}
-	if patch.SourceChatID != nil {
-		t.SourceChatID = *patch.SourceChatID
+	if su.patch.SourceChatID != nil {
+		su.t.SourceChatID = *su.patch.SourceChatID
 	}
+	return nil, nil, false
+}
 
+// validateAndPersist checks merged invariants, derives blocked state, and persists the task.
+func (su *storeUpdateLocked) validateAndPersist() (*Task, error) {
 	// Cross-field invariant (ADR-052 FR-028, mirrors plan.Plan's normalize()-
 	// enforced FailedReason/State coupling — pkg/plan/plan.go:299-306):
 	// CancelReason is only meaningful on a failed task. Checked here against
@@ -1436,7 +1468,7 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	// e.g. a caller that patches Status away from failed without also
 	// clearing CancelReason in the same call is rejected rather than landing
 	// an inconsistent record on disk.
-	if t.CancelReason != "" && t.Status != StatusFailed {
+	if su.t.CancelReason != "" && su.t.Status != StatusFailed {
 		return nil, verr("cancel_reason is only valid when status is failed")
 	}
 
@@ -1456,20 +1488,20 @@ func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	// mirroring what AddDependency/RestartReset already do.
 	// recomputeBlockedStateLocked is a no-op for every other status
 	// (in_progress/done/failed/inbox unaffected).
-	s.recomputeBlockedStateLocked(t)
+	su.s.recomputeBlockedStateLocked(su.t)
 
 	// Re-check with the fully-patched task: a patch that ARMS an auto-firing
 	// trigger on an agentless task, or CLEARS the agent off an already-scheduled
 	// task, must be rejected the same as Create would reject it (normalize).
-	if err := t.validateScheduledAgentAssignment(); err != nil {
+	if err := su.t.validateScheduledAgentAssignment(); err != nil {
 		return nil, err
 	}
 
-	t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-	if err := s.write(t); err != nil {
+	su.t.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	if err := su.s.write(su.t); err != nil {
 		return nil, err
 	}
-	return t, nil
+	return su.t, nil
 }
 
 // UpdateIfStatus is the compare-and-swap write primitive that closes the
