@@ -352,10 +352,11 @@ func (a *restAPI) runCopilotSignInCheck(ctx context.Context) providers_pkg.Copil
 // that cannot be read.
 //
 // `check_failed` (the CLI could not be started, or timed out) degrades to
-// not_signed_in the same way, because the contract has no state or reason
-// field that could carry "the check itself failed". Until it does, the reason
-// is only in the server log below — every outcome other than signed_in and a
-// recognised not_signed_in is logged with the detail that produced it.
+// not_signed_in with a `reason` on the wire (SignInStatus.reason,
+// 2026-09-14), so the operator is told the check itself failed rather than
+// being pointed at `copilot login`. Every outcome other than signed_in and a
+// recognised not_signed_in is also logged server-side with the detail that
+// produced it.
 //
 // known is false for a state this mapping has no case for. The caller must then
 // answer with an error, never with any sign-in state.
@@ -382,9 +383,17 @@ func copilotSignInStatusResponse(res providers_pkg.CopilotSignInResult) (gen.Sig
 	case providers_pkg.CopilotCheckFailed:
 		slog.Warn("copilot sign-in check could not run; reporting not_signed_in, which says nothing about the login",
 			"provider", copilotProviderID, "detail", res.Detail)
+		// The reason field (SignInStatus.reason, 2026-09-14): the operator
+		// sees WHY the check could not run instead of an unexplained
+		// "not signed in" that reads as "run copilot login". Stage-named,
+		// never the CLI's raw output (Detail) or a path.
+		reason := "the sign-in check could not run (the CLI failed to start or timed out); this says nothing about the login"
+		status.Reason = &reason
 	case providers_pkg.CopilotCLIMissing:
 		slog.Warn("copilot sign-in status requested but the CLI is not installed",
 			"provider", copilotProviderID, "hint", providers_pkg.CopilotCLIMissingHint)
+		reason := "the Copilot CLI is not installed on this machine"
+		status.Reason = &reason
 	case providers_pkg.CopilotNotSignedIn:
 		// A recognised message needs no log; an unrecognised one was already
 		// logged, with its text, by the classifier.

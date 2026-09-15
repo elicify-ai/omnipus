@@ -6450,9 +6450,11 @@ func (a *restAPI) HandleProviders(w http.ResponseWriter, r *http.Request) {
 			// machine the row stays `disconnected` and carries the operator
 			// hint. Whether the operator is SIGNED IN is never computed by
 			// running the CLI here — that check costs a premium request, so
-			// it stays the explicit Check sign-in action's alone
-			// (cheapSignInRowStatus never reports "known" for a cli_login id
-			// other than codex-cli, github-copilot included).
+			// it stays the explicit Check sign-in action's alone. The row
+			// CAN still say signed_in/expired for github-copilot — from the
+			// cached result of the operator's last explicit Check
+			// (copilotRowSignInStatus, never a probe), codex-cli from its
+			// saved login file.
 			copilotHint := copilotRowHint(name)
 			hasEndpointCopy := hasEndpoint
 			// ADR-068 T068-08: the row's auth method comes from the config row

@@ -57,7 +57,7 @@ import type { SignInStatus } from '@/lib/api/generated/openapi-types'
 
 type Phase =
   | { kind: 'starting' }
-  | { kind: 'cli_login'; command: string; instructions: string; checking: boolean; checkResult?: 'not_yet' | 'signed_in' | 'expired' }
+  | { kind: 'cli_login'; command: string; instructions: string; checking: boolean; checkResult?: 'not_yet' | 'signed_in' | 'expired'; checkReason?: string }
   | { kind: 'device_code'; verificationUrl: string; userCode: string; deviceAuthId: string; intervalSeconds: number }
   | { kind: 'signed_in'; accountLabel?: string }
   // device_code only: a code that was never approved in time. A cli_login
@@ -301,7 +301,11 @@ export function SignInDialog({
         // way back in (run the login command, then Check sign-in) stays on screen.
         setPhase({ kind: 'cli_login', command: phase.command, instructions: phase.instructions, checking: false, checkResult: 'expired' })
       } else {
-        setPhase({ kind: 'cli_login', command: phase.command, instructions: phase.instructions, checking: false, checkResult: 'not_yet' })
+        // SignInStatus.reason (2026-09-14): present exactly when the check
+        // itself could not run (CLI missing, failed to start, timed out) —
+        // without it the operator reads "not signed in yet" as "run the
+        // command", which is the wrong advice for a machine-level failure.
+        setPhase({ kind: 'cli_login', command: phase.command, instructions: phase.instructions, checking: false, checkResult: 'not_yet', checkReason: status.reason })
       }
     } catch (err) {
       setPhase({ kind: 'error', message: getErrorMessage(err, 'Sign-in check failed') })
@@ -345,7 +349,10 @@ export function SignInDialog({
     switch (phase.kind) {
       case 'starting': return 'Starting sign-in…'
       case 'cli_login':
-        if (phase.checkResult === 'not_yet') return 'Not signed in yet — run the command above, then check again.'
+        if (phase.checkResult === 'not_yet') {
+          if (phase.checkReason) return `Not signed in yet — ${phase.checkReason}.`
+          return 'Not signed in yet — run the command above, then check again.'
+        }
         if (phase.checkResult === 'expired') return cliSessionRejectedText(providerLabel, phase.command)
         return 'Waiting for you to sign in.'
       case 'device_code': return 'Waiting for you to approve this sign-in…'
@@ -401,7 +408,10 @@ export function SignInDialog({
               </div>
               {phase.checkResult === 'not_yet' && (
                 <p className="text-sm text-[var(--color-warning)] flex items-center gap-1.5" role="alert" aria-live="assertive">
-                  <Warning size={13} weight="fill" /> Not signed in yet — run the command above, then check again.
+                  <Warning size={13} weight="fill" />{' '}
+                  {phase.checkReason
+                    ? `Not signed in yet — ${phase.checkReason}.`
+                    : 'Not signed in yet — run the command above, then check again.'}
                 </p>
               )}
               {phase.checkResult === 'expired' && (

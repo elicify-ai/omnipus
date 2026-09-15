@@ -230,7 +230,7 @@ func TestLibraryPreview_NothingUnderThePrefixRedirects(t *testing.T) {
 		method, target, dest string
 		resp                 rawPreviewResponse
 	}
-	var seen []observation
+	seen := make([]observation, 0, (len(dests)*len(readMethods)+len(otherMethods))*len(targets))
 	for _, target := range targets {
 		for _, method := range readMethods {
 			for _, dest := range dests {

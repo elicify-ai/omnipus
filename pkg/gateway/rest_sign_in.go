@@ -750,11 +750,22 @@ func (a *restAPI) handleProviderSignInStatus(w http.ResponseWriter, r *http.Requ
 		jsonErr(w, http.StatusBadRequest, "provider does not support sign-in")
 		return
 	}
+	// ADR-068 FR-050: an anonymous caller inside the pre-auth window gets a
+	// REDUCED answer — account_label is the operator's own vendor account
+	// identifier, exactly the class of value the provider list already hides
+	// from anonymous callers (see HandleProviders). Strip it here too; state,
+	// expiry and reason stay, because onboarding needs them.
+	stripLabelIfAnonymous := func(r *http.Request, st gen.SignInStatus) gen.SignInStatus {
+		if a.callerIdentity(r).Username == "" {
+			st.AccountLabel = nil
+		}
+		return st
+	}
 	if method == "cli_login" {
-		jsonOK(w, cliLoginStatus(providerID))
+		jsonOK(w, stripLabelIfAnonymous(r, cliLoginStatus(providerID)))
 		return
 	}
-	jsonOK(w, a.deviceCodeStatus(providerID))
+	jsonOK(w, stripLabelIfAnonymous(r, a.deviceCodeStatus(providerID)))
 }
 
 // handleProviderSignInImport implements POST /providers/openai-chatgpt/sign-in/import (FR-047).
