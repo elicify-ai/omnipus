@@ -470,7 +470,7 @@ func TestRequestPathRedaction_EveryLoggingSite(t *testing.T) {
 
 // redactionRecordingSite names one place in pkg/gateway that writes a request path into
 // a log record or an audit entry. This inventory is the FR-003e claim written
-// down: six sites, all redacted.
+// down: seven sites, all redacted.
 type redactionRecordingSite struct {
 	file string
 	what string
@@ -484,6 +484,7 @@ var expectedRedactionSites = []redactionRecordingSite{
 	{file: filepath.Join("middleware", "bypass_gate.go"), what: "RequireNotBypass: 503 forensic warning"},
 	{file: filepath.Join("middleware", "csrf.go"), what: "CSRFMiddleware: safe-method cookie re-mint failure"},
 	{file: "rest_signin_copilot.go", what: "handleCopilotSignInStatus: probe-refused 429 warning"},
+	{file: "rest_knowledge.go", what: "allowKnowledgeRetrieval: knowledge rate-limit 429 warning (2026-09-14 limiter fix)"},
 }
 
 // redactionImplFile is where redactRequestPath is DEFINED. Its own call
