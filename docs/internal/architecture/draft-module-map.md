@@ -1,6 +1,6 @@
 # Draft architecture — module map and per-module CLAUDE.md
 
-**Status:** draft (shape agreed 2026-09-12; re-baselined 2026-09-15 after the library-improvements merge ff11e8249; size budgets ratified by the founder 2026-09-15; browser rows updated after PR #685; not implemented, not an ADR, not a spec)
+**Status:** draft, now partly implemented (shape agreed 2026-09-12; re-baselined 2026-09-15 after the library-improvements merge ff11e8249; size budgets ratified by the founder 2026-09-15; browser rows updated after PR #685; **budget gates and the first three splits merged to `release/v0.1.1` on 2026-09-15**, see "Progress"; not an ADR, not a spec)
 
 **Agreed so far**
 
@@ -34,7 +34,19 @@
 - **Budget gates built (2026-09-15, branch `feat/size-budget-file-gate`, carries both gates and the wiring, not merged).** Both pass on GitHub's runner. The design's wiring section was wrong: `scripts/guards.sh` already auto-discovers every `check-*.sh` with its self-check and is the only guard step in `pr.yml` and `runci.sh` (C-92); what the guard job lacked was Go, Node and `node_modules`. The function gate matches a grandfathered entry by exact file+name, then by package directory+name, so a same-package file split keeps the entry.
 - Review fixes: `pkg/library` versus `pkg/media/library` now stated the same way in both drafts; the unassigned-tools count corrected from nine to eleven; ADR-067/068 triples noted; founder decisions gathered in one table; function baseline linked by filename.
 
-**Still open:** the two budget scripts are designed below but not built; nested `CLAUDE.md` landing.
+**Progress (2026-09-15, all on `release/v0.1.1`, merged without a CI run by founder decision; one CI pass at the end of the migration):**
+
+| Step | Result | Proof recorded |
+|---|---|---|
+| Budget gates | `scripts/check-file-budget.sh`, `scripts/check-function-budget.sh`, self-checks, seeded lists, auto-discovered by `scripts/guards.sh`; guard job gained Go, Node, `node_modules` | green in real CI on the gate branch |
+| `pkg/agent/loop.go` | 16,515 → 7,825 lines across 21 `loop*.go` files (two cuts) | full `pkg/agent` suite: 2,464 tests before and after, same 3 pre-existing failures, `^func` multiset identical |
+| `pkg/gateway/rest.go` | 11,338 → 854 (mux, CORS, JSON helpers, auth); twelve `rest_*.go` files; agents split three ways so no test file passes 4,000 | test inventory 3,141 identical, multiset identical, 92 scoped tests |
+| `src/lib/api.ts` | 5,939 → 484-line barrel; 16 modules under `src/lib/api/` | 428 exported names before and after, typecheck 0 errors, 144 api tests, wire-type guard 0 findings |
+| Retired ADR-082 key | deleted from `pkg/config/keys.go` | guard job green on release |
+
+Files over 4,000: 10 → 8. Grandfather lists lowered in the same commits. Tools: `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` (Go) and `ts/tssplit.cjs` (TypeScript), mappings alongside.
+
+**Still open:** the remaining eight files over 4,000; `runTurn`; nested `CLAUDE.md` landing; the one CI pass and the red jobs it will show.
 
 **Decisions for the founder (2026-09-15), each with a recommendation:**
 
@@ -226,9 +238,9 @@ The same pattern, four times, all grown since 2026-09-12:
 
 | File | Lines (2026-09-15) | Lines (2026-09-12) | What actually happened |
 |---|---|---|---|
-| `pkg/agent/loop.go` | 16,515 | 14,912 | Constructor, idle tickers, wiring, accessors, delegation, Run/Stop, events, tool-loading — one type, one file |
-| `pkg/gateway/rest.go` | 11,338 | 11,008 | Sessions, agents, uploads, media, CORS helpers. Tasks and workspaces already escaped to `rest_tasks.go` / `rest_workspaces.go`; the rest never followed |
-| `src/lib/api.ts` | 5,939 | 5,023 | Every HTTP wrapper in one module. Generated types are already separate; the hand-written client is not |
+| `pkg/agent/loop.go` | 16,515, **now 7,825** | 14,912 | Constructor, idle tickers, wiring, accessors, delegation, Run/Stop, events, tool-loading — one type, one file. Split 2026-09-15; what remains is `runTurn` (4,364) plus construct/run/stop |
+| `pkg/gateway/rest.go` | 11,338, **now 854** | 11,008 | Sessions, agents, uploads, media, CORS helpers. Tasks and workspaces already escaped to `rest_tasks.go` / `rest_workspaces.go`; the rest followed on 2026-09-15 |
+| `src/lib/api.ts` | 5,939, **now 484** | 5,023 | Every HTTP wrapper in one module. Generated types are already separate; the hand-written client followed on 2026-09-15, 16 modules behind a barrel |
 | `src/store/chat.ts` | 6,695 | 6,250 | One Zustand store for messages, streaming, tool-result clamping, buckets |
 
 Go does **not** require this. Methods of the same type may live in many files in the same package. `net/http` does it. We already do it for REST (`rest_tasks.go` is `restAPI` methods that used to belong in `rest.go`). The missing rule is: **the next function goes in the file whose one-sentence job matches, not the file that already compiles.**
@@ -437,14 +449,14 @@ Lines re-measured 2026-09-15 (`wc -l` against `release/v0.1.1` @ `1f996b01d`); p
 
 | Today | Lines | Becomes (one sentence each) |
 |---|---|---|
-| `pkg/agent/loop.go` | 16,515 (was 14,912) | The 16 `loop_*.go` files already listed. Then **`runTurn` (~4,400 lines, one function)** extracted into `loop_turn.go` (orchestration) + `turn_llm.go` + `turn_tools.go` + `turn_exit.go` so no function needs two Reads. |
-| `pkg/gateway/rest.go` | 11,338 (was 11,008) | The 10 `rest_*.go` files already listed (sessions, agents, config, skills, providers, mcp, tools, channels, uploads, status). Mux stays in `rest.go`. The other 63 existing `rest_*.go` files get sorted into modules separately — see the compact table above. |
+| `pkg/agent/loop.go` | **7,825 (done 2026-09-15; was 16,515)** | Both file cuts landed: 15 `loop_*.go` files plus appends to `goal_loop.go` / `task_executor.go`, then `loop_truncation.go` and `loop_toolname.go`. Still on the list because of **`runTurn` (4,364 lines, one function)**: extract into `loop_turn.go` (orchestration) + `turn_llm.go` + `turn_tools.go` + `turn_exit.go` so no function needs two Reads. |
+| `pkg/gateway/rest.go` | **854 (done 2026-09-15; was 11,338). Off the list.** | Twelve files landed, not ten: `rest_agents.go` became `rest_agents.go` / `rest_agents_create.go` / `rest_agents_update.go` because one agents test file would have been 5,951 lines. `rotateGatewayToken` went to `rest_config.go` with its caller. The other 63 existing `rest_*.go` files still get sorted into modules in the gateway-thinning step. |
 | `pkg/gateway/gateway.go` | 6,641 (was 6,579) | `gateway.go` (`Run`/`RunContext`); `gateway_boot.go` (credentials, souls, roster); `gateway_reload.go` (watcher, `restartServices`); `gateway_sandbox.go` (egress, tool-policy repair) |
 | `src/store/chat.ts` | 6,695 (was 6,250) | `chatMessages.ts`; `chatStreaming.ts`; `chatTools.ts` (clamp/truncation); `chatBuckets.ts` |
 | `pkg/gateway/websocket.go` | 6,219 (was 5,614) | `websocket.go` (conn, auth, ServeHTTP); `websocket_chat.go` (`handleChatMessage`); `websocket_cancel.go`; `websocket_replay.go` (attach/replay); `websocket_pump.go` (`writePump`) |
 | `pkg/agent/plan_engine.go` | 6,130 (was 5,351) | `plan_engine.go` (type, Start/Stop, Tick); `plan_engine_play.go`; `plan_engine_supervise.go` (unmet DoD / signature gate) |
 | `pkg/config/config.go` | 5,278 (was 5,171) | `config.go` (`Config` + load/save); `config_agents.go`; `config_gateway.go`; `config_retention.go` (memory/compaction helpers) |
-| `src/lib/api.ts` | 5,939 (was 5,023) | `api/agents.ts`, `api/sessions.ts`, `api/workspaces.ts`, `api/tasks.ts`, `api/plans.ts`, `api/channels.ts`, `api/skills.ts`, `api/config.ts` — barrel re-export only in `api.ts` |
+| `src/lib/api.ts` | **484 (done 2026-09-15; was 5,939). Off the list.** | Sixteen modules under `src/lib/api/`, cut by the file's own section banners: the eight named here plus `http` (shared transport), `providers`, `library` (1,193 lines, the largest), `tools`, `security`, `auth`, `system`, `uploads`. `api.ts` is the barrel plus the generated type re-exports. |
 | `pkg/tools/delegate.go` | 4,145 (was 4,026) | `delegate/run.go`, `status.go`, `followup.go`, `park.go` (family package) |
 | `pkg/tools/browser/manager.go` | 4,167 (was 4,124 before PR #685) | PR #685 already added six `manager_*.go` siblings (`manager_live_commands.go` 288, `manager_session_context.go`, `manager_tab_serialization.go`, `manager_local_startup.go`, `manager_lifecycle_fencing.go`, `manager_click_tabs.go`), but took only new code there. Remaining cut out of `manager.go` itself: `manager.go` (construct, config, pool wiring); `manager_tabs.go` (tab open/close/switch, still inside the giant); `manager_lease.go` (workspace lease and ownership). Name the cuts against the siblings that exist; do not add a seventh sibling for new code while the giant keeps its old code. |
 
@@ -482,15 +494,17 @@ Lines re-measured 2026-09-15; prior (2026-09-12) value in parentheses where it d
 
 ### Order of work
 
-1. `loop.go` (mapping already in the bench splitter) including **`runTurn` function extract**.
-2. `rest.go` (banners already mark the cuts).
+1. ~~`loop.go` file cuts~~ **done 2026-09-15.** `runTurn` function extract still open.
+2. ~~`rest.go`~~ **done 2026-09-15.**
 3. `delegate.go` + `shell.go` (tool families).
 4. `gateway.go` + `websocket.go`.
-5. `plan_engine.go` + `task_executor.go`.
+5. `plan_engine.go` + `task_executor.go` (the latter grew to 3,129 from the loop.go appends).
 6. `config.go` + `coreagent/core.go`.
-7. SPA: `api.ts` → `chat.ts` → screens.
-8. Second cuts: `rest_tasks.go`, `rest_workspaces.go`, browser `manager.go` / `live.go`.
+7. SPA: ~~`api.ts`~~ **done 2026-09-15** → `chat.ts` → screens.
+8. Second cuts: `rest_tasks.go`, `rest_workspaces.go`, browser `manager.go` / `live.go`, and `goal_loop.go` / `loop_wire.go` which now sit just over 2,000.
 9. `channels/manager.go` once families self-register.
+
+Steps 3 to 6 are independent files and run in parallel, one agent and one worktree each, with the proven recipe: grep the package's tests for the filename first, write the mapping from the file's own banners, dry-run, split, verify test inventory and `^func` multiset, lower the grandfather lists in the same commit.
 
 ## The rule (plain English)
 
@@ -516,7 +530,7 @@ What that costs today, measured at `release/v0.1.1` @ `d9a0c6941` with the scann
 
 | Set | Warn (over 2,000 lines / 120 lines) | Fail, becomes the grandfather list (over 4,000 / 240) |
 |---|---|---|
-| Production files | 34 | 10 (`loop.go`, `rest.go`, `chat.ts`, `gateway.go`, `websocket.go`, `plan_engine.go`, `api.ts`, `config.go`, `browser/manager.go`, `delegate.go`) |
+| Production files | 34 | 10 at seed (`loop.go`, `rest.go`, `chat.ts`, `gateway.go`, `websocket.go`, `plan_engine.go`, `api.ts`, `config.go`, `browser/manager.go`, `delegate.go`); **8 after the 2026-09-15 merges** (`rest.go` and `api.ts` left the list) |
 | Test files | 17 | 0 (the only test file over 4,000 is `pkg/api/generated/contract_test.go`, which is generated and skipped) |
 | Go production functions | 315 | 70 (26 in `pkg/gateway`, 16 in `pkg/agent`, 8 in `pkg/tools`, 5 in `pkg/sysagent/tools`, 15 elsewhere) |
 | Go test functions | 281 | 20 |
