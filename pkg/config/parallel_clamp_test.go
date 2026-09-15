@@ -5,36 +5,6 @@ import (
 	"testing"
 )
 
-// TestClampParallelExplicit_HonoursOne verifies that an EXPLICIT user value of 1
-// is honored (single-flight) — only the floor of 1, and that large explicit
-// values are honored in full (no silent ceiling — ADR-037 bans silently
-// clamping an operator's explicit choice). Only the defensive floor applies;
-// values above the physical safety ceiling are still passed through
-// unchanged (a WARN is logged, verified separately by
-// TestClampParallelExplicit_WarnsAboveSafetyCeiling-style behavior at the
-// EffectiveMaxParallelAgents level below).
-func TestClampParallelExplicit_HonoursOne(t *testing.T) {
-	cases := []struct {
-		in, want int
-	}{
-		{1, 1},
-		{2, 2},
-		{8, 8},
-		{16, 16},
-		{17, 17},     // NO ceiling at 16 anymore.
-		{1000, 1000}, // an explicit value ABOVE the old 16 ceiling survives untouched.
-		{5000, 5000}, // an explicit value ABOVE physicalConcurrencySafetyCeiling (2000) still survives untouched — explicit values are never clamped.
-		{50000, 50000},
-		{0, 1},  // below floor -> floor (1)
-		{-3, 1}, // below floor -> floor (1)
-	}
-	for _, c := range cases {
-		if got := clampParallelExplicit(c.in); got != c.want {
-			t.Errorf("clampParallelExplicit(%d) = %d, want %d", c.in, got, c.want)
-		}
-	}
-}
-
 // TestEffectiveMaxParallelAgents_ExplicitOne verifies the end-to-end resolution:
 // a user who sets max_parallel_agents=1 gets single-flight (1), not 2.
 func TestEffectiveMaxParallelAgents_ExplicitOne(t *testing.T) {
@@ -151,16 +121,5 @@ func TestEffectiveMaxParallelAgents_ExplicitOverridesAuto_BothDirections(t *test
 	above := backstop + 1000
 	if got, gotCapped := (PerformanceConfig{MaxParallelAgents: above}).EffectiveMaxParallelAgents(); got != above || !gotCapped {
 		t.Fatalf("explicit value %d above the backstop %d was not honored outright: got (%d, %v), want (%d, true)", above, backstop, got, gotCapped, above)
-	}
-}
-
-// TestClampParallelExplicit_NeverLowersLargeValue is a direct unit-level
-// companion to the end-to-end test above: clampParallelExplicit itself must
-// never reduce a large explicit value, at any magnitude.
-func TestClampParallelExplicit_NeverLowersLargeValue(t *testing.T) {
-	for _, v := range []int{17, 100, 2000, 2001, 10000, 100000} {
-		if got := clampParallelExplicit(v); got != v {
-			t.Errorf("clampParallelExplicit(%d) = %d, want %d (explicit values are never lowered)", v, got, v)
-		}
 	}
 }
