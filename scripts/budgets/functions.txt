@@ -57,11 +57,11 @@ pkg/gateway/rest.go	restAPI.registerAdditionalEndpoints	249
 pkg/gateway/sandbox_apply.go	applySandbox	504
 pkg/gateway/task_occurrences_overlay_test.go	TestOccurrenceOverlay	373
 pkg/gateway/task_occurrences_test.go	TestOccurrences_BucketingAndCaps	396
-pkg/gateway/websocket_pump.go	WSHandler.eventForwarder	1231
+pkg/gateway/websocket_forward.go	WSHandler.eventForwarder	1231
 pkg/gateway/websocket_replay.go	WSHandler.handleAttachSession	386
 pkg/gateway/websocket_chat.go	WSHandler.handleChatMessage	595
 pkg/gateway/websocket.go	WSHandler.readLoop	278
-pkg/gateway/websocket_pump.go	wsStreamer.Finalize	284
+pkg/gateway/websocket_streamer.go	wsStreamer.Finalize	284
 pkg/knowledge/links_test.go	TestKnowledge_NoLanguageModelInTheGraphPath	258
 pkg/plan/store.go	Store.updateLocked	311
 pkg/records/enum_test.go	TestEnum_ClosedAndLexical	247
