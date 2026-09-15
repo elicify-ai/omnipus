@@ -5,9 +5,12 @@
 package config
 
 import (
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // TestConfig_LeaseWaitClampedAgainstPageTimeout is FR-023a: the clamp fires at
@@ -167,17 +170,9 @@ func TestBrowserToolConfig_NewKeysHaveFullyQualifiedEnvTags(t *testing.T) {
 // a permanent second code path that every future change has to keep working —
 // which is how a temporary flag turns into a permanent maintenance cost.
 func TestBrowserToolConfig_ActionabilityGateDocumentsItsRemoval(t *testing.T) {
-	src := readRepoFile(t, "config.go")
-	idx := strings.Index(src, "ActionabilityGate string")
-	if idx < 0 {
-		t.Fatal("ActionabilityGate's declaration was not found in config.go")
-	}
+	src := readConfigSourcesForTest(t)
 	// Look back over the doc comment attached to the field.
-	start := idx - 2200
-	if start < 0 {
-		start = 0
-	}
-	doc := src[start:idx]
+	doc := configDocWindowForTest(t, src, "ActionabilityGate string", 2200)
 
 	for _, needle := range []string{"revert switch", "REMOVED"} {
 		if !strings.Contains(doc, needle) {
@@ -187,4 +182,52 @@ func TestBrowserToolConfig_ActionabilityGateDocumentsItsRemoval(t *testing.T) {
 	if !strings.Contains(doc, "visible_only") || !strings.Contains(doc, `"full"`) {
 		t.Error("ActionabilityGate's doc comment does not enumerate its accepted values (full / visible_only), so an operator cannot know what to set it to")
 	}
+}
+
+// readConfigSourcesForTest concatenates every non-test config*.go sibling with a
+// "// ---- file: <name> ----" banner. Guard tests that used to read "config.go"
+// alone must read this instead: config.go is split into config_*.go files by
+// concern (2026-09-15), so a symbol scanned by name may live in any of them.
+//
+// Mirrors readLoopSourcesForTest in pkg/agent and readRestSourcesForTest in
+// pkg/gateway, added for the same reason when those files were split.
+func readConfigSourcesForTest(t *testing.T) string {
+	t.Helper()
+	matches, err := filepath.Glob("config*.go")
+	require.NoError(t, err, "readConfigSourcesForTest: glob config*.go")
+
+	var b strings.Builder
+	n := 0
+	for _, name := range matches {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		b.WriteString("// ---- file: " + name + " ----\n")
+		b.WriteString(readRepoFile(t, name))
+		b.WriteString("\n")
+		n++
+	}
+	// A glob that matches nothing returns no error, so without this the scans
+	// above would pass vacuously on a broken checkout.
+	require.Greater(t, n, 0, "readConfigSourcesForTest: no non-test config*.go sources found")
+	return b.String()
+}
+
+// configDocWindowForTest returns the bytes before the marker, at most width,
+// failing the test when the marker is absent instead of panicking the whole
+// test binary with a negative slice bound. The window never crosses back past
+// the "// ---- file:" banner of the block the marker lives in, so a doc-comment
+// scan cannot be satisfied by the tail of the previous sibling.
+func configDocWindowForTest(t *testing.T, src, marker string, width int) string {
+	t.Helper()
+	i := strings.Index(src, marker)
+	require.GreaterOrEqualf(t, i, 0, "marker %q not found in the config*.go family", marker)
+	start := i - width
+	if banner := strings.LastIndex(src[:i], "// ---- file: "); banner >= 0 && start < banner {
+		start = banner
+	}
+	if start < 0 {
+		start = 0
+	}
+	return src[start:i]
 }
