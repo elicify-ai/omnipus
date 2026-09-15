@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 
@@ -188,6 +189,8 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 			}
 		}
 		anyApplied := false
+		measurementRetried := false
+		initialLayoutUnverified := false
 		for attempt := 0; ; attempt++ {
 			if err := viewportContextError(caller, operation); err != nil {
 				return anyApplied, err
@@ -204,7 +207,7 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 			var applied bool
 			var err error
 			if attempt == 0 {
-				applied, err = lv.applyViewportAdmitted(caller, tabCtx, operation, width, height, scale)
+				applied, initialLayoutUnverified, err = lv.applyViewportAdmitted(caller, tabCtx, operation, width, height, scale)
 			} else {
 				// Size content directly: repeating outer bounds can retain Chrome's toolbar deficit.
 				err = lv.runCDP(operation, viewportSetTimeout, windowContentsSizeAction{width, height})
@@ -223,12 +226,31 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 			if cs == nil {
 				return anyApplied, nil
 			}
+			active, target, identityErr := lv.mgr.activeTargetSnapshot(lv.sessionID)
+			if identityErr != nil {
+				return anyApplied, fmt.Errorf("viewport final geometry target lookup: %w", identityErr)
+			}
 			measured, err := lv.measureCaptureFrame(operation, cs)
+			if !measurementRetried && errors.Is(err, context.DeadlineExceeded) && viewportContextError(caller, operation) == nil {
+				// A stage timeout need not consume the operation's original budget.
+				// Retry only the read, and only for the same target and capture.
+				current, currentTarget, snapshotErr := lv.mgr.activeTargetSnapshot(lv.sessionID)
+				if snapshotErr != nil || current != active || currentTarget != target || lv.mgr.CaptureSessionForPanel(lv.sessionID) != cs {
+					return anyApplied, fmt.Errorf("viewport final geometry: identity changed after timed-out read: %w", err)
+				}
+				measurementRetried = true
+				measured, err = lv.measureCaptureFrame(operation, cs)
+			}
 			if err != nil {
 				return anyApplied, fmt.Errorf("viewport final geometry: %w", err)
 			}
+			// The initial read can fail before toolbar compensation, even when the
+			// final read succeeds immediately. Correct that shortfall once; fresh
+			// inner/CSS geometry distinguishes it from a normal scrollbar.
+			recoverShortfall := attempt == 0 && initialLayoutUnverified &&
+				(width-measured.Width > viewportDriftTolerancePx || height-measured.Height > viewportDriftTolerancePx)
 			matches := true
-			if converge {
+			if converge || recoverShortfall {
 				matches, err = lv.viewportMatchesRequest(operation, measured, width, height)
 				if err != nil {
 					return anyApplied, fmt.Errorf("viewport convergence measurement: %w", err)

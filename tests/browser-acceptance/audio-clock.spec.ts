@@ -87,7 +87,7 @@ test('same peer silence-tone-silence with viewer muted then unmuted', async ({ p
         const counters = (sample: Awaited<ReturnType<typeof read>>) => {
           const audio = sample.stats.filter(row => row.kind === 'audio');
           expect(audio, 'one inbound audio stream must supply receiver energy').toHaveLength(1);
-          const values = Object.fromEntries(['totalAudioEnergy', 'totalSamplesDuration', 'totalSamplesReceived'].map(key => {
+          const values = Object.fromEntries(['totalAudioEnergy', 'totalSamplesDuration', 'totalSamplesReceived', 'packetsReceived'].map(key => {
             const value = audio[0][key];
             expect(typeof value, `required receiver metric ${key}`).toBe('number');
             expect(Number.isFinite(value), `finite receiver metric ${key}`).toBe(true);
@@ -98,17 +98,22 @@ test('same peer silence-tone-silence with viewer muted then unmuted', async ({ p
         };
         expect(stableStart, 'stable receiver observation must exist').toBeDefined();
         const before = counters(stableStart!), after = counters(stableEnd);
+        const receivedPackets = after.packetsReceived - before.packetsReceived;
         const receivedSamples = after.totalSamplesReceived - before.totalSamplesReceived;
         const receivedDuration = after.totalSamplesDuration - before.totalSamplesDuration;
         const receivedEnergy = after.totalAudioEnergy - before.totalAudioEnergy;
+        expect(receivedPackets, 'audio packets must advance even while viewer is muted').toBeGreaterThan(0);
         expect(receivedSamples, 'audio samples must advance even while viewer is muted').toBeGreaterThan(0);
         expect(receivedDuration).toBeGreaterThan(0);
         expect(receivedEnergy).toBeGreaterThanOrEqual(0);
         const meanSquare = receivedEnergy / receivedDuration;
         const authoredTonePower = 0.02 ** 2 / 2;
         observations.push({ checkpoint: 'receiver-energy', requestedPhase: phase, requestedMuted: muted,
-          stableStartMs: stableStart!.atMs, stableEndMs: stableEnd.atMs, receivedSamples, receivedDuration, receivedEnergy, meanSquare });
-        if (phase === 1) expect(meanSquare, 'receiver must contain the authored tone energy').toBeGreaterThanOrEqual(authoredTonePower * 0.05);
+          stableStartMs: stableStart!.atMs, stableEndMs: stableEnd.atMs, receivedPackets, receivedSamples, receivedDuration, receivedEnergy, meanSquare });
+        // LibWebRTC ChannelReceive measures output energy after volume scaling:
+        // muted playback must be silent even when the received source is a tone.
+        // https://webrtc.googlesource.com/src/+/refs/heads/main/audio/channel_receive.cc
+        if (!muted && phase === 1) expect(meanSquare, 'receiver must contain the authored tone energy').toBeGreaterThanOrEqual(authoredTonePower * 0.05);
         else expect(meanSquare, 'receiver must return to silence').toBeLessThanOrEqual(authoredTonePower * 0.005);
       }
     }

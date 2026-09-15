@@ -154,6 +154,7 @@ func TestLegacyTabCommandHoldsGateThroughNotification(t *testing.T) {
 
 func TestActiveTargetSnapshotPreservesIdentityAndRejectsDeadTarget(t *testing.T) {
 	m := newTestManagerWithFakeTabs(t)
+	m.memoryPressureFn = func(int) (bool, bool) { return false, true }
 	t.Cleanup(m.Shutdown)
 	wantCtx, err := m.Session(testSessionID)
 	require.NoError(t, err)

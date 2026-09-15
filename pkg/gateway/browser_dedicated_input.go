@@ -360,7 +360,17 @@ func (h *BrowserWSHandler) dispatchDedicatedControl(wc *browserWSConn, state *br
 		fail(err.Error())
 		return
 	}
-	job := browserCommand{navigation: inputKindIsDiscrete(f.Kind), run: func(parent context.Context) {
+	// Only schema-valid, current-epoch administrative controls may interrupt
+	// a viewport. Gestures never gain this privilege or its longer budget.
+	viewport := typ == "browser_viewport"
+	supersedesViewport := viewport || typ == "browser_tab_action" || (typ == "browser_input" && inputKindIsDiscrete(f.Kind))
+	if typ == "browser_control" {
+		var control generated.BrowserControlFrame
+		if json.Unmarshal(data, &control) == nil && control.Action == "release" {
+			supersedesViewport = true
+		}
+	}
+	job := browserCommand{viewport: viewport, supersedesViewport: supersedesViewport, navigation: inputKindIsDiscrete(f.Kind), run: func(parent context.Context) {
 		failJob := func(reason string) {
 			d.failControlUnlessSuperseded(parent, request.ctx, epoch, next, reason, fail)
 		}

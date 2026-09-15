@@ -601,9 +601,10 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 
 // applyViewportAdmitted keeps the original target identity for cache validation;
 // only operationCtx is passed to browser work so caller cancellation reaches it.
-func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.Context, width, height int, deviceScaleFactor float64) (bool, error) {
+// initialLayoutUnverified reports that the initial read failed before compensation.
+func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.Context, width, height int, deviceScaleFactor float64) (applied bool, initialLayoutUnverified bool, err error) {
 	if tabCtx == nil {
-		return false, nil
+		return false, false, nil
 	}
 	// Serialize the whole apply→compensate→settle→cache sequence per LiveView
 	// (live UAT 2026-07-31, pop-out): two viewers may legally send viewport
@@ -632,14 +633,14 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 	// and a future non-WS caller must not be able to hand Chromium a degenerate
 	// or enormous allocation.
 	if width < 1 || height < 1 || width > maxViewportDimension || height > maxViewportDimension {
-		return false, fmt.Errorf("browser live: viewport %dx%d out of range", width, height)
+		return false, false, fmt.Errorf("browser live: viewport %dx%d out of range", width, height)
 	}
 	if deviceScaleFactor < 1 || deviceScaleFactor > maxViewportScaleFactor {
 		// Reject rather than silently clamp (review finding): a caller asking
 		// for dsf 50 got no feedback at all under the old clamp, while an
 		// out-of-range width got an explicit error. Same input class, same
 		// treatment.
-		return false, fmt.Errorf("browser live: device scale factor %.2f out of range (1..%.0f)",
+		return false, false, fmt.Errorf("browser live: device scale factor %.2f out of range (1..%.0f)",
 			deviceScaleFactor, maxViewportScaleFactor)
 	}
 	// Combined ceiling. Each dimension and the scale factor are individually
@@ -649,7 +650,7 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 	// single shared Chrome backing the agent's browsing.
 	physicalPixels := float64(width) * float64(height) * deviceScaleFactor * deviceScaleFactor
 	if physicalPixels > maxViewportPhysicalPixels {
-		return false, fmt.Errorf(
+		return false, false, fmt.Errorf(
 			"browser live: viewport %dx%d @%.1fx = %.0f physical pixels, over the %.0f ceiling",
 			width, height, deviceScaleFactor, physicalPixels, maxViewportPhysicalPixels)
 	}
@@ -683,10 +684,10 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 		if cs := lv.mgr.CaptureSessionForPanel(lv.sessionID); cs != nil {
 			_, target, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
 			if err != nil {
-				return false, err
+				return false, false, err
 			}
 			if _, err := cs.BeginFrameTransition(string(target), 0, 0, deviceScaleFactor); err != nil {
-				return false, err
+				return false, false, err
 			}
 		}
 	}
@@ -700,7 +701,7 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 		// stall has typically cleared. Any other error is a real failure and
 		// still surfaces immediately.
 		if viewportContextError(caller, operationCtx) != nil || !errors.Is(err, context.DeadlineExceeded) {
-			return false, fmt.Errorf("browser live: resize viewport: %w", err)
+			return false, false, fmt.Errorf("browser live: resize viewport: %w", err)
 		}
 		logger.WarnCF(
 			"browser",
@@ -708,12 +709,12 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 			map[string]any{"session_id": lv.sessionID},
 		)
 		if err := run(viewportSetTimeout, boundsAction); err != nil {
-			return false, fmt.Errorf("browser live: resize viewport (after retry): %w", err)
+			return false, false, fmt.Errorf("browser live: resize viewport (after retry): %w", err)
 		}
 	}
 
 	if err := viewportContextError(caller, operationCtx); err != nil {
-		return true, err
+		return true, false, err
 	}
 
 	// Step 2: deviceScaleFactor only, on its OWN budget. A stage failure is
@@ -729,7 +730,7 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 	scaleApplied := true
 	if err := run(viewportScaleTimeout, scaleAction); err != nil {
 		if ended := viewportContextError(caller, operationCtx); ended != nil {
-			return true, ended
+			return true, false, ended
 		}
 		scaleApplied = false
 		logger.WarnCF(
@@ -762,14 +763,14 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 	}
 
 	if err := viewportContextError(caller, operationCtx); err != nil {
-		return true, err
+		return true, false, err
 	}
 
 	// Step 3: settle-poll the tab's ACTUAL CSS layout viewport (see the
 	// mechanism section, and settleCSSViewport's own doc comment).
 	actualW, actualH, readErr := lv.settleCSSViewport(operationCtx, width, height)
 	if err := viewportContextError(caller, operationCtx); err != nil {
-		return true, err
+		return true, false, err
 	}
 	if readErr != nil {
 		// A failed read-back does not undo the resize above (best-effort: the
@@ -788,7 +789,7 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 				"requested_height": height,
 			},
 		)
-		return true, nil
+		return true, true, nil
 	}
 
 	// Chrome-delta compensation, shortfall only, single pass — see the
@@ -804,7 +805,7 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 		compensatedAskW, compensatedAskH = compW, compH
 		if err := run(viewportSetTimeout, windowBoundsAction{width: compW, height: compH}); err != nil {
 			if ended := viewportContextError(caller, operationCtx); ended != nil {
-				return true, ended
+				return true, false, ended
 			}
 			logger.WarnCF(
 				"browser",
@@ -818,11 +819,11 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 			)
 		} else {
 			if err := viewportContextError(caller, operationCtx); err != nil {
-				return true, err
+				return true, false, err
 			}
 			compW2, compH2, compErr := lv.settleCSSViewport(operationCtx, width, height)
 			if err := viewportContextError(caller, operationCtx); err != nil {
-				return true, err
+				return true, false, err
 			}
 			if compErr != nil {
 				lv.invalidateCSSViewportCache()
@@ -838,7 +839,7 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 						"compensated_width":  compW,
 						"compensated_height": compH,
 					})
-				return true, nil
+				return true, false, nil
 			}
 			// The settled post-compensation read is authoritative, full stop.
 			// This used to "keep the closest" of the two read-backs, a
@@ -856,7 +857,7 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 	}
 
 	if err := viewportContextError(caller, operationCtx); err != nil {
-		return true, err
+		return true, false, err
 	}
 
 	fields := map[string]any{
@@ -915,7 +916,7 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 				"actual_height":    actualH,
 			},
 		)
-		return true, nil
+		return true, false, nil
 	}
 	lv.cssViewportW = int(actualW)
 	lv.cssViewportH = int(actualH)
@@ -936,7 +937,7 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 	}
 	lv.mu.Unlock()
 
-	return true, nil
+	return true, false, nil
 }
 
 // viewportMeasurementIsStaleLocked reports whether a viewport measurement

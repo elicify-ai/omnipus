@@ -572,6 +572,7 @@ export function BrowserLiveView({
   // active. (The ADR itself is silent on whether an optimistic highlight
   // would also be acceptable — this "reconcile from the next frame" choice
   // is a local implementation decision, not something the ADR mandates.)
+  const activeTabIdentityRef = useRef('')
   const [tabState, setTabState] = useState<{ tabs: BrowserTabsFrame['tabs']; activeIndex: number } | null>(null)
   // Keep the address bar in sync with the ACTIVE TAB's real url.
   //
@@ -630,7 +631,7 @@ export function BrowserLiveView({
   const [frameGeometryReady, setFrameGeometryReady] = useState(false)
   const [viewportHandoffState, setViewportHandoffState] = useState<'idle' | 'resizing' | 'failed'>('idle')
   const viewportHandoffRef = useRef<{
-    previousId: string | null; previousGeneration: number; target: { w: number; h: number } | null
+    previousId: string | null; previousGeneration: number; tab: string; target: { w: number; h: number } | null
     control?: { input_epoch: number; control_epoch: number }; completed?: { id: string; generation: number }
     failed: boolean; timer: ReturnType<typeof setTimeout> | null
   } | null>(null)
@@ -644,7 +645,7 @@ export function BrowserLiveView({
     if (viewportHandoffRef.current || !captureRef.current.id) return
     flushWheelBeforeActionRef.current()
     const current = captureRef.current
-    const pending = { previousId: current.id, previousGeneration: current.generation, target: null as { w: number; h: number } | null, failed: false, timer: null as ReturnType<typeof setTimeout> | null }
+    const pending = { previousId: current.id, previousGeneration: current.generation, tab: activeTabIdentityRef.current, target: null as { w: number; h: number } | null, failed: false, timer: null as ReturnType<typeof setTimeout> | null }
     viewportHandoffRef.current = pending
     setViewportHandoffState('resizing')
     pending.timer = setTimeout(() => {
@@ -1104,6 +1105,7 @@ export function BrowserLiveView({
         refreshFrameGate()
       },
       onTabs: (f) => {
+        activeTabIdentityRef.current = JSON.stringify([f.active_index, f.tabs[f.active_index]?.url])
         setTabState({ tabs: f.tabs, activeIndex: f.active_index })
       },
       // Reviewer finding: a terminal browser_status{state:'error'} (e.g. a
@@ -1456,6 +1458,7 @@ export function BrowserLiveView({
   const pressedInputsRef = useRef(new Map<string, Omit<BrowserInputFrame, 'type'>>())
   const resizeInputBusyRef = useRef<() => boolean>(() => false)
   const resumeViewportRef = useRef<() => void>(() => {})
+  const retryViewportRef = useRef<() => boolean>(() => false)
   const releaseInputsRef = useRef<() => void>(() => {})
   const inputFailureAtRef = useRef(-Infinity)
   const dispatchInput = useCallback(
@@ -1561,6 +1564,9 @@ export function BrowserLiveView({
     if (!el) return undefined
     let timer: ReturnType<typeof setTimeout> | null = null
     let deferredForInput = false
+    let retry: { handoff: NonNullable<typeof viewportHandoffRef.current>; control: string; tab: string } | null = null
+    const retryIsCurrent = () => !retry || (viewportHandoffRef.current === retry.handoff && !retry.handoff.failed &&
+      retry.control === JSON.stringify(inputRef.current?.controlIdentity) && retry.tab === activeTabIdentityRef.current)
     const inputDefersResize = () => {
       if (!resizeInputBusyRef.current()) return false
       deferredForInput = true
@@ -1579,6 +1585,7 @@ export function BrowserLiveView({
     lastSentViewportRef.current = null
 
     const push = () => {
+      if (!retryIsCurrent()) { retry = null; return }
       // TRANSIENT-RESIZE GUARD (operator video 0804, 11 unintended rebuilds).
       //
       // Focusing the address bar makes Safari open its AutoFill accessory bar,
@@ -1693,6 +1700,7 @@ export function BrowserLiveView({
             if (viewportHandoffRef.current?.target === null) finishViewportHandoff()
             return
           }
+          if (!retryIsCurrent()) { retry = null; return }
           if (inputDefersResize()) return
           const css = captureRef.current.css
           if (!css || css.width !== nw || css.height !== nh || (settled && settled.dpr !== settleDpr)) beginViewportHandoff()
@@ -1705,7 +1713,14 @@ export function BrowserLiveView({
                 ? { input_epoch: control.input_epoch, control_epoch: control.control_epoch } : undefined
             }
             lastSentViewportRef.current = { w: nw, h: nh, dpr: settleDpr }
+            if (retry) {
+              retry = null
+              // start waits for this viewport's ACK; the handoff additionally
+              // requires its matching fresh picture before admitting gestures.
+              inputRef.current?.start()
+            }
           } else if (handoff) {
+            retry = null
             handoff.failed = true
             setViewportHandoffState('failed')
           }
@@ -1738,6 +1753,29 @@ export function BrowserLiveView({
       schedule()
     }
     resumeViewportRef.current = resumeAfterInput
+    const retryViewport = () => {
+      const previous = viewportHandoffRef.current
+      if (!connectedRef.current || !previous || !inputRef.current) return false
+      if (previous.previousId !== captureRef.current.id || previous.tab !== activeTabIdentityRef.current) return false
+      if (timer !== null) clearTimeout(timer)
+      if (settleRef.current !== null) clearTimeout(settleRef.current)
+      finishViewportHandoff()
+      beginViewportHandoff()
+      const handoff = viewportHandoffRef.current
+      if (!handoff) return false
+      // A fresh picture may finish after the failed control but before Retry.
+      // Its exact retry ACK can prove recovery without demanding another frame
+      // generation; the pre-resize picture must still remain inadmissible.
+      handoff.previousId = previous.previousId
+      handoff.previousGeneration = previous.previousGeneration
+      retry = { handoff, control: JSON.stringify(inputRef.current.controlIdentity), tab: activeTabIdentityRef.current }
+      // A failed commit has already populated the sent-size cache. Explicit
+      // recovery must reapply even when the container has not changed.
+      lastSentViewportRef.current = null
+      schedule()
+      return true
+    }
+    retryViewportRef.current = retryViewport
 
     // Initial push once connected — the WS may not be open on first mount, so
     // `connected` is a dependency and this re-runs when it flips true.
@@ -1773,6 +1811,7 @@ export function BrowserLiveView({
     if (typeof ResizeObserver === 'undefined') {
       window.addEventListener('resize', schedule)
       return () => {
+        if (retryViewportRef.current === retryViewport) retryViewportRef.current = () => false
         if (resumeViewportRef.current === resumeAfterInput) resumeViewportRef.current = () => {}
         if (timer !== null) clearTimeout(timer)
         if (settleRef.current !== null) clearTimeout(settleRef.current)
@@ -1785,6 +1824,7 @@ export function BrowserLiveView({
     const ro = new ResizeObserver(schedule)
     ro.observe(el)
     return () => {
+      if (retryViewportRef.current === retryViewport) retryViewportRef.current = () => false
       if (resumeViewportRef.current === resumeAfterInput) resumeViewportRef.current = () => {}
       if (timer !== null) clearTimeout(timer)
       if (settleRef.current !== null) clearTimeout(settleRef.current)
@@ -2486,6 +2526,9 @@ export function BrowserLiveView({
         <span>{inputError}</span>{' '}
         <button type="button" tabIndex={0} disabled={inputState === 'paused' && !inputCanResume} onClick={() => {
           if (inputRef.current?.needsAttachmentRetry) setConnectionAttempt((attempt) => attempt + 1)
+          else if (viewportHandoffRef.current) {
+            if (!retryViewportRef.current()) setConnectionAttempt((attempt) => attempt + 1)
+          }
           else if (inputState === 'paused') inputRef.current?.resume()
           else inputRef.current?.start()
         }}>{inputState === 'paused' ? 'Resume input' : 'Retry input'}</button>

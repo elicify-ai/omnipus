@@ -30,13 +30,14 @@ import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import type { BrowserInputFrame } from '@/lib/api/generated/asyncapi-types'
 
-const { mockSendControl, mockSendInput, mockSendViewport, inputStateCallback, callbacksRef } = vi.hoisted(() => ({
+const { mockSendControl, mockSendInput, mockSendViewport, mockInputStart, inputStateCallback, callbacksRef } = vi.hoisted(() => ({
   mockSendControl: vi.fn(() => true),
   mockSendInput: vi.fn((_input: Omit<BrowserInputFrame, 'type'>) => {
     void _input // present only to give the mock the real call-argument type it's asserted against below
     return true
   }),
   mockSendViewport: vi.fn(() => true),
+  mockInputStart: vi.fn(),
   inputStateCallback: { current: null as ((state: 'ready' | 'paused' | 'failed', reason?: string) => void) | null },
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
 }))
@@ -45,6 +46,7 @@ vi.mock('@/lib/browserInputWebRTC', async () => {
   const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
   return { BrowserInputWebRTCSession: class extends dedicatedInputSessionStub(mockSendInput) {
     constructor(options: { onState(state: 'ready' | 'paused' | 'failed', reason?: string): void }) { super(); inputStateCallback.current = (state, reason) => { this.state = state; options.onState(state, reason) }; queueMicrotask(() => options.onState('ready')) }
+    start() { super.start(); mockInputStart() }
     cancelAutomaticRecovery() {}
   } }
 })
@@ -770,4 +772,58 @@ describe('BrowserLiveView — resize preserves active input', () => {
     } finally { vi.useRealTimers() }
   })
 
+})
+
+
+describe('BrowserLiveView — explicit failed viewport recovery', () => {
+  it.each(['complete', 'detach', 'supersede', 'late-picture'])('retries the latest viewport before input restart and fences completion (%s)', async (outcome) => {
+    vi.useFakeTimers()
+    try {
+      const view = render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectFrameAndDrive()
+      const frame = screen.getByTestId('browser-live-frame')
+      let width = 1280
+      frame.getBoundingClientRect = () => ({ width, height: 720, top: 0, left: 0, right: width, bottom: 720, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      width = 1200
+      fireEvent(window, new Event('resize'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      act(() => inputStateCallback.current?.('failed', 'Browser control failed. Retry input.'))
+      const latePicture = outcome === 'late-picture'
+      const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
+      if (latePicture) act(() => {
+        callbacksRef.current?.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'recovered', capture_id: 'capture-test', capture_generation: 2, rtp_timestamp: 200, css_width: 1200, css_height: 720 })
+        emitBrowserFrame(video, { rtpTimestamp: 200, expectedDisplayTime: performance.now() })
+      })
+      mockSendViewport.mockClear(); mockInputStart.mockClear(); mockSendInput.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: 'Retry input', exact: true }))
+      expect(mockInputStart).not.toHaveBeenCalled()
+      if (outcome === 'detach' || outcome === 'supersede') {
+        if (outcome === 'detach') view.unmount()
+        else act(() => callbacksRef.current?.onTabs?.({ type: 'browser_tabs', active_index: 1, tabs: [{ index: 0, url: 'https://example.com/' }, { index: 1, url: 'https://example.org/' }] }))
+        await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+        expect(mockSendViewport).not.toHaveBeenCalled()
+        expect(mockInputStart).not.toHaveBeenCalled()
+        return
+      }
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      expect(mockSendViewport).toHaveBeenCalledExactlyOnceWith(1200, 720, window.devicePixelRatio || 1)
+      expect(mockInputStart).toHaveBeenCalledTimes(1)
+      expect(mockInputStart.mock.invocationCallOrder[0]).toBeGreaterThan(mockSendViewport.mock.invocationCallOrder[0])
+      act(() => inputStateCallback.current?.('ready'))
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'resizing')
+      act(() => {
+        if (!latePicture) {
+          callbacksRef.current?.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'recovered', capture_id: 'capture-test', capture_generation: 2, rtp_timestamp: 200, css_width: 1200, css_height: 720 })
+          emitBrowserFrame(video, { rtpTimestamp: 200, expectedDisplayTime: performance.now() })
+        }
+        callbacksRef.current?.onInputControlAck?.({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 99, control_epoch: 0, ok: true, capture_id: 'capture-test', capture_generation: 2 })
+      })
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'resizing')
+      fireEvent.keyDown(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })
+      expect(mockSendInput).not.toHaveBeenCalled()
+      act(() => callbacksRef.current?.onInputControlAck?.({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 0, ok: true, capture_id: 'capture-test', capture_generation: 2 }))
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'ready')
+    } finally { vi.useRealTimers() }
+  })
 })

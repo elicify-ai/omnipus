@@ -14,6 +14,10 @@ import (
 
 const browserCommandCapacity = 512
 
+// Viewport work includes window changes, geometry verification and one bounded
+// measurement retry. Queue age consumes this allowance; other commands keep 5s.
+const browserViewportCommandBudget = 10 * time.Second
+
 // browserCommandQueue keeps discrete gestures ordered without making the
 // socket reader wait for Chrome. Only adjacent pointer moves are replaceable.
 type browserCommandQueue struct { // not-wire-format: connection-local mutex, cancellation and job queue; never serialized.
@@ -22,15 +26,19 @@ type browserCommandQueue struct { // not-wire-format: connection-local mutex, ca
 	running          bool
 	jobs             []browserCommand
 	activeCancel     context.CancelFunc
+	activeViewport   bool
 	activeNavigation bool
 }
 
 type browserCommand struct { // not-wire-format: queued execution closure with admission timing; never marshaled as a command payload.
-	enqueued   time.Time
-	move       bool
-	navigation bool
-	run        func(context.Context)
-	onDiscard  func()
+	superseded         bool
+	supersedesViewport bool
+	viewport           bool
+	enqueued           time.Time
+	move               bool
+	navigation         bool
+	run                func(context.Context)
+	onDiscard          func()
 }
 
 func (q *browserCommandQueue) submit(wg *sync.WaitGroup, job browserCommand) bool {
@@ -47,7 +55,16 @@ func (q *browserCommandQueue) submit(wg *sync.WaitGroup, job browserCommand) boo
 	if len(q.jobs) >= browserCommandCapacity {
 		return false
 	}
-	if job.navigation && q.activeNavigation && q.activeCancel != nil {
+	if job.supersedesViewport {
+		for i := range q.jobs {
+			if q.jobs[i].viewport {
+				// Retain the closure so its epoch-aware cancellation path runs;
+				// onDiscard would report failure against the newer control.
+				q.jobs[i].superseded = true
+			}
+		}
+	}
+	if q.activeCancel != nil && ((job.navigation && q.activeNavigation) || (job.supersedesViewport && q.activeViewport)) {
 		q.activeCancel()
 	}
 	q.jobs = append(q.jobs, job)
@@ -67,15 +84,28 @@ func (q *browserCommandQueue) drain(wg *sync.WaitGroup) {
 			q.running = false
 			q.activeCancel = nil
 			q.activeNavigation = false
+			q.activeViewport = false
 			q.mu.Unlock()
 			return
 		}
 		job := q.jobs[0]
 		q.jobs[0] = browserCommand{}
 		q.jobs = q.jobs[1:]
-		ctx, cancel := context.WithDeadline(context.Background(), job.enqueued.Add(5*time.Second))
+		budget := 5 * time.Second
+		if job.viewport {
+			budget = browserViewportCommandBudget
+		}
+		ctx, cancel := context.WithDeadline(context.Background(), job.enqueued.Add(budget))
+		if job.superseded {
+			// Supersession must remain cancellation even if this queued job's
+			// original deadline has since elapsed.
+			cancel()
+			ctx, cancel = context.WithCancel(context.Background())
+			cancel()
+		}
 		q.activeCancel = cancel
 		q.activeNavigation = job.navigation
+		q.activeViewport = job.viewport
 		q.mu.Unlock()
 		job.run(ctx)
 		cancel()

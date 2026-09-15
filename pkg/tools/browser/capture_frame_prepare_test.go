@@ -13,6 +13,7 @@ import (
 func preparedCaptureFixture(t *testing.T) (*CaptureSession, *BrowserManager, context.Context) {
 	t.Helper()
 	mgr := newTestManagerWithFakeTabs(t)
+	mgr.memoryPressureFn = func(int) (bool, bool) { return false, true }
 	t.Cleanup(mgr.Shutdown)
 	active, err := mgr.Session(testSessionID)
 	if err != nil {
