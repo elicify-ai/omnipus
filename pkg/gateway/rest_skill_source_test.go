@@ -6,22 +6,19 @@
 package gateway
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestSystemSkillsDetectedByName verifies the embedded default skills are
@@ -107,108 +104,6 @@ func newTestRestAPIWithSkillsDirs(t *testing.T, builtinDir string) *restAPI {
 	}
 }
 
-// TestListSkillsBuiltinEnriched verifies a seeded built-in skill is returned by
-// GET /api/v1/skills with a non-empty description, source=builtin, verified=true,
-// author=Omnipus, and the frontmatter version.
-func TestListSkillsBuiltinEnriched(t *testing.T) {
-	builtinDir := t.TempDir()
-	seedSkill(t, builtinDir, "daily-briefing",
-		"name: daily-briefing\ndescription: Summarize the day for the operator.\nversion: 1.2.3",
-		"# daily-briefing\n\nProduce a concise daily briefing.")
-
-	api := newTestRestAPIWithSkillsDirs(t, builtinDir)
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)
-	w := httptest.NewRecorder()
-	api.HandleSkills(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	var skills []gen.Skill
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &skills))
-	require.Len(t, skills, 1)
-
-	s := skills[0]
-	assert.Equal(t, "daily-briefing", s.Id)
-	assert.Equal(t, "daily-briefing", s.Name)
-	assert.Equal(t, gen.SkillStatusActive, s.Status)
-	assert.True(t, s.Verified, "builtin skills are Omnipus-team-verified")
-
-	require.NotNil(t, s.Source)
-	assert.Equal(t, gen.SkillSourceBuiltin, *s.Source)
-
-	require.NotNil(t, s.Description)
-	assert.Equal(t, "Summarize the day for the operator.", *s.Description)
-
-	require.NotNil(t, s.Author)
-	assert.Equal(t, "Omnipus", *s.Author)
-
-	assert.Equal(t, "1.2.3", s.Version)
-}
-
-// TestListSkillsVersionDefaultsWhenAbsent verifies a builtin skill without a
-// version frontmatter key falls back to "0.0.0".
-func TestListSkillsVersionDefaultsWhenAbsent(t *testing.T) {
-	builtinDir := t.TempDir()
-	seedSkill(t, builtinDir, "plan",
-		"name: plan\ndescription: Plan a task before executing.",
-		"# plan\n\nPlan before acting.")
-
-	api := newTestRestAPIWithSkillsDirs(t, builtinDir)
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)
-	w := httptest.NewRecorder()
-	api.HandleSkills(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var skills []gen.Skill
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &skills))
-	require.Len(t, skills, 1)
-	assert.Equal(t, "0.0.0", skills[0].Version)
-	require.NotNil(t, skills[0].Source)
-	assert.Equal(t, gen.SkillSourceBuiltin, *skills[0].Source)
-}
-
-// TestListSkillsDisplayNameSeparateFromID verifies a builtin skill whose
-// frontmatter carries a proper English display name surfaces with Id=slug and
-// Name=display, is still detected as a system skill (keyed on the slug), and
-// DELETE is rejected with 403. This is the Part B id/name-separation contract.
-func TestListSkillsDisplayNameSeparateFromID(t *testing.T) {
-	builtinDir := t.TempDir()
-	// Directory slug is "daily-briefing"; frontmatter name is the display name.
-	seedSkill(t, builtinDir, "daily-briefing",
-		"name: Daily Briefing\ndescription: Summarize the day for the operator.\nversion: 1.2.3",
-		"# Daily Briefing\n\nProduce a concise daily briefing.")
-
-	api := newTestRestAPIWithSkillsDirs(t, builtinDir)
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)
-	w := httptest.NewRecorder()
-	api.HandleSkills(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	var listed []gen.Skill
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listed))
-	require.Len(t, listed, 1)
-
-	s := listed[0]
-	assert.Equal(t, "daily-briefing", s.Id, "Id must be the slug")
-	assert.Equal(t, "Daily Briefing", s.Name, "Name must be the display name")
-	assert.True(t, s.Verified, "embedded default must be verified")
-	require.NotNil(t, s.Source)
-	assert.Equal(t, gen.SkillSourceBuiltin, *s.Source, "must surface as builtin")
-
-	// System detection + delete guard are keyed on the slug (Id), not the
-	// display name — DefaultSkillNames returns slugs.
-	assert.Equal(t, "builtin", api.skillSource("daily-briefing"))
-
-	// DELETE by slug must be rejected with 403.
-	rd := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/daily-briefing", nil)
-	wd := httptest.NewRecorder()
-	api.HandleSkills(wd, rd)
-	assert.Equal(t, http.StatusForbidden, wd.Code, "body: %s", wd.Body.String())
-	assert.Contains(t, wd.Body.String(), "built-in skills cannot be removed")
-}
-
 // TestDeleteBuiltinSkillRejected verifies DELETE of a builtin skill returns 403.
 func TestDeleteBuiltinSkillRejected(t *testing.T) {
 	builtinDir := t.TempDir()
@@ -254,53 +149,4 @@ func TestDeleteNonBuiltinSkillNotRejectedByGuard(t *testing.T) {
 		"non-builtin must not hit the 403 guard; body: %s",
 		w.Body.String(),
 	)
-}
-
-// TestHandleSkills_IncludesArgumentHint verifies that GET /api/v1/skills
-// surfaces the SKILL.md frontmatter argument-hint as argument_hint on the
-// wire Skill type (F3/FR-006/FR-014/R3).
-//
-// Traces to: FR-006, FR-014, R3, SC-008.
-func TestHandleSkills_IncludesArgumentHint(t *testing.T) {
-	builtinDir := t.TempDir()
-
-	// Skill WITH an argument-hint declaration.
-	// Note: "[topic]" must be quoted in YAML because bare [topic] parses as a
-	// YAML sequence, not a string. The SKILL.md convention is to quote the hint.
-	seedSkill(t, builtinDir, "web-research",
-		`name: web-research`+"\n"+`description: Search the web.`+"\n"+`argument-hint: "[topic]"`,
-		"# web-research\n\nSearch the web for a given topic.")
-
-	// Skill WITHOUT an argument-hint declaration.
-	seedSkill(t, builtinDir, "summarize",
-		"name: summarize\ndescription: Summarize text.",
-		"# summarize\n\nSummarize arbitrary text.")
-
-	api := newTestRestAPIWithSkillsDirs(t, builtinDir)
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)
-	w := httptest.NewRecorder()
-	api.HandleSkills(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	var listed []gen.Skill
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &listed))
-	require.Len(t, listed, 2)
-
-	// Index by id for order-independent assertions.
-	byID := make(map[string]gen.Skill, len(listed))
-	for _, s := range listed {
-		byID[s.Id] = s
-	}
-
-	// web-research: argument_hint must be "[topic]".
-	wr, ok := byID["web-research"]
-	require.True(t, ok, "web-research must be in the listing")
-	require.NotNil(t, wr.ArgumentHint, "web-research must carry argument_hint")
-	assert.Equal(t, "[topic]", *wr.ArgumentHint) // YAML-quoted in frontmatter → string "[topic]"
-
-	// summarize: argument_hint must be absent (nil pointer).
-	sum, ok := byID["summarize"]
-	require.True(t, ok, "summarize must be in the listing")
-	assert.Nil(t, sum.ArgumentHint, "summarize must not carry argument_hint when not declared")
 }

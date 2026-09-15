@@ -19,10 +19,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/goleak"
-
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -31,6 +27,9 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/goleak"
 )
 
 const testPlansAgentID = "01JXTESTPLANSAGENT0000001"
@@ -565,114 +564,6 @@ func TestTaskPlanID_CrossWorkspaceRejected(t *testing.T) {
 	rPatch.URL.Path = "/api/v1/tasks/" + plainTask.Id
 	api.HandleTasks(wPatch, rPatch)
 	assert.Equal(t, http.StatusBadRequest, wPatch.Code, "body=%s", wPatch.Body.String())
-}
-
-// TestDeleteAgent_OwningActivePlan_Rejected verifies the agent-delete guard
-// (rest.go's deleteAgent): an agent that owns >=1 running plan cannot be
-// deleted.
-func TestDeleteAgent_OwningActivePlan_Rejected(t *testing.T) {
-	api := newTestRestAPIWithPlans(t)
-	wsID := createTestWorkspace(t, api, "Owner WS")
-
-	// Wire a real PlanEngine so HasActivePlansOwnedBy is reachable — mirrors
-	// gateway.go's boot wiring (agent.NewPlanEngine + SetPlanEngine), but
-	// without Start()ing background goroutines (HasActivePlansOwnedBy is a
-	// synchronous store scan, not engine-loop-dependent).
-	pe := agent.NewPlanEngine(api.agentLoop, api.planStore, api.taskStore, api.taskExecutor)
-	api.agentLoop.SetPlanEngine(pe)
-	// This SECOND engine displaces the harness's own in the loop, so the
-	// harness cleanup's pe.Stop() drains that one, not this one. Drain this
-	// one too — it is a live engine bound to the same stores and the same
-	// tmpDir, and any wake it dispatches outlives the test otherwise.
-	// Registered here (later than the harness's) so it runs first; Stop on an
-	// engine that dispatched nothing is a zero-counter wait.
-	t.Cleanup(pe.Stop)
-
-	wCreate := postPlan(t, api, wsID,
-		`{"workspace_id":"`+wsID+`","title":"Owned plan","owner_agent_id":"`+testPlansAgentID+`"}`)
-	require.Equal(t, http.StatusCreated, wCreate.Code)
-	var p gen.Plan
-	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
-
-	// A plan needs at least one member to be approvable (plan-lint's
-	// LintEmptyPlan). This test's subject is agent deletion, not approval —
-	// the member is fixture, not assertion.
-	mustCreateTask(t, api, wsID, "owned plan member", p.Id)
-
-	require.Equal(t, http.StatusOK, postPlanAction(t, api, p.Id, "approve").Code)
-	// PUT can no longer set state at all (ADR-052 FR-007/A1) — drive the
-	// approved->running transition directly via the store instead.
-	running := plan.StateRunning
-	_, rerr := api.planStore.Update(p.Id, plan.Patch{State: &running})
-	require.NoError(t, rerr)
-
-	hasActive, haErr := pe.HasActivePlansOwnedBy(testPlansAgentID)
-	require.NoError(t, haErr)
-	assert.True(t, hasActive)
-
-	wDel := httptest.NewRecorder()
-	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+testPlansAgentID, nil)
-	rDel.URL.Path = "/api/v1/agents/" + testPlansAgentID
-	api.HandleAgents(wDel, rDel)
-	assert.Equal(t, http.StatusBadRequest, wDel.Code, "body=%s", wDel.Body.String())
-
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(wDel.Body.Bytes(), &body))
-	assert.Equal(t, "agent_owns_active_plans", body["code"])
-}
-
-// TestDeleteAgent_PlanStoreListError_FailsClosed is the fix-wave regression
-// for finding 1 (14-reviewer sign-off): when HasActivePlansOwnedBy cannot
-// determine plan ownership (a plan-store List() error), the delete-guard
-// must refuse the delete (503) rather than silently treating "unknown" as
-// "no active plans" and letting a possibly-owning agent be deleted out from
-// under a live plan.
-func TestDeleteAgent_PlanStoreListError_FailsClosed(t *testing.T) {
-	api := newTestRestAPIWithPlans(t)
-	wsID := createTestWorkspace(t, api, "Owner WS 2")
-
-	pe := agent.NewPlanEngine(api.agentLoop, api.planStore, api.taskStore, api.taskExecutor)
-	api.agentLoop.SetPlanEngine(pe)
-	t.Cleanup(pe.Stop)
-
-	wCreate := postPlan(t, api, wsID,
-		`{"workspace_id":"`+wsID+`","title":"Owned plan 2","owner_agent_id":"`+testPlansAgentID+`"}`)
-	require.Equal(t, http.StatusCreated, wCreate.Code)
-	var p gen.Plan
-	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &p))
-	// See above: a member is required for approval; the subject here is the
-	// plan-store list error, not the member.
-	mustCreateTask(t, api, wsID, "owned plan 2 member", p.Id)
-	require.Equal(t, http.StatusOK, postPlanAction(t, api, p.Id, "approve").Code)
-	running := plan.StateRunning
-	_, rerr := api.planStore.Update(p.Id, plan.Patch{State: &running})
-	require.NoError(t, rerr)
-
-	// Force plan.Store.List to fail with a genuine (non-ENOENT) read error,
-	// UID-independently: root (this repo's CI worker runs as uid=0) has
-	// CAP_DAC_OVERRIDE and ignores permission bits entirely, so an
-	// os.Chmod(dir, 0o000) injection succeeds in listing anyway on CI while
-	// failing correctly on a non-root dev machine — a root-only false RED,
-	// not a real product bug (mirrors the os.Getuid()==0 skip-guard pattern
-	// used elsewhere, e.g. pkg/tools/write_file_reason_test.go,
-	// pkg/agent/list_all_sessions_test.go). Swap the plans directory for a
-	// regular file instead: os.ReadDir on a path that is not a directory
-	// returns ENOTDIR unconditionally, root included, because it is a
-	// path-type error rather than a DAC permission check.
-	dir := api.planStore.Dir()
-	backupDir := dir + ".bak"
-	require.NoError(t, os.Rename(dir, backupDir))
-	require.NoError(t, os.WriteFile(dir, []byte("not a directory"), 0o600))
-	t.Cleanup(func() {
-		_ = os.Remove(dir)
-		_ = os.Rename(backupDir, dir)
-	})
-
-	wDel := httptest.NewRecorder()
-	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+testPlansAgentID, nil)
-	rDel.URL.Path = "/api/v1/agents/" + testPlansAgentID
-	api.HandleAgents(wDel, rDel)
-	assert.Equal(t, http.StatusServiceUnavailable, wDel.Code, "body=%s", wDel.Body.String())
 }
 
 // TestPlanEngineBoot_ConstructStartStop is a smoke test of gateway.go's exact

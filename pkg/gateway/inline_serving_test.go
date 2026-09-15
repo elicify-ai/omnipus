@@ -208,8 +208,8 @@ type inlineServingSite struct {
 }
 
 var expectedInlineServingSites = []inlineServingSite{
-	{file: "rest.go", fn: "HandleServeUpload"},
-	{file: "rest.go", fn: "serveMedia"},
+	{file: "rest_uploads.go", fn: "HandleServeUpload"},
+	{file: "rest_uploads.go", fn: "serveMedia"},
 	{file: "rest_library.go", fn: "handleLibraryDownload", forcesAttachment: true},
 	{file: "rest_library_preview.go", fn: "handleServeLibraryPreview", policyOnEveryResponse: true},
 }

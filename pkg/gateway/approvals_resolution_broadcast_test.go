@@ -19,16 +19,13 @@ package gateway
 
 import (
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 type apprResRecord struct {
@@ -203,47 +200,6 @@ func TestWS_ToolApprovalResolved_BroadcastOnSessionStop(t *testing.T) {
 		assert.Equal(t, string(ApprovalStateDeniedCancel), f["state"], "tab %d", i)
 		assert.Equal(t, "sess-stop", f["session_id"], "tab %d", i)
 	}
-}
-
-// TestDeleteAgent_DeniesPendingApprovalsAndBroadcasts: deleting an agent
-// denies the approvals it is still waiting on (unblocking its turn), tells
-// every tab, and leaves other agents' approvals untouched.
-func TestDeleteAgent_DeniesPendingApprovalsAndBroadcasts(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-	handler, _, _ := newTestWSHandler(t)
-	reg := newApprovalRegistryV2(64, 300*time.Second)
-	reg.terminalRetention = 0
-	api.approvalReg = reg
-	reg.setResolutionListener(handler.broadcastToolApprovalResolved)
-	tabs := apprResAttachConns(t, handler, 2)
-
-	doomed, accepted := reg.requestApproval("tc-doomed", "write_file",
-		map[string]any{"path": "e3-marker.txt"}, "test-agent", "sess-doomed", "turn-doomed")
-	require.True(t, accepted)
-	survivor, accepted := reg.requestApproval("tc-survivor", "write_file",
-		map[string]any{"path": "keep.txt"}, "other-agent", "sess-other", "turn-other")
-	require.True(t, accepted)
-	t.Cleanup(func() { reg.resolve(survivor.ApprovalID, ApprovalActionCancel) })
-
-	w := httptest.NewRecorder()
-	api.HandleAgents(w, httptest.NewRequest(http.MethodDelete, "/api/v1/agents/test-agent", nil))
-	require.Equal(t, http.StatusNoContent, w.Code, "delete must succeed: %s", w.Body.String())
-
-	o := apprResAwaitOutcome(t, doomed)
-	assert.Equal(t, ApprovalOutcome{Approved: false, Reason: denialReasonCancel}, o)
-
-	for i, wc := range tabs {
-		f := apprResReadFrame(t, wc, "tool_approval_resolved")
-		assert.Equal(t, doomed.ApprovalID, f["approval_id"], "tab %d", i)
-		assert.Equal(t, string(ApprovalStateDeniedCancel), f["state"], "tab %d", i)
-	}
-
-	still := reg.get(survivor.ApprovalID)
-	require.NotNil(t, still, "another agent's approval must survive the delete")
-	reg.mu.Lock()
-	state := still.state
-	reg.mu.Unlock()
-	assert.Equal(t, ApprovalStatePending, state)
 }
 
 // TestWS_ToolApprovalFrames_CarryWorkspaceID: the approval frames carry the

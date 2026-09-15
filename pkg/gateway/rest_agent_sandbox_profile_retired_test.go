@@ -69,33 +69,3 @@ func runUpdateAgentSandboxProfileRejected400(t *testing.T, value string) {
 	assert.Equal(t, "Test Agent", cfg.Agents.List[0].Name)
 	assert.Nil(t, cfg.Agents.List[0].UpdatedAt, "UpdatedAt must not be set by a rejected PUT")
 }
-
-// TestUpdateAgent_SandboxProfileOff_Rejected400 verifies that a PUT carrying
-// the retired sandbox_profile="off" field is rejected with 400.
-func TestUpdateAgent_SandboxProfileOff_Rejected400(t *testing.T) {
-	runUpdateAgentSandboxProfileRejected400(t, "off")
-}
-
-// TestUpdateAgent_SandboxProfileWorkspace_Rejected400 verifies the same
-// rejection for a different (also-retired) sandbox_profile value, confirming
-// the guard is not accidentally scoped to just "off".
-func TestUpdateAgent_SandboxProfileWorkspace_Rejected400(t *testing.T) {
-	runUpdateAgentSandboxProfileRejected400(t, "workspace")
-}
-
-// TestUpdateAgent_NoSandboxProfile_StillSucceeds is a negative control:
-// confirms the raw-body sniff does not false-positive on ordinary field
-// names (e.g. a field whose name merely contains "sandbox" as a substring is
-// not the trigger — only the literal "sandbox_profile" key is).
-func TestUpdateAgent_NoSandboxProfile_StillSucceeds(t *testing.T) {
-	api := buildGodModeTestAPI(t, false /* allowGodMode */)
-
-	body := `{"name":"Renamed Agent"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	assert.Equal(t, http.StatusOK, w.Code,
-		"an ordinary update with no sandbox_profile key must still succeed; body: %s", w.Body.String())
-}

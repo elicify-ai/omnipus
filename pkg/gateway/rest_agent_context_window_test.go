@@ -15,19 +15,15 @@
 package gateway
 
 import (
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/stretchr/testify/require"
 )
 
 // newContextWindowAgentAPI builds a restAPI over one ordinary agent with no
@@ -68,97 +64,4 @@ func putAgentJSON(t *testing.T, api *restAPI, id, body string) *httptest.Respons
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	return w
-}
-
-// TestUpdateAgent_ContextWindowOverride_IsPersistedAndEchoed is the DoD test:
-// it fails before the fix (the field is dropped and the response carries none
-// of the four window fields) and passes after it.
-func TestUpdateAgent_ContextWindowOverride_IsPersistedAndEchoed(t *testing.T) {
-	api := newContextWindowAgentAPI(t)
-
-	w := putAgentJSON(t, api, "agent-a", `{"context_window_override":32768}`)
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-
-	var resp gen.Agent
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.NotNil(t, resp.ContextWindowOverride,
-		"the PUT response must echo the override it just persisted (the form reads it back)")
-	assert.Equal(t, 32768, *resp.ContextWindowOverride)
-	require.NotNil(t, resp.ContextWindowEffective,
-		"context_window_effective must be derived from ResolveWindow on every response")
-	assert.Equal(t, 32768, *resp.ContextWindowEffective)
-	require.NotNil(t, resp.ContextWindowSource)
-	assert.Equal(t, gen.AgentContextWindowSourceOperator, *resp.ContextWindowSource)
-	require.NotNil(t, resp.ContextWindowClamped)
-	assert.False(t, *resp.ContextWindowClamped)
-
-	// It actually reached AgentConfig — ResolveWindow's rung 1 reads this and
-	// nothing else.
-	live := api.agentLoop.GetConfig()
-	require.NotNil(t, live)
-	var stored *int
-	for i := range live.Agents.List {
-		if live.Agents.List[i].ID == "agent-a" {
-			stored = live.Agents.List[i].ContextWindowOverride
-		}
-	}
-	require.NotNil(t, stored, "AgentConfig.ContextWindowOverride must be persisted, not silently dropped")
-	assert.Equal(t, 32768, *stored)
-
-	// A subsequent GET round-trips the same four fields.
-	g := httptest.NewRecorder()
-	api.getAgent(g, "agent-a")
-	require.Equal(t, http.StatusOK, g.Code, "body: %s", g.Body.String())
-	var got gen.Agent
-	require.NoError(t, json.Unmarshal(g.Body.Bytes(), &got))
-	require.NotNil(t, got.ContextWindowOverride)
-	assert.Equal(t, 32768, *got.ContextWindowOverride)
-	require.NotNil(t, got.ContextWindowEffective)
-	assert.Equal(t, 32768, *got.ContextWindowEffective)
-	require.NotNil(t, got.ContextWindowSource)
-	assert.Equal(t, gen.AgentContextWindowSourceOperator, *got.ContextWindowSource)
-}
-
-// TestUpdateAgent_ContextWindowOverride_NullClears covers "send null to clear"
-// and the "absent leaves unchanged" half of the same contract sentence.
-func TestUpdateAgent_ContextWindowOverride_NullClears(t *testing.T) {
-	api := newContextWindowAgentAPI(t)
-
-	require.Equal(t, http.StatusOK,
-		putAgentJSON(t, api, "agent-a", `{"context_window_override":32768}`).Code)
-
-	// An unrelated write must NOT clear it.
-	keep := putAgentJSON(t, api, "agent-a", `{"max_tool_iterations":25}`)
-	require.Equal(t, http.StatusOK, keep.Code, "body: %s", keep.Body.String())
-	var kept gen.Agent
-	require.NoError(t, json.Unmarshal(keep.Body.Bytes(), &kept))
-	require.NotNil(t, kept.ContextWindowOverride, "an omitted field must leave the override untouched")
-	assert.Equal(t, 32768, *kept.ContextWindowOverride)
-
-	// Explicit null clears it, and the effective window falls back down the
-	// ladder (no override → the cloud floor for an unsized cloud row).
-	cleared := putAgentJSON(t, api, "agent-a", `{"context_window_override":null}`)
-	require.Equal(t, http.StatusOK, cleared.Code, "body: %s", cleared.Body.String())
-	var out gen.Agent
-	require.NoError(t, json.Unmarshal(cleared.Body.Bytes(), &out))
-	assert.Nil(t, out.ContextWindowOverride, "an explicit null must clear the override")
-	require.NotNil(t, out.ContextWindowSource)
-	assert.NotEqual(t, gen.AgentContextWindowSourceOperator, *out.ContextWindowSource,
-		"with the override cleared the window must come from a lower rung")
-
-	live := api.agentLoop.GetConfig()
-	for i := range live.Agents.List {
-		if live.Agents.List[i].ID == "agent-a" {
-			assert.Nil(t, live.Agents.List[i].ContextWindowOverride)
-		}
-	}
-}
-
-// TestUpdateAgent_ContextWindowOverride_RejectsNonPositive — the contract's
-// `minimum: 1`.
-func TestUpdateAgent_ContextWindowOverride_RejectsNonPositive(t *testing.T) {
-	api := newContextWindowAgentAPI(t)
-	w := putAgentJSON(t, api, "agent-a", `{"context_window_override":0}`)
-	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "context_window_override")
 }

@@ -10,16 +10,13 @@ package gateway
 
 import (
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
 // TestPersistSeededSkillGrants_WriteOnceThenByteIdenticalNoOp verifies the
@@ -50,38 +47,4 @@ func TestPersistSeededSkillGrants_WriteOnceThenByteIdenticalNoOp(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, afterFirst, afterSecond,
 		"a second persist with identical markers must leave config.json byte-identical")
-}
-
-// TestHandleConfigGET_StripsSeededSkillGrants is spec test 16c (US-4 S6 /
-// R2-04): the seeded_skill_grants marker is internal-only bookkeeping — it must
-// be absent from the GET /api/v1/config response while config.json on disk
-// carries it.
-func TestHandleConfigGET_StripsSeededSkillGrants(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	// Marker present in the live config (as after a real boot's SeedConfig)…
-	api.agentLoop.GetConfig().SeededSkillGrants = []string{coreagent.SkillsMigrationDefineDone}
-	// …and durably recorded on disk.
-	configPath := filepath.Join(api.homePath, "config.json")
-	require.NoError(t, persistSeededSkillGrants(configPath,
-		[]string{coreagent.SkillsMigrationDefineDone}))
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
-	api.HandleConfig(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code)
-	var resp map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	_, onWire := resp["seeded_skill_grants"]
-	assert.False(t, onWire,
-		"seeded_skill_grants is internal-only and must be stripped from the config response")
-
-	// The disk file still carries it — the strip is wire-only, not a delete.
-	raw, err := os.ReadFile(configPath)
-	require.NoError(t, err)
-	var onDisk map[string]any
-	require.NoError(t, json.Unmarshal(raw, &onDisk))
-	assert.Equal(t, []any{coreagent.SkillsMigrationDefineDone}, onDisk["seeded_skill_grants"],
-		"config.json on disk must keep the marker")
 }

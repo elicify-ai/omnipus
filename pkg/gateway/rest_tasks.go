@@ -4,12 +4,6 @@
 
 package gateway
 
-// rest_tasks.go — the unified /api/v1/tasks REST surface (Sprint 2). One store
-// (pkg/task), one wire schema (gen.Task), one create/update path. It folds in
-// the legacy /board/tasks and workflow-task handlers: GET/POST /tasks,
-// GET/PATCH/DELETE /tasks/{id}, GET /tasks/{id}/subtasks,
-// PUT /tasks/{id}/todos, PUT /tasks/{id}/dependencies.
-
 import (
 	"encoding/json"
 	"errors"
@@ -3486,4 +3480,20 @@ func (a *restAPI) reconcileOrphanBlockedByEdges() {
 	if removed > 0 {
 		slog.Info("rest: dropped orphan blocked_by edges on boot", "count", removed)
 	}
+}
+
+// --- moved from rest.go 2026-09-15 ---
+
+// --- Tasks ---
+
+// validateEntityID rejects IDs that contain path separators, "..", or null bytes
+// to prevent path traversal attacks.
+func validateEntityID(id string) error {
+	if id == "" {
+		return fmt.Errorf("id must not be empty")
+	}
+	if strings.ContainsAny(id, "/\\") || strings.Contains(id, "..") || strings.ContainsRune(id, 0) {
+		return fmt.Errorf("invalid id")
+	}
+	return nil
 }

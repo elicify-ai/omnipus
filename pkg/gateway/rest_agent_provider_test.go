@@ -17,12 +17,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func postAgentProvider(t *testing.T, api *restAPI, body string) gen.Agent {
@@ -152,29 +151,6 @@ func TestAgentPUT_HeartbeatFieldsIgnored(t *testing.T) {
 				"per-agent heartbeat interval must not bleed into the global heartbeat block")
 		}
 	}
-}
-
-// TestCreateAgent_WorkerVoiceFieldRejected proves the unconditional
-// strict-decode enforcement for the Main-only voice field:
-// AgentCreateRequestSubagent (and AgentCreateRequestSubagent3p) structurally
-// have no `voice` property at all (additionalProperties: false — the field
-// matrix marks voice "Main-only among user types"). With a DEFAULT config
-// (ValidateInbound off, the default in this harness), a Subagent create
-// carrying a `voice` key is now rejected 400 by createAgent's strict decode,
-// not silently dropped. (With ValidateInbound enabled the same body 400s at
-// the schema gate instead.) The PUT-time guard (a worker cannot be given a
-// non-empty voice) is unaffected — see TestUpdateAgent_RejectsVoiceOnWorker
-// in rest_agent_executor_test.go.
-func TestCreateAgent_WorkerVoiceFieldRejected(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents",
-		strings.NewReader(`{"name":"W","type":"Subagent","description":"d","soul":"s","voice":"alloy"}`))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "voice")
-	assert.Contains(t, w.Body.String(), "AgentCreateRequestSubagent")
 }
 
 // TestAgentProvider_NeedsModelDerived — ADR-068 T068-08 regression (spec

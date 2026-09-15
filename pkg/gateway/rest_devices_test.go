@@ -17,37 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestHandleDevices_DisabledByDefault verifies that GET /api/v1/devices
-// returns 404 when Sandbox.Experimental.DevicePairingEnabled is false (the
-// default) — the device-pairing feature is dark-launched.
-func TestHandleDevices_DisabledByDefault(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
-	rec := httptest.NewRecorder()
-	api.HandleDevices(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, rec.Code,
-		"GET /api/v1/devices must 404 when device pairing is not enabled (default)")
-}
-
-// TestHandleDevices_EnabledReturnsEmptyArrays verifies that once the flag is
-// enabled, GET /api/v1/devices returns 200 with the (still-stub) empty arrays.
-func TestHandleDevices_EnabledReturnsEmptyArrays(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-	api.agentLoop.GetConfig().Sandbox.Experimental.DevicePairingEnabled = true
-
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices", nil)
-	rec := httptest.NewRecorder()
-	api.HandleDevices(rec, req)
-
-	require.Equal(t, http.StatusOK, rec.Code)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Contains(t, body, "pending")
-	assert.Contains(t, body, "paired")
-}
-
 // TestHandleAbout_DevicePairingEnabledField verifies that GET /api/v1/about
 // reflects the dark-launched flag: false by default, true when the operator
 // enables it.

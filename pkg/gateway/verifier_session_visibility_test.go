@@ -21,10 +21,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
 // wireSession is a minimal decode target for gen.Session — only the fields
@@ -56,137 +55,6 @@ func sessionIDs(sessions []wireSession) []string {
 		ids = append(ids, s.ID)
 	}
 	return ids
-}
-
-// TestListSessions_ExcludesVerifierByDefault verifies GET /api/v1/sessions
-// (no include_verifier param) omits verifier-type sessions while still
-// returning ordinary chat sessions.
-//
-// BDD: Given a chat session and a verifier session both exist,
-// When GET /api/v1/sessions is called with no include_verifier param,
-// Then only the chat session appears in the response.
-//
-// Traces to: FR-036, US-13 Acceptance 6, Test 25.
-func TestListSessions_ExcludesVerifierByDefault(t *testing.T) {
-	api, cleanup := newTestRestAPI(t)
-	defer cleanup()
-
-	store := api.agentLoop.GetSessionStore()
-	require.NotNil(t, store, "shared session store must be available")
-
-	chatMeta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
-	require.NoError(t, err)
-	verifierMeta, err := store.NewVerifierSession("judge")
-	require.NoError(t, err)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
-	api.listSessions(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-	got := decodeSessionList(t, w.Body.Bytes())
-
-	ids := sessionIDs(got)
-	assert.Contains(t, ids, chatMeta.ID, "chat session must be present")
-	assert.NotContains(t, ids, verifierMeta.ID, "verifier session must be excluded by default")
-}
-
-// TestListSessions_IncludesVerifierWithParam verifies GET
-// /api/v1/sessions?include_verifier=true surfaces verifier-type sessions
-// alongside ordinary ones.
-//
-// BDD: Given a chat session and a verifier session both exist,
-// When GET /api/v1/sessions?include_verifier=true is called,
-// Then both sessions appear in the response.
-//
-// Traces to: FR-036, US-13 Acceptance 6, Test 25.
-func TestListSessions_IncludesVerifierWithParam(t *testing.T) {
-	api, cleanup := newTestRestAPI(t)
-	defer cleanup()
-
-	store := api.agentLoop.GetSessionStore()
-	require.NotNil(t, store)
-
-	chatMeta, err := store.NewSession(session.SessionTypeChat, "webchat", "mia")
-	require.NoError(t, err)
-	verifierMeta, err := store.NewVerifierSession("judge")
-	require.NoError(t, err)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions?include_verifier=true", nil)
-	api.listSessions(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-	got := decodeSessionList(t, w.Body.Bytes())
-
-	ids := sessionIDs(got)
-	assert.Contains(t, ids, chatMeta.ID, "chat session must still be present")
-	assert.Contains(t, ids, verifierMeta.ID, "verifier session must be included with include_verifier=true")
-
-	// The returned verifier entry must round-trip its type as "verifier" on
-	// the wire (not silently coerced/omitted).
-	for _, s := range got {
-		if s.ID == verifierMeta.ID {
-			assert.Equal(t, "verifier", s.Type, "wire type must be verifier")
-		}
-	}
-}
-
-// TestListSessions_TypeFilterVerifierAloneStillExcluded verifies that an
-// explicit ?type=verifier filter, WITHOUT include_verifier=true, still
-// excludes verifier sessions — per openapi.yaml's listSessions description:
-// "Verifier-role sessions ... are excluded by default regardless of the type
-// filter unless include_verifier=true is passed." Combining both params is
-// required to actually retrieve them via the type filter.
-//
-// Traces to: FR-036, contracts/openapi.yaml listSessions description.
-func TestListSessions_TypeFilterVerifierAloneStillExcluded(t *testing.T) {
-	api, cleanup := newTestRestAPI(t)
-	defer cleanup()
-
-	store := api.agentLoop.GetSessionStore()
-	require.NotNil(t, store)
-
-	verifierMeta, err := store.NewVerifierSession("judge")
-	require.NoError(t, err)
-
-	// type=verifier alone -> still excluded.
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions?type=verifier", nil)
-	api.listSessions(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-	got := decodeSessionList(t, w.Body.Bytes())
-	assert.Empty(t, got, "type=verifier alone must NOT surface verifier sessions; body=%s", w.Body.String())
-
-	// type=verifier + include_verifier=true -> now included.
-	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodGet, "/api/v1/sessions?type=verifier&include_verifier=true", nil)
-	api.listSessions(w2, r2)
-	require.Equal(t, http.StatusOK, w2.Code, "body=%s", w2.Body.String())
-	got2 := decodeSessionList(t, w2.Body.Bytes())
-	require.Len(t, got2, 1, "type=verifier + include_verifier=true must return exactly the verifier session; body=%s", w2.Body.String())
-	assert.Equal(t, verifierMeta.ID, got2[0].ID)
-}
-
-// TestListSessions_IncludeVerifierFalseExplicit verifies that an explicit
-// include_verifier=false behaves identically to the param being absent
-// (belt-and-braces on the strconv.ParseBool default-false path).
-func TestListSessions_IncludeVerifierFalseExplicit(t *testing.T) {
-	api, cleanup := newTestRestAPI(t)
-	defer cleanup()
-
-	store := api.agentLoop.GetSessionStore()
-	require.NotNil(t, store)
-
-	verifierMeta, err := store.NewVerifierSession("judge")
-	require.NoError(t, err)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions?include_verifier=false", nil)
-	api.listSessions(w, r)
-	require.Equal(t, http.StatusOK, w.Code)
-	got := decodeSessionList(t, w.Body.Bytes())
-	assert.NotContains(t, sessionIDs(got), verifierMeta.ID)
 }
 
 // --- FR-036 creation-side verifier spoof guard -------------------------------

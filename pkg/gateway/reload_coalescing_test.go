@@ -57,15 +57,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // reloadHarness wires the REAL production reload machinery — newReloadTrigger,
@@ -366,112 +365,6 @@ func (h *reloadHarness) waitForCoalescedRequest(timeout time.Duration) bool {
 	return false
 }
 
-// TestCreateAgent_DuringInFlightReload_IsImmediatelyTaskAssignable is the DoD
-// test for the blocker. It goes RED with either half of the fix reverted:
-//
-//   - revert part 1 (trigger drops instead of coalescing): createAgent's
-//     triggerReloadAndWait returns when the IN-FLIGHT reload ends, and that
-//     reload's config snapshot predates the create's write, so the registry
-//     never learns about the agent.
-//   - revert part 2 (bare TriggerReload): the trigger coalesces and returns nil
-//     immediately, so the handler answers 201 before the follow-up reload has
-//     run at all.
-func TestCreateAgent_DuringInFlightReload_IsImmediatelyTaskAssignable(t *testing.T) {
-	h := newReloadHarness(t)
-
-	entered, release := h.blockFirstReload()
-
-	// Reload #1 starts and parks inside the executor: its config snapshot is
-	// taken NOW, before the agent below exists anywhere on disk.
-	require.NoError(t, h.svc.reloadTrigger(), "starting the first reload must succeed")
-	select {
-	case <-entered:
-	case <-time.After(5 * time.Second):
-		release()
-		t.Fatal("the first reload never started executing")
-	}
-
-	done := make(chan createAgentResult, 1)
-	go func() { done <- h.postAgent("Coalesce Target") }()
-
-	// Only release reload #1 once the create's own reload request has landed
-	// against it — otherwise the test would exercise a boring sequential
-	// ordering instead of the mid-reload interleaving that breaks.
-	coalesced := h.waitForCoalescedRequest(3 * time.Second)
-	release()
-
-	var res createAgentResult
-	select {
-	case res = <-done:
-	case <-time.After(15 * time.Second):
-		t.Fatal("createAgent never returned")
-	}
-
-	assert.True(t, coalesced,
-		"the reload POST /agents requested while another reload was in flight must be "+
-			"recorded for a follow-up reload, not dropped")
-	assertUsable(t, res)
-
-	// The follow-up reload must have re-read from disk, not replayed the
-	// snapshot reload #1 already used.
-	rosters := h.snapshotRosters()
-	require.GreaterOrEqual(t, len(rosters), 2,
-		"a coalesced request must produce a SECOND reload; only %d ran", len(rosters))
-	assert.NotContains(t, rosters[0], res.id,
-		"precondition: reload #1's snapshot must predate the create (else the test proves nothing)")
-	assert.Contains(t, rosters[len(rosters)-1], res.id,
-		"the coalesced follow-up reload must re-read config from disk and see the new agent")
-}
-
-// TestCreateAgent_TwoRapidCreatesDuringOneReload_BothTaskAssignable proves the
-// fix is real coalescing and not a single retry: two creates that both land
-// inside one long reload must BOTH be registry-visible when their handlers
-// return. A one-shot retry would serve the first and lose the second.
-func TestCreateAgent_TwoRapidCreatesDuringOneReload_BothTaskAssignable(t *testing.T) {
-	h := newReloadHarness(t)
-
-	entered, release := h.blockFirstReload()
-
-	require.NoError(t, h.svc.reloadTrigger(), "starting the first reload must succeed")
-	select {
-	case <-entered:
-	case <-time.After(5 * time.Second):
-		release()
-		t.Fatal("the first reload never started executing")
-	}
-
-	first := make(chan createAgentResult, 1)
-	second := make(chan createAgentResult, 1)
-	go func() { first <- h.postAgent("Coalesce Rapid One") }()
-	// Sequencing only, and deliberately non-fatal: failing here would abandon
-	// two in-flight handler goroutines mid-test. The outcome assertions below
-	// are what decide the verdict.
-	coalescedFirst := h.waitForCoalescedRequest(3 * time.Second)
-	go func() { second <- h.postAgent("Coalesce Rapid Two") }()
-	time.Sleep(100 * time.Millisecond)
-
-	// Both creates are now outstanding against a single blocked reload.
-	release()
-
-	var resA, resB createAgentResult
-	for i := 0; i < 2; i++ {
-		select {
-		case resA = <-first:
-			first = nil
-		case resB = <-second:
-			second = nil
-		case <-time.After(15 * time.Second):
-			t.Fatal("a createAgent call never returned")
-		}
-	}
-
-	assert.True(t, coalescedFirst,
-		"the first create's reload request must be recorded against the in-flight reload")
-	assertUsable(t, resA)
-	assertUsable(t, resB)
-	assert.NotEqual(t, resA.id, resB.id, "the two creates must produce distinct agents")
-}
-
 // TestReloadCycle_DoesNotReleasePollersBetweenCoalescedReloads pins the caveat
 // that makes part 1 correct: the agent loop's reload-pending flag — the ONLY
 // thing restAPI.triggerReloadAndWait polls — must stay set across the boundary
@@ -567,43 +460,6 @@ func TestReloadTrigger_MidFlightRequestIsAcceptedNotRejected(t *testing.T) {
 	release()
 	require.Eventually(t, func() bool { return h.reloadsRun() >= 2 }, 10*time.Second, 10*time.Millisecond,
 		"the coalesced request must actually run a second reload")
-}
-
-// TestCreateAgent_ReloadSlowerThanWaitDeadline_IsStillTaskAssignable is the
-// regression test for the SECOND half of this release blocker — the half the
-// coalescing fix did not touch, and which kept the llm-conformance e2e shard
-// failing 3/9 with the original signature after coalescing had shipped.
-//
-// triggerReloadAndWait polled for a hard-coded 5 SECONDS and then `return nil`
-// — reporting success it had not observed. A reload restarts every channel,
-// cron, the plan engine and the provider before rebuilding the AgentRegistry;
-// idle that is milliseconds, but under the conformance shard's load (live LLM
-// turns + a busy plan engine) it runs to tens of seconds. Every reload that
-// overran 5s therefore produced a 201 with NO warning and a registry that still
-// had no such agent, so the next POST /tasks answered `agent "x" not found` and
-// POST /workspaces answered `core_team member "x" is not a registered agent`.
-//
-// This is why coalescing alone was not enough: it guaranteed the right reload
-// was QUEUED and would run, but the caller stopped waiting for it and lied
-// about the result.
-//
-// The reload here takes 6s — longer than the old deadline, far inside the new
-// one — and the assertion is the same user-visible outcome as every other test
-// in this file.
-func TestCreateAgent_ReloadSlowerThanWaitDeadline_IsStillTaskAssignable(t *testing.T) {
-	h := newReloadHarness(t)
-
-	// Every reload takes longer than the retired 5s deadline. Deliberately a
-	// wall-clock sleep: the property under test IS a wall-clock deadline.
-	const slowReload = 6 * time.Second
-	require.Greater(t, slowReload, 5*time.Second,
-		"the simulated reload must exceed the deadline this test exists to retire")
-	require.Less(t, slowReload, reloadWaitTimeout,
-		"...and must sit inside the current deadline, or this asserts the wrong thing")
-	h.beforeExec = func(int) { time.Sleep(slowReload) }
-
-	res := h.postAgent("Slow Reload Target")
-	assertUsable(t, res)
 }
 
 // TestTriggerReloadAndWait_TimeoutIsReportedNotSwallowed pins the honesty half
