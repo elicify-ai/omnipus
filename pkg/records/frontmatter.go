@@ -6,6 +6,7 @@ package records
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -145,9 +146,13 @@ func (f Frontmatter) Get(key string) (Node, bool) {
 // A file with no frontmatter is NOT an error — it returns Present=false. That
 // is FR-005: a note that is not a record is an ordinary note.
 func ParseFrontmatter(src []byte) (Frontmatter, error) {
-	block, startLine, ok := extractFrontmatterBlock(src)
+	block, startLine, ok, closed := extractFrontmatterBlock(src)
 	if !ok {
 		return Frontmatter{Present: false, Values: map[string]Node{}}, nil
+	}
+	if !closed {
+		return Frontmatter{Present: true, Values: map[string]Node{}}, errors.New(
+			"frontmatter has no closing fence — add a --- line after the properties to close the block")
 	}
 
 	var doc yaml.Node
@@ -613,32 +618,37 @@ func isExactWikilinkSource(raw string) bool {
 
 // extractFrontmatterBlock returns the YAML between the opening `---` and the
 // closing `---`/`...`, plus the 1-based source line the block starts on.
-func extractFrontmatterBlock(src []byte) (block []byte, startLine int, ok bool) {
+func extractFrontmatterBlock(src []byte) (block []byte, startLine int, ok, closed bool) {
 	s := bytes.TrimPrefix(src, []byte("\xef\xbb\xbf")) // UTF-8 BOM
 
 	// The opening fence must be the very first line.
 	first, rest, found := splitLine(s)
 	if !isFence(first) {
-		return nil, 0, false
+		return nil, 0, false, false
 	}
 	if !found {
 		// A file consisting of nothing but "---" has no block to speak of.
-		return nil, 0, false
+		return nil, 0, false, false
 	}
 
 	var buf bytes.Buffer
 	for {
 		l, next, more := splitLine(rest)
 		if isFence(l) || isDocEnd(l) {
-			return buf.Bytes(), 2, true
+			return buf.Bytes(), 2, true, true
 		}
 		buf.Write(bytes.TrimSuffix(l, []byte("\r")))
 		buf.WriteByte('\n')
 		if !more {
-			// Unterminated frontmatter. DS-3 includes "a file whose
-			// frontmatter is the entire file", so this is the normal case for
-			// such a note, not a malformation: treat what we have as the block.
-			return buf.Bytes(), 2, true
+			// Unterminated frontmatter (UAT 2026-09-13 D-06). DS-3's "a file
+			// whose frontmatter is the entire file" corpus item used to make
+			// this lenient, but that conflated it with a note whose author
+			// forgot the closing fence and went on to write a Markdown body —
+			// and if that body happens to contain a colon it parses as bogus
+			// properties, silently producing a healthy-looking record. Report
+			// it as unclosed instead; ParseFrontmatter turns this into an
+			// error, and record.go sets ParseError from it.
+			return buf.Bytes(), 2, true, false
 		}
 		rest = next
 	}

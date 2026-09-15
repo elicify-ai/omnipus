@@ -78,7 +78,12 @@ func TestFrontmatter_AwkwardRealFiles(t *testing.T) {
 		{"comments and blank lines inside frontmatter", "---\n# leading comment\ntype: widget\n\n# between\nname: A\n---\n", true, "name", "A"},
 		{"single-quoted scalar", "---\nname: 'A: B'\n---\n", true, "name", "A: B"},
 		{"terminated with ...", "---\nname: A\n...\nbody\n", true, "name", "A"},
-		{"frontmatter is the whole file", "---\nname: A\n", true, "name", "A"},
+		// "frontmatter is the whole file" (an opening '---' with NO closing
+		// fence at all, DS-3's corpus item) moved to
+		// TestFrontmatter_UnclosedFrontmatterIsMalformed below: an unclosed
+		// block is now reported as malformed rather than silently accepted as
+		// "the rest of the file is one giant property block" — see that
+		// test's doc comment for why.
 		{"no frontmatter", "just prose\n", false, "", ""},
 		{"--- appearing later is not frontmatter", "prose\n---\nname: A\n---\n", false, "", ""},
 	}
@@ -102,6 +107,83 @@ func TestFrontmatter_AwkwardRealFiles(t *testing.T) {
 				t.Fatalf("%q = %q, want %q", tc.wantKey, n.Text, tc.wantVal)
 			}
 		})
+	}
+}
+
+// TestFrontmatter_UnclosedFrontmatterIsMalformed is UAT D-06 (rows B-41,
+// Q-02) at its source. `extractFrontmatterBlock` used to reach EOF with no
+// closing fence and silently accept "the rest of the file" as the whole
+// frontmatter block, on the reasoning that DS-3's "a file whose frontmatter
+// is the entire file" corpus item needs that leniency. That conflated two
+// different shapes: a note that is genuinely nothing but properties, and a
+// note whose author forgot the closing fence and went on to write a Markdown
+// body. The real UAT fixture is the second shape — `type: project` /
+// `status: active`, then a blank line, then the prose
+// "Broken frontmatter: never closed with ---." — and that prose HAPPENS to
+// contain a colon, so it parses as a THIRD, bogus YAML property instead of
+// failing YAML syntax. No error ever reached Record.ParseError, so the note
+// was served everywhere as a normal, healthy `project` record.
+//
+// The fix drops the leniency entirely: an opening '---' with no closing
+// '---'/'...' is now always malformed, matching the stricter rule
+// pkg/knowledge/author.go's fmParse already enforced for the write path (see
+// that file's ErrFrontmatterUnterminated) — records.ParseFrontmatter no
+// longer disagrees with it.
+func TestFrontmatter_UnclosedFrontmatterIsMalformed(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{
+			"the real UAT fixture: prose body that happens to parse as YAML",
+			"---\ntype: project\nstatus: active\n\nBroken frontmatter: never closed with ---.\n",
+		},
+		{"minimal: a single property and EOF, no closing fence", "---\nname: A\n"},
+		{"no body at all, just the dangling opening fence", "---\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fm, err := ParseFrontmatter([]byte(tc.src))
+			if err == nil {
+				t.Fatalf("an unclosed frontmatter block must be reported as an error, not silently accepted; got fm=%+v", fm)
+			}
+			if !strings.Contains(err.Error(), "closing") {
+				t.Fatalf("the error must name the missing closing fence; got %q", err.Error())
+			}
+			if len(fm.Values) != 0 {
+				t.Fatalf("a malformed block must not hand back any parsed properties; got %v", fm.Values)
+			}
+
+			rec := ParseRecord("Broken FM.md", []byte(tc.src))
+			if rec.ParseError == "" {
+				t.Fatalf("Record.ParseError must be set so every consumer (find, integrity) inherits the fix")
+			}
+			if rec.TypeName() != "" {
+				t.Fatalf("a malformed record must not resolve a type — FR-005's ordinary-note path, not a fabricated record; got %q", rec.TypeName())
+			}
+		})
+	}
+}
+
+// TestFrontmatter_ClosedAndAbsentFrontmatterAreUnaffected is the regression
+// guard the fix's method requires: a normal, properly closed frontmatter
+// block, and a note with no frontmatter at all, must parse exactly as they
+// did before the fix.
+func TestFrontmatter_ClosedAndAbsentFrontmatterAreUnaffected(t *testing.T) {
+	fm, err := ParseFrontmatter([]byte("---\ntype: project\nstatus: active\n---\nbody\n"))
+	if err != nil {
+		t.Fatalf("a properly closed block must still parse: %v", err)
+	}
+	if n, ok := fm.Get("status"); !ok || n.Text != "active" {
+		t.Fatalf("closed frontmatter's properties must still read; got %+v ok=%v", n, ok)
+	}
+
+	fm2, err := ParseFrontmatter([]byte("just an ordinary note, no frontmatter at all\n"))
+	if err != nil {
+		t.Fatalf("a note with no frontmatter must not error: %v", err)
+	}
+	if fm2.Present {
+		t.Fatalf("FR-005: a note with no frontmatter is Present=false, never an error")
 	}
 }
 
