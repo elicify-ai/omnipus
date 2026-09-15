@@ -470,7 +470,7 @@ func TestRequestPathRedaction_EveryLoggingSite(t *testing.T) {
 
 // redactionRecordingSite names one place in pkg/gateway that writes a request path into
 // a log record or an audit entry. This inventory is the FR-003e claim written
-// down: seven sites, all redacted.
+// down: eight sites, all redacted.
 type redactionRecordingSite struct {
 	file string
 	what string
@@ -495,7 +495,7 @@ const redactionImplFile = "preview_path_redact.go"
 // scanned so a new raw site in either package fails the build.
 var redactionScannedDirs = []string{".", "middleware"}
 
-// TestRequestPathRedaction_SourceInventory fails when a seventh recording site
+// TestRequestPathRedaction_SourceInventory fails when a ninth recording site
 // appears, and fails when an existing one stops redacting.
 //
 // Two independent properties, because each catches what the other misses:
@@ -530,14 +530,15 @@ func TestRequestPathRedaction_SourceInventory(t *testing.T) {
 				"or the audit chain (FR-003e).\ninventory: %+v", expectedRedactionSites)
 	})
 
-	t.Run("inventory_is_seven_sites", func(t *testing.T) {
+	t.Run("inventory_is_eight_sites", func(t *testing.T) {
 		// FR-003e counted six; a seventh (rest_signin_copilot.go's probe-refused
-		// 429 warning) was added during the release/v0.1.1 merge. If the
-		// product grows an eighth, this is the line that says so out loud
-		// rather than letting the number drift.
-		assert.Len(t, expectedRedactionSites, 7,
-			"FR-003e-era inventory plus the rest_signin_copilot.go site enumerates seven "+
-				"request-path recording sites")
+		// 429 warning) was added during the release/v0.1.1 merge, and an
+		// eighth (rest_knowledge.go's knowledge rate-limit 429 warning) during
+		// the 2026-09-14 limiter fix. If the product grows a ninth, this is
+		// the line that says so out loud rather than letting the number drift.
+		assert.Len(t, expectedRedactionSites, 8,
+			"FR-003e-era inventory plus the rest_signin_copilot.go and rest_knowledge.go "+
+				"sites enumerates eight request-path recording sites")
 	})
 }
 
