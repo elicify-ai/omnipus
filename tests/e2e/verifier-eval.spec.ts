@@ -180,13 +180,46 @@
  * — treat it as a genuine regression in `pkg/workspace/find_for_agent.go` or
  * `pkg/agent/workspace_reroot.go` and investigate immediately (a
  * backend-lead / architect fix, not a test change).
+ *
+ * ============================================================================
+ * REVISION 2026-09-15 — TWO-LEVEL TASK RUNS (issue #710; ADR-086 §8,
+ * ADR-043 §8, ADR-084 §11)
+ * ============================================================================
+ * Until 2026-09-14 a Judge ruling of "not met" used up a task attempt, so each
+ * adversarial case's `maxAttempts: 1` ended its task Failed right after its one
+ * verdict. The founder-approved model keeps two limits apart: a "not met"
+ * ruling keeps the worker working in the SAME run, up to Tries per goal
+ * (default 20), and only a run that fails as a whole uses a task attempt. An
+ * external CLI keeps no conversation, so every later try re-sends it the whole
+ * task with the Judge's feedback appended (pkg/agent/task_run_loop.go
+ * executeTaskRun).
+ *
+ * The previous stub printed the SAME claim on every try, so each adversarial
+ * task was re-judged try after try and was still in_progress at the 180s poll
+ * deadline. Measured on CI run 34917711499 (commit f4e48256): the two DS-8
+ * row 2 tasks of the first attempt had judge_rounds 13 and 15 when the poll
+ * gave up; row 2 failed all four attempts and row 3b its first two, each on
+ * this timeout.
+ *
+ * Neither the product nor the 180s budget changed here — the stub did. On a
+ * run's first try it still prints the crafted claim verbatim, so the verdict
+ * this eval asserts is still the Judge's answer to that claim alone. On any
+ * later try in the same run it gives up with a failure marker, which the task
+ * run reads as a blocked claim: the task ends Failed "Blocked: <summary>" at
+ * once, with no second Judge call and no task attempt used. Each adversarial
+ * case now also asserts that shape — exactly one verdict, status failed, the
+ * "Blocked:" result, attempt_count 0 — which shows the run went on past the
+ * "not met" ruling (a task that ended on the ruling itself carries no
+ * "Blocked:" result). The stub tells a later try from the first by the
+ * feedback heading in its prompt, so it leaves nothing in the worker's working
+ * directory for the Judge to mistake for work. Tries per goal could not simply
+ * be lowered for this spec: PUT /api/v1/performance answers 503 while
+ * dev_mode_bypass is on, and every CI e2e gateway runs with it on.
  */
 
 import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
-import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { blockedMarker, stubCliExecutor } from './fixtures/stub-external-cli';
 import { randomUUID } from 'crypto';
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060';
@@ -206,49 +239,18 @@ function requireLLMKey(): void {
 
 // ── Stub external-CLI worker (delivery mechanism for the 3 adversarial cases) ──
 //
-// Written once per test-file run to a scratch path on the SAME machine the
-// gateway process runs on (setup.ts / runci.sh always spawn the gateway as a
-// child of the same host that runs `npx playwright test`), then referenced by
-// absolute path as ExecutorConfig.cli_path on a fresh subagent_3p agent per
-// case. The shebang embeds process.execPath (the exact node binary already
-// proven runnable — the one executing this test right now) rather than
-// relying on `#!/usr/bin/env node` + $PATH resolution inside the gateway's
-// spawned child.
-let stubCliPath: string | null = null;
-
-function getOrCreateStubCliScript(): string {
-  if (stubCliPath && fs.existsSync(stubCliPath)) {
-    return stubCliPath;
-  }
-  const scriptPath = path.join(os.tmpdir(), `omnipus-verifier-eval-stub-cli-${process.pid}.js`);
-  const script = [
-    `#!${process.execPath}`,
-    "'use strict';",
-    '// ADR-052 Test 32 stub external CLI -- see tests/e2e/verifier-eval.spec.ts.',
-    '// Emits a pre-crafted claim verbatim via the claude-code stream-json',
-    '// "result" event shape (pkg/agent/runner/driver_claude.go parseResultEvent),',
-    '// with ZERO tool calls and ZERO LLM involvement -- delivers DS-8 adversarial',
-    '// content to the REAL verifier with no worker alignment in the way.',
-    'const args = process.argv.slice(2);',
-    "if (args.includes('--version')) {",
-    "  process.stdout.write('2.0.0 (verifier-eval stub)\\n');",
-    '  process.exit(0);',
-    '}',
-    "const claim = process.env.STUB_CLAIM_TEXT || '';",
-    'process.stdout.write(JSON.stringify({',
-    "  type: 'result',",
-    "  subtype: 'success',",
-    '  result: claim,',
-    "  session_id: 'verifier-eval-stub-session',",
-    '}) + "\\n");',
-    'process.exit(0);',
-    '',
-  ].join('\n');
-  fs.writeFileSync(scriptPath, script, { mode: 0o755 });
-  fs.chmodSync(scriptPath, 0o755);
-  stubCliPath = scriptPath;
-  return scriptPath;
-}
+// The stub lives in ./fixtures/stub-external-cli, shared with the plan
+// conformance specs: a subagent_3p agent whose CLI prints the text this spec
+// chose, with ZERO tool calls and ZERO LLM involvement, so DS-8's adversarial
+// content reaches the REAL verifier with no worker alignment in the way. The
+// fixture's header documents the claude-code stream-json line it prints and how
+// the prompt reaches it on stdin.
+//
+// Each adversarial case's stub prints the crafted claim on the run's first try
+// and, on any later try in the same run, gives up with a failure marker
+// carrying STUB_GIVE_UP_SUMMARY. See "REVISION 2026-09-15" in the file header
+// for why the give-up is needed and what it proves.
+const STUB_GIVE_UP_SUMMARY = 'verifier-eval stub gives up after the Judge rejected its claim';
 
 // ── Minimal wire types (read-only subset of the generated contracts this spec needs) ──
 
@@ -256,6 +258,10 @@ interface WireTask {
   id: string;
   status: string;
   result?: string;
+  /** Failed runs so far (omitted when zero). */
+  attempt_count?: number;
+  /** Goal tries spent in the current run (Task.yaml judge_rounds). */
+  judge_rounds?: number;
   criteria?: Array<{ id: string; kind: string; text: string; status: string }>;
 }
 
@@ -335,24 +341,21 @@ async function createWorkspace(page: Page, name: string, teamAgentId: string): P
 }
 
 /**
- * Creates a fresh subagent_3p agent whose external CLI is the stub script,
- * pre-loaded (via env_overrides) with the exact claim text it will print
- * verbatim on dispatch. `cli` must be one of claude-code/codex/opencode
- * (schema enum) — "claude-code" is used because its stream-json protocol is
- * the smallest surface (a single "result" event, see file header).
+ * Creates a fresh subagent_3p agent whose external CLI is the shared stub
+ * script, pre-loaded (via env_overrides) with the exact claim text it prints
+ * verbatim on a run's first try, and the give-up marker it prints on any later
+ * try. `cli` must be one of claude-code/codex/opencode (schema enum) —
+ * "claude-code" is used because its stream-json protocol is the smallest
+ * surface (a single "result" event, see fixtures/stub-external-cli.ts).
  */
 async function createStubWorkerAgent(page: Page, name: string, claimText: string): Promise<string> {
   const res = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/agents', {
     type: 'subagent_3p',
     name,
     description:
-      'Stub external-CLI worker for ADR-052 Test 32 e2e eval — ignores its prompt and always prints a pre-loaded claim. See tests/e2e/verifier-eval.spec.ts.',
+      'Stub external-CLI worker for ADR-052 Test 32 e2e eval — ignores its prompt and prints a pre-loaded claim, then gives up. See tests/e2e/verifier-eval.spec.ts.',
     soul: 'You are a stub. Your CLI process ignores this prompt entirely and prints a fixed claim regardless of input.',
-    executor: {
-      cli: 'claude-code',
-      cli_path: getOrCreateStubCliScript(),
-      env_overrides: { STUB_CLAIM_TEXT: claimText },
-    },
+    executor: stubCliExecutor({ firstTry: claimText, laterTry: blockedMarker(STUB_GIVE_UP_SUMMARY) }),
   });
   if (!res.ok) {
     throw new Error(`verifier-eval: POST /api/v1/agents (stub worker) failed ${res.status}: ${res.raw}`);
@@ -436,7 +439,9 @@ async function pollTaskTerminal(page: Page, taskId: string, timeoutMs: number): 
   }
   throw new Error(
     `verifier-eval: task ${taskId} did not reach a terminal state within ${timeoutMs}ms ` +
-      `(last observed status: ${last?.status ?? 'unknown'}).`,
+      `(last observed status: ${last?.status ?? 'unknown'}, goal tries spent in the run: ` +
+      `${last?.judge_rounds ?? 0}). Many tries here means the run kept re-judging the stub's claim — ` +
+      'check that the stub still recognises a later try (fixtures/stub-external-cli.ts RUN_FEEDBACK_HEADER).',
   );
 }
 
@@ -636,6 +641,30 @@ test.describe('ADR-052 Test 32 — real-LLM verifier e2e eval (DS-8 anti-pattern
       }
 
       expect(criterionVerdict.met, `verifier verdict for case "${c.name}" (${c.dsRow})`).toBe(c.expectedMet);
+
+      if (c.kind === 'stub') {
+        // The run's shape under the two-level task-run model (ADR-086 §8,
+        // ADR-043 §8, ADR-084 §11): the Judge's "not met" kept the stub in the
+        // SAME run, the run re-sent the task with the Judge's feedback, and the
+        // stub gave up with a failure marker — a blocked claim, which ends the
+        // task at once with no second Judge call and no task attempt used.
+        // A met verdict never gets here (WRONG VERDICT above); a product that
+        // ended the task on the first "not met" leaves no "Blocked:" result.
+        expect(
+          result.verdicts.length,
+          `case "${c.name}": exactly one Judge verdict — the crafted claim, judged once. ` +
+            `Verdicts: ${JSON.stringify(result.verdicts)}`,
+        ).toBe(1);
+        expect(result.task.status, `case "${c.name}": the stub's give-up ends the task`).toBe('failed');
+        expect(
+          result.task.result,
+          `case "${c.name}": the task ends on the stub's blocked claim, after the Judge's "not met" kept the run going`,
+        ).toBe(`Blocked: ${STUB_GIVE_UP_SUMMARY}`);
+        expect(
+          result.task.attempt_count ?? 0,
+          `case "${c.name}": a blocked claim uses no task attempt`,
+        ).toBe(0);
+      }
     });
   }
 });

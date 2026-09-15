@@ -28,6 +28,7 @@ import {
   checkCriterion,
   createMainAgent,
   createPlanWithMembers,
+  createStubCliWorkerAgent,
   extractPlanCorrectCalls,
   getSessionMessages,
   listPlanMemberTasks,
@@ -36,6 +37,7 @@ import {
   requireApiKey,
   startFreshChatWithJim,
 } from './fixtures/conformance-helpers'
+import { blockedMarker } from './fixtures/stub-external-cli'
 
 // ── Conformance_t2_PlanLifecycleE2E ──────────────────────────────────────────
 //
@@ -344,7 +346,7 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
 // eventually clears.
 //
 // This test removes that confound: the plan below has exactly ONE problem
-// (a deterministically-failed, framed-as-transient member) and structurally
+// (a member that fails the same way on every run, framed as transient) and structurally
 // NO candidate for supersede — supersede requires an existing `done` member
 // whose outcome is in question
 // (`resolvePlanMember(..., task.StatusDone, ...)`, pkg/tools/plan_correct.go),
@@ -368,9 +370,17 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   // Setup: per-test Main agent (chat-target owner + member assignee) in its
   // own workspace core_team — same rationale as t3's createMainAgent comment.
   const ownerId = await createMainAgent(page, `conformance-t3b-owner-${Date.now()}`, { bash: 'allow' })
+  // m2's assignee: a stub external-CLI worker that ends every run reporting a
+  // transient failure (see m2 in the members comment below for why).
+  const m2WorkerId = await createStubCliWorkerAgent(page, `conformance-t3b-m2-stub-${Date.now()}`, {
+    firstTry: blockedMarker(
+      'a transient network error interrupted writing out/t3b/m2.txt; the member itself is sound and is ' +
+        'expected to succeed when retried',
+    ),
+  })
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t3b',
-    core_team: [ownerId],
+    core_team: [ownerId, m2WorkerId],
   })
   if (!wsRes.ok) throw new Error(`t3b: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
@@ -380,12 +390,30 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   //   m1 — trivial filler, own check trivially passes, reaches `done`, and
   //        is never named as a problem by the DoD — a `done` member that
   //        exists in the plan but is not a valid/motivated supersede target.
-  //   m2 — the SOLE TARGETED-RETRY target: max_attempts=1 with a check that
-  //        deterministically fails (`exit 1`), so it ends `failed` after
-  //        exactly one attempt. Its title frames the failure as transient —
-  //        the identical idiom Conformance_t3_PlanningReplanningE2E already
-  //        used for its own m3, which is exactly the wake data PlanSupervisor
-  //        reads ("member_id | status | title").
+  //   m2 — the SOLE TARGETED-RETRY target. It must end `failed` promptly and
+  //        the same way on every run. Its worker is the stub external CLI
+  //        above, which ends every run with a failure marker naming a
+  //        transient cause; the task run reads that as a blocked claim, so m2
+  //        ends Failed "Blocked: <cause>" at once — no Judge call, no task
+  //        attempt used, no restart (ADR-043 §8, ADR-084 §11). Its title
+  //        frames the failure as transient — the identical idiom
+  //        Conformance_t3_PlanningReplanningE2E already uses for its own m3,
+  //        which is exactly the wake data PlanSupervisor reads
+  //        ("member_id | status | title").
+  //
+  //        WHY NOT a native worker with a check that can never pass (`exit 1`,
+  //        max_attempts=1), as this test used until 2026-09-15: under the
+  //        two-level task-run model (ADR-086 §8, issue #710) a Judge ruling of
+  //        "not met" no longer uses up a task attempt. The worker keeps working
+  //        in the same run, up to Tries per goal (default 20), and every try is
+  //        a worker LLM turn plus a Judge call on the member's Definition of
+  //        Done. A check that can never pass therefore kept m2 in progress for
+  //        many minutes and the plan did not reach the hold within Step 1's
+  //        120s (CI run 34917711499: 4 of 4 attempts timed out there). Tries per
+  //        goal cannot be lowered for one test either: PUT /api/v1/performance
+  //        answers 503 while dev_mode_bypass is on, and every CI e2e gateway
+  //        runs with it on. A blocked claim is the documented way a run ends at
+  //        once, and it keeps m2's failure deterministic with no LLM involved.
   const { planId, memberIds } = await createPlanWithMembers(
     page,
     workspaceId,
@@ -425,8 +453,10 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
         title: 'm2-retry-target: transient/flaky failure, safe and expected to succeed if retried',
         prompt: 'reply with beta',
         write_set: ['out/t3b/m2.txt'],
-        max_attempts: 1,
-        criteria: [checkCriterion('m2 deterministically fails its one attempt', 'exit 1', 0)],
+        agent_id: m2WorkerId,
+        // Never judged: the stub worker ends every run with a blocked claim,
+        // before any Judge call. A criterion is still mandatory at creation.
+        criteria: [proseCriterion('m2 replied with the word beta')],
       },
     ],
     createdPlanIds,
@@ -439,8 +469,9 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   const HOLD_PHASE = 'awaiting_supervision'
 
   // --- Step 1: MANDATORY — reach the hold at least once -------------------
-  // With m2 deterministically failed, a round-1 unmet verdict (and the
-  // awaiting_supervision hold it triggers) is expected reliably.
+  // With m2 ending Failed "Blocked: <transient cause>" on its first try, a
+  // round-1 unmet verdict (and the awaiting_supervision hold it triggers) is
+  // expected reliably.
   let reachedHoldOnce = false
   const firstHoldDeadline = Date.now() + 120_000
   while (Date.now() < firstHoldDeadline) {
@@ -455,7 +486,7 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   expect(
     reachedHoldOnce,
     `t3b: plan ${planId} must reach plan_phase=awaiting_supervision within 120s of approval — m2 ` +
-      '(deterministically failed) makes a round-1 unmet verdict expected reliably.',
+      '(its stub worker ends every run Blocked at once) makes a round-1 unmet verdict expected reliably.',
   ).toBe(true)
 
   // --- Step 2: observe the REAL correction mechanism over the plan's full

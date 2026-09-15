@@ -63,6 +63,7 @@
 
 import { expect, type Page } from '@playwright/test'
 import { chatInput, assistantMessages, selectAgent } from './selectors'
+import { stubCliExecutor, type StubCliTexts } from './stub-external-cli'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -184,6 +185,13 @@ export interface MemberSpec {
    */
   dod?: Criterion[]
   max_attempts?: number
+  /**
+   * The member's assignee. Defaults to the plan owner. Must be on the
+   * workspace team like any assignee; a subagent_3p worker is accepted
+   * (pkg/gateway/rest_tasks.go: a plan member can be assigned directly to a
+   * native or subagent_3p agent).
+   */
+  agent_id?: string
 }
 
 export interface PlanFields {
@@ -466,12 +474,40 @@ export async function createPlanWithMembers(
     const blockedBy = (m.blocked_by_labels ?? [])
       .map((l) => memberIds[l])
       .filter((id): id is string => typeof id === 'string')
-    memberIds[m.label] = await createPlanMember(page, workspaceId, planId, ownerAgentId, {
+    memberIds[m.label] = await createPlanMember(page, workspaceId, planId, m.agent_id ?? ownerAgentId, {
       ...m,
       blocked_by: blockedBy,
     })
   }
   return { planId, memberIds }
+}
+
+/**
+ * Create a `subagent_3p` worker whose CLI is the e2e stub
+ * (./stub-external-cli): it prints `texts.firstTry` on a task run's first try
+ * and `texts.laterTry` (when given) on every later try in that run, with no
+ * LLM on the worker side. Put it on the workspace team like any other assignee.
+ */
+export async function createStubCliWorkerAgent(page: Page, name: string, texts: StubCliTexts): Promise<string> {
+  const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', {
+    type: 'subagent_3p',
+    name,
+    description: 'Stub external-CLI worker for a conformance e2e: its CLI ignores the prompt and prints a fixed reply.',
+    soul: 'You are a stub. Your CLI process prints a fixed reply regardless of input.',
+    executor: stubCliExecutor(texts),
+  })
+  if (!res.ok) {
+    throw new Error(`createStubCliWorkerAgent: POST /agents failed ${res.status}: ${res.raw}`)
+  }
+  // Same rule as createMainAgent: a 201 carrying a warning means the agent may
+  // not be registered in memory yet, so the next POST /tasks could reject it.
+  if (res.body.warning) {
+    throw new Error(
+      'createStubCliWorkerAgent: POST /agents returned 201 with a reload warning, so the agent may not ' +
+        `be registered in memory and is not safely usable: ${res.body.warning}`,
+    )
+  }
+  return res.body.id
 }
 
 /**
