@@ -13,9 +13,42 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
+// delegateToolExecuteRespond carries the shared state of executeRespond across its stages.
+type delegateToolExecuteRespond struct {
+	t             *DelegateTool
+	ctx           context.Context
+	args          map[string]any
+	cb            AsyncCallback
+	sessionID     string
+	correlationID string
+	text          string
+	rec           *session.LifecycleRecord
+	nextState     session.LifecycleState
+	failedReason  string
+}
+
 func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
-	if t.lifecycle == nil {
-		return ErrorResult("delegate: no lifecycle store configured")
+	dt := &delegateToolExecuteRespond{t: t, ctx: ctx, args: args, cb: cb}
+
+	if r0, stop := dt.validateAndLoad(); stop {
+		return r0
+	}
+
+	if r0, stop := dt.verifyQuestionAuthority(); stop {
+		return r0
+	}
+
+	if r0, stop := dt.dispatchThirdParty(); stop {
+		return r0
+	}
+
+	return dt.resumeNative()
+}
+
+// validateAndLoad validates the respond request and loads its parked lifecycle record.
+func (dt *delegateToolExecuteRespond) validateAndLoad() (*ToolResult, bool) {
+	if dt.t.lifecycle == nil {
+		return ErrorResult("delegate: no lifecycle store configured"), true
 	}
 	// HIGH-1 (14-reviewer sign-off): a parked child's turn has already ENDED
 	// (TurnEndStatusParked, via message_parent(wait=true)) — respond must
@@ -27,20 +60,21 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 	// anything, exactly like executeFollowUp's own posture (checked before
 	// any argument parsing) — never as a failure discovered mid-flow after
 	// some other state has already changed.
-	if t.spawner == nil {
-		return ErrorResult("delegate: respond: no sub-turn spawner configured to resume the session")
+	if dt.t.spawner == nil {
+		return ErrorResult("delegate: respond: no sub-turn spawner configured to resume the session"), true
 	}
-	sessionID, err := requiredStringArg(args, "session_id")
+	var err error
+	dt.sessionID, err = requiredStringArg(dt.args, "session_id")
 	if err != nil {
-		return ErrorResult(err.Error())
+		return ErrorResult(err.Error()), true
 	}
-	correlationID, err := requiredStringArg(args, "correlation_id")
+	dt.correlationID, err = requiredStringArg(dt.args, "correlation_id")
 	if err != nil {
-		return ErrorResult(err.Error())
+		return ErrorResult(err.Error()), true
 	}
-	text, err := requiredStringArg(args, "text")
+	dt.text, err = requiredStringArg(dt.args, "text")
 	if err != nil {
-		return ErrorResult(err.Error())
+		return ErrorResult(err.Error()), true
 	}
 
 	// rec is loaded UNLOCKED here only for the fast-path pre-checks
@@ -50,23 +84,28 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 	// lock (Correctness-MAJOR-3) so a concurrent respond/cancel cannot
 	// double-apply. Do NOT wrap this Load in a manual Lock(); the transition
 	// uses Mutate, which takes the lock once internally.
-	rec, lerr := t.lifecycle.Load(sessionID)
+	var lerr error
+	dt.rec, lerr = dt.t.lifecycle.Load(dt.sessionID)
 	if lerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: %v", lerr))
+		return ErrorResult(fmt.Sprintf("delegate: respond: %v", lerr)), true
 	}
-	if verr := t.verifyCallerOwnsSession(ctx, rec); verr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: %v", verr))
+	if verr := dt.t.verifyCallerOwnsSession(dt.ctx, dt.rec); verr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: %v", verr)), true
 	}
 
-	if rec.State != session.LifecycleNeedsInput || rec.NeedsInput == nil || rec.NeedsInput.CorrelationID != correlationID {
+	if dt.rec.State != session.LifecycleNeedsInput || dt.rec.NeedsInput == nil || dt.rec.NeedsInput.CorrelationID != dt.correlationID {
 		return ErrorResult(fmt.Sprintf(
-			"delegate: respond: session %s is not parked on correlation_id %q", sessionID, correlationID,
-		))
+			"delegate: respond: session %s is not parked on correlation_id %q", dt.sessionID, dt.correlationID,
+		)), true
 	}
-	if cerr := t.checkSteerCaps(sessionID, text); cerr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: %v", cerr)).WithError(cerr)
+	if cerr := dt.t.checkSteerCaps(dt.sessionID, dt.text); cerr != nil {
+		return ErrorResult(fmt.Sprintf("delegate: respond: %v", cerr)).WithError(cerr), true
 	}
+	return nil, false
+}
 
+// verifyQuestionAuthority confirms the target inbox question permits a parent-authored answer.
+func (dt *delegateToolExecuteRespond) verifyQuestionAuthority() (*ToolResult, bool) {
 	// R§8.2/FR-132: reject a respond targeting an owner_required question.
 	// PHASE-1 SCOPING: this reads the original question's CHILD-AUTHORED
 	// authority tag directly from the inbox — the runtime content-based
@@ -92,12 +131,12 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 	// independent of ack state would need a new inbox-store primitive
 	// (outside this wave's write-set); fail-closed-on-absent is the safe
 	// posture until that lands.
-	if t.inbox == nil {
-		return ErrorResult("delegate: respond: no message inbox configured to verify question authority")
+	if dt.t.inbox == nil {
+		return ErrorResult("delegate: respond: no message inbox configured to verify question authority"), true
 	}
-	msgs, _, _, derr := t.inbox.Drain(rec.ParentDurableKey, sessionID, "", 0)
+	msgs, _, _, derr := dt.t.inbox.Drain(dt.rec.ParentDurableKey, dt.sessionID, "", 0)
 	if derr != nil {
-		return ErrorResult(fmt.Sprintf("delegate: respond: %v", derr)).WithError(derr)
+		return ErrorResult(fmt.Sprintf("delegate: respond: %v", derr)).WithError(derr), true
 	}
 	questionVerified := false
 	for _, m := range msgs {
@@ -106,14 +145,14 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 			continue
 		}
 		q, qerr := m.AsSessionMessageQuestion()
-		if qerr != nil || q.CorrelationId != correlationID {
+		if qerr != nil || q.CorrelationId != dt.correlationID {
 			continue
 		}
 		if q.Authority != nil && string(*q.Authority) == "owner_required" {
 			return ErrorResult(fmt.Sprintf(
 				"delegate: respond: question %q requires owner/human authority and cannot be "+
-					"answered by a parent directly (R§8.2)", correlationID,
-			))
+					"answered by a parent directly (R§8.2)", dt.correlationID,
+			)), true
 		}
 		questionVerified = true
 		break
@@ -121,10 +160,14 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 	if !questionVerified {
 		return ErrorResult(fmt.Sprintf(
 			"delegate: respond: question %q could not be verified in the inbox (it may be acked or absent) — "+
-				"denying by default to enforce owner_required authority (R§8.2)", correlationID,
-		))
+				"denying by default to enforce owner_required authority (R§8.2)", dt.correlationID,
+		)), true
 	}
+	return nil, false
+}
 
+// dispatchThirdParty dispatches a corrective successor for a parked third-party session.
+func (dt *delegateToolExecuteRespond) dispatchThirdParty() (*ToolResult, bool) {
 	// HIGH-1 ordering fix (14-reviewer sign-off): the un-park lifecycle
 	// transition used to commit BEFORE delivery was even attempted — an
 	// enqueue failure then left the record flipped away from needs_input
@@ -147,14 +190,14 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 	// informative than leaving the cancellation unexplained, and adding a
 	// dedicated `superseded` state would be a wire-type change outside this
 	// wave's scope.) The native path keeps the original `running` transition.
-	nextState := session.LifecycleRunning
-	var failedReason string
-	if rec.Is3P {
-		nextState = session.LifecycleCancelled
-		failedReason = "superseded by corrective re-dispatch (3P respond)"
+	dt.nextState = session.LifecycleRunning
+
+	if dt.rec.Is3P {
+		dt.nextState = session.LifecycleCancelled
+		dt.failedReason = "superseded by corrective re-dispatch (3P respond)"
 	}
 
-	if rec.Is3P {
+	if dt.rec.Is3P {
 		// D5: 3P respond spawns a NEW corrective session — never an
 		// in-place warm resume (external CLIs have no such primitive).
 		// spawnCorrectiveFollowUp Persists the new generation under a
@@ -162,23 +205,23 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 		// (the original) record. Dispatch it FIRST — a failure here (e.g. a
 		// Persist I/O error, or the inner executeAsync call) never marks the
 		// original as superseded, so it stays parked and retryable.
-		dispatch := t.spawnCorrectiveFollowUp(ctx, sessionID, rec,
-			fmt.Sprintf("Answer to your question (correlation_id=%s): %s", correlationID, text), cb)
+		dispatch := dt.t.spawnCorrectiveFollowUp(dt.ctx, dt.sessionID, dt.rec,
+			fmt.Sprintf("Answer to your question (correlation_id=%s): %s", dt.correlationID, dt.text), dt.cb)
 		if dispatch.IsError {
-			return dispatch
+			return dispatch, true
 		}
 		// The corrective successor is confirmed dispatched — only now mark
 		// the ORIGINAL terminal (superseded by the successor).
-		if merr := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
+		if merr := dt.t.lifecycle.Mutate(dt.sessionID, func(cur *session.LifecycleRecord) error {
 			if cur == nil {
 				return session.ErrLifecycleNotFound
 			}
-			if cur.State != session.LifecycleNeedsInput || cur.NeedsInput == nil || cur.NeedsInput.CorrelationID != correlationID {
-				return fmt.Errorf("session %s is not parked on correlation_id %q", sessionID, correlationID)
+			if cur.State != session.LifecycleNeedsInput || cur.NeedsInput == nil || cur.NeedsInput.CorrelationID != dt.correlationID {
+				return fmt.Errorf("session %s is not parked on correlation_id %q", dt.sessionID, dt.correlationID)
 			}
-			cur.State = nextState
+			cur.State = dt.nextState
 			cur.NeedsInput = nil
-			cur.FailedReason = failedReason
+			cur.FailedReason = dt.failedReason
 			return nil
 		}); merr != nil {
 			// The corrective successor is already running by this point —
@@ -187,11 +230,15 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 			// instead; the original record is a display/bookkeeping nicety at
 			// this stage, not the source of truth for whether the answer landed.
 			slog.Warn("delegate: respond: 3P corrective successor dispatched but the original could not be marked superseded",
-				"session_id", sessionID, "error", merr)
+				"session_id", dt.sessionID, "error", merr)
 		}
-		return dispatch
+		return dispatch, true
 	}
+	return nil, false
+}
 
+// resumeNative delivers the answer and resumes a native parked session.
+func (dt *delegateToolExecuteRespond) resumeNative() *ToolResult {
 	// Native: the parked child's turn has already ENDED (TurnEndStatusParked)
 	// — the steering queue below has no live consumer, and even a freshly
 	// redispatched turn's OWN first iteration does not drain it
@@ -207,10 +254,10 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 	// Enqueue is attempted FIRST, before any lifecycle mutation — an enqueue
 	// failure returns immediately with the record still untouched (still
 	// parked, retryable).
-	if t.steering == nil {
+	if dt.t.steering == nil {
 		return ErrorResult("delegate: respond: no steering sink configured to deliver the answer")
 	}
-	if serr := t.steering.EnqueueSteeringMessage(sessionID, rec.AgentID, providers.Message{Role: "user", Content: text}); serr != nil {
+	if serr := dt.t.steering.EnqueueSteeringMessage(dt.sessionID, dt.rec.AgentID, providers.Message{Role: "user", Content: dt.text}); serr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: failed to deliver answer: %v", serr)).WithError(serr)
 	}
 
@@ -228,35 +275,35 @@ func (t *DelegateTool) executeRespond(ctx context.Context, args map[string]any, 
 	// ordering fix requires: the record is only ever flipped once delivery
 	// (the enqueue above) has already succeeded, and never in a way an
 	// enqueue failure could leave half-applied.
-	if merr := t.lifecycle.Mutate(sessionID, func(cur *session.LifecycleRecord) error {
+	if merr := dt.t.lifecycle.Mutate(dt.sessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
 		}
-		if cur.State != session.LifecycleNeedsInput || cur.NeedsInput == nil || cur.NeedsInput.CorrelationID != correlationID {
-			return fmt.Errorf("session %s is not parked on correlation_id %q", sessionID, correlationID)
+		if cur.State != session.LifecycleNeedsInput || cur.NeedsInput == nil || cur.NeedsInput.CorrelationID != dt.correlationID {
+			return fmt.Errorf("session %s is not parked on correlation_id %q", dt.sessionID, dt.correlationID)
 		}
-		cur.State = nextState
+		cur.State = dt.nextState
 		cur.NeedsInput = nil
-		cur.FailedReason = failedReason
+		cur.FailedReason = dt.failedReason
 		return nil
 	}); merr != nil {
 		return ErrorResult(fmt.Sprintf("delegate: respond: failed to resume session: %v", merr)).WithError(merr)
 	}
 
 	label := ""
-	t.mu.Lock()
-	if taskID, ok := t.sessionIndex[sessionID]; ok {
-		if st, ok := t.tasks[taskID]; ok {
+	dt.t.mu.Lock()
+	if taskID, ok := dt.t.sessionIndex[dt.sessionID]; ok {
+		if st, ok := dt.t.tasks[taskID]; ok {
 			label = st.Label
 		}
 	}
-	t.mu.Unlock()
+	dt.t.mu.Unlock()
 
-	dispatch := t.executeAsync(ctx,
-		fmt.Sprintf("Answer to your question (correlation_id=%s): %s", correlationID, text),
+	dispatch := dt.t.executeAsync(dt.ctx,
+		fmt.Sprintf("Answer to your question (correlation_id=%s): %s", dt.correlationID, dt.text),
 		// requested_skill is action="run" only (ADR-072 D9) — a resume never
 		// carries one.
-		label, rec.AgentID, nil, sessionID, 0, nil, "", true, cb)
+		label, dt.rec.AgentID, nil, dt.sessionID, 0, nil, "", true, dt.cb)
 	if dispatch.IsError {
 		return dispatch
 	}
