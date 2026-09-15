@@ -217,19 +217,38 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   ).toBe(true)
 
   // --- Step 2: the F2 round-burn proof itself -----------------------------
-  // Sample (judge_rounds, member terminal signature, plan_phase) at fine
-  // granularity while the plan sits at the hold. The F2 invariant, stated
-  // causally: judge_rounds may only advance between two samples whose
-  // member signature ALSO changed (a real correction landed and changed
-  // the DAG) — an increment between two samples with an IDENTICAL member
-  // signature is exactly the bug F2 exists to prevent (re-judging an
-  // unchanged terminal state on every idle tick). The sampling window ends
-  // either at its own deadline or as soon as the plan leaves the hold
-  // (whichever first — sampling past that point is not testing F2 anymore).
+  // Sample (plan_phase, judge_rounds, supervision.correction_rounds, member
+  // terminal signature) at fine granularity while the plan sits at the hold.
+  // The F2 invariant, stated causally: judge_rounds may only advance between
+  // two samples across which the plan's evidence ALSO changed. The engine
+  // starts a genuinely fresh round for exactly two reasons reachable here
+  // (pkg/agent/plan_engine.go, lastUnmetTerminalSignature's doc comment):
+  //   - the member terminal signature changed; or
+  //   - a correction was applied. AppendCorrection clears the gate for every
+  //     verb ("correction = new activity", INV-7), and
+  //     countCorrectionAndClearWake increments supervision.correction_rounds
+  //     in the same step — never reset, so a higher count is the wire-visible
+  //     record that a correction landed.
+  // A round between two samples where NEITHER changed is exactly the bug F2
+  // exists to prevent (re-judging an unchanged idle hold on a tick). The
+  // sampling window ends either at its own deadline or as soon as the plan
+  // leaves the hold (whichever first — sampling past that point is not
+  // testing F2 anymore).
+  //
+  // WHY THE MEMBER SIGNATURE ALONE IS NOT ENOUGH: with members that end at
+  // once, PlanSupervisor's targeted_retry re-runs a failed member, the member
+  // fails again within seconds, and the plan is re-judged and back at the
+  // hold before the next 4s sample. Both samples read "failed" for every
+  // member, yet a correction really landed and a fresh round is correct.
+  // release/v0.1.1 CI run 34938204261 (job 104280897259) showed exactly that:
+  // each judge_rounds step 1→5 arrived together with a correction_rounds step
+  // 0→4 and a new updated_at on the ONE member that was retried, while between
+  // corrections judge_rounds held for ~40s across several 30s engine ticks.
   interface Sample {
     tMs: number
     phase: string
     judgeRounds: number
+    correctionRounds: number
     signature: string
   }
   const samples: Sample[] = []
@@ -238,7 +257,11 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   const t0 = Date.now()
   while (Date.now() < sampleWindowDeadline) {
     const [planPoll, members] = await Promise.all([
-      apiFetch<{ plan_phase?: string; judge_rounds?: number }>(page, 'GET', `/api/v1/plans/${planId}`),
+      apiFetch<{ plan_phase?: string; judge_rounds?: number; supervision?: { correction_rounds?: number } }>(
+        page,
+        'GET',
+        `/api/v1/plans/${planId}`,
+      ),
       listPlanMemberTasks(page, workspaceId, planId),
     ])
     if (!planPoll.ok) throw new Error(`t2: GET /plans/{id} poll (F2 sampling) failed ${planPoll.status}: ${planPoll.raw}`)
@@ -246,6 +269,7 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
       tMs: Date.now() - t0,
       phase: planPoll.body.plan_phase ?? '',
       judgeRounds: planPoll.body.judge_rounds ?? 0,
+      correctionRounds: planPoll.body.supervision?.correction_rounds ?? 0,
       signature: memberSignature(members),
     })
     if (planPoll.body.plan_phase !== HOLD_PHASE) break
@@ -253,7 +277,7 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   }
 
   // Causal invariant: for every consecutive pair, judge_rounds may only
-  // increase alongside a member-signature change.
+  // increase alongside a member-signature change or an applied correction.
   const violations: string[] = []
   let sawHeldUnchangedPair = false
   for (let i = 1; i < samples.length; i++) {
@@ -261,13 +285,15 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
     const cur = samples[i]
     const roundsAdvanced = cur.judgeRounds > prev.judgeRounds
     const signatureChanged = cur.signature !== prev.signature
-    if (prev.phase === HOLD_PHASE && !signatureChanged) {
+    const correctionApplied = cur.correctionRounds > prev.correctionRounds
+    if (prev.phase === HOLD_PHASE && !signatureChanged && !correctionApplied) {
       sawHeldUnchangedPair = true
       if (roundsAdvanced) {
         violations.push(
           `t=${prev.tMs}ms→${cur.tMs}ms: judge_rounds ${prev.judgeRounds}→${cur.judgeRounds} advanced while the ` +
-            `member terminal signature stayed IDENTICAL ("${prev.signature}") and phase stayed ` +
-            'awaiting_supervision — this is exactly the F2 round-burn bug (re-judging an unchanged idle hold).',
+            `member terminal signature stayed IDENTICAL ("${prev.signature}"), no correction was applied ` +
+            `(correction_rounds stayed ${prev.correctionRounds}) and phase stayed awaiting_supervision — this is ` +
+            'exactly the F2 round-burn bug (re-judging an unchanged idle hold).',
         )
       }
     }
@@ -278,14 +304,25 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
       `Full sample trace: ${JSON.stringify(samples)}`,
   ).toEqual([])
   // The invariant above is only a meaningful proof if we actually observed
-  // at least one held, signature-unchanged consecutive pair to test it
+  // at least one held, evidence-unchanged consecutive pair to test it
   // against — otherwise it holds vacuously (every sample happened to land
   // on a round transition). Require genuine coverage of the idle case.
   expect(
     sawHeldUnchangedPair,
     'F2 sampling window never observed two consecutive samples that were BOTH held at awaiting_supervision ' +
-      `with an unchanged member signature — the invariant above was not genuinely exercised. Sample trace: ${JSON.stringify(samples)}`,
+      'with an unchanged member signature and no correction applied between them — the invariant above was not ' +
+      `genuinely exercised. Sample trace: ${JSON.stringify(samples)}`,
   ).toBe(true)
+  // correction_rounds is never reset (countCorrectionAndClearWake), so a
+  // regression would mean the counter the invariant above leans on is itself
+  // unreliable — which would let a real round burn hide behind it.
+  for (let i = 1; i < samples.length; i++) {
+    expect(
+      samples[i].correctionRounds,
+      `t2: supervision.correction_rounds must never decrease — observed ${samples[i - 1].correctionRounds} → ` +
+        `${samples[i].correctionRounds} at sample ${i}. Trace: ${JSON.stringify(samples)}`,
+    ).toBeGreaterThanOrEqual(samples[i - 1].correctionRounds)
+  }
   // judge_rounds must never have been observed to REGRESS either (a
   // completely different failure mode from round-burn, but still a broken
   // invariant worth catching for free from the same trace).
