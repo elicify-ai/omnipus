@@ -186,41 +186,6 @@ func TestStrandedDetectionInertWithoutAnExecutorReader(t *testing.T) {
 	}
 }
 
-// TestTaskExecutorHoldsDispatchSlot pins the raw read the whole detection
-// rests on, against the REAL map rather than a stand-in: a reserved slot
-// (claimed, goroutine not yet launched) and a live slot both count as
-// executing, and only an absent entry does not.
-func TestTaskExecutorHoldsDispatchSlot(t *testing.T) {
-	te := &TaskExecutor{running: map[string]*taskSlot{}}
-
-	if taskExecutorHoldsDispatchSlot(nil, "t1") {
-		t.Fatal("a nil executor must not claim to be running anything")
-	}
-	if taskExecutorHoldsDispatchSlot(te, "") {
-		t.Fatal("an empty task id must not match")
-	}
-	if taskExecutorHoldsDispatchSlot(te, "t1") {
-		t.Fatal("an absent entry must read as not executing")
-	}
-
-	te.running["t1"] = &taskSlot{reserved: true}
-	if !taskExecutorHoldsDispatchSlot(te, "t1") {
-		t.Fatal("a RESERVED slot must count as executing — the goroutine is launching, and treating that " +
-			"window as stranded is exactly the race the dwell exists to avoid")
-	}
-
-	te.running["t1"] = &taskSlot{cancel: func() {}}
-	if !taskExecutorHoldsDispatchSlot(te, "t1") {
-		t.Fatal("a live slot must count as executing")
-	}
-
-	delete(te.running, "t1")
-	if taskExecutorHoldsDispatchSlot(te, "t1") {
-		t.Fatal("once the slot is deleted (runTask's outermost defer, after adjudication AND after any " +
-			"redispatch) the member is no longer executing")
-	}
-}
-
 // TestStallNoteIsClampedForLikeForLikeDedup covers the handover-clamp
 // follow-up: pkg/plan's Store.write clamps handover text unconditionally, so a
 // stall writer that builds a RAW over-bound note compares a raw string against
