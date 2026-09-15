@@ -147,6 +147,42 @@ type AgentInstance struct {
 	LightProvider providers.LLMProvider
 }
 
+// newAgentInstance carries the shared state of NewAgentInstance across its stages.
+type newAgentInstance struct {
+	agentCfg            *config.AgentConfig
+	defaults            *config.AgentDefaults
+	cfg                 *config.Config
+	provider            providers.LLMProvider
+	workspace           string
+	model               string
+	fallbacks           []string
+	fallbackModels      []config.FallbackModel
+	restrict            bool
+	readRestrict        bool
+	allowReadPaths      []*regexp.Regexp
+	allowWritePaths     []*regexp.Regexp
+	toolsRegistry       *tools.ToolRegistry
+	agentID             string
+	agentName           string
+	subagents           *config.SubagentsConfig
+	skillsFilter        []string
+	sessions            session.SessionStore
+	contextBuilder      *ContextBuilder
+	maxIter             int
+	maxTokens           int
+	temperature         float64
+	thinkingLevel       ThinkingLevel
+	candidates          []providers.FallbackCandidate
+	poolBuild           providerPoolBuild
+	window              WindowResolution
+	contextWindow       int
+	configuredMaxTokens int
+	router              *routing.Router
+	lightCandidates     []providers.FallbackCandidate
+	lightProvider       providers.LLMProvider
+	timeoutSeconds      int
+}
+
 // NewAgentInstance creates an agent instance from config.
 func NewAgentInstance(
 	agentCfg *config.AgentConfig,
@@ -154,32 +190,54 @@ func NewAgentInstance(
 	cfg *config.Config,
 	provider providers.LLMProvider,
 ) *AgentInstance {
-	workspace := resolveAgentHome(agentCfg, defaults)
+	nai := &newAgentInstance{agentCfg: agentCfg, defaults: defaults, cfg: cfg, provider: provider}
+
+	nai.prepareWorkspace()
+
+	nai.registerTools()
+
+	nai.prepareIdentity()
+
+	nai.resolveRuntimeLimits()
+
+	nai.resolveCandidates()
+
+	nai.configureRouting()
+
+	return nai.assembleInstance()
+}
+
+// prepareWorkspace resolves the workspace, model settings, and path restrictions.
+func (nai *newAgentInstance) prepareWorkspace() {
+	nai.workspace = resolveAgentHome(nai.agentCfg, nai.defaults)
 	// H11: escalate MkdirAll failure to Error — a missing workspace is serious.
-	if mkErr := os.MkdirAll(workspace, 0o755); mkErr != nil {
+	if mkErr := os.MkdirAll(nai.workspace, 0o755); mkErr != nil {
 		logger.ErrorCF("agent", "Failed to create agent workspace directory",
-			map[string]any{"workspace": workspace, "error": mkErr.Error()})
+			map[string]any{"workspace": nai.workspace, "error": mkErr.Error()})
 	}
 
-	model := resolveAgentModel(agentCfg, defaults)
-	fallbacks := resolveAgentFallbacks(agentCfg, defaults)
-	fallbackModels := resolveAgentFallbackModels(agentCfg, defaults)
+	nai.model = resolveAgentModel(nai.agentCfg, nai.defaults)
+	nai.fallbacks = resolveAgentFallbacks(nai.agentCfg, nai.defaults)
+	nai.fallbackModels = resolveAgentFallbackModels(nai.agentCfg, nai.defaults)
 
-	restrict := defaults.RestrictToWorkspace
-	readRestrict := restrict && !defaults.AllowReadOutsideWorkspace
+	nai.restrict = nai.defaults.RestrictToWorkspace
+	nai.readRestrict = nai.restrict && !nai.defaults.AllowReadOutsideWorkspace
 
 	// Compile path whitelist patterns from config.
-	allowReadPaths := buildAllowReadPatterns(cfg)
-	allowWritePaths := compilePatterns(cfg.Tools.AllowWritePaths)
+	nai.allowReadPaths = buildAllowReadPatterns(nai.cfg)
+	nai.allowWritePaths = compilePatterns(nai.cfg.Tools.AllowWritePaths)
+}
 
-	toolsRegistry := tools.NewToolRegistry()
+// registerTools constructs the agent's tool registry and registers its workspace tools.
+func (nai *newAgentInstance) registerTools() {
+	nai.toolsRegistry = tools.NewToolRegistry()
 
 	// All file-system and exec tools register unconditionally. Policy
 	// (allow / ask / deny) decides whether an agent can actually invoke them.
-	maxReadFileSize := cfg.Tools.ReadFile.MaxReadFileSize
-	toolsRegistry.Register(tools.NewReadFileTool(workspace, readRestrict, maxReadFileSize, allowReadPaths))
-	toolsRegistry.Register(tools.NewWriteFileTool(workspace, restrict, allowWritePaths))
-	toolsRegistry.Register(tools.NewListDirTool(workspace, readRestrict, allowReadPaths))
+	maxReadFileSize := nai.cfg.Tools.ReadFile.MaxReadFileSize
+	nai.toolsRegistry.Register(tools.NewReadFileTool(nai.workspace, nai.readRestrict, maxReadFileSize, nai.allowReadPaths))
+	nai.toolsRegistry.Register(tools.NewWriteFileTool(nai.workspace, nai.restrict, nai.allowWritePaths))
+	nai.toolsRegistry.Register(tools.NewListDirTool(nai.workspace, nai.readRestrict, nai.allowReadPaths))
 	// library_list / library_read (D3, library-spec): scoped facades over
 	// this agent's own workspace .library/ dual-write directory, where chat
 	// uploads land (D-1) so file tools can actually reach them (ADR-046).
@@ -187,19 +245,19 @@ func NewAgentInstance(
 	// read_file/list_directory siblings above — tool POLICY (allow/ask/
 	// deny), not conditional registration, decides who can actually invoke
 	// them (CLAUDE.md Constraint #6).
-	toolsRegistry.Register(tools.NewLibraryListTool(workspace, readRestrict, allowReadPaths))
-	toolsRegistry.Register(tools.NewLibraryReadTool(workspace, readRestrict, maxReadFileSize, allowReadPaths))
+	nai.toolsRegistry.Register(tools.NewLibraryListTool(nai.workspace, nai.readRestrict, nai.allowReadPaths))
+	nai.toolsRegistry.Register(tools.NewLibraryReadTool(nai.workspace, nai.readRestrict, maxReadFileSize, nai.allowReadPaths))
 
-	execTool, err := tools.NewExecToolWithConfig(workspace, restrict, cfg, allowReadPaths)
+	execTool, err := tools.NewExecToolWithConfig(nai.workspace, nai.restrict, nai.cfg, nai.allowReadPaths)
 	if err != nil {
 		logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 			map[string]any{"error": err.Error()})
 	} else {
-		toolsRegistry.Register(execTool)
+		nai.toolsRegistry.Register(execTool)
 	}
 
-	toolsRegistry.Register(tools.NewEditFileTool(workspace, restrict, allowWritePaths))
-	toolsRegistry.Register(tools.NewAppendFileTool(workspace, restrict, allowWritePaths))
+	nai.toolsRegistry.Register(tools.NewEditFileTool(nai.workspace, nai.restrict, nai.allowWritePaths))
+	nai.toolsRegistry.Register(tools.NewAppendFileTool(nai.workspace, nai.restrict, nai.allowWritePaths))
 
 	// request_mount (ADR-063 FR-7.2): the agent asks the operator for write
 	// access to a real folder. Registered unconditionally like every sibling
@@ -210,7 +268,7 @@ func NewAgentInstance(
 	// in /api/v1/tools and in Settings while being absent from every agent's
 	// execution registry: no agent could call it, and it could not be granted
 	// or revoked per agent, because GET /agents/{id}/tools lists this registry.
-	toolsRegistry.Register(tools.NewRequestMountTool(config.OmnipusHomeDir()))
+	nai.toolsRegistry.Register(tools.NewRequestMountTool(config.OmnipusHomeDir()))
 
 	// list_mounts (ADR-068 §4) registers here for exactly the reason spelled
 	// out above: a mount tool that lives only in the metadata catalog is
@@ -218,7 +276,7 @@ func NewAgentInstance(
 	// the pair — an agent that can request a mount must also be able to see
 	// which mounts it already has, or it re-requests folders it was already
 	// granted (ADR-068 §2.2).
-	toolsRegistry.Register(tools.NewListMountsTool(config.OmnipusHomeDir()))
+	nai.toolsRegistry.Register(tools.NewListMountsTool(config.OmnipusHomeDir()))
 
 	// The knowledge tool family (ADR-067 D7, FR-050–FR-055 retrieval and
 	// FR-100–FR-108 authoring): the agent-facing read AND write path over a
@@ -232,7 +290,7 @@ func NewAgentInstance(
 	// nothing, and until it covered the authoring half, seven of the nine
 	// seeded names were a granted posture over a tool no registry offered.
 	// See knowledge_tools.go for the audit wiring.
-	registerKnowledgeTools(toolsRegistry)
+	registerKnowledgeTools(nai.toolsRegistry)
 
 	// grep (ADR-081 / docs/internal/specs/unified-search-and-grep-spec.md
 	// FR-008/FR-019/FR-020): recursive file NAME and TEXT-CONTENT search
@@ -247,26 +305,27 @@ func NewAgentInstance(
 	// posture is a POLICY seed (pkg/coreagent/core.go + pkg/config/
 	// defaults.go, owned by ADR-081's governance track, not this file);
 	// this call only makes the tool reachable, it grants nothing.
-	toolsRegistry.Register(tools.NewGrepTool(workspace, readRestrict))
+	nai.toolsRegistry.Register(tools.NewGrepTool(nai.workspace, nai.readRestrict))
+}
 
+// prepareIdentity resolves agent identity, sessions, context, skills, and memory tools.
+func (nai *newAgentInstance) prepareIdentity() {
 	// Resolve agentID early so the session store can tag sessions with the correct owner.
 	// Empty until an agentCfg supplies one: the "main" sentinel used to stand in
 	// here, which is how it ended up stamped on sessions, transcripts, tasks and
 	// plans as an owner that no agent record ever matched.
-	agentID := ""
-	agentName := ""
-	var subagents *config.SubagentsConfig
-	var skillsFilter []string
+	nai.agentID = ""
+	nai.agentName = ""
 
-	if agentCfg != nil {
-		agentID = routing.NormalizeAgentID(agentCfg.ID)
-		agentName = agentCfg.Name
-		subagents = agentCfg.Subagents
-		skillsFilter = agentCfg.Skills
+	if nai.agentCfg != nil {
+		nai.agentID = routing.NormalizeAgentID(nai.agentCfg.ID)
+		nai.agentName = nai.agentCfg.Name
+		nai.subagents = nai.agentCfg.Subagents
+		nai.skillsFilter = nai.agentCfg.Skills
 	}
 
-	sessionsDir := filepath.Join(workspace, "sessions")
-	sessions := initSessionStore(sessionsDir, agentID, omnipusHome())
+	sessionsDir := filepath.Join(nai.workspace, "sessions")
+	nai.sessions = initSessionStore(sessionsDir, nai.agentID, omnipusHome())
 
 	// WithToolDiscovery gates the "Tool Discovery" prompt section on the
 	// 3-tier tool-manifest system (cfg.Tools.Manifest.Compressed, default ON)
@@ -274,23 +333,23 @@ func NewAgentInstance(
 	// default OFF), which this used to (wrongly) gate on, per finding 1 / GH
 	// #657: a default install has the manifest system active but MCP
 	// discovery off, so the old gate rendered no discovery guidance at all.
-	contextBuilder := NewContextBuilder(workspace).
-		WithToolDiscovery(cfg.Tools.Manifest.Compressed).
-		WithSplitOnMarker(cfg.Agents.Defaults.SplitOnMarker)
+	nai.contextBuilder = NewContextBuilder(nai.workspace).
+		WithToolDiscovery(nai.cfg.Tools.Manifest.Compressed).
+		WithSplitOnMarker(nai.cfg.Agents.Defaults.SplitOnMarker)
 
-	if agentCfg != nil {
-		contextBuilder.WithAgentInfo(agentID, agentName)
+	if nai.agentCfg != nil {
+		nai.contextBuilder.WithAgentInfo(nai.agentID, nai.agentName)
 		// FR-9.4, ADR-072 D5: install the per-agent skill allowlist so it is
 		// enforced at skill-resolution time (default-DENY). agentCfg.Skills
 		// nil (never configured) and an empty slice (deliberately emptied)
 		// are now IDENTICAL — both deny every registry/builtin skill. There
 		// is no "unrestricted" state any more: only names present in
 		// agentCfg.Skills resolve or appear in progressive disclosure.
-		contextBuilder.WithSkillAllowlist(agentCfg.Skills)
+		nai.contextBuilder.WithSkillAllowlist(nai.agentCfg.Skills)
 		// ADR-052 FR-039: per-agent memory gate (nil = enabled). The Judge
 		// verifier runs memoryless for impartial, reproducible verdicts —
 		// its seed leaves MemoryEnabled=false; every other agent defaults on.
-		contextBuilder.WithMemoryEnabled(agentCfg.MemoryEnabledEffective())
+		nai.contextBuilder.WithMemoryEnabled(nai.agentCfg.MemoryEnabledEffective())
 	}
 
 	// Memory tools (FR-016, FR-017): register remember, recall_memory and
@@ -305,24 +364,27 @@ func NewAgentInstance(
 	// control to change it, because the per-agent permissions screen lists the
 	// execution registry. The gate went with the sentinel — whether an agent may
 	// remember is its tool policy, like every other tool.
-	memAdapter := NewMemoryStoreAdapter(contextBuilder.Memory())
-	toolsRegistry.Register(tools.NewRememberTool(memAdapter, nil))
-	toolsRegistry.Register(tools.NewRecallMemoryTool(memAdapter))
-	toolsRegistry.Register(tools.NewRetrospectiveTool(memAdapter, nil))
+	memAdapter := NewMemoryStoreAdapter(nai.contextBuilder.Memory())
+	nai.toolsRegistry.Register(tools.NewRememberTool(memAdapter, nil))
+	nai.toolsRegistry.Register(tools.NewRecallMemoryTool(memAdapter))
+	nai.toolsRegistry.Register(tools.NewRetrospectiveTool(memAdapter, nil))
+}
 
+// resolveRuntimeLimits resolves iteration, sampling, and thinking-level settings.
+func (nai *newAgentInstance) resolveRuntimeLimits() {
 	// Per-turn tool-round cap: per-agent override wins, then the global
 	// default, then 200. The per-agent field was persisted+displayed but never
 	// applied before 2026-07-03 (P0) — the runtime silently ran everything on
 	// the old emergency fallback of 20.
-	maxIter := 0
-	if agentCfg != nil {
-		maxIter = agentCfg.MaxToolIterations
+	nai.maxIter = 0
+	if nai.agentCfg != nil {
+		nai.maxIter = nai.agentCfg.MaxToolIterations
 	}
-	if maxIter <= 0 {
-		maxIter = defaults.MaxToolIterations
+	if nai.maxIter <= 0 {
+		nai.maxIter = nai.defaults.MaxToolIterations
 	}
-	if maxIter <= 0 {
-		maxIter = 200
+	if nai.maxIter <= 0 {
+		nai.maxIter = 200
 	}
 
 	// Sampling params: per-agent override (agentCfg.ModelParams) wins, then
@@ -334,28 +396,31 @@ func NewAgentInstance(
 	// temperature returned 200 and never once reached a provider call —
 	// the ADR-037 anti-pattern moved to config file rather than fixed by
 	// it. See config.AgentModelParams's doc comment.
-	maxTokens := defaults.MaxTokens
-	if agentCfg != nil && agentCfg.ModelParams != nil && agentCfg.ModelParams.MaxTokens != nil {
-		maxTokens = *agentCfg.ModelParams.MaxTokens
+	nai.maxTokens = nai.defaults.MaxTokens
+	if nai.agentCfg != nil && nai.agentCfg.ModelParams != nil && nai.agentCfg.ModelParams.MaxTokens != nil {
+		nai.maxTokens = *nai.agentCfg.ModelParams.MaxTokens
 	}
-	if maxTokens == 0 {
-		maxTokens = 8192
+	if nai.maxTokens == 0 {
+		nai.maxTokens = 8192
 	}
 
-	temperature := 0.7
-	if defaults.Temperature != nil {
-		temperature = *defaults.Temperature
+	nai.temperature = 0.7
+	if nai.defaults.Temperature != nil {
+		nai.temperature = *nai.defaults.Temperature
 	}
-	if agentCfg != nil && agentCfg.ModelParams != nil && agentCfg.ModelParams.Temperature != nil {
-		temperature = *agentCfg.ModelParams.Temperature
+	if nai.agentCfg != nil && nai.agentCfg.ModelParams != nil && nai.agentCfg.ModelParams.Temperature != nil {
+		nai.temperature = *nai.agentCfg.ModelParams.Temperature
 	}
 
 	var thinkingLevelStr string
-	if mc, err := cfg.FindModelConfigBySlug(model); err == nil {
+	if mc, err := nai.cfg.FindModelConfigBySlug(nai.model); err == nil {
 		thinkingLevelStr = mc.ThinkingLevel
 	}
-	thinkingLevel := parseThinkingLevel(thinkingLevelStr)
+	nai.thinkingLevel = parseThinkingLevel(thinkingLevelStr)
+}
 
+// resolveCandidates resolves provider candidates, provider pool, and context-window limits.
+func (nai *newAgentInstance) resolveCandidates() {
 	// Resolve fallback candidates. Prefer the provider-aware resolver when
 	// AgentConfig.FallbackModels (or a derived equivalent) is populated so a
 	// fallback can route through its own provider (FR-007). Falls back to the
@@ -365,9 +430,9 @@ func NewAgentInstance(
 	// O3 two-field model: when the agent pins an explicit primary provider, the
 	// primary candidate routes through it directly (never inferred). Empty
 	// provider preserves the pre-O3 selection exactly.
-	primaryProvider := resolveAgentPrimaryProvider(agentCfg, defaults)
-	candidates := resolveAgentCandidatesWithPrimaryProvider(
-		cfg, defaults.DefaultModel.Provider, model, primaryProvider, fallbackModels, fallbacks)
+	primaryProvider := resolveAgentPrimaryProvider(nai.agentCfg, nai.defaults)
+	nai.candidates = resolveAgentCandidatesWithPrimaryProvider(
+		nai.cfg, nai.defaults.DefaultModel.Provider, nai.model, primaryProvider, nai.fallbackModels, nai.fallbacks)
 
 	// Pre-build the provider pool for every distinct provider referenced by
 	// the resolved candidate chain. FR-007 requires each fallback to use its
@@ -375,71 +440,75 @@ func NewAgentInstance(
 	// construction (vs. lazily inside the fallback hot path) keeps the
 	// per-turn hot path allocation-free and surfaces credential / API-base
 	// config errors at startup instead of mid-conversation.
-	poolBuild := buildProviderPool(cfg, candidates, agentID)
+	nai.poolBuild = buildProviderPool(nai.cfg, nai.candidates, nai.agentID)
 
 	// ADR-066 D2: the context window comes from the ONE resolver, keyed by
 	// the primary candidate's (provider, model) pair and this agent's id so
 	// the per-agent override applies. There is no heuristic fallback: an
 	// exempt provider gets 0 and skips every budget check; a local endpoint
 	// nobody can size gets 0 and is refused at turn start (D3).
-	windowProvider, windowModel := primaryWindowPair(candidates, defaults.DefaultModel.Provider, model)
-	window := ResolveWindow(cfg, windowProvider, windowModel, agentID)
-	contextWindow := window.Window
+	windowProvider, windowModel := primaryWindowPair(nai.candidates, nai.defaults.DefaultModel.Provider, nai.model)
+	nai.window = ResolveWindow(nai.cfg, windowProvider, windowModel, nai.agentID)
+	nai.contextWindow = nai.window.Window
 	// FR-005b: max_tokens must leave a positive budget B for the window.
 	// Keep the configured value: every later re-clamp (a model switch) must
 	// start from it, never from the already-clamped result.
-	configuredMaxTokens := maxTokens
-	maxTokens = clampMaxTokensForWindow(contextWindow, maxTokens, model)
+	nai.configuredMaxTokens = nai.maxTokens
+	nai.maxTokens = clampMaxTokensForWindow(nai.contextWindow, nai.maxTokens, nai.model)
+}
 
+// configureRouting configures the optional light-model router and per-turn timeout.
+func (nai *newAgentInstance) configureRouting() {
 	// Model routing setup: pre-resolve light model candidates at creation time
 	// to avoid repeated model_list lookups on every incoming message.
-	var router *routing.Router
-	var lightCandidates []providers.FallbackCandidate
-	var lightProvider providers.LLMProvider
-	if rc := defaults.Routing; rc != nil && rc.Enabled && rc.LightModel != "" {
-		resolved := resolveModelCandidates(cfg, defaults.DefaultModel.Provider, rc.LightModel, nil)
+
+	if rc := nai.defaults.Routing; rc != nil && rc.Enabled && rc.LightModel != "" {
+		resolved := resolveModelCandidates(nai.cfg, nai.defaults.DefaultModel.Provider, rc.LightModel, nil)
 		if len(resolved) > 0 {
-			lightModelCfg, err := resolvedModelConfig(cfg, rc.LightModel, workspace)
+			lightModelCfg, err := resolvedModelConfig(nai.cfg, rc.LightModel, nai.workspace)
 			if err != nil {
 				logger.WarnCF("agent", "Routing light model config invalid; routing disabled",
-					map[string]any{"light_model": rc.LightModel, "agent_id": agentID, "error": err.Error()})
+					map[string]any{"light_model": rc.LightModel, "agent_id": nai.agentID, "error": err.Error()})
 			} else {
 				lp, _, err := providers.CreateProviderFromConfig(lightModelCfg)
 				if err != nil {
 					logger.WarnCF("agent", "Routing light model provider init failed; routing disabled",
-						map[string]any{"light_model": rc.LightModel, "agent_id": agentID, "error": err.Error()})
+						map[string]any{"light_model": rc.LightModel, "agent_id": nai.agentID, "error": err.Error()})
 				} else {
-					router = routing.New(routing.RouterConfig{
+					nai.router = routing.New(routing.RouterConfig{
 						LightModel: rc.LightModel,
 						Threshold:  rc.Threshold,
 					})
-					lightCandidates = resolved
-					lightProvider = lp
+					nai.lightCandidates = resolved
+					nai.lightProvider = lp
 				}
 			}
 		} else {
 			logger.WarnCF("agent", "Routing light model not found; routing disabled",
-				map[string]any{"light_model": rc.LightModel, "agent_id": agentID})
+				map[string]any{"light_model": rc.LightModel, "agent_id": nai.agentID})
 		}
 	}
 
 	// Per-turn timeout from agent defaults (0 = disabled).
 	// Clamp negative values to 0 (disabled) — a negative timeout is meaningless
 	// and would cause context.WithTimeout to fire immediately.
-	timeoutSeconds := defaults.TimeoutSeconds
-	if timeoutSeconds < 0 {
-		timeoutSeconds = 0
+	nai.timeoutSeconds = nai.defaults.TimeoutSeconds
+	if nai.timeoutSeconds < 0 {
+		nai.timeoutSeconds = 0
 	}
+}
 
+// assembleInstance derives the agent type, builds the instance, and publishes runtime policy snapshots.
+func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 	// Derive agent type and policy snapshot for LLM-call-time tool filtering (FR-003, FR-041).
 	// agentType uses the config-stored Type when present; falls back to "custom" for
 	// unrecognized types. The registry may upgrade this to "core" via SetAgentType()
 	// for runtime-seeded agents (FR-045).
 	resolvedAgentType := "custom"
-	if agentCfg != nil {
-		switch agentCfg.Type {
+	if nai.agentCfg != nil {
+		switch nai.agentCfg.Type {
 		case config.AgentTypeCore, config.AgentTypeSystem, config.AgentTypeWorker:
-			resolvedAgentType = string(agentCfg.Type)
+			resolvedAgentType = string(nai.agentCfg.Type)
 		case config.AgentTypeCustom:
 			resolvedAgentType = "custom"
 		}
@@ -456,50 +525,50 @@ func NewAgentInstance(
 	// RouteResolver.resolveDefaultAgentID — see those functions' doc
 	// comments for the current (3-priority) ladder.
 	inst := &AgentInstance{
-		ID:                  agentID,
-		Name:                agentName,
-		Model:               model,
-		Fallbacks:           fallbacks,
-		FallbackModels:      fallbackModels,
-		Home:                workspace,
-		MaxIterations:       maxIter,
-		MaxTokens:           maxTokens,
-		configuredMaxTokens: configuredMaxTokens,
-		Temperature:         temperature,
-		ThinkingLevel:       thinkingLevel,
-		ContextWindow:       contextWindow,
-		WindowSource:        window.Source,
-		WindowClamped:       window.Clamped,
-		WindowExempt:        window.Exempt,
-		WindowUnknown:       window.Unknown,
-		needsProvider:       poolBuild.primaryUnknown,
-		needsProviderID:     poolBuild.primaryProvider,
-		Provider:            provider,
-		Sessions:            sessions,
-		ContextBuilder:      contextBuilder,
-		Tools:               toolsRegistry,
-		Subagents:           subagents,
-		SkillsFilter:        skillsFilter,
-		Candidates:          candidates,
-		Router:              router,
-		LightCandidates:     lightCandidates,
-		LightProvider:       lightProvider,
-		TimeoutSeconds:      timeoutSeconds,
+		ID:                  nai.agentID,
+		Name:                nai.agentName,
+		Model:               nai.model,
+		Fallbacks:           nai.fallbacks,
+		FallbackModels:      nai.fallbackModels,
+		Home:                nai.workspace,
+		MaxIterations:       nai.maxIter,
+		MaxTokens:           nai.maxTokens,
+		configuredMaxTokens: nai.configuredMaxTokens,
+		Temperature:         nai.temperature,
+		ThinkingLevel:       nai.thinkingLevel,
+		ContextWindow:       nai.contextWindow,
+		WindowSource:        nai.window.Source,
+		WindowClamped:       nai.window.Clamped,
+		WindowExempt:        nai.window.Exempt,
+		WindowUnknown:       nai.window.Unknown,
+		needsProvider:       nai.poolBuild.primaryUnknown,
+		needsProviderID:     nai.poolBuild.primaryProvider,
+		Provider:            nai.provider,
+		Sessions:            nai.sessions,
+		ContextBuilder:      nai.contextBuilder,
+		Tools:               nai.toolsRegistry,
+		Subagents:           nai.subagents,
+		SkillsFilter:        nai.skillsFilter,
+		Candidates:          nai.candidates,
+		Router:              nai.router,
+		LightCandidates:     nai.lightCandidates,
+		LightProvider:       nai.lightProvider,
+		TimeoutSeconds:      nai.timeoutSeconds,
 		AgentType:           resolvedAgentType,
 	}
 	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
 	// pointer; calling it here (vs. direct field assignment) keeps the
 	// publish path identical to the model-switch path in ApplyAgentModel.
-	inst.StoreProviderPool(poolBuild.pool)
+	inst.StoreProviderPool(nai.poolBuild.pool)
 	// O7: thread the global sandbox tool policies into the runtime policy
 	// snapshot so FilterToolsByPolicy enforces global × agent merge at call
 	// time. Build the policy even when the agent has no per-agent tools
 	// config, because a global deny must still apply to that agent.
 	var agentToolsCfg *config.AgentToolsCfg
-	if agentCfg != nil {
-		agentToolsCfg = agentCfg.Tools
+	if nai.agentCfg != nil {
+		agentToolsCfg = nai.agentCfg.Tools
 	}
-	inst.toolPolicy.Store(agentToolsCfgToPolicy(cfg, agentToolsCfg))
+	inst.toolPolicy.Store(agentToolsCfgToPolicy(nai.cfg, agentToolsCfg))
 	return inst
 }
 
