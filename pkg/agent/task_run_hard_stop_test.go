@@ -27,8 +27,11 @@ import (
 )
 
 // stoppedTurnResult is the task result a stopped turn ends with: "Stopped: "
-// followed by the contract's plain message for a stopped turn.
-const stoppedTurnResult = "Stopped: This turn was stopped before it finished."
+// followed by the contract's plain message for a stopped turn. The message is
+// read from the catalogue, never pasted: a pasted copy goes stale silently the
+// moment the contract rewords it (pkg/api/generated's
+// TestLLMErrorMessages_NoHandCopiesOutsideTheCatalogue).
+var stoppedTurnResult = "Stopped: " + UserMessageForCode(CodeTurnCanceled)
 
 // blockingWorker's first request blocks until its context is cancelled; any
 // later request answers at once without claiming.
