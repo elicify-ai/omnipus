@@ -51,7 +51,7 @@ gen_go_func() {
 # gen_tsx_func <out> <func-name> <total-lines>: a .tsx file whose one
 # function spans exactly <total-lines> and returns JSX.
 gen_tsx_func() {
-  local out="$1" name="$2" total="$3" filler=$(( $3 - 3 )) i=0
+  local out="$1" name="$2" filler=$(( $3 - 3 )) i=0
   printf 'function %s() {\n' "$name" > "$out"
   while [ "$i" -lt "$filler" ]; do printf '  const v%d = %d;\n' "$i" "$i" >> "$out"; i=$((i + 1)); done
   { echo "  return (<div>ok</div>);"; echo "}"; } >> "$out"
@@ -126,6 +126,25 @@ if expect "(f) same body renamed to a hook (useThing)" 1; then
   # must be end-anchored: the fixture's own path (src/components/...)
   # contains the substring "component" too.
   grep -Eq ' component$' "$TMP/out" && { echo "selfcheck FAIL: (f) hook was misclassified as a component" >&2; FAIL=1; }
+fi
+
+# (g) a listed function that moved to a SIBLING file in the same package
+# (what a file split does) keeps its entry: listed under fixture_g_old.go,
+# now living in fixture_g_new.go, one line under its number, must pass.
+fresh_tree
+printf 'pkg/fixture_g_old.go\tMovedFunc\t300\n' >> "$TMP/budget.txt"
+gen_go_func "$TMP/tree/pkg/fixture_g_new.go" "MovedFunc" 299
+if expect "(g) listed function moved to a sibling file in the same package" 0; then
+  grep -q '^FAIL' "$TMP/out" && { echo "selfcheck FAIL: (g) unexpected FAIL line" >&2; FAIL=1; }
+fi
+
+# (h) the same function moved to ANOTHER package is not grandfathered.
+fresh_tree
+mkdir -p "$TMP/tree/pkg/other"
+printf 'pkg/fixture_h.go\tMovedFunc\t300\n' >> "$TMP/budget.txt"
+gen_go_func "$TMP/tree/pkg/other/fixture_h.go" "MovedFunc" 299
+if expect "(h) listed function moved to another package" 1; then
+  grep -q "not grandfathered" "$TMP/out" || { echo "selfcheck FAIL: (h) missing 'not grandfathered' FAIL line" >&2; FAIL=1; }
 fi
 
 if [ "$FAIL" -ne 0 ]; then

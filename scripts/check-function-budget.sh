@@ -21,6 +21,9 @@
 #   WARN <file:line> <name> <lines> > 240 component
 #   FAIL <file:line> <name> <lines> > 240 (not grandfathered)
 #   FAIL <file:line> <name> <lines> > listed <n>
+#   A listed entry matches by exact file+name, or by package directory+name
+#   so a function moved to a sibling file in the same package (a file split)
+#   keeps its grandfathered number. A move to another directory does not.
 #   grandfathered: <n> functions; components over 240: <m>   (always last)
 #
 # Exit: 0 clean or warn-only, 1 any FAIL, 2 the gate itself could not run
@@ -85,8 +88,16 @@ awk -v budget="$BUDGET" '
       if (line ~ /^[[:space:]]*(#|$)/) continue;
       n = split(line, f, "\t");
       if (n < 3) continue;
+      # Two keys per entry. Exact file+name first. Then package dir+name,
+      # so a grandfathered function that moves to a sibling file in the
+      # same package (a file split) keeps its entry; a move to another
+      # package does not. If two listed functions in one dir share a name,
+      # the dir key keeps the larger number (the exact key still wins).
       key = f[1] SUBSEP f[2];
       budget_lines[key] = f[3] + 0;
+      dir = f[1]; sub(/\/[^\/]*$/, "", dir);
+      dkey = dir SUBSEP f[2];
+      if (!(dkey in budget_dir) || f[3] + 0 > budget_dir[dkey]) budget_dir[dkey] = f[3] + 0;
       budget_count++;
     }
     close(budget);
@@ -119,8 +130,10 @@ awk -v budget="$BUDGET" '
 
     if (lines > 240) {
       key = file SUBSEP name;
-      if (key in budget_lines) {
-        blines = budget_lines[key];
+      dir = file; sub(/\/[^\/]*$/, "", dir);
+      dkey = dir SUBSEP name;
+      if (key in budget_lines || dkey in budget_dir) {
+        blines = (key in budget_lines) ? budget_lines[key] : budget_dir[dkey];
         if (lines > blines) {
           printf "FAIL %s %s %d > listed %d\n", filecolon, name, lines, blines;
           fail_count++;
