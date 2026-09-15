@@ -1,6 +1,6 @@
 # Draft architecture — module map and per-module CLAUDE.md
 
-**Status:** draft (shape agreed 2026-09-12; re-baselined 2026-09-15 after the library-improvements merge ff11e8249; not implemented, not an ADR, not a spec)
+**Status:** draft (shape agreed 2026-09-12; re-baselined 2026-09-15 after the library-improvements merge ff11e8249; size budgets ratified by the founder 2026-09-15; browser rows updated after PR #685; not implemented, not an ADR, not a spec)
 
 **Agreed so far**
 
@@ -10,6 +10,7 @@
 - `rest.go` file list (10 new `rest_*`; do not recreate tasks/workspaces/plans/auth). **Founder agreed 2026-09-12.**
 
 - Tools: channel grain (one package per family, not per `Name()`); dissolve `pkg/sysagent/tools` into product families. **Founder agreed 2026-09-12.**
+- Size budgets: a file warns at 2,000 lines and fails at 4,000; a function warns at 120 lines and fails at 240. Same numbers for production and test code. **Founder ruled 2026-09-15.** Test design in "How we enforce it" below.
 
 **Changes 2026-09-15** (validation after ff11e8249; every number below is re-measured against `release/v0.1.1` @ `1f996b01d`, not carried over):
 
@@ -22,7 +23,16 @@
 - `pkg/tools/` grew from 64 to 73 files (nine new). Two of the new ones (`goal_claim.go`, `set_goal.go`) were already in the `work/` family table. The other seven new files, plus four older files the 2026-09-12 pass missed, are assigned below: eleven assignments in total.
 - ADR numbers 067 and 068 each have three unrelated files today (see the docs map). Cite ADRs by title, not number alone.
 
-**Still open:** file-budget ratchet implementation; nested `CLAUDE.md` landing.
+**Changes 2026-09-15, second pass** (after PR #685, browser-improvements, merge `a809b838f`; a critical review of the first pass; and the founder's ruling on size budgets):
+
+- PR #685 touched nothing outside the browser module that this map measures: `loop.go`, `rest.go`, `chat.ts`, `api.ts`, `config.go`, `plan_engine.go`, `delegate.go` are line-for-line unchanged; `gateway.go` +4, `websocket.go` +2. Function counts, `rest_*.go` count, `pkg/tools` count and the root `CLAUDE.md` length all match.
+- PR #685 doubled the browser file count: `pkg/tools/browser` 51 to 110 non-test files, its `webrtc/` subpackage 8 to 25, `pkg/gateway/browser_*.go` 5 to 27. 81 new files, 9,174 lines, largest 667. The three browser rows in the giants tables are rewritten against that structure. `browser_webrtc.go` fell from 2,108 to 1,378 lines and leaves the list.
+- Lesson from PR #685, recorded in "How files grew": siblings were added but the two giants barely moved (`manager.go` +43 to 4,167, `live.go` -56 to 3,616). New code went to new files; old code stayed put. A ratchet that only blocks growth would have passed this. The warn threshold exists so the giants are named on every PR, not only when they grow.
+- Founder ruling on budgets (files warn 2,000 / fail 4,000; functions warn 120 / fail 240) replaces the earlier "target / hard" wording. "How we enforce it" is now a test design, with grandfather-list sizes measured at `d9a0c6941`.
+- A separate sizing study (`function-size-recommendation-2026-09-15.md`) added statement counts and nesting depth. Its proposed numbers are superseded by the ruling; its two durable findings are kept below: a statement-count signal for phase two, and the order of the first ten functions to bring down.
+- Review fixes: `pkg/library` versus `pkg/media/library` now stated the same way in both drafts; the unassigned-tools count corrected from nine to eleven; ADR-067/068 triples noted; founder decisions gathered in one table; function baseline linked by filename.
+
+**Still open:** the two budget scripts are designed below but not built; nested `CLAUDE.md` landing.
 
 **Decisions for the founder (2026-09-15), each with a recommendation:**
 
@@ -197,7 +207,7 @@ These pre-existing packages are not in the mermaid diagram or target-folders blo
 ## Sequence (after acceptance)
 
 1. Cut root `CLAUDE.md` and add the nested files above. No package moves.
-2. Install the file-budget ratchet (below). Grandfather the current giants so they may only shrink.
+2. Install both budget scripts and their self-checks (design below). Commit the two grandfather lists. From this step on every PR names the giants it touches, and nothing new may exceed the fail line.
 3. Split `rest.go` along the section comments that already exist (Sessions, Agents, uploads). Lowest risk: same package, same type, new files.
 4. Split `src/lib/api.ts` the same way (one client file per module).
 4b. Knowledge Base module: apply D1 and D2. Promote `src/components/library/knowledge/` to `src/components/knowledge/`, add the two nested `CLAUDE.md` files, and sort the `rest_knowledge*` / `rest_library*` handlers into the module when step 5 moves domain REST out of the gateway. No Go package moves before D1 is ratified.
@@ -220,6 +230,8 @@ The same pattern, four times, all grown since 2026-09-12:
 | `src/store/chat.ts` | 6,695 | 6,250 | One Zustand store for messages, streaming, tool-result clamping, buckets |
 
 Go does **not** require this. Methods of the same type may live in many files in the same package. `net/http` does it. We already do it for REST (`rest_tasks.go` is `restAPI` methods that used to belong in `rest.go`). The missing rule is: **the next function goes in the file whose one-sentence job matches, not the file that already compiles.**
+
+PR #685 (browser-improvements, merged 2026-09-15) shows the second half of the problem. It added 81 browser files and 9,174 lines, all of them small and well named. `manager.go` still grew by 43 lines and `live.go` shrank by only 56. Putting new code in new files is necessary but not sufficient: the old code has to leave the giant too, or the giant stays a giant forever. That is why the budget below warns on every file over 2,000 lines on every PR, and does not only fail on growth.
 
 ## How to split (same package, same type, new file)
 
@@ -305,7 +317,7 @@ Files: `base.go`, `registry.go`, `builtin_registry.go`, `compositor.go`, `result
 
 | Package | Tool names | Files in (today) | Split inside |
 |---|---|---|---|
-| `browser/` | ~18 browser tools | already `pkg/tools/browser/` | `manager.go` (4,124) and `live.go` (3,672) later |
+| `browser/` | ~18 browser tools | already `pkg/tools/browser/` (110 files after PR #685) plus `pkg/tools/browser/webrtc/` (25 files) | `manager.go` (4,167) and `live.go` (3,616) still need their remaining cuts; see the giants tables |
 | `delegate/` | `delegate` | `delegate.go` | `run.go` / `status.go` / `followup.go` / `park.go` |
 | `shell/` | `bash` | `shell.go`, `shell_guard.go`, `shell_subst_guard.go`, `shell_process_*` | `shell.go` vs `shell_bg.go` |
 | `fs/` | `read_file`, `write_file`, `list_directory`, `edit_file`, `append_file`, `request_mount`, `list_mounts` | `filesystem.go`, `edit.go`, `resolvepath.go`, `fserrors.go`, `path_audit.go`, `list_mounts.go`, `request_mount.go` | `resolvepath` stays shared; `filesystem.go` only if still over 800 |
@@ -419,7 +431,7 @@ Lines re-measured 2026-09-15 (`wc -l` against `release/v0.1.1` @ `1f996b01d`); p
 | `pkg/config/config.go` | 5,278 (was 5,171) | `config.go` (`Config` + load/save); `config_agents.go`; `config_gateway.go`; `config_retention.go` (memory/compaction helpers) |
 | `src/lib/api.ts` | 5,939 (was 5,023) | `api/agents.ts`, `api/sessions.ts`, `api/workspaces.ts`, `api/tasks.ts`, `api/plans.ts`, `api/channels.ts`, `api/skills.ts`, `api/config.ts` — barrel re-export only in `api.ts` |
 | `pkg/tools/delegate.go` | 4,145 (was 4,026) | `delegate/run.go`, `status.go`, `followup.go`, `park.go` (family package) |
-| `pkg/tools/browser/manager.go` | 4,124 (was 4,102) | `manager.go` (construct, config); `manager_tabs.go`; `manager_lease.go` |
+| `pkg/tools/browser/manager.go` | 4,167 (was 4,124 before PR #685) | PR #685 already added six `manager_*.go` siblings (`manager_live_commands.go` 288, `manager_session_context.go`, `manager_tab_serialization.go`, `manager_local_startup.go`, `manager_lifecycle_fencing.go`, `manager_click_tabs.go`), but took only new code there. Remaining cut out of `manager.go` itself: `manager.go` (construct, config, pool wiring); `manager_tabs.go` (tab open/close/switch, still inside the giant); `manager_lease.go` (workspace lease and ownership). Name the cuts against the siblings that exist; do not add a seventh sibling for new code while the giant keeps its old code. |
 
 ### 2,000–4,000 — dest files
 
@@ -428,7 +440,7 @@ Lines re-measured 2026-09-15; prior (2026-09-12) value in parentheses where it d
 | Today | Lines | Becomes |
 |---|---|---|
 | `pkg/coreagent/core.go` | 3,992 (was 3,434) — **8 lines under the 4,000 hard ceiling; flagging, not yet over** | `core.go` (roster literals, All/BaseAgents); `seed.go` (`SeedConfig`); `seed_system.go` (Judge / Plan Supervisor) |
-| `pkg/tools/browser/live.go` | 3,672 (was 3,590) | `live.go` (registry, attach/detach); `live_viewport.go`; `live_idle.go` (sweeper / stand-down) |
+| `pkg/tools/browser/live.go` | 3,616 (was 3,672 before PR #685) | PR #685 added ten `live_*.go` siblings (`live_input_context.go` 667, `live_document_frame.go` 562, `live_viewport_frame.go` 338, and seven under 120 lines). Same pattern: new behaviour in siblings, old behaviour still in the giant. Remaining cut: `live.go` (registry, attach/detach); `live_idle.go` (sweeper / stand-down); fold the old viewport code into the existing `live_viewport_frame.go` / `live_viewport_context.go` rather than a new `live_viewport.go`. |
 | `src/components/chat/ChatScreen.tsx` | 3,607 (was 3,457) | `ChatThread.tsx`; `ChatComposer.tsx`; `ChatScreen.tsx` (shell) |
 | `pkg/gateway/rest_tasks.go` | 3,489 (was 3,165) | `rest_tasks.go` (list/get/create/update); `rest_task_wire.go` (criteria/DoD mapping). Drop the previously-proposed `rest_task_runs.go` — it already exists (224 lines, start/runs) as of this merge. |
 | `pkg/vaultimport/infer.go` | 3,279 (new to this map, existed 2026-09-12) | Mixes observation-collection (`LoadNotes`, `BuildNameIndex`, `CollectTypeGroups`) with type classification (`InferSchema`, `classifyProperty`). Split: `infer_collect.go` (collection/indexing) + `infer_classify.go` (schema classification). |
@@ -451,7 +463,7 @@ Lines re-measured 2026-09-15; prior (2026-09-12) value in parentheses where it d
 | `pkg/channels/manager.go` | 2,180 (unchanged) | shrink by `RegisterFactory` per channel; leftover is start/stop only |
 | `pkg/gateway/rest_workspaces.go` | 2,146 (was 2,138) | `rest_workspaces.go` (CRUD); `rest_workspace_team.go` (delegation/team) |
 | `pkg/knowledge/knowledge_edit.go` | 2,051 (new to this map) | **Leave, one job** — its own header explicitly rules out a further split: unlike `knowledge_describe.go`/`knowledge_read.go`, this file already imports `pkg/tools` transitively through the mutation preamble, so there is no clean boundary left to cut along. |
-| `pkg/gateway/browser_webrtc.go` | 2,108 (unchanged) | `browser_webrtc.go` (signaling); `browser_webrtc_session.go` |
+| `pkg/gateway/browser_webrtc.go` | 1,378 (was 2,108; PR #685 moved input handling to `browser_dedicated_input.go` 483, `browser_input_timing.go` 302, `browser_command_queue.go` 215 and others) | Off the list. One job, under 2,000. |
 
 ### Order of work
 
@@ -473,31 +485,101 @@ If you need the word “and” to describe the file, it is two files. Same packa
 
 **Size is a ceiling, not a reason to dice a good file.**
 
-| | Why | Production | Tests |
+## Size budgets (founder ruling, 2026-09-15)
+
+Two levels for each unit. **Warn** means the check prints the offender on every PR and in the local `make lint` output, but does not fail the build. **Fail** means the build is red. Production and test code use the same numbers.
+
+| Unit | Warn (named on every PR) | Fail (build red) | Why these numbers |
 |---|---|---|---|
-| Target | One Read in this Claude Code harness (2,000-line default) | 2,000 lines | 3,000 lines |
-| Hard | Two Reads; new files must not exceed; old giants must not grow | 4,000 lines | 6,000 lines |
+| File | over 2,000 lines | over 4,000 lines | 2,000 is one Read call in the Claude Code harness; 4,000 is two. Past two, an agent cannot hold the file. |
+| Function | over 120 lines | over 240 lines | 120 is the `funlen` threshold the repo already configured; 97% of functions fit under it today. 240 is two of those; only the real tail is above it. |
 
-A 1,200-line file that is only session HTTP is allowed. A 1,200-line file that is sessions *and* agents *and* uploads is not.
+A function or file that is over the fail line **today** is grandfathered by name and may only shrink. A **new** function or file must be under the fail line, full stop. Warnings are informational for old code and a review prompt for new code: a new 150-line function is legal, but the reviewer sees it named.
 
-**A giant function is its own violation.** Splitting `loop.go` did not help `runTurn` (~4,400 lines): Grep still needs two Reads. Extract helpers until a function fits in one Read. (`funlen` is configured at 120 lines/40 statements in `.golangci.yaml` but is **disabled** — it sits in `linters.disable` and is excluded again in `issues.exclude-rules`, so it does not run at all today, on these files or any others. Function-length baseline: `function-length-baseline-2026-09-15.md` in this folder. 315 Go and 184 TypeScript production functions exceed 120 lines; the longest are `AgentLoop.runTurn` at 4,364 lines and the single Zustand `create` call in `src/store/chat.ts` at 4,568.)
+What that costs today, measured at `release/v0.1.1` @ `d9a0c6941` with the scanners in `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/` (full lists in `function-length-baseline-2026-09-15.md`):
 
-**Do not** create a dozen tiny files for one feature. That is the other way to lose the agent.
+| Set | Warn (over 2,000 lines / 120 lines) | Fail, becomes the grandfather list (over 4,000 / 240) |
+|---|---|---|
+| Production files | 34 | 10 (`loop.go`, `rest.go`, `chat.ts`, `gateway.go`, `websocket.go`, `plan_engine.go`, `api.ts`, `config.go`, `browser/manager.go`, `delegate.go`) |
+| Test files | 17 | 0 (the only test file over 4,000 is `pkg/api/generated/contract_test.go`, which is generated and skipped) |
+| Go production functions | 315 | 70 (26 in `pkg/gateway`, 16 in `pkg/agent`, 8 in `pkg/tools`, 5 in `pkg/sysagent/tools`, 15 elsewhere) |
+| Go test functions | 281 | 20 |
+| TS production functions | 184 | 83 (mostly whole React components written as one function) |
+| TS test functions | 214 | 36 |
 
-## How we enforce it (mechanical, not hope)
+So the initial grandfather lists hold 10 files and 209 functions. Both lists only shrink.
 
-Prose in `CLAUDE.md` will not hold. Same pattern as `scripts/check-no-jpeg-screencast.sh`.
+**What is exempt by construction:** `pkg/api/generated/`, `src/lib/api/generated/`, `pkg/gateway/spa/`, `node_modules/`, `dist/`, `.gitnexus/`. Nothing else. Data literals such as `DefaultConfig` (1,003 lines, 3 statements) and `coreAgentSeed` (1,060 lines, 76 statements) are **not** exempt; they go on the grandfather list like everything else and come down by splitting the literal per agent or per section. An exemption for "data" would become the place every long function claims to be, and the sizing study found that statement count cannot reliably tell data from logic either (`coreAgentSeed` builds its table with individual assignments).
 
-1. **`scripts/check-file-budget.sh` in CI** (`make lint` / PR workflow), skip `generated/`, `spa/`, `node_modules/`:
-   - New production file > 4,000 lines → fail.
-   - File on the grandfather list → fail if `wc -l` is **higher** than the listed number. Shrink is allowed. Drop off the list when under 4,000.
-   - New files never join the list.
-2. **Grandfather list** starts as today’s files already over 4,000 (`loop.go`, `rest.go`, `gateway.go`, `websocket.go`, `plan_engine.go`, `config.go`, `chat.ts`, `api.ts`, `delegate.go`, `browser/manager.go`, `browser/live.go`, …). The list only shrinks.
-3. **Function ratchet** (separate, or the same script): `runTurn` and any function over 2,000 lines listed by name/size; they may not grow; they leave the list when under 2,000. Do not turn `funlen` 120 on for the whole tree in one go — it would fail hundreds of files and block shipping.
-4. **Review:** “Does this belong in this file’s one-sentence job?” After `rest_sessions.go` exists, a new session handler in `rest.go` is a reject. The script is the backstop; this is the human check.
-5. **Root `CLAUDE.md` gets two lines**, not an essay: the one-job rule + “do not add to a grandfathered file; extract first.”
+**Function length is the whole span**, from the `func` keyword or the signature to the closing brace, blank lines and comments included. That is what the harness reads, so that is what counts. It is a stricter reading than `funlen` with `ignore-comments`, and it is deliberately simple: `wc -l` on the span, no judgement calls.
 
-The splitter at `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` is the mechanical *how* for a cut, not the gate. The gate is CI.
+**Phase two, not now: statement count as a second warn signal.** The sizing study measured every Go function's statement count as well as its lines. Of the 315 Go functions over 120 lines, 288 are also over 40 statements, so the two signals mostly agree. But 325 functions are under 120 lines and over 40 statements: dense code packed tight, which a line count alone never names (`BrowserPool.Acquire` is 117 lines and 84 statements). Once the line-based ratchet has run for a release, add "over 40 statements" as a second **warn-only** line in the same gate. Not a fail line, not yet: it would add 325 entries to a list that is supposed to visibly shrink. `gocognit` (25) and `gocyclo` (20) are also configured and disabled in `.golangci.yaml`; they stay off until one of them has been run against this tree at least once.
+
+## How we enforce it (test design)
+
+Prose in `CLAUDE.md` will not hold, and a linter can be switched off in one YAML line without anyone noticing, which is exactly what happened to `funlen`. The gate is two scripts in CI, each with a self-check that proves the gate can still see a failure. Same family as `scripts/check-no-jpeg-screencast.sh` and the `check-no-removed-providers.sh` / `-selfcheck.sh` pair.
+
+### Files
+
+| Piece | Path | What it does |
+|---|---|---|
+| Gate | `scripts/check-file-budget.sh` | Walks production and test source (Go, TS, TSX), skips the exempt dirs, runs `wc -l`. Prints every file over 2,000 as `WARN`. Fails on any file over 4,000 that is not on the grandfather list, and on any listed file whose count is higher than its listed number. |
+| Grandfather list | `scripts/budgets/files.txt` | One line per file: `path<TAB>lines`. Starts with the 10 files above. A PR that shrinks a file updates its number in the same commit; a PR may delete a line; no PR may add a line or raise a number. |
+| Self-check | `scripts/check-file-budget-selfcheck.sh` | Builds a temp tree with three fixtures and runs the gate against it: a 4,001-line file not on the list must fail; a listed file whose real count is one line under its listed number must pass; a listed file one line over must fail. Any other outcome fails the self-check. |
+
+### Functions
+
+| Piece | Path | What it does |
+|---|---|---|
+| Scanner | `scripts/funlen/` (Go program, `go run ./scripts/funlen`) and `scripts/tsfunlen.cjs` | Ports of the bench scanners into the repo. Go: `go/ast` walk of every `*.go`, span per `FuncDecl`. TS: TypeScript compiler API walk of `src/**/*.ts(x)`, span per function declaration, method, function expression, arrow function, constructor, accessor. Output: `lines<TAB>file:line<TAB>name`, longest first. No third-party dependency beyond the repo's own `typescript`. |
+| Gate | `scripts/check-function-budget.sh` | Runs both scanners. Prints every function over 120 as `WARN`. Fails on any function over 240 that is not on the grandfather list, and on any listed function whose span is higher than its listed number. |
+| Grandfather list | `scripts/budgets/functions.txt` | One line per function: `file<TAB>qualified name<TAB>lines`. Keyed by name, not line number, so a function that moves within a file or to a sibling file in the same package keeps its entry. Starts with the 209 functions above. Only shrinks. |
+| Self-check | `scripts/check-function-budget-selfcheck.sh` | Temp Go package and temp TS file with fixtures: a 241-line unlisted function must fail; a listed function one under its number must pass; one over must fail; a 121-line unlisted function must produce exactly one `WARN` line and exit 0. |
+
+### Wiring, three places, none optional
+
+| Where | What |
+|---|---|
+| `Makefile` | `make lint-budgets` runs the two self-checks first, then the two gates. `make lint` depends on it. |
+| `.github/workflows/pr.yml` | Two steps in the lint job, self-check before gate, next to the existing `check-no-removed-providers` pair at lines 907 and 914. |
+| `deploy/ci-worker/runci.sh` | Added to the `lint` gate so the Fly worker and GitHub agree. |
+
+### Output contract
+
+- Exit 0 with no output when clean. Exit 0 with `WARN` lines when only warnings. Exit 1 with `FAIL` lines when any fail.
+- One line per finding, machine-readable: `WARN file:line function 153 > 120` or `FAIL file 4,212 > 4,000 (not grandfathered)` or `FAIL file:line function 1,502 > listed 1,489`.
+- The gate prints its own grandfather-list size at the end (`grandfathered: 10 files, 209 functions`) so a shrinking list is visible in every CI log, and a list that stopped shrinking is visible too.
+
+### What the tests prove and what they do not
+
+- The self-checks prove the gate can fail. A green gate with a broken scanner is the false-green pattern this repo has already been bitten by; the self-check is the answer to "could the instrument have seen it".
+- They do not prove the split was a good one. A 240-line function cut into three 80-line functions with the same tangled state is legal and bad. That stays a review question: "one file, one job; one function, one job".
+- They do not replace `funlen`. Re-enabling `funlen` at 120 remains possible later as a second opinion, but it must not be the only gate, because it can be disabled silently.
+
+### First ten functions to bring under 240, in order
+
+From the sizing study, ordered by cost and risk, not by size alone:
+
+| # | Function | Lines | Why in this position |
+|---|---|---|---|
+| 1 | `pkg/config/defaults.go::DefaultConfig` | 1,003 | One literal, 3 statements. Split per config section. Cheapest win. |
+| 2 | `pkg/coreagent/core.go::coreAgentSeed` | 1,060 | A policy table. Split per agent. |
+| 3 | `pkg/agent/loop.go::runTurn` | 4,364 | Largest by three times; the extraction plan already exists above. |
+| 4 | `pkg/agent/subturn.go::spawnSubTurn` | 1,489 | Second largest; carries the ADR-032 identity contract, so it is reviewed on every touch anyway. |
+| 5 | `pkg/agent/loop.go::registerSharedTools` | 1,346 | Pure wiring; split by tool family. |
+| 6 | `pkg/gateway/gateway.go::setupAndStartServices` | 1,258 | Sequential setup, nesting depth 2; one helper per service. |
+| 7 | `pkg/gateway/websocket.go::eventForwarder` | 1,231 | Already has named closures inside; the seams are drawn. |
+| 8 | `pkg/gateway/gateway.go::RunContextWithOptions` | 1,090 | Matches the planned `gateway_boot.go` cut. |
+| 9 | `pkg/gateway/rest.go::HandleProviders` | 1,041 | A method-and-path switch; each case is a handler. |
+| 10 | `pkg/gateway/rest.go::updateAgent` | 999 | Most-touched REST handler; earliest day-to-day payoff. |
+
+Also from the study: `pkg/tools/task.go::TaskUpdateTool.Execute` (397) and `pkg/sysagent/tools/task.go::TaskUpdateTool.Execute` (392) are near-duplicates. The `sysagent` dissolution above removes one of them for free.
+
+### Root `CLAUDE.md` gets three lines
+
+The one-job rule; "a file warns at 2,000 and fails at 4,000, a function warns at 120 and fails at 240"; "do not add to a grandfathered file or function, extract first". No essay.
+
+The splitter at `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` is the mechanical *how* for a file cut, not the gate. The gate is CI.
 
 ## Out of scope until a later draft
 

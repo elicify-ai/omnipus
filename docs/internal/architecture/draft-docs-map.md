@@ -5,9 +5,10 @@
 **Do not:** rewrite user guides or delete `.preview-doc/` until this is accepted.
 
 **Changes 2026-09-15** (re-validation after `ff11e8249` landed on `release/v0.1.1`):
+- Second pass after PR #685 (browser-improvements, `a809b838f`): no user handbook file changed, no stale-text line moved. PR #685 added 78 loose investigation notes at the root of `docs/internal/` (`browser-*-2026-09-*.md`, `runtime-latency-validation.md`) and one more ADR-081 ("dedicated browser input connection"). Archive rule and ADR notes below updated; ADR file count is now 151.
 - Every stale-text citation re-checked line by line against `1f996b01d`; all 14 line numbers in the two tables below held exactly, no drift found.
 - Knowledge Base moved from a TBD placeholder to a scoped new page, and to **step 1** of the Sequence — it's now the single biggest documentation hole, bigger than the Workspaces rewrite.
-- ADR and spec counts refreshed (150 ADRs, 198 specs, both higher than the 2026-09-12 estimate).
+- ADR and spec counts refreshed (151 ADR files covering 86 distinct numbers, 198 specs counting subfolders, both higher than the 2026-09-12 estimate).
 - Nine more product-surface rows added to the gaps table, each confirmed against `pkg/gateway/rest_*.go` or `src/components/`: Knowledge base, Library preview of knowledge markdown, sign-in / Copilot sign-in, host folders / mounts, automations (redirect, already tracked — no new page needed), mailbox, audit log, god mode, rate limits / retention. Voice was already listed; its shipped status is now confirmed with file citations.
 - `docs/tools-reference.md` L25 row corrected: "all five" is five *filesystem tools*, not five agents — dropped as a stale-agent-count finding.
 - Noted that ADR numbers renumbered again on 2026-09-15 (commit `1f996b01d`) after the merge collided two ADR-081s and two ADR-082s — cite ADR title alongside number everywhere in this doc that a bare number could go stale.
@@ -16,7 +17,7 @@
 
 | Bucket | Where | Stance |
 |---|---|---|
-| ADRs | `docs/internal/architecture/ADR-*.md` (150 as of 2026-09-15, `ls docs/internal/architecture/ADR-*.md \| wc -l`) | **Truth.** Continuously maintained. Code + ADR on conflict: code still wins, but these explain *why*. |
+| ADRs | `docs/internal/architecture/ADR-*.md` (151 files as of 2026-09-15 after PR #685, `ls docs/internal/architecture/ADR-*.md \| wc -l`; 86 distinct numbers once review rounds and number collisions are folded) | **Truth.** Continuously maintained. Code + ADR on conflict: code still wins, but these explain *why*. |
 | Specs | `docs/internal/specs/` (198 as of 2026-09-15, `find docs/internal/specs -name '*.md' \| wc -l`) | **Truth for in-flight work.** Maintained with the features they describe. |
 | Wire contracts | `contracts/` | **Machine truth.** CI (`make verify-contracts`) already gates drift. |
 | Agent-facing | root `CLAUDE.md` | Operating rules for agents — fat, separate problem (module-map draft). |
@@ -128,7 +129,7 @@ The 2026-09-12 pass marked `knowledge.md` a placeholder because nothing was spec
 - ADR-089 — "Rename 'vault' to 'Knowledge Base', in three staged phases" (`ADR-089-rename-vault-to-knowledge-base.md`)
 - ADR-067 — "Omnipus knowledge base and render-first preview" (`ADR-067-omnipus-knowledge-base-and-render-first-preview.md` — two more, unrelated ADR-067 files also exist: "CI design and build targets" and "registry-fed catalog and provider identity")
 - ADR-068 — "Vault records: typed record layer" (`ADR-068-vault-records-typed-record-layer.md` — two more, unrelated ADR-068 files also exist: "bash text guard, third rule layer" and "subscriptions, provider deletion and provider UX")
-- ADR-081 — "Unified Library search, general file search, and the grep engine" (`ADR-081-unified-library-search-and-grep-engine.md` — this is the ADR-081 that *kept* its number in the 2026-09-15 renumber)
+- ADR-081 — "Unified Library search, general file search, and the grep engine" (`ADR-081-unified-library-search-and-grep-engine.md` — this is the ADR-081 that *kept* its number in the 2026-09-15 renumber; PR #685 then added a second, unrelated ADR-081, "dedicated browser input connection")
 - ADR-083 — "Embedded content in knowledge-base notes" (`ADR-083-embedded-content-in-knowledge-base-notes.md`), amended by a second ADR-083 covering record creation over REST and the `.seq` identifier allocator
 
 **What shipped, in specs** (`docs/internal/specs/`, roughly 18 files once review rounds are counted): `adr-067-knowledge-base-and-preview-spec.md`, `vault-records-spec-2026-08-25.md`, `unified-search-and-grep-spec.md`, `view-kinds-design-2026-09-03.md`, `library-b-c-design-2026-09-07.md`, `library-spec.md`, `library-improvements-requirements-2026-08-21.md`, `workspace-media-library-and-presentation-layer-spec.md`, plus UAT findings (`uat-vault-records-2026-08-28.md`, `uat-library-records-2026-08-26.md`, `uat-findings-view-kinds-2026-09-05.md`) and an implementation plan (`vault-records-implementation-plan-2026-08-28.md`). Several of these have 2-6 numbered "review round" siblings — write from the base spec, skim the review rounds only for ratified changes.
@@ -188,7 +189,7 @@ Internal:
 | `architecture/ADR-*` | `docs/internal/BRD/` (delete; optional archive tombstone) |
 | `specs/` | `.preview-doc/` (after handbook rewrite) |
 | `architecture/AS-IS-architecture.md` (stamp frozen or refresh) | `design/*-2026-05.md` → `_archive/` |
-| | Root `HANDOVER-*`, `*-rootcause-*` → `_archive/` or the closing issue |
+| | Root `HANDOVER-*`, `*-rootcause-*`, and the dated evidence notes `browser-*-2026-09-*.md` / `runtime-*.md` (78 files from PR #685, plus the earlier `browser-*-2026-07-*` pair) → `_archive/` or the closing issue. Evidence for a merged PR belongs in git history and the PR, not at the root of the internal tree. |
 
 ## Sequence (after acceptance)
 
