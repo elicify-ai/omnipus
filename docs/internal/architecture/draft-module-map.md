@@ -59,7 +59,30 @@ Files over 4,000: 10 → 8. Grandfather lists lowered in the same commits.
 | `pkg/knowledge/index.go` | 3,177 | 1,896 | `index_query.go`, `index_persist.go` |
 | `pkg/session/unified.go` | 2,384 | 950 | `unified_list.go` 560, `unified_write.go` 902 |
 
-Every lane: build, vet, gofmt clean; package-wide `^func` multiset identical (apart from named test helpers); sorted test inventory identical; scoped tests green; both gates exit 0. Lanes took 11 to 29 minutes each; no usage-limit signal. Files over 4,000 after batch 1: **4** (`loop.go`, `config.go`, `websocket.go`, `chat.ts`). Splitter fix from this batch: tests from an external test package (`package x_test`) now land in `<stem>_ext_test.go`; previously `-tests` would have produced an import cycle. Batch 2 (twelve lanes) launched the same day. Tools: `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` (Go) and `ts/tssplit.cjs` (TypeScript), mappings alongside.
+Every lane: build, vet, gofmt clean; package-wide `^func` multiset identical (apart from named test helpers); sorted test inventory identical; scoped tests green; both gates exit 0. Lanes took 11 to 29 minutes each; no usage-limit signal. Files over 4,000 after batch 1: **4** (`loop.go`, `config.go`, `websocket.go`, `chat.ts`). Splitter fix from this batch: tests from an external test package (`package x_test`) now land in `<stem>_ext_test.go`; previously `-tests` would have produced an import cycle. Batch 2 (twelve lanes) launched the same day.
+
+**Wave 1, batch 2 (2026-09-15, twelve GLM 5.3 lanes, all merged with `[skip ci]`):**
+
+| File | Before | After |
+|---|---|---|
+| `pkg/gateway/websocket.go` | 6,221 | under 2,000 (`websocket_pump.go` 2,775 holds `eventForwarder`); off the list |
+| `pkg/gateway/rest_tasks.go` | 3,499 | 2,077 (`rest_task_wire.go`, appends to `rest_task_runs.go`) |
+| `pkg/gateway/browser_ws.go` | 2,487 | 2,308 (`browser_ws_input.go`) |
+| `pkg/gateway/rest_library.go` | 2,141 | under 2,000 (`rest_library_write.go`) |
+| `pkg/gateway/rest_workspaces.go` | 2,125 | 1,901 (`rest_workspace_team.go`) |
+| `pkg/agent/task_executor.go` | 3,129 | under 2,000 (`_run`, `_judge`) |
+| `pkg/agent/turn.go` | 2,718 | under 2,000 (`turn_exit.go`, `turn_stream.go`, `turn_transcript.go`) |
+| `pkg/agent/subturn.go` | 2,605 | 2,195 (`subturn_identity.go`, `subturn_result.go`; `spawnSubTurn` 1,489 stays whole) |
+| `pkg/tools/shell.go` | 2,736 | under 2,000 (`shell_bg.go`, `shell_path_guard.go`) |
+| `pkg/tools/task.go` | 2,256 | under 2,000 (`task_query.go`) |
+| `pkg/tools/browser/live.go` | 3,616 | under 2,000 (`live_idle.go`, viewport and input siblings) |
+| `pkg/vaultimport/infer.go` | 3,279 | under 2,000 (`infer_collect.go`, `infer_classify.go`, `infer_base.go`) |
+
+Two same-package lanes (turn, subturn) collided on shared test files; resolved by regenerating `subturn_test.go` from the pre-lane base minus the tests that moved, receiver-aware, with the package test-function multiset proven equal to base plus helpers.
+
+**Comment loss found and repaired.** The lanes' "nothing dropped" checks count functions, not comments. An audit of every split (`0ea1b81b7..HEAD`) found 603 comment lines removed and never re-added. Cause: the splitter rebuilt each rewritten file from its package clause plus declarations, dropping any comment block between `package` and `import`. Fixed in the splitter (preamble now extends to the import block, both code paths, proven on a fixture) and repaired on the tree: 410 lines re-inserted verbatim from the pre-split versions across 21 files (`ae84ddf84`). The remainder are headers of test files deleted because every test in them moved, plus the ADR-082 key doc removed on purpose. **Rule added to the recipe:** a split's proof must include a comment-line audit (`git diff <base> | grep '^-//'` minus `grep '^+//'`), not only the function multiset.
+
+After batch 2: production files over 2,000: **22** (was 34); over 4,000: **3**, each dominated by one function (`loop.go::runTurn`, `config.go`, `chat.ts` store `create` call). Tools: `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` (Go) and `ts/tssplit.cjs` (TypeScript), mappings alongside.
 
 **Still open:** the remaining four files over 4,000 (`config.go` second cut, `websocket.go` in batch 2, `chat.ts` and `runTurn` are judgment work); batch 2 lanes; nested `CLAUDE.md` landing; the one CI pass and the red jobs it will show.
 
