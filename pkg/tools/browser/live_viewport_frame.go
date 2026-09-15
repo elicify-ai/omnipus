@@ -165,7 +165,13 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 		}
 		if cs != nil {
 			before := cs.FrameState()
-			if before.Width == width && before.Height == height && before.Scale == scale {
+			_, target, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
+			if err != nil {
+				return false, fmt.Errorf("viewport no-op target lookup: %w", err)
+			}
+			// A different target cannot reuse the previous picture, even at
+			// identical dimensions. Invalidate it through the resize path first.
+			if before.TargetID == string(target) && before.Width == width && before.Height == height && before.Scale == scale {
 				measured, err := lv.measureCaptureFrame(operation, cs)
 				if err != nil {
 					return false, fmt.Errorf("viewport initial geometry: %w", err)
