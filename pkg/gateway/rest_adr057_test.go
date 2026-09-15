@@ -150,10 +150,31 @@ func TestU18FourFilterSites_NoLongerCallTheFilter(t *testing.T) {
 	root := u18RepoRoot(t)
 	sites := map[string]string{
 		"pkg/gateway/replay.go":              filepath.Join(root, "pkg", "gateway", "replay.go"),
-		"pkg/gateway/rest.go":                filepath.Join(root, "pkg", "gateway", "rest.go"),
 		"pkg/agent/verifier_adjudication.go": filepath.Join(root, "pkg", "agent", "verifier_adjudication.go"),
 		"pkg/tools/inspect_session.go":       filepath.Join(root, "pkg", "tools", "inspect_session.go"),
 	}
+
+	// The fourth site was "pkg/gateway/rest.go". Naming that one file pins the
+	// check to a filename rather than to the handler it guards: once rest.go is
+	// split by domain (docs/internal/architecture/draft-module-map.md) the
+	// getSession/getSessionMessages call sites live in a sibling rest_*.go, and
+	// a check that still reads only rest.go would pass while covering none of
+	// them. Enumerate the whole non-test rest*.go family instead, so the pin
+	// follows the code across any future split.
+	restSources, err := filepath.Glob(filepath.Join(root, "pkg", "gateway", "rest*.go"))
+	require.NoError(t, err, "glob pkg/gateway/rest*.go")
+	restCount := 0
+	for _, p := range restSources {
+		if strings.HasSuffix(p, "_test.go") {
+			continue
+		}
+		sites["pkg/gateway/"+filepath.Base(p)] = p
+		restCount++
+	}
+	require.GreaterOrEqualf(t, restCount, 10,
+		"expected the pkg/gateway rest*.go family to have many non-test sources; found %d — "+
+			"a glob this small means the walk is broken and the assertions below would pass vacuously",
+		restCount)
 	for name, path := range sites {
 		src, err := os.ReadFile(path)
 		require.NoErrorf(t, err, "read %s", name)

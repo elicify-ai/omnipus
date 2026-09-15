@@ -5,7 +5,6 @@
 package gateway
 
 import (
-	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -19,21 +18,25 @@ import (
 // and had to be fixed in b95edc4; the test is the structural defense so it
 // never recurs.
 //
-// Implementation: scan the compiled `rest.go` source for every
+// Implementation: scan every non-test `rest*.go` source for each
 // `cm.RegisterHTTPHandler("<pattern>", ...)` call and assert each literal
-// pattern appears at most once across the entire file.
+// pattern appears at most once across the whole family.
+//
+// The scan reads the rest*.go FAMILY rather than rest.go alone so that
+// splitting rest.go by domain cannot silently narrow it — a registration that
+// moves to a sibling file must stay under the same uniqueness rule, and a
+// scan pinned to one filename would simply stop seeing it. Comment lines are
+// stripped first because rest_library.go quotes two registration calls in a
+// doc comment, which a raw text scan counts as real.
 func TestRegisterHTTPHandler_NoDuplicatePatterns(t *testing.T) {
-	data, err := os.ReadFile("rest.go")
-	if err != nil {
-		t.Fatalf("read rest.go: %v", err)
-	}
+	data := stripLineCommentsForTest(readRestSourcesForTest(t))
 
 	// Match cm.RegisterHTTPHandler( followed by a quoted pattern.
 	// Captures the pattern string between the quotes.
 	re := regexp.MustCompile(`cm\.RegisterHTTPHandler\(\s*"([^"]+)"`)
-	matches := re.FindAllStringSubmatch(string(data), -1)
+	matches := re.FindAllStringSubmatch(data, -1)
 	if len(matches) == 0 {
-		t.Fatalf("expected at least one RegisterHTTPHandler call in rest.go; regex pattern may be stale")
+		t.Fatalf("expected at least one RegisterHTTPHandler call in the rest*.go sources; regex pattern may be stale")
 	}
 
 	counts := make(map[string]int, len(matches))
@@ -49,7 +52,7 @@ func TestRegisterHTTPHandler_NoDuplicatePatterns(t *testing.T) {
 	}
 	if len(duplicates) > 0 {
 		t.Fatalf(
-			"rest.go registers these patterns more than once — the last registration silently wins and can strip middleware (e.g. RequireNotBypass):\n  %s",
+			"the rest*.go sources register these patterns more than once — the last registration silently wins and can strip middleware (e.g. RequireNotBypass):\n  %s",
 			strings.Join(duplicates, "\n  "),
 		)
 	}
