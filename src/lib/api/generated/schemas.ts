@@ -3732,6 +3732,7 @@ export const SignInStatus = z.object({
   state: z.enum(["not_signed_in", "pending", "signed_in", "expired"]),
   account_label: z.string().max(128).optional(),
   expires_at: z.string().datetime({ offset: true }).optional(),
+  reason: z.string().max(200).optional(),
 });
 export const SignInPollRequest = z.object({
   device_auth_id: z.string().min(1).max(64),
@@ -10185,6 +10186,16 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         status: 401,
         description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
         schema: ErrorResponse,
       },
       {

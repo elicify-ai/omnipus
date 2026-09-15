@@ -17274,6 +17274,9 @@ type SignInStatus struct {
 	// ExpiresAt The access token's expiry when known. Absent otherwise.
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
 
+	// Reason Plain-language explanation, for the operator, of why a check reported `not_signed_in` when the check itself could not run or could not be interpreted (the CLI is missing, could not start, timed out, or printed an unrecognised message). Absent for every definite state — signed in, expired, a recognised not-signed-in, and pending — and absent when the reason is already implied by the state. Safe for display: it names the stage that failed, never the CLI's raw output or a filesystem path.
+	Reason *string `json:"reason,omitempty"`
+
 	// State not_signed_in when no saved login / stored OAuth entry exists (or it is unreadable / malformed — logged as a warning); pending while an open device-code session awaits approval; signed_in when a usable login or OAuth entry exists; expired per the per-method rule above.
 	State SignInStatusState `json:"state"`
 }
@@ -19318,9 +19321,7 @@ type ViewDef struct {
 	// Label Human-readable title. Absent means render `name`.
 	Label *string `json:"label,omitempty"`
 
-	// Layout Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`.
-	//
-	// ONLY `table` AND `cards` ARE RENDERED. `board`, `calendar`, `gallery` and `map` are declared here precisely BECAUSE they are not rendered: the importer must be able to record what an Obsidian view actually asked for, so a layout this product cannot draw imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table that nobody knows was ever anything else.
+	// Layout Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`. Every layout renders except `map`, which has no renderer yet; `records.ViewLayoutIsRendered` is the source of truth. All five non-table layouts stay declared here so the importer can record what an Obsidian view actually asked for: a layout the SPA cannot draw yet imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table nobody knows was ever anything else.
 	//
 	// This field exists because of a measured failure, not a hypothesis. An Obsidian CARDS view imported as a table, recorded no loss at all, and scored CLEAN under the parity exit criterion — a green number over an undetected loss, which is the exact failure this whole surface is written against. An unrenderable layout is a visible gap; a silently flattened one is a wrong answer.
 	Layout *ViewDefLayout `json:"layout,omitempty"`
@@ -19376,9 +19377,7 @@ type ViewDef struct {
 // A kind is OFFERED only when the collection holds what it requires, and a refusal names the missing property (design §3 G1). That gate lives in the composer, which is the only thing that writes this field on the normal path.
 type ViewDefKind string
 
-// ViewDefLayout Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`.
-//
-// ONLY `table` AND `cards` ARE RENDERED. `board`, `calendar`, `gallery` and `map` are declared here precisely BECAUSE they are not rendered: the importer must be able to record what an Obsidian view actually asked for, so a layout this product cannot draw imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table that nobody knows was ever anything else.
+// ViewDefLayout Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`. Every layout renders except `map`, which has no renderer yet; `records.ViewLayoutIsRendered` is the source of truth. All five non-table layouts stay declared here so the importer can record what an Obsidian view actually asked for: a layout the SPA cannot draw yet imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table nobody knows was ever anything else.
 //
 // This field exists because of a measured failure, not a hypothesis. An Obsidian CARDS view imported as a table, recorded no loss at all, and scored CLEAN under the parity exit criterion — a green number over an undetected loss, which is the exact failure this whole surface is written against. An unrenderable layout is a visible gap; a silently flattened one is a wrong answer.
 type ViewDefLayout string

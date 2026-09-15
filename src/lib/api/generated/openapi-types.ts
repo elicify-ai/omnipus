@@ -3765,6 +3765,11 @@ export interface components {
              * @example 2026-09-01T12:00:00Z
              */
             expires_at?: string;
+            /**
+             * @description Plain-language explanation, for the operator, of why a check reported `not_signed_in` when the check itself could not run or could not be interpreted (the CLI is missing, could not start, timed out, or printed an unrecognised message). Absent for every definite state — signed in, expired, a recognised not-signed-in, and pending — and absent when the reason is already implied by the state. Safe for display: it names the stage that failed, never the CLI's raw output or a filesystem path.
+             * @example the Copilot CLI is not installed on this machine
+             */
+            reason?: string;
         };
         /** @description Body for POST /providers/{id}/sign-in/poll (ADR-068 FR-044, added 2026-08-23 §8b). Identifies which open device-code session to check. */
         SignInPollRequest: {
@@ -6589,9 +6594,7 @@ export interface components {
                 [key: string]: components["schemas"]["ViewPropertyConfig"];
             };
             /**
-             * @description Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`.
-             *
-             *     ONLY `table` AND `cards` ARE RENDERED. `board`, `calendar`, `gallery` and `map` are declared here precisely BECAUSE they are not rendered: the importer must be able to record what an Obsidian view actually asked for, so a layout this product cannot draw imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table that nobody knows was ever anything else.
+             * @description Which rendering this view asks for (FR-109). THE ENGINE NEVER READS THIS; the SPA does. Omitted means `table`. Every layout renders except `map`, which has no renderer yet; `records.ViewLayoutIsRendered` is the source of truth. All five non-table layouts stay declared here so the importer can record what an Obsidian view actually asked for: a layout the SPA cannot draw yet imports with the loss NAMED as an annotation loss (FR-106) instead of arriving as a table nobody knows was ever anything else.
              *
              *     This field exists because of a measured failure, not a hypothesis. An Obsidian CARDS view imported as a table, recorded no loss at all, and scored CLEAN under the parity exit criterion — a green number over an undetected loss, which is the exact failure this whole surface is written against. An unrenderable layout is a visible gap; a silently flattened one is a wrong answer.
              * @example cards
@@ -19329,6 +19332,10 @@ export interface operations {
             };
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
+            /** @description Another Copilot sign-in check is already running (one premium vendor request at a time); Retry-After names the wait. Uses the shared 429 response body. */
+            429: components["responses"]["429TooManyRequests"];
+            /** @description The sign-in check returned a state this gateway does not recognise; no sign-in state is answered. */
+            500: components["responses"]["500InternalServerError"];
             503: components["responses"]["503BypassActive"];
         };
     };

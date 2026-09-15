@@ -713,3 +713,40 @@ describe('SignInDialog — start failure', () => {
     expect(screen.getByTestId('try-again-btn')).toBeInTheDocument()
   })
 })
+
+// SignInStatus.reason (2026-09-14): a not_signed_in whose check could not run
+// shows WHY, instead of advice to run the command — the wrong advice for a
+// machine-level failure (CLI missing, failed to start, timed out).
+describe('SignInDialog — reason on a degraded not_signed_in', () => {
+  it('Check sign-in: a degraded not_signed_in shows the reason', async () => {
+    vi.mocked(api.startSignIn).mockResolvedValue(COPILOT_CLI_LOGIN_RESPONSE)
+    vi.mocked(api.fetchSignInStatus).mockResolvedValue({
+      state: 'not_signed_in',
+      reason: 'the Copilot CLI is not installed on this machine',
+    })
+    renderDialog({ providerId: 'github-copilot', providerLabel: 'GitHub Copilot' })
+
+    await waitFor(() => screen.getByTestId('check-sign-in-btn'))
+    fireEvent.click(screen.getByTestId('check-sign-in-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/the Copilot CLI is not installed/)
+    })
+    // The reason replaces the run-the-command advice, it does not follow it.
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/run the command above/)
+  })
+
+  it('Check sign-in: without a reason the run-the-command advice stays', async () => {
+    vi.mocked(api.startSignIn).mockResolvedValue(COPILOT_CLI_LOGIN_RESPONSE)
+    vi.mocked(api.fetchSignInStatus).mockResolvedValue({ state: 'not_signed_in' })
+    renderDialog({ providerId: 'github-copilot', providerLabel: 'GitHub Copilot' })
+
+    await waitFor(() => screen.getByTestId('check-sign-in-btn'))
+    fireEvent.click(screen.getByTestId('check-sign-in-btn'))
+
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/Not signed in yet/)
+    })
+    expect(screen.getByRole('alert')).toHaveTextContent(/run the command above, then check again/)
+  })
+})

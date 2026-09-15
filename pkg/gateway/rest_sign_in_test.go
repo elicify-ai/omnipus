@@ -19,6 +19,7 @@ import (
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/auth"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 )
 
@@ -92,6 +93,28 @@ func doJSON(t *testing.T, api *restAPI, method, path string, body any) *httptest
 	r := httptest.NewRequest(method, path, reader)
 	cfg := api.agentLoop.GetConfig()
 	r = r.WithContext(context.WithValue(r.Context(), configContextKey{}, cfg))
+	w := httptest.NewRecorder()
+	api.HandleProviders(w, isolateRateLimit(t, r))
+	return w
+}
+
+func doJSONWithUser(t *testing.T, api *restAPI, method, path string, body any, username string) *httptest.ResponseRecorder {
+	t.Helper()
+	var reader *bytes.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		require.NoError(t, err)
+		reader = bytes.NewReader(b)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+	r := httptest.NewRequest(method, path, reader)
+	cfg := api.agentLoop.GetConfig()
+	ctx := context.WithValue(r.Context(), configContextKey{}, cfg)
+	if username != "" {
+		ctx = context.WithValue(ctx, UserContextKey{}, &config.UserConfig{Username: username})
+	}
+	r = r.WithContext(ctx)
 	w := httptest.NewRecorder()
 	api.HandleProviders(w, isolateRateLimit(t, r))
 	return w
@@ -207,8 +230,17 @@ func TestSignInPoll_Expired404(t *testing.T) {
 func TestSignInStatus_Store(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 
+	// This test pins STORAGE semantics, and its label assertions need an
+	// authenticated caller: an anonymous caller inside the FR-050 pre-auth
+	// window gets a REDUCED answer with no account_label (see
+	// rest_signin_status_reduction_test.go). doJSON sets no user, so wrap.
+	doJSONAsAdmin := func(t *testing.T, method, path string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		return doJSONWithUser(t, api, method, path, body, "admin")
+	}
+
 	// Nothing stored -> not_signed_in.
-	w1 := doJSON(t, api, http.MethodGet, "/api/v1/providers/openai-chatgpt/sign-in/status", nil)
+	w1 := doJSONAsAdmin(t, http.MethodGet, "/api/v1/providers/openai-chatgpt/sign-in/status", nil)
 	require.Equal(t, http.StatusOK, w1.Code)
 	var status1 gen.SignInStatus
 	require.NoError(t, json.Unmarshal(w1.Body.Bytes(), &status1))
@@ -224,7 +256,7 @@ func TestSignInStatus_Store(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.Set(credentials.OAuthEntryName("openai"), string(freshBlob)))
 
-	w2 := doJSON(t, api, http.MethodGet, "/api/v1/providers/openai-chatgpt/sign-in/status", nil)
+	w2 := doJSONAsAdmin(t, http.MethodGet, "/api/v1/providers/openai-chatgpt/sign-in/status", nil)
 	require.Equal(t, http.StatusOK, w2.Code)
 	var status2 gen.SignInStatus
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &status2))
@@ -240,7 +272,7 @@ func TestSignInStatus_Store(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, store.Set(credentials.OAuthEntryName("openai"), string(expiredBlob)))
 
-	w3 := doJSON(t, api, http.MethodGet, "/api/v1/providers/openai-chatgpt/sign-in/status", nil)
+	w3 := doJSONAsAdmin(t, http.MethodGet, "/api/v1/providers/openai-chatgpt/sign-in/status", nil)
 	require.Equal(t, http.StatusOK, w3.Code)
 	var status3 gen.SignInStatus
 	require.NoError(t, json.Unmarshal(w3.Body.Bytes(), &status3))
