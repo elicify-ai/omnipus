@@ -36,7 +36,7 @@ import type { LibraryEntry } from '@/lib/api'
 // LATER `dispatchEvent('error', ...)` lands on a race that already
 // settled — proving nothing about the error path at all.
 const h = vi.hoisted(() => ({
-  pendingDocs: [] as Array<{ resolve: (doc: unknown) => void }>,
+  pendingDocs: [] as Array<{ resolve: (doc: unknown) => void; reject: (err: unknown) => void }>,
 }))
 
 function makePdfDoc() {
@@ -78,10 +78,12 @@ vi.mock('pdfjs-dist', () => {
     },
     getDocument: () => {
       let resolveDoc: (doc: unknown) => void = () => {}
-      const promise = new Promise((resolve) => {
+      let rejectDoc: (err: unknown) => void = () => {}
+      const promise = new Promise((resolve, reject) => {
         resolveDoc = resolve
+        rejectDoc = reject
       })
-      h.pendingDocs.push({ resolve: resolveDoc })
+      h.pendingDocs.push({ resolve: resolveDoc, reject: rejectDoc })
       return { promise, destroy: () => Promise.resolve() }
     },
   }
@@ -379,4 +381,40 @@ describe('LibraryPdfPreview — bounded worker pool (EMB-032, ceiling 2)', () =>
     // that no longer exists once doc1's slot frees.
     expect(constructedWorkers).toHaveLength(2)
   })
+
+  it('a corrupt document (never a worker crash) also terminates the worker thread — failLoad path', async () => {
+    // SILENT-FAILURES-pdf-pool.md finding 1: every failure EXCEPT a worker
+    // crash used to release the PDF's pool slot but leave its Worker thread
+    // running, so N failed PDFs meant N live threads on top of the ceiling.
+    // The worker-crash path is covered by the eviction test above; this test
+    // is the OTHER shape: PDF.js itself rejects the document (corrupt file),
+    // the worker never errors, and failLoad ends the thread anyway.
+    const doc1 = await mountDoc('reports/corrupt.pdf')
+    await waitFor(() => expect(constructedWorkers).toHaveLength(1))
+    await waitFor(() => expect(h.pendingDocs).toHaveLength(1))
+    const worker = constructedWorkers[0]
+
+    // The document promise rejects — no worker error event, no crash.
+    h.pendingDocs[0]?.reject(new Error('InvalidPDFStructure'))
+
+    const alert = await within(doc1.container).findByRole('alert')
+    expect(alert).toBeInTheDocument()
+
+    // The thread is ended, not just abandoned: this is the assertion a
+    // `releaseLease()`-without-`terminateWorkerThread()` mutation dies on.
+    expect(worker.terminated).toBe(true)
+
+    // The freed slot admits a fresh document without queueing.
+    const doc2 = await mountDoc('reports/fine.pdf')
+    await waitFor(() => expect(constructedWorkers).toHaveLength(2))
+    expect(within(doc2.container).queryByTestId('library-pdf-queued')).not.toBeInTheDocument()
+    await waitFor(() => expect(h.pendingDocs).toHaveLength(2))
+    h.pendingDocs[1]?.resolve(makePdfDoc())
+    await waitFor(() => expect(within(doc2.container).queryByTestId('library-pdf-loading')).not.toBeInTheDocument())
+    expect(within(doc2.container).queryByTestId('library-pdf-error')).not.toBeInTheDocument()
+
+    doc1.unmount()
+    doc2.unmount()
+  })
 })
+
