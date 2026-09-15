@@ -1,6 +1,4 @@
-// Omnipus - Ultra-lightweight personal AI agent
-// License: MIT
-// Copyright (c) 2026 Omnipus contributors
+// config_defaults_apply_test.go: tests for effective-value accessors, defaults and normalisation for loaded config sections (performance clamp, schedules, search-tool API keys, browser/delegate/judge caps)
 
 package config
 
@@ -8,6 +6,103 @@ import (
 	"testing"
 	"time"
 )
+
+// --- moved from config.go tests 2026-09-15 ---
+
+func TestMergeAPIKeys(t *testing.T) {
+	tests := []struct {
+		name     string
+		apiKey   string
+		apiKeys  []string
+		expected []string
+	}{
+		{
+			name:     "both empty",
+			apiKey:   "",
+			apiKeys:  nil,
+			expected: nil,
+		},
+		{
+			name:     "only ApiKey",
+			apiKey:   "key1",
+			apiKeys:  nil,
+			expected: []string{"key1"},
+		},
+		{
+			name:     "only ApiKeys",
+			apiKey:   "",
+			apiKeys:  []string{"key1", "key2"},
+			expected: []string{"key1", "key2"},
+		},
+		{
+			name:     "both with overlap",
+			apiKey:   "key1",
+			apiKeys:  []string{"key1", "key2", "key3"},
+			expected: []string{"key1", "key2", "key3"},
+		},
+		{
+			name:     "with whitespace",
+			apiKey:   "  key1  ",
+			apiKeys:  []string{"  key2  ", "  key1  "},
+			expected: []string{"key1", "key2"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := MergeAPIKeys(tt.apiKey, tt.apiKeys)
+			if len(result) != len(tt.expected) {
+				t.Fatalf("expected %d keys, got %d", len(tt.expected), len(result))
+			}
+			for i, k := range result {
+				if k != tt.expected[i] {
+					t.Errorf("expected key[%d] = %q, got %q", i, tt.expected[i], k)
+				}
+			}
+		})
+	}
+}
+
+// TestClampParallelExplicit_HonoursOne verifies that an EXPLICIT user value of 1
+// is honored (single-flight) — only the floor of 1, and that large explicit
+// values are honored in full (no silent ceiling — ADR-037 bans silently
+// clamping an operator's explicit choice). Only the defensive floor applies;
+// values above the physical safety ceiling are still passed through
+// unchanged (a WARN is logged, verified separately by
+// TestClampParallelExplicit_WarnsAboveSafetyCeiling-style behavior at the
+// EffectiveMaxParallelAgents level below).
+func TestClampParallelExplicit_HonoursOne(t *testing.T) {
+	cases := []struct {
+		in, want int
+	}{
+		{1, 1},
+		{2, 2},
+		{8, 8},
+		{16, 16},
+		{17, 17},     // NO ceiling at 16 anymore.
+		{1000, 1000}, // an explicit value ABOVE the old 16 ceiling survives untouched.
+		{5000, 5000}, // an explicit value ABOVE physicalConcurrencySafetyCeiling (2000) still survives untouched — explicit values are never clamped.
+		{50000, 50000},
+		{0, 1},  // below floor -> floor (1)
+		{-3, 1}, // below floor -> floor (1)
+	}
+	for _, c := range cases {
+		if got := clampParallelExplicit(c.in); got != c.want {
+			t.Errorf("clampParallelExplicit(%d) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
+// TestClampParallelExplicit_NeverLowersLargeValue is a direct unit-level
+// companion to the end-to-end test above: clampParallelExplicit itself must
+// never reduce a large explicit value, at any magnitude.
+func TestClampParallelExplicit_NeverLowersLargeValue(t *testing.T) {
+	for _, v := range []int{17, 100, 2000, 2001, 10000, 100000} {
+		if got := clampParallelExplicit(v); got != v {
+			t.Errorf("clampParallelExplicit(%d) = %d, want %d (explicit values are never lowered)", v, got, v)
+		}
+	}
+}
 
 // TestShouldLogExplicitCeilingWarn_Throttles is the regression test for the
 // 2026-08-04 code review MINOR at config.go:487-493: clampParallelExplicit's

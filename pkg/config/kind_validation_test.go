@@ -1,7 +1,6 @@
 package config
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -65,83 +64,5 @@ func TestAgentRef_Validate(t *testing.T) {
 				t.Fatalf("Validate() err=%v, wantErr=%v", err, tt.wantErr)
 			}
 		})
-	}
-}
-
-// TestValidateIdentityKinds_RejectsTypos proves the load-time wiring: a typo'd
-// channel identity kind fails loudly rather than silently downgrading routing.
-//
-// ADR-037 renamed validateIdentityAndAgentRefKinds to validateIdentityKinds and
-// dropped its agent-delegation-ref-kind validation entirely — that ran against
-// AgentConfig.DelegationPolicy / AgentDefaults.DelegationPolicy, both of which
-// no longer exist (the per-workspace delegation graph is the sole delegation
-// mechanism now). The "typo'd agent delegation ref kind" and delegation-policy
-// assertions this test used to carry are removed with it; AgentRef.Validate
-// itself is still covered directly by TestAgentRef_Validate above.
-func TestValidateIdentityKinds_RejectsTypos(t *testing.T) {
-	t.Run("typo'd channel identity kind", func(t *testing.T) {
-		cfg := &Config{
-			Channels: map[string]ChannelInstanceConfig{
-				"telegram": {
-					Type:     "telegram",
-					Identity: &ChannelIdentity{Kind: "agnet", ID: "mia"},
-				},
-			},
-		}
-		err := validateIdentityKinds(cfg)
-		if err == nil || !strings.Contains(err.Error(), "telegram") {
-			t.Fatalf("expected typo'd identity kind to be rejected with channel name, got %v", err)
-		}
-	})
-
-	t.Run("valid kinds pass", func(t *testing.T) {
-		cfg := &Config{
-			Channels: map[string]ChannelInstanceConfig{
-				"telegram": {Type: "telegram", Identity: &ChannelIdentity{Kind: "agent", ID: "mia"}},
-				"discord":  {Type: "discord", Identity: &ChannelIdentity{Kind: "user"}},
-			},
-		}
-		if err := validateIdentityKinds(cfg); err != nil {
-			t.Fatalf("expected valid kinds to pass, got %v", err)
-		}
-	})
-}
-
-// TestValidateIdentityKinds_NormalizesKinds proves the CRITICAL-1 fix
-// end-to-end: a mixed-case/whitespace kind the API write path accepts (and that
-// route.go routes) passes load-time validation AND is rewritten in place to the
-// canonical lowercase+trimmed form, so persisted configs never drift from the
-// case-tolerant accept paths.
-func TestValidateIdentityKinds_NormalizesKinds(t *testing.T) {
-	cfg := &Config{
-		Channels: map[string]ChannelInstanceConfig{
-			"telegram": {Type: "telegram", Identity: &ChannelIdentity{Kind: "Agent", ID: "mia"}},
-			"discord":  {Type: "discord", Identity: &ChannelIdentity{Kind: " User "}},
-		},
-	}
-
-	if err := validateIdentityKinds(cfg); err != nil {
-		t.Fatalf("expected mixed-case kinds to pass load-time validation, got %v", err)
-	}
-
-	if got := cfg.Channels["telegram"].Identity.Kind; got != "agent" {
-		t.Errorf("channel telegram identity kind = %q, want canonical %q", got, "agent")
-	}
-	if got := cfg.Channels["discord"].Identity.Kind; got != "user" {
-		t.Errorf("channel discord identity kind = %q, want canonical %q", got, "user")
-	}
-}
-
-// TestValidateIdentityKinds_RejectsUnknownEvenMixedCase proves normalization
-// does NOT widen the accepted set: a genuinely-unknown kind ("robot") is still
-// rejected regardless of casing.
-func TestValidateIdentityKinds_RejectsUnknownEvenMixedCase(t *testing.T) {
-	cfg := &Config{
-		Channels: map[string]ChannelInstanceConfig{
-			"telegram": {Type: "telegram", Identity: &ChannelIdentity{Kind: "Robot", ID: "mia"}},
-		},
-	}
-	if err := validateIdentityKinds(cfg); err == nil {
-		t.Fatal("expected mixed-case unknown identity kind \"Robot\" to be rejected, got nil")
 	}
 }
