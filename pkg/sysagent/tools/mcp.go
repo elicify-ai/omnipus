@@ -89,50 +89,87 @@ func (t *MCPAddTool) Parameters() map[string]any {
 	}
 }
 
+// mcpAddToolExecute carries the shared state of Execute across its stages.
+type mcpAddToolExecute struct {
+	t                   *MCPAddTool
+	ctx                 context.Context
+	args                map[string]any
+	name                string
+	transport           string
+	command             string
+	urlStr              string
+	envRefs             map[string]string
+	entry               config.MCPServerConfig
+	flippedGlobalEnable bool
+	gatedGlobalDisabled bool
+}
+
 func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	name, _ := args["name"].(string)
-	if name == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
+	mat := &mcpAddToolExecute{t: t, ctx: ctx, args: args}
+
+	if r0, stop := mat.validateInput(); stop {
+		return r0
+	}
+	// Coerce optional args/env into typed values.
+	if r0, stop := mat.prepareEntry(); stop {
+		return r0
+	}
+
+	if r0, stop := mat.persistConfig(); stop {
+		return r0
+	}
+
+	return mat.reconcileAndRespond()
+}
+
+// validateInput validates the server name, transport, and transport-specific connection fields.
+func (mat *mcpAddToolExecute) validateInput() (*tools.ToolResult, bool) {
+	mat.name, _ = mat.args["name"].(string)
+	if mat.name == "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", "")), true
 	}
 	// Reject path-traversal / separator characters in the server name — the name
 	// is the map key in config and must be a clean identifier.
-	if err := validateID(name); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid server name: "+err.Error(), ""))
+	if err := validateID(mat.name); err != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid server name: "+err.Error(), "")), true
 	}
 
-	transport, _ := args["transport"].(string)
-	if transport == "" {
-		transport = "stdio"
+	mat.transport, _ = mat.args["transport"].(string)
+	if mat.transport == "" {
+		mat.transport = "stdio"
 	}
-	switch transport {
+	switch mat.transport {
 	case "stdio", "sse", "http":
 	default:
 		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			fmt.Sprintf("invalid transport %q: must be one of stdio, sse, http", transport), ""))
+			fmt.Sprintf("invalid transport %q: must be one of stdio, sse, http", mat.transport), "")), true
 	}
 
-	command, _ := args["command"].(string)
-	urlStr, _ := args["url"].(string)
-	switch transport {
+	mat.command, _ = mat.args["command"].(string)
+	mat.urlStr, _ = mat.args["url"].(string)
+	switch mat.transport {
 	case "stdio":
-		if command == "" {
+		if mat.command == "" {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"command is required for stdio transport", ""))
+				"command is required for stdio transport", "")), true
 		}
 	case "sse", "http":
-		if urlStr == "" {
+		if mat.urlStr == "" {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"url is required for sse/http transport", ""))
+				"url is required for sse/http transport", "")), true
 		}
-		if !mcpURLSchemeValid(urlStr) {
+		if !mcpURLSchemeValid(mat.urlStr) {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"url must use https, or http for loopback addresses only (localhost, 127.x.x.x, ::1)", ""))
+				"url must use https, or http for loopback addresses only (localhost, 127.x.x.x, ::1)", "")), true
 		}
 	}
+	return nil, false
+}
 
-	// Coerce optional args/env into typed values.
-	argList := stringSliceArg(args["args"])
-	envMap := stringMapArg(args["env"])
+// prepareEntry checks for duplicates, stores environment credentials, and builds the persisted server entry.
+func (mat *mcpAddToolExecute) prepareEntry() (*tools.ToolResult, bool) {
+	argList := stringSliceArg(mat.args["args"])
+	envMap := stringMapArg(mat.args["env"])
 
 	// Duplicate-name pre-check: reject an existing server name
 	// BEFORE any credential-store write. Without this, a name collision was
@@ -145,11 +182,11 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 	// check further down is kept as the authoritative concurrency guard for
 	// the (now much rarer) race where a same-named server is created between
 	// this check and the WithConfig call.
-	if cfg := t.deps.GetCfg(); cfg != nil {
-		if _, exists := cfg.Tools.MCP.Servers[name]; exists {
+	if cfg := mat.t.deps.GetCfg(); cfg != nil {
+		if _, exists := cfg.Tools.MCP.Servers[mat.name]; exists {
 			return tools.ErrorResult(errorJSON("ALREADY_EXISTS",
-				fmt.Sprintf("mcp server %q already exists", name),
-				"Use list_mcp_servers to see existing servers, or remove it first with remove_mcp_server"))
+				fmt.Sprintf("mcp server %q already exists", mat.name),
+				"Use list_mcp_servers to see existing servers, or remove it first with remove_mcp_server")), true
 		}
 	}
 
@@ -165,24 +202,24 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 	// uses): store each value under mcp_<name>_<key>. A partial failure here
 	// (some keys stored, one fails) leaves orphaned but harmless credential
 	// entries and no config write — no dangling ref is possible.
-	var envRefs map[string]string
+
 	if len(envMap) > 0 {
-		if t.deps.CredStore == nil {
+		if mat.t.deps.CredStore == nil {
 			return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
 				"credential store is not available",
 				"Ensure the credential store is unlocked before adding an MCP server with env values",
-			))
+			)), true
 		}
-		envRefs = make(map[string]string, len(envMap))
+		mat.envRefs = make(map[string]string, len(envMap))
 		for key, value := range envMap {
-			credKey := mcpEnvCredKey(name, key)
-			if err := t.deps.CredStore.Set(credKey, value); err != nil {
+			credKey := mcpEnvCredKey(mat.name, key)
+			if err := mat.t.deps.CredStore.Set(credKey, value); err != nil {
 				return tools.ErrorResult(errorJSON("CREDENTIAL_SAVE_FAILED",
 					fmt.Sprintf("Failed to store env credential %q: %s", key, err.Error()),
 					"Check that the credential store is unlocked",
-				))
+				)), true
 			}
-			envRefs[key] = credKey
+			mat.envRefs[key] = credKey
 		}
 	}
 
@@ -192,28 +229,31 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 	// time (pkg/mcp.ResolveServerEnvRefs, pkg/agent/loop_mcp.go's
 	// reconcileLocked) so the plaintext secret exists only in memory, only
 	// for the duration of a connect attempt.
-	entry := config.MCPServerConfig{
+	mat.entry = config.MCPServerConfig{
 		Enabled: true,
-		Type:    transport,
-		Command: command,
-		URL:     urlStr,
+		Type:    mat.transport,
+		Command: mat.command,
+		URL:     mat.urlStr,
 		Args:    argList,
-		EnvRefs: envRefs,
+		EnvRefs: mat.envRefs,
 	}
+	return nil, false
+}
 
+// persistConfig persists the server and handles global-enable and concurrent-name outcomes.
+func (mat *mcpAddToolExecute) persistConfig() (*tools.ToolResult, bool) {
 	// flippedGlobalEnable/gatedGlobalDisabled record which of the two
 	// auto-enable outcomes below happened, so the result note can be honest
 	// about it (set inside the WithConfig closure, read after it returns).
-	var flippedGlobalEnable, gatedGlobalDisabled bool
 
-	if err := t.deps.WithConfig(func(cfg *config.Config) error {
+	if err := mat.t.deps.WithConfig(func(cfg *config.Config) error {
 		if cfg.Tools.MCP.Servers == nil {
 			cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{}
 		}
-		if _, exists := cfg.Tools.MCP.Servers[name]; exists {
-			return fmt.Errorf("mcp server %q already exists", name)
+		if _, exists := cfg.Tools.MCP.Servers[mat.name]; exists {
+			return fmt.Errorf("mcp server %q already exists", mat.name)
 		}
-		cfg.Tools.MCP.Servers[name] = entry
+		cfg.Tools.MCP.Servers[mat.name] = mat.entry
 		// Adding a server only to have it silently ignored by a disabled global
 		// kill-switch (tools.mcp.enabled defaults to false on a fresh install)
 		// would reproduce the exact "saved but never connects" bug this tool
@@ -224,7 +264,7 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 		if !cfg.Tools.MCP.Enabled {
 			otherEnabled := false
 			for otherName, otherSrv := range cfg.Tools.MCP.Servers {
-				if otherName == name {
+				if otherName == mat.name {
 					continue
 				}
 				if otherSrv.Enabled {
@@ -233,10 +273,10 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 				}
 			}
 			if otherEnabled {
-				gatedGlobalDisabled = true
+				mat.gatedGlobalDisabled = true
 			} else {
 				cfg.Tools.MCP.Enabled = true
-				flippedGlobalEnable = true
+				mat.flippedGlobalEnable = true
 			}
 		}
 		return nil
@@ -251,41 +291,45 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 			// race, exactly like the bug this whole fix closes. Best-effort:
 			// a delete failure here is logged, not fatal — the request still
 			// fails with ALREADY_EXISTS either way.
-			for envKey, credKey := range envRefs {
-				if delErr := t.deps.CredStore.Delete(credKey); delErr != nil {
+			for envKey, credKey := range mat.envRefs {
+				if delErr := mat.t.deps.CredStore.Delete(credKey); delErr != nil {
 					slog.Warn("add_mcp_server: name-collision race — failed to roll back env credential",
-						"server", name, "env_key", envKey, "cred_key", credKey, "error", delErr)
+						"server", mat.name, "env_key", envKey, "cred_key", credKey, "error", delErr)
 				}
 			}
 			return tools.ErrorResult(errorJSON("ALREADY_EXISTS", err.Error(),
-				"Use list_mcp_servers to see existing servers, or remove it first with remove_mcp_server"))
+				"Use list_mcp_servers to see existing servers, or remove it first with remove_mcp_server")), true
 		}
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), "")), true
 	}
+	return nil, false
+}
 
+// reconcileAndRespond reconciles the live server state and returns an honest connection result.
+func (mat *mcpAddToolExecute) reconcileAndRespond() *tools.ToolResult {
 	// Trigger live reconciliation so the server actually connects (and its
 	// tools get registered into the per-agent and central registries) instead
 	// of only being persisted to config.json. Nil in tests or when the
 	// gateway hasn't wired live MCP reconciliation.
 	var reconcileErr error
-	reconcileAttempted := t.deps.ReconcileMCP != nil
+	reconcileAttempted := mat.t.deps.ReconcileMCP != nil
 	if reconcileAttempted {
-		rctx, cancel := context.WithTimeout(ctx, mcpReconcileTimeout)
-		reconcileErr = t.deps.ReconcileMCP(rctx)
+		rctx, cancel := context.WithTimeout(mat.ctx, mcpReconcileTimeout)
+		reconcileErr = mat.t.deps.ReconcileMCP(rctx)
 		cancel()
 		if reconcileErr != nil {
-			slog.Warn("add_mcp_server: live MCP reconciliation failed", "server", name, "error", reconcileErr)
+			slog.Warn("add_mcp_server: live MCP reconciliation failed", "server", mat.name, "error", reconcileErr)
 		}
 	}
 
 	result := map[string]any{
-		"name":      name,
-		"transport": transport,
+		"name":      mat.name,
+		"transport": mat.transport,
 		"enabled":   true,
 	}
 	var note string
-	if t.deps.MCPStatus != nil {
-		status, toolCount, errMsg := t.deps.MCPStatus(name)
+	if mat.t.deps.MCPStatus != nil {
+		status, toolCount, errMsg := mat.t.deps.MCPStatus(mat.name)
 		result["status"] = status
 		switch status {
 		case "connected":
@@ -321,9 +365,9 @@ func (t *MCPAddTool) Execute(ctx context.Context, args map[string]any) *tools.To
 	// connect failure apart from "saved, but MCP is globally disabled and
 	// nothing was even attempted."
 	switch {
-	case flippedGlobalEnable:
+	case mat.flippedGlobalEnable:
 		note += " Global MCP enable was off — turned on."
-	case gatedGlobalDisabled:
+	case mat.gatedGlobalDisabled:
 		note += " MCP is globally disabled — an operator must enable tools.mcp.enabled for this server to connect."
 	}
 	result["note"] = note
