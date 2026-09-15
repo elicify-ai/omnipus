@@ -16,12 +16,15 @@
 #         go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@v2.7.0
 #     This MUST match the version pinned in .github/workflows/pr.yml, or
 #     `make verify-contracts` fails for reasons that have nothing to do with
-#     your change. v2.8.0 renames every enum constant (ExternalCli becomes
-#     ExecutorConfigKindExternalCli, and so on): regenerating with it rewrites
-#     ~5000 lines and breaks hand-written consumers such as
-#     pkg/api/generated/fixtures.go. The generator version is stamped into the
-#     header of pkg/api/generated/openapi_types.gen.go — check it if a
-#     regeneration produces a diff far larger than your schema change.
+#     your change. Measured against v2.7.0 on this spec, v2.8.0 rewrites about
+#     6,800 generated lines (doc comments, struct field alignment) and drops
+#     the BearerAuthScopes constant. Enum constant names do NOT differ between
+#     the two: pkg/api/generated/oapi-codegen-config.yaml sets
+#     compatibility.always-prefix-enum-values, so every constant is
+#     <TypeName><Value> (e.g. ExecutorConfigKindExternalCli) on either version.
+#     The generator version is stamped into the header of
+#     pkg/api/generated/openapi_types.gen.go — check it if a regeneration
+#     produces a diff far larger than your schema change.
 #   - gofmt in PATH (ships with Go)
 
 set -euo pipefail
@@ -46,11 +49,14 @@ echo "[gen-contracts] Working directory: ${REPO_ROOT}"
 # Step 0: Generator version guard
 # ---------------------------------------------------------------------------
 # oapi-codegen's output is version-dependent in ways that are NOT confined to
-# your schema change. v2.8.0 renames every enum constant (ExternalCli ->
-# ExecutorConfigKindExternalCli), which rewrites ~5000 lines and breaks
-# hand-written consumers like pkg/api/generated/fixtures.go. Regenerating with
-# the wrong version therefore produces a huge diff, a broken build, and a
-# verify-contracts failure that looks like it came from your change.
+# your schema change. v2.8.0 once renamed every enum constant (ExternalCli ->
+# ExecutorConfigKindExternalCli) and broke hand-written consumers like
+# pkg/api/generated/fixtures.go; enum names are now pinned by
+# compatibility.always-prefix-enum-values, but v2.8.0 still rewrites about
+# 6,800 lines of this spec's output (doc comments, field alignment) and drops
+# the BearerAuthScopes constant. Regenerating with the wrong version therefore
+# produces a huge diff and a verify-contracts failure that looks like it came
+# from your change.
 #
 # This guard exists because that happened. Keep REQUIRED_OAPI_CODEGEN_VERSION
 # in lockstep with the version pinned in .github/workflows/pr.yml.

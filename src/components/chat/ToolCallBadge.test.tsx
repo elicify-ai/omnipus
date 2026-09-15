@@ -571,3 +571,65 @@ describe('ToolCallBadge — verbose chat gate', () => {
     expect(screen.queryByTestId('tool-call-badge')).toBeNull()
   })
 })
+
+// ── ADR-082 D9 review S11: a delegated worker's set_goal step is visible ─────
+// SubagentBlock renders a delegated worker's nested steps through this
+// component. `set_goal` refuses on a sub-turn (ADR-081 FR-005), and the
+// thread policy hides the raw `set_goal` chip by default — so the worker's
+// attempt used to vanish entirely. It now routes to the dedicated UI: the
+// quiet "Goal registration failed" trace for the refusal, the record card
+// for a success, and the ordinary raw badge once verbose chat is on.
+
+describe('ToolCallBadge — set_goal routes to the dedicated goal UI (S11)', () => {
+  beforeEach(() => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: false })
+    })
+  })
+
+  it('a refused (error) set_goal step renders the quiet failure trace instead of nothing', () => {
+    const { container } = render(
+      <ToolCallBadge
+        toolCall={makeToolCall({
+          tool: 'set_goal',
+          params: { mode: 'register', definition: 'x' },
+          status: 'error',
+          error: 'set_goal is owner-session-only: a delegated sub-turn cannot author or amend the parent session\'s goal record',
+        })}
+      />,
+    )
+    const failed = container.querySelector('[data-testid="set-goal-failed"]')
+    expect(failed).not.toBeNull()
+    expect(failed?.textContent).toContain('Goal registration failed')
+    expect(container.querySelector('[data-testid="set-goal-failed-detail"]')?.textContent).toContain('owner-session-only')
+  })
+
+  it('a successful set_goal step renders the record card', () => {
+    const payload = JSON.stringify({
+      mode: 'register',
+      goal_id: 'goal-badge-1',
+      definition: 'Ship the thing.',
+      criteria: [{ kind: 'prose', judgment: 'boolean', text: 'it ships', author: { kind: 'agent', id: 'ray' }, status: 'pending' }],
+      dod: [],
+    })
+    const { container } = render(
+      <ToolCallBadge
+        toolCall={makeToolCall({ tool: 'set_goal', params: { mode: 'register' }, status: 'success', result: { text: payload }, duration_ms: 3 })}
+      />,
+    )
+    expect(container.querySelector('[data-testid="goal-echo-card"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="goal-echo-statement"]')?.textContent).toBe('Ship the thing.')
+  })
+
+  it('verbose chat ON: the ordinary raw badge renders (data-tool="set_goal"), not the dedicated UI', () => {
+    act(() => {
+      useChatPreferencesStore.setState({ verboseChatEnabled: true })
+    })
+    render(
+      <ToolCallBadge
+        toolCall={makeToolCall({ tool: 'set_goal', params: { mode: 'register' }, status: 'error', error: 'refused' })}
+      />,
+    )
+    expect(screen.getByTestId('tool-call-badge')).toHaveAttribute('data-tool', 'set_goal')
+  })
+})

@@ -43,7 +43,7 @@ func runListTasks(t *testing.T, tool *TaskListTool, ctx context.Context, role st
 //
 // task.Task documents four fields as DISK-ONLY — CreatedByAgentID ("the REST
 // mapper does NOT copy it to the wire type, and it MUST NOT be added to any
-// schema in contracts/"), Scratchpad, PendingJudgeClaim and DelegationDepth —
+// schema in contracts/"), Scratchpad and DelegationDepth —
 // and marshalling the whole struct shipped every one of them into the model's
 // context.
 func TestListTasks_ProjectionOmitsDiskOnlyFields(t *testing.T) {
@@ -51,14 +51,13 @@ func TestListTasks_ProjectionOmitsDiskOnlyFields(t *testing.T) {
 	store := task.New(t.TempDir())
 
 	tk := &task.Task{
-		Title:             "PROJECTED",
-		Action:            task.ActionLLM,
-		Status:            task.StatusNext,
-		WorkspaceID:       "ws-1",
-		AgentID:           "mia",
-		Scratchpad:        true,
-		PendingJudgeClaim: "SCRATCHPAD-CLAIM-SECRET",
-		DelegationDepth:   7,
+		Title:           "PROJECTED",
+		Action:          task.ActionLLM,
+		Status:          task.StatusNext,
+		WorkspaceID:     "ws-1",
+		AgentID:         "mia",
+		Scratchpad:      true,
+		DelegationDepth: 7,
 	}
 	if err := store.CreateByAgent(tk, "mia"); err != nil {
 		t.Fatalf("seed: %v", err)
@@ -74,7 +73,7 @@ func TestListTasks_ProjectionOmitsDiskOnlyFields(t *testing.T) {
 	}
 
 	for _, forbidden := range []string{
-		"scratchpad", "pending_judge_claim", "created_by_agent_id", "delegation_depth",
+		"scratchpad", "created_by_agent_id", "delegation_depth",
 		"SCRATCHPAD-CLAIM-SECRET",
 	} {
 		if strings.Contains(res.ForLLM, forbidden) {

@@ -1,5 +1,7 @@
 # ADR-053 F4 Integration — Code Review
 
+> **Update 2026-09-14:** the app-level token budget described here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Branch:** `feature/plan-swimlane-board`  
 **Range:** `75ab6eb2..HEAD`  
 **Reviewer:** read-only integration review (scope-limited files + commit log)  

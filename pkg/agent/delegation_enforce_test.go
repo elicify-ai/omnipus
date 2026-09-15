@@ -220,6 +220,13 @@ func TestDelegationDistinction_RealWiringThroughCreateTask(t *testing.T) {
 		"prompt":   "x",
 		"agent_id": "genuinely-nonexistent-agent",
 		"criteria": []any{map[string]any{"kind": "prose", "text": "done"}},
+		// dod is mandatory on every agent-facing task-creation surface
+		// (GOAL-FR-021 / operator decision D-C, "criteria + definition-of-done
+		// are mandatory at CREATION and EDIT") and sits in create_task's schema
+		// `required` list, so the tool registry rejects the call before the
+		// delegation gate this test exists to exercise is ever reached.
+		// Supplied to get past argument validation; nothing here asserts on it.
+		"dod": []any{map[string]any{"kind": "prose", "text": "no regressions"}},
 	})
 	if nonexistentResult == nil || !nonexistentResult.IsError {
 		t.Fatalf("create_task against a nonexistent agent must be denied, got %+v", nonexistentResult)
@@ -240,6 +247,8 @@ func TestDelegationDistinction_RealWiringThroughCreateTask(t *testing.T) {
 		"prompt":   "x",
 		"agent_id": "worker-agent",
 		"criteria": []any{map[string]any{"kind": "prose", "text": "done"}},
+		// Mandatory per GOAL-FR-021 / D-C — see the nonexistent-agent case above.
+		"dod": []any{map[string]any{"kind": "prose", "text": "no regressions"}},
 	})
 	if untrustedResult == nil || !untrustedResult.IsError {
 		t.Fatalf("create_task against an extant-but-untrusted agent must be denied, got %+v", untrustedResult)

@@ -76,7 +76,17 @@ func TestRegisterTools_NoBoundManagerField(t *testing.T) {
 // renaming it here would orphan that row. The catalog was eleven tools when
 // the row was written; ADR-075 D2 added six (select_option, press_key, hover,
 // snapshot, handle_dialog, upload_file — the capability spec's §2.1 row for
-// metadata.go calls for exactly those "six additions"), so it is SEVENTEEN.
+// metadata.go calls for exactly those "six additions"), making it seventeen,
+// and ADR-085 D7 (BROWSER-FR-046/FR-051) adds browser_handover, so it is
+// EIGHTEEN.
+//
+// browser_handover's absence from the catalog was a real defect, not a second
+// FR-029-style hold: register.go registers it unconditionally, and
+// buildKnownBuiltinToolNames (pkg/gateway/gateway.go) builds the Constraint #6
+// tool-policy universe from THIS catalog — so a registered-but-uncatalogued
+// tool sits outside ReconcileToolPolicyCeiling's reach and outside
+// GET /api/v1/tools. See metadata.go's own comment on the &HandoverTool{}
+// entry. Adding it is what moved this literal from 17 to 18.
 //
 // The count and the name were both stale from the moment those six landed, and
 // nothing noticed for two waves — this test was red on the wave-4 baseline
@@ -105,10 +115,12 @@ func TestBrowserBuiltinMetadata_ConstructsAllEleven(t *testing.T) {
 	}
 
 	metadata := BrowserBuiltinMetadata()
-	require.Len(t, metadata, 17,
-		"the browser catalog is seventeen tools: the eleven that shipped before ADR-075 plus D2's "+
-			"six (select_option, press_key, hover, snapshot, handle_dialog, upload_file). Still no "+
-			"take-control tool (FR-070) — acquiring the operator's tab is implicit and has no surface")
+	require.Len(t, metadata, 18,
+		"the browser catalog is eighteen tools: the eleven that shipped before ADR-075, plus D2's "+
+			"six (select_option, press_key, hover, snapshot, handle_dialog, upload_file), plus "+
+			"ADR-085 D7's browser_handover. Still no take-control tool (FR-070) — ACQUIRING the "+
+			"operator's tab is implicit and has no surface; browser_handover runs the other "+
+			"direction and RELEASES the wheel to the operator, which FR-070 does not speak to")
 
 	catalog := map[string]bool{}
 	for _, tool := range metadata {

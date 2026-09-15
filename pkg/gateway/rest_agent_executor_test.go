@@ -1003,54 +1003,10 @@ func TestCreateAgent_FastUpsertFailure_FallsBackAndSucceedsSilently(t *testing.T
 	require.True(t, ok, "the new agent must be resolvable in the registry after the full-reload fallback succeeds")
 }
 
-// TestUpdateAgent_ModelLiveApplyFailure_ReturnsWarning verifies that a model
-// change which persists to disk but cannot be applied to the running agent is
-// returned with a warning (not a hard failure).
-func TestUpdateAgent_ModelLiveApplyFailure_ReturnsWarning(t *testing.T) {
-	api := buildExecutorTestAPI(t)
-
-	// The model string must genuinely fail live-apply so the warning path fires.
-	// After the aggregator-resolver fix, a passthrough provider (openrouter /
-	// vivgrid) resolves ANY vendor-prefixed slug (that's the correct behavior —
-	// OpenRouter serves "anthropic/…"/"openai/…" from its own catalog), so no
-	// model NAME triggers a resolution failure while a passthrough is present.
-	// To reach the persist-but-cannot-apply path we pin the on-disk config to a
-	// single DEDICATED (non-passthrough) provider: an explicit providers list
-	// suppresses the default passthrough-catalog seeding, so an unmatched slug
-	// like "anthropic/…" has no route and fails in ApplyAgentModel →
-	// resolvedModelConfig — exactly the live-apply failure this test asserts
-	// surfaces as a (soft) warning rather than a hard error.
-	{
-		raw, err := os.ReadFile(api.configPath())
-		require.NoError(t, err)
-		var m map[string]any
-		require.NoError(t, json.Unmarshal(raw, &m))
-		m["providers"] = []map[string]any{
-			{
-				"provider":   "openai",
-				"model_name": "gpt-4o",
-				"model":      "openai/gpt-4o",
-				"api_base":   "https://api.openai.com/v1",
-				"api_key":    "sk-test-dummy",
-			},
-		}
-		out, err := json.Marshal(m)
-		require.NoError(t, err)
-		require.NoError(t, os.WriteFile(api.configPath(), out, 0o600))
-	}
-
-	body := `{"model":"anthropic/omnipus-nonexistent-model-zzz"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	var resp gen.Agent
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	require.NotNil(t, resp.Warning)
-	assert.Contains(t, *resp.Warning, "model saved to config but could not be applied")
-}
+// The model-change-that-cannot-be-applied case (UAT E-7) lives in
+// rest_agent_model_live_apply_test.go. The test that used to sit here pinned
+// the defect itself (a 200 with a "saved but not applied" warning while the
+// running agent kept its previous model).
 
 // agentUpdatedAtFromConfig reads the persisted agent record via the agent
 // store (ADR-054 — agents are per-entity records under

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log/slog"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
 // findMatchingBrace finds the index after the closing brace matching the
@@ -27,15 +29,22 @@ func findMatchingBrace(text string, pos int) int {
 // extractToolCallsFromText parses tool call JSON from response text.
 // CodexCliProvider uses this to extract tool calls that the model outputs
 // in its response text.
-func extractToolCallsFromText(text string) []ToolCall {
+//
+// Returns common.ErrToolArgumentsUndecodable when a call's arguments payload
+// is present but will not parse. Text-embedded calls are the likeliest of all
+// the paths to be cut off mid-payload — the CLI providers' whole transport is
+// the completion text itself — and this site used to hide that behind a
+// `_raw` key, spelled differently from the `raw` every other decode site used.
+// That divergence is itself the evidence nothing ever consumed either key.
+func extractToolCallsFromText(text string) ([]ToolCall, error) {
 	start := strings.Index(text, `{"tool_calls"`)
 	if start == -1 {
-		return nil
+		return nil, nil
 	}
 
 	end := findMatchingBrace(text, start)
 	if end == start {
-		return nil
+		return nil, nil
 	}
 
 	jsonStr := text[start:end]
@@ -53,19 +62,16 @@ func extractToolCallsFromText(text string) []ToolCall {
 
 	if err := json.Unmarshal([]byte(jsonStr), &wrapper); err != nil {
 		slog.Warn("tool_call_extract: failed to parse tool call JSON", "error", err)
-		return nil
+		return nil, nil
 	}
 
 	var result []ToolCall
 	for _, tc := range wrapper.ToolCalls {
-		var args map[string]any
-		if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-			slog.Warn("providers: tool call arguments not valid JSON; preserving raw",
-				"tool", tc.Function.Name,
-				"error", err,
-				"raw", tc.Function.Arguments,
-			)
-			args = map[string]any{"_raw": tc.Function.Arguments}
+		args, err := common.DecodeToolCallArguments(
+			json.RawMessage(tc.Function.Arguments), tc.Function.Name,
+		)
+		if err != nil {
+			return nil, err
 		}
 
 		result = append(result, ToolCall{
@@ -80,7 +86,7 @@ func extractToolCallsFromText(text string) []ToolCall {
 		})
 	}
 
-	return result
+	return result, nil
 }
 
 // stripToolCallsFromText removes tool call JSON from response text.

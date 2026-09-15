@@ -96,6 +96,103 @@ func (ts *turnState) recordToolSuccess(sig string) {
 	}
 }
 
+// Identical SUCCESSFUL repetition. The streak above deliberately counts only
+// failures ("A success ... resets the streak"), so a model repeating a call
+// that keeps SUCCEEDING was bounded only by the per-turn iteration cap (200
+// rounds by default). Two live cases on 2026-09-14 hit exactly that gap:
+//
+//   - UAT B-1 run 4: set_todos called 137 times in a row, every call a
+//     success, 64 of them byte-identical in one unbroken run, until a human
+//     pressed Stop at iteration 141.
+//   - A throwaway gateway: Mia polled a stuck verification task with
+//     list_jobs 174 times (plus list_tasks 8 times) in 4.5 minutes; the task
+//     never changed state.
+//
+// The run is keyed on the same signature as the failure streak and counts
+// consecutive successful dispatches of it with no other dispatched call in
+// between. It deliberately does NOT compare results: list_jobs can carry
+// engine timestamps (cap_observed_at) that differ between otherwise
+// identical polls of a stuck task, so a "same result" rule would miss the
+// polling case. At toolRepeatWarnThreshold the result gains a notice; at
+// toolRepeatStopThreshold the turn ends after the current round with a
+// visible final message, through the same finalization path the iteration
+// cap uses.
+const (
+	// toolRepeatWarnThreshold is the consecutive identical-success count at
+	// which the tool result gains an explicit "this is not making progress"
+	// notice.
+	toolRepeatWarnThreshold = 4
+	// toolRepeatStopThreshold is the consecutive identical-success count at
+	// which the turn is ended after the current round.
+	toolRepeatStopThreshold = 8
+)
+
+// recordToolSuccessRepeat notes one more successful dispatch of sig and
+// returns the length of the current run of consecutive successful dispatches
+// of that same signature. A different signature starts a new run of 1.
+func (ts *turnState) recordToolSuccessRepeat(sig string) int {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if sig == ts.toolRepeatSig {
+		ts.toolRepeatRun++
+	} else {
+		ts.toolRepeatSig = sig
+		ts.toolRepeatRun = 1
+	}
+	return ts.toolRepeatRun
+}
+
+// resetToolSuccessRepeat ends the current identical-success run. Called on
+// every failed dispatch (failures belong to the failure streak) and when a
+// queued user message supersedes a pending stop.
+func (ts *turnState) resetToolSuccessRepeat() {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	ts.toolRepeatSig = ""
+	ts.toolRepeatRun = 0
+}
+
+// requestToolRepeatStop records the final message the turn will end with at
+// the end of the current round. The first request in a round wins.
+func (ts *turnState) requestToolRepeatStop(notice string) {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	if ts.toolRepeatStopNotice == "" {
+		ts.toolRepeatStopNotice = notice
+	}
+}
+
+// takeToolRepeatStop returns and clears a pending stop notice ("" when none).
+func (ts *turnState) takeToolRepeatStop() string {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	notice := ts.toolRepeatStopNotice
+	ts.toolRepeatStopNotice = ""
+	return notice
+}
+
+// toolRepeatWarnNotice is appended to a successful tool result once its
+// identical-success run reaches toolRepeatWarnThreshold.
+func toolRepeatWarnNotice(toolName string, run int) string {
+	return fmt.Sprintf(
+		"\n\n[SYSTEM NOTICE: you have now called %q with these exact arguments %d times in a row. "+
+			"Calling it again unchanged will not make progress on its own — act on what it already "+
+			"returned, take a materially different step, or tell the user what you are waiting for. "+
+			"At %d identical calls in a row this turn will be stopped.]",
+		toolName, run, toolRepeatStopThreshold,
+	)
+}
+
+// toolRepeatStopNotice is the visible final content of a turn ended by the
+// identical-success run reaching toolRepeatStopThreshold.
+func toolRepeatStopNotice(toolName string, run int) string {
+	return fmt.Sprintf(
+		"I stopped this turn: I called `%s` with the same arguments %d times in a row without making "+
+			"progress. Tell me how you would like to proceed, or ask me to try a different approach.",
+		toolName, run,
+	)
+}
+
 // tripToolCircuitBreaker marks sig as hard-blocked for the remainder of this
 // turn, recording reason for the denial message every subsequent identical
 // call receives.

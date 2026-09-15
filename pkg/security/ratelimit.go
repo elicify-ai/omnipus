@@ -7,9 +7,8 @@
 //
 // ADR-053 D12 ("no money caps") retires the SEC-26 global daily USD cost cap
 // (formerly CheckGlobalCostCap / RecordSpend / SetDailyCostCap / GetDailyCost
-// here) — the only app-level spend brake is now TokenBudget
-// (pkg/agent/budget.go). The sliding-window rate limits (LLM calls per agent
-// per hour, tool calls per agent per minute) remain.
+// here). The sliding-window rate limits (LLM calls per agent per hour, tool
+// calls per agent per minute) remain.
 
 package security
 
@@ -34,8 +33,8 @@ import (
 // the resolved AgentType through this predicate.
 //
 // Note: the SEC-26 daily USD cost cap that this predicate also gated has been
-// retired per ADR-053 D12 (token budget is the sole spend brake). This
-// predicate now applies only to sliding-window rate limits.
+// retired per ADR-053 D12. This predicate now applies only to sliding-window
+// rate limits.
 func IsPrivilegedAgent(agentType string) bool {
 	return agentType == "core"
 }
@@ -144,8 +143,7 @@ func (sw *SlidingWindow) allowAt(now time.Time) RateLimitResult {
 //
 // ADR-053 D12: the SEC-26 global daily USD cost cap that this registry used
 // to enforce (SetDailyCostCap / CheckGlobalCostCap / RecordSpend /
-// GetDailyCost) has been retired — the only app-level spend brake is now
-// pkg/agent.TokenBudget. This registry now hosts ONLY the per-agent
+// GetDailyCost) has been retired. This registry now hosts ONLY the per-agent
 // sliding-window rate limits (LLM calls per hour, tool calls per minute).
 type RateLimiterRegistry struct {
 	mu      sync.RWMutex

@@ -317,12 +317,25 @@ func TestPlanLint_G5_ThreeShardsOverlapping_Rejected(t *testing.T) {
 
 // --- Nil / empty inputs ------------------------------------------------------
 
-func TestPlanLint_NilOrEmptyInputsPass(t *testing.T) {
+// TestPlanLint_NilPlanPasses pins the nil-PLAN nil-safety half of what used
+// to be TestPlanLint_NilOrEmptyInputsPass.
+//
+// Its second half asserted that an EMPTY MEMBER LIST also returns no
+// violation. That assertion pinned UAT defect A: an empty plan passed lint
+// vacuously (every check in lint.go is a predicate over pairs), approved, and
+// went `running` — after which a supervision correction populated it with
+// members that no lint had ever seen. The empty case now has its own,
+// strictly stronger assertion in TestPlanLint_EmptyMemberListIsRejected
+// (lint_empty_plan_test.go), which checks the returned violation's kind and
+// identity rather than only that it is nil. Coverage is not reduced by this
+// split: the nil-plan case below is unchanged, and the empty case went from
+// one nil-check to four assertions.
+func TestPlanLint_NilPlanPasses(t *testing.T) {
 	if lerr := Lint(nil, []task.Task{member("a", nil, []string{"x"})}); lerr != nil {
 		t.Fatalf("a nil plan must not panic and must return no violation, got: %v", lerr)
 	}
-	if lerr := Lint(&Plan{ID: "p"}, nil); lerr != nil {
-		t.Fatalf("an empty member list must return no violation, got: %v", lerr)
+	if lerr := Lint(nil, nil); lerr != nil {
+		t.Fatalf("a nil plan with no members must not panic and must return no violation, got: %v", lerr)
 	}
 }
 

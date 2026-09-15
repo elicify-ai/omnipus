@@ -24,7 +24,7 @@
 #   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
-.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-removed-providers spa-embed release-snapshot release-build golangci-lint-version-check
+.PHONY: all build install uninstall clean help test gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-removed-providers lint-no-orphan-turn-watchdog lint-guards spa-embed release-snapshot release-build golangci-lint-version-check
 
 # Build variables
 BINARY_NAME=omnipus
@@ -307,7 +307,7 @@ fmt: golangci-lint-version-check
 	@$(GOLANGCI_LINT) fmt
 
 ## lint: Run linters
-lint: golangci-lint-version-check lint-no-removed-providers
+lint: golangci-lint-version-check lint-guards
 	@$(GOLANGCI_LINT) run --build-tags $(GO_BUILD_TAGS)
 
 ## fix: Fix linting issues
@@ -448,6 +448,16 @@ lint-no-jpeg-screencast:
 lint-no-fail-closed-backfill:
 	bash scripts/check-no-fail-closed-backfill.sh
 
+## lint-no-goal-confirm-gate: Fail if the deleted /goal confirm-gate machinery reappears
+## Regression guard for ADR-081 — see scripts/check-no-goal-confirm-gate.sh's header comment.
+lint-no-goal-confirm-gate:
+	bash scripts/check-no-goal-confirm-gate.sh
+
+## lint-no-orphan-turn-watchdog: Fail if the deleted ADR-045 orphan-foreground-turn watchdog reappears
+## Regression guard for ADR-082 D1/D7 — see scripts/check-no-orphan-turn-watchdog.sh's header comment.
+lint-no-orphan-turn-watchdog:
+	bash scripts/check-no-orphan-turn-watchdog.sh
+
 ## lint-e2e-login-crosstalk: Fail if any E2E spec calls POST /api/v1/auth/login
 ## Regression guard: login re-mints the SINGLE-SLOT session_token_hash, silently invalidating the
 ## shared storageState cookie for every spec that runs later. Self-test first (a guard that cannot
@@ -462,6 +472,14 @@ lint-e2e-login-crosstalk:
 lint-no-removed-providers:
 	bash scripts/check-no-removed-providers-selfcheck.sh
 	bash scripts/check-no-removed-providers.sh
+
+## lint-guards: Run every discovered guard under scripts/ (scripts/guards.sh)
+## The eight targets above remain as thin delegates to their own guard for muscle memory and
+## direct references; this is the aggregate that `lint` actually depends on. Adding a guard to
+## the delivery is adding a scripts/check-*.sh file plus its companion — this target discovers
+## it automatically, with no Makefile edit (C-19, C-44, C-45, C-92, C-93).
+lint-guards:
+	bash scripts/guards.sh
 
 ## verify-contracts: Regenerate contracts, run wire-type lint, typecheck TS, fail if anything has drifted
 # Note: `tsc --noEmit` (without -b) is a silent no-op on a project-references

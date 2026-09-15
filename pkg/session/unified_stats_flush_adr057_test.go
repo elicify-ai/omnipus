@@ -288,11 +288,11 @@ func TestEventWrites_NotThrottled(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := meta.ID
 
-	goalCond := "ship-it"
-	require.NoError(t, store.SetMeta(sessionID, MetaPatch{GoalCondition: &goalCond, GoalRoundsUsed: intPtr(1)}))
-	goalOnDisk, err := u5ReadGoalFile(filepath.Join(store.BaseDir(), sessionID))
+	askSet := "ship-it"
+	require.NoError(t, store.SetMeta(sessionID, MetaPatch{PendingAskJSON: &askSet}))
+	pendingAskOnDisk, err := u5ReadPendingAskFile(filepath.Join(store.BaseDir(), sessionID))
 	require.NoError(t, err)
-	assert.Equal(t, 1, goalOnDisk.GoalRoundsUsed, "/goal round's GoalRoundsUsed must be on disk immediately")
+	assert.Equal(t, askSet, pendingAskOnDisk.PendingAskJSON, "a pending-ask park's PendingAskJSON must be on disk immediately")
 
 	loopMode := "interval"
 	require.NoError(t, store.SetMeta(sessionID, MetaPatch{LoopMode: &loopMode, LoopRunCount: intPtr(2)}))
@@ -375,12 +375,19 @@ func TestStatsCache_FieldGroupIsolationUnderInterleavedWriters(t *testing.T) {
 		require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "user", Content: "x", Tokens: 5}))
 	}
 
-	// A /goal round and a Status transition — each of which touches the
-	// cache via u5WriteGoalLocked/u5WriteIdentityLocked, which mutate ONLY
-	// their own field group in place (never `metaCache[id] = meta.Clone()`
-	// wholesale) — so neither must clobber the still-pending Stats delta.
-	goalCond := "mid-flight-goal"
-	require.NoError(t, store.SetMeta(sessionID, MetaPatch{GoalCondition: &goalCond}))
+	// A pending-ask park and a Status transition — each of which touches the
+	// cache via u5WritePendingAskLocked/u5WriteIdentityLocked, which mutate
+	// ONLY their own field group in place (never `metaCache[id] =
+	// meta.Clone()` wholesale) — so neither must clobber the still-pending
+	// Stats delta.
+	//
+	// ADR-086 GOAL-FR-005 (wave S6): this test used a /goal round
+	// (u5WriteGoalLocked/goal.json) as its interleaved-writer example
+	// before wave S6 retired the goal group from session meta entirely.
+	// PendingAskJSON/u5WritePendingAskLocked — wave S2's own addition to
+	// this same field-group-isolation discipline — fills its role here.
+	askSet := "mid-flight-pending-ask"
+	require.NoError(t, store.SetMeta(sessionID, MetaPatch{PendingAskJSON: &askSet}))
 	status := StatusActive
 	require.NoError(t, store.SetMeta(sessionID, MetaPatch{Status: &status}))
 
@@ -390,9 +397,9 @@ func TestStatsCache_FieldGroupIsolationUnderInterleavedWriters(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, k*5, onDisk.TokensIn, "stats.json must equal K's exact deltas — zero lost, zero double-counted")
 
-	goalOnDisk, err := u5ReadGoalFile(filepath.Join(store.BaseDir(), sessionID))
+	pendingAskOnDisk, err := u5ReadPendingAskFile(filepath.Join(store.BaseDir(), sessionID))
 	require.NoError(t, err)
-	assert.Equal(t, "mid-flight-goal", goalOnDisk.GoalCondition, "goal.json must carry the goal writer's own value")
+	assert.Equal(t, "mid-flight-pending-ask", pendingAskOnDisk.PendingAskJSON, "pending_ask.json must carry the pending-ask writer's own value")
 
 	identOnDisk, err := u5ReadIdentityFile(filepath.Join(store.BaseDir(), sessionID))
 	require.NoError(t, err)

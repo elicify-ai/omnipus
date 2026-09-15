@@ -96,7 +96,7 @@ func TestDelete_FinalUnlinkFailure_ReturnsNonZeroEntryWithError(t *testing.T) {
 	}))
 	require.NoError(t, err)
 
-	_, uploaded, uploadErr := lib.Upload("leaked.bin", gen.UserUpload, strings.NewReader("bytes"))
+	_, uploaded, uploadErr := lib.Upload("leaked.bin", gen.MediaLibraryEntrySourceUserUpload, strings.NewReader("bytes"))
 	require.NoError(t, uploadErr)
 	require.NotNil(t, uploaded.Id)
 
@@ -123,7 +123,7 @@ func TestDelete_QuarantineRenameHardFailure_ReturnsZeroEntryWithError(t *testing
 	}))
 	require.NoError(t, err)
 
-	_, uploaded, uploadErr := lib.Upload("still-there.bin", gen.UserUpload, strings.NewReader("bytes"))
+	_, uploaded, uploadErr := lib.Upload("still-there.bin", gen.MediaLibraryEntrySourceUserUpload, strings.NewReader("bytes"))
 	require.NoError(t, uploadErr)
 	require.NotNil(t, uploaded.Id)
 
@@ -192,7 +192,7 @@ func TestHandleWorkspaceMediaDelete_Success_AuditsLogsAndReturns200(t *testing.T
 
 	lib := api.agentLoop.GetWorkspaceLibrary(workspaceID)
 	require.NotNil(t, lib)
-	_, uploaded, uploadErr := lib.Upload("note.txt", gen.UserUpload, strings.NewReader("bytes"))
+	_, uploaded, uploadErr := lib.Upload("note.txt", gen.MediaLibraryEntrySourceUserUpload, strings.NewReader("bytes"))
 	require.NoError(t, uploadErr)
 	mediaID := uploaded.Id.String()
 

@@ -145,3 +145,40 @@ An adversarial verification pass over the already-merged §7 implementation foun
 - **H3 — indented code blocks (fixed).** A marker inside a markdown indented code block (leading tab, or 4-or-more leading spaces) counted as a live signal, since the wrapper class swallows leading whitespace unconditionally. Fixed by the same `isExcludedMarkerLine` pre-check: a leading tab or >=4-space indent excludes the line; a 1-3 space indent (`buildPrompt`'s own instruction lines use exactly 2) is unaffected and still matches. Pinned by `TestParseTaskCompletionSignal_IndentedCodeBlock_NotAMarker` (4-space and tab excluded, 2-space still matches).
 - **H4 — unclosed-fence swallow (confirmed accepted-safe, no code change).** An unbalanced opening fence with no matching close swallows a genuine trailing marker and fails the task closed — this is `computeFencedLines`' existing, deliberate conservative choice and was left unchanged. Pinned by name (`TestParseTaskCompletionSignal_UnclosedFence_FailsClosed_KnownLimitation`) and added to §3's limitations list so a future reader doesn't mistake it for an oversight.
 - **N1 — blockquote-prefixed marker (confirmed accepted, no code change, note added).** `> TASK_STATUS: success` does not match (`> ` is outside the tolerated wrapper class) and fails closed; this was already true before the hardening pass and remains so. Added to §3 alongside H4's note, with a small pinning test (`TestParseTaskCompletionSignal_BlockquotePrefixed_NotAMarker`) so the silent non-match reads as deliberate.
+
+## 8. Amendment — 2026-09-14 (issue #710): the marker is for external CLI workers only, and every claim is judged
+
+The founder's decisions of 2026-09-14 change two things this ADR decided. The text above is kept unchanged as the record of what was decided on 2026-07-13.
+
+**§2.1 said:** "A native agent that calls `task_update` to a terminal status mid-run is unaffected by anything in this ADR — the marker contract only engages when that check finds the task still non-terminal, i.e. no explicit tool call happened."
+
+**Now:** a worker can never mark its own running task done or failed. `update_task`, and the system agent's `update_task_in_workspace`, refuse any status write on the task the caller's own run is executing, and the refusal names `goal_claim` as the way to finish. A task completes only when its goal's claim is upheld by the Judge.
+
+**§2.3 said:** "**Found, success** → `completeTaskWithResult(t, taskSessionID, task.StatusDone, signal.Result)`", "**Found, failure** → same call with `task.StatusFailed`", and "**Not found** (includes the empty-output case) → `task.StatusFailed`".
+
+**Now:**
+
+- A **native** worker claims with the `goal_claim` tool. It is not taught the `TASK_STATUS` marker, and a marker it types anyway is not read.
+- A **`subagent_3p`** worker (an external CLI, which cannot call Omnipus tools) still ends with the marker, and the marker feeds the same claim path as `goal_claim`:
+  - `[goal:evidence] <one line>` directly before `TASK_STATUS: success` is a met claim, which the Judge checks;
+  - `TASK_STATUS: success` with no evidence line spends one goal try, and the worker is told to add the line;
+  - `TASK_STATUS: failure` is a blocked claim: the task ends Failed "Blocked: <TASK_SUMMARY>", with no attempt used, no Judge call and no restart.
+- **No claim at all** is no longer an immediate failure. The turn spends one goal try and the worker is told how to claim. When the run's tries are spent, the run fails as a whole and the task restarts in a fresh run, up to its attempt limit (default 3); then it ends Failed with the reason (see ADR-086 §8).
+
+§2.2's parser, §2.6's context-eviction breadcrumb (which now teaches `goal_claim` on native runs) and §3's accepted limitations are unchanged.
+
+Code: `pkg/agent/task_run_loop.go` (`executeTaskRun`, `finishRunTurn`, `resolveRunClaim`, `adjudicateRunClaim`, `consumeTaskAttempt`, `endTaskWithoutAttempt`); `pkg/agent/task_executor.go::buildPrompt`; the in-run status refusal in `pkg/tools/task.go` and `pkg/sysagent/tools/task.go`. `finishTaskRun` no longer exists.
+
+## 9. Amendment — 2026-09-15 (issue #710): an error only an operator can fix ends the task at once
+
+The founder's decision of 2026-09-15 narrows one rule in §8. The text above is kept unchanged as the record of what was decided on 2026-09-14.
+
+**§8 (with ADR-086 §8) said:** a run that breaks — an execution error — fails as a whole, uses one attempt, and the task restarts in a fresh run, up to its attempt limit.
+
+**Now:**
+
+- A worker turn refused for a reason **only an operator can fix** ends the task **Failed at once**, with the reason and how to fix it. No attempt is used and the task does not restart: every fresh run would be refused the same way until someone changes a setting. The reasons are: the provider rejected the key, or no usable key is set (the provider answers 401 or 403); the provider sign-in has expired; the agent's provider is not configured; the agent has no model; the model's context window is unknown; the agent is on no workspace team; the agent's working folder cannot be opened. A Judge refused for one of these reasons ends the task the same way ("The Judge could not run: …").
+- A **temporary** error — a rate limit, a network or provider outage, a stalled stream, a timeout, or an error nothing recognises — still breaks the run: it uses one attempt and the task restarts, up to its attempt limit.
+- What the task result, the restarted run's prompt, the run's transcript and the goal's outcome line say about the error is plain wording: for an operator-only refusal, the reason and the fix, built from the agent's settings; for a temporary error, the contract's message for its error code. The provider's raw error text, which can repeat a credential or the request, is never copied there; it stays in the gateway log, with registered credentials scrubbed.
+
+Code: `pkg/agent/operator_only_turn_error.go::classifyOperatorOnlyTurnError`; `pkg/agent/task_run_loop.go::finishRunTurn` and `taskOperatorFixReason`; `pkg/agent/translate_error.go::turnErrorUserText`.

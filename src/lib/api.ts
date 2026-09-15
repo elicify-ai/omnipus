@@ -26,6 +26,7 @@ import { ApiError, isApiError as isApiErrorFn, getErrorMessage } from './api-err
 export { ApiError, isApiError, getErrorMessage } from './api-error'
 import { maybeDevToast } from './dev-toast'
 import { logError } from './telemetry'
+import { normalizeTruncationReason, type TruncationReason } from './truncation'
 
 import type { ZodType } from 'zod'
 import { z } from 'zod'
@@ -175,8 +176,6 @@ import {
   SlashCommand as SlashCommandSchema,
   // Memory/recap settings (workspace-heartbeat-memory-config-spec.md FR-019):
   MemorySettings as MemorySettingsSchema,
-  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
-  TokenBudgetStatus as TokenBudgetStatusSchema,
   // ADR-066 D9 — global context-budget settings (Settings → Models):
   ContextSettings as ContextSettingsSchema,
   // M11 per-(agent, workspace) email mailbox account (contract-first #8):
@@ -287,6 +286,7 @@ if ((import.meta.env.DEV || import.meta.env.MODE === 'test' || (typeof navigator
 // Types whose generated shape is canonical (no local body) — import into scope
 // so function return-type annotations compile, then re-export for consumers.
 import type {
+  GoalOutcome as WireGoalOutcome,
   LoginResponse,
   ProbeProviderRequest,
   ProbeProviderResponse,
@@ -403,8 +403,6 @@ import type {
   WorkspaceInstructionsResponse,
   WorkspaceInstructionsRequest,
   TokenUsageSummary,
-  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
-  TokenBudgetStatus,
   // ADR-066 D9 — global context-budget settings (Settings → Models):
   ContextSettings,
   ContextSettingsUpdate,
@@ -600,8 +598,6 @@ export type {
   WorkspaceInstructionsResponse,
   WorkspaceInstructionsRequest,
   TokenUsageSummary,
-  // ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget status:
-  TokenBudgetStatus,
   // ADR-066 D9 — global context-budget settings (Settings → Models):
   ContextSettings,
   ContextSettingsUpdate,
@@ -1245,6 +1241,47 @@ interface MessageBase { // not-wire-format
   type?: 'judge_verdict'
   /** The verdict payload when `type === 'judge_verdict'` (wire `Message.verdict`, same shape as the live `JudgeVerdictFrame` push minus the `type`/`session_id` discriminator fields). */
   verdict?: JudgeVerdict
+  /**
+   * Goal outcome line (founder decision 2026-09-14): set on a `role: 'system'`
+   * message that records how a goal ENDED — from the persisted
+   * `system_subtype: goal_outcome` transcript entry on a cold REST load
+   * (`rawToMessage`), or from the live/replayed `goal_outcome` WS frame
+   * (store/chat.ts → `buildGoalOutcomeInsertion`, src/lib/goalOutcome.ts).
+   * Renderers show `GoalOutcomeRow` for it, regardless of Verbose chat.
+   */
+  goalOutcome?: WireGoalOutcome
+  /**
+   * ADR-087 D2 — set on the last assistant entry of an incomplete turn.
+   * Only populated for assistant messages (only role the backend ever
+   * stamps this on — `MarkLastEntryTruncated` writes the last assistant
+   * transcript entry). Placed on the shared base (rather than only
+   * `AssistantMessage`) matching the existing `model`/`verdict` pattern, so
+   * the discriminated `Message` union stays trivially narrowable without a
+   * role guard at every read site.
+   */
+  truncated?: boolean
+  /**
+   * ADR-087 D2/D1 — narrows why `truncated` is true. Drives the muted
+   * footer suffix (`getMessageStatusSuffix`, src/lib/truncation.ts):
+   * `'cancelled'` renders `(interrupted)`, `'max_output_tokens'` renders
+   * `(cut off at the output limit)`. Already legacy-defaulted to
+   * `'cancelled'` (ADR-087 D2) by the callers that set this field —
+   * `rawToMessage` (cold-load) and the WS replay reducer
+   * (`store/chat.ts`'s `case 'replay_message'`) — via
+   * `normalizeTruncationReason`.
+   */
+  truncationReason?: TruncationReason
+  /**
+   * Turn-correlation id (wire `Message.turn_id`, stamped by the backend on
+   * every real assistant entry). Forwarded by rawToMessage so
+   * chat.ts's `mergeJudgeVerdictHistory` can anchor a cold-loaded
+   * `judge_verdict` entry's thread position to the judged turn's assistant
+   * message — the one stable per-turn correlator shared by the REST
+   * transcript and the WS-replay path (replay frames carry `turn_id` but
+   * no timestamp, so timestamps cannot order a replay-populated bucket;
+   * see that action's doc comment).
+   */
+  turnId?: string
 }
 
 export interface UserMessage extends MessageBase { // not-wire-format: SPA-internal user message. Status 'error' means the WS send failed; Retry button re-sends the content.
@@ -1371,7 +1408,7 @@ interface RawToolCall { // not-wire-format: adapter alias over the generated Too
 
 interface RawMessage { // not-wire-format: adapter alias over the generated Message wire schema. Used only in rawToMessage() to delegate ToolCall transformation. The wire `status` enum values differ from the SPA's ('ok'|'error'|'interrupted' vs 'streaming'|'done'|'error'|'interrupted'). Never sent to or received as a standalone type from the gateway.
   id: string
-  type?: 'message' | 'compaction' | 'system'
+  type?: 'message' | 'compaction' | 'system' | 'judge_verdict'
   role?: 'user' | 'assistant' | 'system'
   content?: string
   summary?: string
@@ -1390,6 +1427,40 @@ interface RawMessage { // not-wire-format: adapter alias over the generated Mess
    * placeholder text per spec §18 Q6).
    */
   model?: string
+  /**
+   * ADR-087 D2 — set on the last assistant entry when it is incomplete. See
+   * `truncation_reason` for why. Forwarded to AssistantMessage/ChatMessage
+   * so a cold-loaded transcript renders the same cut-off notice a live or
+   * replayed turn would (rawToMessage below applies the legacy-default rule
+   * via `normalizeTruncationReason`).
+   */
+  truncated?: boolean
+  /**
+   * ADR-087 D2 — narrows why `truncated` is true. Absent on a
+   * `truncated: true` entry means `'cancelled'` (every entry written before
+   * this field existed predates it and was always a cancel).
+   */
+  truncation_reason?: TruncationReason
+  /**
+   * Goal outcome line — present on a `type: system, system_subtype:
+   * goal_outcome` entry (contracts/components/schemas/GoalOutcome.yaml).
+   * Forwarded by rawToMessage so a reloaded thread shows how a goal ended.
+   */
+  goal_outcome?: WireGoalOutcome
+  /**
+   * Judge verdict payload — present on a `type: judge_verdict, role: system`
+   * entry (contracts/components/schemas/JudgeVerdict.yaml, wire
+   * `Message.verdict`). Forwarded by rawToMessage so a cold-loaded (REST)
+   * transcript can render `JudgeVerdictThreadCard`, gated by
+   * `shouldRenderJudgeVerdictInThread` (toolVisibility.ts) — ADR-049
+   * D2/D4/SD-C10. See rawToMessage's own comment on this field for why REST
+   * is currently the only carrier that can populate the card.
+   */
+  verdict?: JudgeVerdict
+  /**
+   * Turn-correlation id (wire `Message.turn_id`) — see MessageBase.turnId.
+   */
+  turn_id?: string
 }
 
 function rawToToolCall(raw: RawToolCall): ToolCall {
@@ -1458,6 +1529,21 @@ function rawToMessage(raw: RawMessage): Message {
       cost: raw.cost,
       agentId: raw.agent_id || undefined,
       status: 'done',
+      ...(raw.goal_outcome ? { goalOutcome: raw.goal_outcome } : {}),
+      // ADR-049 D2/D4/SD-C10: a persisted `type: judge_verdict` entry cold-
+      // loaded via REST must carry `type`/`verdict` through so ChatScreen's
+      // `msg.type === 'judge_verdict'` branch can render
+      // JudgeVerdictThreadCard. Before this fix `raw.type`/`raw.verdict`
+      // were silently dropped here, so the card never appeared even when
+      // Verbose chat was on. Live-thread-card fix (2026-09-14): the
+      // live/replayed `judge_verdict` WS frame (store/chat.ts's `case
+      // 'judge_verdict'`) now ALSO carries `session_id` for scope=task/
+      // scope=goal (JudgeVerdictFrame.yaml) and inserts the same card
+      // directly (src/lib/judgeVerdictThread.ts), keyed by this entry's own
+      // id — so this REST path is no longer the only carrier; it remains
+      // the fallback for scope=plan (no session_id) and for a cold-only
+      // load with no live WS connection.
+      ...(raw.type === 'judge_verdict' && raw.verdict ? { type: 'judge_verdict' as const, verdict: raw.verdict } : {}),
     } satisfies SystemMessage
   }
   // role === 'assistant' (default)
@@ -1468,6 +1554,12 @@ function rawToMessage(raw: RawMessage): Message {
   // here so the renderer's `if (model) ` check covers both cases.
   const rawModel = raw.model?.trim()
   const modelField = rawModel && rawModel.length > 0 ? rawModel : undefined
+  // ADR-087 D2 — cold-load (REST) truncation plumbing, layer 3 of the SPA's
+  // six-layer path (§7.2). `normalizeTruncationReason` applies the legacy
+  // default (absent reason on a truncated entry means 'cancelled') so the
+  // cold-load and WS-replay paths (store/chat.ts's `case 'replay_message'`)
+  // derive the same value from the same rule.
+  const truncationReason = normalizeTruncationReason(raw.truncated, raw.truncation_reason)
   return {
     id: raw.id,
     session_id: undefined,
@@ -1483,7 +1575,9 @@ function rawToMessage(raw: RawMessage): Message {
     // (never on persisted wire messages) so this branch guards for undefined only.
     status: (baseStatus === 'done' || baseStatus === 'error' || baseStatus === 'interrupted') ? baseStatus : 'done',
     tool_calls: raw.tool_calls?.map(rawToToolCall),
+    ...(raw.turn_id ? { turnId: raw.turn_id } : {}),
     ...(modelField ? { model: modelField } : {}),
+    ...(raw.truncated ? { truncated: true as const, truncationReason } : {}),
   } satisfies AssistantMessage
 }
 
@@ -1960,9 +2054,8 @@ export interface Config { // not-wire-format: SPA-internal configuration shape p
     // endpoint since Wave 3. This field is still populated on read for
     // backward compatibility but must NOT be sent on updateConfig calls.
     prompt_injection_level?: 'off' | 'low' | 'medium' | 'high'
-    // ADR-053 D12 retired the SEC-26 USD cap; the app-level spend brake is
-    // now the token budget (set via /api/v1/settings/token-budget). The
-    // daily_cost_cap field is gone from both the wire types and this Config.
+    // ADR-053 D12 retired the SEC-26 USD cap. The daily_cost_cap field is
+    // gone from both the wire types and this Config.
     exec_timeout_seconds?: number
     max_background_seconds?: number
     enable_deny_patterns?: boolean
@@ -2133,7 +2226,7 @@ function rawToFrontendConfig(raw: Record<string, unknown>): Config {
       // corrupted-but-truthy value would silently NaN out and strip the
       // guardrail on the next PUT rather than failing loudly. Runtime-checked
       // and dropped to undefined (== "not configured") instead.
-      // ADR-053 D12: daily_cost_cap is gone — token budget is the sole brake.
+      // ADR-053 D12: daily_cost_cap is gone.
       exec_timeout_seconds: castOptionalNumber(security.exec_timeout_seconds, 'security.exec_timeout_seconds'),
       max_background_seconds: castOptionalNumber(security.max_background_seconds, 'security.max_background_seconds'),
       enable_deny_patterns: security.enable_deny_patterns as boolean | undefined,
@@ -2199,8 +2292,7 @@ function frontendToRawConfig(data: Partial<Config>): Record<string, unknown> {
     if (data.security.exec_approval !== undefined) sec.exec_approval = data.security.exec_approval
     // prompt_injection_level intentionally omitted — owned by PUT /security/prompt-guard.
     // daily_cost_cap intentionally omitted — ADR-053 D12 retired the SEC-26
-    // USD cap; the app-level spend brake is the token budget, set via
-    // PUT /api/v1/settings/token-budget.
+    // USD cap.
     if (data.security.exec_timeout_seconds !== undefined) sec.exec_timeout_seconds = data.security.exec_timeout_seconds
     if (data.security.max_background_seconds !== undefined) sec.max_background_seconds = data.security.max_background_seconds
     if (data.security.enable_deny_patterns !== undefined) sec.enable_deny_patterns = data.security.enable_deny_patterns
@@ -4988,36 +5080,5 @@ export function putContextSettings(body: ContextSettingsUpdate): Promise<Context
     '/settings/context',
     { method: 'PUT', body: JSON.stringify(body) },
     ContextSettingsSchema as ZodType<ContextSettings>,
-  )
-}
-
-// ADR-053 D12/R§8.3 (FE-6) — app-level OVERALL token budget for the Usage
-// screen. ONE shared pool across all workloads (owner/member/verifier/Judge);
-// no per-plan cap, no money/USD cap, no IsPrivilegedAgent exemption (D12).
-// GET returns the live spend accounting (TokenBudgetStatus). PUT persists the
-// operator-set ceiling; the ceiling is restart-gated (R§8.3e — a live ceiling
-// change would straddle two budgets, the N-15 hazard; the live lever for
-// runaway spend is the existing Stop/cancel cascade, NOT a live token cut).
-// The PUT body is the single operator-set field (`budget`; 0 = unbounded
-// sentinel, R§8.3a) — no hand-written request wire type; the response is
-// zod-validated against the landed TokenBudgetStatus schema (contract-first #8).
-// See contracts/components/schemas/TokenBudgetStatus.yaml.
-export const tokenBudgetQueryKeys = {
-  status: ['token-budget', 'status'] as const,
-}
-
-export function fetchTokenBudgetStatus(): Promise<TokenBudgetStatus> {
-  return request<TokenBudgetStatus>(
-    '/settings/token-budget',
-    undefined,
-    TokenBudgetStatusSchema as ZodType<TokenBudgetStatus>,
-  )
-}
-
-export function updateTokenBudget(budget: number): Promise<TokenBudgetStatus> {
-  return request<TokenBudgetStatus>(
-    '/settings/token-budget',
-    { method: 'PUT', body: JSON.stringify({ budget }) },
-    TokenBudgetStatusSchema as ZodType<TokenBudgetStatus>,
   )
 }

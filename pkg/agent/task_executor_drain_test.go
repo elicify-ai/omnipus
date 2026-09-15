@@ -45,7 +45,7 @@ import (
 // (task_executor_no_per_agent_cap_test.go) but takes an explicit provider —
 // needed here so TestTaskExecutor_Drain_GoalLoopRedispatchChainTerminatesAtNextHop
 // can synchronously flip te.draining from INSIDE the worker's own Chat call,
-// something goroutineCtxHook's short-circuit-before-finishTaskRun seam cannot
+// something goroutineCtxHook's short-circuit-before-the-run-loop seam cannot
 // reach (it returns before the goal-loop's redispatch decision is ever made).
 func newDrainTestExecutorWithProvider(t *testing.T, provider providers.LLMProvider) (*TaskExecutor, *task.Store, *AgentLoop) {
 	t.Helper()
@@ -205,67 +205,51 @@ func TestTaskExecutor_Drain_RefusesNewDispatch(t *testing.T) {
 
 // --- (c) A goal-loop redispatch chain terminates at its next hop -----------
 
-// drainMidChainProvider is the LLM provider for the goal-loop redispatch
-// test below. Its FIRST Chat call fires onFirstCall SYNCHRONOUSLY, before
-// returning the scripted "success + evidence" claim — letting the test flip
-// te.draining from INSIDE the currently-executing attempt, deterministically
-// (no sleeps): the redispatch this attempt's own trailing defer performs
-// happens strictly after Chat returns (see runTask's doc comment on why the
-// redispatch call is made from the outermost deferred closure), so by the
-// time that redispatch call reaches ExecuteTask's entry gate, draining is
-// already guaranteed to be true.
+// drainMidChainProvider wraps a goal_claim worker for the restart test below.
+// The FIRST turn it starts fires onFirstCall SYNCHRONOUSLY, before that turn's
+// claim is returned — letting the test flip te.draining from INSIDE the
+// currently-executing run, deterministically (no sleeps): the restart a failed
+// run hands back is dispatched strictly after the run returns (runTask's
+// outermost deferred closure), so by the time that restart reaches
+// ExecuteTask's entry gate, draining is already guaranteed to be true.
 type drainMidChainProvider struct {
-	mu           sync.Mutex
-	calls        int
-	onFirstCall  func()
-	responseBody string
+	worker      *claimingWorker
+	once        sync.Once
+	onFirstCall func()
 }
 
 func (p *drainMidChainProvider) Chat(
-	_ context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any,
+	ctx context.Context, msgs []providers.Message, defs []providers.ToolDefinition, model string, opts map[string]any,
 ) (*providers.LLMResponse, error) {
-	p.mu.Lock()
-	p.calls++
-	first := p.calls == 1
-	p.mu.Unlock()
-	if first && p.onFirstCall != nil {
-		p.onFirstCall()
+	resp, err := p.worker.Chat(ctx, msgs, defs, model, opts)
+	if p.onFirstCall != nil && p.worker.turnsStarted() >= 1 {
+		p.once.Do(p.onFirstCall)
 	}
-	return &providers.LLMResponse{Content: p.responseBody}, nil
+	return resp, err
 }
 
 func (p *drainMidChainProvider) GetDefaultModel() string { return "drain-mid-chain-model" }
 
-func (p *drainMidChainProvider) callCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.calls
-}
-
 // TestTaskExecutor_Drain_GoalLoopRedispatchChainTerminatesAtNextHop is
-// scenario (c) from the fix-wave finding: a goal-loop redispatch chain that
-// would otherwise keep re-attempting the SAME task (the judge always reports
-// "unmet", and MaxAttempts leaves plenty of budget) stops after exactly ONE
-// real dispatch once draining is set DURING that first attempt's own
-// execution — proving the entry-level wg.Add-then-check-draining ordering
-// (finding #1) actually closes the window: the first attempt is allowed to
-// run to completion (its own store writes are not caught mid-flight), but
-// its trailing self-redispatch is refused, so the chain never reaches a
-// second real LLM call.
+// scenario (c) from the fix-wave finding: a chain of task restarts that would
+// otherwise keep re-running the SAME task (the judge always reports "unmet",
+// each run has one goal try, and max_attempts leaves plenty of budget) stops
+// after exactly ONE run once draining is set DURING that run's own execution —
+// proving the entry-level wg.Add-then-check-draining ordering (finding #1)
+// actually closes the window: the first run is allowed to finish (its own
+// store writes are not caught mid-flight), but the restart it hands back is
+// refused, so the chain never reaches a second worker turn.
 func TestTaskExecutor_Drain_GoalLoopRedispatchChainTerminatesAtNextHop(t *testing.T) {
-	worker := &drainMidChainProvider{
-		responseBody: "did the work\n[goal:evidence] verified against the acceptance criterion\n" +
-			"TASK_STATUS: success\nTASK_SUMMARY: I finished it.",
-	}
-	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
+	worker := &drainMidChainProvider{worker: newClaimingWorker(turnClaimMet("verified against the acceptance criterion"))}
+	al, judgeInst := newGoalLoopTestLoop(t, worker, func(cfg *config.Config) { cfg.Planning.GoalMaxRounds = 1 })
 	judgeInst.Provider = alwaysUnmetJudgeProvider()
 
 	// Flip draining from INSIDE the first (and, if this fix regresses, only
-	// the first of MANY) worker Chat call — see drainMidChainProvider's doc
+	// the first of MANY) worker turn — see drainMidChainProvider's doc
 	// comment for why this is deterministic rather than a timing guess.
 	worker.onFirstCall = func() { al.taskExecutor.draining.Store(true) }
 
-	maxAttempts := 5 // far more than the 1 attempt this test expects to see
+	maxAttempts := 5 // far more than the 1 run this test expects to see
 	tk := &task.Task{
 		Title: "redispatch-chain-vs-drain", Prompt: "do it", Action: task.ActionLLM,
 		AgentID: "native-agent", Priority: 3, WorkspaceID: "default", Status: task.StatusNext,
@@ -276,33 +260,32 @@ func TestTaskExecutor_Drain_GoalLoopRedispatchChainTerminatesAtNextHop(t *testin
 
 	require.NoError(t, al.taskExecutor.ExecuteTask(context.Background(), tk.ID, nil))
 
-	// The first (only) attempt runs synchronously to completion inside the
-	// dispatched goroutine; wait for it to land back in the store as `next`
-	// with AttemptCount==1 (consumeAttemptOrExhaust's unmet-with-budget-left
-	// outcome) rather than sleeping a fixed duration.
+	// The first run spends its one goal try, fails, and consumeTaskAttempt
+	// re-queues the task as `next` with AttemptCount==1 before handing back
+	// the restart; wait for that rather than sleeping a fixed duration.
 	require.Eventually(t, func() bool {
 		cur, err := al.taskStore.Get(tk.ID)
 		return err == nil && cur.AttemptCount == 1 && cur.Status == task.StatusNext
-	}, 5*time.Second, 10*time.Millisecond,
-		"task must settle at AttemptCount=1, status=next (the first attempt's own outcome) within 5s")
+	}, 10*time.Second, 10*time.Millisecond,
+		"task must settle at AttemptCount=1, status=next (the failed first run's own outcome) within 10s")
 
-	// Give any (incorrect, if the fix regressed) further redispatch a real
-	// window to occur before asserting the chain stayed at exactly one call —
-	// a bare Eventually success above only proves attempt #1 landed, not
-	// that no attempt #2 ever started.
+	// Give any (incorrect, if the fix regressed) restart a real window to
+	// occur before asserting the chain stayed at exactly one run — a bare
+	// Eventually success above only proves run #1 landed, not that no run #2
+	// ever started.
 	require.Never(t, func() bool {
-		return worker.callCount() > 1
+		return worker.worker.turnsStarted() > 1
 	}, 500*time.Millisecond, 20*time.Millisecond,
-		"the goal-loop redispatch chain must terminate at its next hop once draining — "+
-			"a second real worker dispatch means ExecuteTask's entry-level draining check "+
-			"is not actually gating the self-redispatch call runTask's trailing defer makes")
+		"the restart chain must terminate at its next hop once draining — "+
+			"a second worker turn means ExecuteTask's entry-level draining check "+
+			"is not actually gating the restart runTask's trailing defer dispatches")
 
 	final, err := al.taskStore.Get(tk.ID)
 	require.NoError(t, err)
 	assert.Equal(t, 1, final.AttemptCount,
-		"exactly one attempt must have been consumed — the refused redispatch must not double-increment it")
+		"exactly one attempt must have been consumed — the refused restart must not double-increment it")
 	assert.Equal(t, task.StatusNext, final.Status,
-		"the task must be left at `next` (re-queued by the first attempt's own outcome), "+
+		"the task must be left at `next` (re-queued by the first run's own outcome), "+
 			"never advanced to `in_progress` by a second dispatch that should have been refused")
 }
 

@@ -161,7 +161,10 @@ func TestParseResponse_ThinkingBlock(t *testing.T) {
 		StopReason: anthropic.StopReasonEndTurn,
 	}
 
-	result := parseResponse(resp)
+	result, err := parseResponse(resp)
+	if err != nil {
+		t.Fatalf("parseResponse: %v", err)
+	}
 
 	if result.Reasoning != "Let me reason step by step..." {
 		t.Errorf("Reasoning = %q, want thinking content", result.Reasoning)
@@ -182,7 +185,10 @@ func TestParseResponse_NoThinkingBlock(t *testing.T) {
 		StopReason: anthropic.StopReasonEndTurn,
 	}
 
-	result := parseResponse(resp)
+	result, err := parseResponse(resp)
+	if err != nil {
+		t.Fatalf("parseResponse: %v", err)
+	}
 
 	if result.Reasoning != "" {
 		t.Errorf("Reasoning = %q, want empty", result.Reasoning)

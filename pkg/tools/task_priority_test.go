@@ -66,6 +66,7 @@ func TestTaskCreate_PriorityBoundaryMatrix(t *testing.T) {
 				"prompt":   "do it",
 				"agent_id": "agent-b",
 				"criteria": validCriteriaArg(),
+				"dod":      validDoDArg(),
 			}
 			if c.priority != nil {
 				args["priority"] = c.priority
@@ -121,6 +122,7 @@ func TestTaskList_SurfacesPriorityWriteSetStream(t *testing.T) {
 		"prompt":    "do it",
 		"agent_id":  "agent-b",
 		"criteria":  validCriteriaArg(),
+		"dod":       validDoDArg(),
 		"priority":  float64(2),
 		"stream":    "uat-stream",
 		"write_set": []any{"uat-output.txt"},
@@ -172,6 +174,7 @@ func TestTaskList_PriorityDefaultsToThreeWhenUnset(t *testing.T) {
 		"prompt":   "do it",
 		"agent_id": "agent-b",
 		"criteria": validCriteriaArg(),
+		"dod":      validDoDArg(),
 	})
 	require.False(t, res.IsError, "create_task: %s", res.ForLLM)
 

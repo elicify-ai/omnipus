@@ -45,13 +45,21 @@ func u5NewTestStore(t *testing.T) *UnifiedStore {
 // ---------------------------------------------------------------------
 
 // TestReadUnifiedMeta_ComposesFourFiles exercises BDD-58: a session that has
-// been created, then given one /goal set (via SetMeta), one /loop start
-// (via SetMeta), and one transcript append, MUST have exactly four meta
-// files on disk — meta.json, stats.json, goal.json, loop.json — and each
-// MUST contain ONLY its own group's fields (AC-21(a)). This is asserted on
-// the session directory's actual files and bytes, per AC-21's own text, not
-// on the composed *UnifiedMeta struct (which would look identical whether
-// the split is real or not).
+// been created, then given one AskUserQuestion park (via SetMeta's
+// PendingAskJSON), one /loop start (via SetMeta), and one transcript
+// append, MUST have exactly four meta files on disk — meta.json,
+// stats.json, pending_ask.json, loop.json — and each MUST contain ONLY its
+// own group's fields (AC-21(a)). This is asserted on the session
+// directory's actual files and bytes, per AC-21's own text, not on the
+// composed *UnifiedMeta struct (which would look identical whether the
+// split is real or not).
+//
+// ADR-086 GOAL-FR-005 (wave S6): this test used a /goal set (goal.json) as
+// its fourth group before wave S6 retired the goal group from session meta
+// entirely. PendingAskJSON/pending_ask.json — wave S2's own addition to
+// this same file split — is the group that fills its role here; the test's
+// structure and rigor (the four-files positive control, AC-21(a)'s
+// key-isolation check) are otherwise unchanged.
 func TestReadUnifiedMeta_ComposesFourFiles(t *testing.T) {
 	store := u5NewTestStore(t)
 	meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
@@ -59,18 +67,18 @@ func TestReadUnifiedMeta_ComposesFourFiles(t *testing.T) {
 	sessionID := meta.ID
 
 	// Immediately after create: meta.json ONLY (dataset row 2 — "a session
-	// that never ran a goal"). This is the positive control proving the
-	// OTHER three files are genuinely absent before the actions below, not
-	// merely unchecked.
+	// that never parked a question"). This is the positive control proving
+	// the OTHER three files are genuinely absent before the actions below,
+	// not merely unchecked.
 	sessionDir := filepath.Join(store.BaseDir(), sessionID)
 	assertFileExists(t, filepath.Join(sessionDir, "meta.json"))
 	assertFileAbsent(t, filepath.Join(sessionDir, "stats.json"))
-	assertFileAbsent(t, filepath.Join(sessionDir, "goal.json"))
+	assertFileAbsent(t, filepath.Join(sessionDir, "pending_ask.json"))
 	assertFileAbsent(t, filepath.Join(sessionDir, "loop.json"))
 
-	// One /goal set.
-	goalCond := "ship the feature"
-	require.NoError(t, store.SetMeta(sessionID, MetaPatch{GoalCondition: &goalCond}))
+	// One AskUserQuestion park.
+	askSet := `{"questions":[{"id":"q1","text":"ship the feature?"}]}`
+	require.NoError(t, store.SetMeta(sessionID, MetaPatch{PendingAskJSON: &askSet}))
 
 	// One /loop start.
 	loopMode := "interval"
@@ -94,7 +102,7 @@ func TestReadUnifiedMeta_ComposesFourFiles(t *testing.T) {
 	// Now all four MUST exist.
 	assertFileExists(t, filepath.Join(sessionDir, "meta.json"))
 	assertFileExists(t, filepath.Join(sessionDir, "stats.json"))
-	assertFileExists(t, filepath.Join(sessionDir, "goal.json"))
+	assertFileExists(t, filepath.Join(sessionDir, "pending_ask.json"))
 	assertFileExists(t, filepath.Join(sessionDir, "loop.json"))
 
 	// AC-21(a): each file contains ONLY its own group's fields. Assert by
@@ -104,31 +112,31 @@ func TestReadUnifiedMeta_ComposesFourFiles(t *testing.T) {
 	assert.Contains(t, metaKeys, "id")
 	assert.Contains(t, metaKeys, "status")
 	assert.NotContains(t, metaKeys, "stats", "meta.json must not carry the stats group")
-	assert.NotContains(t, metaKeys, "goal_condition", "meta.json must not carry goal fields")
+	assert.NotContains(t, metaKeys, "pending_ask", "meta.json must not carry the pending-ask field")
 	assert.NotContains(t, metaKeys, "loop_mode", "meta.json must not carry loop fields")
 
 	statsKeys := readJSONKeys(t, filepath.Join(sessionDir, "stats.json"))
 	assert.Contains(t, statsKeys, "tokens_in")
-	assert.NotContains(t, statsKeys, "goal_condition")
+	assert.NotContains(t, statsKeys, "pending_ask")
 	assert.NotContains(t, statsKeys, "loop_mode")
 	assert.NotContains(t, statsKeys, "id", "stats.json must not carry identity fields")
 
-	goalKeys := readJSONKeys(t, filepath.Join(sessionDir, "goal.json"))
-	assert.Contains(t, goalKeys, "goal_condition")
-	assert.NotContains(t, goalKeys, "loop_mode")
-	assert.NotContains(t, goalKeys, "tokens_in")
-	assert.NotContains(t, goalKeys, "id")
+	pendingAskKeys := readJSONKeys(t, filepath.Join(sessionDir, "pending_ask.json"))
+	assert.Contains(t, pendingAskKeys, "pending_ask")
+	assert.NotContains(t, pendingAskKeys, "loop_mode")
+	assert.NotContains(t, pendingAskKeys, "tokens_in")
+	assert.NotContains(t, pendingAskKeys, "id")
 
 	loopKeys := readJSONKeys(t, filepath.Join(sessionDir, "loop.json"))
 	assert.Contains(t, loopKeys, "loop_mode")
-	assert.NotContains(t, loopKeys, "goal_condition")
+	assert.NotContains(t, loopKeys, "pending_ask")
 	assert.NotContains(t, loopKeys, "tokens_in")
 	assert.NotContains(t, loopKeys, "id")
 
 	// The composed read must still see all of it.
 	composed, err := store.GetMeta(sessionID)
 	require.NoError(t, err)
-	assert.Equal(t, goalCond, composed.GoalCondition)
+	assert.Equal(t, askSet, composed.PendingAskJSON)
 	assert.Equal(t, loopMode, composed.LoopMode)
 	assert.Equal(t, 1, composed.Stats.MessageCount)
 }
@@ -144,14 +152,14 @@ func TestReadUnifiedMeta_MissingGroupFilesAreZeroValue(t *testing.T) {
 
 	sessionDir := filepath.Join(store.BaseDir(), meta.ID)
 	assertFileAbsent(t, filepath.Join(sessionDir, "stats.json"))
-	assertFileAbsent(t, filepath.Join(sessionDir, "goal.json"))
+	assertFileAbsent(t, filepath.Join(sessionDir, "pending_ask.json"))
 	assertFileAbsent(t, filepath.Join(sessionDir, "loop.json"))
 
 	composed, err := readUnifiedMeta(sessionDir)
 	require.NoError(t, err, "a directory with only meta.json must load successfully")
 	assert.Zero(t, composed.Stats.TokensIn)
 	assert.Zero(t, composed.Stats.MessageCount)
-	assert.Empty(t, composed.GoalCondition)
+	assert.Empty(t, composed.PendingAskJSON)
 	assert.Empty(t, composed.LoopMode)
 }
 
@@ -186,15 +194,15 @@ func TestReadUnifiedMeta_CorruptGroupFileErrors(t *testing.T) {
 	require.NoError(t, err)
 	sessionDir := filepath.Join(store.BaseDir(), meta.ID)
 
-	// Present-but-truncated goal.json.
-	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "goal.json"), []byte(`{"goal_condition":`), 0o600))
+	// Present-but-truncated pending_ask.json.
+	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "pending_ask.json"), []byte(`{"pending_ask":`), 0o600))
 
 	_, err = readUnifiedMeta(sessionDir)
-	require.Error(t, err, "a present-but-corrupt goal.json must surface an error for that group")
-	assert.Contains(t, err.Error(), "goal.json", "the error must name the group that failed")
+	require.Error(t, err, "a present-but-corrupt pending_ask.json must surface an error for that group")
+	assert.Contains(t, err.Error(), "pending_ask.json", "the error must name the group that failed")
 
 	// Same rule applies to stats.json.
-	require.NoError(t, os.Remove(filepath.Join(sessionDir, "goal.json")))
+	require.NoError(t, os.Remove(filepath.Join(sessionDir, "pending_ask.json")))
 	require.NoError(t, os.WriteFile(filepath.Join(sessionDir, "stats.json"), []byte(`{not valid`), 0o600))
 	_, err = readUnifiedMeta(sessionDir)
 	require.Error(t, err, "a present-but-corrupt stats.json must surface an error for that group")
@@ -210,6 +218,11 @@ func TestReadUnifiedMeta_CorruptGroupFileErrors(t *testing.T) {
 // DISTINCT content hash before any "unchanged" assertion — a gate that
 // skipped this would pass vacuously if the split were entirely broken (e.g.
 // all four files empty or identical).
+// ADR-086 GOAL-FR-005 (wave S6): this test used a /goal round (goal.json) as
+// one of its four groups before wave S6 retired the goal group from session
+// meta entirely. PendingAskJSON/pending_ask.json — wave S2's own addition to
+// this same file split — fills its role here; the test's structure and
+// rigor are otherwise unchanged.
 func TestMetaWriters_WriterIsolationByteLevel(t *testing.T) {
 	store := u5NewTestStore(t)
 	meta, err := store.NewSession(SessionTypeChat, "", "agent-1")
@@ -217,8 +230,8 @@ func TestMetaWriters_WriterIsolationByteLevel(t *testing.T) {
 	sessionID := meta.ID
 	sessionDir := filepath.Join(store.BaseDir(), sessionID)
 
-	goalCond := "initial-goal"
-	require.NoError(t, store.SetMeta(sessionID, MetaPatch{GoalCondition: &goalCond}))
+	askSet := "initial-pending-ask"
+	require.NoError(t, store.SetMeta(sessionID, MetaPatch{PendingAskJSON: &askSet}))
 	loopMode := "interval"
 	require.NoError(t, store.SetMeta(sessionID, MetaPatch{LoopMode: &loopMode}))
 	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "user", Content: "seed"}))
@@ -231,13 +244,13 @@ func TestMetaWriters_WriterIsolationByteLevel(t *testing.T) {
 
 	metaPath := filepath.Join(sessionDir, "meta.json")
 	statsPath := filepath.Join(sessionDir, "stats.json")
-	goalPath := filepath.Join(sessionDir, "goal.json")
+	pendingAskPath := filepath.Join(sessionDir, "pending_ask.json")
 	loopPath := filepath.Join(sessionDir, "loop.json")
 
 	// Positive lower bound (Rule 4): all 4 exist, non-zero length, distinct
 	// content hashes.
 	contents := map[string][]byte{}
-	for _, p := range []string{metaPath, statsPath, goalPath, loopPath} {
+	for _, p := range []string{metaPath, statsPath, pendingAskPath, loopPath} {
 		b, rErr := os.ReadFile(p)
 		require.NoError(t, rErr, "file %s must exist", p)
 		require.NotEmpty(t, b, "file %s must be non-empty", p)
@@ -256,7 +269,7 @@ func TestMetaWriters_WriterIsolationByteLevel(t *testing.T) {
 	// Snapshot bytes before each targeted operation.
 	snap := func() map[string][]byte {
 		out := map[string][]byte{}
-		for _, p := range []string{metaPath, statsPath, goalPath, loopPath} {
+		for _, p := range []string{metaPath, statsPath, pendingAskPath, loopPath} {
 			b, rErr := os.ReadFile(p)
 			require.NoError(t, rErr)
 			out[p] = b
@@ -264,7 +277,7 @@ func TestMetaWriters_WriterIsolationByteLevel(t *testing.T) {
 		return out
 	}
 
-	// Row: transcript append -> goal.json and loop.json unchanged.
+	// Row: transcript append -> pending_ask.json and loop.json unchanged.
 	before := snap()
 	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "assistant", Content: "reply", Tokens: 3}))
 	// ADR-057-U6-inverted: force the W24 throttle's deferred stats.json
@@ -273,34 +286,34 @@ func TestMetaWriters_WriterIsolationByteLevel(t *testing.T) {
 	// delta — see the note on the earlier FlushSessionStats call above.
 	require.NoError(t, store.FlushSessionStats(sessionID))
 	after := snap()
-	assert.True(t, bytes.Equal(before[goalPath], after[goalPath]), "transcript append must leave goal.json byte-identical")
+	assert.True(t, bytes.Equal(before[pendingAskPath], after[pendingAskPath]), "transcript append must leave pending_ask.json byte-identical")
 	assert.True(t, bytes.Equal(before[loopPath], after[loopPath]), "transcript append must leave loop.json byte-identical")
 	assert.False(t, bytes.Equal(before[statsPath], after[statsPath]), "transcript append must actually change stats.json")
 
-	// Row: /goal round -> loop.json and meta.json unchanged.
+	// Row: a new pending-ask park -> loop.json and meta.json unchanged.
 	before = snap()
-	newGoalCond := "advanced-goal"
-	require.NoError(t, store.SetMeta(sessionID, MetaPatch{GoalCondition: &newGoalCond}))
+	newAskSet := "advanced-pending-ask"
+	require.NoError(t, store.SetMeta(sessionID, MetaPatch{PendingAskJSON: &newAskSet}))
 	after = snap()
-	assert.True(t, bytes.Equal(before[loopPath], after[loopPath]), "a /goal round must leave loop.json byte-identical")
-	assert.True(t, bytes.Equal(before[metaPath], after[metaPath]), "a /goal round must leave meta.json byte-identical")
-	assert.False(t, bytes.Equal(before[goalPath], after[goalPath]), "a /goal round must actually change goal.json")
+	assert.True(t, bytes.Equal(before[loopPath], after[loopPath]), "a pending-ask park must leave loop.json byte-identical")
+	assert.True(t, bytes.Equal(before[metaPath], after[metaPath]), "a pending-ask park must leave meta.json byte-identical")
+	assert.False(t, bytes.Equal(before[pendingAskPath], after[pendingAskPath]), "a pending-ask park must actually change pending_ask.json")
 
-	// Row: /loop tick -> goal.json and meta.json unchanged.
+	// Row: /loop tick -> pending_ask.json and meta.json unchanged.
 	before = snap()
 	newLoopMode := "self_paced"
 	require.NoError(t, store.SetMeta(sessionID, MetaPatch{LoopMode: &newLoopMode}))
 	after = snap()
-	assert.True(t, bytes.Equal(before[goalPath], after[goalPath]), "a /loop tick must leave goal.json byte-identical")
+	assert.True(t, bytes.Equal(before[pendingAskPath], after[pendingAskPath]), "a /loop tick must leave pending_ask.json byte-identical")
 	assert.True(t, bytes.Equal(before[metaPath], after[metaPath]), "a /loop tick must leave meta.json byte-identical")
 	assert.False(t, bytes.Equal(before[loopPath], after[loopPath]), "a /loop tick must actually change loop.json")
 
-	// Row: status transition -> goal.json, loop.json, stats.json unchanged.
+	// Row: status transition -> pending_ask.json, loop.json, stats.json unchanged.
 	before = snap()
 	newStatus := StatusArchived
 	require.NoError(t, store.SetMeta(sessionID, MetaPatch{Status: &newStatus}))
 	after = snap()
-	assert.True(t, bytes.Equal(before[goalPath], after[goalPath]), "a status transition must leave goal.json byte-identical")
+	assert.True(t, bytes.Equal(before[pendingAskPath], after[pendingAskPath]), "a status transition must leave pending_ask.json byte-identical")
 	assert.True(t, bytes.Equal(before[loopPath], after[loopPath]), "a status transition must leave loop.json byte-identical")
 	assert.True(t, bytes.Equal(before[statsPath], after[statsPath]), "a status transition must leave stats.json byte-identical")
 	assert.False(t, bytes.Equal(before[metaPath], after[metaPath]), "a status transition must actually change meta.json")
@@ -320,8 +333,8 @@ func TestUnifiedMetaMarshal_ByteIdenticalAcrossSplit(t *testing.T) {
 	require.NoError(t, err)
 	sessionID := meta.ID
 
-	goalCond := "byte-identical-goal"
-	require.NoError(t, store.SetMeta(sessionID, MetaPatch{GoalCondition: &goalCond}))
+	askSet := "byte-identical-pending-ask"
+	require.NoError(t, store.SetMeta(sessionID, MetaPatch{PendingAskJSON: &askSet}))
 	loopMode := "interval"
 	require.NoError(t, store.SetMeta(sessionID, MetaPatch{LoopMode: &loopMode}))
 	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "user", Content: "x", Tokens: 2}))

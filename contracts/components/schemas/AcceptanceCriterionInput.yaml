@@ -195,5 +195,22 @@ properties:
     description: >
       Per-run judgement status. `pending` before any judge round; `met` /
       `unmet` set by the most recent `JudgeVerdict.per_criterion` entry.
-      Absence of evidence/a verdict never defaults to `met` (NFR-2).
+      Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32:
+      the outcome of the MOST RECENT verdict that mentioned this criterion
+      id — a projection re-applies only the criterion ids present in the
+      verdict it is projecting and never resets a criterion this round's
+      verdict did not mention back to `pending`.
     example: "pending"
+  clause_count:
+    type: integer
+    minimum: 1
+    description: >
+      JUDGE-FR-006b — server-computed on create/update by
+      `pkg/task/criterion.go::normalizeCriteria`; NOT author-supplied
+      (present on this input shape only for field-set equality with
+      `AcceptanceCriterion.yaml` — see this file's own header comment). A
+      `mode:update` that LOWERS a criterion's persisted clause count while
+      a verdict for that criterion id exists is rejected with a stated
+      reason (FR-006b). Consumed exclusively as a grounding-evidence
+      REPORTING signal (D-B) — never a proof gate.
+    example: 1

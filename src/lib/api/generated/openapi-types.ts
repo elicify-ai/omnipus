@@ -3732,10 +3732,16 @@ export interface components {
              */
             messages_compacted?: number;
             /**
-             * @description Set to true on the last assistant entry when a turn is canceled mid-stream (FR-14). Only present when true. The SPA renders an "(interrupted)" suffix on the bubble when this is set.
+             * @description Set to true on the last assistant entry when the entry is incomplete — see `truncation_reason` for why. Only present when true.
              * @example true
              */
             truncated?: boolean;
+            /**
+             * @description Narrows why `truncated` is true: "cancelled" (the user canceled the turn mid-stream) or "max_output_tokens" (the provider's output-token limit cut the answer off before it finished). Absent on a `truncated: true` entry means "cancelled" — every entry written before this field existed predates it and was always a cancel (ADR-087 D2).
+             * @example max_output_tokens
+             * @enum {string}
+             */
+            truncation_reason?: "cancelled" | "max_output_tokens";
             /**
              * @description Turn identifier — present only on type="turn_canceled" entries (FR-15). Identifies the turn that was canceled.
              * @example turn-T3
@@ -3770,6 +3776,13 @@ export interface components {
              */
             model?: string;
             verdict?: components["schemas"]["JudgeVerdict"];
+            /**
+             * @description BROWSER-FR-043a (C-83) — a second, orthogonal axis on a `type: system` entry, discriminating WHICH kind of system entry this is without prefix-matching `content` (the `"Handoff:"` prefix match this pattern deliberately avoids repeating). Do NOT add a value here to the `type` enum above — the entry's `type` stays `system`; this field only narrows it further. OPTIONAL and ADDITIVE: absent on every system entry that predates this delivery and on every system entry that is not one of the subtypes below. A closed enum so a future subtype is a deliberate contract edit rather than a free-text field silently widening. `pkg/gateway/replay.go` discriminates on this stamped field (never on `content`) to emit the same frame type on replay as was emitted live: `browser_handover_notice` → `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` → `GoalOutcomeFrame` (the goal outcome line, founder decision 2026-09-14 — the entry also carries `goal_outcome`).
+             * @example browser_handover_notice
+             * @enum {string}
+             */
+            system_subtype?: "browser_handover_notice" | "goal_outcome";
+            goal_outcome?: components["schemas"]["GoalOutcome"];
         };
         /** @description A single tool invocation recorded in a transcript entry. Maps to session.ToolCall on the Go side and ToolCall interface in src/lib/api.ts. */
         ToolCall: {
@@ -4354,12 +4367,6 @@ export interface components {
              * @example 4096
              */
             max_tokens?: number;
-            /**
-             * Format: double
-             * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-             * @example 1
-             */
-            top_p?: number;
         };
         /**
          * AgentRateLimits
@@ -4568,12 +4575,6 @@ export interface components {
                  * @example 4096
                  */
                 max_tokens?: number;
-                /**
-                 * Format: double
-                 * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-                 * @example 1
-                 */
-                top_p?: number;
             };
             /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
             rate_limits?: {
@@ -4694,12 +4695,6 @@ export interface components {
                  * @example 4096
                  */
                 max_tokens?: number;
-                /**
-                 * Format: double
-                 * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-                 * @example 1
-                 */
-                top_p?: number;
             };
             /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
             rate_limits?: {
@@ -4935,12 +4930,6 @@ export interface components {
                  * @example 4096
                  */
                 max_tokens?: number;
-                /**
-                 * Format: double
-                 * @description Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-                 * @example 1
-                 */
-                top_p?: number;
             };
             /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
             rate_limits?: {
@@ -5685,7 +5674,7 @@ export interface components {
         };
         /**
          * RateLimitConfig
-         * @description Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits. Per-agent sliding-window rate limits only (LLM/hr, tool/min). The app-level spend brake (token budget) is set separately via /api/v1/settings/token-budget; the SEC-26 USD cap was retired per ADR-053 D12.
+         * @description Rate limit configuration returned by GET /api/v1/security/rate-limits and accepted by PUT /api/v1/security/rate-limits. Per-agent sliding-window rate limits only (LLM/hr, tool/min). The SEC-26 USD cap was retired per ADR-053 D12.
          */
         RateLimitConfig: {
             /**
@@ -6053,6 +6042,11 @@ export interface components {
              * @example true
              */
             tools_on_demand?: boolean;
+            /**
+             * @description GOAL-FR-024/FR-045, MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE, GLOBAL adjudication-round ceiling for EVERY goal, task and chat identically. Default 20. THERE IS NO PER-GOAL OVERRIDE anywhere in this delivery — GOAL-FR-046 ("a human-editable budget control for a goal's per-goal override") and GOAL-US-8 ("an operator can give a goal more room") are RETIRED in full. This is the ONE control: `Goal.max_rounds` on every goal record resolves from this value alone (`pkg/config/planning.go::EffectiveGoalMaxRounds`, unmodified signature — NQ-2). It bounds the tries a goal gets in chat and within one run of a task alike; it does NOT bound how many fresh runs a task gets (`Task.effective_max_attempts`, a separate limit — founder decision 2026-09-14, issue #710). A goal keeps the value in force when it started. Lives under Settings → Performance (`src/components/settings/PerformanceSection.tsx`, GOAL-FR-045) — no new settings tab. Always present in responses.
+             * @example 20
+             */
+            goal_max_rounds?: number;
         };
         /**
          * PerformanceSettingsUpdate
@@ -6069,6 +6063,11 @@ export interface components {
              * @example true
              */
             tools_on_demand?: boolean;
+            /**
+             * @description New value for the SINGLE, GLOBAL goal-adjudication-round ceiling (GOAL-FR-024/FR-045, D-D/D-E) — governs task goals and chat goals identically; there is no per-goal override anywhere (GOAL-FR-046/ US-8 retired). Rejected below 1. Omitted = unchanged (partial update).
+             * @example 20
+             */
+            goal_max_rounds?: number;
         };
         /** @description A single LLM provider entry as returned by GET /providers and PUT /providers/{id}. Describes the provider's connection status, the resolved model list, and any non-fatal warnings encountered when fetching the upstream model catalogue. */
         Provider: {
@@ -7064,22 +7063,34 @@ export interface components {
              */
             is_join?: boolean;
             /**
-             * @description ADR-053 §Contract Surface — "Budget / bounds". Per-task adjudication rounds consumed so far, mirroring `Plan.judge_rounds` at task/goal scope (R§8.9 — one round = one adjudication, claim-triggered or idle-settled). Distinct from `attempt_count`, which tracks retry attempts, not adjudications.
+             * @description Goal tries used by the task's current run (or by its last run, once the task has ended), read from the task's goal record: one try is one judged claim, or one turn that ended without a usable claim (founder decision 2026-09-14, issue #710). It starts again from zero when the task restarts in a fresh run. The UI renders "try N of M" against `goal_max_rounds`. Distinct from `attempt_count`, which counts failed runs. Absent when the task has no goal record or no try has been used.
              * @example 0
              */
             readonly judge_rounds?: number;
-            /** @description Acceptance criteria (Definition of Done) for this task (ADR-049 D2/D5/FR-3). Agent-created tasks require at least one; UI/human creation is soft (falls back to judging title+description when empty). Immutable once a recurring Trigger run has started (per-run snapshot). */
-            criteria?: components["schemas"]["AcceptanceCriterion"][];
             /**
-             * @description Current run's attempt index within its goal loop (ADR-049 D7). Read-only, server-set; the UI renders "attempt N/M" against `max_attempts` (or the inherited `PlanningConfig.task_max_attempts` default).
+             * @description Server-derived, read-only: the tries-per-goal limit the task's current (or last) run works under — the Settings → Performance goal try limit as it was snapshotted onto the task's goal record when that run started. Absent when the task has no goal record. Not the task attempt limit, which is `effective_max_attempts`.
+             * @example 20
+             */
+            readonly goal_max_rounds?: number;
+            /** @description Acceptance criteria for this task (ADR-049 D2/D5/FR-3). GOAL-FR-021/ D-C (2026-09-11, operator-ratified): creating OR editing a task through the API or the interface now requires at least one criterion AND at least one `dod` item (see `dod` below) — the prior "UI/human creation is soft, falls back to judging title+description" behaviour is RETIRED for every NEW creation/edit going forward (GOAL-FR-047, enforced at the API with a 400, not schema-only). GOAL-FR-023: a task created before this rule with no criteria continues to run and continues to be judged by the ephemeral soft-tier criterion — the rule binds at creation and at edit only, never retroactively. Immutable once a recurring Trigger run has started (per-run snapshot). ADR-086 D5: this list itself now REFERENCES the task's goal record rather than being a second persisted list (GOAL-FR-029) — an implementation detail this wire shape is unaffected by. */
+            criteria?: components["schemas"]["AcceptanceCriterion"][];
+            /** @description GOAL-FR-003/FR-048 — this task's Definition of Done, DISTINCT from `criteria` (mirrors `Goal.dod`/`Plan.dod`): generic standing quality gates vs. outcome-specific checks, judged identically but never mixed into `criteria`. NEW field (ADR-086): `pkg/task/task.go` had no DoD field before this delivery — the list lives on the task's goal record. GOAL-FR-021/D-C: mandatory (>= 1 item) at creation and at edit, enforced with a 400 at the API, same as `criteria`. GOAL-FR-048: opening a pre-existing task with no `dod` MUST NOT block reading it; saving an edit enforces the rule. */
+            dod?: components["schemas"]["AcceptanceCriterion"][];
+            /**
+             * @description Task attempts already used: how many runs of this task have failed as a whole and been started over (ADR-049 D7). A run fails as a whole when its goal ends not met after all its tries, when the run breaks, or after two reasoning-only tries in a row. Read-only, server-set; the UI renders "attempt N of M" against `effective_max_attempts`. Separate from the goal's tries within a run (`judge_rounds`/`goal_max_rounds`).
              * @example 1
              */
             readonly attempt_count?: number;
             /**
-             * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
+             * @description Per-task override of the task attempt limit — how many fresh runs this task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null/absent inherits the global `planning.task_max_attempts` config value (default 3). This is not the goal try limit (`PerformanceSettings.goal_max_rounds`): goal tries and task attempts are separate limits (founder decision 2026-09-14, issue #710).
              * @example 5
              */
             max_attempts?: number | null;
+            /**
+             * @description Server-derived, read-only: the task attempt limit this task runs under — the task ends Failed once this many runs have failed as a whole, and it is the "M" in the UI's "attempt N of M". Resolved by the same function the task executor enforces (`pkg/tools/task_attempt_budget.go:: EffectiveTaskMaxAttempts`): the per-task `max_attempts` when set, otherwise the global `planning.task_max_attempts` config value (default 3). Not writable. Always present in responses.
+             * @example 3
+             */
+            readonly effective_max_attempts?: number;
             trigger?: components["schemas"]["TaskTrigger"];
             /**
              * Format: date-time
@@ -7155,6 +7166,26 @@ export interface components {
              * @example 2026-06-20T10:05:30Z
              */
             completed_at?: string;
+            /**
+             * Format: date-time
+             * @description Read-time only, never stored: the most recent moment this task's run showed any sign of work, so a long run can be told apart from a stuck one without a fixed time limit (founder decision 2026-09-14). The later of (a) the live progress stamp of the task's running turn or any turn it delegated to — which moves on every streamed reasoning or tool-call argument delta — and (b) the last write to the task session's transcript (a tool result, an assistant message). Present only while `status` is `in_progress` and the run has produced such evidence; absent otherwise. Nothing is written to produce it (it is not a heartbeat). Unrelated to `Plan.last_activity_at`, which is a plan's idle-expiry clock.
+             * @example 2026-06-20T10:04:55Z
+             */
+            readonly last_activity_at?: string;
+            /** @description Read-time only, never stored (founder decision 2026-09-15): present when the task is not done or failed and its assigned agent cannot finish it as configured — a native agent whose tool policy denies `goal_claim` can never report the task as done, and a task with a `check` criterion or Definition of Done item needs the agent's `bash` policy to be `allow`, because the Judge runs checks with nobody there to approve them. Saving such a task is not refused on this API: an operator may assign first and fix the agent's permissions afterwards (ADR-049 D2 rule 5 — agent tool paths reject, the UI warns). A run of the task in this state ends `failed` at once with this same message, using no attempt. Absent when the task has no agent, is done or failed, or nothing knowable stops the agent. */
+            readonly assignee_warning?: {
+                /**
+                 * @description Plain-language reason the assigned agent cannot finish this task, naming the fix.
+                 * @example Worker isn't allowed to report tasks as done. Allow 'goal_claim' for it in Agents → Tools, or assign another agent.
+                 */
+                message: string;
+                /**
+                 * @description The task field the warning is about, so a form can show it next to that control.
+                 * @example agent_id
+                 * @enum {string}
+                 */
+                field: "agent_id";
+            };
             /** @description Read-time only (Detail #6): derived list of live child sub-agent runs used to render board roll-up badges ("▸ N sub-agents running"). COMPUTED on read from the children whose `parent_task_id` equals this task's id — NEVER stored on the task record. Absent when the task has no live children. */
             rollup?: {
                 /**
@@ -7749,7 +7780,7 @@ export interface components {
         };
         /**
          * RateLimitsResponse
-         * @description Response from GET /api/v1/security/rate-limits. Returns the current per-agent sliding-window rate-limit configuration. Per ADR-053 D12 the SEC-26 USD cost cap was retired; the app-level spend brake (token budget) is set via /api/v1/settings/token-budget.
+         * @description Response from GET /api/v1/security/rate-limits. Returns the current per-agent sliding-window rate-limit configuration. Per ADR-053 D12 the SEC-26 USD cost cap was retired.
          */
         RateLimitsResponse: {
             /** @example true */
@@ -7770,7 +7801,7 @@ export interface components {
         /**
          * RateLimitsUpdateRequest
          * @description Request body for PUT /api/v1/security/rate-limits. Partial update — any subset of the two sliding-window cap fields. Strict type validation rejects JSON strings in numeric fields, floats in integer fields, negative values, NaN/Inf, and overflow. Changes are hot-reloaded.
-         *     Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the endpoint rejects that field with HTTP 400. Use /api/v1/settings/token-budget to set the app-level token spend brake.
+         *     Per ADR-053 D12 the SEC-26 daily_cost_cap_usd field was retired; the endpoint rejects that field with HTTP 400.
          */
         RateLimitsUpdateRequest: {
             /**
@@ -8359,10 +8390,12 @@ export interface components {
              * @example false
              */
             is_join?: boolean;
-            /** @description Optional initial acceptance criteria (Definition of Done, ADR-049 D2/D5/FR-3). Agent tool paths reject a create with zero criteria; human/UI creation may leave this empty (soft tier). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            /** @description Initial acceptance criteria (ADR-049 D2/D5/FR-3). GOAL-FR-021/D-C (2026-09-11, operator-ratified): creation through the API or the interface now REQUIRES at least one criterion AND at least one `dod` item (see `dod` below) — the prior "human/UI creation may leave this empty (soft tier)" behaviour is RETIRED for new creates; the server returns HTTP 400 when either is empty (GOAL-FR-047, not enforced as a JSON-Schema `minItems` here — agent tool paths and the REST handler share one 400 rejection, not two shapes of it). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
             criteria?: components["schemas"]["AcceptanceCriterionInput"][];
+            /** @description GOAL-FR-003/FR-021/FR-048/D-C — this task's Definition of Done, DISTINCT from `criteria`. NEW field (ADR-086). Required (>= 1 item, enforced with a 400, not schema-only — see `criteria` above) at creation. Items use the authoring-time `AcceptanceCriterionInput` shape, same as `criteria`. */
+            dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
-             * @description Per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null/absent inherits the global `PlanningConfig.task_max_attempts` default (3).
+             * @description Per-task override of the task attempt limit — how many fresh runs this task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null/absent inherits the global `planning.task_max_attempts` config value (default 3). Separate from the goal try limit (`PerformanceSettings.goal_max_rounds`).
              * @example 5
              */
             max_attempts?: number | null;
@@ -8475,10 +8508,12 @@ export interface components {
              * @example false
              */
             is_join?: boolean;
-            /** @description Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. Agent tool paths reject an update that reduces the count below 1. Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
+            /** @description Replacement acceptance-criteria set (ADR-049 D2/D5/FR-3) — replaces the current `criteria` atomically. GOAL-FR-021/D-C (2026-09-11, operator-ratified): the mandatory-criteria rule now binds at EDIT too, uniformly with creation — an update that reduces the count below 1 (on either `criteria` or `dod` below) is rejected with a 400, on every surface (the create form, the task detail panel, the calendar slide-over, this REST path, and the `update_task` tool) — no creation-only carve-out and no exemption for a task created before this rule (GOAL-FR-023 exempts an untouched legacy task from running, never from being edited). Items use the authoring-time `AcceptanceCriterionInput` shape (ADR-074 D2): `kind` may be omitted and is inferred server-side from the payload. */
             criteria?: components["schemas"]["AcceptanceCriterionInput"][];
+            /** @description GOAL-FR-003/FR-021/FR-048/D-C — replacement Definition-of-Done set, DISTINCT from `criteria`, replacing the current `dod` atomically. NEW field (ADR-086). Same edit-time mandatory-count rule as `criteria` above (>= 1 item, enforced with a 400 on every surface). */
+            dod?: components["schemas"]["AcceptanceCriterionInput"][];
             /**
-             * @description New per-task override of the attempt ceiling before the goal loop wakes the owner (ADR-049 D7/FR-9). Null clears the override (inherit the global default).
+             * @description New per-task override of the task attempt limit — how many fresh runs this task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null clears the override (inherit the global `planning.task_max_attempts` config value, default 3).
              * @example 5
              */
             max_attempts?: number | null;
@@ -9753,11 +9788,11 @@ export interface components {
              */
             owner_session_id?: string;
             /**
-             * @description Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired vs the ADR-053 D12/INV-8 app-level token-budget brake (`budget_exhausted` — added §Contract Surface "Budget / bounds") so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
+             * @description Set only when `state == failed` (R1) — distinguishes judge-rounds-exhausted vs user-stopped vs idle-expired so they don't collapse to one generic "Failed" badge. ADR-055/FR-035 adds two more so every terminal cause supervision can produce is machine-distinguishable rather than string-distinguishable: `dod_unreachable` — the Definition of Done cannot be reached from the plan's current state (a correction left the plan unable to progress, or PlanSupervisor issued the `abandon` verb); rounds may still remain, which is exactly why it is NOT `judge_rounds_exhausted`. `supervision_unavailable` — the supervision attempt ceiling was exhausted (ADR-055/FR-022): the plan parked, was woken, and no valid correction ever arrived. Note that `judge_rounds_exhausted` still covers two distinct causes, told apart by `supervision.correction_rounds` (`== 0` the round ceiling was reached with no correction ever applied; `> 0` corrections consumed the shared round budget).
              * @example judge_rounds_exhausted
              * @enum {string}
              */
-            failed_reason?: "judge_rounds_exhausted" | "stopped_by_user" | "idle_expired" | "budget_exhausted" | "dod_unreachable" | "supervision_unavailable";
+            failed_reason?: "judge_rounds_exhausted" | "stopped_by_user" | "idle_expired" | "dod_unreachable" | "supervision_unavailable";
             /** @description ADR-055/FR-050 — the durable PlanSupervisor adjudication state for this plan. Server-set only; never accepted from a create or update body. Absent until the plan first enters the supervision-eligible phase set (`awaiting_supervision`, `stalled`). Every field is optional and independently written — the engine's write path is five discrete `plan.Patch` pointers, not one whole-object pointer, so a concurrent REST update of an unrelated field can never clobber a counter (FR-050, r3 M3-16). */
             supervision?: {
                 /**
@@ -10108,11 +10143,16 @@ export interface components {
                 id: string;
             };
             /**
-             * @description Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+             * @description Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`; there is no per-criterion round field recording when the status was last set.
              * @example pending
              * @enum {string}
              */
             status: "pending" | "met" | "unmet";
+            /**
+             * @description JUDGE-FR-006b — the number of distinct clauses in this criterion's `text`, computed once by `pkg/task/criterion.go::normalizeCriteria` when the criterion is created or updated (never recomputed at adjudication time — see FR-006b's rationale: a count derived at judging time would let the judged party shrink a failing multi-clause criterion into fewer clauses to reduce its own evidence bar). OPTIONAL here only in the sense that a criterion loaded before this field existed carries none until its own next load-time backfill; the server always persists an explicit value going forward, the same precedent as `status`'s own `CritPending` backfill. Consumed exclusively as a grounding-evidence REPORTING signal (how many distinctly-grounded evidence entries the Judge's investigation found) — per operator decision D-B, grounding is never a proof gate, and this field NEVER changes a verdict from `met` to anything else.
+             * @example 1
+             */
+            clause_count?: number;
         };
         /**
          * AcceptanceCriterionInput
@@ -10201,11 +10241,16 @@ export interface components {
                 id: string;
             };
             /**
-             * @description Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2).
+             * @description Per-run judgement status. `pending` before any judge round; `met` / `unmet` set by the most recent `JudgeVerdict.per_criterion` entry. Absence of evidence/a verdict never defaults to `met` (NFR-2). R-32: the outcome of the MOST RECENT verdict that mentioned this criterion id — a projection re-applies only the criterion ids present in the verdict it is projecting and never resets a criterion this round's verdict did not mention back to `pending`.
              * @example pending
              * @enum {string}
              */
             status: "pending" | "met" | "unmet";
+            /**
+             * @description JUDGE-FR-006b — server-computed on create/update by `pkg/task/criterion.go::normalizeCriteria`; NOT author-supplied (present on this input shape only for field-set equality with `AcceptanceCriterion.yaml` — see this file's own header comment). A `mode:update` that LOWERS a criterion's persisted clause count while a verdict for that criterion id exists is rejected with a stated reason (FR-006b). Consumed exclusively as a grounding-evidence REPORTING signal (D-B) — never a proof gate.
+             * @example 1
+             */
+            clause_count?: number;
         };
         /**
          * EvidenceRecord
@@ -10345,10 +10390,98 @@ export interface components {
              */
             reason: string;
             /**
-             * @description ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text.
+             * @description ADR-074 D7 — the verbatim evidence excerpt the judge grounded this verdict in, copied out of the UNTRUSTED-DATA region of its input (diff/window/claim) per the rubric's quote-before-verdict instruction. Optional and empty-safe: absent/empty on every fail-closed verdict, every pre-D7 persisted verdict, and installs whose Judge soul predates the quote-emitting rubric. Truncated rune-safe to 500 code points at the parser. UNTRUSTED CONTENT — any re-emission into another agent's prompt MUST wrap it in UNTRUSTED-DATA framing; the UI renders it as inert quoted text. FR-071: when `evidence` (below) is present, `evidence_quote` MUST equal `evidence[0].quote`.
              * @example --- PASS: TestPlanStore_CreatePersists (0.02s)
              */
             evidence_quote?: string;
+            /**
+             * @description JUDGE-FR-065/FR-066 — where the grounding evidence for this verdict came from, derived (never trusted) server-side: `machine_check` when a veto or check evidence decided it, otherwise mapped from the validated evidence_source the investigation recorded. OPTIONAL and a REPORTING field only (D-B, ADR-084 revision 9 §10) — absence, or a value that does not verify, NEVER flips `met` to anything else; it never gates a verdict, it only explains one.
+             * @example file_read
+             * @enum {string}
+             */
+            evidence_source?: "diff" | "transcript" | "machine_check" | "file_read" | "session_read";
+            /**
+             * @description JUDGE-FR-065 — the specific artifact the grounding evidence was read from (a file path, a diff hunk's changed file, a transcript tool-call id, …), paired with `evidence_source`. OPTIONAL REPORTING field only (D-B) — never a proof gate.
+             * @example neon-2048/index.html
+             */
+            evidence_target?: string;
+            /**
+             * @description JUDGE-FR-065 — the investigation-log provenance of this verdict: `deterministic_check` when a veto or check evidence decided it; `judge_read`/`diff`/`transcript`/`session_read` mapped from the validated `evidence_source` when the Judge's own reading decided it; `none` when neither applies (e.g. a fail-closed verdict, or a legacy rubric that emits no `evidence_source`). OPTIONAL REPORTING field only (D-B) — the Judge's authority to rule `met` on reasoned conviction alone is never conditioned on this field being present or non-`none`.
+             * @example judge_read
+             * @enum {string}
+             */
+            provenance?: "judge_read" | "deterministic_check" | "diff" | "transcript" | "session_read" | "none";
+            /** @description JUDGE-FR-006 — one entry per clause of the criterion this verdict judges, each answering that clause with its own grounding excerpt. NEW, OPTIONAL, sibling field alongside `evidence_quote` (FR-006's own wording) — `evidence_quote` keeps its existing type/length/optionality unchanged for every reader that does not know about this field (C2); when `evidence` is present the engine populates `evidence_quote` from `evidence[0].quote` so no existing persisted-verdict reader, replay frame or SPA render is affected. A criterion with no machine-checkable form and no located evidence for one or more of its clauses is still the NORMAL case and may still be `met` on the Judge's reasoned conviction (GOAL-FR-038/FR-039, D-B) — this array is a REPORTING obligation the Judge uses to show its work and flag any clause it could not ground, never a gate that can turn a `met` into an `unmet`. */
+            evidence?: {
+                /**
+                 * @description The clause text (a substring of the criterion's own `text`) this entry answers.
+                 * @example the button links to https://example.com/pricing
+                 */
+                part: string;
+                /**
+                 * @description Where this clause's grounding excerpt came from. Plain string here (not a closed enum, unlike the verdict-level `evidence_source` above) — a codegen constraint (oapi-codegen cannot auto-name two same-shaped nested enum types across this document without a shared top-level schema, which is out of this wave's write-set) and, independently, a defensible one: this per-entry value is a REPORTING detail (D-B), never compared against by code the way the top-level `evidence_source` is (FR-066's derivation).
+                 * @example file_read
+                 */
+                source?: string;
+                /**
+                 * @description The specific artifact this clause's excerpt was read from.
+                 * @example neon-2048/index.html
+                 */
+                target?: string;
+                /**
+                 * @description The verbatim, rune-truncated (500 code points) grounding excerpt for this clause. UNTRUSTED CONTENT — same framing obligation as `evidence_quote` above. MAY be empty when the Judge could not locate grounding for this clause and is reporting that gap rather than fabricating a quote (D-B: an empty/failed entry here is reported, not fabricated, and never by itself flips the overall verdict).
+                 * @example <a href="https://example.com/pricing">Pricing</a>
+                 */
+                quote: string;
+            }[];
+        };
+        /**
+         * GoalOutcome
+         * @description How a goal ENDED — the single durable, structured record behind the always-visible goal outcome line in the chat thread (founder decision 2026-09-14: a goal's ending must leave a clear, lasting line in the chat, not only a pill that hides 4 seconds after turning terminal, and not only the Verbose-chat-gated `judge_verdict` card). Written EXACTLY ONCE per goal ending, by the same terminal transition that ends the goal record (`pkg/agent/goal_loop.go::clearGoalStatus` — every ending kind flows through it). An intermediate UNMET Judge round with rounds remaining is NOT an ending (the worker is steered and keeps going) and never produces one of these. Two carriers share this exact shape so they cannot silently disagree (the `JudgeVerdict` precedent): (a) the persisted transcript entry `Message.type: system`, `Message.system_subtype: goal_outcome`, `Message.goal_outcome: <this>` (cold REST load), and (b) the `GoalOutcomeFrame` WS push, emitted live at the ending AND re-emitted by `pkg/gateway/replay.go` from the persisted entry (discriminating on the stamped `system_subtype`, never on `content`). The WS copy is the hand-synced duplicate `GoalOutcomeFrameOutcome` in `contracts/asyncapi.yaml` (AsyncAPI codegen does not resolve cross-file `$ref`, and the Go package cannot hold two types named `GoalOutcome`) — any field edit here MUST be mirrored there.
+         */
+        GoalOutcome: {
+            /**
+             * @description The goal that ended (`Goal.goal_id`).
+             * @example goal_01M2F71KTWW6B2ADSGB3XVMS69
+             */
+            goal_id: string;
+            /**
+             * @description The goal's own text, verbatim (`Goal.prompt`) — what the user asked for. Rendered after the outcome headline.
+             * @example write a file called e4-marker.txt containing the word RELOAD, then read it back to confirm
+             */
+            goal_text: string;
+            /**
+             * @description WHY the goal ended. `met` — the Judge confirmed every criterion (Goal.state `met`). `rounds_exhausted` — the round limit was reached with no met verdict, including the bare-claim round-bound path (Goal.state `exhausted`, terminal note "round bound reached …"). `stopped_by_user` — a deliberate `/goal clear|stop|off|reset|cancel| none` (Goal.state `cleared`, terminal note "cleared by user"). `other` — every remaining ending (today: the idle-expiry sweep, or the working agent being deleted; any future terminal brake lands here too). Deliberately NOT subdivided: the goal outcome line for these is a neutral "not met" with the tries count only (founder decision 2026-09-14 — exactly three named variants: met, not met after N tries, stopped by you).
+             * @example rounds_exhausted
+             * @enum {string}
+             */
+            ending: "met" | "rounds_exhausted" | "stopped_by_user" | "other";
+            /**
+             * @description Adjudication rounds consumed when the goal ended (shown to the user as "tries"). For `rounds_exhausted` this is the round that hit the limit (normally equal to `max_rounds`); for every other ending it is the number of rounds actually completed. Always the real persisted count — never defaulted to `max_rounds`.
+             * @example 20
+             */
+            rounds_used: number;
+            /**
+             * @description The goal's round limit at the time it ended (`Goal.max_rounds`).
+             * @example 20
+             */
+            max_rounds: number;
+            /**
+             * @description The Judge's most recent reason — for a not-met ending, the last UNMET reason fed back to the worker; for `met`, the deciding verdict's reasoning. OPTIONAL: absent when no Judge round ever ran or no reason was recorded. The writer MUST omit the field rather than send a placeholder (e.g. the internal "(no reason recorded)" sentinel).
+             * @example The file e8-impossible.txt is 5 bytes; the criterion also requires exactly 500 bytes, which cannot hold at the same time.
+             */
+            judge_reason?: string;
+            /**
+             * @description Number of criteria the deciding Judge verdict evaluated (`per_criterion` length). OPTIONAL — present only when a verdict exists. With `ending: met` every one of them was confirmed.
+             * @example 4
+             */
+            criteria_total?: number;
+            /**
+             * Format: date-time
+             * @description RFC 3339 UTC timestamp of the terminal transition.
+             * @example 2026-09-14T06:29:31Z
+             */
+            ended_at: string;
         };
         /**
          * PlanApproveError
@@ -11283,7 +11416,7 @@ export interface components {
                 reconstructable: boolean;
             };
             /**
-             * @description Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively ("e.g. `interrupted`, `budget_exhausted`, `judge_rounds_exhausted`"), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
+             * @description Set only when `state == failed`. An open string, not a closed enum — the spec enumerates this non-exhaustively (e.g. `interrupted`, `judge_rounds_exhausted`), unlike `Plan.failed_reason`'s closed enum, so this field is left open rather than guessing at a complete set (flagged for review).
              * @example interrupted
              */
             failed_reason?: string;
@@ -11302,7 +11435,7 @@ export interface components {
         };
         /**
          * Goal
-         * @description The unified goal / criteria record (ADR-053 §Contract Surface, S1 — "one criteria model, two authors"). A chat `/goal`, a standalone Task's criteria, and a Plan's DoD are all judged against the SAME `AcceptanceCriterion` model (REUSED, never duplicated — a second goal store is a DoD-11 blocking finding). Authored two ways: `chat_compiled` (agent-compiled from user intent via the SMART goal compiler, US-3) or `task_explicit`/`plan_dod` (explicit at task/plan creation).
+         * @description The unified goal / criteria record (ADR-086 D1 — a goal is its own stored entity, addressed by its own id, and is NOT represented as fields on a session or a task; ADR-053 §Contract Surface, S1 — "one criteria model, two authors"). A chat `/goal` and a standalone Task's criteria are judged against the SAME `AcceptanceCriterion` model (REUSED, never duplicated — a second goal store is a DoD-11 blocking finding). Authored two ways: `chat_compiled` (agent-compiled from user intent via the SMART goal compiler, US-3) or `task_explicit` (explicit at task creation). TYPE-ONLY on the wire (D-E, 2026-09-11, OQ-2 ANSWERED): registered in `components.schemas` and referenced by NO path — there is no `GET`/`PATCH /api/v1/goals/{id}` and no `GoalUpdateRequest.yaml`, in this delivery or as a follow-up. The SPA reaches goal state through `GoalStatusFrame` (WS) and through the task shapes' `dod`/`criteria`. RESHAPED from the pre-existing four-field stub (`binding_kind [session|task|plan]`/`binding_id`/`attempts_max`/`judge_rounds_max`/ `state [active|done|failed|cleared]`) by this delivery — see the joint ADR-084/ADR-085/ADR-086 delivery plan's C-05, R-14, R-31, OQ-1.
          */
         Goal: {
             /**
@@ -11311,18 +11444,18 @@ export interface components {
              */
             goal_id: string;
             /**
-             * @description SHAPE DECISION (flagged for review): the spec describes `binding` as `oneOf session_id | task_id | plan_id`. A bare `oneOf` of untagged strings has no discriminator, so it is split into this enum tag plus `binding_id` below — mirrors the same pattern used for `SessionLifecycleRecord.owner_scope_kind`/`owner_scope_id`.
+             * @description GOAL-FR-002 — a goal MUST reference exactly one owner, as an owner kind plus an owner id; owner kind MUST be part of the persisted record, not inferred. RENAMED from the pre-existing `binding_kind` (R-14: a rename, not a widening) and NARROWED from three values to two (R-31): `plan` is dropped. A Plan's own DoD is judged with NO goal record involved at all — criterion statuses are projected directly onto the plan member's own DoD list, using the same explicit, logged no-op discipline already required for the ephemeral soft-tier criterion (goal spec FR-040). `Goal.OwnerID` is unique per owner for the `task` kind — one goal per task for the task's whole life; a terminal task-owned goal re-enters `active` on task re-run rather than a new goal being minted (R-04, see `state` and `terminal_history` below). A `session`-owned goal has no such re-entry edge — a terminal chat goal stays terminal.
              * @example session
              * @enum {string}
              */
-            binding_kind: "session" | "task" | "plan";
+            owner_kind: "session" | "task";
             /**
-             * @description The session/task/plan id this goal is bound to, per `binding_kind`.
+             * @description The session/task id this goal is bound to, per `owner_kind`. RENAMED from the pre-existing `binding_id` (R-14).
              * @example 550e8400-e29b-41d4-a716-446655440000
              */
-            binding_id: string;
+            owner_id: string;
             /**
-             * @description How this goal's criteria were authored.
+             * @description How this goal's criteria were authored. `plan_dod` is retained on the wire for forward-compatibility even though no `owner_kind: plan` goal record exists any more (see `owner_kind` above) — a Plan's DoD never reaches this enum today.
              * @example chat_compiled
              * @enum {string}
              */
@@ -11333,7 +11466,7 @@ export interface components {
              */
             prompt: string;
             /**
-             * @description The compiled SMART restatement of `prompt` (US-3 echo-confirm) — distinct from the raw prompt. Absent for `task_explicit`/`plan_dod` sources, which have no separate compile step.
+             * @description The compiled SMART restatement of `prompt` (US-3 echo-confirm) — distinct from the raw prompt. Absent for `task_explicit` sources, which have no separate compile step.
              * @example All pkg/plan tests pass and golangci-lint reports zero issues.
              */
             definition?: string;
@@ -11342,86 +11475,123 @@ export interface components {
             /** @description ADR-080 D-DOD — the goal's Definition of Done, DISTINCT from `criteria`: generic standing quality gates (e.g. no secrets in the output) vs. outcome-specific checks. `AcceptanceCriterion`-shaped (judged identically) but modelled as its own array, mirroring the existing `Plan.dod` precedent — never mixed into `criteria`. REQUIRED with `minItems: 1` — the compiler's built-in floor layer guarantees at least one item on every newly-compiled goal. A pre-ADR-080 persisted goal with no `dod` is backfilled with the built-in floor DoD at load time (before this schema validates), so a legacy goal always satisfies `minItems: 1` too. The Judge evaluates `criteria` UNION `dod` together. */
             dod: components["schemas"]["AcceptanceCriterion"][];
             /**
-             * @description Attempt ceiling before the goal loop wakes the owner (3 native / 6 default per session_messaging config, restart-gated).
-             * @example 3
-             */
-            attempts_max: number;
-            /**
-             * @description Adjudication-round ceiling (R§8.9 — one round = one adjudication, claim-triggered or idle-settled).
+             * @description GOAL-FR-024/MV-1, D-D/D-E (2026-09-11, operator-ratified) — the SINGLE budget ceiling for this goal's adjudication rounds, collapsed from the pre-existing separate `attempts_max`/`judge_rounds_max` pair (R14/C-05). Defaults to 20 (no schema `default:` here — this field is `required`, and combining `default:` with `required` makes openapi-zod-client emit an optional `.default()` input type that conflicts with the plain required TS type; see AcceptanceCriterionInput.yaml's header comment for the sibling codegen trap on an OPTIONAL field). There is NO per-goal override anywhere on the wire (D-E retires GOAL-FR-046/US-8 in full): this value is always the ONE global "goal tries" setting under Settings → Performance (`PerformanceSettings.yaml`'s `goal_max_rounds`), governing a task-owned and a session-owned goal IDENTICALLY — there is no writable per-goal budget field on this schema, `Task.yaml`, `TaskUpdateRequest.yaml` or anywhere else. The distinct `attempts` counter (task retry attempts, separate from adjudication rounds) is NOT modelled here — it stays on the task/session's own attempt machinery; the `2 × effective budget` hard ceiling there is an independent divergence brake, not a second goal budget (R-03).
              * @example 20
              */
-            judge_rounds_max: number;
+            max_rounds: number;
             /**
-             * @description Adjudications consumed so far (R§8.9). The stored integer is preserved unchanged across the upgrade from the legacy "one turn + judge" round definition — only the increment site moved.
+             * @description Adjudications consumed so far (R§8.9 — one round = one adjudication, claim-triggered or idle-settled). The stored integer is preserved unchanged across the upgrade from the legacy "one turn + judge" round definition — only the increment site moved. Reset to 0 when a terminal task-owned goal re-enters `active` on task re-run (R-04).
              * @example 0
              */
             readonly round: number;
             /**
-             * @description SHAPE DECISION (flagged for review): the spec lists a bare `state` field with no enumerated values. This 4-value set is the persisted GOAL record's OWN lifecycle (active while iterating; done on a met verdict; failed on rounds/attempts/budget exhaustion; cleared via `/goal clear`) — deliberately narrower than and distinct from the 8-state pill-display enum (`GoalStatusFrame.state`, R§8.10), which derives its richer display states from this state PLUS the session's own lifecycle PLUS ephemeral engine-phase signals. Do not conflate the two.
+             * @description GOAL-FR-006 — attempts consumed so far against this goal's owner's attempt ceiling (a distinct counter from `round` — `TestAttemptsVsRounds_DistinctBrakes` asserts the two counters are distinct, not that their numbers differ, R-03). Reset to 0 when a terminal task-owned goal re-enters `active` on task re-run (R-04).
+             * @example 0
+             */
+            readonly attempts_used: number;
+            /**
+             * @description GOAL-FR-006/FR-027/FR-028, R-14 (a RENAME of the pre-existing 4-value set, not a widening: `done` → `met`, `failed` → `exhausted`, plus two new values). `defining` — the goal exists, is readable and editable, and MUST NOT run (ADR-086 D2/D3, GOAL-FR-009): a task holds its goal in this phase from task creation until the task starts. `active` — activated and iterating (GOAL-FR-010: activation binds the goal to exactly one session and starts the loop). `met` — terminal, a verdict satisfied every criterion. `exhausted` — terminal, the round/attempt/budget ceiling was reached with no `met` verdict. `expired` — terminal, the 7-day idle-expiry sweep ended a goal that never claimed (D-A) — EC-10: a goal record whose active session was swept by retention is also terminal-expired at the next sweep rather than left pointing at a missing session. `cleared` — terminal, a deliberate user-initiated `/goal clear` (not a failure, mirrors `GoalStatusFrame.state`'s existing `cleared`/`failed` split). Ending a goal is a STATUS TRANSITION on a retained record, never field-zeroing erasure (GOAL-FR-027/FR-028): the record survives every terminal transition with its criteria, their final statuses, the verdict, the reason and any handover intact. This 4-value set is deliberately narrower than and distinct from the richer `GoalStatusFrame.state` display enum (R§8.10), which derives additional ephemeral engine-phase and lifecycle-overlay states from this state PLUS the owning session's own lifecycle. Do not conflate the two. A `task`-owned goal's ONLY re-entry edge is terminal → `active` on task re-run (R-04); a `session`-owned goal has no such edge and stays terminal once ended.
              * @example active
              * @enum {string}
              */
-            state: "active" | "done" | "failed" | "cleared";
+            state: "defining" | "active" | "met" | "exhausted" | "expired" | "cleared";
             /**
              * Format: date-time
              * @description RFC3339 timestamp this goal was set/created.
              * @example 2026-07-22T10:00:00Z
              */
             created_at: string;
-        };
-        /**
-         * TokenBudgetStatus
-         * @description App-level OVERALL token budget status for the Usage screen (ADR-053 §Contract Surface, D12/R§8.3, FE-6). ONE shared pool across the whole install — no per-plan budgets, no money caps, no `IsPrivilegedAgent` exemption (D12 deliberately removes the core-agent exemption). Debited by owner + member + verifier + Judge turns from provider-reported usage via a single atomic `debitTokenBudget(n)` critical section (INV-8).
-         */
-        TokenBudgetStatus: {
             /**
-             * @description The operator-set overall token budget. `0` is the unbounded sentinel (R§8.3a — default on a fresh install) — the Usage screen shows `advisory` persistently while this is 0.
-             * @example 5000000
+             * Format: date-time
+             * @description GOAL-FR-006 — RFC3339 timestamp this goal was last ACTIVATED (GOAL-FR-010). Absent while `state == defining`. Reset to a fresh timestamp on a task-owned goal's terminal → active re-entry (R-04).
+             * @example 2026-07-22T10:05:00Z
              */
-            budget: number;
+            started_at?: string;
             /**
-             * @description Total tokens debited so far this budget period, reconciled from the persisted counter at boot. May overshoot `budget` by up to the sum of in-flight turn costs at the moment of exhaustion (INV-8 — post-turn provider-reported debit, graceful wind-down, never a mid-tool hard cut).
-             * @example 1250000
+             * Format: date-time
+             * @description GOAL-FR-006 — RFC3339 timestamp of the most recent activity on this goal (a claim, an adjudication, a criteria update). Drives the 7-day idle-expiry sweep (D-A) for BOTH owner kinds identically, and is the clock the goal's own retention (A-8: "the goal's own `last_activity_at` against the session retention window") measures against for a task-owned goal, which has no session lifecycle of its own to borrow a clock from. Initialised to `created_at`.
+             * @example 2026-07-22T10:05:00Z
              */
-            consumed: number;
+            last_activity_at: string;
             /**
-             * @description `budget - consumed`, floored at 0. Meaningless (ignore) when `budget == 0` (unbounded).
-             * @example 3750000
+             * @description GOAL-FR-006 — the id of the session this goal is currently active in, once `state != defining`. Absent while `state == defining`. Cleared (never re-pointed) once the goal reaches a terminal state — the terminal record still names the session that carried it via the LAST value this field held before the transition, per the `terminal_history`/replay-anchored transcript, not via a live pointer that could dangle (EC-10).
+             * @example 550e8400-e29b-41d4-a716-446655440000
              */
-            remaining: number;
+            active_session_id?: string;
             /**
-             * @description True once the pool has crossed zero. Every running scope brakes to `failed(budget_exhausted)` at its next turn/adjudication boundary (INV-8) — never mid-tool.
-             * @example false
+             * @description GOAL-FR-006 — most recent judge reason fed forward as steering (evaluator-optimizer pattern), mirroring `GoalStatusFrame.latest_reason`. Empty/absent before the first round completes.
+             * @example 3 tests still failing in pkg/plan
              */
-            exhausted: boolean;
+            latest_reason?: string;
             /**
-             * @description Present (non-empty) only when `budget == 0` — the persistent "unbounded — set a budget" Usage-screen advisory (R§8.3a). Also used for the one-time token≠dollar-cap warning surfaced when an operator first sets a budget (R§8.3b).
-             * @example unbounded — set a budget
+             * @description GOAL-FR-028 — the reason this goal reached its current terminal `state`, distinct from `latest_reason` (which tracks the latest ROUND's judge reason, not why the goal itself ended): e.g. "idle expiry after 7 days of inactivity with no claim", "round budget (20) exhausted", "cleared by operator". Absent while the goal is not terminal. Exactly one terminal frame is emitted per ending (GOAL-FR-028) and this field is set in the same transition.
+             * @example round budget (20) exhausted with no met verdict
              */
-            advisory?: string;
-            /** @description Per-scope spend accounting (owner/member/verifier/Judge turns each debit the SAME shared pool — this breakdown is display-only, not a separate budget per scope). */
-            by_scope: {
+            terminal_reason?: string;
+            /** @description GOAL-FR-006 — a snapshot of the most recent `goal_claim` tool call against this goal (JUDGE §D12's reliable claim channel). Absent until the first claim. Does not itself carry a verdict — see `latest_verdict` below, set only once the claim's adjudication completes. */
+            latest_claim?: {
                 /**
-                 * @description Tokens consumed by plan-owner / goal-owner turns.
-                 * @example 200000
+                 * @description JUDGE machine-verifiable constraint — `goal_claim.status` enum is exactly these three values.
+                 * @example met
+                 * @enum {string}
                  */
-                owner: number;
+                status: "met" | "blocked" | "waiting_on_user";
                 /**
-                 * @description Tokens consumed by plan-member / delegated-child turns.
-                 * @example 900000
+                 * @description The claim's own evidence text. Required and non-empty (whitespace-trimmed) at the call when `status == met` (JUDGE machine-verifiable constraint); ignored otherwise. This is a snapshot of what was submitted, not a grounding excerpt — distinct from `CriterionVerdict.evidence`.
+                 * @example All 47 tests in pkg/plan pass; golangci-lint reports 0 issues.
                  */
-                member: number;
+                evidence?: string;
                 /**
-                 * @description Tokens consumed by verifier/Judge-adjacent worker turns.
-                 * @example 100000
+                 * Format: date-time
+                 * @example 2026-07-22T10:07:00Z
                  */
-                verifier: number;
-                /**
-                 * @description Tokens consumed by the Judge's own adjudication calls.
-                 * @example 50000
-                 */
-                judge: number;
+                claimed_at: string;
             };
+            /** @description GOAL-FR-006 — the most recent Judge adjudication of this goal. Absent before the first completed adjudication. */
+            latest_verdict?: components["schemas"]["JudgeVerdict"];
+            /** @description GOAL-FR-006 — the superseded-criteria history: prior `criteria`/`dod` sets this goal carried before a `set_goal(mode: update)` steering revision replaced them (ADR-081). Empty/absent for a goal never revised. Distinct from `terminal_history` below, which records prior COMPLETED RUNS of a re-run task-owned goal, not prior criteria revisions of the current run. */
+            superseded_criteria?: {
+                /** Format: date-time */
+                superseded_at: string;
+                criteria: components["schemas"]["AcceptanceCriterion"][];
+                dod: components["schemas"]["AcceptanceCriterion"][];
+            }[];
+            /** @description R-04 (goal spec A-2/EC-1) — for a `task`-owned goal that is reused across a re-run after its prior run ended (the SAME goal, its `attempts_used`/`round` reset to 0, per `owner_kind`'s description): the prior run's terminal outcome is APPENDED here rather than overwritten, so a task's full adjudication history survives every re-run. A `session`-owned goal never re-enters `active` from terminal, so this array stays empty for it. Ordered oldest-first. */
+            terminal_history?: {
+                /**
+                 * @description The terminal state this prior run ended in.
+                 * @enum {string}
+                 */
+                state: "met" | "exhausted" | "expired" | "cleared";
+                terminal_reason?: string;
+                verdict?: components["schemas"]["JudgeVerdict"];
+                /** Format: date-time */
+                ended_at: string;
+                /** @description Attempts consumed in that prior run. */
+                attempts_used?: number;
+                /** @description Rounds consumed in that prior run. */
+                round?: number;
+            }[];
+            /**
+             * @description GOAL-FR-004 — the keeper's own durable recordless-nudge / zero-output-push streak counter (today the session-level `goal_zero_output_pushes`, bound `goalZeroOutputPushMax = 2`), relocated onto the goal record so it applies identically to a task-owned and a session-owned goal (GOAL-FR-015/FR-017).
+             * @example 0
+             */
+            zero_output_pushes: number;
+            /**
+             * @description GOAL-FR-004 — the keeper's own durable clarification-question door counter (today the session-level `goal_question_rounds_used`), relocated onto the goal record so it applies identically to both owner kinds (GOAL-FR-015/FR-020).
+             * @example 0
+             */
+            question_rounds_used: number;
+            /**
+             * @description GOAL-FR-034 — the channel a keeper follow-up for this goal is delivered through (e.g. "telegram", "discord"), surviving from the pre-existing session-level `goal_route_channel`. `dispatchGoalAsyncFollowUp` aborts without either `route_channel` or `route_chat_id`. Absent for a goal whose owner has never needed an async follow-up (e.g. webchat delivery, which stays session-addressed per ADR-082 and does not use this field, GOAL-FR-035).
+             * @example telegram
+             */
+            route_channel?: string;
+            /**
+             * @description GOAL-FR-034 — the chat/peer id within `route_channel` a keeper follow-up for this goal is delivered to, surviving from the pre-existing session-level `goal_route_chat_id`.
+             * @example 123456789
+             */
+            route_chat_id?: string;
         };
         /**
          * PlanRestartResponse
@@ -18757,6 +18927,7 @@ export type AcceptanceCriterionInput = components["schemas"]["AcceptanceCriterio
 export type EvidenceRecord = components["schemas"]["EvidenceRecord"];
 export type JudgeVerdict = components["schemas"]["JudgeVerdict"];
 export type CriterionVerdict = components["schemas"]["CriterionVerdict"];
+export type GoalOutcome = components["schemas"]["GoalOutcome"];
 export type PlanApproveError = components["schemas"]["PlanApproveError"];
 export type AgentTokenEntry = components["schemas"]["AgentTokenEntry"];
 export type TokenUsageSummary = components["schemas"]["TokenUsageSummary"];
@@ -18777,7 +18948,6 @@ export type SessionMessageRespond = components["schemas"]["SessionMessageRespond
 export type RevisionEntry = components["schemas"]["RevisionEntry"];
 export type SessionLifecycleRecord = components["schemas"]["SessionLifecycleRecord"];
 export type Goal = components["schemas"]["Goal"];
-export type TokenBudgetStatus = components["schemas"]["TokenBudgetStatus"];
 export type PlanRestartResponse = components["schemas"]["PlanRestartResponse"];
 export type DelegateActionRequest = components["schemas"]["DelegateActionRequest"];
 export type DelegateRunAction = components["schemas"]["DelegateRunAction"];

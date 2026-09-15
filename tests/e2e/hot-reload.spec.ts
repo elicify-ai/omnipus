@@ -239,8 +239,8 @@ test('rate-limit hot-reload: GET reflects new cap within 2s of PUT', async () =>
   // in CI. The GET-readback variant used here does not require live LLM calls.
 
   // ── Step 1: set a known baseline (100 LLM calls/hour, unlimited tools) ──
-  // ADR-053 D12 / #540 retired daily_cost_cap_usd — the sole spend brake is
-  // the app-level token budget. PUT rejects the retired field with 400.
+  // ADR-053 D12 / #540 retired daily_cost_cap_usd. PUT rejects the retired
+  // field with 400.
   const putBaseline = await authedPut('/api/v1/security/rate-limits', {
     max_agent_llm_calls_per_hour: 100,
     max_agent_tool_calls_per_minute: 0,

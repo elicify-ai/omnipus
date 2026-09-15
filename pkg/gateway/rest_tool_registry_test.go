@@ -751,7 +751,7 @@ func TestWS_SessionState_SeesAllPendingApprovals(t *testing.T) {
 		userID: "testuser",
 	}
 
-	handler.emitSessionState(wc)
+	handler.emitSessionState(wc, "")
 
 	var frame map[string]any
 	select {

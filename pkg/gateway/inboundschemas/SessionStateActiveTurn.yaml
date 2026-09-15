@@ -1,0 +1,24 @@
+title: SessionStateActiveTurn
+description: >
+  ADR-082 D4 — the in-flight foreground turn of the session a connection has
+  just bound to. Carried only inside SessionStateFrame.active_turn. The
+  catch-up token frame that follows (ADR-082 D3) carries the text generated so
+  far; this object only tells the SPA that a turn is running and who runs it.
+  Keep in sync by hand with contracts/asyncapi.yaml's inline copy.
+type: object
+required:
+  - turn_id
+  - agent_id
+  - started_at
+additionalProperties: false
+properties:
+  turn_id:
+    type: string
+    description: Server-minted id of the running turn (matches ToolCallStartFrame/DoneFrame turn ids).
+  agent_id:
+    type: string
+    description: The agent executing the turn (the producer of the frames that follow).
+  started_at:
+    type: string
+    format: date-time
+    description: RFC 3339 timestamp of when the turn began.

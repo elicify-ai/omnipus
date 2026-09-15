@@ -69,3 +69,24 @@ func TestValidateOverrideKeys_AcceptsTheD2Names(t *testing.T) {
 		"browser_upload_file":   config.ToolPolicyAsk,
 	})
 }
+
+// TestValidateOverrideKeys_AcceptsGoalClaimAndBrowserHandover is wave E1's
+// own positive control for its two new catalog names (JUDGE-D12,
+// BROWSER-FR-051, C-70): without this, a later regression that dropped
+// either name from allStaticToolNames while leaving the per-agent seed maps
+// naming it would surface only as a boot panic in an unrelated test, with a
+// failure message that names neither the missing catalog entry nor the wave
+// that broke it.
+func TestValidateOverrideKeys_AcceptsGoalClaimAndBrowserHandover(t *testing.T) {
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("validateOverrideKeys rejected goal_claim/browser_handover: %v. Both are seeded "+
+				"in at least one agent's override map (pkg/coreagent/core.go), so a rejection here "+
+				"means the per-agent seeds panic at first use", r)
+		}
+	}()
+	validateOverrideKeys(map[string]config.ToolPolicy{
+		"goal_claim":       config.ToolPolicyAllow,
+		"browser_handover": config.ToolPolicyDeny,
+	})
+}

@@ -24,13 +24,33 @@
 // the session readable), the window carries a head-and-tail cut around the
 // typed cap mark, and the projection function (projection.go) re-derives the
 // same bytes on reload from the persisted state.
+//
+// ADR-084 D4/D9 additionally routes two verifier-adjudication mechanisms
+// through this SAME choke point, because it is the one function every tool
+// result already passes through and the one place that holds both the tool
+// name and the exact admitted text (see each mechanism's own doc comment
+// below for why here and nowhere else):
+//
+//   - JUDGE-FR-009a: a shipped, closed, case-insensitive injection-signature
+//     scan against every admitted result. A hit prepends an "UNTRUSTED DATA"
+//     banner to the text admitted to the model and flags the call — never a
+//     filter, never a suppression, only the removal of that content's
+//     ability to ground a `met` verdict (a later wave's job).
+//   - JUDGE-FR-030's capture mechanism: for the duration of one adjudication,
+//     the exact text admitted to the model per tool call, keyed compositely
+//     by (iteration, tool_call_id) — never by tool_call_id alone (m6) —
+//     accumulated in memory for the mapping loop
+//     (pkg/agent/verifier_adjudication.go, outside this wave) to ground a
+//     `met` verdict's quote against.
 package agent
 
 import (
 	"context"
 	"encoding/json"
 	"math"
+	"regexp"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"unicode/utf8"
 
@@ -314,6 +334,16 @@ type toolResultAdmission struct {
 	// ParallelN is the number of tool calls on the owning assistant message
 	// (FR-011's N). < 1 is treated as 1.
 	ParallelN int
+	// SkipVerifierBudgetAccounting is set ONLY by JUDGE-FR-052's own
+	// cap-refusal producer (pkg/agent/loop.go's turnLoop dispatch point) on
+	// the synthetic tool-result it manufactures when a verifier adjudication
+	// budget is already exhausted. Every other producer leaves this false
+	// (its zero value), which is what makes adding it here additive rather
+	// than a breaking change to the other ten call sites: a refusal that
+	// exists ONLY because the cap was already reached must not itself count
+	// toward that same cap, or a turn already past the limit would inflate
+	// its own counters on every further (refused) attempt.
+	SkipVerifierBudgetAccounting bool
 }
 
 // admittedToolResult is what the producer gets back.
@@ -353,6 +383,27 @@ func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) adm
 		content = cfg.FilterSensitiveData(content)
 		cs = cfg.Context
 	}
+
+	// JUDGE-FR-009a: scan the admitted text for a shipped, closed,
+	// case-insensitive injection signature, on EVERY admitted tool result —
+	// this is unconditional and NOT gated on a verifier adjudication being
+	// in progress (D4 is a general defense, and this is the one choke point
+	// every tool result of every kind of turn passes through). A hit
+	// prepends the banner to the text the model actually sees and records
+	// the flag against this adjudication's capture (if any is registered
+	// for this turn) so a later `met` verdict grounded in the flagged call
+	// can be caught — never a filter, never a suppression.
+	injectionPattern, injectionHit := scanForInjectionSignature(content)
+	if injectionHit {
+		logger.WarnCF("agent", "tool result matched an injection signature (JUDGE-FR-009a); banner prepended, verdict grounding in this call flagged",
+			map[string]any{
+				"tool":         adm.Tool,
+				"tool_call_id": adm.ToolCallID,
+				"pattern":      injectionPattern,
+			})
+		content = injectionBanner(injectionPattern) + "\n" + content
+	}
+
 	budget := 0
 	if ts != nil && ts.agent != nil {
 		budget = agentContextBudget(ts.agent)
@@ -470,6 +521,31 @@ func (al *AgentLoop) admitToolResult(ts *turnState, adm toolResultAdmission) adm
 			})
 	}
 
+	// JUDGE-FR-030's capture and JUDGE-FR-051's budget accounting, both
+	// no-ops for the overwhelming majority of calls (an ordinary chat turn
+	// has nothing registered for its turnID — see verifier_budget.go's
+	// package doc comment for why turnID rather than a context.Context
+	// value). window.Content, not archived.Content, is recorded: it is the
+	// exact text the model actually saw (FR-030's "the text admitted to the
+	// model"), which over the cap differs from the archived full content.
+	if ts != nil && ts.turnID != "" {
+		if vc := verifierCaptureForTurn(ts.turnID); vc != nil {
+			vc.Record(ts.iteration, verifierCaptureEntry{
+				Tool:             adm.Tool,
+				ToolCallID:       adm.ToolCallID,
+				Content:          window.Content,
+				Bytes:            len(window.Content),
+				Injected:         injectionHit,
+				InjectionPattern: injectionPattern,
+			})
+		}
+		if !adm.SkipVerifierBudgetAccounting {
+			if vb := verifierBudgetForTurn(ts.turnID); vb != nil {
+				vb.RecordToolCall(len(window.Content))
+			}
+		}
+	}
+
 	return admittedToolResult{
 		Message:       window,
 		Archived:      archived,
@@ -502,4 +578,179 @@ func toolResultMessage(toolCallID, content string, media []string) providers.Mes
 		ToolCallID: toolCallID,
 		Media:      media,
 	}
+}
+
+// --- JUDGE-FR-009a: the injection-signature scan -----------------------
+
+// injectionSignature is one shipped, closed pattern D4's mechanical control
+// scans every admitted tool result against.
+type injectionSignature struct {
+	name string
+	re   *regexp.Regexp
+}
+
+// injectionSignatures is the shipped, closed, case-insensitive set (the
+// `(?i)` flag on every pattern). At minimum the five the spec names:
+// "ignore (all )?(prior|previous) instructions", "system:",
+// "mark (every|all) criteri", "criteria (are )?(waived|descoped|
+// renegotiated)", "return met". A heuristic floor, not a filter for a
+// determined model — see this file's package doc comment.
+var injectionSignatures = []injectionSignature{
+	{name: "ignore prior instructions", re: regexp.MustCompile(`(?i)ignore\s+(all\s+)?(prior|previous)\s+instructions`)},
+	{name: "system:", re: regexp.MustCompile(`(?i)system:`)},
+	{name: "mark all criteria", re: regexp.MustCompile(`(?i)mark\s+(every|all)\s+criteri`)},
+	{name: "criteria waived/descoped/renegotiated", re: regexp.MustCompile(`(?i)criteria\s+(are\s+)?(waived|descoped|renegotiated)`)},
+	{name: "return met", re: regexp.MustCompile(`(?i)return\s+met\b`)},
+}
+
+// scanForInjectionSignature reports the first matching pattern's name, in
+// injectionSignatures' fixed order, or hit=false when none match.
+func scanForInjectionSignature(content string) (pattern string, hit bool) {
+	for _, sig := range injectionSignatures {
+		if sig.re.MatchString(content) {
+			return sig.name, true
+		}
+	}
+	return "", false
+}
+
+// injectionBanner builds JUDGE-FR-009a's per-result banner, prepended to the
+// text admitted to the model on a signature hit.
+func injectionBanner(pattern string) string {
+	return "UNTRUSTED DATA — INJECTION SIGNATURE DETECTED (" + pattern + ")"
+}
+
+// --- JUDGE-FR-030's capture mechanism -----------------------------------
+
+// verifierCaptureKey is FR-030 m6's composite key: (iteration, tool_call_id)
+// — never tool_call_id alone, because a provider can reuse a call id such as
+// "call_0" on every turn iteration (pkg/agent/empty_in_place.go's B-29b
+// notes), which would let a later iteration's result silently overwrite the
+// one an earlier verdict grounded in.
+type verifierCaptureKey struct {
+	Iteration  int
+	ToolCallID string
+}
+
+// verifierCaptureEntry is one captured tool result: the exact text admitted
+// to the model, its byte length, and JUDGE-FR-009a's injection flag for that
+// same call. Parameters are deliberately NOT captured here — toolResultAdmission
+// carries no tool arguments (adding them would require touching the eleven
+// admitToolResult call sites in pkg/agent/loop.go, only one of which is in
+// this wave's write-set) — the mapping loop that needs them
+// (pkg/agent/verifier_adjudication.go, outside this wave) joins them from
+// the turn's own recorded tool-call transcript entries by ToolCallID
+// instead, which is what FR-030's own mechanism note describes ("the
+// parameters are joined from the turn's own recorded tool calls").
+type verifierCaptureEntry struct {
+	Tool             string
+	ToolCallID       string
+	Content          string
+	Bytes            int
+	Injected         bool
+	InjectionPattern string
+}
+
+// VerifierCapture accumulates, in memory and for the duration of one
+// adjudication, every tool result admitted during it — see this file's
+// package doc comment and verifier_budget.go's for why it is registered per
+// turnID rather than carried on a context.Context value.
+type VerifierCapture struct {
+	mu      sync.Mutex
+	entries map[verifierCaptureKey]verifierCaptureEntry
+	// flagged holds ToolCallID -> matched pattern name for every call
+	// JUDGE-FR-009a flagged in this adjudication — "an adjudication-level
+	// flag plus the flagged tool-call ids".
+	flagged map[string]string
+}
+
+// NewVerifierCapture returns an empty capture ready for one adjudication.
+func NewVerifierCapture() *VerifierCapture {
+	return &VerifierCapture{
+		entries: make(map[verifierCaptureKey]verifierCaptureEntry),
+		flagged: make(map[string]string),
+	}
+}
+
+// Record accumulates one tool result. A nil receiver is a no-op (defensive;
+// the registry never hands out a nil *VerifierCapture, but every method here
+// stays safe if that ever changes).
+func (vc *VerifierCapture) Record(iteration int, entry verifierCaptureEntry) {
+	if vc == nil {
+		return
+	}
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	vc.entries[verifierCaptureKey{Iteration: iteration, ToolCallID: entry.ToolCallID}] = entry
+	if entry.Injected {
+		vc.flagged[entry.ToolCallID] = entry.InjectionPattern
+	}
+}
+
+// Get returns the captured entry for one (iteration, tool_call_id) pair.
+func (vc *VerifierCapture) Get(iteration int, toolCallID string) (verifierCaptureEntry, bool) {
+	if vc == nil {
+		return verifierCaptureEntry{}, false
+	}
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	e, ok := vc.entries[verifierCaptureKey{Iteration: iteration, ToolCallID: toolCallID}]
+	return e, ok
+}
+
+// FlaggedToolCallIDs returns JUDGE-FR-009a's adjudication-level flag: a copy
+// of every tool-call id an injection signature was matched in, mapped to the
+// pattern that matched. Empty (never nil) when nothing was flagged.
+func (vc *VerifierCapture) FlaggedToolCallIDs() map[string]string {
+	out := make(map[string]string)
+	if vc == nil {
+		return out
+	}
+	vc.mu.Lock()
+	defer vc.mu.Unlock()
+	for id, pattern := range vc.flagged {
+		out[id] = pattern
+	}
+	return out
+}
+
+// --- per-turn registry, keyed by turnState.turnID (see verifier_budget.go's
+// package doc comment for why turnID rather than a context.Context value) --
+
+var (
+	verifierCapturesMu sync.Mutex
+	verifierCaptures   = map[string]*VerifierCapture{}
+)
+
+// RegisterVerifierCapture attaches vc to turnID for the duration of one
+// adjudication turn. The caller MUST call UnregisterVerifierCapture(turnID)
+// once that turn returns — in a defer set immediately after this call — or
+// the entry leaks for the life of the process.
+func RegisterVerifierCapture(turnID string, vc *VerifierCapture) {
+	if turnID == "" || vc == nil {
+		return
+	}
+	verifierCapturesMu.Lock()
+	defer verifierCapturesMu.Unlock()
+	verifierCaptures[turnID] = vc
+}
+
+// UnregisterVerifierCapture removes turnID's capture, if any.
+func UnregisterVerifierCapture(turnID string) {
+	if turnID == "" {
+		return
+	}
+	verifierCapturesMu.Lock()
+	defer verifierCapturesMu.Unlock()
+	delete(verifierCaptures, turnID)
+}
+
+// verifierCaptureForTurn is admitToolResult's read of the per-turn registry.
+func verifierCaptureForTurn(turnID string) *VerifierCapture {
+	if turnID == "" {
+		return nil
+	}
+	verifierCapturesMu.Lock()
+	defer verifierCapturesMu.Unlock()
+	return verifierCaptures[turnID]
 }

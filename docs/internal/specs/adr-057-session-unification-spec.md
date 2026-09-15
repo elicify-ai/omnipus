@@ -8,6 +8,8 @@
 
 **Version**: v3 (2026-08-03). Supersedes v2 (commit `883f1efc`), which superseded v1 (commit `478b85b5`).
 
+> **ADR-082 note (2026-09-08):** every reference below to the ADR-045 orphan-foreground-turn watchdog (`orphan_watch.go`, `hasLiveCriticalDelegate`, BDD-26/BDD-27) describes a mechanism [ADR-082](../architecture/ADR-082-ui-independent-turns-and-session-bound-streaming.md) D1 has since deleted in full, not merely disabled. Read those passages as history. Unrelated uses of "orphan" in this document (orphan session directories, orphan buffers, etc.) are untouched.
+
 > **v3 changelog.** v2 was reviewed by [grill #2](adr-057-session-unification-spec-review-2.md) — **verdict BLOCK, 4 CRITICAL / 12 MAJOR / 6 MINOR / 3 OBSERVATION**. All 22 numbered findings are resolved here; **nothing is deferred, nothing is filed as a follow-up issue.** Grill #2 independently re-derived every v2 correction against the tree and confirmed all six CRITICAL fixes are real — **those are not touched here.** Corrections forced by this review are marked `[grill2 C2-n / M2-n / m2-n]`.
 >
 > **The structural lesson v3 acts on.** Grill #2's verdict was not "v2 got things wrong" — it was that v2 **fixed the findings rather than the defect classes**, deriving its corrections from grill #1's file list instead of from the tree. So every correction below was derived by **enumerating the tree**, and the enumeration commands are now stated in the document so a reviewer can re-run them (see "Ownership derivation"). Three of the four CRITICALs are direct consequences of that one habit.

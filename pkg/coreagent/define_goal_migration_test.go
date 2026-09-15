@@ -69,7 +69,23 @@ func TestSeedConfig_FreshInstall_DefineGoalEverywhere(t *testing.T) {
 	// allowlist for it (nil stays unrestricted).
 	assert.Nil(t, byID["worker"], "the worker's nil (unrestricted) skill posture is unchanged")
 	// The Judge consumes criteria, never authors them — no grant (ADR-074 D4).
-	assert.Nil(t, byID[string(coreagent.IDJudge)], "the Judge gets NO define-goal grant")
+	//
+	// The SHAPE this reads changed, the thing it asserts did not: JUDGE-FR-059
+	// (ADR-084 revision 9 — "systemAgentSkills(IDJudge) MUST return a non-nil,
+	// empty []string{}") deliberately moved the Judge's seeded allowlist from
+	// nil to an explicit empty list, so `assert.Nil` no longer describes the
+	// intended state. An empty allowlist is a STRICTER posture than nil, not a
+	// looser one — both deny every registry skill (context.go::skillAllowed,
+	// ADR-072 D5/C12), and the explicit [] additionally makes
+	// seedSystemAgents' `skills != nil` branch re-enforce the closure on every
+	// boot, which nil does not. Asserting the exact empty slice therefore
+	// keeps the original claim ("no define-goal grant") and pins FR-059's
+	// shape at the same time.
+	assert.Equal(t, []string{}, byID[string(coreagent.IDJudge)],
+		"the Judge gets NO define-goal grant — and, per JUDGE-FR-059, carries an explicit "+
+			"non-nil EMPTY allowlist rather than nil")
+	assert.NotContains(t, byID[string(coreagent.IDJudge)], "define-goal",
+		"the Judge consumes criteria, never authors them (ADR-074 D4)")
 	// PlanSupervisor: exactly the pair, canonical order, renamed.
 	assert.Equal(t, []string{"plan", "define-goal"}, byID[string(coreagent.IDPlanSupervisor)])
 	// Both markers recorded in the same pass.

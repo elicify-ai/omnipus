@@ -1,5 +1,7 @@
 # ADR-049: Planning & Goals — Plan entity, evidence-ladder judge, goal loops, System Agents
 
+> **Update 2026-09-14:** the token budgets this document rejects were later adopted as the app-level token budget (ADR-053 D12); that budget and the per-delegation token budget have since been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 - **Status:** Proposed (ratification of operator interview 2026-07-19; amended post grill-reviews **r1 (BLOCK) → r2 (REVISE) → r3 (PASS)**, all 2026-07-19; grill gate cleared — next: `/plan-spec`)
 - **Superseded in part:** by [ADR-052](ADR-052-autonomous-agent-plan-execution.md) (autonomous agent plan execution) — ADR-052's autonomous kickoff replaces this ADR's human-only approval gate, and the Judge's execution mechanism is re-architected (real agent, own verifier session, replacing the direct `Provider.Chat` shortcut). This ADR's Plan entity, evidence-ladder concept, and System Agents stand.
 - **Superseded in part (2026-07-22):** by [ADR-053](ADR-053-unified-goal-plan-subagent.md) (unified goal/plan/subagent system) — **D4** one-shot owner wake → a persistent owner session; **D7** round accounting (a round is now one *adjudication*, not one worker turn — affects `judge_rounds_max`); **FR-5/D6** after-every-turn `/goal` cadence + one-`/goal`-per-session → **claim-or-idle**, per-goal-id, multiple goals per session. ADR-049's deterministic dispatch engine, boot reconciliation, and 7-day idle-expiry sweeper stand. See ADR-053 §5.1.

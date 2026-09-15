@@ -34,9 +34,13 @@ const ALL_CODES: LLMErrorCode[] = [
   'provider_auth_failed',
   'rate_limited',
   'network',
+  // Founder decision 2026-09-14: a streaming call aborted for total silence.
+  'provider_stalled',
   'content_policy',
   'context_too_long',
   'tool_args',
+  // ADR-087 D5: a truncated tool call, distinct from a genuinely malformed one.
+  'tool_call_truncated',
   'schema',
   'agent_not_configured',
   'workspace_unavailable',

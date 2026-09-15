@@ -36,6 +36,7 @@ func TestSeam4_CreateTask_PersistsWriteSetStreamIsJoin(t *testing.T) {
 		"prompt":    "implement shard A",
 		"agent_id":  "agent-b",
 		"criteria":  validCriteriaArg(),
+		"dod":       validDoDArg(),
 		"write_set": []any{"pkg/plan/plan_lint.go", "pkg/plan/plan_lint_test.go"},
 		"stream":    "stream-schema",
 		"is_join":   true,

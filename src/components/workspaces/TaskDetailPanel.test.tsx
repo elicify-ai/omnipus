@@ -468,11 +468,12 @@ const taskNoPrompt: Task = makeTask({
   priority: 3,
 })
 
-describe('TaskDetailPanel — renders prompt field', () => {
-  it('renders the prompt content', async () => {
+describe('TaskDetailPanel — renders Goal field (GOAL-FR-056 — was "Prompt / Instructions")', () => {
+  it('renders the prompt content under the "Goal" label', async () => {
     renderPanel(taskWithPrompt)
     expect(await screen.findByText(/run the tests and fix all failures/i)).toBeInTheDocument()
-    expect(screen.getByText(/prompt/i)).toBeInTheDocument()
+    expect(screen.getByText(/^goal$/i)).toBeInTheDocument()
+    expect(screen.queryByText(/prompt \/ instructions/i)).toBeNull()
   })
 
   it('shows "No prompt set." when task has no prompt', async () => {
@@ -517,11 +518,12 @@ describe('TaskDetailPanel — renders todos checklist', () => {
     expect(screen.getByText(/step two/i)).toBeInTheDocument()
   })
 
-  it('does not render todos section when todos array is empty', async () => {
+  it('renders the bare "Todos" header with no count and no rows when todos array is empty (GOAL-FR-057)', async () => {
     const task = makeTask({ todos: [] })
     renderPanel(task)
     await act(async () => {})
-    expect(screen.queryByText(/todos/i)).toBeNull()
+    expect(await screen.findByText(/^todos$/i)).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox')).toBeNull()
   })
 
   it('renders in_progress todo distinctly and does not count it as completed', async () => {
@@ -1016,59 +1018,26 @@ describe('TaskDetailPanel — renders subtask section when subtasks exist', () =
   })
 })
 
-// ── Full task UX edits (trigger / depends-on / due / todos) ────────────────────
+// ── Full task UX edits (depends-on / due / todos) ───────────────────────────
 
-describe('TaskDetailPanel — editable trigger', () => {
-  // FR-011/D3/FR-005, updated by operator ruling 2026-08-07: recurring- AND
-  // once-trigger SCHEDULE editing are both removed from the generic detail
-  // panel entirely — actual date/time entry exists only in the calendar
-  // editor. The trigger-KIND switch (manual ⇄ once) still lives here, tested
-  // by the two tests below. Every/recurring/once-at-rest all get the
-  // calendar-redirect rendering, tested in the FR-023 describe block below
-  // (which used to cover only recurring/every — the once-DateTimePicker test
-  // that used to live here is replaced by that block's "once" case, since
-  // once now gets the identical treatment).
-  it('the Trigger dropdown offers only "None (manual)" and "Once (at a time)" for a manual task', async () => {
-    Element.prototype.scrollIntoView = vi.fn()
-    renderPanel(makeTask({ id: 'task-trig', status: 'next' }))
-
-    await openSmartSelectAndFind(/^trigger$/i, /once \(at a time\)/i)
-    // Query by role="option" — the closed trigger's own selected-value
-    // display ALSO reads "None (manual)" (the default), so a plain
-    // getByText would ambiguously match both it and the open option.
-    expect(screen.getByRole('option', { name: /none \(manual\)/i })).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: /once \(at a time\)/i })).toBeInTheDocument()
-    expect(screen.queryByRole('option', { name: /every \(interval\)/i })).toBeNull()
-    expect(screen.queryByRole('option', { name: /recurring \(cron\)/i })).toBeNull()
-    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
-  })
-
-  it('Binding Rule 4 positive control: selecting "Once (at a time)" on a manual/no-trigger task still switches the trigger kind via updateTask', async () => {
-    // Operator ruling 2026-08-07 moved once-SCHEDULE editing (the actual
-    // date/time) to the calendar-only redirect — it did NOT touch the
-    // trigger-KIND switch (manual → once), which stays inline right here,
-    // exactly as before. This proves a manual/no-trigger task still gets
-    // that inline editing today, unaffected by the ruling.
-    Element.prototype.scrollIntoView = vi.fn()
-    const { updateTask } = await import('@/lib/api')
-    renderPanel(makeTask({ id: 'task-trig-manual-switch', status: 'next' }))
-
-    const label = await screen.findByText(/^trigger$/i)
-    const fieldRoot = label.parentElement as HTMLElement
-    const combo = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
-    fireEvent.click(combo)
-
-    const option = await screen.findByRole('option', { name: /once \(at a time\)/i })
-    fireEvent.pointerDown(option, { pointerId: 1, button: 0 })
-    fireEvent.click(option)
-
-    await waitFor(() => {
-      const arg = lastUpdateArg(updateTask)
-      expect(arg.trigger?.type).toBe('once')
-      expect(typeof arg.trigger?.config.at_ms).toBe('number')
-    })
-
-    delete (Element.prototype as { scrollIntoView?: () => void }).scrollIntoView
+// GOAL-FR-060: the manual-kind Trigger CONTROL (the SmartSelect offering
+// "None (manual)" / "Once (at a time)") is REMOVED outright — a normal task
+// starts by Start/agent/plan, never a timer, and picking a schedule is the
+// calendar's job now. This replaces the pre-FR-060 "editable trigger"
+// describe block, which exercised that exact control — both of its tests
+// (the option-list assertion and the "Binding Rule 4" positive control on
+// selecting "Once") tested a control this FR deletes; their read-only-branch
+// sibling (once a task IS already scheduled) survives unchanged in the
+// FR-023 describe block below.
+describe('TaskDetailPanel — Trigger control removed for a manual task (GOAL-FR-060)', () => {
+  it('renders no Trigger field/control at all for a manual (non-scheduled) task', async () => {
+    renderPanel(makeTask({ id: 'task-manual-no-trigger', status: 'next' }))
+    // Wait for the panel to finish its first render before asserting an
+    // absence, so the query can't pass merely because nothing loaded yet.
+    await screen.findByText(/^goal$/i)
+    expect(screen.queryByText(/^trigger$/i)).toBeNull()
+    expect(screen.queryByRole('combobox', { name: /trigger/i })).toBeNull()
+    expect(screen.queryByRole('option', { name: /once \(at a time\)/i })).toBeNull()
   })
 })
 
@@ -1452,14 +1421,4 @@ describe('TaskDetailPanel — autosave indicator', () => {
 function lastUpdateArg(updateTask: unknown): { trigger?: { type: string; config: Record<string, unknown> }; due?: string } {
   const mock = vi.mocked(updateTask as (id: string, data: unknown) => Promise<unknown>)
   return mock.mock.calls[mock.mock.calls.length - 1][1] as never
-}
-
-async function openSmartSelectAndFind(fieldLabel: RegExp, optionLabel: RegExp): Promise<HTMLElement> {
-  // Each Field renders its label text followed by the control. Find the field
-  // wrapper by its label, then click the combobox trigger inside it.
-  const label = await screen.findByText(fieldLabel)
-  const fieldRoot = label.parentElement as HTMLElement
-  const combo = fieldRoot.querySelector('[role="combobox"]') as HTMLElement
-  fireEvent.click(combo)
-  return screen.findByText(optionLabel)
 }

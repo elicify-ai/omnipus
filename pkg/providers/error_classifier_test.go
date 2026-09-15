@@ -2,10 +2,14 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
 func TestClassifyError_Nil(t *testing.T) {
@@ -497,5 +501,48 @@ func TestIsImageSizeError(t *testing.T) {
 	}
 	if IsImageSizeError("normal error message") {
 		t.Error("should not match normal error")
+	}
+}
+
+// TestClassifyError_ToolArgumentsErrorNeverClassifiedByFragmentContent is the
+// ADR-087 Finding #8 regression. ToolArgumentsError.Error() embeds up to 256
+// bytes of the refused argument fragment verbatim (ADR-087 D3 /
+// maxUndecodableArgumentsQuoted) — that fragment is model-controlled text,
+// and it can coincidentally contain a classifier keyword. Before the typed
+// short-circuit, a fragment like this one would substring-match
+// authPatterns ("authentication"), timeoutPatterns ("timeout"), and
+// rateLimitPatterns ("429", "rate limit") and get classified as a
+// retriable/failoverable provider fault — cooling down (or failing over
+// away from) a perfectly healthy candidate for a deterministic content
+// fault that has nothing to do with its health.
+//
+// ClassifyError must return nil for ANY *common.ToolArgumentsError,
+// regardless of what the fragment says, so FallbackChain.Execute treats it
+// as non-retriable/non-failoverable (see TestFallback_UnclassifiedError's
+// sibling test for *ToolArgumentsError, TestFallbackChain_ToolArgumentsErrorIsNotFailoverable).
+func TestClassifyError_ToolArgumentsErrorNeverClassifiedByFragmentContent(t *testing.T) {
+	// Unterminated string literal containing every classifier trap word this
+	// package matches on, so this test would fail against the old
+	// substring-first behavior no matter which pattern list "won" the race.
+	fragment := `{"note":"authentication timeout 429 rate limit 503 overloaded`
+
+	_, err := common.DecodeToolCallArguments(json.RawMessage(fragment), "write_file")
+	if err == nil {
+		t.Fatal("expected DecodeToolCallArguments to refuse the fragment")
+	}
+
+	// Sanity: prove the trap is real — the raw error message DOES contain
+	// the keywords a naive substring classifier would match on.
+	msg := strings.ToLower(err.Error())
+	for _, trap := range []string{"authentication", "timeout", "429", "rate limit", "503", "overloaded"} {
+		if !strings.Contains(msg, trap) {
+			t.Fatalf("test fixture is broken: error message %q does not contain trap word %q", msg, trap)
+		}
+	}
+
+	result := ClassifyError(err, "openai", "gpt-4")
+	if result != nil {
+		t.Errorf("ClassifyError(*ToolArgumentsError) = %+v, want nil — "+
+			"a refused tool call must never be classified as a retriable/failoverable provider fault", result)
 	}
 }

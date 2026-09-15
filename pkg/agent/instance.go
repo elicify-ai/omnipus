@@ -296,7 +296,19 @@ func NewAgentInstance(
 		maxIter = 200
 	}
 
+	// Sampling params: per-agent override (agentCfg.ModelParams) wins, then
+	// the global default, then the hardcoded fallback — same three-rung
+	// ladder as maxIter above. The per-agent field was persisted (PUT
+	// /api/v1/agents/{id} `model_params`) but never read here before this
+	// fix (Q1): AgentConfig had no ModelParams field at all until it was
+	// added specifically to close this gap, so a caller-set max_tokens/
+	// temperature returned 200 and never once reached a provider call —
+	// the ADR-037 anti-pattern moved to config file rather than fixed by
+	// it. See config.AgentModelParams's doc comment.
 	maxTokens := defaults.MaxTokens
+	if agentCfg != nil && agentCfg.ModelParams != nil && agentCfg.ModelParams.MaxTokens != nil {
+		maxTokens = *agentCfg.ModelParams.MaxTokens
+	}
 	if maxTokens == 0 {
 		maxTokens = 8192
 	}
@@ -304,6 +316,9 @@ func NewAgentInstance(
 	temperature := 0.7
 	if defaults.Temperature != nil {
 		temperature = *defaults.Temperature
+	}
+	if agentCfg != nil && agentCfg.ModelParams != nil && agentCfg.ModelParams.Temperature != nil {
+		temperature = *agentCfg.ModelParams.Temperature
 	}
 
 	var thinkingLevelStr string

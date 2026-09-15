@@ -47,10 +47,9 @@ func TestParseStreamResponse_EmitsProgressForToolCallArguments(t *testing.T) {
 		t.Context(),
 		strings.NewReader(stream),
 		func(string) { textCallbacks++ },
-		func(p protocoltypes.ToolCallProgress) { progress = append(progress, p) },
-	)
+		func(p protocoltypes.ToolCallProgress) { progress = append(progress, p) }, nil)
 	if err != nil {
-		t.Fatalf("parseStreamResponse() error = %v", err)
+		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 	}
 
 	// The stream has no text at all — this is the whole point.
@@ -117,9 +116,9 @@ func TestParseStreamResponse_EmitsProgressForToolCallArguments(t *testing.T) {
 // every existing caller passes nil and must keep working untouched.
 func TestParseStreamResponse_NilProgressCallbackIsSafe(t *testing.T) {
 	stream := toolArgsOnlyStream("write_file", []string{`{"a":`, `1}`})
-	resp, err := parseStreamResponse(t.Context(), strings.NewReader(stream), nil, nil)
+	resp, err := parseStreamResponse(t.Context(), strings.NewReader(stream), nil, nil, nil)
 	if err != nil {
-		t.Fatalf("parseStreamResponse() error = %v", err)
+		t.Fatalf("parseStreamResponse(, nil) error = %v", err)
 	}
 	if len(resp.ToolCalls) != 1 {
 		t.Fatalf("expected 1 tool call, got %d", len(resp.ToolCalls))
@@ -146,8 +145,7 @@ func TestParseStreamResponse_PanickingProgressHandlerDoesNotKillTheStream(t *tes
 		func(protocoltypes.ToolCallProgress) {
 			calls++
 			panic("consumer handler is broken")
-		},
-	)
+		}, nil)
 	if err != nil {
 		t.Fatalf("a panicking progress handler broke the stream: %v", err)
 	}

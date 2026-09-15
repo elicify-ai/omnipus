@@ -151,6 +151,41 @@ func AccessURLsFromConfig(configPath string) AccessURLs {
 		}
 	}
 
+	// ENV WINS, exactly as it does for the gateway itself.
+	//
+	// pkg/config's GatewayConfig carries `env:"OMNIPUS_GATEWAY_HOST"` /
+	// `env:"OMNIPUS_GATEWAY_PORT"` / `env:"OMNIPUS_GATEWAY_PUBLIC_URL"` tags,
+	// which caarlos0/env applies over the file's values at load. This function
+	// is a SECOND, independent reader of the same three settings — it
+	// hand-parses config.json rather than importing pkg/config, to keep the
+	// CLI's start-up path light — and it read only the file, so any operator
+	// who set the port by environment was told to open the WRONG URL while
+	// the gateway listened somewhere else entirely.
+	//
+	// On macOS that is not a cosmetic slip: ControlCenter's AirPlay Receiver
+	// squats port 5000, so the printed default URL answers 403 from a wholly
+	// unrelated process, and the gateway looks broken when it is running
+	// perfectly one port over. Measured on this machine: banner said
+	// http://localhost:5000 while the gateway served the SPA on 5055, and
+	// curl :5000 returned AirPlay's 403.
+	//
+	// Being a second reader is the defect's real shape, so if a fourth
+	// gateway setting ever grows an env tag it has to be mirrored here too.
+	if v := strings.TrimSpace(os.Getenv("OMNIPUS_GATEWAY_HOST")); v != "" {
+		host = v
+	}
+	if v := strings.TrimSpace(os.Getenv("OMNIPUS_GATEWAY_PORT")); v != "" {
+		// A malformed or out-of-range value is IGNORED rather than defaulted:
+		// the gateway's own parse will reject it and refuse to start, so
+		// printing a made-up port here would be the same lie in a new place.
+		if p, perr := strconv.Atoi(v); perr == nil && p > 0 && p <= 65535 {
+			port = p
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("OMNIPUS_GATEWAY_PUBLIC_URL")); v != "" {
+		publicURL = v
+	}
+
 	return BuildAccessURLs(host, port, publicURL, LocalIPv4s())
 }
 

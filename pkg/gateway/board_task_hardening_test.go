@@ -269,7 +269,7 @@ func TestTask_Post_RejectsUnknownAgentID(t *testing.T) {
 		wsID := ensureTestWorkspace(t, api)
 
 		body := fmt.Sprintf(
-			`{"title":"UnknownAgentTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":%q}`,
+			`{"title":"UnknownAgentTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":%q,`+minimalCriteriaDodJSON+`}`,
 			wsID, unknownID,
 		)
 		w := httptest.NewRecorder()
@@ -296,7 +296,7 @@ func TestTask_Post_RejectsUnknownAgentID(t *testing.T) {
 		setWorkspaceCoreTeam(t, api, wsID, []string{registeredID})
 
 		body := fmt.Sprintf(
-			`{"title":"AgentAcceptTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":%q}`,
+			`{"title":"AgentAcceptTest","action":"llm","workspace_id":%q,"prompt":"do it","agent_id":%q,`+minimalCriteriaDodJSON+`}`,
 			wsID, registeredID,
 		)
 		w := httptest.NewRecorder()
@@ -314,7 +314,7 @@ func TestTask_Post_RejectsUnknownAgentID(t *testing.T) {
 		api := newTestRestAPIWithAgent(t)
 		wsID := ensureTestWorkspace(t, api)
 
-		body := fmt.Sprintf(`{"title":"NoAgentIDTask","action":"llm","workspace_id":%q,"prompt":"do it"}`, wsID)
+		body := fmt.Sprintf(`{"title":"NoAgentIDTask","action":"llm","workspace_id":%q,"prompt":"do it",`+minimalCriteriaDodJSON+`}`, wsID)
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, "/api/v1/tasks", strings.NewReader(body))
 		r.Header.Set("Content-Type", "application/json")

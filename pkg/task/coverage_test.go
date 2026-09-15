@@ -1928,7 +1928,6 @@ func TestRestartReset_HappyPath(t *testing.T) {
 	loaded.StartedAt = at
 	loaded.CompletedAt = at
 	loaded.FollowedUp = true
-	loaded.PendingJudgeClaim = "claim text"
 	require.NoError(t, s.write(loaded))
 
 	reset, err := s.RestartReset(tk.ID)
@@ -1942,7 +1941,6 @@ func TestRestartReset_HappyPath(t *testing.T) {
 	assert.Empty(t, reset.StartedAt)
 	assert.Empty(t, reset.CompletedAt)
 	assert.False(t, reset.FollowedUp)
-	assert.Empty(t, reset.PendingJudgeClaim)
 
 	// Persistence check.
 	got, err := s.Get(tk.ID)

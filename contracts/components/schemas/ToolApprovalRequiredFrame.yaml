@@ -57,6 +57,16 @@ properties:
     type: string
     minLength: 1
     description: Session in which approval is needed.
+  workspace_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      The workspace the requesting session belongs to (resolved server-side
+      from the session's meta, walking up to the delegating parent when a
+      delegated child has none). The SPA shows the approval only while that
+      workspace is the active one. Omitted when the session belongs to no
+      workspace — such an approval is shown everywhere.
   producing_session_id:
     type: string
     minLength: 1

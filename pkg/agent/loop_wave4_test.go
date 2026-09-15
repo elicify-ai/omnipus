@@ -14,10 +14,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/security"
 )
 
-// Wave 4 — SEC-26 rate-limiting wiring tests + ADR-053 D12 token-budget
-// regression tests.
-//
-// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
+// Wave 4 — SEC-26 rate-limiting wiring tests.
 
 func makeRateLimitCfg(t *testing.T) (*config.Config, *bus.MessageBus) {
 	t.Helper()
@@ -34,7 +31,6 @@ func makeRateLimitCfg(t *testing.T) (*config.Config, *bus.MessageBus) {
 		},
 		Sandbox: config.OmnipusSandboxConfig{
 			RateLimits: config.OmnipusRateLimitsConfig{
-				// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 				MaxAgentLLMCallsPerHour:    100,
 				MaxAgentToolCallsPerMinute: 20,
 			},
@@ -45,7 +41,6 @@ func makeRateLimitCfg(t *testing.T) (*config.Config, *bus.MessageBus) {
 
 // TestRateLimiter_InitializedFromConfig verifies that NewAgentLoop constructs
 // a non-nil RateLimiterRegistry and exposes it via RateLimiter().
-// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 func TestRateLimiter_InitializedFromConfig(t *testing.T) {
 	cfg, msgBus := makeRateLimitCfg(t)
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})
@@ -60,8 +55,7 @@ func TestRateLimiter_InitializedFromConfig(t *testing.T) {
 // TestIsPrivilegedAgent verifies that IsPrivilegedAgent identifies privileged
 // agent types. Privileges flow from agent type (FR-045), not from a hardcoded
 // agent ID. This predicate gates the surviving SEC-26 sliding-window rate
-// limits (LLM/hr, tool/min). TokenBudget is the sole app-level spend brake;
-// see pkg/agent/budget.go (D12 / R§8.3).
+// limits (LLM/hr, tool/min).
 func TestIsPrivilegedAgent(t *testing.T) {
 	cases := []struct {
 		agentType string
@@ -121,72 +115,11 @@ func TestEstimateLLMCallCost_NilUsage(t *testing.T) {
 	}
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ADR-053 D12 / R§8.3 — TokenBudget regression tests (issue #540)
-//
-// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
-// ─────────────────────────────────────────────────────────────────────────────
-
-// TestTokenBudget_SoleBrake_NonCore verifies that the token budget debits
-// for a non-core agent (the only brake per D12). Pre-D12 a parallel USD
-// cap would have tripped at $5; with the cap retired, the token budget
-// alone governs.
-func TestTokenBudget_SoleBrake_NonCore(t *testing.T) {
-	tb := NewTokenBudget(1000, nil) // 1000-token cap, no persister (in-memory)
-
-	// A non-core agent's LLM call debits the pool.
-	consumed, exhausted := tb.Debit(400)
-	if consumed != 400 {
-		t.Errorf("after first debit, Consumed = %d, want 400", consumed)
-	}
-	if exhausted {
-		t.Error("Exhausted() must be false after 400/1000 debits")
-	}
-
-	// A second call crosses the cap — the brake engages.
-	consumed, exhausted = tb.Debit(700)
-	if consumed != 1100 {
-		t.Errorf("after second debit, Consumed = %d, want 1100 (overshoot allowed per R§8.3d)", consumed)
-	}
-	if !exhausted {
-		t.Error("Exhausted() must be true once Consumed >= Cap")
-	}
-	if !tb.Exhausted() {
-		t.Error("Exhausted() must report true at the boundary (FR-174 / R§8.3c)")
-	}
-}
-
-// TestTokenBudget_SoleBrake_Core is the critical regression for ADR-053 D12:
-// a "core" agent's spend also debits the same pool. Before D12 the SEC-26
-// USD cap exempted core agents via IsPrivilegedAgent; that exemption is
-// RETIRED for the brake. (IsPrivilegedAgent still gates the per-agent
-// sliding-window LLM/hr + tool/min limits, which is verified by
-// TestIsPrivilegedAgent above.)
-func TestTokenBudget_SoleBrake_Core(t *testing.T) {
-	tb := NewTokenBudget(500, nil)
-
-	// A "core" agent turn debits the same pool — no exemption. This is the
-	// security-posture shift called out in ADR-053 §179: "core-agent turns
-	// now debit — a deliberate, operator-locked change of cost posture that
-	// removes the privileged exemption."
-	consumed, _ := tb.Debit(500)
-	if consumed != 500 {
-		t.Errorf("core-agent debit: Consumed = %d, want 500", consumed)
-	}
-	if !tb.Exhausted() {
-		t.Error("Exhausted() must be true after a single core debit hits the cap — " +
-			"no privileged-agent exemption on the brake (FR-172)")
-	}
-}
-
-// TestTokenBudget_USDCapPathRemoved is the structural regression that
-// fails closed if the SEC-26 USD cap sneaks back in. The retired cap
-// methods must NOT exist on security.RateLimiterRegistry; this guards
-// against a re-introduction that would re-create the dual-brake
-// anti-pattern (#540 / S5 anti-drift).
-//
-// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
-func TestTokenBudget_USDCapPathRemoved(t *testing.T) {
+// TestRateLimiterRegistry_USDCapPathRemoved is the structural regression that
+// fails closed if the SEC-26 USD cap sneaks back in. The cap methods ADR-053
+// D12 removed must NOT exist on security.RateLimiterRegistry (#540 / S5
+// anti-drift).
+func TestRateLimiterRegistry_USDCapPathRemoved(t *testing.T) {
 	// Sanity: the registry still constructs and exposes GetOrCreate for the
 	// surviving sliding-window rate limits.
 	reg := security.NewRateLimiterRegistry()
@@ -207,7 +140,7 @@ func TestTokenBudget_USDCapPathRemoved(t *testing.T) {
 
 	// The USD cap methods are intentionally absent — see pkg/security/ratelimit.go
 	// header doc-comment. If anyone re-introduces them, this reflection guard
-	// fails AND a new ADR must justify the second brake (S5 anti-drift).
+	// fails AND a new ADR must justify bringing the USD cap back (S5 anti-drift).
 	regType := reflect.TypeOf((*security.RateLimiterRegistry)(nil))
 	banned := []string{
 		"CheckGlobalCostCap", // the pre-turn gate
@@ -219,9 +152,7 @@ func TestTokenBudget_USDCapPathRemoved(t *testing.T) {
 	for _, name := range banned {
 		if _, ok := regType.MethodByName(name); ok {
 			t.Errorf("security.RateLimiterRegistry must not have method %q — "+
-				"ADR-053 D12 retired the SEC-26 USD cap (TokenBudget is the sole "+
-				"app-level spend brake). Re-introducing it re-creates the "+
-				"dual-brake anti-pattern (S5 anti-drift, #540).", name)
+				"ADR-053 D12 removed the SEC-26 USD cap (S5 anti-drift, #540).", name)
 		}
 	}
 }

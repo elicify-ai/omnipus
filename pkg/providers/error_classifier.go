@@ -5,6 +5,8 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 )
 
 // Common patterns in Go HTTP error messages
@@ -166,6 +168,39 @@ func ClassifyError(err error, provider, model string) *FailoverError {
 
 	// Context deadline exceeded: treat as timeout, always fallback.
 	if errors.Is(err, context.DeadlineExceeded) {
+		return &FailoverError{
+			Reason:   FailoverTimeout,
+			Provider: provider,
+			Model:    model,
+			Wrapped:  err,
+		}
+	}
+
+	// A refused tool call (ADR-087) is a deterministic content fault, never
+	// a transient provider fault — it must never cool down the candidate or
+	// trigger failover. This MUST run before any substring matching below:
+	// ToolArgumentsError's Error() embeds up to 256 bytes of the refused
+	// argument fragment verbatim (common.maxUndecodableArgumentsQuoted), and
+	// that fragment is attacker/model-controlled text that can coincidentally
+	// contain a classifier keyword ("authentication", "timeout", "rate
+	// limit", "429", "503", "overloaded", …). Classifying by content instead
+	// of by type would spuriously cool down (or even fail over away from) a
+	// perfectly healthy candidate for a fault that has nothing to do with
+	// its health. Returning nil here makes ClassifyError return "not
+	// classifiable" for it, which FallbackChain.Execute treats as
+	// non-retriable/non-failoverable (see the "unclassified error" branch).
+	var tae *common.ToolArgumentsError
+	if errors.As(err, &tae) {
+		return nil
+	}
+
+	// A stall-aborted stream (founder decision 2026-09-14) is a transient
+	// transport-class fault: the provider had a live connection and went
+	// mute. Classified as FailoverTimeout so the agent loop's existing
+	// inline retry (the only reason it retries inline) applies, exactly like
+	// a connection drop. Checked before substring matching because the
+	// sentinel's wording need not contain any classifier keyword.
+	if errors.Is(err, common.ErrStreamStalled) {
 		return &FailoverError{
 			Reason:   FailoverTimeout,
 			Provider: provider,

@@ -342,7 +342,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [fallbackModels, setFallbackModels] = useState<FallbackEntry[]>([])
   const [temperature, setTemperature] = useState(1.0)
   const [maxTokens, setMaxTokens] = useState(4096)
-  const [topP, setTopP] = useState(1.0)
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [useGlobalRateLimits, setUseGlobalRateLimits] = useState(true)
   const [maxLlmCallsPerHour, setMaxLlmCallsPerHour] = useState<number | ''>('')
@@ -594,7 +593,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     )
     setTemperature(agent.model_params?.temperature ?? 1.0)
     setMaxTokens(agent.model_params?.max_tokens ?? 4096)
-    setTopP(agent.model_params?.top_p ?? 1.0)
     setUseGlobalRateLimits(agent.rate_limits?.use_global_defaults ?? true)
     setMaxLlmCallsPerHour(agent.rate_limits?.max_llm_calls_per_hour ?? '')
     setMaxToolCallsPerMinute(agent.rate_limits?.max_tool_calls_per_minute ?? '')
@@ -706,7 +704,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // Editor state matches the wire shape 1:1; emit `undefined` for
       // empty (treated as "no fallbacks" by the backend).
       fallback_models: fallbackModels.length > 0 ? fallbackModels : undefined,
-      model_params: { temperature, max_tokens: maxTokens, top_p: topP },
+      model_params: { temperature, max_tokens: maxTokens },
       rate_limits: rateLimits,
       soul,
       // ADR-052 FR-039: "Allowed on all agents" per AgentUpdateRequest.yaml —
@@ -770,7 +768,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     }
   }, [
     agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
-    temperature, maxTokens, topP, useGlobalRateLimits, maxLlmCallsPerHour,
+    temperature, maxTokens, useGlobalRateLimits, maxLlmCallsPerHour,
     maxToolCallsPerMinute, maxCostPerDay, soul, memoryEnabled, voice,
     timeoutPayload, timeoutSeconds, maxToolIterations, contextWindowOverride,
     shellDenyPatterns,
@@ -1597,16 +1595,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     step={256}
                     onChange={(v) => { markDirty(); setMaxTokens(v) }}
                     format={(v) => v.toLocaleString()}
-                  />
-                  <RangeField
-                    label="Top P"
-                    caption="Nucleus sampling mass — 1.0 disables it (default 1)"
-                    value={topP}
-                    min={0}
-                    max={1}
-                    step={0.01}
-                    onChange={(v) => { markDirty(); setTopP(v) }}
-                    format={(v) => v.toFixed(2)}
                   />
                 </div>
               )}

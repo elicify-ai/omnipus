@@ -58,7 +58,7 @@ func TestHandleWorkspaceDelete_ActorAttribution(t *testing.T) {
 	// behavior covered separately below.
 	lib := api.agentLoop.GetWorkspaceLibrary(id)
 	require.NotNil(t, lib, "workspace library must be resolvable")
-	_, _, uploadErr := lib.Upload("note.txt", gen.UserUpload, strings.NewReader("bytes"))
+	_, _, uploadErr := lib.Upload("note.txt", gen.MediaLibraryEntrySourceUserUpload, strings.NewReader("bytes"))
 	require.NoError(t, uploadErr)
 
 	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)

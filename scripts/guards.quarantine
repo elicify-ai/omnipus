@@ -1,0 +1,1 @@
+check-dead-code.sh  # whole-program call graph; out-of-memory risk on the development machine; referenced by no CI surface today (C-60/C-93)

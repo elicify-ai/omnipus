@@ -26,6 +26,16 @@ export interface ApiErrorOptions { // not-wire-format: constructor options for t
    */
   code?: string
   /**
+   * Names the request field the error is about (ADR-068 validation bodies,
+   * e.g. "provider", "model", "criteria", "dod", "blocked_by" —
+   * `contracts/components/schemas/ErrorResponse.yaml`'s `field` property).
+   * Present only on field-attributable 4xx validation errors; the preferred,
+   * structured channel for routing a rejection to a specific control —
+   * callers should not parse `userMessage` to recover this (see
+   * `taskValidationError.ts`'s `fieldFromValidationError`).
+   */
+  field?: string
+  /**
    * Raw response body for debug/log surfaces. Never display this directly to
    * end users — use `userMessage` for UI.
    */
@@ -97,6 +107,10 @@ export class ApiError extends Error {
    */
   readonly code?: string
   /**
+   * Names the request field the error is about. See `ApiErrorOptions.field`.
+   */
+  readonly field?: string
+  /**
    * Human-displayable error message. Safe to render in UI as-is. Defaults
    * apply when the server doesn't return a useful body.
    */
@@ -123,6 +137,7 @@ export class ApiError extends Error {
     this.name = 'ApiError'
     this.status = status
     this.code = options?.code
+    this.field = options?.field
     this.userMessage = message
     this.body = options?.body
     this.retryAfterMs = options?.retryAfterMs
@@ -245,10 +260,17 @@ export class ApiError extends Error {
 
     let parsedMessage: string | undefined
     let parsedCode: string | undefined
+    let parsedField: string | undefined
     if (bodyText) {
       try {
-        const parsed = JSON.parse(bodyText) as { code?: unknown; error?: unknown; message?: unknown }
+        const parsed = JSON.parse(bodyText) as {
+          code?: unknown
+          error?: unknown
+          message?: unknown
+          field?: unknown
+        }
         if (typeof parsed.code === 'string') parsedCode = parsed.code
+        if (typeof parsed.field === 'string') parsedField = parsed.field
         if (typeof parsed.error === 'string') parsedMessage = parsed.error
         else if (typeof parsed.message === 'string') parsedMessage = parsed.message
       } catch {
@@ -270,7 +292,12 @@ export class ApiError extends Error {
     const userMessage = isKnown
       ? defaultUserMessage(res.status)
       : (parsedMessage ?? (bodyText.trim().length > 0 ? bodyText : defaultUserMessage(res.status)))
-    return new ApiError(res.status, userMessage, { code: parsedCode, body: bodyText, retryAfterMs })
+    return new ApiError(res.status, userMessage, {
+      code: parsedCode,
+      field: parsedField,
+      body: bodyText,
+      retryAfterMs,
+    })
   }
 }
 

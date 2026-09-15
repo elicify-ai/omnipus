@@ -668,4 +668,260 @@ describe('chat store — tool-call offset stamping (position-in-model fix)', () 
       expect(bucket.toolCallOrder).toEqual([])
     })
   })
+
+  // FX-E (ADR-082 D9): reproduces goal-card-position.spec.ts's post-reload
+  // failure using the REAL replayed-frame shape — a tool_call_start +
+  // tool_call_result frame pair driven through the store, not a hand-built
+  // message.tool_calls object (a hand-built object cannot exercise the bake
+  // gap this closes: `handleFrame`'s 'replay_message' case only ever baked
+  // a session's dangling toolCallOrder for a NEW `role === 'assistant'`
+  // frame — never for 'user'/'system' — and the terminal 'done' bakes only
+  // when it carries real turn stats, never the plain replay-terminator done
+  // (frames_emitted set, no tokens/cost) a reload with no live turn always
+  // gets). Root cause: a `set_goal` call (or any tool call) that is the
+  // LAST thing an assistant turn does, immediately followed in the
+  // transcript by the session's next USER message with no further assistant
+  // narration replayed before the session goes idle, was left stranded in
+  // the bucket's live toolCallOrder/toolCalls maps forever — it rendered
+  // live (the live tool_call_start/result path never goes through replay at
+  // all) but never reached `message.tool_calls` on reload, so any renderer
+  // keyed off that field (SetGoalCardBlock included) silently saw nothing.
+  describe('FX-E: a tool call orphaned by a NON-assistant replay_message / replay-terminator done', () => {
+    it('bakes onto its owning assistant bubble when the very next replayed frame is a NEW USER message (no further assistant narration)', () => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message', role: 'user', content: 'build a tiny page', id: 'fxe-user1', session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          role: 'assistant',
+          content: 'Registering the goal now.',
+          id: 'fxe-asst1',
+          agent_id: 'agent-mia',
+          turn_id: 'fxe-turn-1',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_start',
+          call_id: 'fxe-tc-goal',
+          tool: 'set_goal',
+          params: { definition: 'build a tiny page' },
+          agent_id: 'agent-mia',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_result',
+          call_id: 'fxe-tc-goal',
+          tool: 'set_goal',
+          // Replay envelope shape (SetGoalToolUI.tsx's "Result SHAPES"
+          // doc comment): the persisted tool result under `{ text: "<json>" }`,
+          // exactly what pkg/gateway/replay.go forwards unchanged.
+          result: { text: JSON.stringify({ goal_id: 'g1', definition: 'build a tiny page', criteria: [], dod: [] }) },
+          status: 'success',
+          session_id: SID,
+        })
+      })
+      // The NEXT replayed frame is a plain USER message (the session's
+      // follow-up turn) — no further assistant narration for turn 1 was
+      // ever replayed before it.
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message', role: 'user', content: 'also make the background dark', id: 'fxe-user2', session_id: SID,
+        })
+      })
+
+      const state = useChatStore.getState()
+      const asst = state.messages.find((m) => m.id === 'fxe-asst1')!
+      const toolCalls = (asst.tool_calls ?? []) as PositionedToolCall[]
+      const baked = toolCalls.find((tc) => tc.id === 'fxe-tc-goal')
+      expect(baked).toBeDefined()
+      expect(baked?.textOffset).toBe('Registering the goal now.'.length)
+
+      // Nothing left dangling in the bucket's live pending-call maps.
+      const bucket = state.sessionsById[SID]!
+      expect(bucket.toolCallOrder).toEqual([])
+      expect(bucket.toolCalls['fxe-tc-goal']).toBeUndefined()
+    })
+
+    it('bakes onto its owning assistant bubble when the transcript replay ends right after it (replay-terminator done, no further message at all)', () => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          role: 'assistant',
+          content: 'Registering the goal now.',
+          id: 'fxe-asst2',
+          agent_id: 'agent-mia',
+          turn_id: 'fxe-turn-2',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_start',
+          call_id: 'fxe-tc-goal-2',
+          tool: 'set_goal',
+          params: { definition: 'build a tiny page' },
+          agent_id: 'agent-mia',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_result',
+          call_id: 'fxe-tc-goal-2',
+          tool: 'set_goal',
+          result: { text: JSON.stringify({ goal_id: 'g2', definition: 'build a tiny page', criteria: [], dod: [] }) },
+          status: 'success',
+          session_id: SID,
+        })
+      })
+      // Replay ends here: the terminal frame is the REPLAY TERMINATOR done
+      // (frames_emitted set, tokens/cost absent) — never a real turn's own
+      // completion, per the 'done' case's own isReplayTerminatorDone check.
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'done', session_id: SID, stats: { frames_emitted: 3 },
+        })
+      })
+
+      const state = useChatStore.getState()
+      const asst = state.messages.find((m) => m.id === 'fxe-asst2')!
+      const toolCalls = (asst.tool_calls ?? []) as PositionedToolCall[]
+      const baked = toolCalls.find((tc) => tc.id === 'fxe-tc-goal-2')
+      expect(baked).toBeDefined()
+      expect(baked?.textOffset).toBe('Registering the goal now.'.length)
+
+      const bucket = state.sessionsById[SID]!
+      expect(bucket.toolCallOrder).toEqual([])
+    })
+
+    // Generic-fix proof: the bake gap is a property of MESSAGE ORDERING
+    // (a call whose owner is a prior assistant bubble, with no further
+    // assistant-role frame replayed before the session goes idle), never of
+    // the tool name — neither this bake block nor the isReplayTerminatorDone
+    // bake in the 'done' case reads `frame.tool` at all. Pin that with an
+    // ordinary `bash` call in the exact same shape, so this class of bug
+    // cannot silently regress back to "only set_goal is covered."
+    it('is NOT set_goal-specific: an ordinary `bash` call in the identical shape is baked too', () => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          role: 'assistant',
+          content: 'Checking disk usage.',
+          id: 'fxe-asst-bash',
+          agent_id: 'agent-jim',
+          turn_id: 'fxe-turn-bash',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_start',
+          call_id: 'fxe-tc-bash',
+          tool: 'bash',
+          params: { command: 'df -h' },
+          agent_id: 'agent-jim',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_result',
+          call_id: 'fxe-tc-bash',
+          tool: 'bash',
+          result: { stdout: '...', exit_code: 0 },
+          status: 'success',
+          session_id: SID,
+        })
+      })
+      // Same shape as the set_goal case: the very next replayed frame is a
+      // NEW USER message, with no further assistant narration in between.
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message', role: 'user', content: 'thanks, now do the next thing', id: 'fxe-user-bash', session_id: SID,
+        })
+      })
+
+      const state = useChatStore.getState()
+      const asst = state.messages.find((m) => m.id === 'fxe-asst-bash')!
+      const toolCalls = (asst.tool_calls ?? []) as PositionedToolCall[]
+      const baked = toolCalls.find((tc) => tc.id === 'fxe-tc-bash')
+      expect(baked).toBeDefined()
+      expect(baked?.tool).toBe('bash')
+      expect(baked?.textOffset).toBe('Checking disk usage.'.length)
+
+      const bucket = state.sessionsById[SID]!
+      expect(bucket.toolCallOrder).toEqual([])
+      expect(bucket.toolCalls['fxe-tc-bash']).toBeUndefined()
+    })
+
+    // Coordinator hypothesis check: does an intervening `turn_canceled`
+    // pseudo-role entry (the shape a Stop-clicked turn persists as, per the
+    // 'replay_message' case's own turn_canceled branch, which `break`s
+    // immediately WITHOUT touching toolCallOrder) introduce a SEPARATE gap?
+    // No — turn_canceled is delivered as its own frame/switch-invocation
+    // that never consumes or clears toolCallOrder, so the pending call
+    // simply survives untouched until the NEXT frame that does bake it
+    // (here, the following user replay_message, covered by the same fix
+    // above). Pinned explicitly so "the turn was stopped" is never
+    // mistaken for a distinct root cause from plain message ordering.
+    it('a turn_canceled entry interposed between the tool call and the next user message does not block the bake', () => {
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message',
+          role: 'assistant',
+          content: 'Registering the goal now.',
+          id: 'fxe-asst-cancel',
+          agent_id: 'agent-mia',
+          turn_id: 'fxe-turn-cancel',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_start',
+          call_id: 'fxe-tc-cancel',
+          tool: 'set_goal',
+          params: {},
+          agent_id: 'agent-mia',
+          session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'tool_call_result',
+          call_id: 'fxe-tc-cancel',
+          tool: 'set_goal',
+          result: { text: JSON.stringify({ goal_id: 'g3', definition: 'x', criteria: [], dod: [] }) },
+          status: 'success',
+          session_id: SID,
+        })
+      })
+      // The turn was stopped: replay carries a turn_canceled pseudo-entry
+      // correlated by turn_id, exactly as pkg/gateway/replay.go emits it.
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message', role: 'turn_canceled', content: '', turn_id: 'fxe-turn-cancel', session_id: SID,
+        })
+      })
+      act(() => {
+        useChatStore.getState().handleFrame({
+          type: 'replay_message', role: 'user', content: 'next message', id: 'fxe-user-cancel', session_id: SID,
+        })
+      })
+
+      const state = useChatStore.getState()
+      const asst = state.messages.find((m) => m.id === 'fxe-asst-cancel')!
+      const toolCalls = (asst.tool_calls ?? []) as PositionedToolCall[]
+      expect(toolCalls.find((tc) => tc.id === 'fxe-tc-cancel')).toBeDefined()
+      const bucket = state.sessionsById[SID]!
+      expect(bucket.toolCallOrder).toEqual([])
+    })
+  })
 })

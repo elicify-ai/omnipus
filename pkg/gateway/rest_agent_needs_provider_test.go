@@ -148,7 +148,7 @@ func TestGatewayBoot_UnknownProvider_NonFatal(t *testing.T) {
 			"agent A is bound to a catalog provider and must not be degraded")
 		require.NotNil(t, byID["agent-b"].DegradedReason,
 			"agent B is bound to an unknown provider and must carry degraded_reason")
-		assert.Equal(t, gen.NeedsProvider, *byID["agent-b"].DegradedReason)
+		assert.Equal(t, gen.AgentDegradedReasonNeedsProvider, *byID["agent-b"].DegradedReason)
 	})
 
 	t.Run("no hint anywhere (FR-015 / SC-010)", func(t *testing.T) {
@@ -192,7 +192,14 @@ func TestAgentRepair_PUTProvider_NoRestart(t *testing.T) {
 	gotDegraded := getAgentResp(t, api, created.Id).DegradedReason
 	require.NotNil(t, gotDegraded,
 		"an agent bound to an unknown provider must be degraded on the very next GET")
-	assert.Equal(t, gen.NeedsProvider, *gotDegraded)
+	assert.Equal(t, gen.AgentDegradedReasonNeedsProvider, *gotDegraded)
+	// degraded_reason is derived from the SAVED config, so on its own it cannot
+	// show that the running agent changed. The running agent's primary
+	// candidate is what a turn actually routes through (a pinned provider routes
+	// the primary directly, O3), so it is the runtime half of the proof.
+	require.NotEmpty(t, liveAgent(t, api, created.Id).Candidates)
+	require.Equal(t, "z-ai", liveAgent(t, api, created.Id).Candidates[0].Provider,
+		"precondition: the running agent must start routed to the unknown provider")
 
 	// The repair: re-point the agent at a real provider.
 	w := httptest.NewRecorder()
@@ -207,6 +214,12 @@ func TestAgentRepair_PUTProvider_NoRestart(t *testing.T) {
 
 	assert.Nil(t, getAgentResp(t, api, created.Id).DegradedReason,
 		"and the next GET must agree — no restart, no second action")
+
+	repaired := liveAgent(t, api, created.Id)
+	require.NotEmpty(t, repaired.Candidates)
+	assert.Equal(t, "openrouter", repaired.Candidates[0].Provider,
+		"the running agent must route through the repaired provider; a response that says repaired "+
+			"while the agent still routes to the unknown provider is the saved-but-changed-nothing failure")
 }
 
 // TestAgentDegradedReason_AbsentCatalogNeverDegrades pins the E7 posture the

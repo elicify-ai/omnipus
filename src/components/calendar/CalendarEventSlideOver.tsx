@@ -69,9 +69,12 @@ import {
   tasksQueryKeys,
   getErrorMessage,
 } from '@/lib/api'
-import type { Task, TaskTrigger, TaskCreateRequest, TaskUpdateRequest, TaskRun, Todo } from '@/lib/api'
+import type { Task, TaskTrigger, TaskCreateRequest, TaskUpdateRequest, TaskRun, Todo, AcceptanceCriterion } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useAuthStore } from '@/store/auth'
 import { useWorkspaceTeamIds } from '@/hooks/useWorkspaceTeamIds'
+import { AcceptanceCriteriaEditor } from '@/components/workspaces/AcceptanceCriteriaEditor'
+import { DefinitionOfDoneEditor } from '@/components/workspaces/DefinitionOfDoneEditor'
 import {
   RecurrenceEditor,
   compileRecurrence,
@@ -181,6 +184,7 @@ export function CalendarEventSlideOver({
 }: CalendarEventSlideOverProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
+  const username = useAuthStore((s) => s.username)
 
   const isEdit = task != null
   const isLegacy = isEdit && isLegacyTrigger(task.trigger)
@@ -199,6 +203,13 @@ export function CalendarEventSlideOver({
   const [recurrenceFieldTouched, setRecurrenceFieldTouched] = useState(false)
   const [titleError, setTitleError] = useState('')
   const [saveError, setSaveError] = useState<string | null>(null)
+  // GOAL-FR-047/FR-053/D-C (R-26) — the calendar slide-over gets the same
+  // two mandatory editors CreateTaskSlideOver has, on BOTH its create and
+  // edit paths: a normal task and a scheduled task are judged identically.
+  const [criteria, setCriteria] = useState<AcceptanceCriterion[]>([])
+  const [dod, setDod] = useState<AcceptanceCriterion[]>([])
+  const [criteriaError, setCriteriaError] = useState('')
+  const [dodError, setDodError] = useState('')
   // Buffered checklist for CREATE mode (no task exists yet, so items can't be
   // persisted per-edit like the EDIT slide-over does). Folded into the create
   // request on Save. Unused in EDIT mode, where TaskChecklistField is task-bound.
@@ -211,6 +222,8 @@ export function CalendarEventSlideOver({
     if (!open) return
     setTitleError('')
     setSaveError(null)
+    setCriteriaError('')
+    setDodError('')
     setAnchorFieldTouched(false)
     setRecurrenceFieldTouched(false)
 
@@ -218,6 +231,8 @@ export function CalendarEventSlideOver({
       setTitle(task.title)
       setAgentId(task.agent_id || '')
       setPrompt(task.prompt || '')
+      setCriteria(task.criteria ?? [])
+      setDod(task.dod ?? [])
       if (isRruleTrigger(task.trigger)) {
         const dtstartMs = task.trigger.config.dtstart_ms as number
         const rruleBody = task.trigger.config.rrule as string
@@ -235,6 +250,8 @@ export function CalendarEventSlideOver({
       setTitle('')
       setAgentId('')
       setPrompt('')
+      setCriteria([])
+      setDod([])
       setAnchorDate(initialDate ?? new Date())
       setRecurrence({ kind: 'none' })
     }
@@ -408,6 +425,25 @@ export function CalendarEventSlideOver({
       setSaveError('Select an agent and add instructions before saving.')
       return
     }
+    // GOAL-FR-047/D-C — mandatory on this surface too, at both create and
+    // edit: refuse a save that would leave the task with no acceptance
+    // criteria or no definition-of-done item, matching FR-047's HTTP 400
+    // on the update path. Checked independently so the refusal says which
+    // is missing, rather than stopping at the first failure.
+    let blockedByCriteria = false
+    if (criteria.length === 0) {
+      setCriteriaError('Add at least one acceptance criterion.')
+      blockedByCriteria = true
+    } else {
+      setCriteriaError('')
+    }
+    if (dod.length === 0) {
+      setDodError('Add at least one definition-of-done item.')
+      blockedByCriteria = true
+    } else {
+      setDodError('')
+    }
+    if (blockedByCriteria) return
     if (!anchorDate) {
       setSaveError('Pick a date and time for this event.')
       return
@@ -430,6 +466,8 @@ export function CalendarEventSlideOver({
         title: trimmed,
         agent_id: agentId,
         prompt: trimmedPrompt,
+        criteria,
+        dod,
         trigger,
       })
     } else {
@@ -441,6 +479,8 @@ export function CalendarEventSlideOver({
         priority: 3,
         agent_id: agentId,
         prompt: trimmedPrompt,
+        criteria,
+        dod,
         trigger,
         // Fold the buffered create-mode checklist into the new task; omit when
         // empty to keep the request minimal.
@@ -553,6 +593,39 @@ export function CalendarEventSlideOver({
               id="ces-prompt-error"
               error={promptEmpty ? 'Instructions are required.' : null}
             />
+          </div>
+
+          {/* Acceptance criteria (GOAL-FR-047/FR-053, D-C/R-26) — the same
+              mandatory editor CreateTaskSlideOver has, on both this
+              surface's create AND edit paths. */}
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-[var(--color-secondary)]">
+              Acceptance criteria <span className="text-[var(--color-error)]">*</span>
+            </Label>
+            <AcceptanceCriteriaEditor
+              criteria={criteria}
+              onChange={(next) => { setCriteria(next); setCriteriaError('') }}
+              currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
+            />
+            <p className="text-xs text-[var(--color-muted)]">Add at least one.</p>
+            {criteriaError && (
+              <p className="text-xs text-[var(--color-error)]">{criteriaError}</p>
+            )}
+          </div>
+
+          {/* Definition of Done (GOAL-FR-003/FR-048/FR-053, D-C/R-26) —
+              same mandatory second list, same rule, on this surface too.
+              `DefinitionOfDoneEditor` (U1) supplies its own label/asterisk/
+              helper text. */}
+          <div className="flex flex-col gap-1.5">
+            <DefinitionOfDoneEditor
+              dod={dod}
+              onChange={(next) => { setDod(next); setDodError('') }}
+              currentAuthor={{ kind: 'user', id: username ?? 'operator' }}
+            />
+            {dodError && (
+              <p className="text-xs text-[var(--color-error)]">{dodError}</p>
+            )}
           </div>
 
           {/* Date & time (the recurrence anchor) */}

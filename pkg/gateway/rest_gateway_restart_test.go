@@ -43,7 +43,7 @@ func TestHandleGatewayRestart_HappyPath(t *testing.T) {
 
 	var resp gen.GatewayRestartResponse
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp), "decode: %s", w.Body.String())
-	assert.Equal(t, gen.Restarting, resp.Status)
+	assert.Equal(t, gen.GatewayRestartResponseStatusRestarting, resp.Status)
 	assert.NotEmpty(t, resp.RestartId)
 	assert.Equal(t, selfRestartDrainSeconds, resp.DrainSeconds)
 	require.NotNil(t, resp.Message)

@@ -4,5 +4,15 @@ generate:
   embedded-spec: false
   std-http-server: false
 output: pkg/api/generated/openapi_types.gen.go
+# Every enum constant is named <TypeName><Value>, always. Without this,
+# oapi-codegen v2.7.0 prefixes a constant only when it detects a value
+# collision with another enum, and that detection is order-dependent (once an
+# enum is prefixed its values no longer match later enums). Adding an
+# unrelated schema could therefore silently rename an existing constant:
+# GoalOutcome's `stopped_by_user` turned TaskCancelReasonStoppedByUser into a
+# bare StoppedByUser and broke every consumer. Always prefixing makes a
+# constant's name depend only on its own type and value.
+compatibility:
+  always-prefix-enum-values: true
 output-options:
   skip-prune: true

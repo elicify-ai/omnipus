@@ -1,5 +1,7 @@
 # Feature Specification: Unified Goal / Plan / Subagent System (ADR-053)
 
+> **Update 2026-09-14:** the app-level token budget described here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Created**: 2026-07-22
 **Status**: Draft (ratification spec — requirements LOCKED by ADR-053 + twice-grilled v2.2 design + 17 interview decisions D1–D17)
 **Input**: `docs/internal/architecture/ADR-053-unified-goal-plan-subagent.md` (Accepted, grill PASS) · `docs/internal/design/unified-goal-plan-subagent-target-design-v2.2.html` (the *what*) · `docs/internal/design/unified-goal-plan-subagent-DELIVERY-GOAL.md` (the *how/order/proof*).
@@ -44,7 +46,7 @@
 | `pkg/tools/plan.go` — `create_plan` (dod required, L145/L175), `execute_plan` (member-criteria gate) | modifies | Gains `write_sets` + `rationale` schema; plan-lint gate at approve. |
 | `pkg/task/criterion.go` — `AcceptanceCriterion`, `CriterionKind{check/prose/behavior}` (L21-27), `CriterionCheck`, `CriterionBehavior` | calls (reuse) | S1's "one criteria model" — REUSE unchanged (`machine` = existing `check`). |
 | `pkg/security/ratelimit.go` — `IsPrivilegedAgent` (L30) | modifies (bypass) | D12: the app-level token budget deliberately does NOT honor `IsPrivilegedAgent` — core-agent turns debit. |
-| `pkg/agent/orphan_watch.go` — startup reaper | calls (pattern) | Precedent for the boot-sweep reconciliation of persisted non-terminal sessions. |
+| `pkg/agent/orphan_watch.go` — startup reaper [†ADR-082 deleted this file in full] | calls (pattern) | Precedent for the boot-sweep reconciliation of persisted non-terminal sessions. |
 | `go.mod` — go-git absent | adds | New dependency (spike GO, +3.04 MiB stripped, Apache-2.0 → NOTICE). |
 
 ### Impact Assessment

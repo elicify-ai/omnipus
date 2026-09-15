@@ -106,7 +106,7 @@ func TestSignInStart_CLILogin(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	variant, err := resp.AsSignInStartResponseCliLogin()
 	require.NoError(t, err)
-	assert.Equal(t, gen.CliLogin, variant.Method)
+	assert.Equal(t, gen.SignInStartResponseCliLoginMethodCliLogin, variant.Method)
 	assert.Equal(t, "codex login", variant.Command)
 	assert.NotEmpty(t, variant.Instructions)
 }
@@ -125,7 +125,7 @@ func TestSignInStart_DeviceCode(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	variant, err := resp.AsSignInStartResponseDeviceCode()
 	require.NoError(t, err)
-	assert.Equal(t, gen.DeviceCode, variant.Method)
+	assert.Equal(t, gen.SignInStartResponseDeviceCodeMethodDeviceCode, variant.Method)
 	assert.Equal(t, "WDJB-MJHT", variant.UserCode)
 	assert.NotEmpty(t, variant.DeviceAuthId)
 	assert.NotContains(t, variant.DeviceAuthId, "vendor_das_1",

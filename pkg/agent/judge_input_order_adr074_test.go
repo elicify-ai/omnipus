@@ -147,9 +147,16 @@ func TestJudgeInputOrder_ADR074_BackReferencesRewritten(t *testing.T) {
 		}
 	}
 
-	// The rewritten empty-window fallback points forward/backward correctly:
-	// criteria are above it, machine-check results and the claim below it.
-	if !strings.Contains(empty, "judge from the criteria above and the machine-check results and claim below only") {
-		t.Errorf("empty-window fallback must direct the judge to the criteria above and the machine-check results and claim below; got:\n%s", empty)
+	// JUDGE-FR-002a (ADR-084 revision 9): the empty-window fallback no longer
+	// points the judge back at "the criteria above and the machine-check
+	// results and claim below only" — that phrasing is a confinement
+	// instruction (E1's deleted rubric prohibition re-appearing in the user
+	// message). It must instead direct real investigation.
+	if strings.Contains(empty, "judge from the criteria above and the machine-check results and claim below only") {
+		t.Errorf("empty-window fallback must not restate passivity (FR-002a); got:\n%s", empty)
+	}
+	if !strings.Contains(empty, "open the artifacts") || !strings.Contains(empty, "inspect the in-scope sessions") {
+		t.Errorf("empty-window fallback must direct investigation (open the artifacts, list the workspace, "+
+			"inspect the in-scope sessions) — FR-002a/FR-111; got:\n%s", empty)
 	}
 }

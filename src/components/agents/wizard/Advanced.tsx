@@ -67,7 +67,7 @@ export function Advanced({
 // Slim variant: the external CLI runner manages its own isolation, sampling,
 // and tool loop, so ONLY timeout_seconds and rate_limits apply on the wire
 // (`AgentCreateRequestSubagent3p` — see the field matrix). No sampling
-// (temperature/max_tokens/top_p), max_tool_iterations, or shell policy —
+// (temperature/max_tokens), max_tool_iterations, or shell policy —
 // those all 400 on this variant. `steering_mode` is NOT variant-specific
 // here: it is retired from the wire entirely (2026-07-17 — dead config
 // removal) and 400s on every create variant, including Main, which used
@@ -108,7 +108,7 @@ function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
     custom_deny_patterns: [],
   }
 
-  function setModelParam<K extends 'temperature' | 'max_tokens' | 'top_p'>(
+  function setModelParam<K extends 'temperature' | 'max_tokens'>(
     key: K,
     value: number | undefined,
   ) {
@@ -143,15 +143,6 @@ function MainAdvancedFields({ payload, setField }: MainAdvancedFieldsProps) {
             min={1}
             step={1}
             onChange={(v) => setModelParam('max_tokens', v)}
-          />
-          <RangeRow
-            label="Top P"
-            caption="Nucleus sampling probability mass. 1.0 disables it. Default 1.0."
-            value={modelParams.top_p}
-            min={0}
-            max={1}
-            step={0.05}
-            onChange={(v) => setModelParam('top_p', v)}
           />
         </div>
       </div>

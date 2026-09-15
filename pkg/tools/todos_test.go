@@ -597,3 +597,124 @@ func TestSetTodos_AnyAgentCanUseItsOwnScratchpad(t *testing.T) {
 		})
 	}
 }
+
+// ---- session scoping (UAT B-1 runs 3 and 5) --------------------------------
+//
+// The checklist is scoped to the calling turn's transcript session: two
+// concurrent sessions of the SAME agent each get their own card (even for the
+// identical goal title), never overwrite each other's checklist, and never
+// archive each other's cards.
+
+func TestSetTodos_SessionScoped_SecondSessionGetsOwnCardForSameGoal(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewSetTodosTool(store)
+
+	ctxA := WithAgentID(context.Background(), "mia")
+	ctxA = WithWorkspaceID(ctxA, "ws-1")
+	ctxA = WithTranscriptSessionID(ctxA, "session-a")
+	ctxB := WithAgentID(context.Background(), "mia")
+	ctxB = WithWorkspaceID(ctxB, "ws-1")
+	ctxB = WithTranscriptSessionID(ctxB, "session-b")
+
+	if r := tool.Execute(ctxA, map[string]any{
+		"goal":  "shared goal title",
+		"todos": []any{map[string]any{"text": "A step", "status": "pending"}},
+	}); r.IsError {
+		t.Fatalf("session A set_todos: %s", r.ForLLM)
+	}
+	// Same goal title from session B: must NOT find (and overwrite) A's card —
+	// it creates its own.
+	if r := tool.Execute(ctxB, map[string]any{
+		"goal":  "shared goal title",
+		"todos": []any{map[string]any{"text": "B step", "status": "pending"}},
+	}); r.IsError {
+		t.Fatalf("session B set_todos: %s", r.ForLLM)
+	}
+
+	tasks, err := store.List(task.Filter{AgentID: "mia"})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("two sessions with the same goal title must own TWO cards, got %d", len(tasks))
+	}
+	bySession := map[string]task.Task{}
+	for _, tk := range tasks {
+		bySession[tk.OriginSessionID] = tk
+	}
+	if len(bySession) != 2 || bySession["session-a"].ID == bySession["session-b"].ID {
+		t.Fatalf("each session must have its own card, got %+v", bySession)
+	}
+	if got := bySession["session-a"].Todos[0].Text; got != "A step" {
+		t.Errorf("session A's checklist must be untouched by session B, first todo %q", got)
+	}
+	if got := bySession["session-b"].Todos[0].Text; got != "B step" {
+		t.Errorf("session B's checklist must be its own, first todo %q", got)
+	}
+
+	// A same-goal update from session A still replaces A's own card (exactly
+	// two cards remain, A's list replaced).
+	if r := tool.Execute(ctxA, map[string]any{
+		"goal":  "shared goal title",
+		"todos": []any{map[string]any{"text": "A step 2", "status": "in_progress"}},
+	}); r.IsError {
+		t.Fatalf("session A update: %s", r.ForLLM)
+	}
+	tasks, _ = store.List(task.Filter{AgentID: "mia"})
+	if len(tasks) != 2 {
+		t.Fatalf("a same-session update must not create a third card, got %d", len(tasks))
+	}
+	for _, tk := range tasks {
+		if tk.OriginSessionID == "session-a" && (len(tk.Todos) != 1 || tk.Todos[0].Text != "A step 2") {
+			t.Errorf("session A's replace-semantics broken: %+v", tk.Todos)
+		}
+	}
+}
+
+func TestSetTodos_SessionScoped_GoalSwitchDoesNotArchiveOtherSessionsCards(t *testing.T) {
+	t.Parallel()
+	store := task.New(t.TempDir())
+	tool := NewSetTodosTool(store)
+
+	mkCtx := func(sessionID string) context.Context {
+		ctx := WithAgentID(context.Background(), "mia")
+		ctx = WithWorkspaceID(ctx, "ws-1")
+		return WithTranscriptSessionID(ctx, sessionID)
+	}
+
+	// Session A opens a checklist, then switches to a new goal.
+	if r := tool.Execute(mkCtx("session-a"), map[string]any{
+		"goal":  "A goal one",
+		"todos": []any{map[string]any{"text": "a1", "status": "pending"}},
+	}); r.IsError {
+		t.Fatalf("A first: %s", r.ForLLM)
+	}
+	// Session B opens its own (unrelated) checklist while A is still on goal one.
+	if r := tool.Execute(mkCtx("session-b"), map[string]any{
+		"goal":  "B goal",
+		"todos": []any{map[string]any{"text": "b1", "status": "pending"}},
+	}); r.IsError {
+		t.Fatalf("B first: %s", r.ForLLM)
+	}
+	// A switches goals — the archive pass must close only A's old card.
+	if r := tool.Execute(mkCtx("session-a"), map[string]any{
+		"goal":  "A goal two",
+		"todos": []any{map[string]any{"text": "a2", "status": "pending"}},
+	}); r.IsError {
+		t.Fatalf("A switch: %s", r.ForLLM)
+	}
+
+	tasks, _ := store.List(task.Filter{AgentID: "mia"})
+	if len(tasks) != 3 {
+		t.Fatalf("expected 3 cards (A old archived, A new, B open), got %d", len(tasks))
+	}
+	for _, tk := range tasks {
+		if tk.OriginSessionID == "session-b" && task.IsTerminal(tk.Status) {
+			t.Errorf("REGRESSION (UAT B-1): session A's goal switch archived session B's card (%q is %q)", tk.Title, tk.Status)
+		}
+		if tk.OriginSessionID == "session-a" && tk.Title == "A goal one" && !task.IsTerminal(tk.Status) {
+			t.Errorf("A's own prior card must still be archived, got %q", tk.Status)
+		}
+	}
+}

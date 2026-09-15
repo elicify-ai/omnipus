@@ -26,10 +26,247 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/plan"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/elicify-ai/omnipus/pkg/tools"
 )
+
+// This file has NO goal-store derivation and NO task-delete goal cleanup of
+// its own. It calls tools.GoalStoreForTasks and tools.RemoveTaskGoalRecords
+// (pkg/tools/task.go) — the single implementations shared with the create_task
+// / delete_task agent tools and the System Agent's workspace task tools. The
+// private copies that used to live here (goalStoreForTasks,
+// goalTerminalReasonOwnerDeleted, terminateGoalForOwnerDeletion,
+// removeTaskGoalRecords) were byte-identical mirrors and are deleted; mirroring
+// is the shape that let the sibling task-terminal hook reach only three of its
+// seven writers. pkg/tools/task_goal_delete_guard_test.go keeps the delete-side
+// call-site set closed.
+
+// errGoalRecordNeedsBothLists marks the one syncTaskGoalRecord failure that is
+// the CALLER's fault rather than a storage fault: bootstrapping a paired goal
+// record for a task that never had one requires both criteria and dod, so a
+// request that supplies only one of them is a 400, not a 500. Every other
+// failure out of syncTaskGoalRecord is a server-side write/read problem.
+var errGoalRecordNeedsBothLists = errors.New("this task doesn't have a Definition of Done yet — the " +
+	"first time you set one, you need to supply both the acceptance criteria and the " +
+	"definition-of-done items together")
+
+// frozenTaskDefinitionFields reports which fields of a PATCH body belong to the
+// JUDGED CONTRACT — the definition the Judge measures the finished work
+// against — and are therefore frozen for as long as the task is running
+// (operator decision, 2026-09-12).
+//
+// The rule is FIELD-LEVEL, never a blanket lock on a running task. Changing
+// the target mid-run means neither a pass nor a fail from the Judge means
+// anything: the work was done against one target and scored against another.
+// That, and only that, is what this exists to prevent.
+//
+// FROZEN — the four named parts of the contract, mapped onto the wire fields
+// that actually carry them on a task:
+//
+//   - the goal definition — carried by `prompt`: syncTaskGoalRecord builds the
+//     paired goal record's own Prompt from Task.Prompt (ADR-086 D2/D5), so on
+//     a task the goal definition and the instructions are the same string.
+//   - the acceptance criteria — `criteria`.
+//   - the definition of done — `dod`.
+//   - the instructions — `prompt` again, by the wire schema's own words
+//     ("the instruction handed to the assigned agent when the task runs").
+//
+// STILL MUTABLE — everything else, because it is the RECORD OF PROGRESS, not
+// the target: `status` and `todos` above all (the working agent writes both as
+// it goes and MUST be able to), plus `result`, `artifacts`, `started_at`,
+// `completed_at`, `priority`, `due`, `tags`, `agent_id`, `plan_id`,
+// `blocked_by`, `write_set`, `stream`, `is_join`, `surface`, `max_attempts`
+// and `trigger`. Over-freezing breaks the agent mid-run, which is strictly
+// worse than under-freezing, so an unclassifiable field stays mutable.
+//
+// DELIBERATELY LEFT MUTABLE, and reported rather than frozen: `title` and
+// `description`. The wire schema calls them "the name field" and "human-facing
+// notes" — bookkeeping, on the mutable side of the operator's line. They are
+// NOT purely cosmetic in one narrow case: when a task has an empty `prompt`,
+// pkg/agent's SoftTierCriterion falls back to title (+ description) to build
+// the single prose criterion the Judge scores. Freezing them outright would
+// block renaming any running task, which is the over-freezing the decision
+// warns against; freezing them only-when-prompt-is-empty would be a rule no
+// interface could state plainly. They stay mutable and the residual hole is
+// reported upward instead.
+//
+// The engine's own writes are NOT operator edits and never reach this check:
+// attempt counts, verdicts, run records and the verdict->criterion-status
+// projection all go through task.Store.Update from pkg/agent directly, not
+// through this handler or the update_task tool. Stopping or cancelling a
+// running task is likewise not an edit — POST /tasks/{id}/stop and a plain
+// `status` change are untouched by this rule.
+//
+// Returns the frozen field names present in the request, in a stable order, so
+// the refusal can name every one of them rather than just the first. An empty
+// result means the request touches nothing frozen and may proceed even while
+// the task runs.
+func frozenTaskDefinitionFields(req *gen.TaskUpdateRequest) []string {
+	if req == nil {
+		return nil
+	}
+	var frozen []string
+	if req.Prompt != nil {
+		frozen = append(frozen, "prompt")
+	}
+	if req.Criteria != nil {
+		frozen = append(frozen, "criteria")
+	}
+	if req.Dod != nil {
+		frozen = append(frozen, "dod")
+	}
+	return frozen
+}
+
+// runningTaskFrozenFieldMessage is the single refusal wording shared by both
+// entry points that can change a task's definition — this REST PATCH handler
+// and the `update_task` tool (pkg/tools/task.go, which builds the identical
+// sentence from its own copy of the field list). Both answer with the same
+// 409 Conflict semantics: the request is well formed and the field is legal,
+// but the resource is in a state that forbids this particular change.
+//
+// It names WHICH field was refused and says the task is running, because a
+// generic failure leaves the caller — human or agent — with no way to tell a
+// frozen field from a malformed one, and an agent that cannot tell will retry
+// the same edit forever.
+func runningTaskFrozenFieldMessage(frozen []string) string {
+	return fmt.Sprintf(
+		"cannot change %s while the task is running: the goal definition, the acceptance criteria, "+
+			"the definition of done and the prompt are frozen for the duration of a run, because the "+
+			"Judge measures the finished work against exactly those — changing one mid-run means "+
+			"neither a pass nor a fail would mean anything. Stop the task first, then edit it. "+
+			"Progress fields (status, todos, result, artifacts) stay editable while it runs.",
+		quoteFieldList(frozen),
+	)
+}
+
+// quoteFieldList renders a field-name list as `"a", "b" and "c"` for the
+// refusal sentence above.
+func quoteFieldList(names []string) string {
+	quoted := make([]string, 0, len(names))
+	for _, n := range names {
+		quoted = append(quoted, strconv.Quote(n))
+	}
+	switch len(quoted) {
+	case 0:
+		return ""
+	case 1:
+		return quoted[0]
+	default:
+		return strings.Join(quoted[:len(quoted)-1], ", ") + " and " + quoted[len(quoted)-1]
+	}
+}
+
+// syncTaskGoalRecord creates or updates the goal record paired with task t
+// (ADR-086 D2/D5, GOAL-FR-003/FR-012/FR-021/FR-029). Mirrors
+// pkg/tools/task.go's syncTaskGoalRecord exactly — see its doc comment for
+// the full contract (create-or-update, both-lists-required when bootstrapping
+// a record for a legacy task that never had one). This copy reads the live
+// Settings -> Performance goal-round ceiling directly via
+// a.agentLoop.GetConfig() rather than through an optional injected accessor,
+// since the gateway (unlike the tool constructors wired in pkg/agent/loop.go,
+// outside this wave's write-set) always has it.
+//
+// THE CRITERIA COME FROM t, NEVER FROM THE CALLER. This signature used to take
+// a `criteria []task.AcceptanceCriterion` alongside criteriaProvided, and every
+// one of its call sites handed it the PRE-normalisation slice it had just given
+// to the task store — the one whose criteria still carry empty ids. The store
+// mints ids into its own deep copy (task.normalizeCriteria), and goal.New /
+// Goal.SetCriteria then mint a SECOND, different set for the same text. The
+// criterion id is the join key the verdict projection de-unions the Judge's
+// result on (GOAL-FR-007/FR-041), so the same criterion ended up reading `met`
+// on the task and `pending` on its goal record: two contradictory answers to
+// "was this met". Taking the list off t — the record the store has already
+// normalised and persisted — makes that divergence unrepresentable rather than
+// merely fixed at three call sites. criteriaProvided remains a parameter
+// because it carries something t cannot: whether THIS request touched criteria
+// at all (an edit that supplies only `dod` must leave the goal's criteria
+// alone).
+func (a *restAPI) syncTaskGoalRecord(
+	t *task.Task,
+	criteriaProvided bool,
+	dod []task.AcceptanceCriterion, dodProvided bool,
+) error {
+	if !criteriaProvided && !dodProvided {
+		return nil
+	}
+	criteria := t.Criteria
+	gs := tools.GoalStoreForTasks(a.taskStore)
+	now := time.Now().UTC()
+	existing, err := gs.GetByOwner(gen.GoalOwnerKindTask, t.ID)
+	if err != nil {
+		if !errors.Is(err, goal.ErrOwnerNotFound) {
+			return fmt.Errorf("load paired goal record: %w", err)
+		}
+		if !criteriaProvided || !dodProvided {
+			return errGoalRecordNeedsBothLists
+		}
+		maxRounds := config.DefaultGoalMaxRounds
+		if a.agentLoop != nil {
+			if cfg := a.agentLoop.GetConfig(); cfg != nil {
+				maxRounds = cfg.Planning.EffectiveGoalMaxRounds()
+			}
+		}
+		// goal.New requires a non-empty Prompt ("the raw user intent this
+		// goal was set/compiled from"); Task.Prompt is optional on the wire
+		// (an llm-action task may carry only a title, e.g. a human-tracking
+		// task later assigned an agent), so fall back to Title, which the
+		// wire schema always requires.
+		goalPrompt := t.Prompt
+		if goalPrompt == "" {
+			goalPrompt = t.Title
+		}
+		g, nErr := goal.New(
+			gen.GoalOwnerKindTask, t.ID, gen.GoalSourceTaskExplicit,
+			goalPrompt, "", criteria, dod, maxRounds, now,
+		)
+		if nErr != nil {
+			return fmt.Errorf("build goal record: %w", nErr)
+		}
+		return gs.Create(g)
+	}
+	_, err = gs.Update(existing.GoalID, func(g *goal.Goal) error {
+		if criteriaProvided {
+			if sErr := g.SetCriteria(criteria, now); sErr != nil {
+				return sErr
+			}
+		}
+		if dodProvided {
+			if sErr := g.SetDoD(dod, now); sErr != nil {
+				return sErr
+			}
+		}
+		return nil
+	})
+	return err
+}
+
+// pairedGoalDoD returns the Definition of Done currently persisted on the goal
+// record paired with taskID, or nil when the task has no paired record at all
+// (a legacy pre-D-C task, GOAL-FR-023/FR-048).
+//
+// It exists for the one edit shape that cannot evaluate the distinctness rule
+// (GOAL-FR-021/FR-047/FR-048) from the request alone: a PATCH that replaces
+// `criteria` and leaves `dod` untouched has to compare the NEW criteria against
+// the DoD already on file, and the task record has no DoD field to read it from
+// (ADR-086 D5 — pkg/task/task.go has no Dod at all).
+//
+// A read fault is returned, never swallowed: it means the rule could not be
+// evaluated, and a rule that silently does not run is exactly the failure this
+// whole change exists to stop.
+func (a *restAPI) pairedGoalDoD(taskID string) ([]task.AcceptanceCriterion, error) {
+	g, err := tools.GoalStoreForTasks(a.taskStore).GetByOwner(gen.GoalOwnerKindTask, taskID)
+	if err != nil {
+		if errors.Is(err, goal.ErrOwnerNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load paired goal record: %w", err)
+	}
+	return g.DoD, nil
+}
 
 // decodeTaskJSONBody decodes a JSON request body into dst, writing a 400 and
 // returning false on a malformed body.
@@ -320,11 +557,139 @@ func (a *restAPI) buildRollupIndex() (rollupIndex, error) {
 	return idx, nil
 }
 
+// taskGoalIndex maps a task-owned goal record by its owner task id (ADR-086
+// D2/D5, GOAL-FR-029). A task's Definition of Done lives on its paired goal
+// record, never on the task record itself, so projecting `dod` onto the wire
+// requires a goal-store lookup — this is the batch-caller index for that
+// lookup, mirroring rollupIndex exactly (goal.Store.GetByOwner scans the
+// WHOLE goals directory per call, so a list endpoint calling it once per
+// returned task would be the same per-item-List-call trap rollupIndex's own
+// doc comment already names). nil is a valid, common value: every
+// single-task endpoint (get/create/patch/stop/restart/...) passes nil and
+// toWireTask falls back to one direct GetByOwner call.
+type taskGoalIndex map[string]*goal.Goal
+
+// buildTaskGoalIndex fetches every goal record ONCE (goal.Store.List) and
+// indexes the task-owned ones by their owner task id. Mirrors
+// buildRollupIndex exactly — see taskGoalIndex's doc comment for why this
+// exists at all.
+func (a *restAPI) buildTaskGoalIndex() (taskGoalIndex, error) {
+	all, _, err := tools.GoalStoreForTasks(a.taskStore).List()
+	if err != nil {
+		return nil, err
+	}
+	idx := make(taskGoalIndex, len(all))
+	for i := range all {
+		g := all[i]
+		if g.OwnerKind != gen.GoalOwnerKindTask || g.OwnerID == "" {
+			continue
+		}
+		idx[g.OwnerID] = &g
+	}
+	return idx, nil
+}
+
+// LiveTaskActivityReader is the narrow gateway-side seam for a running
+// task's live last-activity stamp (founder decision 2026-09-14). Implemented
+// by *agent.TaskExecutor (forwarding to the AgentLoop's turn-progress
+// atomics); kept as a local interface so tests wire a stub without
+// constructing an executor.
+type LiveTaskActivityReader interface {
+	LiveTaskLastActivity(taskID string) (time.Time, bool)
+}
+
+// taskLastActivityAt resolves Task.last_activity_at for an in-progress task:
+// the LATER of (a) the live progress stamp of its running turn — which moves
+// on every streamed reasoning and tool-call-argument delta (UAT E-15c) — and
+// (b) the last write to its session transcript (a tool result, an assistant
+// message; the session store's cached UpdatedAt moves on every append).
+// Returns ok=false when the task is not in progress or no evidence exists —
+// the field is then simply absent on the wire, never fabricated.
+func (a *restAPI) taskLastActivityAt(t task.Task) (time.Time, bool) {
+	if t.Status != task.StatusInProgress {
+		return time.Time{}, false
+	}
+	var live, transcript time.Time
+	if a.liveTaskActivity != nil {
+		if at, ok := a.liveTaskActivity.LiveTaskLastActivity(t.ID); ok {
+			live = at
+		}
+	}
+	if t.SessionID != "" {
+		if store := a.resolveSessionStore(t.SessionID); store != nil {
+			if meta, err := store.GetMeta(t.SessionID); err == nil && meta != nil && !meta.UpdatedAt.IsZero() {
+				transcript = meta.UpdatedAt
+			}
+		}
+	}
+	// Local-time skew defence: a stamp from the future (clock jump between
+	// nodes) still renders as "just now", never a negative age.
+	now := time.Now()
+	switch {
+	case live.After(transcript) && !live.After(now):
+		return live, true
+	case transcript.After(live) && !transcript.After(now):
+		return transcript, true
+	case live.After(now) || transcript.After(now):
+		// Both candidates in the future — fall back to the later one anyway;
+		// the SPA clamps negative ages to "just now".
+		if live.After(transcript) {
+			return live, true
+		}
+		return transcript, true
+	default:
+		return time.Time{}, false
+	}
+}
+
+// taskAssigneeWarning resolves Task.assignee_warning (founder decision
+// 2026-09-15): why t's assigned agent cannot finish it, from the SAME answer
+// the task run's pre-run check and the agent task tools use
+// (agent.AgentLoop.TaskAssigneeCannotFinish), judged against the criteria and
+// Definition of Done on its goal record g — else the task's own criteria.
+// Returns "" when the task has no agent, is done or failed, is a checklist
+// card, or nothing knowable stops the agent.
+//
+// This surface warns and never refuses. The agent task tools reject the same
+// assignment, but an operator using the task form may assign first and fix
+// the agent's permissions afterwards — ADR-049 D2 rule 5's split, and the
+// planning-goals-spec scenario "the same shape via the human UI path is
+// accepted with a warning". A run of such a task ends Failed at once with this
+// same text.
+func (a *restAPI) taskAssigneeWarning(t task.Task, g *goal.Goal) string {
+	if a.agentLoop == nil || t.AgentID == "" || t.Scratchpad || task.IsTerminal(t.Status) {
+		return ""
+	}
+	var judged []task.AcceptanceCriterion
+	if g != nil && len(g.Criteria) > 0 {
+		judged = append(judged, g.Criteria...)
+	} else {
+		judged = append(judged, t.Criteria...)
+	}
+	if g != nil {
+		judged = append(judged, g.DoD...)
+	}
+	return a.agentLoop.TaskAssigneeCannotFinish(t.AgentID, judged)
+}
+
 // toWireTask converts an internal task.Task to the generated wire type, filling
 // the read-time agent_name and rollup fields from the registry / store. idx is
 // an optional shared rollupIndex (see its doc comment) for batch callers; pass
-// nil for a single-task response.
-func (a *restAPI) toWireTask(t task.Task, idx rollupIndex) gen.Task {
+// nil for a single-task response. gidx is the analogous optional shared
+// taskGoalIndex for `dod` (ADR-086 D5) — pass nil for a single-task response.
+//
+// It returns a non-nil error ONLY when the task's paired goal record exists as
+// far as we know but could not be READ (a storage fault, a corrupt record).
+// That is not the same thing as a task having no Definition of Done, and the
+// wire type cannot say the difference: `dod` is omitempty, so a read failure
+// used to render byte-identically to "this task genuinely has none" (silent-
+// failure finding SF-6). With D-C making a Definition of Done mandatory at
+// creation AND edit, "none" is no longer a believable answer — a reader seeing
+// an empty DoD would conclude the task has none and act on it. So the error
+// travels up and the handler answers 500 instead of inventing an empty field.
+// goal.ErrOwnerNotFound is NOT an error here: a task with no goal record at all
+// really does have no dod, which is the normal state for a pre-D-C task.
+func (a *restAPI) toWireTask(t task.Task, idx rollupIndex, gidx taskGoalIndex) (gen.Task, error) {
 	out := gen.Task{
 		Id:          t.ID,
 		Title:       t.Title,
@@ -386,8 +751,63 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex) gen.Task {
 		tags := append([]string{}, t.Tags...)
 		out.Tags = &tags
 	}
-	if len(t.Criteria) > 0 {
+	// GOAL-FR-003/FR-029/FR-048 (ADR-086 D5): BOTH judged lists — criteria
+	// and Definition of Done — live on the task's paired goal record and the
+	// wire reads them from there, one source of truth. The task record's own
+	// Criteria dual-write is write-only for the not-yet-repointed writers;
+	// reading it here is what made a retried task's card show the previous
+	// run's criterion ticks beside a freshly-reset DoD (the goal record is
+	// the side Reactivate resets). gidx (batch caller) or a direct GetByOwner
+	// (single-task caller) resolves the record; a task with no goal record at
+	// all (a legacy, pre-D-C task — GOAL-FR-023/FR-048) has neither list,
+	// which is the normal, non-error state, and falls back to the task
+	// record's criteria for continuity.
+	var g *goal.Goal
+	if gidx != nil {
+		g = gidx[t.ID]
+	} else if a.taskStore != nil {
+		found, gErr := tools.GoalStoreForTasks(a.taskStore).GetByOwner(gen.GoalOwnerKindTask, t.ID)
+		switch {
+		case gErr == nil:
+			g = found
+		case errors.Is(gErr, goal.ErrOwnerNotFound):
+			// Genuinely no paired record. Normal state, not an error.
+		default:
+			// A real read failure. Do NOT fall through and emit a task with
+			// judged lists read from a possibly-stale second copy — that is
+			// indistinguishable from a task that has none (SF-6).
+			return gen.Task{}, fmt.Errorf(
+				"read paired goal record for task %q: %w", t.ID, gErr)
+		}
+	}
+	if g != nil && len(g.Criteria) > 0 {
+		out.Criteria = toWireCriteria(g.Criteria)
+	} else if len(t.Criteria) > 0 {
 		out.Criteria = toWireCriteria(t.Criteria)
+	}
+	if g != nil && len(g.DoD) > 0 {
+		out.Dod = toWireDod(g.DoD)
+	}
+	// Founder decision 2026-09-15: a task whose agent cannot finish it as
+	// configured says so, next to the agent picker. Read-time only; it warns
+	// and never refuses (see taskAssigneeWarning).
+	if msg := a.taskAssigneeWarning(t, g); msg != "" {
+		out.AssigneeWarning = &struct {
+			Field   gen.TaskAssigneeWarningField `json:"field"`
+			Message string                       `json:"message"`
+		}{Field: gen.TaskAssigneeWarningFieldAgentId, Message: msg}
+	}
+	// The goal's tries (issue #710): the tries its current (or last) run has
+	// used and the try limit that run started with, both read off the goal
+	// record — the card shows them beside the task attempt counter, never
+	// mixed with it.
+	if g != nil {
+		if g.Round > 0 {
+			out.JudgeRounds = ptr(g.Round)
+		}
+		if g.MaxRounds >= 1 {
+			out.GoalMaxRounds = ptr(g.MaxRounds)
+		}
 	}
 	if t.AttemptCount > 0 {
 		out.AttemptCount = ptr(t.AttemptCount)
@@ -395,6 +815,19 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex) gen.Task {
 	if t.MaxAttempts != nil {
 		out.MaxAttempts = ptr(*t.MaxAttempts)
 	}
+	// effective_max_attempts: the task attempt limit (how many fresh runs this
+	// task gets), resolved by the SAME function the task executor enforces
+	// (tools.EffectiveTaskMaxAttempts): the task's own max_attempts, else the
+	// global planning.task_max_attempts, else the default of 3. It is not the
+	// goal try limit — goal tries and task attempts are separate limits
+	// (founder decision 2026-09-14, issue #710).
+	var planning config.PlanningConfig
+	if a.agentLoop != nil {
+		if cfg := a.agentLoop.GetConfig(); cfg != nil {
+			planning = cfg.Planning
+		}
+	}
+	out.EffectiveMaxAttempts = ptr(tools.EffectiveTaskMaxAttempts(planning, &t))
 	if t.Trigger != nil {
 		out.Trigger = toWireTrigger(t.Trigger)
 	}
@@ -436,10 +869,41 @@ func (a *restAPI) toWireTask(t task.Task, idx rollupIndex) gen.Task {
 			out.CompletedAt = &ts
 		}
 	}
+	// Founder decision 2026-09-14: last_activity_at, read-time only, only
+	// while the task is in progress (see taskLastActivityAt).
+	if at, ok := a.taskLastActivityAt(t); ok {
+		at = at.UTC()
+		out.LastActivityAt = &at
+	}
 
 	// Read-time rollup: live child sub-agent runs (parent_task_id == t.ID).
 	out.Rollup = a.computeRollup(t.ID, idx)
-	return out
+	return out, nil
+}
+
+// writeWireTask renders t and writes it as the response body, or answers 500
+// when the task could not be rendered COMPLETELY — today that means its paired
+// goal record (its Definition of Done) could not be read. Every single-task
+// endpoint (get / create / patch / stop / restart / …) goes through here so
+// that they all fail the same way; the batch endpoints keep their own
+// buildTaskGoalIndex error branch, which already 500s.
+//
+// Answering 500 rather than a 200 with the DoD quietly missing is the point
+// (SF-6): `dod` is omitempty, so a partial render is indistinguishable on the
+// wire from a task that genuinely has no Definition of Done.
+func (a *restAPI) writeWireTask(w http.ResponseWriter, status int, t task.Task) {
+	wire, err := a.toWireTask(t, nil, nil)
+	if err != nil {
+		slog.Error("rest: could not render task completely", "task_id", t.ID, "error", err)
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf(
+			"task %q could not be read completely: its Definition of Done is unavailable", t.ID))
+		return
+	}
+	if status == http.StatusCreated {
+		jsonCreated(w, wire)
+		return
+	}
+	jsonOK(w, wire)
 }
 
 // toWireTrigger maps an internal trigger to the gen.Task.Trigger inline type.
@@ -556,12 +1020,13 @@ func toWireCriteria(cs []task.AcceptanceCriterion) *[]struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
-	Id         *string                     `json:"id,omitempty"`
-	Judgment   gen.TaskCriteriaJudgment    `json:"judgment"`
-	Kind       gen.TaskCriteriaKind        `json:"kind"`
-	Provenance *gen.TaskCriteriaProvenance `json:"provenance,omitempty"`
-	Status     gen.TaskCriteriaStatus      `json:"status"`
-	Text       string                      `json:"text"`
+	ClauseCount *int                        `json:"clause_count,omitempty"`
+	Id          *string                     `json:"id,omitempty"`
+	Judgment    gen.TaskCriteriaJudgment    `json:"judgment"`
+	Kind        gen.TaskCriteriaKind        `json:"kind"`
+	Provenance  *gen.TaskCriteriaProvenance `json:"provenance,omitempty"`
+	Status      gen.TaskCriteriaStatus      `json:"status"`
+	Text        string                      `json:"text"`
 } {
 	out := make([]struct {
 		Author struct {
@@ -578,12 +1043,13 @@ func toWireCriteria(cs []task.AcceptanceCriterion) *[]struct {
 			Command          string `json:"command"`
 			ExpectedExitCode int    `json:"expected_exit_code"`
 		} `json:"check,omitempty"`
-		Id         *string                     `json:"id,omitempty"`
-		Judgment   gen.TaskCriteriaJudgment    `json:"judgment"`
-		Kind       gen.TaskCriteriaKind        `json:"kind"`
-		Provenance *gen.TaskCriteriaProvenance `json:"provenance,omitempty"`
-		Status     gen.TaskCriteriaStatus      `json:"status"`
-		Text       string                      `json:"text"`
+		ClauseCount *int                        `json:"clause_count,omitempty"`
+		Id          *string                     `json:"id,omitempty"`
+		Judgment    gen.TaskCriteriaJudgment    `json:"judgment"`
+		Kind        gen.TaskCriteriaKind        `json:"kind"`
+		Provenance  *gen.TaskCriteriaProvenance `json:"provenance,omitempty"`
+		Status      gen.TaskCriteriaStatus      `json:"status"`
+		Text        string                      `json:"text"`
 	}, 0, len(cs))
 	for _, c := range cs {
 		item := struct { // not-wire-format: intermediate value built to match gen.Task.Criteria's oapi-codegen anonymous element type, not a parallel wire type
@@ -601,12 +1067,13 @@ func toWireCriteria(cs []task.AcceptanceCriterion) *[]struct {
 				Command          string `json:"command"`
 				ExpectedExitCode int    `json:"expected_exit_code"`
 			} `json:"check,omitempty"`
-			Id         *string                     `json:"id,omitempty"`
-			Judgment   gen.TaskCriteriaJudgment    `json:"judgment"`
-			Kind       gen.TaskCriteriaKind        `json:"kind"`
-			Provenance *gen.TaskCriteriaProvenance `json:"provenance,omitempty"`
-			Status     gen.TaskCriteriaStatus      `json:"status"`
-			Text       string                      `json:"text"`
+			ClauseCount *int                        `json:"clause_count,omitempty"`
+			Id          *string                     `json:"id,omitempty"`
+			Judgment    gen.TaskCriteriaJudgment    `json:"judgment"`
+			Kind        gen.TaskCriteriaKind        `json:"kind"`
+			Provenance  *gen.TaskCriteriaProvenance `json:"provenance,omitempty"`
+			Status      gen.TaskCriteriaStatus      `json:"status"`
+			Text        string                      `json:"text"`
 		}{
 			Kind:     gen.TaskCriteriaKind(c.Kind),
 			Judgment: gen.TaskCriteriaJudgment(wireCriterionJudgment(c)),
@@ -616,6 +1083,16 @@ func toWireCriteria(cs []task.AcceptanceCriterion) *[]struct {
 		if c.Provenance != "" {
 			p := gen.TaskCriteriaProvenance(c.Provenance)
 			item.Provenance = &p
+		}
+		// C-58/JUDGE-FR-006b: this field was declared in the anonymous wire
+		// shape (matching the generated type) but never actually populated —
+		// a real GET response carried clause_count:null even though the
+		// persisted criterion always has one. ClauseCount is minimum:1 on
+		// the schema, so a zero (never-normalized, pre-FR-006b) value is
+		// left absent rather than emitted as an invalid 0.
+		if c.ClauseCount > 0 {
+			cc := c.ClauseCount
+			item.ClauseCount = &cc
 		}
 		item.Author.Id = c.Author.ID
 		item.Author.Kind = gen.TaskCriteriaAuthorKind(c.Author.Kind)
@@ -676,12 +1153,13 @@ func criteriaFromCreateWire(items []struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
-	Id         *string                                  `json:"id,omitempty"`
-	Judgment   *gen.TaskCreateRequestCriteriaJudgment   `json:"judgment,omitempty"`
-	Kind       *gen.TaskCreateRequestCriteriaKind       `json:"kind,omitempty"`
-	Provenance *gen.TaskCreateRequestCriteriaProvenance `json:"provenance,omitempty"`
-	Status     gen.TaskCreateRequestCriteriaStatus      `json:"status"`
-	Text       string                                   `json:"text"`
+	ClauseCount *int                                     `json:"clause_count,omitempty"`
+	Id          *string                                  `json:"id,omitempty"`
+	Judgment    *gen.TaskCreateRequestCriteriaJudgment   `json:"judgment,omitempty"`
+	Kind        *gen.TaskCreateRequestCriteriaKind       `json:"kind,omitempty"`
+	Provenance  *gen.TaskCreateRequestCriteriaProvenance `json:"provenance,omitempty"`
+	Status      gen.TaskCreateRequestCriteriaStatus      `json:"status"`
+	Text        string                                   `json:"text"`
 }) []task.AcceptanceCriterion {
 	out := make([]task.AcceptanceCriterion, 0, len(items))
 	for _, it := range items {
@@ -734,12 +1212,13 @@ func criteriaFromUpdateWire(items []struct {
 		Command          string `json:"command"`
 		ExpectedExitCode int    `json:"expected_exit_code"`
 	} `json:"check,omitempty"`
-	Id         *string                                  `json:"id,omitempty"`
-	Judgment   *gen.TaskUpdateRequestCriteriaJudgment   `json:"judgment,omitempty"`
-	Kind       *gen.TaskUpdateRequestCriteriaKind       `json:"kind,omitempty"`
-	Provenance *gen.TaskUpdateRequestCriteriaProvenance `json:"provenance,omitempty"`
-	Status     gen.TaskUpdateRequestCriteriaStatus      `json:"status"`
-	Text       string                                   `json:"text"`
+	ClauseCount *int                                     `json:"clause_count,omitempty"`
+	Id          *string                                  `json:"id,omitempty"`
+	Judgment    *gen.TaskUpdateRequestCriteriaJudgment   `json:"judgment,omitempty"`
+	Kind        *gen.TaskUpdateRequestCriteriaKind       `json:"kind,omitempty"`
+	Provenance  *gen.TaskUpdateRequestCriteriaProvenance `json:"provenance,omitempty"`
+	Status      gen.TaskUpdateRequestCriteriaStatus      `json:"status"`
+	Text        string                                   `json:"text"`
 }) []task.AcceptanceCriterion {
 	out := make([]task.AcceptanceCriterion, 0, len(items))
 	for _, it := range items {
@@ -752,6 +1231,246 @@ func criteriaFromUpdateWire(items []struct {
 		// kind/judgment defaulting — an absent kind or judgment passes THROUGH
 		// as empty and is inferred downstream by the store's normalizeCriteria
 		// (task.InferCriterionKind / task.InferJudgment).
+		if it.Kind != nil {
+			c.Kind = task.CriterionKind(*it.Kind)
+		}
+		if it.Judgment != nil {
+			c.Judgment = task.JudgmentKind(*it.Judgment)
+		}
+		if it.Provenance != nil {
+			c.Provenance = task.CriterionProvenance(*it.Provenance)
+		}
+		if it.Id != nil {
+			c.ID = *it.Id
+		}
+		if it.Check != nil {
+			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
+		}
+		if it.Behavior != nil {
+			c.Behavior = behaviorFromWire(it.Behavior.Tool, it.Behavior.MinCount, it.Behavior.MaxCount, it.Behavior.Scope)
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// toWireDod converts internal Definition-of-Done criteria to the gen.Task.Dod
+// inline wire shape (read path — GET/POST/PATCH responses). GOAL-FR-021/
+// FR-029/FR-048: dod is a NEW field (ADR-086) — the task's DoD list lives on
+// its paired goal record (pkg/goal), never on the task record itself, so
+// callers of this function read from a *goal.Goal, not from task.Task.
+//
+// This is a distinct, near-duplicate function rather than a shared one with
+// toWireCriteria because oapi-codegen emits TWO separate named anonymous-
+// struct-element types for Task.Criteria and Task.Dod even though their
+// shapes are structurally identical (same reason toWireCriteria/
+// toWirePlanDoD in rest_plans.go cannot be shared either — see toWirePlanDoD's
+// own doc comment).
+func toWireDod(cs []task.AcceptanceCriterion) *[]struct {
+	Author struct {
+		Id   string                `json:"id"`
+		Kind gen.TaskDodAuthorKind `json:"kind"`
+	} `json:"author"`
+	Behavior *struct {
+		MaxCount *int                      `json:"max_count,omitempty"`
+		MinCount *int                      `json:"min_count,omitempty"`
+		Scope    *gen.TaskDodBehaviorScope `json:"scope,omitempty"`
+		Tool     string                    `json:"tool"`
+	} `json:"behavior,omitempty"`
+	Check *struct {
+		Command          string `json:"command"`
+		ExpectedExitCode int    `json:"expected_exit_code"`
+	} `json:"check,omitempty"`
+	ClauseCount *int                   `json:"clause_count,omitempty"`
+	Id          *string                `json:"id,omitempty"`
+	Judgment    gen.TaskDodJudgment    `json:"judgment"`
+	Kind        gen.TaskDodKind        `json:"kind"`
+	Provenance  *gen.TaskDodProvenance `json:"provenance,omitempty"`
+	Status      gen.TaskDodStatus      `json:"status"`
+	Text        string                 `json:"text"`
+} {
+	out := make([]struct {
+		Author struct {
+			Id   string                `json:"id"`
+			Kind gen.TaskDodAuthorKind `json:"kind"`
+		} `json:"author"`
+		Behavior *struct {
+			MaxCount *int                      `json:"max_count,omitempty"`
+			MinCount *int                      `json:"min_count,omitempty"`
+			Scope    *gen.TaskDodBehaviorScope `json:"scope,omitempty"`
+			Tool     string                    `json:"tool"`
+		} `json:"behavior,omitempty"`
+		Check *struct {
+			Command          string `json:"command"`
+			ExpectedExitCode int    `json:"expected_exit_code"`
+		} `json:"check,omitempty"`
+		ClauseCount *int                   `json:"clause_count,omitempty"`
+		Id          *string                `json:"id,omitempty"`
+		Judgment    gen.TaskDodJudgment    `json:"judgment"`
+		Kind        gen.TaskDodKind        `json:"kind"`
+		Provenance  *gen.TaskDodProvenance `json:"provenance,omitempty"`
+		Status      gen.TaskDodStatus      `json:"status"`
+		Text        string                 `json:"text"`
+	}, 0, len(cs))
+	for _, c := range cs {
+		item := struct { // not-wire-format: intermediate value built to match gen.Task.Dod's oapi-codegen anonymous element type, not a parallel wire type
+			Author struct {
+				Id   string                `json:"id"`
+				Kind gen.TaskDodAuthorKind `json:"kind"`
+			} `json:"author"`
+			Behavior *struct {
+				MaxCount *int                      `json:"max_count,omitempty"`
+				MinCount *int                      `json:"min_count,omitempty"`
+				Scope    *gen.TaskDodBehaviorScope `json:"scope,omitempty"`
+				Tool     string                    `json:"tool"`
+			} `json:"behavior,omitempty"`
+			Check *struct {
+				Command          string `json:"command"`
+				ExpectedExitCode int    `json:"expected_exit_code"`
+			} `json:"check,omitempty"`
+			ClauseCount *int                   `json:"clause_count,omitempty"`
+			Id          *string                `json:"id,omitempty"`
+			Judgment    gen.TaskDodJudgment    `json:"judgment"`
+			Kind        gen.TaskDodKind        `json:"kind"`
+			Provenance  *gen.TaskDodProvenance `json:"provenance,omitempty"`
+			Status      gen.TaskDodStatus      `json:"status"`
+			Text        string                 `json:"text"`
+		}{
+			Kind:     gen.TaskDodKind(c.Kind),
+			Judgment: gen.TaskDodJudgment(wireCriterionJudgment(c)),
+			Status:   gen.TaskDodStatus(c.Status),
+			Text:     c.Text,
+		}
+		if c.Provenance != "" {
+			p := gen.TaskDodProvenance(c.Provenance)
+			item.Provenance = &p
+		}
+		if c.ClauseCount > 0 {
+			cc := c.ClauseCount
+			item.ClauseCount = &cc
+		}
+		item.Author.Id = c.Author.ID
+		item.Author.Kind = gen.TaskDodAuthorKind(c.Author.Kind)
+		if c.ID != "" {
+			item.Id = ptr(c.ID)
+		}
+		if c.Check != nil {
+			item.Check = &struct {
+				Command          string `json:"command"`
+				ExpectedExitCode int    `json:"expected_exit_code"`
+			}{Command: c.Check.Command, ExpectedExitCode: c.Check.ExpectedExitCode}
+		}
+		if c.Behavior != nil {
+			beh := &struct { // not-wire-format: intermediate value built to match gen.Task.Dod's oapi-codegen anonymous element type, not a parallel wire type
+				MaxCount *int                      `json:"max_count,omitempty"`
+				MinCount *int                      `json:"min_count,omitempty"`
+				Scope    *gen.TaskDodBehaviorScope `json:"scope,omitempty"`
+				Tool     string                    `json:"tool"`
+			}{
+				Tool:     c.Behavior.Tool,
+				MinCount: c.Behavior.MinCount,
+				MaxCount: c.Behavior.MaxCount,
+			}
+			if c.Behavior.Scope != "" {
+				s := gen.TaskDodBehaviorScope(c.Behavior.Scope)
+				beh.Scope = &s
+			}
+			item.Behavior = beh
+		}
+		out = append(out, item)
+	}
+	return &out
+}
+
+// dodFromCreateWire converts the gen.TaskCreateRequest.Dod inline wire shape
+// to internal acceptance criteria (create path). Mirrors criteriaFromCreateWire
+// exactly — see toWireDod's doc comment for why this cannot be shared.
+func dodFromCreateWire(items []struct {
+	Author struct {
+		Id   string                             `json:"id"`
+		Kind gen.TaskCreateRequestDodAuthorKind `json:"kind"`
+	} `json:"author"`
+	Behavior *struct {
+		MaxCount *int                                   `json:"max_count,omitempty"`
+		MinCount *int                                   `json:"min_count,omitempty"`
+		Scope    *gen.TaskCreateRequestDodBehaviorScope `json:"scope,omitempty"`
+		Tool     string                                 `json:"tool"`
+	} `json:"behavior,omitempty"`
+	Check *struct {
+		Command          string `json:"command"`
+		ExpectedExitCode int    `json:"expected_exit_code"`
+	} `json:"check,omitempty"`
+	ClauseCount *int                                `json:"clause_count,omitempty"`
+	Id          *string                             `json:"id,omitempty"`
+	Judgment    *gen.TaskCreateRequestDodJudgment   `json:"judgment,omitempty"`
+	Kind        *gen.TaskCreateRequestDodKind       `json:"kind,omitempty"`
+	Provenance  *gen.TaskCreateRequestDodProvenance `json:"provenance,omitempty"`
+	Status      gen.TaskCreateRequestDodStatus      `json:"status"`
+	Text        string                              `json:"text"`
+}) []task.AcceptanceCriterion {
+	out := make([]task.AcceptanceCriterion, 0, len(items))
+	for _, it := range items {
+		c := task.AcceptanceCriterion{
+			Text:   it.Text,
+			Status: task.CriterionStatus(it.Status),
+			Author: task.CriterionAuthor{Kind: string(it.Author.Kind), ID: it.Author.Id},
+		}
+		if it.Kind != nil {
+			c.Kind = task.CriterionKind(*it.Kind)
+		}
+		if it.Judgment != nil {
+			c.Judgment = task.JudgmentKind(*it.Judgment)
+		}
+		if it.Provenance != nil {
+			c.Provenance = task.CriterionProvenance(*it.Provenance)
+		}
+		if it.Id != nil {
+			c.ID = *it.Id
+		}
+		if it.Check != nil {
+			c.Check = &task.CriterionCheck{Command: it.Check.Command, ExpectedExitCode: it.Check.ExpectedExitCode}
+		}
+		if it.Behavior != nil {
+			c.Behavior = behaviorFromWire(it.Behavior.Tool, it.Behavior.MinCount, it.Behavior.MaxCount, it.Behavior.Scope)
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+// dodFromUpdateWire converts the gen.TaskUpdateRequest.Dod inline wire shape
+// to internal acceptance criteria (PATCH path). Mirrors criteriaFromUpdateWire
+// exactly — see toWireDod's doc comment for why this cannot be shared.
+func dodFromUpdateWire(items []struct {
+	Author struct {
+		Id   string                             `json:"id"`
+		Kind gen.TaskUpdateRequestDodAuthorKind `json:"kind"`
+	} `json:"author"`
+	Behavior *struct {
+		MaxCount *int                                   `json:"max_count,omitempty"`
+		MinCount *int                                   `json:"min_count,omitempty"`
+		Scope    *gen.TaskUpdateRequestDodBehaviorScope `json:"scope,omitempty"`
+		Tool     string                                 `json:"tool"`
+	} `json:"behavior,omitempty"`
+	Check *struct {
+		Command          string `json:"command"`
+		ExpectedExitCode int    `json:"expected_exit_code"`
+	} `json:"check,omitempty"`
+	ClauseCount *int                                `json:"clause_count,omitempty"`
+	Id          *string                             `json:"id,omitempty"`
+	Judgment    *gen.TaskUpdateRequestDodJudgment   `json:"judgment,omitempty"`
+	Kind        *gen.TaskUpdateRequestDodKind       `json:"kind,omitempty"`
+	Provenance  *gen.TaskUpdateRequestDodProvenance `json:"provenance,omitempty"`
+	Status      gen.TaskUpdateRequestDodStatus      `json:"status"`
+	Text        string                              `json:"text"`
+}) []task.AcceptanceCriterion {
+	out := make([]task.AcceptanceCriterion, 0, len(items))
+	for _, it := range items {
+		c := task.AcceptanceCriterion{
+			Text:   it.Text,
+			Status: task.CriterionStatus(it.Status),
+			Author: task.CriterionAuthor{Kind: string(it.Author.Kind), ID: it.Author.Id},
+		}
 		if it.Kind != nil {
 			c.Kind = task.CriterionKind(*it.Kind)
 		}
@@ -899,46 +1618,20 @@ func (a *restAPI) validateTaskAgentID(agentID, workspaceID string) error {
 	return nil
 }
 
-// validateTaskPlanID enforces the same-workspace FK on Task.PlanID (ADR-049
-// D1, mirrors the removed validateMilestoneFK): a task may only reference a
-// plan that lives in its own workspace. Returns nil when planID is empty
-// (nothing to validate). Fails CLOSED (400) when a.planStore is nil — an
-// uninitialized dependency is never treated as "no FK to check", mirroring
-// validateTaskAgentID's errTaskAgentLoopUnavailable convention immediately
-// above.
+// The REST surface has NO plan-linkage validator of its own. POST /tasks and
+// PATCH /tasks/{id} both call tools.ValidateTaskPlanMembership (pkg/tools/
+// plan.go) directly — the one choke point shared with the create_task and
+// create_task_in_workspace agent tools, so "may this task join this plan?"
+// has exactly one answer in this codebase. A REST-local wrapper (the retired
+// validateTaskPlanID, and its errTaskPlanStoreUnavailable sentinel) is what
+// let the rule drift here in the first place: it rejected only TERMINAL
+// plans, so the UI could attach a member to an approved or running plan that
+// plan-lint would never see. Do not reintroduce one.
 //
-// Also rejects linking to a TERMINAL plan (done/failed): a terminal plan can
-// never accept new member tasks, and allowing the attach would leave a member
-// pointing at a dead plan. This is data integrity (parity with
-// pkg/tools/plan.go's validateTaskPlanLinkage), not a dispatch-approval
-// mechanism — task dispatch authority is governed solely by the run_task tool
-// policy (allow/deny/ask), enforced in the agent loop.
-func (a *restAPI) validateTaskPlanID(planID, workspaceID string) error {
-	if planID == "" {
-		return nil
-	}
-	if a.planStore == nil {
-		return errTaskPlanStoreUnavailable
-	}
-	if err := validateEntityID(planID); err != nil {
-		return fmt.Errorf("invalid plan_id: %w", err)
-	}
-	if err := a.planStore.ValidatePlanWorkspace(planID, workspaceID); err != nil {
-		return err
-	}
-	p, err := a.planStore.Get(planID)
-	if err != nil {
-		return fmt.Errorf("could not load plan %q: %w", planID, err)
-	}
-	if plan.IsTerminal(p.State) {
-		return fmt.Errorf("plan %q is %q (terminal) and cannot accept new member tasks", planID, p.State)
-	}
-	return nil
-}
-
-// errTaskPlanStoreUnavailable is returned by validateTaskPlanID when
-// a.planStore is nil — see its doc comment for the fail-closed rationale.
-var errTaskPlanStoreUnavailable = errors.New("task: plan store not initialized; cannot validate plan_id")
+// Path-traversal safety needs no separate validateEntityID call here either:
+// plan.Store.Get runs pkg/plan's own validateID on every lookup, with the
+// identical "/", "\", "..", NUL" rejection, and the error surfaces as a 400
+// exactly like every other rejection below.
 
 // resolveAgentName returns the display name for an agent ID from the registry,
 // or "" when unknown.
@@ -1069,9 +1762,30 @@ func (a *restAPI) handleTaskList(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "could not list tasks")
 		return
 	}
+	// GOAL-FR-029/FR-048: same batching rationale as the rollup index above,
+	// applied to `dod` (taskGoalIndex's doc comment) — one goal.Store.List
+	// scan for the whole response instead of one per returned task.
+	gidx, gidxErr := a.buildTaskGoalIndex()
+	if gidxErr != nil {
+		slog.Error("rest: task list: build goal index failed", "error", gidxErr)
+		jsonErr(w, http.StatusInternalServerError, "could not list tasks")
+		return
+	}
 	out := make([]gen.Task, 0, len(tasks))
 	for _, t := range tasks {
-		out = append(out, a.toWireTask(t, idx))
+		// gidx is non-nil here, so toWireTask never takes its direct-read
+		// branch and cannot report a DoD read failure — the gidxErr branch
+		// above already answered 500 for that. Checked anyway so a future
+		// error source inside toWireTask cannot re-open SF-6 through the
+		// batch door.
+		wire, wErr := a.toWireTask(t, idx, gidx)
+		if wErr != nil {
+			slog.Error("rest: task list: could not render task completely",
+				"task_id", t.ID, "error", wErr)
+			jsonErr(w, http.StatusInternalServerError, "could not list tasks")
+			return
+		}
+		out = append(out, wire)
 	}
 	jsonOK(w, out)
 }
@@ -1092,7 +1806,7 @@ func (a *restAPI) handleTaskGet(w http.ResponseWriter, id string) {
 		jsonErr(w, http.StatusInternalServerError, "could not read task")
 		return
 	}
-	jsonOK(w, a.toWireTask(*t, nil))
+	a.writeWireTask(w, http.StatusOK, *t)
 }
 
 // handleTaskSubtasks handles GET /api/v1/tasks/{id}/subtasks.
@@ -1116,9 +1830,23 @@ func (a *restAPI) handleTaskSubtasks(w http.ResponseWriter, parentID string) {
 		jsonErr(w, http.StatusInternalServerError, "could not list subtasks")
 		return
 	}
+	gidx, gidxErr := a.buildTaskGoalIndex()
+	if gidxErr != nil {
+		slog.Error("rest: task subtasks: build goal index failed", "parent_id", parentID, "error", gidxErr)
+		jsonErr(w, http.StatusInternalServerError, "could not list subtasks")
+		return
+	}
 	out := make([]gen.Task, 0, len(children))
 	for _, t := range children {
-		out = append(out, a.toWireTask(t, idx))
+		// Same rationale as handleTaskList's loop above.
+		wire, wErr := a.toWireTask(t, idx, gidx)
+		if wErr != nil {
+			slog.Error("rest: task subtasks: could not render task completely",
+				"parent_id", parentID, "task_id", t.ID, "error", wErr)
+			jsonErr(w, http.StatusInternalServerError, "could not list subtasks")
+			return
+		}
+		out = append(out, wire)
 	}
 	jsonOK(w, out)
 }
@@ -1202,7 +1930,9 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 		t.ParentTaskID = *req.ParentTaskId
 	}
 	if req.PlanId != nil && *req.PlanId != "" {
-		if err := a.validateTaskPlanID(*req.PlanId, req.WorkspaceId); err != nil {
+		// Same-workspace FK + draft-only membership, via the one choke point
+		// every attach path shares (tools.ValidateTaskPlanMembership).
+		if err := tools.ValidateTaskPlanMembership(a.planStore, *req.PlanId, req.WorkspaceId); err != nil {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -1220,8 +1950,39 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	if req.Tags != nil {
 		t.Tags = *req.Tags
 	}
-	if req.Criteria != nil {
-		t.Criteria = criteriaFromCreateWire(*req.Criteria)
+	// GOAL-FR-021/FR-047/GOAL-MV-6/D-C: creating a task through the API or
+	// the interface requires at least one acceptance criterion AND at least
+	// one definition-of-done item — naming explicitly which is missing.
+	var criteria, dod []task.AcceptanceCriterion
+	if req.Criteria == nil || len(*req.Criteria) == 0 {
+		jsonErrField(w, http.StatusBadRequest,
+			"Add at least one acceptance criterion — what must be true for this task to be done.",
+			"criteria")
+		return
+	}
+	criteria = criteriaFromCreateWire(*req.Criteria)
+	t.Criteria = criteria
+	if req.Dod == nil || len(*req.Dod) == 0 {
+		jsonErrField(w, http.StatusBadRequest,
+			"Add at least one Definition of Done item, distinct from the acceptance criteria.",
+			"dod")
+		return
+	}
+	dod = dodFromCreateWire(*req.Dod)
+	// The DISTINCTNESS half of the same rule the refusal above advertises
+	// ("distinct from its acceptance criteria"). It was advertised and never
+	// checked: a UAT tester pasted one sentence into both boxes and the task
+	// saved with 201. See task.ValidateDoDDistinct for the rule and for why it
+	// stops at whitespace and case rather than reaching for similarity.
+	//
+	// Checked BEFORE taskStore.Create, so a refused pair leaves no task and no
+	// goal record behind.
+	if err := task.ValidateDoDDistinct(criteria, dod); err != nil {
+		// jsonTaskValidationErr routes the refusal to `field: "dod"` via
+		// errors.Is(err, task.ErrDoDNotDistinct), exactly as the update path
+		// does, so a client never has to parse the plain-language message.
+		jsonTaskValidationErr(w, err)
+		return
 	}
 	if req.MaxAttempts != nil {
 		v := *req.MaxAttempts
@@ -1258,11 +2019,35 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 
 	if err := a.taskStore.Create(t); err != nil {
 		if isTaskValidationErr(err) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
+			jsonTaskValidationErr(w, err)
 			return
 		}
 		slog.Error("rest: task create failed", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not create task")
+		return
+	}
+
+	// ADR-086 D2/D5, GOAL-FR-003/FR-012/FR-021/FR-029: a task's Definition of
+	// Done is authored ahead of time onto its own paired goal record, which
+	// stays in the "defining" phase until the task itself starts (GOAL-FR-012
+	// — nothing here activates it). t.Criteria above is a dual-write for the
+	// consumers not yet re-pointed to read the goal record this round — and,
+	// since taskStore.Create has now normalised t.Criteria in place, it is
+	// also the list syncTaskGoalRecord reads, so both records carry ONE set of
+	// criterion ids (see that function's doc comment).
+	if gErr := a.syncTaskGoalRecord(t, true, dod, true); gErr != nil {
+		slog.Error("rest: task create: failed to create paired goal record",
+			"task_id", t.ID, "error", gErr)
+		// Both lists are always provided on the create path, so the
+		// caller-fault branch is unreachable here — mapped anyway so the two
+		// handlers answer the same condition with the same status if that
+		// ever stops being true.
+		if errors.Is(gErr, errGoalRecordNeedsBothLists) {
+			jsonErr(w, http.StatusBadRequest, gErr.Error())
+			return
+		}
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf(
+			"task %q was created but its Definition of Done could not be persisted: %v", t.ID, gErr))
 		return
 	}
 
@@ -1277,7 +2062,7 @@ func (a *restAPI) handleTaskCreate(w http.ResponseWriter, r *http.Request) {
 	if a.agentLoop != nil {
 		a.agentLoop.NotifyTaskUpserted(t)
 	}
-	jsonCreated(w, a.toWireTask(*t, nil))
+	a.writeWireTask(w, http.StatusCreated, *t)
 }
 
 // handleTaskPatch handles PATCH /api/v1/tasks/{id}.
@@ -1297,6 +2082,37 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	if req.Status != nil && task.Status(*req.Status) == task.StatusBlocked {
 		jsonErr(w, http.StatusBadRequest, "blocked is a derived side-state and cannot be set directly")
 		return
+	}
+
+	// Operator decision, 2026-09-12: the judged contract freezes for the
+	// duration of a run. See frozenTaskDefinitionFields for the full rule and
+	// for why the refusal is whole-request rather than partial. The check runs
+	// HERE — before any field is copied into the patch and before any store
+	// write — so a mixed frozen+mutable request leaves nothing behind.
+	//
+	// existingForDefinition is retained past the freeze check for the
+	// distinctness rule below: frozenTaskDefinitionFields reports a non-empty
+	// list whenever `criteria` or `dod` is present, so whenever that rule needs
+	// the task's CURRENT criteria (an edit that supplies only `dod`), this read
+	// has already happened and must not be repeated.
+	var existingForDefinition *task.Task
+	if frozen := frozenTaskDefinitionFields(&req); len(frozen) > 0 {
+		existing, gErr := a.taskStore.Get(id)
+		if gErr != nil {
+			if errors.Is(gErr, task.ErrNotFound) {
+				jsonErr(w, http.StatusNotFound, "task not found")
+				return
+			}
+			slog.Error("rest: task patch: could not read task for the running-definition freeze check",
+				"task_id", id, "error", gErr)
+			jsonErr(w, http.StatusInternalServerError, "could not read task")
+			return
+		}
+		if existing.Status == task.StatusInProgress {
+			jsonErr(w, http.StatusConflict, runningTaskFrozenFieldMessage(frozen))
+			return
+		}
+		existingForDefinition = existing
 	}
 
 	// Detail #8: advancing a partial (no prompt/description) task to `next` is
@@ -1431,7 +2247,13 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 				jsonErr(w, http.StatusInternalServerError, "could not read task")
 				return
 			}
-			if err := a.validateTaskPlanID(*req.PlanId, existingForPlanCheck.WorkspaceID); err != nil {
+			// Same-workspace FK + draft-only membership, via the one choke
+			// point every attach path shares. This is the RE-PARENT/attach
+			// half of PATCH (plan A -> plan B, or standalone -> plan B); the
+			// DETACH half (plan_id -> "") is the else branch below and is
+			// deliberately not gated — leaving a plan is always allowed.
+			if err := tools.ValidateTaskPlanMembership(
+				a.planStore, *req.PlanId, existingForPlanCheck.WorkspaceID); err != nil {
 				jsonErr(w, http.StatusBadRequest, err.Error())
 				return
 			}
@@ -1477,9 +2299,82 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	if req.Tags != nil {
 		patch.Tags = req.Tags
 	}
+	// GOAL-FR-021/FR-023/FR-047/FR-048/D-C: the mandatory-count gate binds at
+	// edit too, uniformly with create — an update supplying either list must
+	// not reduce it below one item; a PATCH that does not touch criteria/dod
+	// at all is unaffected (GOAL-FR-023/FR-048 exempt an untouched legacy
+	// task from the rule, never from being edited once it IS touched).
+	var patchCriteria, patchDoD []task.AcceptanceCriterion
+	criteriaProvided, dodProvided := false, false
 	if req.Criteria != nil {
-		criteria := criteriaFromUpdateWire(*req.Criteria)
-		patch.Criteria = &criteria
+		criteriaProvided = true
+		if len(*req.Criteria) == 0 {
+			jsonErrField(w, http.StatusBadRequest,
+				"An update that changes the acceptance criteria must leave at least one.",
+				"criteria")
+			return
+		}
+		patchCriteria = criteriaFromUpdateWire(*req.Criteria)
+		patch.Criteria = &patchCriteria
+	}
+	if req.Dod != nil {
+		dodProvided = true
+		if len(*req.Dod) == 0 {
+			jsonErrField(w, http.StatusBadRequest,
+				"An update that changes the Definition of Done must leave at least one item.",
+				"dod")
+			return
+		}
+		patchDoD = dodFromUpdateWire(*req.Dod)
+	}
+	// GOAL-FR-048 binds the distinctness rule at SAVE, not only at create —
+	// otherwise the rule is a door you walk around: create with a distinct DoD,
+	// then edit it into a duplicate.
+	//
+	// An edit may touch one list and not the other, so the comparison is
+	// against the EFFECTIVE post-edit pair: the submitted list where one was
+	// submitted, the persisted list otherwise. The persisted criteria come off
+	// the task record; the persisted DoD can only come off the paired goal
+	// record, which is the only place a task's DoD exists (ADR-086 D5).
+	//
+	// Checked BEFORE UpdateWithPrior, so a refusal writes nothing at all —
+	// matching the freeze check's own "a mixed request leaves nothing behind".
+	if criteriaProvided || dodProvided {
+		effectiveCriteria := patchCriteria
+		if !criteriaProvided {
+			if existingForDefinition == nil {
+				// A never-firing tripwire, not a fallback:
+				// frozenTaskDefinitionFields reports "criteria"/"dod" whenever
+				// either is present, so the read above has always happened by
+				// the time this branch is reachable. If that ever stops being
+				// true, the rule must FAIL LOUDLY rather than silently not run
+				// — a rule that quietly skips itself is the whole defect class
+				// this change exists to close.
+				slog.Error("rest: task patch: the Definition-of-Done distinctness check was reached "+
+					"with no task read — frozenTaskDefinitionFields and the criteria/dod block have "+
+					"drifted apart", "task_id", id)
+				jsonErr(w, http.StatusInternalServerError,
+					"could not check the Definition of Done against the acceptance criteria")
+				return
+			}
+			effectiveCriteria = existingForDefinition.Criteria
+		}
+		effectiveDoD := patchDoD
+		if !dodProvided {
+			persistedDoD, dErr := a.pairedGoalDoD(id)
+			if dErr != nil {
+				slog.Error("rest: task patch: could not read the paired goal record's "+
+					"Definition of Done for the distinctness check", "task_id", id, "error", dErr)
+				jsonErr(w, http.StatusInternalServerError,
+					"could not read the task's Definition of Done")
+				return
+			}
+			effectiveDoD = persistedDoD
+		}
+		if vErr := task.ValidateDoDDistinct(effectiveCriteria, effectiveDoD); vErr != nil {
+			jsonErr(w, http.StatusBadRequest, vErr.Error())
+			return
+		}
 	}
 	if req.MaxAttempts != nil {
 		v := *req.MaxAttempts
@@ -1573,7 +2468,7 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 			return
 		}
 		if isTaskValidationErr(err) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
+			jsonTaskValidationErr(w, err)
 			return
 		}
 		slog.Error("rest: task update failed", "id", id, "error", err)
@@ -1582,6 +2477,41 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	}
 	if req.Trigger != nil && priorForUpdate != nil {
 		priorTriggerForAudit = priorForUpdate.Trigger
+	}
+
+	// GOAL-FR-029/FR-030: updated.Criteria above already carries the new
+	// criteria (dual-write, via patch.Criteria); this is what actually
+	// persists the change onto the task's paired goal record — creating one
+	// if this is a legacy task's first-ever criteria/dod (see
+	// syncTaskGoalRecord's doc comment).
+	//
+	// This MUST fail visibly, exactly as handleTaskCreate's identical call
+	// does (review finding 8 / SF-5). It used to log at Error and fall
+	// through to a 200 carrying the task body, on the reasoning that
+	// gen.Task has no field to carry a partial-failure warning. The effect
+	// was that editing a pre-D-C task to ADD a Definition of Done — which
+	// sends `dod` with no `criteria`, the exact shape syncTaskGoalRecord
+	// refuses — answered "saved" and the next GET returned no dod at all.
+	// A caller cannot act on a log line; the two write paths disagreeing
+	// about the same condition is worse still. No wire field is needed to
+	// say "this did not save": the status code says it.
+	//
+	// The one caller-fault case (bootstrapping a record with only one of the
+	// two lists) is a 400 — the client can fix it by sending both. Every
+	// other failure is a storage fault and stays a 500.
+	if criteriaProvided || dodProvided {
+		if gErr := a.syncTaskGoalRecord(updated, criteriaProvided, patchDoD, dodProvided); gErr != nil {
+			slog.Error("rest: task update: failed to sync paired goal record",
+				"id", id, "error", gErr)
+			if errors.Is(gErr, errGoalRecordNeedsBothLists) {
+				jsonErr(w, http.StatusBadRequest, gErr.Error())
+				return
+			}
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf(
+				"task %q was updated but its Definition of Done could not be persisted: %v",
+				id, gErr))
+			return
+		}
 	}
 
 	// If the task transitioned INTO in_progress (from a different state) and has
@@ -1683,6 +2613,31 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 		}
 	}
 
+	// GOAL-FR-015/FR-027/FR-028 (review finding C1): end the paired goal
+	// record when THIS patch is what moved the task terminal.
+	//
+	// This is the writer the original three-call-site fix missed most
+	// visibly, because it is the one a user drives by hand: validateTransition
+	// permits in_progress->done and in_progress->failed, so dragging a card
+	// onto Done or Failed on the board arrives here, answered 200, and left
+	// the goal record `state: active` forever. The next run of that task then
+	// silently skipped Goal.Reactivate (activateTaskGoal's `default:` branch
+	// matches neither IsDefining nor IsTerminal), inheriting the previous
+	// run's attempts, rounds and per-criterion statuses — a DoD item marked
+	// `met` in run 1 served as `met` for work run 2 never did.
+	//
+	// priorForUpdate is UpdateWithPrior's snapshot, captured atomically under
+	// the SAME per-task lock as the write, so the "did this patch move it"
+	// test cannot be raced by a concurrent writer the way a separate pre-patch
+	// Get() could be. The hook is idempotent, so a nil prior (defensive only —
+	// UpdateWithPrior returns one on every success) falls through to the
+	// terminal test alone rather than skipping the record.
+	if task.IsTerminal(updated.Status) &&
+		(priorForUpdate == nil || !task.IsTerminal(priorForUpdate.Status)) {
+		tools.TerminateTaskGoalRecord(
+			tools.GoalStoreForTasks(a.taskStore), id, updated.Status, updated.CancelReason, updated.Result)
+	}
+
 	a.auditTask("task.update", id)
 	if req.Trigger != nil {
 		// FR-022: audit a recurrence-trigger change (legacy→RRULE or
@@ -1696,13 +2651,38 @@ func (a *restAPI) handleTaskPatch(w http.ResponseWriter, r *http.Request, id str
 	if a.agentLoop != nil {
 		a.agentLoop.NotifyTaskUpserted(updated)
 	}
-	jsonOK(w, a.toWireTask(*updated, nil))
+	a.writeWireTask(w, http.StatusOK, *updated)
 }
 
 // handleTaskDelete handles DELETE /api/v1/tasks/{id} → 204.
 func (a *restAPI) handleTaskDelete(w http.ResponseWriter, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid task ID")
+		return
+	}
+	// GOAL-FR-044/EC-4: a goal MUST NOT outlive its owner as an unreferenced
+	// record — deleting a task transitions and removes its paired goal. Every
+	// deleted task used to leave its goal record behind, owned by a task id
+	// that no longer resolves and (if the task had ever run) permanently
+	// `active`; the retention sweep was the only thing that would ever have
+	// touched it again.
+	//
+	// Runs BEFORE the task file is removed, and a failure REFUSES the whole
+	// delete (500) rather than logging and answering 204. The old ordering
+	// could only report the orphan; this one prevents it. Answering 204 while
+	// knowing a permanent orphan was just created is the same class of lie as
+	// SF-6 in this file (emitting a task with no `dod` after a goal-record read
+	// fault, indistinguishable from a task that genuinely has none) — and
+	// unlike a mid-delete failure, nothing has happened yet here, so the
+	// caller's retry is both meaningful and safe (RemoveTaskGoalRecords is
+	// idempotent). The two agent tools take the identical path; this is the one
+	// answer all three delete surfaces now give.
+	if gErr := tools.RemoveTaskGoalRecords(tools.GoalStoreForTasks(a.taskStore), id); gErr != nil {
+		slog.Error("rest: task delete: refusing to delete a task whose paired goal record could not "+
+			"be removed (GOAL-FR-044) — nothing was deleted", "task_id", id, "error", gErr)
+		jsonErr(w, http.StatusInternalServerError,
+			"could not delete task: its paired goal record could not be removed, and deleting the "+
+				"task anyway would leave that record behind as an unreferenced orphan")
 		return
 	}
 	unblocked, err := a.taskStore.Delete(id)
@@ -1799,7 +2779,7 @@ func (a *restAPI) applyTaskFieldUpdate(w http.ResponseWriter, id string, patch t
 			return
 		}
 		if isTaskValidationErr(err) {
-			jsonErr(w, http.StatusBadRequest, err.Error())
+			jsonTaskValidationErr(w, err)
 			return
 		}
 		slog.Error("rest: task "+what+" update failed", "id", id, "error", err)
@@ -1807,7 +2787,7 @@ func (a *restAPI) applyTaskFieldUpdate(w http.ResponseWriter, id string, patch t
 		return
 	}
 	a.auditTask("task.update", id)
-	jsonOK(w, a.toWireTask(*updated, nil))
+	a.writeWireTask(w, http.StatusOK, *updated)
 }
 
 // --- evidence / verdicts / stop (ADR-049 D2, Wave 2-C1 deferred REST paths) --
@@ -1855,10 +2835,19 @@ func toWireJudgeVerdict(v task.JudgeVerdict) gen.JudgeVerdict {
 	// so start from a non-nil, empty slice rather than appending onto a nil
 	// one.
 	out.PerCriterion = make([]struct {
-		CriterionId   string  `json:"criterion_id"`
-		EvidenceQuote *string `json:"evidence_quote,omitempty"`
-		Met           bool    `json:"met"`
-		Reason        string  `json:"reason"`
+		CriterionId string `json:"criterion_id"`
+		Evidence    *[]struct {
+			Part   string  `json:"part"`
+			Quote  string  `json:"quote"`
+			Source *string `json:"source,omitempty"`
+			Target *string `json:"target,omitempty"`
+		} `json:"evidence,omitempty"`
+		EvidenceQuote  *string                                     `json:"evidence_quote,omitempty"`
+		EvidenceSource *gen.JudgeVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
+		EvidenceTarget *string                                     `json:"evidence_target,omitempty"`
+		Met            bool                                        `json:"met"`
+		Provenance     *gen.JudgeVerdictPerCriterionProvenance     `json:"provenance,omitempty"`
+		Reason         string                                      `json:"reason"`
 	}, 0, len(v.PerCriterion))
 	for _, c := range v.PerCriterion {
 		// ADR-074 D7: optional + empty-safe — an empty quote (fail-closed /
@@ -1867,12 +2856,86 @@ func toWireJudgeVerdict(v task.JudgeVerdict) gen.JudgeVerdict {
 		if c.EvidenceQuote != "" {
 			quote = ptr(c.EvidenceQuote)
 		}
+		// ADR-084 D-B / JUDGE-FR-070a: Evidence, EvidenceSource,
+		// EvidenceTarget and Provenance are REPORTING-only fields — they
+		// never gate a verdict, they explain one. They DO exist on
+		// task.CriterionVerdict (pkg/task/verdict.go); a stale comment here
+		// claimed the Go fields were still to come and dropped all four,
+		// so the same verdict arrived complete over the WS frame
+		// (replay.go's toJudgeVerdictFrame maps them) and stripped over
+		// REST — meaning a page reload silently erased the judge's evidence.
+		// This mapping mirrors toJudgeVerdictFrame field-for-field; the only
+		// difference is the generated REST shape's typed enums and its
+		// POINTER-to-slice evidence field.
+		var evidenceSource *gen.JudgeVerdictPerCriterionEvidenceSource
+		if c.EvidenceSource != "" {
+			es := gen.JudgeVerdictPerCriterionEvidenceSource(c.EvidenceSource)
+			evidenceSource = &es
+		}
+		var evidenceTarget *string
+		if c.EvidenceTarget != "" {
+			evidenceTarget = ptr(c.EvidenceTarget)
+		}
+		var provenance *gen.JudgeVerdictPerCriterionProvenance
+		if c.Provenance != "" {
+			p := gen.JudgeVerdictPerCriterionProvenance(c.Provenance)
+			provenance = &p
+		}
+		var evidence *[]struct {
+			Part   string  `json:"part"`
+			Quote  string  `json:"quote"`
+			Source *string `json:"source,omitempty"`
+			Target *string `json:"target,omitempty"`
+		}
+		if len(c.Evidence) > 0 {
+			entries := make([]struct {
+				Part   string  `json:"part"`
+				Quote  string  `json:"quote"`
+				Source *string `json:"source,omitempty"`
+				Target *string `json:"target,omitempty"`
+			}, 0, len(c.Evidence))
+			for _, e := range c.Evidence {
+				var src *string
+				if e.Source != "" {
+					src = ptr(e.Source)
+				}
+				var tgt *string
+				if e.Target != "" {
+					tgt = ptr(e.Target)
+				}
+				entries = append(entries, struct {
+					Part   string  `json:"part"`
+					Quote  string  `json:"quote"`
+					Source *string `json:"source,omitempty"`
+					Target *string `json:"target,omitempty"`
+				}{Part: e.Part, Quote: e.Quote, Source: src, Target: tgt})
+			}
+			evidence = &entries
+		}
 		out.PerCriterion = append(out.PerCriterion, struct {
-			CriterionId   string  `json:"criterion_id"`
-			EvidenceQuote *string `json:"evidence_quote,omitempty"`
-			Met           bool    `json:"met"`
-			Reason        string  `json:"reason"`
-		}{CriterionId: c.CriterionID, EvidenceQuote: quote, Met: c.Met, Reason: c.Reason})
+			CriterionId string `json:"criterion_id"`
+			Evidence    *[]struct {
+				Part   string  `json:"part"`
+				Quote  string  `json:"quote"`
+				Source *string `json:"source,omitempty"`
+				Target *string `json:"target,omitempty"`
+			} `json:"evidence,omitempty"`
+			EvidenceQuote  *string                                     `json:"evidence_quote,omitempty"`
+			EvidenceSource *gen.JudgeVerdictPerCriterionEvidenceSource `json:"evidence_source,omitempty"`
+			EvidenceTarget *string                                     `json:"evidence_target,omitempty"`
+			Met            bool                                        `json:"met"`
+			Provenance     *gen.JudgeVerdictPerCriterionProvenance     `json:"provenance,omitempty"`
+			Reason         string                                      `json:"reason"`
+		}{
+			CriterionId:    c.CriterionID,
+			Evidence:       evidence,
+			EvidenceQuote:  quote,
+			EvidenceSource: evidenceSource,
+			EvidenceTarget: evidenceTarget,
+			Met:            c.Met,
+			Provenance:     provenance,
+			Reason:         c.Reason,
+		})
 	}
 	return out
 }
@@ -2045,7 +3108,7 @@ func (a *restAPI) handleTaskStop(w http.ResponseWriter, r *http.Request, id stri
 			if outcome, handled := taskStopConflictOutcome(reread); handled {
 				if outcome.alreadyStopped {
 					a.auditTask("task.stop", id)
-					jsonOK(w, a.toWireTask(*reread, nil))
+					a.writeWireTask(w, http.StatusOK, *reread)
 					return
 				}
 				jsonErr(w, http.StatusConflict, outcome.message)
@@ -2060,7 +3123,7 @@ func (a *restAPI) handleTaskStop(w http.ResponseWriter, r *http.Request, id stri
 	// do not double-emit here. Audit logging remains a REST-layer concern
 	// (the engine package writes no audit entries).
 	a.auditTask("task.stop", id)
-	jsonOK(w, a.toWireTask(*updated, nil))
+	a.writeWireTask(w, http.StatusOK, *updated)
 }
 
 // taskStopOutcome is what taskStopConflictOutcome decided for a task re-read
@@ -2162,7 +3225,7 @@ func (a *restAPI) handleTaskRestart(w http.ResponseWriter, id string) {
 	if a.agentLoop != nil {
 		a.agentLoop.NotifyTaskUpserted(updated)
 	}
-	jsonOK(w, a.toWireTask(*updated, nil))
+	a.writeWireTask(w, http.StatusOK, *updated)
 }
 
 // --- helpers ----------------------------------------------------------------
@@ -2258,6 +3321,38 @@ func isTaskValidationErr(err error) bool {
 	return errors.Is(err, task.ErrValidation)
 }
 
+// taskValidationField attributes a task-validation error to the wire
+// ErrorResponse.field a client should route it to inline, via errors.Is
+// against the specific sentinel each rule raises — never by parsing the
+// (now plain-language, human-facing) message text. Returns "" for a
+// validation error that names no single field (e.g. an illegal status
+// transition), which callers use to fall back to jsonErr's fieldless body.
+func taskValidationField(err error) string {
+	switch {
+	case errors.Is(err, task.ErrDoDNotDistinct):
+		return "dod"
+	case errors.Is(err, task.ErrBlockedByCycle),
+		errors.Is(err, task.ErrBlockedBySelfEdge),
+		errors.Is(err, task.ErrBlockedByDepthExceeded):
+		return "blocked_by"
+	default:
+		return ""
+	}
+}
+
+// jsonTaskValidationErr writes a task-validation error (already confirmed via
+// isTaskValidationErr) as a 400, attaching the wire `field` property when
+// taskValidationField recognizes the rejection's sentinel (ADR-068 body
+// shape) so the SPA can route the (plain-language) message inline without
+// parsing it.
+func jsonTaskValidationErr(w http.ResponseWriter, err error) {
+	if field := taskValidationField(err); field != "" {
+		jsonErrField(w, http.StatusBadRequest, err.Error(), field)
+		return
+	}
+	jsonErr(w, http.StatusBadRequest, err.Error())
+}
+
 // errTaskAgentLoopUnavailable is returned by validateTaskAgentID's early
 // guards when a.agentLoop or its registry is not yet available. It replaces
 // the guards' previous `return nil` (silent allow) — see the fail-closed
@@ -2309,6 +3404,18 @@ func (a *restAPI) reconcileStuckTasks() {
 		}
 		reset++
 		a.reconcileStuckTaskRuns(t.ID)
+		// GOAL-FR-015/FR-027/FR-028 (review finding C1): this reset is a real
+		// terminal write — every task this loop touches was in_progress a
+		// moment ago and is `failed` now — so its paired goal record must end
+		// with it, exactly as the judged and user-driven endings do. Left
+		// unhooked, a single crash-and-restart was enough to leave every
+		// in-flight task's goal record permanently ACTIVE, which is also the
+		// state that makes the NEXT run of each of those tasks skip
+		// Goal.Reactivate and inherit the dead run's counters and criterion
+		// statuses. CancelReason is empty here (this is not a user Stop), so
+		// the record ends `exhausted`, matching the attempts-exhausted ending.
+		tools.TerminateTaskGoalRecord(
+			tools.GoalStoreForTasks(a.taskStore), t.ID, task.StatusFailed, "", result)
 	}
 	if reset > 0 {
 		slog.Info("rest: reconcile stuck tasks: reset in_progress→failed on boot", "count", reset)

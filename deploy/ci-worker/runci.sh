@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Omnipus CI worker entrypoint for a single gate run.
 # Usage: runci.sh <git-ref> <gate>
-#   gate ∈ { all | go-build | go-vet | lint | go-test | go-race | contracts | spa | gofmt | quick | embed-build | e2e }
+#   gate ∈ { all | go-build | go-vet | lint | go-test | go-race | records-no-sqlite | contracts | spa | gofmt | quick | embed-build | e2e }
 # Requires env GIT_REMOTE (authenticated clone URL), set as a Fly secret.
 #   The `e2e` gate additionally requires OPENROUTER_API_KEY (Fly secret) — set on ci-omnipus via
 #   `fly secrets set OPENROUTER_API_KEY=<value> --app ci-omnipus`.
@@ -59,6 +59,16 @@ export HOME="${HOME:-/root}"   # non-login SSH shell has no HOME; gen-contracts.
 # check `df -h /cache` when diagnosing space here.
 export TMPDIR=/cache/tmp
 mkdir -p "$TMPDIR"
+
+# E2E SHARD STATE LIVES ON /cache, NOT /tmp.
+#
+# /tmp shares the 7.8G ROOT OVERLAY; /cache is the 40G volume. Each shard's
+# OMNIPUS_HOME is ~400MB and there are 15 shards, so the matrix needs ~6G and
+# the root overlay cannot hold it. Measured 2026-09-11: the run filled / to 96%
+# and shards began failing with "ENOSPC: no space left on device", which reads
+# as a test failure and is not one. TMPDIR above already redirects anything
+# honouring it; these paths were hardcoded and bypassed it.
+export E2E_DIR=/cache/e2e
 
 log() { printf '\n\033[1;36m=== %s ===\033[0m\n' "$*"; }
 rc=0; step() { local name="$1"; shift; log "$name"; "$@"; local e=$?; printf '\033[1m%s -> exit %d\033[0m\n' "$name" "$e"; [ $e -ne 0 ] && rc=1; return 0; }
@@ -118,46 +128,18 @@ run_lint() {
       | sh -s -- -b /cache/go/bin "$GOLANGCI_VERSION" || return 1
   fi
   CGO_ENABLED=0 golangci-lint run --build-tags="$TAGS" || return 1
-  # #615 regression guard: every pkg/tools/browser real-Chrome test must be
-  # gated by the package's own skipIfNoBrowser(t) convention.
-  #
-  # There is deliberately NO -race package-list lockstep check here any more.
-  # That invariant used to be enforced by comparing this file against
-  # .github/workflows/pr.yml with a regex scraper, which could not see the
-  # drift class most likely to produce a false verdict: this file is executed
-  # from /cache/runci.sh on the worker, while the checker read the repo copy.
-  # Both surfaces now consume scripts/race-packages.sh — which the worker gets
-  # from the checkout — so the lists cannot diverge at all. See run_gorace.
-  bash scripts/check-browser-tests-gated.sh || return 1
-  # #618 and #617 regression guards, same reasoning: pr.yml runs each in its
-  # own job, so omitting either here lets the worker report a green lint while
-  # GitHub's is red.
-  bash scripts/check-no-handwritten-wire-types.sh || return 1
-  bash scripts/check-no-tool-error-from-status.sh || return 1
-  # ADR-061 regression guard: the deleted JPEG screencast path must not return.
-  bash scripts/check-no-jpeg-screencast.sh || return 1
-  # ADR-077 regression guard: the deleted fail-closed per-agent tool-policy
-  # backfill (RepairIncompleteToolPolicyCoverage / ValidateAgentOwnToolPolicyCoverage)
-  # must not return.
-  bash scripts/check-no-fail-closed-backfill.sh || return 1
-  # E2E auth cross-talk guard: no spec may POST /api/v1/auth/login (it rotates the
-  # single-slot session_token_hash and invalidates the shared storageState cookie
-  # for every LATER spec — a failure that lands in an unrelated file). Self-test
-  # first (a guard that cannot fail is no guard).
-  bash scripts/check-e2e-login-crosstalk.sh --self-test || return 1
-  bash scripts/check-e2e-login-crosstalk.sh || return 1
-  # ADR-067 SC-008/SC-009/US-11.AC2 regression guard: no alias, migration or
-  # deprecation machinery in pkg/providers or pkg/config, no folded-away
-  # capabilities package, no bundled SPA catalog. Same reasoning as the guards
-  # above: pr.yml runs it in its own step, so omitting it here lets the worker
-  # report a green lint while GitHub's is red. Self-test first (a guard that
-  # cannot fail is no guard — docs/internal/false-green-patterns.md).
-  bash scripts/check-greenfield-providers.sh --self-test || return 1
-  bash scripts/check-greenfield-providers.sh || return 1
-  # ADR-068 §2.4 regression guard: antigravity / claude-cli / OpenAI device-code
-  # flow leave no trace. Self-check first (a guard that cannot fail is no guard).
-  bash scripts/check-no-removed-providers-selfcheck.sh || return 1
-  bash scripts/check-no-removed-providers.sh
+  # Discovery-based guard suite (ADR-084/085/086 delivery, wave G1,
+  # C-19/C-44/C-45/C-92/C-93): scripts/guards.sh discovers every
+  # scripts/check-*.sh guard, resolves and runs each one's proof-of-failure
+  # companion first, runs every guard regardless of an earlier one's outcome,
+  # and fails if any guard or companion failed, if zero guards were
+  # discovered, or if a non-exempt guard has no companion. This replaced the
+  # ten hand-listed guard invocations that used to live here — pr.yml runs
+  # the SAME script in its own job, so omitting it here would let the worker
+  # report a green lint while GitHub's is red, exactly as the guards it
+  # replaced warned. Adding a guard requires no edit here — see
+  # scripts/guards.sh's header for the full mechanism.
+  bash scripts/guards.sh || return 1
 }
 # Full suite with a flake filter: a package that fails the contended full run but passes when
 # re-run isolated (-p 1) is a timing flake → not a real failure. Fails both = real.
@@ -350,7 +332,18 @@ run_gotest() {
   # — a navigation timeout, not a broken SSRF guard. The flake filter correctly
   # refused to excuse it (it failed both runs), which is exactly why the gate
   # must not measure something GitHub does not.
-  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 2 ./... 2>&1)
+  #
+  # -timeout 1800s is REQUIRED: go test's default is 10m PER PACKAGE TEST
+  # BINARY, and pkg/agent alone (400+ test files) measured ~19min (1142s) on
+  # an UNCONTENDED machine — this gate runs it under -p 2 (two package
+  # binaries sharing CPU/disk), which is worse. Without an explicit override
+  # the 10m default fires first and panics naming whatever test happened to
+  # be in flight at that instant, not the actual slow package — observed on
+  # this worker as a false lead that sent an investigation chasing an
+  # innocent test with nothing to do with the real timing. 1800s matches
+  # run_gorace's 900s with the extra margin plain (non-race) execution
+  # doesn't strictly need but a loaded shared worker does.
+  local out; out=$(CI=true GOMAXPROCS=4 CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 2 ./... 2>&1)
   local code=$?
   echo "$out"
   # DATA RACE carve-out — checked BEFORE the exit-code short-circuit, because a
@@ -383,7 +376,13 @@ run_gotest() {
     # CI=true here too: the isolated re-run must measure the same thing as the
     # contended run, or a package that only failed because it launched a real
     # Chrome would be re-run without one and stamped a flake (or vice versa).
-    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -p 1 "$p" >/tmp/rr.log 2>&1; then
+    # -timeout 1800s: same reasoning as the contended run above — an
+    # isolated -p 1 re-run of a slow package (e.g. pkg/agent, ~19min
+    # uncontended) is just as exposed to go test's 10m-per-binary default,
+    # and this IS the exact re-run that would otherwise stamp such a package
+    # "REAL FAILURE (same test failed BOTH runs)" on a timeout artifact
+    # rather than a genuine repeat failure.
+    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 1 "$p" >/tmp/rr.log 2>&1; then
       echo "FLAKE (passed isolated): $p"
       echo "  contended-run failures (each one is a REAL BUG that has not been diagnosed yet):"
       echo "$run1" | sed 's/^/    /'
@@ -411,6 +410,58 @@ run_gotest() {
     fi
   done
   return $rc
+}
+
+# Review finding F7: pkg/gateway/rest_knowledge_find_propindexless_test.go is
+# gated `records_no_sqlite || mipsle || netbsd || (freebsd && arm)` — the
+# platform/feature carve-out for a build with no SQLite-backed properties
+# index (ADR-081 / MV-9). That tag combination appeared in NEITHER this
+# script NOR .github/workflows/pr.yml: run_gotest above (and every other gate
+# here) builds/tests with $TAGS ("goolm,stdjson") only, so this build-tag
+# branch — and the honesty contract the file exists to pin (a properties-
+# index-only request group must refuse HONESTLY, complete:false plus the
+# engine's own reason, never a silently bare empty group) — was never
+# exercised. Deleting the file's whole attachment carve-out would have left
+# every other gate in this script green too.
+#
+# -run scoped to the file's own two tests (mirrors the exact command in that
+# file's own doc comment); -p 1 because both tests flip package-level state
+# to simulate the carve-out and must not race a concurrent package binary in
+# the same run.
+#
+# Pass-floor mirrors pr.yml's Landlock step (docs/internal/false-green-
+# patterns.md: "ok with zero --- PASS lines" is a build-tag miscompile or a
+# silently-skipped suite, not a real pass) — 2 is exact (grep the test file
+# for `^func Test` before changing it).
+run_records_no_sqlite() {
+  # BRANCH-SCOPED GATE. The file this pins — pkg/gateway/rest_knowledge_find_
+  # propindexless_test.go — was added on origin/integrate/library-improvements-
+  # v0.1.1 and has never been merged to main. This runner is shared by every
+  # branch, so on any branch without that feature the gate found 0 of its 2
+  # tests and failed forever, reporting "coverage silently lost" about coverage
+  # that was never here. That is a false RED, and a false RED trains people to
+  # ignore a gate — which would eventually cost the branch that DOES have it.
+  #
+  # So: skip when the guarded file is absent, and keep the gate at full
+  # strength (pass-floor of 2, no softening) when it is present. Deliberately
+  # keyed on the FILE, not on a branch name: the day it merges, the gate arms
+  # itself with no edit here.
+  if [ ! -f pkg/gateway/rest_knowledge_find_propindexless_test.go ]; then
+    echo "records-no-sqlite: SKIPPED — pkg/gateway/rest_knowledge_find_propindexless_test.go is not on this branch (the records_no_sqlite carve-out lives on integrate/library-improvements-v0.1.1). The gate arms itself automatically when that file is present."
+    return 0
+  fi
+  ensure_spa_stub
+  local out; out=$(CGO_ENABLED=0 go test -v -tags "$TAGS,records_no_sqlite" -count=1 -timeout 300s \
+    -run '^TestVaultSearch_Propindexless' -p 1 ./pkg/gateway/ 2>&1)
+  local code=$?
+  echo "$out"
+  local passes; passes=$(echo "$out" | grep -c -- '--- PASS' || true)
+  echo "records_no_sqlite propindexless passing tests: $passes"
+  if [ "$passes" -lt 2 ]; then
+    echo "only $passes of the 2 known records_no_sqlite propindexless tests passed — coverage silently lost (or a test was added/renamed without updating this gate)" >&2
+    return 1
+  fi
+  return $code
 }
 # CLI removed-verb guard (US-11 AC4 / FR-013).
 # Scanned: docker/ .github/ deploy/ scripts/ cmd/omnipus-launcher-tui/
@@ -495,12 +546,17 @@ _e2e_build() {
   # across 5 shards — every one of them `browserType.launch: Executable doesn't exist`,
   # each "failing" in 4-6ms because no browser ever started. Infra noise indistinguishable
   # from a real regression at a glance.
-  log "e2e: install matching chromium"
+  log "e2e: install matching browsers (chromium, firefox, webkit)"
   local pw=./node_modules/.bin/playwright
   [ -x "$pw" ] || { echo "e2e: $pw missing or not executable — npm ci must run first" >&2; return 1; }
   # chromium_headless_shell is a SEPARATE download from chromium; the suite launches it
   # directly, so installing only `chromium` leaves the headless path broken.
-  "$pw" install chromium chromium-headless-shell || return 1
+  # ADR-067: the preview-isolation specs run on three engines, so all three must be
+  # present here or they fail with the same `Executable doesn't exist` signature this
+  # block already documents — 48 phantom failures in 4-6ms, indistinguishable from a
+  # real regression. Installing more than the suite needs is cheap; installing less is
+  # the failure mode above.
+  "$pw" install chromium chromium-headless-shell firefox webkit || return 1
 
   # A zero exit above is NOT proof the right browser landed — installing the WRONG
   # revision also exits 0. Verify the exact revision this runner resolves is on disk,
@@ -509,7 +565,7 @@ _e2e_build() {
     const fs = require("fs"), path = require("path");
     const root = process.env.PLAYWRIGHT_BROWSERS_PATH || "";
     const want = require("./node_modules/playwright-core/browsers.json").browsers
-      .filter(b => b.name === "chromium" || b.name === "chromium-headless-shell");
+      .filter(b => ["chromium", "chromium-headless-shell", "firefox", "webkit"].includes(b.name));
     let bad = 0;
     for (const b of want) {
       const dir = path.join(root, `${b.name.replace(/-/g, "_")}-${b.revision}`);
@@ -524,7 +580,7 @@ _e2e_build() {
 # pkill-by-pattern — a pattern can match this very shell (see deploy/ci-worker/CLAUDE.md).
 _e2e_reap_pidfiles() {
   local f pid
-  for f in /tmp/e2e-shard-*.gwpid; do
+  for f in "$E2E_DIR"/e2e-shard-*.gwpid; do
     [ -e "$f" ] || continue
     pid="$(cat "$f" 2>/dev/null || true)"
     [ -n "$pid" ] && kill "$pid" 2>/dev/null || true
@@ -540,10 +596,10 @@ _e2e_reap_pidfiles() {
 # a hard-killed run can still be reaped by _e2e_reap_pidfiles.
 _e2e_run_shard() {
   local name="$1" port="$2" key="$3" specs="$4" pwargs="$5"
-  local home="/tmp/omnipus-e2e-$name"
-  local logf="/tmp/omnipus-e2e-$name.gw.log"
-  local pidfile="/tmp/e2e-shard-$name.gwpid"
-  local authfile="/tmp/e2e-$name-auth.json"
+  local home="$E2E_DIR/omnipus-e2e-$name"
+  local logf="$E2E_DIR/omnipus-e2e-$name.gw.log"
+  local pidfile="$E2E_DIR/e2e-shard-$name.gwpid"
+  local authfile="$E2E_DIR/e2e-$name-auth.json"
   local GATEWAY_PID=
 
   # Inlined (not a nested fn) so it can see the local GATEWAY_PID under `set -u`.
@@ -593,9 +649,10 @@ EOF
 
   OMNIPUS_HOME="$home" /tmp/omnipus-ci credentials set OPENROUTER_API_KEY "$key" >/dev/null || return 1
 
-  # OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 (ADR-045): reap a genuinely leaked
-  # (finished-tab) live turn quickly without touching open-tab / transcript-seeded turns.
-  OMNIPUS_HOME="$home" OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 \
+  # ADR-082 D1 deleted the ADR-045 orphan-foreground-turn watchdog in full —
+  # the old OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS=20 override no longer
+  # exists (a turn now runs to completion regardless of UI connectivity).
+  OMNIPUS_HOME="$home" \
     /tmp/omnipus-ci start --allow-empty > "$logf" 2>&1 &
   GATEWAY_PID=$!
   echo "$GATEWAY_PID" > "$pidfile"
@@ -631,10 +688,32 @@ EOF
   # next to the manifest) is per-shard too — otherwise concurrent shards, sharing one repo
   # CWD, would race on test-results/soft-skips.json. $pwargs (sharded only) adds --output +
   # --reporter=list so concurrent shards don't collide on test-results/ and playwright-report/.
+  # A VIRTUAL DISPLAY, because one shard runs a REAL headed browser.
+  #
+  # playwright.config.ts's `preview-headed` project sets `headless: false`
+  # deliberately — ADR-067 tests 57/58 measure what a real browser's own PDF
+  # viewer does, which headless cannot answer. This box has no X display, so
+  # without a virtual one every headed test dies inside browserType.launch.
+  #
+  # THAT FAILURE IS INDISTINGUISHABLE FROM A CODE REGRESSION AT A GLANCE, and
+  # it is the third trap in this directory's CLAUDE.md: every test fails in
+  # 2-4ms, across specs that share nothing, because no browser ever started.
+  # Observed 2026-09-11: 7 failed / 1 passed on preview-headed while the other
+  # 14 shards were green, on specs the branch had not touched.
+  #
+  # Xvfb is already installed in the image for exactly this reason and was
+  # simply never wired up. run_e2e starts ONE Xvfb and exports DISPLAY before
+  # any shard launches, so every shard inherits it: headless Chromium ignores
+  # DISPLAY and pays nothing, and a single path means a headed spec added later
+  # cannot land in a shard that silently lacks a display.
+  #
+  # NOT `xvfb-run`, which is also installed: it shells out to `xauth`, which is
+  # NOT in this image, and fails with "xauth command not found" (measured).
+  # Xvfb itself has no such dependency.
   OMNIPUS_HOME="$home" \
   OMNIPUS_URL="http://localhost:$port" \
   OMNIPUS_AUTH_FILE="$authfile" \
-  OMNIPUS_SKIP_MANIFEST_PATH="/tmp/e2e-$name-results/skip-manifest.json" \
+  OMNIPUS_SKIP_MANIFEST_PATH="$E2E_DIR/e2e-$name-results/skip-manifest.json" \
   OPENROUTER_API_KEY="$key" \
   OPENROUTER_API_KEY_CI="$key" \
     npx playwright test $specs $pwargs
@@ -645,6 +724,37 @@ run_e2e() {
   KEY_A="${OPENROUTER_API_KEY:?e2e gate requires OPENROUTER_API_KEY Fly secret}"
   KEY_B="${OPENROUTER_API_KEY_B:-$KEY_A}"
   KEY_C="${OPENROUTER_API_KEY_C:-$KEY_A}"
+
+  # WIPE THE SHARD STATE DIR FIRST. Leftovers from a previous run are not
+  # harmless: a stale /tmp/e2e-shard-<name>.log is indistinguishable from this
+  # run's own, and on 2026-09-11 two-day-old logs were twice read as this run's
+  # failures (three CSP failures that did not exist, then a headed-shard result
+  # from a different commit). Starting empty makes "no log" mean "did not run"
+  # instead of "ran two days ago".
+  rm -rf "$E2E_DIR"
+  mkdir -p "$E2E_DIR"
+
+  # One virtual display for every shard (see _e2e_run_shard's comment for why).
+  # Reaped by exact pid on the way out; never pkill-by-pattern on this box.
+  if [ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
+    Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+    _XVFB_PID=$!
+    export DISPLAY=:99
+    # Give the server a moment, then confirm it is actually up rather than
+    # assuming: a dead Xvfb and no Xvfb look identical to a launching browser.
+    sleep 2
+    if kill -0 "$_XVFB_PID" 2>/dev/null; then
+      log "e2e: virtual display :99 up (pid $_XVFB_PID)"
+    else
+      echo "WARNING: Xvfb died on startup — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect. See /tmp/xvfb.log" >&2
+      unset DISPLAY _XVFB_PID
+    fi
+  elif [ -z "${DISPLAY:-}" ]; then
+    echo "WARNING: no Xvfb on this box — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect" >&2
+  fi
+  # Reap by EXACT pid. A bare `return` inside a RETURN trap is not needed and
+  # muddies the function's own exit status, so the trap only kills.
+  trap '[ -n "${_XVFB_PID:-}" ] && kill "$_XVFB_PID" 2>/dev/null || true' RETURN
 
   _e2e_build || return 1
 
@@ -714,8 +824,8 @@ run_e2e() {
       # flaked ui specs at MAX_PARALLEL=2 when they overlapped a CPU-heavy shard).
       while [ "$running" -gt 0 ]; do _e2e_reap_one; done
       log "e2e: launch shard $group (port $port, key slot $slot; SOLO)"
-      ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=/tmp/e2e-$group-results --reporter=list" ) \
-        > "/tmp/e2e-shard-$group.log" 2>&1
+      ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=$E2E_DIR/e2e-$group-results --reporter=list" ) \
+        > "$E2E_DIR/e2e-shard-$group.log" 2>&1
       src=$?
       NAMES+=("$group")
       if [ "$src" -eq 0 ]; then
@@ -729,8 +839,8 @@ run_e2e() {
     # Concurrency gate: block until a slot frees up.
     while [ "$running" -ge "$MAX_PARALLEL" ]; do _e2e_reap_one; done
     log "e2e: launch shard $group (port $port, key slot $slot; $((running + 1))/$MAX_PARALLEL in flight)"
-    ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=/tmp/e2e-$group-results --reporter=list" ) \
-      > "/tmp/e2e-shard-$group.log" 2>&1 &
+    ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=$E2E_DIR/e2e-$group-results --reporter=list" ) \
+      > "$E2E_DIR/e2e-shard-$group.log" 2>&1 &
     PID2NAME[$!]="$group"; NAMES+=("$group"); running=$((running + 1))
   done < <(scripts/e2e-shards.sh list 2>/dev/null)
 
@@ -746,7 +856,7 @@ run_e2e() {
     local n
     for n in "${FAILED[@]}"; do
       log "e2e: FAILED shard '$n' — output"
-      cat "/tmp/e2e-shard-$n.log" 2>/dev/null || echo "(no log for $n)"
+      cat "$E2E_DIR/e2e-shard-$n.log" 2>/dev/null || echo "(no log for $n)"
     done
     echo "e2e: FAILED shards: ${FAILED[*]}" >&2
   fi
@@ -760,6 +870,7 @@ case "$GATE" in
   lint)            step golangci-lint run_lint ;;
   go-test)         step go-build run_gobuild; step go-test run_gotest ;;
   go-race)         step go-race run_gorace ;;
+  records-no-sqlite) step records-no-sqlite run_records_no_sqlite ;;
   contracts)       step npm-ci run_npm; step verify-contracts run_contracts ;;
   spa)             step npm-ci run_npm; step typecheck run_typecheck; step vitest run_vitest ;;
   quick)           step gofmt run_gofmt; step go-build run_gobuild ;;
@@ -778,6 +889,7 @@ case "$GATE" in
     step vitest run_vitest
     step go-test run_gotest
     step go-race run_gorace
+    step records-no-sqlite run_records_no_sqlite
     step e2e run_e2e
     ;;
   *) echo "unknown gate: $GATE"; exit 64 ;;

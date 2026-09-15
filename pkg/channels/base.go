@@ -318,6 +318,14 @@ func (c *BaseChannel) HandleMessage(
 		// calls to publish a real platform sender's inbound message — the
 		// "channel adapter inbound (real human Sender)" origination point.
 		UserInitiated: true,
+		// OperatorPrompt (ADR-085 BROWSER-FR-029): the third of the three
+		// sites where the operator composed this message on THIS session —
+		// see pkg/gateway/websocket.go's matching field for the full
+		// contract. A platform sender IS the operator for this purpose
+		// (there is no separate "operator" identity on a channel); the
+		// release is then audited with Sender.CanonicalID as the actor
+		// (FR-030), never a gateway user id.
+		OperatorPrompt: true,
 	}
 
 	// Auto-trigger typing indicator, message reaction, and placeholder before publishing.

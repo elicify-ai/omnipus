@@ -23,7 +23,7 @@ import (
 //   - GET /api/v1/security/rate-limits — disabled state (no config)
 //   - GET /api/v1/security/rate-limits — enabled state (config set)
 //   - PUT /api/v1/security/rate-limits — rejects retired daily_cost_cap_usd
-//     field with HTTP 400 (ADR-053 D12 — token budget is the sole brake).
+//     field with HTTP 400 (ADR-053 D12).
 //   - Non-GET methods return 405
 
 // TestHandleRateLimits_Disabled returns enabled=false when no rate-limit
@@ -87,8 +87,8 @@ func TestHandleRateLimits_Enabled(t *testing.T) {
 
 // TestHandleRateLimits_RejectsRetiredUSDField pins the wire-shape invariant
 // for issue #540: PUT /api/v1/security/rate-limits must reject the retired
-// daily_cost_cap_usd field with HTTP 400 (token budget is the sole brake
-// per ADR-053 D12 — operators get a clear error, not a silent no-op).
+// daily_cost_cap_usd field with HTTP 400 (retired per ADR-053 D12 —
+// operators get a clear error, not a silent no-op).
 func TestHandleRateLimits_RejectsRetiredUSDField(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 

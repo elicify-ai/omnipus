@@ -179,8 +179,8 @@ properties:
     type: string
     description: >
       Set only when `state == failed`. An open string, not a closed enum
-      — the spec enumerates this non-exhaustively ("e.g. `interrupted`,
-      `budget_exhausted`, `judge_rounds_exhausted`"), unlike
+      — the spec enumerates this non-exhaustively (e.g. `interrupted`,
+      `judge_rounds_exhausted`), unlike
       `Plan.failed_reason`'s closed enum, so this field is left
       open rather than guessing at a complete set (flagged for review).
     example: "interrupted"

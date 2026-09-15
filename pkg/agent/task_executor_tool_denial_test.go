@@ -18,7 +18,7 @@
 // level. This file's distinct job is the ONE additional hop those tests do
 // not exercise: a REAL task.Store-backed TaskExecutor dispatching a REAL
 // task through ExecuteTask -> runTask -> processTaskDirect -> runAgentLoop
-// -> abortTurn -> finishTaskRun -> failTask, proving the same abort reason
+// -> abortTurn -> finishRunTurn -> consumeTaskAttempt, proving the same abort reason
 // survives that whole chain into the PERSISTED Task.Result a human or the UI
 // actually reads — not just the in-memory error returned by ProcessDirect.
 //
@@ -81,7 +81,7 @@ func (d *deniedBashStub) Execute(ctx context.Context, args map[string]any) *tool
 	return &tools.ToolResult{ForLLM: "executed — this should never happen", IsError: false}
 }
 
-func TestFinishTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgent(t *testing.T) {
+func TestTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgent(t *testing.T) {
 	tmpHome := t.TempDir()
 	workspaceDir := filepath.Join(tmpHome, "workspace")
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
@@ -138,7 +138,18 @@ func TestFinishTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgen
 
 	stub := &deniedBashStub{}
 	al.RegisterTool(stub)
-	setAskPolicyForAllAgents(t, al, toolName, config.ToolPolicyAsk)
+	// StoreToolPolicy replaces an agent's whole policy snapshot, so goal_claim
+	// is stated alongside the ask entry: production seeds it "allow" for every
+	// agent, and a task whose worker is denied goal_claim now ends before its
+	// first turn (founder decision 2026-09-15) — which would never reach the
+	// denial budget this test is about.
+	for _, agentID := range al.GetRegistry().ListAgentIDs() {
+		if agentInst, ok := al.GetRegistry().GetAgent(agentID); ok {
+			agentInst.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{
+				toolName: config.ToolPolicyAsk, tools.GoalClaimToolName: config.ToolPolicyAllow,
+			}})
+		}
+	}
 
 	approver := &countingDenyApprover{reason: denialReason}
 	al.SetToolApprover(approver)
@@ -153,6 +164,10 @@ func TestFinishTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgen
 		dispatchSema: newDispatchSemaphore(10),
 	}
 
+	// A turn aborted by the denial budget breaks the run, which is one failed
+	// task attempt (founder decision 2026-09-14); a limit of 1 ends the task on
+	// it rather than restarting a run that would be denied the same way.
+	oneAttempt := 1
 	tk := &task.Task{
 		Title:       "adr-058-bdd-08-denial-budget",
 		Prompt:      "please run bash repeatedly",
@@ -162,6 +177,7 @@ func TestFinishTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgen
 		Priority:    3,
 		WorkspaceID: "default",
 		Status:      task.StatusNext,
+		MaxAttempts: &oneAttempt,
 	}
 	require.NoError(t, store.Create(tk))
 
@@ -170,8 +186,8 @@ func TestFinishTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgen
 			"later, inside the asynchronous runTask goroutine")
 
 	// runTask executes asynchronously (ExecuteTask only claims + launches the
-	// goroutine); poll the store for the terminal write finishTaskRun/failTask
-	// produces.
+	// goroutine); poll the store for the terminal write the run loop produces
+	// once the failed run has used the task's one attempt.
 	var final *task.Task
 	require.Eventually(t, func() bool {
 		got, err := store.Get(tk.ID)
@@ -187,8 +203,8 @@ func TestFinishTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgen
 	assert.Equal(t, task.StatusFailed, final.Status)
 
 	// --- AC-04's stub-resistance assertion (spec §8.2): the exact,
-	// hop-by-hop chain (§3.8) — task_executor.finishTaskRun's "execution
-	// error: %v" wrapper around abortTurn's "turn aborted during %s: %s"
+	// hop-by-hop chain (§3.8) — the task run loop's "execution error: %v"
+	// wrapper around abortTurn's "turn aborted during %s: %s"
 	// wrapper around toolDenialAbortReason's own pinned format. This is
 	// computed from the SAME production function the loop calls
 	// (toolDenialAbortReason), not hand-duplicated, so it tracks the real
@@ -200,8 +216,9 @@ func TestFinishTaskRun_ToolDenialBudgetAbort_TaskLandsFailedNamingToolReasonAgen
 	// in the pinned shape.
 	wantReason := toolDenialAbortReason(toolName, denialReason, agentID, turnDenialBudget)
 	wantResult := fmt.Sprintf("execution error: turn aborted during tool_denial_budget: %s", wantReason)
-	assert.Equal(t, wantResult, final.Result,
-		"Task.Result must be the EXACT hop-by-hop chain from turn abort to persisted task result")
+	assert.Contains(t, final.Result, wantResult,
+		"Task.Result must carry the EXACT hop-by-hop chain from turn abort to persisted task result")
+	assert.Equal(t, 1, final.AttemptCount, "the aborted run is exactly one failed task attempt")
 
 	// Individually, for a clearer failure message if the exact-match above
 	// ever regresses for an unrelated formatting reason: the three distinct

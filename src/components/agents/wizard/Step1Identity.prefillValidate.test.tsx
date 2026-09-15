@@ -257,9 +257,32 @@ describe('Step1Identity / ExecutorInputs — FR-019 (never trap Create)', () => 
 
     fireEvent.change(screen.getByTestId('wizard-cli-path'), { target: { value: '/nope/claude' } })
     fireEvent.blur(screen.getByTestId('wizard-cli-path'))
-    await waitFor(() => {
-      expect(screen.getByTestId('wizard-cli-path-status')).toHaveTextContent(/no cli found/i)
-    })
+    // ESTABLISH the block (setup, not the thing under test) on the same time
+    // budget every sibling test in this file already uses for the identical
+    // wait. `useCliPathValidation` debounces the validate call by 400ms of
+    // REAL time (DEBOUNCE_MS), so waiting straight on the rendered hint under
+    // RTL's 1000ms default left ~600ms of slack for the timer to fire, the
+    // promise to settle and React to re-render. Every other test that crosses
+    // this debounce gates on the call landing first with an explicit 2000ms
+    // (lines 146/163/176/201/227); this one was the sole exception, and it is
+    // the one that flaked on the loaded CI worker. Evidence it is timing and
+    // not a defect: `src/` is byte-identical between CI run 30228afa (vitest
+    // 490/490 green, this test 549ms) and run 004e1aa7 (this test the only
+    // failure) — only Go files changed in between, so neither the component
+    // nor this test moved.
+    // The GUARANTEE is untouched: the block still has to be real and visible
+    // before the edit, and the "block cleared" wait at the end of this test
+    // keeps its own budget — a block that never clears still fails there.
+    await waitFor(
+      () => expect(fetchCliValidate).toHaveBeenCalledWith('claude-code', '/nope/claude', expect.anything()),
+      { timeout: 2000 },
+    )
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('wizard-cli-path-status')).toHaveTextContent(/no cli found/i)
+      },
+      { timeout: 2000 },
+    )
 
     // Editing resets the verdict to idle — the stale block must not persist.
     fireEvent.change(screen.getByTestId('wizard-cli-path'), { target: { value: '/usr/local/bin/claude' } })

@@ -218,41 +218,96 @@ properties:
     minimum: 0
     readOnly: true
     description: >
-      ADR-053 §Contract Surface — "Budget / bounds". Per-task adjudication
-      rounds consumed so far, mirroring `Plan.judge_rounds` at task/goal
-      scope (R§8.9 — one round = one adjudication, claim-triggered or
-      idle-settled). Distinct from `attempt_count`, which tracks retry
-      attempts, not adjudications.
+      Goal tries used by the task's current run (or by its last run, once the
+      task has ended), read from the task's goal record: one try is one judged
+      claim, or one turn that ended without a usable claim (founder decision
+      2026-09-14, issue #710). It starts again from zero when the task
+      restarts in a fresh run. The UI renders "try N of M" against
+      `goal_max_rounds`. Distinct from `attempt_count`, which counts failed
+      runs. Absent when the task has no goal record or no try has been used.
     example: 0
+  goal_max_rounds:
+    type: integer
+    minimum: 1
+    readOnly: true
+    description: >
+      Server-derived, read-only: the tries-per-goal limit the task's current
+      (or last) run works under — the Settings → Performance goal try limit
+      as it was snapshotted onto the task's goal record when that run started.
+      Absent when the task has no goal record. Not the task attempt limit,
+      which is `effective_max_attempts`.
+    example: 20
   criteria:
     type: array
     items:
       $ref: ./AcceptanceCriterion.yaml
     description: >
-      Acceptance criteria (Definition of Done) for this task (ADR-049
-      D2/D5/FR-3). Agent-created tasks require at least one; UI/human
-      creation is soft (falls back to judging title+description when
-      empty). Immutable once a recurring Trigger run has started (per-run
-      snapshot).
+      Acceptance criteria for this task (ADR-049 D2/D5/FR-3). GOAL-FR-021/
+      D-C (2026-09-11, operator-ratified): creating OR editing a task
+      through the API or the interface now requires at least one
+      criterion AND at least one `dod` item (see `dod` below) — the prior
+      "UI/human creation is soft, falls back to judging title+description"
+      behaviour is RETIRED for every NEW creation/edit going forward
+      (GOAL-FR-047, enforced at the API with a 400, not schema-only).
+      GOAL-FR-023: a task created before this rule with no criteria
+      continues to run and continues to be judged by the ephemeral
+      soft-tier criterion — the rule binds at creation and at edit only,
+      never retroactively. Immutable once a recurring Trigger run has
+      started (per-run snapshot). ADR-086 D5: this list itself now
+      REFERENCES the task's goal record rather than being a second
+      persisted list (GOAL-FR-029) — an implementation detail this wire
+      shape is unaffected by.
+  dod:
+    type: array
+    items:
+      $ref: ./AcceptanceCriterion.yaml
+    description: >
+      GOAL-FR-003/FR-048 — this task's Definition of Done, DISTINCT from
+      `criteria` (mirrors `Goal.dod`/`Plan.dod`): generic standing quality
+      gates vs. outcome-specific checks, judged identically but never
+      mixed into `criteria`. NEW field (ADR-086): `pkg/task/task.go` had
+      no DoD field before this delivery — the list lives on the task's
+      goal record. GOAL-FR-021/D-C: mandatory (>= 1 item) at creation and
+      at edit, enforced with a 400 at the API, same as `criteria`.
+      GOAL-FR-048: opening a pre-existing task with no `dod` MUST NOT
+      block reading it; saving an edit enforces the rule.
   attempt_count:
     type: integer
     minimum: 0
     readOnly: true
     description: >
-      Current run's attempt index within its goal loop (ADR-049 D7).
-      Read-only, server-set; the UI renders "attempt N/M" against
-      `max_attempts` (or the inherited `PlanningConfig.task_max_attempts`
-      default).
+      Task attempts already used: how many runs of this task have failed as a
+      whole and been started over (ADR-049 D7). A run fails as a whole when
+      its goal ends not met after all its tries, when the run breaks, or
+      after two reasoning-only tries in a row. Read-only, server-set; the UI
+      renders "attempt N of M" against `effective_max_attempts`. Separate
+      from the goal's tries within a run (`judge_rounds`/`goal_max_rounds`).
     example: 1
   max_attempts:
     type: integer
     minimum: 1
     nullable: true
     description: >
-      Per-task override of the attempt ceiling before the goal loop wakes
-      the owner (ADR-049 D7/FR-9). Null/absent inherits the global
-      `PlanningConfig.task_max_attempts` default (3).
+      Per-task override of the task attempt limit — how many fresh runs this
+      task gets before it ends Failed (ADR-049 D7/FR-9, R-03). Null/absent
+      inherits the global `planning.task_max_attempts` config value (default
+      3). This is not the goal try limit (`PerformanceSettings.goal_max_rounds`):
+      goal tries and task attempts are separate limits (founder decision
+      2026-09-14, issue #710).
     example: 5
+  effective_max_attempts:
+    type: integer
+    minimum: 1
+    readOnly: true
+    description: >
+      Server-derived, read-only: the task attempt limit this task runs under —
+      the task ends Failed once this many runs have failed as a whole, and it
+      is the "M" in the UI's "attempt N of M". Resolved by the same function
+      the task executor enforces (`pkg/tools/task_attempt_budget.go::
+      EffectiveTaskMaxAttempts`): the per-task `max_attempts` when set,
+      otherwise the global `planning.task_max_attempts` config value
+      (default 3). Not writable. Always present in responses.
+    example: 3
   trigger:
     $ref: ./TaskTrigger.yaml
   due:
@@ -338,6 +393,58 @@ properties:
       RFC 3339 timestamp when the task reached `done` or `failed`. Absent until
       then.
     example: "2026-06-20T10:05:30Z"
+  last_activity_at:
+    type: string
+    format: date-time
+    readOnly: true
+    description: >
+      Read-time only, never stored: the most recent moment this task's run
+      showed any sign of work, so a long run can be told apart from a stuck one
+      without a fixed time limit (founder decision 2026-09-14). The later of
+      (a) the live progress stamp of the task's running turn or any turn it
+      delegated to — which moves on every streamed reasoning or tool-call
+      argument delta — and (b) the last write to the task session's transcript
+      (a tool result, an assistant message). Present only while `status` is
+      `in_progress` and the run has produced such evidence; absent otherwise.
+      Nothing is written to produce it (it is not a heartbeat). Unrelated to
+      `Plan.last_activity_at`, which is a plan's idle-expiry clock.
+    example: "2026-06-20T10:04:55Z"
+  assignee_warning:
+    type: object
+    readOnly: true
+    required:
+      - message
+      - field
+    additionalProperties: false
+    properties:
+      message:
+        type: string
+        maxLength: 2000
+        description: >
+          Plain-language reason the assigned agent cannot finish this task,
+          naming the fix.
+        example: "Worker isn't allowed to report tasks as done. Allow 'goal_claim' for it in Agents → Tools, or assign another agent."
+      field:
+        type: string
+        enum:
+          - agent_id
+        description: >
+          The task field the warning is about, so a form can show it next to
+          that control.
+        example: "agent_id"
+    description: >
+      Read-time only, never stored (founder decision 2026-09-15): present when
+      the task is not done or failed and its assigned agent cannot finish it as
+      configured — a native agent whose tool policy denies `goal_claim` can
+      never report the task as done, and a task with a `check` criterion or
+      Definition of Done item needs the agent's `bash` policy to be `allow`,
+      because the Judge runs checks with nobody there to approve them. Saving
+      such a task is not refused on this API: an operator may assign first and
+      fix the agent's permissions afterwards (ADR-049 D2 rule 5 — agent tool
+      paths reject, the UI warns). A run of the task in this state ends
+      `failed` at once with this same message, using no attempt. Absent when
+      the task has no agent, is done or failed, or nothing knowable stops the
+      agent.
   rollup:
     type: array
     items:

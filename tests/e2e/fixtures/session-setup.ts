@@ -42,6 +42,13 @@ export interface TranscriptEntry {
   timestamp: string
   agent_id?: string
   tool_calls?: TranscriptToolCall[]
+  /**
+   * ADR-087 D2 — set on the last assistant entry of an incomplete turn.
+   * Optional, additive fields (mirror the wire `Message`/`ReplayMessageFrame`
+   * schema) so existing seeded fixtures are unaffected.
+   */
+  truncated?: boolean
+  truncation_reason?: 'cancelled' | 'max_output_tokens'
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

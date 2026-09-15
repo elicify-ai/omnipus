@@ -39,7 +39,7 @@ func uploadFixture(t *testing.T, lib *library.Library, filename string, data []b
 	// Use the package-private UploadFixture helper (Wave 1 TD-m1): the
 	// test_fixture source value is NOT a production wire value and has
 	// been dropped from contracts/components/schemas/MediaLibraryEntry.yaml.
-	// The public Upload path now only accepts gen.UserUpload (production).
+	// The public Upload path now only accepts gen.MediaLibraryEntrySourceUserUpload (production).
 	ref, entry, err := lib.UploadFixture(filename, bytes.NewReader(data))
 	if err != nil {
 		t.Fatalf("UploadFixture(%q) error = %v", filename, err)
@@ -126,8 +126,8 @@ func TestWorkspaceLibrary_Store_AnyFormat_Succeeds(t *testing.T) {
 	// projection default), never nil and never "stranded" — that value is
 	// reserved for entries the stranded registry actually knows about.
 	for _, entry := range listed {
-		if entry.Status == nil || *entry.Status != gen.Available {
-			t.Errorf("List() entry %q Status = %v, want %q", entry.Filename, entry.Status, gen.Available)
+		if entry.Status == nil || *entry.Status != gen.MediaLibraryEntryStatusAvailable {
+			t.Errorf("List() entry %q Status = %v, want %q", entry.Filename, entry.Status, gen.MediaLibraryEntryStatusAvailable)
 		}
 	}
 	if got := lib.StrandedCount(); got != 0 {
@@ -406,7 +406,7 @@ func TestWorkspaceLibrary_ManifestRefcount_DrivesDeferredGC(t *testing.T) {
 func TestWorkspaceLibrary_RejectsToolOutputPersistence(t *testing.T) {
 	now := time.Date(2026, 7, 23, 15, 0, 0, 0, time.UTC)
 	lib, _, _ := newWorkspaceLibrary(t, &now)
-	_, _, err := lib.Upload("screenshot.png", gen.ToolOutput, bytes.NewReader([]byte("agent output")))
+	_, _, err := lib.Upload("screenshot.png", gen.MediaLibraryEntrySourceToolOutput, bytes.NewReader([]byte("agent output")))
 	if !errors.Is(err, library.ErrSourceNotAllowed) {
 		t.Fatalf("Upload(tool_output) error = %v, want ErrSourceNotAllowed", err)
 	}
@@ -1210,9 +1210,9 @@ func TestWorkspaceLibrary_Delete_CompoundRollbackFailure_ReportsErrEntryStranded
 	if got := len(listed); got != 1 {
 		t.Fatalf("List() length = %d, want 1 (the stranded entry is still cataloged)", got)
 	}
-	if listed[0].Status == nil || *listed[0].Status != gen.Stranded {
+	if listed[0].Status == nil || *listed[0].Status != gen.MediaLibraryEntryStatusStranded {
 		t.Fatalf("List()[0].Status = %v, want %q (the stranded entry must be annotated, not shown as healthy)",
-			listed[0].Status, gen.Stranded)
+			listed[0].Status, gen.MediaLibraryEntryStatusStranded)
 	}
 
 	// StrandedCount (review FIX 3) must reflect this same live state.

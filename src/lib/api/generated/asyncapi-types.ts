@@ -33,6 +33,7 @@ export type WsFrameType =
   | "media"
   | "agent_switched"
   | "tool_approval_required"
+  | "tool_approval_resolved"
   | "session_state"
   | "system_overload"
   | "replay_warning"
@@ -64,7 +65,9 @@ export type WsFrameType =
   | "plan_status"
   | "judge_verdict"
   | "ask_user_question"
-  | "ask_user_answer";
+  | "ask_user_answer"
+  | "browser_handover_notice"
+  | "goal_outcome";
 
 // ── Frame payload types ─────────────────────────────────────────────────────
 
@@ -138,6 +141,8 @@ export interface DoneStats {
   truncated_result_count?: number;
   replay_error?: boolean;
   turn_failed?: boolean;
+  truncated?: boolean;
+  truncation_reason?: "cancelled" | "max_output_tokens";
   [key: string]: unknown;
 }
 
@@ -149,14 +154,14 @@ export interface DoneFrame {
 }
 
 export interface LLMError {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "context_unrecoverable" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "context_unrecoverable" | "context_window_unknown" | "unknown";
   message: string;
   retryable: boolean;
   detail?: string;
 }
 
 export interface LLMErrorReplay {
-  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "content_policy" | "context_too_long" | "tool_args" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "context_unrecoverable" | "context_window_unknown" | "unknown";
+  code: "media_unsupported" | "provider_rejected" | "request_too_large" | "provider_auth_failed" | "rate_limited" | "network" | "provider_stalled" | "content_policy" | "context_too_long" | "tool_args" | "tool_call_truncated" | "schema" | "agent_not_configured" | "workspace_unavailable" | "model_unavailable" | "needs_provider" | "model_unassigned" | "turn_canceled" | "turn_timed_out" | "context_unrecoverable" | "context_window_unknown" | "unknown";
   message: string;
   retryable: boolean;
 }
@@ -338,6 +343,9 @@ export interface ReplayMessageFrame {
   agent_id?: string;
   model?: string;
   turn_id?: string;
+  producing_session_id?: string;
+  truncated?: boolean;
+  truncation_reason?: "cancelled" | "max_output_tokens";
 }
 
 export interface ReplayErrorFrame {
@@ -410,6 +418,14 @@ export interface ToolApprovalRequiredFrame {
   turn_id: string;
   expires_in_ms: number;
   producing_session_id?: string;
+  workspace_id?: string;
+}
+
+export interface ToolApprovalResolvedFrame {
+  type: "tool_approval_resolved";
+  approval_id: string;
+  state: "approved" | "denied_user" | "denied_timeout" | "denied_cancel" | "denied_restart" | "denied_batch_short_circuit";
+  session_id?: string;
 }
 
 export interface AskUserQuestionCard {
@@ -465,6 +481,13 @@ export interface SessionStatePendingApproval {
   tool_name: string;
   agent_id: string;
   expires_in_ms: number;
+  workspace_id?: string;
+}
+
+export interface SessionStateActiveTurn {
+  turn_id: string;
+  agent_id: string;
+  started_at: string;
 }
 
 export interface SessionStateFrame {
@@ -472,6 +495,8 @@ export interface SessionStateFrame {
   user_id: string;
   pending_approvals: Array<SessionStatePendingApproval>;
   pending_asks?: Array<AskUserQuestionCard>;
+  session_id?: string;
+  active_turn?: SessionStateActiveTurn;
   emitted_at: string;
 }
 
@@ -697,7 +722,7 @@ export interface GoalStatusFrame {
   latest_reason: string;
   active_loops: number;
   cap: number;
-  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared";
+  state: "queued" | "active" | "waiting_on_user" | "judge_unavailable" | "re-planning" | "judging" | "done" | "failed" | "cleared" | "judge_refused_god_mode" | "judge_cas_loss" | "blocked" | "claim_overturned" | "expired";
   producing_session_id?: string;
   criteria?: Array<{
     id?: string;
@@ -720,6 +745,7 @@ export interface GoalStatusFrame {
       id: string;
     };
     status: "pending" | "met" | "unmet";
+    clause_count?: number;
   }>;
   dod?: Array<{
     id?: string;
@@ -742,6 +768,7 @@ export interface GoalStatusFrame {
       id: string;
     };
     status: "pending" | "met" | "unmet";
+    clause_count?: number;
   }>;
 }
 
@@ -778,10 +805,45 @@ export interface JudgeVerdictFrame {
     met: boolean;
     reason: string;
     evidence_quote?: string;
+    evidence_source?: "diff" | "transcript" | "machine_check" | "file_read" | "session_read";
+    evidence_target?: string;
+    provenance?: "judge_read" | "deterministic_check" | "diff" | "transcript" | "session_read" | "none";
+    evidence?: Array<{
+      part: string;
+      source?: string;
+      target?: string;
+      quote: string;
+    }>;
   }>;
   model: string;
   judged_at: string;
   judge_agent_id: string;
+  session_id?: string;
+}
+
+export interface BrowserHandoverNoticeFrame {
+  type: "browser_handover_notice";
+  session_id: string;
+  message_id: string;
+  text: string;
+}
+
+export interface GoalOutcomeFrameOutcome {
+  goal_id: string;
+  goal_text: string;
+  ending: "met" | "rounds_exhausted" | "stopped_by_user" | "other";
+  rounds_used: number;
+  max_rounds: number;
+  judge_reason?: string;
+  criteria_total?: number;
+  ended_at: string;
+}
+
+export interface GoalOutcomeFrame {
+  type: "goal_outcome";
+  session_id: string;
+  message_id: string;
+  outcome: GoalOutcomeFrameOutcome;
 }
 
 export interface ErrorPayload {
@@ -821,6 +883,7 @@ export type WsFrame =
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
+  | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
   | AskUserAnswerFrame
   | SessionStateFrame
@@ -852,7 +915,9 @@ export type WsFrame =
   | GoalStatusFrame
   | LoopStatusFrame
   | PlanStatusFrame
-  | JudgeVerdictFrame;
+  | JudgeVerdictFrame
+  | BrowserHandoverNoticeFrame
+  | GoalOutcomeFrame;
 
 // ── Client → server frames ──────────────────────────────────────────────────
 
@@ -900,6 +965,7 @@ export type ServerFrame =
   | MediaFrame
   | AgentSwitchedFrame
   | ToolApprovalRequiredFrame
+  | ToolApprovalResolvedFrame
   | AskUserQuestionFrame
   | SessionStateFrame
   | SystemOverloadFrame
@@ -923,4 +989,6 @@ export type ServerFrame =
   | GoalStatusFrame
   | LoopStatusFrame
   | PlanStatusFrame
-  | JudgeVerdictFrame;
+  | JudgeVerdictFrame
+  | BrowserHandoverNoticeFrame
+  | GoalOutcomeFrame;

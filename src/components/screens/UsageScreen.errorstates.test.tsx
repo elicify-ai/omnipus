@@ -37,11 +37,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchTokenStats: vi.fn(),
     fetchSessions: vi.fn(),
-    fetchTokenBudgetStatus: vi.fn(),
   }
 })
 
-import { fetchTokenStats, fetchSessions, fetchTokenBudgetStatus } from '@/lib/api'
+import { fetchTokenStats, fetchSessions } from '@/lib/api'
 
 const mockSummary: TokenUsageSummary = {
   agents: [
@@ -83,14 +82,6 @@ function renderUsage() {
 
 beforeEach(() => {
   vi.mocked(fetchTokenStats).mockResolvedValue(mockSummary)
-  vi.mocked(fetchTokenBudgetStatus).mockResolvedValue({
-    budget: 0,
-    consumed: 0,
-    remaining: 0,
-    exhausted: false,
-    advisory: 'unbounded — set a budget',
-    by_scope: { owner: 0, member: 0, verifier: 0, judge: 0 },
-  })
 })
 
 describe('UsageScreen — Defect 5: "By session" tab error branch (not indistinguishable from empty)', () => {

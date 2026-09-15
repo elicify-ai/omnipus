@@ -59,8 +59,27 @@ type AsyncNotifyEvent struct {
 	TranscriptSessionID string
 	// SourceKind identifies the producer (e.g. "spawn", "bash", "delegate").
 	// Composed into the synthetic inbound message's sender CanonicalID as
-	// "async:<SourceKind>", exactly matching today's convention.
+	// "async:<SourceKind>", exactly matching today's convention — UNLESS
+	// SenderCanonicalID (below) is set.
 	SourceKind string
+	// SenderCanonicalID is ADR-081 D6b/FR-015's per-event sender override:
+	// when non-empty, Notify stamps the reconstructed turn's
+	// bus.SenderInfo.CanonicalID with THIS value instead of composing
+	// "async:<SourceKind>". Empty (the default for every producer except the
+	// goal loop's own dispatch helpers) preserves today's behavior exactly —
+	// negative-asserted in async_notifier_test.go / goal_keeper_repairs_test.go.
+	//
+	// Why this exists: the goal keeper's idle-steer/nudge/continue-push turns
+	// used to be published with the default "async:goal_idle_settle" sender
+	// and UserInitiated=false. checkGoalLoopAfterTurn's origin gate
+	// (goal_loop.go) accepts ONLY a genuine user-initiated turn or the
+	// sentinel goalLoopFollowUpSenderID ("system:goal_loop") — so the
+	// re-injected steer turn was silently DROPPED at the gate: activity
+	// never bumped, the idleSettling marker never cleared, and the idle
+	// keeper fired exactly once per goal, then wedged forever. Setting this
+	// field to goalLoopFollowUpSenderID on the goal-loop's own dispatches
+	// (pkg/agent/goal_triggers.go's dispatchGoalAsyncFollowUp) is the fix.
+	SenderCanonicalID string
 	// Content is the text to relay back into the conversation as a new turn.
 	// May be empty (e.g. a silent kill with nothing to report) — Notify does
 	// not treat empty Content as an error, only empty Channel/ChatID are
@@ -267,12 +286,20 @@ func (n *asyncNotifierImpl) Notify(ctx context.Context, event AsyncNotifyEvent) 
 	pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer pubCancel()
 
+	// FR-015/D6b: a per-event sender override. Empty (the default for every
+	// producer except the goal loop's own dispatches) preserves today's
+	// "async:<kind>" composition exactly.
+	senderID := event.SenderCanonicalID
+	if senderID == "" {
+		senderID = fmt.Sprintf("async:%s", event.SourceKind)
+	}
+
 	var publishErr error
 	if n.loop != nil && n.loop.bus != nil {
 		publishErr = n.loop.bus.PublishInbound(pubCtx, bus.InboundMessage{
 			Channel: "system",
 			Sender: bus.SenderInfo{
-				CanonicalID: fmt.Sprintf("async:%s", event.SourceKind),
+				CanonicalID: senderID,
 			},
 			ChatID:  fmt.Sprintf("%s:%s", event.Channel, event.ChatID),
 			Content: event.Content,

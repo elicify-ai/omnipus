@@ -215,7 +215,10 @@ func (p *CopilotCliProvider) buildPrompt(messages []Message, tools []ToolDefinit
 func (p *CopilotCliProvider) parseOutput(output string) (*LLMResponse, error) {
 	content := strings.TrimSpace(output)
 
-	toolCalls := extractToolCallsFromText(content)
+	toolCalls, err := extractToolCallsFromText(content)
+	if err != nil {
+		return nil, err
+	}
 
 	finishReason := "stop"
 	if len(toolCalls) > 0 {

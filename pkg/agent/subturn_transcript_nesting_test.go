@@ -95,6 +95,17 @@ func TestSpawnSubTurn_MultiStepChild_StampsParentSpawnCallIDOnOwnNarration(t *te
 			List: []config.AgentConfig{{ID: "mia", Home: tmpDir}},
 		},
 	}
+	// Tools-on-demand ON, the shipped default (pkg/config/defaults.go:
+	// Manifest.Compressed = true). The scripted child below calls ToolSearch,
+	// and ToolSearch is only ever OFFERED to the model on a compressed request:
+	// buildCompressedToolDefs force-includes it, while the non-compressed path
+	// strips it from the sent definitions (stripInfraToolDefs — "has no
+	// function when compression is off, so the model never sees it there").
+	// This bare config left the flag at its zero value (off), so the child was
+	// calling a tool its own request never offered — which the offered-tool
+	// gate (tool_offer_gate.go) correctly refuses. Setting the production
+	// default makes the fixture realistic instead of weakening the gate.
+	cfg.Tools.Manifest.Compressed = true
 	msgBus := bus.NewMessageBus()
 	t.Cleanup(func() { msgBus.Close() })
 	al := mustNewAgentLoop(t, cfg, msgBus, &mockProvider{})

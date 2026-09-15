@@ -175,10 +175,10 @@ func TestU26_WriteJudgeVerdictTranscript_RealSession_PersistsAndDoesNotCount(t *
 	}
 }
 
-// TestU26_WriteSteeringPrompt_NonexistentSession_CountsAndWarns exercises
-// task_executor.go's writeSteeringPrompt (this unit's steering call site)
+// TestU26_RunSteeringTranscript_NonexistentSession_CountsAndWarns exercises
+// task_run_loop.go's appendRunSystemTranscript (the run loop's steering writer)
 // against a nonexistent session.
-func TestU26_WriteSteeringPrompt_NonexistentSession_CountsAndWarns(t *testing.T) {
+func TestU26_RunSteeringTranscript_NonexistentSession_CountsAndWarns(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	store := al.GetAgentStore("native-agent")
 	if store == nil {
@@ -193,7 +193,7 @@ func TestU26_WriteSteeringPrompt_NonexistentSession_CountsAndWarns(t *testing.T)
 	}
 
 	before := TaskGoalTranscriptWriteFailures()
-	al.taskExecutor.writeSteeringPrompt(tk, u26NonexistentSessionID, "claim summary", nil)
+	al.taskExecutor.appendRunSystemTranscript(tk, u26NonexistentSessionID, store, "claim summary")
 	after := TaskGoalTranscriptWriteFailures()
 
 	if after-before != 1 {
@@ -202,10 +202,10 @@ func TestU26_WriteSteeringPrompt_NonexistentSession_CountsAndWarns(t *testing.T)
 	u26AssertNoSessionDir(t, store, u26NonexistentSessionID)
 }
 
-// TestU26_WriteSteeringPrompt_RealSession_PersistsAndDoesNotCount is the
+// TestU26_RunSteeringTranscript_RealSession_PersistsAndDoesNotCount is the
 // Rule-4 positive lower bound: a real session accepts the steering entry and
 // the counter does not move.
-func TestU26_WriteSteeringPrompt_RealSession_PersistsAndDoesNotCount(t *testing.T) {
+func TestU26_RunSteeringTranscript_RealSession_PersistsAndDoesNotCount(t *testing.T) {
 	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
 	store := al.GetAgentStore("native-agent")
 	if store == nil {
@@ -221,7 +221,7 @@ func TestU26_WriteSteeringPrompt_RealSession_PersistsAndDoesNotCount(t *testing.
 	}
 
 	before := TaskGoalTranscriptWriteFailures()
-	al.taskExecutor.writeSteeringPrompt(tk, sessionID, "steer text here", nil)
+	al.taskExecutor.appendRunSystemTranscript(tk, sessionID, store, "steer text here")
 	after := TaskGoalTranscriptWriteFailures()
 
 	if after != before {

@@ -4,12 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 )
 
@@ -29,9 +34,10 @@ const (
 )
 
 type Provider struct {
-	client      *anthropic.Client
-	tokenSource func() (string, error)
-	baseURL     string
+	client             *anthropic.Client
+	tokenSource        func() (string, error)
+	baseURL            string
+	streamStallTimeout time.Duration // streaming silence limit; 0 = common.DefaultStreamStallTimeout
 }
 
 // SupportsThinking implements providers.ThinkingCapable.
@@ -51,6 +57,26 @@ func NewProviderWithBaseURL(token, apiBase string) *Provider {
 		client:  &client,
 		baseURL: baseURL,
 	}
+}
+
+// WithStreamStallTimeout sets the streaming silence limit on this provider
+// (founder decision 2026-09-14): a ChatStream call receiving no events of any
+// kind for this long is aborted with common.ErrStreamStalled. Non-positive
+// falls back to common.DefaultStreamStallTimeout. NOT a wall-clock limit — a
+// stream that keeps delivering, however slowly, is never cut.
+func (p *Provider) WithStreamStallTimeout(d time.Duration) *Provider {
+	if d > 0 {
+		p.streamStallTimeout = d
+	}
+	return p
+}
+
+// effectiveStreamStallTimeout resolves the silence limit for this provider.
+func (p *Provider) effectiveStreamStallTimeout() time.Duration {
+	if p.streamStallTimeout > 0 {
+		return p.streamStallTimeout
+	}
+	return common.DefaultStreamStallTimeout
 }
 
 func NewProviderWithClient(client *anthropic.Client) *Provider {
@@ -104,7 +130,7 @@ func (p *Provider) Chat(
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
-	return parseResponse(resp), nil
+	return parseResponse(resp)
 }
 
 // ChatStream implements providers.StreamingProvider.
@@ -159,6 +185,13 @@ func (p *Provider) chatStreaming(
 // than by decoding delta union types. That keeps this robust across SDK
 // revisions: whatever shape the deltas take, the accumulated content blocks
 // are the same ones parseResponse already reads.
+//
+// Silence check (founder decision 2026-09-14): a stream that delivers no
+// BYTE for p's silence limit is aborted with common.ErrStreamStalled. The
+// clock re-arms on every byte read off the response body (middleware below),
+// not on parsed events — the SDK swallows Anthropic's keep-alive pings
+// internally (Stream.Next's "ping" case), so event-level arming would
+// misread a ping-only stream as silent.
 func (p *Provider) streamWithCallbacks(
 	ctx context.Context,
 	params anthropic.MessageNewParams,
@@ -166,11 +199,42 @@ func (p *Provider) streamWithCallbacks(
 	onChunk func(accumulated string),
 	onProgress protocoltypes.OnToolCallProgress,
 ) (*LLMResponse, error) {
-	stream := p.client.Messages.NewStreaming(ctx, params, opts...)
+	stall := p.effectiveStreamStallTimeout()
+
+	// stallArmer hands the monitor's arm fn to the body-wrapping middleware
+	// without an ordering dependency: the middleware runs inside
+	// NewStreaming, before the monitor exists, so the cell is filled
+	// immediately after the stream is created and every subsequent Read
+	// re-arms the clock. Reads that race the fill simply skip one arm.
+	var armer stallBodyArmer
+	streamOpts := opts
+	if stall > 0 {
+		streamOpts = append(append([]option.RequestOption{}, opts...),
+			option.WithMiddleware(func(req *http.Request, next func(*http.Request) (*http.Response, error)) (*http.Response, error) {
+				resp, err := next(req)
+				if err != nil || resp == nil || resp.Body == nil {
+					return resp, err
+				}
+				// Method value, bound to &armer: reads made before the monitor
+				// exists find armer.arm nil and skip; every later read re-arms.
+				resp.Body = &armReader{ReadCloser: resp.Body, onByte: armer.onByte}
+				return resp, nil
+			}))
+	}
+
+	stream := p.client.Messages.NewStreaming(ctx, params, streamOpts...)
 	defer stream.Close()
+
+	var watch *common.StreamStallWatch
+	if stall > 0 {
+		watch = common.WatchStreamStall(ctx, func() { _ = stream.Close() }, stall)
+		defer watch.Stop()
+		armer.set(watch.Arm)
+	}
 
 	var msg anthropic.Message
 	var lastTextLen int
+	var lastReasoningLen int
 	lastArgsLen := map[int]int{}
 
 	for stream.Next() {
@@ -188,6 +252,7 @@ func (p *Provider) streamWithCallbacks(
 		argsLen := make(map[int]int, len(msg.Content))
 		names := make(map[int]string, len(msg.Content))
 		totalArgs := 0
+		reasoning := 0
 		for i, block := range msg.Content {
 			// Read the union's DIRECT fields, never the As*() accessors.
 			//
@@ -210,6 +275,13 @@ func (p *Provider) streamWithCallbacks(
 				argsLen[i] = n
 				names[i] = block.Name
 				totalArgs += n
+			case "thinking":
+				// Extended thinking counts as progress (founder decision
+				// 2026-09-14): minutes of thinking with no text or tool
+				// bytes must not read as a hung call. Length only.
+				reasoning += len(block.Thinking)
+			case "redacted_thinking":
+				reasoning += len(block.Data)
 			}
 		}
 
@@ -225,6 +297,15 @@ func (p *Provider) streamWithCallbacks(
 			onChunk(text.String())
 		}
 		if onProgress != nil {
+			// Same growth-only rule as text and arguments.
+			if reasoning > lastReasoningLen {
+				lastReasoningLen = reasoning
+				protocoltypes.SafeInvoke(onProgress, protocoltypes.ToolCallProgress{
+					Index:          protocoltypes.ReasoningProgressIndex,
+					TotalArgsBytes: totalArgs,
+					ReasoningBytes: reasoning,
+				})
+			}
 			for i, n := range argsLen {
 				if n <= lastArgsLen[i] {
 					continue
@@ -237,15 +318,64 @@ func (p *Provider) streamWithCallbacks(
 					Name:           names[i],
 					ArgsBytes:      n,
 					TotalArgsBytes: totalArgs,
+					ReasoningBytes: reasoning,
 				})
 			}
 		}
 	}
 	if err := stream.Err(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		// Fired() (set by our own monitor just before it closes the stream)
+		// is what distinguishes our abort of a fully silent stream from a
+		// genuine server-side drop, which surfaces as the same read error.
+		if watch.Fired() {
+			return nil, common.NewStallError(stall)
+		}
 		return nil, fmt.Errorf("claude API call: %w", err)
 	}
 
-	return parseResponse(&msg), nil
+	return parseResponse(&msg)
+}
+
+// stallBodyArmer is the late-bound cell connecting the stall monitor's re-arm
+// function to the response-body middleware (see streamWithCallbacks).
+type stallBodyArmer struct {
+	mu  sync.Mutex
+	arm func()
+}
+
+func (a *stallBodyArmer) set(arm func()) {
+	a.mu.Lock()
+	a.arm = arm
+	a.mu.Unlock()
+}
+
+// onByte re-arms the silence clock. Called after every successful Read of the
+// response body; safe concurrently with set.
+func (a *stallBodyArmer) onByte() {
+	a.mu.Lock()
+	arm := a.arm
+	a.mu.Unlock()
+	if arm != nil {
+		arm()
+	}
+}
+
+// armReader wraps the response body so every byte delivered re-arms the stall
+// monitor — pings, comments, and events alike.
+type armReader struct {
+	io.ReadCloser
+	onByte func()
+}
+
+func (r *armReader) Read(p []byte) (int, error) {
+	n, err := r.ReadCloser.Read(p)
+	if n > 0 && r.onByte != nil {
+		r.onByte()
+	}
+	return n, err
 }
 
 func (p *Provider) GetDefaultModel() string {
@@ -303,10 +433,30 @@ func buildParams(
 					if tc.Name == "" {
 						continue
 					}
+					// OUTBOUND rebuild: this re-serialises OUR OWN history back
+					// into an Anthropic request, so unlike the inbound decode in
+					// parseResponse a failure here is an internal invariant
+					// violation, not a truncated upstream reply. It stays
+					// non-fatal — refusing to rebuild would make one bad history
+					// entry permanently unsendable, which is the wedge described
+					// in common.ErrToolArgumentsUndecodable — but it no longer
+					// happens in silence. Before, the error was discarded
+					// outright and an empty arguments block was sent as if the
+					// model had called the tool with no parameters.
 					args := tc.Arguments
 					if args == nil && tc.Function != nil && tc.Function.Arguments != "" {
-						if err := json.Unmarshal([]byte(tc.Function.Arguments), &args); err != nil {
-							args = map[string]any{}
+						decoded, err := common.DecodeToolCallArguments(
+							json.RawMessage(tc.Function.Arguments), tc.Name,
+						)
+						if err != nil {
+							logger.ErrorCF(
+								"anthropic",
+								"stored tool call arguments will not decode when rebuilding the request; "+
+									"sending an empty arguments block",
+								map[string]any{"tool": tc.Name, "id": tc.ID, "error": err.Error()},
+							)
+						} else {
+							args = decoded
 						}
 					}
 					if args == nil {
@@ -459,10 +609,29 @@ func translateTools(tools []ToolDefinition) []anthropic.ToolUnionParam {
 	return result
 }
 
-func parseResponse(resp *anthropic.Message) *LLMResponse {
+func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 	var content strings.Builder
 	var reasoning strings.Builder
 	var toolCalls []ToolCall
+
+	// PromptTokens = plain (uncached) input; cache tokens are tracked separately.
+	// TotalTokens = plain input + cache_creation + cache_read + output.
+	// Computed up front (resp.Usage/resp.StopReason are top-level fields, not
+	// dependent on the content-block loop below) so a tool-call decode
+	// failure can attach this same evidence to the refusal (ADR-087 D3.9 /
+	// D5 / D7) instead of returning bare.
+	cacheWrite := int(resp.Usage.CacheCreationInputTokens)
+	cacheRead := int(resp.Usage.CacheReadInputTokens)
+	promptTokens := int(resp.Usage.InputTokens)
+	completionTokens := int(resp.Usage.OutputTokens)
+	total := promptTokens + cacheWrite + cacheRead + completionTokens
+	usage := &UsageInfo{
+		PromptTokens:     promptTokens,
+		CompletionTokens: completionTokens,
+		CacheWriteTokens: cacheWrite,
+		CacheReadTokens:  cacheRead,
+		TotalTokens:      total,
+	}
 
 	for _, block := range resp.Content {
 		switch block.Type {
@@ -474,13 +643,17 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 			content.WriteString(tb.Text)
 		case "tool_use":
 			tu := block.AsToolUse()
-			var args map[string]any
-			if err := json.Unmarshal(tu.Input, &args); err != nil {
-				logger.WarnCF("anthropic", "failed to decode tool call input", map[string]any{
-					"tool":  tu.Name,
-					"error": err.Error(),
-				})
-				args = map[string]any{"raw": string(tu.Input)}
+			args, err := common.DecodeToolCallArguments(tu.Input, tu.Name)
+			if err != nil {
+				// The refused attempt's stop reason and billed usage are
+				// both already in hand at this scope — attach them so the
+				// caller's classifier (and cost accounting) sees real
+				// evidence instead of having to guess from the fragment
+				// alone (ADR-087 D3.9 / D5 / D7). resp.StopReason's raw
+				// string spelling ("max_tokens") already matches the
+				// normalised spelling AttachToolArgumentsEvidence looks
+				// for, so it is passed through unmapped.
+				return nil, common.AttachToolArgumentsEvidence(err, string(resp.StopReason), usage)
 			}
 			toolCalls = append(toolCalls, ToolCall{
 				ID:        tu.ID,
@@ -512,27 +685,13 @@ func parseResponse(resp *anthropic.Message) *LLMResponse {
 		finishReason = "content_filter"
 	}
 
-	// PromptTokens = plain (uncached) input; cache tokens are tracked separately.
-	// TotalTokens = plain input + cache_creation + cache_read + output.
-	cacheWrite := int(resp.Usage.CacheCreationInputTokens)
-	cacheRead := int(resp.Usage.CacheReadInputTokens)
-	promptTokens := int(resp.Usage.InputTokens)
-	completionTokens := int(resp.Usage.OutputTokens)
-	total := promptTokens + cacheWrite + cacheRead + completionTokens
-
 	return &LLMResponse{
 		Content:      content.String(),
 		Reasoning:    reasoning.String(),
 		ToolCalls:    toolCalls,
 		FinishReason: finishReason,
-		Usage: &UsageInfo{
-			PromptTokens:     promptTokens,
-			CompletionTokens: completionTokens,
-			CacheWriteTokens: cacheWrite,
-			CacheReadTokens:  cacheRead,
-			TotalTokens:      total,
-		},
-	}
+		Usage:        usage,
+	}, nil
 }
 
 func normalizeBaseURL(apiBase string) string {

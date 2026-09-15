@@ -68,6 +68,6 @@ func agentDegradedReason(
 	if !providers.IsUnknownProviderIDIn(cat, cfg, id) {
 		return nil
 	}
-	reason := gen.NeedsProvider
+	reason := gen.AgentDegradedReasonNeedsProvider
 	return &reason
 }

@@ -1260,6 +1260,64 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
     expect(messages[0].id).toBe('cancel_xyz')
   })
 
+  it('forwards type:"judge_verdict" and the verdict payload onto the SPA message (ADR-049 D2/SD-C10)', async () => {
+    // Regression for the "verdict card never appears" bug: rawToMessage's
+    // `role: 'system'` branch used to build a SystemMessage without ever
+    // reading raw.type/raw.verdict, so a cold-loaded (REST) judge_verdict
+    // transcript entry silently lost the one field
+    // (shouldRenderJudgeVerdictInThread + JudgeVerdictThreadCard,
+    // ChatScreen.tsx) needs to tell it apart from an ordinary system
+    // message and render the card.
+    const wirePayload = [
+      {
+        id: 'goal-sid-verdict-judge-1',
+        type: 'judge_verdict',
+        role: 'system',
+        agent_id: 'judge',
+        timestamp: '2026-09-14T12:05:00Z',
+        verdict: {
+          id: 'verdict-1',
+          scope: 'goal',
+          round: 1,
+          met: true,
+          per_criterion: [{ criterion_id: 'crit-1', met: true, reason: 'confirmed' }],
+          model: 'z-ai/glm-5.3',
+          judged_at: '2026-09-14T12:05:00Z',
+          judge_agent_id: 'judge',
+        },
+      },
+      // The judged turn's own assistant entry, carrying turn_id —
+      // mergeJudgeVerdictHistory anchors the verdict's thread position to
+      // this turn (chat.ts); rawToMessage must forward it.
+      {
+        id: 'assistant-turn-entry',
+        type: 'message',
+        role: 'assistant',
+        agent_id: 'mia',
+        content: 'OK-DONE-VERDICT-TEST',
+        timestamp: '2026-09-14T12:04:00Z',
+        status: 'ok',
+        turn_id: 'mia-turn-2',
+      },
+    ]
+    fetchSpy.mockResolvedValueOnce(
+      new Response(JSON.stringify(wirePayload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sid-verdict')
+    expect(messages).toHaveLength(2)
+    expect(messages[0].id).toBe('goal-sid-verdict-judge-1')
+    expect(messages[0].type).toBe('judge_verdict')
+    expect(messages[0].verdict?.id).toBe('verdict-1')
+    expect(messages[0].verdict?.scope).toBe('goal')
+    expect(messages[0].verdict?.met).toBe(true)
+    expect(messages[0].verdict?.per_criterion).toHaveLength(1)
+    expect(messages[1].turnId).toBe('mia-turn-2')
+  })
+
   it('degrades an unknown entry type to a placeholder instead of rejecting the whole list (Issue 3 / library-uat HIGH)', async () => {
     // Updated for the per-item resilience fix. Previously this asserted
     // fetchSessionMessages REJECTED the whole array on a single out-of-enum
@@ -2810,5 +2868,130 @@ describe('fetchAuditLog: per-entry resilience', () => {
 
     const { fetchAuditLog, ApiSchemaError: ApiSchemaErrorCtor } = await loadApi()
     await expect(fetchAuditLog()).rejects.toBeInstanceOf(ApiSchemaErrorCtor)
+  })
+})
+
+// ── ADR-087 (Truncation is an outcome, not a silence) — WP F, §7.2 ─────────────
+//
+// Cold-load (REST) plumbing: layer 1 (generated zod schema, schemas.ts) must
+// not silently strip `truncated`/`truncation_reason`, and layer 3
+// (rawToMessage, exercised here only through the public `fetchSessionMessages`
+// surface — rawToMessage itself is not exported) must carry them onto the
+// SPA-internal `Message`, applying the ADR-087 D2 legacy-default rule
+// (absent reason on a truncated entry means 'cancelled').
+
+describe('ADR-087 D2 — Message.truncated/truncation_reason survive the generated zod schema (guards the silent-strip layer)', () => {
+  it('a Message payload WITH truncation_reason parses with both fields intact, unchanged', async () => {
+    const { Message: MessageSchema } = await import('./api/generated/schemas')
+    const payload = {
+      id: 'm-trunc-1',
+      role: 'assistant',
+      content: 'Cut off mid-',
+      timestamp: '2026-09-10T10:00:00Z',
+      agent_id: 'mia',
+      truncated: true,
+      truncation_reason: 'max_output_tokens',
+    }
+    const result = MessageSchema.parse(payload)
+    expect(result.truncated).toBe(true)
+    expect(result.truncation_reason).toBe('max_output_tokens')
+  })
+
+  it('a legacy Message payload with truncated:true and no reason parses with truncation_reason absent (schema does not invent a default)', async () => {
+    const { Message: MessageSchema } = await import('./api/generated/schemas')
+    const payload = {
+      id: 'm-trunc-legacy',
+      role: 'assistant',
+      content: 'Cancelled here',
+      timestamp: '2026-09-10T10:00:00Z',
+      agent_id: 'mia',
+      truncated: true,
+    }
+    const result = MessageSchema.parse(payload)
+    expect(result.truncated).toBe(true)
+    expect(result.truncation_reason).toBeUndefined()
+  })
+})
+
+describe('ADR-087 D2 — fetchSessionMessages (cold-load) plumbs truncated/truncationReason onto the SPA Message', () => {
+  let fetchSpy: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.resetModules()
+  })
+
+  it('carries truncated:true + truncationReason:"max_output_tokens" onto the assistant Message', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeOkResponse([
+        {
+          id: 'm-cutoff',
+          role: 'assistant',
+          content: 'The answer starts and then',
+          timestamp: '2026-09-10T10:00:00Z',
+          agent_id: 'mia',
+          truncated: true,
+          truncation_reason: 'max_output_tokens',
+        },
+      ]),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sess-1')
+
+    expect(messages).toHaveLength(1)
+    const msg = messages[0] as { truncated?: boolean; truncationReason?: string }
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncationReason).toBe('max_output_tokens')
+  })
+
+  it('legacy rule: truncated:true with no wire reason cold-loads as truncationReason:"cancelled"', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeOkResponse([
+        {
+          id: 'm-legacy-cancel',
+          role: 'assistant',
+          content: 'Cancelled partial',
+          timestamp: '2026-09-10T10:00:00Z',
+          agent_id: 'mia',
+          truncated: true,
+        },
+      ]),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sess-1')
+
+    expect(messages).toHaveLength(1)
+    const msg = messages[0] as { truncated?: boolean; truncationReason?: string }
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncationReason).toBe('cancelled')
+  })
+
+  it('a non-truncated assistant Message carries no truncated/truncationReason fields', async () => {
+    fetchSpy.mockResolvedValueOnce(
+      makeOkResponse([
+        {
+          id: 'm-normal',
+          role: 'assistant',
+          content: 'A complete answer.',
+          timestamp: '2026-09-10T10:00:00Z',
+          agent_id: 'mia',
+        },
+      ]),
+    )
+
+    const { fetchSessionMessages } = await import('./api')
+    const messages = await fetchSessionMessages('sess-1')
+
+    expect(messages).toHaveLength(1)
+    const msg = messages[0] as { truncated?: boolean; truncationReason?: string }
+    expect(msg.truncated).toBeUndefined()
+    expect(msg.truncationReason).toBeUndefined()
   })
 })

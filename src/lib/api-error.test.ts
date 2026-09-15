@@ -178,6 +178,26 @@ describe('ApiError.fromResponse — JSON body', () => {
     const err = await ApiError.fromResponse(res)
     expect(err.userMessage).toBe('first')
   })
+
+  // ADR-068 validation-body shape — the structured channel task-validation
+  // rejections use to name which control a message routes to (see
+  // taskValidationError.ts's fieldFromValidationError), instead of parsing
+  // the (now plain-language) message text.
+  it('parses the field property into .field for a 400 validation body', async () => {
+    const res = new Response(
+      '{"error":"Add at least one Definition of Done item.","field":"dod"}',
+      { status: 400 },
+    )
+    const err = await ApiError.fromResponse(res)
+    expect(err.field).toBe('dod')
+    expect(err.userMessage).toBe('Add at least one Definition of Done item.')
+  })
+
+  it('leaves .field undefined when the body carries no field property', async () => {
+    const res = new Response('{"error":"agent not found"}', { status: 400 })
+    const err = await ApiError.fromResponse(res)
+    expect(err.field).toBeUndefined()
+  })
 })
 
 describe('ApiError.fromResponse — text fallback', () => {

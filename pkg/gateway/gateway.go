@@ -38,6 +38,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/askuser"
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/bus"
@@ -65,6 +66,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/health"
 	"github.com/elicify-ai/omnipus/pkg/heartbeat"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -1917,6 +1919,24 @@ func persistFreshInstallDefaultAgentID(configPath, agentID string) error {
 // churn), making the second boot a byte-level no-op (judgment-first spec
 // test 16).
 func persistSeededSkillGrants(configPath string, markers []string) error {
+	return persistConfigMarkerList(configPath, "seeded_skill_grants", markers)
+}
+
+// persistSeededToolPolicyUpdates durably records
+// config.seeded_tool_policy_updates (the one-time seeded tool-policy update
+// markers coreagent.SeedConfig checks, e.g. the Worker goal_claim update)
+// into config.json. Same contract as persistSeededSkillGrants: raw-map
+// read-modify-write that preserves every other key, and no write at all when
+// the on-disk value already matches.
+func persistSeededToolPolicyUpdates(configPath string, markers []string) error {
+	return persistConfigMarkerList(configPath, "seeded_tool_policy_updates", markers)
+}
+
+// persistConfigMarkerList writes markers under the top-level config.json key
+// key, preserving every other key exactly as-is, and skips the write entirely
+// when the on-disk list already equals markers (byte-level no-op on a
+// settled install).
+func persistConfigMarkerList(configPath, key string, markers []string) error {
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
@@ -1926,7 +1946,7 @@ func persistSeededSkillGrants(configPath string, markers []string) error {
 		return fmt.Errorf("parse config: %w", unmarshalErr)
 	}
 	// Skip the write entirely when the on-disk value already matches.
-	if existing, ok := m["seeded_skill_grants"].([]any); ok && len(existing) == len(markers) {
+	if existing, ok := m[key].([]any); ok && len(existing) == len(markers) {
 		same := true
 		for i := range markers {
 			if s, isStr := existing[i].(string); !isStr || s != markers[i] {
@@ -1938,7 +1958,7 @@ func persistSeededSkillGrants(configPath string, markers []string) error {
 			return nil
 		}
 	}
-	m["seeded_skill_grants"] = markers
+	m[key] = markers
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("serialize config: %w", err)
@@ -2178,66 +2198,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		return fmt.Errorf("error creating provider: %w", err)
 	}
 
-	// ADR-054 D2/D3: bring in any agents already persisted as entity records
-	// (entities/agents/<id>.json) from a previous run BEFORE SeedConfig looks
-	// at cfg.Agents.List to decide which core agents are "already present" —
-	// otherwise every boot would look like a fresh install (cfg.Agents.List
-	// starts empty: config.LoadConfig strips config.json's legacy agents.list
-	// unconditionally, see legacy_agents_list.go) and SeedConfig would
-	// re-create core agents from their seed defaults on every restart,
-	// discarding any operator customization. Strict variant: a roster-
-	// population failure here (genuine store error, every on-disk record
-	// unparseable, or a same-process non-empty→empty regression) must abort
-	// boot rather than silently proceed with an empty/partial roster — see
-	// populateAgentsListFromEntityStoreStrict's doc for the verified
-	// privilege-escalation chain an empty roster otherwise opens up.
-	if rosterErr := populateAgentsListFromEntityStoreStrict(cfg, homePath); rosterErr != nil {
-		return fmt.Errorf("gateway: could not populate agent roster from entity store at boot: %w", rosterErr)
-	}
-
-	// Seed core agents into config on first boot. Core agents are stored in
-	// cfg.Agents.List with Locked=true so they appear alongside custom agents
-	// in the REST API with type "core". SeedConfig is idempotent — it only adds
-	// agents that are not already present (checked by ID).
-	if coreagent.SeedConfig(cfg) {
-		// ADR-054 D2/§11: core agents now persist as entity records
-		// (entities/agents/<id>.json) — never back into config.json's
-		// agents.list. config.SaveConfig here would be a double violation:
-		// (a) it is the full-struct save CLAUDE.md forbids for exactly this
-		// reason ("corrupts API keys" via SecureString round-trip), and (b)
-		// anything it wrote to agents.list would be stripped again on the
-		// very next config.LoadConfig call, so it would not even survive.
-		// persistSeededCoreAgents persists every agent SeedConfig
-		// added-or-touched (its own "re-enforce identity fields on existing
-		// core agents" pass, and any brand-new core agent it appended) via
-		// the agent store — see its own doc comment for the corrupt-record
-		// handling that makes this safe against a single bad entity file.
-		if seedErr := persistSeededCoreAgents(homePath, cfg.Agents.List); seedErr != nil {
-			return seedErr
-		}
-	}
-
-	// ADR-074 D4: durably record the one-shot skills-migration markers
-	// SeedConfig checked/wrote in memory (e.g. the define-done allowlist
-	// append). ADR-080 D-SKILL's own marker (adr080-define-goal-rename,
-	// the "define-done"→"define-goal" allowlist REWRITE — see
-	// coreagent.applyDefineGoalRenameMigration) rides the exact same
-	// cfg.SeededSkillGrants slice and is persisted by this same call; the
-	// matching skill-DIRECTORY cleanup (deleting the orphaned
-	// $OMNIPUS_HOME/skills/define-done/) is a separate, later step — see the
-	// call to skills.SeedDefaults below. The agent-side appends were just
-	// persisted by persistSeededCoreAgents above; this writes the marker into
-	// config.json so the migration never re-runs. Best-effort like the
-	// default_agent_id persist above: a failure only means the (idempotent,
-	// additive) check runs again next boot — not a boot-time fatal. The
-	// helper skips the write entirely when the on-disk key already matches,
-	// so a settled install's boot performs no config.json write here at all.
-	if len(cfg.SeededSkillGrants) > 0 {
-		if persistErr := persistSeededSkillGrants(configPath, cfg.SeededSkillGrants); persistErr != nil {
-			slog.Warn("gateway: could not persist seeded_skill_grants to config.json; "+
-				"the additive skills migration will be re-checked on the next boot",
-				"error", persistErr)
-		}
+	// ADR-054 D2/D3 + SeedConfig + its one-time migrations, persisted. The
+	// whole sequence lives in seedAndPersistAgentRoster (boot_agent_roster.go)
+	// so the upgrade path can be tested against a real on-disk fixture with
+	// exactly the calls boot makes, in exactly this order.
+	if rosterErr := seedAndPersistAgentRoster(cfg, homePath, configPath); rosterErr != nil {
+		return rosterErr
 	}
 
 	// RELEASE BLOCKER fix follow-up (2026-07-26): on a genuinely fresh
@@ -2943,6 +2909,10 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// DelegationDeny above) per systools.Deps.ResolveBashPolicy's doc
 		// comment.
 		ResolveBashPolicy: agentLoop.NewSysagentBashPolicyResolver(),
+		// Founder decision 2026-09-15: create/update_task_in_workspace refuse an
+		// assignee that cannot finish the task — the same answer as the plain
+		// task tools and the task run's pre-run check.
+		AssigneeCannotFinish: agentLoop.TaskAssigneeCannotFinish,
 		// ADR-057 U9 changed ListAllSessions' signature to
 		// (limit, offset int, parentSessionID string, flat bool), so it can no
 		// longer be assigned here as a bare method value — this field's type
@@ -4770,6 +4740,10 @@ func setupAndStartServices(
 	}
 	approvalReg := newApprovalRegistryV2(effectiveCap, approvalTimeoutDur)
 	wsHandler.approvalRegV2 = approvalReg
+	// Broadcast every pending→terminal transition, whatever caused it (a
+	// decision from any tab, timeout, Stop, agent deletion, shutdown), so no
+	// open tab keeps a dialog for an approval the server has already closed.
+	approvalReg.setResolutionListener(wsHandler.broadcastToolApprovalResolved)
 
 	// Wire the policy approver into the agent loop (FR-011, C3).
 	// The adapter bridges agent.PolicyApprover → approvalRegistryV2 + WSHandler.
@@ -4794,6 +4768,14 @@ func setupAndStartServices(
 		askSink.delayFn = askReg.EffectiveDefaultSafeDelay
 		wsHandler.askUserReg = askReg
 		agentLoop.SetAskUserRegistry(askReg)
+		// ADR-081 FR-031: wire the goal-routing store resolver at boot so a
+		// cold-start channel record echo / keeper action can rehydrate the
+		// persisted GoalRoute* fields before any /goal command runs.
+		agentLoop.SetGoalRouteSessionStore()
+		// Goal outcome line: a task-owned goal that ends with its task leaves
+		// the same lasting outcome line in the task's run session as a chat
+		// goal does (pkg/agent/goal_outcome.go).
+		agentLoop.InstallTaskGoalOutcomeRecorder()
 		// Boot rearm sweep (US-6 S1/FR-9): re-hydrate every persisted pending
 		// set so its default-safe timers re-arm from the durable CreatedAt
 		// (already-elapsed timers fire near-immediately) and the reconnect
@@ -5060,34 +5042,36 @@ func setupAndStartServices(
 		planEngine.SetSessionFailedHook(func(sessionID, reason string) {
 			slog.Info("gateway: boot sweep: session.failed", "session_id", sessionID, "reason", reason)
 		})
-		// Wave 2-C2 supplies the real /goal and /loop active-loop counters via
-		// these exact call sites; until then they contribute 0 to the R5
-		// global active-loop cap (documented boot-ordering requirement on
-		// PlanEngine.RegisterActiveCounter's doc comment). Wave 2-C2 (ADR-049
-		// D6/D7, R5): "goal" counts sessions carrying an active
-		// UnifiedMeta.GoalCondition in the shared session store (the only
-		// store /goal can ever write to — it requires a live
-		// TranscriptStore/TranscriptSessionID, which for every webchat/
-		// channel turn resolves to GetSessionStore()'s shared store, see
-		// resolveOrCreateChannelSession / the WS message handler's session
-		// minting); "loop" counts currently-enabled cron jobs owned by the
-		// dedicated LoopScheduler (constructed above, before this block).
+		// These two exact call sites supply the real /goal and /loop
+		// active-loop counters (documented boot-ordering requirement on
+		// PlanEngine.RegisterActiveCounter's doc comment); "loop" counts
+		// currently-enabled cron jobs owned by the dedicated LoopScheduler
+		// (constructed above, before this block).
+		//
+		// "goal" (GOAL-FR-049, R-22, ADR-086, wave E11 — re-homed here from
+		// the retired wave S4, D-F): re-pointed off session.UnifiedMeta's
+		// GoalCondition field (which ADR-086 makes a derived legacy mirror,
+		// not the source of truth) onto pkg/goal's own record store.
+		// goal.Store.ListActiveByOwnerKind is C-25/R-22's shared selector —
+		// the same predicate goalIdleExpirySweep (pkg/agent/goal_loop.go,
+		// wave E8) reads from, so the two never diverge on what "active"
+		// means. Filtered to owner_kind == session (generated.GoalOwnerKind
+		// Session): the definition phase and every terminal state count 0
+		// by construction (ListActive filters on generated.GoalStateActive
+		// alone), and a task-owned goal is excluded by owner_kind so it
+		// never counts against this global active-loop cap (task-owned
+		// goals are exempt from it, R-22, delivering MV-10 for free).
+		// Constructing a fresh goal.Store per call is safe and cheap —
+		// pkg/entity's cross-call locking is process-wide and shared by
+		// every Store[T] instance rooted at the same directory, exactly the
+		// precedent pkg/gateway/rest_tasks.go's goalStoreForTasks documents.
 		planEngine.RegisterActiveCounter("goal", func() (int, error) {
-			store := agentLoop.GetSessionStore()
-			if store == nil {
-				return 0, nil
-			}
-			sessions, listErr := store.ListSessions()
+			goalStore := goal.NewStore(homePath)
+			active, listErr := goalStore.ListActiveByOwnerKind(gen.GoalOwnerKindSession)
 			if listErr != nil {
-				return 0, fmt.Errorf("active-goal counter: list sessions: %w", listErr)
+				return 0, fmt.Errorf("active-goal counter: list active session-owned goals: %w", listErr)
 			}
-			count := 0
-			for _, s := range sessions {
-				if s != nil && s.GoalCondition != "" {
-					count++
-				}
-			}
-			return count, nil
+			return len(active), nil
 		})
 		planEngine.RegisterActiveCounter("loop", func() (int, error) {
 			if runningServices.LoopScheduler == nil {
@@ -5160,6 +5144,7 @@ func setupAndStartServices(
 		homePath:               homePath,
 		taskStore:              tStore,
 		taskExecutor:           tExecutor,
+		liveTaskActivity:       tExecutor, // founder decision 2026-09-14: Task.last_activity_at
 		planStore:              planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
 		credStore:              credStore,
 		mediaStore:             runningServices.MediaStore,

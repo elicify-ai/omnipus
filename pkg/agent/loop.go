@@ -30,6 +30,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/commands"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/constants"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/memory"
@@ -37,6 +38,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/providers/common"
 	"github.com/elicify-ai/omnipus/pkg/providers/protocoltypes"
 	"github.com/elicify-ai/omnipus/pkg/routing"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -133,13 +135,6 @@ type AgentLoop struct {
 	// GetLastSwitchToDefault (LoadAndDelete — one-shot per switch).
 	// key: "session:"+sessionID (string), value: bool.
 	lastSwitchToDefault sync.Map
-
-	// orphanWatches holds the orphan-foreground-turn watchdog's pending grace
-	// timer per session (ADR-045): key sessionID (string), value *orphanWatch.
-	// Populated by ArmOrphanForegroundTurnWatch, removed by
-	// DisarmOrphanForegroundTurnWatch or once the grace timer fires. See
-	// pkg/agent/orphan_watch.go.
-	orphanWatches sync.Map
 
 	// Turn tracking
 	turnSeq        atomic.Uint64
@@ -403,17 +398,7 @@ type AgentLoop struct {
 	// NewAgentLoop so per-call sites add a defensive nil-check that is
 	// structurally unreachable. The per-call sites check
 	// cfg.Sandbox.RateLimits.* > 0 to decide whether to enforce.
-	// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 	rateLimiter *security.RateLimiterRegistry
-
-	// tokenBudget is the ADR-053 Phase-2 / D12 app-level OVERALL token budget
-	// (R§8.3): ONE atomic pool debited by ALL workloads (owner/member/verifier/
-	// Judge) from provider-reported usage, deliberately NOT honoring
-	// IsPrivilegedAgent (FR-172). Default cap 0 = unbounded (FR-175). The
-	// ceiling is restart-gated (FR-177). Always non-nil after NewAgentLoop so
-	// the debit path is a unconditional no-op when unbounded. The persisted
-	// consumed counter is reconciled at boot from system/token_budget.json.
-	tokenBudget *TokenBudget
 
 	// approvalGrants tracks per-session "Always Allow" tool-approval grants,
 	// scoped by (session_id, agent_id, tool_name). Always non-nil after
@@ -666,6 +651,14 @@ type processOptions struct {
 	// second, parallel injection path.
 	IsTaskRun bool
 
+	// RunningTaskID names the unified task this turn is executing (founder
+	// decision 2026-09-14: last-activity on task cards). processTaskDirect
+	// sets it from the tools.WithRunningTaskID context the task executor
+	// already stamps on the run; AgentLoop.TaskLiveLastActivity matches on
+	// it to expose the turn's live progress stamp for exactly this task.
+	// Empty for every non-task turn.
+	RunningTaskID string
+
 	// UserInitiated threads bus.InboundMessage.UserInitiated into the turn
 	// (ADR-049 Gap #8/r2, spec Part B FR-075/SD-B6/R6) — see that field's doc
 	// comment for the fail-closed origin contract. handleCommand reads this
@@ -759,6 +752,584 @@ const (
 	metadataKeyParentPeerKind = "parent_peer_kind"
 	metadataKeyParentPeerID   = "parent_peer_id"
 )
+
+// Orphan tool-call markup repair — see the choke point in runTurn and
+// providers.DetectOrphanToolCallMarkup for the failure this handles.
+const (
+	// maxOrphanToolMarkupRepairs bounds the re-prompts spent on one turn.
+	// Two is enough to clear a one-off upstream parse failure (the observed
+	// case) without letting a model that cannot produce structured tool calls
+	// at all spend the whole iteration budget getting nowhere.
+	maxOrphanToolMarkupRepairs = 2
+	// orphanToolMarkupRetryReason labels the retry on the event bus so an
+	// operator can tell this apart from an empty-response retry.
+	orphanToolMarkupRetryReason = "orphan_tool_markup"
+	// orphanToolMarkupStage labels the terminal error event/transcript entry.
+	orphanToolMarkupStage = "orphan_tool_markup"
+)
+
+// stripOrphanToolCallMarkup removes residual native tool-call markup from
+// every user-visible text field of an LLM response, returning the first
+// residue found so the caller can log it and decide what the round means.
+//
+// It is a strip, not a parse: Omnipus accepts tool calls from the structured
+// `tool_calls` field and nowhere else, so the residue is discarded rather
+// than interpreted. Reconstructing a call from it would mean trusting a
+// half-delivered payload — exactly the payload whose other half is missing.
+func stripOrphanToolCallMarkup(response *providers.LLMResponse) (providers.OrphanToolMarkup, bool) {
+	if response == nil {
+		return providers.OrphanToolMarkup{}, false
+	}
+	var first providers.OrphanToolMarkup
+	found := false
+	if om, ok := providers.DetectOrphanToolCallMarkup(response.Content); ok {
+		response.Content = om.Prose
+		first, found = om, true
+	}
+	if om, ok := providers.DetectOrphanToolCallMarkup(response.ReasoningContent); ok {
+		response.ReasoningContent = om.Prose
+		if !found {
+			first, found = om, true
+		}
+	}
+	return first, found
+}
+
+// truncationOutputCapSentence is the advice given to a model whose
+// generation was cut off at the output-token limit before it finished:
+// make the next attempt smaller. Factored out of orphanToolMarkupRepairMessage
+// (ADR-087 D3.6) so both repair paths — the orphan-markup re-prompt and
+// toolCallTruncationRepairMessage below — send the model byte-identical
+// wording for the same underlying fault.
+const truncationOutputCapSentence = " Your previous response was also cut off at the output-token limit before the call was complete. " +
+	"Make this call smaller: send shorter arguments, or split the work across several calls."
+
+// orphanToolMarkupRepairMessage builds the corrective turn sent back to a
+// model whose tool call arrived as text.
+//
+// It deliberately does NOT quote the residue back. The residue is the model's
+// own malformed output; replaying it is a strong prompt to produce the same
+// thing again. The note states the failure, the consequence, and the one
+// action that fixes it.
+//
+// finishReason drives a second sentence when the generation was cut off at
+// the output-token cap — the observed trigger for this fault, where the call
+// was simply too large to finish. Telling the model to make it smaller is the
+// only advice that actually clears that case.
+func orphanToolMarkupRepairMessage(finishReason string) providers.Message {
+	var b strings.Builder
+	b.WriteString("Your previous message did not arrive as a tool call. " +
+		"It arrived as plain text containing raw tool-call markup, so no tool ran and nothing was written or changed. " +
+		"Re-issue that call now using the tool-calling interface — a structured tool call, not text. " +
+		"Do not write tool-call markup, XML tags, or a JSON description of the call into your message body.")
+	if isTruncatedFinishReason(finishReason) {
+		b.WriteString(truncationOutputCapSentence)
+	}
+	return providers.Message{Role: "user", Content: b.String()}
+}
+
+// isTruncatedFinishReason reports whether a finish_reason means the model ran
+// out of output tokens mid-generation. providers/common.normalizeFinishReason
+// rewrites OpenAI's "length" to "truncated"; both spellings are accepted here
+// because not every provider adapter routes through that normaliser.
+func isTruncatedFinishReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "truncated", "length", "max_tokens":
+		return true
+	}
+	return false
+}
+
+// ── ADR-087 D3/D4/D5/D6/D9: the truncation outcome handler ──
+//
+// runTurn calls the provider from three sites (§2.7: the main retry loop,
+// the media-downgrade retry, and the empty-response retry's own attempt).
+// D9 requires D3 (error arm) and D4/D6 (success arm) to be evaluated
+// identically at all three — implemented here as two shared functions
+// (evaluateTruncatedToolCallError, evaluateTruncatedSuccess) that runTurn
+// calls at each site; Go's labeled continue/break for turnLoop can only be
+// written in runTurn itself, so the functions return a verdict rather than
+// controlling the loop directly, and runTurn's three call sites act on it
+// identically (§7.9 pins this).
+const (
+	// truncationReasonMaxOutputTokens is the only Message.truncation_reason
+	// value this package writes (ADR-087 D2) — "cancelled" is cancel.go's
+	// own, unrelated writer.
+	truncationReasonMaxOutputTokens = "max_output_tokens"
+	// maxTruncationContinuations bounds ADR-087 D6's auto-continue rounds
+	// per turn (D6.3).
+	maxTruncationContinuations = 2
+	// truncatedToolCallRetryReason labels a D3 tool-call-truncation repair
+	// on the event bus, distinct from orphanToolMarkupRetryReason and the
+	// plain "empty_response"/"timeout" reasons already in use.
+	truncatedToolCallRetryReason = "tool_call_truncated"
+	// truncationContinueRetryReason labels a D6 auto-continue round on the
+	// event bus.
+	truncationContinueRetryReason = "truncation_continue"
+)
+
+// toolCallTruncationRepairMessage builds the corrective turn sent back to a
+// model whose tool call was cut off at the output-token limit before it
+// could be decoded (ADR-087 D3). Reuses truncationOutputCapSentence
+// (D3.6) — the same advice orphanToolMarkupRepairMessage gives for the
+// sibling fault.
+func toolCallTruncationRepairMessage() providers.Message {
+	return providers.Message{
+		Role: "user",
+		Content: "Your tool call was cut off at the output-token limit before it finished, so it could not run and nothing was changed." +
+			truncationOutputCapSentence,
+	}
+}
+
+// truncationContinueMessage is the D6.9 instruction appended after the
+// partial answer when a truncated response earns an auto-continue round.
+// Never persisted as a user-role session-history message (D6.7) — it lives
+// only in the turn-local `messages` slice used to build the next request.
+func truncationContinueMessage() providers.Message {
+	return providers.Message{
+		Role: "user",
+		Content: "Your previous message was cut off at the output-token limit. Continue from exactly where it stopped. " +
+			"Do not repeat any text you already wrote, and do not restate or summarise it.",
+	}
+}
+
+// evaluateTruncatedToolCallError implements ADR-087 D3: a tool call cut off
+// at the output-token limit gets exactly one bounded repair per turnLoop
+// round before the turn falls through to the terminal error path.
+//
+// Returns (repairedMessages, true) when a repair was dispatched — the
+// caller must retry the provider call with repairedMessages. Returns
+// (nil, false) when the caller's EXISTING error handling (ClassifyError,
+// media downgrade, PDF fallback, the generic terminal path) must run
+// completely unchanged: the error was not a truncated tool call, nothing
+// was streamed's worth of content was already shown, the round already
+// spent its one repair, no provider retry remains, or a hard abort is
+// already in flight.
+func (al *AgentLoop) evaluateTruncatedToolCallError(
+	ts *turnState,
+	err error,
+	callMessages []providers.Message,
+	retry, maxRetries int,
+	roundRepairUsed *bool,
+	llmModel string,
+	iteration int,
+) ([]providers.Message, bool) {
+	if err == nil || !errors.Is(err, common.ErrToolArgumentsUndecodable) {
+		return nil, false
+	}
+	// D3.2: only repair when nothing was streamed yet this attempt — a
+	// partially-streamed response has already shown the user real text;
+	// repairing here would duplicate it. Same idiom as the timeout-retry
+	// guard at :10487.
+	if sc, ok := ts.lastStreamer.(interface{ StreamedContentLen() int }); ok && sc.StreamedContentLen() > 0 {
+		return nil, false
+	}
+	// D3.3: a `continue` on the last retry exits the loop without making
+	// the promised call — do not count or announce a repair that cannot
+	// run.
+	if retry >= maxRetries {
+		return nil, false
+	}
+	// D3.4: one repair per turnLoop round; the caller resets
+	// roundRepairUsed at the top of every round.
+	if roundRepairUsed == nil || *roundRepairUsed {
+		return nil, false
+	}
+	// D3.8: re-check hard-abort explicitly before dispatching the repair
+	// call — `continue` skips sleepWithContext, which is where this check
+	// normally lands.
+	if ts.hardAbortRequested() {
+		return nil, false
+	}
+
+	*roundRepairUsed = true
+
+	// D3.9: the refused attempt was billed by the provider even though the
+	// call was refused locally — debit its usage exactly once, through the
+	// SAME function the success arm uses (debitLLMUsage). An earlier cut of
+	// this block re-typed the four accounting calls by hand and silently
+	// omitted SetLastUsage, so a turn whose last provider call was a refused
+	// truncated tool call reported the PREVIOUS call's usage as its last.
+	var tae *common.ToolArgumentsError
+	if errors.As(err, &tae) {
+		al.debitLLMUsage(ts, llmModel, tae.Usage)
+	}
+
+	logger.WarnCF("agent", "tool call cut off at the output-token limit — re-prompting the model once",
+		map[string]any{
+			"agent_id":  ts.agent.ID,
+			"iteration": iteration,
+			"model":     llmModel,
+			"error":     err.Error(),
+		})
+	al.emitEvent(
+		EventKindLLMRetry,
+		ts.eventMeta("runTurn", "turn.llm.retry"),
+		LLMRetryPayload{
+			Attempt:    1,
+			MaxRetries: 1,
+			Reason:     truncatedToolCallRetryReason,
+			Error:      err.Error(),
+		},
+	)
+
+	// D3.5/D3.6: append to a FRESH copy of callMessages — never mutate the
+	// turn's own `messages`, never bare-append (aliasing risk, same idiom
+	// as :9867). D3.7: the refused response itself is never appended to
+	// history — only this repair note is.
+	repaired := append(append([]providers.Message(nil), callMessages...), toolCallTruncationRepairMessage())
+	return repaired, true
+}
+
+// truncationSuccessAction is evaluateTruncatedSuccess's verdict — see its
+// doc comment for what each caller must do.
+type truncationSuccessAction int
+
+const (
+	// truncationActionNone: the guard did not match (not truncated, or the
+	// response carried tool calls) — the caller's existing logic runs
+	// completely unchanged.
+	truncationActionNone truncationSuccessAction = iota
+	// truncationActionContinue: D6 — the caller must set `messages` to
+	// verdict.messages and `continue turnLoop`.
+	truncationActionContinue
+	// truncationActionEnd: D4a or D4b — the caller must set finalContent to
+	// verdict.finalContent and `break turnLoop`.
+	truncationActionEnd
+)
+
+// truncationSuccessVerdict is evaluateTruncatedSuccess's return value.
+type truncationSuccessVerdict struct {
+	action       truncationSuccessAction
+	finalContent string
+	messages     []providers.Message
+}
+
+// evaluateTruncatedSuccess implements ADR-087 D4 (one branch, three
+// outcomes) and D6 (auto-continue). Called once, ahead of the legacy
+// empty-response retry loop, for every one of runTurn's three provider-call
+// sites (D9) — main, media-downgrade retry, and the empty-response retry's
+// own successful attempt (via its own call site inside that loop).
+//
+// continuationChain is the caller's turn-scoped bookkeeping (declared once,
+// ahead of turnLoop) holding the exact {assistant, user} pair a previous
+// round appended to `messages` — mutated here so a later round REPLACES the
+// previous round's chain instead of accumulating duplicate copies of the
+// answer-so-far (D6.7's "re-appended exactly once").
+//
+// The response's own CONTENT is read from response.Content deliberately, NOT
+// from the caller's `responseContent` local: that local carries the
+// ReasoningContent substitution the empty-response path applies, so passing
+// it fed a reasoning-only truncated response's chain-of-thought into the
+// accumulator, echoed it back to the model under "Continue from exactly
+// where it stopped", and persisted it as the answer. A reasoning-only
+// truncated response produced no answer text and is therefore D4a.
+func (al *AgentLoop) evaluateTruncatedSuccess(
+	ts *turnState,
+	response *providers.LLMResponse,
+	messages []providers.Message,
+	providerToolDefs []providers.ToolDefinition,
+	gracefulTerminal bool,
+	iteration int,
+	llmModel string,
+	continuationChain *[]providers.Message,
+) truncationSuccessVerdict {
+	if response == nil || !isTruncatedFinishReason(response.FinishReason) || len(response.ToolCalls) > 0 {
+		// D6.10 (part): a round that did not need the truncation branch at
+		// all resolves any chain a PRIOR round left pending.
+		ts.resolveContinuation()
+		return truncationSuccessVerdict{action: truncationActionNone}
+	}
+
+	responseContent := response.Content
+	accumulated := ts.appendToAccumulator(responseContent)
+
+	if strings.TrimSpace(accumulated) == "" {
+		// D4a: nothing was ever produced. No retry, no fallback
+		// substitution, no markTurnFailed — the annotation is the whole
+		// answer. loop.go's tail (and, for a streamed turn,
+		// finalizeStreamer) own writing the zero-content entry this
+		// annotates.
+		ts.setTruncationReason(truncationReasonMaxOutputTokens)
+		ts.resolveContinuation()
+		logger.WarnCF("agent", "LLM response truncated at the output-token limit with no content produced",
+			map[string]any{"agent_id": ts.agent.ID, "iteration": iteration, "model": llmModel})
+		return truncationSuccessVerdict{action: truncationActionEnd, finalContent: ""}
+	}
+
+	if responseContent != "" {
+		if newMessages, ok := al.truncationContinuationEligible(
+			ts, messages, providerToolDefs, gracefulTerminal, iteration, continuationChain, accumulated,
+		); ok {
+			ts.markContinuationDispatched()
+			al.emitEvent(
+				EventKindLLMRetry,
+				ts.eventMeta("runTurn", "turn.llm.retry"),
+				LLMRetryPayload{
+					Attempt:    ts.continuationRoundsSnapshot(),
+					MaxRetries: maxTruncationContinuations,
+					Reason:     truncationContinueRetryReason,
+				},
+			)
+			logger.InfoCF("agent", "LLM response cut off at the output-token limit; auto-continuing",
+				map[string]any{
+					"agent_id":  ts.agent.ID,
+					"iteration": iteration,
+					"model":     llmModel,
+					"round":     ts.continuationRoundsSnapshot(),
+				})
+			return truncationSuccessVerdict{action: truncationActionContinue, messages: newMessages}
+		}
+	}
+
+	// D4b: not eligible for a further continuation (bound reached,
+	// iteration capacity, graceful stop already used, or the request
+	// cannot fit) — the accumulated answer stands.
+	ts.setTruncationReason(truncationReasonMaxOutputTokens)
+	ts.resolveContinuation()
+	logger.WarnCF("agent", "LLM response remained truncated at the output-token limit; ending the turn with the partial answer",
+		map[string]any{"agent_id": ts.agent.ID, "iteration": iteration, "model": llmModel})
+	return truncationSuccessVerdict{action: truncationActionEnd, finalContent: accumulated}
+}
+
+// truncationContinuationEligible implements D6's gates 3-6 (D6.2's content
+// gate and D4's own "content produced" check are the caller's
+// responsibility, above). Returns the candidate `messages` slice — with the
+// collapsed continuation chain appended, admission-checked via
+// midTurnWindowCheck (D6.6) — and whether a further round may be
+// dispatched.
+func (al *AgentLoop) truncationContinuationEligible(
+	ts *turnState,
+	messages []providers.Message,
+	providerToolDefs []providers.ToolDefinition,
+	gracefulTerminal bool,
+	iteration int,
+	continuationChain *[]providers.Message,
+	accumulated string,
+) ([]providers.Message, bool) {
+	// D6.3: bounded at 2 continuations per turn.
+	if ts.continuationRoundsSnapshot() >= maxTruncationContinuations {
+		return nil, false
+	}
+	// D6.4 (Codex C4): never spend the LAST permitted iteration on a
+	// continuation — D4b takes over instead of the toolLimitResponse
+	// fallback.
+	if ts.agent.MaxIterations > 0 && iteration+1 >= ts.agent.MaxIterations {
+		return nil, false
+	}
+	// D6.5 (Codex C3): cancellation beats recovery — never continue once
+	// the turn has already gone through its graceful-stop terminal
+	// request.
+	if gracefulTerminal {
+		return nil, false
+	}
+
+	// D6.7's "re-appended exactly once" — by IDENTITY, never by position.
+	// This used to slice `messages[:len-2]` on the assumption that the
+	// previous round's chain was still the last two entries. It is not: the
+	// steering injection at the top of turnLoop and every tool-call round
+	// append AFTER the chain, so the blind tail-slice removed whichever two
+	// entries happened to be last (a dequeued steering message, or an
+	// assistant tool_calls message together with its tool result) while
+	// leaving the stale chain in place — the model then continued without
+	// the steering instruction or without the tool result, and saw its own
+	// partial twice.
+	var base []providers.Message
+	if continuationChain != nil {
+		base = stripContinuationChain(messages, *continuationChain)
+	} else {
+		base = messages
+	}
+	chain := continuationChainMessages(accumulated)
+	candidate := append(append([]providers.Message(nil), base...), chain...)
+
+	// D6.6 (Codex pass 2, M2): `continue turnLoop` does not re-run the
+	// proactive windowTrim — run the existing mid-turn admission check
+	// against what the continuation would add. A guard hit here means D4b
+	// with the partial (the caller sees ok=false), never typedTurnExit.
+	checked, err := al.midTurnWindowCheck(ts, candidate, providerToolDefs)
+	if err != nil {
+		return nil, false
+	}
+	if continuationChain != nil {
+		*continuationChain = chain
+	}
+	return checked, true
+}
+
+// continuationChainMessages builds the collapsed
+// {assistant: answer-so-far, user: continue-instruction} pair ADR-087 D6.9
+// appends to the turn-local `messages` slice. It is the SINGLE definition of
+// that pair: truncationContinuationEligible above and the two history-rebuild
+// restoration sites in runTurn (D6.7 — post-timeout-trim and
+// post-context-overflow-trim assembly) all call it, so the shape the model
+// sees can never drift between the three.
+func continuationChainMessages(accumulated string) []providers.Message {
+	return []providers.Message{
+		{Role: "assistant", Content: accumulated},
+		truncationContinueMessage(),
+	}
+}
+
+// stripContinuationChain removes a previously-appended D6 continuation chain
+// from msgs by IDENTITY — the recorded pair's role+content, matched as two
+// ADJACENT entries, searched from the end — and returns a fresh slice.
+//
+// Position is not usable here (see truncationContinuationEligible's comment):
+// appends land after the chain, and midTurnWindowCheck may hand back a
+// re-sliced `messages`, so neither an index nor a trailing-count survives.
+// When the recorded pair is not found (nothing was recorded, or a trim
+// already evicted it) msgs is returned unchanged — the caller then appends a
+// fresh chain, which is the correct degraded behaviour: at worst the model
+// re-reads a partial it already has, never loses a tool result.
+func stripContinuationChain(msgs, chain []providers.Message) []providers.Message {
+	if len(chain) != 2 || len(msgs) < 2 {
+		return msgs
+	}
+	for i := len(msgs) - 2; i >= 0; i-- {
+		if !sameContinuationChainMessage(msgs[i], chain[0]) ||
+			!sameContinuationChainMessage(msgs[i+1], chain[1]) {
+			continue
+		}
+		out := make([]providers.Message, 0, len(msgs)-2)
+		out = append(out, msgs[:i]...)
+		out = append(out, msgs[i+2:]...)
+		return out
+	}
+	return msgs
+}
+
+// sameContinuationChainMessage is stripContinuationChain's identity test. A
+// chain entry is plain text with no tool calls and no media, so a message
+// carrying either is never the chain even if its role and content match.
+func sameContinuationChainMessage(a, b providers.Message) bool {
+	return a.Role == b.Role &&
+		a.Content == b.Content &&
+		len(a.ToolCalls) == 0 && len(b.ToolCalls) == 0 &&
+		len(a.Media) == 0 && len(b.Media) == 0
+}
+
+// flushContinuationAccumulator settles the D6 accumulator into the durable
+// record, IN ORDER, and clears it.
+//
+// The invariant it enforces: the accumulator holds exactly the answer text
+// that has NOT yet been persisted anywhere. A tool-calling round persists its
+// OWN narration (the assistant tool_calls message into session history, plus
+// appendIntermediateAssistantTranscript into the transcript) the moment it
+// runs, so any earlier continuation prefix still sitting in the accumulator
+// must be written FIRST or the archive ends up out of order: the prefix would
+// otherwise only reach disk at turn end, prepended to the final answer, i.e.
+// [P2][P1+P3] instead of [P1][P2][P3] — content preserved, order wrong, and
+// the SPA's replay merge renders it as "P2\n\nP1P3" while the next turn's
+// context sees P1 after P2.
+//
+// Clearing is the other half: content that has been flushed must never be
+// re-emitted by the accumulator's later readers (the D6.10 merge at the
+// direct-answer tail, D4b, preserveTruncatedAccumulator, or finalizeStreamer's
+// SetContinuationContent probe).
+//
+// The recorded continuation chain is dropped at the same time: the chain's
+// assistant entry is now settled context that the next round's rebuild must
+// KEEP rather than strip, and the accumulator it would otherwise be rebuilt
+// from no longer contains that text.
+//
+// Written here rather than as a turnState method because pkg/agent/turn.go is
+// owned by a concurrent work item in this wave; the field access is
+// mutex-guarded exactly as turn.go's own accessors do it.
+func (al *AgentLoop) flushContinuationAccumulator(ts *turnState, continuationChain *[]providers.Message) {
+	if ts == nil {
+		return
+	}
+	ts.mu.Lock()
+	pending := ts.continuationAccum
+	ts.continuationAccum = ""
+	ts.mu.Unlock()
+	if continuationChain != nil {
+		*continuationChain = nil
+	}
+	if pending == "" {
+		return
+	}
+	ts.appendIntermediateAssistantTranscript(pending)
+	if !ts.opts.NoHistory && ts.agent != nil && ts.agent.Sessions != nil {
+		ts.agent.Sessions.AddMessage(ts.sessionKey, "assistant", pending)
+	}
+}
+
+// debitLLMUsage is the ONE accounting path for a provider call's reported
+// usage: turnState.lastUsage and the turn's own stats — collapsed total +
+// cost, the cache read/write split, and the prompt/completion split.
+//
+// It exists because ADR-087 D3.9 must debit a REFUSED attempt's billed usage
+// (common.ToolArgumentsError.Usage) exactly the way the success arm debits a
+// delivered one, and the first cut of that re-typed the calls by hand and
+// dropped SetLastUsage. Two callers, one body, no drift.
+func (al *AgentLoop) debitLLMUsage(ts *turnState, llmModel string, usage *providers.UsageInfo) {
+	if ts == nil || usage == nil {
+		return
+	}
+	ts.SetLastUsage(usage)
+	ts.AddTurnStats(int64(usage.TotalTokens), estimateLLMCallCost(llmModel, usage))
+	ts.AddTurnCacheStats(usage.CacheReadTokens, usage.CacheWriteTokens)
+	ts.AddTurnIOStats(usage.PromptTokens, usage.CompletionTokens)
+}
+
+// preserveTruncatedAccumulator implements ADR-087 D6.8: every terminal exit
+// that can fire while a D6 continuation is unresolved must keep what was
+// already written, annotated truncated/max_output_tokens, instead of
+// silently discarding it behind its own real error.
+//
+// It is runTurn's ONE choke point, invoked from a single `defer` registered
+// immediately after `defer ts.finalizeStreamer(ctx)` so LIFO runs it just
+// BEFORE the streamer is finalised (which is what picks up the finalContent/
+// truncationReason set here on a streamed turn). It was previously
+// hand-wired into five specific exits, which left every OTHER bare
+// `return turnResult{}` inside turnLoop able to fire with a continuation
+// pending and preserve nothing: the four process-hook aborts (before_llm /
+// after_llm / before_tool / after_tool), the orphan-markup repair-budget
+// exhaustion, the tool-dedup denial, the delegate park — and, past the loop,
+// the session-save failure. A hook aborting at the top of a continuation
+// round persisted the partial as a COMPLETE, un-annotated answer on webchat,
+// and dropped it outright on every non-streamed surface (heartbeat, cron,
+// delegated sub-turns) where the chain had never reached history at all
+// (D6.7) — exactly what D6.8 forbids.
+//
+// ts.continuationUnresolved() is the "already settled" guard that makes the
+// defer safe: resolveContinuation below clears it, so a turn that settled
+// its chain during the loop (the overwhelming majority) no-ops here, and no
+// exit can preserve twice.
+//
+// For a streamed turn the write happens later, inside finalizeStreamer's
+// deferred call (which reads ts.finalContent/ts.truncationReason set here);
+// for a non-streamed turn this writes the transcript entry directly, since
+// no later choke point exists for that path. Either way, D6.8's "makes no
+// provider call" half of the contract is satisfied by construction: this
+// function never calls the provider.
+func (al *AgentLoop) preserveTruncatedAccumulator(ts *turnState) {
+	if ts == nil || !ts.continuationUnresolved() {
+		return
+	}
+	accumulated := ts.continuationAccumulated()
+	ts.SetFinalContent(accumulated)
+	ts.setTruncationReason(truncationReasonMaxOutputTokens)
+	ts.resolveContinuation()
+
+	ts.mu.RLock()
+	hasStreamer := ts.lastStreamer != nil
+	ts.mu.RUnlock()
+	if hasStreamer {
+		// finalizeStreamer's deferred call (registered once, early in
+		// runTurn) fires after this function returns and picks up the
+		// ts.finalContent / ts.truncationReason just set above.
+		return
+	}
+	// ADR-087 D4a/D4b: stamp Truncated/TruncationReason in the SAME write as
+	// the content — see appendAssistantTranscriptTruncated's doc comment.
+	// This replaces the former append-then-MarkLastEntryTruncated two-step,
+	// which reopened and rewrote the whole transcript.jsonl just to stamp
+	// two fields on the entry constructed one call earlier.
+	ts.appendAssistantTranscriptTruncated(accumulated, truncationReasonMaxOutputTokens)
+}
 
 // ErrReloadNotConfigured is returned by TriggerReload when no reload function
 // has been registered. This is normal in unit-test environments where the full
@@ -968,6 +1539,11 @@ func NewAgentLoop(
 	al.homePath = homePath
 	al.taskStore = task.New(filepath.Join(homePath, "tasks"))
 	al.taskExecutor = newTaskExecutor(al, al.taskStore)
+	// Founder decision 2026-09-14: expose the running task's live progress
+	// stamp (reasoning counts) so the REST tasks surface can stamp
+	// Task.last_activity_at. The loop is the authority; the executor is the
+	// holder because the REST side already reaches the task engine here.
+	al.taskExecutor.SetLiveTaskActivitySource(al)
 
 	// Initialize shared session store at $OMNIPUS_HOME/sessions/.
 	// All new chat sessions are created here (joined session model).
@@ -1177,16 +1753,7 @@ func NewAgentLoop(
 
 	// SEC-26: Initialize rate limiter registry. The registry always exists
 	// so per-agent windows can be created even when no limit is configured.
-	// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
 	al.rateLimiter = security.NewRateLimiterRegistry()
-
-	// ADR-053 Phase-2 / D12 (R§8.3): app-level OVERALL token budget — the
-	// sole app-level spend brake. The ceiling is restart-gated (FR-177) —
-	// read ONCE at boot from PlanningConfig and never live-reloaded; the
-	// live spend lever is Stop/cancel. The persister reconciles the
-	// consumed counter across restarts. cap 0 = unbounded (FR-175).
-	tbPath := filepath.Join(homePath, "system", "token_budget.json")
-	al.tokenBudget = NewTokenBudget(cfg.Planning.EffectiveTokenBudget(), NewTokenBudgetPersister(tbPath))
 	logger.InfoCF("agent", "Rate limiter initialized",
 		map[string]any{
 			"max_agent_llm_calls_per_hour":    cfg.Sandbox.RateLimits.MaxAgentLLMCallsPerHour,
@@ -1381,17 +1948,6 @@ func (al *AgentLoop) RateLimiter() *security.RateLimiterRegistry {
 		return nil
 	}
 	return al.rateLimiter
-}
-
-// TokenBudget returns the ADR-053 Phase-2 app-level OVERALL token budget
-// (D12/R§8.3). Always non-nil after NewAgentLoop (a nil AgentLoop returns
-// nil). Used by the goal loop's graceful-wind-down brake (checkGoalLoopAfterTurn)
-// and by gateway Usage handlers that report spend / set the restart-gated ceiling.
-func (al *AgentLoop) TokenBudget() *TokenBudget {
-	if al == nil {
-		return nil
-	}
-	return al.tokenBudget
 }
 
 // ApprovalGrants returns the session-scoped "Always Allow" tool-approval
@@ -1908,6 +2464,15 @@ func registerSharedTools(
 			return al.getAskUserRegistry()
 		}))
 
+		// set_goal (ADR-081 D2, work-first-goal-flow-spec FR-004..FR-006):
+		// the validated write-path over this session's goal record.
+		// wireGoalToolsForAgent (goal_record_wiring.go) resolves the
+		// session-store-backed access/diff/feasibility seams LIVE per call —
+		// no external gateway wiring needed, unlike AskUserQuestion's
+		// registry, since goal state lives in the SAME session store this
+		// package already owns.
+		wireGoalToolsForAgent(al, agent)
+
 		// Handoff tools — always registered (ScopeCore).
 		getRegistryReader := func() tools.AgentRegistryReader {
 			return al.GetRegistry()
@@ -2237,6 +2802,10 @@ func registerSharedTools(
 			// it exists, exactly like wirePlanToolsForAgent's own create_plan/
 			// execute_plan late-binding discipline.
 			taskCreate.SetPlanStore(al.GetPlanStore())
+			// Founder decision 2026-09-14 (D-D/D-E): the paired goal record an
+			// agent-created task gets carries the LIVE Settings -> Performance
+			// goal try limit, read at create time — not the shipped default.
+			taskCreate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(al) })
 			// ADR-037: the legacy boolean delegateCheck (SetDelegateChecker,
 			// backed by config.ResolveDelegationTo) is retired — the field it
 			// read no longer exists. The graph-based deny checker below is the
@@ -2258,6 +2827,9 @@ func registerSharedTools(
 			// task run starts a fresh turn at depth 0 (see processTaskDirect depth
 			// seeding); this hard ceiling closes that gap.
 			taskCreate.SetMaxDelegationDepth(maxTaskDepth)
+			// Founder decision 2026-09-15: refuse assigning a task to an agent
+			// that cannot finish it (task_assignee_readiness.go).
+			taskCreate.SetAssigneeReadinessChecker(al.TaskAssigneeCannotFinish)
 			// D2 rule 5 (FR-017/052, review r1 major M5): reject an all-check
 			// criteria create outright when the assignee's effective bash
 			// policy is deny or ask — structurally unsatisfiable, mirrors
@@ -2291,6 +2863,10 @@ func registerSharedTools(
 			agent.Tools.RegisterReplacing(taskCreate)
 
 			taskUpdate := tools.NewTaskUpdateTool(al.taskStore)
+			// Same live goal try limit as taskCreate above, for the goal record
+			// update_task creates when a legacy task gets criteria/dod.
+			taskUpdate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(al) })
+			taskUpdate.SetAssigneeReadinessChecker(al.TaskAssigneeCannotFinish)
 			taskUpdate.SetOnComplete(func(t *task.Task) {
 				if al.taskExecutor != nil {
 					al.taskExecutor.onTaskComplete(t)
@@ -2431,6 +3007,14 @@ func registerSharedTools(
 				// pkg/tools/browser/pool_ttl_config_reachability_test.go.
 				browserCfg.IdleCloseTTL = cfg.Tools.Browser.EffectiveIdleCloseTTL()
 				browserCfg.CacheTrimInterval = cfg.Tools.Browser.EffectiveCacheTrimInterval()
+				// ADR-085 BROWSER-FR-031a/FR-052: the LiveViewRegistry
+				// idle-release sweeper's window and the take-control
+				// enablement flag it reads on every tick — see
+				// browser.BrowserConfig's doc comments on both fields.
+				browserCfg.ControlIdleRelease = time.Duration(
+					cfg.Tools.Browser.EffectiveControlIdleReleaseSec(),
+				) * time.Second
+				browserCfg.TakeControlEnabled = cfg.Tools.Browser.TakeControlEnabled
 				// Start page: an operator override wins; otherwise default to
 				// the gateway's own served start page so a fresh tab lands
 				// somewhere branded and legible instead of about:blank (a blank
@@ -3733,29 +4317,61 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 				return nil
 			}
 
-			// System messages are handled inline in a goroutine (no scope).
+			// System messages carrying a resolved async origin session
+			// (#505) run through the per-session sessionWorker so the
+			// reconstructed turn is serialized against the origin session's
+			// live turns, exactly like every other inbound message. Before
+			// this, FIX 5d's AsyncTranscriptSessionID threading made the bare
+			// goroutine below able to run a real turn concurrently against the
+			// SAME origin session as a live user turn (UAT A-17: five turns
+			// at once on one session, each started as a background delegation
+			// finished, ending in SIGKILL-recovered orphaned tool calls).
 			//
-			// FIX 5d follow-up — tracked as elicify-ai/omnipus#505 (filed,
-			// not fixed in this pass): before FIX 5d, an AsyncNotifier-
-			// originated system message was inert here w.r.t. the origin
-			// session (no TranscriptSessionID/TranscriptStore bound), so
-			// this lack of per-session serialization was harmless. FIX 5d
-			// now threads AsyncOriginAgentID/AsyncTranscriptSessionID
-			// through processSystemMessage, so this goroutine CAN run a real
-			// turn concurrently against the SAME origin session as a live
-			// user turn (unlike every other inbound message, which IS
-			// serialized per session via the sessionWorker pool below).
-			// File-level writes stay safe (UnifiedStore's mutex +
-			// WriteFileAtomic), so this is not a NEW corruption risk on its
-			// own, but the single-writer-per-session invariant other turn
-			// types rely on no longer holds for this specific path. See
-			// #505 for the suggested follow-up (route through sessionWorker,
-			// or prove file-level locking is sufficient and close it).
+			// Dispatch prefers a worker that already owns the session —
+			// matched on the one scope-shape guarantee resolveSteeringTarget
+			// makes unconditionally (a literal ":"+SessionID suffix; see
+			// cancel_prearm.go's matching rationale) — so serialization holds
+			// whichever agent-shaped key the live turn used (explicit
+			// dropdown, handoff pin, or default route). With no live worker,
+			// a probe message shaped like the session's own user traffic
+			// (origin channel/chatID + SessionID) resolves the scope the same
+			// way that traffic would, and a worker is spawned under it — the
+			// residual gap is a turn whose routing diverges from the probe's
+			// (e.g. an agent selected per-message via metadata while no worker
+			// is live): that pair still falls back to the bare goroutine
+			// below, no worse than before.
+			//
+			// sessionWorker.enqueue deliberately never steers a system message
+			// into a live turn (session_worker.go): it queues in the worker's
+			// inbox and runs as its own serialized turn after the live one —
+			// a live turn waiting on the very delegation whose completion this
+			// message carries can therefore never deadlock against it.
+			//
+			// Internal-channel origins and messages with no resolved origin
+			// session have nothing to serialize against and keep the bare
+			// goroutine.
+			if msg.Channel == "system" && msg.AsyncTranscriptSessionID != "" {
+				originChannel := "cli"
+				if idx := strings.Index(msg.ChatID, ":"); idx > 0 {
+					originChannel = msg.ChatID[:idx]
+				}
+				if !constants.IsInternalChannel(originChannel) && al.dispatchSystemMessageToSessionWorker(msg, originChannel) {
+					continue
+				}
+			}
+
+			// System messages with no session to serialize against are
+			// handled inline in a goroutine (no scope).
 			if msg.Channel == "system" {
 				// Track in activeRequests so graceful shutdown's
 				// WaitForActiveRequests drains this turn before teardown —
 				// otherwise its cost.json / session-context writes can outlive
 				// RunContext and race temp-dir cleanup (#265, macOS APFS).
+				// (The sessionWorker path above intentionally does NOT wrap
+				// the message: no other worker-dispatched message is wrapped
+				// either; each LLM call inside the turn tracks itself, and
+				// Close()/stopSessionWorkers cancels and drains the worker
+				// with a 5s budget.)
 				al.activeRequests.Add(1)
 				go func() {
 					defer al.activeRequests.Done()
@@ -3901,61 +4517,13 @@ func (al *AgentLoop) Run(ctx context.Context) error {
 			}
 
 			// If a worker already exists for this scope AND is not in the
-			// middle of exiting, enqueue into it. The exiting check closes
-			// the silent-drop race (pass-2 silent-failure-hunter N1) where
-			// the dispatcher Load'd a worker whose idleTimer had already
-			// fired but whose deferred sessionWorkers.Delete had not yet
-			// run — enqueue into the dying worker's inbox would never be
-			// drained. When exiting=true we fall through to the spawn path
-			// below, which will create a fresh worker.
-			if existing, ok := al.sessionWorkers.Load(scope); ok {
-				w, ok := existing.(*sessionWorker)
-				if !ok {
-					logger.ErrorCF("agent", "sessionWorkers: invariant violated — unexpected value type",
-						map[string]any{"scope": scope, "got_type": fmt.Sprintf("%T", existing)})
-					// Fall through to spawn a replacement, same as a dying worker.
-				} else if !w.exiting.Load() {
-					w.enqueue(msg)
-					continue
-				}
-				// Dying worker (or corrupted entry) — fall through to spawn replacement.
-			}
-
-			// No worker yet — atomically claim an admission slot for this scope.
-			// TryAdmit returns (true, release) when admitted; (false, nil) when at cap.
-			// Using TryAdmit rather than a separate ShouldAdmit+OnTurnStart pair
-			// closes the TOCTOU window where two concurrent dispatchers both pass
-			// the check and overshoot the cap.
-			admitted, release := al.admission.TryAdmit(scope)
-			if !admitted {
-				logger.WarnCF("agent", "At capacity — rejecting new session",
-					map[string]any{
-						"scope":    scope,
-						"active":   al.admission.ActiveScopes(),
-						"soft_cap": al.admission.SoftCap(),
-						"channel":  msg.Channel,
-						"chat_id":  msg.ChatID,
-					})
-				// Send user-visible capacity reply.
-				rejectCtx, rejectCancel := context.WithTimeout(runCtx, 3*time.Second)
-				if pubErr := al.bus.PublishOutbound(rejectCtx, bus.OutboundMessage{
-					Channel: msg.Channel,
-					ChatID:  msg.ChatID,
-					Content: "I'm at capacity right now — please try again in a few seconds.",
-				}); pubErr != nil {
-					logger.WarnCF("agent", "Failed to send capacity-rejection reply",
-						map[string]any{"channel": msg.Channel, "error": pubErr.Error()})
-				}
-				rejectCancel()
-				continue
-			}
-
-			// Spawn a new worker for this scope. The worker holds the admission
-			// slot via release() and calls it in its deferred runLoop cleanup.
-			w := newSessionWorker(scope, al, release)
-			al.sessionWorkers.Store(scope, w)
-			go w.runLoop()
-			w.enqueue(msg)
+			// middle of exiting, enqueue into it; otherwise spawn one under
+			// the admission controller. See dispatchSessionWorker
+			// (session_worker.go) — the same helper #505's system-message
+			// dispatch uses to serialize async-origin turns against the
+			// origin session's worker. On an admission refusal the helper has
+			// already published the capacity reply; nothing further to do.
+			al.dispatchSessionWorker(scope, msg)
 		}
 	}
 }
@@ -4337,18 +4905,6 @@ func (al *AgentLoop) Close() {
 		return true
 	})
 
-	// ADR-045: stop every pending orphan-foreground-turn watchdog timer so
-	// none of them fire against a torn-down AgentLoop after Close() returns
-	// (tests in particular construct/close many AgentLoops in quick
-	// succession; a leaked timer firing later would touch a stale al).
-	al.orphanWatches.Range(func(k, v any) bool {
-		if ow, ok := v.(*orphanWatch); ok {
-			ow.cancel()
-		}
-		al.orphanWatches.Delete(k)
-		return true
-	})
-
 	// FR-048: On graceful shutdown, write turn_canceled_restart synthetic entries
 	// to any sessions that have active turns paused awaiting approval. This makes
 	// the restart visible to the session on next load, preventing the user from
@@ -4718,7 +5274,10 @@ func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDe
 		reason = "hook requested turn abort"
 	}
 
-	err := fmt.Errorf("hook aborted turn during %s: %s", stage, reason)
+	// curatedTurnError: this text is written here, from a hook's decision —
+	// never a provider's response — so a task run may show it as written
+	// (turnErrorUserText), exactly as the chat bubble below does.
+	err := &curatedTurnError{text: fmt.Sprintf("hook aborted turn during %s: %s", stage, reason)}
 	// FIX 3: compute the classifier code once and thread it onto the live
 	// ErrorPayload so the WS forwarder (FIX 2) does not have to re-translate
 	// this curated message from scratch — mirroring appendErrorTranscript's
@@ -5224,6 +5783,25 @@ func (al *AgentLoop) rewireBrowserManagerForKey(
 		pool.Release(key, prior)
 	}
 	if prior != nil {
+		// KEEP THIS SHUTDOWN. coordinator.go's doc calls Release "a full
+		// substitute for the old prior.Shutdown() reload call", and that
+		// sentence is true only when the pool instance HAS a coordinator:
+		// BrowserPool.Release does no teardown of its own — it deletes mgr
+		// from inst.mgrs and then calls inst.coord.Release, and only that
+		// reaches dropConnection -> m.Shutdown(). With inst.coord nil (no
+		// shared Chrome stood up yet) nothing is torn down at all, and the
+		// prior manager's Chromium allocator leaks on every hot reload.
+		// TestRegisterSharedTools_HotReload_ShutsDownReplacedBrowserManager
+		// pins exactly that case and caught this being deleted.
+		//
+		// The double-Shutdown that used to panic the gateway with "close of
+		// closed channel" on a Settings save was never this call's fault —
+		// it was LiveViewRegistry.Shutdown not being idempotent, which is
+		// fixed at the source (see its comment in pkg/tools/browser/live.go).
+		// Every other step of BrowserManager.Shutdown was already idempotent
+		// and its doc comment says so, so with the registry fixed the
+		// coordinator-present path's second call is a safe no-op and the
+		// coordinator-absent path is no longer a leak.
 		prior.Shutdown()
 		prior.InvalidateExecPathCache()
 	}
@@ -6544,10 +7122,10 @@ func (al *AgentLoop) processTaskDirect(
 	agentID, prompt, sessionKey, taskChatID string,
 ) (string, error) {
 	if err := al.ensureHooksInitialized(ctx); err != nil {
-		return "", fmt.Errorf("processTaskDirect: hooks: %w", err)
+		return "", fmt.Errorf("processTaskDirect: hooks: %w: %w", ErrTaskRunNotDispatched, err)
 	}
 	if err := al.ensureMCPInitialized(ctx); err != nil {
-		return "", fmt.Errorf("processTaskDirect: mcp: %w", err)
+		return "", fmt.Errorf("processTaskDirect: mcp: %w: %w", ErrTaskRunNotDispatched, err)
 	}
 
 	registry := al.GetRegistry()
@@ -6561,7 +7139,7 @@ func (al *AgentLoop) processTaskDirect(
 		ag = registry.GetDefaultAgent()
 	}
 	if ag == nil {
-		return "", fmt.Errorf("processTaskDirect: no agent %q", agentID)
+		return "", fmt.Errorf("processTaskDirect: no agent %q: %w", agentID, ErrTaskRunNotDispatched)
 	}
 
 	// Tool context uses "system" channel so exec/cron tools are permitted.
@@ -6592,7 +7170,7 @@ func (al *AgentLoop) processTaskDirect(
 	// paper over. This dispatch branch is what lets those guards be relaxed.
 	dispatchKind, dispatchErr := runner.ResolveDispatch(executorConfigOf(ag))
 	if dispatchErr != nil {
-		return "", fmt.Errorf("processTaskDirect: %w", dispatchErr)
+		return "", fmt.Errorf("processTaskDirect: %w: %w", ErrTaskRunNotDispatched, dispatchErr)
 	}
 	if dispatchKind == runner.DispatchKindExternalCLI {
 		return al.processTaskDirectExternalCLI(taskCtx, ag, prompt, sessionKey, taskChatID, delegationDepth)
@@ -6610,6 +7188,7 @@ func (al *AgentLoop) processTaskDirect(
 		TranscriptStore:        al.GetAgentStore(agentID),
 		InitialDelegationDepth: delegationDepth,
 		IsTaskRun:              true,
+		RunningTaskID:          tools.ToolRunningTaskID(taskCtx),
 		// WorkspaceID is already on taskCtx via tools.WithWorkspaceID (the task
 		// executor sets it on ctx before calling processTaskDirect — see
 		// runTask/runTaskFromInProgress's tools.WithWorkspaceID(ctx, t.WorkspaceID)
@@ -6646,15 +7225,15 @@ func (al *AgentLoop) processTaskDirect(
 // An external-CLI worker's tool registry is its OWN CLI's, never Omnipus's —
 // it has no task_update tool wired at all — so buildPrompt's ADR-043
 // TASK_STATUS/TASK_SUMMARY marker instruction (task_executor.go) is this
-// dispatch kind's ONLY possible completion signal. The caller
-// (TaskExecutor.finishTaskRun) parses the aggregated CLI output (ForUser,
-// falling back to ForLLM) for that marker: a found "success"/"failure" line
-// lands the task Done/Failed with the marker's own reported words as Result;
-// no parseable marker at all fails the task closed (StatusFailed) — it is
-// NEVER auto-completed to Done on unverified prose alone. This replaced the
-// former "auto-complete to Done, WARN-only" default (ADR-042 §3's finding);
-// see ADR-043 for the full contract and finishTaskRun's own WarnCF log on the
-// fail-closed path.
+// dispatch kind's ONLY possible completion signal. The task run loop
+// (task_run_loop.go::resolveRunClaim) reads the aggregated CLI output
+// (ForUser, falling back to ForLLM) for that marker and feeds it into the same
+// claim path goal_claim feeds: success with an evidence line is a met claim the
+// Judge checks, failure is a blocked claim that ends the task Failed, and no
+// marker at all spends one goal try — it is NEVER auto-completed to Done on
+// unverified prose alone. This replaced the former "auto-complete to Done,
+// WARN-only" default (ADR-042 §3's finding); see ADR-043 §8 for the current
+// contract.
 //
 // Delegation-depth bounding: the dispatched CLI child runs as a separate OS
 // process with its own tool registry — it has no delegate/create_task tools
@@ -7714,6 +8293,16 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		Metadata: msg.Metadata,
 	}
 
+	// ADR-085 BROWSER-FR-029: release a held browser wheel BEFORE this turn
+	// begins, if and only if msg.OperatorPrompt is true (set ONLY at the
+	// three operator-originated publish sites: websocket.go, sse.go,
+	// channels/base.go::HandleMessage — never here, never by the bus, never
+	// by the async notifier or a goal-loop follow-up). A nil hook (no
+	// gateway wired — headless/test builds) is a silent no-op. See
+	// browser_deferral.go for the hook's registration and the fail-closed
+	// contract on OperatorPrompt itself.
+	invokeBrowserWheelReleaseHookIfOperatorPrompt(ctx, msg, transcriptSessionID)
+
 	// FR-025: reset idle ticker on every user turn, using transcript session ID
 	// when available (web-chat sessions). This starts the ticker on the first
 	// turn and resets it on every subsequent turn.
@@ -7778,18 +8367,12 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return response, agent, nil
 	}
 
-	// ADR-074 D4a reply routing (judgment-first spec US-3 S9): when this
-	// session carries a pending goal state (compiled-awaiting-confirmation or
-	// awaiting a clarification answer), a BARE chat message may be the confirm
-	// token or the clarification answer. The hook answers synchronously
-	// (handled=true), rewrites the turn into round 1 on a fresh-goal confirm
-	// (handled=false + opts.UserMessage), or passes an ordinary message
-	// through untouched — a routine chat message never silently mutates goal
-	// state.
-	if goalHandled, goalReply := al.applyGoalPendingReply(ctx, msg, agent, &opts); goalHandled {
-		return goalReply, agent, nil
-	}
-
+	// ADR-081 D1/D9: the ADR-074 D4a pending-goal reply-routing hook
+	// (applyGoalPendingReply) is retired — goals activate instantly now, so
+	// there is no more pending/clarification state for a bare chat message to
+	// resolve against (FR-022: bare "confirm" is ordinary chat, no
+	// interception exists). Nothing stands between handleCommand above and
+	// runAgentLoop below anymore.
 	resp, err := al.runAgentLoop(ctx, agent, opts)
 	return resp, agent, err
 }
@@ -8096,20 +8679,54 @@ func (al *AgentLoop) processSystemMessage(
 	// is known. This is the confirmed, exact cause of a live "Worker vs Jim"
 	// speaker-attribution flip: an async result from a non-default agent used
 	// to be silently reattributed to whichever agent happens to be default.
-	// GetDefaultAgent() remains the fallback for messages with no async
-	// origin (or a named agent that has since been deleted) — a genuine
-	// last resort, not the primary path.
+	// GetDefaultAgent() remains the fallback ONLY for messages with no async
+	// origin at all — a genuine last resort, not the primary path.
+	//
+	// UAT E-3: a NAMED origin that no longer resolves (the agent was deleted)
+	// is NOT re-homed onto the default agent any more. That fallback handed a
+	// deleted agent's goal-keeper push to Mia, who then worked and parked a
+	// goal that was never hers, delegating real work in the process — the
+	// same "no inheritance" identity violation ADR-032 forbids for delegation.
+	// The result is discarded, loudly: a WARN naming the missing agent, and a
+	// system note in the originating session so the user sees that a
+	// background update was dropped and why.
 	var agent *AgentInstance
 	if msg.AsyncOriginAgentID != "" {
-		if named, ok := al.GetRegistry().GetAgent(msg.AsyncOriginAgentID); ok && named != nil {
-			agent = named
-		} else {
+		named, ok := al.GetRegistry().GetAgent(msg.AsyncOriginAgentID)
+		if !ok || named == nil {
 			logger.WarnCF(
 				"agent",
-				"processSystemMessage: named async origin agent not found; falling back to default agent",
-				map[string]any{"agent_id": msg.AsyncOriginAgentID},
+				"processSystemMessage: async origin agent no longer exists; background result discarded rather than handed to another agent",
+				map[string]any{
+					"agent_id":   msg.AsyncOriginAgentID,
+					"sender_id":  msg.Sender.CanonicalID,
+					"session_id": msg.AsyncTranscriptSessionID,
+				},
 			)
+			if msg.AsyncTranscriptSessionID != "" {
+				if store := al.ResolveSessionStore(msg.AsyncTranscriptSessionID); store != nil {
+					now := time.Now().UTC()
+					if werr := store.AppendTranscriptStrict(msg.AsyncTranscriptSessionID, session.TranscriptEntry{
+						ID:   fmt.Sprintf("async-origin-missing-%s-%d", msg.AsyncTranscriptSessionID, now.UnixNano()),
+						Type: session.EntryTypeSystem,
+						Role: "system",
+						Content: fmt.Sprintf(
+							"A background update for agent %q was not delivered: that agent no longer exists, "+
+								"so the update was discarded instead of being handed to a different agent.",
+							msg.AsyncOriginAgentID),
+						Timestamp: now,
+					}); werr != nil {
+						logger.WarnCF("agent", "processSystemMessage: could not record the discarded-update note in the session",
+							map[string]any{"session_id": msg.AsyncTranscriptSessionID, "error": werr.Error()})
+					}
+				} else {
+					logger.WarnCF("agent", "processSystemMessage: discarded update's session not found; no note written",
+						map[string]any{"session_id": msg.AsyncTranscriptSessionID})
+				}
+			}
+			return "", nil
 		}
+		agent = named
 	}
 	if agent == nil {
 		agent = al.GetRegistry().GetDefaultAgent()
@@ -8226,9 +8843,22 @@ func (al *AgentLoop) processSystemMessage(
 	}
 
 	return al.runAgentLoop(ctx, agent, processOptions{
-		SessionKey:          sessionKey,
-		Channel:             originChannel,
-		ChatID:              originChatID,
+		SessionKey: sessionKey,
+		Channel:    originChannel,
+		ChatID:     originChatID,
+		// ADR-081 D6b: mirrors processMessage's own SenderID threading
+		// (msg.Sender.CanonicalID, above in this file) — without it, EVERY
+		// system-channel-dispatched turn (not just the goal loop's) reaches
+		// checkGoalLoopAfterTurn's origin gate with opts.SenderID always
+		// empty, regardless of what Sender.CanonicalID the producer stamped
+		// on the bus message. This is what let the goal-loop's idle-steer/
+		// nudge/continue-push turns (pkg/agent/goal_triggers.go's
+		// dispatchGoalAsyncFollowUp, which stamps
+		// AsyncNotifyEvent.SenderCanonicalID = goalLoopFollowUpSenderID) be
+		// silently dropped at the gate even after that stamping fix —
+		// discovered while regression-testing D6b (goal_keeper_repairs_test.go's
+		// TestKeeper_SenderGateUnwedged_TwoFullIdleCycles).
+		SenderID:            msg.Sender.CanonicalID,
 		UserMessage:         fmt.Sprintf("[System: %s] %s", msg.Sender.CanonicalID, msg.Content),
 		DefaultResponse:     "Background task completed.",
 		SendResponse:        true,
@@ -8295,13 +8925,29 @@ func (al *AgentLoop) runAgentLoop(
 		// returns a non-nil error for every system-initiated abort (case 2),
 		// which the `if err != nil` branch above already returned from. See
 		// abortTurn's doc comment for the full case split.
+		//
+		// A task executor's worker turn (opts.RunningTaskID, set only by
+		// processTaskDirect) is the one caller this silence misleads: the task
+		// run loop reads a nil error as a turn that ended without a claim and
+		// prompts the worker again, spending its goal tries and then a task
+		// attempt — a hard Stop restarted the work. It gets the typed stop
+		// instead, so task_run_loop.go::finishRunTurn ends the task "Stopped: …"
+		// with no attempt and no restart, as it already does for a graceful
+		// stop and an external-CLI worker's cancel. The Judge's turns set
+		// IsTaskRun but not RunningTaskID and keep the silent unwind.
+		if opts.RunningTaskID != "" {
+			return "", fmt.Errorf("%w: %w", ErrTurnCanceled, context.Canceled)
+		}
 		return "", nil
 	}
 
-	// ADR-049 D6/D7 (US-8): judge-gated /goal round advance. Fast no-op
-	// unless opts.TranscriptSessionID's session carries an active goal; may
-	// append a steering follow-up to result.followUps, published by the loop
-	// immediately below exactly like any other follow-up.
+	// ADR-049 D6/D7 (US-8) / ADR-084 revision 9 D13 (JUDGE-FR-098, this
+	// wave): judge-gated /goal round advance. Fast no-op unless
+	// opts.TranscriptSessionID's session carries an active goal; may append
+	// a steering follow-up to result.followUps (published by the loop
+	// immediately below exactly like any other follow-up), and — on a
+	// resolved `met` claim — records a DEFERRED adjudication on
+	// result.goalDeferredAdjudication instead of running the Judge itself.
 	al.checkGoalLoopAfterTurn(ctx, agent, opts, &result)
 
 	for _, followUp := range result.followUps {
@@ -8315,14 +8961,33 @@ func (al *AgentLoop) runAgentLoop(
 	}
 
 	if opts.SendResponse && result.finalContent != "" {
+		// ADR-082 D6/FR-011: carry the transcript session id so
+		// webchatChannel.Send (pkg/gateway/webchat_channel.go) can resolve
+		// delivery targets by session id first, chat id second — the fix for
+		// E5 (keeper-originated turns carrying a stale ChatID whose only
+		// live connection may have moved to a different chatID via
+		// reconnect/second-tab attach, while the session id stays valid).
 		if err := al.bus.PublishOutbound(ctx, bus.OutboundMessage{
-			Channel: opts.Channel,
-			ChatID:  opts.ChatID,
-			Content: result.finalContent,
+			Channel:   opts.Channel,
+			ChatID:    opts.ChatID,
+			Content:   result.finalContent,
+			SessionID: opts.TranscriptSessionID,
 		}); err != nil {
 			logger.ErrorCF("agent", "Failed to publish outbound response after turn",
 				map[string]any{"channel": opts.Channel, "chat_id": opts.ChatID, "error": err.Error()})
 		}
+	}
+
+	// JUDGE-FR-098 (D13, this wave): dispatch a claim-triggered adjudication
+	// ONLY here — strictly after the operator's answer has been published
+	// above — and in its own goroutine, so this turn returns to its caller
+	// without waiting for the Judge. This is the whole of FR-098's
+	// reordering mechanism; the dispatch itself (context.Background()-
+	// derived timeout, async-notifier steer delivery) lives in
+	// dispatchDeferredGoalAdjudication (goal_loop.go).
+	if result.goalDeferredAdjudication != nil {
+		work := result.goalDeferredAdjudication
+		go al.dispatchDeferredGoalAdjudication(work)
 	}
 
 	if result.finalContent != "" {
@@ -8414,6 +9079,336 @@ func isMessagingChannel(channel string) bool {
 	return false
 }
 
+// goalForcingWebChannel is the SPA session origin (ADR-081 D3 [G-B2]) —
+// mirrors pkg/tools' own unexported webChannelName const
+// (ask_user_question.go), which pkg/agent cannot reach without a
+// cross-package coupling for one literal. AskUserQuestion's own web-only
+// refusal (ToolChannel(ctx) != webChannelName) is the authority this
+// predicate must agree with, so both sides carry the identical value.
+const goalForcingWebChannel = "webchat"
+
+// goalTurnRecordState reads the turn session's current goal state from
+// pkg/goal — the single read both evaluateGoalForcing (every
+// iteration since the D3 amendment, 2026-09-08 — no longer iteration==1
+// only) and the mid-turn rubric-note budget estimate (goalRubricNoteForBudget,
+// every iteration) share, so the two can never disagree about what "the
+// record is still empty" means. holds is
+// ADR-081 D3's base predicate: an active goal whose compiled record is still
+// empty — the transient window between instant activation (D1) and the
+// working agent's own set_goal authorship. rec is nil whenever holds is
+// false.
+//
+// DD-6 (round-6 production blocker, ADR-086, fixed by wave E13): "the
+// compiled record is still empty" used to be read straight off session
+// meta's GoalCriteriaJSON — but a set_goal TOOL call's WriteRecord
+// (goal_record_wiring.go, wave E4) was re-pointed onto pkg/goal.Store and
+// writes NO session meta at all (GOAL-FR-004/FR-005), so a real working
+// agent that registered its record via the tool left this session-meta
+// field permanently empty: the narrowed first-move door never lifted for
+// the rest of the goal. Fixed by reading the SAME pkg/goal-backed accessor
+// set_goal itself uses (agentLoopGoalRecordAccess.ReadGoalState,
+// goal_record_wiring.go) — recordJSON is "" exactly when the session's
+// ACTIVE goal record's own criteria list is still empty, whether that
+// record was activated via the /goal command (goal_loop.go) or a task run
+// (task_executor.go::activateTaskGoal). The REJECTED alternative — making
+// WriteRecord mirror the criteria back onto session meta — would reinstate
+// precisely the dual-write ADR-086 exists to delete; not implemented here.
+//
+// ADR-086 (S6) completes that re-point: the "is this a goal turn at all"
+// half used to read session meta's GoalCondition, which no longer exists.
+// Both halves now come from ONE lookup of the ACTIVE goal record bound to
+// this session (activeGoalForSession, goal_record_wiring.go) — its
+// existence answers the first question and its own criteria list answers
+// the second, so the two can no longer disagree even in principle, and the
+// predicate covers a task-owned goal as well as a chat-owned one.
+func goalTurnRecordState(al *AgentLoop, ts *turnState) (holds bool, rec *goal.Goal) {
+	if al == nil || ts == nil || ts.opts.TranscriptStore == nil || ts.opts.TranscriptSessionID == "" {
+		return false, nil
+	}
+	g := activeGoalForSession(ts.opts.TranscriptSessionID)
+	if g == nil {
+		return false, nil
+	}
+	if len(g.Criteria) > 0 {
+		return false, nil
+	}
+	return true, g
+}
+
+// goalForcingNarrowTools returns the ADR-081 D3 Layer 1 narrowed tool pair:
+// set_goal (always, when present in policyFiltered) plus AskUserQuestion
+// when includeAsk is true and it too is present. Never any other tool —
+// C-3's "1 or 2 definitions, never any other tool".
+func goalForcingNarrowTools(policyFiltered []tools.Tool, includeAsk bool) []tools.Tool {
+	out := make([]tools.Tool, 0, 2)
+	for _, t := range policyFiltered {
+		switch t.Name() {
+		case tools.SetGoalToolName:
+			out = append(out, t)
+		case tools.AskUserQuestionToolName:
+			if includeAsk {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
+// goalForcingDecision is ADR-081 D3/D4's per-request verdict, evaluated once
+// at the top of each LLM request inside runTurn's round loop (spec
+// FR-007/009/010/011, test 8) and consumed by that SAME iteration:
+// providerToolDefs assembly, the rubric-note injection, and — after the
+// tool-execution loop processes the model's response — the FR-010
+// question-round budget bump when the ask door was genuinely taken.
+//
+// D3 AMENDMENT (2026-09-07, ADR-081): provider tool-choice forcing is
+// DELETED — a goal turn on z-ai/glm-5v-turbo failed with `status=400 "Tool
+// choice must be auto" (Z.AI)`, and Z.AI/GLM is the operator's primary
+// provider family. Determinism no longer comes from the request shape
+// (narrow-and-force); it comes from the ENGINE noticing a skipped first
+// move and correcting it on the very next turn (checkGoalLoopAfterTurn's
+// immediate post-turn nudge, goal_loop.go). layer1 here now means ONLY
+// "the tool surface was narrowed to {set_goal[, AskUserQuestion]}" — never
+// "and the model was forced to call one of them". Narrowing is provider-
+// agnostic (it is just the tools array offered), so the old CLI-bridged-
+// provider exclusion (isCLIBridgedProvider/ToolChoiceForcingCapable) is
+// gone too — narrowing applies identically on every provider now.
+type goalForcingDecision struct {
+	// layer1 is true when the request's tool surface was narrowed to
+	// {set_goal[, AskUserQuestion]}: the base predicate holds and set_goal
+	// itself is not policy-denied. No tool-choice is ever forced (D3
+	// amendment) — a model offered the narrowed pair remains free to answer
+	// in plain text; the immediate post-turn correction (goal_loop.go) is
+	// what catches that case, not this request's shape.
+	layer1 bool
+	// rubric is true whenever D3's base predicate holds at all (active goal
+	// AND an empty compiled record, this turn's first LLM request) —
+	// independent of channel/provider/policy. D4's rubric note injects
+	// under this alone; layer1 implies rubric, never the reverse.
+	rubric bool
+	// askOffered is true when this request's narrowed pair still includes
+	// AskUserQuestion (layer1 && webchat origin && the question budget is
+	// unspent && policy allows it) — read after the tool-execution loop to
+	// know the ask door was actually reachable this request.
+	askOffered bool
+	// isWebchat records ts.channel == goalForcingWebChannel once so the
+	// rubric-note builder and downstream logging need not re-derive it.
+	// AskUserQuestion is permanently web-only [G-B2] — isWebchat gates
+	// whether it is INCLUDED in the narrowed pair, never whether narrowing
+	// itself applies (narrowing now applies on every origin).
+	isWebchat bool
+	sessionID string
+	goalID    string
+	// questionRoundsUsed is the persisted budget counter AS READ this
+	// evaluation — bumpGoalQuestionRoundsUsed increments from this value,
+	// never a re-read, so a concurrent unrelated write between evaluation
+	// and the bump cannot silently double-count (the single-flight goal
+	// session assumption every other goal-state writer in this package
+	// already makes).
+	questionRoundsUsed int
+	// narrowed is the actual {set_goal[, AskUserQuestion]} slice offered
+	// this request when layer1 is true — nil otherwise. providerToolDefs is
+	// built directly from this slice (never re-derived), so what the model
+	// is offered and what askOffered/layer1 describe can never disagree.
+	narrowed []tools.Tool
+}
+
+// goalForcingMaxNarrowAttempts bounds ADR-081 D3's narrowed first-move door
+// (the D3 amendment, 2026-09-08): once a turn has offered the narrowed
+// {set_goal[, AskUserQuestion]} pair this many CONSECUTIVE times without
+// either a successful set_goal write or a genuinely parked AskUserQuestion
+// card, evaluateGoalForcing releases the door (full tool surface, WARN
+// logged) instead of narrowing again — see goalNarrowEscaped's doc comment
+// on turnState (turn.go) for the exact counting rule and the real-world
+// defect (11:54:48Z→12:12:26Z, a 17-minute wedged turn) this escape exists
+// to prevent. N=3: enough for a model to recover from one transient
+// schema-validation slip (the observed defect) or two, without letting a
+// persistently broken/uncooperative model consume the whole MaxIterations
+// budget stuck in the narrowed pair — the post-turn nudge ladder
+// (checkGoalLoopAfterTurn, goal_loop.go D6c) is the backstop once this fires.
+const goalForcingMaxNarrowAttempts = 3
+
+// evaluateGoalForcing computes goalForcingDecision for the CURRENT LLM
+// request (ADR-081 D3 as amended 2026-09-07, further amended 2026-09-08 —
+// see goalForcingMaxNarrowAttempts; spec FR-007/009/010; C-3's negative
+// rows, grill M1): the predicate deliberately consults ONLY iteration
+// (logging only — see below), persisted session state, and this turn's own
+// narrow-attempt/escape counters — never opts.UserInitiated or sender
+// identity, since a card-resume turn (human-answered or auto-submitted) and
+// a keeper nudge turn are goal turns exactly like a fresh activation turn.
+//
+// D3 AMENDMENT (2026-09-08): narrowing used to apply to the turn's FIRST LLM
+// request ONLY (iteration==1), on the theory that the narrowed pair's own
+// two outcomes (register or park) never leave a second request with the
+// predicate still true in the same turn. That theory missed a third
+// outcome: a narrowed call that FAILS (tool-arg validation error, policy
+// denial at execution, or an error result) neither registers nor parks, so
+// the predicate is STILL true on iteration 2 — and used to get the FULL
+// unnarrowed tool surface back while the goal record stayed empty. Real
+// evidence: a /goal set at 11:54:48Z narrowed iteration 1; the model's
+// AskUserQuestion call failed schema validation ("unexpected property
+// \"recommended\"" inside an option); iteration 2 onward ran unnarrowed —
+// ToolSearch, write_file×5, bash, serve_web, browser_navigate — for ~17
+// minutes before the agent finally called set_goal at 12:12:26Z, because the
+// turn never ended for the post-turn correction to catch it. The door now
+// stays narrowed for EVERY request while the predicate holds — iteration is
+// no longer a gate, only a log field — bounded by goalForcingMaxNarrowAttempts
+// so a persistently-failing model cannot wedge the turn instead.
+func (al *AgentLoop) evaluateGoalForcing(
+	ts *turnState, iteration int, policyFiltered []tools.Tool,
+) goalForcingDecision {
+	var d goalForcingDecision
+	holds, rec := goalTurnRecordState(al, ts)
+	if !holds {
+		// Covers both "not a goal turn at all" and "a PRIOR request's
+		// set_goal already wrote the record" — goalTurnRecordState reads
+		// persisted state fresh on every call, so a successful write between
+		// iteration N and N+1 is what naturally releases the door here; no
+		// escape-counter bookkeeping is needed for this branch.
+		return d
+	}
+	if ts.goalNarrowIsEscaped() {
+		// The bounded escape already fired earlier this turn (see
+		// goalForcingMaxNarrowAttempts) — stay released for the rest of the
+		// turn even though the base predicate still holds. Do not re-arm:
+		// the rubric note (D4) keeps nudging, but the tool surface is not
+		// narrowed again.
+		d.rubric = true
+		d.sessionID = ts.opts.TranscriptSessionID
+		d.goalID = rec.GoalID
+		d.questionRoundsUsed = rec.QuestionRoundsUsed
+		d.isWebchat = ts.channel == goalForcingWebChannel
+		return d
+	}
+	d.rubric = true
+	d.sessionID = ts.opts.TranscriptSessionID
+	d.goalID = rec.GoalID
+	d.questionRoundsUsed = rec.QuestionRoundsUsed
+	d.isWebchat = ts.channel == goalForcingWebChannel
+
+	setGoalAllowed, askAllowed := false, false
+	for _, t := range policyFiltered {
+		switch t.Name() {
+		case tools.SetGoalToolName:
+			setGoalAllowed = true
+		case tools.AskUserQuestionToolName:
+			askAllowed = true
+		}
+	}
+	if !setGoalAllowed {
+		// D3: "if set_goal itself is policy-denied, do NO narrowing and log
+		// WARN" — checked specifically for set_goal, independent of whether
+		// AskUserQuestion alone would have made the intersection non-empty.
+		// This request is NOT counted as a narrowed attempt (it was never
+		// narrowed) and does not advance goalNarrowMisses.
+		logger.WarnCF("agent", "goal: narrowing skipped — set_goal is policy-denied for this agent",
+			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "agent_id": ts.agent.ID, "iteration": iteration})
+		return d
+	}
+
+	// [G-B2]: AskUserQuestion is permanently web-only — included in the
+	// narrowed pair ONLY on a webchat origin with the question budget
+	// unspent. On a channel or keeper (Channel:"system") origin the pair
+	// degrades to {set_goal} alone (never the empty set): narrowing itself
+	// is provider/channel-agnostic since the D3 amendment deleted tool-
+	// choice forcing, so there is no reason to skip it off-web anymore —
+	// only the ask door is origin-gated.
+	includeAsk := d.isWebchat && askAllowed && d.questionRoundsUsed < 1
+	narrowed := goalForcingNarrowTools(policyFiltered, includeAsk)
+
+	// Bounded escape (goalForcingMaxNarrowAttempts): this request is about
+	// to become another CONSECUTIVE narrowed offering. Count it BEFORE
+	// deciding whether to actually narrow — a request that instead exits
+	// above (record already written, or the escape already armed) never
+	// reaches this bump, so the counter only ever measures genuine
+	// narrowed-but-unresolved attempts. Once the count exceeds the bound,
+	// this (and every later) request in the turn gets the FULL surface
+	// instead.
+	attempt := ts.noteGoalNarrowAttempt()
+	if attempt > goalForcingMaxNarrowAttempts {
+		ts.armGoalNarrowEscape()
+		logger.WarnCF("agent", "goal: bounded escape — releasing the narrowed first-move door after repeated unresolved narrowed requests",
+			map[string]any{
+				"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID,
+				"attempts": attempt - 1, "max_attempts": goalForcingMaxNarrowAttempts, "iteration": iteration,
+			})
+		return d
+	}
+
+	d.narrowed = narrowed
+	d.layer1 = true
+	// askOffered is recomputed from the ACTUAL narrowed slice rather than
+	// trusted from includeAsk alone, so it can never disagree with what
+	// providerToolDefs (built from this same slice) actually offers.
+	for _, t := range d.narrowed {
+		if t.Name() == tools.AskUserQuestionToolName {
+			d.askOffered = true
+		}
+	}
+
+	logger.InfoCF("agent", "goal: first-move door narrowed",
+		map[string]any{
+			"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID,
+			"ask_offered": d.askOffered, "channel": ts.channel, "is_webchat": d.isWebchat,
+			"iteration": iteration, "attempt": attempt,
+		})
+	return d
+}
+
+// bumpGoalQuestionRoundsUsed persists FR-010's spent question-round budget
+// (per GoalID — a restate never re-mints the GoalID, so it correctly
+// inherits an already-spent budget). Best-effort: a persistence failure is
+// WARN-logged, never turn-fatal — the card has already parked the turn by
+// the time this runs.
+func (al *AgentLoop) bumpGoalQuestionRoundsUsed(d goalForcingDecision) {
+	if d.sessionID == "" {
+		return
+	}
+	// ADR-086 (GOAL-FR-004): the question-round budget is the goal record's
+	// own QuestionRoundsUsed counter, relocated off the retired session-meta
+	// GoalQuestionRoundsUsed field — which is also what keeps it attached to
+	// the GOAL generation (a restate never re-mints the record) rather than
+	// to the session.
+	if d.goalID == "" {
+		logger.WarnCF("agent", "goal: could not persist the spent question-round budget — no goal id on the forcing decision",
+			map[string]any{"component": "goal", "session_id": d.sessionID})
+		return
+	}
+	newCount := d.questionRoundsUsed + 1
+	if _, err := resolveGoalRecordStore().Update(d.goalID, func(cur *goal.Goal) error {
+		cur.QuestionRoundsUsed = newCount
+		return nil
+	}); err != nil {
+		logger.WarnCF("agent", "goal: could not persist the spent question-round budget",
+			map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "error": err.Error()})
+		return
+	}
+	logger.InfoCF("agent", "goal: question door taken; budget spent",
+		map[string]any{"component": "goal", "session_id": d.sessionID, "goal_id": d.goalID, "rounds_used": newCount})
+}
+
+// goalRubricNoteForBudget re-derives buildGoalRubricInjectionNote's input
+// from persisted session state (ADR-081 D4, midturn_budget.go's
+// ephemeralSystemNoteTokens). Before the 2026-09-08 D3 amendment,
+// evaluateGoalForcing's own rubric flag was gated to the turn's first
+// request only (iteration==1), while mid-turn budget checks run AFTER that
+// first request is already assembled and sent — so this function
+// deliberately ignored that gate and re-evaluated the base predicate
+// unconditionally, a conservative OVER-estimate on iteration ≥ 2 (never an
+// under-estimate). Since the amendment, evaluateGoalForcing's rubric flag is
+// no longer iteration-gated either (it tracks goalTurnRecordState across the
+// whole turn, exactly like this function) — so the two now normally AGREE
+// rather than this one merely over-estimating. This function is kept
+// re-deriving independently rather than threading evaluateGoalForcing's
+// per-request decision through the mid-turn call chain (matching how every
+// OTHER ephemeral note in that enumeration is measured), and remains safe
+// either way: it can only ever match or over-estimate, never under-count.
+func (al *AgentLoop) goalRubricNoteForBudget(ts *turnState) string {
+	holds, _ := goalTurnRecordState(al, ts)
+	isWebchat := ts != nil && ts.channel == goalForcingWebChannel
+	return buildGoalRubricInjectionNote(holds, isWebchat)
+}
+
 func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, error) {
 	// H1: guard against an already-canceled or timed-out context before doing any work.
 	if ctx.Err() != nil {
@@ -8464,6 +9459,16 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// The session key is a routing key; the transcript session ID is the
 	// real session directory (e.g., "session_01KP30THP63YFESKGECYYHYQWY").
 	turnCtx = tools.WithTranscriptSessionID(turnCtx, ts.opts.TranscriptSessionID)
+	// ADR-085 BROWSER-FR-021: stamp the ROOT chat session id (ADR-057
+	// routingSessionID, inherited verbatim through a whole delegation
+	// subtree) so pkg/tools/browser/tools.go::controlledResult can evaluate
+	// its FR-020 second coverage check — the tab set the live panel would
+	// hold the lock on for the chat this turn (or its delegated ancestor)
+	// belongs to — even for a delegated child driving its OWN tab set
+	// (FR-023). A turn with no root chat (cron/heartbeat/task) stamps "",
+	// which controlledResult's own doc comment documents as "skip that
+	// check entirely" (fails open, never closed).
+	turnCtx = withBrowserRootChatSessionID(turnCtx, ts)
 	// Inject the session owner so sysagent tools (system.workspace.create,
 	// system.task.create) can stamp the owner on newly created entities
 	// (Rule-2 of the sysagent ownership rule, SEC-2/#406).
@@ -8636,6 +9641,18 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	// false and reproduce the exact bug this fixes.
 	defer func() { ts.Finish(ts.hardAbortRequested()) }()
 	defer ts.finalizeStreamer(ctx)
+	// ADR-087 D6.8, the ONE choke point (see preserveTruncatedAccumulator's
+	// doc comment). REGISTRATION ORDER IS LOAD-BEARING, the same way the
+	// markTurnFailed defer below is: Go runs defers LIFO, so registering this
+	// AFTER `defer ts.finalizeStreamer(ctx)` makes it run BEFORE that call —
+	// which is the only ordering that works, because on a streamed turn this
+	// function merely SETS ts.finalContent/ts.truncationReason and
+	// finalizeStreamer is what hands them to the streamer. Registering it
+	// above finalizeStreamer's would silently drop the annotation on every
+	// webchat turn. A `defer` (rather than a call at each exit) is the point:
+	// runTurn returns from dozens of places inside turnLoop, and the five
+	// that were hand-wired were not the ones that mattered.
+	defer al.preserveTruncatedAccumulator(ts)
 	defer al.clearActiveTurn(ts)
 
 	turnStatus := TurnEndStatusCompleted
@@ -9036,6 +10053,18 @@ func (al *AgentLoop) runTurn(ctx context.Context, ts *turnState) (turnResult, er
 	var midTurnGuardErr error
 	emptyResponseRetries := 0
 	const maxEmptyResponseRetries = 1
+	// orphanToolMarkupRepairs counts how many times this turn has re-prompted
+	// a model that emitted its tool call as unparseable text (see the strip
+	// choke point below). Bounded so a model that cannot comply ends the turn
+	// with a visible error instead of looping on the user's budget.
+	orphanToolMarkupRepairs := 0
+	// continuationChain (ADR-087 D6.7) holds the exact {assistant, user} pair
+	// a previous round appended to `messages` as the D6 continuation chain,
+	// so the next round REPLACES it — by identity, via stripContinuationChain
+	// — instead of accumulating duplicate copies of the answer-so-far. nil
+	// means no chain is currently live in `messages`. Declared before
+	// turnLoop so it survives both `continue turnLoop` and `goto turnLoop`.
+	var continuationChain []providers.Message
 
 turnLoop:
 	for ts.currentIteration() < ts.agent.MaxIterations || len(pendingMessages) > 0 || func() bool {
@@ -9049,6 +10078,13 @@ turnLoop:
 
 		iteration := ts.currentIteration() + 1
 		ts.setIteration(iteration)
+
+		// toolCallTruncationRepairUsed (ADR-087 D3.4) bounds a truncated
+		// tool call to exactly one repair per turnLoop round — reset every
+		// round (this `:=` runs again on every loop-body execution,
+		// including via `continue turnLoop`), shared across this round's
+		// three possible provider-call sites (D9).
+		toolCallTruncationRepairUsed := false
 
 		// Hard ceiling: never exceed 2x MaxIterations regardless of pending messages or
 		// graceful-interrupt state. This prevents an unbounded loop when the agent keeps
@@ -9095,6 +10131,10 @@ turnLoop:
 					map[string]any{"retry_after_seconds": result.RetryAfterSeconds},
 				)
 				turnStatus = TurnEndStatusError
+				// ADR-087 D6.8: a rate-limit denial makes no provider call —
+				// a D6 continuation left unresolved by a prior round is
+				// preserved by runTurn's deferred preserveTruncatedAccumulator
+				// choke point, which covers this return like every other.
 				return turnResult{}, fmt.Errorf("rate limit: %s (retry after %.0fs)",
 					result.PolicyRule, result.RetryAfterSeconds)
 			}
@@ -9208,6 +10248,14 @@ turnLoop:
 		policyFilteredTools = ensureInfraToolsExecutable(
 			ts.agent.Tools, policyFilteredTools, filterTimePolicyMap)
 
+		// ADR-081 D3/D4 (spec FR-007/009/010/011): evaluated ONCE per request,
+		// right after the policy filter settles, so both the tool-surface
+		// narrowing below and the rubric-note injection further down (and the
+		// FR-010 question-budget bump after this iteration's tool-execution
+		// loop) read the exact same verdict. See evaluateGoalForcing's own doc
+		// comment for the full predicate.
+		goalForce := al.evaluateGoalForcing(ts, iteration, policyFilteredTools)
+
 		// FR-066: dedup invariant — tools[] must be name-unique after filter+assembly.
 		// If a duplicate is detected, emit HIGH audit and return an error turn result
 		// so the loop does not feed a malformed tool list to the LLM.
@@ -9251,9 +10299,17 @@ turnLoop:
 		}
 
 		var providerToolDefs []providers.ToolDefinition
-		if cfg.Tools.Manifest.Compressed {
+		switch {
+		case goalForce.layer1:
+			// ADR-081 D3 Layer 1 (spec test 8's compressed-mode-suspension
+			// row): "exactly the pair" is exact — bypass
+			// buildCompressedToolDefs/stripInfraToolDefs entirely for this one
+			// narrowed request, including the compressed-mode ToolSearch
+			// force-through those helpers would otherwise apply.
+			providerToolDefs = tools.ToolsToProviderDefs(goalForce.narrowed)
+		case cfg.Tools.Manifest.Compressed:
 			providerToolDefs = al.buildCompressedToolDefs(ts, policyFilteredTools)
-		} else {
+		default:
 			// Non-compressed defs path: strip manifest infra tools (ToolSearch)
 			// before surfacing defs to the model. ToolSearch resolves through the
 			// same global×agent merge as every other static builtin tool and is
@@ -9308,7 +10364,7 @@ turnLoop:
 		// always sees its plan at the top of the turn. The note is NOT persisted
 		// to history — it is rebuilt fresh each turn from the task store.
 		if ts.agent != nil {
-			if note := al.buildScratchpadNote(ts.agent.ID); note != "" && len(callMessages) > 0 {
+			if note := al.buildScratchpadNote(ts.agent.ID, ts.opts.TranscriptSessionID); note != "" && len(callMessages) > 0 {
 				// Insert after callMessages[0] (the system prompt) so it immediately
 				// follows the agent's identity, before the conversation history.
 				injected := make([]providers.Message, 0, len(callMessages)+1)
@@ -9317,44 +10373,60 @@ turnLoop:
 				injected = append(injected, callMessages[1:]...)
 				callMessages = injected
 			}
-			// Inject the ADR-078 D2 pending-goal note as an ephemeral system
-			// message: while a goal is compiled and awaiting the user's
-			// confirmation (fresh pending only — see buildGoalPendingNote's
-			// gating), the model must not proceed context-blind about it. Like
-			// the scratchpad note above, this is rebuilt every turn from session
-			// meta and never persisted to history.
-			callMessages = injectGoalPendingNote(callMessages, buildGoalPendingNote(ts.opts.TranscriptStore, ts.opts.TranscriptSessionID))
 			// Inject per-turn workspace instructions (AGENT.md) as an ephemeral
 			// system message immediately after the system prompt. Empty/absent
 			// instructions are a no-op — zero behavioral change.
 			//
-			// Ordering note (finding 10c, context-audit 2026-08, extended by
-			// ADR-078 D2's goal-pending note — this comment previously claimed
-			// "workspace instructions land at [2]", which stopped being true once
-			// the web-rendering note was added between this call and
-			// injectManifestNote below): all of these injectors
-			// (injectGoalPendingNote above, this one, injectWebRenderingNote,
+			// Ordering note (finding 10c, context-audit 2026-08 — ADR-081 D9
+			// retires the ADR-078 D2 goal-pending note that used to sit between
+			// this call and injectManifestNote below; buildGoalPendingNote/
+			// injectGoalPendingNote, pkg/agent/goal_pending_note.go, are deleted
+			// in full — instant activation leaves no pending state for a note to
+			// describe): the remaining injectors (this one, injectWebRenderingNote,
 			// injectManifestNote) insert at index 1 of the message array, so call
 			// order alone determines final position — the LAST call ends up
 			// CLOSEST to the system message. With every note present this turn,
 			// final order is: [0] system prompt · [1] manifest note · [2]
-			// web-rendering note · [3] workspace instructions · [4] goal-pending
-			// note (spliced above, before this call) · [5] scratchpad (spliced
-			// above, before that) · [6+] history. See injectWorkspaceInstructions'
-			// own doc comment (workspace_instructions.go) for the authoritative,
-			// single-sourced version of this contract.
+			// web-rendering note · [3] workspace instructions · [4] scratchpad
+			// (spliced above, before this call) · [5+] history. See
+			// injectWorkspaceInstructions' own doc comment
+			// (workspace_instructions.go) for the authoritative, single-sourced
+			// version of this contract.
 			callMessages = injectWorkspaceInstructions(callMessages, buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
 			// Web-only: encourage Mermaid diagrams when the turn comes from the web
 			// chat (the sole surface that renders them). Per-turn + surface-gated on
 			// ts.channel — deliberately NOT in the cached system prompt, since one
 			// agent serves multiple channels (see web_rendering_note.go).
 			callMessages = injectWebRenderingNote(callMessages, buildWebRenderingNote(ts.channel))
+			// ADR-081 D4 (spec FR-011, D3 amendment 2026-09-07): the goal
+			// rubric + first-move instruction + define-goal skill quality
+			// bar, injected exactly when the D3 base predicate holds
+			// (goalForce.rubric — active goal AND an empty compiled record,
+			// this turn's first LLM request) on EITHER origin — webchat gets
+			// it alongside the narrowed two-tool surface below; a channel
+			// origin gets the SAME note (with its conversational-ask
+			// addendum) narrowed to {set_goal} alone (AskUserQuestion stays
+			// permanently web-only). Neither origin forces a tool choice —
+			// the note ASSISTS; the immediate post-turn correction
+			// (checkGoalLoopAfterTurn, goal_loop.go) carries the guarantee.
+			// buildGoalRubricInjectionNote returns "" when the predicate
+			// does not hold, making this call a no-op on every non-goal turn.
+			callMessages = injectGoalRubricNote(callMessages,
+				buildGoalRubricInjectionNote(goalForce.rubric, goalForce.isWebchat))
 			// Re-inject the compressed manifest of unloaded lazy tools as an ephemeral
 			// system message. Like the scratchpad, it is rebuilt every turn (never
 			// persisted) so it is never stale and not double-counted in the cached
 			// system prompt. Injected only when Compressed is active and there are
 			// unloaded lazy tools to list.
-			if cfg.Tools.Manifest.Compressed {
+			//
+			// Not on an ADR-081 D3 narrowed request (goalForce.layer1): that
+			// request offers only {set_goal[, AskUserQuestion]}, and the block's
+			// header tells the model to "call `ToolSearch`" to load a listed
+			// tool — advertising a tool the request does not offer. UAT B-10
+			// run 1 made exactly that un-offered ToolSearch call on the narrowed
+			// request. The dispatch loop also refuses any call to a tool the
+			// request did not offer (toolNotOfferedRefusal, tool_offer_gate.go).
+			if cfg.Tools.Manifest.Compressed && !goalForce.layer1 {
 				callMessages = injectManifestNote(callMessages, al.buildToolManifestNote(ts, policyFilteredTools))
 			}
 		}
@@ -9364,12 +10436,28 @@ turnLoop:
 			ts.markGracefulTerminalUsed()
 		}
 
+		// ADR-081 D3 Layer 1 narrowing is active for THIS request exactly
+		// when goalForce.layer1 holds and gracefulTerminal hasn't nilled the
+		// tool surface. review-round-1 finding #6 (kept under the D3
+		// amendment, 2026-09-07): native_search must never ride alongside
+		// the narrowed pair — it would silently add a THIRD callable "tool"
+		// (the provider's own built-in search) outside {set_goal[,
+		// AskUserQuestion]}, undermining the narrowed surface's "exactly the
+		// pair" promise even though nothing forces the model to touch it
+		// anymore (provider tool-choice forcing is deleted — determinism now
+		// comes from the immediate post-turn correction, goal_loop.go, not
+		// the request shape). Suppress native search for this one request
+		// while narrowing is active; the client-side search_web tool is not
+		// offered here either (it's excluded from goalForce.narrowed, same
+		// as every other non-goal tool). No tool-choice option is ever set —
+		// see evaluateGoalForcing's doc comment for why.
+		narrowingActive := goalForce.layer1 && !gracefulTerminal
 		llmOpts := map[string]any{
 			"max_tokens":       ts.agent.MaxTokens,
 			"temperature":      ts.agent.Temperature,
 			"prompt_cache_key": ts.agent.ID,
 		}
-		if useNativeSearch {
+		if useNativeSearch && !narrowingActive {
 			llmOpts["native_search"] = true
 		}
 		ts.agent.mu.RLock()
@@ -9413,6 +10501,13 @@ turnLoop:
 				return al.abortTurn(ts, "before_llm", decision.Reason)
 			}
 		}
+
+		// The exact tool set this request offers, captured AFTER every step that
+		// shapes providerToolDefs (goal-door narrowing, compressed manifest,
+		// native-search strip, graceful-terminal clearing, BeforeLLM hook). The
+		// tool loop below refuses any call to a tool outside it — see
+		// toolNotOfferedRefusal (tool_offer_gate.go).
+		offeredTools := newOfferedToolSet(providerToolDefs)
 
 		// G1 fix: a cheap, non-blocking tool-call-argument progress callback,
 		// so a `delegate action=status` poll on a running child can tell
@@ -9573,6 +10668,16 @@ turnLoop:
 					ts.stampStreamerTurnID(streamer)
 					ts.stampStreamerParentSpawnCallID(streamer)
 					var lastChunk string
+					// Residual native tool-call markup must never reach the
+					// live view. This is not only a rendering concern: the
+					// gateway streamer PERSISTS what it accumulated from these
+					// Update calls (wsStreamer.Finalize prefers its own buffer
+					// over the turn's final content), so anything forwarded
+					// here also lands in transcript.jsonl. Filtering at this
+					// seam is what keeps the live bubble and the persisted
+					// entry identical — and both clean. See
+					// providers.StreamTextFilter.
+					var streamFilter providers.StreamTextFilter
 					resp, streamErr := sp.ChatStream(providerCtx, messagesForCall, toolDefsForCall, llmModel, llmOpts, func(accumulated string) {
 						// B4: if the turn has been abandoned (stuck-goroutine detach),
 						// suppress further frame emits so a zombie goroutine cannot
@@ -9581,29 +10686,48 @@ turnLoop:
 							abandonedWritesSuppressed.Add(1)
 							return
 						}
-						// Send only the new delta (accumulated minus what we already sent).
+						visible := streamFilter.Visible(accumulated)
+						// Send only the new delta (visible minus what we already sent).
 						//
 						// Defensive: this slice panics with index-out-of-range if a
 						// provider ever emits an accumulated string SHORTER than its
 						// predecessor. The contract is monotonic growth, but a provider
 						// bug, a block reorder, or an SDK revision changing accumulation
 						// semantics would otherwise take down the whole turn. Treat a
-						// non-growing value as "nothing new" and skip it.
-						if len(accumulated) < len(lastChunk) {
+						// non-growing value as "nothing new" and skip it. The filter
+						// upholds the same non-shrinking contract on its own output.
+						if len(visible) < len(lastChunk) {
 							logger.DebugCF("agent", "Streaming callback emitted a shorter accumulated string; ignoring", map[string]any{
 								"previous_len": len(lastChunk),
-								"new_len":      len(accumulated),
+								"new_len":      len(visible),
 							})
 							return
 						}
-						delta := accumulated[len(lastChunk):]
-						lastChunk = accumulated
+						delta := visible[len(lastChunk):]
+						lastChunk = visible
 						if delta != "" {
 							if err := streamer.Update(providerCtx, delta); err != nil {
 								logger.DebugCF("agent", "Streaming update error (client may have disconnected)", map[string]any{"error": err.Error()})
 							}
 						}
 					}, onToolCallProgress)
+					// Reconcile against the provider's final text. Two things
+					// need this: the few bytes the filter holds back mid-stream
+					// in case they start a marker split across SSE chunks, and
+					// a provider that returned content without ever invoking
+					// the callback. Without it those bytes would be dropped
+					// silently — the streamer's buffer is what gets persisted.
+					if streamErr == nil && resp != nil && !ts.abandoned.Load() {
+						finalVisible := resp.Content
+						if om, isOrphan := providers.DetectOrphanToolCallMarkup(finalVisible); isOrphan {
+							finalVisible = om.Prose
+						}
+						if len(finalVisible) > len(lastChunk) && strings.HasPrefix(finalVisible, lastChunk) {
+							if err := streamer.Update(providerCtx, finalVisible[len(lastChunk):]); err != nil {
+								logger.DebugCF("agent", "Streaming tail flush error (client may have disconnected)", map[string]any{"error": err.Error()})
+							}
+						}
+					}
 					// Do NOT finalize here — the turn may continue with tool calls.
 					// Store the streamer so the turn-level code can finalize once,
 					// after the last LLM call, preventing premature "done" frames
@@ -9713,6 +10837,13 @@ turnLoop:
 			if err == nil {
 				break
 			}
+			// ADR-087 D3/D9 (main call site): a tool call cut off at the
+			// output-token limit gets one bounded repair before falling
+			// through to ClassifyError/the media-downgrade/PDF paths below.
+			if repaired, ok := al.evaluateTruncatedToolCallError(ts, err, callMessages, retry, maxRetries, &toolCallTruncationRepairUsed, llmModel, iteration); ok {
+				callMessages = repaired
+				continue
+			}
 			// Preserve the friendly image-only synthesis before the generic media
 			// downgrade path. PDF and mixed-media failures deliberately fall through.
 			pe := errorToProviderError(err)
@@ -9775,6 +10906,12 @@ turnLoop:
 						ts.setOutcomeRelabel(CodeMediaUnsupported)
 					}
 					break
+				}
+				// ADR-087 D3/D9 (media-downgrade retry call site): same
+				// bounded repair as the main call site above.
+				if repaired, ok := al.evaluateTruncatedToolCallError(ts, err, callMessages, retry, maxRetries, &toolCallTruncationRepairUsed, llmModel, iteration); ok {
+					callMessages = repaired
+					continue
 				}
 			}
 			if ts.hardAbortRequested() && errors.Is(err, context.Canceled) {
@@ -10007,6 +11144,16 @@ turnLoop:
 							// Site-3: post-timeout-trim assembly.
 							newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 							messages = al.assembleMessages(turnCtx, ts, newHistory, "", nil, activeSkillNames(ts.agent, ts.opts))
+							continuationChain = nil
+							if ts.continuationUnresolved() {
+								// ADR-087 D6.7: a history rebuild loses the D6
+								// continuation chain (it was never persisted
+								// to session history) — re-append it exactly
+								// once so the model still sees what it has
+								// already written.
+								continuationChain = continuationChainMessages(ts.continuationAccumulated())
+								messages = append(messages, continuationChain...)
+							}
 							callMessages = messages
 							if gracefulTerminal {
 								callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
@@ -10160,6 +11307,12 @@ turnLoop:
 				// Site-4: post-context-overflow-trim assembly.
 				newHistory := ts.agent.Sessions.GetHistory(ts.sessionKey)
 				messages = al.assembleMessages(turnCtx, ts, newHistory, "", nil, activeSkillNames(ts.agent, ts.opts))
+				continuationChain = nil
+				if ts.continuationUnresolved() {
+					// ADR-087 D6.7: same rebuild-restoration as Site-3 above.
+					continuationChain = continuationChainMessages(ts.continuationAccumulated())
+					messages = append(messages, continuationChain...)
+				}
 				callMessages = messages
 				if gracefulTerminal {
 					callMessages = append(append([]providers.Message(nil), messages...), ts.interruptHintMessage())
@@ -10186,12 +11339,16 @@ turnLoop:
 			// never emit raw err.Error() to the assistant-facing bus /
 			// transcript. Build a *ProviderError from the wrapped chain
 			// (best-effort — falls back to substring matching on err.Error()
-			// when no FailoverError is in the chain), route through the
-			// shared translateLLMError, and surface the generic message
-			// instead of the raw provider text. Raw stays in logger.ErrorCF
-			// + the wrapped fmt.Errorf return for operator triage.
+			// when no FailoverError is in the chain) for the live
+			// ErrorPayload, and classify via TranslateTurnError (ADR-087
+			// D5): it recognizes a *common.ToolArgumentsError in err's chain
+			// (CodeToolCallTruncated vs CodeToolArgs, per whether the
+			// refusal carries real truncation evidence) before falling back
+			// to the exact same errorToProviderError + TranslateLLMError
+			// path this used to call directly — so a 401/413 buried in err
+			// still classifies correctly (Codex C6).
 			pe := errorToProviderError(err)
-			llm := TranslateLLMError(pe, err.Error())
+			llm := TranslateTurnError(err)
 
 			// FR-017a: label an inconclusive residual 4xx after a
 			// successful strip-retry. A later distinct classified
@@ -10224,6 +11381,9 @@ turnLoop:
 					"error":     err.Error(),
 					"code":      string(llm.Code),
 				})
+			// ADR-087 D6.8: exhausted retries make no further provider call —
+			// runTurn's deferred preserveTruncatedAccumulator keeps a D6
+			// continuation left unresolved by a prior round.
 			return turnResult{}, fmt.Errorf("LLM call failed after retries: %w", err)
 		}
 
@@ -10250,15 +11410,44 @@ turnLoop:
 			}
 		}
 
-		// Save finishReason to turnState for SubTurn truncation detection.
-		// H5: use turnCtx (the per-turn context that carries the turnState value),
-		// not the outer ctx which may not have the turnState attached.
-		if innerTS := turnStateFromContext(turnCtx); innerTS != nil {
-			innerTS.SetLastFinishReason(response.FinishReason)
-			// Save usage for token budget tracking
-			if response.Usage != nil {
-				innerTS.SetLastUsage(response.Usage)
-			}
+		// ── Orphan tool-call markup: the single strip choke point ──
+		//
+		// Some models emit tool calls as XML-ish markup in the completion
+		// TEXT and rely on the hosting provider to parse it back into
+		// `tool_calls`. When that upstream parse does not complete, the
+		// unconsumed remainder is flushed into the text instead — see
+		// providers.DetectOrphanToolCallMarkup for the full dialect and the
+		// live evidence. Two things must happen, and they are separate:
+		//
+		//  1. The residue must never be shown to a user as the assistant's
+		//     own words. That is THIS strip, applied once here so every
+		//     downstream consumer (citations, the transcript writers, the
+		//     assistant history message, the terminal answer) sees text that
+		//     has already been cleaned. The live-stream surface is filtered
+		//     independently at the ChatStream callback above, because the
+		//     gateway streamer persists what it accumulated, not this value.
+		//
+		//  2. A round that produced NO tool calls has to be repaired or
+		//     reported — handled in the no-tool-calls branch below. Silence
+		//     is the defect there, not the malformation.
+		//
+		// ReasoningContent is stripped too: the no-tool-calls branch falls
+		// back to it when Content is empty, so leaving it alone would just
+		// move the leak. Mutating it here is safe — handleReasoning below
+		// receives its own string copy.
+		orphanMarkup, hasOrphanMarkup := stripOrphanToolCallMarkup(response)
+		if hasOrphanMarkup {
+			logger.WarnCF("agent", "LLM emitted unparseable tool-call markup as text; markup suppressed",
+				map[string]any{
+					"agent_id":      ts.agent.ID,
+					"iteration":     iteration,
+					"model":         llmModel,
+					"marker":        orphanMarkup.Marker,
+					"markup_chars":  len(orphanMarkup.Markup),
+					"prose_chars":   len(orphanMarkup.Prose),
+					"tool_calls":    len(response.ToolCalls),
+					"finish_reason": response.FinishReason,
+				})
 		}
 
 		reasoningContent := response.Reasoning
@@ -10297,30 +11486,20 @@ turnLoop:
 		}
 		logger.DebugCF("agent", "LLM response", llmResponseFields)
 
-		// ADR-053 Phase-2 / D12 (R§8.3d/FR-171/FR-172/FR-173): debit the ONE
-		// app-level OVERALL token pool from provider-reported usage. Agent-agnostic
-		// by design (no agentType arg) — the IsPrivilegedAgent exemption is removed
-		// so core-agent turns debit the same pool. Atomic RMW under one lock; the
-		// graceful-wind-down gate (Exhausted) is consulted at the next turn/
-		// adjudication boundary, NEVER mid-turn (FR-174). The debit is unconditional
-		// even when unbounded (cap 0) so Usage accounting stays correct.
+		// Record the provider-reported usage on the turn. debitLLMUsage also
+		// records ts.lastUsage — the write that used to sit ~90 lines above
+		// this block, guarded by its own
+		// turnStateFromContext(turnCtx) lookup that resolves to this very same
+		// ts (withTurnState(turnCtx, ts) is how turnCtx was built). Two copies
+		// of one accounting step is how the ADR-087 D3.9 refused-attempt debit
+		// came to omit SetLastUsage; there is now exactly one.
 		//
-		// TokenBudget is the sole app-level spend brake; see pkg/agent/budget.go (D12 / R§8.3).
-		if response != nil && response.Usage != nil {
-			callCost := estimateLLMCallCost(llmModel, response.Usage)
-			if al.tokenBudget != nil && response.Usage.TotalTokens > 0 {
-				al.tokenBudget.Debit(int64(response.Usage.TotalTokens))
-			}
-			// Accumulate turn-level stats so the "done" WS frame can surface
-			// real token counts and cost to the chat UI (issue #12).
-			ts.AddTurnStats(int64(response.Usage.TotalTokens), callCost)
-			// Accumulate cache token split for transcript entry (Wave 1 token tracking).
-			ts.AddTurnCacheStats(response.Usage.CacheReadTokens, response.Usage.CacheWriteTokens)
-			// Accumulate the input/output split. The provider reports it and
-			// estimateLLMCallCost above already consumes it, but until this
-			// call existed it was dropped here — AddTurnStats carries only the
-			// collapsed total — so session stats could never report tokens_in.
-			ts.AddTurnIOStats(response.Usage.PromptTokens, response.Usage.CompletionTokens)
+		// ADR-087 D8: the old lastUsage site also called the now-deleted
+		// SetLastFinishReason("for SubTurn truncation detection") — that
+		// consumer was never built (GetLastFinishReason had zero callers); see
+		// §5.1 of the ADR for the recorded gap.
+		if response != nil {
+			al.debitLLMUsage(ts, llmModel, response.Usage)
 		}
 
 		if len(response.ToolCalls) == 0 || gracefulTerminal {
@@ -10328,6 +11507,105 @@ turnLoop:
 			if responseContent == "" && response.ReasoningContent != "" {
 				responseContent = response.ReasoningContent
 			}
+
+			// ── Orphan tool-call markup with NO tool call: repair, or fail loudly ──
+			//
+			// The model tried to call a tool and nothing came back as a
+			// structured call, so this round did no work at all. Ending the
+			// turn here — which is what happened before this branch existed —
+			// presents whatever prose survived the strip as a finished answer
+			// and, when the whole response was markup, presents nothing at
+			// all: a spinner that resolves into silence, with the goal record
+			// left untouched and no error anywhere. That is the defect.
+			//
+			// Repair first: re-prompt with an explicit instruction to use the
+			// tool-calling API, bounded by maxOrphanToolMarkupRepairs so a
+			// model that cannot comply does not burn the turn. The repair note
+			// is appended to the in-flight request only — never to session
+			// history — so a transient protocol fault leaves no residue in the
+			// durable archive, and the residue itself is never echoed back
+			// (that would invite the model to repeat it verbatim).
+			//
+			// A graceful interrupt is the one case that does not repair: the
+			// user asked the turn to wind down, so the stripped response
+			// stands and the empty-response fallback below covers it.
+			if hasOrphanMarkup && len(response.ToolCalls) == 0 {
+				switch {
+				case gracefulTerminal:
+					// Fall through: honour the interrupt, do not re-prompt.
+				case orphanToolMarkupRepairs < maxOrphanToolMarkupRepairs:
+					orphanToolMarkupRepairs++
+					logger.WarnCF("agent", "Tool call arrived as unparseable text; re-prompting the model",
+						map[string]any{
+							"agent_id":      ts.agent.ID,
+							"iteration":     iteration,
+							"model":         llmModel,
+							"marker":        orphanMarkup.Marker,
+							"finish_reason": response.FinishReason,
+							"attempt":       orphanToolMarkupRepairs,
+							"max_attempts":  maxOrphanToolMarkupRepairs,
+						})
+					al.emitEvent(
+						EventKindLLMRetry,
+						ts.eventMeta("runTurn", "turn.llm.retry"),
+						LLMRetryPayload{
+							Attempt:    orphanToolMarkupRepairs,
+							MaxRetries: maxOrphanToolMarkupRepairs,
+							Reason:     orphanToolMarkupRetryReason,
+						},
+					)
+					messages = append(messages, orphanToolMarkupRepairMessage(response.FinishReason))
+					continue
+				default:
+					// Repair budget spent. Fail LOUDLY — a typed error event
+					// for the live client and a typed transcript entry for
+					// replay. CodeToolArgs is the contract's existing
+					// "tool-call argument format error"; the vocabulary is
+					// contract data (contracts/components/schemas/LLMError.yaml),
+					// so this path reuses it rather than inventing a code the
+					// SPA has no catalogue entry for.
+					turnStatus = TurnEndStatusError
+					llm := LLMError{
+						Code:      CodeToolArgs,
+						Message:   UserMessageForCode(CodeToolArgs),
+						Retryable: isRetryable(CodeToolArgs),
+					}
+					logger.WarnCF("agent", "Tool call kept arriving as unparseable text; ending turn with an error",
+						map[string]any{
+							"agent_id":      ts.agent.ID,
+							"iteration":     iteration,
+							"model":         llmModel,
+							"marker":        orphanMarkup.Marker,
+							"finish_reason": response.FinishReason,
+							"attempts":      orphanToolMarkupRepairs,
+						})
+					al.emitEvent(
+						EventKindError,
+						ts.eventMeta("runTurn", "turn.error"),
+						ErrorPayload{
+							Stage:     orphanToolMarkupStage,
+							Code:      string(llm.Code),
+							Message:   llm.Message,
+							ChatID:    ts.opts.ChatID,
+							SessionID: string(ts.routingSessionID),
+						},
+					)
+					ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+					// UAT A-12: wrap the TYPED refusal a provider raises for an
+					// undecodable tool call. A task attempt's turn error is
+					// classified by type only (task_attempt_turn_error.go's
+					// attemptRecoverableTurnErrorCode — errors.As for
+					// *common.ToolArgumentsError, then TranslateTurnError ->
+					// CodeToolArgs, the same code this exit already reports to
+					// the client). Untyped, this exhaustion failed the task on
+					// the spot instead of consuming one attempt.
+					return turnResult{}, fmt.Errorf(
+						"model emitted unparseable tool-call markup (marker %q, finish_reason %q) after %d repair attempts: %w",
+						orphanMarkup.Marker, response.FinishReason, orphanToolMarkupRepairs,
+						common.NewToolArgumentsError("", common.ErrToolArgumentsUndecodable, false))
+				}
+			}
+
 			// FR-7.5/NFR-1: scan the assistant's final answer for references to
 			// memories recalled earlier this turn and emit op:cited events.
 			if citationTracker != nil {
@@ -10342,6 +11620,28 @@ turnLoop:
 					})
 				pendingMessages = append(pendingMessages, steerMsgs...)
 				continue
+			}
+			// ADR-087 D4/D6/D9: the one success-arm truncation handler,
+			// ahead of the legacy empty-response retry loop below. Guarded
+			// internally on isTruncatedFinishReason(FinishReason) &&
+			// len(ToolCalls)==0 — when that guard does not match, the
+			// verdict is truncationActionNone and every line below runs
+			// completely unchanged (§7.10: a normal empty response with a
+			// non-truncated finish reason still falls through to the
+			// legacy loop). This single insertion covers both the main and
+			// media-downgrade-retry call sites, since both `break` into
+			// this shared downstream code on success; the empty-response
+			// retry's own successful attempt (site 3) reaches the
+			// identical branch again below, inside that loop.
+			if verdict := al.evaluateTruncatedSuccess(ts, response, messages, providerToolDefs, gracefulTerminal, iteration, llmModel, &continuationChain); verdict.action != truncationActionNone {
+				switch verdict.action {
+				case truncationActionContinue:
+					messages = verdict.messages
+					continue turnLoop
+				case truncationActionEnd:
+					finalContent = verdict.finalContent
+					break turnLoop
+				}
 			}
 			// Empty response recovery (FR-006): if LLM returned empty content with no
 			// reasoning and no tool calls, retry once before surfacing a fallback message.
@@ -10378,16 +11678,56 @@ turnLoop:
 				// Re-call the LLM directly without advancing the outer turn iteration.
 				retryResp, retryErr := callLLM(callMessages, providerToolDefs)
 				if retryErr != nil {
-					// Propagate the error back to the outer error-handling block by
-					// overwriting response/err and breaking out of both loops.
-					response = nil
-					err = retryErr
-					break
+					// ADR-087 D3/D9 (empty-response retry call site): same
+					// bounded repair as the other two call sites — issue the
+					// repaired call directly rather than looping, since this
+					// mini-loop's own iteration budget is about EMPTY
+					// content, a different concern from a truncated tool
+					// call.
+					if repaired, ok := al.evaluateTruncatedToolCallError(ts, retryErr, callMessages, 0, 1, &toolCallTruncationRepairUsed, llmModel, iteration); ok {
+						callMessages = repaired
+						retryResp, retryErr = callLLM(callMessages, providerToolDefs)
+					}
+					if retryErr != nil {
+						// Propagate the error back to the outer error-handling block by
+						// overwriting response/err and breaking out of both loops.
+						response = nil
+						err = retryErr
+						break
+					}
 				}
 				response = retryResp
 				responseContent = response.Content
 				if responseContent == "" && response.ReasoningContent != "" {
 					responseContent = response.ReasoningContent
+				}
+				// ADR-087 D4/D6/D9: the empty-response retry's own
+				// successful attempt goes through the SAME success-arm
+				// handler as the other two call sites (§7.9).
+				if verdict := al.evaluateTruncatedSuccess(ts, response, messages, providerToolDefs, gracefulTerminal, iteration, llmModel, &continuationChain); verdict.action != truncationActionNone {
+					switch verdict.action {
+					case truncationActionContinue:
+						messages = verdict.messages
+						continue turnLoop
+					case truncationActionEnd:
+						finalContent = verdict.finalContent
+						break turnLoop
+					}
+				}
+				// ADR-087 D3/D9: a repaired call can come back carrying a
+				// (smaller, complete) TOOL CALL — the whole point of the D3
+				// repair note is to solicit one. This mini-loop lives inside
+				// the direct-answer branch, which was entered because the
+				// ORIGINAL response had none, so nothing below inspects
+				// response.ToolCalls: the repaired call would be discarded and
+				// the turn would end on the defaultResponse fallback with
+				// markTurnFailed, as if the model had stayed silent. Stop
+				// retrying and let the fall-through below hand it to the
+				// normal tool-dispatch path — which is what the main call site
+				// would have done with the identical response (D9's "identical
+				// at all three sites").
+				if len(response.ToolCalls) > 0 && !gracefulTerminal {
+					break
 				}
 			}
 			// If the inner retry loop set an error, surface it via the outer error path.
@@ -10402,9 +11742,13 @@ turnLoop:
 				turnStatus = TurnEndStatusError
 				// Wave 1 (error-provenance hardening): translate via the
 				// shared classifier (CRIT-001). Never surface raw err.Error()
-				// to the assistant / bus / transcript.
+				// to the assistant / bus / transcript. ADR-087 D5/D9: this
+				// empty-response retry's own error path is subsumed into the
+				// same TranslateTurnError classification the main terminal
+				// path uses, so a truncated tool call refused here reports
+				// CodeToolCallTruncated identically to every other site.
 				pe := errorToProviderError(err)
-				llm := TranslateLLMError(pe, err.Error())
+				llm := TranslateTurnError(err)
 
 				// FR-017a: label an inconclusive residual 4xx after a
 				// successful strip-retry. A later distinct classified
@@ -10422,22 +11766,96 @@ turnLoop:
 				// FR-002: persist this provider error to the transcript (write
 				// choke point).
 				ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+				// ADR-087 D6.8: no further provider call follows this error
+				// either — runTurn's deferred preserveTruncatedAccumulator
+				// keeps a D6 continuation left unresolved by a prior round.
 				return turnResult{}, fmt.Errorf("LLM call failed during empty-response retry: %w", err)
 			}
-			if strings.TrimSpace(responseContent) == "" {
-				responseContent = defaultResponse
-				ts.markTurnFailed()
-				logger.WarnCF("agent", "LLM returned empty response after retry; using fallback message",
-					map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
+			// ADR-087 D3/D9: re-test the CURRENT response. This branch was
+			// entered on the ORIGINAL response's len(ToolCalls) == 0, but the
+			// empty-response retry above may since have replaced `response`
+			// with a D3-repaired one that carries a valid, smaller tool call.
+			// The condition is byte-identical to this branch's own entry
+			// condition, so the graceful-terminal case still finishes here — a
+			// winding-down turn must never start executing tools — and
+			// everything else falls out of this block into the ordinary
+			// tool-dispatch path below.
+			if len(response.ToolCalls) == 0 || gracefulTerminal {
+				if strings.TrimSpace(responseContent) == "" {
+					responseContent = defaultResponse
+					ts.markTurnFailed()
+					logger.WarnCF("agent", "LLM returned empty response after retry; using fallback message",
+						map[string]any{"agent_id": ts.agent.ID, "iteration": iteration})
+				}
+				// ADR-087 D6.10: this round did not go through
+				// evaluateTruncatedSuccess (it was not itself truncated, or it
+				// carried tool calls on an earlier pass through this loop) —
+				// but if an EARLIER round in this same turn dispatched a D6
+				// continuation, the accumulator holds that earlier content and
+				// must be prefixed here, or the prior round's answer is
+				// silently dropped and only this round's own text survives.
+				// (What the accumulator holds at this point is only what has
+				// NOT already been settled into the record by
+				// flushContinuationAccumulator — see its doc comment.)
+				if ts.hadContinuation() {
+					responseContent = ts.appendToAccumulator(responseContent)
+					ts.resolveContinuation()
+				}
+				finalContent = responseContent
+				logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
+					map[string]any{
+						"agent_id":      ts.agent.ID,
+						"iteration":     iteration,
+						"content_chars": len(finalContent),
+					})
+				break turnLoop
 			}
-			finalContent = responseContent
-			logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
+			logger.InfoCF("agent", "empty-response retry returned a repaired tool call; dispatching it",
 				map[string]any{
-					"agent_id":      ts.agent.ID,
-					"iteration":     iteration,
-					"content_chars": len(finalContent),
+					"agent_id":   ts.agent.ID,
+					"iteration":  iteration,
+					"tool_calls": len(response.ToolCalls),
 				})
-			break
+		}
+
+		// ADR-087 D6.10 / D4 (last paragraph, "truncated and has complete
+		// tool calls"): a round with tool calls never reaches
+		// evaluateTruncatedSuccess (its guard requires len(ToolCalls)==0),
+		// so this is the one place that handles a D6 chain across a
+		// tool-calling round.
+		//
+		// FIRST, unconditionally, settle whatever the accumulator still holds.
+		// Everything this round is about to write — the assistant tool_calls
+		// message into session history, and appendIntermediateAssistantTranscript's
+		// narration entry into the transcript — lands AFTER any earlier
+		// continuation prefix was produced, so the prefix has to reach disk
+		// first or the record comes out as [P2][P1+P3] instead of
+		// [P1][P2][P3]. flushContinuationAccumulator writes it in order and
+		// clears it, which is also what stops it being emitted a second time
+		// at turn end.
+		//
+		// THEN the two truncation cases:
+		//   - FinishReason NOT truncated: an ordinary follow-up round
+		//     resolves any D6 chain a prior round left pending.
+		//   - FinishReason truncated but the response still carried
+		//     complete tool calls (parseStreamResponse succeeds once every
+		//     collected argument set decodes, regardless of finishReason):
+		//     execute the calls once (unchanged below) and carry the
+		//     truncation forward as PENDING ONLY. This round's own narration
+		//     is deliberately NOT seeded into the accumulator: the tool-call
+		//     branch immediately below persists that exact text itself, three
+		//     ways (messages, Sessions.AddFullMessage,
+		//     appendIntermediateAssistantTranscript), so seeding it here made
+		//     every later accumulator reader emit the narration a second time
+		//     — and, if a later call errored, made preserveTruncatedAccumulator
+		//     append a second identical copy marked truncated. Never
+		//     re-executed because of a continuation: nothing here re-dispatches
+		//     these tool calls.
+		al.flushContinuationAccumulator(ts, &continuationChain)
+		if isTruncatedFinishReason(response.FinishReason) {
+			ts.markContinuationPending()
+		} else {
+			ts.resolveContinuation()
 		}
 
 		normalizedToolCalls := make([]providers.ToolCall, 0, len(response.ToolCalls))
@@ -10543,16 +11961,213 @@ turnLoop:
 		}
 
 		ts.setPhase(TurnPhaseTools)
+		// setGoalSucceededThisRound tracks whether a set_goal call in THIS
+		// model response already registered (or updated) the goal record — the
+		// gate a few branches down uses to refuse a trailing AskUserQuestion
+		// from the same response (UAT B-9 run 4: set_goal plus an invented
+		// "Placeholder question - not used" ask in one response both ran; the
+		// ask parked a turn whose goal record was already registered, freezing
+		// the session for 18 minutes). A successful set_goal only ever happens
+		// on a goal turn, so no separate goal-turn predicate is needed.
+		setGoalSucceededThisRound := false
 		for i, tc := range normalizedToolCalls {
 			if ts.hardAbortRequested() {
 				turnStatus = TurnEndStatusAborted
 				return al.abortTurn(ts, "tool_loop", hardInterruptAbortReason)
 			}
 
+			// A done turn context (the agent's own turn timeout, or any other
+			// cancellation of turnCtx that is not a hard abort) means no further
+			// tool call in this batch may start. ExecuteWithContext does not
+			// consult the context itself, so before this check a batch that began
+			// before the deadline kept dispatching every queued call after it.
+			// Mirrors the hard-abort check above (end the turn now) and the
+			// steering/graceful-interrupt skip at the end of this loop (every call
+			// that will not run still gets a synthetic result, so each tool_call
+			// in the assistant message keeps its paired tool result). The turn
+			// then ends through typedTurnExit — the same typed cancel/timeout exit
+			// the provider call uses when this context is done — instead of
+			// spending a provider round that can only fail on the same context.
+			if ctxErr := turnCtx.Err(); ctxErr != nil {
+				const ctxDoneSkipMessage = "Skipped: this turn ran out of time or was cancelled before this tool call could start."
+				skipReason := "turn context done (" + ctxErr.Error() + ")"
+				logger.InfoCF("agent", "Turn checkpoint: turn context done, skipping remaining tools",
+					map[string]any{
+						"agent_id":  ts.agent.ID,
+						"completed": i,
+						"skipped":   len(normalizedToolCalls) - i,
+						"reason":    skipReason,
+					})
+				for j := i; j < len(normalizedToolCalls); j++ {
+					skippedTC := normalizedToolCalls[j]
+					al.emitEvent(
+						EventKindToolExecSkipped,
+						ts.eventMeta("runTurn", "turn.tool.skipped"),
+						ToolExecSkippedPayload{
+							Tool:   skippedTC.Name,
+							Reason: skipReason,
+						},
+					)
+					// ADR-066 D4: a synthetic skipped result is a builtin-failure
+					// surface result like any other skip (FR-009).
+					skippedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: skippedTC.Name, ToolCallID: skippedTC.ID, Content: ctxDoneSkipMessage, IsError: true, ParallelN: len(normalizedToolCalls),
+					}).Message
+					messages = append(messages, skippedMsg)
+				}
+				res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, ctxErr)
+				turnStatus = status
+				return res, exitErr
+			}
+
 			// Unsanitize tool name from LLM — dots were replaced with underscores
 			// for Anthropic/Azure API compatibility (e.g., "browser_navigate" → "browser.navigate").
 			toolName := ts.agent.Tools.UnsanitizeToolName(tc.Name)
 			toolArgs := cloneStringAnyMap(tc.Arguments)
+
+			// pkg/agent/verifier_budget.go::VerifierBudget (JUDGE-FR-051/
+			// FR-052): once a verifier adjudication's tool-call or byte cap
+			// has been reached by every call already admitted this turn,
+			// refuse EVERY further tool call here — before the quarantine
+			// gate, before any hook, before dispatch — with a tool-result
+			// message telling the Judge the cap was reached and to conclude
+			// with the evidence already gathered. The turn is NEVER killed
+			// (FR-052): this is an ordinary refused tool-result, the same
+			// shape as the serialised-tool-argument-bound refusal further
+			// below, and the loop continues so the Judge's next assistant
+			// message can still emit its verdict.
+			// verifierBudgetForTurn returns nil for every non-verifier turn
+			// (the overwhelming majority — an ordinary chat turn's turnID
+			// was never registered), and CheckCap on a nil *VerifierBudget
+			// is a no-op, so this costs one map lookup on the hot path and
+			// nothing more.
+			if vb := verifierBudgetForTurn(ts.turnID); vb != nil {
+				if refusal, capped := vb.CheckCap(); capped {
+					logger.WarnCF("agent", "verifier tool call refused: adjudication budget cap reached (JUDGE-FR-051/FR-052)",
+						map[string]any{
+							"agent_id": ts.agent.ID,
+							"tool":     toolName,
+						})
+					// ADR-066 D4: refused results enter through the choke
+					// point on the builtin-failure surface (FR-009).
+					// SkipVerifierBudgetAccounting is set because this
+					// result exists ONLY because the cap was already
+					// reached — it must not itself count toward that same
+					// cap.
+					refusedMsg := al.admitToolResult(ts, toolResultAdmission{
+						Tool: tc.Name, ToolCallID: tc.ID, Content: refusal, IsError: true, ParallelN: len(normalizedToolCalls),
+						SkipVerifierBudgetAccounting: true,
+					}).Message
+					messages = append(messages, refusedMsg)
+					// ADR-066 D6 (T066-13): the window check runs after EVERY
+					// admitted result — empty-only mid-turn, Skip never
+					// moves; a thrash-guard fire ends the turn typed with no
+					// further provider call (FR-032).
+					if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+						res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+						turnStatus = status
+						return res, exitErr
+					}
+					al.emitEvent(
+						EventKindToolExecSkipped,
+						ts.eventMeta("runTurn", "turn.tool.skipped"),
+						ToolExecSkippedPayload{
+							Tool:   toolName,
+							Reason: refusal,
+						},
+					)
+					continue
+				}
+			}
+
+			// A call to a tool this request did not offer never runs (ADR-081
+			// D3: the narrowed goal request's "exactly two" is exact; ADR-071
+			// §1.1: a lazy tool is callable only once ToolSearch promotes it).
+			// Checked on the pre-hook name, before the quarantine gate, hooks,
+			// the argument bound and any approval prompt — a call that will not
+			// run must not cost the user an approval. Not a policy denial: the
+			// denial ledger and quarantine are not consulted, and a tool policy
+			// denies at filter time is left to the exec-time deny path below
+			// (see toolNotOfferedRefusal).
+			if refusal, notOffered := al.toolNotOfferedRefusal(
+				ts, offeredTools, tc.Name, toolName, filterTimePolicyMap, goalForce, cfg.Tools.Manifest.Compressed,
+			); notOffered {
+				logger.WarnCF("agent", "Tool call refused: the tool was not offered in this request",
+					map[string]any{
+						"agent_id":  ts.agent.ID,
+						"tool":      toolName,
+						"iteration": iteration,
+						"narrowed":  goalForce.layer1,
+					})
+				refusedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: refusal, IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, refusedMsg)
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
+				}
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: "tool_not_offered",
+					},
+				)
+				continue
+			}
+
+			// UAT B-9 run 4: an AskUserQuestion trailing a SUCCESSFUL set_goal
+			// from the SAME model response never runs. The rubric note already
+			// says the two narrowed doors are alternatives ("Call exactly ONE
+			// of the two, never both in the same response"); the live case had
+			// the model register the record and then emit an invented
+			// "Placeholder question - not used" ask, whose park froze a session
+			// for 18 minutes even though the goal record was registered. The
+			// ask is refused with a result telling the model to work now, or to
+			// ask a REAL question on its next turn. Refused here, before
+			// dispatch, so no park happens, no question card is created, and
+			// the FR-010 question-round budget is not spent (that bump fires
+			// only on a genuine ParksTurn success below).
+			if toolName == tools.AskUserQuestionToolName && setGoalSucceededThisRound {
+				const askAfterSetGoalRefusal = "AskUserQuestion was not called: this same response already " +
+					"registered the goal record with set_goal. Registering the record and asking are alternatives — " +
+					"you chose to register. Start working on the goal now (your full tool set returns on the next " +
+					"request), or, if you are genuinely blocked on a real question, ask that real question on your " +
+					"next turn — never a placeholder."
+				logger.WarnCF("agent", "goal: refusing an AskUserQuestion trailing a successful set_goal in the same response",
+					map[string]any{
+						"agent_id":  ts.agent.ID,
+						"turn_id":   ts.turnID,
+						"iteration": iteration,
+					})
+				refusedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: askAfterSetGoalRefusal, IsError: true, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, refusedMsg)
+				// ADR-066 D6 (T066-13): the window check runs after EVERY admitted
+				// result — empty-only mid-turn, Skip never moves; a thrash-guard fire
+				// ends the turn typed with no further provider call (FR-032).
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
+				}
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: "goal_turn_ask_after_set_goal",
+					},
+				)
+				continue
+			}
 
 			// ADR-058 fix: ledgerToolName is the PRE-HOOK tool name, captured
 			// before hooks.BeforeTool below gets a chance to run. Every
@@ -10619,6 +12234,38 @@ turnLoop:
 				if used, exhausted := ts.recordQuarantineReplay(ledgerToolName); exhausted {
 					turnStatus = TurnEndStatusAborted
 					return al.abortTurnForToolDenialBudget(ts, ledgerToolName, qReason, used)
+				}
+				continue
+			}
+
+			// ADR-085 BROWSER-FR-016/FR-016a: once this turn's control-gate
+			// deferral bound (BROWSER-FR-014, N=3) has been reached, every
+			// LATER control-gated browser tool call short-circuits HERE —
+			// before hooks.BeforeTool, before dispatch, before any CDP
+			// contact, no lease acquisition, no audit action row, no entry
+			// into pkg/tools/browser at all. This is a SEPARATE ledger and
+			// refusal from the quarantine gate immediately above: it shares
+			// this tool-dispatch point and nothing else (see loop.go's
+			// shared-file-chain doc). Never mixes with turnDenialBudget.
+			if isBrowserControlGatedTool(ledgerToolName) && ts.browserControlGateExhausted() {
+				al.emitEvent(
+					EventKindToolExecSkipped,
+					ts.eventMeta("runTurn", "turn.tool.skipped"),
+					ToolExecSkippedPayload{
+						Tool:   toolName,
+						Reason: "browser_control_gate_exhausted",
+					},
+				)
+				exhaustedMsg := browserControlGateExhaustedMessage(toolName)
+				settleAskToolCallTranscript(ts, session.ToolCallID(tc.ID), toolName, toolArgs, exhaustedMsg)
+				admittedMsg := al.admitToolResult(ts, toolResultAdmission{
+					Tool: tc.Name, ToolCallID: tc.ID, Content: exhaustedMsg, IsError: false, ParallelN: len(normalizedToolCalls),
+				}).Message
+				messages = append(messages, admittedMsg)
+				if messages, midTurnGuardErr = al.midTurnWindowCheck(ts, messages, providerToolDefs); midTurnGuardErr != nil {
+					res, status, exitErr := al.typedTurnExit(ts, iteration, llmModel, midTurnGuardErr)
+					turnStatus = status
+					return res, exitErr
 				}
 				continue
 			}
@@ -10962,8 +12609,12 @@ turnLoop:
 				denialReason := ""
 				if !approved {
 					// About to block on a human, for up to the approval
-					// registry's timeout (300 s by default — see
-					// pkg/gateway/approvals.go). Record the call as `pending`
+					// registry's timeout (600 s by default, configurable —
+					// pkg/gateway/gateway.go's defaultToolApprovalTimeout). The
+					// wait is server-side and needs no browser attached: a task
+					// run's approval waits exactly like a chat turn's (ADR-082;
+					// pinned by pkg/gateway/task_run_ask_approval_test.go).
+					// Record the call as `pending`
 					// FIRST so the thread shows what the turn is waiting on for
 					// the whole wait, and so a reload mid-wait still shows it:
 					// the tool_approval_required WS frame is live-only and does
@@ -11372,6 +13023,19 @@ turnLoop:
 				toolResult = tools.ErrorResult("hook returned nil tool result")
 			}
 
+			// ADR-085 BROWSER-FR-012a/FR-013/FR-015: a REAL dispatch (not the
+			// FR-016 short-circuit above, which never reaches here) came back
+			// deferred by the browser control gate. Record it on this turn's
+			// ledger via the STRUCTURAL Deferred field alone — never by
+			// parsing ForLLM's prose — and, on exactly the call that reaches
+			// BROWSER-FR-014's bound (the third), append FR-015's terminal
+			// instruction to this one result's own ForLLM.
+			if toolResult.Deferred != nil && toolResult.Deferred.Gate == browserControlDeferralGate {
+				if _, justReachedBound := ts.recordBrowserControlDeferral(); justReachedBound {
+					toolResult.ForLLM += browserControlGateBoundReachedNote
+				}
+			}
+
 			// UAT fix (fix/uat-defects-2026-08-22, Defect 1): update this
 			// exact call's consecutive-failure streak. A success (or a hook
 			// that turned a failure into one) clears the streak outright; a
@@ -11382,6 +13046,9 @@ turnLoop:
 			// toolCBSig computed before dispatch/hooks so a hook renaming the
 			// tool does not fragment the streak it is meant to track.
 			if toolResult.IsError {
+				// A failure ends any identical-SUCCESS run; identical failures
+				// are the failure streak's job.
+				ts.resetToolSuccessRepeat()
 				streak := ts.recordToolFailure(toolCBSig)
 				switch {
 				case streak >= toolFailureCircuitBreakThreshold:
@@ -11393,6 +13060,22 @@ turnLoop:
 				}
 			} else {
 				ts.recordToolSuccess(toolCBSig)
+				// Feeds the same-response ask refusal above: a set_goal that
+				// succeeded in this response makes any trailing AskUserQuestion
+				// in the same batch a refusal, not a park.
+				if ledgerToolName == tools.SetGoalToolName {
+					setGoalSucceededThisRound = true
+				}
+				// Identical SUCCESSFUL repetition (tool_failure_circuit_breaker.go):
+				// warn the model, and at the stop threshold end the turn after
+				// this round (the takeToolRepeatStop check after the tool loop).
+				switch run := ts.recordToolSuccessRepeat(toolCBSig); {
+				case run >= toolRepeatStopThreshold:
+					ts.requestToolRepeatStop(toolRepeatStopNotice(toolName, run))
+					toolResult.ForLLM = toolResult.ContentForLLM() + toolRepeatWarnNotice(toolName, run)
+				case run >= toolRepeatWarnThreshold:
+					toolResult.ForLLM = toolResult.ContentForLLM() + toolRepeatWarnNotice(toolName, run)
+				}
 			}
 			// Always deliver any media the tool produced AND tag the result with
 			// artifact references so the LLM can reason about them in the
@@ -11798,6 +13481,21 @@ turnLoop:
 			// in-flight steering message or graceful interrupt too.
 			parked := toolResult.ParksTurn
 
+			// ADR-081 FR-010: the question door was genuinely taken on a
+			// narrowed goal turn — bump the persisted per-generation
+			// question-round budget. Scoped tightly: only THIS exact tool
+			// (never any other ParksTurn tool, e.g. a nested delegate's
+			// parked child), only when the narrowed pair actually offered
+			// the ask door THIS request (goalForce.layer1 &&
+			// goalForce.askOffered — a stray AskUserQuestion call on some
+			// unrelated turn must never consume a goal's budget it has no
+			// relation to), and only on the genuine success path
+			// (parked==true — a refused/errored ask attempt asked nothing
+			// and must not spend the round, spec S-14/E6).
+			if parked && goalForce.layer1 && goalForce.askOffered && toolName == tools.AskUserQuestionToolName {
+				al.bumpGoalQuestionRoundsUsed(goalForce)
+			}
+
 			skipReason := ""
 			skipMessage := ""
 			if parked {
@@ -11894,6 +13592,29 @@ turnLoop:
 		logger.DebugCF("agent", "TTL tick after tool execution", map[string]any{
 			"agent_id": ts.agent.ID, "iteration": iteration,
 		})
+
+		// Identical SUCCESSFUL repetition reached toolRepeatStopThreshold this
+		// round (tool_failure_circuit_breaker.go). Every tool result of the
+		// round is already recorded, so the history stays well-formed; end the
+		// turn through the same finalization path the iteration cap uses, with
+		// a visible final message instead of another provider round. A queued
+		// user message is new input: let it through and restart the count.
+		if notice := ts.takeToolRepeatStop(); notice != "" {
+			if len(pendingMessages) > 0 {
+				ts.resetToolSuccessRepeat()
+			} else {
+				logger.WarnCF("agent", "Turn stopped: an identical tool call kept succeeding without progress",
+					map[string]any{
+						"agent_id":  ts.agent.ID,
+						"turn_id":   ts.turnID,
+						"iteration": iteration,
+						"threshold": toolRepeatStopThreshold,
+					})
+				finalContent = notice
+				ts.markTurnFailed()
+				break turnLoop
+			}
+		}
 	}
 
 	// ADR-071 §4.3.1(a): advance and sweep this bucket's search-promotion
@@ -11947,7 +13668,13 @@ turnLoop:
 	}
 
 	if finalContent == "" {
-		if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
+		if ts.getTruncationReason() != "" {
+			// ADR-087 D4a: this IS the deliberate outcome, not a fallthrough
+			// — a truncated turn that produced literally no content. No
+			// retry, no fallback substitution, no markTurnFailed; finalContent
+			// stays "" and the write choke points below persist a zero-content
+			// entry for MarkLastEntryTruncated to find.
+		} else if ts.currentIteration() >= ts.agent.MaxIterations && ts.agent.MaxIterations > 0 {
 			// Genuine failure: tool-iteration ceiling hit without a final response.
 			// markTurnFailed so DoneStats.TurnFailed=true reaches the done frame.
 			finalContent = toolLimitResponse
@@ -12006,8 +13733,21 @@ turnLoop:
 	ts.mu.RLock()
 	hasActiveStreamer := ts.lastStreamer != nil
 	ts.mu.RUnlock()
-	if !hasActiveStreamer && finalContent != "" {
-		ts.appendAssistantTranscript(finalContent)
+	truncReason := ts.getTruncationReason()
+	if !hasActiveStreamer {
+		// ADR-087 D4a/D4b: this is the non-streaming write choke point.
+		// When the turn was truncated, stamp Truncated/TruncationReason in
+		// the SAME write as the content — see
+		// appendAssistantTranscriptTruncated's doc comment for why this
+		// replaces the former append-then-MarkLastEntryTruncated two-step
+		// (for the streaming case, finalizeStreamer's own deferred call
+		// does the single-write equivalent after wsStreamer.Finalize
+		// persists its entry).
+		if truncReason != "" {
+			ts.appendAssistantTranscriptTruncated(finalContent, truncReason)
+		} else if finalContent != "" {
+			ts.appendAssistantTranscript(finalContent)
+		}
 	}
 
 	ts.setPhase(TurnPhaseCompleted)
@@ -12058,6 +13798,10 @@ const hardInterruptAbortReason = "turn canceled by hard interrupt request"
 // ErrTurnTimedOut) and the raw cause, so runAgentLoop / processMessage /
 // session_worker callers that errors.Is the context error keep working and
 // TranslateTurnError classifies the chain to the same code. Never `unknown`.
+// ADR-087 D6.8 is NOT re-implemented here: every typed exit returns out of
+// runTurn, whose deferred preserveTruncatedAccumulator is the single choke
+// point that keeps an unresolved D6 continuation. The call this function used
+// to make itself was one of the five hand-wired ones the defer replaced.
 func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string, cause error) (turnResult, TurnEndStatus, error) {
 	code, ok := typedExitCode(cause)
 	if !ok {
@@ -12078,18 +13822,7 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 	}
 	llm := typedExitError(code, cause)
 
-	al.emitEvent(
-		EventKindError,
-		ts.eventMeta("runTurn", "turn.error"),
-		ErrorPayload{
-			Stage:     "llm",
-			ChatID:    ts.opts.ChatID,
-			Code:      string(llm.Code),
-			Message:   llm.Message,
-			SessionID: string(ts.routingSessionID),
-		},
-	)
-	ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+	al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
 	level("agent", "Turn exited: "+string(code), map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": iteration,
@@ -12098,6 +13831,34 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 		"cause":     cause.Error(),
 	})
 	return turnResult{status: status}, status, fmt.Errorf("%w: %w", sentinel, cause)
+}
+
+// emitTurnErrorFrame emits one EventKindError frame for a turn that ended on a
+// classified error, and records the same error in that turn's transcript so a
+// reload re-renders it. payloadStage is the frame's Stage; transcriptStage is
+// the transcript entry's stage.
+//
+// ADR-057 FR-014: this is a WS-payload-stamping consumer of routingSessionID.
+// The frame's SessionID is ts.routingSessionID — the session a second tab or a
+// reload is attached to; a webchat ChatID alone is a dead per-connection id —
+// and the value never leaves this function. Two exits share it: typedTurnExit
+// (a turn cancelled, timed out, or out of context) and subturn.go's
+// subTurnTimedOutResult (a delegation force-cancelled at its time limit, the
+// exit a timed-out child took through typedTurnExit before the force-cancel
+// existed). Code that needs the id for any other purpose must read the field
+// itself and justify that read against the consumer-set test
+// (routing_session_id_consumer_set_adr057_test.go).
+func (al *AgentLoop) emitTurnErrorFrame(
+	ts *turnState, meta EventMeta, payloadStage, transcriptStage string, llm LLMError,
+) {
+	al.emitEvent(EventKindError, meta, ErrorPayload{
+		Stage:     payloadStage,
+		ChatID:    ts.opts.ChatID,
+		Code:      string(llm.Code),
+		Message:   llm.Message,
+		SessionID: string(ts.routingSessionID),
+	})
+	ts.appendClassifiedError(EventKindError.String(), transcriptStage, llm)
 }
 
 // abortTurn finalizes a hard-aborted turn. It differentiates two cases by
@@ -12128,6 +13889,11 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 //     propagates it, and session_worker.go's processTurn turns it into the
 //     terminal user-facing frame every channel already knows how to render
 //     (rather than silently dropping the user with no explanation).
+//
+// ADR-087 D6.8 is NOT re-implemented here either (see typedTurnExit): a hard
+// cancel or system-initiated abort returns out of runTurn, and runTurn's
+// deferred preserveTruncatedAccumulator is the single choke point that keeps
+// an unresolved D6 continuation.
 func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult, error) {
 	ts.setPhase(TurnPhaseAborted)
 	if !ts.opts.NoHistory {
@@ -12184,7 +13950,10 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 	if reason == "" {
 		reason = "no reason provided"
 	}
-	err := fmt.Errorf("turn aborted during %s: %s", stage, reason)
+	// curatedTurnError: the stage and a hook's or the tool-denial budget's own
+	// reason — never a provider's response — so a task run may show it as
+	// written (turnErrorUserText), exactly as the event payload below does.
+	err := &curatedTurnError{text: fmt.Sprintf("turn aborted during %s: %s", stage, reason)}
 	// Wave 2 (BLOCK 2 / IMPORTANT 1): system-initiated aborts are
 	// operator-shaped; preserve the original reason verbatim in both the
 	// returned error AND the event payload (a user/operator needs to see
@@ -12433,21 +14202,17 @@ func (al *AgentLoop) assembleMessages(
 			})
 		}
 	}
-	// Review B3: a task's TASK_STATUS/TASK_SUMMARY marker instruction
-	// (buildPrompt, task_executor.go) lives only in the task's first user
-	// turn — a long, tool-heavy task run can trip windowTrim (ADR-028) and
-	// evict that turn entirely, silently dropping the instruction for the
-	// rest of the run. Piggyback a terse reminder onto the SAME breadcrumb
-	// block that already fires exactly when (and only when) something has
-	// been evicted (breadcrumb != ""), scoped to task runs only
-	// (ts.opts.IsTaskRun) — this re-surfaces the instruction precisely when
-	// it risks having been evicted, at near-zero token cost, without a
-	// second parallel injection mechanism.
+	// Review B3 (reworded for the one-claim-path model, founder decision
+	// 2026-09-14): a task run's goal_claim instruction (buildPrompt,
+	// task_executor.go) lives only in the run's first user turn — a long,
+	// tool-heavy run can trip windowTrim (ADR-028) and evict that turn
+	// entirely, silently dropping the instruction for the rest of the run.
+	// Piggyback a terse reminder onto the SAME breadcrumb block that already
+	// fires exactly when (and only when) something has been evicted
+	// (breadcrumb != ""), scoped to native task runs only (ts.opts.IsTaskRun;
+	// an external-CLI worker never reaches assembleMessages at all).
 	if ts.opts.IsTaskRun && breadcrumb != "" {
-		breadcrumb += fmt.Sprintf(
-			"\n\nReminder (task run): end your final message with `%s: success` or `%s: failure` (ADR-043).",
-			taskStatusLabel, taskStatusLabel,
-		)
+		breadcrumb += "\n\nReminder (task run): when the work is verified, report completion by calling goal_claim (status \"met\", with your one-line evidence) — not by writing a status yourself."
 	}
 	span := al.activeRecallSpan(ts.sessionKey)
 	// ADR-066 D5.4 (FR-043): this from-scratch assembly includes the active
@@ -14072,7 +15837,13 @@ func (al *AgentLoop) emitScheduledAutoDenyAudit(
 // returns the note string. Returns "" when there is nothing to inject (no
 // store, no active goal-task with todos). This is rebuilt fresh every turn so
 // it survives context compression without polluting the persisted transcript.
-func (al *AgentLoop) buildScratchpadNote(agentID string) string {
+//
+// sessionID scopes the note to the checklist the CURRENT session's own
+// set_todos calls created (Task.OriginSessionID). Without the scoping the note
+// carried the agent's most recent open checklist from ANY session or workspace
+// (UAT B-1 runs 3 and 5), which the model treated as this conversation's
+// context. An empty sessionID keeps the pre-scoping agent-wide selection.
+func (al *AgentLoop) buildScratchpadNote(agentID, sessionID string) string {
 	if al.taskStore == nil || agentID == "" {
 		return ""
 	}
@@ -14096,6 +15867,9 @@ func (al *AgentLoop) buildScratchpadNote(agentID string) string {
 			continue
 		}
 		if len(tk.Todos) == 0 {
+			continue
+		}
+		if sessionID != "" && tk.OriginSessionID != sessionID {
 			continue
 		}
 		// List is sorted priority ASC then created_at ASC; last match is

@@ -27,7 +27,7 @@ func SafeInvoke(cb OnToolCallProgress, p ToolCallProgress) {
 			// the consumer and must be visible. It just must not be fatal to
 			// the turn.
 			slog.Error("providers: tool-call progress handler panicked; progress suppressed for this delta",
-				"panic", r, "tool", p.Name, "args_bytes", p.ArgsBytes)
+				"panic", r, "tool", p.Name, "args_bytes", p.ArgsBytes, "reasoning_bytes", p.ReasoningBytes)
 		}
 	}()
 	cb(p)

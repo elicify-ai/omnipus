@@ -199,9 +199,40 @@ test(
     const collapsedBlocks = page.locator('[data-testid="subagent-collapsed"]');
     await expect(collapsedBlocks.first()).toBeVisible({ timeout: 60_000 });
 
-    // Structural assertion: wait for exactly 2 sibling blocks.
+    // Structural assertion: at least 2 sibling blocks.
     // Traces to: BDD Scenario 13 — "two distinct SubagentBlock elements"
     await expect(collapsedBlocks).toHaveCount(2, { timeout: 60_000 });
+
+    // THEN LET THE COUNT SETTLE BEFORE TOUCHING ANYTHING.
+    //
+    // toHaveCount polls until the count EQUALS 2 and returns the moment it
+    // does — it does not promise the model is finished. The prompt above asks
+    // for exactly two delegate calls, and a real model usually complies, but
+    // "usually" is the whole problem: when a third call lands during the
+    // expand/collapse sequence below, the final count is 3 and the last
+    // assertion fails on a run where nothing about the PRODUCT was wrong.
+    //
+    // That is how it failed on CI: one failure, then a clean pass on retry #1
+    // in the same job, with the error "exactly 2 sibling SubagentBlocks must
+    // be rendered for two delegate calls".
+    //
+    // How many times the model chooses to call `delegate` is not a product
+    // invariant and this test never had a way to enforce it. What IS the
+    // product invariant — and what BDD Scenario 13 is actually about — is that
+    // sibling blocks render independently and that expanding or collapsing one
+    // neither creates nor destroys another. So: settle, snapshot the count,
+    // and hold the INVARIANT against that snapshot.
+    let stableCount = await collapsedBlocks.count();
+    for (let i = 0; i < 6; i++) {
+      await page.waitForTimeout(500);
+      const now = await collapsedBlocks.count();
+      if (now === stableCount) break;
+      stableCount = now;
+    }
+    expect(
+      stableCount,
+      'at least 2 sibling SubagentBlocks are required to test independent expansion',
+    ).toBeGreaterThanOrEqual(2);
 
     // Verify independent expansion: expand first — second should remain collapsed.
     await collapsedBlocks.nth(0).click();
@@ -216,9 +247,13 @@ test(
     await collapsedBlocks.nth(0).click();
     await expect(expandedBlocks).toHaveCount(1, { timeout: 10_000 });
 
-    // Differentiation test: two different blocks expanded/collapsed independently.
+    // Differentiation test: two different blocks expanded and collapsed
+    // independently, and the block set itself is untouched by doing so.
     const finalCount = await collapsedBlocks.count();
-    expect(finalCount, 'exactly 2 sibling SubagentBlocks must be rendered for two delegate calls').toBe(2);
+    expect(
+      finalCount,
+      'expanding and collapsing sibling SubagentBlocks must not create or destroy blocks',
+    ).toBe(stableCount);
   },
 );
 

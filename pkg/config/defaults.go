@@ -11,6 +11,43 @@ import (
 	"github.com/elicify-ai/omnipus/pkg"
 )
 
+// Judge budget defaults (ADR-084 §H, JUDGE-FR-049 – FR-052, FR-081; C-29 /
+// C-70: pkg/config/defaults.go's sole writer for the whole delivery is
+// wave E1, landed in the same commit as the goal_claim and browser_handover
+// ceiling entries above/below). These are the LITERAL DEFAULT VALUES the
+// spec fixes up front; wave E2 owns pkg/config/config.go for the whole
+// delivery and adds the Config struct fields (judge timeout / cap /
+// byte-cap / token-ceiling) plus their Effective*() accessors that fall
+// back to these constants, mirroring the shipped EffectiveTaskMaxAttempts /
+// EffectiveGoalMaxRounds pattern — see pkg/config/planning.go. Exported now,
+// ahead of their consumer, so E2's commit is a pure additive reference: the
+// value is known from the spec, so it does not need its consumer to exist
+// first (C-29).
+const (
+	// DefaultJudgeTimeoutSeconds is JUDGE-FR-049's operator-configurable
+	// judge-turn timeout default (420 s).
+	DefaultJudgeTimeoutSeconds = 420
+	// JudgeTimeoutHardCeilingSeconds is JUDGE-FR-049's hard ceiling: a
+	// configured judge timeout MUST be clamped to this value.
+	JudgeTimeoutHardCeilingSeconds = 900
+	// DefaultJudgeToolCallCap is JUDGE-FR-051's per-adjudication tool-call
+	// cap default (verifier dispatch, not the global chat MaxIterations).
+	DefaultJudgeToolCallCap = 25
+	// JudgeToolCallCapCeiling is JUDGE-FR-051's configurable ceiling on the
+	// tool-call cap.
+	JudgeToolCallCapCeiling = 60
+	// DefaultJudgeByteCapBytes is JUDGE-FR-051's per-adjudication cap on
+	// total bytes returned by tool results (2 MiB default).
+	DefaultJudgeByteCapBytes = 2 * 1024 * 1024
+	// JudgeByteCapCeilingBytes is JUDGE-FR-051's configurable ceiling on the
+	// byte cap (8 MiB).
+	JudgeByteCapCeilingBytes = 8 * 1024 * 1024
+	// DefaultJudgeTokenCeiling is JUDGE-FR-081's per-adjudication
+	// prompt+completion token/cost ceiling default (120 K tokens). FR-081
+	// also requires a WARN at 75% of this value.
+	DefaultJudgeTokenCeiling = 120_000
+)
+
 // DefaultConfig returns the default configuration for Omnipus.
 func DefaultConfig() *Config {
 	// Determine the base path for the workspace via the single mandatory
@@ -274,7 +311,34 @@ func DefaultConfig() *Config {
 				// ask-gate). Per-agent seeds decide who holds it: every
 				// human-facing agent allow; Judge/PlanSupervisor explicit deny
 				// via their denyAllThenOverride stamps.
-				"AskUserQuestion":     "allow",
+				"AskUserQuestion": "allow",
+				// set_goal (ADR-081 D2, work-first-goal-flow-spec FR-004): the
+				// validated write-path over the goal record. Ceiling "allow"
+				// for the same reason AskUserQuestion's is — writing your own
+				// session's goal record is the safety-increasing direction
+				// (it can only ever register/replace THIS session's own
+				// record, gated shut for a delegated sub-turn or a goalless
+				// session by the tool's own scope preconditions, never by
+				// policy) — and per-agent seeds decide who holds it: every
+				// human-facing agent allow (mirroring AskUserQuestion's own
+				// seed), Judge/PlanSupervisor explicit deny via their
+				// denyAllThenOverride stamps, Worker explicit deny via
+				// tightenGlobalCeiling (see pkg/coreagent/core.go).
+				"set_goal": "allow",
+				// goal_claim (ADR-084 D12, JUDGE-FR-089, C-70): the tool-call
+				// claim channel. Ceiling "allow" for the same reason
+				// set_goal's is directly above — it reports the CALLING
+				// session's own completion only, gated shut for a goalless
+				// session, and for a delegated sub-turn that is not a task's
+				// own run, by the tool's own scope preconditions, never by
+				// policy. A native task run finishes ONLY through an upheld
+				// goal_claim (ADR-084 §11, issue #710), so every agent a task
+				// can be assigned to must hold it. Per-agent seeds decide who
+				// holds it: every human-facing agent and the Worker allow
+				// (the Worker explicitly, via tightenGlobalCeiling — unlike its
+				// set_goal deny), Judge/PlanSupervisor explicit deny via their
+				// denyAllThenOverride stamps (see pkg/coreagent/core.go).
+				"goal_claim":          "allow",
 				"list_tasks":          "allow",
 				"create_task":         "allow",
 				"update_task":         "allow",
@@ -344,6 +408,21 @@ func DefaultConfig() *Config {
 				// tightenGlobalCeiling's sparse map, which is intended and
 				// recorded rather than discovered.
 				"browser_upload_file": "ask",
+				// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow.
+				// This is a decision, not an inheritance — the browser
+				// family is NOT uniform (browser_upload_file above is
+				// "ask") — because handing the browser to the human is the
+				// conservative direction: the tool takes nothing and reaches
+				// no page, and an "ask" on it would put an approval card
+				// between the agent and its own stand-down. Per-agent seeds
+				// (pkg/coreagent/core.go) decide who holds it: IDJim, IDRay,
+				// IDExplorer, IDResearcher explicit allow; Mia and Ava need
+				// no edit at all (denyAllThenOverride's floor already
+				// resolves them deny); Worker inherits this ceiling value
+				// through tightenGlobalCeiling's sparse map, matching every
+				// other browser_* tool's existing, already-tolerated posture
+				// for Worker.
+				"browser_handover": "allow",
 
 				// --- Sysagent management tools ---
 				"create_workspace":    "allow",
@@ -566,6 +645,10 @@ func DefaultConfig() *Config {
 		// config.json is self-documenting; validateBootConfig still applies
 		// the same defaults for any field an operator zeroes out later.
 		Planning: PlanningConfig{
+			// Two separate limits (founder decision 2026-09-14, issue #710):
+			// TaskMaxAttempts is how many fresh runs a task gets (default 3);
+			// GoalMaxRounds is how many tries a goal gets within one run or one
+			// chat (Settings -> Performance, default 20).
 			TaskMaxAttempts:         DefaultTaskMaxAttempts,
 			GoalMaxRounds:           DefaultGoalMaxRounds,
 			PlanJudgeMaxRounds:      DefaultPlanJudgeMaxRounds,

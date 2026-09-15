@@ -63,6 +63,7 @@
 
 import { expect, type Page } from '@playwright/test'
 import { chatInput, assistantMessages, selectAgent } from './selectors'
+import { stubCliExecutor, type StubCliTexts } from './stub-external-cli'
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -174,7 +175,23 @@ export interface MemberSpec {
   /** Labels of members this one depends on; resolved to real task IDs. */
   blocked_by_labels?: string[]
   criteria: Criterion[]
+  /**
+   * Definition of Done — operator decision D-C (2026-09-11): criteria AND a
+   * definition of done are MANDATORY at task creation and at edit, and the
+   * DoD must be DISTINCT from the acceptance criteria (GOAL-FR-021/FR-048).
+   * `POST /api/v1/tasks` rejects a body with an empty/absent `dod` with HTTP
+   * 400. Optional here only so a member that does not care can inherit
+   * `defaultMemberDoD()` — createPlanMember always sends one.
+   */
+  dod?: Criterion[]
   max_attempts?: number
+  /**
+   * The member's assignee. Defaults to the plan owner. Must be on the
+   * workspace team like any assignee; a subagent_3p worker is accepted
+   * (pkg/gateway/rest_tasks.go: a plan member can be assigned directly to a
+   * native or subagent_3p agent).
+   */
+  agent_id?: string
 }
 
 export interface PlanFields {
@@ -187,6 +204,35 @@ export interface PlanFields {
 
 export function proseCriterion(text: string): Criterion {
   return { kind: 'prose', text, author: { kind: 'user', id: 'admin' }, status: 'pending' }
+}
+
+/**
+ * The default Definition of Done for a conformance fixture task.
+ *
+ * Operator decision D-C (2026-09-11) made criteria AND a definition of done
+ * mandatory at creation and at edit; `POST /api/v1/tasks` answers a body
+ * without `dod` with HTTP 400 ("dod is required: a task must have at least
+ * one definition-of-done item, DISTINCT from its acceptance criteria" —
+ * GOAL-FR-021/FR-048). Every conformance fixture therefore has to supply one.
+ *
+ * Deliberately a DELIVERY statement ("the assignee ran this task and left a
+ * reply on the record"), never a restatement of the member's acceptance
+ * criterion: the two lists have to differ, and a DoD that duplicates the
+ * criterion would also make the criterion's own met/unmet outcome — which is
+ * what these conformance tests actually assert — ambiguous.
+ *
+ * Deliberately PROSE, never `kind: check`: a check criterion is dispatched
+ * through the ASSIGNEE's own `bash` tool, and a conformance worker created by
+ * `createMainAgent` with no `builtinPolicies` override is seeded fully
+ * deny-by-default, so a check would fail closed on every member regardless of
+ * its command (see checkCriterion's own doc comment).
+ */
+export function defaultMemberDoD(label: string): Criterion[] {
+  return [
+    proseCriterion(
+      `the assignee ran the "${label}" task to completion and left its reply on the task record`,
+    ),
+  ]
 }
 
 /**
@@ -359,6 +405,10 @@ export async function createPlanMember(
     agent_id: agentId,
     plan_id: planId,
     criteria: member.criteria,
+    // D-C: mandatory at creation, distinct from `criteria` — see MemberSpec.dod
+    // and defaultMemberDoD. Without it POST /tasks answers 400 and no member
+    // is ever created.
+    dod: member.dod ?? defaultMemberDoD(member.label),
   }
   if (member.write_set !== undefined) body.write_set = member.write_set
   if (member.stream !== undefined) body.stream = member.stream
@@ -424,12 +474,40 @@ export async function createPlanWithMembers(
     const blockedBy = (m.blocked_by_labels ?? [])
       .map((l) => memberIds[l])
       .filter((id): id is string => typeof id === 'string')
-    memberIds[m.label] = await createPlanMember(page, workspaceId, planId, ownerAgentId, {
+    memberIds[m.label] = await createPlanMember(page, workspaceId, planId, m.agent_id ?? ownerAgentId, {
       ...m,
       blocked_by: blockedBy,
     })
   }
   return { planId, memberIds }
+}
+
+/**
+ * Create a `subagent_3p` worker whose CLI is the e2e stub
+ * (./stub-external-cli): it prints `texts.firstTry` on a task run's first try
+ * and `texts.laterTry` (when given) on every later try in that run, with no
+ * LLM on the worker side. Put it on the workspace team like any other assignee.
+ */
+export async function createStubCliWorkerAgent(page: Page, name: string, texts: StubCliTexts): Promise<string> {
+  const res = await apiFetch<{ id: string; warning?: string }>(page, 'POST', '/api/v1/agents', {
+    type: 'subagent_3p',
+    name,
+    description: 'Stub external-CLI worker for a conformance e2e: its CLI ignores the prompt and prints a fixed reply.',
+    soul: 'You are a stub. Your CLI process prints a fixed reply regardless of input.',
+    executor: stubCliExecutor(texts),
+  })
+  if (!res.ok) {
+    throw new Error(`createStubCliWorkerAgent: POST /agents failed ${res.status}: ${res.raw}`)
+  }
+  // Same rule as createMainAgent: a 201 carrying a warning means the agent may
+  // not be registered in memory yet, so the next POST /tasks could reject it.
+  if (res.body.warning) {
+    throw new Error(
+      'createStubCliWorkerAgent: POST /agents returned 201 with a reload warning, so the agent may not ' +
+        `be registered in memory and is not safely usable: ${res.body.warning}`,
+    )
+  }
+  return res.body.id
 }
 
 /**

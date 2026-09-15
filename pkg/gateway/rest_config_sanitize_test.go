@@ -13,8 +13,9 @@ import "testing"
 // internal-only marker that must never cross the wire).
 func TestSanitizeConfigForWire(t *testing.T) {
 	m := map[string]any{
-		"gateway":             map[string]any{"port": float64(5000)},
-		"seeded_skill_grants": []any{"define-skill-allowlist"},
+		"gateway":                    map[string]any{"port": float64(5000)},
+		"seeded_skill_grants":        []any{"define-skill-allowlist"},
+		"seeded_tool_policy_updates": []any{"adr084-worker-goal-claim-allow"},
 	}
 	for _, k := range wireExcludedConfigFields {
 		m[k] = "internal"
@@ -29,6 +30,9 @@ func TestSanitizeConfigForWire(t *testing.T) {
 	}
 	if _, present := m["seeded_skill_grants"]; present {
 		t.Fatal("seeded_skill_grants must be in the exclusion list and stripped from the wire")
+	}
+	if _, present := m["seeded_tool_policy_updates"]; present {
+		t.Fatal("seeded_tool_policy_updates must be in the exclusion list and stripped from the wire")
 	}
 	if _, present := m["gateway"]; !present {
 		t.Fatal("sanitizeConfigForWire must not touch keys outside wireExcludedConfigFields")

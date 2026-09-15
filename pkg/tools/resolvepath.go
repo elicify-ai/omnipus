@@ -402,6 +402,82 @@ type skillsWriteAuditFields struct {
 	workspaceID string
 }
 
+// --- ADR-084 engine-set turn facts (JUDGE-FR-060b, JUDGE-FR-084) ---
+//
+// Both keys below follow the SHIPPED precedent of
+// tools.WithVerifierSessionScope / VerifierSessionScopeAllows (base.go): an
+// engine-owned fact placed on the turn context by the code that DISPATCHES
+// the turn, which a tool can read but can never set for itself. A tool that
+// could set its own confinement posture, or mint its own audit correlation
+// id, would be able to lie about both.
+//
+// They live in this file rather than base.go because this file owns the two
+// consumers — ResolveTurnFSPolicy (the sole read-time FSPolicy builder) and
+// the ADR-084 audit emitters in filesystem.go — and because base.go belongs
+// to another wave of this delivery. The keys are package-scoped either way;
+// placement changes nothing a caller can observe.
+var (
+	ctxKeyReadConfined           = &toolCtxKey{"readConfined"}
+	ctxKeyVerifierAdjudicationID = &toolCtxKey{"verifierAdjudicationID"}
+)
+
+// WithReadConfined marks a turn context as running under ADR-084
+// JUDGE-FR-060's read-confinement posture: FSOpRead, FSOpList and FSOpSend
+// are confined to the turn's effective working directory instead of being
+// open outside the secret set.
+//
+// The engine sets this when it dispatches a System-Agent turn (the Judge and
+// PlanSupervisor), at the same place it already sets
+// WithSystemAgentWorkspaceOverride. No tool calls it.
+//
+// POLARITY: unset means NOT confined. Passing false is therefore identical
+// to never calling this at all, and every turn that does not opt in keeps
+// exactly the pre-ADR-084 reach ADR-063 FR-2.2 defined. This direction is
+// deliberate and is asserted by
+// TestEffectiveFSPolicy_ReadConfinedOnlyForSystemAgents: the alternative
+// polarity would silently confine every agent in the product the first time
+// a context was built without the flag.
+func WithReadConfined(ctx context.Context, confined bool) context.Context {
+	return context.WithValue(ctx, ctxKeyReadConfined, confined)
+}
+
+// ReadConfined reports whether this turn carries ADR-084 JUDGE-FR-060's
+// read-confinement posture. An unset context returns false (not confined) —
+// see WithReadConfined's polarity note.
+func ReadConfined(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	v, _ := ctx.Value(ctxKeyReadConfined).(bool)
+	return v
+}
+
+// WithVerifierAdjudicationID stamps the turn context with the id of the
+// verifier adjudication it belongs to (ADR-084 JUDGE-FR-084), so the audit
+// entries a Judge turn produces can be correlated back to the adjudication
+// that caused them — "what did the verifier open" answerable from the audit
+// log rather than from whatever the investigation log happened to keep.
+//
+// An empty id leaves ctx untouched (mirrors WithTurnWorkspaceDir's
+// "empty is unset" convention), so a normal turn carries no adjudication id
+// and its audit entries carry no correlation field.
+func WithVerifierAdjudicationID(ctx context.Context, adjudicationID string) context.Context {
+	if adjudicationID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxKeyVerifierAdjudicationID, adjudicationID)
+}
+
+// VerifierAdjudicationID returns the adjudication id stamped on this turn
+// context, or "" when the turn is not a verifier adjudication.
+func VerifierAdjudicationID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	v, _ := ctx.Value(ctxKeyVerifierAdjudicationID).(string)
+	return v
+}
+
 // skillsWriteAuditMu / skillsWriteAuditLogger — a process-wide audit.Logger
 // for the D6.1.1/FR-071 write hook, installed once via
 // SetSkillsWriteAuditLogger. Mirrors pkg/audit/hmac.go's
@@ -763,7 +839,12 @@ func (h *PathHandle) Close() error {
 //     symlink that resolves outside), dispatch on op (FR-2.2):
 //     - FSOpRead, FSOpList, FSOpSend: allowed anywhere except the secret
 //     set already refused at step 2 — a legacy host-fs PathHandle
-//     (root==nil) is returned, independent of policy.Scope.
+//     (root==nil) is returned, independent of policy.Scope. The ONE
+//     exception is policy.ReadConfined (ADR-084 JUDGE-FR-060): a
+//     read-confined turn is refused with ErrOutsideScope here instead,
+//     for all three of these operations. ReadConfined is false on every
+//     policy that did not explicitly ask for it, so this exception
+//     changes nothing for any non-System agent.
 //     - FSOpWrite, FSOpServe: allowed only when the realpath also falls
 //     within one of policy.AllowedRoots (a workspace mount) — refused
 //     with ErrOutsideScope otherwise, independent of policy.Scope. This
@@ -902,6 +983,35 @@ func ResolvePath(
 		// set unconditionally above (step 2), before op is ever consulted.
 		switch op {
 		case FSOpRead, FSOpList, FSOpSend:
+			// ADR-084 JUDGE-FR-060: a read-confined turn (the Judge and
+			// PlanSupervisor — see fspolicy.FSPolicy.ReadConfined) loses the
+			// open-read rule for ALL THREE of these operations and is held
+			// to policy.WorkDir instead.
+			//
+			// This is the ONLY behavioural change ADR-084 makes to this
+			// function. Every turn that did not opt in (ReadConfined is the
+			// zero value) falls through to the unchanged branch below, so a
+			// non-System agent's FSOpRead/FSOpList/FSOpSend reach is exactly
+			// what ADR-063 FR-2.2 left it — open outside the secret set,
+			// independent of policy.Scope. That non-change is asserted
+			// directly by TestResolvePath_ReadConfinedRefusesOutsideWorkdir's
+			// unconfined case and by
+			// TestEffectiveFSPolicy_ReadConfinedOnlyForSystemAgents.
+			//
+			// It closes the symlink escape too (JUDGE-FR-060a), and for free:
+			// realAbs is already fully symlink-resolved before
+			// isWithinWorkspace was consulted above, so a symlink planted
+			// INSIDE the work dir that points outside it is measured at its
+			// target and lands in this branch. That matters because the
+			// worker whose output is under review controls the workspace and
+			// can plant the link between writing the artifact and the
+			// adjudication reading it.
+			if policy.ReadConfined {
+				return nil, fmt.Errorf(
+					"%w: %q resolves to %q, outside the effective working directory %q (read-confined turn)",
+					ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
+			}
+
 			// Reads (and sends — FR-2.3/FR-2.3a: send_file follows the open-
 			// read rule, governed by tool policy rather than a path
 			// restriction) are allowed anywhere outside the secret set,
@@ -1170,13 +1280,23 @@ func newMountRootHandle(mountRoot, rawPath, realAbs string, policy fspolicy.FSPo
 // config.OmnipusHomeDir() respectively. Centralizing this removes what were
 // 9 hand-duplicated call sites (filesystem.go x3, edit.go x2, send_file.go,
 // web_serve.go x2, browser/tools.go) — each a chance for the shape to drift.
+//
+// ADR-084 JUDGE-FR-060b: this is also the ONE place the read-confinement
+// posture enters a policy. It is read here from the engine-set turn fact
+// (ReadConfined(ctx), set by the turn dispatcher and unsettable by a tool)
+// and handed to fspolicy as an explicit argument — never smuggled through
+// the ctx fspolicy itself discards. Because every path-taking tool routes
+// through this function, opting a turn in here reaches read_file,
+// list_directory and send_file at once; there is no per-tool wiring to
+// forget.
 func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool) (fspolicy.FSPolicy, error) {
 	home := config.OmnipusHomeDir()
 	workspaceID := ToolWorkspaceID(ctx)
 
-	policy, err := fspolicy.EffectiveFSPolicy(
+	policy, err := fspolicy.EffectiveFSPolicyWithReadConfined(
 		ctx, agentHome, TurnWorkspaceDir(ctx), restrict,
 		home, ToolAgentID(ctx), workspaceID,
+		ReadConfined(ctx),
 	)
 	if err != nil {
 		return policy, err
@@ -1252,6 +1372,15 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool) (
 // still runs unconditionally either way, because ResolvePath always checks
 // it first regardless of scope — an improvement over whitelistFs, which
 // bypassed it entirely.
+//
+// ADR-084 JUDGE-FR-060, stated so it is deliberate rather than incidental:
+// this axis does NOT reopen a read-confined turn. The call-scoped copy below
+// inherits policy.ReadConfined unchanged, and ResolvePath's outside-WorkDir
+// branch consults ReadConfined BEFORE it consults Scope — so forcing Scope
+// to Unrestricted here cannot lift the confinement. That is the fail-closed
+// direction on purpose: an operator's AllowReadPaths pattern is configured
+// for ordinary agents and may well cover $OMNIPUS_HOME, which is exactly the
+// reach JUDGE-FR-060 exists to take away from a verifier turn.
 func ResolvePathAllowingPatterns(
 	ctx context.Context,
 	policy fspolicy.FSPolicy,

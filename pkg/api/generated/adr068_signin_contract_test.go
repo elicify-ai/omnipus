@@ -47,7 +47,7 @@ import (
 
 func TestContract_SignInStartResponseCliLogin_Populated(t *testing.T) {
 	mustPassComponent(t, "SignInStartResponseCliLogin", SignInStartResponseCliLogin{
-		Method:       CliLogin,
+		Method:       SignInStartResponseCliLoginMethodCliLogin,
 		Command:      "codex login",
 		Instructions: "Run `codex login` in a terminal, then click Check sign-in.",
 	})
@@ -72,7 +72,7 @@ func TestContract_SignInStartResponseCliLogin_DeviceCodeFieldsRejected(t *testin
 
 func deviceCodeFixture() SignInStartResponseDeviceCode {
 	return SignInStartResponseDeviceCode{
-		Method:          DeviceCode,
+		Method:          SignInStartResponseDeviceCodeMethodDeviceCode,
 		VerificationUrl: "https://auth.openai.com/codex/device",
 		UserCode:        "WDJB-MJHT",
 		DeviceAuthId:    "das_9f3a2b1c",
@@ -127,7 +127,7 @@ func TestContract_SignInStartResponse_UnionRoundTrip(t *testing.T) {
 
 	var c SignInStartResponse
 	require.NoError(t, c.FromSignInStartResponseCliLogin(SignInStartResponseCliLogin{
-		Method: CliLogin, Command: "copilot login", Instructions: "x",
+		Method: SignInStartResponseCliLoginMethodCliLogin, Command: "copilot login", Instructions: "x",
 	}))
 	disc, err = c.Discriminator()
 	require.NoError(t, err)

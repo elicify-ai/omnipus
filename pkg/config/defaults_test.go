@@ -245,3 +245,97 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		t.Errorf("disable_channel is reversible, not a delete — expected 'allow', got %q", got)
 	}
 }
+
+// =====================================================================
+// Wave E1 — GOAL-FR-024/025/026 default values, judge budget default
+// constants (JUDGE-FR-049/050/051/081), and the goal_claim/browser_handover
+// ceiling entries this wave adds (JUDGE-D12, BROWSER-FR-051, C-70).
+// =====================================================================
+
+// TestDefaultConfig_SeedsGoalClaimAndBrowserHandoverCeiling pins the second
+// of the two sites this wave owns for each new tool name (the first,
+// catalogue membership, is pkg/coreagent's TestCatalog_ContainsGoalClaimAndBrowserHandover).
+func TestDefaultConfig_SeedsGoalClaimAndBrowserHandoverCeiling(t *testing.T) {
+	cfg := DefaultConfig()
+
+	if got := cfg.Sandbox.ToolPolicies["goal_claim"]; got != string(ToolPolicyAllow) {
+		t.Errorf("goal_claim ceiling must be %q (mirrors set_goal's own ceiling), got %q", ToolPolicyAllow, got)
+	}
+	if got := cfg.Sandbox.ToolPolicies["browser_handover"]; got != string(ToolPolicyAllow) {
+		t.Errorf("browser_handover ceiling must be %q (a decision, not an inheritance — the browser "+
+			"family is not uniform), got %q", ToolPolicyAllow, got)
+	}
+}
+
+// TestGoalDefaultBudget_IsTwentyAndSharedAcrossOwnerKinds pins GOAL-FR-024's
+// default value: ONE budget for BOTH owner kinds (a task goal and a chat
+// goal), defaulting to 20. DefaultGoalMaxRounds already is that one shared
+// default (pkg/config/planning.go) and DefaultConfig() already wires it into
+// PlanningConfig.GoalMaxRounds — this test is the regression oracle that
+// pins the literal value this wave's row promises, ahead of wave E6's
+// redirect of the task-owner-kind ceiling onto the same default
+// (GOAL-FR-026, pkg/agent/task_executor.go, out of this wave's write-set).
+func TestGoalDefaultBudget_IsTwentyAndSharedAcrossOwnerKinds(t *testing.T) {
+	if DefaultGoalMaxRounds != 20 {
+		t.Fatalf("DefaultGoalMaxRounds must be 20 (GOAL-FR-024), got %d", DefaultGoalMaxRounds)
+	}
+	cfg := DefaultConfig()
+	if cfg.Planning.GoalMaxRounds != DefaultGoalMaxRounds {
+		t.Fatalf("DefaultConfig().Planning.GoalMaxRounds must equal DefaultGoalMaxRounds (%d), got %d",
+			DefaultGoalMaxRounds, cfg.Planning.GoalMaxRounds)
+	}
+	// GOAL-FR-025's per-goal override is RETIRED (D-E/D-K): the resolver
+	// takes no override argument, so the only budget any goal — task or
+	// chat — can ever resolve is this one shared default (or the operator's
+	// single global Settings -> Performance edit to PlanningConfig.GoalMaxRounds
+	// itself). EffectiveGoalMaxRounds's signature is asserted structurally:
+	// this line does not compile if an override parameter is ever added back.
+	if got := cfg.Planning.EffectiveGoalMaxRounds(); got != DefaultGoalMaxRounds {
+		t.Fatalf("EffectiveGoalMaxRounds() must resolve the shared default %d with no override, got %d",
+			DefaultGoalMaxRounds, got)
+	}
+}
+
+// TestJudgeBudgetDefaults_MatchSpec pins the JUDGE-FR-049/FR-050/FR-051/
+// FR-081 literal default values this wave lands in pkg/config/defaults.go,
+// ahead of wave E2's Config struct fields and Effective*() accessors
+// (pkg/config/config.go, out of this wave's write-set — C-29/C-70's
+// shared-file-chain split). These constants are the wave's actual
+// deliverable for "judge timeout/cap/token-ceiling defaults"; until E2
+// wires a struct field to them they are not yet reachable from a live
+// Config value, which is why this test pins the constants directly rather
+// than a Config field that does not exist yet.
+func TestJudgeBudgetDefaults_MatchSpec(t *testing.T) {
+	cases := []struct {
+		name string
+		got  int
+		want int
+	}{
+		{"DefaultJudgeTimeoutSeconds", DefaultJudgeTimeoutSeconds, 420},
+		{"JudgeTimeoutHardCeilingSeconds", JudgeTimeoutHardCeilingSeconds, 900},
+		{"DefaultJudgeToolCallCap", DefaultJudgeToolCallCap, 25},
+		{"JudgeToolCallCapCeiling", JudgeToolCallCapCeiling, 60},
+		{"DefaultJudgeByteCapBytes", DefaultJudgeByteCapBytes, 2 * 1024 * 1024},
+		{"JudgeByteCapCeilingBytes", JudgeByteCapCeilingBytes, 8 * 1024 * 1024},
+		{"DefaultJudgeTokenCeiling", DefaultJudgeTokenCeiling, 120_000},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
+		}
+	}
+	// Every default must sit at or below its own ceiling — a spec-internal
+	// consistency check, not merely a restatement of the two literals.
+	if DefaultJudgeTimeoutSeconds > JudgeTimeoutHardCeilingSeconds {
+		t.Errorf("DefaultJudgeTimeoutSeconds (%d) exceeds JudgeTimeoutHardCeilingSeconds (%d)",
+			DefaultJudgeTimeoutSeconds, JudgeTimeoutHardCeilingSeconds)
+	}
+	if DefaultJudgeToolCallCap > JudgeToolCallCapCeiling {
+		t.Errorf("DefaultJudgeToolCallCap (%d) exceeds JudgeToolCallCapCeiling (%d)",
+			DefaultJudgeToolCallCap, JudgeToolCallCapCeiling)
+	}
+	if DefaultJudgeByteCapBytes > JudgeByteCapCeilingBytes {
+		t.Errorf("DefaultJudgeByteCapBytes (%d) exceeds JudgeByteCapCeilingBytes (%d)",
+			DefaultJudgeByteCapBytes, JudgeByteCapCeilingBytes)
+	}
+}

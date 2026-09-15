@@ -184,11 +184,6 @@ func IsValidEventName(e EventName) bool {
 		// gate (see cancel.go's RequestCancel doc comment for the root-cause
 		// writeup this closes).
 		EventTurnCancelBackgroundKilled,
-		// Orphan-foreground-turn watchdog events (ADR-045). The escalation
-		// itself is RequestCancel's own turn_canceled event (cancel_method:
-		// "hard") — there is no separate turn.orphan_hard_aborted event since
-		// the 2026-07 reap-via-RequestCancel redesign.
-		EventTurnOrphanTimeout,
 		// Live interactive browser panel events (ADR-038 D6).
 		EventBrowserInstanceCreated,
 		EventBrowserAction,
@@ -197,6 +192,17 @@ func IsValidEventName(e EventName) bool {
 		EventBrowserSnapshot,
 		EventBrowserLiveControlTaken,
 		EventBrowserLiveControlReleased,
+		// ADR-085 browser control handover vocabulary (events.go's
+		// "browser_control_*" family plus browser_handover). All four are
+		// emitted for real — pkg/tools/browser/audit.go's
+		// recordControlDeferral, pkg/tools/browser/tools_handover.go and
+		// pkg/gateway/browser_ws.go's sweeper releases — so they belong in
+		// this predicate; without them every ADR-085 deferral, handover and
+		// sweeper release trips the unknown-event warn-once path.
+		EventBrowserControlDeferred,
+		EventBrowserHandover,
+		EventBrowserControlIdleRelease,
+		EventBrowserControlDisabledRelease,
 		// WebRTC capture stream events (ADR-047, wave-plan W2-A).
 		EventBrowserWebRTCStreamStarted,
 		EventBrowserWebRTCStreamStopped,

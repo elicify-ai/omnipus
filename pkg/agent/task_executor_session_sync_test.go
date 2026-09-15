@@ -8,11 +8,10 @@
 // so a plan-engine Stop fan-out (planDecisionMu) issued the instant after
 // dispatch always has a cancel handle (SC-005).
 //
-// The scriptedProvider fixtures below carry a "[goal:evidence] ..." line
-// immediately before "TASK_STATUS: success" (ADR-052 FR-035's
-// evidence-marker gate, task_executor.go's finishTaskRun) — without it the
-// gate would re-prompt instead of letting the claim reach the (always-met)
-// judge these tests rely on for a deterministic single-attempt Done.
+// The worker below finishes the one way a native task worker can: a
+// goal_claim(met) call (founder decision 2026-09-14), which the always-met
+// Judge upholds on the first try, so every run is a deterministic
+// single-attempt Done.
 
 package agent
 
@@ -20,21 +19,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 )
-
-// metJudgeProviderC1 scripts the Judge System Agent to always return a
-// well-formed, immediately-met verdict for criterion "c1" — used by these
-// tests to keep the goal loop deterministic (single attempt, terminal Done)
-// so it does not interfere with the specific M1 assertion each test makes.
-func metJudgeProviderC1() *fakeJudgeProvider {
-	return &fakeJudgeProvider{chatFn: func(int) (*providers.LLMResponse, error) {
-		return &providers.LLMResponse{
-			Content: `{"met": true, "criteria": [{"id":"c1","met":true,"reason":"evidenced"}]}`,
-		}, nil
-	}}
-}
 
 // TestExecuteTask_SessionIDAssignedSynchronouslyBeforeReturn calls
 // ExecuteTask and immediately (no polling, no sleep) re-reads the task from
@@ -43,9 +29,9 @@ func metJudgeProviderC1() *fakeJudgeProvider {
 // goroutine (task_executor.go's old runTask), so this exact assertion would
 // have been flaky-to-always-failing depending on goroutine scheduling.
 func TestExecuteTask_SessionIDAssignedSynchronouslyBeforeReturn(t *testing.T) {
-	worker := &scriptedProvider{responseBody: "doing it\n[goal:evidence] verified against c1\nTASK_STATUS: success\nTASK_SUMMARY: done"}
+	worker := newClaimingWorker(turnClaimMet("verified against c1"))
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
-	judgeInst.Provider = metJudgeProviderC1()
+	judgeInst.Provider = &b6ScriptedJudge{metFromCall: 1, reason: "evidenced"}
 
 	tk := &task.Task{
 		Title: "sync session task", Prompt: "do it", Action: task.ActionLLM,
@@ -89,9 +75,9 @@ func TestExecuteTask_SessionIDAssignedSynchronouslyBeforeReturn(t *testing.T) {
 // ExecuteTask itself (M1) must not change the actual dispatch/run/complete
 // behavior for the ordinary happy path.
 func TestExecuteTask_EndToEndStillCompletes_AfterM1Refactor(t *testing.T) {
-	worker := &scriptedProvider{responseBody: "doing it\n[goal:evidence] verified against c1\nTASK_STATUS: success\nTASK_SUMMARY: done"}
+	worker := newClaimingWorker(turnClaimMet("verified against c1"))
 	al, judgeInst := newGoalLoopTestLoop(t, worker, nil)
-	judgeInst.Provider = metJudgeProviderC1()
+	judgeInst.Provider = &b6ScriptedJudge{metFromCall: 1, reason: "evidenced"}
 
 	tk := &task.Task{
 		Title: "end to end", Prompt: "do it", Action: task.ActionLLM,

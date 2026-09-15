@@ -66,7 +66,14 @@ func TestTaskCreate_Gate_FiresOnInferredKind(t *testing.T) {
 		return tool, store
 	}
 	baseArgs := func(criteria []any) map[string]any {
-		return map[string]any{"title": "t", "prompt": "p", "agent_id": "assignee", "criteria": criteria}
+		// dod is supplied on every case: GOAL-FR-021/D-C makes it mandatory at
+		// creation, and this suite is about criteria KIND INFERENCE, not the
+		// dod gate. Omitting it would make every case fail on the dod message
+		// and prove nothing about inference.
+		return map[string]any{
+			"title": "t", "prompt": "p", "agent_id": "assignee",
+			"criteria": criteria, "dod": validDoDArg(),
+		}
 	}
 	ctx := WithWorkspaceID(WithAgentID(context.Background(), "caller"), "ws")
 
@@ -144,6 +151,7 @@ func TestBehavior_EndToEnd_CreateTask(t *testing.T) {
 	res := tool.Execute(ctx, map[string]any{
 		"title": "no shell", "prompt": "p", "agent_id": "assignee",
 		"criteria": kindOmittedBehaviorCriteria(),
+		"dod":      validDoDArg(),
 	})
 	if res.IsError {
 		t.Fatalf("create_task with kind-omitted behavior criterion failed: %s", res.ForLLM)

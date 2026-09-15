@@ -81,7 +81,6 @@ export interface AdvancedFields {
   model_params?: {
     temperature?: number
     max_tokens?: number
-    top_p?: number
   }
   // Shell hardening (Main + Subagent only).
   shell_policy?: {

@@ -74,30 +74,13 @@ func newPlanGateTestTask(t *testing.T, al *AgentLoop, planID string) *task.Task 
 	return tk
 }
 
-// scriptedProviderCallCount reads p's call count under its own mutex — the
-// struct exposes the field directly (no exported getter) since it lives in
-// this same test package.
-func scriptedProviderCallCount(p *scriptedProvider) int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return p.callCount
-}
-
-// successMarkerBody is a scripted LLM response that completes a (criteria-
-// less) task to Done via the TASK_STATUS/TASK_SUMMARY marker, carrying the
-// FR-035 evidence-marker line so the gate doesn't re-prompt it.
-const successMarkerBody = "Did the work.\n" +
-	"[goal:evidence] verified the change directly\n" +
-	"TASK_STATUS: success\n" +
-	"TASK_SUMMARY: done via plan gate test."
-
 // TestCheckQueuedTasks_DraftPlanMemberNotDispatched is DoD item 1: a `next`
 // member of a plan that was NEVER approved (still StateDraft, approved_at
 // empty) must not be picked up by the heartbeat drain. Root-cause repro:
 // "PRIYA-GATE-never-executed" — a plan member dragged Inbox->Next while the
 // Execute button was never clicked.
 func TestCheckQueuedTasks_DraftPlanMemberNotDispatched(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	planStore := plan.New(filepath.Join(t.TempDir(), "plans"))
 	al.taskExecutor.SetPlanStore(planStore)
@@ -118,7 +101,7 @@ func TestCheckQueuedTasks_DraftPlanMemberNotDispatched(t *testing.T) {
 		t.Fatalf("status = %q after CheckQueuedTasks, want %q (unchanged) — a DRAFT plan's member "+
 			"must never auto-dispatch (S1: Execute approval gate bypass)", got.Status, task.StatusNext)
 	}
-	if calls := scriptedProviderCallCount(provider); calls != 0 {
+	if calls := provider.turnsStarted(); calls != 0 {
 		t.Fatalf("provider was called %d time(s) — a draft plan's member task must never reach the LLM", calls)
 	}
 
@@ -140,7 +123,7 @@ func TestCheckQueuedTasks_DraftPlanMemberNotDispatched(t *testing.T) {
 // AFTER the stop, running it to completion over a plan the user had already
 // terminated.
 func TestCheckQueuedTasks_TerminalPlanMemberNotDispatched(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	planStore := plan.New(filepath.Join(t.TempDir(), "plans"))
 	al.taskExecutor.SetPlanStore(planStore)
@@ -158,7 +141,7 @@ func TestCheckQueuedTasks_TerminalPlanMemberNotDispatched(t *testing.T) {
 		t.Fatalf("status = %q after CheckQueuedTasks, want %q (unchanged) — a TERMINAL (stopped/failed) "+
 			"plan's member must never auto-dispatch", got.Status, task.StatusNext)
 	}
-	if calls := scriptedProviderCallCount(provider); calls != 0 {
+	if calls := provider.turnsStarted(); calls != 0 {
 		t.Fatalf("provider was called %d time(s) — a terminal plan's member task must never reach the LLM", calls)
 	}
 }
@@ -168,7 +151,7 @@ func TestCheckQueuedTasks_TerminalPlanMemberNotDispatched(t *testing.T) {
 // continue to be dispatched by the heartbeat exactly as before this fix —
 // the plan-gate must only ever apply when PlanID is non-empty.
 func TestCheckQueuedTasks_StandaloneTaskStillDispatched(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	// Deliberately do NOT call SetPlanStore — a standalone task must dispatch
 	// even with no plan store wired at all (the common case: most task_executor
@@ -195,7 +178,7 @@ func TestCheckQueuedTasks_StandaloneTaskStillDispatched(t *testing.T) {
 	if final.Status != task.StatusDone {
 		t.Fatalf("final status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
 	}
-	if calls := scriptedProviderCallCount(provider); calls == 0 {
+	if calls := provider.turnsStarted(); calls == 0 {
 		t.Fatal("provider was never called — standalone task did not actually dispatch")
 	}
 }
@@ -206,7 +189,7 @@ func TestCheckQueuedTasks_StandaloneTaskStillDispatched(t *testing.T) {
 // hasn't yet promoted it to `running`, e.g. cap-waiting) must still let its
 // `next` member dispatch via the heartbeat drain.
 func TestCheckQueuedTasks_ApprovedPlanMemberIsDispatched(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	planStore := plan.New(filepath.Join(t.TempDir(), "plans"))
 	al.taskExecutor.SetPlanStore(planStore)
@@ -234,7 +217,7 @@ func TestCheckQueuedTasks_ApprovedPlanMemberIsDispatched(t *testing.T) {
 // TestCheckQueuedTasks_RunningPlanMemberIsDispatched mirrors the Approved
 // case above for StateRunning — the engine's normal in-flight state.
 func TestCheckQueuedTasks_RunningPlanMemberIsDispatched(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	planStore := plan.New(filepath.Join(t.TempDir(), "plans"))
 	al.taskExecutor.SetPlanStore(planStore)
@@ -273,7 +256,7 @@ func TestCheckQueuedTasks_RunningPlanMemberIsDispatched(t *testing.T) {
 // sufficient to dispatch) and passes after it (PermitsMemberDispatch also
 // checks PausedReason).
 func TestCheckQueuedTasks_PausedRunningPlanMemberNotDispatched(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	planStore := plan.New(filepath.Join(t.TempDir(), "plans"))
 	al.taskExecutor.SetPlanStore(planStore)
@@ -295,7 +278,7 @@ func TestCheckQueuedTasks_PausedRunningPlanMemberNotDispatched(t *testing.T) {
 		t.Fatalf("status = %q after CheckQueuedTasks, want %q (unchanged) — a PAUSED running plan's "+
 			"member must never auto-dispatch (FR-065)", got.Status, task.StatusNext)
 	}
-	if calls := scriptedProviderCallCount(provider); calls != 0 {
+	if calls := provider.turnsStarted(); calls != 0 {
 		t.Fatalf("provider was called %d time(s) — a paused plan's member must never reach the LLM", calls)
 	}
 }
@@ -306,7 +289,7 @@ func TestCheckQueuedTasks_PausedRunningPlanMemberNotDispatched(t *testing.T) {
 // must never be treated as if the gate did not apply, only a standalone
 // (PlanID=="") task gets that treatment.
 func TestCheckQueuedTasks_NoPlanStoreWired_PlanMemberFailsClosed(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	// Deliberately do NOT call SetPlanStore.
 	tk := newPlanGateTestTask(t, al, "some-plan-id-with-no-store-to-resolve-it")
@@ -322,7 +305,7 @@ func TestCheckQueuedTasks_NoPlanStoreWired_PlanMemberFailsClosed(t *testing.T) {
 			"fail closed (not dispatch) when no plan store is wired to verify its parent plan's state",
 			got.Status, task.StatusNext)
 	}
-	if calls := scriptedProviderCallCount(provider); calls != 0 {
+	if calls := provider.turnsStarted(); calls != 0 {
 		t.Fatalf("provider was called %d time(s) — must not dispatch with no plan store wired", calls)
 	}
 }
@@ -348,7 +331,7 @@ func TestCheckQueuedTasks_NoPlanStoreWired_PlanMemberFailsClosed(t *testing.T) {
 // CheckQueuedTasks-only gate placement reopened for every non-heartbeat
 // caller.
 func TestAdvanceBlockedTasks_StoppedPlanMemberNotDispatched(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	planStore := plan.New(filepath.Join(t.TempDir(), "plans"))
 	al.taskExecutor.SetPlanStore(planStore)
@@ -408,7 +391,7 @@ func TestAdvanceBlockedTasks_StoppedPlanMemberNotDispatched(t *testing.T) {
 		t.Fatalf("depB status = %q, want next (AdvanceBlockedDependents promotes it plan-agnostically, "+
 			"but the plan gate inside ExecuteTask must then refuse to dispatch it)", final.Status)
 	}
-	if calls := scriptedProviderCallCount(provider); calls != 0 {
+	if calls := provider.turnsStarted(); calls != 0 {
 		t.Fatalf("provider was called %d time(s) — depB must never reach the LLM once its plan was stopped", calls)
 	}
 }
@@ -420,7 +403,7 @@ func TestAdvanceBlockedTasks_StoppedPlanMemberNotDispatched(t *testing.T) {
 // immediately for PlanID == "" without ever touching the plan store, so this
 // must succeed even with NO plan store wired at all.
 func TestExecuteTask_StandaloneTaskStillDispatches(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	// Deliberately do NOT wire a plan store.
 	tk := newPlanGateTestTask(t, al, "" /* no PlanID */)
@@ -433,7 +416,7 @@ func TestExecuteTask_StandaloneTaskStillDispatches(t *testing.T) {
 	if final.Status != task.StatusDone {
 		t.Fatalf("final status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
 	}
-	if calls := scriptedProviderCallCount(provider); calls == 0 {
+	if calls := provider.turnsStarted(); calls == 0 {
 		t.Fatal("provider was never called — standalone task did not actually dispatch via ExecuteTask")
 	}
 }
@@ -442,7 +425,7 @@ func TestExecuteTask_StandaloneTaskStillDispatches(t *testing.T) {
 // half): mirrors the above for StartTaskNow — the OTHER primitive the S1
 // gate now sits inside, with no bypass of its own.
 func TestStartTaskNow_StandaloneTaskStillDispatches(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	tk := newPlanGateTestTask(t, al, "" /* no PlanID */)
 
@@ -468,7 +451,7 @@ func TestStartTaskNow_StandaloneTaskStillDispatches(t *testing.T) {
 	if final.Status != task.StatusDone {
 		t.Fatalf("final status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
 	}
-	if calls := scriptedProviderCallCount(provider); calls == 0 {
+	if calls := provider.turnsStarted(); calls == 0 {
 		t.Fatal("provider was never called — standalone task did not actually dispatch via StartTaskNow")
 	}
 }
@@ -484,7 +467,7 @@ func TestStartTaskNow_StandaloneTaskStillDispatches(t *testing.T) {
 // dispatch — exactly the boot-ordering risk executeTaskPlanVerified's doc
 // comment describes.
 func TestDispatchReadyMembers_BypassesRedundantPlanGate_EvenWithTaskExecutorPlanStoreUnset(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	// Deliberately do NOT call al.taskExecutor.SetPlanStore — the crux of
 	// this test: TaskExecutor's own planStore field stays nil throughout.
@@ -504,7 +487,7 @@ func TestDispatchReadyMembers_BypassesRedundantPlanGate_EvenWithTaskExecutorPlan
 	if final.Status != task.StatusDone {
 		t.Fatalf("final status = %q, want %q (result: %s)", final.Status, task.StatusDone, final.Result)
 	}
-	if calls := scriptedProviderCallCount(provider); calls == 0 {
+	if calls := provider.turnsStarted(); calls == 0 {
 		t.Fatal("provider was never called — dispatchReadyMembers' bypass path did not actually dispatch")
 	}
 }
@@ -517,7 +500,7 @@ func TestDispatchReadyMembers_BypassesRedundantPlanGate_EvenWithTaskExecutorPlan
 // — the bypass is a documented, narrow exception (executeTaskPlanVerified),
 // never a general weakening of ExecuteTask's own gate.
 func TestDispatchReadyMembers_BypassDoesNotWeakenExecuteTask_ForOtherCallers(t *testing.T) {
-	provider := &scriptedProvider{responseBody: successMarkerBody}
+	provider := newClaimingWorker(turnClaimMet("verified the change directly"))
 	al := newNativeTaskCompletionTestLoop(t, provider)
 	// TaskExecutor's own plan store is deliberately left unset, and this task
 	// is dispatched via plain ExecuteTask — NOT through the plan engine's

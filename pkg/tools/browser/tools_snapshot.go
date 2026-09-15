@@ -7,12 +7,16 @@
 //
 // THREE THINGS ABOUT THIS TOOL ARE DELIBERATE AND EASY TO "FIX" WRONGLY.
 //
-//  1. It is READ-ONLY (FR-038). It calls NEITHER controlledResult NOR the D1
-//     write lease, so it is never {"deferred": true} — it returns the full
-//     tree while a human is driving the tab and while another tool holds the
-//     lease. Adding either gate would make the one tool that tells an agent
-//     what is on the page unavailable exactly when the page is contested.
-//     Its Execute therefore starts at mgr.Session, not at the gates.
+//  1. It is CAPTURE-class, not exempt (ADR-085 D5/FR-033/FR-035, amending
+//     the original FR-038 read-only classification): it DOES call
+//     controlledResult and CAN return {"deferred": true} while a human
+//     drives the tab — reading the page's accessible tree could describe a
+//     credential a human is mid-typing, exactly like a screenshot could
+//     capture one. It still calls NEITHER the D1 write lease NOR
+//     recordBrowserAction — capture-class is gated but neither leased nor
+//     per-call audited (it keeps its own metadata-only browser_snapshot
+//     event below). It still stands ALONE among the write-class action
+//     verbs in never fighting anyone for the lease.
 //
 //  2. Field VALUES are emitted unconditionally (FR-018, operator ruling).
 //     There is no include_values parameter and no role-based omission. A
@@ -101,11 +105,10 @@ func (t *SnapshotTool) Description() string {
 		"when you need to act on the page rather than look at it — it is text, so you can quote it, and " +
 		"every line names an element you can pass straight back as `role` + `name` (plus `index` when " +
 		"the line shows one) to browser_click, browser_type, browser_select_option, browser_hover or " +
-		"browser_press_key. It takes no arguments and never changes the page, so it works while " +
-		"someone else is driving the browser. Large pages are cut at 64,000 bytes on a whole-element " +
-		"boundary, keeping the top of the page and saying how many elements were left out. INTERIM: " +
-		"this reads the workspace browser, which is shared with the operator and carries their live " +
-		"logins — values you read here may be theirs."
+		"browser_press_key. It takes no arguments and never changes the page. Large pages are cut at " +
+		"64,000 bytes on a whole-element boundary, keeping the top of the page and saying how many " +
+		"elements were left out. INTERIM: this reads the workspace browser, which is shared with the " +
+		"operator and carries their live logins — values you read here may be theirs." + deferredIsNotAnError
 }
 
 // Parameters is deliberately EMPTY. In particular there is no include_values:
@@ -284,8 +287,13 @@ func (t *SnapshotTool) Execute(ctx context.Context, args map[string]any) *tools.
 	// read-only. The defer is what makes a panicking or cancelled call
 	// release; a leaked count is a browser that can never be reclaimed.
 	defer mgr.EnterCall()()
-	// NO controlledResult and NO leaseWrite here (FR-038). This is not an
-	// omission and the structural test in this package asserts their absence.
+	// ADR-085 D5/FR-033/FR-035: browser_snapshot is CAPTURE-class — gated by
+	// controlledResult, but NO leaseWrite and NO recordBrowserAction. This
+	// is not an omission; the structural test in this package asserts the
+	// exact three-way partition (action / capture / exempt).
+	if result := controlledResult(ctx, mgr, key, owner, t.Name(), &t.browserAudit); result != nil {
+		return result
+	}
 
 	sessionCtx, err := mgr.Session(sid)
 	if err != nil {

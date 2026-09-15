@@ -6,15 +6,455 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/goal"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
+
+// GoalStoreForTasks returns a goal.Store rooted at the SAME $OMNIPUS_HOME the
+// given task.Store is rooted at (task.Store.Dir() is always "<home>/tasks",
+// by this codebase's universal convention — see task.New's own doc comment).
+//
+// Exported because it is THE shared derivation, not one of several: pkg/gateway
+// carried a byte-identical private copy until this consolidation, and pkg/
+// sysagent/tools carried a third spelling over its own `home` field. One
+// implementation, three callers — mirroring is what let the sibling goal rules
+// drift in the first place (see TerminateTaskGoalRecord's section header).
+//
+// This is deliberately NOT a constructor-injected dependency: pkg/goal
+// already imports pkg/task (for the shared AcceptanceCriterion type), so
+// pkg/task cannot import pkg/goal back, and pkg/agent/loop.go (which
+// constructs every tool in this file) is a highest-risk shared file this
+// wave's write-set does not include — see this wave's report for the full
+// rationale. Deriving the goal store from the already-injected task.Store
+// avoids needing any new wiring at the construction call sites. Constructing
+// a fresh goal.Store per call is safe and cheap: pkg/entity's cross-call
+// locking (pkg/entity/lock.go's package-level `fileLock`, keyed on the full
+// data-file path) is process-wide and shared by every Store[T] instance
+// regardless of how many are constructed, and goal.NewStore's directory
+// pre-create is idempotent.
+func GoalStoreForTasks(store *task.Store) *goal.Store {
+	return goal.NewStore(filepath.Dir(store.Dir()))
+}
+
+// syncTaskGoalRecord creates or updates the goal record paired with task t
+// (ADR-086 D2/D5, GOAL-FR-003/FR-012/FR-021/FR-029). A task's goal stays in
+// the "defining" phase until the task itself starts and mints a session
+// (GOAL-FR-012) — this function only ever creates or updates the record, it
+// never activates it.
+//
+// Exactly one of the three outcomes happens:
+//   - Neither criteria nor dod changed: no-op, returns nil.
+//   - A goal record already exists for this task: whichever of
+//     criteria/dod changed is replaced on it (Goal.SetCriteria/SetDoD);
+//     the other list is left untouched.
+//   - No goal record exists yet (a legacy, pre-D-C task, GOAL-FR-023/
+//     FR-048): one is created, which requires BOTH lists to be supplied and
+//     non-empty together — a goal record cannot exist with an empty DoD
+//     (goal.Goal.Validate), and "saving an edit" (GOAL-FR-048) submits both
+//     lists as one unit, so a caller providing only one of the two on a task
+//     with no existing Definition of Done is rejected with a clear reason
+//     rather than silently leaving the other list empty.
+//
+// THE CRITERIA COME FROM t, NEVER FROM THE CALLER. This signature used to take
+// a `criteria []task.AcceptanceCriterion` alongside criteriaProvided, and every
+// one of its call sites handed it the PRE-normalisation slice it had just given
+// to the task store — the one whose criteria still carry empty ids. The store
+// mints ids into its own deep copy (task.normalizeCriteria), and goal.New /
+// Goal.SetCriteria then mint a SECOND, different set for the same text. The
+// criterion id is the join key the verdict projection de-unions the Judge's
+// result on (GOAL-FR-007/FR-041), so the same criterion ended up reading `met`
+// on the task and `pending` on its goal record. Taking the list off t — the
+// record the store has already normalised and persisted — makes that
+// divergence unrepresentable rather than merely fixed at three call sites.
+// criteriaProvided remains a parameter because it carries something t cannot:
+// whether THIS request touched criteria at all.
+func syncTaskGoalRecord(
+	store *task.Store,
+	t *task.Task,
+	criteriaProvided bool,
+	dod []task.AcceptanceCriterion, dodProvided bool,
+	goalMaxRoundsFn func() int,
+) error {
+	if !criteriaProvided && !dodProvided {
+		return nil
+	}
+	criteria := t.Criteria
+	gs := GoalStoreForTasks(store)
+	now := time.Now().UTC()
+	existing, err := gs.GetByOwner(generated.GoalOwnerKindTask, t.ID)
+	if err != nil {
+		if !errors.Is(err, goal.ErrOwnerNotFound) {
+			return fmt.Errorf("load paired goal record: %w", err)
+		}
+		if !criteriaProvided || !dodProvided {
+			return fmt.Errorf(
+				"this task has no existing Definition of Done — saving criteria or dod for the " +
+					"first time requires supplying BOTH together (GOAL-FR-048)")
+		}
+		maxRounds := config.DefaultGoalMaxRounds
+		if goalMaxRoundsFn != nil {
+			maxRounds = goalMaxRoundsFn()
+		}
+		// goal.New requires a non-empty Prompt; fall back to Title (always
+		// present) when the task carries no Prompt.
+		goalPrompt := t.Prompt
+		if goalPrompt == "" {
+			goalPrompt = t.Title
+		}
+		g, nErr := goal.New(
+			generated.GoalOwnerKindTask, t.ID, generated.GoalSourceTaskExplicit,
+			goalPrompt, "", criteria, dod, maxRounds, now,
+		)
+		if nErr != nil {
+			return fmt.Errorf("build goal record: %w", nErr)
+		}
+		return gs.Create(g)
+	}
+	_, err = gs.Update(existing.GoalID, func(g *goal.Goal) error {
+		if criteriaProvided {
+			if sErr := g.SetCriteria(criteria, now); sErr != nil {
+				return sErr
+			}
+		}
+		if dodProvided {
+			if sErr := g.SetDoD(dod, now); sErr != nil {
+				return sErr
+			}
+		}
+		return nil
+	})
+	return err
+}
+
+// pairedGoalDoD returns the Definition of Done currently persisted on the goal
+// record paired with taskID, or nil when the task has no paired record at all
+// (a legacy pre-D-C task, GOAL-FR-023/FR-048).
+//
+// It exists for the one edit shape that cannot evaluate the distinctness rule
+// (GOAL-FR-021/FR-047/FR-048) from the call arguments alone: an update that
+// replaces `criteria` and leaves `dod` untouched has to compare the NEW criteria
+// against the DoD already on file, and the task record has no DoD field to read
+// it from (ADR-086 D5 — pkg/task/task.go has no Dod at all).
+//
+// A read fault is returned, never swallowed: it means the rule could not be
+// evaluated, and a rule that silently does not run is the failure this change
+// exists to stop.
+func pairedGoalDoD(store *task.Store, taskID string) ([]task.AcceptanceCriterion, error) {
+	g, err := GoalStoreForTasks(store).GetByOwner(generated.GoalOwnerKindTask, taskID)
+	if err != nil {
+		if errors.Is(err, goal.ErrOwnerNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("load paired goal record: %w", err)
+	}
+	return g.DoD, nil
+}
+
+// goalTerminalReasonOwnerDeleted is the TerminalReason stamped on a goal record
+// whose owning task was deleted, mirroring the vocabulary
+// pkg/agent/task_goal_terminal.go's terminalReasonForTask uses for the other
+// task endings.
+const goalTerminalReasonOwnerDeleted = "owning task was deleted"
+
+// terminateGoalForOwnerDeletion is the TRANSITION half of GOAL-FR-044 ("a goal
+// MUST NOT outlive its owner as an unreferenced record. Deleting a task MUST
+// transition and remove its goal"), as a pure function over the record so it is
+// directly testable without a store.
+//
+// Only an ACTIVE record is transitioned, and it is transitioned to `cleared` —
+// the terminal vocabulary FR-028 reserves for an explicit operator ending,
+// which is what deleting the owning task is. A `defining` record (a task
+// deleted before it ever ran) is left untouched and is NOT an error: forcing a
+// transition there would invent an adjudication that never happened, the same
+// reasoning pkg/agent's terminateTaskGoalRecord states. An already-terminal
+// record is a no-op, which makes the whole delete path idempotent.
+//
+// Unexported because RemoveTaskGoalRecords below is the only thing that should
+// ever call it, and RemoveTaskGoalRecords is exported. pkg/gateway and
+// pkg/sysagent/tools each carried a byte-identical private copy of this
+// function — and of the const above — until this consolidation; both are gone.
+func terminateGoalForOwnerDeletion(g *goal.Goal, now time.Time) error {
+	if g == nil || g.State != generated.GoalStateActive {
+		return nil
+	}
+	return g.Terminate(generated.GoalStateCleared, goalTerminalReasonOwnerDeleted, now)
+}
+
+// RemoveTaskGoalRecords implements GOAL-FR-044/EC-4 in full for one task: every
+// goal record owned by taskID is transitioned out of the active phase and then
+// removed, so no goal survives the deletion of its owner.
+//
+// ONE implementation, called by all three task-delete surfaces — this file's
+// TaskDeleteTool, pkg/gateway/rest_tasks.go's handleTaskDelete, and
+// pkg/sysagent/tools/task.go's delete_task_in_workspace. It used to be three
+// mirrored private copies, which is the same shape that let the sibling
+// task-terminal hook reach only three of its seven writers (see
+// TerminateTaskGoalRecord's section header). pkg/tools is the nearest package
+// all three callers already import; task.Store.Delete itself cannot host the
+// rule because pkg/goal imports pkg/task, so the dependency can only run one
+// way. task_goal_delete_guard_test.go is what keeps the call-site set closed.
+//
+// CALL IT BEFORE deleting the task, and treat a failure as fatal to the whole
+// delete. All three surfaces used to delete the task first and then clean up
+// best-effort, which meant a goal-store fault produced a PERMANENT orphan — an
+// `active` goal record owned by a task id that no longer resolves — that the
+// REST surface then reported as 204 No Content. Doing the cleanup first makes
+// the failure recoverable instead of reportable: the task is still there, the
+// caller gets a real error, and a retry is safe because this function is
+// idempotent (an already-terminal record is a no-op, and a record that is
+// already gone is simply not found in the List below).
+//
+// It iterates List rather than calling GetByOwner because GetByOwner refuses to
+// guess when a task somehow owns more than one record — and refusing is the
+// wrong answer here. "Remove everything this owner owns" is well defined for
+// any number of records, and leaving one behind would be precisely the
+// unreferenced orphan FR-044 forbids. Errors are joined rather than
+// short-circuited so one unwritable record cannot strand the others.
+func RemoveTaskGoalRecords(gs *goal.Store, taskID string) error {
+	if gs == nil || taskID == "" {
+		return nil
+	}
+	goals, skipped, err := gs.List()
+	if err != nil {
+		return fmt.Errorf("list goal records: %w", err)
+	}
+	if len(skipped) > 0 {
+		slog.Warn("task delete: unreadable goal records skipped while removing a deleted task's goal",
+			"task_id", taskID, "skipped", skipped)
+	}
+	now := time.Now().UTC()
+	var errs []error
+	for i := range goals {
+		if goals[i].OwnerKind != generated.GoalOwnerKindTask || goals[i].OwnerID != taskID {
+			continue
+		}
+		goalID := goals[i].GoalID
+		if _, uErr := gs.Update(goalID, func(g *goal.Goal) error {
+			return terminateGoalForOwnerDeletion(g, now)
+		}); uErr != nil {
+			// Record the fault and still remove the record: a goal that cannot
+			// be transitioned must not therefore be left behind ACTIVE and
+			// unreferenced, which is the worse of the two outcomes.
+			errs = append(errs, fmt.Errorf("terminate goal record %q: %w", goalID, uErr))
+		}
+		if dErr := gs.Delete(goalID); dErr != nil {
+			errs = append(errs, fmt.Errorf("delete goal record %q: %w", goalID, dErr))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// --- the task-terminal -> goal-terminal hook (GOAL-FR-015/FR-027/FR-028) ----
+//
+// Review finding C1. terminateTaskGoalRecord shipped as an UNEXPORTED helper
+// in pkg/agent with three call sites, and its own doc comment asserted those
+// three "are" the terminal writers. They are not. A task also reaches a
+// terminal status through PATCH /api/v1/tasks/{id} (rest_tasks.go's
+// handleTaskPatch — validateTransition permits in_progress->done and ->failed,
+// which is what a Kanban drag onto Done or Failed sends), through the boot
+// reconciler that resets EVERY stranded in_progress task to failed
+// (reconcileStuckTasks), and through update_task / update_task_in_workspace
+// with status:"failed" (the done-claim judge deferral only intercepts `done`).
+// Those three live in pkg/gateway, pkg/tools and pkg/sysagent/tools, none of
+// which can see an unexported pkg/agent symbol — so the hook was structurally
+// unreachable from more than half of the writers it claimed to cover.
+//
+// WHY THIS LIVES HERE, AND WHY IT IS NOT A STORE-LEVEL CHOKEPOINT. The real
+// chokepoint would be task.Store's own status-write path (updateLocked): one
+// place, no call sites to forget. It is impossible — pkg/goal imports pkg/task
+// (for the shared AcceptanceCriterion type), so pkg/task cannot import pkg/goal
+// back. task.Patch.Criteria's own doc comment and removeTaskGoalRecords' both
+// already state this for the two sibling problems ("this store has no way to do
+// that itself ... the dependency can only run the other way").
+//
+// pkg/tools is the nearest thing to a chokepoint that IS reachable: it imports
+// pkg/goal and pkg/task, and it is imported by all three of the other writer
+// packages (pkg/agent, pkg/gateway, pkg/sysagent/tools). So the TRANSITION has
+// exactly one implementation, shared — not the five mirrored copies this file
+// family's other goal helpers use (goalStoreForTasks, syncTaskGoalRecord,
+// terminateGoalForOwnerDeletion). Mirroring is what let three of seven writers
+// ship without the hook at all; for a rule whose whole job is to be applied
+// everywhere, one copy is the point.
+//
+// The remaining call sites are then made ENFORCEABLE rather than remembered:
+// task_goal_terminal_guard_test.go enumerates every function in pkg/agent,
+// pkg/gateway, pkg/tools and pkg/sysagent/tools that writes task.Patch.Status,
+// and fails when a new one appears that neither calls this hook nor carries a
+// written justification for why it cannot reach a terminal status.
+
+// terminalGoalReasonMaxRunes bounds the task text carried onto the goal
+// record's TerminalReason. Mirrors pkg/agent's maxFailClosedOutputChars, the
+// bound the task's own Result already carries, so the goal record cannot grow
+// a copy of an unbounded worker response.
+const terminalGoalReasonMaxRunes = 2000
+
+// GoalStateForTerminalTask maps a task's terminal disposition onto the goal
+// state its paired record must end in, using the SAME vocabulary
+// pkg/agent/goal_loop.go's clearGoalStatus already uses for a chat goal — so a
+// task goal and a chat goal that ended the same way read the same way:
+//
+//	task done                       -> met        (clearGoalStatus's goalClearNoteMet)
+//	task failed, stopped by a user  -> cleared    (clearGoalStatus's goalClearNoteUser)
+//	task failed, any other reason   -> exhausted  (clearGoalStatus's default)
+//
+// `expired` is deliberately NOT produced here: it belongs to the idle-expiry
+// calendar sweep (goalIdleExpirySweep), which is about a goal nobody touched
+// for days, not about a task that ran and finished.
+//
+// ok is false for a non-terminal status, so a caller that reaches this with a
+// mid-flight task transitions nothing.
+func GoalStateForTerminalTask(status task.Status, cancelReason task.CancelReason) (generated.GoalState, bool) {
+	switch status {
+	case task.StatusDone:
+		return generated.GoalStateMet, true
+	case task.StatusFailed:
+		if cancelReason == task.CancelReasonStoppedByUser {
+			return generated.GoalStateCleared, true
+		}
+		return generated.GoalStateExhausted, true
+	default:
+		return "", false
+	}
+}
+
+// TerminalGoalReasonForTask builds the Goal.TerminalReason text retained on the
+// record. It names the task outcome that ended the goal and carries the task's
+// own result/reason text when there is one, so a terminal goal record explains
+// itself without a reader having to go and find the task.
+func TerminalGoalReasonForTask(status task.Status, reason string) string {
+	if reason == "" {
+		return fmt.Sprintf("owning task reached %s", status)
+	}
+	return fmt.Sprintf("owning task reached %s: %s", status, truncateGoalReason(reason))
+}
+
+// truncateGoalReason bounds s to terminalGoalReasonMaxRunes runes, noting the
+// cut so a reader is not misled into thinking the text ended there naturally.
+// Rune-safe (slices a []rune, never a byte index) for the same reason
+// pkg/agent's truncateRunes is.
+func truncateGoalReason(s string) string {
+	r := []rune(s)
+	if len(r) <= terminalGoalReasonMaxRunes {
+		return s
+	}
+	return string(r[:terminalGoalReasonMaxRunes]) + "\n... (truncated, output continues)"
+}
+
+// TerminateTaskGoalRecord ends the goal record paired with a task that has just
+// reached a terminal status (GOAL-FR-015/FR-027/FR-028). Call it from EVERY
+// terminal disposition of a task — see this section's header comment for the
+// seven that exist and why they cannot be collapsed into one.
+//
+// Every outcome is a no-op rather than an error except a genuine store fault:
+//
+//   - no paired goal record (GOAL-FR-023 legacy/Scratchpad task): nothing to end.
+//   - the record is still `defining`: the task terminated without ever starting
+//     (Stop on a queued task, or a create-then-cancel). `defining` is the
+//     legitimate resting state for a record whose task has not run —
+//     goal.Goal.Terminate refuses it outright, and forcing a transition would
+//     invent an adjudication that never happened.
+//   - the record is already terminal: another writer (or a previous call) ended
+//     it. Idempotent by construction, which is what makes it safe to call from
+//     every writer without any of them having to know about the others.
+//
+// Best-effort and non-fatal: the task has ALREADY been written terminal by the
+// caller, so a broken goal store must never retroactively change the task's own
+// outcome. A fault is logged at Warn so "the goal record was not closed" is
+// never silent — which is precisely how the original defect survived to UAT.
+func TerminateTaskGoalRecord(
+	gs *goal.Store, taskID string, status task.Status, cancelReason task.CancelReason, reason string,
+) {
+	if gs == nil || taskID == "" {
+		return
+	}
+	state, ok := GoalStateForTerminalTask(status, cancelReason)
+	if !ok {
+		slog.Warn("task goal: refusing to terminate a task's goal record for a non-terminal task status",
+			"task_id", taskID, "status", string(status))
+		return
+	}
+
+	g, err := gs.GetByOwner(generated.GoalOwnerKindTask, taskID)
+	if err != nil {
+		if errors.Is(err, goal.ErrOwnerNotFound) {
+			slog.Debug("task goal: terminated task has no paired goal record to end (GOAL-FR-023)",
+				"task_id", taskID)
+			return
+		}
+		slog.Warn("task goal: could not look up the paired goal record of a terminated task — "+
+			"the record may be left ACTIVE (GOAL-FR-015)",
+			"task_id", taskID, "status", string(status), "error", err)
+		return
+	}
+	if g.State != generated.GoalStateActive {
+		slog.Debug("task goal: paired goal record is not active — nothing to terminate",
+			"task_id", taskID, "goal_id", g.GoalID, "goal_state", string(g.State))
+		return
+	}
+
+	now := time.Now().UTC()
+	terminalReason := TerminalGoalReasonForTask(status, reason)
+	transitioned := false
+	updated, uErr := gs.Update(g.GoalID, func(cur *goal.Goal) error {
+		if cur.State != generated.GoalStateActive {
+			// Another writer ended it between the read above and this
+			// lock-held mutate. Not a fault — see the idempotence note.
+			return nil
+		}
+		if terr := cur.Terminate(state, terminalReason, now); terr != nil {
+			return terr
+		}
+		transitioned = true
+		return nil
+	})
+	if uErr != nil {
+		slog.Warn("task goal: the paired goal record of a terminated task could not be transitioned — "+
+			"it is still ACTIVE (GOAL-FR-015)",
+			"task_id", taskID, "goal_id", g.GoalID, "goal_state", string(state), "error", uErr)
+		return
+	}
+	if !transitioned || updated == nil {
+		return
+	}
+	slog.Info("task goal: paired goal record terminated with its task",
+		"task_id", taskID, "goal_id", g.GoalID, "goal_state", string(state))
+	if hook := taskGoalEndedHook.Load(); hook != nil {
+		(*hook)(*updated, status)
+	}
+}
+
+// taskGoalEndedHook is TerminateTaskGoalRecord's after-transition observer:
+// called exactly once per task-owned goal this function actually ended, with
+// the record as saved — never when the record was already terminal, still
+// defining, or the store refused the write. pkg/agent installs its goal
+// outcome recorder here at gateway boot (AgentLoop.InstallTaskGoalOutcomeRecorder)
+// so a task's run session gets the same lasting outcome line a chat goal's
+// session does; this package cannot reach pkg/agent to do it directly.
+// Process-wide, like every seam of its kind: one agent loop per process.
+var taskGoalEndedHook atomic.Pointer[func(ended goal.Goal, taskStatus task.Status)] //nolint:gochecknoglobals
+
+// SetTaskGoalEndedHook installs fn as TerminateTaskGoalRecord's
+// after-transition observer (nil removes it) and returns a func that restores
+// the previous observer — for tests; production installs once at boot.
+func SetTaskGoalEndedHook(fn func(ended goal.Goal, taskStatus task.Status)) (restore func()) {
+	var next *func(ended goal.Goal, taskStatus task.Status)
+	if fn != nil {
+		next = &fn
+	}
+	prev := taskGoalEndedHook.Swap(next)
+	return func() { taskGoalEndedHook.Store(prev) }
+}
 
 // TaskListTool lists tasks for the calling agent.
 type TaskListTool struct {
@@ -164,7 +604,7 @@ const maxTaskListRows = 100
 // carries fields whose own doc comments declare them DISK-ONLY and forbid them
 // from crossing any boundary — CreatedByAgentID ("the REST mapper does NOT copy
 // it to the wire type, and it MUST NOT be added to any schema in contracts/"),
-// Scratchpad, PendingJudgeClaim, DelegationDepth — and a whole-struct marshal
+// Scratchpad, DelegationDepth — and a whole-struct marshal
 // shipped every one of them into an LLM's context. Because these rows are
 // already scoped to the caller this was never a cross-principal disclosure, but
 // the disk-only contract is a contract regardless of audience, and an allowlist
@@ -267,11 +707,22 @@ type TaskCreateTool struct {
 	// bashPolicyChecker resolves an assignee agent's effective "bash" tool
 	// policy (ADR-049 D2 rule 5, FR-017/052). Set via SetBashPolicyChecker.
 	bashPolicyChecker func(assigneeAgentID string) (policy string, ok bool)
+	// assigneeCannotFinish answers whether the assignee can finish the task at
+	// all (founder decision 2026-09-15, task_assignee_readiness.go). Set via
+	// SetAssigneeReadinessChecker.
+	assigneeCannotFinish AssigneeReadinessChecker
 	// planStore, when set, backs the optional plan_id linkage arg (ADR-052
-	// FR-002): validates the same-workspace FK and rejects linking to a
-	// terminal plan (validateTaskPlanLinkage, plan.go). A nil planStore with
+	// FR-002): validates the same-workspace FK and refuses any plan that has
+	// left draft (ValidateTaskPlanMembership, plan.go). A nil planStore with
 	// a non-empty plan_id arg fails closed (see SetPlanStore).
 	planStore *plan.Store
+	// goalMaxRoundsFn, when set, resolves the live single global goal-round
+	// ceiling (Settings -> Performance, D-D/D-E — one setting governs task
+	// goals and chat goals identically; there is no per-goal override) for
+	// the paired goal record this tool creates. Wired in production by
+	// pkg/agent/loop.go (registerSharedTools); unwired (nil, e.g. a bare unit
+	// test) falls back to config.DefaultGoalMaxRounds.
+	goalMaxRoundsFn func() int
 }
 
 func NewTaskCreateTool(store *task.Store) *TaskCreateTool {
@@ -323,10 +774,27 @@ func (t *TaskCreateTool) SetBashPolicyChecker(fn func(assigneeAgentID string) (p
 // SetPlanStore installs the plan store backing the optional plan_id linkage
 // arg (ADR-052 FR-002). Wired by the agent loop alongside the task store; a
 // nil (unwired) store makes any create_task(plan_id=...) call fail closed —
-// see validateTaskPlanLinkage (plan.go). create_task calls with no plan_id
+// see ValidateTaskPlanMembership (plan.go). create_task calls with no plan_id
 // are entirely unaffected by whether this is wired.
 func (t *TaskCreateTool) SetPlanStore(store *plan.Store) {
 	t.planStore = store
+}
+
+// SetGoalMaxRoundsFn installs the live accessor for the single global
+// Settings -> Performance goal-round ceiling (D-D/D-E), applied to the goal
+// record this tool creates alongside every task. Unwired (the zero value,
+// nil), create_task falls back to config.DefaultGoalMaxRounds — the SAME
+// shipped default the config system itself falls back to
+// (PlanningConfig.EffectiveGoalMaxRounds) — rather than failing the create
+// outright, because refusing every task creation on an unwired accessor would
+// be a much larger regression. Production wiring: pkg/agent/loop.go's
+// registerSharedTools calls this with the live goal try limit
+// (goalTryLimit), next to SetPlanStore — pinned by
+// pkg/agent/task_attempt_budget_test.go. The value written here is the
+// creation-time snapshot only; the task executor re-stamps the live value
+// when the task's run starts (TaskExecutor.activateTaskGoal).
+func (t *TaskCreateTool) SetGoalMaxRoundsFn(fn func() int) {
+	t.goalMaxRoundsFn = fn
 }
 
 // parseCriteriaArgs converts the create_task tool's raw "criteria" argument
@@ -427,9 +895,11 @@ func (t *TaskCreateTool) Description() string {
 	return "Create a task and assign it to an agent for execution.\n" +
 		"This is a DELEGATION: it passes the same delegation-policy gate (trust set + modes + depth) as " +
 		"any other delegation, and is refused if you are not authorized to delegate to the assignee. " +
-		"criteria is REQUIRED: at least one acceptance criterion (Definition of Done) — a task created " +
-		"with none is rejected. Before authoring acceptance criteria, load the define-goal skill " +
-		"(via the Skill tool) and follow its quality bar. " +
+		"criteria AND dod are BOTH REQUIRED: at least one acceptance criterion and at least one " +
+		"definition-of-done item — a task created with either missing is rejected (GOAL-FR-021). " +
+		"criteria are the outcome-specific checks for THIS task; dod are the generic standing quality " +
+		"gates (mirrors Goal.dod) — the two are judged identically but never mixed together. Before " +
+		"authoring either, load the define-goal skill (via the Skill tool) and follow its quality bar. " +
 		"If every criterion is kind=check, the assignee's effective bash policy " +
 		"must be allow, or the create is rejected as structurally unsatisfiable (a machine check that can " +
 		"never run can never adjudicate MET). The task lands as a visible card on the workspace board in " +
@@ -468,7 +938,7 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 			},
 			"plan_id": map[string]any{
 				"type":        "string",
-				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must not be a terminal (done/failed) plan.",
+				"description": "ID of the Plan this task is a member of (optional). Must exist in the same workspace and must still be a DRAFT plan — a plan's membership is frozen at approval, so an approved, running, done or failed plan rejects a new member. To add work to a plan that is already under way, use a plan-supervision correction instead.",
 			},
 			"write_set": map[string]any{
 				"type":        "array",
@@ -519,11 +989,47 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 					},
 					"required": []string{"text"},
 				},
-				"description": "Acceptance criteria (Definition of Done) for this task. REQUIRED: at least " +
-					"one criterion — an agent-created task with zero criteria is rejected.",
+				"description": "Acceptance criteria for this task — the outcome-specific checks. " +
+					"REQUIRED: at least one criterion — an agent-created task with zero criteria is rejected.",
+			},
+			"dod": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type": "string",
+							"enum": []string{"check", "prose", "behavior"},
+							"description": "check: a shell command verified via the assignee's own bash tool; " +
+								"prose: a free-text statement judged by the Judge System Agent; " +
+								"behavior: a deterministic count of successful calls of a named tool in the " +
+								"session's tool-call log. Optional (ADR-074 D2) — when omitted, inferred " +
+								"from the payload: check payload => check, behavior payload => behavior, " +
+								"no payload => prose. An explicit kind mismatching its payload is rejected.",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "The definition-of-done statement (1-1000 characters)",
+						},
+						"check": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+							},
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
+						},
+						"behavior": task.BehaviorCriterionParamSchema(),
+					},
+					"required": []string{"text"},
+				},
+				"description": "Definition of Done for this task (GOAL-FR-003/FR-021/FR-048) — generic " +
+					"standing quality gates, DISTINCT from criteria and never mixed into it, judged " +
+					"identically. REQUIRED: at least one item — an agent-created task with zero dod " +
+					"items is rejected.",
 			},
 		},
-		"required": []string{"title", "prompt", "agent_id", "criteria"},
+		"required": []string{"title", "prompt", "agent_id", "criteria", "dod"},
 	}
 }
 
@@ -675,8 +1181,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	rawCriteria, _ := args["criteria"].([]any)
 	if len(rawCriteria) == 0 {
 		return ErrorResult(
-			"criteria is required: an agent-created task must supply at least one acceptance " +
-				"criterion (Definition of Done) — ADR-049 D5/SD-A7",
+			"Add at least one acceptance criterion: say what must be true for this task to be done.",
 		)
 	}
 	criteria, cErr := parseCriteriaArgs(rawCriteria, callerID)
@@ -764,6 +1269,47 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		due = d
 	}
 
+	// GOAL-FR-021/D-C: dod is mandatory alongside criteria, uniformly, on
+	// every task-creation surface — this tool included (R-25). Distinct
+	// list, same author-stamping and parse rules as criteria above.
+	//
+	// ORDER MATTERS — do NOT hoist this back above the per-field checks.
+	// It sits deliberately AFTER title/prompt/agent_id, the delegation gate,
+	// criteria, the D2-rule-5 bash gate, the depth bound, priority and due,
+	// because a gate placed first PRE-EMPTS every one of them: a caller who
+	// sends priority=6 and no dod must hear "priority must be between 1 and
+	// 5", not a dod complaint that hides the real defect in their call. The
+	// gate itself is unconditional (D-C) either way; only which message the
+	// caller sees first changes. Regression oracle:
+	// TestTaskCreate_DoDGateDoesNotPreemptFieldValidation.
+	rawDoD, _ := args["dod"].([]any)
+	if len(rawDoD) == 0 {
+		return ErrorResult(
+			"Add at least one Definition of Done item, distinct from the acceptance criteria.",
+		)
+	}
+	dod, dErr := parseCriteriaArgs(rawDoD, callerID)
+	if dErr != nil {
+		return ErrorResult(fmt.Sprintf("task_create failed: dod: %v", dErr))
+	}
+	// The DISTINCTNESS half of the same rule the refusal above advertises. It
+	// was advertised on every surface and checked on none: a task whose DoD
+	// restates its acceptance criteria spends a second judged slot on a
+	// sentence already being scored (the judge unions Criteria and DoD). See
+	// task.ValidateDoDDistinct for the rule and for why it stops at whitespace
+	// and case rather than reaching for similarity. Checked before any store
+	// write, so a refused pair leaves no task and no goal record behind.
+	if vErr := task.ValidateDoDDistinct(criteria, dod); vErr != nil {
+		return ErrorResult(fmt.Sprintf("task_create failed: %v", vErr)).WithError(vErr)
+	}
+	// Founder decision 2026-09-15: refuse an assignee that cannot finish this
+	// task — denied goal_claim, or a check its bash policy cannot run — before
+	// anything is written (task_assignee_readiness.go).
+	if res := assigneeCannotFinishResult("create_task", t.assigneeCannotFinish, agentID,
+		append(append([]task.AcceptanceCriterion{}, criteria...), dod...)); res != nil {
+		return res
+	}
+
 	parentTaskID, _ := args["parent_task_id"].(string)
 
 	wsID, err := t.resolveWorkspaceID(ctx)
@@ -810,11 +1356,14 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		entity.BlockedBy = deps
 	}
 
-	// Optional plan_id (ADR-052 FR-002): same-workspace FK + not-terminal
-	// (validateTaskPlanLinkage, plan.go). A create_task call with no plan_id
-	// is entirely unaffected — the check is a no-op for planID == "".
+	// Optional plan_id (ADR-052 FR-002): same-workspace FK + draft-only
+	// membership (ValidateTaskPlanMembership, plan.go — the one choke point
+	// this tool shares with create_task_in_workspace and the REST surface;
+	// see its doc for why an approved/running plan refuses a new member). A
+	// create_task call with no plan_id is entirely unaffected — the check is
+	// a no-op for planID == "".
 	if planID, _ := args["plan_id"].(string); planID != "" {
-		if pErr := validateTaskPlanLinkage(t.planStore, planID, wsID); pErr != nil {
+		if pErr := ValidateTaskPlanMembership(t.planStore, planID, wsID); pErr != nil {
 			return ErrorResult(fmt.Sprintf("task_create failed: %v", pErr))
 		}
 		entity.PlanID = planID
@@ -857,6 +1406,21 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult(fmt.Sprintf("task_create failed: %v", err))
 	}
 
+	// ADR-086 D2/D5, GOAL-FR-003/FR-012/FR-021/FR-029: a task's Definition of
+	// Done is authored ahead of time onto its own paired goal record, which
+	// stays in the "defining" phase until the task itself starts (GOAL-FR-012
+	// — nothing here activates it). The task record itself was created above
+	// with entity.Criteria already populated (dual-write, for the consumers
+	// not yet re-pointed to read the goal record this round — see this
+	// wave's report); this call is what actually persists dod anywhere.
+	if gErr := syncTaskGoalRecord(t.store, entity, true, dod, true, t.goalMaxRoundsFn); gErr != nil {
+		slog.Error("create_task: failed to create paired goal record",
+			"task_id", entity.ID, "error", gErr)
+		return ErrorResult(fmt.Sprintf(
+			"task_create failed: task %q was created but its Definition of Done could not be "+
+				"persisted: %v", entity.ID, gErr))
+	}
+
 	if t.onCreate != nil {
 		t.onCreate(entity)
 	}
@@ -876,10 +1440,25 @@ type TaskUpdateTool struct {
 	// SAME gate task_create uses.
 	delegationDeny func(ctx context.Context, targetAgentID string) *DelegationDenial
 	onComplete     func(*task.Task)
+	// goalMaxRoundsFn mirrors TaskCreateTool.goalMaxRoundsFn (wired by
+	// pkg/agent/loop.go alongside it). It is consulted only when update_task must CREATE a goal
+	// record that did not exist before (a legacy task getting criteria/dod
+	// for the first time via an edit); updating an existing record never
+	// touches the budget.
+	goalMaxRoundsFn func() int
+	// assigneeCannotFinish mirrors TaskCreateTool.assigneeCannotFinish (set via
+	// SetAssigneeReadinessChecker).
+	assigneeCannotFinish AssigneeReadinessChecker
 }
 
 func NewTaskUpdateTool(store *task.Store) *TaskUpdateTool {
 	return &TaskUpdateTool{store: store}
+}
+
+// SetGoalMaxRoundsFn installs the live Settings -> Performance goal-round
+// ceiling accessor — see TaskCreateTool.SetGoalMaxRoundsFn.
+func (t *TaskUpdateTool) SetGoalMaxRoundsFn(fn func() int) {
+	t.goalMaxRoundsFn = fn
 }
 
 // SetOnComplete sets the callback invoked when a task reaches a terminal status.
@@ -896,26 +1475,69 @@ func (t *TaskUpdateTool) SetDelegationDenyChecker(
 	t.delegationDeny = fn
 }
 
-// deferDoneClaimToJudge reports whether an explicit update_task(status:"done")
-// call on t must be staged as a pending judge claim rather than written as a
-// terminal `done` immediately (ADR-049 C1/SD-B2, review r1 blocker). This is
-// the FR-041 evidence-ladder judge closing the #1 self-certification bypass:
-// a worker could previously call update_task(done) directly and skip the
-// judge entirely, even though the SAME claim arriving via the TASK_STATUS
-// completion marker (task_executor.go finishTaskRun/adjudicateClaim) was
-// always judged.
+// frozenUpdateTaskDefinitionFields is the update_task half of the
+// running-task field freeze (operator decision, 2026-09-12). It is the exact
+// counterpart of pkg/gateway/rest_tasks.go's frozenTaskDefinitionFields —
+// read that function's doc comment for the full rule, the four frozen parts of
+// the judged contract, and the reasoning for what deliberately stays mutable.
 //
-//   - A task with explicit acceptance criteria (hard tier, len(Criteria)>0)
-//     is ALWAYS judged — this returns true.
-//   - A criteria-less task (soft tier — ADR-049 D5 synthesizes an implicit
-//     prose criterion from Prompt/title/description at judge time) keeps
-//     today's exact behavior: an explicit done write is trusted immediately,
-//     unchanged by this fix (explicitly accepted scope per review r1 C1).
-//   - A Scratchpad task (FR-048, set_todos-created checklist tracking) is
-//     exempt from the goal loop entirely, mirroring finishTaskRun's own
-//     Scratchpad exemption — trusted immediately regardless of criteria.
-func deferDoneClaimToJudge(t *task.Task, newStatus task.Status) bool {
-	return newStatus == task.StatusDone && !t.Scratchpad && len(t.Criteria) > 0
+// The two entry points enforce the same rule over different field sets simply
+// because they expose different fields. update_task's schema carries NO
+// `prompt` and no `description` argument at all, so the only frozen-set fields
+// reachable from here are `criteria` and `dod`. Nothing is enumerated for the
+// fields this tool cannot touch: a guard for an argument that does not exist
+// would be dead code, and adding a frozen argument to the schema later must
+// carry adding it here in the same change.
+//
+// Presence is decided with the SAME type assertion the apply path below uses
+// (`args[k].([]any)`), so the gate refuses exactly what would otherwise be
+// written — never more. A `criteria` argument of the wrong JSON shape changes
+// nothing downstream, so it is not something to refuse.
+//
+// `status` and every other progress field are untouched by this: an agent
+// working the task must be able to advance its own status, its todos (a
+// separate tool), its result and its artifacts while it runs.
+func frozenUpdateTaskDefinitionFields(args map[string]any) []string {
+	var frozen []string
+	if _, ok := args["criteria"].([]any); ok {
+		frozen = append(frozen, "criteria")
+	}
+	if _, ok := args["dod"].([]any); ok {
+		frozen = append(frozen, "dod")
+	}
+	return frozen
+}
+
+// runningTaskFrozenFieldToolMessage is the tool-side refusal, deliberately
+// word-for-word the REST handler's
+// (pkg/gateway/rest_tasks.go::runningTaskFrozenFieldMessage) so an operator
+// reading a 409 body and an agent reading a tool error are told the same
+// thing. It states the HTTP status the REST surface answers with, because a
+// tool result has no status line of its own and an agent that cannot tell a
+// state conflict from a malformed argument will retry the same edit forever.
+//
+// pkg/tools cannot import pkg/gateway (the dependency runs the other way), so
+// the sentence is duplicated rather than shared. Keeping the two copies
+// identical is the point; if one is reworded, reword both.
+func runningTaskFrozenFieldToolMessage(frozen []string) string {
+	quoted := make([]string, 0, len(frozen))
+	for _, n := range frozen {
+		quoted = append(quoted, strconv.Quote(n))
+	}
+	var list string
+	if len(quoted) == 1 {
+		list = quoted[0]
+	} else {
+		list = strings.Join(quoted[:len(quoted)-1], ", ") + " and " + quoted[len(quoted)-1]
+	}
+	return fmt.Sprintf(
+		"409 Conflict: cannot change %s while the task is running: the goal definition, the "+
+			"acceptance criteria, the definition of done and the prompt are frozen for the duration "+
+			"of a run, because the Judge measures the finished work against exactly those — changing "+
+			"one mid-run means neither a pass nor a fail would mean anything. Stop the task first, "+
+			"then edit it. Progress fields (status, todos, result, artifacts) stay editable while it runs.",
+		list,
+	)
 }
 
 func (t *TaskUpdateTool) Name() string           { return "update_task" }
@@ -924,11 +1546,10 @@ func (t *TaskUpdateTool) Category() ToolCategory { return CategoryTasks }
 
 func (t *TaskUpdateTool) Description() string {
 	return "Update a task assigned to you or that you created: status, title, priority, due date, agent_id, or blocked_by.\n" +
-		"Mark status (done/failed — in_progress is reached only through real dispatch via run_task, " +
-		"never written directly here). If the task has acceptance criteria, a done claim is NOT applied " +
-		"directly: during that task's own run it is recorded as a claim for the evidence-ladder judge " +
-		"(the task stays non-terminal and the response says so), and outside that run it is refused. " +
-		"Tasks with no criteria are marked done immediately. Only provided fields are updated."
+		"Status: failed ends a task you are NOT currently running; done on a task with acceptance criteria " +
+		"is refused outside its own run (the judge decides completion there), and while a task's own run is " +
+		"in flight you cannot write its status at all — claim completion with the goal_claim tool instead " +
+		"(status \"met\" with evidence, or \"blocked\" when you cannot proceed). Only provided fields are updated."
 }
 
 func (t *TaskUpdateTool) Parameters() map[string]any {
@@ -990,6 +1611,70 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 				"type":        "boolean",
 				"description": "Set/clear whether this plan member is an authored join/assemble member.",
 			},
+			"criteria": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type":        "string",
+							"enum":        []string{"check", "prose", "behavior"},
+							"description": "See create_task's criteria.kind — same inference rules.",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "The criterion statement (1-1000 characters)",
+						},
+						"check": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+							},
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
+						},
+						"behavior": task.BehaviorCriterionParamSchema(),
+					},
+					"required": []string{"text"},
+				},
+				"description": "Replacement acceptance-criteria set (replaces the current set atomically). " +
+					"Pass at least one item — GOAL-FR-021/D-C binds at edit too: an update supplying an " +
+					"empty criteria array is rejected. Omit to leave criteria unchanged. " +
+					"FROZEN WHILE THE TASK IS RUNNING: once the task is in_progress this field cannot be " +
+					"changed (the Judge scores the finished work against it), and supplying it is refused. " +
+					"Your status, todos, result and artifacts stay editable throughout.",
+			},
+			"dod": map[string]any{
+				"type": "array",
+				"items": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"kind": map[string]any{
+							"type":        "string",
+							"enum":        []string{"check", "prose", "behavior"},
+							"description": "See create_task's dod.kind — same inference rules.",
+						},
+						"text": map[string]any{
+							"type":        "string",
+							"description": "The definition-of-done statement (1-1000 characters)",
+						},
+						"check": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"command":            map[string]any{"type": "string", "description": "Shell command to run"},
+								"expected_exit_code": map[string]any{"type": "integer", "minimum": 0, "maximum": 255},
+							},
+							"description": "Required when kind is \"check\"; must be omitted for other kinds",
+						},
+						"behavior": task.BehaviorCriterionParamSchema(),
+					},
+					"required": []string{"text"},
+				},
+				"description": "Replacement Definition-of-Done set (replaces the current set atomically). " +
+					"Pass at least one item — GOAL-FR-021/D-C binds at edit too: an update supplying an " +
+					"empty dod array is rejected. Omit to leave dod unchanged. " +
+					"FROZEN WHILE THE TASK IS RUNNING: same rule as criteria above.",
+			},
 		},
 		"required": []string{"task_id"},
 	}
@@ -1030,6 +1715,17 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("you can only update tasks you own or are assigned")
 	}
 
+	// Operator decision, 2026-09-12: the judged contract freezes for the
+	// duration of a run — the SAME rule the REST PATCH handler enforces, with
+	// the SAME 409-Conflict semantics and the same wording (see
+	// frozenUpdateTaskDefinitionFields for the field mapping and for why the
+	// refusal is whole-request). Checked here, before a single field is copied
+	// into the patch, so a call mixing frozen and mutable fields applies none
+	// of it rather than half of it.
+	if frozen := frozenUpdateTaskDefinitionFields(args); len(frozen) > 0 && existing.Status == task.StatusInProgress {
+		return ErrorResult(runningTaskFrozenFieldToolMessage(frozen))
+	}
+
 	patch := task.Patch{}
 	updatedFields := []string{}
 
@@ -1060,48 +1756,30 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 		newStatus = st
 		updatedFields = append(updatedFields, "status")
-		if deferDoneClaimToJudge(existing, st) {
-			// review r2 Chunk 1: a hard-tier done claim is ONLY ever
-			// adjudicated inside THAT task's own executor run — finishTaskRun
-			// (task_executor.go) is the sole reader of Task.PendingJudgeClaim.
-			// An out-of-band call (this task is not the caller's
-			// currently-running task, e.g. a stale/idle criteria task nobody
-			// is executing, or a different agent poking at it) must be
-			// rejected outright rather than staged: nothing would ever
-			// adjudicate that claim, stranding the task non-terminal forever
-			// (bounded only by boot's reconcileStuckTasks). Status is
-			// deliberately left unpatched in the genuine in-run case too —
-			// the PendingJudgeClaim block after the result/artifacts fields
-			// stages the claim instead.
-			if ToolRunningTaskID(ctx) != taskID {
-				return ErrorResult("this task has acceptance criteria — completion is adjudicated by " +
-					"the judge during a task run; it cannot be force-completed here")
-			}
-		} else {
-			patch.Status = &st
+		// Founder decision 2026-09-14 (one claim mechanism): while THIS task's
+		// own executor run is in flight (the context names it as the running
+		// task), the worker cannot write any terminal status itself — done or
+		// failed. Completion is claimed with goal_claim and decided by the
+		// judge; an honest give-up is goal_claim(status:"blocked"). A worker
+		// that could mark its own run failed would bypass the judge entirely.
+		if ToolRunningTaskID(ctx) == taskID {
+			return ErrorResult("you cannot set this task's status while it is running — its completion is " +
+				"decided by the judge. Call goal_claim with status \"met\" and your one-line evidence when the " +
+				"work is verified, or goal_claim with status \"blocked\" if you cannot proceed")
 		}
+		// Out-of-band done on a task with acceptance criteria: nothing would
+		// ever adjudicate it — the judge runs inside the task's own run.
+		if st == task.StatusDone && !existing.Scratchpad && len(existing.Criteria) > 0 {
+			return ErrorResult("this task has acceptance criteria — completion is adjudicated by the judge " +
+				"during a task run; it cannot be marked done here. Run the task and let its worker claim")
+		}
+		patch.Status = &st
 	}
 
 	// Result / artifacts — accepted with or without a status.
-	deferToJudge := deferDoneClaimToJudge(existing, newStatus)
-	var claimText string
 	if result, ok := args["result"].(string); ok && result != "" {
-		claimText = result
-		if deferToJudge {
-			// Captured below as the judge's claim text (adjudicateClaim),
-			// NOT written to Task.Result directly — Task.Result stays the
-			// goal loop's own in-flight steering carrier between attempts
-			// (task_executor.go writeSteeringPrompt's doc comment) until the
-			// judge decides; completeTaskWithResult overwrites it with the
-			// real final result once terminal.
-		} else {
-			patch.Result = &result
-			updatedFields = append(updatedFields, "result")
-		}
-	}
-	if deferToJudge {
-		patch.PendingJudgeClaim = &claimText
-		updatedFields = append(updatedFields, "pending_judge_claim")
+		patch.Result = &result
+		updatedFields = append(updatedFields, "result")
 	}
 	if rawArtifacts, ok := args["artifacts"].([]any); ok {
 		artifacts := make([]string, 0, len(rawArtifacts))
@@ -1215,30 +1893,130 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		updatedFields = append(updatedFields, "is_join")
 	}
 
+	// criteria / dod (GOAL-FR-021/FR-029/FR-030/D-C): the mandatory-count
+	// gate binds at edit too, uniformly with create_task — an update
+	// supplying either list must not reduce it below one item. Persisted to
+	// the paired goal record (syncTaskGoalRecord, below, after the store
+	// write succeeds); entity.Criteria is ALSO dual-written onto the task
+	// record itself via patch.Criteria for the consumers not yet re-pointed
+	// to read the goal record this round.
+	var newCriteria, newDoD []task.AcceptanceCriterion
+	criteriaProvided, dodProvided := false, false
+	if rawCriteria, ok := args["criteria"].([]any); ok {
+		criteriaProvided = true
+		if len(rawCriteria) == 0 {
+			return ErrorResult("An update that changes the acceptance criteria must leave at least one.")
+		}
+		parsed, cErr := parseCriteriaArgs(rawCriteria, callerID)
+		if cErr != nil {
+			return ErrorResult(fmt.Sprintf("task_update failed: criteria: %v", cErr))
+		}
+		newCriteria = parsed
+		patch.Criteria = &parsed
+		updatedFields = append(updatedFields, "criteria")
+	}
+	if rawDoD, ok := args["dod"].([]any); ok {
+		dodProvided = true
+		if len(rawDoD) == 0 {
+			return ErrorResult("An update that changes the Definition of Done must leave at least one item.")
+		}
+		parsed, dErr := parseCriteriaArgs(rawDoD, callerID)
+		if dErr != nil {
+			return ErrorResult(fmt.Sprintf("task_update failed: dod: %v", dErr))
+		}
+		newDoD = parsed
+		updatedFields = append(updatedFields, "dod")
+	}
+
+	// GOAL-FR-048 binds the distinctness rule at SAVE, not only at create —
+	// otherwise the rule is a door you walk around: create with a distinct DoD,
+	// then edit it into a duplicate.
+	//
+	// An edit may touch one list and not the other, so the comparison is
+	// against the EFFECTIVE post-edit pair: the submitted list where one was
+	// submitted, the persisted list otherwise. The persisted criteria come off
+	// the task record; the persisted DoD can only come off the paired goal
+	// record, which is the only place a task's DoD exists (ADR-086 D5).
+	// Checked before store.Update, so a refusal writes nothing at all.
+	if criteriaProvided || dodProvided {
+		effectiveCriteria := newCriteria
+		if !criteriaProvided {
+			effectiveCriteria = existing.Criteria
+		}
+		effectiveDoD := newDoD
+		if !dodProvided {
+			persistedDoD, dErr := pairedGoalDoD(t.store, taskID)
+			if dErr != nil {
+				return ErrorResult(fmt.Sprintf(
+					"task_update failed: could not read the task's Definition of Done to check it "+
+						"stays distinct from the criteria: %v", dErr))
+			}
+			effectiveDoD = persistedDoD
+		}
+		if vErr := task.ValidateDoDDistinct(effectiveCriteria, effectiveDoD); vErr != nil {
+			return ErrorResult(fmt.Sprintf("task_update failed: %v", vErr)).WithError(vErr)
+		}
+	}
+
+	// Founder decision 2026-09-15: a reassignment, or a change to what the task
+	// is judged against, may not leave it with an agent that cannot finish it.
+	// Checked before store.Update, so a refusal writes nothing.
+	if res := t.updateAssigneeCannotFinish(existing, patch.AgentID,
+		newCriteria, newDoD, criteriaProvided, dodProvided); res != nil {
+		return res
+	}
+
 	if len(updatedFields) == 0 {
 		return ErrorResult(
 			"no updatable fields provided (supply at least one of status, result, artifacts, title, priority, due, agent_id, blocked_by, write_set, stream, is_join)",
 		)
 	}
 
-	// Timestamps keyed off status (unchanged behavior for the status path). A
-	// deferred done-claim is NOT actually terminal yet (review r1 C1) — the
-	// judge decides — so CompletedAt is not stamped until adjudication lands
-	// (task_executor.go completeTaskWithResult stamps it then, via the normal
-	// Update path).
+	// Timestamps keyed off status.
 	now := time.Now().UTC().Format(time.RFC3339)
 	switch newStatus {
 	case task.StatusInProgress:
 		patch.StartedAt = &now
 	case task.StatusDone, task.StatusFailed:
-		if !deferToJudge {
-			patch.CompletedAt = &now
-		}
+		patch.CompletedAt = &now
 	}
 
 	updated, err := t.store.Update(taskID, patch)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("task_update failed: %v", err))
+		// WithError carries the store sentinel (task.ErrBlockedByCycle,
+		// ErrValidation, ...) so callers and tests assert identity rather
+		// than the plain-language message wording.
+		return ErrorResult(fmt.Sprintf("task_update failed: %v", err)).WithError(err)
+	}
+
+	// GOAL-FR-029/FR-030: the task record's write already landed above
+	// (dual-write); this is what actually persists the change onto the
+	// task's paired goal record — creating one if this is a legacy task's
+	// first-ever criteria/dod (see syncTaskGoalRecord's doc comment).
+	var goalSyncWarning string
+	if criteriaProvided || dodProvided {
+		if gErr := syncTaskGoalRecord(t.store, updated, criteriaProvided, newDoD, dodProvided, t.goalMaxRoundsFn); gErr != nil {
+			slog.Error("update_task: failed to sync paired goal record",
+				"task_id", taskID, "error", gErr)
+			goalSyncWarning = gErr.Error()
+		}
+	}
+
+	// GOAL-FR-015/FR-027/FR-028 (review finding C1): this tool is one of the
+	// seven terminal task writers, and it was one of the four with no goal
+	// hook at all. The done-claim judge deferral above only intercepts `done`
+	// — status:"failed" was written straight through, leaving the paired goal
+	// record ACTIVE forever and silently killing Goal.Reactivate on every
+	// subsequent re-run of that task (activateTaskGoal's `default:` branch).
+	//
+	// Keyed on `updated.Status` (what actually landed on disk) rather than on
+	// the requested `newStatus`. The prior-
+	// status guard keeps a no-op resend on an already-terminal task from
+	// re-entering the hook; the hook is idempotent anyway, this just keeps the
+	// logs honest.
+	if task.IsTerminal(updated.Status) && !task.IsTerminal(existing.Status) {
+		TerminateTaskGoalRecord(
+			GoalStoreForTasks(t.store), taskID, updated.Status, updated.CancelReason, updated.Result)
 	}
 
 	// FR-6.5: when the task newly reaches "done", advance dependents (mirror
@@ -1247,14 +2025,13 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 	// caller as an advance_warning rather than turning a successful update into a
 	// failure (which would orphan dependents with no signal either way).
 	//
-	// A deferred done-claim (review r1 C1/SD-B2) must NOT advance dependents
-	// or fire onComplete here — the task has not actually reached `done`
-	// (patch.Status was deliberately left unset above), so newStatus=="done"
-	// alone is no longer sufficient to gate these; the judge
-	// (task_executor.go adjudicateClaim -> completeTaskWithResult) is the
-	// only path that may do so, once it actually adjudicates the claim MET.
+	// A done write only reaches here for a task with no acceptance criteria,
+	// from outside that task's own run: a status write on the caller's own
+	// running task, and a done write on a criteria task, are both refused
+	// above, because only a Judge-upheld claim may complete those (founder
+	// decision 2026-09-14, pkg/agent/task_run_loop.go).
 	var advanceWarning string
-	if newStatus == task.StatusDone && !deferToJudge {
+	if newStatus == task.StatusDone {
 		advanced, advErr := t.store.AdvanceBlockedDependents(taskID)
 		if advErr != nil {
 			// Storage fault advancing dependents — the update itself succeeded,
@@ -1268,36 +2045,37 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		}
 	}
 
-	if task.IsTerminal(newStatus) && !deferToJudge && t.onComplete != nil {
+	if task.IsTerminal(newStatus) && t.onComplete != nil {
 		t.onComplete(updated)
 	}
 
 	// Marshal cannot fail on a []string (updatedFields is always a concrete
 	// slice of strings), so the error is impossible in practice — discard it.
-	updatedFieldsJSON, _ := json.Marshal(updatedFields)
-	result := fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s}`,
-		updated.ID, updated.Status, string(updatedFieldsJSON))
-	if deferToJudge {
-		// FR-041/SD-B2 (review r1 C1): tell the calling agent its done claim
-		// was received but is NOT yet final — this task has explicit
-		// acceptance criteria, so the evidence-ladder judge must adjudicate
-		// the claim (task_executor.go adjudicateClaim) before the task can
-		// actually reach `done`. Built with json.Marshal for safe escaping.
-		const pendingNote = "completion claim recorded — this task has acceptance criteria, so it is " +
-			"NOT yet done; the evidence-ladder judge will adjudicate your claim against the criteria " +
-			"before the task can reach a terminal status"
-		noteJSON, _ := json.Marshal(pendingNote)
-		result = fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s,"pending_judge_note":%s}`,
-			updated.ID, updated.Status, string(updatedFieldsJSON), string(noteJSON))
-	} else if advanceWarning != "" {
-		// Append the warning as an escaped string field so the LLM/user can see
-		// the dependents were not advanced. Built with json.Marshal so the error
-		// message is properly escaped into a JSON string literal.
-		warnJSON, _ := json.Marshal(advanceWarning)
-		result = fmt.Sprintf(`{"task_id":%q,"status":%q,"updated_fields":%s,"advance_warning":%s}`,
-			updated.ID, updated.Status, string(updatedFieldsJSON), string(warnJSON))
+	resultPayload := map[string]any{
+		"task_id":        updated.ID,
+		"status":         updated.Status,
+		"updated_fields": updatedFields,
 	}
-	return NewToolResult(result)
+	if advanceWarning != "" {
+		resultPayload["advance_warning"] = advanceWarning
+	}
+	if goalSyncWarning != "" {
+		// GOAL-FR-029/FR-030: the task record itself already carries the new
+		// criteria (dual-write, via patch.Criteria above), so this is never a
+		// silent data loss — but the paired goal record (the authoritative
+		// store per ADR-086 D5) failed to pick up the change, so the caller
+		// must see that explicitly rather than assume both landed together.
+		resultPayload["goal_sync_warning"] = "criteria/dod saved on the task, but the paired goal " +
+			"record could not be updated: " + goalSyncWarning
+	}
+	encoded, mErr := json.Marshal(resultPayload)
+	if mErr != nil {
+		// Every field above is a concrete string/slice — Marshal cannot
+		// fail on this shape in practice; fall back to the minimal payload
+		// rather than dropping a successful update's response entirely.
+		return NewToolResult(fmt.Sprintf(`{"task_id":%q,"status":%q}`, updated.ID, updated.Status))
+	}
+	return NewToolResult(string(encoded))
 }
 
 // --- TaskDeleteTool ---
@@ -1372,6 +2150,21 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *Tool
 		return ErrorResult("you can only modify/delete tasks you own or are assigned")
 	}
 
+	// GOAL-FR-044/EC-4: a goal MUST NOT outlive its owner as an unreferenced
+	// record. Run BEFORE the task file is removed and treat a failure as fatal
+	// to the whole delete — see RemoveTaskGoalRecords' doc for why this
+	// ordering replaced the best-effort-afterwards shape all three delete
+	// surfaces used to share (and the three different answers they gave when
+	// it failed). Nothing has been deleted yet at this point, so refusing here
+	// leaves the task and its goal exactly as they were, and a retry is safe.
+	if gErr := RemoveTaskGoalRecords(GoalStoreForTasks(t.store), taskID); gErr != nil {
+		slog.Error("delete_task: refusing to delete a task whose paired goal record could not be "+
+			"removed (GOAL-FR-044) — nothing was deleted", "task_id", taskID, "error", gErr)
+		return ErrorResult(fmt.Sprintf(
+			"task %q was NOT deleted: its paired goal record could not be removed, and deleting the "+
+				"task anyway would leave that record behind as an unreferenced orphan: %v", taskID, gErr))
+	}
+
 	unblocked, err := t.store.Delete(taskID)
 	if err != nil {
 		if errors.Is(err, task.ErrNotFound) {
@@ -1409,6 +2202,9 @@ func (t *TaskDeleteTool) Execute(ctx context.Context, args map[string]any) *Tool
 		slog.Info("delete_task: advanced unblocked dependent blocked→next", "deleted_id", taskID, "advanced_id", depID)
 	}
 
+	// No goal_cleanup_warning field any more: the cleanup ran before the
+	// delete and a failure returned above, so reaching here means both the
+	// goal record and the task are gone.
 	return NewToolResult(fmt.Sprintf(`{"deleted":%q}`, taskID))
 }
 

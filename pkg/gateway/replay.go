@@ -284,10 +284,51 @@ func streamReplay(
 					"session_id", sessionID, "entry_id", entry.ID, "error", uerr)
 				continue
 			}
-			if err2 := emitFrame(toJudgeVerdictFrame(verdict)); err2 != nil {
+			if err2 := emitFrame(toJudgeVerdictFrame(sessionID, verdict)); err2 != nil {
 				return framesEmitted, err2
 			}
 			continue
+		}
+
+		// ADR-085 BROWSER-FR-043a: a persisted browser-handover waiting-line
+		// entry replays as the SAME frame type FR-042 delivers live
+		// (BrowserHandoverNoticeFrame), never the generic ReplayMessageFrame
+		// the fallthrough below would otherwise produce. Discriminates on
+		// the STAMPED entry.SystemSubtype field alone — never by
+		// prefix-matching entry.Content, which is exactly the anti-pattern
+		// the existing "Handoff:" branch elsewhere in this function is
+		// documented as being (see the FR-043a spec citation). The message
+		// id is the entry's own ID, per FR-044: "the deterministic notice id
+		// rides the existing TranscriptEntry.ID".
+		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == "browser_handover_notice" {
+			if err2 := emitFrame(generated.BrowserHandoverNoticeFrame{
+				Type:      string(generated.WsFrameTypeBrowserHandoverNotice),
+				SessionId: sessionID,
+				MessageId: entry.ID,
+				Text:      entry.Content,
+			}); err2 != nil {
+				return framesEmitted, err2
+			}
+			continue
+		}
+
+		// Goal outcome line (founder decision 2026-09-14): a persisted goal
+		// ending replays as the SAME goal_outcome frame the ending sent live
+		// (goalOutcomeFrame, shared with websocket.go), discriminated on the
+		// stamped entry.SystemSubtype — never on Content — with the entry's own
+		// ID as message_id so the SPA keeps exactly one line per ending. An
+		// entry stamped goal_outcome but carrying no outcome is malformed: it
+		// is logged and falls through to the ordinary rendering below so its
+		// text is not lost.
+		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeGoalOutcome {
+			if entry.GoalOutcome != nil {
+				if err2 := emitFrame(goalOutcomeFrame(sessionID, entry.ID, *entry.GoalOutcome)); err2 != nil {
+					return framesEmitted, err2
+				}
+				continue
+			}
+			slog.Warn("replay: goal_outcome transcript entry carries no outcome — replaying it as a plain entry",
+				"session_id", sessionID, "entry_id", entry.ID)
 		}
 
 		// Update the running fallback agent ID.
@@ -326,8 +367,18 @@ func streamReplay(
 			}
 		}
 
-		// FR-I-002: emit replay_message for non-empty content.
-		if entry.Content != "" {
+		// ADR-087 D2/Codex C8: a truncated assistant entry can have EMPTY
+		// content — D4a persists a zero-content entry stamped
+		// truncated/max_output_tokens when the answer was cut off before any
+		// text was produced. That entry must still replay (with no body) so
+		// the SPA can render the "(cut off at the output limit)" suffix on
+		// reattach/reload; a non-truncated empty entry is unaffected and
+		// continues to be skipped entirely below.
+		truncatedEmptyAssistant := entry.Content == "" && entry.Truncated && entry.Role == "assistant"
+
+		// FR-I-002: emit replay_message for non-empty content (or a
+		// truncated-empty assistant entry, per ADR-087 above).
+		if entry.Content != "" || truncatedEmptyAssistant {
 			// Phase 1B (FR-014): system-error entries (Type=system + Status="error")
 			// are emitted as ReplayErrorFrame so the SPA can render the typed
 			// rate-limit-denial or generic error component. Without this, the
@@ -370,6 +421,23 @@ func streamReplay(
 			if entry.Model != "" {
 				modelCopy := entry.Model
 				msgFrame.Model = &modelCopy
+			}
+			// ADR-087 D2: surface truncation on every replayed assistant
+			// entry that carries it — not only the empty-content case above.
+			// D4b (auto-continue exhausted/ineligible) stamps Truncated on
+			// an entry that DOES have content, and that must replay with the
+			// same "(cut off at the output limit)" suffix as a live turn.
+			// Absent reason on a truncated entry means "cancelled" (legacy —
+			// every entry written before TruncationReason existed was always
+			// a cancel; see TranscriptEntry.TruncationReason's doc comment).
+			if entry.Role == "assistant" && entry.Truncated {
+				truncatedCopy := true
+				msgFrame.Truncated = &truncatedCopy
+				reason := entry.TruncationReason
+				if reason == "" {
+					reason = "cancelled"
+				}
+				msgFrame.TruncationReason = &reason
 			}
 			if err2 := emitFrame(msgFrame); err2 != nil {
 				return framesEmitted, err2
@@ -1209,11 +1277,14 @@ func buildReplayErrorFrame(sessionID string, entry session.TranscriptEntry) gene
 // (gen.JudgeVerdict, the openapi Message.verdict shape, vs.
 // generated.JudgeVerdictFrame, the asyncapi WS frame shape); both live in the
 // same pkg/api/generated package but are distinct generated structs.
-// JudgeVerdictFrame deliberately carries no session_id (see chat.ts's own
-// comment on the live frame) — it is correlated by task_id/plan_id, or by
-// the session the judge_verdict transcript entry itself lives in for the
-// scope=goal case.
-func toJudgeVerdictFrame(v task.JudgeVerdict) generated.JudgeVerdictFrame {
+// sessionID is the verdict's owning chat session — the task run session for
+// scope=task, the /goal session for scope=goal, "" for scope=plan (a plan
+// round has no single owning chat session; plan-scope verdicts pass "" here,
+// same as before this field existed). Stamped onto the frame's OPTIONAL
+// session_id (JudgeVerdictFrame.yaml) so the SPA can anchor the card in that
+// specific chat thread in addition to the GLOBAL ActivityPanel; a frame
+// without it keeps the pre-existing panel-only routing exactly as before.
+func toJudgeVerdictFrame(sessionID string, v task.JudgeVerdict) generated.JudgeVerdictFrame {
 	f := generated.JudgeVerdictFrame{
 		Type:         string(generated.WsFrameTypeJudgeVerdict),
 		Id:           v.ID,
@@ -1232,17 +1303,39 @@ func toJudgeVerdictFrame(v task.JudgeVerdict) generated.JudgeVerdictFrame {
 		planIDCopy := v.PlanID
 		f.PlanId = &planIDCopy
 	}
+	if sessionID != "" {
+		sessionIDCopy := sessionID
+		f.SessionId = &sessionIDCopy
+	}
 	// Fix-wave finding #3: PerCriterion is a required array on the wire
 	// (asyncapi_types.gen.go, no `omitempty`) — a nil slice marshals as JSON
 	// `null`, which fails the SPA's zod schema for a required array and gets
 	// dropped. An empty (zero-criteria) verdict must still round-trip as `[]`,
 	// so start from a non-nil, empty slice rather than appending onto a nil
 	// one.
+	//
+	// JUDGE-FR-070a/FR-074 (C-02, F2): four new optional fields —
+	// evidence_source, evidence_target, provenance, evidence[] — mirror
+	// task.CriterionVerdict's new Go fields onto the generated wire shape.
+	// Deliberately no `outcome` field anywhere (D-H, C-02) — Met stays the
+	// only verdict-shape bool. A pre-existing verdict, whose new Go fields
+	// are all zero-valued, produces nil pointers/nil slice here, which
+	// `omitempty` drops from the JSON exactly as before this change
+	// (FR-074): the wire frame for an old verdict is unchanged byte-for-byte.
 	f.PerCriterion = make([]struct {
-		CriterionId   string  `json:"criterion_id"`
-		EvidenceQuote *string `json:"evidence_quote,omitempty"`
-		Met           bool    `json:"met"`
-		Reason        string  `json:"reason"`
+		CriterionId string `json:"criterion_id"`
+		Evidence    []struct {
+			Part   string  `json:"part"`
+			Quote  string  `json:"quote"`
+			Source *string `json:"source,omitempty"`
+			Target *string `json:"target,omitempty"`
+		} `json:"evidence,omitempty"`
+		EvidenceQuote  *string `json:"evidence_quote,omitempty"`
+		EvidenceSource *string `json:"evidence_source,omitempty"`
+		EvidenceTarget *string `json:"evidence_target,omitempty"`
+		Met            bool    `json:"met"`
+		Provenance     *string `json:"provenance,omitempty"`
+		Reason         string  `json:"reason"`
 	}, 0, len(v.PerCriterion))
 	for _, c := range v.PerCriterion {
 		// ADR-074 D7: optional + empty-safe — an empty quote (fail-closed /
@@ -1252,12 +1345,77 @@ func toJudgeVerdictFrame(v task.JudgeVerdict) generated.JudgeVerdictFrame {
 			q := c.EvidenceQuote
 			quote = &q
 		}
+		var evidenceSource *string
+		if c.EvidenceSource != "" {
+			s := string(c.EvidenceSource)
+			evidenceSource = &s
+		}
+		var evidenceTarget *string
+		if c.EvidenceTarget != "" {
+			t := c.EvidenceTarget
+			evidenceTarget = &t
+		}
+		var provenance *string
+		if c.Provenance != "" {
+			p := string(c.Provenance)
+			provenance = &p
+		}
+		var evidence []struct {
+			Part   string  `json:"part"`
+			Quote  string  `json:"quote"`
+			Source *string `json:"source,omitempty"`
+			Target *string `json:"target,omitempty"`
+		}
+		if len(c.Evidence) > 0 {
+			evidence = make([]struct {
+				Part   string  `json:"part"`
+				Quote  string  `json:"quote"`
+				Source *string `json:"source,omitempty"`
+				Target *string `json:"target,omitempty"`
+			}, 0, len(c.Evidence))
+			for _, e := range c.Evidence {
+				var src *string
+				if e.Source != "" {
+					s := e.Source
+					src = &s
+				}
+				var tgt *string
+				if e.Target != "" {
+					t := e.Target
+					tgt = &t
+				}
+				evidence = append(evidence, struct {
+					Part   string  `json:"part"`
+					Quote  string  `json:"quote"`
+					Source *string `json:"source,omitempty"`
+					Target *string `json:"target,omitempty"`
+				}{Part: e.Part, Quote: e.Quote, Source: src, Target: tgt})
+			}
+		}
 		f.PerCriterion = append(f.PerCriterion, struct {
-			CriterionId   string  `json:"criterion_id"`
-			EvidenceQuote *string `json:"evidence_quote,omitempty"`
-			Met           bool    `json:"met"`
-			Reason        string  `json:"reason"`
-		}{CriterionId: c.CriterionID, EvidenceQuote: quote, Met: c.Met, Reason: c.Reason})
+			CriterionId string `json:"criterion_id"`
+			Evidence    []struct {
+				Part   string  `json:"part"`
+				Quote  string  `json:"quote"`
+				Source *string `json:"source,omitempty"`
+				Target *string `json:"target,omitempty"`
+			} `json:"evidence,omitempty"`
+			EvidenceQuote  *string `json:"evidence_quote,omitempty"`
+			EvidenceSource *string `json:"evidence_source,omitempty"`
+			EvidenceTarget *string `json:"evidence_target,omitempty"`
+			Met            bool    `json:"met"`
+			Provenance     *string `json:"provenance,omitempty"`
+			Reason         string  `json:"reason"`
+		}{
+			CriterionId:    c.CriterionID,
+			Evidence:       evidence,
+			EvidenceQuote:  quote,
+			EvidenceSource: evidenceSource,
+			EvidenceTarget: evidenceTarget,
+			Met:            c.Met,
+			Provenance:     provenance,
+			Reason:         c.Reason,
+		})
 	}
 	return f
 }

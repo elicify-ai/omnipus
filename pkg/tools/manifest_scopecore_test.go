@@ -43,9 +43,12 @@ const scopeCoreManifestMaxLineLen = 140
 // tool registry, which is intentionally not a dependency direction this
 // codebase takes — see scopeCoreFullTierTools's doc comment in
 // manifest_test.go). It instead checks get_workspace by name, the one
-// ScopeCore name currently in previewedLazyToolNames
-// (pkg/tools/manifest.go). If a second ScopeCore tool is ever promoted into
-// the previewed tier, add it here alongside get_workspace.
+// previewed ScopeCore name (pkg/tools/manifest.go's previewedLazyToolNames)
+// that is absent from GeneralBuiltinMetadata(). create_plan and execute_plan
+// are ScopeCore and previewed too, but they ARE in that catalog, so the
+// general test already checks their first lines. If another ScopeCore tool
+// absent from that catalog is ever promoted into the previewed tier, add it
+// here alongside get_workspace.
 func TestVisibility_ScopeCoreGetWorkspaceDescriptionFitsWithoutTruncation(t *testing.T) {
 	const name = "get_workspace"
 

@@ -19,6 +19,14 @@ properties:
     type: string
     minLength: 1
     description: Session in which the approval is pending.
+  workspace_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+    description: >
+      Workspace the pending approval's session belongs to — same value and
+      semantics as ToolApprovalRequiredFrame.workspace_id. Omitted when the
+      session belongs to no workspace.
   tool_name:
     type: string
     minLength: 1

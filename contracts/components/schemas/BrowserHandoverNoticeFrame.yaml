@@ -1,0 +1,69 @@
+title: BrowserHandoverNoticeFrame
+description: >
+  Server → client. ADR-085 BROWSER-FR-041/FR-042 — the visible waiting
+  surface: a system-authored line delivered LIVE to the open chat thread
+  stating that the agent has stopped driving the browser (a human took the
+  wheel, or the agent called `browser_handover`) and that sending a message
+  returns it. Session-scoped (registered in `SESSION_SCOPED_FRAME_TYPES`).
+  Delivered through the single `WaitingSurfaceEmitter` seam shared by all
+  three producers (the take, `browser_handover`, and the FR-031a idle
+  sweeper) — this schema does not distinguish which producer raised it.
+  BROWSER-FR-043: the SAME notice is also persisted as a `type: system,
+  system_subtype: browser_handover_notice` transcript entry
+  (`Message.yaml`) so a replay renders the identical line in the identical
+  place — `pkg/gateway/replay.go` emits THIS frame type on replay
+  (BROWSER-FR-043a), discriminating on the persisted `system_subtype`
+  stamp, never on `content` prefix-matching. THIS FILE EXISTS ONLY for the
+  Constraint #8 5-step process and the `pkg/gateway/inboundschemas/` sync
+  (C-67/C-69) — the GENERATING copy for codegen is the inline schema in
+  `contracts/asyncapi.yaml`; this frame is NEVER registered in
+  `contracts/openapi.yaml` (doing so would emit the same exported
+  TypeScript name twice and break the build). Keep both copies in sync by
+  hand, the same precedent as `JudgeVerdictFrame`/`GoalStatusFrame`.
+type: object
+required:
+  - type
+  - session_id
+  - message_id
+  - text
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_handover_notice
+  session_id:
+    type: string
+    minLength: 1
+    description: The chat session this notice belongs to.
+    example: "550e8400-e29b-41d4-a716-446655440000"
+  message_id:
+    type: string
+    minLength: 1
+    description: >
+      BROWSER-FR-044 — a deterministic id derived from `(sessionID,
+      holdStartedAtUnixNano)` (a wall-clock nanosecond timestamp minted at
+      the transition INTO a stood-down state — a take or a
+      `browser_handover` call — and reused verbatim for every emission
+      within that unbroken hold, never a per-process counter, which would
+      collide across a gateway restart). Exactly ONE notice is emitted per
+      unbroken held period (FR-044) — the SPA reducer drops a notice whose
+      id it already holds, exactly as the existing goal-ack line's
+      `goalAckMessageId` idempotency pattern does. The SAME id is stamped
+      onto the persisted transcript entry's own `id`, so the live delivery
+      and the replayed entry converge on one message, never two that
+      merely read alike.
+    example: "browser-handover-01J3ZQK8N2H8VXNRP5T7C9M4WE"
+  text:
+    type: string
+    maxLength: 2000
+    description: >
+      BROWSER-FR-041 — the notice body: that the agent has stopped driving
+      the browser and that sending a message returns it. BROWSER-FR-048a:
+      when raised by the `browser_handover` tool, the body ALSO includes
+      the tool's model-authored `reason` argument, rendered as plain text
+      and truncated to 200 runes (never HTML/Markdown — an
+      operator-facing surface fed by model-authored text is an injection
+      surface if treated as markup). An empty or whitespace-only reason
+      produces no empty parenthetical — the body falls back to its
+      agent-neutral copy.
+    example: "A person has taken control of the browser. Send a message to get it back."

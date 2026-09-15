@@ -1,5 +1,7 @@
 # Grill Review (RE-GRILL) — Unified Goal / Plan / Subagent Spec (ADR-053)
 
+> **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Reviewed file**: `docs/internal/specs/unified-goal-plan-subagent-spec.md`
 **Inputs**: `docs/internal/architecture/ADR-053-unified-goal-plan-subagent.md` (Accepted); `docs/internal/design/unified-goal-plan-subagent-target-design-v2.2.html`
 **Mode**: plan-spec format · **RE-GRILL** after the prior FAIL (C1 CRITICAL + M1..M8 MAJOR + minors)

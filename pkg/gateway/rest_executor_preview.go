@@ -120,9 +120,9 @@ func (a *restAPI) postAgentsExecutorPreview(w http.ResponseWriter, r *http.Reque
 	var promptDelivery gen.ExecutorCommandPreviewResponsePromptDelivery
 	switch cli {
 	case "claude-code", "codex":
-		promptDelivery = gen.Stdin
+		promptDelivery = gen.ExecutorCommandPreviewResponsePromptDeliveryStdin
 	case "opencode":
-		promptDelivery = gen.PositionalArgumentAfter
+		promptDelivery = gen.ExecutorCommandPreviewResponsePromptDeliveryPositionalArgumentAfter
 	}
 
 	resp := gen.ExecutorCommandPreviewResponse{

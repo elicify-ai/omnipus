@@ -64,7 +64,7 @@ func TestPostAgentsExecutorPreview_Claude_HappyPath(t *testing.T) {
 	)
 	assert.Equal(t, wantArgv, resp.Argv)
 	assert.Equal(t, "claude", resp.Binary)
-	assert.Equal(t, gen.Stdin, resp.PromptDelivery)
+	assert.Equal(t, gen.ExecutorCommandPreviewResponsePromptDeliveryStdin, resp.PromptDelivery)
 	assert.Empty(t, resp.DroppedArgs)
 	assert.Nil(t, resp.ModelDroppedReason)
 
@@ -98,7 +98,7 @@ func TestPostAgentsExecutorPreview_Codex_HappyPath(t *testing.T) {
 	})
 	assert.Equal(t, wantArgv, resp.Argv)
 	assert.Equal(t, "/usr/local/bin/codex", resp.Binary)
-	assert.Equal(t, gen.Stdin, resp.PromptDelivery)
+	assert.Equal(t, gen.ExecutorCommandPreviewResponsePromptDeliveryStdin, resp.PromptDelivery)
 	assert.Empty(t, resp.DroppedArgs)
 	assert.Nil(t, resp.ModelDroppedReason)
 }
@@ -119,7 +119,7 @@ func TestPostAgentsExecutorPreview_Opencode_HappyPath(t *testing.T) {
 	})
 	assert.Equal(t, wantArgv, resp.Argv)
 	assert.Equal(t, "opencode", resp.Binary)
-	assert.Equal(t, gen.PositionalArgumentAfter, resp.PromptDelivery)
+	assert.Equal(t, gen.ExecutorCommandPreviewResponsePromptDeliveryPositionalArgumentAfter, resp.PromptDelivery)
 	assert.Nil(t, resp.ModelDroppedReason)
 
 	require.NotEmpty(t, resp.Argv)

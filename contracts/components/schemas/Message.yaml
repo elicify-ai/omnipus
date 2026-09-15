@@ -94,10 +94,22 @@ properties:
   truncated:
     type: boolean
     description: >
-      Set to true on the last assistant entry when a turn is canceled mid-stream
-      (FR-14). Only present when true. The SPA renders an "(interrupted)" suffix
-      on the bubble when this is set.
+      Set to true on the last assistant entry when the entry is incomplete —
+      see `truncation_reason` for why. Only present when true.
     example: true
+  truncation_reason:
+    type: string
+    enum:
+      - cancelled
+      - max_output_tokens
+    description: >
+      Narrows why `truncated` is true: "cancelled" (the user canceled the
+      turn mid-stream) or "max_output_tokens" (the provider's output-token
+      limit cut the answer off before it finished). Absent on a
+      `truncated: true` entry means "cancelled" — every entry written
+      before this field existed predates it and was always a cancel
+      (ADR-087 D2).
+    example: "max_output_tokens"
   turn_id:
     type: string
     description: >
@@ -145,3 +157,27 @@ properties:
     example: "z-ai/glm-5.2"
   verdict:
     $ref: './JudgeVerdict.yaml'
+  system_subtype:
+    type: string
+    enum:
+      - browser_handover_notice
+      - goal_outcome
+    description: >
+      BROWSER-FR-043a (C-83) — a second, orthogonal axis on a
+      `type: system` entry, discriminating WHICH kind of system entry this
+      is without prefix-matching `content` (the `"Handoff:"` prefix match
+      this pattern deliberately avoids repeating). Do NOT add a value here
+      to the `type` enum above — the entry's `type` stays `system`; this
+      field only narrows it further. OPTIONAL and ADDITIVE: absent on
+      every system entry that predates this delivery and on every system
+      entry that is not one of the subtypes below. A closed enum so a
+      future subtype is a deliberate contract edit rather than a free-text
+      field silently widening. `pkg/gateway/replay.go` discriminates on
+      this stamped field (never on `content`) to emit the same frame type
+      on replay as was emitted live: `browser_handover_notice` →
+      `BrowserHandoverNoticeFrame` (BROWSER-FR-043a); `goal_outcome` →
+      `GoalOutcomeFrame` (the goal outcome line, founder decision
+      2026-09-14 — the entry also carries `goal_outcome`).
+    example: "browser_handover_notice"
+  goal_outcome:
+    $ref: './GoalOutcome.yaml'

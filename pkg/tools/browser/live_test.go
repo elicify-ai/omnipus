@@ -581,6 +581,88 @@ func TestLiveView_Detach_ImplicitReleaseBroadcastsToOtherViewers(t *testing.T) {
 	)
 }
 
+// TestReleaseStoodDown_BroadcastsTheFreedLockToOtherViewers is the guard for
+// the half of ADR-039 UAT BE-1 that ADR-085 Finding 7(b) silently dropped.
+//
+// The two tests above exercise releaseControl and detach, which both still
+// broadcast. Neither is reachable from a release any more: Finding 7(b)
+// repointed pkg/gateway/browser_ws.go::handleControl at ReleaseStoodDown
+// (correctly — releaseControl leaves the FR-026a latch standing), and
+// ReleaseStoodDown is now the ONLY production path that frees the lock short
+// of a disconnect. It notified the former holder and nobody else, so every
+// OTHER attached panel stayed on "Someone else is driving" with its own
+// Take-control affordance disabled — for as long as it stayed attached, over
+// a browser nobody was driving. The full round trip is covered at the gateway
+// by TestBrowserWS_Control_ControlledByOther_BroadcastsToSecondConnection,
+// but that test needs a real Chromium and therefore SKIPs on most machines;
+// this one is pure in-memory bookkeeping and always runs.
+func TestReleaseStoodDown_BroadcastsTheFreedLockToOtherViewers(t *testing.T) {
+	lv := &LiveView{
+		sessionID:    "s1",
+		viewers:      map[string]struct{}{"connA": {}, "connB": {}},
+		controlSinks: make(map[string]ControlSink),
+		releaseSinks: make(map[string]ReleaseNotifySink),
+	}
+	reg := &LiveViewRegistry{views: map[string]*LiveView{"s1": lv}}
+
+	gotA := make(chan bool, 4)
+	gotB := make(chan bool, 4)
+	lv.controlSinks["connA"] = func(controlledByOther bool) { gotA <- controlledByOther }
+	lv.controlSinks["connB"] = func(controlledByOther bool) { gotB <- controlledByOther }
+
+	notifiedA := make(chan struct{}, 4)
+	lv.releaseSinks["connA"] = func() { notifiedA <- struct{}{} }
+
+	require.True(t, lv.takeControl("connA"))
+	requireControlBroadcast(t, gotB, true, "conn B must first learn conn A took control")
+
+	formerHolder, cleared := reg.ReleaseStoodDown("s1")
+	require.Equal(t, "connA", formerHolder)
+	require.True(t, cleared)
+
+	requireControlBroadcast(t, gotB, false,
+		"conn B must be told the lock was freed — without this it stays wedged on 'someone else is driving'")
+
+	select {
+	case <-notifiedA:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the former holder must still get its FR-031b ReleaseNotifySink")
+	}
+	requireNoControlBroadcast(t, gotA,
+		"the former holder is served by its own `released` lifecycle frame, never a control_only broadcast "+
+			"(FR-031b: a control_only frame cannot clear the holder's own isControlling)")
+}
+
+// TestReleaseStoodDown_LatchOnlyStandDownDoesNotBroadcast pins the gate on the
+// fan-out above. `cleared` is also true for a latch-only (FR-026a) or
+// handover-only (FR-047) stand-down, but neither ever sets lv.controller, so
+// no viewer was ever sent controlled_by_other=true for them and there is
+// nothing to correct. Broadcasting anyway would be a status change the SPA
+// must not see.
+func TestReleaseStoodDown_LatchOnlyStandDownDoesNotBroadcast(t *testing.T) {
+	lv := &LiveView{
+		sessionID:    "s1",
+		viewers:      map[string]struct{}{"connB": {}},
+		controlSinks: make(map[string]ControlSink),
+		releaseSinks: make(map[string]ReleaseNotifySink),
+	}
+	reg := &LiveViewRegistry{views: map[string]*LiveView{"s1": lv}}
+
+	gotB := make(chan bool, 4)
+	lv.controlSinks["connB"] = func(controlledByOther bool) { gotB <- controlledByOther }
+
+	lv.mu.Lock()
+	lv.standDownUntilPrompt = true // a handover/latch stand-down: no interactive holder
+	lv.mu.Unlock()
+
+	formerHolder, cleared := reg.ReleaseStoodDown("s1")
+	require.Equal(t, "", formerHolder, "a latch-only stand-down has no interactive holder to report")
+	require.True(t, cleared, "the latch itself was still cleared")
+
+	requireNoControlBroadcast(t, gotB,
+		"nobody was ever told controlled_by_other=true for a latch-only stand-down, so nothing needs clearing")
+}
+
 // TestLiveView_Attach_ReturnsControlledByOtherForNewViewer covers the
 // "attaches while already controlled" half of ADR-039 UAT BE-1: a NEW
 // connection attaching to a session some other viewer already controls must
@@ -930,26 +1012,52 @@ func TestBrowserManager_Live(t *testing.T) {
 
 // --- controlledResult: ADR-038 D6 tool-side gate ---
 
+// TestControlledResult was widened, NOT relocated, by ADR-085 (BROWSER-FR-010
+// through FR-012a): controlledResult gained a leading ctx context.Context
+// parameter (FR-021's root-chat coverage) and a trailing *browserAudit
+// (FR-061's deferral audit), and a bare mgr.Live().ReleaseControl no longer
+// un-gates the tool on its own — the FR-026a stand-down latch is DELIBERATELY
+// designed to survive an ordinary release (Escape, closing the panel), so
+// only a genuine ADR-085 release (mgr.Live().ReleaseStoodDown, the FR-029
+// prompt-release/FR-031a idle-expiry primitive) clears it. This file is
+// outside wave B123's write-set; only this one function's call-site arity
+// and its now-incorrect "bare release un-gates" assumption were touched — see
+// B123's final report for why the fix could not be deferred to a later wave
+// without leaving `go vet ./pkg/tools/browser/` permanently red.
 func TestControlledResult(t *testing.T) {
 	cfg, err := DefaultConfig()
 	require.NoError(t, err)
 	mgr, err := NewBrowserManager(cfg, security.NewSSRFChecker(nil))
 	require.NoError(t, err)
+	ctx := context.Background()
 
-	require.Nil(t, controlledResult(mgr, testKey, testOwner, "browser_click"),
+	require.Nil(t, controlledResult(ctx, mgr, testKey, testOwner, "browser_click", nil),
 		"an uncontrolled session must not defer")
 
 	require.True(t, mgr.Live().TakeControl(testSessionID, "viewer1"))
 
-	result := controlledResult(mgr, testKey, testOwner, "browser_click")
+	result := controlledResult(ctx, mgr, testKey, testOwner, "browser_click", nil)
 	require.NotNil(t, result, "a controlled session must defer the interactive tool")
 	require.False(t, result.IsError, "deferral is not a tool failure")
 	require.Contains(t, result.ForLLM, "browser_click")
 	require.Contains(t, result.ForLLM, "human is currently controlling")
+	require.NotNil(t, result.Deferred, "BROWSER-FR-012a: a deferral must carry the structural discriminator")
+	require.Equal(t, "browser_control", result.Deferred.Gate)
 
+	// ADR-085 FR-026a: a bare release (Escape, closing the panel) does NOT
+	// un-gate the tool — the stand-down latch survives it deliberately, so
+	// the agent does not silently resume driving a page the operator walked
+	// away from.
 	mgr.Live().ReleaseControl(testSessionID, "viewer1")
-	require.Nil(t, controlledResult(mgr, testKey, testOwner, "browser_click"),
-		"releasing control must un-gate the tool again")
+	require.NotNil(t, controlledResult(ctx, mgr, testKey, testOwner, "browser_click", nil),
+		"ADR-085 FR-026a: a bare ReleaseControl must NOT un-gate the tool — only a genuine "+
+			"ADR-085 release (the operator's next prompt, or idle expiry) clears the stand-down latch")
+
+	// The genuine ADR-085 release DOES un-gate it.
+	_, cleared := mgr.Live().ReleaseStoodDown(testSessionID)
+	require.True(t, cleared, "ReleaseStoodDown must report that something was actually cleared")
+	require.Nil(t, controlledResult(ctx, mgr, testKey, testOwner, "browser_click", nil),
+		"ReleaseStoodDown must un-gate the tool again")
 }
 
 // ---------------------------------------------------------------------------

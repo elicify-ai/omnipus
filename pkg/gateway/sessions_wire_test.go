@@ -269,6 +269,75 @@ func TestGetSessionMessages_TurnCanceledEntry_PassesWireSchema(t *testing.T) {
 	assert.True(t, foundCancel, "seeded turn_canceled entry must round-trip")
 }
 
+// TestGetSessionMessages_TruncatedEntry_PassesWireSchema is the ADR-087 D2/§7.1
+// contract fixture: seeds a real assistant TranscriptEntry with Truncated=true
+// AND TruncationReason="max_output_tokens" set, so the Message.yaml
+// additionalProperties:false check actually exercises both new fields.
+// Before this fixture, no test in this file ever set Truncated at all — an
+// omitempty field with no populated fixture ships green without ever being
+// validated (the false-green pattern this file's own header describes).
+//
+// Traces to: contracts/components/schemas/Message.yaml (truncated,
+// truncation_reason) and pkg/session/daypartition.go's TranscriptEntry.
+func TestGetSessionMessages_TruncatedEntry_PassesWireSchema(t *testing.T) {
+	api, cleanup := newTestRestAPI(t)
+	defer cleanup()
+
+	sessionID := createTestSession(t, api)
+	store := api.agentLoop.GetSessionStore()
+	require.NotNil(t, store, "shared session store must be available")
+
+	truncatedEntry := session.TranscriptEntry{
+		ID:               "msg_truncated_001",
+		Role:             "assistant",
+		Content:          "Here is the first part of a long answer that got cut off",
+		Timestamp:        time.Date(2026, 9, 13, 4, 20, 0, 0, time.UTC),
+		AgentID:          "main",
+		TurnID:           "turn-T9",
+		Truncated:        true,
+		TruncationReason: "max_output_tokens",
+	}
+	require.NoError(t, store.AppendTranscript(sessionID, truncatedEntry),
+		"seeding a truncated assistant entry must succeed")
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/"+sessionID+"/messages", nil)
+	r.URL.Path = "/api/v1/sessions/" + sessionID + "/messages"
+	api.HandleSessions(w, r)
+	require.Equal(t, http.StatusOK, w.Code,
+		"GET /sessions/{id}/messages must return 200; got %d body=%s",
+		w.Code, w.Body.String())
+
+	var entries []map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
+		"response must be a JSON array of message objects")
+	require.NotEmpty(t, entries, "must have at least one entry seeded")
+
+	schema := loadMessageSchema(t)
+	for i, entry := range entries {
+		raw, err := json.Marshal(entry)
+		require.NoError(t, err)
+		validationErr := schema.Validate(any(entry))
+		assert.NoErrorf(t, validationErr,
+			"entry[%d] must validate against Message.yaml; raw=%s", i, string(raw))
+	}
+
+	// The exact assertion this fixture exists for: both new fields must
+	// round-trip onto the wire unchanged, not be stripped by omitempty or
+	// dropped by the handler's pass-through marshal.
+	foundTruncated := false
+	for _, entry := range entries {
+		if entry["id"] == "msg_truncated_001" {
+			foundTruncated = true
+			assert.Equal(t, true, entry["truncated"],
+				"truncated field must round-trip as true")
+			assert.Equal(t, "max_output_tokens", entry["truncation_reason"],
+				"truncation_reason field must round-trip")
+		}
+	}
+	assert.True(t, foundTruncated, "the seeded truncated entry must round-trip through the handler")
+}
+
 // TestGetSession_TranscriptWithCancelledTurn_PassesSessionDetailSchema covers
 // the envelope shape jsonSessionDetail emits — {session, messages,
 // agent_removed?}. The Session.partitions array regression we fixed earlier

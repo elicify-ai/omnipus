@@ -31,6 +31,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/plan"
 )
 
@@ -135,11 +136,10 @@ func TestHandleTaskPatch_InProgress_StoppedPlanMember_DoesNotLaunch(t *testing.T
 	// failed — mirroring drivePlanToFailed's own convention
 	// (rest_plan_task_restart_test.go, same package) and matching real
 	// production sequencing: a plan is never CREATED already-terminal, a
-	// member is attached first and the plan fails later. This also exercises
-	// validateTaskPlanID's post-4th-bypass-fix terminal-plan check correctly
-	// — attaching a NEW member to an ALREADY-terminal plan is now rejected
-	// (parity with pkg/tools/plan.go's validateTaskPlanLinkage), so the
-	// attach step itself must happen before the plan reaches State=failed.
+	// member is attached first and the plan fails later. Attaching a NEW
+	// member to a plan that has already left draft is rejected 400 by
+	// tools.ValidateTaskPlanMembership (pkg/tools/plan.go), so the attach
+	// step itself must happen before the plan reaches State=failed.
 	p := makeTestPlan(t, planStore, wsID, plan.StateDraft)
 	tsk := assignPlanMemberTask(t, api, "StoppedPlanMemberTask", wsID, p.ID)
 	drivePlanToFailed(t, api, p.ID, plan.FailedReasonStoppedByUser)
@@ -164,12 +164,18 @@ func TestHandleTaskPatch_InProgress_PausedRunningPlanMember_DoesNotLaunch(t *tes
 	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
-	p := makeTestPlan(t, planStore, wsID, plan.StateRunning)
+	// Attach the member while the plan is still DRAFT, then drive it to
+	// running+paused. Membership is frozen at approval
+	// (tools.ValidateTaskPlanMembership), so a PATCH plan_id at a running
+	// plan is refused 400 — this fixture has to follow the real production
+	// sequence (author the member, then run the plan), exactly like the
+	// stopped-plan case above.
+	p := makeTestPlan(t, planStore, wsID, plan.StateDraft)
+	tsk := assignPlanMemberTask(t, api, "PausedPlanMemberTask", wsID, p.ID)
+	drivePlanToRunning(t, api, p.ID)
 	pausedReason := "owner_disabled"
 	_, err := planStore.Update(p.ID, plan.Patch{PausedReason: &pausedReason})
 	require.NoError(t, err, "pause plan")
-
-	tsk := assignPlanMemberTask(t, api, "PausedPlanMemberTask", wsID, p.ID)
 
 	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
 	assert.Equal(t, 409, w.Code,
@@ -189,8 +195,24 @@ func TestHandleTaskPatch_InProgress_ApprovedPlanMember_StillLaunches(t *testing.
 	setWorkspaceCoreTeam(t, api, wsID, []string{"mia"})
 	planStore := wirePlanStore(t, api)
 
-	p := makeTestPlan(t, planStore, wsID, plan.StateApproved)
+	// Same fixture ordering as the paused case above: attach while DRAFT,
+	// then approve. Membership is frozen at approval, so attaching to an
+	// already-approved plan is refused 400.
+	p := makeTestPlan(t, planStore, wsID, plan.StateDraft)
 	tsk := assignPlanMemberTask(t, api, "ApprovedPlanMemberTask", wsID, p.ID)
+	approved := plan.StateApproved
+	_, err := planStore.Update(p.ID, plan.Patch{State: &approved})
+	require.NoError(t, err, "approve plan")
+
+	// This harness's mock worker never claims, so its run spends goal tries
+	// and task attempts (founder decision 2026-09-14). One of each lets the
+	// launched run end Failed quickly, so the teardown guard below does not
+	// wait out the default 20 tries x 3 attempts.
+	require.NoError(t, api.agentLoop.MutateConfig(func(cfg *config.Config) error {
+		cfg.Planning.GoalMaxRounds = 1
+		cfg.Planning.TaskMaxAttempts = 1
+		return nil
+	}))
 
 	w := patchTask(t, api, tsk.Id, `{"status":"in_progress"}`)
 	require.Equal(t, 200, w.Code,

@@ -10,6 +10,7 @@ package common
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/net/http2"
@@ -40,6 +43,155 @@ type (
 )
 
 const DefaultRequestTimeout = 120 * time.Second
+
+// DefaultStreamStallTimeout is how long a STREAMING provider call may receive
+// no bytes of any kind — no content, no tool-call delta, no reasoning, no
+// provider keep-alive — before it is aborted as a provider stall (founder
+// decision 2026-09-14, UAT E-15c). Deliberately NOT a wall-clock limit: a call
+// that keeps streaming, however slowly, is never cut. Configurable per model
+// row via `model_list[].stream_stall_timeout` (seconds).
+const DefaultStreamStallTimeout = 5 * time.Minute
+
+// ErrStreamStalled is the sentinel for a streaming call the stall monitor
+// ended because nothing at all arrived for the configured silence limit. It
+// flows through the normal provider-error classification as a retryable,
+// provider-attributed fault (network-class), never as a turn timeout.
+var ErrStreamStalled = errors.New("provider stream stalled: no data received for the silence limit")
+
+// StallError carries the sentinel together with how long the stream had been
+// silent when the monitor fired, so the operator-facing message can state the
+// real number. Implements error; match with errors.Is(err, ErrStreamStalled).
+type StallError struct {
+	// SilentFor is the configured silence limit that fired.
+	SilentFor time.Duration
+	// FirstByteAt is when the stream last delivered data before going silent
+	// (zero when it never delivered anything).
+	LastData time.Time
+}
+
+// Error implements error. The wording is operator-facing and deliberately
+// plain: "the model provider stopped responding for 5m0s".
+func (e *StallError) Error() string {
+	return fmt.Sprintf("%s (%s)", ErrStreamStalled.Error(), e.SilentFor)
+}
+
+// Unwrap makes errors.Is(err, ErrStreamStalled) work through every wrap.
+func (e *StallError) Unwrap() error { return ErrStreamStalled }
+
+// NewStallError builds the typed stall error stamped with the limit that fired.
+func NewStallError(silentFor time.Duration) *StallError {
+	return &StallError{SilentFor: silentFor}
+}
+
+// IsBodyClosedStreamError reports whether an error returned by a streaming
+// body read is the shape "the read was aborted by closing the body/connection
+// under it" — which is what our own context watchdog or stall monitor
+// produces, on both HTTP/1.1 and HTTP/2. A REMOTE close does not look like
+// this (it surfaces as io.EOF or "connection reset by peer"), so when the
+// caller's context is still alive a match here means WE closed it — i.e. the
+// stall monitor fired.
+func IsBodyClosedStreamError(err error) bool {
+	if err == nil {
+		return false
+	}
+	lower := strings.ToLower(err.Error())
+	return strings.Contains(lower, "response body closed") ||
+		strings.Contains(lower, "read on closed response body") ||
+		strings.Contains(lower, "use of closed network connection")
+}
+
+// StreamStallWatch is one provider call's silence monitor, as returned by
+// WatchStreamStall. Arm (re)starts the silence clock and must be invoked by
+// the consumer whenever it observes activity — a parsed SSE event, a raw byte
+// read, whatever it already consumes; Stop disarms the monitor and must be
+// called on every exit path; Fired reports whether the monitor itself aborted
+// the call, which is how the reader distinguishes ITS OWN abort from a
+// genuine server-side drop (both surface as a body-closed read error).
+type StreamStallWatch struct {
+	arm       func()
+	stop      func()
+	fired     func() bool
+	silentFor time.Duration
+}
+
+// Arm (re)starts the silence clock. Cheap; called per consumed event.
+func (w *StreamStallWatch) Arm() {
+	if w != nil && w.arm != nil {
+		w.arm()
+	}
+}
+
+// Stop disarms the monitor and releases its goroutine. Idempotent.
+func (w *StreamStallWatch) Stop() {
+	if w != nil && w.stop != nil {
+		w.stop()
+	}
+}
+
+// Fired reports whether this monitor aborted the call (true from just before
+// it closes the body onward). A nil watch never fired.
+func (w *StreamStallWatch) Fired() bool {
+	return w != nil && w.fired != nil && w.fired()
+}
+
+// SilentFor is the configured silence limit.
+func (w *StreamStallWatch) SilentFor() time.Duration {
+	if w == nil {
+		return 0
+	}
+	return w.silentFor
+}
+
+// WatchStreamStall arms the streaming stall monitor for one provider call: a
+// goroutine that invokes closeBody if Arm has not been invoked for silentFor,
+// unblocked early by the returned watch's Stop (call it on every exit path —
+// normal end of stream, error, and caller cancellation).
+//
+// It fires ONLY on total silence. The monitor does not read or parse
+// anything: the CALLER re-arms the clock whenever it observes activity. That
+// split keeps the monitor byte-agnostic: SSE comments, provider keep-alive
+// pings, and every delta shape reset it equally.
+//
+// Concurrency: closeBody must be safe to call concurrently with the blocked
+// read it is meant to unblock (net/http response bodies and the Anthropic SDK
+// stream both document/exhibit this — Close unblocks a pending Read).
+func WatchStreamStall(ctx context.Context, closeBody func(), silentFor time.Duration) *StreamStallWatch {
+	if closeBody == nil || silentFor <= 0 {
+		return &StreamStallWatch{}
+	}
+	timer := time.NewTimer(silentFor)
+	done := make(chan struct{})
+	var fired atomic.Bool
+	go func() {
+		select {
+		case <-ctx.Done():
+		case <-timer.C:
+			logger.WarnCF("providers", "stream stall monitor fired: no data for the silence limit; aborting provider call",
+				map[string]any{"silent_for": silentFor.String()})
+			fired.Store(true)
+			closeBody()
+		case <-done:
+		}
+	}()
+	var once sync.Once
+	return &StreamStallWatch{
+		arm: func() {
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(silentFor)
+		},
+		stop: func() {
+			timer.Stop()
+			once.Do(func() { close(done) })
+		},
+		fired:     fired.Load,
+		silentFor: silentFor,
+	}
+}
 
 // NewHTTPClient creates an *http.Client with an optional proxy and the default timeout.
 // Returns an error if proxy is non-empty and cannot be parsed as a URL.
@@ -298,7 +450,17 @@ func ParseResponse(body io.Reader) (*LLMResponse, error) {
 
 		if tc.Function != nil {
 			name = tc.Function.Name
-			arguments = DecodeToolCallArguments(tc.Function.Arguments, name)
+			decodedArgs, err := DecodeToolCallArguments(tc.Function.Arguments, name)
+			if err != nil {
+				// The refused attempt's finish reason and billed usage are
+				// both already in hand at this scope (choice.FinishReason,
+				// apiResponse.Usage) — attach them so the caller's
+				// classifier (and cost accounting) sees real evidence
+				// instead of having to guess from the fragment alone
+				// (ADR-087 D3.9 / D5).
+				return nil, AttachToolArgumentsEvidence(err, choice.FinishReason, apiResponse.Usage.ToUsageInfo())
+			}
+			arguments = decodedArgs
 		}
 
 		toolCall := ToolCall{
@@ -339,50 +501,325 @@ func normalizeFinishReason(reason string) string {
 	return reason
 }
 
-// DecodeToolCallArguments decodes a tool call's arguments from raw JSON.
-func DecodeToolCallArguments(raw json.RawMessage, name string) map[string]any {
+// ErrToolArgumentsUndecodable reports a tool call whose `arguments` payload
+// was PRESENT but could not be decoded into a JSON object.
+//
+// This is a hard error — never a degraded dispatch — and the reason is
+// truncation. When a generation hits the output-token cap partway through a
+// tool call, what reaches us is a fragment: `{"query`, or in the shape
+// llama.cpp is known to emit, a bare `{`. Those are not "weird arguments",
+// they are the visible end of a response that was cut off, and the only
+// honest reading is that the model never finished saying what it wanted done.
+//
+// Why we don't rely on finish_reason alone (ADR-087 D7): on the primary
+// transports this project talks to — OpenAI-compatible endpoints
+// (common.ParseResponse and openai_compat's streaming parser), the native
+// Anthropic Messages API (anthropic/provider.go's parseResponse), the
+// OpenAI Responses API (openai_responses_common's parseResponse), and
+// Bedrock Converse (bedrock/provider_bedrock.go's parseResponse) —
+// finish_reason (respectively stop_reason) IS reliable, and every one of
+// those five decode sites calls AttachToolArgumentsEvidence (or, for
+// Bedrock's non-common.DecodeToolCallArguments path, constructs a
+// *ToolArgumentsError directly) so it is wired up as real truncation
+// evidence rather than ignored (see ToolArgumentsError.Truncated below).
+// But a minority of OpenAI-compatible servers get the field wrong
+// specifically on the tool-call path: vLLM's streaming handler has marked
+// a choice as having produced tool calls the moment any delta carries one, with no check that
+// the call is complete, reporting "tool_calls" in place of the engine's
+// real "length" (vllm#47903, open; the proposed fix vllm#47963 has sat
+// unreviewed, and the merged non-streaming fix is gated behind a flag the
+// Hermes path does not set). Parsing the arguments is cheap, local
+// insurance against that minority — it costs nothing when finish_reason is
+// right, and it is what catches the fragment when finish_reason is wrong.
+//
+// What went wrong before this was an error: every decode site substituted a
+// stand-in — a `raw` key holding the fragment, or an empty map — and
+// dispatched the tool anyway. The tool then failed downstream on schema
+// validation with "missing required property path" or "unexpected property
+// raw", which is a true statement about the map and a false statement about
+// the cause. The model, told it forgot a parameter, re-sends the same
+// oversized call and is truncated again. Surfacing truncation as truncation
+// is what breaks that loop.
+//
+// Refusing the whole response rather than dropping the one bad call is
+// deliberate. A response cut off mid-call is incomplete as a whole, so the
+// tool calls that did parse are a partial view of a plan the model never
+// finished expressing; running them commits side effects for a decision that
+// was never fully stated. It also keeps the fragment out of session history —
+// an undecodable call appended to the transcript is re-sent on every
+// subsequent request, which is how one truncated call permanently wedges a
+// conversation (llama.cpp#21771, open).
+// The message opens with "invalid tool arguments" deliberately: that exact
+// phrase is the pinned substring pkg/agent's translate_error.go matches to
+// label an error CodeToolArgs (ADR-051 Rev 4 FR-018). Without it the turn
+// still fails loudly but the user is shown the generic CodeUnknown copy
+// instead of the tool-argument copy that actually describes what happened.
+// Wording note: this text must never contain the phrase "token limit" — the
+// classifier's contextOverflowPatterns match it and would re-label a
+// truncated call as a context-window overflow, which is a different fault
+// with different advice. Say "output cap" instead.
+var ErrToolArgumentsUndecodable = errors.New("invalid tool arguments: payload is not decodable JSON")
+
+// maxUndecodableArgumentsQuoted bounds how many bytes of an offending payload
+// an error quotes. The fragment is the diagnostic — it is what tells an
+// operator "this was cut off" rather than "this was malformed" — but a
+// hostile or runaway payload must not flood a log line.
+const maxUndecodableArgumentsQuoted = 256
+
+// DecodeToolCallArguments decodes one tool call's `arguments` payload into the
+// map the dispatcher hands the tool.
+//
+// This is the ONLY tool-argument decoder in the codebase. Every provider —
+// openai_compat (streaming and non-streaming), anthropic, the OpenAI
+// Responses API, bedrock, and the CLI-provider text extractor — routes
+// through it, because the alternative is what was here before: eight decode
+// sites that had drifted into five different policies for the same fragment
+// (`{"raw": …}`, `{"_raw": …}` under a different key, an empty map, with and
+// without a log). Add a new provider by calling this, not by writing a sixth.
+//
+// An ABSENT payload is not an error. Empty, whitespace, and explicit `null`
+// all decode to an empty map with a nil error, because a zero-parameter tool
+// legitimately sends nothing at all — `list_mounts`, `browser_snapshot` and
+// the sysagent's parameterless tools all do. Only a payload that is present
+// and undecodable returns ErrToolArgumentsUndecodable; conflating the two is
+// the defect this function exists to avoid.
+func DecodeToolCallArguments(raw json.RawMessage, name string) (map[string]any, error) {
 	arguments := make(map[string]any)
 	raw = bytes.TrimSpace(raw)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
-		return arguments
+		return arguments, nil
 	}
 
 	var decoded any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
-		logger.WarnCF(
-			"common",
-			"failed to decode tool call arguments payload",
-			map[string]any{"tool": name, "error": err.Error()},
-		)
-		arguments["raw"] = string(raw)
-		return arguments
+		return nil, undecodableArgumentsError(name, string(raw), err)
 	}
 
 	switch v := decoded.(type) {
 	case string:
+		// The OpenAI wire format specifies `arguments` as a JSON-ENCODED
+		// STRING, so a conforming payload decodes once to a string that must
+		// itself be decoded. A truncated call typically fails on this second
+		// pass, not the first.
 		if strings.TrimSpace(v) == "" {
-			return arguments
+			return arguments, nil
 		}
 		if err := json.Unmarshal([]byte(v), &arguments); err != nil {
-			logger.WarnCF(
-				"common",
-				"failed to decode tool call arguments",
-				map[string]any{"tool": name, "error": err.Error()},
-			)
-			arguments["raw"] = v
+			return nil, undecodableArgumentsError(name, v, err)
 		}
-		return arguments
+		return arguments, nil
 	case map[string]any:
-		return v
+		return v, nil
 	default:
-		logger.WarnCF(
-			"common",
-			"unsupported tool call arguments type",
-			map[string]any{"tool": name, "type": fmt.Sprintf("%T", decoded)},
-		)
-		arguments["raw"] = string(raw)
-		return arguments
+		// Valid JSON, wrong shape: a bare number, array or boolean where an
+		// object belongs. Not dispatchable as named parameters, so it fails
+		// exactly like a fragment does. This shape is NEVER truncation —
+		// json.Unmarshal above already succeeded, so there is no prefix to
+		// have been cut off; only finish-reason evidence attached later
+		// (AttachToolArgumentsEvidence) can mark it Truncated (ADR-087 D5).
+		return nil, NewToolArgumentsError(name, fmt.Errorf(
+			"%w: tool %q: arguments decoded to %T, want a JSON object: %s",
+			ErrToolArgumentsUndecodable, name, decoded, quoteUndecodableArguments(string(raw)),
+		), false)
 	}
+}
+
+// undecodableArgumentsError builds the error for a payload that would not
+// parse, quoting the fragment so the truncation is visible in the message.
+func undecodableArgumentsError(name, payload string, cause error) error {
+	// Both the sentinel and the underlying JSON cause are wrapped with %w, so
+	// errors.Is matches ErrToolArgumentsUndecodable AND a caller that cares
+	// can still reach the *json.SyntaxError underneath.
+	return NewToolArgumentsError(name, fmt.Errorf(
+		"%w: tool %q: %w: %s",
+		ErrToolArgumentsUndecodable, name, cause, quoteUndecodableArguments(payload),
+	), isEOFShapedToolArgumentsFragment(payload))
+}
+
+// ToolArgumentsError reports a tool call whose `arguments` payload was
+// refused by DecodeToolCallArguments, distinguishing genuine truncation
+// (the response was cut off before the call finished) from a well-formed
+// payload of the wrong shape (ADR-087 D5) — ErrToolArgumentsUndecodable
+// alone does not prove truncation, since it also fires for valid JSON like
+// `42`, `true`, or `[1,2,3]` (TestDecodeToolCallArguments_NonObjectRefused).
+//
+// This is the fixed D→C interface WP D ships for pkg/agent's
+// TranslateTurnError to classify on (ADR-087 §9): Cause wraps
+// ErrToolArgumentsUndecodable, Truncated gates CodeToolCallTruncated vs
+// CodeToolArgs. Shape is not negotiable — see the ADR.
+type ToolArgumentsError struct {
+	// Cause wraps ErrToolArgumentsUndecodable (and, for a decode failure,
+	// the underlying JSON error) — see undecodableArgumentsError and the
+	// non-object branch of DecodeToolCallArguments.
+	Cause error
+	// ToolName is the tool the undecodable arguments belonged to.
+	ToolName string
+	// FinishReason is the finish/stop reason as received from the provider
+	// for the refused attempt, unnormalized, "" if unknown. Populated by
+	// AttachToolArgumentsEvidence — DecodeToolCallArguments itself has no
+	// visibility into it.
+	FinishReason string
+	// Truncated is true only when the evidence supports truncation: the
+	// finish reason is length/max_tokens/truncated, OR the refused fragment
+	// is the unclosed prefix of a JSON object. NEVER true for well-formed
+	// JSON of the wrong shape absent finish-reason evidence.
+	Truncated bool
+	// Usage is the refused attempt's billed usage, when the provider
+	// returned one. The provider already charged for these tokens even
+	// though the call was refused; the caller debits them once.
+	Usage *UsageInfo
+}
+
+// Error implements error. It returns Cause's text unchanged — this is the
+// same message DecodeToolCallArguments callers saw before this type
+// existed (tool name + quoted fragment), so no classifier substring match
+// anywhere in the codebase shifts as a side effect of this type's
+// introduction.
+func (e *ToolArgumentsError) Error() string {
+	if e == nil {
+		return "<nil ToolArgumentsError>"
+	}
+	if e.Cause != nil {
+		return e.Cause.Error()
+	}
+	return ErrToolArgumentsUndecodable.Error()
+}
+
+// Unwrap exposes Cause to errors.Is / errors.As chain walks, so
+// errors.Is(err, ErrToolArgumentsUndecodable) keeps working exactly as it
+// did when DecodeToolCallArguments returned a bare wrapped error.
+func (e *ToolArgumentsError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+// As implements the errors.As extension point (see the standard library's
+// errors.As documentation) so a *ToolArgumentsError still satisfies every
+// existing consumer that walks an error chain looking for a *ProviderError
+// — pkg/agent's errorToProviderError chief among them. Status reads 0 (no
+// HTTP request failed: the upstream returned a healthy response whose
+// content was cut off) and Body carries the pinned "invalid tool arguments"
+// substring, exactly the shape NewToolArgumentsError produced before this
+// type existed — TestToolArgumentsErrorClassifiesAsToolArgs pins both.
+// This keeps that whole classification path working without this type
+// embedding a *ProviderError instance, which would have given it two
+// independent "what actually happened" stories to keep in sync.
+func (e *ToolArgumentsError) As(target any) bool {
+	if e == nil {
+		return false
+	}
+	if pp, ok := target.(**ProviderError); ok {
+		*pp = &ProviderError{
+			Status: 0,
+			Body:   e.Error(),
+			Err:    e,
+		}
+		return true
+	}
+	return false
+}
+
+// NewToolArgumentsError builds the typed refusal DecodeToolCallArguments (and
+// ParseResponse's non-object branch) returns for an undecodable `arguments`
+// payload. truncated must be the caller's best local judgement from the
+// fragment shape alone — AttachToolArgumentsEvidence layers finish-reason
+// evidence on afterward, once the caller has it.
+func NewToolArgumentsError(name string, cause error, truncated bool) *ToolArgumentsError {
+	return &ToolArgumentsError{
+		Cause:     cause,
+		ToolName:  name,
+		Truncated: truncated,
+	}
+}
+
+// isEOFShapedToolArgumentsFragment reports whether payload looks like an
+// object literal whose closing brace never arrived — the shape a
+// generation leaves behind when it is cut off mid tool-call (`{"query`,
+// the bare `{` llama.cpp shape, `{"path":"a.txt","content":"hello`), as
+// opposed to well-formed JSON of the wrong type. Only ever called on a
+// payload that already failed json.Unmarshal (undecodableArgumentsError's
+// caller), so "never closes" — an unterminated string or an unbalanced
+// brace count — is the only thing left to establish (ADR-087 D5).
+func isEOFShapedToolArgumentsFragment(payload string) bool {
+	trimmed := strings.TrimSpace(payload)
+	if !strings.HasPrefix(trimmed, "{") {
+		return false
+	}
+	depth := 0
+	inString := false
+	escaped := false
+	for _, r := range trimmed {
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case r == '\\':
+				escaped = true
+			case r == '"':
+				inString = false
+			}
+			continue
+		}
+		switch r {
+		case '"':
+			inString = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+		}
+	}
+	return inString || depth > 0
+}
+
+// isTruncationFinishReason reports whether reason (raw, as received from
+// the provider — "length", "max_tokens", or the post-normalizeFinishReason
+// spelling "truncated") is evidence the generation was cut off at the
+// output-token cap. Matching is case-insensitive; every other value
+// (including "" / unknown) is not truncation evidence by itself.
+func isTruncationFinishReason(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "length", "max_tokens", "truncated":
+		return true
+	}
+	return false
+}
+
+// AttachToolArgumentsEvidence enriches any *ToolArgumentsError reachable in
+// err's chain with the finish reason and billed usage of the refused
+// attempt, and folds finish-reason evidence into Truncated (ADR-087 D5: the
+// finish reason wins even over a well-formed-shaped fragment — it is never
+// used to downgrade an already-true Truncated). Returns err unchanged
+// (including nil, and including an err with no *ToolArgumentsError in its
+// chain) so callers can call this unconditionally on every decode-failure
+// return without a type check first.
+func AttachToolArgumentsEvidence(err error, finishReason string, usage *UsageInfo) error {
+	var tae *ToolArgumentsError
+	if !errors.As(err, &tae) {
+		return err
+	}
+	tae.FinishReason = finishReason
+	tae.Usage = usage
+	if isTruncationFinishReason(finishReason) {
+		tae.Truncated = true
+	}
+	return err
+}
+
+// quoteUndecodableArguments renders a payload for an error message, capped at
+// maxUndecodableArgumentsQuoted bytes and reporting the true length when it
+// had to cut. Quoting via %q escapes the partial UTF-8 sequence a byte-offset
+// cut can leave behind, so the result is always printable.
+func quoteUndecodableArguments(payload string) string {
+	if len(payload) > maxUndecodableArgumentsQuoted {
+		return fmt.Sprintf(
+			"%q…[%d bytes total]",
+			payload[:maxUndecodableArgumentsQuoted], len(payload),
+		)
+	}
+	return fmt.Sprintf("%q", payload)
 }
 
 // --- HTTP response helpers ---

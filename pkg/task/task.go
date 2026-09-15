@@ -259,9 +259,20 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// own ephemeral tracking cards from real create_task tasks even when they share
 	// the same Title, preventing the hijack bug where set_todos overwrites a real
 	// user task's checklist.
-	Scratchpad bool   `json:"scratchpad,omitempty"`
-	Action     Action `json:"action"`
-	Status     Status `json:"status"`
+	Scratchpad bool `json:"scratchpad,omitempty"`
+	// OriginSessionID is the transcript session the set_todos call that created
+	// this scratchpad card ran in. The facade's lookup, archival and the agent
+	// loop's scratchpad note all scope to it, so one agent's concurrent sessions
+	// never share, overwrite or archive each other's checklists (UAT B-1 runs 3
+	// and 5: buildScratchpadNote(agentID) used to inject the agent's most recent
+	// open checklist from ANY session, which the model treated as conversation
+	// context). DISK-ONLY, mirroring Scratchpad: the REST mapper (toWireTask)
+	// does NOT copy it to the wire type, and it MUST NOT be added to any schema
+	// in contracts/. Empty on every card created before this field existed —
+	// a session-scoped caller simply does not match those legacy cards.
+	OriginSessionID string `json:"origin_session_id,omitempty"`
+	Action          Action `json:"action"`
+	Status          Status `json:"status"`
 	// CancelReason is set on a Status=failed task cancelled via a user Stop
 	// (ADR-052 FR-028); empty for a genuine failure (e.g. attempt-limit
 	// exhaustion) and for every non-failed status. Cleared on restart/re-run.
@@ -312,8 +323,40 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// predecessors) whose IsJoin is false, or true but with zero Criteria.
 	IsJoin bool `json:"is_join,omitempty"`
 	// Criteria are the task's acceptance criteria / Definition of Done
-	// (ADR-049 D2/D5, FR-3). Agent-created tasks require at least one (enforced
-	// at the tool layer); human/UI creation may leave this empty (SD-A7).
+	// (ADR-049 D2/D5, FR-3). Agent-created and REST-created tasks require at
+	// least one (enforced at the tool/gateway layer, GOAL-FR-021/D-C); a
+	// legacy task created before that rule may carry none (GOAL-FR-023).
+	//
+	// ADR-086 D5/GOAL-FR-029: going forward, a task's Definition of Done is
+	// AUTHORED onto its own paired goal record (pkg/goal, keyed by
+	// OwnerKind=task/OwnerID=this task's ID via goal.Store.GetByOwner) — the
+	// goal record is now the intended authoritative store, and the SEPARATE,
+	// new `dod` list (GOAL-FR-048) lives there EXCLUSIVELY; there is no
+	// Task.Dod field. This Criteria field, however, is DELIBERATELY KEPT as
+	// a real, disk-persisted, dual-written field rather than removed
+	// (contrary to FR-029's literal "become a reference" text) — see the
+	// wave E5 report for the two independent, load-bearing reasons:
+	//
+	//  1. pkg/goal imports pkg/task (for this very AcceptanceCriterion type),
+	//     so pkg/task cannot import pkg/goal back — a true in-memory
+	//     "hydrate Criteria from the goal record on every Store.Get/List"
+	//     reference is a Go import-cycle impossibility, not a design choice.
+	//     The reference therefore has to live ABOVE this package, at the
+	//     tool/REST callers that already hold both stores.
+	//  2. Three real consumers still read this field directly as a plain Go
+	//     struct access — pkg/agent/task_executor.go, pkg/agent/plan_engine.go
+	//     (both scheduled for repointing by a LATER wave, E12/E14, not this
+	//     round) and pkg/tools/plan.go's execute_plan handler (asserted
+	//     nowhere in any wave's write-set — an apparent gap in the delivery
+	//     plan). Deleting this field in this round would not compile those
+	//     three files, breaking the tree for every wave running after this
+	//     one — "a wave must leave the tree green" (standing rule 15)
+	//     forbids that outright.
+	//
+	// The tool/REST create and update paths in this wave's write-set write
+	// this field AND the paired goal record's Criteria in the same call
+	// (dual-write) so both stay consistent until a future wave can finish
+	// the removal FR-029 describes.
 	Criteria []AcceptanceCriterion `json:"criteria,omitempty"`
 	// AttemptCount is the current run's attempt index within its goal loop
 	// (ADR-049 D7/R4/C17). Read-only, server-set by the runtime engine — never
@@ -387,7 +430,7 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// Task.CreatedByAgent, which rejects an empty value on BOTH sides rather
 	// than treating "" as a wildcard.
 	//
-	// DISK-ONLY, mirroring Scratchpad / DelegationDepth / PendingJudgeClaim:
+	// DISK-ONLY, mirroring Scratchpad / DelegationDepth:
 	// the REST mapper (toWireTask) does NOT copy it to the wire type, and it
 	// MUST NOT be added to any schema in contracts/.
 	CreatedByAgentID string `json:"created_by_agent_id,omitempty"`
@@ -410,17 +453,6 @@ type Task struct { //nolint:revive // exported name matches package purpose
 	// it is NOT part of the gen.Task wire contract and never crosses the
 	// gateway/SPA boundary (the REST task mapper does not copy it).
 	DelegationDepth int `json:"delegation_depth,omitempty"`
-	// PendingJudgeClaim holds a worker's explicit update_task(status:"done")
-	// completion summary when the task HAS acceptance criteria (ADR-049
-	// C1/SD-B2, review r1): the tool layer (pkg/tools/task.go) does NOT write
-	// a terminal `done` status for that case — it stages the claim here
-	// instead, and pkg/agent/task_executor.go's finishTaskRun adjudicates it
-	// through the SAME evidence-ladder judge path (adjudicateClaim) a
-	// TASK_STATUS completion marker uses, closing the self-certification
-	// bypass where an explicit tool call skipped the judge entirely. Cleared
-	// once adjudicated. DISK-ONLY (mirrors Scratchpad/DelegationDepth): the
-	// REST mapper (toWireTask) does NOT copy it to the wire type.
-	PendingJudgeClaim string `json:"pending_judge_claim,omitempty"`
 }
 
 // CreatedByAgent reports whether this task was created by the agent agentID.

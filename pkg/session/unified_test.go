@@ -340,7 +340,7 @@ func TestMarkLastEntryTruncated_FlagsLastAssistantEntry(t *testing.T) {
 	require.NoError(t, store.AppendTranscript(sessionID, entry))
 
 	// Call MarkLastEntryTruncated with the turn ID.
-	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "turn-001"))
+	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "turn-001", "cancelled"))
 
 	// Read back and assert Truncated==true and other fields preserved.
 	entries, err := store.ReadTranscript(sessionID)
@@ -382,7 +382,7 @@ func TestMarkLastEntryTruncated_TrailingNewlineSurvivesSubsequentAppend(t *testi
 		TurnID:  "turn-001",
 	}))
 
-	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "turn-001"))
+	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "turn-001", "cancelled"))
 
 	transcriptPath := filepath.Join(store.baseDir, sessionID, "transcript.jsonl")
 	raw, err := os.ReadFile(transcriptPath)
@@ -437,7 +437,7 @@ func TestMarkLastEntryTruncated_NoAssistantEntryIsNoOp(t *testing.T) {
 	require.NoError(t, store.AppendTranscript(sessionID, userEntry))
 
 	// MarkLastEntryTruncated must return nil.
-	require.NoError(t, store.MarkLastEntryTruncated(sessionID, ""))
+	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "", "cancelled"))
 
 	// Entries must be unchanged.
 	entries, err := store.ReadTranscript(sessionID)
@@ -448,7 +448,7 @@ func TestMarkLastEntryTruncated_NoAssistantEntryIsNoOp(t *testing.T) {
 	// Also verify the empty-transcript case (fresh session with no appended entries).
 	metaEmpty, err := store.NewSession(SessionTypeChat, "", "test-agent")
 	require.NoError(t, err)
-	require.NoError(t, store.MarkLastEntryTruncated(metaEmpty.ID, ""),
+	require.NoError(t, store.MarkLastEntryTruncated(metaEmpty.ID, "", "cancelled"),
 		"MarkLastEntryTruncated on empty transcript must be a no-op")
 }
 
@@ -489,7 +489,7 @@ func TestMarkLastEntryTruncated_DoesNotTouchContextStore(t *testing.T) {
 	require.NoError(t, readErr, "context.jsonl must exist after AddMessage")
 
 	// Call MarkLastEntryTruncated (empty turnID = backward-compat path).
-	require.NoError(t, store.MarkLastEntryTruncated(sessionID, ""))
+	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "", "cancelled"))
 
 	// Assert transcript.jsonl has Truncated==true on the assistant entry.
 	entries, err := store.ReadTranscript(sessionID)
@@ -540,7 +540,7 @@ func TestMarkLastEntryTruncated_DoesNotMutatePreviousTurnEntry(t *testing.T) {
 	}))
 
 	// Cancel arrives for T1 only (e.g., a delayed cancel for a previous turn).
-	require.NoError(t, store.MarkLastEntryTruncated(sid, "T1"))
+	require.NoError(t, store.MarkLastEntryTruncated(sid, "T1", "cancelled"))
 
 	entries, err := store.ReadTranscript(sid)
 	require.NoError(t, err)
@@ -560,6 +560,90 @@ func TestMarkLastEntryTruncated_DoesNotMutatePreviousTurnEntry(t *testing.T) {
 	require.NotNil(t, t2, "T2 entry must exist")
 	assert.True(t, t1.Truncated, "T1 entry must be marked truncated")
 	assert.False(t, t2.Truncated, "T2 entry must NOT be marked truncated by a T1 cancel")
+}
+
+// TestMarkLastEntryTruncated_PersistsReason verifies ADR-087 D2: the reason
+// argument is written to disk as truncation_reason on the rewritten entry.
+//
+// BDD: Given an assistant entry for turn "turn-001",
+// When MarkLastEntryTruncated(sessionID, "turn-001", "max_output_tokens") is called,
+// Then the rewritten JSONL line contains "truncation_reason":"max_output_tokens"
+// AND ReadTranscript's TruncationReason field reflects the same value.
+//
+// Traces to: pkg/session/unified.go MarkLastEntryTruncated (ADR-087 D2)
+func TestMarkLastEntryTruncated_PersistsReason(t *testing.T) {
+	store := newTestStore(t)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
+		ID:      "entry-001",
+		Type:    EntryTypeMessage,
+		Role:    "assistant",
+		Content: "Truncated by the output cap",
+		AgentID: "test-agent",
+		TurnID:  "turn-001",
+	}))
+
+	require.NoError(t, store.MarkLastEntryTruncated(sessionID, "turn-001", "max_output_tokens"))
+
+	transcriptPath := filepath.Join(store.baseDir, sessionID, "transcript.jsonl")
+	raw, err := os.ReadFile(transcriptPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"truncation_reason":"max_output_tokens"`,
+		"rewritten JSONL line must carry the persisted reason")
+
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.True(t, entries[0].Truncated)
+	assert.Equal(t, "max_output_tokens", entries[0].TruncationReason)
+}
+
+// TestMarkLastEntryTruncated_RejectsUnknownReason verifies MarkLastEntryTruncated
+// fails loud on a reason outside the ADR-087 D2 enum, and never writes it —
+// the on-disk entry is left byte-identical to before the rejected call.
+//
+// BDD: Given an assistant entry for turn "turn-001",
+// When MarkLastEntryTruncated(sessionID, "turn-001", "bogus") is called,
+// Then an error is returned AND the transcript file is unchanged.
+//
+// Traces to: pkg/session/unified.go MarkLastEntryTruncated (ADR-087 D2)
+func TestMarkLastEntryTruncated_RejectsUnknownReason(t *testing.T) {
+	store := newTestStore(t)
+
+	meta, err := store.NewSession(SessionTypeChat, "", "test-agent")
+	require.NoError(t, err)
+	sessionID := meta.ID
+
+	require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{
+		ID:      "entry-001",
+		Type:    EntryTypeMessage,
+		Role:    "assistant",
+		Content: "Untouched content",
+		AgentID: "test-agent",
+		TurnID:  "turn-001",
+	}))
+
+	transcriptPath := filepath.Join(store.baseDir, sessionID, "transcript.jsonl")
+	before, err := os.ReadFile(transcriptPath)
+	require.NoError(t, err)
+
+	err = store.MarkLastEntryTruncated(sessionID, "turn-001", "bogus")
+	require.Error(t, err, "an unrecognized reason must be rejected")
+
+	after, err := os.ReadFile(transcriptPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after),
+		"a rejected reason must leave the transcript file byte-identical")
+
+	entries, err := store.ReadTranscript(sessionID)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.False(t, entries[0].Truncated, "entry must not be flagged truncated on a rejected reason")
+	assert.Empty(t, entries[0].TruncationReason)
 }
 
 // --- UpdateToolCallStatus tests (Wave 3 fix 5b) ---

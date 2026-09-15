@@ -16,10 +16,3 @@ properties:
     minimum: 1
     description: Maximum tokens to generate per turn.
     example: 4096
-  top_p:
-    type: number
-    format: double
-    minimum: 0.0
-    maximum: 1.0
-    description: Nucleus sampling probability mass. 1.0 disables nucleus sampling.
-    example: 1.0

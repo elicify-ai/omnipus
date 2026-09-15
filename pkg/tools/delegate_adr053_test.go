@@ -324,7 +324,7 @@ func TestDelegateTool_Respond_ParksThenResumes(t *testing.T) {
 	// Seed the question the respond will answer with a self_ok authority so
 	// the fail-closed authority check (MAJOR-2) can positively verify it.
 	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-z", "q-1", "corr-1",
-		generated.SelfOk)); err != nil {
+		generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
 		t.Fatalf("seed question message failed: %v", err)
 	}
 
@@ -813,7 +813,7 @@ func TestDelegateTool_Respond_OwnerRequiredDeniedEvenWhenAcked(t *testing.T) {
 	// Seed an owner_required question, then ACK it — the exact sequence that
 	// used to bypass the authority check (Drain excludes acked messages).
 	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-owner", "q-owner",
-		"corr-owner", generated.OwnerRequired)); err != nil {
+		"corr-owner", generated.SessionMessageQuestionAuthorityOwnerRequired)); err != nil {
 		t.Fatalf("seed owner_required question failed: %v", err)
 	}
 	if err := inbox.Ack("parent-1", []string{"q-owner"}); err != nil {
@@ -850,7 +850,7 @@ func TestDelegateTool_Respond_SelfOkQuestionAllowedWhenNotAcked(t *testing.T) {
 		t.Fatalf("seed failed: %v", err)
 	}
 	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-selfok", "q-selfok",
-		"corr-selfok", generated.SelfOk)); err != nil {
+		"corr-selfok", generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
 		t.Fatalf("seed self_ok question failed: %v", err)
 	}
 
@@ -882,7 +882,7 @@ func TestDelegateTool_Respond_3P_OriginalNotLeftRunning(t *testing.T) {
 		t.Fatalf("seed failed: %v", err)
 	}
 	if _, err := inbox.Append("parent-1", questionMsgForDelegateTest(t, "child-3p-resp", "q-3p", "corr-3p",
-		generated.SelfOk)); err != nil {
+		generated.SessionMessageQuestionAuthoritySelfOk)); err != nil {
 		t.Fatalf("seed question failed: %v", err)
 	}
 

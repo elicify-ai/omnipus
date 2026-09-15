@@ -57,7 +57,7 @@ import type { WsSessionStateFrame } from '@/lib/ws'
 
 beforeEach(() => {
   act(() => {
-    useToolApprovalStore.setState({ queue: [] })
+    useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
   })
   vi.clearAllMocks()
   vi.mocked(api.submitToolApproval).mockResolvedValue({
@@ -368,7 +368,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
     // Start exactly where a fresh page load starts: nobody has enqueued
     // anything locally, but the server still thinks this approval is open.
     act(() => {
-      useToolApprovalStore.setState({ queue: [] })
+      useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
     })
 
     const frame: WsSessionStateFrame = {
@@ -406,7 +406,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
     // connected, THEN a session_state snapshot arrives (e.g. a brief WS
     // reconnect) reporting the SAME approval as still pending.
     act(() => {
-      useToolApprovalStore.setState({ queue: [] })
+      useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
       useToolApprovalStore.getState().enqueue({
         type: 'tool_approval_required',
         approval_id: 'appr-e2e-known',
@@ -460,7 +460,7 @@ describe('ToolApprovalModal — reconnect gap, end-to-end (store fix + modal ren
     // otherwise a reconnect could show a stub approval as actionable seconds
     // after the server-side window it was actually granted has closed.
     act(() => {
-      useToolApprovalStore.setState({ queue: [] })
+      useToolApprovalStore.setState({ queue: [], resolvedIds: [] })
     })
 
     const frame: WsSessionStateFrame = {

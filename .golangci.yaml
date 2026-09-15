@@ -181,6 +181,16 @@ linters:
           - staticcheck
         path: ^pkg/(providers/azure/provider|tools/web)\.go$
         text: 'ST1005'
+      # ST1005 — ValidateDoDDistinct's refusal (GOAL-FR-021/FR-047/FR-048) is
+      # read verbatim by end users in the task create/edit dialog (fix wave:
+      # task-validation-message-register). It is deliberately two full,
+      # capitalized, period-terminated sentences of plain prose — Go's
+      # lowercase-no-punctuation error-string convention is for log/wrap
+      # readability, not for text a non-engineer reads in a UI.
+      - linters:
+          - staticcheck
+        path: ^pkg/task/dod_distinct\.go$
+        text: 'ST1005'
       # SA2001 — a deliberate lock-probe idiom (Lock immediately followed by
       # Unlock) proving the lock is acquirable / not deadlocked. The "empty
       # critical section" IS the test.

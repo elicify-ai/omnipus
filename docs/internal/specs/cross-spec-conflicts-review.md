@@ -1,5 +1,7 @@
 # Cross-Spec Conflict Review — `plan-supervisor-spec.md` × `list-jobs-spec.md`
 
+> **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
+
 **Created**: 2026-07-27
 **Scope**: conflicts, contradictions and gaps **BETWEEN** the two specs only. Neither spec is
 reviewed internally — two other agents are doing that concurrently.

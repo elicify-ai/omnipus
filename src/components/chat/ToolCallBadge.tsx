@@ -8,6 +8,7 @@ import { useChatPreferencesStore } from '@/store/chatPreferences'
 import { shouldRenderToolCall, shouldRenderToolCallInPanel } from '@/lib/toolVisibility'
 import { getToolBadgeStatusConfig, type ToolBadgeStatusConfig } from '@/lib/toolStatusConfig'
 import { detectToolResultSentinels } from './tools/toolResultSentinels'
+import { SetGoalCardBlock, partStatusFromToolCallStatus } from './tools/SetGoalToolUI'
 
 interface ToolCallBadgeProps {
   toolCall: ToolCall & { call_id: string }
@@ -76,6 +77,28 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
   // DELEGATED worker's tool calls, which is exactly where a
   // filesystem-scope or tool-policy denial reaches the model.
   const sentinels = detectToolResultSentinels(toolCall.result)
+  // ADR-082 D9 review S11: a `set_goal` step in this thread-surface list
+  // (SubagentBlock's nested steps — a DELEGATED worker's own attempt, which
+  // the tool refuses on a sub-turn, ADR-081 FR-005) used to fall into
+  // shouldRenderToolCall's hide-by-default `set_goal` case and vanish. Route
+  // it to the same dedicated UI the top-level thread uses: the record card
+  // on success, the quiet "Goal registration failed" line on the refusal.
+  // Verbose chat falls through to this badge's own raw rendering below
+  // (shouldRenderToolCall returns true there), matching SetGoalCardBlock's
+  // own verbose contract. The 'panel' surface keeps its outcome-blind policy.
+  if (toolCall.tool === 'set_goal' && surface === 'thread' && !verboseChatEnabled) {
+    return (
+      <SetGoalCardBlock
+        args={toolCall.params}
+        result={toolCall.result}
+        status={partStatusFromToolCallStatus(toolCall.status)}
+        isRunning={toolCall.status === 'running'}
+        isError={toolCall.status === 'error' || marshalErr || sentinels.any}
+        error={toolCall.error}
+        durationMs={toolCall.duration_ms}
+      />
+    )
+  }
   const isVisible =
     surface === 'panel'
       ? shouldRenderToolCallInPanel(toolCall.tool, verboseChatEnabled)
