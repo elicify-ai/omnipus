@@ -1,3 +1,5 @@
+// delegate_status_test.go: tests for poll and report on a delegation — task status, live activity, child inbox messages, and checkpoint peek.
+
 package tools
 
 import (
@@ -5,6 +7,8 @@ import (
 	"testing"
 	"time"
 )
+
+// --- moved from delegate.go tests 2026-09-15 ---
 
 // Founder decision 2026-09-14: when only reasoning is arriving, `delegate
 // action=status` must say the worker is thinking. "generating tool call" would
@@ -51,5 +55,35 @@ func TestFormatToolCallProgressLine_ToolCallWithEarlierReasoningStillSaysGenerat
 	}
 	if strings.Contains(line, "thinking") {
 		t.Fatalf("a tool-call snapshot must not read as thinking: %q", line)
+	}
+}
+
+// TestFormatToolCallProgressLine_FreshVsStale is a pure-function unit test
+// for the "still generating" vs. "may have stalled" distinction
+// formatToolCallProgressLine renders, without needing to wait
+// maxToolCallProgressStaleness (5 minutes) in real time. This is the second
+// of the two required scenarios: a recently-recorded snapshot and a
+// stale one must render text a human or orchestrator can tell apart.
+func TestFormatToolCallProgressLine_FreshVsStale(t *testing.T) {
+	fresh := formatToolCallProgressLine(ToolCallProgressSnapshot{
+		Name: "web_serve", ArgsBytes: 100, TotalArgsBytes: 100, Age: 2 * time.Second,
+	})
+	if !strings.Contains(fresh, "generating") {
+		t.Errorf("expected a fresh snapshot to render as 'generating', got: %s", fresh)
+	}
+	if strings.Contains(fresh, "stale") {
+		t.Errorf("a fresh snapshot must not render as stale, got: %s", fresh)
+	}
+
+	stale := formatToolCallProgressLine(ToolCallProgressSnapshot{
+		Name: "web_serve", ArgsBytes: 100, TotalArgsBytes: 100, Age: 10 * time.Minute,
+	})
+	if !strings.Contains(stale, "stale") {
+		t.Errorf("expected a snapshot older than maxToolCallProgressStaleness to render as stale, got: %s", stale)
+	}
+
+	if fresh == stale {
+		t.Fatal("fresh and stale snapshots must render distinguishably — a caller has no way to tell " +
+			"'still working' from 'may have stalled' otherwise")
 	}
 }

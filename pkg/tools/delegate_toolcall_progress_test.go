@@ -1,27 +1,5 @@
 package tools
 
-// G1 regression coverage (review finding, criticality 9): before this fix,
-// `delegate action=status` could only ever see a running native child's
-// PERSISTED transcript entries (recentActivityLines), which are written only
-// at full-LLM-round completion. A model spending tens of seconds streaming a
-// large tool-call argument (a multi-kilobyte SVG body, a long file write)
-// therefore produced NOTHING an orchestrator's status poll could see — bit
-// for bit indistinguishable from a hung generation. That ambiguity had a
-// real production consequence: an orchestrator polled a delegated worker 75
-// times over 46 seconds, saw no activity, concluded it had hung, and killed
-// it mid-write — repeatedly.
-//
-// DelegateProgressReader (delegate.go) is the fix's consumer-side seam:
-// action:"status" now also reads a LIVE tool-call-argument progress
-// snapshot, sourced from the child turn's own in-memory state
-// (pkg/agent.turnState.recordToolCallProgress, wired through
-// AgentLoop.ProgressForSession) rather than the persisted transcript alone.
-// These tests exercise that seam end-to-end through the real DelegateTool
-// (mirroring delegate_status_snapshot_test.go's existing pattern for
-// recentActivityLines) using a stub DelegateProgressReader, so pkg/tools
-// stays decoupled from pkg/agent exactly like every sibling seam on this
-// tool (SubTurnSpawner, DelegateAgentRegistry, DelegateSessionStore).
-
 import (
 	"context"
 	"strings"
@@ -238,35 +216,5 @@ func TestDelegateStatus_NilProgressReader_DegradesGracefully(t *testing.T) {
 	}
 	if strings.Contains(statusResult.ForLLM, "progress:") {
 		t.Errorf("a nil progressReader must not render a 'progress:' line — got: %s", statusResult.ForLLM)
-	}
-}
-
-// TestFormatToolCallProgressLine_FreshVsStale is a pure-function unit test
-// for the "still generating" vs. "may have stalled" distinction
-// formatToolCallProgressLine renders, without needing to wait
-// maxToolCallProgressStaleness (5 minutes) in real time. This is the second
-// of the two required scenarios: a recently-recorded snapshot and a
-// stale one must render text a human or orchestrator can tell apart.
-func TestFormatToolCallProgressLine_FreshVsStale(t *testing.T) {
-	fresh := formatToolCallProgressLine(ToolCallProgressSnapshot{
-		Name: "web_serve", ArgsBytes: 100, TotalArgsBytes: 100, Age: 2 * time.Second,
-	})
-	if !strings.Contains(fresh, "generating") {
-		t.Errorf("expected a fresh snapshot to render as 'generating', got: %s", fresh)
-	}
-	if strings.Contains(fresh, "stale") {
-		t.Errorf("a fresh snapshot must not render as stale, got: %s", fresh)
-	}
-
-	stale := formatToolCallProgressLine(ToolCallProgressSnapshot{
-		Name: "web_serve", ArgsBytes: 100, TotalArgsBytes: 100, Age: 10 * time.Minute,
-	})
-	if !strings.Contains(stale, "stale") {
-		t.Errorf("expected a snapshot older than maxToolCallProgressStaleness to render as stale, got: %s", stale)
-	}
-
-	if fresh == stale {
-		t.Fatal("fresh and stale snapshots must render distinguishably — a caller has no way to tell " +
-			"'still working' from 'may have stalled' otherwise")
 	}
 }
