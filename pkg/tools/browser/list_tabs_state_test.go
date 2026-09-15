@@ -190,11 +190,11 @@ func TestListTabs_DelegatesAndNeverReturnsSilentEmpty(t *testing.T) {
 	}
 
 	// The structural half: the literal `return nil, 0, nil` — the silent
-	// empty-success shape — must not exist anywhere in manager.go any more.
-	src, err := os.ReadFile("manager.go")
-	require.NoError(t, err)
-	assert.NotContains(t, string(src), "return nil, 0, nil",
-		"manager.go must not return the silent nil,0,nil empty-success shape once ListTabsState exists (§5)")
+	// empty-success shape — must not exist anywhere in the manager*.go family
+	// any more. The scan reads the whole family, not manager.go by name, so a
+	// ListTabs that moves between siblings cannot smuggle the shape back in.
+	assert.NotContains(t, readManagerSourcesForTest(t), "return nil, 0, nil",
+		"the manager*.go family must not return the silent nil,0,nil empty-success shape once ListTabsState exists (§5)")
 }
 
 // --- FR-080's payload half --------------------------------------------------

@@ -3,7 +3,6 @@ package browser
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -303,17 +302,18 @@ func TestNewTab_StartPageNavigationFailureIsNonFatal(t *testing.T) {
 // asserts on the SOURCE: createTab must contain the call. A source assertion is
 // weak by nature, but it fails loudly on the one edit that caused the outage —
 // removing the wiring — which no behavioral test in this file can see.
+//
+// The scan reads the whole manager*.go family, not manager.go by name: createTab
+// lives in whichever sibling holds the tab job after the split, and a by-name
+// scan would keep passing while guarding nothing.
 func TestCreateTab_CallsStartPageNavigation(t *testing.T) {
-	src, err := os.ReadFile("manager.go")
-	require.NoError(t, err)
+	body := readManagerSourcesForTest(t)
 
-	body := string(src)
-	start := strings.Index(body, "func (m *BrowserManager) createTab(")
-	require.Positive(t, start, "createTab must exist")
-	end := strings.Index(body[start:], "\nfunc ")
+	fromCreateTab := sliceFromMarkerForTest(t, body, "func (m *BrowserManager) createTab(")
+	end := strings.Index(fromCreateTab, "\nfunc ")
 	require.Positive(t, end, "createTab must be followed by another function")
 
-	require.Contains(t, body[start:start+end], "navigateNewTabToStartPage(",
+	require.Contains(t, fromCreateTab[:end], "navigateNewTabToStartPage(",
 		"createTab must call navigateNewTabToStartPage — without it every new tab opens "+
 			"about:blank and the start page is inert in production (UAT v39 regression)")
 }
