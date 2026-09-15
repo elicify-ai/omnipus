@@ -399,10 +399,21 @@ func (s *Store) saveFileNoLock(sf *storeFile) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("credentials: create store dir: %w", err)
 	}
-	return fileutil.WithFlock(s.path, func() error {
-		return fileutil.WriteFileAtomic(s.path, data, 0o600)
+	// Lock the sidecar credentials.json.lock, never credentials.json itself:
+	// locking the store file created it EMPTY on the first write, which
+	// loadFileInternal then reports as corrupted (see fileutil.SidecarLockPath).
+	// The sidecar is created 0600 like the store, and the sandbox already
+	// withholds it from agents — fspolicy's secret set covers every
+	// credentials.json.<suffix> name.
+	return fileutil.WithFlock(fileutil.SidecarLockPath(s.path), func() error {
+		return writeFileAtomicFn(s.path, data, 0o600)
 	})
 }
+
+// writeFileAtomicFn is fileutil.WriteFileAtomic, held in a package variable so
+// a test can pause a store write inside its lock (store_lock_test.go).
+// Production code never reassigns it.
+var writeFileAtomicFn = fileutil.WriteFileAtomic
 
 // loadOrCreateSalt reads the salt from the existing credentials.json or
 // generates a fresh one if the file does not yet exist.
