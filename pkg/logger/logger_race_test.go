@@ -47,6 +47,11 @@ func TestLogMessage_ConcurrentWithLoggingToggles(t *testing.T) {
 			DisableFileLogging()
 		}
 	}()
+	// Capture the FIRST call's restore; the loop above hammers DisableConsole
+	// on purpose (each call re-disables, which is a no-op state-wise), and one
+	// cleanup restores the console the goroutines took over.
+	restoreConsole := DisableConsole()
+	t.Cleanup(restoreConsole)
 	go func() {
 		defer wg.Done()
 		for time.Now().Before(deadline) {

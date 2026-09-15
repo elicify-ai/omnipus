@@ -9,9 +9,21 @@ import (
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
+
+	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
 func TestMain(m *testing.M) {
 	testutil.RegisterGatewayRunner(RunContext)
-	os.Exit(m.Run())
+	code := m.Run()
+	// Hygiene guard (2026-09-14, after a CI debug session where the real
+	// failure text never reached the log): a test that silences the console
+	// via logger.DisableConsole and never runs its restore func leaves EVERY
+	// later test in this binary unable to log. Fail the package loudly rather
+	// than letting the next failure hide its own evidence.
+	if code == 0 && logger.ConsoleDisabled() {
+		println("gateway TestMain: console logging is still disabled after the test run — a test called logger.DisableConsole() without t.Cleanup on its restore func")
+		os.Exit(1)
+	}
+	os.Exit(code)
 }

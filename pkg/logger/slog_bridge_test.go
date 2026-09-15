@@ -21,7 +21,7 @@ func captureSlogBridge(t *testing.T) func() string {
 	t.Helper()
 	logFile := filepath.Join(t.TempDir(), "slog-bridge-test.log")
 	prevLevel := GetLevel()
-	DisableConsole()
+	t.Cleanup(DisableConsole())
 	SetLevel(DEBUG)
 	if err := EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)

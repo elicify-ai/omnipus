@@ -86,7 +86,7 @@ func TestFindForAgent_AmbiguousMembership_DeterministicAndWarns(t *testing.T) {
 	// assert on WARN content redirect through EnableFileLogging instead.
 	logFile := filepath.Join(t.TempDir(), "find-for-agent-ambiguous.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)
