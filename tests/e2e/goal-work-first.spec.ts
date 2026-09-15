@@ -1,14 +1,14 @@
 /**
- * goal-work-first.spec.ts — ADR-081 work-first goal flow, spec test 27.
+ * goal-work-first.spec.ts — ADR-088 work-first goal flow, spec test 27.
  *
- * Traces to: docs/internal/architecture/ADR-081-work-first-goal-flow.md,
+ * Traces to: docs/internal/architecture/ADR-088-work-first-goal-flow.md,
  * docs/internal/specs/work-first-goal-flow-spec.md (test 27, S-01/S-04/S-17).
  *
  * This drives the REAL embedded binary against a LIVE model, so — per the
  * spec's own instruction — it asserts ONLY what forcing makes deterministic:
  *
  *   - `/goal <prose>` starts streaming immediately, with NO confirm control
- *     ever appearing (the confirm-gate mechanism is deleted in full, ADR-081
+ *     ever appearing (the confirm-gate mechanism is deleted in full, ADR-088
  *     D9) — this is true regardless of which door the model takes.
  *   - Whichever door the model takes (register directly via `set_goal`, or
  *     ask via the AskUserQuestion card), NO Confirm/Amend/Cancel button ROW
@@ -38,7 +38,7 @@ const askUserQuestionCard = (page: import('@playwright/test').Page) =>
   page.locator('[data-testid="ask-user-question-card"]')
 
 /**
- * The retired goal confirm-gate row (ADR-081 D9): exactly "Confirm" and
+ * The retired goal confirm-gate row (ADR-088 D9): exactly "Confirm" and
  * "Amend" are unique-enough accessible names in this app that a page-wide
  * `toHaveCount(0)` is a safe, deterministic absence proof — unlike "Cancel"
  * alone, which legitimately labels OTHER, unrelated controls elsewhere
@@ -157,7 +157,7 @@ test(
     await assertNoGoalConfirmRow(page)
 
     // A steering message must never trigger an approval prompt — ordinary
-    // chat is the entire steering mechanism (ADR-081 D5). Same discipline:
+    // chat is the entire steering mechanism (ADR-088 D5). Same discipline:
     // assert streaming STARTED and no approval surfaced, then stop — never
     // wait for the model to finish.
     await input.fill('also make the background dark')

@@ -6,7 +6,7 @@
 // while the first goal was still ACTIVE overwrote the record's prompt but left
 // the definition, criteria and Definition of Done compiled for the first
 // intent. The agent worked the new intent without re-registering, claimed, and
-// the Judge adjudicated ONLY the stale ladder. The rule under test (ADR-081
+// the Judge adjudicated ONLY the stale ladder. The rule under test (ADR-088
 // D1/US-5, work-first-goal-flow-spec round-2 M-7): a restate keeps the goal id
 // and replaces the working prompt, and the record must never describe two
 // different pieces of work.

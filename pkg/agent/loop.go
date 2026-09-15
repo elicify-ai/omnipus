@@ -2527,7 +2527,7 @@ func registerSharedTools(
 			return al.getAskUserRegistry()
 		}))
 
-		// set_goal (ADR-081 D2, work-first-goal-flow-spec FR-004..FR-006):
+		// set_goal (ADR-088 D2, work-first-goal-flow-spec FR-004..FR-006):
 		// the validated write-path over this session's goal record.
 		// wireGoalToolsForAgent (goal_record_wiring.go) resolves the
 		// session-store-backed access/diff/feasibility seams LIVE per call —
@@ -8689,7 +8689,7 @@ func (al *AgentLoop) processMessage(ctx context.Context, msg bus.InboundMessage)
 		return response, agent, nil
 	}
 
-	// ADR-081 D1/D9: the ADR-074 D4a pending-goal reply-routing hook
+	// ADR-088 D1/D9: the ADR-074 D4a pending-goal reply-routing hook
 	// (applyGoalPendingReply) is retired — goals activate instantly now, so
 	// there is no more pending/clarification state for a bare chat message to
 	// resolve against (FR-022: bare "confirm" is ordinary chat, no
@@ -9168,7 +9168,7 @@ func (al *AgentLoop) processSystemMessage(
 		SessionKey: sessionKey,
 		Channel:    originChannel,
 		ChatID:     originChatID,
-		// ADR-081 D6b: mirrors processMessage's own SenderID threading
+		// ADR-088 D6b: mirrors processMessage's own SenderID threading
 		// (msg.Sender.CanonicalID, above in this file) — without it, EVERY
 		// system-channel-dispatched turn (not just the goal loop's) reaches
 		// checkGoalLoopAfterTurn's origin gate with opts.SenderID always
@@ -9407,7 +9407,7 @@ func isMessagingChannel(channel string) bool {
 	return false
 }
 
-// goalForcingWebChannel is the SPA session origin (ADR-081 D3 [G-B2]) —
+// goalForcingWebChannel is the SPA session origin (ADR-088 D3 [G-B2]) —
 // mirrors pkg/tools' own unexported webChannelName const
 // (ask_user_question.go), which pkg/agent cannot reach without a
 // cross-package coupling for one literal. AskUserQuestion's own web-only
@@ -9421,7 +9421,7 @@ const goalForcingWebChannel = "webchat"
 // only) and the mid-turn rubric-note budget estimate (goalRubricNoteForBudget,
 // every iteration) share, so the two can never disagree about what "the
 // record is still empty" means. holds is
-// ADR-081 D3's base predicate: an active goal whose compiled record is still
+// ADR-088 D3's base predicate: an active goal whose compiled record is still
 // empty — the transient window between instant activation (D1) and the
 // working agent's own set_goal authorship. rec is nil whenever holds is
 // false.
@@ -9463,7 +9463,7 @@ func goalTurnRecordState(al *AgentLoop, ts *turnState) (holds bool, rec *goal.Go
 	return true, g
 }
 
-// goalForcingNarrowTools returns the ADR-081 D3 Layer 1 narrowed tool pair:
+// goalForcingNarrowTools returns the ADR-088 D3 Layer 1 narrowed tool pair:
 // set_goal (always, when present in policyFiltered) plus AskUserQuestion
 // when includeAsk is true and it too is present. Never any other tool —
 // C-3's "1 or 2 definitions, never any other tool".
@@ -9482,14 +9482,14 @@ func goalForcingNarrowTools(policyFiltered []tools.Tool, includeAsk bool) []tool
 	return out
 }
 
-// goalForcingDecision is ADR-081 D3/D4's per-request verdict, evaluated once
+// goalForcingDecision is ADR-088 D3/D4's per-request verdict, evaluated once
 // at the top of each LLM request inside runTurn's round loop (spec
 // FR-007/009/010/011, test 8) and consumed by that SAME iteration:
 // providerToolDefs assembly, the rubric-note injection, and — after the
 // tool-execution loop processes the model's response — the FR-010
 // question-round budget bump when the ask door was genuinely taken.
 //
-// D3 AMENDMENT (2026-09-07, ADR-081): provider tool-choice forcing is
+// D3 AMENDMENT (2026-09-07, ADR-088): provider tool-choice forcing is
 // DELETED — a goal turn on z-ai/glm-5v-turbo failed with `status=400 "Tool
 // choice must be auto" (Z.AI)`, and Z.AI/GLM is the operator's primary
 // provider family. Determinism no longer comes from the request shape
@@ -9541,7 +9541,7 @@ type goalForcingDecision struct {
 	narrowed []tools.Tool
 }
 
-// goalForcingMaxNarrowAttempts bounds ADR-081 D3's narrowed first-move door
+// goalForcingMaxNarrowAttempts bounds ADR-088 D3's narrowed first-move door
 // (the D3 amendment, 2026-09-08): once a turn has offered the narrowed
 // {set_goal[, AskUserQuestion]} pair this many CONSECUTIVE times without
 // either a successful set_goal write or a genuinely parked AskUserQuestion
@@ -9557,7 +9557,7 @@ type goalForcingDecision struct {
 const goalForcingMaxNarrowAttempts = 3
 
 // evaluateGoalForcing computes goalForcingDecision for the CURRENT LLM
-// request (ADR-081 D3 as amended 2026-09-07, further amended 2026-09-08 —
+// request (ADR-088 D3 as amended 2026-09-07, further amended 2026-09-08 —
 // see goalForcingMaxNarrowAttempts; spec FR-007/009/010; C-3's negative
 // rows, grill M1): the predicate deliberately consults ONLY iteration
 // (logging only — see below), persisted session state, and this turn's own
@@ -9716,7 +9716,7 @@ func (al *AgentLoop) bumpGoalQuestionRoundsUsed(d goalForcingDecision) {
 }
 
 // goalRubricNoteForBudget re-derives buildGoalRubricInjectionNote's input
-// from persisted session state (ADR-081 D4, midturn_budget.go's
+// from persisted session state (ADR-088 D4, midturn_budget.go's
 // ephemeralSystemNoteTokens). Before the 2026-09-08 D3 amendment,
 // evaluateGoalForcing's own rubric flag was gated to the turn's first
 // request only (iteration==1), while mid-turn budget checks run AFTER that
@@ -10576,7 +10576,7 @@ turnLoop:
 		policyFilteredTools = ensureInfraToolsExecutable(
 			ts.agent.Tools, policyFilteredTools, filterTimePolicyMap)
 
-		// ADR-081 D3/D4 (spec FR-007/009/010/011): evaluated ONCE per request,
+		// ADR-088 D3/D4 (spec FR-007/009/010/011): evaluated ONCE per request,
 		// right after the policy filter settles, so both the tool-surface
 		// narrowing below and the rubric-note injection further down (and the
 		// FR-010 question-budget bump after this iteration's tool-execution
@@ -10629,7 +10629,7 @@ turnLoop:
 		var providerToolDefs []providers.ToolDefinition
 		switch {
 		case goalForce.layer1:
-			// ADR-081 D3 Layer 1 (spec test 8's compressed-mode-suspension
+			// ADR-088 D3 Layer 1 (spec test 8's compressed-mode-suspension
 			// row): "exactly the pair" is exact — bypass
 			// buildCompressedToolDefs/stripInfraToolDefs entirely for this one
 			// narrowed request, including the compressed-mode ToolSearch
@@ -10705,7 +10705,7 @@ turnLoop:
 			// system message immediately after the system prompt. Empty/absent
 			// instructions are a no-op — zero behavioral change.
 			//
-			// Ordering note (finding 10c, context-audit 2026-08 — ADR-081 D9
+			// Ordering note (finding 10c, context-audit 2026-08 — ADR-088 D9
 			// retires the ADR-078 D2 goal-pending note that used to sit between
 			// this call and injectManifestNote below; buildGoalPendingNote/
 			// injectGoalPendingNote, pkg/agent/goal_pending_note.go, are deleted
@@ -10726,7 +10726,7 @@ turnLoop:
 			// ts.channel — deliberately NOT in the cached system prompt, since one
 			// agent serves multiple channels (see web_rendering_note.go).
 			callMessages = injectWebRenderingNote(callMessages, buildWebRenderingNote(ts.channel))
-			// ADR-081 D4 (spec FR-011, D3 amendment 2026-09-07): the goal
+			// ADR-088 D4 (spec FR-011, D3 amendment 2026-09-07): the goal
 			// rubric + first-move instruction + define-goal skill quality
 			// bar, injected exactly when the D3 base predicate holds
 			// (goalForce.rubric — active goal AND an empty compiled record,
@@ -10747,7 +10747,7 @@ turnLoop:
 			// system prompt. Injected only when Compressed is active and there are
 			// unloaded lazy tools to list.
 			//
-			// Not on an ADR-081 D3 narrowed request (goalForce.layer1): that
+			// Not on an ADR-088 D3 narrowed request (goalForce.layer1): that
 			// request offers only {set_goal[, AskUserQuestion]}, and the block's
 			// header tells the model to "call `ToolSearch`" to load a listed
 			// tool — advertising a tool the request does not offer. UAT B-10
@@ -10764,7 +10764,7 @@ turnLoop:
 			ts.markGracefulTerminalUsed()
 		}
 
-		// ADR-081 D3 Layer 1 narrowing is active for THIS request exactly
+		// ADR-088 D3 Layer 1 narrowing is active for THIS request exactly
 		// when goalForce.layer1 holds and gracefulTerminal hasn't nilled the
 		// tool surface. review-round-1 finding #6 (kept under the D3
 		// amendment, 2026-09-07): native_search must never ride alongside
@@ -12408,7 +12408,7 @@ turnLoop:
 				}
 			}
 
-			// A call to a tool this request did not offer never runs (ADR-081
+			// A call to a tool this request did not offer never runs (ADR-088
 			// D3: the narrowed goal request's "exactly two" is exact; ADR-071
 			// §1.1: a lazy tool is callable only once ToolSearch promotes it).
 			// Checked on the pre-hook name, before the quarantine gate, hooks,
@@ -13824,7 +13824,7 @@ turnLoop:
 			// in-flight steering message or graceful interrupt too.
 			parked := toolResult.ParksTurn
 
-			// ADR-081 FR-010: the question door was genuinely taken on a
+			// ADR-088 FR-010: the question door was genuinely taken on a
 			// narrowed goal turn — bump the persisted per-generation
 			// question-round budget. Scoped tightly: only THIS exact tool
 			// (never any other ParksTurn tool, e.g. a nested delegate's

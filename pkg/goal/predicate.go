@@ -89,7 +89,7 @@ func (s *Store) ListActiveByOwnerKind(kind generated.GoalOwnerKind) ([]Goal, err
 // goal because Store.Create refuses a second Create for a task that already
 // has a goal record (R-04, ErrOwnerAlreadyHasGoal) — task re-runs go
 // through Reactivate on the SAME record instead; a session-owned goal
-// because ADR-081 D1's instant activation only ever opens one /goal per
+// because ADR-088 D1's instant activation only ever opens one /goal per
 // session at a time, even though a session may accumulate several TERMINAL
 // goal records across its life. Finding more than one active match is
 // therefore reported as errMultipleActiveGoalsForOwner rather than silently

@@ -1,6 +1,6 @@
 # Judgment-first acceptance criteria — implementation spec
 
-> **SUPERSEDED (flow parts) — ADR-081 / work-first-goal-flow-spec.md (2026-09-07).** The `/goal` compile→clarify→confirm FLOW described in this document is deleted (instant activation, agent-authored record via `set_goal`, steering instead of confirmation). The RECORD shape (statement / judgment-typed criteria / DoD) remains authoritative where this document defines it. Do not implement flow behavior from this file.
+> **SUPERSEDED (flow parts) — ADR-088 / work-first-goal-flow-spec.md (2026-09-07).** The `/goal` compile→clarify→confirm FLOW described in this document is deleted (instant activation, agent-authored record via `set_goal`, steering instead of confirmation). The RECORD shape (statement / judgment-typed criteria / DoD) remains authoritative where this document defines it. Do not implement flow behavior from this file.
 
 
 - **Status:** Draft **v4** (2026-09-07). Grill round 1 (0C/14M) corrected in v2; grill round 2 (0C/8M/7m/2o) corrected in v3; **v4 folds in ADR-080** (goal statement + judgment-typed criteria + Definition of Done + shared workspace context + the `define-goal` skill rename), grilled once more with findings corrected in-place — see §12.

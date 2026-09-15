@@ -10,7 +10,7 @@
 // response carried a valid set_goal AND an invented AskUserQuestion
 // ("Placeholder question - not used"). Both executed; the ask parked the
 // turn for 18 minutes even though the goal record was already registered.
-// ADR-081 D4's rubric note makes the two doors alternatives ("Call exactly
+// ADR-088 D4's rubric note makes the two doors alternatives ("Call exactly
 // ONE of the two, never both in the same response") — this enforces it at
 // dispatch.
 package agent

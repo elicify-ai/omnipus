@@ -593,7 +593,7 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 	coll, collDone := newEventCollector(t, al)
 	defer collDone()
 
-	// (1) ADR-081 D1 (work-first): a PROSE /goal activates INSTANTLY — the
+	// (1) ADR-088 D1 (work-first): a PROSE /goal activates INSTANTLY — the
 	// condition persists, the record (GoalCriteriaJSON) is a LEGAL, expected
 	// transient empty (the D3 forcing predicate), and NO confirm surface
 	// exists anymore. The record is then authored by the working agent via
@@ -608,7 +608,7 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 		t.Fatal("(1) /goal set must persist the goal condition")
 	}
 	if got := goalRecordCompiledJSON(meta); got != "" {
-		t.Fatalf("(1) ADR-081: instant activation must NOT compile — the record starts empty (got %q)", got)
+		t.Fatalf("(1) ADR-088: instant activation must NOT compile — the record starts empty (got %q)", got)
 	}
 	// ADR-086: the registration the working agent's set_goal would perform
 	// lands on the goal's OWN record (GOAL-FR-003, typed lists), not on the
@@ -704,7 +704,7 @@ func TestConformance_t0_ChatGoal_Design(t *testing.T) {
 			walk = append(walk, p)
 		}
 	}
-	// ADR-081 D1 (instant activation): there is no pending/confirm step
+	// ADR-088 D1 (instant activation): there is no pending/confirm step
 	// anymore, so the walk starts at active — never queued (goalPillQueued
 	// is no longer emitted anywhere in the activation path).
 	wantWalk := []string{goalPillActive, goalPillWaitingOnUser, goalPillActive, goalPillJudging, goalPillDone}

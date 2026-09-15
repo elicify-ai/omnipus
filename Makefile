@@ -470,7 +470,7 @@ lint-no-fail-closed-backfill:
 	bash scripts/check-no-fail-closed-backfill.sh
 
 ## lint-no-goal-confirm-gate: Fail if the deleted /goal confirm-gate machinery reappears
-## Regression guard for ADR-081 — see scripts/check-no-goal-confirm-gate.sh's header comment.
+## Regression guard for ADR-088 — see scripts/check-no-goal-confirm-gate.sh's header comment.
 lint-no-goal-confirm-gate:
 	bash scripts/check-no-goal-confirm-gate.sh
 

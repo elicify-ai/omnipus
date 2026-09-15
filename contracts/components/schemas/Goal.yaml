@@ -305,7 +305,7 @@ properties:
     description: >
       GOAL-FR-006 — the superseded-criteria history: prior `criteria`/`dod`
       sets this goal carried before a `set_goal(mode: update)` steering
-      revision replaced them (ADR-081). Empty/absent for a goal never
+      revision replaced them (ADR-088). Empty/absent for a goal never
       revised. Distinct from `terminal_history` below, which records prior
       COMPLETED RUNS of a re-run task-owned goal, not prior criteria
       revisions of the current run.

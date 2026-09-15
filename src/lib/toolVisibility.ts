@@ -133,7 +133,7 @@ export function shouldRenderToolCall(
       return isError
 
     case 'set_goal':
-      // ADR-081 D5/A-3 (work-first goal flow), re-anchored by ADR-082 D9:
+      // ADR-088 D5/A-3 (work-first goal flow), re-anchored by ADR-082 D9:
       // `set_goal` is the working agent's write-path for the goal record
       // (register/update). The record-rendering surface for a reader is the
       // typed record card (GoalEchoCard), rendered directly from THIS

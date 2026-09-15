@@ -4,7 +4,7 @@
 
 // Regression coverage for the offered-tool gate (tool_offer_gate.go, wired in
 // runTurn's per-tool loop) and for the "More tools" manifest note being left
-// off an ADR-081 D3 narrowed request.
+// off an ADR-088 D3 narrowed request.
 //
 // UAT B-10 run 1: on the narrowed goal request that offered only set_goal and
 // AskUserQuestion, a ToolSearch call still executed. The loop resolved every

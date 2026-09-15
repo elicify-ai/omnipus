@@ -433,8 +433,8 @@ fire-once-per-quiet-spell re-arm (`goalIsIdleSettling` / `markGoalIdleFired`), t
 self-race guard (`goalAdjudicationInFlight` — **the guard open item 3 resolves onto**), the
 live-turn suppression (`goalHasLiveTurn`), the token-budget brake
 (`TokenBudget().Exhausted()` → `clearGoal(FailedReasonBudgetExhausted)`, the only idle-path
-termination for a goal past its budget), the ADR-081 D6c recordless nudge ladder and its
-`dispatchGoalFallbackCompile` backstop (without which ADR-081 FR-017's "every active goal ends up
+termination for a goal past its budget), the ADR-088 D6c recordless nudge ladder and its
+`dispatchGoalFallbackCompile` backstop (without which ADR-088 FR-017's "every active goal ends up
 judgeable" breaks) — and `settleZeroOutputRecordedGoal` →
 `dispatchGoalAsyncFollowUp(goalContinuePushPrompt(…))`, **which is the Ralph-loop re-post D13 says
 the keeper "already implements" and instructs us to keep**. It is inside the function D13 names for
@@ -469,7 +469,7 @@ Two mechanical consequences §8 does not state, both of which make the move more
    `SenderCanonicalID: goalLoopFollowUpSenderID`. That sentinel is load-bearing, not cosmetic:
    `checkGoalLoopAfterTurn`'s origin gate accepts only a `UserInitiated` turn or exactly it, and a
    notify stamped with the default `"async:<kind>"` is **silently dropped** — a failure this project
-   has already shipped once (ADR-081 D6b, recorded in `dispatchGoalAsyncFollowUp`'s own comment).
+   has already shipped once (ADR-088 D6b, recorded in `dispatchGoalAsyncFollowUp`'s own comment).
 2. **The turn `ctx` is the wrong context.** `runGoalAdjudication` derives its timeout from the turn
    ctx, which is finished once the work is deferred. The idle path already builds
    `context.WithTimeout(context.Background(), goalJudgeRoundTimeout)`; the deferred claim path must

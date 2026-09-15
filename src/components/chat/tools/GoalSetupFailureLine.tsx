@@ -1,6 +1,6 @@
 // GoalSetupFailureLine — operator-reported UX fix, 2026-09-08.
 //
-// Repro: while a goal was active and its record still empty (the ADR-081
+// Repro: while a goal was active and its record still empty (the ADR-088
 // D1 window between `/goal` activation and the working agent's first
 // `set_goal` call), a tool call the agent needed for that setup — the
 // reported case was `ask_user_question`, rejected by argument validation —

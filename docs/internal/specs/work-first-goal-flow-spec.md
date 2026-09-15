@@ -1,10 +1,10 @@
 # Work-First Goal Flow — Specification
 
-- **Source brief:** `docs/internal/architecture/ADR-081-work-first-goal-flow.md` (Accepted, operator-ratified 2026-09-07, grilled once + corrected).
+- **Source brief:** `docs/internal/architecture/ADR-088-work-first-goal-flow.md` (Accepted, operator-ratified 2026-09-07, grilled once + corrected).
 - **Supersedes (flow parts of):** `planning-goals-spec.md` and the `/goal` compile/confirm flow described in `judgment-first-criteria-spec.md` v4 — the RECORD shape (definition / judgment-typed criteria / DoD with provenance) from those specs is unchanged and remains authoritative.
-- **Discovery status:** Phase-1 requirements were gathered and confirmed point-by-point with the operator in the 2026-09-07 design session (recorded verbatim in ADR-081 §"The ratified design conversation"); the operator ordered this spec's production and its two grill rounds. Gate satisfied.
-- **Greenfield ruling (operator):** no backward compatibility with the confirm-gate mechanism; its artifacts are deleted in full (ADR-081 D9), enforced mechanically.
-- **Codebase intelligence note:** GitNexus MCP tools are not connected in this session; the "Existing Codebase Context" below is sourced from the ADR-081 architect grill, which verified every symbol first-hand against `release/v0.1.1` (`fbcbc5ed`). Reference-pattern review (Phase 1.7): N/A — agent-engine subsystem, not covered by the go-implementation reference library.
+- **Discovery status:** Phase-1 requirements were gathered and confirmed point-by-point with the operator in the 2026-09-07 design session (recorded verbatim in ADR-088 §"The ratified design conversation"); the operator ordered this spec's production and its two grill rounds. Gate satisfied.
+- **Greenfield ruling (operator):** no backward compatibility with the confirm-gate mechanism; its artifacts are deleted in full (ADR-088 D9), enforced mechanically.
+- **Codebase intelligence note:** GitNexus MCP tools are not connected in this session; the "Existing Codebase Context" below is sourced from the ADR-088 architect grill, which verified every symbol first-hand against `release/v0.1.1` (`fbcbc5ed`). Reference-pattern review (Phase 1.7): N/A — agent-engine subsystem, not covered by the go-implementation reference library.
 
 ---
 
@@ -22,7 +22,7 @@
 
 ---
 
-## 2. Existing Codebase Context (Phase 1.5 — from the ADR-081 grill, verified on `fbcbc5ed`)
+## 2. Existing Codebase Context (Phase 1.5 — from the ADR-088 grill, verified on `fbcbc5ed`)
 
 ### Symbols Involved
 
@@ -447,11 +447,11 @@ Modifies existing functionality — preserved behaviors and their guardians:
 - **FR-020** The channel record echo MUST key on the goal's **recorded routing channel** (`recordGoalRouting`), never the current turn's own `Channel` — a keeper/nudge turn (`Channel: "system"`) on a Telegram-origin goal still echoes to Telegram (grill M7). On channel-routed goals, every successful register/update MUST send exactly one formatted record text (re-scoped `formatGoalEcho`); web-routed goals MUST NOT receive a text echo.
 - **FR-021** The SPA MUST render the record card from the active frame (no buttons) and evict any empty-id pill when a keyed frame for the session arrives.
 - **FR-022** Bare "confirm" MUST be ordinary chat (no interception exists). `/goal confirm` MUST reply informatively without state change, recognized by a **new inline verb match in the command router** — NOT the retired `isGoalConfirmVerb` (grill B3: without a recognizer it would fall through and activate a goal literally named "confirm").
-- **FR-023a** At completion, the tree MUST contain zero definitions and zero non-comment references to ADR-081's FULL deletion inventory (human-verified sweep, wave 4 checklist §6).
+- **FR-023a** At completion, the tree MUST contain zero definitions and zero non-comment references to ADR-088's FULL deletion inventory (human-verified sweep, wave 4 checklist §6).
 - **FR-023b** `scripts/check-no-goal-confirm-gate.sh` MUST enforce exactly these seven names — `confirmPendingGoal`, `IsGoalConfirm`, `confirmGoalAliases`, `ConfirmGoalWord`, `proposeGoalAmendment`, `buildGoalPendingNote`, `useGoalCompilingIndicator` — wired into pr.yml, runci.sh lint, and make (grill M5).
 - **FR-024** Stale pending-draft fields in on-disk goal state MUST be ignored on read and absent after the next write; no legacy parse path may exist.
 - **FR-025** Goal lifecycle events MUST log per D8 (INFO set + WARN set), each exactly once, with session_id/goal_id, without duplicating existing lines; the two pre-existing INFO lines (`goal_triggers.go:549`, `goal_loop.go:1200`) gain a `goal_id` field (grill m1).
-- **FR-026** The contracts **schema shape** MUST be unchanged — no field added, removed, or retyped. The queued-only DESCRIPTION prose on `GoalStatusFrame`'s `definition`/`criteria`/`dod` AND the `state` enum's own `queued` description (updated to "retained for wire compatibility; never emitted since ADR-081" — round-2 m-3) ARE updated (schema file + regen + hand-sync of `contracts/asyncapi.yaml`'s inline duplicate — an explicit wave-2 task; grill B5).
+- **FR-026** The contracts **schema shape** MUST be unchanged — no field added, removed, or retyped. The queued-only DESCRIPTION prose on `GoalStatusFrame`'s `definition`/`criteria`/`dod` AND the `state` enum's own `queued` description (updated to "retained for wire compatibility; never emitted since ADR-088" — round-2 m-3) ARE updated (schema file + regen + hand-sync of `contracts/asyncapi.yaml`'s inline duplicate — an explicit wave-2 task; grill B5).
 - **FR-027** The frontend prerequisite branch MUST be merged before D5 frontend work lands — wave-0 gate: `git merge-base --is-ancestor 1e0527d8 HEAD` succeeds (grill m10).
 - **FR-028** Activating a new goal, and `/goal clear`, MUST cancel any parked question card belonging to the superseded/cleared goal **without dispatching a resume turn** (round-2 M-6: `CancelByUser` injects a resume and is the WRONG primitive; use a non-resuming cancellation — `CancelOnSessionStop`-style, or a new `CancelWithoutResume` on the registry interface — resolved via `PendingForSession(sessionID)`). The re-homed `cancelOrphanedClarifyCard` is the named wrapper (its old call sites die with `emitGoalClarificationCard`; its new call sites are exactly these two). Resume invalidation is free once cancelled: a later `Submit` returns `ErrNoPending`; the parked turn needs no unwinding (`TurnEndStatusParked` is terminal). Tests MUST assert no resume turn is dispatched by the cancellation.
 - **FR-029** `/goal status` MUST be rewritten: `goalStatusReply`'s pending-draft branches (its `loadGoalClarification` branch and its `loadCompiledGoal(meta.GoalPendingJSON)` + `ConfirmGoalWord` branch — cited by symbol per the churn rule, round-2 m-1) are deleted; the reply gains the record summary via the re-scoped `formatGoalEcho` (a NEW call site — today `goalStatusReply` never calls it) alongside condition/elapsed/rounds/spend/reason (grill M8).

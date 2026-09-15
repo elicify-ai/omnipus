@@ -473,7 +473,7 @@ func (al *AgentLoop) goalCompileWindowText(goalSessionID, agentID string) string
 // clarity gate, the checklist-authoring guidance (judgment types, the
 // 4-layer DoD derivation ladder), and the seeded define-goal skill content
 // when present — WITHOUT ADR-079 D1's session-transcript window and WITHOUT
-// ADR-080 D-CONTEXT2's workspace/project instructions (ADR-081 D4, spec
+// ADR-080 D-CONTEXT2's workspace/project instructions (ADR-088 D4, spec
 // FR-011). This is a single reusable builder so buildGoalCompileMessages
 // (below, D7's fallback-only compile) and loop.go's D3/D4 turn-scoped
 // rubric injection (the WORKING agent's own first-move guidance) can never
@@ -622,7 +622,7 @@ const goalOneDoorRule = "Call exactly ONE of the two, never both in the same res
 	"placeholder, a test question, or a request for permission to proceed on a goal that is already clear."
 
 // goalRubricChannelAddendum extends buildGoalRubricNote's text on a
-// non-webchat origin (ADR-081 D3 [G-B2] / D4): AskUserQuestion is
+// non-webchat origin (ADR-088 D3 [G-B2] / D4): AskUserQuestion is
 // permanently web-only (pkg/tools/ask_user_question.go), so a channel-origin
 // goal turn gets the SAME rubric plus this one line telling it to ask
 // conversationally instead of reaching for a card that would refuse.
@@ -631,7 +631,7 @@ const goalRubricChannelAddendum = "\n\nAskUserQuestion is unavailable on this ch
 	"question conversationally, in plain language, as your normal reply, and register the record once " +
 	"the operator answers.\n"
 
-// buildGoalRubricInjectionNote returns the ADR-081 D4 turn-scoped system
+// buildGoalRubricInjectionNote returns the ADR-088 D4 turn-scoped system
 // note loop.go injects on a goal turn: "" when holds is false (the D3 base
 // predicate — active goal AND an empty compiled record — does not hold this
 // request), buildGoalRubricNote(true) otherwise (the tool-calling framing —
@@ -727,7 +727,7 @@ func buildGoalCompileMessages(prose, question, answer, repairReason, sessionWind
 	}
 }
 
-// goalCompileLLMCall runs one bounded compile call (ADR-081 D7, spec
+// goalCompileLLMCall runs one bounded compile call (ADR-088 D7, spec
 // FR-018). After the front-path compile's deletion this function is
 // reachable ONLY from the D6c nudge-ladder engine fallback
 // (goal_loop.go, outside this file's scope) via compileGoalIntentLLM below,

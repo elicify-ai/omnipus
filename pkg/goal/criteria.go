@@ -90,7 +90,7 @@ func validateCriteriaList(list []task.AcceptanceCriterion, listName string) erro
 // SetCriteria replaces g.Criteria with a normalised, validated copy of
 // criteria. It does not touch DoD and does not snapshot the prior list —
 // use SupersedeCriteria when the caller needs the superseded-criteria
-// history (ADR-081 set_goal(mode: update)) preserved.
+// history (ADR-088 set_goal(mode: update)) preserved.
 func (g *Goal) SetCriteria(criteria []task.AcceptanceCriterion, now time.Time) error {
 	normalized, err := task.NormalizeCriteria(criteria)
 	if err != nil {
@@ -124,7 +124,7 @@ func (g *Goal) SetDoD(dod []task.AcceptanceCriterion, now time.Time) error {
 }
 
 // SupersedeCriteria snapshots g's CURRENT Criteria and DoD into
-// SupersededCriteria (ADR-081's set_goal(mode: update) steering revision),
+// SupersededCriteria (ADR-088's set_goal(mode: update) steering revision),
 // then replaces both lists with the normalised, validated newCriteria and
 // newDoD. newDoD MUST contain at least one item after normalisation, same
 // as SetDoD — a steering revision may not leave the goal with no definition
@@ -160,7 +160,7 @@ func (g *Goal) SupersedeCriteria(newCriteria, newDoD []task.AcceptanceCriterion,
 }
 
 // Restate replaces an ACTIVE goal's prompt with a new operator intent — a
-// prose `/goal <intent>` issued while the goal is still active (ADR-081
+// prose `/goal <intent>` issued while the goal is still active (ADR-088
 // D1/US-5: "the working prompt is replaced by the restated intent"). The
 // GoalID and every budget counter are deliberately untouched (a restate is
 // the SAME goal generation, work-first-goal-flow-spec round-2 M-7), but the
@@ -174,7 +174,7 @@ func (g *Goal) SupersedeCriteria(newCriteria, newDoD []task.AcceptanceCriterion,
 // into SupersededCriteria (history, never erased — D9's spirit), Criteria is
 // emptied, DoD is reset to floorDoD, and the per-definition outcome fields
 // (LatestClaim, LatestVerdict, LatestReason) are cleared because they judged
-// the superseded definition. That is ADR-081 D1's legal transient state
+// the superseded definition. That is ADR-088 D1's legal transient state
 // ("active, no record registered yet"): the working agent registers a record
 // for the new intent via set_goal, the engine's post-turn registration nudge
 // fires if it does not, and until one exists the Judge is given the new

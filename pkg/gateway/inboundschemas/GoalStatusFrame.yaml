@@ -55,7 +55,7 @@ properties:
       (mirrors `Goal.definition`), one clear sentence staying close to
       the setter's own words, rendered BEFORE the criteria breakdown.
       ADDITIVE-OPTIONAL: populated on the `active` emission that follows
-      a goal record register/update (ADR-081 `set_goal`) or marker
+      a goal record register/update (ADR-088 `set_goal`) or marker
       activation, alongside `criteria`/`dod`; MAY be absent on
       marker-path records (deterministic marker-derived goals carry no
       compiled SMART restatement); absent on other round/lifecycle
@@ -117,7 +117,7 @@ properties:
       (originally 8 states, superseding the earlier 4-value
       active/paused_judge_unavailable/brake_fired/cleared set — no
       back-compat at the time). `queued` retained for wire compatibility;
-      never emitted since ADR-081 (work-first goal flow). `active`
+      never emitted since ADR-088 (work-first goal flow). `active`
       iterating normally (lifecycle default overlay). `waiting_on_user` a typed `GOAL_STATUS:
       waiting_on_user` pause, OR `needs_input`/`paused` for any other
       reason — cancel-soft grace, etc. (lifecycle). `judge_unavailable`
@@ -189,7 +189,7 @@ properties:
       this frame and the breakdown is the same lifecycle datum; items $ref
       the canonical AcceptanceCriterion (never a third criteria shape).
       Present on the `active` emission that follows a goal record
-      register/update (ADR-081 `set_goal`) or marker activation; absent
+      register/update (ADR-088 `set_goal`) or marker activation; absent
       on other round/lifecycle pushes, whose consumers only track
       accounting.
       NOTE the asyncapi.yaml inline canonical copy cannot cross-file-$ref:
@@ -206,7 +206,7 @@ properties:
       confirmation surface can flag `provenance == inferred` items as
       "inferred — confirm or drop". ADDITIVE-OPTIONAL: present on the
       `active` emission that follows a goal record register/update
-      (ADR-081 `set_goal`) or marker activation, alongside `criteria`/
+      (ADR-088 `set_goal`) or marker activation, alongside `criteria`/
       `definition`; absent on other round/lifecycle pushes. Same
       hand-sync obligation as `criteria` above — the asyncapi.yaml inline
       copy must be kept in sync by hand.

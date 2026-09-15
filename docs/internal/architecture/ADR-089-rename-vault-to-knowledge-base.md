@@ -1,9 +1,9 @@
-# ADR-082 — Rename "vault" to "Knowledge Base", in three staged phases
+# ADR-089 — Rename "vault" to "Knowledge Base", in three staged phases
 
 - **Status:** Accepted (founder-ratified, 2026-09-07). The naming rules and the three carve-outs are decided. Two sub-questions are marked OPEN in §7 and do not block the shape.
 - **Deciders:** Daniel Piatkowski (founder, ratifying decision); architect (staging, migration, verification)
 - **Date:** 2026-09-07
-- **Number verification:** `ADR-082` is genuinely free. Checked three ways on `integrate/library-improvements-v0.1.1`: the directory listing tops out at `ADR-081`; `git log --all --name-only --no-renames -- 'docs/internal/architecture/*'` shows no `ADR-082` path on **any** branch, past or present; and `git grep 'ADR-082'` across the last 400 commits of all refs returns nothing. This check is not ceremony — ADR-081 was drafted as "ADR-069" on a feature branch and had to be renumbered after the merge revealed `release/v0.1.1` already owned 069.
+- **Number verification:** `ADR-089` is genuinely free. Checked three ways on `integrate/library-improvements-v0.1.1`: the directory listing tops out at `ADR-081`; `git log --all --name-only --no-renames -- 'docs/internal/architecture/*'` shows no `ADR-089` path on **any** branch, past or present; and `git grep 'ADR-089'` across the last 400 commits of all refs returns nothing. This check is not ceremony — ADR-081 was drafted as "ADR-069" on a feature branch and had to be renumbered after the merge revealed `release/v0.1.1` already owned 069.
 - **Supersedes:** [ADR-067](ADR-067-omnipus-knowledge-base-and-render-first-preview.md) §2 **D1**, third paragraph ("*The name `.omnipus-vault/` is decided, not provisional*"), together with its §5 closing note ("*O-3 (marker name) is **closed** — decided as `.omnipus-vault/` in D1*") and the Appendix A row **M-15** that recorded that closure. **Nothing else in ADR-067 D1 is superseded** — the detection rule (either marker alone suffices), the never-create-`.obsidian/` asymmetry, and the marker-trust paragraph all stand unchanged. ADR-067 itself is **not edited**: historical ADRs are the audit trail of what we believed and when, and rewriting one destroys the only record that the belief ever changed.
 - **Relates:** [ADR-068](ADR-068-vault-records-typed-record-layer.md) (the typed record layer, whose wire schemas carry most of the `Vault*` names), [ADR-081](ADR-081-unified-library-search-and-grep-engine.md) (unified search, same surface), [ADR-022](ADR-022-credential-vault-reauth.md) (the *credential* vault — carve-out 1, never renamed)
 - **Constraints in force:** Hard Constraint #7 (release responsibility — every branch fully green), Hard Constraint #8 (contract-first wire formats; generated types are the only legal cross-boundary types)
@@ -291,7 +291,7 @@ vocabularies at once, and the phase-1 change description must say so.
 
 ### 5.4 Residual
 
-Historical documents keep the old word. ADR-067, ADR-068, ADR-081 and the specs beneath them
+Historical documents keep the old word. ADR-067, ADR-068, ADR-088 and the specs beneath them
 say "vault" and will continue to. They record what was believed when they were written, and
 that is their only job. New prose uses the new name; old prose is left alone — the same
 principle that keeps this ADR from editing ADR-067.

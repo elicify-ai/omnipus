@@ -13,7 +13,7 @@ import (
 
 // offeredToolSet is the exact set of tool names one provider request put in
 // front of the model — the names of the tool definitions actually sent, after
-// every narrowing step (ADR-081 D3's goal first-move door, ADR-071's
+// every narrowing step (ADR-088 D3's goal first-move door, ADR-071's
 // compressed manifest, the native-search strip, the graceful-terminal
 // clearing and a BeforeLLM hook's rewrite). Keys are the sanitized names the
 // provider saw (tools.ToolsToProviderDefs sanitizes every name).
@@ -25,7 +25,7 @@ import (
 // request that offered only set_goal and AskUserQuestion, a ToolSearch call
 // still executed. Two documented rules forbid that:
 //
-//   - ADR-081 D3: the narrowed request offers "only {set_goal,
+//   - ADR-088 D3: the narrowed request offers "only {set_goal,
 //     AskUserQuestion} ∩ policy-allowed" and "'exactly two' is exact".
 //   - ADR-071 §1.1: a lazy tool is "callable only after load_tool [now
 //     ToolSearch] promotes it"; until then it is listed by name in the "More

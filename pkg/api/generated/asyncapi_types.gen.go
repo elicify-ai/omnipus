@@ -419,7 +419,7 @@ type GoalStatusFrame struct {
 	ActiveLoops int    `json:"active_loops"`
 	Cap         int    `json:"cap"`
 	Condition   string `json:"condition"`
-	// ADR-074 D5.2 / judgment-first FR-011 — compiled criteria breakdown for the `active` emission that follows a goal record register/update (ADR-081 `set_goal`) or marker activation. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI does not resolve cross-file $ref for its own codegen — the JudgeVerdictFrame/CriterionVerdict precedent); keep both in sync by hand, never a third criteria shape.
+	// ADR-074 D5.2 / judgment-first FR-011 — compiled criteria breakdown for the `active` emission that follows a goal record register/update (ADR-088 `set_goal`) or marker activation. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape (AsyncAPI does not resolve cross-file $ref for its own codegen — the JudgeVerdictFrame/CriterionVerdict precedent); keep both in sync by hand, never a third criteria shape.
 	Criteria []struct {
 		Author struct {
 			Id   string `json:"id"`
@@ -443,9 +443,9 @@ type GoalStatusFrame struct {
 		Status      string  `json:"status"`
 		Text        string  `json:"text"`
 	} `json:"criteria,omitempty"`
-	// ADR-080 D-STATEMENT — the compiled SMART restatement, rendered before the criteria breakdown. Populated on the `active` emission that follows a goal record register/update (ADR-081 `set_goal`) or marker activation; MAY be absent on marker-path records; keep in sync by hand with components/schemas/GoalStatusFrame.yaml.
+	// ADR-080 D-STATEMENT — the compiled SMART restatement, rendered before the criteria breakdown. Populated on the `active` emission that follows a goal record register/update (ADR-088 `set_goal`) or marker activation; MAY be absent on marker-path records; keep in sync by hand with components/schemas/GoalStatusFrame.yaml.
 	Definition *string `json:"definition,omitempty"`
-	// ADR-080 D-DOD — the goal's Definition of Done breakdown, DISTINCT from `criteria`, for the `active` emission that follows a goal record register/update (ADR-081 `set_goal`) or marker activation. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape, same as `criteria` above — keep both in sync by hand with components/schemas/GoalStatusFrame.yaml.
+	// ADR-080 D-DOD — the goal's Definition of Done breakdown, DISTINCT from `criteria`, for the `active` emission that follows a goal record register/update (ADR-088 `set_goal`) or marker activation. Items are a hand-synced INLINE duplicate of the canonical components/schemas/AcceptanceCriterion.yaml shape, same as `criteria` above — keep both in sync by hand with components/schemas/GoalStatusFrame.yaml.
 	Dod []struct {
 		Author struct {
 			Id   string `json:"id"`

@@ -13,7 +13,7 @@
 # A merge from a pre-ADR-082 branch can resurrect the deleted symbols as
 # ordinary, conflict-free additions — this script fails the build when any
 # of them reappears as a definition or non-comment reference. Mirrors
-# scripts/check-no-goal-confirm-gate.sh (ADR-081) and
+# scripts/check-no-goal-confirm-gate.sh (ADR-088) and
 # scripts/check-no-fail-closed-backfill.sh (ADR-077).
 #
 # Guarded names (ADR-082 §5's guard list):

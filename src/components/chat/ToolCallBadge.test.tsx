@@ -574,7 +574,7 @@ describe('ToolCallBadge — verbose chat gate', () => {
 
 // ── ADR-082 D9 review S11: a delegated worker's set_goal step is visible ─────
 // SubagentBlock renders a delegated worker's nested steps through this
-// component. `set_goal` refuses on a sub-turn (ADR-081 FR-005), and the
+// component. `set_goal` refuses on a sub-turn (ADR-088 FR-005), and the
 // thread policy hides the raw `set_goal` chip by default — so the worker's
 // attempt used to vanish entirely. It now routes to the dedicated UI: the
 // quiet "Goal registration failed" trace for the refusal, the record card

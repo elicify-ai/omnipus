@@ -102,7 +102,7 @@ Today a lost connection (a) silently degrades the rest of the turn to non-stream
 
 Determinism rules: integration tests use a fake provider that streams a fixed token list on a controllable clock; no live model. E2E uses the real binary with a live model but asserts only structure (bubble present, Stop visible, `done` once, final text equals transcript), never content.
 
-## 5. Wave plan (parallel worktrees, same discipline as ADR-081)
+## 5. Wave plan (parallel worktrees, same discipline as ADR-088)
 
 | Wave | Scope | Agent | Depends on |
 |---|---|---|---|

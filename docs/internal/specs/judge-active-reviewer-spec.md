@@ -574,7 +574,7 @@ or the `goalIdleQuietWindow` constant that paces it, also deletes:
 | `goalAdjudicationInFlight` self-race guard | the guard **open item 3 resolves onto** (FR-101) |
 | `goalHasLiveTurn` suppression + activity re-arm | the keeper starts acting against a live turn |
 | `TokenBudget().Exhausted()` brake → `clearGoal(FailedReasonBudgetExhausted)` | a goal past its token budget **never terminates on the idle path** |
-| `settleRecordlessGoal` — the ADR-081 D6c nudge ladder, and `dispatchGoalFallbackCompile` after it | a recordless goal is never nudged to call `set_goal` and never gets an engine-authored record — ADR-081 FR-017's "every active goal ends up judgeable" invariant breaks |
+| `settleRecordlessGoal` — the ADR-088 D6c nudge ladder, and `dispatchGoalFallbackCompile` after it | a recordless goal is never nudged to call `set_goal` and never gets an engine-authored record — ADR-088 FR-017's "every active goal ends up judgeable" invariant breaks |
 | `settleZeroOutputRecordedGoal` → `dispatchGoalAsyncFollowUp(goalContinuePushPrompt(…))` | **this is the Ralph-loop re-post D13 says to keep.** It is inside the function D13 names for removal |
 | `settleGoalNormally` → `runGoalAdjudication(…, claimText: "")` | the claimless adjudication — the **only** thing that actually goes |
 
@@ -603,7 +603,7 @@ Two mechanical consequences the ADR does not state:
   again. The deferred path MUST use the tick-path deliverer instead —
   `idleSteerDeliverer(sessionID)` → `dispatchGoalAsyncFollowUp` → `asyncNotifier.Notify`, which
   already stamps `goalLoopFollowUpSenderID` and therefore already passes
-  `checkGoalLoopAfterTurn`'s own origin gate (ADR-081 D6b).
+  `checkGoalLoopAfterTurn`'s own origin gate (ADR-088 D6b).
 - **The turn `ctx` is the wrong context.** `runGoalAdjudication` currently derives
   `context.WithTimeout(ctx, goalJudgeRoundTimeout)` from the turn ctx. Once the work is deferred past
   the turn, that ctx is finished. The idle path already solves this —
@@ -777,7 +777,7 @@ goal never has any). Its wording must not assume a repository, a diff or a test 
 | `pkg/agent/goal_triggers.go::goalQuietWindowSettle` / `maybeSettleGoalIdle` | modify — **surgically** | The single periodic driver for **nine** keeper behaviours, of which the claimless adjudication is one branch (C22). FR-095 replaces `settleGoalNormally`'s `runGoalAdjudication` call; FR-096 enumerates the eight that MUST survive. |
 | `pkg/agent/goal_triggers.go::settleGoalNormally` | modify | `logger.InfoCF(… "goal idle settle: firing claimless adjudication after quiet window")` then `runGoalAdjudication(…, claimText: "")` under a fresh `context.Background()` timeout. **This one call is the whole of D13's removal.** |
 | `pkg/agent/goal_triggers.go::settleZeroOutputRecordedGoal` / `goalContinuePushPrompt` / `settleRecordlessGoal` / `goalNudgePrompt` / `dispatchGoalFallbackCompile` | keep | **The Ralph-loop re-post D13 says the keeper "already implements" — verified, and it is inside the function D13 names for removal.** `goalContinuePushPrompt` is literally "Continue working toward the goal: %s … Keep going." |
-| `pkg/agent/goal_triggers.go::dispatchGoalAsyncFollowUp` / `idleSteerDeliverer` | call | The shared re-inject primitive: `asyncNotifier.Notify(AsyncNotifyEvent{… SourceKind: "goal_idle_settle", SenderCanonicalID: goalLoopFollowUpSenderID})`. Stamping that sentinel is what lets the re-injected turn pass `checkGoalLoopAfterTurn`'s origin gate (ADR-081 D6b). The deferred claim path's steer MUST route here, not through `result.followUps` (C23). |
+| `pkg/agent/goal_triggers.go::dispatchGoalAsyncFollowUp` / `idleSteerDeliverer` | call | The shared re-inject primitive: `asyncNotifier.Notify(AsyncNotifyEvent{… SourceKind: "goal_idle_settle", SenderCanonicalID: goalLoopFollowUpSenderID})`. Stamping that sentinel is what lets the re-injected turn pass `checkGoalLoopAfterTurn`'s origin gate (ADR-088 D6b). The deferred claim path's steer MUST route here, not through `result.followUps` (C23). |
 | `pkg/agent/goal_triggers.go::goalAdjudicationInFlight` / `verifier_registry.go::Register` / `ErrVerifierSessionHeld` | call | The two-layer in-flight guard: a check-then-act marker plus a CAS whose doc comment states the invariant outright ("a concurrent adjudication is already in flight for this unit and must not be silently clobbered … G-1 'exactly once'"). **Open item 3 resolves onto these** (FR-101) rather than onto anything new. |
 | `pkg/agent/behavior_scan.go::runBehaviorScan` / `task.CriterionBehavior` | extend | D14 **tier 1's only shipped evaluator**, and it is `{Tool, MinCount, MaxCount, Scope}` — a successful-call **count** for a named tool. It reads neither `Parameters` nor `Result`, so it cannot answer any of D14's own three examples (C26). |
 | `pkg/agent/verifier_adjudication.go::renderTranscriptEntriesForWindow` | modify | Renders every call as `fmt.Sprintf("[tool_call] %s -> %s", tc.Tool, tc.Status)` — name and status only. ADR §2 E3's defect, still live in the one place D14 tier 1 needs it not to be (C26, FR-105). |
@@ -1466,7 +1466,7 @@ equality test is the only mechanical guard (C21).
 - **FR-006b**: The clause count MUST be computed **when the criterion is created or updated**, not
   at adjudication time, and MUST be persisted on the criterion.
   - **Why this is not a refactor.** Revision 5 computed the count at adjudication time from the
-    criterion text. Under ADR-081 the **working agent** authors the goal record via `set_goal`, and
+    criterion text. Under ADR-088 the **working agent** authors the goal record via `set_goal`, and
     `mode:update` replaces the outgoing criteria set — so the judged party could re-issue a failing
     three-clause criterion as one clause and cut its own evidence bar by two thirds. A count frozen
     before judging cannot be tuned in response to failing; a count derived at judging time pays the
@@ -2516,7 +2516,7 @@ Five properties this change makes materially worse and which nothing above bound
   | 4 | In-flight self-race guard | `goalAdjudicationInFlight` | **the guard FR-101 resolves onto** |
   | 5 | Live-turn suppression + activity re-arm | `goalHasLiveTurn` | the keeper acts against a running turn |
   | 6 | Token-budget brake | `TokenBudget().Exhausted()` → `clearGoal(FailedReasonBudgetExhausted)` | a goal past its budget never terminates on this path |
-  | 7 | Recordless nudge ladder + engine fallback compile | `settleRecordlessGoal`, `goalNudgePrompt`, `dispatchGoalFallbackCompile` | ADR-081 FR-017's "every active goal ends up judgeable" breaks |
+  | 7 | Recordless nudge ladder + engine fallback compile | `settleRecordlessGoal`, `goalNudgePrompt`, `dispatchGoalFallbackCompile` | ADR-088 FR-017's "every active goal ends up judgeable" breaks |
   | 8 | The zero-output continue-push | `settleZeroOutputRecordedGoal`, `goalContinuePushPrompt` | **the Ralph-loop re-post D13 depends on** |
 
   `goalQuietWindowSettle`, `goalIdleQuietWindow` and `maybeSettleGoalIdle` are **kept**. Only
@@ -2550,7 +2550,7 @@ Five properties this change makes materially worse and which nothing above bound
   inside the first of those, so **today the Judge runs before delivery** (C23).
   - `checkGoalLoopAfterTurn` MUST keep running where it is for everything that is cheap and
     synchronous — the origin gate, the token-budget brake, the `waiting_on_user`/`blocked` park, the
-    activity bump, the ADR-081 D3 post-turn correction, and now FR-092's claim resolution. It MUST
+    activity bump, the ADR-088 D3 post-turn correction, and now FR-092's claim resolution. It MUST
     NOT call `runGoalAdjudication`. On a `met` claim it records the claim and hands the engine a
     **deferred dispatch** — a field on `turnResult` (shaped like the existing `followUps` slice,
     which is the shipped precedent for "the hook produces work the loop performs later").
@@ -2573,7 +2573,7 @@ Five properties this change makes materially worse and which nothing above bound
   `dispatchGoalAsyncFollowUp` → `asyncNotifier.Notify` with
   `SenderCanonicalID: goalLoopFollowUpSenderID`.
   - That sentinel is not decoration: `checkGoalLoopAfterTurn`'s own origin gate accepts **only** a
-    `UserInitiated` turn or exactly that sender (ADR-081 D6b). A re-injected steer stamped with the
+    `UserInitiated` turn or exactly that sender (ADR-088 D6b). A re-injected steer stamped with the
     notifier's default `"async:<kind>"` is **silently dropped at the gate** — activity never bumps,
     the idle marker never clears, and the keeper wedges. That failure is documented in
     `dispatchGoalAsyncFollowUp`'s own comment as one this project has already shipped once.
@@ -3670,7 +3670,7 @@ Traces to: US-12, FR-099
 - *(Appending to `result.followUps` would publish an empty slice: `runAgentLoop` publishes it
   immediately after `checkGoalLoopAfterTurn` returns, long before a deferred adjudication has
   produced a steer. And a notify stamped with the default `"async:<kind>"` sender is silently
-  dropped at the gate — a failure this project has already shipped once, ADR-081 D6b.)*
+  dropped at the gate — a failure this project has already shipped once, ADR-088 D6b.)*
 
 **Scenario: a new operator message during an in-flight adjudication is not blocked** *(Happy Path)*
 Traces to: US-12 AC-4, FR-100, E-32
@@ -3841,7 +3841,7 @@ each says so. Rows marked **(fails today)** are the ones that prove a closure ex
 | FR-097 | `TestQuietWindow_RePostsTheGoal` **(fails today)** — oracle: `goalContinuePushPrompt`'s text is dispatched, stamped `goalLoopFollowUpSenderID`, with zero Judge calls and no round consumed. All four, because "no verdict was written" alone passes on an implementation that does nothing and wedges every quiet goal | Go integration | same |
 | FR-097 | `TestZeroOutputTriple_AndItsDeadPredicatesAreRemoved` — oracle: `goalZeroOutputTripleHolds` and `sessionHasTranscriptOutputSince` are unreferenced and deleted; one push ladder remains, not two branches with identical bodies | Go unit | same |
 | FR-098 | `TestAdjudicationDispatchedAfterOutboundPublish` **(fails today)** — oracle: the **observed** seam order is `PublishOutbound(finalContent)` then verifier dispatch, `runAgentLoop` returns without waiting, and the adjudication's ctx outlives the turn ctx. A source-order assertion would pass on a conditionally-deferred implementation | Go integration | `pkg/agent/goal_claim_after_delivery_adr084_test.go` |
-| FR-099 | `TestDeferredAdjudication_SteerRoutesThroughAsyncNotifier` **(fails today)** — oracle: the steer arrives as a notify event carrying `SenderCanonicalID: goalLoopFollowUpSenderID` and a `SourceKind` distinct from `"goal_idle_settle"`, and `result.followUps` is empty. A default-stamped notify is silently dropped at the origin gate — a failure this project already shipped once (ADR-081 D6b) | Go integration | same |
+| FR-099 | `TestDeferredAdjudication_SteerRoutesThroughAsyncNotifier` **(fails today)** — oracle: the steer arrives as a notify event carrying `SenderCanonicalID: goalLoopFollowUpSenderID` and a `SourceKind` distinct from `"goal_idle_settle"`, and `result.followUps` is empty. A default-stamped notify is silently dropped at the origin gate — a failure this project already shipped once (ADR-088 D6b) | Go integration | same |
 | FR-100 | `TestNewOperatorMessageDuringInFlightAdjudicationIsNotBlocked` — oracle: the turn delivers with no wait; and a verdict for a criterion id a concurrent `set_goal mode:update` removed is discarded with a WARN naming the id, while the rest are applied | Go integration | same |
 | FR-101 | `TestSecondClaimDuringInFlightAdjudicationIsRefusedInTheToolResult` **(fails today — today it is a log line and a silent drop)** — oracle: the tool result states the refusal, no second verifier turn starts, no round is consumed, the streak is not cleared; plus a row where the check-then-act guard is raced past and `ErrVerifierSessionHeld` surfaces the same message | Go integration | same |
 | FR-102 | `TestOverturnedClaim_SurfacesAsADistinctStateAndATranscriptEntry` **(fails today)** — oracle: the `claim_overturned` state on the goal-status frame, distinct from an ordinary unmet round; the `judge_verdict` entry written; and the steer arriving as an ordinary async turn | Go integration | same |
@@ -3957,7 +3957,7 @@ named existing tests.
 | The marker claim path, including G-4's free-then-costly bounce ladder (`parseGoalStatusMarker`, `handleBareGoalClaim`, `bumpGoalBareClaimStreak`, `goalBareClaimCostThreshold`, `goalStatusBareClaimSteer`) | `pkg/agent/task_completion_signal_test.go` (existing cases) + `TestMarkerPath_UnchangedIncludingBareClaimEconomics`. **This is the row most at risk**: D12 is exactly where a "simplification" deletes the fallback the ADR says to keep |
 | The keeper's eight non-adjudicating behaviours (FR-096's table) | `pkg/agent/goal_triggers_test.go` (existing cases) + `TestKeeperTick_AllEightSurvivingBehaviours`. At risk because ADR §8 names their shared driver for removal (C22) |
 | `dispatchGoalAsyncFollowUp`'s un-wedge discipline: every exit that does not hand off to a turn clears the idle-settling marker itself | `pkg/agent/goal_keeper_repairs_test.go` (existing cases). Load-bearing for FR-097, which makes this the *only* action the keeper takes |
-| `goalLoopFollowUpSenderID` stamping on keeper-originated notifies (ADR-081 D6b) | `pkg/agent/async_notifier_test.go`, `goal_keeper_repairs_test.go`. FR-099 adds a second producer that depends on it; the negative assertion (other producers keep the default `async:<kind>` sender) must survive |
+| `goalLoopFollowUpSenderID` stamping on keeper-originated notifies (ADR-088 D6b) | `pkg/agent/async_notifier_test.go`, `goal_keeper_repairs_test.go`. FR-099 adds a second producer that depends on it; the negative assertion (other producers keep the default `async:<kind>` sender) must survive |
 | `verifier_registry`'s CAS refusing a concurrent adjudication (`ErrVerifierSessionHeld`) | `pkg/agent/verifier_registry_test.go`. Promoted from a rare race to FR-101's primary mechanism |
 | ADR-074's prose-led judge input order, with `ClaimText` last | `pkg/agent/judge_input_order_adr074_test.go`. FR-094 changes what `ClaimText` contains, never where it sits |
 | The `judging` pill is emitted before dispatch (was FR-086) | `pkg/agent/goal_triggers_test.go::TestGoalStatus_JudgingPillEmittedAtDispatch` |
@@ -4342,7 +4342,7 @@ ratified.
 | A-3 | RETIRED with D6 (ADR-084 rev 4) — concerned the frozen list's completeness | — | — |
 | A-13 | FR-030a's reachability test can reject a legitimate `met` whose evidence genuinely lives in a file the criterion does not name and the diff does not list | Reject it (`unable_to_verify`, bounded at K) rather than accept it | Is a false `unable_to_verify` on an obliquely-evidenced criterion an acceptable price for closing C9? The alternative — accepting an unattributable quote — is the defect this spec exists to prevent. |
 | A-14 | FR-006a's clause splitter is a heuristic over natural-language criterion text | Cap at 5, split on `"; "` / `" and "` / bullets; a false split can only produce `unable_to_verify`, never `unmet` | Should the clause count instead come from the criterion author (an explicit `parts[]` on `AcceptanceCriterion`), making it data rather than a guess? **Answered no, and the answer is now load-bearing:** an author-supplied count hands the dial to the judged party, which is strictly worse than a heuristic — see A-17. |
-| A-17 | **The clause splitter creates an incentive, and `set_goal` gives the judged party the lever.** A vaguer criterion needs fewer grounded entries, and under ADR-081 the *working* agent authors the record; `mode:update` replaces the outgoing criteria set, so a failing three-clause criterion could be re-issued as one clause | FR-006b: compute the count at criterion create/update and persist it; the adjudicator reads the persisted value and never recomputes; a `mode:update` that lowers it while a verdict exists is rejected | Is rejecting the lowering the right posture, or should it be allowed with a loud WARN and a surfaced diff? Rejecting is chosen because a silent reduction of one's own evidence bar in response to failing is indistinguishable from gaming, and a WARN nobody reads is not a control. **Distinct from A-14**: that row asks who computes the count; this one asks who benefits from the answer. |
+| A-17 | **The clause splitter creates an incentive, and `set_goal` gives the judged party the lever.** A vaguer criterion needs fewer grounded entries, and under ADR-088 the *working* agent authors the record; `mode:update` replaces the outgoing criteria set, so a failing three-clause criterion could be re-issued as one clause | FR-006b: compute the count at criterion create/update and persist it; the adjudicator reads the persisted value and never recomputes; a `mode:update` that lowers it while a verdict exists is rejected | Is rejecting the lowering the right posture, or should it be allowed with a loud WARN and a surfaced diff? Rejecting is chosen because a silent reduction of one's own evidence bar in response to failing is indistinguishable from gaming, and a WARN nobody reads is not a control. **Distinct from A-14**: that row asks who computes the count; this one asks who benefits from the answer. |
 | A-18 | FR-085's rollout choice: accept that old clients drop new frames, or relax `additionalProperties` on the two frame copies | Deferred to W3 with both options and their consequences stated (FR-085) | The SaaS variant serves the SPA from a CDN independently of the Go service, so its skew window is open-ended where the OSS binary's is a page reload. Does that asymmetry change the answer? |
 | A-19 | FR-086's visibility choice: update the goal-status surface during a 420 s adjudication, or state that the `judging` pill does not change for up to seven minutes | Deferred to W3; **both are legitimate, silence is not** | Is an unchanging pill acceptable for seven minutes inside the operator's own chat turn, or should the tool-call count stream? |
 | A-15 | FR-009a's injection-signature set is a heuristic floor that a determined attacker rephrases around | Ship it anyway: it is the only mechanical control for D4, and it removes grounding rather than filtering content, so a miss is no worse than today | Is a heuristic that catches the naive case worth the false-positive risk on a file legitimately discussing prompt injection? |

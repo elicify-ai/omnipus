@@ -32,7 +32,7 @@
 // store clears the bucket (session switch / reset) rather than any
 // particular state literal.
 //
-// ADR-081 D5/D9: `queued` is retired — the backend never emits it anymore
+// ADR-088 D5/D9: `queued` is retired — the backend never emits it anymore
 // (the pending-confirm state it represented is deleted in full). The wire
 // enum value survives untouched in the generated type (Constraint #8; do
 // not edit generated files), so this component still narrows it out
@@ -82,7 +82,7 @@ interface StatusLineConfig {
 
 // Non-`active`, non-`queued` states each render a single summary line (no
 // condition/round detail) — mirrors the prior paused/brake-fired
-// convention. `queued` is excluded from this type entirely (ADR-081 D5/D9
+// convention. `queued` is excluded from this type entirely (ADR-088 D5/D9
 // — retired, never emitted; the caller narrows it out via `nonQueuedGoal`
 // before this is ever called). Exhaustive switch with a `never` default so
 // a future 9th LIVE enum value fails typecheck here instead of silently
@@ -193,7 +193,7 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
   // claim: any non-null, non-`queued` frame renders, `cleared` included,
   // via its own dedicated branch below like every other non-active state.
   //
-  // ADR-081 D5/D9: `queued` is excluded from `showGoal` up front (never
+  // ADR-088 D5/D9: `queued` is excluded from `showGoal` up front (never
   // emitted anymore), and every render branch below re-checks
   // `goalStatus.state !== 'queued'` inline (property narrowing on repeated
   // `goalStatus.state` access, the same pattern the pre-existing

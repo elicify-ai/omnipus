@@ -1,4 +1,4 @@
-// Omnipus — set_goal tool tests (spec tests 1-3, DS-1 rows: ADR-081 D2).
+// Omnipus — set_goal tool tests (spec tests 1-3, DS-1 rows: ADR-088 D2).
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -1077,7 +1077,7 @@ func TestSetGoalTool_UpdateDoD_OmittedCarriesForward_ExplicitEmptyResetsFloor(t 
 // render the goal card directly from the call's own result, anchored at
 // the call's position, instead of the deleted GoalThreadTailCards mount
 // (which only ever read the goal_status frame via goalPills). A mode:update
-// (amend) call must report the SAME goal_id — ADR-081/ADR-053: GoalID never
+// (amend) call must report the SAME goal_id — ADR-088/ADR-053: GoalID never
 // changes within a goal generation, only a fresh goal (not exercised here)
 // mints a new one — with the amended record.
 func TestSetGoal_ResultCarriesGoalIDAndRecord(t *testing.T) {

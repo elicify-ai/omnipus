@@ -172,7 +172,7 @@ func clearGoalRecordCriteria(t *testing.T, sid string) {
 	}
 }
 
-// activatePendingGoal is a compatibility name (ADR-081 D1: instant
+// activatePendingGoal is a compatibility name (ADR-088 D1: instant
 // activation — there is no more pending/confirm step) kept so the ~33
 // call sites across the goal test suite that call it right after an
 // activating `/goal <intent>` do not all need individual edits. It is now a
@@ -181,7 +181,7 @@ func clearGoalRecordCriteria(t *testing.T, sid string) {
 func activatePendingGoal(t *testing.T, _ *AgentLoop, _ *AgentInstance, opts *processOptions) {
 	t.Helper()
 	if activeGoalForSession(opts.TranscriptSessionID) == nil {
-		t.Fatal("activatePendingGoal: goal must already be ACTIVE (ADR-081 D1 instant activation)")
+		t.Fatal("activatePendingGoal: goal must already be ACTIVE (ADR-088 D1 instant activation)")
 	}
 }
 
@@ -247,7 +247,7 @@ func unmetJudgeProvider(reason string) *fakeJudgeProvider {
 
 // --- /goal: set / status / clear ----------------------------------------
 
-// TestGoalCommand_SetRewritesUserMessage — rewritten for ADR-081 D1: a PROSE
+// TestGoalCommand_SetRewritesUserMessage — rewritten for ADR-088 D1: a PROSE
 // `/goal <intent>` activates INSTANTLY in the same turn (matched=true,
 // handled=false), rewriting opts.UserMessage to the raw intent — no compile
 // call, no pending echo, no confirm step. GoalCriteriaJSON starts EMPTY
@@ -288,7 +288,7 @@ func TestGoalCommand_SetRewritesUserMessage(t *testing.T) {
 	}
 }
 
-// TestGoalCommand_ReplaceOnSet — rewritten for ADR-081 D1/D5/FR-001: a
+// TestGoalCommand_ReplaceOnSet — rewritten for ADR-088 D1/D5/FR-001: a
 // `/goal <new intent>` on an ALREADY-ACTIVE goal is STEERING, not a pending
 // amendment. A PROSE restate rewrites the turn's working prompt (same
 // mechanism as activation) and does NOT touch the persisted record — the
@@ -375,7 +375,7 @@ func TestGoalCommand_StatusAndClear(t *testing.T) {
 	for _, verb := range []string{"clear", "stop", "cancel"} {
 		al.applyGoalCommandPrompt(context.Background(),
 			bus.InboundMessage{Content: "/goal make the tests pass", UserInitiated: true}, agentInst, &opts)
-		// ADR-081 D1: instant activation — no confirm step. First iteration:
+		// ADR-088 D1: instant activation — no confirm step. First iteration:
 		// the status section's goal is still ACTIVE, so this is a prose
 		// restate that leaves the already-active goal in place; later
 		// iterations: a goalless fresh activation. Either way the goal is
@@ -839,7 +839,7 @@ func TestGoalLoop_ReInjectedFollowUp_AdvancesGoal(t *testing.T) {
 	}
 }
 
-// --- ADR-081 D3 AMENDMENT item 3: immediate post-turn correction --------
+// --- ADR-088 D3 AMENDMENT item 3: immediate post-turn correction --------
 //
 // checkGoalLoopAfterTurn's maybeNudgeUnregisteredGoal replaces provider
 // tool-choice forcing as the enforcement point: a completed goal turn that
@@ -1554,7 +1554,7 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 	}
 	firstID := meta1.GoalID
 
-	// ADR-081 D1/FR-001: a prose restate on the active goal rewrites the
+	// ADR-088 D1/FR-001: a prose restate on the active goal rewrites the
 	// working prompt and continues the turn — no confirm ritual, and
 	// critically it must NOT mint a new GoalID.
 	matched, handled, _ := al.applyGoalCommandPrompt(context.Background(),
@@ -1595,7 +1595,7 @@ func TestGoalId_StableAcrossLifecycle_NewGenerationAfterClear(t *testing.T) {
 	cleanup()
 
 	// Every emitted frame for goal #1's lifecycle carries firstID; goal #2's
-	// own frame carries its own, different id. None is ever empty — ADR-081
+	// own frame carries its own, different id. None is ever empty — ADR-088
 	// D1 mints the GoalID up front on instant activation, so (unlike the
 	// retired ADR-074 D4a pending/queued state) there is no window where a
 	// frame legitimately carries an empty goal-id.

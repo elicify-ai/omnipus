@@ -15093,7 +15093,7 @@ export interface components {
             };
             /** @description GOAL-FR-006 — the most recent Judge adjudication of this goal. Absent before the first completed adjudication. */
             latest_verdict?: components["schemas"]["JudgeVerdict"];
-            /** @description GOAL-FR-006 — the superseded-criteria history: prior `criteria`/`dod` sets this goal carried before a `set_goal(mode: update)` steering revision replaced them (ADR-081). Empty/absent for a goal never revised. Distinct from `terminal_history` below, which records prior COMPLETED RUNS of a re-run task-owned goal, not prior criteria revisions of the current run. */
+            /** @description GOAL-FR-006 — the superseded-criteria history: prior `criteria`/`dod` sets this goal carried before a `set_goal(mode: update)` steering revision replaced them (ADR-088). Empty/absent for a goal never revised. Distinct from `terminal_history` below, which records prior COMPLETED RUNS of a re-run task-owned goal, not prior criteria revisions of the current run. */
             superseded_criteria?: {
                 /** Format: date-time */
                 superseded_at: string;

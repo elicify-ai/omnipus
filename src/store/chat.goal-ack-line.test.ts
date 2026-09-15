@@ -1,7 +1,7 @@
 /**
  * chat.goal-ack-line.test.ts — operator-reported UX fix, 2026-09-08 (GX-C).
  *
- * `/goal <text>` activates a goal INSTANTLY (ADR-081 D1, zero LLM calls),
+ * `/goal <text>` activates a goal INSTANTLY (ADR-088 D1, zero LLM calls),
  * but the operator reported watching only the generic thinking indicator
  * for 17 minutes with no sign the goal had registered, while a tool call
  * had actually failed off-screen. Fix #1: the FIRST time the store observes

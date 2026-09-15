@@ -3,7 +3,7 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // UAT 2026-09-14 (B-1 run 4) regression coverage for
-// appendGoalDoorsAfterEscape (tool_manifest.go): after ADR-081 D3's bounded
+// appendGoalDoorsAfterEscape (tool_manifest.go): after ADR-088 D3's bounded
 // escape releases the narrowed first-move request, the compressed tool
 // surface must still let the model call set_goal (and, on webchat with the
 // question budget unspent, AskUserQuestion) while the goal has no record.

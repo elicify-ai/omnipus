@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# check-no-goal-confirm-gate.sh — ADR-081 D9 mechanical guard.
+# check-no-goal-confirm-gate.sh — ADR-088 D9 mechanical guard.
 #
 # The /goal confirm-gate machinery was deleted in full (greenfield, operator
 # directive 2026-09-07): goals activate instantly, the working agent authors
 # the goal record via set_goal, and steering replaces confirmation. A merge
-# from a pre-ADR-081 branch can resurrect the deleted symbols as ordinary,
+# from a pre-ADR-088 branch can resurrect the deleted symbols as ordinary,
 # conflict-free additions — this script fails the build when any of the seven
 # guarded names reappears as a definition or non-comment reference.
 #
@@ -67,12 +67,12 @@ violations=$(echo "$hits" | awk -F: '
   }' | grep -v '^$' || true)
 
 if [ -n "$violations" ]; then
-  echo "ERROR: retired ADR-081 confirm-gate symbol(s) present in hand-written source:" >&2
+  echo "ERROR: retired ADR-088 confirm-gate symbol(s) present in hand-written source:" >&2
   echo "$violations" >&2
   echo "" >&2
-  echo "These were deleted by ADR-081 (work-first goal flow, greenfield)." >&2
+  echo "These were deleted by ADR-088 (work-first goal flow, greenfield)." >&2
   echo "If this came from a merge, resolve by KEEPING the deletion — see" >&2
-  echo "CLAUDE.md 'Retired surfaces' and docs/internal/architecture/ADR-081-work-first-goal-flow.md." >&2
+  echo "CLAUDE.md 'Retired surfaces' and docs/internal/architecture/ADR-088-work-first-goal-flow.md." >&2
   exit 1
 fi
 

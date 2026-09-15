@@ -64,7 +64,7 @@ On every WebSocket reopen the SPA re-attaches its active session (`attach_sessio
 
 ### D7 — Mechanical guard
 
-`scripts/check-no-orphan-turn-watchdog.sh` fails the build if any symbol in §5's guard list reappears as a definition or a non-comment reference. Wired into `.github/workflows/pr.yml`, `deploy/ci-worker/runci.sh`'s `lint` gate, and `make lint-no-orphan-turn-watchdog`, matching the ADR-081 and ADR-077 guards.
+`scripts/check-no-orphan-turn-watchdog.sh` fails the build if any symbol in §5's guard list reappears as a definition or a non-comment reference. Wired into `.github/workflows/pr.yml`, `deploy/ci-worker/runci.sh`'s `lint` gate, and `make lint-no-orphan-turn-watchdog`, matching the ADR-088 and ADR-077 guards.
 
 ### D9 — The goal card is anchored at its `set_goal` call, not at the thread tail
 
@@ -123,7 +123,7 @@ On every WebSocket reopen the SPA re-attaches its active session (`attach_sessio
 | `tests/e2e/cancel-cross-channel.spec.ts` ~L995 | comment referencing the CI env — remove |
 | `docs/internal/architecture/ADR-045-…md` | Status → Superseded by ADR-082 |
 | `docs/internal/architecture/ADR-057-…md`, `…-review.md`, `docs/internal/specs/adr-057-…spec.md`, `…-review.md`, `adr-058-…spec.md`, `unified-goal-plan-subagent-spec.md` | annotate references (do not rewrite history) |
-| `CLAUDE.md` | add a "Retired surfaces" entry mirroring the ADR-081 one |
+| `CLAUDE.md` | add a "Retired surfaces" entry mirroring the ADR-088 one |
 
 **Guard list** (`scripts/check-no-orphan-turn-watchdog.sh`): `ArmOrphanForegroundTurnWatch`, `DisarmOrphanForegroundTurnWatch`, `fireOrphanForegroundTurnWatch`, `reapOrphanForegroundTurn`, `sessionStillOrphaned`, `hasLiveCriticalDelegate`, `getActiveRootTurnStateForSession`, `OrphanedTurnGraceSeconds`, `DefaultOrphanedTurnGraceSeconds`, `EffectiveOrphanedTurnGraceSeconds`, `GatewayOrphanedTurnGraceSeconds`, `OMNIPUS_GATEWAY_ORPHANED_TURN_GRACE_SECONDS`, `EventTurnOrphanTimeout`, `turn.orphan_timeout`. Explicitly **not** guarded (kept): `startOrphanWatchdog`, `orphanWatchdogTimeout`, `orphanWatchdogMaxRechecks`, `SubTurnOrphan`.
 

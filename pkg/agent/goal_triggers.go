@@ -114,7 +114,7 @@ var goalIdleQuietWindow = 60 * time.Second //nolint:gochecknoglobals
 // never the idle path's full quiet-window cost).
 const goalBareClaimCostThreshold = 2
 
-// goalZeroOutputPushMax is ADR-081 FR-014b/FR-017's "N=2" bound — SHARED by
+// goalZeroOutputPushMax is ADR-088 FR-014b/FR-017's "N=2" bound — SHARED by
 // TWO ladders through the SAME persisted GoalZeroOutputPushes field
 // (session.UnifiedMeta), a deliberate decision (reported per the lane
 // brief, not an oversight): a RECORDED goal's bounded zero-output
@@ -242,7 +242,7 @@ type goalTriggerState struct {
 	// itself — which IS new activity, G-2).
 	idleSettling map[string]bool
 
-	// diffBoundaryHash is ADR-081 D6a/FR-014b's per-goal-id git-commit
+	// diffBoundaryHash is ADR-088 D6a/FR-014b's per-goal-id git-commit
 	// boundary for the zero-output triple's diff term (resolveGoalScopedDiffEmpty,
 	// verifier_adjudication.go): the HEAD hash observed the last time this
 	// goal-id's diff term was evaluated, refreshed on every evaluation. This
@@ -415,7 +415,7 @@ func resetGoalTriggerStateForTest() {
 // Called from applyGoalCommandPrompt when a goal activates/activates-from-
 // pending. Idempotent; cleared by clearGoalTriggerState on /goal clear.
 //
-// ADR-081 FR-031 (round-2 M-9), re-pointed by GOAL-FR-032/FR-033/FR-034
+// ADR-088 FR-031 (round-2 M-9), re-pointed by GOAL-FR-032/FR-033/FR-034
 // (E12): the route's channel/chatID are ALSO persisted onto the goal's OWN
 // record (goal.SetRoute, wave S5), not just the in-memory map — a gateway
 // restart used to silently disable both the keeper's idle-steer re-inject
@@ -883,7 +883,7 @@ func (al *AgentLoop) runGoalAdjudication(
 
 	verdict := jr.Verdict
 	al.writeGoalVerdictTranscript(store, sessionID, verdict)
-	// ADR-081 D8: the verdict summary — the event D8 names that this file
+	// ADR-088 D8: the verdict summary — the event D8 names that this file
 	// previously had no INFO line for at all.
 	logger.InfoCF("agent", "goal: verdict computed",
 		map[string]any{
@@ -1226,7 +1226,7 @@ func (al *AgentLoop) goalQuietWindowSettle(now time.Time) {
 func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedStore, s *session.UnifiedMeta, rec *goal.Goal) {
 	sessionID := s.ID
 
-	// ADR-081 D6a/FR-016: a parked AskUserQuestion card suppresses BOTH idle
+	// ADR-088 D6a/FR-016: a parked AskUserQuestion card suppresses BOTH idle
 	// settlement and the D6c nudge ladder — the goal is waiting on the
 	// operator in the same sense as the waiting_on_user marker pause below.
 	// Checked in the SAME early, silent position as goalIsWaitingOnUser
@@ -1288,7 +1288,7 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 		return // quiet window not yet elapsed
 	}
 
-	// ADR-081 D6a/FR-013: a live turn for this goal's session — its own root
+	// ADR-088 D6a/FR-013: a live turn for this goal's session — its own root
 	// turn OR any delegated descendant — counts as activity. Idle settlement
 	// (and the D6c nudge ladder, which shares this same gate) is suppressed
 	// while one exists; the window re-arms so the NEXT check waits a full
@@ -1370,7 +1370,7 @@ func (al *AgentLoop) maybeSettleGoalIdle(now time.Time, store *session.UnifiedSt
 	// empty (GOAL-FR-003) — the direct replacement for the retired
 	// `GoalCriteriaJSON == ""` session-meta check.
 	if len(rec.Criteria) == 0 {
-		// ADR-081 D3/FR-014/D6c: a RECORDLESS goal (active ∧ empty record) is
+		// ADR-088 D3/FR-014/D6c: a RECORDLESS goal (active ∧ empty record) is
 		// NEVER judged at idle — there is nothing to adjudicate. The keeper's
 		// only action is the nudge ladder.
 		al.settleRecordlessGoal(store, s, rec, agentInst)
@@ -1449,7 +1449,7 @@ func (al *AgentLoop) settleGoalNormally(sessionID string, rec *goal.Goal) {
 	al.dispatchGoalAsyncFollowUp(sessionID, rec.GoalID, goalIdleSettleSourceKind, goalContinuePushPrompt(rec.Prompt))
 }
 
-// settleRecordlessGoal is ADR-081 D6c's nudge ladder for a RECORDLESS active
+// settleRecordlessGoal is ADR-088 D6c's nudge ladder for a RECORDLESS active
 // goal at idle (no parked card, quiet turn machinery): dispatch a nudge
 // telling the working agent to register its record via set_goal, up to
 // goalZeroOutputPushMax (N=2) times; on the (N+1)th observation (still
@@ -1542,10 +1542,10 @@ func goalContinuePushPrompt(condition string) string {
 	)
 }
 
-// dispatchGoalFallbackCompile is ADR-081 D6c/D7's engine-authored fallback:
+// dispatchGoalFallbackCompile is ADR-088 D6c/D7's engine-authored fallback:
 // after goalZeroOutputPushMax recordless nudges the agent still has not
 // called set_goal, so the engine runs compileGoalIntentLLM ITSELF — the
-// same call the pre-ADR-081 front path used to make, D7-repointed at the
+// same call the pre-ADR-088 front path used to make, D7-repointed at the
 // Judge system agent's model by wave 2a — with the goal's own durable
 // condition as intent, and registers whatever comes back directly via the
 // session meta patch (bypassing the set_goal tool entirely: there is no
@@ -1654,7 +1654,7 @@ func (al *AgentLoop) dispatchGoalFallbackCompile(
 		narration: goalAnchorNarrationFallback,
 		record:    outcome.Result.Goal,
 		assumptions: []string{
-			"Engine-authored fallback record after nudge exhaustion (ADR-081 D7): the agent never called set_goal, so the goal statement was compiled by the engine.",
+			"Engine-authored fallback record after nudge exhaustion (ADR-088 D7): the agent never called set_goal, so the goal statement was compiled by the engine.",
 		},
 	}); aerr != nil {
 		return
@@ -1884,7 +1884,7 @@ func goalDescendantSessionIDs(all []*session.UnifiedMeta, rootID string) []strin
 // activity (G-2): the Notify-originated turn bumps GoalLastActivityAt via
 // checkGoalLoopAfterTurn's activity path, re-arming the quiet window.
 //
-// ADR-081 D6b (the un-wedge fix): dispatchGoalAsyncFollowUp stamps the
+// ADR-088 D6b (the un-wedge fix): dispatchGoalAsyncFollowUp stamps the
 // notify event's SenderCanonicalID as goalLoopFollowUpSenderID — the SAME
 // sentinel checkGoalLoopAfterTurn's origin gate accepts. Before this, the
 // notifier's default "async:<kind>" stamping meant the re-injected steer

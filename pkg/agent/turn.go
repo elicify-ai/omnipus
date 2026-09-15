@@ -355,7 +355,7 @@ type turnState struct {
 	// CLI/automation clients can detect failure without parsing message content.
 	turnFailed bool
 
-	// goalNarrowMisses is ADR-081 D3's bounded-escape counter (the D3
+	// goalNarrowMisses is ADR-088 D3's bounded-escape counter (the D3
 	// amendment, 2026-09-08): the number of CONSECUTIVE LLM requests this
 	// turn for which evaluateGoalForcing (loop.go) has offered the narrowed
 	// {set_goal[, AskUserQuestion]} first-move door while the base predicate
@@ -370,7 +370,7 @@ type turnState struct {
 	// Zero value is correct: each turnState is fresh per turn generation, so
 	// there is nothing to reset between turns.
 	goalNarrowMisses int
-	// goalNarrowEscaped is true once ADR-081 D3's bounded escape has fired
+	// goalNarrowEscaped is true once ADR-088 D3's bounded escape has fired
 	// for this turn — evaluateGoalForcing then offers the FULL tool surface
 	// for the remainder of the turn even though the base predicate may still
 	// hold (a persistently empty record against a model that keeps failing
@@ -1662,7 +1662,7 @@ func (ts *turnState) markTurnFailed() {
 	ts.mu.Unlock()
 }
 
-// noteGoalNarrowAttempt bumps ADR-081 D3's bounded-escape counter
+// noteGoalNarrowAttempt bumps ADR-088 D3's bounded-escape counter
 // (goalNarrowMisses, see its doc comment) for one more narrowed first-move
 // offering this turn and returns the running total, so the caller
 // (evaluateGoalForcing, loop.go) can compare it against
@@ -1674,7 +1674,7 @@ func (ts *turnState) noteGoalNarrowAttempt() int {
 	return ts.goalNarrowMisses
 }
 
-// armGoalNarrowEscape permanently releases ADR-081 D3's narrowed first-move
+// armGoalNarrowEscape permanently releases ADR-088 D3's narrowed first-move
 // door for the rest of this turn (see goalNarrowEscaped's doc comment).
 func (ts *turnState) armGoalNarrowEscape() {
 	ts.mu.Lock()

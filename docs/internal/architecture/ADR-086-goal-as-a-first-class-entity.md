@@ -3,7 +3,7 @@
 > **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
 
 - **Status:** Proposed (revision 2 — corrected against an adversarial review, 2026-09-10; five blockers and seven majors addressed, §7 records what changed and why. Revision 1 — 2026-09-09.)
-- **Relates to:** ADR-081 (work-first goal flow), ADR-084 **revision 9** (the Judge as an active reviewer; revision 9 withdraws the three-state outcome), ADR-049/ADR-052/ADR-055 (task and plan adjudication), ADR-080 (criterion types and DoD provenance), ADR-057 (session unification, the striped session lock), ADR-054 D3 (`pkg/entity`, the per-entity store precedent)
+- **Relates to:** ADR-088 (work-first goal flow), ADR-084 **revision 9** (the Judge as an active reviewer; revision 9 withdraws the three-state outcome), ADR-049/ADR-052/ADR-055 (task and plan adjudication), ADR-080 (criterion types and DoD provenance), ADR-057 (session unification, the striped session lock), ADR-054 D3 (`pkg/entity`, the per-entity store precedent)
 - **Changes the ground under:** `docs/internal/specs/judge-active-reviewer-spec.md`, which currently assumes a chat goal lives on the session
 - **Spec:** `docs/internal/specs/goal-entity-spec.md`
 
@@ -95,7 +95,7 @@ A `Goal` is stored in its own right, not as fields on a session and not as field
 - **Definition.** The goal exists with its criteria and budget, and is not running. A task holds a goal in this phase from creation until the task starts.
 - **Active.** The goal is bound to a session and the loop runs: work → claim → judgement (ADR-084 revision 9).
 
-**In chat, the two phases collapse:** `/goal` creates the definition and activates it in the current session in one step (ADR-081 D1's instant activation is unchanged). **On a task, they are separated in time**: the definition is authored up front, dormant, and activates when the task starts and mints its session.
+**In chat, the two phases collapse:** `/goal` creates the definition and activates it in the current session in one step (ADR-088 D1's instant activation is unchanged). **On a task, they are separated in time**: the definition is authored up front, dormant, and activates when the task starts and mints its session.
 
 After activation the two are **identical** — same loop, same claim tool, same Judge, same budget accounting, same verdict. This is the operator's stated invariant and it is the point of the ADR.
 

@@ -5,7 +5,7 @@
 // no goal-shaped trace after a reload. The reason is a persistence asymmetry
 // on the SERVER, not a client filter:
 //
-//   - `pkg/agent/goal_loop.go::activateInstantGoal` (the ADR-081 D1 path
+//   - `pkg/agent/goal_loop.go::activateInstantGoal` (the ADR-088 D1 path
 //     every prose `/goal` takes) activates the goal and emits a live
 //     `goal_status` frame, but — unlike the marker-activation, marker-restate
 //     and fallback-compile paths — it never calls
@@ -46,7 +46,7 @@
 //   - `pkg/agent/goal_loop.go::isGoalClearVerb` treats the six
 //     `commands.GoalClearAliases()` verbs — compared against the WHOLE args
 //     string — as clearing a goal, not setting one.
-//   - A bare `/goal` prints status, and `/goal confirm` is an ADR-081 no-op
+//   - A bare `/goal` prints status, and `/goal confirm` is an ADR-088 no-op
 //     reply — neither sets anything.
 //
 // WHAT IT RETURNS, AND WHY IT IS A BOOLEAN. An earlier version returned the
@@ -70,7 +70,7 @@
 /** The six verbs that CLEAR a goal — `pkg/commands/cmd_goal.go::GoalClearAliases`. */
 const GOAL_CLEAR_ALIASES = ['clear', 'stop', 'off', 'reset', 'cancel', 'none']
 
-/** ADR-081 D1/FR-022 no-op arg — `pkg/agent/goal_loop.go::goalConfirmNoOpArg`. */
+/** ADR-088 D1/FR-022 no-op arg — `pkg/agent/goal_loop.go::goalConfirmNoOpArg`. */
 const GOAL_CONFIRM_NOOP_ARG = 'confirm'
 
 /** The command word, `pkg/commands/cmd_goal.go`'s `Name: "goal"` — no aliases. */

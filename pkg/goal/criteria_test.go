@@ -106,7 +106,7 @@ func TestGoalSetCriteriaNormalizesAndPersists(t *testing.T) {
 	}
 }
 
-// TestGoalSupersedeCriteriaRetainsHistory (ADR-081 set_goal(mode: update))
+// TestGoalSupersedeCriteriaRetainsHistory (ADR-088 set_goal(mode: update))
 // proves SupersedeCriteria snapshots the PRIOR lists into
 // SupersededCriteria before installing the new ones, and that repeated
 // supersessions accumulate rather than overwrite.

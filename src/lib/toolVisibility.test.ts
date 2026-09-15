@@ -76,14 +76,14 @@ describe('shouldRenderToolCall — Skill (ADR-072 D3)', () => {
   })
 })
 
-// ADR-081 D5/A-3 (work-first goal flow), re-anchored by ADR-082 D9: the RAW
+// ADR-088 D5/A-3 (work-first goal flow), re-anchored by ADR-082 D9: the RAW
 // `set_goal` call chip is hidden by default — the record card (GoalEchoCard,
 // rendered directly from the call's own result by its dedicated tool UI,
 // SetGoalToolUI) is the visible surface for a reader, same rationale as
 // `delegate`'s hide. Unlike `ToolSearch`/`Skill`, there is NO error
 // exception (mirrors `delegate`/background-`bash`): a rejected submission
 // is a bounded-retry validation loop the calling agent handles inline.
-describe('shouldRenderToolCall — set_goal (ADR-081 D5/A-3)', () => {
+describe('shouldRenderToolCall — set_goal (ADR-088 D5/A-3)', () => {
   it.each([
     [undefined, false, false],
     [{}, false, false],

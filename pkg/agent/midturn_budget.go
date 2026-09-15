@@ -112,7 +112,7 @@ func absoluteShareTokens(cs config.ContextSettings) int {
 // tokens, with no budget-aware cap), and the web-rendering note (loop.go's
 // callMessages assembly — buildScratchpadNote / injectWorkspaceInstructions
 // / injectWebRenderingNote, all called on `repairedHistory`, never on the
-// `messages` slice either budget site measures). ADR-081 D9 retires the
+// `messages` slice either budget site measures). ADR-088 D9 retires the
 // ADR-078 D2 pending-goal note (buildGoalPendingNote/injectGoalPendingNote,
 // pkg/agent/goal_pending_note.go — deleted in full: instant activation
 // leaves no pending state for it to describe) — it is no longer part of this
@@ -141,9 +141,9 @@ func (al *AgentLoop) ephemeralSystemNoteTokens(ts *turnState) int {
 	add(al.buildScratchpadNote(ts.agent.ID, ts.opts.TranscriptSessionID))
 	add(buildWorkspaceInstructionsNote(ts.opts.WorkspaceID))
 	add(buildWebRenderingNote(ts.channel))
-	// ADR-081 D4 (spec FR-011): the goal rubric note. The ADR-078 D2
+	// ADR-088 D4 (spec FR-011): the goal rubric note. The ADR-078 D2
 	// buildGoalPendingNote entry that used to sit here is gone in full
-	// (pkg/agent/goal_pending_note.go, deleted — ADR-081 D9); this is its
+	// (pkg/agent/goal_pending_note.go, deleted — ADR-088 D9); this is its
 	// replacement in the SAME per-turn note enumeration. See
 	// goalRubricNoteForBudget's own doc comment for why this deliberately
 	// does not gate on "iteration==1 only" the way the real injection call

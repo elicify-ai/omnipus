@@ -23,7 +23,7 @@
 # A merge from a pre-revision-9 branch can restore all five symbols as an
 # ordinary, conflict-free addition — this script fails the build when any
 # of them reappears as a definition or non-comment reference. Mirrors
-# scripts/check-no-goal-confirm-gate.sh (ADR-081) and
+# scripts/check-no-goal-confirm-gate.sh (ADR-088) and
 # scripts/check-no-orphan-turn-watchdog.sh (ADR-082), matching the judge
 # spec's own instruction at FR-109's traceability row: "Matches the
 # check-no-goal-confirm-gate.sh precedent."

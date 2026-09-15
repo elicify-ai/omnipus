@@ -14,7 +14,7 @@
  *     runs of whitespace collapse and a bare command yields empty args.
  *   - `pkg/agent/goal_loop.go::applyGoalCommandPrompt` — empty args print
  *     status, `isGoalClearVerb(args)` clears, `goalConfirmNoOpArg`
- *     ("confirm") is an ADR-081 no-op reply. Only what falls through all
+ *     ("confirm") is an ADR-088 no-op reply. Only what falls through all
  *     three actually SETS a goal.
  *   - `pkg/commands/cmd_goal.go::GoalClearAliases` — clear, stop, off, reset,
  *     cancel, none. The command itself has no aliases (`Name: "goal"`).
@@ -58,7 +58,7 @@ describe('messageSetsGoal — what the server would treat as setting a goal', ()
     },
   )
 
-  it('returns false for /goal confirm — an ADR-081 no-op reply, not a goal named "confirm"', () => {
+  it('returns false for /goal confirm — an ADR-088 no-op reply, not a goal named "confirm"', () => {
     expect(messageSetsGoal('/goal confirm')).toBe(false)
     expect(messageSetsGoal('/goal CONFIRM')).toBe(false)
   })

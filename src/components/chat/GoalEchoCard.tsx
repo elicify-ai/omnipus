@@ -1,4 +1,4 @@
-// GoalEchoCard — ADR-081 D5/D9 (work-first goal flow): re-keyed from
+// GoalEchoCard — ADR-088 D5/D9 (work-first goal flow): re-keyed from
 // "pending confirmation" to a REGISTERED RECORD VIEW. Criteria breakdown
 // per ADR-074 D5.2 / judgment-first FR-011 (US-6). Restated statement +
 // judgment icons + Definition of Done accordion per ADR-080
@@ -8,20 +8,20 @@
 // approval controls): once the working agent registers or updates the
 // record via `set_goal` (or a marker-path activation/restate), the engine
 // emits the `goal_status` frame in state `active` with `criteria`/`dod`/
-// `definition` populated (ADR-081 D5 — the SAME optional fields the old
+// `definition` populated (ADR-088 D5 — the SAME optional fields the old
 // `queued`-state pending-confirm emission once populated; this component
 // keeps its name and its rendering, only its keying and its footer change).
 // The listing is presented as the agent's WORKING ASSUMPTIONS, not a
 // proposal awaiting approval — steering (an ordinary chat message that
 // changes direction) is the only control; there is no confirm/amend/cancel
-// ritual anywhere (ADR-081 D9 deletes it in full, greenfield, no dormant
+// ritual anywhere (ADR-088 D9 deletes it in full, greenfield, no dormant
 // branches).
 //
 // `definition` (the restated one-sentence statement) may be ABSENT: a
 // marker-only goal legitimately stores an empty statement (the existing
-// Prompt/Intent fallback, ADR-081 round-2 B-3) — the card renders
+// Prompt/Intent fallback, ADR-088 round-2 B-3) — the card renders
 // gracefully without the statement block in that case, exactly as it
-// already did for "legacy/ambiguous" frames pre-ADR-081.
+// already did for "legacy/ambiguous" frames pre-ADR-088.
 //
 // ONE SENTENCE, ONE LINE (UAT defect C). `definition` (the restatement) and
 // `condition` (the text the goal was set with) are different fields that
@@ -55,7 +55,7 @@
 // shared CriteriaBreakdown renderer — inferred items are always visible to
 // the reader, not silently accepted.
 //
-// Redesign preserved verbatim from the pre-ADR-081 branch (operator report
+// Redesign preserved verbatim from the pre-ADR-088 branch (operator report
 // 2026-09-07: a live goal with 16 criteria + 4 DoD items overflowed the
 // viewport): the card uses AskUserQuestionCard's flat, hairline-delimited
 // zone style (no boxy rounded/bordered/tinted wrapper), and both the
@@ -210,7 +210,7 @@ export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) 
       className="my-2 border-y border-[var(--color-border)] py-2.5 px-1 text-xs"
     >
       {/* Header — record banner, flat zone style matching AskUserQuestionCard.
-          No "reply to confirm" language (ADR-081 D9 deletes the confirm
+          No "reply to confirm" language (ADR-088 D9 deletes the confirm
           ritual): this is the agent's working assumptions, not a proposal. */}
       <div className="flex items-center gap-2 mb-2">
         <Target size={12} weight="fill" className="shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
@@ -222,7 +222,7 @@ export function GoalEchoCard({ frame, showProgress = true }: GoalEchoCardProps) 
       {/* Restated goal statement (ADR-080 D-STATEMENT) — one clear sentence,
           the request restated close to the setter's own words, rendered as
           the LEAD line above the compiled condition. Additive-optional: not
-          present on marker-path/legacy/ambiguous frames (ADR-081 round-2
+          present on marker-path/legacy/ambiguous frames (ADR-088 round-2
           B-3) — rendered gracefully absent, no placeholder.
 
           When the restatement and the raw condition are the SAME sentence

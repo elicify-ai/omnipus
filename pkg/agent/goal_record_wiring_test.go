@@ -2,11 +2,11 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// goal_record_wiring_test.go covers ADR-081 D2 (set_goal's three late-bound
+// goal_record_wiring_test.go covers ADR-088 D2 (set_goal's three late-bound
 // seams — GoalRecordAccess/DiffFn/FeasibilityFn), D5 (write-side frame
 // emission + channel echo), and D7 (the Judge-model fast lane) — the wave-2
 // (W2a) regression suite for goal_record_wiring.go. Traces to:
-// docs/internal/architecture/ADR-081-work-first-goal-flow.md (D2/D5/D7),
+// docs/internal/architecture/ADR-088-work-first-goal-flow.md (D2/D5/D7),
 // docs/internal/specs/work-first-goal-flow-spec.md tests 15/16/17(emit side).
 package agent
 
@@ -35,7 +35,7 @@ import (
 // ReadGoalState, not activation). A nil dod defaults to a single
 // floor-provenance item so goal.New's DoD-non-empty invariant (D11, schema
 // minItems: 1) is always satisfied; nil criteria leaves the record in the
-// ADR-081 D1 legal-transient "active, no criteria registered yet" state,
+// ADR-088 D1 legal-transient "active, no criteria registered yet" state,
 // mirroring setActiveGoalRecordless's (goal_first_move_test.go, wave E12)
 // old session-meta-only seeding for that same state.
 func seedActiveGoalRecord(t *testing.T, sid, prompt string, criteria, dod []task.AcceptanceCriterion) *goal.Goal {
@@ -151,7 +151,7 @@ func TestGoalRecordAccess_ReadWrite(t *testing.T) {
 	})
 }
 
-// TestGoalRecordAccess_WriteRecord_SideEffects proves ADR-081 D5/FR-019: a
+// TestGoalRecordAccess_WriteRecord_SideEffects proves ADR-088 D5/FR-019: a
 // successful WriteRecord bumps activity, RESETS GoalZeroOutputPushes to 0
 // (FR-014b's reset rule), and emits the goal_status frame in state ACTIVE
 // with definition/criteria/dod populated from the freshly-written record.
@@ -240,7 +240,7 @@ func TestGoalRecordAccess_WriteRecord_SideEffects(t *testing.T) {
 	}
 	for _, p := range payloads {
 		if p.State == goalPillQueued {
-			t.Fatal("the queued state must NEVER be emitted from afterGoalRecordWrite (ADR-081 D5/D9)")
+			t.Fatal("the queued state must NEVER be emitted from afterGoalRecordWrite (ADR-088 D5/D9)")
 		}
 	}
 }

@@ -128,7 +128,7 @@ var ErrOwnerAlreadyHasGoal = errors.New("goal: owner already has a goal record")
 // re-run must re-enter the EXISTING record via Reactivate, never mint a
 // second one. A session-owned goal has no such uniqueness constraint (a
 // session may accumulate several terminal goal records across its life,
-// one per /goal invocation, ADR-081 D1).
+// one per /goal invocation, ADR-088 D1).
 //
 // entity.Store.Create already performs write-then-verify internally
 // (ADR-054 D6 corollary) — this wrapper does not duplicate that check; a

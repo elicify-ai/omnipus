@@ -62,7 +62,7 @@ type AsyncNotifyEvent struct {
 	// "async:<SourceKind>", exactly matching today's convention — UNLESS
 	// SenderCanonicalID (below) is set.
 	SourceKind string
-	// SenderCanonicalID is ADR-081 D6b/FR-015's per-event sender override:
+	// SenderCanonicalID is ADR-088 D6b/FR-015's per-event sender override:
 	// when non-empty, Notify stamps the reconstructed turn's
 	// bus.SenderInfo.CanonicalID with THIS value instead of composing
 	// "async:<SourceKind>". Empty (the default for every producer except the

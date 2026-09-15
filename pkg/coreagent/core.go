@@ -407,7 +407,7 @@ var allStaticToolNames = []string{
 	// their denyAllThenOverride stamps (they can never be session owners; an
 	// advertised always-erroring tool violates their minimal seeds).
 	"AskUserQuestion",
-	// set_goal (ADR-081 D2, work-first-goal-flow-spec FR-004): the validated
+	// set_goal (ADR-088 D2, work-first-goal-flow-spec FR-004): the validated
 	// write-path over the goal record (definition/criteria/DoD), seeded
 	// ALLOW for every human-facing agent alongside AskUserQuestion — it can
 	// only ever touch the CALLING session's own record, and refuses on a
@@ -911,7 +911,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// applies, so it is named too rather than left to inference.
 			"stop_plan":    deny,
 			"plan_correct": deny,
-			// set_goal (ADR-081 D2) is an EXPLICIT "deny" here for exactly
+			// set_goal (ADR-088 D2) is an EXPLICIT "deny" here for exactly
 			// the inspect_session/stop_plan/plan_correct reason directly
 			// above: its global ceiling is "allow" (pkg/config/defaults.go),
 			// so leaving it ABSENT from this sparse map would silently GRANT
@@ -1014,7 +1014,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// message_parent(question:true); the seed keeps the tool usable
 			// whenever one of them runs as a session owner.
 			"AskUserQuestion": allow,
-			// set_goal (ADR-081 D2): same reasoning as AskUserQuestion
+			// set_goal (ADR-088 D2): same reasoning as AskUserQuestion
 			// immediately above — its own scope precondition refuses a
 			// DELEGATED run (ToolDelegationDepth > 0), so the seed only ever
 			// matters when one of these agents runs as a session owner.
@@ -1236,7 +1236,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
 			// the user structured clarification questions.
 			"AskUserQuestion": allow,
-			// set_goal (ADR-081 D2): every human-facing agent may author its
+			// set_goal (ADR-088 D2): every human-facing agent may author its
 			// own session's goal record — seeded alongside AskUserQuestion.
 			"set_goal": allow,
 			// goal_claim (ADR-084 D12): every human-facing agent may claim
@@ -1361,7 +1361,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
 			// the user structured clarification questions.
 			"AskUserQuestion": allow,
-			// set_goal (ADR-081 D2): every human-facing agent may author its
+			// set_goal (ADR-088 D2): every human-facing agent may author its
 			// own session's goal record — seeded alongside AskUserQuestion.
 			"set_goal": allow,
 			// goal_claim (ADR-084 D12): every human-facing agent may claim
@@ -1475,7 +1475,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
 			// the user structured clarification questions.
 			"AskUserQuestion": allow,
-			// set_goal (ADR-081 D2): every human-facing agent may author its
+			// set_goal (ADR-088 D2): every human-facing agent may author its
 			// own session's goal record — seeded alongside AskUserQuestion.
 			"set_goal": allow,
 			// goal_claim (ADR-084 D12): every human-facing agent may claim
@@ -1640,7 +1640,7 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
 			// the user structured clarification questions.
 			"AskUserQuestion": allow,
-			// set_goal (ADR-081 D2): every human-facing agent may author its
+			// set_goal (ADR-088 D2): every human-facing agent may author its
 			// own session's goal record — seeded alongside AskUserQuestion.
 			"set_goal": allow,
 			// goal_claim (ADR-084 D12): every human-facing agent may claim
@@ -1968,7 +1968,7 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		//     it does carry the SAME unspecified-reach exposure this bullet
 		//     argues against for read_file/list_directory — grep is also a
 		//     filesystem read, confined to the same unreinforced Workspace
-		//     field (FR-020). It is granted anyway, ONLY because ADR-081's
+		//     field (FR-020). It is granted anyway, ONLY because ADR-088's
 		//     founder ruling (unified-search-and-grep-spec.md MV-8/FR-009)
 		//     is explicit and unqualified: "explicit allow for EVERY agent
 		//     tier ... system agents", with grep specifically singled out as
@@ -2014,7 +2014,7 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 		// DIFFERENT in kind from those two floors and from plan_correct: it
 		// is the one deliberate FOURTH, role-UNRELATED grant this comment's
 		// own prior revision said would need the test amended on purpose
-		// (see the ADR-081 paragraph above) — not a structural floor, not
+		// (see the ADR-088 paragraph above) — not a structural floor, not
 		// PlanSupervisor's role-specific verb, but a founder-ruled universal
 		// exception landing on the most locked-down agent in the system
 		// same as everywhere else. A future FIFTH grant must still amend
@@ -3257,7 +3257,7 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// carries it — every human-facing agent may ask the user
 				// structured clarification questions; never `ask`-gate asking.
 				"AskUserQuestion": allow,
-				// set_goal (ADR-081 D2): customs' default allowlist carries
+				// set_goal (ADR-088 D2): customs' default allowlist carries
 				// it too — every human-facing agent may author its own
 				// session's goal record, seeded alongside AskUserQuestion.
 				"set_goal": allow,

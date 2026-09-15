@@ -165,7 +165,7 @@ func TestPendingAskFile_AbsentVsCorrupt(t *testing.T) {
 // json.Unmarshal — NEVER composed into PendingAskJSON. Only a real
 // pending_ask.json is ever consulted for that field; there is no rescue, no
 // shim, no legacy parse path, matching TestGoalMetaGreenfield's own
-// no-back-compat contract for the sibling ADR-081 D9 field removal.
+// no-back-compat contract for the sibling ADR-088 D9 field removal.
 func TestNoMigrationPathExists(t *testing.T) {
 	store := newTestStore(t)
 	meta, err := store.NewSession(SessionTypeChat, "webchat", "agent-1")

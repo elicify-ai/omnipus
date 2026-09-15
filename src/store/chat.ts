@@ -1887,7 +1887,7 @@ function evictGoalPillsOverCap(pills: Record<string, GoalStatusFrame>): Record<s
 }
 
 /**
- * Field-preserving merge for `goalPills[pillKey]` — ADR-081 code-review
+ * Field-preserving merge for `goalPills[pillKey]` — ADR-088 code-review
  * round 1, Finding 1 (HIGH): the goal record card was only transiently
  * visible. Root cause: the engine's ROUTINE `goal_status` emissions
  * (end-of-turn pushes from the goal loop) carry NO `criteria`/`dod`/
@@ -1939,7 +1939,7 @@ function mergeGoalPillFrame(
 
 // ── Goal acknowledgement line (operator-reported UX fix, 2026-09-08) ──────
 //
-// Repro: `/goal <text>` activates INSTANTLY (ADR-081 D1, zero LLM calls
+// Repro: `/goal <text>` activates INSTANTLY (ADR-088 D1, zero LLM calls
 // before the working agent's first request), but the user saw nothing
 // confirming that — just the generic rotating thinking indicator — for as
 // long as 17 minutes in the reported case, while a tool call had actually
@@ -6315,17 +6315,17 @@ export const useChatStore = create<ChatStore>((set, get) => {
           // now?) — the render policy the comment above still refers to is
           // untouched.
           //
-          // ADR-081 D5 store hygiene: an EMPTY-goal_id frame (the '_default'
+          // ADR-088 D5 store hygiene: an EMPTY-goal_id frame (the '_default'
           // key) was root cause #2 of the 2026-09-07 UX trace — the deleted
           // `queued` emission carried no `goal_id`, landed on '_default', and
           // was never overwritten once the later keyed `active` frame arrived
           // under a different key, so the stale card rendered forever. The
-          // `queued` emission itself is gone (ADR-081 D9), but a keyed frame
+          // `queued` emission itself is gone (ADR-088 D9), but a keyed frame
           // arriving for this session still evicts any lingering '_default'
           // pill defensively — harmless once no frame is ever emitted with an
           // empty goal_id, cheap insurance against any stale/legacy one.
           //
-          // ADR-081 code-review round 1, Finding 1 (HIGH): the pill for
+          // ADR-088 code-review round 1, Finding 1 (HIGH): the pill for
           // `pillKey` is no longer stored verbatim — it goes through
           // `mergeGoalPillFrame` so a routine, criteria-less progress frame
           // cannot clobber a record a prior `set_goal` write already

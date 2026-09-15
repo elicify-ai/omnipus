@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// goal_forcing_bounded_escape_test.go covers the ADR-081 D3 amendment of
+// goal_forcing_bounded_escape_test.go covers the ADR-088 D3 amendment of
 // 2026-09-08: the narrowed first-move door (evaluateGoalForcing, loop.go)
 // used to apply to a turn's FIRST LLM request only (iteration==1). That
 // missed a third outcome besides "register" and "park" — a narrowed call

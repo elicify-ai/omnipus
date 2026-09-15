@@ -3268,7 +3268,7 @@ func (h *WSHandler) handleAttachSession(
 		})
 	}
 
-	// Item 14 (review-round-1, ADR-081): goal_status is a pure live push
+	// Item 14 (review-round-1, ADR-088): goal_status is a pure live push
 	// (agent.EventKindGoalStatusChanged) — never a persisted, replayable
 	// transcript entry the streamReplay above reconstructs — so a
 	// registered goal's record card (definition/criteria/dod) had no

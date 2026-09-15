@@ -216,7 +216,7 @@ func TestCreate_RefusesSecondGoalForSameTask(t *testing.T) {
 }
 
 // TestCreate_AllowsMultipleGoalsForSameSession proves a session-owned goal
-// has NO such uniqueness constraint — ADR-081 D1 allows a session to open
+// has NO such uniqueness constraint — ADR-088 D1 allows a session to open
 // more than one /goal across its life (each prior one having gone
 // terminal).
 func TestCreate_AllowsMultipleGoalsForSameSession(t *testing.T) {

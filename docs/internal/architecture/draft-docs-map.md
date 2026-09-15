@@ -85,7 +85,7 @@ Stale:
 - Roster: 3+1 (General Assistant / Researcher / Content Creator + Omnipus system agent) — not Mia/Jim/Ava/Ray.
 - Appendix D: exclusive 41-tool **system agent** that drives the UI — that agent does not exist.
 - Appendix C: full **Command Center** spec.
-- Confirm-gate for destructive ops — deleted (ADR-081).
+- Confirm-gate for destructive ops — deleted (ADR-088).
 - Channels tabs, not Connectors; projects/rooms, not Workspaces.
 - **Zero** goals-as-entities, Judge, Plan Supervisor.
 - Appendix A: Windows Job Objects as if they ship — they do not.
