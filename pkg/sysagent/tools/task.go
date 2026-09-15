@@ -419,20 +419,72 @@ func (t *TaskCreateTool) Parameters() map[string]any {
 	}
 }
 
+// taskCreateToolExecute carries the shared state of Execute across its stages.
+type taskCreateToolExecute struct {
+	t       *TaskCreateTool
+	ctx     context.Context
+	args    map[string]any
+	name    string
+	status  task.Status
+	tk      unifiedTask
+	caller  string
+	goalDoD []task.AcceptanceCriterion
+	store   *task.Store
+}
+
 func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	name, _ := args["name"].(string)
-	if name == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
+	tc := &taskCreateToolExecute{t: t, ctx: ctx, args: args}
+
+	if r0, stop := tc.validateArgs(); stop {
+		return r0
 	}
-	status := task.StatusInbox
-	if v, ok := args["status"].(string); ok && v != "" {
+	tc.initTask()
+	if r0, stop := tc.resolveWorkspace(); stop {
+		return r0
+	}
+
+	if r0, stop := tc.enforceDelegation(); stop {
+		return r0
+	}
+
+	if r0, stop := tc.enforceCriteriaContract(); stop {
+		return r0
+	}
+
+	if r0, stop := tc.applySimpleFields(); stop {
+		return r0
+	}
+
+	if r0, stop := tc.validateBlockers(); stop {
+		return r0
+	}
+
+	if r0, stop := tc.persistTask(); stop {
+		return r0
+	}
+
+	if r0, stop := tc.syncGoalRecord(); stop {
+		return r0
+	}
+
+	return tc.respond()
+}
+
+// validateArgs requires a name and parses status, rejecting unknown values and in_progress.
+func (tc *taskCreateToolExecute) validateArgs() (*tools.ToolResult, bool) {
+	tc.name, _ = tc.args["name"].(string)
+	if tc.name == "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", "")), true
+	}
+	tc.status = task.StatusInbox
+	if v, ok := tc.args["status"].(string); ok && v != "" {
 		// An unknown status is rejected outright, not silently defaulted to
 		// inbox — same reasoning as list_tasks_in_workspace's own status
 		// filter: defaulting a typo would teach the caller its requested
 		// status was applied when it never was.
 		if !isValidTaskStatus(v) {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				fmt.Sprintf("unknown status %q: expected one of inbox, next, blocked, done, failed", v), "status"))
+				fmt.Sprintf("unknown status %q: expected one of inbox, next, blocked, done, failed", v), "status")), true
 		}
 		// Issue #593 (Option A): in_progress is a DISPATCH state, never a
 		// caller-settable value at create time either — mirrors the guard
@@ -443,63 +495,80 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		if task.Status(v) == task.StatusInProgress {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
 				"in_progress cannot be set directly — it is only ever reached through real dispatch; "+
-					"create the task as next and call run_task to start it", "status"))
+					"create the task as next and call run_task to start it", "status")), true
 		}
-		status = task.Status(v)
+		tc.status = task.Status(v)
 	}
+	return nil, false
+}
+
+// initTask mints the task id and builds the task shell with title, status, description and prompt.
+func (tc *taskCreateToolExecute) initTask() {
 	id := ulid.Make().String()
-	tk := unifiedTask{
+	tc.tk = unifiedTask{
 		ID:     id,
-		Title:  name,
+		Title:  tc.name,
 		Action: task.ActionLLM,
-		Status: status,
+		Status: tc.status,
 	}
-	if v, ok := args["description"].(string); ok {
-		tk.Description = v
+	if v, ok := tc.args["description"].(string); ok {
+		tc.tk.Description = v
 	}
-	if v, ok := args["prompt"].(string); ok {
-		tk.Prompt = v
+	if v, ok := tc.args["prompt"].(string); ok {
+		tc.tk.Prompt = v
 	}
-	sessionOwner := tools.ToolSessionOwner(ctx)
-	workspaceID, _ := args["workspace_id"].(string)
+}
+
+// resolveWorkspace requires and validates workspace_id, then resolves the task's owner and creator.
+func (tc *taskCreateToolExecute) resolveWorkspace() (*tools.ToolResult, bool) {
+	sessionOwner := tools.ToolSessionOwner(tc.ctx)
+	workspaceID, _ := tc.args["workspace_id"].(string)
 	if workspaceID == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "workspace_id is required", "workspace_id"))
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "workspace_id is required", "workspace_id")), true
 	}
 	if err := validateID(workspaceID); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id")), true
 	}
-	ws, wsErr := readWorkspaceFromDisk(t.deps.Home, workspaceID)
+	ws, wsErr := readWorkspaceFromDisk(tc.t.deps.Home, workspaceID)
 	if wsErr != nil {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id")), true
 	}
-	tk.WorkspaceID = workspaceID
+	tc.tk.WorkspaceID = workspaceID
 	if ws.Owner != "" {
-		tk.Owner = ws.Owner
+		tc.tk.Owner = ws.Owner
 	}
-	if tk.Owner == "" && sessionOwner != "" {
-		tk.Owner = sessionOwner
+	if tc.tk.Owner == "" && sessionOwner != "" {
+		tc.tk.Owner = sessionOwner
 	}
-	tk.CreatedBy = sessionOwner
+	tc.tk.CreatedBy = sessionOwner
+	return nil, false
+}
 
+// enforceDelegation gates assigning the task to another agent through the delegation policy.
+func (tc *taskCreateToolExecute) enforceDelegation() (*tools.ToolResult, bool) {
 	// FR-6.2 delegation gate (parity with the plain create_task tool). The
 	// cross-workspace surface is the PRIVILEGED Orchestrator path, so it must
 	// enforce the SAME trust-set + mode("task") + depth policy the same-workspace
 	// create_task enforces — assigning work to ANOTHER agent is delegation.
-	caller := tools.ToolAgentID(ctx)
-	if v, ok := args["agent_id"].(string); ok {
-		tk.AgentID = v
+	tc.caller = tools.ToolAgentID(tc.ctx)
+	if v, ok := tc.args["agent_id"].(string); ok {
+		tc.tk.AgentID = v
 	}
 	// subagent_3p (external-CLI) worker task assignment is no longer guarded
 	// here: AgentLoop.processTaskDirect (pkg/agent/loop.go) now branches on
 	// runner.ResolveDispatch and routes an external-CLI worker's task run
 	// through runExternalCLISubTurn instead of the native engine — see its
 	// doc comment for the dispatch design.
-	if t.deps.DelegationDeny != nil && tk.AgentID != "" && tk.AgentID != caller {
-		if denial := t.deps.DelegationDeny(ctx, caller, tk.AgentID); denial != nil {
-			return tools.DelegationDeniedResult(t.Name(), denial)
+	if tc.t.deps.DelegationDeny != nil && tc.tk.AgentID != "" && tc.tk.AgentID != tc.caller {
+		if denial := tc.t.deps.DelegationDeny(tc.ctx, tc.caller, tc.tk.AgentID); denial != nil {
+			return tools.DelegationDeniedResult(tc.t.Name(), denial), true
 		}
 	}
+	return nil, false
+}
 
+// enforceCriteriaContract enforces the criteria/dod contract, distinctness, bash-policy satisfiability and assignee readiness for an assigned task.
+func (tc *taskCreateToolExecute) enforceCriteriaContract() (*tools.ToolResult, bool) {
 	// FR-6/D5 strict criteria enforcement (ADR-049, SD-A7, review r1 major
 	// M5, parity with the plain create_task tool): an agent-ASSIGNED task
 	// requires at least one acceptance criterion — only meaningful once
@@ -510,31 +579,31 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// record off tk.Criteria, which store.Create normalises in place (see
 	// syncWorkspaceTaskGoalRecord's doc comment on why the criteria may not be
 	// passed separately).
-	var goalDoD []task.AcceptanceCriterion
-	if tk.AgentID != "" {
-		rawCriteria, _ := args["criteria"].([]any)
+
+	if tc.tk.AgentID != "" {
+		rawCriteria, _ := tc.args["criteria"].([]any)
 		if len(rawCriteria) == 0 {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
 				"Add at least one acceptance criterion: say what must be true for this task to be done.",
-				"criteria"))
+				"criteria")), true
 		}
-		criteria, cErr := parseCriteriaArgsFromWorkspaceTool(rawCriteria, caller)
+		criteria, cErr := parseCriteriaArgsFromWorkspaceTool(rawCriteria, tc.caller)
 		if cErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", cErr.Error(), "criteria"))
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", cErr.Error(), "criteria")), true
 		}
 		// GOAL-FR-021/D-C: dod is mandatory alongside criteria, uniformly,
 		// on every task-creation surface (R-25) — this cross-workspace twin
 		// included. Same conditionality as criteria above: only meaningful
 		// once AgentID is set (an unassigned, human-tracking-only task never
 		// enters the goal loop/judge machinery).
-		rawDoD, _ := args["dod"].([]any)
+		rawDoD, _ := tc.args["dod"].([]any)
 		if len(rawDoD) == 0 {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"Add at least one Definition of Done item, distinct from the acceptance criteria.", "dod"))
+				"Add at least one Definition of Done item, distinct from the acceptance criteria.", "dod")), true
 		}
-		dod, dErr := parseCriteriaArgsFromWorkspaceTool(rawDoD, caller)
+		dod, dErr := parseCriteriaArgsFromWorkspaceTool(rawDoD, tc.caller)
 		if dErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", dErr.Error(), "dod"))
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", dErr.Error(), "dod")), true
 		}
 		// The DISTINCTNESS half of the same rule the refusal above advertises.
 		// It was advertised on every surface and checked on none: a task whose
@@ -543,24 +612,24 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		// See task.ValidateDoDDistinct for the rule and for why it stops at
 		// whitespace and case. Checked before any store write.
 		if vErr := task.ValidateDoDDistinct(criteria, dod); vErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod")).WithError(vErr)
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod")).WithError(vErr), true
 		}
-		goalDoD = dod
+		tc.goalDoD = dod
 		// D2 rule 5 (FR-017/052): an all-check criteria set can never be
 		// adjudicated MET if the assignee's effective bash policy is deny or
 		// ask (ask resolves to deny unattended at judge time, D2 rule 2).
 		if allCheckCriteriaWorkspace(criteria) {
-			if t.deps.ResolveBashPolicy == nil {
+			if tc.t.deps.ResolveBashPolicy == nil {
 				// FAIL CLOSED, not open, when no checker is wired — same
 				// rationale as the delegation gate above.
 				slog.Error("create_task_in_workspace: no bash-policy resolver installed — denying an "+
 					"all-check criteria set by default",
-					"caller_id", caller, "target_agent_id", tk.AgentID)
+					"caller_id", tc.caller, "target_agent_id", tc.tk.AgentID)
 				return tools.ErrorResult(errorJSON("INVALID_INPUT",
 					"cannot verify the assignee's bash policy (D2 rule 5 resolver not configured) — "+
-						"denying an all-machine-criteria create by default", "criteria"))
+						"denying an all-machine-criteria create by default", "criteria")), true
 			}
-			policy, ok := t.deps.ResolveBashPolicy(tk.AgentID)
+			policy, ok := tc.t.deps.ResolveBashPolicy(tc.tk.AgentID)
 			if !ok || policy != string(config.ToolPolicyAllow) {
 				resolved := "unresolvable"
 				if ok {
@@ -570,22 +639,26 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 					"all criteria are machine-checkable (kind=check) but agent %q's effective bash "+
 						"policy is %q — this criteria set could never be satisfied (structurally "+
 						"unsatisfiable, ADR-049 D2 rule 5)",
-					tk.AgentID, resolved,
-				), "criteria"))
+					tc.tk.AgentID, resolved,
+				), "criteria")), true
 			}
 		}
 		// Founder decision 2026-09-15 (parity with the plain create_task tool):
 		// refuse an assignee that cannot finish this task — denied goal_claim,
 		// or a check its bash policy cannot run — before anything is written.
-		if refusal := tools.AssigneeCannotFinishRefusal("create_task_in_workspace", t.deps.AssigneeCannotFinish,
-			tk.AgentID, append(append([]task.AcceptanceCriterion{}, criteria...), dod...)); refusal != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", refusal.Reason, refusal.Field)).WithError(refusal)
+		if refusal := tools.AssigneeCannotFinishRefusal("create_task_in_workspace", tc.t.deps.AssigneeCannotFinish,
+			tc.tk.AgentID, append(append([]task.AcceptanceCriterion{}, criteria...), dod...)); refusal != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", refusal.Reason, refusal.Field)).WithError(refusal), true
 		}
-		tk.Criteria = criteria
+		tc.tk.Criteria = criteria
 	}
+	return nil, false
+}
 
-	if v, ok := args["due"].(string); ok && v != "" {
-		tk.Due = v
+// applySimpleFields applies due, priority, plan_id, write_set, stream, is_join and blocked_by from the args.
+func (tc *taskCreateToolExecute) applySimpleFields() (*tools.ToolResult, bool) {
+	if v, ok := tc.args["due"].(string); ok && v != "" {
+		tc.tk.Due = v
 	}
 
 	// Optional priority: priority is a general task attribute, not gated
@@ -593,7 +666,7 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// accepts it) was a genuine schema-consistency gap rather than a
 	// deliberate restriction. Unset (0) is treated as 3 on read
 	// (task.Task.EffectivePriority), matching create_task's own default.
-	if v, ok := args["priority"].(float64); ok {
+	if v, ok := tc.args["priority"].(float64); ok {
 		pr := int(v)
 		// args["priority"] IS present (ok==true), so this is an EXPLICIT value —
 		// including an explicit 0, which task.ValidatePriority rejects with no
@@ -603,63 +676,71 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 		// must be between 1 and 5" can never drift across entry points again
 		// (M2(b)).
 		if err := task.ValidatePriority(pr); err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "priority"))
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "priority")), true
 		}
-		tk.Priority = pr
+		tc.tk.Priority = pr
 	}
 
 	// Optional plan_id (ADR-052 FR-002): same-workspace FK + draft-only
 	// membership (tools.ValidateTaskPlanMembership — see its doc for why an
 	// approved/running plan refuses a new member). A call with no plan_id is
 	// entirely unaffected — the check is a no-op for planID == "".
-	if v, ok := args["plan_id"].(string); ok && v != "" {
-		if pErr := tools.ValidateTaskPlanMembership(t.deps.PlanStore, v, tk.WorkspaceID); pErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", pErr.Error(), "plan_id"))
+	if v, ok := tc.args["plan_id"].(string); ok && v != "" {
+		if pErr := tools.ValidateTaskPlanMembership(tc.t.deps.PlanStore, v, tc.tk.WorkspaceID); pErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", pErr.Error(), "plan_id")), true
 		}
-		tk.PlanID = v
+		tc.tk.PlanID = v
 	}
 
 	// Optional write_set/stream/is_join (ADR-053 §Contract Surface, US-11
 	// G-16) — parity with the plain create_task tool.
-	if rawWriteSet, ok := args["write_set"].([]any); ok {
+	if rawWriteSet, ok := tc.args["write_set"].([]any); ok {
 		writeSet := make([]string, 0, len(rawWriteSet))
 		for _, p := range rawWriteSet {
 			if s, ok := p.(string); ok && s != "" {
 				writeSet = append(writeSet, s)
 			}
 		}
-		tk.WriteSet = writeSet
+		tc.tk.WriteSet = writeSet
 	}
-	if v, ok := args["stream"].(string); ok {
-		tk.Stream = v
+	if v, ok := tc.args["stream"].(string); ok {
+		tc.tk.Stream = v
 	}
-	if v, ok := args["is_join"].(bool); ok {
-		tk.IsJoin = v
+	if v, ok := tc.args["is_join"].(bool); ok {
+		tc.tk.IsJoin = v
 	}
 
-	if rawDeps, ok := args["blocked_by"].([]any); ok && len(rawDeps) > 0 {
+	if rawDeps, ok := tc.args["blocked_by"].([]any); ok && len(rawDeps) > 0 {
 		deps := make([]string, 0, len(rawDeps))
 		for _, d := range rawDeps {
 			if s, ok := d.(string); ok && s != "" {
 				deps = append(deps, s)
 			}
 		}
-		tk.BlockedBy = deps
+		tc.tk.BlockedBy = deps
 	}
+	return nil, false
+}
 
+// validateBlockers checks every blocked_by edge points at a task in the same target workspace.
+func (tc *taskCreateToolExecute) validateBlockers() (*tools.ToolResult, bool) {
 	// Create via the store so DAG validation + atomic write + locking apply.
-	store := taskStoreFor(t.deps.Home)
+	tc.store = taskStoreFor(tc.t.deps.Home)
 
 	// Same-workspace blocker guard (parity with validateBlockersWorkspace in the
 	// plain tool): every blocked_by edge must point at a task in the SAME target
 	// workspace. The store validates the DAG (cycle/self-edge/missing/depth) but
 	// NOT this cross-workspace rule, so enforce it at the tool layer.
-	if len(tk.BlockedBy) > 0 {
-		if wErr := validateBlockersSameWorkspace(store, tk.WorkspaceID, tk.BlockedBy); wErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", wErr.Error(), "blocked_by"))
+	if len(tc.tk.BlockedBy) > 0 {
+		if wErr := validateBlockersSameWorkspace(tc.store, tc.tk.WorkspaceID, tc.tk.BlockedBy); wErr != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", wErr.Error(), "blocked_by")), true
 		}
 	}
+	return nil, false
+}
 
+// persistTask creates the task via the store, stamping agent provenance when a caller exists.
+func (tc *taskCreateToolExecute) persistTask() (*tools.ToolResult, bool) {
 	// FR-037 provenance. CreateByAgent stamps Task.CreatedByAgentID (agent-id
 	// namespace) so the created task is findable by its author — list_jobs'
 	// dispatched half and list_tasks role="delegator" both filter on it, and
@@ -678,46 +759,54 @@ func (t *TaskCreateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// refusing the create outright, would both be worse than recording the
 	// truth: nobody-in-the-agent-namespace created this.
 	var createErr error
-	if strings.TrimSpace(caller) != "" {
-		createErr = store.CreateByAgent(&tk, caller)
+	if strings.TrimSpace(tc.caller) != "" {
+		createErr = tc.store.CreateByAgent(&tc.tk, tc.caller)
 	} else {
 		slog.Debug("create_task_in_workspace: no calling agent on context — "+
 			"persisting the task without FR-037 agent provenance",
-			"workspace_id", tk.WorkspaceID, "assignee_agent_id", tk.AgentID)
-		createErr = store.Create(&tk)
+			"workspace_id", tc.tk.WorkspaceID, "assignee_agent_id", tc.tk.AgentID)
+		createErr = tc.store.Create(&tc.tk)
 	}
 	if createErr != nil {
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", createErr.Error(), ""))
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", createErr.Error(), "")), true
 	}
+	return nil, false
+}
 
+// syncGoalRecord authors the task's Definition of Done onto its paired goal record for an assigned task.
+func (tc *taskCreateToolExecute) syncGoalRecord() (*tools.ToolResult, bool) {
 	// ADR-086 D2/D5, GOAL-FR-003/FR-012/FR-021/FR-029: mirrors the plain
 	// create_task tool — a task's Definition of Done is authored ahead of
 	// time onto its own paired goal record (stays "defining" until the task
 	// starts, GOAL-FR-012). Only meaningful once AgentID is set, matching
 	// the criteria/dod requirement's own conditionality above.
-	if tk.AgentID != "" {
+	if tc.tk.AgentID != "" {
 		var goalMaxRoundsFn func() int
-		if t.deps.GetCfg != nil {
+		if tc.t.deps.GetCfg != nil {
 			goalMaxRoundsFn = func() int {
-				cfg := t.deps.GetCfg()
+				cfg := tc.t.deps.GetCfg()
 				if cfg == nil {
 					return config.DefaultGoalMaxRounds
 				}
 				return cfg.Planning.EffectiveGoalMaxRounds()
 			}
 		}
-		if gErr := syncWorkspaceTaskGoalRecord(t.deps.Home, &tk, true, goalDoD, true, goalMaxRoundsFn); gErr != nil {
+		if gErr := syncWorkspaceTaskGoalRecord(tc.t.deps.Home, &tc.tk, true, tc.goalDoD, true, goalMaxRoundsFn); gErr != nil {
 			slog.Error("create_task_in_workspace: failed to create paired goal record",
-				"task_id", tk.ID, "error", gErr)
+				"task_id", tc.tk.ID, "error", gErr)
 			return tools.ErrorResult(errorJSON("SAVE_FAILED",
 				fmt.Sprintf("task %q was created but its Definition of Done could not be persisted: %v",
-					tk.ID, gErr), ""))
+					tc.tk.ID, gErr), "")), true
 		}
 	}
+	return nil, false
+}
 
+// respond returns the created task's id, name, status, workspace and assignee.
+func (tc *taskCreateToolExecute) respond() *tools.ToolResult {
 	return tools.NewToolResult(successJSON(map[string]any{
-		"id": tk.ID, "name": name, "status": string(tk.Status),
-		"workspace_id": tk.WorkspaceID, "agent_id": tk.AgentID,
+		"id": tc.tk.ID, "name": tc.name, "status": string(tc.tk.Status),
+		"workspace_id": tc.tk.WorkspaceID, "agent_id": tc.tk.AgentID,
 	}))
 }
 
@@ -810,10 +899,72 @@ func (t *TaskUpdateTool) Parameters() map[string]any {
 	}
 }
 
+// taskUpdateToolExecute carries the shared state of Execute across its stages.
+type taskUpdateToolExecute struct {
+	t                    *TaskUpdateTool
+	ctx                  context.Context
+	args                 map[string]any
+	id                   string
+	caller               string
+	store                *task.Store
+	existing             *task.Task
+	err                  error
+	patch                task.Patch
+	updated              []string
+	pendingWorkspaceID   string
+	workspaceIDPending   bool
+	effectiveWorkspaceID string
+	goalCriteria         []task.AcceptanceCriterion
+	goalDoD              []task.AcceptanceCriterion
+	criteriaProvided     bool
+	dodProvided          bool
+	result               *task.Task
+	goalSyncWarning      string
+}
+
 func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	id, _ := args["id"].(string)
-	if id == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
+	tu := &taskUpdateToolExecute{t: t, ctx: ctx, args: args}
+
+	if r0, stop := tu.validatePrincipal(); stop {
+		return r0
+	}
+
+	if r0, stop := tu.loadAndAuthorize(); stop {
+		return r0
+	}
+
+	if r0, stop := tu.buildPatch(); stop {
+		return r0
+	}
+	if r0, stop := tu.resolveWorkspace(); stop {
+		return r0
+	}
+	if r0, stop := tu.collectSimpleFields(); stop {
+		return r0
+	}
+
+	if r0, stop := tu.parseCriteria(); stop {
+		return r0
+	}
+
+	if r0, stop := tu.checkDistinct(); stop {
+		return r0
+	}
+
+	if r0, stop := tu.applyPatch(); stop {
+		return r0
+	}
+
+	tu.runPostUpdateHooks()
+
+	return tu.respond()
+}
+
+// validatePrincipal checks id and resolves the calling agent, refusing an update with no principal.
+func (tu *taskUpdateToolExecute) validatePrincipal() (*tools.ToolResult, bool) {
+	tu.id, _ = tu.args["id"].(string)
+	if tu.id == "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", "")), true
 	}
 
 	// FAIL CLOSED on an unresolvable caller, and do it BEFORE the store read so
@@ -836,17 +987,21 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// task" is an honest attribution of a task that did not exist before;
 	// mutating an EXISTING task that may belong to someone else is an
 	// authorization decision, and there is no principal to authorize.
-	caller := strings.TrimSpace(tools.ToolAgentID(ctx))
-	if caller == "" {
+	tu.caller = strings.TrimSpace(tools.ToolAgentID(tu.ctx))
+	if tu.caller == "" {
 		return tools.ErrorResult(errorJSON("PRINCIPAL_REQUIRED",
-			"cannot resolve the calling agent; refusing to update a task", ""))
+			"cannot resolve the calling agent; refusing to update a task", "")), true
 	}
+	return nil, false
+}
 
-	store := taskStoreFor(t.deps.Home)
-	existing, err := store.Get(id)
-	if err != nil {
-		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
-			"Use list_tasks_in_workspace to see available tasks"))
+// loadAndAuthorize loads the task and runs the ownership and reassignment delegation gates.
+func (tu *taskUpdateToolExecute) loadAndAuthorize() (*tools.ToolResult, bool) {
+	tu.store = taskStoreFor(tu.t.deps.Home)
+	tu.existing, tu.err = tu.store.Get(tu.id)
+	if tu.err != nil {
+		return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", tu.id),
+			"Use list_tasks_in_workspace to see available tasks")), true
 	}
 
 	// Ownership gate (parity with the plain update_task tool's "you can only
@@ -866,35 +1021,39 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// agent `jim` a pass on every task they create, skipping the delegation
 	// check entirely. CreatedByAgent reads the agent-id-namespaced field and
 	// fails closed on BOTH sides by construction, so "" is never a wildcard.
-	if existing.AgentID != "" && existing.AgentID != caller && !existing.CreatedByAgent(caller) {
-		if denied := t.deps.delegationDenied(ctx, caller, existing.AgentID); denied != nil {
-			return tools.DelegationDeniedResult(t.Name(), denied)
+	if tu.existing.AgentID != "" && tu.existing.AgentID != tu.caller && !tu.existing.CreatedByAgent(tu.caller) {
+		if denied := tu.t.deps.delegationDenied(tu.ctx, tu.caller, tu.existing.AgentID); denied != nil {
+			return tools.DelegationDeniedResult(tu.t.Name(), denied), true
 		}
 	}
 
 	// Reassignment is re-delegation: when agent_id changes to a DIFFERENT agent,
 	// gate it through the SAME trust-set + mode("task") + depth policy as create.
-	if v, ok := args["agent_id"].(string); ok && v != "" && v != existing.AgentID && v != caller {
-		if denied := t.deps.delegationDenied(ctx, caller, v); denied != nil {
-			return tools.DelegationDeniedResult(t.Name(), denied)
+	if v, ok := tu.args["agent_id"].(string); ok && v != "" && v != tu.existing.AgentID && v != tu.caller {
+		if denied := tu.t.deps.delegationDenied(tu.ctx, tu.caller, v); denied != nil {
+			return tools.DelegationDeniedResult(tu.t.Name(), denied), true
 		}
 	}
+	return nil, false
+}
 
-	patch := task.Patch{}
-	updated := []string{}
-	if v, ok := args["name"].(string); ok && v != "" {
-		patch.Title = &v
-		updated = append(updated, "name")
+// buildPatch translates name, description, prompt, status and agent_id args into a task.Patch, enforcing the status guards.
+func (tu *taskUpdateToolExecute) buildPatch() (*tools.ToolResult, bool) {
+	tu.patch = task.Patch{}
+	tu.updated = []string{}
+	if v, ok := tu.args["name"].(string); ok && v != "" {
+		tu.patch.Title = &v
+		tu.updated = append(tu.updated, "name")
 	}
-	if v, ok := args["description"].(string); ok {
-		patch.Description = &v
-		updated = append(updated, "description")
+	if v, ok := tu.args["description"].(string); ok {
+		tu.patch.Description = &v
+		tu.updated = append(tu.updated, "description")
 	}
-	if v, ok := args["prompt"].(string); ok {
-		patch.Prompt = &v
-		updated = append(updated, "prompt")
+	if v, ok := tu.args["prompt"].(string); ok {
+		tu.patch.Prompt = &v
+		tu.updated = append(tu.updated, "prompt")
 	}
-	if v, ok := args["status"].(string); ok {
+	if v, ok := tu.args["status"].(string); ok {
 		if !isValidTaskStatus(v) {
 			// UAT batch3 S58 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
 			// finding #2): an unrecognized status used to fall through this
@@ -904,7 +1063,7 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 			// enumerated status list) rather than let a typo look like a
 			// successful, silent no-op.
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				fmt.Sprintf("unknown status %q: expected one of inbox, next, blocked, done, failed", v), "status"))
+				fmt.Sprintf("unknown status %q: expected one of inbox, next, blocked, done, failed", v), "status")), true
 		}
 		st := task.Status(v)
 		// Issue #593 (Option A): in_progress is a DISPATCH state, not a
@@ -920,10 +1079,10 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		// "running" task with no session and no executor. A resend on a task
 		// that is ALREADY in_progress is a harmless no-op and is let through
 		// unchanged.
-		if st == task.StatusInProgress && existing.Status != task.StatusInProgress {
+		if st == task.StatusInProgress && tu.existing.Status != task.StatusInProgress {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
 				"in_progress cannot be set directly — it is only ever reached through real dispatch; "+
-					"call run_task to actually start this task", "status"))
+					"call run_task to actually start this task", "status")), true
 		}
 		// Founder decision 2026-09-14 (one claim mechanism): while THIS
 		// task's own executor run is in flight, no terminal status may be
@@ -931,26 +1090,31 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		// with goal_claim and decided by the judge. Out-of-band done on a
 		// criteria task stays refused for the same reason it always was:
 		// nothing would ever adjudicate it.
-		if tools.ToolRunningTaskID(ctx) == id {
+		if tools.ToolRunningTaskID(tu.ctx) == tu.id {
 			return tools.ErrorResult(errorJSON("JUDGE_REQUIRED",
 				"you cannot set this task's status while it is running — its completion is decided "+
 					"by the judge. The worker claims with goal_claim (status \"met\" with evidence, "+
-					"or \"blocked\" when it cannot proceed)", "status"))
+					"or \"blocked\" when it cannot proceed)", "status")), true
 		}
-		if st == task.StatusDone && !existing.Scratchpad && len(existing.Criteria) > 0 {
+		if st == task.StatusDone && !tu.existing.Scratchpad && len(tu.existing.Criteria) > 0 {
 			return tools.ErrorResult(errorJSON("JUDGE_REQUIRED",
 				"this task has acceptance criteria — completion is adjudicated by the judge "+
-					"during a task run; it cannot be force-completed here", "status"))
+					"during a task run; it cannot be force-completed here", "status")), true
 		}
-		patch.Status = &st
-		updated = append(updated, "status")
+		tu.patch.Status = &st
+		tu.updated = append(tu.updated, "status")
 	}
-	if v, ok := args["agent_id"].(string); ok && v != "" {
+	if v, ok := tu.args["agent_id"].(string); ok && v != "" {
 		// subagent_3p (external-CLI) worker reassignment is no longer guarded
 		// here — same rationale as create_task_in_workspace above.
-		patch.AgentID = &v
-		updated = append(updated, "agent_id")
+		tu.patch.AgentID = &v
+		tu.updated = append(tu.updated, "agent_id")
 	}
+	return nil, false
+}
+
+// resolveWorkspace validates a requested workspace move and defers its write until the patch lands.
+func (tu *taskUpdateToolExecute) resolveWorkspace() (*tools.ToolResult, bool) {
 	// workspace_id is not in task.Patch (workspace is required-scoped and not
 	// re-pointed via the generic patch), so it is applied via a separate,
 	// direct read-modify-write rather than through store.Update. Validate the
@@ -960,19 +1124,18 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// violation) can no longer leave the task moved to a different workspace
 	// and persisted while the caller is told INVALID_INPUT and reasonably
 	// assumes nothing changed. The whole call is now all-or-nothing.
-	var pendingWorkspaceID string
-	var workspaceIDPending bool
+
 	// effectiveWorkspaceID is what blocked_by's same-workspace check (below)
 	// validates against: the workspace this task WILL be in once this call
 	// completes, even though the move itself has not been written yet.
-	effectiveWorkspaceID := existing.WorkspaceID
-	if v, ok := args["workspace_id"].(string); ok {
+	tu.effectiveWorkspaceID = tu.existing.WorkspaceID
+	if v, ok := tu.args["workspace_id"].(string); ok {
 		if v != "" {
 			if werr := validateID(v); werr != nil {
-				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
+				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id")), true
 			}
-			if _, wsErr := readWorkspaceFromDisk(t.deps.Home, v); wsErr != nil {
-				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id"))
+			if _, wsErr := readWorkspaceFromDisk(tu.t.deps.Home, v); wsErr != nil {
+				return tools.ErrorResult(errorJSON("INVALID_INPUT", "invalid workspace_id: not found", "workspace_id")), true
 			}
 		}
 		// UAT batch3 S58 (finding #2, second half): workspace_id used to be
@@ -986,26 +1149,31 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		// treat this as a real change — and only then defer the actual
 		// write and report it in `updated` — when v differs from the task's
 		// current workspace.
-		if v != existing.WorkspaceID {
-			pendingWorkspaceID = v
-			workspaceIDPending = true
-			effectiveWorkspaceID = v
-			updated = append(updated, "workspace_id")
+		if v != tu.existing.WorkspaceID {
+			tu.pendingWorkspaceID = v
+			tu.workspaceIDPending = true
+			tu.effectiveWorkspaceID = v
+			tu.updated = append(tu.updated, "workspace_id")
 		}
 	}
-	if v, ok := args["due"].(string); ok {
-		patch.Due = &v
-		updated = append(updated, "due")
+	return nil, false
+}
+
+// collectSimpleFields collects due, priority, blocked_by, write_set, stream and is_join into the patch.
+func (tu *taskUpdateToolExecute) collectSimpleFields() (*tools.ToolResult, bool) {
+	if v, ok := tu.args["due"].(string); ok {
+		tu.patch.Due = &v
+		tu.updated = append(tu.updated, "due")
 	}
 	// Optional priority — parity with the plain update_task tool. Range
 	// validation (1-5) is enforced by store.Update (pkg/task/store.go),
 	// whose error surfaces via the generic INVALID_INPUT mapping below.
-	if v, ok := args["priority"].(float64); ok {
+	if v, ok := tu.args["priority"].(float64); ok {
 		pr := int(v)
-		patch.Priority = &pr
-		updated = append(updated, "priority")
+		tu.patch.Priority = &pr
+		tu.updated = append(tu.updated, "priority")
 	}
-	if rawDeps, ok := args["blocked_by"].([]any); ok {
+	if rawDeps, ok := tu.args["blocked_by"].([]any); ok {
 		deps := make([]string, 0, len(rawDeps))
 		for _, d := range rawDeps {
 			if s, ok := d.(string); ok && s != "" {
@@ -1019,69 +1187,77 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 		// until after store.Update succeeds (see the workspace_id block
 		// above). CLEAR ([]) trivially passes.
 		if len(deps) > 0 {
-			if wErr := validateBlockersSameWorkspace(store, effectiveWorkspaceID, deps); wErr != nil {
-				return tools.ErrorResult(errorJSON("INVALID_INPUT", wErr.Error(), "blocked_by"))
+			if wErr := validateBlockersSameWorkspace(tu.store, tu.effectiveWorkspaceID, deps); wErr != nil {
+				return tools.ErrorResult(errorJSON("INVALID_INPUT", wErr.Error(), "blocked_by")), true
 			}
 		}
-		patch.BlockedBy = &deps
-		updated = append(updated, "blocked_by")
+		tu.patch.BlockedBy = &deps
+		tu.updated = append(tu.updated, "blocked_by")
 	}
 
 	// write_set/stream/is_join (ADR-053 §Contract Surface, US-11 G-16) —
 	// parity with the plain update_task tool.
-	if rawWriteSet, ok := args["write_set"].([]any); ok {
+	if rawWriteSet, ok := tu.args["write_set"].([]any); ok {
 		writeSet := make([]string, 0, len(rawWriteSet))
 		for _, p := range rawWriteSet {
 			if s, ok := p.(string); ok && s != "" {
 				writeSet = append(writeSet, s)
 			}
 		}
-		patch.WriteSet = &writeSet
-		updated = append(updated, "write_set")
+		tu.patch.WriteSet = &writeSet
+		tu.updated = append(tu.updated, "write_set")
 	}
-	if v, ok := args["stream"].(string); ok {
-		patch.Stream = &v
-		updated = append(updated, "stream")
+	if v, ok := tu.args["stream"].(string); ok {
+		tu.patch.Stream = &v
+		tu.updated = append(tu.updated, "stream")
 	}
-	if v, ok := args["is_join"].(bool); ok {
-		patch.IsJoin = &v
-		updated = append(updated, "is_join")
+	if v, ok := tu.args["is_join"].(bool); ok {
+		tu.patch.IsJoin = &v
+		tu.updated = append(tu.updated, "is_join")
 	}
+	return nil, false
+}
 
+// parseCriteria parses submitted criteria and dod, refusing an edit that empties either list.
+func (tu *taskUpdateToolExecute) parseCriteria() (*tools.ToolResult, bool) {
 	// criteria / dod (GOAL-FR-021/FR-029/FR-030/D-C): mirrors the plain
 	// update_task tool — the mandatory-count gate binds at edit too,
 	// uniformly with create. Persisted to the paired goal record after
 	// store.Update succeeds (syncWorkspaceTaskGoalRecord, below).
-	var goalCriteria, goalDoD []task.AcceptanceCriterion
-	criteriaProvided, dodProvided := false, false
-	if rawCriteria, ok := args["criteria"].([]any); ok {
-		criteriaProvided = true
+
+	tu.criteriaProvided, tu.dodProvided = false, false
+	if rawCriteria, ok := tu.args["criteria"].([]any); ok {
+		tu.criteriaProvided = true
 		if len(rawCriteria) == 0 {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"An update that changes the acceptance criteria must leave at least one.", "criteria"))
+				"An update that changes the acceptance criteria must leave at least one.", "criteria")), true
 		}
-		parsed, cErr := parseCriteriaArgsFromWorkspaceTool(rawCriteria, caller)
+		parsed, cErr := parseCriteriaArgsFromWorkspaceTool(rawCriteria, tu.caller)
 		if cErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", cErr.Error(), "criteria"))
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", cErr.Error(), "criteria")), true
 		}
-		goalCriteria = parsed
-		patch.Criteria = &parsed
-		updated = append(updated, "criteria")
+		tu.goalCriteria = parsed
+		tu.patch.Criteria = &parsed
+		tu.updated = append(tu.updated, "criteria")
 	}
-	if rawDoD, ok := args["dod"].([]any); ok {
-		dodProvided = true
+	if rawDoD, ok := tu.args["dod"].([]any); ok {
+		tu.dodProvided = true
 		if len(rawDoD) == 0 {
 			return tools.ErrorResult(errorJSON("INVALID_INPUT",
-				"An update that changes the Definition of Done must leave at least one item.", "dod"))
+				"An update that changes the Definition of Done must leave at least one item.", "dod")), true
 		}
-		parsed, dErr := parseCriteriaArgsFromWorkspaceTool(rawDoD, caller)
+		parsed, dErr := parseCriteriaArgsFromWorkspaceTool(rawDoD, tu.caller)
 		if dErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", dErr.Error(), "dod"))
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", dErr.Error(), "dod")), true
 		}
-		goalDoD = parsed
-		updated = append(updated, "dod")
+		tu.goalDoD = parsed
+		tu.updated = append(tu.updated, "dod")
 	}
+	return nil, false
+}
 
+// checkDistinct keeps criteria and dod distinct post-edit and refuses an assignee that cannot finish.
+func (tu *taskUpdateToolExecute) checkDistinct() (*tools.ToolResult, bool) {
 	// GOAL-FR-048 binds the distinctness rule at SAVE, not only at create —
 	// otherwise the rule is a door you walk around: create with a distinct DoD,
 	// then edit it into a duplicate.
@@ -1092,23 +1268,23 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// the task record; the persisted DoD can only come off the paired goal
 	// record, which is the only place a task's DoD exists (ADR-086 D5).
 	// Checked before store.Update, so a refusal writes nothing at all.
-	if criteriaProvided || dodProvided {
-		effectiveCriteria := goalCriteria
-		if !criteriaProvided {
-			effectiveCriteria = existing.Criteria
+	if tu.criteriaProvided || tu.dodProvided {
+		effectiveCriteria := tu.goalCriteria
+		if !tu.criteriaProvided {
+			effectiveCriteria = tu.existing.Criteria
 		}
-		effectiveDoD := goalDoD
-		if !dodProvided {
-			persistedDoD, dErr := pairedWorkspaceGoalDoD(t.deps.Home, id)
+		effectiveDoD := tu.goalDoD
+		if !tu.dodProvided {
+			persistedDoD, dErr := pairedWorkspaceGoalDoD(tu.t.deps.Home, tu.id)
 			if dErr != nil {
 				return tools.ErrorResult(errorJSON("SAVE_FAILED",
 					"could not read the task's Definition of Done to check it stays distinct from "+
-						"the criteria: "+dErr.Error(), "criteria"))
+						"the criteria: "+dErr.Error(), "criteria")), true
 			}
 			effectiveDoD = persistedDoD
 		}
 		if vErr := task.ValidateDoDDistinct(effectiveCriteria, effectiveDoD); vErr != nil {
-			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod")).WithError(vErr)
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", vErr.Error(), "dod")).WithError(vErr), true
 		}
 	}
 
@@ -1116,37 +1292,45 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// reassignment, or a change to what the task is judged against, may not
 	// leave it with an agent that cannot finish it. Checked before
 	// store.Update, so a refusal writes nothing.
-	if refusal := workspaceUpdateAssigneeCannotFinish(t.deps.AssigneeCannotFinish, t.deps.Home, existing,
-		patch.AgentID, goalCriteria, goalDoD, criteriaProvided, dodProvided); refusal != nil {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", refusal.Reason, refusal.Field)).WithError(refusal)
+	if refusal := workspaceUpdateAssigneeCannotFinish(tu.t.deps.AssigneeCannotFinish, tu.t.deps.Home, tu.existing,
+		tu.patch.AgentID, tu.goalCriteria, tu.goalDoD, tu.criteriaProvided, tu.dodProvided); refusal != nil {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", refusal.Reason, refusal.Field)).WithError(refusal), true
 	}
+	return nil, false
+}
 
+// applyPatch persists the patch via the store and then writes the deferred workspace move.
+func (tu *taskUpdateToolExecute) applyPatch() (*tools.ToolResult, bool) {
 	// Apply the field patch via the store (DAG validation + atomic write).
-	result, err := store.Update(id, patch)
-	if err != nil {
-		if isTaskNotFound(err) {
-			return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", id),
-				"Use list_tasks_in_workspace to see available tasks"))
+	tu.result, tu.err = tu.store.Update(tu.id, tu.patch)
+	if tu.err != nil {
+		if isTaskNotFound(tu.err) {
+			return tools.ErrorResult(errorJSON("TASK_NOT_FOUND", fmt.Sprintf("No task %q", tu.id),
+				"Use list_tasks_in_workspace to see available tasks")), true
 		}
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", tu.err.Error(), "")), true
 	}
 
 	// Only now — AFTER store.Update has validated and persisted the rest of
 	// the patch — write the workspace_id move validated earlier. This keeps
 	// the call all-or-nothing: if store.Update had failed above, we already
 	// returned without touching the task at all.
-	if workspaceIDPending {
-		mu := store.Lock(id)
+	if tu.workspaceIDPending {
+		mu := tu.store.Lock(tu.id)
 		mu.Lock()
-		result.WorkspaceID = pendingWorkspaceID
-		result.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
-		writeErr := writeEntity(tasksDir(t.deps.Home), id, *result)
+		tu.result.WorkspaceID = tu.pendingWorkspaceID
+		tu.result.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		writeErr := writeEntity(tasksDir(tu.t.deps.Home), tu.id, *tu.result)
 		mu.Unlock()
 		if writeErr != nil {
-			return tools.ErrorResult(errorJSON("SAVE_FAILED", writeErr.Error(), ""))
+			return tools.ErrorResult(errorJSON("SAVE_FAILED", writeErr.Error(), "")), true
 		}
 	}
+	return nil, false
+}
 
+// runPostUpdateHooks terminates the goal record on a terminal write, advances dependents and syncs criteria/dod to the goal record.
+func (tu *taskUpdateToolExecute) runPostUpdateHooks() {
 	// GOAL-FR-015/FR-027/FR-028 (review finding C1): this privileged tool is
 	// one of the seven terminal task writers and had no goal hook at all. The
 	// judge deferral above only intercepts `done` — status:"failed" was
@@ -1158,47 +1342,50 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, args map[string]any) *tool
 	// unset — terminates nothing. The prior-status guard keeps a no-op resend
 	// on an already-terminal task out of the hook; the hook is idempotent
 	// anyway, this just keeps the logs honest.
-	if task.IsTerminal(result.Status) && !task.IsTerminal(existing.Status) {
+	if task.IsTerminal(tu.result.Status) && !task.IsTerminal(tu.existing.Status) {
 		tools.TerminateTaskGoalRecord(
-			goal.NewStore(t.deps.Home), id, result.Status, result.CancelReason, result.Result)
+			goal.NewStore(tu.t.deps.Home), tu.id, tu.result.Status, tu.result.CancelReason, tu.result.Result)
 	}
 
 	// FR-6.5: when the task newly reaches terminal "done", advance dependents.
-	if result.Status == task.StatusDone {
-		if advanced, advErr := store.AdvanceBlockedDependents(id); advErr != nil {
-			slog.Warn("update_task_in_workspace: advance dependents failed", "id", id, "error", advErr)
+	if tu.result.Status == task.StatusDone {
+		if advanced, advErr := tu.store.AdvanceBlockedDependents(tu.id); advErr != nil {
+			slog.Warn("update_task_in_workspace: advance dependents failed", "id", tu.id, "error", advErr)
 		} else if len(advanced) > 0 {
 			slog.Info("update_task_in_workspace: completed task advanced dependents",
-				"completed_id", id, "advanced_ids", advanced)
+				"completed_id", tu.id, "advanced_ids", advanced)
 		}
 	}
 
 	// GOAL-FR-029/FR-030: the task record itself already carries the new
 	// criteria (dual-write, via patch.Criteria above); this is what actually
 	// persists the change onto the task's paired goal record.
-	var goalSyncWarning string
-	if criteriaProvided || dodProvided {
+
+	if tu.criteriaProvided || tu.dodProvided {
 		var goalMaxRoundsFn func() int
-		if t.deps.GetCfg != nil {
+		if tu.t.deps.GetCfg != nil {
 			goalMaxRoundsFn = func() int {
-				cfg := t.deps.GetCfg()
+				cfg := tu.t.deps.GetCfg()
 				if cfg == nil {
 					return config.DefaultGoalMaxRounds
 				}
 				return cfg.Planning.EffectiveGoalMaxRounds()
 			}
 		}
-		if gErr := syncWorkspaceTaskGoalRecord(t.deps.Home, result, criteriaProvided, goalDoD, dodProvided, goalMaxRoundsFn); gErr != nil {
+		if gErr := syncWorkspaceTaskGoalRecord(tu.t.deps.Home, tu.result, tu.criteriaProvided, tu.goalDoD, tu.dodProvided, goalMaxRoundsFn); gErr != nil {
 			slog.Error("update_task_in_workspace: failed to sync paired goal record",
-				"task_id", id, "error", gErr)
-			goalSyncWarning = gErr.Error()
+				"task_id", tu.id, "error", gErr)
+			tu.goalSyncWarning = gErr.Error()
 		}
 	}
+}
 
-	respFields := map[string]any{"id": id, "updated_fields": updated}
-	if goalSyncWarning != "" {
+// respond builds the success payload with updated_fields and any goal sync warning.
+func (tu *taskUpdateToolExecute) respond() *tools.ToolResult {
+	respFields := map[string]any{"id": tu.id, "updated_fields": tu.updated}
+	if tu.goalSyncWarning != "" {
 		respFields["goal_sync_warning"] = "criteria/dod saved on the task, but the paired goal " +
-			"record could not be updated: " + goalSyncWarning
+			"record could not be updated: " + tu.goalSyncWarning
 	}
 	return tools.NewToolResult(successJSON(respFields))
 }
