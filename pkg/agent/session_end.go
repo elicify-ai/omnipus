@@ -281,56 +281,89 @@ func filterRecapUserTurns(entries []session.TranscriptEntry) (userTurns []string
 	return userTurns, toolCallCount
 }
 
+// agentLoopRunRecap carries the shared state of runRecap across its stages.
+type agentLoopRunRecap struct {
+	al            *AgentLoop
+	sessionID     string
+	trigger       string
+	agentInst     *AgentInstance
+	entries       []session.TranscriptEntry
+	userTurns     []string
+	toolCallCount int
+	carryForward  string
+	resp          *providers.LLMResponse
+}
+
 // runRecap performs the session-end LLM summarisation and persists the result.
 // Runs in a goroutine; a top-level recover() prevents a panic in any
 // subsystem (provider, JSON parse, file I/O) from killing the gateway process.
 func (al *AgentLoop) runRecap(sessionID, trigger string) {
-	slog.Debug("session_end: runRecap started", "session_id", sessionID, "trigger", trigger)
+	rr := &agentLoopRunRecap{al: al, sessionID: sessionID, trigger: trigger}
+
+	slog.Debug("session_end: runRecap started", "session_id", rr.sessionID, "trigger", rr.trigger)
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("session_end: runRecap panic recovered",
-				"session_id", sessionID,
-				"trigger", trigger,
+				"session_id", rr.sessionID,
+				"trigger", rr.trigger,
 				"panic", r,
 			)
-			al.auditRecap(sessionID, "", trigger, "panic_recovered")
+			rr.al.auditRecap(rr.sessionID, "", rr.trigger, "panic_recovered")
 		}
 	}()
 
-	agentInst, err := al.AgentForSession(sessionID)
+	if rr.loadTranscript() {
+		return
+	}
+
+	if rr.callCandidates() {
+		return
+	}
+
+	rr.persistResponse()
+}
+
+// loadTranscript resolves the session agent and loads the transcript inputs used by recap.
+func (rr *agentLoopRunRecap) loadTranscript() bool {
+	var err error
+	rr.agentInst, err = rr.al.AgentForSession(rr.sessionID)
 	if err != nil {
 		// Heuristic fallback: agent deleted or session meta unavailable.
-		al.writeHeuristicFallbackRetro(sessionID, trigger, "agent_deleted", nil)
-		return
+		rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, "agent_deleted", nil)
+		return true
 	}
 
 	// Read the session transcript from the shared store.
-	store := al.sharedSessionStore
+	store := rr.al.sharedSessionStore
 	if store == nil {
-		al.writeHeuristicFallbackRetro(sessionID, trigger, "no_session_store", agentInst)
-		return
+		rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, "no_session_store", rr.agentInst)
+		return true
 	}
 
-	entries, err := store.ReadTranscript(sessionID)
+	rr.entries, err = store.ReadTranscript(rr.sessionID)
 	if err != nil {
-		al.writeHeuristicFallbackRetro(sessionID, trigger, fmt.Sprintf("transcript_read_error: %v", err), agentInst)
-		return
+		rr.al.writeHeuristicFallbackRetro(rr.sessionID, rr.trigger, fmt.Sprintf("transcript_read_error: %v", err), rr.agentInst)
+		return true
 	}
 
 	// FR-028: filter to user-role, non-empty, non-SubTurn, non-interrupt-hint messages.
-	userTurns, toolCallCount := filterRecapUserTurns(entries)
+	rr.userTurns, rr.toolCallCount = filterRecapUserTurns(rr.entries)
 
 	// Carry-forward tail for the fallback path: if summarisation fails below,
 	// the recent user turns are preserved verbatim so cross-session continuity
 	// survives a degraded recap (buildCarryForward / writeHeuristicFallbackRetroWithCount).
-	carryForward := buildCarryForward(userTurns, carryForwardMaxRunes)
+	rr.carryForward = buildCarryForward(rr.userTurns, carryForwardMaxRunes)
+	return false
+}
 
+// callCandidates builds the bounded recap request and tries its ordered model candidates within the retry budget.
+func (rr *agentLoopRunRecap) callCandidates() bool {
 	// Build the conversation text, truncate to 2000 tokens (~8000 runes).
 	// FR-030: "truncate oldest" — we keep the tail (most recent turns) because
 	// the recap's value is summarizing what just happened, not what happened
 	// 40 turns ago.
 	const tokenBudget = 2000
-	combined := strings.Join(userTurns, "\n\n")
+	combined := strings.Join(rr.userTurns, "\n\n")
 	runes := []rune(combined)
 	prefix := ""
 	if len(runes)/4 > tokenBudget {
@@ -344,7 +377,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// Priority: recap_model config → overall default model → session agent model.
 	// Snapshot the config once (under RLock via GetConfig) so all reads below
 	// see a consistent view of the config even if SwapConfig races.
-	snapCfg := al.GetConfig()
+	snapCfg := rr.al.GetConfig()
 	recapModel := snapCfg.Agents.Defaults.RecapModel
 	// When no recap model is configured the default (provider, model) pair is
 	// used as-is — pinned to its own provider, never re-resolved (ADR-068).
@@ -354,7 +387,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		recapPinnedProvider = snapCfg.Agents.Defaults.DefaultModel.Provider
 	}
 	if recapModel == "" {
-		recapModel = agentInst.Model
+		recapModel = rr.agentInst.Model
 	}
 
 	// Build the fallback candidate list: [primaryRecapModel, ...RecapFallbackModels].
@@ -421,7 +454,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// The agent id is passed for the FR-016 WARNs only; a recap chain is not
 	// the agent's turn chain, so its primaryUnknown verdict is deliberately
 	// NOT projected onto the instance's needs_provider degrade.
-	recapProviderPool := buildProviderPool(snapCfg, candidates, agentInst.ID).pool
+	recapProviderPool := buildProviderPool(snapCfg, candidates, rr.agentInst.ID).pool
 
 	// resolveRecapProvider mirrors GetProviderForCandidate but consults the
 	// one-off recap pool first, then the agent's turn pool (single-passthrough
@@ -436,11 +469,11 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		// Single passthrough provider (empty Provider on candidate): use the
 		// agent's primary provider — same as the pre-fix behavior and the
 		// correct path when all recap candidates share the agent's provider.
-		p := agentInst.GetProviderForCandidate(candidate)
+		p := rr.agentInst.GetProviderForCandidate(candidate)
 		if p != nil {
 			return p
 		}
-		return agentInst.Provider
+		return rr.agentInst.Provider
 	}
 
 	// Self-bounded overall at 60s. Divide the budget evenly across candidates
@@ -475,7 +508,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	// before moving to the next fallback candidate.
 	// Non-transient errors (4xx, unauthorized, context-overflow) fall through to
 	// the next candidate immediately — retrying them is not safe or useful.
-	var resp *providers.LLMResponse
+
 	var llmErr error
 	for _, candidate := range candidates {
 		p := resolveRecapProvider(candidate)
@@ -485,8 +518,8 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 			remaining := time.Until(recapDeadline)
 			if remaining <= 0 {
 				slog.Warn("session_end: recap deadline exceeded, stopping retries",
-					"session_id", sessionID,
-					"agent_id", agentInst.ID,
+					"session_id", rr.sessionID,
+					"agent_id", rr.agentInst.ID,
 					"model", candidate.Model,
 				)
 				break
@@ -500,7 +533,7 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 			r, err := p.Chat(candidateCtx, msgs, nil, candidate.Model, opts)
 			candidateCancel()
 			if err == nil {
-				resp = r
+				rr.resp = r
 				llmErr = nil
 				break
 			}
@@ -509,8 +542,8 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 			if attempt < maxTransientRetries && isTransientStreamError(err) {
 				backoff := time.Duration(1+attempt) * 500 * time.Millisecond
 				slog.Warn("session_end: recap transient stream error, retrying",
-					"session_id", sessionID,
-					"agent_id", agentInst.ID,
+					"session_id", rr.sessionID,
+					"agent_id", rr.agentInst.ID,
 					"model", candidate.Model,
 					"attempt", attempt+1,
 					"max_retries", maxTransientRetries,
@@ -524,8 +557,8 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 
 			// Non-transient error or retries exhausted — move to the next candidate.
 			slog.Warn("session_end: recap candidate failed, trying next",
-				"session_id", sessionID,
-				"agent_id", agentInst.ID,
+				"session_id", rr.sessionID,
+				"agent_id", rr.agentInst.ID,
 				"model", candidate.Model,
 				"attempt", attempt+1,
 				"error", err.Error(),
@@ -533,32 +566,36 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 			llmErr = err
 			break
 		}
-		if resp != nil {
+		if rr.resp != nil {
 			break
 		}
 	}
 
 	if llmErr != nil {
 		slog.Warn("session_end: llm call failed",
-			"session_id", sessionID,
-			"agent_id", agentInst.ID,
+			"session_id", rr.sessionID,
+			"agent_id", rr.agentInst.ID,
 			"error", llmErr.Error(),
 		)
 		// SF1: emit two distinct audit entries so operators can see both outcomes:
 		// (1) the LLM call failed, (2) the heuristic fallback was written.
-		al.auditRecap(sessionID, agentInst.ID, trigger, "llm_failed:"+classifyLLMError(llmErr))
-		al.writeHeuristicFallbackRetroWithCount(
-			sessionID,
-			trigger,
+		rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "llm_failed:"+classifyLLMError(llmErr))
+		rr.al.writeHeuristicFallbackRetroWithCount(
+			rr.sessionID,
+			rr.trigger,
 			classifyLLMError(llmErr),
-			agentInst,
-			len(entries),
-			toolCallCount,
-			carryForward,
+			rr.agentInst,
+			len(rr.entries),
+			rr.toolCallCount,
+			rr.carryForward,
 		)
-		return
+		return true
 	}
+	return false
+}
 
+// persistResponse parses the recap response and persists its summary and retrospective.
+func (rr *agentLoopRunRecap) persistResponse() {
 	// Parse LLM JSON response.
 	type recapJSON struct {
 		Recap            string   `json:"recap"`
@@ -568,15 +605,15 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 	}
 
 	var parsed recapJSON
-	responseText := resp.Content
+	responseText := rr.resp.Content
 
 	// Reasoning-model fallback: some providers (e.g. glm-5.2 on OpenRouter/Fireworks)
 	// ignore the reasoning:{enabled:false} hint and generate a reasoning trace. When
 	// content is empty but resp.Reasoning is non-empty, the model likely drafted its
 	// JSON inside the reasoning trace (observed pattern: the trace ends with a JSON
 	// block). Fall back to the reasoning trace so the recap succeeds without a retry.
-	if strings.TrimSpace(responseText) == "" && resp.Reasoning != "" {
-		responseText = resp.Reasoning
+	if strings.TrimSpace(responseText) == "" && rr.resp.Reasoning != "" {
+		responseText = rr.resp.Reasoning
 	}
 
 	// Unwrap the JSON envelope. glm-5.2 (and other providers) frequently return the
@@ -594,76 +631,76 @@ func (al *AgentLoop) runRecap(sessionID, trigger string) {
 		// The raw body can still be useful for debugging recap-prompt regressions,
 		// so log a truncated preview before discarding it and falling back.
 		slog.Warn("session_end: recap JSON parse failed",
-			"session_id", sessionID,
-			"agent_id", agentInst.ID,
+			"session_id", rr.sessionID,
+			"agent_id", rr.agentInst.ID,
 			"parse_error", parseErr.Error(),
 			"response_preview", utils.Truncate(responseText, 500),
 		)
-		al.writeHeuristicFallbackRetroWithCount(
-			sessionID,
-			trigger,
+		rr.al.writeHeuristicFallbackRetroWithCount(
+			rr.sessionID,
+			rr.trigger,
 			"json_parse_error",
-			agentInst,
-			len(entries),
-			toolCallCount,
-			carryForward,
+			rr.agentInst,
+			len(rr.entries),
+			rr.toolCallCount,
+			rr.carryForward,
 		)
 		return
 	}
 
 	// Persist last-session summary.
-	memory := agentInst.ContextBuilder.Memory()
+	memory := rr.agentInst.ContextBuilder.Memory()
 	if memory == nil {
-		al.writeHeuristicFallbackRetroWithCount(
-			sessionID,
-			trigger,
+		rr.al.writeHeuristicFallbackRetroWithCount(
+			rr.sessionID,
+			rr.trigger,
 			"no_memory_store",
-			agentInst,
-			len(entries),
-			toolCallCount,
-			carryForward,
+			rr.agentInst,
+			len(rr.entries),
+			rr.toolCallCount,
+			rr.carryForward,
 		)
 		return
 	}
 
 	slog.Info("session_end: writing LAST_SESSION.md",
-		"session_id", sessionID,
-		"agent_id", agentInst.ID,
-		"workspace", agentInst.Home,
+		"session_id", rr.sessionID,
+		"agent_id", rr.agentInst.ID,
+		"workspace", rr.agentInst.Home,
 	)
 	if err := memory.WriteLastSession(parsed.Recap); err != nil {
 		slog.Warn("session_end: failed to write LAST_SESSION.md",
-			"session_id", sessionID,
-			"agent_id", agentInst.ID,
+			"session_id", rr.sessionID,
+			"agent_id", rr.agentInst.ID,
 			"error", err,
 		)
 	}
 
 	retro := Retro{
 		Timestamp:        time.Now().UTC(),
-		Trigger:          RecapTrigger(trigger),
+		Trigger:          RecapTrigger(rr.trigger),
 		Fallback:         false,
 		Recap:            parsed.Recap,
 		WentWell:         parsed.WentWell,
 		NeedsImprovement: parsed.NeedsImprovement,
 	}
-	if err := memory.AppendRetro(sessionID, retro); err != nil {
+	if err := memory.AppendRetro(rr.sessionID, retro); err != nil {
 		slog.Warn("session_end: failed to append retro",
-			"session_id", sessionID,
-			"agent_id", agentInst.ID,
+			"session_id", rr.sessionID,
+			"agent_id", rr.agentInst.ID,
 			"error", err,
 		)
 	}
 
-	al.auditRecap(sessionID, agentInst.ID, trigger, "success")
+	rr.al.auditRecap(rr.sessionID, rr.agentInst.ID, rr.trigger, "success")
 	// Claim stays for the process lifetime: idempotency is provided by
 	// agentSessionHasRetro at the file level. Re-recap on a subsequent
 	// bootstrap pass will be blocked by the file check, not this map.
 
 	slog.Info("session_end: recap complete",
-		"session_id", sessionID,
-		"agent_id", agentInst.ID,
-		"trigger", trigger,
+		"session_id", rr.sessionID,
+		"agent_id", rr.agentInst.ID,
+		"trigger", rr.trigger,
 		"recap_len", len(parsed.Recap),
 	)
 }
