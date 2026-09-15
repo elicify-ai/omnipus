@@ -65,7 +65,6 @@ pkg/tools/browser/live_viewport_frame.go	LiveView.applyViewportAdmitted	337
 pkg/tools/delegate_run.go	DelegateTool.executeAsync	341
 pkg/tools/delegate_park.go	DelegateTool.executeRespond	255
 pkg/tools/delegate_run.go	DelegateTool.executeRun	277
-pkg/tools/message_parent.go	MessageParentTool.Execute	345
 pkg/tools/resolvepath.go	ResolvePath	270
 pkg/tools/set_goal_test.go	TestSetGoalTool_ValidatesAndWrites	246
 pkg/tools/set_goal.go	SetGoalTool.Execute	308
