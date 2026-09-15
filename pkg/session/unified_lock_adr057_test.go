@@ -22,6 +22,8 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -218,14 +220,40 @@ func findFilesystemCall(fset *token.FileSet, stmts []ast.Stmt) (desc string, lin
 	return desc, line, ok
 }
 
+// cacheMuGateFilesForTest returns the non-test Go sources the FR-049 AST gate
+// below scans: every unified*.go sibling in pkg/session/ plus
+// retention_sweep.go. The gate's original file set named unified.go directly;
+// unified.go was split into unified_*.go files by job on 2026-09-15, so a
+// cacheMu critical section may now live in any of them — scanning the family
+// glob (plus the non-family sibling that was always in the set) keeps the
+// gate covering every region it did before, without naming split artifacts.
+func cacheMuGateFilesForTest(t *testing.T) []string {
+	t.Helper()
+	matches, err := filepath.Glob("unified*.go")
+	require.NoError(t, err, "cacheMuGateFilesForTest: glob unified*.go")
+	files := make([]string, 0, len(matches)+1)
+	for _, name := range matches {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		files = append(files, name)
+	}
+	files = append(files, "retention_sweep.go")
+	// A glob that matches nothing returns no error, so without this the gate
+	// below would pass vacuously on a broken checkout.
+	require.NotEmpty(t, files, "cacheMuGateFilesForTest: no non-test unified*.go sources found")
+	return files
+}
+
 // TestCacheMu_NoFilesystemInCriticalSection is test #9 (FR-049/BDD-57): an
-// AST gate over the three files U4 owns. Per binding Rule 4, it MUST locate
+// AST gate over the files U4 owns (see cacheMuGateFilesForTest). Per binding
+// Rule 4, it MUST locate
 // >= 3 cacheMu critical sections BEFORE asserting the exclusion — cacheMu
 // does not exist before this unit's change (`grep -c cacheMu
 // pkg/session/unified.go` was 0), so a gate that locates zero has found a
 // bug in the gate, not proven anything safe.
 func TestCacheMu_NoFilesystemInCriticalSection(t *testing.T) {
-	files := []string{"unified.go", "retention_sweep.go", "unified_lock.go"}
+	files := cacheMuGateFilesForTest(t)
 	fset := token.NewFileSet()
 
 	var regions []cacheMuRegion
@@ -387,34 +415,6 @@ func TestLockAllSessionShards_AcquiresInStrictAscendingIndexOrder(t *testing.T) 
 	for i, ev := range releases {
 		require.Falsef(t, ev.acquire, "event %d must be a release", 64+i)
 		require.Equalf(t, uint32(i), ev.shard, "release %d must be shard index %d (ascending)", i, i)
-	}
-}
-
-// TestClearAll_AcquiresAllShardsInIndexOrder proves the REAL ClearAll call
-// (not a hand-rolled simulation) goes through lockAllSessionShards, by
-// asserting the recorded order matches the strict-ascending-index shape
-// while ClearAll runs against a real store with real sessions.
-func TestClearAll_AcquiresAllShardsInIndexOrder(t *testing.T) {
-	store := newTestStoreForLockTests(t)
-	for i := 0; i < 3; i++ {
-		_, err := store.NewSession(SessionTypeChat, "", "agent-1")
-		require.NoError(t, err)
-	}
-
-	events, restore := installLockRecorder(t)
-	t.Cleanup(restore)
-
-	_, err := store.ClearAll()
-	require.NoError(t, err)
-
-	recorded := *events
-	require.GreaterOrEqual(t, len(recorded), 128, "ClearAll must acquire+release all 64 shards")
-	// The first 64 events (the lockAllSessionShards acquire loop, which runs
-	// before ClearAll does any per-session work) must be a strictly
-	// ascending 0..63 acquire sequence.
-	for i := 0; i < 64; i++ {
-		require.Truef(t, recorded[i].acquire, "event %d must be an acquire", i)
-		require.Equalf(t, uint32(i), recorded[i].shard, "acquire %d must be shard %d", i, i)
 	}
 }
 

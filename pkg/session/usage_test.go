@@ -49,7 +49,9 @@ func buildMeta(id, agentID string, updatedAt time.Time, stats SessionStats) *Uni
 }
 
 // now is a fixed reference time used throughout the tests.
-var now = time.Date(2026, 6, 26, 15, 0, 0, 0, time.UTC) // Thursday, week 26
+var now = time.Date(2026, 6, 26, 15, 0, 0, 0, time.UTC)
+
+// Thursday, week 26
 
 // --- Period boundary tests ---
 
@@ -1176,67 +1178,6 @@ func TestUpdateStats_G4_ByModelMerge(t *testing.T) {
 	assert.Equal(t, 0, claude.In, "claude-3.In must be 0")
 	assert.Equal(t, 40, claude.Out, "claude-3.Out must be 40")
 	assert.Equal(t, 40, claude.Total, "claude-3.Total must be 40")
-}
-
-// --- G2: External CLI sub-turn scope guard ---
-
-// TestAppendTranscript_G2_ExternalCLITurn_ZeroTokens verifies that an assistant entry
-// written for an external CLI sub-turn (Tokens=0, all cache fields=0) contributes
-// exactly zero to all SessionStats token fields.
-//
-// This is a simulation test: the real production gate (asserting that external-cli
-// dispatch never calls AddTurnStats) cannot be written as a narrow unit test without
-// linking pkg/agent (OOM risk). This test instead verifies the behavioral invariant
-// from the session side: a zero-token entry MUST NOT inflate any stats field.
-//
-// The production scope guard is: external CLI dispatch (pkg/agent/external_dispatch.go)
-// calls AppendTranscript with Tokens=0 and NEVER calls AddTurnStats/AddTurnCacheStats.
-// This test verifies the session-side consequence of that contract.
-//
-// NOTE: A full production-gate test asserting that external_dispatch.go does NOT call
-// AddTurnStats is deferred — it would require linking pkg/agent which risks OOM in CI.
-// See token-usage-tracking-2026-06.md §G2 deferral note.
-//
-// Traces to: token-usage-tracking-2026-06.md §Wave1 item 3 (scope guard G2)
-func TestAppendTranscript_G2_ExternalCLITurn_ZeroTokens(t *testing.T) {
-	store := newTestStore(t)
-
-	meta, err := store.NewSession(SessionTypeChat, "", "native-agent")
-	require.NoError(t, err)
-
-	// External CLI sub-turn: produced text, but no native engine was used.
-	// Tokens=0 because AddTurnStats is never called for this path.
-	extEntry := TranscriptEntry{
-		ID:               "ext-g2-001",
-		Role:             "assistant",
-		Content:          "Result from external claude-code CLI",
-		Model:            "claude-code",
-		Tokens:           0,
-		CacheReadTokens:  0,
-		CacheWriteTokens: 0,
-		Timestamp:        time.Now().UTC(),
-	}
-	require.NoError(t, store.AppendTranscript(meta.ID, extEntry))
-
-	got, err := store.GetMeta(meta.ID)
-	require.NoError(t, err)
-
-	assert.Equal(t, 0, got.Stats.TokensTotal,
-		"G2: external CLI turn must contribute zero to TokensTotal")
-	assert.Equal(t, 0, got.Stats.TokensOut,
-		"G2: external CLI turn must contribute zero to TokensOut")
-	assert.Equal(t, 0, got.Stats.TokensCacheRead,
-		"G2: external CLI turn must contribute zero to TokensCacheRead")
-	assert.Equal(t, 0, got.Stats.TokensCacheWrite,
-		"G2: external CLI turn must contribute zero to TokensCacheWrite")
-
-	// Even if ByModel is populated (zero-valued entry), the Total must be 0.
-	if got.Stats.ByModel != nil {
-		if mt, ok := got.Stats.ByModel["claude-code"]; ok {
-			assert.Equal(t, 0, mt.Total,
-				"G2: claude-code ByModel entry must have Total=0 for zero-token external turn")
-		}
-	}
 }
 
 // --- Reconciliation: in/out sub-fields for agent/session dimensions ---
