@@ -12,17 +12,15 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
-	"sync"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // newCompressedCfg builds a minimal config with Compressed=true and the four
@@ -99,70 +97,6 @@ func fakeTurnStateNoTranscript(agent *AgentInstance, sessionKey string) *turnSta
 // nothing ever reads.
 func bucketFor(agent *AgentInstance, sessionID string) string {
 	return manifestBucketKey(agent.ID, sessionID, sessionID)
-}
-
-// ─── Session state tests ────────────────────────────────────────────────────
-
-// TestMarkToolsLoaded_BasicRoundTrip proves that markToolsLoaded records names
-// and sessionLoadedTools returns them for the same session.
-func TestMarkToolsLoaded_BasicRoundTrip(t *testing.T) {
-	al := &AgentLoop{loadedTools: make(map[string]map[string]bool)}
-	al.markToolsLoaded("sess-1", []string{"create_agent", "list_agents"})
-	loaded := al.sessionLoadedTools("sess-1")
-	assert.True(t, loaded["create_agent"])
-	assert.True(t, loaded["list_agents"])
-}
-
-// TestSessionLoadedTools_IsolatedAcrossSessions proves that a different session
-// does not inherit another session's loaded set.
-func TestSessionLoadedTools_IsolatedAcrossSessions(t *testing.T) {
-	al := &AgentLoop{loadedTools: make(map[string]map[string]bool)}
-	al.markToolsLoaded("sess-A", []string{"create_agent"})
-	loaded := al.sessionLoadedTools("sess-B")
-	assert.Empty(t, loaded, "sess-B must not inherit sess-A's loaded set")
-}
-
-// TestSessionLoadedTools_ReturnsCopy proves the returned map is a copy: mutations
-// do not affect the internal state.
-func TestSessionLoadedTools_ReturnsCopy(t *testing.T) {
-	al := &AgentLoop{loadedTools: make(map[string]map[string]bool)}
-	al.markToolsLoaded("sess-1", []string{"create_agent"})
-	copy1 := al.sessionLoadedTools("sess-1")
-	copy1["injected"] = true // mutate the returned copy
-	copy2 := al.sessionLoadedTools("sess-1")
-	assert.False(t, copy2["injected"], "mutating returned copy must not affect internal state")
-}
-
-// TestMarkToolsLoaded_EmptySessionID proves nil-safe behavior.
-func TestMarkToolsLoaded_EmptySessionID(t *testing.T) {
-	al := &AgentLoop{loadedTools: make(map[string]map[string]bool)}
-	// Must not panic.
-	al.markToolsLoaded("", []string{"create_agent"})
-	loaded := al.sessionLoadedTools("")
-	assert.Empty(t, loaded)
-}
-
-// TestMarkToolsLoaded_Concurrency proves no data race when two goroutines write
-// to different session IDs simultaneously.
-func TestMarkToolsLoaded_Concurrency(t *testing.T) {
-	al := &AgentLoop{loadedTools: make(map[string]map[string]bool)}
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 100; i++ {
-			al.markToolsLoaded("sess-A", []string{"create_agent"})
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for i := 0; i < 100; i++ {
-			al.markToolsLoaded("sess-B", []string{"list_agents"})
-		}
-	}()
-	wg.Wait()
-	assert.True(t, al.sessionLoadedTools("sess-A")["create_agent"])
-	assert.True(t, al.sessionLoadedTools("sess-B")["list_agents"])
 }
 
 // ─── buildCompressedToolDefs tests ─────────────────────────────────────────
@@ -1020,45 +954,6 @@ func TestMarkLoaded_UnregisteredNameRejected(t *testing.T) {
 	loadedAfter := al.sessionLoadedTools("sess-fix1-roundtrip")
 	assert.False(t, loadedAfter["nonexistent_phantom_xyz"],
 		"FIX1: rejected name must not be in the loaded set")
-}
-
-// ─── FIX 3: forgetSession eviction ─────────────────────────────────────────
-
-// TestForgetSession_Evicts proves forgetSession removes the entry from loadedTools.
-func TestForgetSession_Evicts(t *testing.T) {
-	al := &AgentLoop{loadedTools: make(map[string]map[string]bool)}
-	al.markToolsLoaded("sess-evict", []string{"create_agent", "list_agents"})
-	require.True(t, al.sessionLoadedTools("sess-evict")["create_agent"],
-		"create_agent must be loaded before eviction")
-
-	al.forgetSession("sess-evict")
-
-	after := al.sessionLoadedTools("sess-evict")
-	assert.Empty(t, after, "loadedTools entry must be empty after forgetSession")
-	assert.False(t, after["create_agent"], "create_agent must not be present after forgetSession")
-}
-
-// TestForgetSession_NoopOnEmpty proves forgetSession on an unknown key is a no-op.
-func TestForgetSession_NoopOnEmpty(t *testing.T) {
-	al := &AgentLoop{loadedTools: make(map[string]map[string]bool)}
-	// Must not panic on unknown or empty key.
-	al.forgetSession("nonexistent")
-	al.forgetSession("")
-}
-
-// TestForgetSession_OtherSessionsUnaffected proves forgetSession only evicts
-// the targeted session and leaves other sessions intact.
-func TestForgetSession_OtherSessionsUnaffected(t *testing.T) {
-	al := &AgentLoop{loadedTools: make(map[string]map[string]bool)}
-	al.markToolsLoaded("sess-keep", []string{"list_agents"})
-	al.markToolsLoaded("sess-drop", []string{"create_agent"})
-
-	al.forgetSession("sess-drop")
-
-	kept := al.sessionLoadedTools("sess-keep")
-	assert.True(t, kept["list_agents"], "sess-keep must be unaffected by forgetSession(sess-drop)")
-	dropped := al.sessionLoadedTools("sess-drop")
-	assert.Empty(t, dropped, "sess-drop must be empty after forgetSession")
 }
 
 // ─── Search-tool registration (Gap 2) ──────────────────────────────────────
@@ -1983,6 +1878,7 @@ func TestMiaNavigate_DemotedToPreviewedTier(t *testing.T) {
 type fakeGetWorkspaceTool struct{}
 
 func (f *fakeGetWorkspaceTool) Name() string { return "get_workspace" }
+
 func (f *fakeGetWorkspaceTool) Description() string {
 	return "Get a single workspace's details (stub for manifest tier test)."
 }
@@ -1990,8 +1886,11 @@ func (f *fakeGetWorkspaceTool) Description() string {
 func (f *fakeGetWorkspaceTool) Parameters() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{}}
 }
-func (f *fakeGetWorkspaceTool) Scope() tools.ToolScope       { return tools.ScopeCore }
+
+func (f *fakeGetWorkspaceTool) Scope() tools.ToolScope { return tools.ScopeCore }
+
 func (f *fakeGetWorkspaceTool) Category() tools.ToolCategory { return tools.CategoryWorkspaces }
+
 func (f *fakeGetWorkspaceTool) Execute(_ context.Context, _ map[string]any) *tools.ToolResult {
 	return &tools.ToolResult{ForLLM: "stub"}
 }

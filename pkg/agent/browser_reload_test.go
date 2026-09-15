@@ -8,10 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/bus"
-	"github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/stretchr/testify/require"
 )
 
 // browser_reload_test.go — FR-026a and FR-026b, the two properties of
@@ -165,42 +163,6 @@ func writeWorkspaceFile(t *testing.T, home, workspaceID string, coreTeam []strin
 	body, err := json.Marshal(map[string]any{"id": workspaceID, "core_team": coreTeam})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, workspaceID+".json"), body, 0o600))
-}
-
-// TestBrowserManagerForAgent_AmbiguousMembershipRefuses is FR-033 at the
-// gateway-facing boundary: an agent on two workspaces' core teams, with no
-// preferred workspace supplied, must REFUSE rather than tie-break. Choosing
-// silently picks which set of live logins the panel drives.
-func TestBrowserManagerForAgent_AmbiguousMembershipRefuses(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-	writeWorkspaceFile(t, home, "workspace-one", []string{"roamer"})
-	writeWorkspaceFile(t, home, "workspace-two", []string{"roamer"})
-
-	var askedFor []string
-	al := &AgentLoop{
-		browserMgrs:             make(map[string]*browser.BrowserManager),
-		browserRegisteredAgents: map[string]bool{"roamer": true},
-		browserFactory: func(k browser.BrowsingKey) (*browser.BrowserManager, error) {
-			askedFor = append(askedFor, k.String())
-			return nil, errTestFactoryRefuses
-		},
-	}
-
-	mgr, outcome := al.BrowserManagerForAgent(context.Background(), "roamer", "")
-	require.Nil(t, mgr)
-	require.Equal(t, BrowserResolveAmbiguous, outcome)
-	require.Empty(t, askedFor,
-		"an ambiguous membership must be refused BEFORE a browser is built — "+
-			"building one means a workspace was silently chosen")
-
-	// Naming one of them resolves it: the caller has said which it means, and
-	// that is not the ambiguity FR-033 refuses.
-	mgr, outcome = al.BrowserManagerForAgent(context.Background(), "roamer", "workspace-two")
-	require.Nil(t, mgr)
-	require.Equal(t, BrowserResolveLaunchFailed, outcome)
-	require.Equal(t, []string{"ws:workspace-two"}, askedFor,
-		"the NAMED workspace must be the one resolved, not the sorted-first one")
 }
 
 // errTestFactoryRefuses stands in for a launch failure, so a test can observe

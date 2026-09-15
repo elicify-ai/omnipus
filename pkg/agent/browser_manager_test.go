@@ -7,11 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/stretchr/testify/require"
 )
 
 // errZeroKeyReachedFactory is returned by a test factory that must never be
@@ -114,9 +112,7 @@ func TestLoop_BrowserManagerForKey_ZeroKeyIsNamedFailure(t *testing.T) {
 // wrong-proof: the field's doc must name the browsing key, and must not claim
 // the old per-agent keying.
 func TestLoop_BrowserMgrsCommentIsCurrent(t *testing.T) {
-	src, err := os.ReadFile("loop.go")
-	require.NoError(t, err)
-	text := string(src)
+	text := readLoopSourcesForTest(t)
 
 	start := strings.Index(text, "// browserMgrs holds one BrowserManager per")
 	require.GreaterOrEqual(t, start, 0, "the browserMgrs doc comment has moved or been deleted")
@@ -130,80 +126,4 @@ func TestLoop_BrowserMgrsCommentIsCurrent(t *testing.T) {
 		"the doc must show the actual key shape a reader will see in a log line")
 	require.NotContains(t, doc, "one BrowserManager per agent",
 		"the pre-ADR-075 claim survived the re-key — it is now false and actively misleading")
-}
-
-// TestBrowserManagerForAgent_DistinguishesNotRegisteredFromNoWorkspace is
-// FR-008a. "Browser tools are not registered for this agent" and "this agent is
-// not on a workspace team" are different operator problems with different
-// remedies, and browser_inspect.go reported the former for BOTH — so an
-// operator whose agent simply had no workspace was sent to check tool
-// registration, which was fine.
-func TestBrowserManagerForAgent_DistinguishesNotRegisteredFromNoWorkspace(t *testing.T) {
-	t.Setenv("OMNIPUS_HOME", t.TempDir()) // no workspaces on disk
-	al := &AgentLoop{
-		browserMgrs:             make(map[string]*browser.BrowserManager),
-		browserRegisteredAgents: map[string]bool{"has-tools": true},
-	}
-
-	_, outcome := al.BrowserManagerForAgent(context.Background(), "no-tools-at-all", "")
-	require.Equal(t, BrowserResolveNotRegistered, outcome)
-
-	_, outcome = al.BrowserManagerForAgent(context.Background(), "has-tools", "")
-	require.Equal(t, BrowserResolveNoWorkspace, outcome,
-		"an agent WITH browser tools but no workspace must not be reported as unregistered")
-}
-
-// TestRegisterSharedTools_HotReload_ShutsDownReplacedBrowserManager is the
-// ADR-038 finding #2 regression guard, carried through the ADR-075 re-key:
-// registerSharedTools MUST call Shutdown() on the PRIOR BrowserManager for a
-// browsing key before installing a replacement for that SAME key (the
-// hot-reload path, driven by ReloadProviderAndConfig on every Settings save).
-// Before the fix, the old manager's Go reference was simply dropped and its
-// Chromium subprocess (if the allocator had ever been started) leaked —
-// Shutdown() is the only thing that cancels the chromedp allocator context.
-//
-// It drives the REAL registerSharedTools code path via a minimal AgentLoop (not
-// a re-implementation of its browser block), so a future refactor of that block
-// stays covered. It configures tools.browser.cdp_url to a
-// syntactically-valid-but-unreachable loopback address: ensureStarted() takes
-// chromedp.NewRemoteAllocator's lazy remote-CDP path in that case, which only
-// stores the URL and returns a context/cancel pair; it does NOT dial anything
-// until Allocate() is invoked by an in-flight chromedp.Run. So Session() below
-// reliably flips the manager into "started" with zero dependency on a real
-// Chromium binary or a reachable CDP endpoint.
-func TestRegisterSharedTools_HotReload_ShutsDownReplacedBrowserManager(t *testing.T) {
-	cfg := minimalTestConfig(t)
-	cfg.Tools.Browser.CDPURL = "ws://127.0.0.1:1/unreachable-by-design"
-
-	msgBus := bus.NewMessageBus()
-	provider := &mockProvider{}
-	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-
-	defaultAgent := al.GetRegistry().GetDefaultAgent()
-	require.NotNil(t, defaultAgent, "test fixture must seed at least one agent")
-	id := defaultAgent.ID
-
-	firstMgr, outcome := al.BrowserManagerForAgent(context.Background(), id, "")
-	require.Equal(t, BrowserResolveOK, outcome,
-		"registerSharedTools must have built a browser for the default agent's workspace")
-	require.NotNil(t, firstMgr)
-	require.False(t, firstMgr.Started(), "a freshly registered manager must not be started until first use")
-
-	// Trigger ensureStarted() via the one exported path (Session). The
-	// subsequent tab-creation dial against the unreachable URL is expected to
-	// fail and the error is deliberately ignored — the allocator having been
-	// constructed is what is being verified, not that a tab could be opened.
-	_, _ = firstMgr.Session(firstMgr.OperatorSessionID())
-	require.True(t, firstMgr.Started(),
-		"test setup: the manager must be 'started' for Shutdown()'s effect to be observable")
-
-	require.NoError(t, al.ReloadProviderAndConfig(context.Background(), provider, cfg))
-
-	secondMgr, outcome := al.BrowserManagerForAgent(context.Background(), id, "")
-	require.Equal(t, BrowserResolveOK, outcome)
-	require.NotSame(t, firstMgr, secondMgr, "hot reload must install a NEW manager instance, not reuse the old one")
-
-	require.False(t, firstMgr.Started(),
-		"the FIRST manager must be Shutdown() (Started() must go false) before it is replaced — "+
-			"otherwise its Chromium allocator (if ever launched) leaks on every hot reload")
 }

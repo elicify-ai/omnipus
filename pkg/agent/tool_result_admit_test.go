@@ -749,9 +749,8 @@ func TestChokePoint_ProducerListByGrep(t *testing.T) {
 	// scanDiscardedChokePointResults above are what actually prove the
 	// property. This just confirms no call site was silently deleted; a
 	// legitimate new call site is expected to raise the floor, not fail it.
-	loopSrc, err := os.ReadFile("loop.go")
-	require.NoError(t, err)
-	calls := strings.Count(string(loopSrc), "al.admitToolResult(ts,")
+	loopSrc := readLoopSourcesForTest(t)
+	calls := strings.Count(loopSrc, "al.admitToolResult(ts,")
 	assert.GreaterOrEqual(t, calls, 10, "loop.go: success path + seven denied sites + skipped site + the T066-15 argument-refusal site (FR-016) = at least 10 choke-point calls")
 
 	for _, fname := range []string{"attach_hydrate.go", "recall_conversation.go"} {

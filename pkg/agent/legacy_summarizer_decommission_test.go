@@ -115,7 +115,7 @@ func TestDecommission_NoLegacySummarizerSymbols(t *testing.T) {
 	// TestMidTurnBudget_SameBudgetAsWindowTrim (context_budget_test.go); the
 	// timeout-recovery gate itself is still exercised by
 	// TestRetryOnStreamingReset_* (streaming_reset_retry_test.go).
-	loopSrc := readOwnedFileForTest(t, "loop.go")
+	loopSrc := readLoopSourcesForTest(t)
 	assert.NotContains(t, loopSrc, "SummarizeTokenPercent",
 		"loop.go must not reference the deleted SummarizeTokenPercent (FR-004)")
 }

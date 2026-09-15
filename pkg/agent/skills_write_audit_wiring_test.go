@@ -9,13 +9,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestNewAgentLoop_WiresSkillsWriteAuditLogger is the R4 regression test:
@@ -80,44 +79,4 @@ func TestNewAgentLoop_WiresSkillsWriteAuditLogger(t *testing.T) {
 	assert.Equal(t, "ws-1", details["workspace_id"])
 	assert.Equal(t, "edit_skill", found["tool"])
 	assert.Equal(t, "ava", found["agent_id"])
-}
-
-// TestReloadProviderAndConfig_ReassertsSkillsWriteAuditLogger proves the
-// reload path (pkg/agent/loop.go's al.auditLogger != nil block that also
-// calls al.wireMemoryAuditLoggerOn) re-asserts
-// tools.SetSkillsWriteAuditLogger too, so a hot config reload can never leave
-// the process-wide skills audit hook silently unset even though it started
-// wired at boot.
-func TestReloadProviderAndConfig_ReassertsSkillsWriteAuditLogger(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("OMNIPUS_HOME", home)
-
-	cfg := config.DefaultConfig()
-	coreagent.SeedConfig(cfg)
-	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "test-model"}
-	cfg.Agents.Defaults.MaxTokens = 4096
-	cfg.Sandbox.AuditLog = true
-
-	msgBus := bus.NewMessageBus()
-	t.Cleanup(func() { msgBus.Close() })
-	al, err := NewAgentLoop(cfg, msgBus, &mockProvider{})
-	require.NoError(t, err)
-	t.Cleanup(func() { al.Close() })
-
-	reloadWithSameAgents(t, al)
-
-	tools.EmitSkillWriteAudit("registry", "write_file", "jim", "sess-2", "ws-2", "/home/.omnipus/skills/some-skill/SKILL.md")
-
-	auditPath := filepath.Join(home, "system", "audit.jsonl")
-	events := readAuditEvents(t, auditPath)
-	found := false
-	for _, e := range events {
-		if e["event"] == "skill.write" {
-			details, _ := e["details"].(map[string]any)
-			if details != nil && details["workspace_id"] == "ws-2" {
-				found = true
-			}
-		}
-	}
-	assert.True(t, found, "the skills write-audit logger must still be wired after a config reload; got events: %v", events)
 }

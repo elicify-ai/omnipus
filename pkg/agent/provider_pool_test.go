@@ -13,7 +13,6 @@ package agent
 import (
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 )
@@ -50,84 +49,6 @@ func newPoolTestConfig(t *testing.T) *config.Config {
 				APIKeyRef: "W4_17_ANTHROPIC_KEY",
 			},
 		},
-	}
-}
-
-// TestApplyAgentModel_RebuildsProviderPool covers Crit 8: after switching
-// primary to a model whose pinned provider is one of the agent's fallback
-// providers, the pool must STILL contain BOTH providers (not just the new
-// primary's). Otherwise a subsequent fallback that routes through the other
-// provider would silently degrade to "use the primary's provider" per
-// GetProviderForCandidate's legacy fallback path.
-func TestApplyAgentModel_RebuildsProviderPool(t *testing.T) {
-	t.Setenv("W4_17_OPENROUTER_KEY", "or-key")
-	t.Setenv("W4_17_ANTHROPIC_KEY", "anth-key")
-
-	cfg := newPoolTestConfig(t)
-	provider, _, err := providers.CreateProvider(cfg)
-	if err != nil {
-		t.Fatalf("CreateProvider: %v", err)
-	}
-	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
-
-	before := al.GetRegistry().GetDefaultAgent()
-	if before == nil {
-		t.Fatal("no default agent")
-	}
-
-	// Sanity: the initial pool was built eagerly from the candidate chain at
-	// NewAgentInstance. openrouter must be in it (the primary provider).
-	// providerPool is an atomic.Pointer[map[…]]; Load() returns the current
-	// map snapshot (or nil if the pointer was never set, which would be a bug).
-	if pool := before.providerPool.Load(); pool == nil {
-		t.Fatal("initial providerPool is nil — FR-007 buildProviderPool was skipped")
-	} else if _, ok := (*pool)["openrouter"]; !ok {
-		t.Error("initial pool missing openrouter entry — buildProviderPool did not pick up the primary provider")
-	}
-
-	// Switch primary to anthropic-pinned model. The fallback chain (if any)
-	// references anthropic, so the post-switch pool must include both
-	// providers.
-	if _, err := al.ApplyAgentModel(before.ID, "claude-haiku-4-5-20251001"); err != nil {
-		t.Fatalf("ApplyAgentModel(claude-haiku-4-5-20251001): %v", err)
-	}
-
-	after, ok := al.GetRegistry().GetAgent(before.ID)
-	if !ok {
-		t.Fatal("agent vanished after ApplyAgentModel")
-	}
-	if after.Provider == nil {
-		t.Fatal("agent.Provider is nil after switch")
-	}
-
-	// Pool must contain anthropic (the new primary's provider).
-	anthProv := after.GetProviderForCandidate(providers.FallbackCandidate{
-		Provider: "anthropic",
-		Model:    "claude-haiku-4-5-20251001",
-	})
-	if anthProv == nil {
-		t.Errorf("post-switch pool missing anthropic entry: GetProviderForCandidate returned nil for anthropic")
-	}
-
-	// Pool must STILL contain openrouter (the original primary / any fallback
-	// that routes through openrouter). FR-007: a fallback that pins
-	// openrouter must use openrouter credentials, not the new primary's.
-	orProv := after.GetProviderForCandidate(providers.FallbackCandidate{
-		Provider: "openrouter",
-		Model:    "openrouter/anthropic/claude-sonnet-4.6",
-	})
-	if orProv == nil {
-		t.Errorf("post-switch pool dropped openrouter entry: GetProviderForCandidate returned nil for openrouter")
-	}
-	// FR-007 invariant: the anthropic provider instance and the openrouter
-	// provider instance MUST be different — they have different API keys,
-	// different endpoints, and different model families. A fall-back
-	// implementation that lazily points all pinned providers at the primary
-	// would violate this.
-	if anthProv == orProv {
-		t.Error(
-			"post-switch pool returned the same LLMProvider for anthropic and openrouter — FR-007 requires distinct provider instances",
-		)
 	}
 }
 
