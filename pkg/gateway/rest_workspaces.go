@@ -856,60 +856,27 @@ func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id 
 	jsonOK(w, workspaceToWire(a.homePath, ws, countTasksForWorkspace(a.homePath, id)))
 }
 
+// restAPIHandleWorkspacePut carries the shared state of handleWorkspacePut across its stages.
+type restAPIHandleWorkspacePut struct {
+	a                       *restAPI
+	w                       http.ResponseWriter
+	r                       *http.Request
+	id                      string
+	req                     gen.WorkspaceUpdateRequest
+	incomingMC              map[string]workspace.MemberConfig
+	mcPresent               bool
+	ws                      storedWorkspace
+	rollbackCreatedSessions func()
+	changed                 bool
+	coreTeamChanged         bool
+}
+
 func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id string) {
-	if err := validateEntityID(id); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
-		return
-	}
+	rw := &restAPIHandleWorkspacePut{a: a, w: w, r: r, id: id}
 
-	// FR-9.2: repository is retired from the wire entirely (no back-compat).
-	// gen.WorkspaceUpdateRequest no longer has the field at all, so without
-	// this raw-body sniff a client still sending it would have it silently
-	// dropped by Go's default JSON decode rather than getting a loud 400.
-	if !rejectRetiredRepositoryField(w, r) {
+	if rw.validateRequest() {
 		return
 	}
-	// FR-5: mounts have their own dedicated lifecycle (workspace.CreateMount/
-	// DeleteMount) — see mountsNotWritableHereMsg's doc comment.
-	if !rejectMountsWriteField(w, r) {
-		return
-	}
-
-	var req gen.WorkspaceUpdateRequest
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "WorkspaceUpdateRequest", &req, validateEnabled) {
-		return
-	}
-
-	// member_configs uses merge semantics: when present (non-nil) it replaces the
-	// config for each listed agent and GCs stale entries; when absent it is left
-	// unchanged. session_id is server-managed (FR-010) and ignored on input.
-	incomingMC, mcPresent := workspaceMemberConfigsFromWire(req.MemberConfigs)
-
-	// Validate fields before touching disk.
-	if req.Name != nil {
-		// Trim before the empty check so a whitespace-only name is rejected
-		// rather than silently accepted (UAT fix). Persist the trimmed value.
-		trimmedName := strings.TrimSpace(*req.Name)
-		if trimmedName == "" {
-			jsonErr(w, http.StatusBadRequest, "name must not be empty")
-			return
-		}
-		if len(trimmedName) > 200 {
-			jsonErr(w, http.StatusBadRequest, "name exceeds 200 characters")
-			return
-		}
-		req.Name = &trimmedName
-	}
-	if req.Description != nil && len(*req.Description) > 2000 {
-		jsonErr(w, http.StatusBadRequest, "description exceeds 2000 characters")
-		return
-	}
-	if req.Status != nil && !req.Status.Valid() {
-		jsonErr(w, http.StatusBadRequest, `status must be "active" or "archived"`)
-		return
-	}
-
 	// Serialize the full load-modify-write cycle against this workspace
 	// ID so a concurrent kickoff consume (pkg/gateway/websocket.go), a racing
 	// delete, or a racing delegation PUT cannot interleave with this update —
@@ -917,12 +884,248 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	// stale in-memory copy, or this write clobbering a concurrent rename.
 	// Held for the whole handler (including the heartbeat-session-creation
 	// loop below) via defer: correctness first, this is not a hot path.
-	unlock := workspace.LockID(id)
+	unlock := workspace.LockID(rw.id)
 	defer unlock()
 
-	ws, ok := a.loadWorkspace(w, id)
-	if !ok {
+	if rw.loadAndValidateTeam() {
 		return
+	}
+	// HIGH-2: sessionsCreated tracks heartbeat sessions minted this request so
+	// they can be rolled back on any error path before the workspace is persisted.
+	// Declared at function scope so the writeWorkspaceFile error branch can also
+	// roll back (not just the eager-session loop).
+	type sessionCreated struct {
+		agentID   string
+		sessionID string
+	}
+	var sessionsCreated []sessionCreated
+	rw.rollbackCreatedSessions = func() {
+		for _, sc := range sessionsCreated {
+			// Shared-store-first, per-agent-fallback delete — see
+			// deleteHeartbeatSessionAnyStore's doc for why (matches where the
+			// eager-creation call below now writes).
+			if delErr := deleteHeartbeatSessionAnyStore(rw.a.agentLoop, sc.agentID, sc.sessionID); delErr != nil {
+				slog.Warn("rest: workspace PUT: rollback session delete failed",
+					"agent_id", sc.agentID, "session_id", sc.sessionID, "error", delErr)
+			}
+		}
+	}
+
+	// Determine effective CoreTeam for member_configs validation: the request
+	// value when present (not yet applied), else the current stored value.
+	effectiveCoreTeam := rw.ws.CoreTeam
+	if rw.req.CoreTeam != nil {
+		effectiveCoreTeam = deduplicateStrings(*rw.req.CoreTeam)
+	}
+
+	// FR-010/022: validate and eagerly-session incoming member_configs before
+	// touching the workspace on disk.
+	if rw.mcPresent && len(rw.incomingMC) > 0 {
+		cfg := rw.a.agentLoop.GetConfig()
+		if vErr := workspace.ValidateMemberConfigs(
+			effectiveCoreTeam,
+			rw.incomingMC,
+			configOnlyIsWorker(cfg),
+		); vErr != nil {
+			jsonErr(rw.w, http.StatusUnprocessableEntity, vErr.Error())
+			return
+		}
+
+		// FR-010: for each newly-enabled heartbeat with no SessionID, create an
+		// eager standing session so the cron job can continue it across runs.
+		// Disable path: if an incoming entry transitions enabled→disabled and the
+		// stored entry has a session_id, release that standing session now so it
+		// does not remain as an orphan (FIX-3).
+		for agentID, mc := range rw.incomingMC {
+			hb := mc.Heartbeat
+			// Disable path: release the stored standing session when heartbeat
+			// transitions to disabled/absent and the stored entry had a session_id.
+			if hb == nil || !hb.Enabled {
+				if stored, exists := rw.ws.MemberConfigs[agentID]; exists &&
+					stored.Heartbeat != nil && stored.Heartbeat.SessionID != "" {
+					// ADR-049 D4/FR-065: this codebase has no global per-agent
+					// enable/disable REST toggle — the per-workspace
+					// member-heartbeat flag (ADR-027) is the only one, so it
+					// is the wiring point for PausePlansOwnedBy/
+					// ResumePlansOwnedBy. A stored session_id here is the same
+					// "was previously enabled" signal the session-release
+					// logic immediately below already relies on. Best-effort:
+					// a pause failure is logged, never blocks the PUT.
+					if pe := agent.GetPlanEngine(rw.a.agentLoop); pe != nil {
+						if perr := pe.PausePlansOwnedBy(agentID); perr != nil {
+							slog.Warn("rest: workspace PUT: pause plans on heartbeat disable failed",
+								"workspace_id", rw.id, "agent_id", agentID, "error", perr)
+						}
+					}
+					// Shared-store-first, per-agent-fallback delete — mirrors
+					// eager creation above and rollbackCreatedSessions below.
+					// A direct GetAgentStore(agentID).DeleteSession() here
+					// misses sessions minted in the shared store (the
+					// eager-creation default per the FIX comment above),
+					// leaving the standing session orphaned on disable.
+					if delErr := deleteHeartbeatSessionAnyStore(rw.a.agentLoop, agentID, stored.Heartbeat.SessionID); delErr != nil {
+						slog.Warn("rest: workspace PUT: disable-path session release failed",
+							"workspace_id", rw.id, "agent_id", agentID,
+							"session_id", stored.Heartbeat.SessionID, "error", delErr)
+					} else {
+						slog.Info("rest: workspace PUT: released heartbeat session on disable",
+							"workspace_id", rw.id, "agent_id", agentID,
+							"session_id", stored.Heartbeat.SessionID)
+					}
+					// Clear the stored session_id from the incoming config so the
+					// persisted entry carries no stale session reference.
+					if hb == nil {
+						mc.Heartbeat = &workspace.MemberHeartbeat{}
+					} else {
+						mc.Heartbeat = &workspace.MemberHeartbeat{
+							Enabled:         false,
+							IntervalMinutes: hb.IntervalMinutes,
+							Body:            hb.Body,
+						}
+					}
+					rw.incomingMC[agentID] = mc
+				}
+				continue
+			}
+			// Enable path: hb != nil && hb.Enabled.
+			// ADR-049 D4/FR-065: resume any plan owned by this agent that was
+			// paused for owner_disabled (idempotent no-op when nothing was
+			// paused for that reason — see ResumePlansOwnedBy's doc comment).
+			// Fires unconditionally on every enabled=true entry in this PUT
+			// (not gated on the idempotent-enable early-continue below), so a
+			// re-submitted "already enabled" PUT still self-heals a plan that
+			// somehow stayed paused. Best-effort: a failure is logged, never
+			// blocks the PUT.
+			if pe := agent.GetPlanEngine(rw.a.agentLoop); pe != nil {
+				if rerr := pe.ResumePlansOwnedBy(agentID); rerr != nil {
+					slog.Warn("rest: workspace PUT: resume plans on heartbeat enable failed",
+						"workspace_id", rw.id, "agent_id", agentID, "error", rerr)
+				}
+			}
+			if hb.SessionID != "" {
+				continue
+			}
+			// Check whether the existing config already has a session_id for
+			// this (workspace, agent) pair — if so, reuse it (idempotent enable).
+			if existing, exists := rw.ws.MemberConfigs[agentID]; exists &&
+				existing.Heartbeat != nil && existing.Heartbeat.SessionID != "" {
+				hb.SessionID = existing.Heartbeat.SessionID
+				mc.Heartbeat = hb
+				rw.incomingMC[agentID] = mc
+				continue
+			}
+			// FIX (pre-existing defect, confirmed against loop.go's own
+			// GetSessionStore/GetAgentStore doc comment): eager creation MUST use
+			// the shared session store, not the legacy per-agent store. The
+			// heartbeat cron's continue-mode session lookup (pickSession in
+			// schedules.go) resolves the stored session_id exclusively via
+			// al.GetSessionStore().GetOrCreateScheduledSession — a session minted
+			// in the per-agent store is invisible to that lookup, so the first
+			// heartbeat fire silently created a second, empty session under the
+			// SAME id in the shared store while this eagerly-created one (holding
+			// the WorkspaceID stamp) sat orphaned. Mirrors the shared-store-
+			// primary/per-agent-fallback idiom createSessionHTTP (rest.go) already
+			// uses for the joined session model.
+			sessStore := rw.a.agentLoop.GetSessionStore()
+			if sessStore == nil {
+				sessStore = rw.a.agentLoop.GetAgentStore(agentID)
+			}
+			if sessStore == nil {
+				// HIGH-3: nil store is an internal inconsistency (agent passed
+				// CoreTeam validation, so it must be registered). Persisting
+				// enabled=true with an empty session_id is invalid state — roll
+				// back any sessions created so far and return 500.
+				slog.Error("rest: workspace PUT: session store unavailable for heartbeat session",
+					"workspace_id", rw.id, "agent_id", agentID)
+				rw.rollbackCreatedSessions()
+				jsonErr(rw.w, http.StatusInternalServerError, "session store unavailable for heartbeat session")
+				return
+			}
+			meta, sessErr := sessStore.NewHeartbeatSession(rw.id, agentID)
+			if sessErr != nil {
+				slog.Error("rest: workspace PUT: failed to create heartbeat session",
+					"workspace_id", rw.id, "agent_id", agentID, "error", sessErr)
+				// HIGH-2: roll back sessions created earlier in this loop.
+				rw.rollbackCreatedSessions()
+				jsonErr(rw.w, http.StatusInternalServerError, "failed to create heartbeat session")
+				return
+			}
+			sessionsCreated = append(sessionsCreated, sessionCreated{agentID: agentID, sessionID: meta.ID})
+			hb.SessionID = meta.ID
+			mc.Heartbeat = hb
+			rw.incomingMC[agentID] = mc
+		}
+	}
+
+	if rw.applyUpdate() {
+		return
+	}
+
+	rw.persistAndRespond()
+}
+
+// validateRequest decodes and validates the workspace update request.
+func (rw *restAPIHandleWorkspacePut) validateRequest() bool {
+	if err := validateEntityID(rw.id); err != nil {
+		jsonErr(rw.w, http.StatusBadRequest, "invalid workspace ID")
+		return true
+	}
+
+	// FR-9.2: repository is retired from the wire entirely (no back-compat).
+	// gen.WorkspaceUpdateRequest no longer has the field at all, so without
+	// this raw-body sniff a client still sending it would have it silently
+	// dropped by Go's default JSON decode rather than getting a loud 400.
+	if !rejectRetiredRepositoryField(rw.w, rw.r) {
+		return true
+	}
+	// FR-5: mounts have their own dedicated lifecycle (workspace.CreateMount/
+	// DeleteMount) — see mountsNotWritableHereMsg's doc comment.
+	if !rejectMountsWriteField(rw.w, rw.r) {
+		return true
+	}
+
+	validateEnabled := rw.a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(rw.w, rw.r, "WorkspaceUpdateRequest", &rw.req, validateEnabled) {
+		return true
+	}
+
+	// member_configs uses merge semantics: when present (non-nil) it replaces the
+	// config for each listed agent and GCs stale entries; when absent it is left
+	// unchanged. session_id is server-managed (FR-010) and ignored on input.
+	rw.incomingMC, rw.mcPresent = workspaceMemberConfigsFromWire(rw.req.MemberConfigs)
+
+	// Validate fields before touching disk.
+	if rw.req.Name != nil {
+		// Trim before the empty check so a whitespace-only name is rejected
+		// rather than silently accepted (UAT fix). Persist the trimmed value.
+		trimmedName := strings.TrimSpace(*rw.req.Name)
+		if trimmedName == "" {
+			jsonErr(rw.w, http.StatusBadRequest, "name must not be empty")
+			return true
+		}
+		if len(trimmedName) > 200 {
+			jsonErr(rw.w, http.StatusBadRequest, "name exceeds 200 characters")
+			return true
+		}
+		rw.req.Name = &trimmedName
+	}
+	if rw.req.Description != nil && len(*rw.req.Description) > 2000 {
+		jsonErr(rw.w, http.StatusBadRequest, "description exceeds 2000 characters")
+		return true
+	}
+	if rw.req.Status != nil && !rw.req.Status.Valid() {
+		jsonErr(rw.w, http.StatusBadRequest, `status must be "active" or "archived"`)
+		return true
+	}
+	return false
+}
+
+// loadAndValidateTeam loads the locked workspace and validates newly introduced team members.
+func (rw *restAPIHandleWorkspacePut) loadAndValidateTeam() bool {
+	var ok bool
+	rw.ws, ok = rw.a.loadWorkspace(rw.w, rw.id)
+	if !ok {
+		return true
 	}
 
 	// review r1 major M4/Gap #6 (ADR-054 D6 rule 1: "validate the delta, not
@@ -943,10 +1146,10 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	// carried through untouched (still dangling, still reachable via
 	// RepairDanglingCoreTeamMembers below), while a genuinely new bad id is
 	// still rejected exactly as before.
-	if req.CoreTeam != nil {
-		newTeam := deduplicateStrings(*req.CoreTeam)
-		existingMembers := make(map[string]struct{}, len(ws.CoreTeam))
-		for _, memberID := range ws.CoreTeam {
+	if rw.req.CoreTeam != nil {
+		newTeam := deduplicateStrings(*rw.req.CoreTeam)
+		existingMembers := make(map[string]struct{}, len(rw.ws.CoreTeam))
+		for _, memberID := range rw.ws.CoreTeam {
 			existingMembers[memberID] = struct{}{}
 		}
 		var introduced []string
@@ -955,321 +1158,191 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 				introduced = append(introduced, memberID)
 			}
 		}
-		if vErr := validateCoreTeamMembers(a.agentLoop.GetConfig(), introduced); vErr != nil {
-			jsonErr(w, http.StatusBadRequest, vErr.Error())
-			return
+		if vErr := validateCoreTeamMembers(rw.a.agentLoop.GetConfig(), introduced); vErr != nil {
+			jsonErr(rw.w, http.StatusBadRequest, vErr.Error())
+			return true
 		}
 	}
+	return false
+}
 
-	// HIGH-2: sessionsCreated tracks heartbeat sessions minted this request so
-	// they can be rolled back on any error path before the workspace is persisted.
-	// Declared at function scope so the writeWorkspaceFile error branch can also
-	// roll back (not just the eager-session loop).
-	type sessionCreated struct {
-		agentID   string
-		sessionID string
-	}
-	var sessionsCreated []sessionCreated
-	rollbackCreatedSessions := func() {
-		for _, sc := range sessionsCreated {
-			// Shared-store-first, per-agent-fallback delete — see
-			// deleteHeartbeatSessionAnyStore's doc for why (matches where the
-			// eager-creation call below now writes).
-			if delErr := deleteHeartbeatSessionAnyStore(a.agentLoop, sc.agentID, sc.sessionID); delErr != nil {
-				slog.Warn("rest: workspace PUT: rollback session delete failed",
-					"agent_id", sc.agentID, "session_id", sc.sessionID, "error", delErr)
-			}
-		}
-	}
-
-	// Determine effective CoreTeam for member_configs validation: the request
-	// value when present (not yet applied), else the current stored value.
-	effectiveCoreTeam := ws.CoreTeam
-	if req.CoreTeam != nil {
-		effectiveCoreTeam = deduplicateStrings(*req.CoreTeam)
-	}
-
-	// FR-010/022: validate and eagerly-session incoming member_configs before
-	// touching the workspace on disk.
-	if mcPresent && len(incomingMC) > 0 {
-		cfg := a.agentLoop.GetConfig()
-		if vErr := workspace.ValidateMemberConfigs(
-			effectiveCoreTeam,
-			incomingMC,
-			configOnlyIsWorker(cfg),
-		); vErr != nil {
-			jsonErr(w, http.StatusUnprocessableEntity, vErr.Error())
-			return
-		}
-
-		// FR-010: for each newly-enabled heartbeat with no SessionID, create an
-		// eager standing session so the cron job can continue it across runs.
-		// Disable path: if an incoming entry transitions enabled→disabled and the
-		// stored entry has a session_id, release that standing session now so it
-		// does not remain as an orphan (FIX-3).
-		for agentID, mc := range incomingMC {
-			hb := mc.Heartbeat
-			// Disable path: release the stored standing session when heartbeat
-			// transitions to disabled/absent and the stored entry had a session_id.
-			if hb == nil || !hb.Enabled {
-				if stored, exists := ws.MemberConfigs[agentID]; exists &&
-					stored.Heartbeat != nil && stored.Heartbeat.SessionID != "" {
-					// ADR-049 D4/FR-065: this codebase has no global per-agent
-					// enable/disable REST toggle — the per-workspace
-					// member-heartbeat flag (ADR-027) is the only one, so it
-					// is the wiring point for PausePlansOwnedBy/
-					// ResumePlansOwnedBy. A stored session_id here is the same
-					// "was previously enabled" signal the session-release
-					// logic immediately below already relies on. Best-effort:
-					// a pause failure is logged, never blocks the PUT.
-					if pe := agent.GetPlanEngine(a.agentLoop); pe != nil {
-						if perr := pe.PausePlansOwnedBy(agentID); perr != nil {
-							slog.Warn("rest: workspace PUT: pause plans on heartbeat disable failed",
-								"workspace_id", id, "agent_id", agentID, "error", perr)
-						}
-					}
-					// Shared-store-first, per-agent-fallback delete — mirrors
-					// eager creation above and rollbackCreatedSessions below.
-					// A direct GetAgentStore(agentID).DeleteSession() here
-					// misses sessions minted in the shared store (the
-					// eager-creation default per the FIX comment above),
-					// leaving the standing session orphaned on disable.
-					if delErr := deleteHeartbeatSessionAnyStore(a.agentLoop, agentID, stored.Heartbeat.SessionID); delErr != nil {
-						slog.Warn("rest: workspace PUT: disable-path session release failed",
-							"workspace_id", id, "agent_id", agentID,
-							"session_id", stored.Heartbeat.SessionID, "error", delErr)
-					} else {
-						slog.Info("rest: workspace PUT: released heartbeat session on disable",
-							"workspace_id", id, "agent_id", agentID,
-							"session_id", stored.Heartbeat.SessionID)
-					}
-					// Clear the stored session_id from the incoming config so the
-					// persisted entry carries no stale session reference.
-					if hb == nil {
-						mc.Heartbeat = &workspace.MemberHeartbeat{}
-					} else {
-						mc.Heartbeat = &workspace.MemberHeartbeat{
-							Enabled:         false,
-							IntervalMinutes: hb.IntervalMinutes,
-							Body:            hb.Body,
-						}
-					}
-					incomingMC[agentID] = mc
-				}
-				continue
-			}
-			// Enable path: hb != nil && hb.Enabled.
-			// ADR-049 D4/FR-065: resume any plan owned by this agent that was
-			// paused for owner_disabled (idempotent no-op when nothing was
-			// paused for that reason — see ResumePlansOwnedBy's doc comment).
-			// Fires unconditionally on every enabled=true entry in this PUT
-			// (not gated on the idempotent-enable early-continue below), so a
-			// re-submitted "already enabled" PUT still self-heals a plan that
-			// somehow stayed paused. Best-effort: a failure is logged, never
-			// blocks the PUT.
-			if pe := agent.GetPlanEngine(a.agentLoop); pe != nil {
-				if rerr := pe.ResumePlansOwnedBy(agentID); rerr != nil {
-					slog.Warn("rest: workspace PUT: resume plans on heartbeat enable failed",
-						"workspace_id", id, "agent_id", agentID, "error", rerr)
-				}
-			}
-			if hb.SessionID != "" {
-				continue
-			}
-			// Check whether the existing config already has a session_id for
-			// this (workspace, agent) pair — if so, reuse it (idempotent enable).
-			if existing, exists := ws.MemberConfigs[agentID]; exists &&
-				existing.Heartbeat != nil && existing.Heartbeat.SessionID != "" {
-				hb.SessionID = existing.Heartbeat.SessionID
-				mc.Heartbeat = hb
-				incomingMC[agentID] = mc
-				continue
-			}
-			// FIX (pre-existing defect, confirmed against loop.go's own
-			// GetSessionStore/GetAgentStore doc comment): eager creation MUST use
-			// the shared session store, not the legacy per-agent store. The
-			// heartbeat cron's continue-mode session lookup (pickSession in
-			// schedules.go) resolves the stored session_id exclusively via
-			// al.GetSessionStore().GetOrCreateScheduledSession — a session minted
-			// in the per-agent store is invisible to that lookup, so the first
-			// heartbeat fire silently created a second, empty session under the
-			// SAME id in the shared store while this eagerly-created one (holding
-			// the WorkspaceID stamp) sat orphaned. Mirrors the shared-store-
-			// primary/per-agent-fallback idiom createSessionHTTP (rest.go) already
-			// uses for the joined session model.
-			sessStore := a.agentLoop.GetSessionStore()
-			if sessStore == nil {
-				sessStore = a.agentLoop.GetAgentStore(agentID)
-			}
-			if sessStore == nil {
-				// HIGH-3: nil store is an internal inconsistency (agent passed
-				// CoreTeam validation, so it must be registered). Persisting
-				// enabled=true with an empty session_id is invalid state — roll
-				// back any sessions created so far and return 500.
-				slog.Error("rest: workspace PUT: session store unavailable for heartbeat session",
-					"workspace_id", id, "agent_id", agentID)
-				rollbackCreatedSessions()
-				jsonErr(w, http.StatusInternalServerError, "session store unavailable for heartbeat session")
-				return
-			}
-			meta, sessErr := sessStore.NewHeartbeatSession(id, agentID)
-			if sessErr != nil {
-				slog.Error("rest: workspace PUT: failed to create heartbeat session",
-					"workspace_id", id, "agent_id", agentID, "error", sessErr)
-				// HIGH-2: roll back sessions created earlier in this loop.
-				rollbackCreatedSessions()
-				jsonErr(w, http.StatusInternalServerError, "failed to create heartbeat session")
-				return
-			}
-			sessionsCreated = append(sessionsCreated, sessionCreated{agentID: agentID, sessionID: meta.ID})
-			hb.SessionID = meta.ID
-			mc.Heartbeat = hb
-			incomingMC[agentID] = mc
-		}
-	}
-
+// applyUpdate applies workspace fields and reconciles member configurations in memory.
+func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 	// FR-1.9: no access gate — owner is attribution only.
 
 	// Default workspace cannot be archived (mirrors the delete-protection guard below).
-	if ws.IsDefault && req.Status != nil && *req.Status == gen.WorkspaceUpdateRequestStatusArchived {
-		jsonErr(w, http.StatusConflict, "cannot archive the default workspace")
-		return
+	if rw.ws.IsDefault && rw.req.Status != nil && *rw.req.Status == gen.WorkspaceUpdateRequestStatusArchived {
+		jsonErr(rw.w, http.StatusConflict, "cannot archive the default workspace")
+		return true
 	}
 
 	// Apply partial update (merge semantics) — track whether anything changed.
-	changed := false
-	if req.Name != nil && *req.Name != ws.Name {
-		ws.Name = *req.Name
-		changed = true
+	rw.changed = false
+	if rw.req.Name != nil && *rw.req.Name != rw.ws.Name {
+		rw.ws.Name = *rw.req.Name
+		rw.changed = true
 	}
-	if req.Description != nil && *req.Description != ws.Description {
-		ws.Description = *req.Description
-		changed = true
+	if rw.req.Description != nil && *rw.req.Description != rw.ws.Description {
+		rw.ws.Description = *rw.req.Description
+		rw.changed = true
 	}
-	if req.CoreTeam != nil {
-		deduped := deduplicateStrings(*req.CoreTeam)
-		if !slices.Equal(deduped, ws.CoreTeam) {
-			ws.CoreTeam = deduped
-			changed = true
+	if rw.req.CoreTeam != nil {
+		deduped := deduplicateStrings(*rw.req.CoreTeam)
+		if !slices.Equal(deduped, rw.ws.CoreTeam) {
+			rw.ws.CoreTeam = deduped
+			rw.changed = true
 		}
 	}
-	if req.Status != nil && string(*req.Status) != ws.Status {
-		ws.Status = string(*req.Status)
-		changed = true
+	if rw.req.Status != nil && string(*rw.req.Status) != rw.ws.Status {
+		rw.ws.Status = string(*rw.req.Status)
+		rw.changed = true
 	}
-	if req.Pinned != nil && *req.Pinned != ws.Pinned {
-		ws.Pinned = *req.Pinned
-		changed = true
+	if rw.req.Pinned != nil && *rw.req.Pinned != rw.ws.Pinned {
+		rw.ws.Pinned = *rw.req.Pinned
+		rw.changed = true
 	}
-	if req.PinOrder != nil && *req.PinOrder != ws.PinOrder {
-		ws.PinOrder = *req.PinOrder
-		changed = true
+	if rw.req.PinOrder != nil && *rw.req.PinOrder != rw.ws.PinOrder {
+		rw.ws.PinOrder = *rw.req.PinOrder
+		rw.changed = true
 	}
 
 	// FR-022: merge incoming member_configs (when present) and GC stale entries
 	// (agents removed from CoreTeam) so the stored map stays consistent.
-	coreTeamChanged := req.CoreTeam != nil
-	if mcPresent {
-		if ws.MemberConfigs == nil {
-			ws.MemberConfigs = make(map[string]workspace.MemberConfig)
+	rw.coreTeamChanged = rw.req.CoreTeam != nil
+	if rw.mcPresent {
+		if rw.ws.MemberConfigs == nil {
+			rw.ws.MemberConfigs = make(map[string]workspace.MemberConfig)
 		}
-		for agentID, mc := range incomingMC {
-			ws.MemberConfigs[agentID] = mc
+		for agentID, mc := range rw.incomingMC {
+			rw.ws.MemberConfigs[agentID] = mc
 		}
 		// GC: drop entries for agents no longer on the effective team.
-		pruned, removed := workspace.GCMemberConfigs(ws.CoreTeam, ws.MemberConfigs)
+		pruned, removed := workspace.GCMemberConfigs(rw.ws.CoreTeam, rw.ws.MemberConfigs)
 		if len(removed) > 0 {
-			slog.Info("rest: workspace PUT: GC member_configs", "workspace_id", id, "removed", removed)
+			slog.Info("rest: workspace PUT: GC member_configs", "workspace_id", rw.id, "removed", removed)
 			// FIX-4a: release standing sessions for GC-pruned members (members
 			// whose agent is no longer in the CoreTeam).
 			for _, removedID := range removed {
-				if oldMC, had := ws.MemberConfigs[removedID]; had &&
+				if oldMC, had := rw.ws.MemberConfigs[removedID]; had &&
 					oldMC.Heartbeat != nil && oldMC.Heartbeat.SessionID != "" {
 					if delErr := deleteHeartbeatSessionAnyStore(
-						a.agentLoop, removedID, oldMC.Heartbeat.SessionID); delErr != nil {
+						rw.a.agentLoop, removedID, oldMC.Heartbeat.SessionID); delErr != nil {
 						slog.Warn("rest: workspace PUT: GC session release failed",
-							"workspace_id", id, "agent_id", removedID,
+							"workspace_id", rw.id, "agent_id", removedID,
 							"session_id", oldMC.Heartbeat.SessionID, "error", delErr)
 					} else {
 						slog.Info("rest: workspace PUT: GC released heartbeat session",
-							"workspace_id", id, "agent_id", removedID,
+							"workspace_id", rw.id, "agent_id", removedID,
 							"session_id", oldMC.Heartbeat.SessionID)
 					}
 				}
 			}
 		}
-		ws.MemberConfigs = pruned
-		changed = true
-	} else if coreTeamChanged {
+		rw.ws.MemberConfigs = pruned
+		rw.changed = true
+	} else if rw.coreTeamChanged {
 		// FIX-4a: core_team changed without member_configs — GC stale member_config
 		// entries whose agent is no longer on the new team, and release their sessions.
-		if ws.MemberConfigs != nil {
-			pruned, removed := workspace.GCMemberConfigs(ws.CoreTeam, ws.MemberConfigs)
+		if rw.ws.MemberConfigs != nil {
+			pruned, removed := workspace.GCMemberConfigs(rw.ws.CoreTeam, rw.ws.MemberConfigs)
 			if len(removed) > 0 {
 				slog.Info("rest: workspace PUT: core_team shrink GC member_configs",
-					"workspace_id", id, "removed", removed)
+					"workspace_id", rw.id, "removed", removed)
 				for _, removedID := range removed {
-					if oldMC, had := ws.MemberConfigs[removedID]; had &&
+					if oldMC, had := rw.ws.MemberConfigs[removedID]; had &&
 						oldMC.Heartbeat != nil && oldMC.Heartbeat.SessionID != "" {
 						if delErr := deleteHeartbeatSessionAnyStore(
-							a.agentLoop, removedID, oldMC.Heartbeat.SessionID); delErr != nil {
+							rw.a.agentLoop, removedID, oldMC.Heartbeat.SessionID); delErr != nil {
 							slog.Warn("rest: workspace PUT: core_team shrink session release failed",
-								"workspace_id", id, "agent_id", removedID,
+								"workspace_id", rw.id, "agent_id", removedID,
 								"session_id", oldMC.Heartbeat.SessionID, "error", delErr)
 						} else {
 							slog.Info("rest: workspace PUT: core_team shrink released heartbeat session",
-								"workspace_id", id, "agent_id", removedID,
+								"workspace_id", rw.id, "agent_id", removedID,
 								"session_id", oldMC.Heartbeat.SessionID)
 						}
 					}
 				}
-				ws.MemberConfigs = pruned
+				rw.ws.MemberConfigs = pruned
 			}
 		}
 	}
+	return false
+}
 
+// persistAndRespond persists a changed workspace, reconciles schedules, audits, and responds.
+func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 	// No-op: nothing changed — return current state without writing.
-	if !changed {
-		jsonOK(w, workspaceToWire(a.homePath, ws, countTasksForWorkspace(a.homePath, id)))
+	if !rw.changed {
+		jsonOK(rw.w, workspaceToWire(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id)))
 		return
 	}
 
-	ws.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+	rw.ws.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
-	if err := writeWorkspaceFile(a.homePath, ws); err != nil {
-		slog.Error("rest: update workspace: write", "id", id, "error", err)
+	if err := writeWorkspaceFile(rw.a.homePath, rw.ws); err != nil {
+		slog.Error("rest: update workspace: write", "id", rw.id, "error", err)
 		// HIGH-2: roll back any heartbeat sessions created this request since the
 		// workspace file was not persisted (they would be permanently orphaned).
-		rollbackCreatedSessions()
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		rw.rollbackCreatedSessions()
+		jsonErr(rw.w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
 	// FR-007: after persisting, reconcile cron schedules to reflect the new
 	// member_configs. Best-effort: a failure is logged but does not prevent
 	// the 200 response (the data is already safely on disk).
-	if mcPresent || coreTeamChanged {
-		a.reconcileHeartbeatSchedules()
+	if rw.mcPresent || rw.coreTeamChanged {
+		rw.a.reconcileHeartbeatSchedules()
 	}
 
-	if a.auditor != nil {
-		if err := a.auditor.Log(
+	if rw.a.auditor != nil {
+		if err := rw.a.auditor.Log(
 			&audit.Entry{
 				Event:    "workspace.update",
 				Decision: audit.DecisionAllow,
-				Details:  map[string]any{"id": id},
+				Details:  map[string]any{"id": rw.id},
 			},
 		); err != nil {
-			slog.Warn("audit write failed", "event", "workspace.update", "id", id, "error", err)
+			slog.Warn("audit write failed", "event", "workspace.update", "id", rw.id, "error", err)
 		}
 	}
-	jsonOK(w, workspaceToWire(a.homePath, ws, countTasksForWorkspace(a.homePath, id)))
+	jsonOK(rw.w, workspaceToWire(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id)))
+}
+
+// restAPIHandleWorkspaceDelete carries the shared state of handleWorkspaceDelete across its stages.
+type restAPIHandleWorkspaceDelete struct {
+	a                  *restAPI
+	w                  http.ResponseWriter
+	r                  *http.Request
+	id                 string
+	ws                 storedWorkspace
+	actor              string
+	mediaCascadeFailed bool
+	dirRemoveFailed    bool
 }
 
 func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, id string) {
-	if err := validateEntityID(id); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
+	rd := &restAPIHandleWorkspaceDelete{a: a, w: w, r: r, id: id}
+
+	if rd.removeRecord() {
 		return
+	}
+
+	rd.releaseRuntimeResources()
+
+	rd.removeBrowserAndStores()
+
+	rd.removeMediaAndDirectory()
+
+	rd.auditAndRespond()
+}
+
+// removeRecord validates and removes the workspace record after completing hard cascades under its lock.
+func (rd *restAPIHandleWorkspaceDelete) removeRecord() bool {
+	if err := validateEntityID(rd.id); err != nil {
+		jsonErr(rd.w, http.StatusBadRequest, "invalid workspace ID")
+		return true
 	}
 
 	// The per-ID lock guards ONLY the
@@ -1288,32 +1361,33 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// holding the lock across a potentially multi-second directory RemoveAll
 	// plus config/credential rewrites, which could otherwise block a
 	// shard-colliding kickoff's WS readLoop for no correctness benefit.
-	unlock := workspace.LockID(id)
+	unlock := workspace.LockID(rd.id)
 
 	// Verify the workspace exists before cascading.
-	ws, ok := a.loadWorkspace(w, id)
+	var ok bool
+	rd.ws, ok = rd.a.loadWorkspace(rd.w, rd.id)
 	if !ok {
 		unlock()
-		return
+		return true
 	}
 
 	// FR-1.9: no access gate — owner is attribution only.
 
 	// Default workspace cannot be deleted (FR-1.6 delete-protection retained).
-	if ws.IsDefault {
+	if rd.ws.IsDefault {
 		unlock()
-		jsonErr(w, http.StatusConflict, "cannot delete the default workspace")
-		return
+		jsonErr(rd.w, http.StatusConflict, "cannot delete the default workspace")
+		return true
 	}
 
 	// HARD cascade step (gates the delete — must stay under the lock, before
 	// the workspace file is removed): a task-scan failure aborts the whole
 	// delete with 500.
-	if err := deleteTasksForWorkspace(a.homePath, id); err != nil {
+	if err := deleteTasksForWorkspace(rd.a.homePath, rd.id); err != nil {
 		unlock()
-		slog.Error("rest: delete workspace: cascade tasks", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")
-		return
+		slog.Error("rest: delete workspace: cascade tasks", "id", rd.id, "error", err)
+		jsonErr(rd.w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")
+		return true
 	}
 
 	// HARD cascade step (gates the delete — must stay under the lock, before
@@ -1322,29 +1396,33 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// workspace file. If this config write fails the delete aborts with 500,
 	// leaving the workspace + bindings fully consistent (no orphan). Ordering
 	// guarantee: config unbind → workspace file delete.
-	if err := unbindChannelInstancesForWorkspace(a, id); err != nil {
+	if err := unbindChannelInstancesForWorkspace(rd.a, rd.id); err != nil {
 		unlock()
-		slog.Error("rest: delete workspace: cascade channel unbind", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to unbind channel instances for workspace")
-		return
+		slog.Error("rest: delete workspace: cascade channel unbind", "id", rd.id, "error", err)
+		jsonErr(rd.w, http.StatusInternalServerError, "failed to unbind channel instances for workspace")
+		return true
 	}
 
 	// The authoritative delete: remove the workspace JSON file. Still under
 	// the lock — this is the write the lock exists to serialize.
 	// RemoveLocked takes the record's sidecar lock (the lock every writer of
 	// the record takes) and removes the sidecar with the record.
-	path := filepath.Join(a.homePath, "workspaces", id+".json")
+	path := filepath.Join(rd.a.homePath, "workspaces", rd.id+".json")
 	if err := fileutil.RemoveLocked(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		unlock()
-		slog.Error("rest: delete workspace: remove file", "id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
-		return
+		slog.Error("rest: delete workspace: remove file", "id", rd.id, "error", err)
+		jsonErr(rd.w, http.StatusInternalServerError, "internal server error")
+		return true
 	}
 
 	// The workspace file is gone — release the lock now. Everything below is
 	// best-effort cascade cleanup that does not touch workspaces/{id}.json.
 	unlock()
+	return false
+}
 
+// releaseRuntimeResources releases heartbeat jobs, sessions, and mailboxes after the record is gone.
+func (rd *restAPIHandleWorkspaceDelete) releaseRuntimeResources() {
 	// Best-effort cascade (order preserved from before this restructure):
 	// (1) heartbeat cron jobs → (2) heartbeat sessions →
 	// (3) mailboxes → (4) workspace directory. Milestones (formerly step 3)
@@ -1352,8 +1430,8 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// instead, which need no per-workspace cascade cleanup.
 	// FR-023/US-9: release all heartbeat cron jobs owned by this workspace.
 	// Best-effort (logged on failure).
-	if cs := a.cronService.Load(); cs != nil {
-		releaseHeartbeatJobsForWorkspace(cs, id)
+	if cs := rd.a.cronService.Load(); cs != nil {
+		releaseHeartbeatJobsForWorkspace(cs, rd.id)
 	}
 
 	// HIGH-1 (FR-023): release standing heartbeat sessions for each member that
@@ -1362,13 +1440,16 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// remove them. ws (loaded above, before unlock) still carries the
 	// member_configs needed to find which sessions to release. Best-effort
 	// per-session.
-	releaseHeartbeatSessionsForWorkspace(a.agentLoop, ws)
+	releaseHeartbeatSessionsForWorkspace(rd.a.agentLoop, rd.ws)
 
 	// M11: remove every mailbox (config.mailboxes entry + stored credential)
 	// bound to this workspace. Best-effort (logged on failure, never aborts
 	// the delete) — see removeMailboxesForWorkspace's doc comment.
-	removeMailboxesForWorkspace(a, id)
+	removeMailboxesForWorkspace(rd.a, rd.id)
+}
 
+// removeBrowserAndStores removes the browser profile and workspace-scoped mount and delegation stores.
+func (rd *restAPIHandleWorkspaceDelete) removeBrowserAndStores() {
 	// FR-026 + FR-043a + SC-017: the deleted workspace's BROWSER.
 	//
 	// This is the one and only place a browser profile directory is removed.
@@ -1387,10 +1468,10 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// One Close + one DeleteProfile is not enough, and the single-shot version
 	// reported success in the case where it was not — see
 	// deleteWorkspaceBrowserProfile.
-	if pool := browserPoolFor(a); pool != nil {
-		if key, kerr := browser.ParseBrowsingKeyString("ws:" + id); kerr == nil {
+	if pool := browserPoolFor(rd.a); pool != nil {
+		if key, kerr := browser.ParseBrowsingKeyString("ws:" + rd.id); kerr == nil {
 			if derr := deleteWorkspaceBrowserProfile(pool, key); derr != nil {
-				slog.Warn("rest: delete workspace: cascade browser profile", "id", id, "error", derr)
+				slog.Warn("rest: delete workspace: cascade browser profile", "id", rd.id, "error", derr)
 			}
 		} else {
 			// Never silent: an unusable key means the profile directory this
@@ -1398,7 +1479,7 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 			// removes it and the data outlives the workspace.
 			slog.Warn("rest: delete workspace: cascade browser profile: unusable browsing key — "+
 				"the workspace's browser profile is NOT removed",
-				"id", id, "error", kerr)
+				"id", rd.id, "error", kerr)
 		}
 	} else {
 		// The pool is nil when this gateway booted with browser tools
@@ -1408,7 +1489,7 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 		// the absence of a pool read as the absence of a profile.
 		slog.Warn("rest: delete workspace: no browser pool on this gateway — a browser profile left on "+
 			"disk by an earlier boot is NOT removed by this delete",
-			"id", id)
+			"id", rd.id)
 	}
 
 	// Remove the workspace's mount record. Mounts live in
@@ -1418,8 +1499,8 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// grants; the operator's real folders are never touched (FR-8.6).
 	// Best-effort, and it runs AFTER unlock() above because DeleteMountStore
 	// takes LockID itself and that pool is not reentrant.
-	if err := workspace.DeleteMountStore(a.homePath, id); err != nil {
-		slog.Warn("rest: delete workspace: cascade mount store", "id", id, "error", err)
+	if err := workspace.DeleteMountStore(rd.a.homePath, rd.id); err != nil {
+		slog.Warn("rest: delete workspace: cascade mount store", "id", rd.id, "error", err)
 	}
 
 	// Remove the workspace's delegation record, for the same reason and with
@@ -1430,10 +1511,13 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// that no longer exists — and would silently re-authorize the graph if the
 	// id were ever reused. Best-effort, and after unlock() because
 	// DeleteDelegationStore takes LockID itself and that pool is not reentrant.
-	if err := workspace.DeleteDelegationStore(a.homePath, id); err != nil {
-		slog.Warn("rest: delete workspace: cascade delegation store", "id", id, "error", err)
+	if err := workspace.DeleteDelegationStore(rd.a.homePath, rd.id); err != nil {
+		slog.Warn("rest: delete workspace: cascade delegation store", "id", rd.id, "error", err)
 	}
+}
 
+// removeMediaAndDirectory cascades media deletion and removes the workspace directory while recording partial failures.
+func (rd *restAPIHandleWorkspaceDelete) removeMediaAndDirectory() {
 	// Best-effort: remove the per-workspace directory. This now holds more than
 	// AGENT.md and the shared memory room: its work/ subdirectory is also the
 	// SHARED project-work directory every CoreTeam member (native or
@@ -1459,9 +1543,9 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// unattributable regardless of who was actually authenticated. The hook
 	// opens a fresh library instance because the original lib (if any) was
 	// held by the request scope, not the delete handler's scope.
-	actor := a.callerIdentity(r).Username
-	mediaCascadeFailed := false
-	if hookErr := workspace.WorkspaceDeleteHook(a.homePath, id, actor, a.auditor); hookErr != nil {
+	rd.actor = rd.a.callerIdentity(rd.r).Username
+	rd.mediaCascadeFailed = false
+	if hookErr := workspace.WorkspaceDeleteHook(rd.a.homePath, rd.id, rd.actor, rd.a.auditor); hookErr != nil {
 		if errors.Is(hookErr, workspace.ErrCascadeStraggler) {
 			// Re-review FIX 2: library.CascadeDelete's two-phase commit only
 			// returns a non-nil error together with a fully-populated
@@ -1479,14 +1563,14 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 			// already emitted still records Decision=error for this moment
 			// in time (see logCascadeAuditEvent's doc).
 			logger.WarnCF("rest", "delete workspace: media cascade-delete straggler (self-healed by directory wipe)",
-				map[string]any{"id": id, "actor": actor, "error": hookErr.Error()})
+				map[string]any{"id": rd.id, "actor": rd.actor, "error": hookErr.Error()})
 		} else {
-			mediaCascadeFailed = true
+			rd.mediaCascadeFailed = true
 			// Re-review FIX 1: was a bare slog.Error, invisible on a
 			// backgrounded gateway (slog.SetDefault is never called anywhere
 			// in this repo). Route through pkg/logger instead.
 			logger.ErrorCF("rest", "delete workspace: media cascade-delete",
-				map[string]any{"id": id, "actor": actor, "error": hookErr.Error()})
+				map[string]any{"id": rd.id, "actor": rd.actor, "error": hookErr.Error()})
 		}
 	}
 
@@ -1507,7 +1591,7 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// WorkspaceDeleteHook now closes by always emitting a
 	// media.cascade_delete event (DecisionError on failure) regardless of
 	// how many entries were actually removed.
-	wsDir := workspace.WorkspaceDir(a.homePath, id)
+	wsDir := workspace.WorkspaceDir(rd.a.homePath, rd.id)
 	// FIX 3: RemoveAll's own failure (e.g. EBUSY/permission on
 	// workspaces/<id>/work/, which a live agent turn may still be writing
 	// to) used to only reach a slog.Warn — the response gate below checked
@@ -1518,26 +1602,29 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// the existing straggler-vs-hard-cascade-failure distinction above is
 	// unaffected: this only tracks whether the directory wipe itself, run
 	// unconditionally regardless of that distinction, actually succeeded.
-	dirRemoveFailed := false
+	rd.dirRemoveFailed = false
 	if err := removeAllFn(wsDir); err != nil {
-		dirRemoveFailed = true
-		slog.Warn("rest: delete workspace: cascade dir", "id", id, "dir", wsDir, "error", err)
+		rd.dirRemoveFailed = true
+		slog.Warn("rest: delete workspace: cascade dir", "id", rd.id, "dir", wsDir, "error", err)
 	}
+}
 
-	if a.auditor != nil {
-		if err := a.auditor.Log(
+// auditAndRespond audits the deletion outcome and reports any partial cleanup failure.
+func (rd *restAPIHandleWorkspaceDelete) auditAndRespond() {
+	if rd.a.auditor != nil {
+		if err := rd.a.auditor.Log(
 			&audit.Entry{
 				Event:    "workspace.delete",
 				Decision: audit.DecisionAllow,
 				Details: map[string]any{
-					"id":                   id,
-					"actor":                actor,
-					"media_cascade_failed": mediaCascadeFailed,
-					"dir_remove_failed":    dirRemoveFailed,
+					"id":                   rd.id,
+					"actor":                rd.actor,
+					"media_cascade_failed": rd.mediaCascadeFailed,
+					"dir_remove_failed":    rd.dirRemoveFailed,
 				},
 			},
 		); err != nil {
-			slog.Warn("audit write failed", "event", "workspace.delete", "id", id, "error", err)
+			slog.Warn("audit write failed", "event", "workspace.delete", "id", rd.id, "error", err)
 		}
 	}
 
@@ -1554,18 +1641,18 @@ func (a *restAPI) handleWorkspaceDelete(w http.ResponseWriter, r *http.Request, 
 	// this endpoint. The caller can confirm the workspace itself is gone
 	// via a follow-up GET (404) and inspect whatever survives on disk /
 	// in the media library via GET /workspaces/{id}/media.
-	if mediaCascadeFailed || dirRemoveFailed {
+	if rd.mediaCascadeFailed || rd.dirRemoveFailed {
 		msg := "workspace deleted, but media library cleanup failed; see server logs"
 		switch {
-		case mediaCascadeFailed && dirRemoveFailed:
+		case rd.mediaCascadeFailed && rd.dirRemoveFailed:
 			msg = "workspace deleted, but media library cleanup and on-disk directory removal both failed; see server logs"
-		case dirRemoveFailed:
+		case rd.dirRemoveFailed:
 			msg = "workspace record deleted, but the on-disk workspace directory could not be fully removed; see server logs"
 		}
-		jsonErr(w, http.StatusInternalServerError, msg)
+		jsonErr(rd.w, http.StatusInternalServerError, msg)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	rd.w.WriteHeader(http.StatusNoContent)
 }
 
 // releaseHeartbeatSessionsForWorkspace deletes the standing heartbeat session for

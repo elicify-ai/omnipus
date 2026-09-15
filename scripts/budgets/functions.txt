@@ -45,8 +45,6 @@ pkg/gateway/rest_sandbox_config.go	restAPI.putSandboxConfig	307
 pkg/gateway/rest_tasks_occurrences_test.go	TestRestTasks_OccurrencesEndpoint	384
 pkg/gateway/rest_tools.go	restAPI.updateAgentTools	373
 pkg/gateway/rest_uploads.go	restAPI.HandleUpload	389
-pkg/gateway/rest_workspaces.go	restAPI.handleWorkspaceDelete	301
-pkg/gateway/rest_workspaces.go	restAPI.handleWorkspacePut	409
 pkg/gateway/rest.go	restAPI.registerAdditionalEndpoints	249
 pkg/gateway/sandbox_apply.go	applySandbox	504
 pkg/gateway/task_occurrences_overlay_test.go	TestOccurrenceOverlay	373
