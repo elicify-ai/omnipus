@@ -38,6 +38,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -282,23 +283,34 @@ func mutateToolCallInTranscript(
 	transcriptPath := filepath.Join(store.BaseDir(), sessionID, "transcript.jsonl")
 
 	var found bool
-	rewriteErr := fileutil.WithFlock(transcriptPath, func() error {
+	// Lock the sidecar transcript.jsonl.lock, never transcript.jsonl: the
+	// rewrite below renames a new file over the transcript, so a lock on the
+	// transcript itself sat on an inode that rewrite unlinked, and two
+	// concurrent rewrites could each hold "the" lock and overwrite each other's
+	// settled tool call. Locking the transcript also created it empty when it
+	// did not exist yet. See fileutil.SidecarLockPath.
+	rewriteErr := fileutil.WithFlock(fileutil.SidecarLockPath(transcriptPath), func() error {
 		found = false
 		data, err := os.ReadFile(transcriptPath)
 		if err != nil {
 			if os.IsNotExist(err) {
-				// Narrow race window: the flock's own os.OpenFile (below,
-				// via WithFlock) already succeeded — meaning transcriptPath
-				// existed a moment ago — but this fresh, independent
-				// os.ReadFile(transcriptPath) now sees it gone. That can
-				// only happen if the session's directory was removed
-				// concurrently (e.g. DeleteSession) between the flock open
-				// and this read. Classified the same as "session not
-				// found" (FR-099) — the session is, for this call's
-				// purposes, gone.
-				u22RecordTranscriptMutateMissed("transcript mutate: session not found", sessionID, callID,
-					"reason", "session_not_found")
-				return nil // no transcript yet — nothing to update
+				// No transcript file. If the session directory is still there
+				// the session exists and has no tool_call entry to settle — an
+				// entry miss. If the directory is gone too, a DeleteSession
+				// raced this call and the session is gone (FR-099).
+				_, dirErr := os.Stat(filepath.Dir(transcriptPath))
+				switch {
+				case dirErr == nil:
+					u22RecordTranscriptMutateMissed("transcript mutate: tool_call entry not found", sessionID, callID,
+						"expect_status", expectStatus, "reason", "entry_not_found")
+					return nil
+				case os.IsNotExist(dirErr):
+					u22RecordTranscriptMutateMissed("transcript mutate: session not found", sessionID, callID,
+						"reason", "session_not_found")
+					return nil // no transcript — nothing to update
+				default:
+					return fmt.Errorf("transcript mutate: stat session dir: %w", dirErr)
+				}
 			}
 			return err
 		}
@@ -375,8 +387,9 @@ func mutateToolCallInTranscript(
 
 	if rewriteErr != nil {
 		// FR-099: the MAIN "session not found" path. fileutil.WithFlock opens
-		// transcriptPath with os.O_CREATE, which can create the leaf FILE but
-		// not a missing PARENT directory — so for a session id that was never
+		// the transcript's sidecar lock file with os.O_CREATE, which can create
+		// the leaf FILE but not a missing PARENT directory — so for a session
+		// id that was never
 		// minted (no per-session directory at all, matching BDD-109's "no
 		// meta.json exists"), WithFlock's own open fails with ENOENT and the
 		// closure above never runs at all. Verified: reproduced against a

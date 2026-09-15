@@ -909,7 +909,7 @@ func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
 	// never partial. The read-modify-write stays inside the lock, so concurrent
 	// appends (the session-end recap and the agent-invocable retrospective tool
 	// can both target one sessionID) still cannot clobber each other.
-	lockPath := retroPath + ".lock"
+	lockPath := fileutil.SidecarLockPath(retroPath)
 
 	return fileutil.WithFlock(lockPath, func() error {
 		existing, err := os.ReadFile(retroPath)
