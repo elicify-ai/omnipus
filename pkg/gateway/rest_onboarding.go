@@ -405,6 +405,24 @@ func (a *restAPI) onboardingClosedReason(r *http.Request) string {
 	}
 }
 
+// restAPIHandleCompleteOnboarding carries the shared state of HandleCompleteOnboarding across its stages.
+type restAPIHandleCompleteOnboarding struct {
+	a                *restAPI
+	w                http.ResponseWriter
+	r                *http.Request
+	commitOnboarding func() error
+	committed        bool
+	body             gen.OnboardingCompleteRequest
+	provider         onboardingProviderChoice
+	credRefName      string
+	keyWarning       string
+	providerModel    string
+	newProviderEntry map[string]any
+	passwordHash     []byte
+	token            string
+	tokenEntry       []any
+}
+
 // HandleCompleteOnboarding handles POST /api/v1/onboarding/complete.
 //
 // Two-phase commit invariant:
@@ -427,8 +445,10 @@ func (a *restAPI) onboardingClosedReason(r *http.Request) string {
 // must be OPEN. See onboardingWindowGate below for why the onboarding flag
 // alone was never a sufficient gate on the one route that mints authority.
 func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+	ro := &restAPIHandleCompleteOnboarding{a: a, w: w, r: r}
+
+	if ro.r.Method != http.MethodPost {
+		jsonErr(ro.w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
@@ -437,34 +457,60 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// ReserveComplete and before the request body is read at all — an
 	// unauthenticated body is attacker-controlled input and must not be parsed
 	// ahead of the authorization decision.
-	if !a.onboardingWindowGate(w, r) {
+	if !ro.a.onboardingWindowGate(ro.w, ro.r) {
 		return
 	}
 
-	// Phase 1: Reserve the completion slot BEFORE touching config.json.
-	// This closes the TOCTOU window: concurrent callers racing through the
-	// IsComplete() check all see "already complete" once the first caller
-	// holds the reservation, without needing to wait for disk I/O.
-	commitOnboarding, reserveErr := a.onboardingMgr.ReserveComplete()
-	if reserveErr != nil {
-		if errors.Is(reserveErr, onboarding.ErrAlreadyComplete) {
-			jsonErr(w, http.StatusConflict, "onboarding already complete")
-			return
-		}
-		slog.Error("onboarding: reserve failed unexpectedly", "error", reserveErr)
-		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
+	if ro.reserveCompletion() {
 		return
 	}
 	// committed-guard: release the reservation on any early-return path so
 	// callers can retry. Set committed=true only after commitOnboarding()
 	// succeeds (phase-2 write) to prevent a bricked-onboarding state.
-	committed := false
+	ro.committed = false
 	defer func() {
-		if !committed {
-			a.onboardingMgr.ReleaseReservation()
+		if !ro.committed {
+			ro.a.onboardingMgr.ReleaseReservation()
 		}
 	}()
 
+	if ro.decodeAndValidate() {
+		return
+	}
+
+	if ro.prepareProviderAndCredentials() {
+		return
+	}
+
+	if ro.persistConfig() {
+		return
+	}
+
+	ro.finishOnboarding()
+}
+
+// reserveCompletion reserves the onboarding completion slot before any persistent changes.
+func (ro *restAPIHandleCompleteOnboarding) reserveCompletion() bool {
+	// Phase 1: Reserve the completion slot BEFORE touching config.json.
+	// This closes the TOCTOU window: concurrent callers racing through the
+	// IsComplete() check all see "already complete" once the first caller
+	// holds the reservation, without needing to wait for disk I/O.
+	var reserveErr error
+	ro.commitOnboarding, reserveErr = ro.a.onboardingMgr.ReserveComplete()
+	if reserveErr != nil {
+		if errors.Is(reserveErr, onboarding.ErrAlreadyComplete) {
+			jsonErr(ro.w, http.StatusConflict, "onboarding already complete")
+			return true
+		}
+		slog.Error("onboarding: reserve failed unexpectedly", "error", reserveErr)
+		jsonErr(ro.w, http.StatusInternalServerError, "onboarding failed")
+		return true
+	}
+	return false
+}
+
+// decodeAndValidate decodes the onboarding request and validates its provider and administrator fields.
+func (ro *restAPIHandleCompleteOnboarding) decodeAndValidate() bool {
 	// ADR-068 (T068-06): `provider` is a discriminated union on `auth_method`
 	// (OnboardingProviderApiKey | OnboardingProviderSignIn). Mirror the ADR-034
 	// peek-discriminator pattern of createAgent (rest.go): buffer the body,
@@ -472,21 +518,22 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// variant's inbound schema when ValidateInbound is on, then strictly
 	// decode the provider into the NAMED variant struct — never through the
 	// generated union wrapper's As*() accessors.
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	body, provider, ok := decodeOnboardingCompleteBody(w, r, validateEnabled)
+	validateEnabled := ro.a.agentLoop.GetConfig().Gateway.ValidateInbound
+	var ok bool
+	ro.body, ro.provider, ok = decodeOnboardingCompleteBody(ro.w, ro.r, validateEnabled)
 	if !ok {
-		return
+		return true
 	}
 
 	// Validate provider.
-	if provider.ID == "" {
-		jsonErr(w, http.StatusBadRequest, "provider.id is required")
-		return
+	if ro.provider.ID == "" {
+		jsonErr(ro.w, http.StatusBadRequest, "provider.id is required")
+		return true
 	}
 	// Reserved path segments are never provider ids (ADR-068 MAJ-002).
-	if isReservedProviderPathSegment(provider.ID) {
-		jsonErrField(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", provider.ID), "id")
-		return
+	if isReservedProviderPathSegment(ro.provider.ID) {
+		jsonErrField(ro.w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", ro.provider.ID), "id")
+		return true
 	}
 	// Reject ids the catalog does not carry at the boundary, so the gateway
 	// never persists a config that fails the post-save rewire and flips to
@@ -499,95 +546,99 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// third, because it would also make the "no endpoint resolved" skip
 	// branch below unreachable — every supported catalog row carries a URL,
 	// so the only ids that reach it are the unsupported ones.
-	if !providers.IsCatalogProvider(provider.ID) {
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", provider.ID))
-		return
+	if !providers.IsCatalogProvider(ro.provider.ID) {
+		jsonErr(ro.w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", ro.provider.ID))
+		return true
 	}
 	// The two variants diverge for the first time here: the api_key variant
 	// must carry a key, and the sign_in variant must name a row whose catalog
 	// entry actually declares sign_in (the rule OnboardingProviderSignIn.yaml
 	// states for its `id`). A row with no declared auth_methods at all is not
 	// refused — that is a catalog gap, not an operator error.
-	if provider.AuthMethod == config.AuthMethodSignIn {
-		row, known := providers.CatalogProvider(provider.ID)
+	if ro.provider.AuthMethod == config.AuthMethodSignIn {
+		row, known := providers.CatalogProvider(ro.provider.ID)
 		if known && len(row.AuthMethods) > 0 &&
 			!catalogOffersAuth(row.AuthMethods, gen.ProbeProviderRequestAuthSignIn) {
-			jsonErrField(w, http.StatusBadRequest, onboardingSignInUnsupportedMsg, "id")
-			return
+			jsonErrField(ro.w, http.StatusBadRequest, onboardingSignInUnsupportedMsg, "id")
+			return true
 		}
-	} else if provider.APIKey == "" {
-		jsonErr(w, http.StatusBadRequest, "provider.api_key is required")
-		return
+	} else if ro.provider.APIKey == "" {
+		jsonErr(ro.w, http.StatusBadRequest, "provider.api_key is required")
+		return true
 	}
 
 	// Validate admin.
-	if body.Admin.Username == "" {
-		jsonErr(w, http.StatusBadRequest, "admin.username is required")
-		return
+	if ro.body.Admin.Username == "" {
+		jsonErr(ro.w, http.StatusBadRequest, "admin.username is required")
+		return true
 	}
 	// Enforce username constraints regardless of ValidateInbound schema validation.
-	if !usernameRE.MatchString(body.Admin.Username) {
-		jsonErr(w, http.StatusBadRequest, usernameInvalidMsg)
-		return
+	if !usernameRE.MatchString(ro.body.Admin.Username) {
+		jsonErr(ro.w, http.StatusBadRequest, usernameInvalidMsg)
+		return true
 	}
-	if _, reserved := reservedUsernames[strings.ToLower(body.Admin.Username)]; reserved {
-		jsonErr(w, http.StatusBadRequest, reservedUsernameMsg)
-		return
+	if _, reserved := reservedUsernames[strings.ToLower(ro.body.Admin.Username)]; reserved {
+		jsonErr(ro.w, http.StatusBadRequest, reservedUsernameMsg)
+		return true
 	}
-	if body.Admin.Password == "" {
-		jsonErr(w, http.StatusBadRequest, "admin.password is required")
-		return
+	if ro.body.Admin.Password == "" {
+		jsonErr(ro.w, http.StatusBadRequest, "admin.password is required")
+		return true
 	}
-	if len(body.Admin.Password) < 8 {
-		jsonErr(w, http.StatusBadRequest, "admin.password must be at least 8 characters")
-		return
+	if len(ro.body.Admin.Password) < 8 {
+		jsonErr(ro.w, http.StatusBadRequest, "admin.password must be at least 8 characters")
+		return true
 	}
+	return false
+}
 
+// prepareProviderAndCredentials stores provider credentials and prepares the provider, password, and token records.
+func (ro *restAPIHandleCompleteOnboarding) prepareProviderAndCredentials() bool {
 	// ── Credential handling, per auth method ────────────────────────────────
 	// api_key: probe the key and store it. sign_in: nothing to probe and
 	// nothing to store — the vendor CLI's own login is the credential and
 	// Omnipus only ever reads it (FR-007), so credRefName stays empty and no
 	// key warning can arise.
-	credRefName := ""
-	keyWarning := ""
-	if provider.AuthMethod == config.AuthMethodAPIKey {
+	ro.credRefName = ""
+	ro.keyWarning = ""
+	if ro.provider.AuthMethod == config.AuthMethodAPIKey {
 		var ok bool
-		credRefName, keyWarning, ok = a.validateAndStoreOnboardingKey(w, r, provider)
+		ro.credRefName, ro.keyWarning, ok = ro.a.validateAndStoreOnboardingKey(ro.w, ro.r, ro.provider)
 		if !ok {
-			return
+			return true
 		}
 	}
 
 	// Build the provider entry as a JSON object to inject into providers array.
 	// model defaults per provider when not specified in the onboarding request.
-	providerModel := provider.Model
-	if providerModel == "" && provider.AuthMethod == config.AuthMethodSignIn {
+	ro.providerModel = ro.provider.Model
+	if ro.providerModel == "" && ro.provider.AuthMethod == config.AuthMethodSignIn {
 		// A sign-in row has no vendor api_key default to guess from — its
 		// models are whatever the operator's subscription carries — so the
 		// fallback is the row's own first Recommended-for-chat catalog model,
 		// the SAME pick the probe would have exercised (FR-036). If the
 		// catalog offers none, say so rather than write a pair
 		// GetModelConfig cannot resolve.
-		if row, known := providers.CatalogProvider(provider.ID); known {
+		if row, known := providers.CatalogProvider(ro.provider.ID); known {
 			if rec := recommendedProbeModels(row); len(rec) > 0 {
-				providerModel = rec[0]
+				ro.providerModel = rec[0]
 			}
 		}
-		if providerModel == "" {
-			jsonErrField(w, http.StatusBadRequest, onboardingSignInModelRequiredMsg, "model")
-			return
+		if ro.providerModel == "" {
+			jsonErrField(ro.w, http.StatusBadRequest, onboardingSignInModelRequiredMsg, "model")
+			return true
 		}
 	}
-	if providerModel == "" {
-		switch provider.ID {
+	if ro.providerModel == "" {
+		switch ro.provider.ID {
 		case "anthropic":
-			providerModel = "claude-sonnet-4-6"
+			ro.providerModel = "claude-sonnet-4-6"
 		case "gemini", "google":
-			providerModel = "gemini-2.0-flash"
+			ro.providerModel = "gemini-2.0-flash"
 		case "openrouter":
-			providerModel = "openai/gpt-4o"
+			ro.providerModel = "openai/gpt-4o"
 		default: // openai and any other provider
-			providerModel = "gpt-4o"
+			ro.providerModel = "gpt-4o"
 		}
 	}
 	// model_name is the row's user-facing display alias (deleted by ADR-067
@@ -598,55 +649,60 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// auth_method is stamped explicitly on both variants (ADR-068 FR-003):
 	// the row records HOW it authenticates, so a sign-in row is never
 	// mistaken for a key row whose credential went missing.
-	newProviderEntry := map[string]any{
-		"model_name":  providerModel,
-		"provider":    provider.ID,
-		"model":       providerModel,
-		"auth_method": provider.AuthMethod,
+	ro.newProviderEntry = map[string]any{
+		"model_name":  ro.providerModel,
+		"provider":    ro.provider.ID,
+		"model":       ro.providerModel,
+		"auth_method": ro.provider.AuthMethod,
 	}
-	if credRefName != "" {
-		newProviderEntry["api_key_ref"] = credRefName
+	if ro.credRefName != "" {
+		ro.newProviderEntry["api_key_ref"] = ro.credRefName
 	}
 	// Persist a custom endpoint as api_base when supplied (required for providers
 	// with no fixed default base, e.g. azure; also a regional-host override). The
 	// runtime factory reads an explicit api_base before falling back to the
 	// catalog row's own base URL (ADR-067 FR-012).
-	if ep := strings.TrimSpace(provider.Endpoint); ep != "" {
-		newProviderEntry["api_base"] = ep
+	if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
+		ro.newProviderEntry["api_base"] = ep
 	}
 
 	// Pre-compute all expensive crypto operations outside the config lock to
 	// avoid holding configMu for ~300ms across three bcrypt operations.
-	passwordHash, err := bcrypt.GenerateFromPassword([]byte(body.Admin.Password), bcrypt.DefaultCost)
+	var err error
+	ro.passwordHash, err = bcrypt.GenerateFromPassword([]byte(ro.body.Admin.Password), bcrypt.DefaultCost)
 	if err != nil {
 		slog.Error("onboarding: bcrypt password hash failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
-		return
+		jsonErr(ro.w, http.StatusInternalServerError, "onboarding failed")
+		return true
 	}
-	token, err := generateUserToken(body.Admin.Username)
+	ro.token, err = generateUserToken(ro.body.Admin.Username)
 	if err != nil {
 		slog.Error("onboarding: generate token failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
-		return
+		jsonErr(ro.w, http.StatusInternalServerError, "onboarding failed")
+		return true
 	}
 	// SEC-1: bcrypt only the secret body so the ID-tagged token (81 bytes)
 	// stays under bcrypt's 72-byte input ceiling; the issued token is stored in
 	// the bearer-token SET so later logins append rather than evict.
-	tokenHash, err := bcrypt.GenerateFromPassword([]byte(config.TokenSecret(token)), bcrypt.DefaultCost)
+	tokenHash, err := bcrypt.GenerateFromPassword([]byte(config.TokenSecret(ro.token)), bcrypt.DefaultCost)
 	if err != nil {
 		slog.Error("onboarding: bcrypt token hash failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
-		return
+		jsonErr(ro.w, http.StatusInternalServerError, "onboarding failed")
+		return true
 	}
-	tokenEntry := []any{map[string]any{
-		"id":         config.TokenIDFromRaw(token),
+	ro.tokenEntry = []any{map[string]any{
+		"id":         config.TokenIDFromRaw(ro.token),
 		"hash":       string(tokenHash),
 		"created_at": time.Now().UTC().Format(time.RFC3339),
 	}}
+	return false
+}
 
+// persistConfig writes the provider, default model, and administrator account to config.json.
+func (ro *restAPIHandleCompleteOnboarding) persistConfig() bool {
 	// Phase 2: Write config.json only (no state.json write inside the callback).
 	// The commit() closure writes state.json after safeUpdateConfigJSON returns.
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	if err := ro.a.safeUpdateConfigJSON(func(m map[string]any) error {
 		// The TOCTOU window is now closed by ReserveComplete() above — no need
 		// to re-check IsComplete() here. The reserved flag blocks concurrent
 		// callers before they can reach this callback.
@@ -670,14 +726,14 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			if !isMap {
 				continue
 			}
-			if entryMap["provider"] == provider.ID && entryMap["model"] == providerModel {
+			if entryMap["provider"] == ro.provider.ID && entryMap["model"] == ro.providerModel {
 				// Update existing entry.
 				switch {
-				case credRefName != "":
-					entryMap["api_key_ref"] = credRefName
+				case ro.credRefName != "":
+					entryMap["api_key_ref"] = ro.credRefName
 					delete(entryMap, "api_key")
 					delete(entryMap, "api_keys")
-				case provider.AuthMethod == config.AuthMethodSignIn:
+				case ro.provider.AuthMethod == config.AuthMethodSignIn:
 					// No credential exists for a sign-in row, so leave none
 					// behind — including a stale one from an earlier api_key
 					// onboarding of the same pair.
@@ -685,13 +741,13 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 					delete(entryMap, "api_keys")
 					delete(entryMap, "api_key_ref")
 				default:
-					entryMap["api_key"] = provider.APIKey
+					entryMap["api_key"] = ro.provider.APIKey
 				}
-				entryMap["model"] = providerModel
-				entryMap["model_name"] = providerModel
-				entryMap["provider"] = provider.ID
-				entryMap["auth_method"] = provider.AuthMethod
-				if ep := strings.TrimSpace(provider.Endpoint); ep != "" {
+				entryMap["model"] = ro.providerModel
+				entryMap["model_name"] = ro.providerModel
+				entryMap["provider"] = ro.provider.ID
+				entryMap["auth_method"] = ro.provider.AuthMethod
+				if ep := strings.TrimSpace(ro.provider.Endpoint); ep != "" {
 					entryMap["api_base"] = ep
 				}
 				providerList[i] = entryMap
@@ -700,7 +756,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			}
 		}
 		if !found {
-			providerList = append(providerList, newProviderEntry)
+			providerList = append(providerList, ro.newProviderEntry)
 		}
 		m["providers"] = providerList
 
@@ -719,8 +775,8 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		}
 		delete(defaultsMap, "model_name")
 		defaultsMap["default_model"] = map[string]any{
-			"provider": provider.ID,
-			"model":    providerModel,
+			"provider": ro.provider.ID,
+			"model":    ro.providerModel,
 		}
 		agentsMap["defaults"] = defaultsMap
 		m["agents"] = agentsMap
@@ -728,9 +784,9 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 		// --- Admin user ---
 		// Build the user entry using pre-computed hashes.
 		newUser := map[string]any{
-			"username":      body.Admin.Username,
-			"password_hash": string(passwordHash),
-			"tokens":        tokenEntry,
+			"username":      ro.body.Admin.Username,
+			"password_hash": string(ro.passwordHash),
+			"tokens":        ro.tokenEntry,
 		}
 
 		// Ensure gateway object exists in m.
@@ -777,7 +833,7 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			if !ok {
 				continue
 			}
-			if um["username"] == body.Admin.Username {
+			if um["username"] == ro.body.Admin.Username {
 				return errOnboardingUsernameTaken
 			}
 		}
@@ -797,15 +853,15 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 			// the gate does — the response must not confirm which usernames
 			// already exist on this instance.
 			slog.Warn("onboarding: refused — requested admin username already exists",
-				"username", body.Admin.Username, "source_ip", a.clientIPWithLiveFallback(r))
-			if a.auditor != nil {
-				if auditErr := a.auditor.Log(&audit.Entry{
+				"username", ro.body.Admin.Username, "source_ip", ro.a.clientIPWithLiveFallback(ro.r))
+			if ro.a.auditor != nil {
+				if auditErr := ro.a.auditor.Log(&audit.Entry{
 					Event:    audit.EventOnboardingRefused,
 					Decision: audit.DecisionDeny,
 					Details: map[string]any{
 						"reason":    "username_exists",
-						"username":  body.Admin.Username,
-						"source_ip": a.clientIPWithLiveFallback(r),
+						"username":  ro.body.Admin.Username,
+						"source_ip": ro.a.clientIPWithLiveFallback(ro.r),
 						"route":     "/api/v1/onboarding/complete",
 					},
 					PolicyRule: "onboarding.complete must never overwrite an existing account's credentials",
@@ -813,14 +869,18 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 					slog.Warn("audit write failed", "event", audit.EventOnboardingRefused, "error", auditErr)
 				}
 			}
-			jsonErr(w, http.StatusConflict, onboardingClosedMsg)
-			return
+			jsonErr(ro.w, http.StatusConflict, onboardingClosedMsg)
+			return true
 		}
 		slog.Error("onboarding: complete transaction failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "onboarding failed")
-		return
+		jsonErr(ro.w, http.StatusInternalServerError, "onboarding failed")
+		return true
 	}
+	return false
+}
 
+// finishOnboarding audits the new administrator, issues cookies, commits onboarding state, reloads config, and responds.
+func (ro *restAPIHandleCompleteOnboarding) finishOnboarding() {
 	// SEC-15: the admin account now exists on disk. This is the single moment
 	// this product creates an authentication authority out of nothing, and
 	// until now it left no audit record at all — UAT found neither the
@@ -830,16 +890,16 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// reload), so the record exists even if one of those subsequently fails.
 	// The password and the issued token are never logged; the username, the
 	// source IP and the provider the account was created alongside are.
-	if a.auditor != nil {
-		if auditErr := a.auditor.Log(&audit.Entry{
+	if ro.a.auditor != nil {
+		if auditErr := ro.a.auditor.Log(&audit.Entry{
 			Event:    audit.EventOnboardingAdminCreated,
 			Decision: audit.DecisionAllow,
-			User:     body.Admin.Username,
+			User:     ro.body.Admin.Username,
 			Details: map[string]any{
-				"username":    body.Admin.Username,
-				"source_ip":   a.clientIPWithLiveFallback(r),
-				"provider":    provider.ID,
-				"auth_method": provider.AuthMethod,
+				"username":    ro.body.Admin.Username,
+				"source_ip":   ro.a.clientIPWithLiveFallback(ro.r),
+				"provider":    ro.provider.ID,
+				"auth_method": ro.provider.AuthMethod,
 				"route":       "/api/v1/onboarding/complete",
 			},
 			PolicyRule: "onboarding.complete admitted: pre-auth onboarding window was open " +
@@ -859,9 +919,9 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// so the client can retry (the mutate closure above is idempotent on a
 	// matching username — see the duplicate-username branch). This is the
 	// r4 MAJ-003 fix — never return 200 without the cookie.
-	if _, err := issueSessionCookieFn(w, r, body.Admin.Username, a.safeUpdateConfigJSON); err != nil {
+	if _, err := issueSessionCookieFn(ro.w, ro.r, ro.body.Admin.Username, ro.a.safeUpdateConfigJSON); err != nil {
 		slog.Error("onboarding: issue session cookie failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "session init failed")
+		jsonErr(ro.w, http.StatusInternalServerError, "session init failed")
 		return
 	}
 
@@ -874,16 +934,16 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// had no cookie up to this point (/api/v1/onboarding/complete is CSRF-exempt
 	// for exactly that reason — see pkg/gateway/middleware/csrf.go), so it needs
 	// this to make subsequent state-changing requests without a 403. Issue #97.
-	if err := middleware.IssueCSRFCookie(w, r); err != nil {
+	if err := middleware.IssueCSRFCookie(ro.w, ro.r); err != nil {
 		slog.Error("onboarding: issue CSRF cookie failed", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "session init failed")
+		jsonErr(ro.w, http.StatusInternalServerError, "session init failed")
 		return
 	}
 
 	// config.json written successfully. Now commit state.json (phase 2).
 	// If this fails, the instance is in a recoverable state: next boot
 	// will re-enter onboarding, detect the admin user exists, and succeed.
-	if err := commitOnboarding(); err != nil {
+	if err := ro.commitOnboarding(); err != nil {
 		slog.Error(
 			"onboarding: state.json commit failed (config.json already written — retry will recover)",
 			"error", err,
@@ -894,37 +954,37 @@ func (a *restAPI) HandleCompleteOnboarding(w http.ResponseWriter, r *http.Reques
 	// Phase-2 complete: config.json is committed. Mark committed so the defer does NOT release the reservation.
 	// Note: state.json may have failed above (logged as non-fatal) — the process-level reservation correctly
 	// stays held since config.json represents the canonical commit.
-	committed = true
+	ro.committed = true
 
 	// Trigger a reload so the in-memory config picks up the new user.
 	// Reload failure is non-fatal — token is on disk and active after next config poll.
-	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
+	if confirmed, err := ro.a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Warn("onboarding: hot-reload after complete failed; token active after next restart", "error", err)
 	} else if !confirmed {
 		slog.Warn(
 			"onboarding: hot-reload after complete did not confirm within the poll window; "+
 				"new admin user may not be active until next restart",
-			"username", body.Admin.Username,
+			"username", ro.body.Admin.Username,
 		)
 	}
 
-	slog.Info("onboarding: completed", "username", body.Admin.Username)
+	slog.Info("onboarding: completed", "username", ro.body.Admin.Username)
 	resp := gen.OnboardingCompleteResponse{
-		Token:    token,
-		Username: body.Admin.Username,
+		Token:    ro.token,
+		Username: ro.body.Admin.Username,
 	}
 	switch {
-	case provider.AuthMethod == config.AuthMethodAPIKey && credRefName == "":
+	case ro.provider.AuthMethod == config.AuthMethodAPIKey && ro.credRefName == "":
 		warningMsg := "API key stored in plaintext — set OMNIPUS_MASTER_KEY for encrypted storage"
 		resp.Warning = &warningMsg
-	case keyWarning != "":
+	case ro.keyWarning != "":
 		// A non-blocking key-validation outcome (no_credit / unreachable /
 		// restricted). Surfaced on the existing warning field so the SPA's
 		// first-run screen can tell the operator now, rather than letting them
 		// discover it on their first message.
-		resp.Warning = &keyWarning
+		resp.Warning = &ro.keyWarning
 	}
-	jsonOK(w, resp)
+	jsonOK(ro.w, resp)
 }
 
 // validateAndStoreOnboardingKey is the api_key half of onboarding completion:
@@ -1174,6 +1234,19 @@ func probeUnsupportedAuthMsg(auth gen.ProbeProviderRequestAuth) string {
 	return "provider does not support api_key"
 }
 
+// restAPIHandleOnboardingProbeProvider carries the shared state of HandleOnboardingProbeProvider across its stages.
+type restAPIHandleOnboardingProbeProvider struct {
+	a            *restAPI
+	w            http.ResponseWriter
+	r            *http.Request
+	body         gen.ProbeProviderRequest
+	pickedModel  string
+	apiKey       string
+	catalogRow   catalog.Provider
+	isCatalogRow bool
+	baseURL      string
+}
+
 // HandleOnboardingProbeProvider handles POST /api/v1/onboarding/probe-provider.
 //
 // Purpose: during onboarding the SPA needs to test an API key AND fetch the
@@ -1229,8 +1302,10 @@ func probeUnsupportedAuthMsg(auth gen.ProbeProviderRequestAuth) string {
 // The validation field is present for non-valid probed outcomes (no_credit, unreachable, restricted)
 // and absent for valid outcomes and for error responses that short-circuit before the probe.
 func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+	ro := &restAPIHandleOnboardingProbeProvider{a: a, w: w, r: r}
+
+	if ro.r.Method != http.MethodPost {
+		jsonErr(ro.w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	// Gate: only usable during bootstrap. Once the pre-auth window is closed
@@ -1265,17 +1340,30 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// is a state conflict, not a failed authentication challenge. One refusal
 	// message for every closed-window reason keeps the divergent state from
 	// becoming an oracle; the reason goes to the audit log.
-	if !a.preAuthOnboardingWindowGate(w, r, onboardingProbeRoute, probeWindowClosedMsg) {
+	if !ro.a.preAuthOnboardingWindowGate(ro.w, ro.r, onboardingProbeRoute, probeWindowClosedMsg) {
 		return
 	}
 
-	var body gen.ProbeProviderRequest
-	var validateEnabled bool
-	if a.agentLoop != nil {
-		validateEnabled = a.agentLoop.GetConfig().Gateway.ValidateInbound
-	}
-	if !decodeAndValidate(w, r, "ProbeProviderRequest", &body, validateEnabled) {
+	if ro.decodeAndValidate() {
 		return
+	}
+
+	if ro.resolveEndpoint() {
+		return
+	}
+
+	ro.executeProbe()
+}
+
+// decodeAndValidate decodes the probe request and validates its provider, authentication, model, and API-key fields.
+func (ro *restAPIHandleOnboardingProbeProvider) decodeAndValidate() bool {
+
+	var validateEnabled bool
+	if ro.a.agentLoop != nil {
+		validateEnabled = ro.a.agentLoop.GetConfig().Gateway.ValidateInbound
+	}
+	if !decodeAndValidate(ro.w, ro.r, "ProbeProviderRequest", &ro.body, validateEnabled) {
+		return true
 	}
 	// ── `id` (ADR-068 FR-036 / ADR-067 FR-023) ──────────────────────────────
 	// A free string, `1..64`, with NO enum and NO hand pattern (MIN-011):
@@ -1283,90 +1371,94 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// runtime, or the operator declaring a custom endpoint. The length cap is
 	// enforced here as well as in the schema because validate_inbound is off
 	// by default.
-	if body.Id == "" {
-		jsonErrField(w, http.StatusBadRequest, "id is required", "id")
-		return
+	if ro.body.Id == "" {
+		jsonErrField(ro.w, http.StatusBadRequest, "id is required", "id")
+		return true
 	}
-	if len(body.Id) > probeProviderIDMaxLen {
-		jsonErrField(w, http.StatusBadRequest,
+	if len(ro.body.Id) > probeProviderIDMaxLen {
+		jsonErrField(ro.w, http.StatusBadRequest,
 			fmt.Sprintf("id exceeds %d characters", probeProviderIDMaxLen), "id")
-		return
+		return true
 	}
 	// Reserved path segments are never provider ids (ADR-068 MAJ-002): the
 	// generic unknown-provider echo, parameterised by the caller's own id
 	// with no id list (CRIT-003).
-	if isReservedProviderPathSegment(body.Id) {
-		jsonErrField(w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", body.Id), "id")
-		return
+	if isReservedProviderPathSegment(ro.body.Id) {
+		jsonErrField(ro.w, http.StatusBadRequest, fmt.Sprintf("unknown provider %q", ro.body.Id), "id")
+		return true
 	}
 
 	// ── `auth` (required, closed set) ───────────────────────────────────────
-	if body.Auth == "" {
-		jsonErrField(w, http.StatusBadRequest, "auth is required", "auth")
-		return
+	if ro.body.Auth == "" {
+		jsonErrField(ro.w, http.StatusBadRequest, "auth is required", "auth")
+		return true
 	}
-	if !body.Auth.Valid() {
-		jsonErrField(w, http.StatusBadRequest,
-			fmt.Sprintf("unsupported auth %q", string(body.Auth)), "auth")
-		return
+	if !ro.body.Auth.Valid() {
+		jsonErrField(ro.w, http.StatusBadRequest,
+			fmt.Sprintf("unsupported auth %q", string(ro.body.Auth)), "auth")
+		return true
 	}
 
 	// ── `model` (optional, 1..256, used verbatim) ───────────────────────────
-	pickedModel := ""
-	if body.Model != nil {
-		pickedModel = *body.Model
-		if pickedModel == "" {
-			jsonErrField(w, http.StatusBadRequest, "model must not be empty", "model")
-			return
+	ro.pickedModel = ""
+	if ro.body.Model != nil {
+		ro.pickedModel = *ro.body.Model
+		if ro.pickedModel == "" {
+			jsonErrField(ro.w, http.StatusBadRequest, "model must not be empty", "model")
+			return true
 		}
-		if len(pickedModel) > probeProviderModelMaxLen {
-			jsonErrField(w, http.StatusBadRequest,
+		if len(ro.pickedModel) > probeProviderModelMaxLen {
+			jsonErrField(ro.w, http.StatusBadRequest,
 				fmt.Sprintf("model exceeds %d characters", probeProviderModelMaxLen), "model")
-			return
+			return true
 		}
 	}
 
 	// ── `api_key` — required iff auth is api_key, forbidden with sign_in ────
-	apiKey := ""
-	if body.ApiKey != nil {
-		apiKey = *body.ApiKey
+	ro.apiKey = ""
+	if ro.body.ApiKey != nil {
+		ro.apiKey = *ro.body.ApiKey
 	}
-	switch body.Auth {
+	switch ro.body.Auth {
 	case gen.ProbeProviderRequestAuthApiKey:
-		if apiKey == "" {
-			jsonErrField(w, http.StatusBadRequest, "api_key is required", "api_key")
-			return
+		if ro.apiKey == "" {
+			jsonErrField(ro.w, http.StatusBadRequest, "api_key is required", "api_key")
+			return true
 		}
 	default:
-		if apiKey != "" {
-			jsonErrField(w, http.StatusBadRequest,
+		if ro.apiKey != "" {
+			jsonErrField(ro.w, http.StatusBadRequest,
 				"api_key must not be sent with auth sign_in", "api_key")
-			return
+			return true
 		}
 	}
+	return false
+}
 
+// resolveEndpoint checks provider admission, resolves its endpoint, and applies the SSRF guard.
+func (ro *restAPIHandleOnboardingProbeProvider) resolveEndpoint() bool {
 	reqAPIBase := ""
-	if body.ApiBase != nil {
-		reqAPIBase = strings.TrimSpace(*body.ApiBase)
+	if ro.body.ApiBase != nil {
+		reqAPIBase = strings.TrimSpace(*ro.body.ApiBase)
 	}
 	reqProtocol := ""
-	if body.Protocol != nil {
-		reqProtocol = string(*body.Protocol)
+	if ro.body.Protocol != nil {
+		reqProtocol = string(*ro.body.Protocol)
 	}
 	// ADR-067 FR-019/FR-023/FR-035 (T067-12): the SAME admission gate
 	// PUT /providers/{id} and the CLI wizard apply, against the catalog this
 	// process serves. `id` is a free string on the wire (there is no enum any
 	// more), so this is the only thing standing between a typo'd id and a
 	// probe fired at a URL nobody asked for.
-	if _, admitErr := providers.Admit(body.Id, reqAPIBase, reqProtocol); admitErr != nil {
+	if _, admitErr := providers.Admit(ro.body.Id, reqAPIBase, reqProtocol); admitErr != nil {
 		field := "id"
 		if errors.Is(admitErr, providers.ErrUnknownProvider) && reqAPIBase != "" {
 			// The id is unknown AND a base was supplied: what is missing is
 			// the protocol, so point the SPA at that field (mirrors PUT).
 			field = "protocol"
 		}
-		jsonErrField(w, http.StatusBadRequest, admitErr.Error(), field)
-		return
+		jsonErrField(ro.w, http.StatusBadRequest, admitErr.Error(), field)
+		return true
 	}
 
 	// ── the provider must OFFER the requested auth method (FR-030) ──────────
@@ -1375,22 +1467,22 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// for sign-in, is a 400 that names the method — not a probe that fails
 	// later for a reason the operator cannot act on. A custom row is not a
 	// catalog row, so it declares no auth methods and is never refused here.
-	catalogRow, isCatalogRow := providers.CatalogProvider(body.Id)
-	if len(catalogRow.AuthMethods) > 0 && !catalogOffersAuth(catalogRow.AuthMethods, body.Auth) {
-		jsonErrField(w, http.StatusBadRequest, probeUnsupportedAuthMsg(body.Auth), "auth")
-		return
+	ro.catalogRow, ro.isCatalogRow = providers.CatalogProvider(ro.body.Id)
+	if len(ro.catalogRow.AuthMethods) > 0 && !catalogOffersAuth(ro.catalogRow.AuthMethods, ro.body.Auth) {
+		jsonErrField(ro.w, http.StatusBadRequest, probeUnsupportedAuthMsg(ro.body.Auth), "auth")
+		return true
 	}
 
-	baseURL := reqAPIBase
-	if baseURL == "" {
-		baseURL = providers.APIBaseFor(body.Id)
+	ro.baseURL = reqAPIBase
+	if ro.baseURL == "" {
+		ro.baseURL = providers.APIBaseFor(ro.body.Id)
 	}
-	if baseURL == "" {
+	if ro.baseURL == "" {
 		// Admission passed, so this is a catalog row whose document carries no
 		// URL at all — nothing to probe against.
-		jsonErr(w, http.StatusBadRequest,
-			fmt.Sprintf("unknown provider %q and no endpoint override supplied", body.Id))
-		return
+		jsonErr(ro.w, http.StatusBadRequest,
+			fmt.Sprintf("unknown provider %q and no endpoint override supplied", ro.body.Id))
+		return true
 	}
 
 	// SEC-24 / MIN-006: this endpoint is CSRF-exempt and reachable
@@ -1406,14 +1498,18 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// well-formed and the server REFUSED it — reporting that as "the provider
 	// rejected your key" would send the operator hunting for a credential
 	// problem that does not exist.
-	if a.ssrfChecker != nil {
-		if err := a.ssrfChecker.CheckURL(r.Context(), baseURL); err != nil {
+	if ro.a.ssrfChecker != nil {
+		if err := ro.a.ssrfChecker.CheckURL(ro.r.Context(), ro.baseURL); err != nil {
 			slog.Warn("rest: probe-provider: SSRF blocked endpoint", "error", err)
-			jsonErr(w, http.StatusUnprocessableEntity, "provider endpoint not allowed (SSRF guard)")
-			return
+			jsonErr(ro.w, http.StatusUnprocessableEntity, "provider endpoint not allowed (SSRF guard)")
+			return true
 		}
 	}
+	return false
+}
 
+// executeProbe selects catalog models and executes the sign-in or API-key probe.
+func (ro *restAPIHandleOnboardingProbeProvider) executeProbe() {
 	// The model list comes from the REGISTRY CATALOG, offline, with zero
 	// outbound requests (ADR-067 FR-020/FR-022, US-9.AC1). The `GET /models`
 	// pre-fetch that used to run here told us nothing the catalog does not
@@ -1422,8 +1518,8 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// that proved nothing about the key. An operator-named custom row has no
 	// catalog models: it lists none, and the operator types their own slug.
 	var models []string
-	if isCatalogRow {
-		models = catalogModelIDs(catalogRow)
+	if ro.isCatalogRow {
+		models = catalogModelIDs(ro.catalogRow)
 	}
 
 	// An empty list is not a hard failure (the key is still validated below),
@@ -1431,7 +1527,7 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// as a WARN so it does not look like a silent success.
 	if len(models) == 0 {
 		slog.Warn("rest: probe-provider: provider returned no models",
-			"provider", body.Id)
+			"provider", ro.body.Id)
 	}
 
 	// ── auth: sign_in (ADR-068 FR-036, CRIT-002) ────────────────────────────
@@ -1440,13 +1536,13 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// through the vendor's saved login instead of a submitted key: is there a
 	// login at all, and does ONE completion with the operator's chosen model
 	// succeed.
-	if body.Auth == gen.ProbeProviderRequestAuthSignIn {
-		result, refusal := a.probeSignIn(r.Context(), catalogRow, isCatalogRow, body.Id, pickedModel, baseURL)
+	if ro.body.Auth == gen.ProbeProviderRequestAuthSignIn {
+		result, refusal := ro.a.probeSignIn(ro.r.Context(), ro.catalogRow, ro.isCatalogRow, ro.body.Id, ro.pickedModel, ro.baseURL)
 		if refusal != "" {
-			jsonErrField(w, http.StatusBadRequest, refusal, "auth")
+			jsonErrField(ro.w, http.StatusBadRequest, refusal, "auth")
 			return
 		}
-		writeProbeResult(w, body.Id, result, models)
+		writeProbeResult(ro.w, ro.body.Id, result, models)
 		return
 	}
 
@@ -1462,25 +1558,25 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 	// that says so), and only an absent `model` falls back to the provider's
 	// Recommended-for-chat shortlist.
 	var probeModels []string
-	if isCatalogRow {
-		probeModels = recommendedProbeModels(catalogRow)
+	if ro.isCatalogRow {
+		probeModels = recommendedProbeModels(ro.catalogRow)
 	}
-	if pickedModel != "" {
-		probeModels = []string{pickedModel}
+	if ro.pickedModel != "" {
+		probeModels = []string{ro.pickedModel}
 	}
-	result := providers.ValidateKey(r.Context(), providers.ValidateInput{
-		ProviderID:   body.Id,
-		ProviderName: providers.DisplayName(body.Id),
-		BaseURL:      baseURL,
-		APIKey:       apiKey,
+	result := providers.ValidateKey(ro.r.Context(), providers.ValidateInput{
+		ProviderID:   ro.body.Id,
+		ProviderName: providers.DisplayName(ro.body.Id),
+		BaseURL:      ro.baseURL,
+		APIKey:       ro.apiKey,
 		Catalog:      models,
 		ProbeModels:  probeModels,
-	}, a.ssrfChk())
+	}, ro.a.ssrfChk())
 	slog.Debug("rest: probe-provider: key validation result",
-		"provider", body.Id, "outcome", result.Outcome,
+		"provider", ro.body.Id, "outcome", result.Outcome,
 		"probed_model", result.ProbedModel, "detail", result.RawDetail)
 
-	writeProbeResult(w, body.Id, result, models)
+	writeProbeResult(ro.w, ro.body.Id, result, models)
 }
 
 // writeProbeResult renders one ValidationResult as the probe's 200 body
