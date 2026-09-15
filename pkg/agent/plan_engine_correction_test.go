@@ -1304,3 +1304,389 @@ func TestSupervisionDeadline_PerPlanOverrideChangesTheRealDeadline(t *testing.T)
 			"so one plan's override must not have moved the other's", defaultPlan.Supervision.Attempts)
 	}
 }
+
+// --- moved from plan_engine.go tests 2026-09-15 ---
+
+// --- Finding 4a: a tail member that cannot be created must be rejected ----
+
+// TestValidateCorrection_RejectsUncreatableTailMembers pins the non-tool caller
+// class validateCorrection's own doc comment says it exists for.
+//
+// buildCorrectionApplyFunc silently `continue`s past a tail member with an
+// empty ID. For SUPERSEDE that produced the exact outcome the verb is guarded
+// against: requireSupersedePairing and RequireCriteriaInheritance both pass
+// (they inspect the REQUEST), the commit creates nothing, the call reports
+// success — and the plan is left with a discredited done outcome and no
+// replacement work at all. That is the bare discount, reached through the door
+// the two integrity rules do not cover.
+func TestValidateCorrection_RejectsUncreatableTailMembers(t *testing.T) {
+	criterion := planProseCriterion("the parser handles floats")
+
+	// Most cases run as SUPERSEDE, the verb where an uncreatable tail member is
+	// not merely wasteful but unsound: supersede DISCOUNTS a done member's
+	// evidence, so a replacement that is never created leaves the plan with the
+	// bare discount FR-030/FR-030b exist to forbid.
+	//
+	// The missing-criteria case runs BOTH verbs. Under supersede it is the
+	// vacuous-inheritance gap: RequireCriteriaInheritance returns nil early
+	// when the superseded member has no criteria of its own, so without this
+	// rule a criteria-less member could be replaced by criteria-less work and
+	// both integrity rules would report the pairing intact. Under append it is
+	// the plan_correct schema rule (criteria required on every tail member)
+	// that the engine must mirror or else be a bypass around.
+	cases := []struct {
+		name   string
+		verb   CorrectionVerb
+		member task.Task
+		// supersededHasNoCriteria seeds the superseded member WITHOUT criteria,
+		// which is what makes RequireCriteriaInheritance vacuous and lets the
+		// request reach validateCorrectionTailMembers.
+		supersededHasNoCriteria bool
+		want                    string
+	}{
+		{
+			name: "no id",
+			verb: CorrectionSupersede,
+			member: task.Task{
+				Title: "redo the float parsing", WorkspaceID: "ws", Status: task.StatusNext,
+				Criteria: []task.AcceptanceCriterion{criterion},
+			},
+			want: "has no id",
+		},
+		{
+			name: "id collides with an existing member",
+			verb: CorrectionSupersede,
+			member: task.Task{
+				ID: "m-wrong", Title: "redo the float parsing", WorkspaceID: "ws", Status: task.StatusNext,
+				Criteria: []task.AcceptanceCriterion{criterion},
+			},
+			want: "already a member of this plan",
+		},
+		{
+			name: "empty title",
+			verb: CorrectionSupersede,
+			member: task.Task{
+				ID: "m-new", Title: "   ", WorkspaceID: "ws", Status: task.StatusNext,
+				Criteria: []task.AcceptanceCriterion{criterion},
+			},
+			want: "empty title",
+		},
+		{
+			// Reaches the rule through the vacuous-inheritance gap: the
+			// superseded member for this subtest carries no criteria of its
+			// own, so RequireCriteriaInheritance passes trivially.
+			name: "no acceptance criteria (supersede, superseded member had none)",
+			verb: CorrectionSupersede,
+			member: task.Task{
+				ID: "m-new", Title: "redo the float parsing", WorkspaceID: "ws", Status: task.StatusNext,
+			},
+			supersededHasNoCriteria: true,
+			want:                    "no acceptance criteria",
+		},
+		{
+			name: "no acceptance criteria (append)",
+			verb: CorrectionAppend,
+			member: task.Task{
+				ID: "m-new", Title: "add the float parsing", WorkspaceID: "ws", Status: task.StatusNext,
+			},
+			want: "no acceptance criteria",
+		},
+	}
+
+	// The duplicate-id case needs two tail members, so it does not fit the
+	// single-member table above; it is asserted separately below.
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newCorrectionHarness(t)
+			wrong := doneMember("m-wrong")
+			if !tc.supersededHasNoCriteria {
+				wrong.Criteria = []task.AcceptanceCriterion{criterion}
+			}
+			mustSeedAwaitingCorrection(t, h, "p-badtail", wrong)
+
+			req := CorrectionRequest{
+				Verb:                tc.verb,
+				FalsifiedAssumption: "assumed the done member's float handling was correct",
+				TailMembers:         []task.Task{tc.member},
+			}
+			if tc.verb == CorrectionSupersede {
+				req.SupersededMemberID = "m-wrong"
+			}
+
+			_, err := h.pe.AppendCorrection(context.Background(), "p-badtail", supervisorCaller(), req)
+			if err == nil {
+				t.Fatalf("%s with an uncreatable sole tail member (%s) was ACCEPTED — the correction "+
+					"is recorded as applied while creating none of its work", tc.verb, tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error %q does not explain the defect (%q)", err, tc.want)
+			}
+
+			// Rejected means nothing changed: no revision counted, the plan is
+			// still parked exactly as the wake left it.
+			after, gerr := h.plans.Get("p-badtail")
+			if gerr != nil {
+				t.Fatalf("get plan: %v", gerr)
+			}
+			if after.Supervision != nil && after.Supervision.CorrectionRounds != 0 {
+				t.Errorf("a rejected correction still counted %d round(s)", after.Supervision.CorrectionRounds)
+			}
+			if after.EffectivePlanPhase() != plan.PhaseAwaitingSupervision {
+				t.Errorf("plan left at phase %s after a rejected correction; want it still parked",
+					after.EffectivePlanPhase())
+			}
+			if h.pe.isMemberSuperseded("p-badtail", "m-wrong") {
+				t.Error("the member was marked superseded by a correction that was rejected")
+			}
+		})
+	}
+}
+
+// TestValidateCorrection_RejectsDuplicateTailMemberIDs covers the two-member
+// half of the same hole: two tail members sharing one id. The FIRST is created
+// and the SECOND hits the apply func's "already exists, idempotent replay"
+// branch and is skipped — so a supersede paired with two replacement members
+// silently delivers one, and a caller that split the superseded member's
+// criteria across the pair delivers only half of them while
+// RequireCriteriaInheritance (which inspects the request, where both are
+// present) reports the pairing intact.
+func TestValidateCorrection_RejectsDuplicateTailMemberIDs(t *testing.T) {
+	h := newCorrectionHarness(t)
+	criterion := planProseCriterion("the parser handles floats")
+	wrong := doneMember("m-wrong")
+	wrong.Criteria = []task.AcceptanceCriterion{criterion}
+	mustSeedAwaitingCorrection(t, h, "p-duptail", wrong)
+
+	_, err := h.pe.AppendCorrection(context.Background(), "p-duptail", supervisorCaller(), CorrectionRequest{
+		Verb:                CorrectionSupersede,
+		SupersededMemberID:  "m-wrong",
+		FalsifiedAssumption: "assumed the done member's float handling was correct",
+		TailMembers: []task.Task{
+			{
+				ID: "m-dup", Title: "redo the float parsing", WorkspaceID: "ws", Status: task.StatusNext,
+				Criteria: []task.AcceptanceCriterion{criterion},
+			},
+			{
+				ID: "m-dup", Title: "verify the float parsing", WorkspaceID: "ws", Status: task.StatusNext,
+				Criteria: []task.AcceptanceCriterion{criterion},
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("two tail members sharing one id were ACCEPTED — only the first is created, so the " +
+			"correction delivers less replacement work than it reports")
+	}
+	if !strings.Contains(err.Error(), "more than once") {
+		t.Errorf("error %q does not explain the duplicate id", err)
+	}
+}
+
+// TestAppendCorrection_RejectsTailMemberThatFailsPlanLint is the H3 wiring
+// test: remove the plan.LintCorrection call from validateCorrection and this
+// fails.
+//
+// It replays the live correction. alpha and beta are mutually parallel (no
+// ordering between them); the appended member converges both and is not an
+// authored join member. Approve refuses exactly this shape, so a correction
+// must too.
+func TestAppendCorrection_RejectsTailMemberThatFailsPlanLint(t *testing.T) {
+	h := newCorrectionHarness(t)
+	ctx := context.Background()
+
+	mustSeedAwaitingCorrection(t, h, "p-lint", doneMember("alpha"), doneMember("beta"))
+
+	epsilon := lintTailMember("epsilon")
+	epsilon.IsJoin = false // exactly as the supervisor authored it live.
+
+	_, err := h.pe.AppendCorrection(ctx, "p-lint", supervisorCaller(), CorrectionRequest{
+		Verb:                CorrectionAppend,
+		FalsifiedAssumption: "assumed a single member could assemble both streams",
+		TailMembers:         []task.Task{epsilon},
+		TailEdges: []IntentEdge{
+			{FromTaskID: "alpha", ToTaskID: "epsilon"},
+			{FromTaskID: "beta", ToTaskID: "epsilon"},
+		},
+		Reason: "assemble the two parallel streams",
+	})
+
+	if err == nil {
+		t.Fatal("AppendCorrection accepted a tail member that converges two parallel predecessors " +
+			"with is_join=false — approve refuses this member outright, so the correction path " +
+			"must call plan-lint and refuse it too (UAT defect A, correction half)")
+	}
+	if !strings.Contains(err.Error(), "rejected by plan-lint") {
+		t.Fatalf("error = %q, want it to name plan-lint as the rejecting rule — a rejection from "+
+			"some other precondition would mean the lint still is not wired", err)
+	}
+	if !errors.Is(err, plan.ErrValidation) {
+		t.Fatalf("error %v must unwrap to plan.ErrValidation so the calling seam maps it to a 400, "+
+			"not a 500", err)
+	}
+
+	// Nothing may be half-applied: the lint runs before any intent is
+	// appended, so the plan must be exactly as the wake found it.
+	if _, gerr := h.tasks.Get("epsilon"); !errors.Is(gerr, task.ErrNotFound) {
+		t.Fatalf("the rejected tail member was created anyway (get epsilon: %v) — a rejected "+
+			"correction must leave no work behind", gerr)
+	}
+	got, err := h.plans.Get("p-lint")
+	if err != nil {
+		t.Fatalf("get plan: %v", err)
+	}
+	if got.PlanPhase != plan.PhaseAwaitingSupervision {
+		t.Fatalf("plan_phase = %q, want %q — a rejected correction must not move the plan out of "+
+			"the phase where it can still be corrected", got.PlanPhase, plan.PhaseAwaitingSupervision)
+	}
+}
+
+// TestAppendCorrection_AcceptsACorrectlyAuthoredJoinTailMember is the positive
+// control for the test above: the SAME convergence, authored correctly, must
+// commit. Without it, the test above would also pass if the engine had simply
+// started refusing every correction.
+func TestAppendCorrection_AcceptsACorrectlyAuthoredJoinTailMember(t *testing.T) {
+	h := newCorrectionHarness(t)
+	ctx := context.Background()
+
+	mustSeedAwaitingCorrection(t, h, "p-lint-ok", doneMember("alpha"), doneMember("beta"))
+
+	epsilon := lintTailMember("epsilon")
+	epsilon.IsJoin = true // authored join member, and lintTailMember gives it criteria.
+
+	if _, err := h.pe.AppendCorrection(ctx, "p-lint-ok", supervisorCaller(), CorrectionRequest{
+		Verb:                CorrectionAppend,
+		FalsifiedAssumption: "assumed the two streams needed no assembly step",
+		TailMembers:         []task.Task{epsilon},
+		TailEdges: []IntentEdge{
+			{FromTaskID: "alpha", ToTaskID: "epsilon"},
+			{FromTaskID: "beta", ToTaskID: "epsilon"},
+		},
+		Reason: "assemble the two parallel streams",
+	}); err != nil {
+		t.Fatalf("a correctly authored join member must be accepted: %v", err)
+	}
+	if _, err := h.tasks.Get("epsilon"); err != nil {
+		t.Fatalf("the accepted tail member was not created: %v", err)
+	}
+}
+
+// TestAppendCorrection_PreExistingViolationDoesNotBlockTheCorrection is the
+// engine-level H2 test: the park promises that a stalled plan can be
+// corrected, and a plan carrying a violation it cannot repair must not be
+// locked out of that promise.
+//
+// gamma converges alpha and beta without being a join member — a violation
+// that predates this correction, that the correction does not mention, and
+// that no correction verb can repair (supersede requires the target be `done`
+// and would replace it, not fix it). Linting the whole projected set rejected
+// the correction for gamma; every retry failed identically; the supervision
+// ladder exhausted and the plan ended failed(supervision_unavailable).
+func TestAppendCorrection_PreExistingViolationDoesNotBlockTheCorrection(t *testing.T) {
+	h := newCorrectionHarness(t)
+	ctx := context.Background()
+
+	gamma := doneMember("gamma")
+	gamma.BlockedBy = []string{"alpha", "beta"}
+	gamma.IsJoin = false
+	mustSeedAwaitingCorrection(t, h, "p-broken", doneMember("alpha"), doneMember("beta"), gamma)
+
+	// Precondition, asserted rather than assumed: the plan really is carrying
+	// a violation, so acceptance below is the diff working and not an empty
+	// member set or a mis-built DAG.
+	members, err := h.tasks.List(task.Filter{PlanID: "p-broken"})
+	if err != nil {
+		t.Fatalf("list members: %v", err)
+	}
+	seeded, err := h.plans.Get("p-broken")
+	if err != nil {
+		t.Fatalf("get plan: %v", err)
+	}
+	base := plan.Lint(seeded, members)
+	if base == nil || base.Violations[0].Kind != plan.LintJoinless {
+		t.Fatalf("precondition: the seeded plan must already fail plan-lint with a "+
+			"join_less_convergence, got %v", base)
+	}
+
+	if _, err := h.pe.AppendCorrection(ctx, "p-broken", supervisorCaller(), CorrectionRequest{
+		Verb:                CorrectionAppend,
+		FalsifiedAssumption: "assumed the assembled output was complete",
+		TailMembers:         []task.Task{lintTailMember("delta")},
+		TailEdges:           []IntentEdge{{FromTaskID: "gamma", ToTaskID: "delta"}},
+		Reason:              "add the missing follow-up work",
+	}); err != nil {
+		t.Fatalf("a correction that introduces no new violation must be accepted on a plan that "+
+			"already carries one; rejecting it names a member the correction never mentions and "+
+			"locks the plan out of the very mechanism the park exists to offer: %v", err)
+	}
+	if _, err := h.tasks.Get("delta"); err != nil {
+		t.Fatalf("the accepted tail member was not created: %v", err)
+	}
+}
+
+// --- FR-029: the phase gate --------------------------------------------------
+
+// TestAppendCorrection_AcceptsStalledPhase pins the widened gate. Under the
+// pre-ADR-055 gate (equality with the parked phase) this fails 100% of the
+// time: a stall wake asked the adjudicator for a diagnosis and then rejected
+// every correction that diagnosis produced, leaving a stalled plan with no
+// corrector at all and no exit but Stop or idle expiry.
+func TestAppendCorrection_AcceptsStalledPhase(t *testing.T) {
+	h := newTestPlanEngine(t)
+	stalled := plan.PhaseStalled
+	mustCreatePlan(t, h.plans, &plan.Plan{
+		ID: "p1", Title: "p1", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateRunning,
+		PlanPhase:    stalled,
+		HandoverText: stallHandoverNotePrefix + "nothing is dispatchable",
+	})
+	mustCreateTask(t, h.tasks, &task.Task{
+		Title: "member", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusDone,
+	})
+
+	res, err := h.pe.AppendCorrection(context.Background(), "p1",
+		supervisorCaller(),
+		CorrectionRequest{
+			Verb:                CorrectionAppend,
+			FalsifiedAssumption: "the blocker would resolve itself",
+			TailMembers: []task.Task{{
+				ID: "tail-1", Title: "unblock it", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusNext,
+				Criteria: []task.AcceptanceCriterion{planProseCriterion("the blocker is resolved")},
+			}},
+		})
+	if err != nil {
+		t.Fatalf("a correction on a STALLED plan must be applied, got error: %v", err)
+	}
+	if res == nil || res.RevisionID == "" {
+		t.Fatal("expected a recorded revision for the applied correction")
+	}
+
+	got, err := h.plans.Get("p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PlanPhase != plan.PhaseDispatching {
+		t.Fatalf("plan_phase = %q, want dispatching after an applied correction", got.PlanPhase)
+	}
+	if strings.HasPrefix(got.HandoverText, stallHandoverNotePrefix) {
+		t.Fatalf("the stall note must be cleared by the correction, got %q", got.HandoverText)
+	}
+	if got.Supervision == nil || got.Supervision.CorrectionRounds != 1 {
+		t.Fatalf("supervision.correction_rounds must be 1 after one applied correction, got %+v", got.Supervision)
+	}
+
+	// A plan OUTSIDE the supervision-eligible set is still rejected — the gate
+	// widened to a set, it did not become "any phase".
+	dispatching := plan.PhaseDispatching
+	mustCreatePlan(t, h.plans, &plan.Plan{
+		ID: "p2", Title: "p2", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateRunning,
+		PlanPhase: dispatching,
+	})
+	if _, err := h.pe.AppendCorrection(context.Background(), "p2",
+		supervisorCaller(),
+		CorrectionRequest{
+			Verb:                CorrectionAppend,
+			FalsifiedAssumption: "x",
+			TailMembers:         []task.Task{{ID: "t", Title: "t", WorkspaceID: "ws", PlanID: "p2", Status: task.StatusNext}},
+		}); err == nil {
+		t.Fatal("a correction on a DISPATCHING plan must still be rejected")
+	}
+}

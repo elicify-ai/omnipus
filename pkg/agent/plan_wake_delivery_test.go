@@ -4,33 +4,6 @@
 
 package agent
 
-// plan_wake_delivery_test.go is the ADR-055 regression suite for the plan-wake
-// delivery path (FR-012c/FR-012d/FR-016b/FR-016c/FR-021/FR-022/FR-029/FR-044).
-//
-// ⚠ EVERY test here asserts an OUTCOME, never a mechanism. That is the whole
-// point of the file. The defect it exists to prevent survived four reviews
-// because the in-package convention was a fake notifier that CAPTURES
-// AsyncNotifyEvents — a recorder sitting three hops upstream of the guard that
-// discarded every one of them. "Notify was called with AgentID=plansupervisor"
-// was green for years while no agent turn had ever run for any plan wake.
-//
-// So, concretely, in this file:
-//
-//   - "the wake reached the supervisor" means AN LLM CALL WAS MADE ON THE
-//     SUPERVISOR'S OWN PROVIDER and its transcript session has entries — not
-//     that an event was recorded, not that an id was written to the plan.
-//   - "stop halts the supervision turn" means THE TURN RETURNED, observed from
-//     inside the provider call — not that a session id appeared in a cancel
-//     fan-out set. The pre-existing fakeSessionCanceller records the string it
-//     is handed and returns (true, nil) unconditionally, so a set-membership
-//     assertion is green against a control that cancels nothing. It is banned
-//     here.
-//   - "an origin-less plan is healthy" means ITS ATTEMPT COUNTER DID NOT MOVE
-//     and its failed_reason is not supervision_unavailable — the limb that
-//     catches a naive fix which routes an empty origin through the notifier's
-//     empty-destination rejection and escalates a perfectly healthy UI-created
-//     plan to "the supervisor is unavailable".
-
 import (
 	"context"
 	"fmt"
@@ -724,74 +697,6 @@ func TestStopPlan_HaltsTheInFlightSupervisionTurn(t *testing.T) {
 			"it finished on its own rather than being halted by Stop")
 	}
 	close(h.supervisor.gate)
-}
-
-// --- FR-029: the phase gate --------------------------------------------------
-
-// TestAppendCorrection_AcceptsStalledPhase pins the widened gate. Under the
-// pre-ADR-055 gate (equality with the parked phase) this fails 100% of the
-// time: a stall wake asked the adjudicator for a diagnosis and then rejected
-// every correction that diagnosis produced, leaving a stalled plan with no
-// corrector at all and no exit but Stop or idle expiry.
-func TestAppendCorrection_AcceptsStalledPhase(t *testing.T) {
-	h := newTestPlanEngine(t)
-	stalled := plan.PhaseStalled
-	mustCreatePlan(t, h.plans, &plan.Plan{
-		ID: "p1", Title: "p1", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateRunning,
-		PlanPhase:    stalled,
-		HandoverText: stallHandoverNotePrefix + "nothing is dispatchable",
-	})
-	mustCreateTask(t, h.tasks, &task.Task{
-		Title: "member", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusDone,
-	})
-
-	res, err := h.pe.AppendCorrection(context.Background(), "p1",
-		supervisorCaller(),
-		CorrectionRequest{
-			Verb:                CorrectionAppend,
-			FalsifiedAssumption: "the blocker would resolve itself",
-			TailMembers: []task.Task{{
-				ID: "tail-1", Title: "unblock it", WorkspaceID: "ws", PlanID: "p1", Status: task.StatusNext,
-				Criteria: []task.AcceptanceCriterion{planProseCriterion("the blocker is resolved")},
-			}},
-		})
-	if err != nil {
-		t.Fatalf("a correction on a STALLED plan must be applied, got error: %v", err)
-	}
-	if res == nil || res.RevisionID == "" {
-		t.Fatal("expected a recorded revision for the applied correction")
-	}
-
-	got, err := h.plans.Get("p1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.PlanPhase != plan.PhaseDispatching {
-		t.Fatalf("plan_phase = %q, want dispatching after an applied correction", got.PlanPhase)
-	}
-	if strings.HasPrefix(got.HandoverText, stallHandoverNotePrefix) {
-		t.Fatalf("the stall note must be cleared by the correction, got %q", got.HandoverText)
-	}
-	if got.Supervision == nil || got.Supervision.CorrectionRounds != 1 {
-		t.Fatalf("supervision.correction_rounds must be 1 after one applied correction, got %+v", got.Supervision)
-	}
-
-	// A plan OUTSIDE the supervision-eligible set is still rejected — the gate
-	// widened to a set, it did not become "any phase".
-	dispatching := plan.PhaseDispatching
-	mustCreatePlan(t, h.plans, &plan.Plan{
-		ID: "p2", Title: "p2", WorkspaceID: "ws", OwnerAgentID: "owner", State: plan.StateRunning,
-		PlanPhase: dispatching,
-	})
-	if _, err := h.pe.AppendCorrection(context.Background(), "p2",
-		supervisorCaller(),
-		CorrectionRequest{
-			Verb:                CorrectionAppend,
-			FalsifiedAssumption: "x",
-			TailMembers:         []task.Task{{ID: "t", Title: "t", WorkspaceID: "ws", PlanID: "p2", Status: task.StatusNext}},
-		}); err == nil {
-		t.Fatal("a correction on a DISPATCHING plan must still be rejected")
-	}
 }
 
 // --- FR-021/FR-022: the deadline and the ceiling -----------------------------
