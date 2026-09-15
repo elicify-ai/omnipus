@@ -309,6 +309,13 @@ func resolveBoolWithDefault(p *bool, defaultVal bool) bool {
 	return *p
 }
 
+// registerSharedToolsState carries the shared state of registerSharedTools across its stages.
+type registerSharedToolsState struct {
+	al              *AgentLoop
+	registry        *AgentRegistry
+	liveBrowserKeys map[string]bool
+}
+
 // registerSharedTools registers tools that are shared across all agents.
 func registerSharedTools(
 	al *AgentLoop,
@@ -317,6 +324,8 @@ func registerSharedTools(
 	registry *AgentRegistry,
 	provider providers.LLMProvider,
 ) {
+	rs := &registerSharedToolsState{al: al, registry: registry}
+
 	allowReadPaths := buildAllowReadPatterns(cfg)
 
 	// FR-026b. Browser managers are per BROWSING KEY, and N agents commonly
@@ -326,10 +335,10 @@ func registerSharedTools(
 	// rebuild the same browser five times on every Settings save, and the
 	// fifth pass would Release a manager the fourth had just installed.
 	seenBrowserKeys := make(map[string]bool)
-	liveBrowserKeys := make(map[string]bool)
+	rs.liveBrowserKeys = make(map[string]bool)
 
-	for _, agentID := range registry.ListAgentIDs() {
-		agent, ok := registry.GetAgent(agentID)
+	for _, agentID := range rs.registry.ListAgentIDs() {
+		agent, ok := rs.registry.GetAgent(agentID)
 		if !ok {
 			continue
 		}
@@ -364,7 +373,7 @@ func registerSharedTools(
 			BaiduSearchMaxResults: cfg.Tools.Web.BaiduSearch.MaxResults,
 			BaiduSearchEnabled:    cfg.Tools.Web.BaiduSearch.Enabled,
 			Proxy:                 cfg.Tools.Web.Proxy,
-			SSRFChecker:           al.ssrfChecker, // SEC-24: nil when SSRF disabled
+			SSRFChecker:           rs.al.ssrfChecker, // SEC-24: nil when SSRF disabled
 		})
 		if err != nil {
 			logger.ErrorCF("agent", "Failed to create web search tool", map[string]any{"error": err.Error()})
@@ -404,7 +413,7 @@ func registerSharedTools(
 		})
 		// Re-apply the stored resolver: this runs on every reload, and the
 		// MessageTool above is brand new each time (ADR-065).
-		if own := al.ChannelOwnership(); own != nil {
+		if own := rs.al.ChannelOwnership(); own != nil {
 			messageTool.SetChannelOwnership(own)
 		}
 		// RegisterReplacing, not Register: #278 hardened Register to KEEP the
@@ -423,7 +432,7 @@ func registerSharedTools(
 		// re-wire pass; an unwired registry fails closed inside Execute with
 		// a clear "ask conversationally" error, never a silent park.
 		agent.Tools.RegisterReplacing(tools.NewAskUserQuestionTool(func() tools.AskUserQuestionRegistry {
-			return al.getAskUserRegistry()
+			return rs.al.getAskUserRegistry()
 		}))
 
 		// set_goal (ADR-088 D2, work-first-goal-flow-spec FR-004..FR-006):
@@ -433,11 +442,11 @@ func registerSharedTools(
 		// no external gateway wiring needed, unlike AskUserQuestion's
 		// registry, since goal state lives in the SAME session store this
 		// package already owns.
-		wireGoalToolsForAgent(al, agent)
+		wireGoalToolsForAgent(rs.al, agent)
 
 		// Handoff tools — always registered (ScopeCore).
 		getRegistryReader := func() tools.AgentRegistryReader {
-			return al.GetRegistry()
+			return rs.al.GetRegistry()
 		}
 		onHandoffFrontend := func(evt tools.HandoffEvent) {
 			// The next turn resolves the active agent via sessionScopeKey(msg):
@@ -457,9 +466,9 @@ func registerSharedTools(
 			}
 			for _, k := range keys {
 				if evt.AgentID == "" {
-					al.sessionActiveAgent.Delete(k)
+					rs.al.sessionActiveAgent.Delete(k)
 				} else {
-					al.sessionActiveAgent.Store(k, evt.AgentID)
+					rs.al.sessionActiveAgent.Store(k, evt.AgentID)
 				}
 			}
 			// Record the tool's own toDefault intent, keyed the same way
@@ -467,7 +476,7 @@ func registerSharedTools(
 			// the WS agent_switched frame builder can read it back via the
 			// exact evtSID it already uses to look up the active agent.
 			if evt.SessionID != "" {
-				al.lastSwitchToDefault.Store("session:"+evt.SessionID, evt.ToDefault)
+				rs.al.lastSwitchToDefault.Store("session:"+evt.SessionID, evt.ToDefault)
 			}
 		}
 		// The handoff target's window is the one its own instance resolved
@@ -476,7 +485,7 @@ func registerSharedTools(
 		// one or an unknown window yields 0: the handoff then transfers no
 		// recent context and the summary line names what was left out.
 		getContextWindow := func(targetAgentID string) int {
-			liveRegistry := al.GetRegistry()
+			liveRegistry := rs.al.GetRegistry()
 			if liveRegistry == nil {
 				return 0
 			}
@@ -488,7 +497,7 @@ func registerSharedTools(
 			return window
 		}
 		getDefaultAgent := func() string {
-			currentCfg := al.GetConfig()
+			currentCfg := rs.al.GetConfig()
 			if currentCfg.Agents.Defaults.DefaultAgentID != "" {
 				return currentCfg.Agents.Defaults.DefaultAgentID
 			}
@@ -505,7 +514,7 @@ func registerSharedTools(
 			// so reading the captured parameter would resolve the default
 			// against a stale roster. The name difference is deliberate — it
 			// used to shadow, which read as an accident rather than intent.
-			if liveRegistry := al.GetRegistry(); liveRegistry != nil {
+			if liveRegistry := rs.al.GetRegistry(); liveRegistry != nil {
 				if def := liveRegistry.GetDefaultAgent(); def != nil {
 					return def.ID
 				}
@@ -514,7 +523,7 @@ func registerSharedTools(
 		}
 		// sharedStore is the shared session store; tools handle a nil store by
 		// skipping transcript ops (nil only occurs in tests without a store).
-		sharedStore := al.GetSessionStore()
+		sharedStore := rs.al.GetSessionStore()
 		agent.Tools.RegisterReplacing(tools.NewSwitchAgentTool(getRegistryReader, sharedStore, getContextWindow, getDefaultAgent, onHandoffFrontend))
 
 		// Send file tool (outbound media via MediaStore — store injected later by SetMediaStore).
@@ -597,12 +606,12 @@ func registerSharedTools(
 			// gateway, not per agent. See rootDelegationAdmittingSpawner's
 			// doc comment (admission.go) for why wrapping SpawnSubTurn here
 			// is the correct choke point for both sync and async delegation.
-			delegateTool.SetSpawner(newRootDelegationAdmittingSpawner(NewSubTurnSpawner(al), al.rootDelegationAdmission, agentID))
+			delegateTool.SetSpawner(newRootDelegationAdmittingSpawner(NewSubTurnSpawner(rs.al), rs.al.rootDelegationAdmission, agentID))
 			// Retain it so Close() can drain its background delegations before
 			// the stores they write through are torn down. See delegateTools.
-			al.delegateToolsMu.Lock()
-			al.delegateTools = append(al.delegateTools, delegateTool)
-			al.delegateToolsMu.Unlock()
+			rs.al.delegateToolsMu.Lock()
+			rs.al.delegateTools = append(rs.al.delegateTools, delegateTool)
+			rs.al.delegateToolsMu.Unlock()
 			// FR-196 kill switch — wire it HERE, at construction, not only in
 			// SetSessionMessagingStores' later re-wire. This is a PER-AGENT
 			// DelegateTool: the session_messaging_wire.go re-wire walks the
@@ -612,7 +621,7 @@ func registerSharedTools(
 			// whole gated action set — cancel/steer/respond/inbox/inbox_ack/
 			// follow_up/peek — for every agent. The closure re-reads config per
 			// call, so a live kill-switch flip is still honored.
-			delegateTool.SetSessionMessagingEnabled(al.sessionMessagingEnabledLive())
+			delegateTool.SetSessionMessagingEnabled(rs.al.sessionMessagingEnabledLive())
 			// R2-MAJ-015 — the operator kill switch for delegate's FR-015
 			// fail-closed parent-agent-id guard
 			// (tools.delegate.require_parent_agent_id). Same live-closure
@@ -625,7 +634,7 @@ func registerSharedTools(
 			// the gateway assigns AFTER tool wiring means frozen at nil while
 			// registration still looks correct.
 			delegateTool.SetRequireParentAgentID(func() bool {
-				return al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID()
+				return rs.al.GetConfig().Tools.Delegate.EffectiveRequireParentAgentID()
 			})
 			// W2: action:"status" live-progress snapshot for a running native
 			// task. sharedStore mirrors the exact store wiring the
@@ -660,8 +669,8 @@ func registerSharedTools(
 			// typed-nil guard is needed here (unlike sharedStore above):
 			// al is the *AgentLoop this tool is being registered on, never
 			// nil at this point in construction.
-			delegateTool.SetProgressReader(al)
-			delegateTool.SetAgentRegistry(func() tools.DelegateAgentRegistry { return al.GetRegistry() })
+			delegateTool.SetProgressReader(rs.al)
+			delegateTool.SetAgentRegistry(func() tools.DelegateAgentRegistry { return rs.al.GetRegistry() })
 			// FR-028/BDD-29 (ADR-057 U14): wire the shared, process-wide
 			// SessionManager so `delegate action="cancel"` actually kills the
 			// TARGET child's own background bash/exec shells, not just its
@@ -693,7 +702,7 @@ func registerSharedTools(
 					currentAgentID,
 					cfg.Agents.Defaults,
 					config.DelegationModeBackground,
-					agentExistsChecker(registry),
+					agentExistsChecker(rs.registry),
 				),
 			)
 			// FR-6.2: full-policy gate for the await (async=false) mode. Uses
@@ -706,7 +715,7 @@ func registerSharedTools(
 				// ForDelegate bakes in exempt=false: same reasoning as the background
 				// gate — a self-targeted await delegate() is real delegation, graph-gated.
 				buildDelegationDenyCheckerForDelegate(
-					currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait, agentExistsChecker(registry),
+					currentAgentID, cfg.Agents.Defaults, config.DelegationModeAwait, agentExistsChecker(rs.registry),
 				),
 			)
 			// #477 / FR-D9-FR-D10: thread the SAME effective depth cap the
@@ -740,15 +749,15 @@ func registerSharedTools(
 		// gateway's later SetSessionMessagingStores call re-runs this wiring
 		// with the real stores, mirroring SetPlanStore's late-binding
 		// discipline exactly. Safe on hot-reload (idempotent re-wire).
-		al.wireSessionMessagingForAgent(agent)
+		rs.al.wireSessionMessagingForAgent(agent)
 
 		// Task tools — require a task store (available after first NewAgentLoop call).
-		if al.taskStore != nil {
+		if rs.al.taskStore != nil {
 			currentAgentID := agentID
 
-			agent.Tools.RegisterReplacing(tools.NewTaskListTool(al.taskStore))
+			agent.Tools.RegisterReplacing(tools.NewTaskListTool(rs.al.taskStore))
 
-			taskCreate := tools.NewTaskCreateTool(al.taskStore)
+			taskCreate := tools.NewTaskCreateTool(rs.al.taskStore)
 			// Resolve the real default workspace (is_default ULID) when a
 			// chat-delegated task has no workspace bound to the turn — never the
 			// literal "default" (which would land it in an invisible workspace).
@@ -763,11 +772,11 @@ func registerSharedTools(
 			// per-agent loop below re-wires this tool with the real store once
 			// it exists, exactly like wirePlanToolsForAgent's own create_plan/
 			// execute_plan late-binding discipline.
-			taskCreate.SetPlanStore(al.GetPlanStore())
+			taskCreate.SetPlanStore(rs.al.GetPlanStore())
 			// Founder decision 2026-09-14 (D-D/D-E): the paired goal record an
 			// agent-created task gets carries the LIVE Settings -> Performance
 			// goal try limit, read at create time — not the shipped default.
-			taskCreate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(al) })
+			taskCreate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(rs.al) })
 			// ADR-037: the legacy boolean delegateCheck (SetDelegateChecker,
 			// backed by config.ResolveDelegationTo) is retired — the field it
 			// read no longer exists. The graph-based deny checker below is the
@@ -780,7 +789,7 @@ func registerSharedTools(
 					currentAgentID,
 					cfg.Agents.Defaults,
 					config.DelegationModeTask,
-					agentExistsChecker(registry),
+					agentExistsChecker(rs.registry),
 				),
 			)
 			// Task-mode recursion bound: reject a task_create issued from within a
@@ -791,14 +800,14 @@ func registerSharedTools(
 			taskCreate.SetMaxDelegationDepth(maxTaskDepth)
 			// Founder decision 2026-09-15: refuse assigning a task to an agent
 			// that cannot finish it (task_assignee_readiness.go).
-			taskCreate.SetAssigneeReadinessChecker(al.TaskAssigneeCannotFinish)
+			taskCreate.SetAssigneeReadinessChecker(rs.al.TaskAssigneeCannotFinish)
 			// D2 rule 5 (FR-017/052, review r1 major M5): reject an all-check
 			// criteria create outright when the assignee's effective bash
 			// policy is deny or ask — structurally unsatisfiable, mirrors
 			// judge.go's runMachineCheck policy resolution exactly (same
 			// registry, same EffectiveToolPolicy call, ScopeCore).
 			taskCreate.SetBashPolicyChecker(func(assigneeAgentID string) (policy string, ok bool) {
-				agentInst, found := al.GetRegistry().GetAgent(assigneeAgentID)
+				agentInst, found := rs.al.GetRegistry().GetAgent(assigneeAgentID)
 				if !found || agentInst == nil {
 					return "", false
 				}
@@ -813,32 +822,32 @@ func registerSharedTools(
 			// validateTaskAgentID) is retired now that the engine gap it
 			// papered over is closed.
 			taskCreate.SetOnCreate(func(entity *task.Task) {
-				al.EmitTaskStatusChanged(TaskStatusChangedPayload{
+				rs.al.EmitTaskStatusChanged(TaskStatusChangedPayload{
 					TaskID:    entity.ID,
 					Status:    string(entity.Status),
 					SessionID: "task:" + entity.ID,
 					AgentID:   entity.AgentID,
 				})
 				// Register the task's time trigger (no-op for manual/heartbeat).
-				al.NotifyTaskUpserted(entity)
+				rs.al.NotifyTaskUpserted(entity)
 			})
 			agent.Tools.RegisterReplacing(taskCreate)
 
-			taskUpdate := tools.NewTaskUpdateTool(al.taskStore)
+			taskUpdate := tools.NewTaskUpdateTool(rs.al.taskStore)
 			// Same live goal try limit as taskCreate above, for the goal record
 			// update_task creates when a legacy task gets criteria/dod.
-			taskUpdate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(al) })
-			taskUpdate.SetAssigneeReadinessChecker(al.TaskAssigneeCannotFinish)
+			taskUpdate.SetGoalMaxRoundsFn(func() int { return goalTryLimit(rs.al) })
+			taskUpdate.SetAssigneeReadinessChecker(rs.al.TaskAssigneeCannotFinish)
 			taskUpdate.SetOnComplete(func(t *task.Task) {
-				if al.taskExecutor != nil {
-					al.taskExecutor.onTaskComplete(t)
+				if rs.al.taskExecutor != nil {
+					rs.al.taskExecutor.onTaskComplete(t)
 				}
 				// A terminal update removes the task's trigger job UNLESS the
 				// trigger repeats (recurring/every), whose series survives past a
 				// per-run terminal status (OnTaskUpserted, pkg/agent/task_trigger.go);
 				// a non-terminal update re-syncs it (a no-op if it is already
 				// correctly armed for the current trigger content).
-				al.NotifyTaskUpserted(t)
+				rs.al.NotifyTaskUpserted(t)
 			})
 			// ADR-037: legacy SetDelegateChecker retired here too — see the
 			// taskCreate comment above.
@@ -851,7 +860,7 @@ func registerSharedTools(
 					currentAgentID,
 					cfg.Agents.Defaults,
 					config.DelegationModeTask,
-					agentExistsChecker(registry),
+					agentExistsChecker(rs.registry),
 				),
 			)
 			// Same rationale as taskCreate above: the subagent_3p reassignment
@@ -859,14 +868,14 @@ func registerSharedTools(
 			// external-CLI worker's task run through runExternalCLISubTurn.
 			agent.Tools.RegisterReplacing(taskUpdate)
 
-			setTodos := tools.NewSetTodosTool(al.taskStore)
+			setTodos := tools.NewSetTodosTool(rs.al.taskStore)
 			setTodos.SetHome(filepath.Dir(cfg.AgentHomeBasePath()))
 			agent.Tools.RegisterReplacing(setTodos)
-			agent.Tools.RegisterReplacing(tools.NewTaskDeleteTool(al.taskStore))
+			agent.Tools.RegisterReplacing(tools.NewTaskDeleteTool(rs.al.taskStore))
 			agent.Tools.RegisterReplacing(tools.NewAgentListTool(func() []tools.AgentInfo {
 				var infos []tools.AgentInfo
-				for _, id := range registry.ListAgentIDs() {
-					if a, ok := registry.GetAgent(id); ok {
+				for _, id := range rs.registry.ListAgentIDs() {
+					if a, ok := rs.registry.GetAgent(id); ok {
 						// ADR-049 D3: System Agents (the Judge) are excluded from
 						// list_agents — it is the delegation picker ("resolve agent
 						// names to IDs before delegating"), and a System Agent is
@@ -900,13 +909,13 @@ func registerSharedTools(
 		// the accessor (not the bare al.planStore field) since SetPlanStore
 		// writes it under al.mu — a bare field read here would race that
 		// writer (7-reviewer gate NIT).
-		al.wirePlanToolsForAgent(agent, al.GetPlanStore())
+		rs.al.wirePlanToolsForAgent(agent, rs.al.GetPlanStore())
 
 		// list_jobs (the unified background-job roster). Separate from the
 		// plan surface above because it spans plans, standalone tasks AND
 		// delegated sessions, and because it needs no late re-bind — every
 		// store is read through a live adapter (see wireJobRosterForAgent).
-		al.wireJobRosterForAgent(agent)
+		rs.al.wireJobRosterForAgent(agent)
 
 		// Browser automation tools (US-4/US-6/US-7).
 		// Tools are always registered; whether an agent can actually invoke them
@@ -1063,8 +1072,8 @@ func registerSharedTools(
 				// but carrying its own exception. The SSRF-disabled branch already
 				// mints a fresh per-agent checker, so it takes the exception directly.
 				var browserSSRF *security.SSRFChecker
-				if al.ssrfChecker != nil {
-					browserSSRF = al.ssrfChecker.CloneWithGatewayOrigin("localhost", cfg.Gateway.Port)
+				if rs.al.ssrfChecker != nil {
+					browserSSRF = rs.al.ssrfChecker.CloneWithGatewayOrigin("localhost", cfg.Gateway.Port)
 				} else {
 					browserSSRF = security.NewSSRFChecker(nil)
 					browserSSRF.AllowGatewayOrigin("localhost", cfg.Gateway.Port)
@@ -1101,9 +1110,9 @@ func registerSharedTools(
 				// ApplyRuntimeConfig warn-logs those so an operator isn't
 				// silently misled. CRIT-002 stays intact: the coordinator is
 				// never rebuilt on reload.
-				al.mu.Lock()
-				if al.browserPool == nil {
-					al.browserPool = browser.NewBrowserPool(al.homePath, browserCfg)
+				rs.al.mu.Lock()
+				if rs.al.browserPool == nil {
+					rs.al.browserPool = browser.NewBrowserPool(rs.al.homePath, browserCfg)
 					// FR-042a: before this gateway launches anything, settle
 					// what a PREVIOUS run left behind — stale markers cleared,
 					// orphaned Chromes terminated, keys another live gateway
@@ -1111,12 +1120,12 @@ func registerSharedTools(
 					// by the marker's pid; see ReconcileMarkers for why that
 					// distinction is what stops one gateway killing another's
 					// browser.
-					if refused := al.browserPool.ReconcileMarkers(); len(refused) > 0 {
+					if refused := rs.al.browserPool.ReconcileMarkers(); len(refused) > 0 {
 						logger.WarnCF("agent", "another gateway owns some workspaces' browsers — this one will not start them",
 							map[string]any{"workspaces": refused})
 					}
 				} else {
-					al.browserPool.ApplyRuntimeConfig(browserCfg)
+					rs.al.browserPool.ApplyRuntimeConfig(browserCfg)
 				}
 				// FR-034: push tools.browser.actionability_gate into the
 				// actionability gate's single chokepoint. It runs on the
@@ -1134,8 +1143,8 @@ func registerSharedTools(
 				// tool safe — it substitutes registered credential plaintexts
 				// and does nothing for arbitrary form values.
 				browser.SetSensitiveDataReplacer(cfg.SensitiveDataReplacer())
-				pool := al.browserPool
-				al.mu.Unlock()
+				pool := rs.al.browserPool
+				rs.al.mu.Unlock()
 				// fs-workspace: browser tools (browser_screenshot) get agent.Home +
 				// RestrictToWorkspace so screenshot paths resolve through the same
 				// workspace root as the other file tools (FR-009).
@@ -1145,20 +1154,20 @@ func registerSharedTools(
 				// whichever agent it was registered under — which is the
 				// reported defect ADR-075 §1.1 records.
 				if regErr := browser.RegisterTools(
-					agent.Tools, al.browserResolver(), evaluateEnabled,
+					agent.Tools, rs.al.browserResolver(), evaluateEnabled,
 					agent.Home, cfg.Agents.Defaults.RestrictToWorkspace,
 				); regErr != nil {
 					logger.ErrorCF("agent", "Failed to register browser tools",
 						map[string]any{"error": regErr.Error(), "agent_id": agentID})
 				} else {
-					al.mu.Lock()
-					al.browserRegisteredAgents[agentID] = true
+					rs.al.mu.Lock()
+					rs.al.browserRegisteredAgents[agentID] = true
 					// The factory carries THIS reload's config + SSRF checker,
 					// so a lazily-created manager gets the operator's current
 					// security state rather than boot-time state.
 					cfgSnapshot := browserCfg
 					ssrfSnapshot := browserSSRF
-					al.browserFactory = func(key browser.BrowsingKey) (*browser.BrowserManager, error) {
+					rs.al.browserFactory = func(key browser.BrowsingKey) (*browser.BrowserManager, error) {
 						m, err := browser.NewBrowserManager(cfgSnapshot, ssrfSnapshot)
 						if err != nil {
 							return nil, err
@@ -1166,8 +1175,8 @@ func registerSharedTools(
 						m.AttachPool(pool, key)
 						return m, nil
 					}
-					factory := al.browserFactory
-					al.mu.Unlock()
+					factory := rs.al.browserFactory
+					rs.al.mu.Unlock()
 
 					// FR-026b: one register/release cycle per BROWSING KEY per
 					// reload, not per agent. N agents on one workspace resolve
@@ -1182,11 +1191,11 @@ func registerSharedTools(
 						logger.DebugCF("agent", "no browser for this agent yet — it is not rooted in one workspace",
 							map[string]any{"agent_id": agentID, "reason": keyErr.Error()})
 					case seenBrowserKeys[key.String()]:
-						liveBrowserKeys[key.String()] = true
+						rs.liveBrowserKeys[key.String()] = true
 					default:
 						seenBrowserKeys[key.String()] = true
-						liveBrowserKeys[key.String()] = true
-						al.rewireBrowserManagerForKey(key, factory)
+						rs.liveBrowserKeys[key.String()] = true
+						rs.al.rewireBrowserManagerForKey(key, factory)
 					}
 				}
 			}
@@ -1219,7 +1228,7 @@ func registerSharedTools(
 		// discard a same-name newcomer, so plain Register would keep the
 		// stale instance. See docs/internal/false-green-patterns.md §5.
 		if agent.Sessions != nil {
-			agent.Tools.RegisterReplacing(NewRecallConversationTool(agent.Sessions, al))
+			agent.Tools.RegisterReplacing(NewRecallConversationTool(agent.Sessions, rs.al))
 		} else {
 			logger.WarnCF("agent",
 				"recall_conversation not registered — agent.Sessions is nil",
@@ -1284,7 +1293,7 @@ func registerSharedTools(
 						if callerID == "" {
 							callerID = capturedAgentID
 						}
-						callerAgent, ok := al.registry.GetAgent(callerID)
+						callerAgent, ok := rs.al.registry.GetAgent(callerID)
 						if !ok {
 							return false, name + " — agent not found"
 						}
@@ -1295,7 +1304,7 @@ func registerSharedTools(
 						// nothing. Every policy-denied load below goes through
 						// this one closure so the audit row is never forgotten.
 						deniedByPolicy := func() (bool, string) {
-							al.emitToolLoadPolicyDenyAudit(ctx, callerID, name)
+							rs.al.emitToolLoadPolicyDenyAudit(ctx, callerID, name)
 							return false, name + " — denied by this agent's policy"
 						}
 						allAgentTools := callerAgent.Tools.GetAll()
@@ -1402,7 +1411,7 @@ func registerSharedTools(
 						if callerID == "" {
 							callerID = capturedAgentID
 						}
-						callerAgent, ok := al.registry.GetAgent(callerID)
+						callerAgent, ok := rs.al.registry.GetAgent(callerID)
 						if !ok {
 							// No agent — reject everything so the caller can surface the error.
 							rejected := make([]string, 0, len(names))
@@ -1444,7 +1453,7 @@ func registerSharedTools(
 							tools.ToolTranscriptSessionID(ctx),
 							tools.ToolSessionKey(ctx),
 						)
-						al.markToolsLoaded(bucket, loadedOK)
+						rs.al.markToolsLoaded(bucket, loadedOK)
 
 						// ADR-071 §4.3.1(a) FR-038/FR-038a: record a pending
 						// search-follow-up entry for each newly-promoted name,
@@ -1454,7 +1463,7 @@ func registerSharedTools(
 						// it would reintroduce the false-positive floor r3/r4
 						// diagnosed and corrected (see the ADR's MIN-001 note).
 						if tools.IsSearchPromotion(ctx) {
-							al.recordPendingSearchPromotions(bucket, loadedOK)
+							rs.al.recordPendingSearchPromotions(bucket, loadedOK)
 						}
 						return schemas, rejected
 					},
@@ -1499,16 +1508,16 @@ func registerSharedTools(
 							callerID = capturedAgentID
 						}
 						workspaceID := tools.ToolWorkspaceID(ctx)
-						callerAgent, ok := al.registry.GetAgent(callerID)
+						callerAgent, ok := rs.al.registry.GetAgent(callerID)
 						if !ok {
-							audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+							audit.EmitSkillCall(rs.al.auditLogger, callerID, workspaceID, slug,
 								audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
 							return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
 						}
 
 						if resolved, resolvedOK := callerAgent.ContextBuilder.ResolveSkillFullForWorkspace(workspaceID, slug); resolvedOK {
 							if content, readOK := skills.LoadSkillFile(resolved.Path); readOK {
-								audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, resolved.Slug,
+								audit.EmitSkillCall(rs.al.auditLogger, callerID, workspaceID, resolved.Slug,
 									audit.SkillCallModeLoad, audit.SkillCallOutcomeLoaded, string(resolved.Shelf))
 								return tools.SkillLoadOutcome{
 									Status:        tools.SkillLoadLoaded,
@@ -1522,7 +1531,7 @@ func registerSharedTools(
 							// not-found rather than a silent empty load.
 							logger.WarnCF("agent", "skill resolved but its content could not be read",
 								map[string]any{"agent_id": callerID, "skill": slug, "path": resolved.Path})
-							audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+							audit.EmitSkillCall(rs.al.auditLogger, callerID, workspaceID, slug,
 								audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
 							return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
 						}
@@ -1533,12 +1542,12 @@ func registerSharedTools(
 						// shelf" (ADR-072 D4/FR-054's SkillNotFoundCode).
 						for _, s := range callerAgent.ContextBuilder.ListSkillsDetailed() {
 							if strings.EqualFold(s.ID, slug) || strings.EqualFold(s.Name, slug) {
-								audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+								audit.EmitSkillCall(rs.al.auditLogger, callerID, workspaceID, slug,
 									audit.SkillCallModeLoad, audit.SkillCallOutcomeDenied, "")
 								return tools.SkillLoadOutcome{Status: tools.SkillLoadDenied}
 							}
 						}
-						audit.EmitSkillCall(al.auditLogger, callerID, workspaceID, slug,
+						audit.EmitSkillCall(rs.al.auditLogger, callerID, workspaceID, slug,
 							audit.SkillCallModeLoad, audit.SkillCallOutcomeNotFound, "")
 						return tools.SkillLoadOutcome{Status: tools.SkillLoadNotFound}
 					},
@@ -1551,7 +1560,7 @@ func registerSharedTools(
 						if callerID == "" {
 							callerID = capturedAgentID
 						}
-						callerAgent, ok := al.registry.GetAgent(callerID)
+						callerAgent, ok := rs.al.registry.GetAgent(callerID)
 						if !ok {
 							return false
 						}
@@ -1571,7 +1580,7 @@ func registerSharedTools(
 						if callerID == "" {
 							callerID = capturedAgentID
 						}
-						callerAgent, ok := al.registry.GetAgent(callerID)
+						callerAgent, ok := rs.al.registry.GetAgent(callerID)
 						if !ok {
 							return nil
 						}
@@ -1603,6 +1612,11 @@ func registerSharedTools(
 		}
 	}
 
+	rs.pruneRemovedBrowsers()
+}
+
+// pruneRemovedBrowsers removes stale browser registrations and closes browsers no live agent is rooted in.
+func (rs *registerSharedToolsState) pruneRemovedBrowsers() {
 	// FR-026a. A workspace whose last agent was removed (or whose team moved
 	// off it) leaves a BrowserManager in al.browserMgrs and — worse — a
 	// coordinator-owned browser context (cookie/localStorage partition)
@@ -1619,26 +1633,26 @@ func registerSharedTools(
 	// looks removed and every workspace's Chrome context is disposed on the
 	// first Settings save — logins gone, silently, with a cheerful INFO line
 	// per workspace saying it removed a manager for a "deleted agent".
-	al.mu.Lock()
-	pool := al.browserPool
+	rs.al.mu.Lock()
+	pool := rs.al.browserPool
 	var removedKeys []string
-	for k := range al.browserMgrs {
-		if !liveBrowserKeys[k] {
+	for k := range rs.al.browserMgrs {
+		if !rs.liveBrowserKeys[k] {
 			removedKeys = append(removedKeys, k)
-			delete(al.browserMgrs, k)
+			delete(rs.al.browserMgrs, k)
 		}
 	}
-	registeredAgentIDs := registry.ListAgentIDs()
+	registeredAgentIDs := rs.registry.ListAgentIDs()
 	stillPresent := make(map[string]bool, len(registeredAgentIDs))
 	for _, id := range registeredAgentIDs {
 		stillPresent[id] = true
 	}
-	for id := range al.browserRegisteredAgents {
+	for id := range rs.al.browserRegisteredAgents {
 		if !stillPresent[id] {
-			delete(al.browserRegisteredAgents, id)
+			delete(rs.al.browserRegisteredAgents, id)
 		}
 	}
-	al.mu.Unlock()
+	rs.al.mu.Unlock()
 	for _, k := range removedKeys {
 		// FR-026's roster-change half: a workspace that no longer has a single
 		// browser-policy-allowed agent on its CoreTeam gets its Chrome CLOSED.
