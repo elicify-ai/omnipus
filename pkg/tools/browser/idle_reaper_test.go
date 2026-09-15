@@ -3,8 +3,6 @@ package browser
 import (
 	"context"
 	"errors"
-	"os"
-	"strings"
 	"testing"
 	"time"
 
@@ -290,30 +288,4 @@ func TestNewTab_StartPageNavigationFailureIsNonFatal(t *testing.T) {
 	require.NotPanics(t, func() {
 		m.navigateNewTabToStartPage(context.Background(), "")
 	}, "a failed start-page navigation must never break tab creation")
-}
-
-// TestCreateTab_CallsStartPageNavigation closes the gap the tests above cannot:
-// they exercise navigateNewTabToStartPage DIRECTLY, so they still pass if the
-// call site inside createTab is deleted — which is precisely how the start page
-// shipped inert the first time (unit tests green, brand-new tab still
-// about:blank on live UAT v39).
-//
-// createTab's real body performs a CDP attach that cannot run without Chrome,
-// so rather than add a second production seam purely for this test, this
-// asserts on the SOURCE: createTab must contain the call. A source assertion is
-// weak by nature, but it fails loudly on the one edit that caused the outage —
-// removing the wiring — which no behavioral test in this file can see.
-func TestCreateTab_CallsStartPageNavigation(t *testing.T) {
-	src, err := os.ReadFile("manager.go")
-	require.NoError(t, err)
-
-	body := string(src)
-	start := strings.Index(body, "func (m *BrowserManager) createTab(")
-	require.Positive(t, start, "createTab must exist")
-	end := strings.Index(body[start:], "\nfunc ")
-	require.Positive(t, end, "createTab must be followed by another function")
-
-	require.Contains(t, body[start:start+end], "navigateNewTabToStartPage(",
-		"createTab must call navigateNewTabToStartPage — without it every new tab opens "+
-			"about:blank and the start page is inert in production (UAT v39 regression)")
 }

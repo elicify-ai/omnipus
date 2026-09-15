@@ -44,9 +44,24 @@
 | `src/lib/api.ts` | 5,939 → 484-line barrel; 16 modules under `src/lib/api/` | 428 exported names before and after, typecheck 0 errors, 144 api tests, wire-type guard 0 findings |
 | Retired ADR-082 key | deleted from `pkg/config/keys.go` | guard job green on release |
 
-Files over 4,000: 10 → 8. Grandfather lists lowered in the same commits. Tools: `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` (Go) and `ts/tssplit.cjs` (TypeScript), mappings alongside.
+Files over 4,000: 10 → 8. Grandfather lists lowered in the same commits.
 
-**Still open:** the remaining eight files over 4,000; `runTurn`; nested `CLAUDE.md` landing; the one CI pass and the red jobs it will show.
+**Wave 1, batch 1 (2026-09-15, eight GLM 5.3 lanes via `claudez`, one worktree each, all merged with `[skip ci]`):**
+
+| File | Before | After | Notes |
+|---|---|---|---|
+| `pkg/gateway/gateway.go` | 6,645 | 1,672 | `gateway_boot.go` 3,731, `gateway_reload.go`, `gateway_sandbox.go`; off the list |
+| `pkg/agent/plan_engine.go` | 6,130 | 2,256 | play / supervise (1,990) / correction; off the list |
+| `pkg/config/config.go` | 5,278 | 4,391 | agents / gateway / retention split out; **still listed, second cut needed** |
+| `pkg/coreagent/core.go` | 3,992 | 867 | `seed.go` 2,355 (holds `coreAgentSeed` whole), `seed_system.go` 788 |
+| `pkg/tools/delegate.go` | 4,145 | under 2,000 | run / status / followup / park; off the list |
+| `pkg/tools/browser/manager.go` | 4,167 | 1,852 | tabs / session startup / lease; off the list |
+| `pkg/knowledge/index.go` | 3,177 | 1,896 | `index_query.go`, `index_persist.go` |
+| `pkg/session/unified.go` | 2,384 | 950 | `unified_list.go` 560, `unified_write.go` 902 |
+
+Every lane: build, vet, gofmt clean; package-wide `^func` multiset identical (apart from named test helpers); sorted test inventory identical; scoped tests green; both gates exit 0. Lanes took 11 to 29 minutes each; no usage-limit signal. Files over 4,000 after batch 1: **4** (`loop.go`, `config.go`, `websocket.go`, `chat.ts`). Splitter fix from this batch: tests from an external test package (`package x_test`) now land in `<stem>_ext_test.go`; previously `-tests` would have produced an import cycle. Batch 2 (twelve lanes) launched the same day. Tools: `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` (Go) and `ts/tssplit.cjs` (TypeScript), mappings alongside.
+
+**Still open:** the remaining four files over 4,000 (`config.go` second cut, `websocket.go` in batch 2, `chat.ts` and `runTurn` are judgment work); batch 2 lanes; nested `CLAUDE.md` landing; the one CI pass and the red jobs it will show.
 
 **Decisions for the founder (2026-09-15), each with a recommendation:**
 

@@ -607,7 +607,6 @@ func TestDecommission_NoForceCompressionSymbols(t *testing.T) {
 		"context_budget.go",
 		"instance.go",
 		"resolve_window.go",
-		"turn.go",
 		"steering.go",
 		"empty_in_place.go",
 	}
@@ -645,6 +644,17 @@ func TestDecommission_NoForceCompressionSymbols(t *testing.T) {
 		assert.NotContains(t, content, mustNotDefineForceCompression,
 			"file %s must not define forceCompression", filename)
 	}
+
+	// turn.go was split into turn*.go siblings (turn_exit.go, turn_stream.go,
+	// turn_transcript.go) on 2026-09-15 — scan the whole family so a forbidden
+	// pattern cannot evade this guard by moving file.
+	turnFamilySrc := readTurnSourcesForTest(t)
+	for _, pattern := range forbiddenPatterns {
+		assert.NotContains(t, turnFamilySrc, pattern,
+			"turn*.go family must not contain forbidden pattern %q", pattern)
+	}
+	assert.NotContains(t, turnFamilySrc, mustNotDefineForceCompression,
+		"turn*.go family must not define forceCompression")
 }
 
 // readOwnedFileForTest reads a file from the same directory as this test

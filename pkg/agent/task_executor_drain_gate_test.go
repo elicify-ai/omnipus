@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -89,12 +88,9 @@ func TestDrainClosesIntakePermanently(t *testing.T) {
 //
 // A behavioural test would need a full store/parent/sibling fixture; this
 // pins the invariant directly and cheaply instead, and fails the moment a new
-// unguarded Add appears anywhere in the file.
+// unguarded Add appears anywhere in the task_executor*.go family.
 func TestNoUngatedWaitGroupAddOutsideHeldCountSites(t *testing.T) {
-	src, err := os.ReadFile("task_executor.go")
-	if err != nil {
-		t.Fatalf("read task_executor.go: %v", err)
-	}
+	src := readTaskExecutorSourcesForTest(t)
 	// The ONLY three sites allowed to Add directly:
 	//   enterDispatch  — the gate itself; its Add is the guarded one.
 	//   executeTask    — launches runTask while the caller already holds the
@@ -105,9 +101,9 @@ func TestNoUngatedWaitGroupAddOutsideHeldCountSites(t *testing.T) {
 	// enterDispatch().
 	const allowed = 3
 
-	got := strings.Count(string(src), "te.wg.Add(1)")
+	got := strings.Count(src, "te.wg.Add(1)")
 	if got != allowed {
-		t.Fatalf("found %d direct te.wg.Add(1) call(s) in task_executor.go, want exactly %d.\n"+
+		t.Fatalf("found %d direct te.wg.Add(1) call(s) in the task_executor*.go family, want exactly %d.\n"+
 			"A new direct Add is only safe if its caller ALREADY holds a wg entry; "+
 			"otherwise it can take the counter 0->1 while Drain has a waiter parked, "+
 			"which panics the process (sync/waitgroup.go). Route it through te.enterDispatch() instead, "+

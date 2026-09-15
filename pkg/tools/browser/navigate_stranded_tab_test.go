@@ -87,35 +87,6 @@ func TestNavigate_FailedLoad_DoesNotStrandTheTabOnTheTarget(t *testing.T) {
 		"a failed navigation must leave the tab on about:blank")
 }
 
-func TestOpenTab_FailedLoad_DoesNotStrandTheTabOnTheTarget(t *testing.T) {
-	skipIfNoBrowser(t)
-
-	srv := stallingTestServer(t)
-	cfg := testBrowserCfg(t)
-	cfg.PageTimeout = 3 * time.Second
-
-	ssrf := security.NewSSRFChecker([]string{"127.0.0.1"})
-	registry := tools.NewToolRegistry()
-	mgr, err := registerToolsForTest(t, registry, cfg, ssrf, false, t.TempDir(), true)
-	require.NoError(t, err)
-	t.Cleanup(mgr.Shutdown)
-
-	openTool := mustGetTool(t, registry, "browser_open_tab")
-	result := openTool.Execute(context.Background(), map[string]any{"url": srv.URL + "/stall"})
-	require.NotNil(t, result)
-	require.True(t, result.IsError, "a stalled load must report an error; got: %s", result.ForLLM)
-
-	tabCtx, err := mgr.Session(testSessionID)
-	require.NoError(t, err)
-	readCtx, cancel := context.WithTimeout(tabCtx, 10*time.Second)
-	defer cancel()
-
-	var location string
-	require.NoError(t, chromedp.Run(readCtx, chromedp.Location(&location)))
-	require.NotContains(t, location, "/stall",
-		"the new tab was left parked on the failed target")
-}
-
 // --- Independent recovery budgets (review finding F8, 2026-08-13) ---
 //
 // The two tests above pass even with a BROKEN abandon path, because their

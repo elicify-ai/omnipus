@@ -5,9 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/require"
 )
 
 // key_test.go — FR-080. Whose tabs are these?
@@ -236,21 +235,4 @@ func TestTabs_OwnerKeyIsTranscriptNotRouting(t *testing.T) {
 		require.Len(t, tabs, 1,
 			"each delegated turn must hold exactly its OWN tab, not a share of a merged set")
 	}
-}
-
-// TestBrowsingKey_HasNoLiteralConstructor is the structural half of D1.11: a
-// BrowsingKey is minted only by resolution. The zero value must be unusable and
-// must not render as anything a map could key on by accident.
-func TestBrowsingKey_HasNoLiteralConstructor(t *testing.T) {
-	var zero BrowsingKey
-	require.True(t, zero.IsZero())
-	require.Equal(t, "", zero.String())
-	require.Equal(t, "", zero.WorkspaceID())
-	require.Equal(t, "", zero.ProfileSegment(),
-		"a zero key must not render a profile directory — that directory would be shared by everything")
-
-	resolved := newTestBrowsingKey(t, "01J8ZQ4T7N9K3M2P5R6S7T8V9W")
-	require.False(t, resolved.IsZero())
-	require.Equal(t, "ws:01J8ZQ4T7N9K3M2P5R6S7T8V9W", resolved.String())
-	require.Equal(t, "01J8ZQ4T7N9K3M2P5R6S7T8V9W", resolved.WorkspaceID())
 }

@@ -21,79 +21,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
-
-// TestTaskStopConflictOutcome_Classification is the deterministic,
-// state-by-state proof of the fix: it exercises taskStopConflictOutcome
-// directly against every state handleTaskStop can observe on the post-error
-// re-read, with no dependence on goroutine scheduling. This is the
-// mutation-test load-bearing case — reverting the production fix removes
-// taskStopConflictOutcome entirely, which fails this test to even compile.
-func TestTaskStopConflictOutcome_Classification(t *testing.T) {
-	cases := []struct {
-		name               string
-		status             task.Status
-		cancelReason       task.CancelReason
-		wantHandled        bool
-		wantAlreadyStopped bool
-		wantMessageHas     string
-	}{
-		{
-			name:        "still in_progress -> not handled, caller falls back to 500",
-			status:      task.StatusInProgress,
-			wantHandled: false,
-		},
-		{
-			name:               "failed by a user Stop (this request lost the race) -> already stopped, 200",
-			status:             task.StatusFailed,
-			cancelReason:       task.CancelReasonStoppedByUser,
-			wantHandled:        true,
-			wantAlreadyStopped: true,
-		},
-		{
-			name:           "failed for an unrelated reason -> genuine conflict, 409",
-			status:         task.StatusFailed,
-			cancelReason:   "",
-			wantHandled:    true,
-			wantMessageHas: `"failed"`,
-		},
-		{
-			name:           "completed normally before the stop landed -> genuine conflict, 409",
-			status:         task.StatusDone,
-			wantHandled:    true,
-			wantMessageHas: `"done"`,
-		},
-		{
-			name:           "never started -> genuine conflict, 409",
-			status:         task.StatusInbox,
-			wantHandled:    true,
-			wantMessageHas: `"inbox"`,
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			tk := &task.Task{ID: "t1", Status: tc.status, CancelReason: tc.cancelReason}
-			outcome, handled := taskStopConflictOutcome(tk)
-			require.Equal(t, tc.wantHandled, handled)
-			if !tc.wantHandled {
-				return
-			}
-			assert.Equal(t, tc.wantAlreadyStopped, outcome.alreadyStopped)
-			if tc.wantMessageHas != "" {
-				assert.Contains(t, outcome.message, tc.wantMessageHas)
-			}
-			if tc.wantAlreadyStopped {
-				assert.Empty(t, outcome.message, "no 409 body text is needed for the success path")
-			}
-		})
-	}
-}
 
 // TestTaskStop_ConcurrentDoubleStopNeverConflicts is the end-to-end,
 // black-box proof through the real HTTP handler + real PlanEngine.StopTask:

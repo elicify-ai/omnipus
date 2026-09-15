@@ -27,11 +27,10 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestTaskPatch_FailedToInProgress_Legal pins the ▶ Run route for a
@@ -85,30 +84,4 @@ func TestTaskPatch_CancelledFailedToInProgress_Legal(t *testing.T) {
 	var updated gen.Task
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
 	assert.Equal(t, gen.TaskStatusInProgress, updated.Status)
-}
-
-// TestHandleTaskRestart_GateDelegatesToTaskPackage is a regression check
-// that centralizing the restart reason-gate into task.ValidateStandaloneRestart
-// (pkg/task/store.go) did not change the handler's observable behavior: a
-// genuinely-failed task (no cancel_reason) still 409s via POST
-// /tasks/{id}/restart, and its status/cancel_reason are left untouched by
-// the rejected call (RestartReset must never run).
-func TestHandleTaskRestart_GateDelegatesToTaskPackage(t *testing.T) {
-	api := newTestRestAPIWithPlans(t)
-	wsID := createTestWorkspace(t, api, "Restart Gate Delegation WS")
-	taskID := mustCreateTask(t, api, wsID, "genuinely failed, attempts exhausted", "")
-
-	failedStatus := task.StatusFailed
-	attempts := 3
-	_, err := api.taskStore.Update(taskID, task.Patch{Status: &failedStatus, AttemptCount: &attempts})
-	require.NoError(t, err)
-
-	w := postTaskAction(t, api, taskID, "restart")
-	require.Equal(t, http.StatusConflict, w.Code, "genuinely-failed task must still 409 on restart; body=%s", w.Body.String())
-
-	reloaded, gerr := api.taskStore.Get(taskID)
-	require.NoError(t, gerr)
-	assert.Equal(t, task.StatusFailed, reloaded.Status, "rejected restart must leave status untouched")
-	assert.Equal(t, 3, reloaded.AttemptCount, "rejected restart must not have run RestartReset (attempt_count untouched)")
-	assert.Empty(t, reloaded.CancelReason)
 }

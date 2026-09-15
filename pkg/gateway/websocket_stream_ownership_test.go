@@ -19,15 +19,13 @@ package gateway
 import (
 	"context"
 	"encoding/json"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/session"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // buildOwnershipTestStreamer constructs a wsStreamer wired to a REAL
@@ -346,51 +344,6 @@ func TestWsStreamer_AbandonedPathReleasesOwnership_NextConcurrentTurnBecomesLive
 	require.NoError(t, streamC.Update(context.Background(), " still live after a redundant release call"))
 	frameC2 := drainTokenFrame(t, chC, 2*time.Second)
 	assert.Equal(t, " still live after a redundant release call", frameC2.Content)
-}
-
-// TestClaimStreamOwnership_StaleClaimIsForceReclaimed exercises the
-// defense-in-depth backstop (streamOwnershipStaleAfter): an unreleased claim
-// older than the staleness threshold degrades to "reclaimable by a new
-// turn" rather than shadowing a chatID forever, protecting against any
-// FUTURE bug in this family (not just the abandoned-turn path this wave
-// fixed directly).
-func TestClaimStreamOwnership_StaleClaimIsForceReclaimed(t *testing.T) {
-	var owners sync.Map
-	owners.Store("chat-stale", streamOwnerClaim{
-		turnID:    "turn-old-leaked",
-		claimedAt: time.Now().Add(-streamOwnershipStaleAfter - time.Minute),
-	})
-
-	ok := claimStreamOwnership(&owners, "chat-stale", "turn-new")
-	assert.True(t, ok, "a claim older than streamOwnershipStaleAfter must be force-reclaimable by a new turn")
-
-	actual, loaded := owners.Load("chat-stale")
-	require.True(t, loaded)
-	claim, ok := actual.(streamOwnerClaim)
-	require.True(t, ok)
-	assert.Equal(t, "turn-new", claim.turnID, "the stored claim must now belong to the reclaiming turn")
-}
-
-// TestClaimStreamOwnership_FreshClaimIsNotReclaimed proves the staleness
-// backstop does not weaken the normal, fast-path ownership gate: a claim
-// well within streamOwnershipStaleAfter held by a different turn must still
-// deny a concurrent claimant, exactly like before the staleness feature was
-// added.
-func TestClaimStreamOwnership_FreshClaimIsNotReclaimed(t *testing.T) {
-	var owners sync.Map
-	owners.Store("chat-fresh", streamOwnerClaim{
-		turnID:    "turn-current-owner",
-		claimedAt: time.Now(),
-	})
-
-	ok := claimStreamOwnership(&owners, "chat-fresh", "turn-other")
-	assert.False(t, ok, "a fresh (non-stale) claim held by a different turn must not be reclaimed")
-
-	actual, loaded := owners.Load("chat-fresh")
-	require.True(t, loaded)
-	claim, claimOk := actual.(streamOwnerClaim)
-	require.True(t, claimOk, "stored owner must be a streamOwnerClaim")
-	assert.Equal(t, "turn-current-owner", claim.turnID, "the original owner's claim must be untouched")
 }
 
 // TestFix_F6_OwnershipKeyedBySession_NotOriginChatID proves the ADR-082

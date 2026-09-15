@@ -43,7 +43,12 @@ import (
 // pkg/tools/browser's own resolveSessionID/panelTabSet fallbacks are the
 // documented "no panel context" default.
 func TestBrowserPanel_LiveViewCallSitesNeverHardwireTheOperatorSet(t *testing.T) {
-	files := []string{"browser_ws.go", "browser_webrtc.go"}
+	// The gateway half of the guard scans the whole browser_ws*.go family —
+	// browser_ws.go may be split by job (draft-module-map.md) and a scan pinned
+	// to one filename would silently stop covering the siblings. browser_webrtc.go
+	// is named explicitly: it is a different file's family, not this one's.
+	files := browserWsFamilyFilesForTest(t)
+	files = append(files, "browser_webrtc.go")
 	pattern := regexp.MustCompile(`\.OperatorSessionID\(\)`)
 
 	var offenders []string
