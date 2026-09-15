@@ -308,14 +308,16 @@ func u5ReadLoopFile(sessionDir string) (u5LoopFile, error) {
 // the target also locked an inode the rename then unlinks, so a writer that
 // opened the path before the rename and one that opened it after held locks on
 // two different files. A sidecar is never renamed over, so it has neither
-// problem; this is the pattern pkg/entity (Store.lockPath) already uses.
+// problem; this is the pattern pkg/entity (Store.lockPath) already uses, and
+// the naming itself is the shared fileutil.SidecarLockPath every file store
+// uses, so all lockers of one file agree on its lock.
 //
 // The sidecar is never removed while the session exists; it disappears with
 // the session directory. Every lister of a session directory filters by name
 // (*.jsonl partitions, the four named meta files), so it is never mistaken for
 // session content.
 func sessionFileLockPath(path string) string {
-	return path + ".lock"
+	return fileutil.SidecarLockPath(path)
 }
 
 // u5WriteIdentityLocked writes meta.json and updates ONLY the identity
