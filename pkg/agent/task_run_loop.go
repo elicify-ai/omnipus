@@ -41,6 +41,10 @@
 //	Temporary errors (a rate limit, a network or provider outage, a stalled
 //	stream, a timeout) still break the run and restart it.
 //
+//	A stopped turn (a Stop, /cancel, or shutdown cancelling the run) is not a
+//	failed run either: the task ends Failed "Stopped: <why>" with no attempt
+//	used and no restart.
+//
 //	goal_claim(blocked) is not a failed run: the task ends Failed with
 //	"Blocked: <why>" — no attempt consumed, no Judge call, no restart.
 //	goal_claim(waiting_on_user) has no operator reply channel on a task run,
@@ -245,6 +249,25 @@ func (te *TaskExecutor) finishRunTurn(
 			te.appendRunErrorTranscript(t, taskSessionID, sessStore, fmt.Sprintf("Task execution failed: %v", turnErr))
 			te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "not_dispatched")
 			te.endTaskWithoutAttempt(t, taskSessionID, fmt.Sprintf("The task could not be started: %v", turnErr), run)
+			return runStepEnded, "", ""
+		}
+
+		// A stopped turn ends the task: no attempt, no restart. Both classifiers
+		// below inherit TranslateTurnError's precedence so that a Stop racing a
+		// refusal or a malformed tool call "still ends the way a Stop does" —
+		// this is where it ends. Read as a broken run instead, a stop restarted
+		// the task in a fresh run: a Stop or /cancel on a task's session started
+		// it over, and StopTask (which cancels the session BEFORE it writes the
+		// task Failed) could lose that race to consumeTaskAttempt the same way.
+		// completeTaskWithResult writes only over in_progress, so a concurrent
+		// Stop's own outcome still stands; RequestCancel has already marked the
+		// session's lifecycle cancelled. A timeout is not a stop: it still breaks
+		// the run and restarts it.
+		if TranslateTurnError(turnErr).Code == CodeTurnCanceled {
+			reason := "Stopped: " + turnErrorUserText(turnErr)
+			logger.InfoCF("task_executor", "task run: the worker's turn was stopped — ending the task, no attempt used, no restart",
+				map[string]any{"task_id": t.ID, "agent_id": t.AgentID})
+			te.endTaskWithoutAttempt(t, taskSessionID, reason, run)
 			return runStepEnded, "", ""
 		}
 

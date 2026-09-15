@@ -514,13 +514,39 @@ func TestProcessTaskDirect_ExternalCLIWorker_Cancel_FiresTurnCanceledCallback(t 
 			cancelledEntry.CancelMethod, "graceful")
 	}
 
-	// This test returns as soon as the turn_canceled entry appears (written mid-run
-	// in Finish's onCancelFinish callback) — but the runTask goroutine keeps going
-	// afterward through the run loop (task-store status + transcript writes). Block
-	// until that goroutine has fully finished so t.TempDir()'s deferred cleanup can't
-	// race its late writes (the pre-existing "TempDir RemoveAll: directory not empty"
-	// flake, which contended package runs occasionally surfaced).
+	// A stopped run ENDS the task. Documented intent: both turn-error
+	// classifiers inherit TranslateTurnError's precedence so "a Stop ... still
+	// ends the way a Stop does" (operator_only_turn_error.go,
+	// task_attempt_turn_error.go), and task_run_loop.go restarts a task only for
+	// a run that broke or ended not met — a stop is neither, so it uses no task
+	// attempt and never starts a fresh run. Before this was pinned, the cancel
+	// read as a broken run and the task restarted; that restarted run was still
+	// calling the fake driver factory after this test returned and restored it
+	// (the -race failure on CI, 2026-09-15). waitTaskTerminal comes first on
+	// purpose: a restart moves the task back to `next`, never to a terminal
+	// status, so these assertions cannot pass in the window before a restart
+	// begins.
+	final := waitTaskTerminal(t, al, tk.ID)
+
+	// The runTask goroutine keeps going after the task's terminal write
+	// (run-history close, transcript archive). Block until it has fully finished
+	// so t.TempDir()'s deferred cleanup can't race its late writes (the
+	// pre-existing "TempDir RemoveAll: directory not empty" flake, which
+	// contended package runs occasionally surfaced).
 	waitTaskRunGoroutineDone(t, al.taskExecutor, tk.ID)
+
+	if final.Status != task.StatusFailed {
+		t.Errorf("task Status = %q, want %q — a stopped task ends", final.Status, task.StatusFailed)
+	}
+	if final.AttemptCount != 0 {
+		t.Errorf("task AttemptCount = %d, want 0 — a stop is not a failed attempt", final.AttemptCount)
+	}
+	if want := UserMessageForCode(CodeTurnCanceled); !strings.Contains(final.Result, want) {
+		t.Errorf("task Result = %q, want it to carry the stopped message %q", final.Result, want)
+	}
+	if runs := len(fr.RecordedRunOpts()); runs != 1 {
+		t.Errorf("external driver Run was invoked %d times, want 1 — a stopped task must not start a fresh run", runs)
+	}
 }
 
 // asyncTaskPollTimeout bounds how long these tests wait for an ASYNCHRONOUS
