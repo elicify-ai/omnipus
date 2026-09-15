@@ -45,6 +45,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/knowledge"
@@ -93,6 +94,25 @@ type RederiveBaseResult struct {
 // view file unwritable) — an infrastructure failure, distinct from a
 // REFUSAL, which is a verdict about the base's content and comes back as
 // Status == OutcomeRefused with the write on disk untouched.
+// resolveViewWritePath verifies a view file's absolute path against the vault
+// root with the knowledge layer's no-symlink rule (CollectionRoot.
+// ResolveControlWritePath), so a control folder symlinked outside the vault
+// refuses the write instead of being followed.
+func resolveViewWritePath(vaultRoot, abs string) (string, error) {
+	root, err := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), vaultRoot)
+	if err != nil {
+		return "", err
+	}
+	// Strip the caller's spelling of the root (on macOS /var is a link to
+	// /private/var, and NewCollectionRoot resolved it), then run the
+	// no-symlink check in the resolved root's space.
+	rel, rerr := filepath.Rel(filepath.Clean(vaultRoot), filepath.Clean(abs))
+	if rerr != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("vaultimport: %q is not under %q", abs, vaultRoot)
+	}
+	return root.ResolveContainedNoSymlink(knowledge.OSLinkFS(), filepath.ToSlash(rel))
+}
+
 func RederiveBase(vaultRoot, baseRelPath string) (*RederiveBaseResult, error) {
 	abs := filepath.Join(vaultRoot, filepath.FromSlash(baseRelPath))
 	data, err := knowledge.ReadNoteContent(nil, abs)
@@ -169,6 +189,12 @@ func RederiveBase(vaultRoot, baseRelPath string) (*RederiveBaseResult, error) {
 		producedSlugs[slug] = struct{}{}
 
 		path := filepath.Join(viewsDir, filepath.Base(pv.RelPath))
+		// D-14 follow-up: viewsDir is a control-folder path joined as text; a
+		// symlinked .omnipus-vault/views would land this write outside the
+		// vault. Verify with the knowledge layer's no-symlink rule first.
+		if _, vErr := resolveViewWritePath(vaultRoot, path); vErr != nil {
+			return nil, fmt.Errorf("vaultimport: view write refused: %w", vErr)
+		}
 		if current, rerr := os.ReadFile(path); rerr == nil && string(current) == string(pv.Bytes) {
 			res.Unchanged = append(res.Unchanged, slug)
 			continue
@@ -187,7 +213,11 @@ func RederiveBase(vaultRoot, baseRelPath string) (*RederiveBaseResult, error) {
 		if _, still := producedSlugs[slug]; still {
 			continue
 		}
-		if derr := os.Remove(filepath.Join(viewsDir, slug+".yaml")); derr != nil && !os.IsNotExist(derr) {
+		delPath := filepath.Join(viewsDir, slug+".yaml")
+		if _, vErr := resolveViewWritePath(vaultRoot, delPath); vErr != nil {
+			return nil, fmt.Errorf("vaultimport: view delete refused: %w", vErr)
+		}
+		if derr := os.Remove(delPath); derr != nil && !os.IsNotExist(derr) {
 			return nil, fmt.Errorf("vaultimport: removing the view this base no longer declares (%s.yaml): %w", slug, derr)
 		}
 		res.Deleted = append(res.Deleted, slug)

@@ -162,6 +162,12 @@ func mintRecordIDs(lock NoteLockConfig, collectionRoot string, sc *records.Schem
 	cfg := lock
 	cfg.CollectionRoot = collectionRoot
 	seqPath := filepath.Join(collectionRoot, records.VaultMarkerDirName, records.RecordsDirName, sc.Type+".seq")
+	// D-14 follow-up: the id sequence lives in the control folder, which a
+	// symlink could have retargeted outside the vault; refuse before the
+	// read-modify-write touches it (OSLinkFS is the real-filesystem view).
+	if _, vErr := resolveControlWritePath(OSLinkFS(), collectionRoot, seqPath); vErr != nil {
+		return nil, nil, fmt.Errorf("knowledge: mint record identifiers: %w", vErr)
+	}
 	lockKey := records.VaultMarkerDirName + "/" + records.RecordsDirName + "/" + sc.Type + ".seq"
 
 	var (
