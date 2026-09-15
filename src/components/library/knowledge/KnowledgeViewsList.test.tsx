@@ -148,3 +148,19 @@ describe('UAT D-13 — the collection Views list', () => {
     expect(screen.queryByTestId('knowledge-views-list')).toBeNull()
   })
 })
+
+// UAT layout finding 2026-09-14, regression pin: the list must carry its own
+// height cap and scroll. jsdom cannot reproduce the real-browser geometry
+// (a 3,524px list pushing the file rows off-screen in a clipped container the
+// wheel cannot scroll — that measurement is in FIX4-REPORT-library-layout-
+// offscreen.md, before/after), so this pins the CLASS CONTRACT the geometry
+// depends on: a bounded max-height and self-scroll. Removing either class
+// recreates the defect in a real browser.
+describe('KnowledgeViewsList — bounded height (UAT 2026-09-14 layout finding)', () => {
+  it('caps its height and scrolls itself', async () => {
+    renderList({ res: views({ views: [{ name: 'view--a', label: 'A' }] }) })
+    const list = await screen.findByTestId('knowledge-views-list')
+    expect(list.className).toContain('max-h-')
+    expect(list.className).toContain('overflow-y-auto')
+  })
+})
