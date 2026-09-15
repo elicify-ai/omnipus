@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// goal_keeper_repairs_test.go covers ADR-081 D6's keeper repairs (lane W2b):
+// goal_keeper_repairs_test.go covers ADR-088 D6's keeper repairs (lane W2b):
 // D6a in-flight suppression (FR-013), D6a parked-card suppression (FR-016),
 // the FR-014b zero-adjudicable-output triple and its bounded continue-push
 // ladder, D6b's un-wedged Ralph push (FR-015), D6c's recordless-goal nudge

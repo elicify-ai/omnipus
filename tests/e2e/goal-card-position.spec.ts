@@ -4,7 +4,7 @@
  * The goal card renders IN PLACE of its `set_goal` tool call, so after a
  * follow-up message it must sit ABOVE that follow-up in the thread (live)
  * and stay there after a reload (replay). Door choice (register vs ask) is
- * model-dependent (holdout H-2 of the ADR-081 spec): when the model asks
+ * model-dependent (holdout H-2 of the ADR-088 spec): when the model asks
  * instead of registering, the ordering invariant is asserted on the
  * AskUserQuestion card's absence of a goal card and the test ends early.
  */

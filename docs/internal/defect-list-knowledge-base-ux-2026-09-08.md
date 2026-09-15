@@ -13,7 +13,7 @@ than quietly dropped.
 > review during the same work are recorded in
 > `defect-list-embedded-content-review-2026-09-11.md`.
 
-Naming follows ADR-082: the product concept is a **knowledge base**. Phase 1
+Naming follows ADR-089: the product concept is a **knowledge base**. Phase 1
 of that rename (user-visible copy) has landed; identifiers, wire types and the
 on-disk `.omnipus-vault` marker are still the old name and are Phase 2/3 work.
 
@@ -714,7 +714,7 @@ ship.
 
 | Defect | Decision |
 |---|---|
-| KB-1 | `knowledge_create` -> **`knowledge_create_note`**; new **`knowledge_base_create`**. "base" alone was REJECTED as ambiguous with Obsidian Bases (the record types/views INSIDE a knowledge base) — `knowledge_base` reads as one noun and cannot be mistaken for a Base. `kb` rejected too (ADR-082: reads as kilobyte). |
+| KB-1 | `knowledge_create` -> **`knowledge_create_note`**; new **`knowledge_base_create`**. "base" alone was REJECTED as ambiguous with Obsidian Bases (the record types/views INSIDE a knowledge base) — `knowledge_base` reads as one noun and cannot be mistaken for a Base. `kb` rejected too (ADR-089: reads as kilobyte). |
 | KB-2 | **Both** — a `knowledge_list` tool AND type marking in `list_directory` output. Reuse the existing `is_knowledge_base` detection; mounts must be covered. |
 | KB-3 | Create the knowledge base **where the user is**: drop the workspace picker and the free-text path, take workspace + parent from context like the New folder dialog. `LibraryNewVaultDialog` currently accepts NO context prop — that is the gap. |
 | KB-4 | Remove "New workspace" from the Library create menu. NOTE: `LibraryCreateMenu.tsx`'s own header calls it a deliberate "global action" — this decision overrides that documented choice; update the comment rather than leaving it contradicting the code. |

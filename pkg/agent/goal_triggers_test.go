@@ -57,7 +57,7 @@ const armedGoalMaxRounds = 5
 // six fields, and production now reads the goal off its OWN pkg/goal record
 // (activeGoalForSession).
 //
-// criteria may be nil — that is the RECORDLESS goal (ADR-081 D3's transient
+// criteria may be nil — that is the RECORDLESS goal (ADR-088 D3's transient
 // state), which routes idle settlement to the D6c nudge ladder rather than
 // the Judge. DoD is always newFloorDoD(): Goal.Validate requires a non-empty
 // DoD on every persisted record, so a record with "no DoD" is not a state
@@ -135,7 +135,7 @@ func recordedGoalCriteria(condition string) []task.AcceptanceCriterion {
 // criterion path (an EMPTY criteria ladder on the goal record) so the canned
 // judge providers match.
 //
-// ADR-081 D3 caveat: an empty criteria ladder on an ACTIVE goal is now the
+// ADR-088 D3 caveat: an empty criteria ladder on an ACTIVE goal is now the
 // recordless/D6c-nudge transient state (goal_triggers.go's
 // maybeSettleGoalIdle routes it to the nudge ladder, never the Judge, at
 // idle) — this helper's old "empty criteria still reaches the Judge via
@@ -153,7 +153,7 @@ func setGoalRoundsArmed(t *testing.T, _ *session.UnifiedStore, sid, condition st
 	return armGoalRecord(t, sid, condition, nil, roundsUsed, lastActivity)
 }
 
-// setGoalRoundsArmedRecorded is setGoalRoundsArmed's ADR-081 counterpart for
+// setGoalRoundsArmedRecorded is setGoalRoundsArmed's ADR-088 counterpart for
 // tests that exercise IDLE-PATH JUDGE ADJUDICATION specifically: a single
 // prose criterion the canned judge providers answer for
 // (unmetJudgeProvider/metJudgeProvider), persisted EXPLICITLY onto the goal

@@ -3,7 +3,7 @@
 > **Update 2026-09-14:** the app-level token budget referenced here (and the per-delegation token budget) has been deleted from the product by founder decision. Token usage accounting is tracked in #707.
 
 - **Implements:** [ADR-086 revision 2](../architecture/ADR-086-goal-as-a-first-class-entity.md)
-- **Depends on:** ADR-081 (work-first goal flow), ADR-084 **revision 9** (the Judge as an active reviewer; §10 withdraws the three-state outcome), ADR-080 (criterion types and DoD provenance), ADR-057 (session unification and the striped session lock), ADR-054 D3 (`pkg/entity`), ADR-082 (session-bound streaming)
+- **Depends on:** ADR-088 (work-first goal flow), ADR-084 **revision 9** (the Judge as an active reviewer; §10 withdraws the three-state outcome), ADR-080 (criterion types and DoD provenance), ADR-057 (session unification and the striped session lock), ADR-054 D3 (`pkg/entity`), ADR-082 (session-bound streaming)
 - **Status:** Draft for review — 2026-09-10
 - **Branch of record:** `feat/adr-081-work-first-goal`, verified against commit `3ec8a842`
 - **Written non-interactively.** The `/plan-spec` confirmation gates (Phase 1, Phase 5.5) were not put to a human. Every question that would have been asked is recorded in §11 with the assumption taken in its place.
@@ -420,7 +420,7 @@ The re-arm marker (`idleSettling`) means one fire per quiet spell, re-arming onl
 
 - **FR-009** — A goal in the definition phase MUST exist, be readable and editable, and MUST NOT run.
 - **FR-010** — Activation MUST bind a goal to exactly one session and start the loop.
-- **FR-011** — `/goal` in chat MUST create the definition and activate it in the current session in one step (ADR-081 D1's instant activation is unchanged).
+- **FR-011** — `/goal` in chat MUST create the definition and activate it in the current session in one step (ADR-088 D1's instant activation is unchanged).
 - **FR-012** — A task MUST hold its goal in the definition phase from task creation until the task starts, and MUST activate it against the session the task mints (`pkg/agent/task_executor.go::createTaskSessionSync`).
 - **FR-013** — After activation there MUST be exactly one code path for the loop, the claim, the Judge, the budget accounting and the verdict. `JudgeCriteriaInput`'s validation (`pkg/agent/judge.go`, the scope switch rejecting `scope %q must not also carry TaskID/GoalSessionID`) MUST be relaxed to permit a running task's goal carrying both.
 - **FR-014** — A test MUST exist that fails if any post-activation behavioural difference between a chat-owned and a task-owned goal appears. It MUST compare observable behaviour, not implementation structure.

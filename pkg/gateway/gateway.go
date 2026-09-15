@@ -4770,7 +4770,7 @@ func setupAndStartServices(
 		askSink.delayFn = askReg.EffectiveDefaultSafeDelay
 		wsHandler.askUserReg = askReg
 		agentLoop.SetAskUserRegistry(askReg)
-		// ADR-081 FR-031: wire the goal-routing store resolver at boot so a
+		// ADR-088 FR-031: wire the goal-routing store resolver at boot so a
 		// cold-start channel record echo / keeper action can rehydrate the
 		// persisted GoalRoute* fields before any /goal command runs.
 		agentLoop.SetGoalRouteSessionStore()

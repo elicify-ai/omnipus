@@ -2,7 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package tools — set_goal (ADR-081 D2, work-first-goal-flow-spec FR-004/
+// Package tools — set_goal (ADR-088 D2, work-first-goal-flow-spec FR-004/
 // FR-005/FR-006). This is the validated write-path over the goal record: the
 // working agent's own first move on a freshly activated goal (D3's forcing
 // predicate) or its steering move on an already-registered one. It applies,
@@ -45,7 +45,7 @@ import (
 const SetGoalToolName = "set_goal"
 
 // SetGoalModeRegister / SetGoalModeUpdate are the tool's `mode` enum values
-// (ADR-081 D2), exported so pkg/agent's engine-authored record writes (the
+// (ADR-088 D2), exported so pkg/agent's engine-authored record writes (the
 // marker-path activation/restate and the D7 keeper fallback compile) can
 // anchor themselves in the transcript as a set_goal call carrying the SAME
 // mode vocabulary a real call carries (ADR-082 D9, review CR8).
@@ -54,7 +54,7 @@ const (
 	SetGoalModeUpdate   = "update"
 )
 
-// setGoalMode is the tool's mode enum (ADR-081 D2).
+// setGoalMode is the tool's mode enum (ADR-088 D2).
 type setGoalMode string
 
 const (
@@ -140,7 +140,7 @@ func SetGoalResultPayload(c SetGoalResultCore) map[string]any {
 // names, field types, omitempty behavior) — see the package doc comment for
 // why this is a mirror rather than a type alias. Intent/Prompt are never SET
 // by this tool (set_goal's own args are definition/criteria/dod/assessment/
-// mode only, per ADR-081 D2 — no intent/prompt argument exists), but they
+// mode only, per ADR-088 D2 — no intent/prompt argument exists), but they
 // ARE carried through unchanged from whatever record already existed on
 // this session, so a record produced by an activation-time compile (marker
 // path or the D7 fallback, both outside this tool's scope) never loses
@@ -200,7 +200,7 @@ func appendSupersededCriteria(history []supersededCriteriaEntry, outgoingCriteri
 	return out
 }
 
-// setGoalAssessment is the tool's `assessment` arg shape (ADR-081 D2): the
+// setGoalAssessment is the tool's `assessment` arg shape (ADR-088 D2): the
 // agent's own confidence read on this first move. It is VALIDATED but never
 // persisted into setGoalRecord — it is surfaced in the tool result and
 // logged, so "why did it proceed instead of asking" stays answerable from
@@ -213,7 +213,7 @@ type setGoalAssessment struct {
 }
 
 // GoalRecordAccess is the narrow, late-bound session-store seam set_goal
-// needs (ADR-081 D2): read the calling session's active-goal condition and
+// needs (ADR-088 D2): read the calling session's active-goal condition and
 // current goal record JSON, and durably write a new record. Implemented by
 // the wave-2 wiring layer over the real session store (session.MetaPatch's
 // GoalCondition / GoalCriteriaJSON fields) — mirroring the
@@ -229,7 +229,7 @@ type GoalRecordAccess interface {
 	// (session.SessionMeta.GoalCondition; "" means no active goal — FR-005's
 	// goalless-session refusal reads this) and current goal record JSON
 	// (session.SessionMeta.GoalCriteriaJSON; legitimately "" for an active
-	// goal with no record registered yet — ADR-081 D1's transient state).
+	// goal with no record registered yet — ADR-088 D1's transient state).
 	ReadGoalState(sessionID string) (goalID, goalCondition, recordJSON string, err error)
 	// WriteRecord durably persists recordJSON as sessionID's goal record —
 	// the same field the compile-time path writes today.
@@ -240,7 +240,7 @@ type GoalRecordAccess interface {
 // PRIOR goal record and the NEW one mode:update is about to write, both as
 // this tool's own marshaled JSON shape (setGoalRecord). Wave 2 injects the
 // real implementation — pkg/agent's diffGoalAmendment (re-homed per
-// ADR-081 D2, its one surviving caller), unmarshaling both sides into
+// ADR-088 D2, its one surviving caller), unmarshaling both sides into
 // CompiledGoal and rendering the added/changed/dropped diff. A nil seam
 // falls back to this tool's own minimal built-in summary (localDiffSummary)
 // so mode:update never fails purely because the diff renderer is unwired.
@@ -255,7 +255,7 @@ type DiffFn func(oldRecordJSON, newRecordJSON string) (summary string)
 //
 // A nil seam SKIPS vetting rather than failing closed — deliberately unlike
 // plan_correct.go's fail-closed unwired-hook precedent: feasibility is one
-// guard among several ADR-081 D2 lists (alongside NormalizeCriteria/
+// guard among several ADR-088 D2 lists (alongside NormalizeCriteria/
 // IsValidJudgment/the DoD floor, which this tool enforces unconditionally,
 // with no seam and no way to skip them); it is the one guard that depends on
 // agent-instance state (tool policy, sandbox) this package cannot reach on
@@ -263,7 +263,7 @@ type DiffFn func(oldRecordJSON, newRecordJSON string) (summary string)
 // refusing every set_goal call on a fresh install.
 type FeasibilityFn func(ctx context.Context, criteria []task.AcceptanceCriterion) error
 
-// SetGoalTool implements the set_goal tool (ADR-081 D2).
+// SetGoalTool implements the set_goal tool (ADR-088 D2).
 type SetGoalTool struct {
 	BaseTool
 	// accessFn resolves the live GoalRecordAccess per call (late-bound, the
@@ -316,7 +316,7 @@ func (t *SetGoalTool) Category() ToolCategory { return CategoryTasks }
 // Description implements Tool.
 func (t *SetGoalTool) Description() string {
 	return "Register or update THIS session's goal record: the restated goal statement (definition), " +
-		"its acceptance criteria, and its Definition of Done (ADR-081). Use mode:register (the default) " +
+		"its acceptance criteria, and its Definition of Done (ADR-088). Use mode:register (the default) " +
 		"the first time you author this goal's record — your confident first move on a freshly activated " +
 		"goal, or after the operator has answered your clarifying questions. Use mode:update to steer an " +
 		"already-registered record when the operator's message or your own judgment changes it: the whole " +
@@ -424,13 +424,13 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 		return ErrorResult("set_goal: no session context — this tool needs a real, store-backed session to write a goal record")
 	}
 
-	// --- Scope preconditions (ADR-081 D2 / FR-005) — checked BEFORE any
+	// --- Scope preconditions (ADR-088 D2 / FR-005) — checked BEFORE any
 	// payload parsing, so a delegated or goalless caller gets the scope
 	// refusal rather than a validation error that might read as "try again
 	// with a corrected payload" when no payload could ever succeed here. ---
 	if depth := ToolDelegationDepth(ctx); depth > 0 {
 		return ErrorResult("set_goal is owner-session-only: a delegated sub-turn cannot author or amend " +
-			"the parent session's goal record (ADR-081 FR-005) — report your findings back to the parent instead")
+			"the parent session's goal record (ADR-088 FR-005) — report your findings back to the parent instead")
 	}
 
 	goalID, goalCondition, currentRecordJSON, err := access.ReadGoalState(sessionID)
@@ -439,7 +439,7 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	}
 	if strings.TrimSpace(goalCondition) == "" {
 		return ErrorResult("set_goal refuses: this session has no active goal — there is nothing to " +
-			"register a record against (ADR-081 FR-005)")
+			"register a record against (ADR-088 FR-005)")
 	}
 
 	mode, mErr := parseSetGoalMode(args)
@@ -571,7 +571,7 @@ func (t *SetGoalTool) Execute(ctx context.Context, args map[string]any) *ToolRes
 	default:
 		// register mode with no dod, OR update mode with an EXPLICIT empty
 		// dod ([]) — the caller is deliberately (re)applying the floor.
-		// ADR-081 D2 — the DoD floor: pkg/agent.newFloorDoD's built-in floor
+		// ADR-088 D2 — the DoD floor: pkg/agent.newFloorDoD's built-in floor
 		// (ADR-080 D-DOD layer 3). Already normalized (fixed sentinel IDs,
 		// valid shape) — no NormalizeCriteria pass needed.
 		normDoD = setGoalFloorDoD()
@@ -988,7 +988,7 @@ func parseSetGoalAssessment(args map[string]any) (*setGoalAssessment, error) {
 const setGoalDoDFloorAuthorID = "system"
 
 // setGoalFloorDoD constructs ADR-080 D-DOD's built-in floor Definition of
-// Done (layer 3), re-implemented here per ADR-081 D2 because pkg/tools
+// Done (layer 3), re-implemented here per ADR-088 D2 because pkg/tools
 // cannot import pkg/agent (see the package doc comment). Its two entries —
 // ids, kind, judgment, provenance, and text — MUST stay byte-identical to
 // pkg/agent/goal_compile.go's newFloorDoD, so a record floor-backfilled by

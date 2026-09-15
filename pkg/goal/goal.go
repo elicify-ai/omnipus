@@ -31,7 +31,7 @@ type Claim struct {
 }
 
 // SupersededCriteriaEntry is one prior criteria/dod snapshot a goal carried
-// before a set_goal(mode: update) steering revision replaced it (ADR-081).
+// before a set_goal(mode: update) steering revision replaced it (ADR-088).
 // Distinct from TerminalHistoryEntry, which records prior COMPLETED RUNS of
 // a re-run task-owned goal, not prior criteria revisions of the current
 // run.
@@ -154,7 +154,7 @@ type Goal struct {
 // New constructs a fresh Goal in the defining phase (D2): it exists, is
 // readable, and MUST NOT run yet (ADR-086 D2/D3, GOAL-FR-009) — the caller
 // activates it separately via (*Goal).Activate once it is bound to a
-// session (a chat /goal activates in the same turn per ADR-081 D1; a task's
+// session (a chat /goal activates in the same turn per ADR-088 D1; a task's
 // goal stays in defining until the task starts and mints its session,
 // GOAL-FR-012).
 //

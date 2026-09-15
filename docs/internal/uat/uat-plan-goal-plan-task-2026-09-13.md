@@ -3,7 +3,7 @@
 **Version:** 1.0
 **Date:** 2026-09-13
 **Branch under test:** `feat/adr-081-work-first-goal`
-**Governing designs:** ADR-081 (work-first goal), ADR-084 rev 9 (Judge as active reviewer), ADR-085 (browser control handover), ADR-086 (goal as first-class entity), ADR-053 §9.1 (conformance), plan engine FR-156/FR-159
+**Governing designs:** ADR-088 (work-first goal), ADR-084 rev 9 (Judge as active reviewer), ADR-085 (browser control handover), ADR-086 (goal as first-class entity), ADR-053 §9.1 (conformance), plan engine FR-156/FR-159
 
 ---
 
@@ -152,7 +152,7 @@ Doing 3 before 2 fails validation with every endpoint rejected, and the error re
 **PASS when:** work begins immediately — a response starts streaming, and a goal card appears in the thread at the point where the goal was set. There is **no** Confirm / Amend / Cancel row at any moment.
 **FAIL if:** any confirmation step appears, or nothing happens until you do something else.
 
-> ADR-081 deleted the confirm gate in full. A Confirm button appearing is a resurrection regression, not a UI nicety.
+> ADR-088 deleted the confirm gate in full. A Confirm button appearing is a resurrection regression, not a UI nicety.
 
 ### A-2 · The goal card stays where the goal was set
 

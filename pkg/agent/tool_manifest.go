@@ -224,7 +224,7 @@ func (al *AgentLoop) buildCompressedToolDefs(ts *turnState, policyFiltered []too
 	return tools.ToolsToProviderDefs(sent)
 }
 
-// appendGoalDoorsAfterEscape keeps ADR-081 D3's first-move doors callable
+// appendGoalDoorsAfterEscape keeps ADR-088 D3's first-move doors callable
 // once the bounded escape (goalForcingMaxNarrowAttempts, loop.go) has
 // released the narrowed request surface while the goal STILL has no record.
 //

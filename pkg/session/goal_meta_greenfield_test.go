@@ -8,7 +8,7 @@
 // goal is its own stored entity now (pkg/goal.Store, ADR-086) — a session
 // composes no goal data at all, from disk or anywhere else.
 //
-// This supersedes the wave-1b/ADR-081 version of this test (delivery-plan
+// This supersedes the wave-1b/ADR-088 version of this test (delivery-plan
 // §5's S2→S6 chain: S2 left this file's ORIGINAL content untouched, S6
 // rewrites it here). The old version proved the retired confirm-gate
 // fields (GoalPendingJSON/GoalClarificationJSON) were dropped while the

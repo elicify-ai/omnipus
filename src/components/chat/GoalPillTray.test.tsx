@@ -74,7 +74,7 @@ describe('GoalPillTray — per-goal-id pills', () => {
   })
 })
 
-describe('GoalPillTray — 13-state rendering (ADR-081 D5/D9: `queued` retired; C-39: five states added)', () => {
+describe('GoalPillTray — 13-state rendering (ADR-088 D5/D9: `queued` retired; C-39: five states added)', () => {
   beforeEach(() => {
     useChatStore.setState({ goalPills: {} })
     useJudgeActivityStore.getState().reset()
@@ -85,7 +85,7 @@ describe('GoalPillTray — 13-state rendering (ADR-081 D5/D9: `queued` retired; 
   // addition — and the five states added by the joint ADR-084/ADR-085/
   // ADR-086 delivery (C-39): `judge_refused_god_mode`, `judge_cas_loss`,
   // `blocked`, `claim_overturned`, `expired`. The 14th, `queued`, is
-  // retired (ADR-081 D5/D9) — see the dedicated describe block below for
+  // retired (ADR-088 D5/D9) — see the dedicated describe block below for
   // its now-renders-nothing coverage.
   const states: Array<[GoalStatusFrame['state'], string]> = [
     ['active', 'goal-pill-active'],
@@ -141,12 +141,12 @@ describe('GoalPillTray — 13-state rendering (ADR-081 D5/D9: `queued` retired; 
   })
 })
 
-// ADR-081 D5/D9: `queued` is retired — the backend never emits it anymore
+// ADR-088 D5/D9: `queued` is retired — the backend never emits it anymore
 // (the pending-confirm state it represented is deleted in full). The
 // wire-enum value survives untouched in the generated type (Constraint #8),
 // so the tray still filters it out defensively rather than the type simply
 // not existing.
-describe('GoalPillTray — queued state (retired, ADR-081 D5/D9)', () => {
+describe('GoalPillTray — queued state (retired, ADR-088 D5/D9)', () => {
   beforeEach(() => {
     useChatStore.setState({ goalPills: {} })
     useJudgeActivityStore.getState().reset()

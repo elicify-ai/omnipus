@@ -1138,7 +1138,7 @@ func (al *AgentLoop) resolveVerifierDiffText(in JudgeCriteriaInput) (diffText, h
 	return renderDiffEvidence(ev), head
 }
 
-// resolveGoalScopedDiffEmpty is ADR-081 D6a/FR-014b's GOAL-SCOPED variant of
+// resolveGoalScopedDiffEmpty is ADR-088 D6a/FR-014b's GOAL-SCOPED variant of
 // resolveVerifierDiffText, used by the zero-adjudicable-output triple
 // (goal_triggers.go's goalZeroOutputTripleHolds) to answer one question:
 // "has THIS goal's own work changed anything in its workspace since we last

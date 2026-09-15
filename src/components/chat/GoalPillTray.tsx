@@ -16,7 +16,7 @@
 // judge_unavailable (amber) / re-planning (amber) / judging (muted pulse) /
 // done (green) / failed (red) / cleared (muted — a deliberate user stop is
 // neither success nor failure, UAT S3 fix). The 9th, `queued`, is retired
-// (ADR-081 D5/D9): the backend never emits it anymore (the pending-confirm
+// (ADR-088 D5/D9): the backend never emits it anymore (the pending-confirm
 // state it represented is deleted in full), so it renders no pill at all —
 // see the defensive skip in `GoalPill` and the pre-filter in `GoalPillTray`
 // below. The wire-enum value itself survives untouched in the generated
@@ -164,7 +164,7 @@ interface GoalPillProps {
 function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
   const [expanded, setExpanded] = useState(false)
 
-  // ADR-081 D5/D9: `queued` is retired — the backend never emits it
+  // ADR-088 D5/D9: `queued` is retired — the backend never emits it
   // anymore. `GoalPillTray` already filters queued frames out before
   // mapping to this component; this is a defensive second layer (never
   // reached in practice) that also narrows `frame.state` for
@@ -368,7 +368,7 @@ export function GoalPillTray() {
   const verdicts = useJudgeActivityStore((s) => s.verdicts)
   const visiblePills = useVisibleGoalPills(goalPills)
 
-  // ADR-081 D5/D9: `queued` is retired and never emitted — filtered here
+  // ADR-088 D5/D9: `queued` is retired and never emitted — filtered here
   // (not just inside `GoalPill`) so a session holding only a stale/legacy
   // queued pill renders NO tray at all, rather than an empty container.
   const entries = Object.entries(visiblePills).filter(([, frame]) => frame.state !== 'queued')

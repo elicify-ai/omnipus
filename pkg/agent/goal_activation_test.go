@@ -2,10 +2,10 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// goal_activation_test.go covers ADR-081 D1 (instant activation), D5/FR-001
+// goal_activation_test.go covers ADR-088 D1 (instant activation), D5/FR-001
 // (restate/steering), and D9/FR-022 (confirm-gate deletion) at the
 // applyGoalCommandPrompt unit level — the wave-1b (W1b) regression suite.
-// Traces to: docs/internal/architecture/ADR-081-work-first-goal-flow.md,
+// Traces to: docs/internal/architecture/ADR-088-work-first-goal-flow.md,
 // docs/internal/specs/work-first-goal-flow-spec.md tests 4-6, 19.
 package agent
 
@@ -40,7 +40,7 @@ func (p *noCallProvider) Chat(
 
 func (p *noCallProvider) GetDefaultModel() string { return "no-call-model" }
 
-// TestGoalActivation_InstantProsePath proves ADR-081 D1/US-1 (test 4):
+// TestGoalActivation_InstantProsePath proves ADR-088 D1/US-1 (test 4):
 // `/goal <prose>` on a goalless session activates the record immediately —
 // GoalID minted, GoalCondition set to the raw intent, GoalCriteriaJSON
 // EMPTY (the agent authors it later via set_goal), the ADMISSION GATE runs
@@ -364,7 +364,7 @@ func TestGoalRestate_ActiveGoal(t *testing.T) {
 	})
 }
 
-// TestConfirmInert proves ADR-081 D9/FR-022/US-9 (test 19): bare "confirm"
+// TestConfirmInert proves ADR-088 D9/FR-022/US-9 (test 19): bare "confirm"
 // is ordinary chat (nothing intercepts it — the confirm-gate hook is
 // deleted in full); `/goal confirm` is an informative no-op, never
 // activating a goal literally named "confirm" (grill B3); and `/goal

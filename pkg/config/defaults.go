@@ -335,7 +335,7 @@ func DefaultConfig() *Config {
 				// human-facing agent allow; Judge/PlanSupervisor explicit deny
 				// via their denyAllThenOverride stamps.
 				"AskUserQuestion": "allow",
-				// set_goal (ADR-081 D2, work-first-goal-flow-spec FR-004): the
+				// set_goal (ADR-088 D2, work-first-goal-flow-spec FR-004): the
 				// validated write-path over the goal record. Ceiling "allow"
 				// for the same reason AskUserQuestion's is — writing your own
 				// session's goal record is the safety-increasing direction

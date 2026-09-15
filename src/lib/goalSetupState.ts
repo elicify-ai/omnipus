@@ -3,7 +3,7 @@
 // goal-setup-failure quiet line (both in ChatScreen.tsx).
 //
 // Operator-reported UX fix, 2026-09-08: `/goal <text>` activates a goal
-// INSTANTLY (ADR-081 D1, zero LLM calls) with an EMPTY compiled record —
+// INSTANTLY (ADR-088 D1, zero LLM calls) with an EMPTY compiled record —
 // the working agent authors the record itself via its first `set_goal`
 // call. In the reported repro that first `set_goal`/`ask_user_question`
 // call failed, and the user watched a generic, content-free thinking

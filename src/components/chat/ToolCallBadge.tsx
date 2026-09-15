@@ -79,7 +79,7 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
   const sentinels = detectToolResultSentinels(toolCall.result)
   // ADR-082 D9 review S11: a `set_goal` step in this thread-surface list
   // (SubagentBlock's nested steps — a DELEGATED worker's own attempt, which
-  // the tool refuses on a sub-turn, ADR-081 FR-005) used to fall into
+  // the tool refuses on a sub-turn, ADR-088 FR-005) used to fall into
   // shouldRenderToolCall's hide-by-default `set_goal` case and vanish. Route
   // it to the same dedicated UI the top-level thread uses: the record card
   // on success, the quiet "Goal registration failed" line on the refusal.

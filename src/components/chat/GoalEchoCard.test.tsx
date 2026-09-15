@@ -1,4 +1,4 @@
-// GoalEchoCard.test.tsx — ADR-081 D5/D9 (work-first goal flow, test 24):
+// GoalEchoCard.test.tsx — ADR-088 D5/D9 (work-first goal flow, test 24):
 // the card is now a registered-record view rendered from the ACTIVE frame,
 // no buttons, no confirm/amend/cancel wiring. Criteria breakdown per
 // ADR-074 D5.2 / judgment-first FR-011 (US-6, test 19 component half).
@@ -140,7 +140,7 @@ describe('GoalEchoCard', () => {
     expect(screen.getByTestId('goal-echo-condition')).toHaveTextContent('goal_marker_a1b2')
   })
 
-  // ADR-081 round-2 B-3 / test 24: `definition` is legitimately ABSENT on a
+  // ADR-088 round-2 B-3 / test 24: `definition` is legitimately ABSENT on a
   // marker-path record (the existing Prompt/Intent fallback) — the card
   // renders gracefully with no statement block, not a placeholder.
   it('renders no statement line when the frame carries no definition (marker-path/legacy frames)', () => {
@@ -255,11 +255,11 @@ describe('GoalEchoCard', () => {
     expect(screen.getByTestId('goal-echo-round')).toHaveTextContent('1 concurrent loop')
   })
 
-  // ADR-081 D5/D9 (test 24): the confirm-gate button row is deleted in
+  // ADR-088 D5/D9 (test 24): the confirm-gate button row is deleted in
   // full — no Confirm/Amend/Cancel control exists anywhere on the card,
-  // for ANY state, including one that (pre-ADR-081) would have been
+  // for ANY state, including one that (pre-ADR-088) would have been
   // pending confirmation.
-  describe('ADR-081 D5/D9 — no confirm/amend/cancel controls', () => {
+  describe('ADR-088 D5/D9 — no confirm/amend/cancel controls', () => {
     it('renders no buttons at all on an active record with criteria and DoD', () => {
       const frame = makeGoal({
         criteria: [makeCriterion()],

@@ -5,7 +5,7 @@
 // goal_record_wiring.go wires pkg/tools.SetGoalTool's three late-bound seams
 // (GoalRecordAccess, DiffFn, FeasibilityFn — set_goal.go's own package doc
 // comment) over this package's real goal machinery, and implements the
-// ADR-081 D5 write-side effect every successful record write triggers: the
+// ADR-088 D5 write-side effect every successful record write triggers: the
 // goal_status frame (FR-019) and, on a channel-routed goal, the formatted
 // record echo (FR-020). pkg/tools cannot import pkg/agent (import cycle —
 // pkg/agent already imports pkg/tools), so this file is the wave-2 wiring
@@ -34,7 +34,7 @@ import (
 )
 
 // wireGoalToolsForAgent registers BOTH goal tools for one agent — set_goal
-// (ADR-081 D2) and goal_claim (ADR-084 revision 9 §O / D12) — each wired
+// (ADR-088 D2) and goal_claim (ADR-084 revision 9 §O / D12) — each wired
 // over the real session-store-backed GoalRecordAccess; set_goal additionally
 // gets the diff and feasibility seams. Called from registerSharedTools'
 // per-agent loop (loop.go), the SAME site AskUserQuestion registers from, so
@@ -68,7 +68,7 @@ func wireGoalToolsForAgent(al *AgentLoop, agent *AgentInstance) {
 // agentLoopGoalRecordAccess implements tools.GoalRecordAccess. Its two
 // methods, ReadGoalState and WriteRecord, are this wave's (joint delivery
 // plan wave E4, GOAL-FR-003's "seam" half + FR-005's "consumer half") own
-// re-point of ADR-081 D2's seam onto ADR-086's goal entity store
+// re-point of ADR-088 D2's seam onto ADR-086's goal entity store
 // (pkg/goal.Store) — see each method's own doc comment for the shape of
 // the change. The other functions in this file (wireGoalToolsForAgent,
 // afterGoalRecordWrite, anchorGoalRecordInTranscript,
@@ -201,7 +201,7 @@ func bumpGoalRecordActivity(goalID string, now time.Time) {
 // (GOAL-FR-003) instead of a serialised session-meta string.
 //
 // It reproduces loadCompiledGoal's own emptiness contract exactly: a record
-// with no criteria yet — ADR-081 D1's legal transient window between instant
+// with no criteria yet — ADR-088 D1's legal transient window between instant
 // activation and the working agent's first `set_goal` — returns nil, the
 // same value an empty GoalCriteriaJSON returned, so every caller's existing
 // nil fallback behaves unchanged. pkg/goal.Goal has no separate Intent field
@@ -302,7 +302,7 @@ func parseGoalSeamRecord(recordJSON string) (goalSeamRecord, error) {
 // returning g.Prompt here satisfies that contract exactly while surfacing
 // real text instead of an arbitrary placeholder.
 //
-// recordJSON is "" for the ADR-081 D1 legal-transient window — an active
+// recordJSON is "" for the ADR-088 D1 legal-transient window — an active
 // goal with no criteria registered yet (Goal.Validate allows an empty
 // Criteria list; only DoD must be non-empty) — and this seam's own
 // goalSeamRecord JSON encoding of g otherwise.
@@ -439,7 +439,7 @@ func (al *AgentLoop) anchorGoalRecordInTranscript(a goalRecordAnchor) (session.T
 		return "", fmt.Errorf("goal anchor: reading session meta: %w", err)
 	}
 	// A marker-shaped record legitimately carries no restated statement
-	// (ADR-081 round-2 B-3); the card's lead line then falls back to the
+	// (ADR-088 round-2 B-3); the card's lead line then falls back to the
 	// goal condition, the same fallback the echo and the frame already use.
 	definition := a.record.Definition
 	if definition == "" {
@@ -618,7 +618,7 @@ func (a agentLoopGoalRecordAccess) WriteRecord(sessionID, recordJSON string) err
 	return nil
 }
 
-// goalRecordDiffAdapter is the tools.DiffFn seam (ADR-081 D2 mode:update):
+// goalRecordDiffAdapter is the tools.DiffFn seam (ADR-088 D2 mode:update):
 // diffGoalAmendment's one surviving production caller (goal_compile.go's own
 // guard comment, removed below). Both sides are unmarshaled via
 // loadCompiledGoal so the comparison runs against the SAME normalized shape
@@ -643,7 +643,7 @@ func formatGoalAmendmentSummary(amd *GoalAmendment) string {
 	)
 }
 
-// goalRecordFeasibilityFn is the tools.FeasibilityFn seam (ADR-081 D2):
+// goalRecordFeasibilityFn is the tools.FeasibilityFn seam (ADR-088 D2):
 // vets set_goal's submitted criteria∪dod union through the SAME compile-time
 // feasibility gate (feasibilityGate, goal_compile.go) the deterministic and
 // LLM compile paths already run, over the CALLING agent's own tool policy
@@ -665,7 +665,7 @@ func (al *AgentLoop) goalRecordFeasibilityFn(ctx context.Context, criteria []tas
 	return nil
 }
 
-// afterGoalRecordWrite is ADR-081 D5's write-side effect, run after EVERY
+// afterGoalRecordWrite is ADR-088 D5's write-side effect, run after EVERY
 // successful goal-record write (register or update) that lands through
 // WriteRecord above:
 //
@@ -735,7 +735,7 @@ func (al *AgentLoop) afterGoalRecordWrite(sessionID, recordJSON, diffSummary str
 // (returns false, no event emitted) when there is no active goal at all, or
 // the store/session cannot be resolved.
 //
-// Item 14 (review-round-1, ADR-081): a WS reattach (SPA reload/reconnect)
+// Item 14 (review-round-1, ADR-088): a WS reattach (SPA reload/reconnect)
 // has no rehydration path for a goal's already-registered record —
 // goal_status is a pure live push (EventKindGoalStatusChanged), never a
 // persisted, replayable transcript entry, so the record card the SPA

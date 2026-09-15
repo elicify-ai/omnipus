@@ -3,14 +3,14 @@
 // Copyright (c) 2026 Omnipus contributors
 
 // goal_flow_integration_test.go is the wave-5 CROSS-AREA integration suite
-// for ADR-081 (work-first goal flow): it drives full, multi-turn scripted-
+// for ADR-088 (work-first goal flow): it drives full, multi-turn scripted-
 // provider lifecycles through the REAL runTurn/processMessage/
 // processSystemMessage machinery, gluing together the per-area coverage
 // already proven in goal_first_move_test.go (D3/D4, renamed from
 // goal_forcing_test.go on the D3 amendment — tool-choice forcing is
 // deleted; narrowing survives), goal_keeper_repairs_test.go (D6), and
 // goal_record_wiring_test.go (D2/D5/D7). Traces to:
-// docs/internal/architecture/ADR-081-work-first-goal-flow.md,
+// docs/internal/architecture/ADR-088-work-first-goal-flow.md,
 // docs/internal/specs/work-first-goal-flow-spec.md tests 21/22/23.
 package agent
 
@@ -535,7 +535,7 @@ func TestGoalClarify_WebCardRoundtrip(t *testing.T) {
 // ============================================================================
 
 // TestGoalFlow_EndToEnd_Web drives a single scripted-provider webchat
-// session through the FULL ADR-081 lifecycle in one test (spec test 22):
+// session through the FULL ADR-088 lifecycle in one test (spec test 22):
 // instant activation with zero LLM calls before the first working request
 // (C-1) -> the forced first request registers the record via set_goal ->
 // free work continues -> an ordinary steering message updates the record

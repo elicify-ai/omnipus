@@ -13,7 +13,7 @@ import generated "github.com/elicify-ai/omnipus/pkg/api/generated"
 // not implement (that frame is the wire/engine lane's concern, not S1's).
 //
 // "In chat, the two phases collapse: /goal creates the definition and
-// activates it in the current session in one step (ADR-081 D1's instant
+// activates it in the current session in one step (ADR-088 D1's instant
 // activation is unchanged). On a task, they are separated in time: the
 // definition is authored up front, dormant, and activates when the task
 // starts and mints its session." (ADR-086 D2). This package's job is to

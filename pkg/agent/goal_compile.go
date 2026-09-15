@@ -566,7 +566,7 @@ func formatGoalStatementAndCriteria(g *CompiledGoal) string {
 }
 
 // formatGoalEcho renders the compiled goal RECORD (FR-113/D11/G-8;
-// RE-SCOPED by ADR-081 D9/D5: the goal is ALREADY ACTIVE by the time this
+// RE-SCOPED by ADR-088 D9/D5: the goal is ALREADY ACTIVE by the time this
 // renders — instant activation, D1 — so the old "reply confirm to activate"
 // ritual is gone). Two surfaces use it: the channel-origin record echo
 // (FR-020 — a channel user has no SPA frame to read the record from) and

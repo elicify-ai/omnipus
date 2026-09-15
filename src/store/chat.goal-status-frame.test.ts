@@ -184,19 +184,19 @@ describe('chat handleFrame — goalPills bound (regression fix, bc66345f follow-
   })
 })
 
-// ── Regression coverage: ADR-081 D5 store hygiene — '_default' eviction ────
+// ── Regression coverage: ADR-088 D5 store hygiene — '_default' eviction ────
 //
-// Root cause #2 of the 2026-09-07 UX trace (ADR-081 §"The live evidence"):
+// Root cause #2 of the 2026-09-07 UX trace (ADR-088 §"The live evidence"):
 // the deleted `queued` emission carried no `goal_id`, landed on the
 // `'_default'` key, and was never overwritten once a later KEYED `active`
 // frame arrived under a different key — the stale card rendered forever.
-// The `queued` emission itself is gone (ADR-081 D9), but this is the
+// The `queued` emission itself is gone (ADR-088 D9), but this is the
 // defensive store-hygiene half of the fix (D5): any keyed (non-empty
 // goal_id) frame arriving for a session evicts a lingering `'_default'`
 // pill for that SAME session, so a stale empty-id entry (however it got
 // there — a pre-upgrade session, a legacy client) can never survive
 // alongside a real, keyed goal.
-describe('chat handleFrame — goal_status: \'_default\' eviction on a keyed frame (ADR-081 D5)', () => {
+describe('chat handleFrame — goal_status: \'_default\' eviction on a keyed frame (ADR-088 D5)', () => {
   it('evicts a lingering \'_default\' pill once a keyed frame arrives for the same session', () => {
     act(() => {
       useSessionStore.setState({ activeSessionId: SID_A })
@@ -236,7 +236,7 @@ describe('chat handleFrame — goal_status: \'_default\' eviction on a keyed fra
   })
 })
 
-// ── Regression coverage: ADR-081 code-review round 1, Finding 1 (HIGH) ─────
+// ── Regression coverage: ADR-088 code-review round 1, Finding 1 (HIGH) ─────
 //
 // The engine's ROUTINE goal_status emissions (end-of-turn progress pushes
 // from the goal loop) carry NO criteria/dod/definition — only the
@@ -249,7 +249,7 @@ describe('chat handleFrame — goal_status: \'_default\' eviction on a keyed fra
 // (chat.ts) now field-preserves
 // criteria/dod/definition across a criteria-less, non-terminal frame for
 // the same pill key — this is the exact masked sequence the reviewer named.
-describe('chat handleFrame — goal_status: goalPills field-preserving merge (ADR-081 code-review round 1, Finding 1)', () => {
+describe('chat handleFrame — goal_status: goalPills field-preserving merge (ADR-088 code-review round 1, Finding 1)', () => {
   const oneCriterion: NonNullable<GoalStatusFrame['criteria']> = [
     {
       kind: 'prose',

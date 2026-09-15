@@ -881,7 +881,7 @@ func cloneStringAnyMap(src map[string]any) map[string]any {
 // unconditionally clone the request before checking for registered
 // interceptors — so a type-erasing clone would corrupt options fleet-wide
 // with nothing louder than a per-request WARN to notice it by. (Discovered
-// while ADR-081 D3 briefly threaded a typed tool-choice value through here;
+// while ADR-088 D3 briefly threaded a typed tool-choice value through here;
 // that feature was later removed by the D3 amendment, but the hazard is
 // generic to any typed option and the shallow copy is the right shape
 // regardless.) A

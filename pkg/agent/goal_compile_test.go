@@ -114,7 +114,7 @@ func TestGoalCompile_Echo_Amendment(t *testing.T) {
 func intp(v int) *int { return &v }
 
 // TestGoalCompile_AmendmentDiff_ShowsDoDDelta is code-review fix-wave finding
-// #4, re-scoped by ADR-081 D9 (formatAmendmentEcho is retired — set_goal's
+// #4, re-scoped by ADR-088 D9 (formatAmendmentEcho is retired — set_goal's
 // mode:update tool result renders the diff in wave 2; this test now covers
 // diffGoalAmendment's own DoD-delta computation directly): an amendment diff
 // must show DoD deltas alongside Criteria deltas — a re-statement over an
@@ -327,7 +327,7 @@ func TestCriterionUnjudgeable_OwnerRemediation(t *testing.T) {
 // --- FR-114/N-12: /goal clear cancels in-flight compilation -----------------
 
 // TestGoalClear_AfterRestate_ClearsEverything replaces the ADR-074-era
-// TestGoalClear_CancelsInflightCompilation (ADR-081 D9: there is no more
+// TestGoalClear_CancelsInflightCompilation (ADR-088 D9: there is no more
 // pending-amendment state for /goal clear to cancel — a restate applies
 // immediately): activate a goal, restate it (marker-only, applies in place),
 // then verify /goal clear empties all goal state.
@@ -340,7 +340,7 @@ func TestGoalClear_AfterRestate_ClearsEverything(t *testing.T) {
 		Channel: "webchat", ChatID: "c1", SessionKey: "sk1", UserInitiated: true,
 	}
 
-	// Instant activation (ADR-081 D1) — active immediately, no confirm step.
+	// Instant activation (ADR-088 D1) — active immediately, no confirm step.
 	al.applyGoalCommandPrompt(context.Background(),
 		bus.InboundMessage{Content: "/goal the feature lands correctly", UserInitiated: true}, agentInst, &opts)
 	activatePendingGoal(t, al, agentInst, &opts)

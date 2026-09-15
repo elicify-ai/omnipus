@@ -1,6 +1,6 @@
 # Browser integration with updated release — 2026-09-15
 
-Integrates release `fad606838d4175f517b4340cc6882f04fa5e6a75` into browser improvements starting at `97cf7e52fdb290d228774e1e32b542b27f7c6230`. The release includes the goal/judge and library work. Work was isolated from the original dirty checkout; main was not changed.
+Integrates release `fad606838d4175f517b4340cc6882f04fa5e6a75` into browser improvements starting at `97cf7e52fdb290d228774e1e32b542b27f7c6230`. The release includes the goal/judge and library work. The subsequent release commit `1f996b01d2e7c4ffaa0b87361c32f4951fde7074` was also merged; its complete diff was verified to contain only ADR reference renumbering and the corresponding document renames. Work was isolated from the original dirty checkout; main was not changed.
 
 ## Integration decisions
 

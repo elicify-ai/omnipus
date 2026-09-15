@@ -38,7 +38,7 @@ import (
 )
 
 // goalConfirmNoOpArg is the ONLY thing `/goal confirm` still recognizes
-// (ADR-081 D1/D9/FR-022): goals activate instantly now, so there is nothing
+// (ADR-088 D1/D9/FR-022): goals activate instantly now, so there is nothing
 // left to confirm. This is a NEW, narrow verb match — never the retired
 // isGoalConfirmVerb/IsGoalConfirm/confirmGoalAliases machinery — kept solely
 // so the literal word "confirm" doesn't fall through to the prose path and
@@ -59,7 +59,7 @@ func newGoalID() string {
 
 // applyGoalCommandPrompt is handleCommand's rewrite hook for `/goal`
 // (mirrors applyMemoryCommandPrompt/applyExplicitSkillCommand's shape).
-// Rewritten by ADR-081 D1 (instant activation): `/goal` (bare status),
+// Rewritten by ADR-088 D1 (instant activation): `/goal` (bare status),
 // `/goal clear|stop|off|reset|cancel|none`, and `/goal confirm` (now a
 // no-op notice, FR-022) answer SYNCHRONOUSLY (matched=true, handled=true, no
 // LLM call); `/goal <intent>` — fresh OR an active-goal prose restate —
@@ -117,7 +117,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 		return true, true, al.clearGoalByUser(sessionID, store, clearAgentID)
 	}
 	if strings.EqualFold(strings.TrimSpace(args), goalConfirmNoOpArg) {
-		// ADR-081 D1/FR-022: goals activate immediately now — there is no
+		// ADR-088 D1/FR-022: goals activate immediately now — there is no
 		// pending state left to confirm. Without this recognizer, "confirm"
 		// would fall through to the prose path below and activate a goal
 		// literally named "confirm".
@@ -136,7 +136,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	}
 
 	if activeGoal := activeGoalForSession(sessionID); activeGoal != nil {
-		// ADR-081 D1/D5 (US-5): an active goal's restate is STEERING, never a
+		// ADR-088 D1/D5 (US-5): an active goal's restate is STEERING, never a
 		// pending amendment awaiting confirm. The GoalID NEVER changes on a
 		// restate (FR-001) — only a fresh activation on a goalless session
 		// mints one (this keeps the FR-010 question budget and the FR-014b
@@ -161,7 +161,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 			// (new prompt, old ladder), the agent worked the new intent
 			// without re-registering, and the Judge adjudicated its claim
 			// against the stale ladder. goal.Restate supersedes the old
-			// ladder into history and returns the record to ADR-081 D1's
+			// ladder into history and returns the record to ADR-088 D1's
 			// recordless state, so the working agent registers a record for
 			// the NEW intent (the post-turn registration nudge fires if it
 			// does not) and, until it does, the Judge judges the new prompt
@@ -218,7 +218,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	al.cancelOrphanedClarifyCard(al.getAskUserRegistry(), sessionID)
 
 	if goalIntentNeedsLLMCompile(args) {
-		// ADR-081 D1 (US-1): instant activation. Admit ONCE (FR-003), mint the
+		// ADR-088 D1 (US-1): instant activation. Admit ONCE (FR-003), mint the
 		// goal id, write the ACTIVE record up front with GoalCriteriaJSON
 		// EMPTY — the working agent authors the record itself via `set_goal`
 		// as its first move (wave 2's forced two-door mechanism; this is D3's
@@ -378,7 +378,7 @@ func formatCompileRejection(r *FeasibilityRejection) string {
 		"\n\nNo criterion was saved. Please restate the goal with a verifiable criterion."
 }
 
-// activateInstantGoal is ADR-081 D1's instant-activation write (US-1): mints
+// activateInstantGoal is ADR-088 D1's instant-activation write (US-1): mints
 // the goal id, writes the ACTIVE record up front with GoalCriteriaJSON
 // EMPTY — the working agent authors the record itself via `set_goal` as its
 // first move (wave 2's forced two-door mechanism; this is D3's forcing
@@ -397,7 +397,7 @@ func (al *AgentLoop) activateInstantGoal(
 	goalID := newGoalID()
 	// GOAL-FR-009/FR-010/FR-011: mint AND activate the durable pkg/goal
 	// record in the same instant-activation write — a chat goal collapses
-	// the defining and active phases into one turn (ADR-081 D1). Criteria is
+	// the defining and active phases into one turn (ADR-088 D1). Criteria is
 	// empty here by design (the working agent authors it via set_goal as its
 	// own first move, D3's forcing predicate); dod is the built-in floor
 	// layer. Without this, set_goal's WriteRecord (goal_record_wiring.go)
@@ -424,7 +424,7 @@ func (al *AgentLoop) activateInstantGoal(
 
 // createAndActivateSessionGoalRecord is GOAL-FR-009/FR-010/FR-011's
 // chat-side activation write (E12): a chat `/goal` collapses the defining
-// and active phases into one turn (ADR-081 D1's instant activation,
+// and active phases into one turn (ADR-088 D1's instant activation,
 // unchanged by this wave) — unlike a task-owned goal, which is created in
 // the defining phase well before it ever runs and only activated later
 // (task_executor.go::activateTaskGoal), a chat goal has to be minted AND
@@ -464,7 +464,7 @@ func (al *AgentLoop) createAndActivateSessionGoalRecord(
 }
 
 // applyGoalMarkerRestate applies a deterministic marker-only restate to an
-// ALREADY-ACTIVE goal (ADR-081 D1/US-5 S19): the record updates in place —
+// ALREADY-ACTIVE goal (ADR-088 D1/US-5 S19): the record updates in place —
 // same GoalID, same rounds/started-at, no confirm ritual. diffGoalAmendment
 // is wired into set_goal's own update path in a later wave; this restate
 // simply lands the new record.
@@ -538,9 +538,9 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 }
 
 // cancelOrphanedClarifyCard cancels any AskUserQuestion card parked on this
-// session WITHOUT dispatching a resume turn (ADR-081 D9/FR-028 —
+// session WITHOUT dispatching a resume turn (ADR-088 D9/FR-028 —
 // reg.CancelByUser is the WRONG primitive here: it injects a resume turn the
-// caller has no context to act on). Re-homed by ADR-081: its OLD call sites
+// caller has no context to act on). Re-homed by ADR-088: its OLD call sites
 // (inside the now-deleted emitGoalClarificationCard, cleaning up a
 // just-created card's own persist failure) are gone; its NEW call sites are
 // a fresh goal activation superseding a stale card from an earlier attempt
@@ -560,7 +560,7 @@ func (al *AgentLoop) cancelOrphanedClarifyCard(reg tools.AskUserQuestionRegistry
 // goalStatusReply formats `/goal status`'s deterministic reply (FR-069/
 // FR-029): condition, elapsed wall-clock, rounds_used/bound, cumulative
 // token spend (visible-only, NFR-1 — never used to stop the loop), latest
-// judge reason, active loops: N/cap, and — REWRITTEN by ADR-081 (E10/S-39)
+// judge reason, active loops: N/cap, and — REWRITTEN by ADR-088 (E10/S-39)
 // — the record summary (statement + criteria + DoD) once the working agent
 // has registered one via `set_goal`. The old pending-draft/clarification
 // branches are gone (there is no more pending state to report); an
@@ -625,7 +625,7 @@ const (
 // clearGoal ends the session's active goal (FR-070's shared body for
 // `/goal clear` + aliases, the round/budget/idle-expiry brakes, and the
 // task/plan card Clear button's future REST equivalent). Returns the
-// user-facing reply. Despite its name and its ADR-081-era session-meta
+// user-facing reply. Despite its name and its ADR-088-era session-meta
 // zeroing below, this is now (ADR-086 GOAL-FR-027/FR-028, this wave) the
 // SHARED terminal-transition body for every ending kind, not merely the
 // explicit user clear — its signature stays exactly as it was so every
@@ -708,14 +708,14 @@ type endedGoal struct {
 // clearGoalWithOutcome (goal_outcome.go) can record the ending's outcome line
 // only once the ending itself is saved.
 func (al *AgentLoop) endActiveGoal(sessionID string, store *session.UnifiedStore, note string) (string, *endedGoal, bool) {
-	// FR-114 (N-12): /goal clear cancels the in-flight verifier. ADR-081 D9
+	// FR-114 (N-12): /goal clear cancels the in-flight verifier. ADR-088 D9
 	// retires the pending-amendment/pending-compile states this check used to
 	// also cover (GoalPendingJSON/GoalClarificationJSON no longer exist) —
 	// hadGoal is now simply "is there an active goal record to clear".
 	rec := activeGoalForSession(sessionID)
 	hadGoal := rec != nil
 
-	// ADR-081 D9/FR-028 (E7/S-41): a `/goal clear` must not leave an
+	// ADR-088 D9/FR-028 (E7/S-41): a `/goal clear` must not leave an
 	// AskUserQuestion card parked on this session — cancel it WITHOUT
 	// dispatching a resume turn (the re-homed cancelOrphanedClarifyCard).
 	// Runs whether or not a goal was actually active, exactly as before.
@@ -912,8 +912,8 @@ func (al *AgentLoop) emitGoalStatusFrame(sessionID, goalID, condition string, ro
 
 // emitGoalStatusFrameWithCriteria is emitGoalStatusFrame plus the compiled
 // criteria breakdown (ADR-074 D5.2 / FR-011): every current call site passes
-// nil (ADR-081 D9 retired the `queued` pending-confirm emission that used to
-// be the one caller passing a populated slice) — wave 2 (ADR-081 FR-019)
+// nil (ADR-088 D9 retired the `queued` pending-confirm emission that used to
+// be the one caller passing a populated slice) — wave 2 (ADR-088 FR-019)
 // wires a `set_goal`-registered/updated record's criteria/DoD through this
 // path on the `active` emission.
 func (al *AgentLoop) emitGoalStatusFrameWithCriteria(sessionID, goalID, condition string, round, maxRounds int, reason, state string, criteria []task.AcceptanceCriterion) {
@@ -970,7 +970,7 @@ var goalJudgeRoundTimeout = planJudgeRoundTimeout //nolint:gochecknoglobals
 //
 // D13 (JUDGE-FR-098): this hook stays cheap and synchronous for everything
 // that always was — the origin gate, the waiting_on_user/blocked park, the
-// activity bump, the ADR-081 D3 post-turn
+// activity bump, the ADR-088 D3 post-turn
 // correction — but it no longer calls runGoalAdjudication itself. On a
 // resolved `met` claim it records a DEFERRED dispatch on result (the
 // goalDeferredAdjudication field, turn.go) instead: runAgentLoop performs
@@ -1449,7 +1449,7 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		al.bumpGoalActivityOnTurn(rec.GoalID)
 		al.emitGoalStatusFrame(sessionID, rec.GoalID, rec.Prompt, rec.Round,
 			rec.MaxRounds, rec.LatestReason, goalPillActive)
-		// ADR-081 D3 AMENDMENT item 3 (2026-09-07): the immediate post-turn
+		// ADR-088 D3 AMENDMENT item 3 (2026-09-07): the immediate post-turn
 		// correction that replaces provider tool-choice forcing as the
 		// enforcement point. An ordinary (non-parked, non-waiting, non-claim)
 		// goal turn just completed with the compiled record STILL empty —
@@ -1460,7 +1460,7 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	}
 }
 
-// maybeNudgeUnregisteredGoal is ADR-081 D3 amendment item 3's immediate
+// maybeNudgeUnregisteredGoal is ADR-088 D3 amendment item 3's immediate
 // post-turn correction: called only from checkGoalLoopAfterTurn's ordinary-
 // turn branch (default case — a claim, a waiting_on_user pause, or a bare
 // claim all take their own dedicated action and never reach here). When the

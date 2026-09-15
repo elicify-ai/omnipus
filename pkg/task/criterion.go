@@ -344,7 +344,7 @@ type AcceptanceCriterion struct {
 	// NEVER recomputed at adjudication time — the adjudicator reads this
 	// persisted value only. A count frozen before judging cannot be tuned in
 	// response to a failing verdict the way a count derived at judging time
-	// could (A-17): under ADR-081 the working agent authors the goal record
+	// could (A-17): under ADR-088 the working agent authors the goal record
 	// via set_goal, and mode:update replaces the outgoing criteria set, so a
 	// judging-time count would let the judged party shrink a failing
 	// multi-clause criterion into fewer clauses to cut its own evidence bar.

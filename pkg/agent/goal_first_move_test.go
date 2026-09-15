@@ -2,14 +2,14 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// goal_first_move_test.go covers ADR-081 D3 (two-door narrowed first move,
+// goal_first_move_test.go covers ADR-088 D3 (two-door narrowed first move,
 // as amended 2026-09-07 — see the D3 AMENDMENT block in the ADR) and D4
 // (rubric relocation + the tool-calling first-move instruction) at both the
 // evaluateGoalForcing unit level and, for the request-shape-level
 // guarantees a unit test cannot observe (what runTurn actually SENDS to the
 // provider), a full runTurn drive — the wave-2 (W2a) regression suite,
 // updated for the D3 amendment. Traces to:
-// docs/internal/architecture/ADR-081-work-first-goal-flow.md (D3
+// docs/internal/architecture/ADR-088-work-first-goal-flow.md (D3
 // AMENDMENT/D4/D7), docs/internal/specs/work-first-goal-flow-spec.md tests
 // 8/9, C-3/C-4.
 //
@@ -68,7 +68,7 @@ func allowGoalToolsPolicy(agentInst *AgentInstance) {
 
 // setActiveGoalRecordless writes an active goal with an EMPTY compiled
 // record directly onto sid — the D3 base predicate's legal transient state
-// (ADR-081 D1), without going through applyGoalCommandPrompt (W1b's own
+// (ADR-088 D1), without going through applyGoalCommandPrompt (W1b's own
 // lane) at all.
 func setActiveGoalRecordless(t *testing.T, _ *session.UnifiedStore, sid, goalID, condition string) {
 	t.Helper()

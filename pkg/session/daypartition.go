@@ -153,7 +153,7 @@ type SessionMeta struct {
 	// this session; a terminal-status record (status answered/cancelled)
 	// means "not pending" — the collapsed card record renders from it on
 	// history reload. Session-scoped pending interaction state that must not
-	// bump the session's composed recency — untouched by ADR-081 D9, which
+	// bump the session's composed recency — untouched by ADR-088 D9, which
 	// belongs to the tool, not the deleted confirm-gate coupling.
 	//
 	// ADR-086 GOAL-FR-005 (wave S2): this field's NAME, JSON tag and

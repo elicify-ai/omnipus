@@ -37,7 +37,7 @@
 // a code move in a fresh tree, not a migration — nothing reads an old
 // install's goal.json for this field, and no per-session warning is
 // emitted. See goal_meta_greenfield_test.go's own greenfield contract for
-// the sibling precedent (ADR-081 D9's confirm-gate field removal) this
+// the sibling precedent (ADR-088 D9's confirm-gate field removal) this
 // follows.
 package session
 
