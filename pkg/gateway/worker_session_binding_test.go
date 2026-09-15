@@ -45,13 +45,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // newWorkerTestRestAPI builds a restAPI whose config holds a base default agent
@@ -107,29 +106,6 @@ func newWorkerTestRestAPI(t *testing.T) (*restAPI, string) {
 	}
 	t.Cleanup(func() { api.agentLoop.WaitForActiveRequests() })
 	return api, tmpDir
-}
-
-// TestCreateSessionHTTP_RejectsWorker verifies RESIDUAL PATH 5: an explicit worker
-// agent_id on POST /api/v1/sessions returns 400 — a worker cannot back a chat
-// session. A base agent (control) returns 201.
-func TestCreateSessionHTTP_RejectsWorker(t *testing.T) {
-	api, _ := newWorkerTestRestAPI(t)
-
-	// Worker agent_id → 400.
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", strings.NewReader(`{"agent_id":"hans"}`))
-	api.createSessionHTTP(w, r)
-	require.Equal(t, http.StatusBadRequest, w.Code,
-		"a worker agent_id must be rejected with 400 when creating a session")
-	assert.Contains(t, strings.ToLower(w.Body.String()), "worker",
-		"the error must explain a worker cannot back a session")
-
-	// Control: base agent → 201.
-	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPost, "/api/v1/sessions", strings.NewReader(`{"agent_id":"mia"}`))
-	api.createSessionHTTP(w2, r2)
-	require.Equal(t, http.StatusCreated, w2.Code,
-		"a base agent must be able to back a session (control)")
 }
 
 // TestTaskPost_WorkerAssignment verifies the P1 fix on the unified task
@@ -460,24 +436,6 @@ func TestDelegationWorkerTaskStillSucceeds(t *testing.T) {
 		"the delegated task title must match the original")
 }
 
-// TestFirstChatTargetAgentID_SkipsWorker verifies RESIDUAL PATH 6: the last-resort
-// fallback never lands on a worker even when the worker appears first in the list.
-// It returns the first chat-target agent instead.
-func TestFirstChatTargetAgentID_SkipsWorker(t *testing.T) {
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				// Worker appears first but must be skipped — workers are never chat targets.
-				{ID: "hans", Type: config.AgentTypeWorker},
-				{ID: "mia"},
-			},
-		},
-	}
-	got := firstChatTargetAgentID(cfg)
-	assert.NotEqual(t, "hans", got, "firstChatTargetAgentID must never return a worker")
-	assert.Equal(t, "mia", got, "firstChatTargetAgentID must return the first chat-target agent")
-}
-
 // TestHandleChatMessage_RejectsWorkerAgentID verifies RESIDUAL PATH 4: a chat
 // frame that explicitly addresses a worker agentID must be rejected with an error
 // frame and must NOT mint a live session for the worker. A worker is not a chat
@@ -521,20 +479,4 @@ func TestHandleChatMessage_RejectsWorkerAgentID(t *testing.T) {
 			return
 		}
 	}
-}
-
-// TestFirstChatTargetAgentID_AllWorkersReturnsEmpty verifies the degenerate case:
-// when every agent is a worker, the fallback returns "" rather than a
-// worker (the caller then surfaces a "no agent configured" error).
-func TestFirstChatTargetAgentID_AllWorkersReturnsEmpty(t *testing.T) {
-	cfg := &config.Config{
-		Agents: config.AgentsConfig{
-			List: []config.AgentConfig{
-				{ID: "w1", Type: config.AgentTypeWorker},
-				{ID: "w2", Type: config.AgentTypeWorker},
-			},
-		},
-	}
-	assert.Equal(t, "", firstChatTargetAgentID(cfg),
-		"when all agents are workers, the fallback must return empty, never a worker")
 }

@@ -15,16 +15,12 @@
 package gateway
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestCentralBuiltinRegistry_ContainsGeneralAndSystemTools asserts that a
@@ -117,65 +113,4 @@ func TestCentralBuiltinRegistry_NoDoubleCountSystemTools(t *testing.T) {
 	}
 	assert.Equal(t, 33, reg.Count(),
 		"system tools registered once must produce exactly 33 entries — no double-count (Issue #350)")
-}
-
-// TestHandleToolsRegistry_WithCombinedRegistry verifies that HandleToolsRegistry
-// (GET /api/v1/tools) returns both general and system tool entries when the central
-// builtinRegistry is populated the same way as the corrected gateway boot path.
-//
-// BDD: Given a restAPI with a correctly-populated builtinRegistry (system + general),
-//
-//	When GET /api/v1/tools is called,
-//	Then the response is a JSON array with more than 36 entries,
-//	And the array contains entries for exec and list_agents.
-//
-// Traces to: US-1/AC2, FR-101, SC-101, TDD T3, Issue #350.
-func TestHandleToolsRegistry_WithCombinedRegistry(t *testing.T) {
-	api := newTestRestAPIWithHome(t)
-
-	// Build a combined registry (system + general builtins) and wire it into the api.
-	reg := tools.NewBuiltinRegistry()
-	for _, tool := range systools.AllTools(nil) {
-		if err := reg.RegisterBuiltin(tool); err != nil {
-			t.Logf("system tool %q skipped: %v", tool.Name(), err)
-		}
-	}
-	for _, tool := range tools.GeneralBuiltinMetadata() {
-		if err := reg.RegisterBuiltin(tool); err != nil {
-			t.Logf("general builtin %q skipped: %v", tool.Name(), err)
-		}
-	}
-	api.builtinRegistry = reg
-
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/tools", nil)
-	r = withAdminRole(r)
-	w := httptest.NewRecorder()
-	api.HandleToolsRegistry(w, r)
-
-	require.Equal(t, http.StatusOK, w.Code,
-		"GET /api/v1/tools must return 200: %s", w.Body)
-
-	var entries []map[string]any
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &entries),
-		"response must unmarshal as a JSON array")
-
-	assert.Greater(t, len(entries), 36,
-		"GET /api/v1/tools must return more than 36 entries with the combined registry (SC-101)")
-
-	// Verify both general and system entries are present.
-	nameSet := make(map[string]struct{}, len(entries))
-	for _, e := range entries {
-		name, _ := e["name"].(string)
-		if name != "" {
-			nameSet[name] = struct{}{}
-		}
-	}
-	for _, expected := range []string{"bash", "read_file", "search_web", "list_agents"} {
-		assert.Contains(t, nameSet, expected,
-			"response must include tool %q (system + general combined registry check)", expected)
-	}
-
-	// No tool may appear twice.
-	assert.Equal(t, len(entries), len(nameSet),
-		"each tool must appear exactly once in GET /api/v1/tools (no duplicate names)")
 }

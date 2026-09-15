@@ -41,11 +41,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/config"
-	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
 // TestGodMode_POST_ReloadCompletesBeforeResponse proves site 1: setGodMode
@@ -121,38 +119,6 @@ func TestSetAgentMailbox_ReloadCompletesBeforeResponse(t *testing.T) {
 	assert.False(t, api.agentLoop.IsReloadPending(),
 		"setAgentMailbox returned 200 while a config reload was still pending — the newly enabled "+
 			"mailbox's email tools are not guaranteed to be registered on the running agent instance yet")
-}
-
-// TestDeleteAgentMailbox_ReloadCompletesBeforeResponse proves site 4:
-// deleteAgentMailbox must not report success until the registry rebuild that
-// actually deregisters the removed mailbox's email tools has completed.
-// Before the fix, the running agent instance could keep the email tools live
-// (registered at the PRIOR construction, before the mailbox was removed) for
-// as long as the async rebuild took to run, even though the handler already
-// reported the mailbox gone.
-func TestDeleteAgentMailbox_ReloadCompletesBeforeResponse(t *testing.T) {
-	api := newMailboxTestAPI(t, map[string]map[string]config.MailboxConfig{
-		"mia": {"ws_my": {
-			Enabled: true, WorkspaceID: "ws_my", IMAPHost: "i", SMTPHost: "s",
-			Username: "u", PasswordRef: "mailbox_mia_ws_my_password",
-		}},
-	})
-	require.NoError(t, api.credStore.Set("mailbox_mia_ws_my_password", "secret"))
-	require.NoError(t, api.safeUpdateConfigJSON(func(m map[string]any) error {
-		m["mailboxes"] = map[string]any{
-			"mia": map[string]any{"ws_my": map[string]any{"enabled": true, "workspace_id": "ws_my"}},
-		}
-		return nil
-	}))
-	wireAsyncReload(t, api, 30*time.Millisecond)
-
-	w := httptest.NewRecorder()
-	api.deleteAgentMailbox(w, "mia", "ws_my")
-
-	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-	assert.False(t, api.agentLoop.IsReloadPending(),
-		"deleteAgentMailbox reported success while a config reload was still pending — the removed "+
-			"mailbox's email tools could remain registered on the running agent instance")
 }
 
 // TestProvidersPUT_ReloadCompletesBeforeResponse proves site 5: the

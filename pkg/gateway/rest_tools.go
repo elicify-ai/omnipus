@@ -1,0 +1,450 @@
+// rest_tools.go: Tool registry and per-agent tool visibility
+
+package gateway
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
+	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/entity"
+)
+
+// --- Tools ---
+
+// HandleTools handles GET /api/v1/tools — returns the list of tools available to the agent.
+func (a *restAPI) HandleTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	registry := a.agentLoop.GetRegistry()
+	agent := registry.GetDefaultAgent()
+	if agent == nil {
+		jsonOK(w, []map[string]any{})
+		return
+	}
+	allTools := agent.Tools.GetAll()
+	tools := make([]map[string]any, 0, len(allTools))
+	for _, t := range allTools {
+		name := t.Name()
+		category := "general"
+		if idx := strings.Index(name, "."); idx > 0 {
+			category = name[:idx]
+		}
+		tools = append(tools, map[string]any{
+			"name":        name,
+			"category":    category,
+			"description": t.Description(),
+		})
+	}
+	jsonOK(w, tools)
+}
+
+// --- Tool Visibility (Issue #41) ---
+
+// HandleMCPTools handles GET /api/v1/tools/mcp — returns all configured MCP
+// servers with their status and tool lists for the agent tool picker UI.
+func (a *restAPI) HandleMCPTools(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	cfg := a.agentLoop.GetConfig()
+	servers := make([]map[string]any, 0, len(cfg.Tools.MCP.Servers))
+	for name, srv := range cfg.Tools.MCP.Servers {
+		entry := map[string]any{
+			"id":      name,
+			"name":    name,
+			"enabled": srv.Enabled,
+			"command": srv.Command,
+		}
+		if len(srv.Args) > 0 {
+			entry["args"] = srv.Args
+		}
+		servers = append(servers, entry)
+	}
+	jsonOK(w, servers)
+}
+
+// updateAgentTools handles PUT /api/v1/agents/{id}/tools — replaces the
+// agent's tool visibility config.
+func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agentID string) {
+	cfg := a.agentLoop.GetConfig()
+	found := false
+	var foundAgent config.AgentConfig
+	for _, ac := range cfg.Agents.List {
+		if ac.ID == agentID {
+			found = true
+			foundAgent = ac
+			break
+		}
+	}
+	if !found {
+		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
+		return
+	}
+	// Locked (core/system) agents cannot have their tool policy overwritten via the API.
+	// Use coreagent.IsCoreAgent or check the Locked flag.
+	if foundAgent.Locked {
+		jsonErr(w, http.StatusForbidden, fmt.Sprintf("agent %q is locked and cannot be modified", agentID))
+		return
+	}
+	// subagent_3p (External CLI) agents have no tools_cfg on the wire at all
+	// (W1 discriminated union — AgentCreateRequestSubagent3p has no tools_cfg
+	// property) — the runner manages its own tool loop. This endpoint is a
+	// separate write path from updateAgent's firstForbiddenSubagent3pField
+	// guard, so it needs its own check: closes the tools_cfg-for-3p leak
+	// endpoint (a caller could otherwise bypass the PUT /agents/{id} guard by
+	// hitting PUT /agents/{id}/tools directly).
+	if isExternalSubagent(foundAgent) {
+		jsonErr(w, http.StatusBadRequest, "external subagents run their own tools — tools_cfg is not configurable")
+		return
+	}
+
+	// The step-up re-auth gate (requireReAuth) was INTENTIONALLY REMOVED here for
+	// the per-agent tool-grant PUT per UAT feedback (operator found re-typing the
+	// password to change a tool permission to be unnecessary friction). This is a
+	// deliberate, scoped loosening — do NOT restore it. Authorization is still
+	// enforced: this handler runs behind withAuth, so the caller must hold a valid
+	// session; only the password re-prompt is removed. The same gate remains in
+	// force on Integrations/Providers/Sandbox/Credentials/Performance PUTs.
+	if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); !ok || user == nil {
+		jsonErr(w, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+
+	var req gen.AgentToolsUpdateRequest
+	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(w, r, "AgentToolsUpdateRequest", &req, validateEnabled) {
+		return
+	}
+
+	// CLAUDE.md hard constraint 6 — a body carrying no `builtin` object at all
+	// is REJECTED, never treated as "replace the agent's policy map with
+	// nothing".
+	//
+	// This endpoint fully replaces the agent's builtin tools config on persist
+	// (see the updateConfigJSONLocked closure below). Before this guard, a body
+	// missing the required `builtin` wrapper — e.g. {"policies": {...}}, the
+	// shape a client that assumed a PATCH-style partial update would send —
+	// left builtinPolicies nil, and the persist closure then wrote
+	// `"tools": {"builtin": {}, "mcp": {}}`: a completely empty policy map,
+	// with a 200 OK and no indication anything was wrong.
+	//
+	// That empty state does NOT fail closed. Runtime resolution is a
+	// strictest-wins merge where one side is enough
+	// (pkg/tools/compositor.go's resolveEffectivePolicyWith), so every tool
+	// then resolved to the GLOBAL ceiling value alone — mostly "allow". The
+	// coverage guard further down could not catch it either, because
+	// config.ValidateToolPolicyCoverage counts a tool as covered when either
+	// the global map or the agent map has an entry, and the seeded global map
+	// covers the entire static catalog on a default install. Reproduced live
+	// (UAT 2026-09-02, batch 2): an agent explicitly policied `bash: deny` and
+	// `list_providers: deny` executed BOTH successfully after one such
+	// malformed request. This is the one defect of the three that failed in
+	// the ALLOW direction, so it is rejected here at the earliest possible
+	// point, before any normalization can make a partial body look valid.
+	//
+	// UAT 2026-09-13 D-86: the body of a GET /agents/{id}/tools response
+	// (AgentToolsResponse: config + tools + agent_type) is accepted as-is,
+	// so a client can read, modify and write back the same shape. When the
+	// top-level `builtin` is absent and `config.builtin` is present, the
+	// policy map (and MCP bindings, from `config.mcp`) are read from there;
+	// `tools` and `agent_type` are read-only echoes and are ignored. A body
+	// carrying NEITHER `builtin` nor `config.builtin` is still rejected.
+	roundTrip := req.Builtin == nil && req.Config != nil && req.Config.Builtin != nil
+	if req.Builtin == nil && !roundTrip {
+		jsonErr(w, http.StatusBadRequest,
+			"builtin.policies is required: this endpoint replaces the agent's complete tool-policy map, "+
+				"so a body with no \"builtin\" object (and no \"config.builtin\" object, the GET response shape) "+
+				"is rejected rather than persisted as an empty policy")
+		return
+	}
+	// Extract builtin fields. There is no default_policy field on the wire
+	// any more (CLAUDE.md hard constraint 6).
+	var builtinPolicies map[string]string
+	switch {
+	case roundTrip:
+		if req.Config.Builtin.Policies != nil {
+			builtinPolicies = make(map[string]string, len(req.Config.Builtin.Policies))
+			for k, v := range req.Config.Builtin.Policies {
+				builtinPolicies[k] = string(v)
+			}
+		}
+	case req.Builtin.Policies != nil:
+		builtinPolicies = make(map[string]string, len(req.Builtin.Policies))
+		for k, v := range req.Builtin.Policies {
+			builtinPolicies[k] = string(v)
+		}
+	}
+	// Legacy mode/visible compatibility (one release): only mode="explicit"
+	// with `visible` has any effect (populates builtinPolicies from visible
+	// names as "allow"), and ONLY when the caller did NOT also send a real
+	// `policies` map — policies always wins outright when present, matching
+	// the documented wire contract ("mode/visible are... ignored when
+	// policies is present"). Before this fix, the guard checked a now-inert
+	// `builtinDefaultPolicy` bookkeeping variable (always "" at this point —
+	// nothing set it earlier) instead of req.Builtin.Policies == nil, so a
+	// caller sending BOTH a real policies map AND mode="explicit"+visible had
+	// their real per-tool values silently discarded and replaced by the
+	// deny-all-except-visible legacy conversion a few lines below — found
+	// live, two independent reviewers, 2026-07-06. mode="inherit" alone is a
+	// no-op now that there is no default-policy fallback to inherit from
+	// (CLAUDE.md hard constraint 6) — an incomplete map is rejected by the
+	// coverage check below regardless.
+	if req.Builtin != nil && req.Builtin.Policies == nil && req.Builtin.Mode != nil &&
+		string(*req.Builtin.Mode) == "explicit" && req.Builtin.Visible != nil {
+		builtinPolicies = make(map[string]string, len(*req.Builtin.Visible))
+		for _, name := range *req.Builtin.Visible {
+			builtinPolicies[name] = "allow"
+		}
+	}
+
+	// Validate per-tool policy values sent in the request.
+	validPolicies := map[string]bool{"allow": true, "ask": true, "deny": true}
+	for name, p := range builtinPolicies {
+		if !validPolicies[p] {
+			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid policy %q for tool %q", p, name))
+			return
+		}
+	}
+
+	// CLAUDE.md hard constraint 6 — the resolved map (after the legacy
+	// mode/visible conversion above) IS this agent's prospective complete
+	// per-agent policy map, because the persist closure below replaces
+	// Tools.Builtin wholesale. Reject an incomplete map, or one carrying a
+	// wildcard/unrecognized key, right here — the coverage guard further down
+	// cannot see either defect (the seeded global ceiling covers the whole
+	// catalog, so it reports zero gaps for any agent-side map, empty included).
+	// This also gives the documented 400 for the legacy mode="explicit" +
+	// visible[] shape sent alone, exactly as
+	// contracts/components/schemas/AgentToolsUpdateRequest.yaml describes.
+	if defects := config.ValidateSubmittedToolPolicyMap(
+		builtinPolicies, buildKnownBuiltinToolNames(),
+	); !defects.Empty() {
+		jsonErr(w, http.StatusBadRequest, "builtin.policies "+defects.String())
+		return
+	}
+
+	// Validate MCP server IDs reference configured servers. Computed before
+	// the locked validate+persist IIFE below (it does not feed
+	// config.ValidateToolPolicyCoverage, only the MCP section of the persist
+	// payload), then captured by that IIFE's persist closure.
+	var mcpServers []struct {
+		ID    string
+		Tools []string
+	}
+	// The MCP binding list comes from the top-level `mcp` when present, or
+	// from `config.mcp` on a D-86 round-trip body; the two are the same
+	// shape on the wire but distinct generated types, so they are normalised
+	// into one list before validation.
+	type mcpBindingWire struct {
+		Id    string
+		Tools *[]string
+	}
+	var mcpBindings []mcpBindingWire
+	switch {
+	case req.Mcp != nil && req.Mcp.Servers != nil:
+		for _, s := range *req.Mcp.Servers {
+			mcpBindings = append(mcpBindings, mcpBindingWire{Id: s.Id, Tools: s.Tools})
+		}
+	case roundTrip && req.Config.Mcp != nil && req.Config.Mcp.Servers != nil:
+		for _, s := range *req.Config.Mcp.Servers {
+			mcpBindings = append(mcpBindings, mcpBindingWire{Id: s.Id, Tools: s.Tools})
+		}
+	}
+	if mcpBindings != nil {
+		configuredServers := cfg.Tools.MCP.Servers
+		for _, s := range mcpBindings {
+			if s.Id == "" {
+				jsonErr(w, http.StatusUnprocessableEntity, "mcp.servers[].id must not be empty")
+				return
+			}
+			if _, exists := configuredServers[s.Id]; !exists {
+				jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("MCP server %q is not configured", s.Id))
+				return
+			}
+			toolList := []string{}
+			if s.Tools != nil {
+				toolList = *s.Tools
+			}
+			mcpServers = append(mcpServers, struct {
+				ID    string
+				Tools []string
+			}{ID: s.Id, Tools: toolList})
+		}
+	}
+
+	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: this
+	// endpoint fully replaces the agent's builtin tools config on persist
+	// (see the updateConfigJSONLocked closure below), so builtinPolicies IS
+	// the prospective complete per-tool map for this agent — reject 400 with
+	// the full gap list if it (together with the current global
+	// sandbox.tool_policies) would leave any static builtin tool without an
+	// explicit policy entry, before persisting anything.
+	//
+	// The validate step and the persist step run inside ONE a.configMu-locked
+	// critical section (closing a TOCTOU race two concurrent tool-policy
+	// writes could otherwise open — see updateConfigJSONLocked's doc
+	// comment), via withToolPolicyCoverageGuard: it always fetches the config
+	// FRESH, inside a.configMu, discarding the `cfg` fetched at the top of
+	// this function (used only for the fast-path 404/locked/MCP-server-id
+	// checks above, none of which persist anything) — so a concurrent write
+	// racing this one cannot slip in between fetch and lock unobserved by
+	// either the coverage check or the persist step. Returns false once it
+	// has already written the HTTP response (error case), so the caller just
+	// returns.
+	if ok := a.withToolPolicyCoverageGuard(
+		w,
+		func(c *config.Config) {
+			candidatePolicies := make(map[string]config.ToolPolicy, len(builtinPolicies))
+			for k, v := range builtinPolicies {
+				candidatePolicies[k] = config.ToolPolicy(v)
+			}
+			// Base the candidate on the FRESHLY-fetched agent copy (from c,
+			// searched by ID), never the pre-lock foundAgent snapshot — only
+			// Tools is overridden below, so any other field a concurrent
+			// write changed in the meantime stays correctly reflected.
+			for i := range c.Agents.List {
+				if c.Agents.List[i].ID != agentID {
+					continue
+				}
+				candidateAgent := c.Agents.List[i]
+				candidateAgent.Tools = &config.AgentToolsCfg{
+					Builtin: config.AgentBuiltinToolsCfg{Policies: candidatePolicies},
+				}
+				c.Agents.List[i] = candidateAgent
+				break
+			}
+		},
+		func(gaps []config.CoverageGap) string {
+			return fmt.Sprintf(
+				"tool policy coverage incomplete for agent %q (%d gap(s)): %s",
+				agentID, len(gaps), joinCoverageGapMessages(gaps),
+			)
+		},
+		// ADR-054 D2/§11 checklist item 4 ("tools/policies"): agents are
+		// per-entity records under entities/agents/<id>.json, not config.json's
+		// agents.list — persist via the agent store instead of splicing the
+		// raw config map. `m` is deliberately left untouched.
+		func(m map[string]any) error {
+			_, updateErr := agentstore.New(a.homePath).Update(agentID, func(agentRec *config.AgentConfig) error {
+				builtinCfg := config.AgentBuiltinToolsCfg{}
+				if len(builtinPolicies) > 0 {
+					builtinCfg.Policies = agentToolPolicyMapFromWire(builtinPolicies)
+				}
+				newTools := &config.AgentToolsCfg{Builtin: builtinCfg}
+				if len(mcpServers) > 0 {
+					servers := make([]config.AgentMCPServerBinding, 0, len(mcpServers))
+					for _, s := range mcpServers {
+						servers = append(servers, config.AgentMCPServerBinding{ID: s.ID, Tools: s.Tools})
+					}
+					newTools.MCP = config.AgentMCPToolsCfg{Servers: servers}
+				} else if agentRec.Tools != nil {
+					// Symmetric preservation for mcp, mirroring updateAgent's
+					// identical branch above: a request that omits mcp (every
+					// builtin-policy update from the Agents UI does) must not
+					// silently drop the agent's existing MCP server bindings.
+					//
+					// This is not hypothetical here. The SPA's
+					// ToolsAndPermissions editor builds its payload by
+					// spreading the agent's existing tools cfg, but NO gateway
+					// read path populates tools_cfg, so `existing.mcp` is
+					// always undefined and the payload never carries mcp. The
+					// write is triggered by useAutoSave, so a single
+					// allow/ask/deny toggle wiped the bindings with no Save
+					// click and no way to restore them from the UI.
+					newTools.MCP = agentRec.Tools.MCP
+				}
+				agentRec.Tools = newTools
+				return nil
+			})
+			if updateErr != nil {
+				if errors.Is(updateErr, entity.ErrNotFound) {
+					return fmt.Errorf("agent %q not found in agent store", agentID)
+				}
+				return fmt.Errorf("update agent tools entity record: %w", updateErr)
+			}
+			return nil
+		},
+		fmt.Sprintf("rest: update agent tools entity record (agent_id=%s)", agentID),
+	); !ok {
+		return
+	}
+
+	// Trigger a reload AND WAIT for it (triggerReloadAndWaitOutcome, not a bare
+	// TriggerReload — mirrors createAgent/updateAgent/deleteAgent) so the
+	// agent's atomic toolPolicy pointer (pkg/agent/instance.go:290 —
+	// populated by ReloadProviderAndConfig) is actually swapped to the new
+	// policy before this handler responds. A bare TriggerReload only
+	// enqueues the reload and returns before the registry swap happens —
+	// without waiting, the next turn's resolveToolPolicyAtExec /
+	// FilterToolsByPolicy could still see the previous snapshot for as long
+	// as that swap takes to land, and (e.g.) an exec call freshly bumped to
+	// "ask" would run as "allow" because LoadToolPolicy returns the stale
+	// pointer. triggerReloadAndWaitOutcome already treats
+	// ErrReloadNotConfigured (unit tests without the full gateway reload
+	// pipeline wired) as a no-op, so a non-nil error here is always a genuine
+	// reload failure. This is a fail-open authorization path — returning 200
+	// while the rebuild is still queued means a tool freshly bumped to
+	// "deny"/"ask" keeps executing as "allow" for the duration.
+	//
+	// UAT batch3 S67 (docs/internal/qa/uat-report-full-tool-catalog-batch3-2026-09-02.md,
+	// finding #4): before this fix, an unconfirmed-but-error-free reload
+	// (confirmed=false, err=nil) fell through to a 200 with only a
+	// server-side Warn log — a caller had no way to know the tool-policy
+	// tightening they just requested (e.g. create_skill allow/deny -> ask)
+	// might not be enforced yet, and a tool call dispatched immediately
+	// after could still run under the STALE, more permissive snapshot. This
+	// mirrors waitForReload's OWN documented incident ("Persisted-but-not-
+	// live is a real, caller-visible state and it has to surface as one") —
+	// putToolPolicies (the global tool-policy PUT) already treats an
+	// unconfirmed reload as a hard failure via triggerReloadAndWait; this
+	// per-agent endpoint used the richer Outcome variant specifically to
+	// distinguish the two cases, then silently discarded the distinction.
+	// Now both variants agree: an unconfirmed reload is never reported as a
+	// plain, unqualified success.
+	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
+		slog.Error("agent tools update: reload failed — in-memory policy not updated",
+			"agent_id", agentID, "error", err)
+		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+			if auditErr := audit.EmitSecuritySettingChange(
+				r.Context(), auditLogger, "agent.tools_policy",
+				map[string]any{"agent_id": agentID, "saved": true},
+				map[string]any{"agent_id": agentID, "reload_error": err.Error()},
+			); auditErr != nil {
+				slog.Error("rest: audit emit agent tools reload failure", "error", auditErr)
+			}
+		}
+		jsonErr(w, http.StatusServiceUnavailable,
+			"config saved but in-memory reload failed; restart the gateway or retry")
+		return
+	} else if !confirmed {
+		slog.Error("rest: agent tools update: reload did not confirm within the poll window; "+
+			"in-memory tool policy may not yet reflect the new config", "agent_id", agentID)
+		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+			if auditErr := audit.EmitSecuritySettingChange(
+				r.Context(), auditLogger, "agent.tools_policy",
+				map[string]any{"agent_id": agentID, "saved": true},
+				map[string]any{"agent_id": agentID, "reload_error": "reload did not confirm within the poll window"},
+			); auditErr != nil {
+				slog.Error("rest: audit emit agent tools reload unconfirmed", "error", auditErr)
+			}
+		}
+		jsonErr(w, http.StatusServiceUnavailable,
+			"config saved but the in-memory reload did not confirm within the wait window; "+
+				"the new tool policy may not be enforced yet — retry or restart the gateway")
+		return
+	}
+	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not
+	// `effective_tools`) — both paths must share the same wire shape to match
+	// the AgentToolsResponse spec and the SPA Zod schema (_agentToolsSchema).
+	a.HandleAgentToolsRegistry(w, r, agentID)
+}

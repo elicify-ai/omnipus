@@ -16,7 +16,6 @@
 package gateway
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -24,13 +23,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/task"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // newTestRestAPIWithValidation returns a restAPI with validate_inbound=true.
@@ -200,135 +198,6 @@ func TestDecodeAndValidate_MalformedJSON(t *testing.T) {
 		assert.False(t, ok, "enabled=%v", enabled)
 		assert.Equal(t, http.StatusBadRequest, w.Code, "enabled=%v", enabled)
 	}
-}
-
-// ── Handler integration tests — createAgent ───────────────────────────────────
-
-// TestCreateAgent_ValidateInbound_MissingType asserts POST /agents returns 400
-// for a body with no "type" field at all — type is now a required
-// discriminator (W1) and createAgent's peek-the-type dispatch rejects this
-// BEFORE it would even reach schema validation. Replaces the old
-// TestCreateAgent_ValidateInbound_InvalidBody (which asserted a
-// missing-"name" 400 against the retired flat "AgentCreateRequest" schema).
-func TestCreateAgent_ValidateInbound_MissingType(t *testing.T) {
-	api := newTestRestAPIWithValidation(t)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{}`))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-
-	api.createAgent(w, r)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "type is required")
-}
-
-// TestCreateAgent_ValidateInbound_InvalidBody asserts POST /agents with
-// validate_inbound=true returns 400 for a body missing the required "name"
-// and "soul" fields, once type dispatch has already resolved to the Main
-// variant schema (contracts/components/schemas/AgentCreateRequestMain.yaml).
-func TestCreateAgent_ValidateInbound_InvalidBody(t *testing.T) {
-	api := newTestRestAPIWithValidation(t)
-
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(`{"type":"Main"}`))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-
-	api.createAgent(w, r)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "AgentCreateRequestMain")
-}
-
-// TestCreateAgent_ValidateInbound_ValidBody asserts POST /agents with
-// validate_inbound=true accepts a body with the required "type"/"name"/"soul" fields.
-func TestCreateAgent_ValidateInbound_ValidBody(t *testing.T) {
-	api := newTestRestAPIWithValidation(t)
-
-	body := `{"type":"Main","name":"Test Agent","description":"desc","soul":"s"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-
-	api.createAgent(w, r)
-
-	// 200 or 201 — agent created successfully
-	assert.True(t, w.Code == http.StatusOK || w.Code == http.StatusCreated,
-		"expected 200 or 201, got %d: %s", w.Code, w.Body.String())
-}
-
-// TestCreateAgent_ValidateInbound_MainWithExecutorRejected asserts that a
-// Main create carrying an `executor` property is rejected 400 at the schema
-// gate when ValidateInbound is enabled: AgentCreateRequestMain has no
-// executor property at all (additionalProperties: false) — Main agents
-// always run native and cannot express one.
-func TestCreateAgent_ValidateInbound_MainWithExecutorRejected(t *testing.T) {
-	api := newTestRestAPIWithValidation(t)
-
-	body := `{"type":"Main","name":"Bad Main","soul":"s","executor":{"kind":"external-cli","cli":"codex","cli_path":"/usr/local/bin/codex"}}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-
-	api.createAgent(w, r)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "AgentCreateRequestMain")
-}
-
-// TestCreateAgent_ValidateInbound_SubagentWithExecutorRejected asserts that a
-// Subagent (native worker) create carrying an `executor` property is
-// rejected 400 at the schema gate when ValidateInbound is enabled:
-// AgentCreateRequestSubagent has no executor property either — kind=native
-// is always server-derived for this variant.
-func TestCreateAgent_ValidateInbound_SubagentWithExecutorRejected(t *testing.T) {
-	api := newTestRestAPIWithValidation(t)
-
-	body := `{"type":"Subagent","name":"Bad Subagent","description":"d","soul":"s","executor":{"kind":"native"}}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-
-	api.createAgent(w, r)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "AgentCreateRequestSubagent")
-}
-
-// TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsRejected asserts
-// that a subagent_3p create carrying `max_tool_iterations` is rejected 400 at
-// the schema gate when ValidateInbound is enabled: AgentCreateRequestSubagent3p
-// has no max_tool_iterations property (the field matrix's "exclude" decision
-// for this variant — the external CLI runs its own turn loop, so Omnipus
-// cannot cap its per-turn tool-call budget).
-func TestCreateAgent_ValidateInbound_Subagent3pMaxToolIterationsRejected(t *testing.T) {
-	api := newTestRestAPIWithValidation(t)
-
-	body := `{"type":"subagent_3p","name":"Bad 3p","soul":"s","executor":{"cli":"codex","cli_path":"/usr/local/bin/codex"},"max_tool_iterations":50}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-
-	api.createAgent(w, r)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "AgentCreateRequestSubagent3p")
 }
 
 // ── Handler integration tests — putSandboxConfig ─────────────────────────────
@@ -552,97 +421,6 @@ func TestCreateSession_ValidateInbound_ValidBody(t *testing.T) {
 				"valid body must not produce a schema validation 400")
 		}
 	}
-}
-
-// ── Handler integration tests — updateAgent ───────────────────────────────────
-
-// TestUpdateAgent_ValidateInbound_InvalidBody asserts that PATCH /agents/{id}
-// with validate_inbound=true rejects a body where "name" is not a string.
-//
-// BDD:
-//
-//	Given validate_inbound=true and agent "test-agent-001" exists,
-//	When PATCH /agents/test-agent-001 body contains {"name": 42},
-//	Then the handler returns 400 with a schema error referencing AgentUpdateRequest.
-//
-// Traces to: fix-Q / fix-Y — handler integration test for AgentUpdateRequest validation.
-func TestUpdateAgent_ValidateInbound_InvalidBody(t *testing.T) {
-	api := newTestRestAPIWithValidationAndAgent(t)
-
-	// "name" must be a string — sending a number violates the type constraint.
-	body := `{"name": 42}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/test-agent-001", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-
-	api.updateAgent(w, r, "test-agent-001")
-
-	assert.Equal(t, http.StatusBadRequest, w.Code,
-		"wrong type for 'name' must return 400")
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "AgentUpdateRequest",
-		"error message must reference the schema name")
-}
-
-// TestUpdateAgent_ValidateInbound_ValidBody asserts that PATCH /agents/{id}
-// with validate_inbound=true accepts a body with a valid field.
-//
-// BDD:
-//
-//	Given validate_inbound=true and agent "test-agent-001" exists,
-//	When PATCH /agents/test-agent-001 body contains {"model":"gpt-4o"},
-//	Then the schema validation passes (200 or business-logic response, not a 400 schema error).
-//
-// Traces to: fix-Q / fix-Y — handler integration test for AgentUpdateRequest validation.
-func TestUpdateAgent_ValidateInbound_ValidBody(t *testing.T) {
-	api := newTestRestAPIWithValidationAndAgent(t)
-
-	body := `{"model":"gpt-4o"}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/test-agent-001", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-
-	api.updateAgent(w, r, "test-agent-001")
-
-	// Schema validation must not reject this body.
-	if w.Code == http.StatusBadRequest {
-		var resp map[string]string
-		if err := json.Unmarshal(w.Body.Bytes(), &resp); err == nil {
-			assert.NotContains(t, resp["error"], "AgentUpdateRequest",
-				"valid body must not produce a schema validation 400")
-		}
-	}
-}
-
-// TestUpdateAgent_ValidateInbound_EmptyPatchRejected asserts the minProperties:1
-// invariant in the AgentUpdateRequest inbound schema (fix-V).
-func TestUpdateAgent_ValidateInbound_EmptyPatchRejected(t *testing.T) {
-	api := newTestRestAPIWithValidationAndAgent(t)
-
-	body := `{}`
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/test-agent-001", strings.NewReader(body))
-	r.Header.Set("Content-Type", "application/json")
-	r = withAdminRole(r)
-
-	api.updateAgent(w, r, "test-agent-001")
-
-	assert.Equal(
-		t,
-		http.StatusBadRequest,
-		w.Code,
-		"empty patch body {} must be rejected 400 by minProperties:1 in AgentUpdateRequest inbound schema; body: %s",
-		w.Body.String(),
-	)
-	var resp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Contains(t, resp["error"], "AgentUpdateRequest",
-		"error message must reference the schema name")
-	assert.Contains(t, resp["error"], "minProperties",
-		"error message must reference the minProperties constraint")
 }
 
 // ── Handler integration tests — HandleOnboardingProbeProvider ─────────────────

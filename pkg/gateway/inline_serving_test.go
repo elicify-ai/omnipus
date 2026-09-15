@@ -177,9 +177,17 @@ func readSpecPolicyString(t *testing.T) string {
 // and fails when the two disagree, in either direction. Adding a route makes
 // the scan find a site with no row here; deleting a row makes it find a row
 // with no site. Both are failures, and the failure message says which.
+// The IDENTITY of a row is its function name, not its file. Go resolves
+// identifiers per package, so a handler moving between sibling files in
+// pkg/gateway changes nothing about which functions serve bytes — and keying
+// the comparison on "file:function" would turn a pure file move (e.g. the
+// rest.go split in docs/internal/architecture/draft-module-map.md) into a
+// failure with no defect behind it, training the next reader to edit the
+// inventory until the test goes quiet. The file field is kept as a locator
+// for the failure message and for whoever has to find the row.
 type inlineServingSite struct {
-	file string // file within pkg/gateway
-	fn   string // enclosing function name
+	file string // where the function lives today; a locator, not part of the key
+	fn   string // enclosing function name — THIS is the row's identity
 
 	// forcesAttachment is true for a route that must NEVER serve inline,
 	// whatever the extension. FR-003g pins the authenticated Library path
@@ -200,8 +208,8 @@ type inlineServingSite struct {
 }
 
 var expectedInlineServingSites = []inlineServingSite{
-	{file: "rest.go", fn: "HandleServeUpload"},
-	{file: "rest.go", fn: "serveMedia"},
+	{file: "rest_uploads.go", fn: "HandleServeUpload"},
+	{file: "rest_uploads.go", fn: "serveMedia"},
 	{file: "rest_library.go", fn: "handleLibraryDownload", forcesAttachment: true},
 	{file: "rest_library_preview.go", fn: "handleServeLibraryPreview", policyOnEveryResponse: true},
 }
@@ -335,7 +343,7 @@ func TestNoUnprotectedInlineRoute(t *testing.T) {
 	t.Run("byte_serving_sites_are_exactly_the_inventory", func(t *testing.T) {
 		want := make([]string, 0, len(expectedInlineServingSites))
 		for _, site := range expectedInlineServingSites {
-			want = append(want, site.file+":"+site.fn)
+			want = append(want, site.fn)
 		}
 		sort.Strings(want)
 		sort.Strings(helperSites)
@@ -353,10 +361,10 @@ func TestNoUnprotectedInlineRoute(t *testing.T) {
 	t.Run("every_inventoried_site_is_driven_by_a_behavioural_case", func(t *testing.T) {
 		covered := map[string]bool{}
 		for _, c := range inlineServingRouteCases() {
-			covered[c.site.file+":"+c.site.fn] = true
+			covered[c.site.fn] = true
 		}
 		for _, site := range expectedInlineServingSites {
-			key := site.file + ":" + site.fn
+			key := site.fn
 			assert.True(t, covered[key],
 				"%s is inventoried as a byte-serving route but no behavioural case drives it, "+
 					"so nothing asserts its policy, type or disposition", key)
@@ -370,8 +378,13 @@ func TestNoUnprotectedInlineRoute(t *testing.T) {
 //
 //	dispositionSites — positions of every Content-Disposition header literal
 //	                   written outside inline_serving.go;
-//	helperSites      — "file:function" for every function calling a shared
-//	                   helper.
+//	helperSites      — the NAME of every function calling a shared helper (no
+//	                   file prefix: see inlineServingSite for why the file is
+//	                   deliberately not part of this key);
+//	byteWriterSites  — "file:function" for every function calling a stdlib
+//	                   byte writer, where the file still carries meaning —
+//	                   each row is exempt BECAUSE of where it lives (the
+//	                   embedded SPA tree, the shared helper itself).
 //
 // The scan is AST-based rather than a grep for two reasons that both bite in
 // this package: several files DISCUSS Content-Disposition in doc comments
@@ -430,7 +443,10 @@ func scanInlineServingSites(t *testing.T) (dispositionSites, helperSites, byteWr
 						return true
 					}
 					if ident, isIdent := call.Fun.(*ast.Ident); isIdent && inlineServingHelpers[ident.Name] {
-						key := rel + ":" + fn.Name.Name
+						// Function name only — see inlineServingSite: the row's
+						// identity is the function, so a file move inside the
+						// package is invisible here, as it should be.
+						key := fn.Name.Name
 						if !containsString(helperSites, key) {
 							helperSites = append(helperSites, key)
 						}
