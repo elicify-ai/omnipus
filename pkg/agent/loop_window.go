@@ -281,6 +281,18 @@ var evictionTotal atomic.Int64
 // (FR-018, context_skip_advance_total). Exported for test assertions.
 var skipAdvanceTotal atomic.Int64
 
+// agentLoopWindowTrimForce carries the shared state of windowTrimForce across its stages.
+type agentLoopWindowTrimForce struct {
+	agent            *AgentInstance
+	sessionKey       string
+	window           []providers.Message
+	toolDefsTokens   int
+	measured         []providers.Message
+	recallSpanTokens int
+	budget           int
+	cutIdx           int
+}
+
 // windowTrimForce is windowTrim with the "the window already fits, do
 // nothing" guard optionally disabled.
 //
@@ -298,18 +310,13 @@ var skipAdvanceTotal atomic.Int64
 func (al *AgentLoop) windowTrimForce(
 	agent *AgentInstance, transcriptID, sessionKey string, force bool,
 ) (compressionResult, bool) {
-	if agent.budgetChecksExempt() {
-		// FR-005: an exempt provider manages its own context; there is no
-		// budget to fit against, so there is nothing to trim.
-		return compressionResult{NothingToTrim: true}, false
-	}
-	window := agent.Sessions.GetHistory(sessionKey)
-	if len(window) <= 1 {
-		// Nothing to evict: a single-message window cannot be shrunk further.
-		return compressionResult{NothingToTrim: true}, false
+	aw := &agentLoopWindowTrimForce{agent: agent, sessionKey: sessionKey}
+
+	if r0, r1, stop := aw.checkEligibility(); stop {
+		return r0, r1
 	}
 
-	toolDefsTokens := al.sentToolSurfaceTokens(agent, transcriptID, sessionKey)
+	aw.toolDefsTokens = al.sentToolSurfaceTokens(aw.agent, transcriptID, aw.sessionKey)
 
 	// ADR-066 FR-019: measure the window AS THE PROVIDER SEES IT. GetHistory
 	// returns the archive's raw tail; results the choke point capped or an
@@ -317,32 +324,32 @@ func (al *AgentLoop) windowTrimForce(
 	// full content here would over-evict (and, on the floor path, re-empty
 	// results that are already marks). One archive read serves the
 	// projection, the floor-path emptying below and the M5 stat.
-	archive, archErr := agent.Sessions.ReadArchive(context.Background(), sessionKey)
+	archive, archErr := aw.agent.Sessions.ReadArchive(context.Background(), aw.sessionKey)
 	if archErr != nil {
 		logger.DebugCF("agent", "windowTrim: ReadArchive failed; window measured unprojected, no floor emptying",
-			map[string]any{"session_key": sessionKey, "error": archErr.Error()})
+			map[string]any{"session_key": aw.sessionKey, "error": archErr.Error()})
 	}
-	measured := window
+	aw.measured = aw.window
 	lineOf := func(int) int { return -1 }
 	if archErr == nil {
-		lineOf = archiveLineResolver(archive, window)
-		if pm := agent.Sessions.Projection(sessionKey); len(pm.Entries) > 0 {
+		lineOf = archiveLineResolver(archive, aw.window)
+		if pm := aw.agent.Sessions.Projection(aw.sessionKey); len(pm.Entries) > 0 {
 			var cs config.ContextSettings
 			if cfg := al.GetConfig(); cfg != nil {
 				cs = cfg.Context
 			}
-			measured = projectMessages(window, lineOf, pm.Entries, projectionContext{
-				policy:  capPolicyFor(cs, agentContextBudget(agent)),
+			aw.measured = projectMessages(aw.window, lineOf, pm.Entries, projectionContext{
+				policy:  capPolicyFor(cs, agentContextBudget(aw.agent)),
 				archive: archive,
 			})
 		}
 	}
 
 	// Recall span tokens — updated after a potential drop below.
-	recallSpan := al.activeRecallSpan(sessionKey)
-	recallSpanTokens := 0
+	recallSpan := al.activeRecallSpan(aw.sessionKey)
+	aw.recallSpanTokens = 0
 	if recallSpan != nil {
-		recallSpanTokens = recallSpan.Tokens
+		aw.recallSpanTokens = recallSpan.Tokens
 	}
 
 	// The ONE budget B (ADR-066 FR-028): W − max_tokens − ceil(0.05·W) −
@@ -353,11 +360,11 @@ func (al *AgentLoop) windowTrimForce(
 	// the pinned-core term (M3 fix) is what stops under-eviction on
 	// small-window models — the system prompt and breadcrumb are sent every
 	// turn but are not part of `window`.
-	budget := agentContextBudget(agent)
+	aw.budget = agentContextBudget(aw.agent)
 
 	// FR-019 drop-span-first: if an active span exists and we're over budget,
 	// drop it and re-check. Only evict real window Turns if still over budget.
-	currentWindowTokens := sumMessageTokens(measured)
+	currentWindowTokens := sumMessageTokens(aw.measured)
 
 	// Nothing to do: the window already fits. Without this, a caller that
 	// mis-fired (historically the pre-turn check, which charged the whole
@@ -368,17 +375,17 @@ func (al *AgentLoop) windowTrimForce(
 	//
 	// Skipped under force: there the provider itself rejected the request, so
 	// it is our estimate that is wrong, not the window.
-	if !force && currentWindowTokens+toolDefsTokens+recallSpanTokens <= budget {
-		return compressionResult{NothingToTrim: true, RemainingMessages: len(window)}, false
+	if !force && currentWindowTokens+aw.toolDefsTokens+aw.recallSpanTokens <= aw.budget {
+		return compressionResult{NothingToTrim: true, RemainingMessages: len(aw.window)}, false
 	}
 
-	if recallSpan != nil && (currentWindowTokens+toolDefsTokens+recallSpanTokens > budget) {
-		al.dropRecallSpan(sessionKey, "pressure")
-		recallSpanTokens = 0
+	if recallSpan != nil && (currentWindowTokens+aw.toolDefsTokens+aw.recallSpanTokens > aw.budget) {
+		al.dropRecallSpan(aw.sessionKey, "pressure")
+		aw.recallSpanTokens = 0
 		// Re-check against the same budget B used for the suffix fit-check
 		// below. Using the raw window here would pass cases that the suffix
 		// walk would still reject, causing unnecessary evictions on the next call.
-		if currentWindowTokens+toolDefsTokens <= budget {
+		if currentWindowTokens+aw.toolDefsTokens <= aw.budget {
 			// The recall span alone was the problem: dropping it brought the
 			// window back under budget without evicting any window Turns.
 			// This IS a real, successful eviction — FR-019 names the span
@@ -387,27 +394,11 @@ func (al *AgentLoop) windowTrimForce(
 			// ok=false. That makes the caller rebuild the assembled
 			// messages (dropping the now-stale recall-span content) instead
 			// of treating a useful eviction as a compaction failure.
-			return compressionResult{RemainingMessages: len(window)}, true
+			return compressionResult{RemainingMessages: len(aw.window)}, true
 		}
 	}
 
-	// Walk Turn boundaries (oldest first) to find the smallest cut that fits.
-	boundaries := parseTurnBoundaries(window)
-
-	// Find the smallest boundary index b such that window[b:] fits in budget.
-	cutIdx := -1 // -1 means no boundary fits
-	for _, b := range boundaries {
-		if b == 0 {
-			// Boundary at 0 keeps everything — not a useful cut.
-			continue
-		}
-		suffix := measured[b:]
-		suffixTokens := sumMessageTokens(suffix)
-		if suffixTokens+toolDefsTokens+recallSpanTokens <= budget {
-			cutIdx = b
-			break
-		}
-	}
+	aw.findCut()
 
 	// Determine how many messages to keep (tail of the live window).
 	// cutIdx >= 0: normal path — keep window[cutIdx:].
@@ -421,13 +412,13 @@ func (al *AgentLoop) windowTrimForce(
 	// any following assistant/tool messages — not just the bare user message.
 	var droppedCount int
 	var emptiedCount int
-	if cutIdx >= 0 {
+	if aw.cutIdx >= 0 {
 		// Normal path: tail-of-window keeps are handled by TruncateHistory.
 		// TruncateHistory advances meta.Skip (archive-preserving; zero bytes
 		// deleted from the JSONL file). SetHistory is NOT used here.
-		keepLast := len(window) - cutIdx
-		droppedCount = len(window) - keepLast
-		agent.Sessions.TruncateHistory(sessionKey, keepLast)
+		keepLast := len(aw.window) - aw.cutIdx
+		droppedCount = len(aw.window) - keepLast
+		aw.agent.Sessions.TruncateHistory(aw.sessionKey, keepLast)
 	} else {
 		// FR-003: emergency floor — no boundary fits (single huge Turn).
 		// Keep the messages from the most-recent user message onward. This is
@@ -435,8 +426,8 @@ func (al *AgentLoop) windowTrimForce(
 		// assistant/tool messages). TruncateHistory advances meta.Skip to
 		// exactly that position — archive-preserving, no SetHistory.
 		lastUserIdx := -1
-		for i := len(window) - 1; i >= 0; i-- {
-			if window[i].Role == "user" {
+		for i := len(aw.window) - 1; i >= 0; i-- {
+			if aw.window[i].Role == "user" {
 				lastUserIdx = i
 				break
 			}
@@ -444,12 +435,12 @@ func (al *AgentLoop) windowTrimForce(
 		keepStart := lastUserIdx
 		if keepStart < 0 {
 			// Degenerate: no user message at all — keep last message.
-			keepStart = len(window) - 1
+			keepStart = len(aw.window) - 1
 		}
-		keepLast := len(window) - keepStart
-		droppedCount = len(window) - keepLast
+		keepLast := len(aw.window) - keepStart
+		droppedCount = len(aw.window) - keepLast
 		if droppedCount > 0 {
-			agent.Sessions.TruncateHistory(sessionKey, keepLast)
+			aw.agent.Sessions.TruncateHistory(aw.sessionKey, keepLast)
 		}
 
 		// ADR-066 D5, register #3 / B-21b (FR-017): the floor kept an
@@ -461,13 +452,13 @@ func (al *AgentLoop) windowTrimForce(
 		// caller's post-trim assembleMessages re-applies it, so the
 		// in-memory copy mutated here is only the fit measurement.
 		if archErr == nil {
-			kept := append([]providers.Message(nil), measured[keepStart:]...)
+			kept := append([]providers.Message(nil), aw.measured[keepStart:]...)
 			keptLineOf := func(i int) int { return lineOf(keepStart + i) }
 			fits := func(m []providers.Message) bool {
-				return sumMessageTokens(m)+toolDefsTokens+recallSpanTokens <= budget
+				return sumMessageTokens(m)+aw.toolDefsTokens+aw.recallSpanTokens <= aw.budget
 			}
 			emptiedCount = len(al.emptyInPlace(
-				al.getActiveTurnState(sessionKey), agent, sessionKey, kept, keptLineOf, archive, fits, emptyingSitePreTurn))
+				al.getActiveTurnState(aw.sessionKey), aw.agent, aw.sessionKey, kept, keptLineOf, archive, fits, emptyingSitePreTurn))
 		}
 	}
 
@@ -475,12 +466,12 @@ func (al *AgentLoop) windowTrimForce(
 		// The window is already a single turn whose results are all in the
 		// floor set (or already marks): nothing this site may do. Not an
 		// error — D6's clamp keeps that set under B (CRIT-002).
-		return compressionResult{NothingToTrim: true, RemainingMessages: len(window)}, false
+		return compressionResult{NothingToTrim: true, RemainingMessages: len(aw.window)}, false
 	}
 
-	if saveErr := agent.Sessions.Save(sessionKey); saveErr != nil {
+	if saveErr := aw.agent.Sessions.Save(aw.sessionKey); saveErr != nil {
 		logger.ErrorCF("agent", "windowTrim: failed to persist trimmed session",
-			map[string]any{"session_key": sessionKey, "error": saveErr.Error()})
+			map[string]any{"session_key": aw.sessionKey, "error": saveErr.Error()})
 	}
 
 	// M4 fix: verify the window actually shrank after the TruncateHistory call.
@@ -490,12 +481,12 @@ func (al *AgentLoop) windowTrimForce(
 	// the caller does not misreport a successful eviction. An empty-only pass
 	// (droppedCount == 0) shrinks bytes, not the message count, so it is
 	// exempt from the count check.
-	postWindow := agent.Sessions.GetHistory(sessionKey)
-	if droppedCount > 0 && len(postWindow) >= len(window) {
+	postWindow := aw.agent.Sessions.GetHistory(aw.sessionKey)
+	if droppedCount > 0 && len(postWindow) >= len(aw.window) {
 		logger.ErrorCF("agent", "windowTrim: TruncateHistory did not shrink the window (backend write may have failed)",
 			map[string]any{
-				"session_key": sessionKey,
-				"before":      len(window),
+				"session_key": aw.sessionKey,
+				"before":      len(aw.window),
 				"after":       len(postWindow),
 			})
 		return compressionResult{}, false
@@ -524,11 +515,11 @@ func (al *AgentLoop) windowTrimForce(
 
 	logger.WarnCF("agent", "windowTrim: evicted oldest Turns from live window",
 		map[string]any{
-			"session_key":            sessionKey,
+			"session_key":            aw.sessionKey,
 			"turns_evicted":          droppedCount,
 			"results_emptied":        emptiedCount,
 			"kept_msgs":              keptCount,
-			"budget":                 budget,
+			"budget":                 aw.budget,
 			"context_archive_lines":  archiveBytes, // FR-018 context_archive_bytes proxy
 			"context_eviction_total": evictionTotal.Load(),
 		})
@@ -537,6 +528,42 @@ func (al *AgentLoop) windowTrimForce(
 		DroppedMessages:   droppedCount,
 		RemainingMessages: keptCount,
 	}, true
+}
+
+// checkEligibility rejects exempt providers and windows that cannot be shrunk further.
+func (aw *agentLoopWindowTrimForce) checkEligibility() (compressionResult, bool, bool) {
+	if aw.agent.budgetChecksExempt() {
+		// FR-005: an exempt provider manages its own context; there is no
+		// budget to fit against, so there is nothing to trim.
+		return compressionResult{NothingToTrim: true}, false, true
+	}
+	aw.window = aw.agent.Sessions.GetHistory(aw.sessionKey)
+	if len(aw.window) <= 1 {
+		// Nothing to evict: a single-message window cannot be shrunk further.
+		return compressionResult{NothingToTrim: true}, false, true
+	}
+	return *new(compressionResult), false, false
+}
+
+// findCut finds the smallest whole-turn boundary whose suffix fits the context budget.
+func (aw *agentLoopWindowTrimForce) findCut() {
+	// Walk Turn boundaries (oldest first) to find the smallest cut that fits.
+	boundaries := parseTurnBoundaries(aw.window)
+
+	// Find the smallest boundary index b such that window[b:] fits in budget.
+	aw.cutIdx = -1 // -1 means no boundary fits
+	for _, b := range boundaries {
+		if b == 0 {
+			// Boundary at 0 keeps everything — not a useful cut.
+			continue
+		}
+		suffix := aw.measured[b:]
+		suffixTokens := sumMessageTokens(suffix)
+		if suffixTokens+aw.toolDefsTokens+aw.recallSpanTokens <= aw.budget {
+			aw.cutIdx = b
+			break
+		}
+	}
 }
 
 // SwitchAction is the result of decideSwitchCompressAction: should we
