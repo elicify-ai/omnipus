@@ -1,3 +1,4 @@
+import { browserTestWorkspacePath } from './test-workspace';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { randomInt } from 'node:crypto';
@@ -46,7 +47,8 @@ test('native document scrollbar and latest trusted hover remain correct', async 
   try {
     const served = await page.request.get(target.href, { maxRedirects: 0 });
     expect(served.status()).toBe(200); expect(await served.text()).toBe(fixture);
-    await page.goto('/workspaces/01M01TTSDZBFGM28NPHGTFZ17T/chat');
+    await page.goto(browserTestWorkspacePath);
+    await expect(page).toHaveURL(url => url.hash === browserTestWorkspacePath.slice(1));
     await selectAgent(page, 'Browser UAT Test');
     await page.getByRole('button', { name: 'Open browser', exact: true }).click(); await ready();
     const url = new URL(target); url.searchParams.set('nonce', String(nonce));
@@ -73,7 +75,7 @@ test('native document scrollbar and latest trusted hover remain correct', async 
     expect(errors).toEqual([]);
   } finally {
     const output = info.outputPath('native-scroll-evidence.json');
-    fs.writeFileSync(output, JSON.stringify({ provenance, nonce, observations, final: await sample(page).catch(() => null), routes: await routeEvidence(page).catch(() => null), errors, limitations: 'Focused native-document scroll and latest-hover check. Run after the separately recorded endurance test; this test does not itself establish 20-minute stability or new-tab/popout sizing.' }, null, 2));
+    fs.writeFileSync(output, JSON.stringify({ provenance, testWorkspace: browserTestWorkspacePath, nonce, observations, final: await sample(page).catch(() => null), routes: await routeEvidence(page).catch(() => null), errors, limitations: 'Focused native-document scroll and latest-hover check. Run after the separately recorded endurance test; this test does not itself establish 20-minute stability or new-tab/popout sizing.' }, null, 2));
     await info.attach('native-scroll-evidence', { path: output, contentType: 'application/json' });
     await page.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }).catch(() => {});
   }

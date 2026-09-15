@@ -1,3 +1,4 @@
+import { browserTestWorkspacePath } from './test-workspace';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { randomInt } from 'node:crypto';
@@ -43,7 +44,8 @@ test(`${seconds}-second continuous mixed input endurance (${diagnosticMode})`, a
   try {
     const served = await page.request.get(target.href, { maxRedirects: 0 });
     expect(served.status()).toBe(200); expect(await served.text()).toBe(fixture);
-    await page.goto('/workspaces/01M01TTSDZBFGM28NPHGTFZ17T/chat'); await selectAgent(page, 'Browser UAT Test');
+    await page.goto(browserTestWorkspacePath);
+    await expect(page).toHaveURL(url => url.hash === browserTestWorkspacePath.slice(1)); await selectAgent(page, 'Browser UAT Test');
     await page.getByRole('button', { name: 'Open browser', exact: true }).click(); await ready();
     const url = new URL(target); url.searchParams.set('nonce', String(state.nonce)); url.searchParams.set('delay', String(delay));
     const address = page.getByRole('textbox', { name: 'Address bar' }); await address.fill(url.href); await address.press('Enter');
@@ -175,7 +177,7 @@ test(`${seconds}-second continuous mixed input endurance (${diagnosticMode})`, a
     const route = await routeEvidence(page).catch(() => null);
     const recentVideoFrames = await page.evaluate(() => (window as unknown as { __inputSmoke?: { frameTiming(): unknown } }).__inputSmoke?.frameTiming()).catch(() => null);
     const viewerStates = await page.evaluate(() => {const w=window as unknown as {__enduranceStates:unknown;__enduranceObserver:MutationObserver};w.__enduranceObserver?.disconnect();return w.__enduranceStates}).catch(()=>null);
-    fs.writeFileSync(info.outputPath('pressure-stress-evidence.json'), JSON.stringify({ videoPlayoutNegotiated, clientBrowserVersion, audioVideoTimingSeries, diagnosticMode, fullFeatureAcceptanceEligible, mediaStats, recentVideoFrames, requestedSeconds:seconds, resizeEvery, activeSeconds:started ? (performance.now()-started)/1000 : 0, rounds, viewerStates, provenance, deliberateKeyHandlerMs: delay, deliberateWheelHandlerMs: delay ? 75 : 0, marks, expected: state, final, route, errors }, null, 2));
+    fs.writeFileSync(info.outputPath('pressure-stress-evidence.json'), JSON.stringify({ testWorkspace: browserTestWorkspacePath, videoPlayoutNegotiated, clientBrowserVersion, audioVideoTimingSeries, diagnosticMode, fullFeatureAcceptanceEligible, mediaStats, recentVideoFrames, requestedSeconds:seconds, resizeEvery, activeSeconds:started ? (performance.now()-started)/1000 : 0, rounds, viewerStates, provenance, deliberateKeyHandlerMs: delay, deliberateWheelHandlerMs: delay ? 75 : 0, marks, expected: state, final, route, errors }, null, 2));
     await info.attach('pressure-stress-evidence', { path: info.outputPath('pressure-stress-evidence.json'), contentType: 'application/json' });
     await page.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }).catch(() => {});
   }

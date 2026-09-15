@@ -1,3 +1,4 @@
+import { browserTestWorkspacePath } from './test-workspace';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { randomInt } from 'node:crypto';
@@ -35,7 +36,8 @@ test('one eleven-second renderer resize stall recovers after exactly one Retry',
   try {
     const served = await page.request.get(target.href, { maxRedirects: 0 });
     expect(served.status()).toBe(200); expect(await served.text()).toBe(fixture);
-    await page.goto('/workspaces/01M01TTSDZBFGM28NPHGTFZ17T/chat'); await selectAgent(page, 'Browser UAT Test');
+    await page.goto(browserTestWorkspacePath);
+    await expect(page).toHaveURL(url => url.hash === browserTestWorkspacePath.slice(1)); await selectAgent(page, 'Browser UAT Test');
     const startupAt = Date.now();
     await page.getByRole('button', { name: 'Open browser', exact: true }).click();
     // Initial media negotiation has its own existing 45-second product budget.
@@ -98,7 +100,7 @@ test('one eleven-second renderer resize stall recovers after exactly one Retry',
   } finally {
     const failures = await page.evaluate(() => { const w = window as unknown as { __resizeFailures?: string[]; __resizeObserver?: MutationObserver }; w.__resizeObserver?.disconnect(); return w.__resizeFailures; }).catch(() => null);
     const output = info.outputPath('viewport-retry-evidence.json');
-    fs.writeFileSync(output, JSON.stringify({ provenance, nonce, deliberateResizeStallMs: 11000, observations, failures, errors, final: await sample(page).catch(() => null), routes: await routeEvidence(page).catch(() => null) }, null, 2));
+    fs.writeFileSync(output, JSON.stringify({ provenance, testWorkspace: browserTestWorkspacePath, nonce, deliberateResizeStallMs: 11000, observations, failures, errors, final: await sample(page).catch(() => null), routes: await routeEvidence(page).catch(() => null) }, null, 2));
     await info.attach('viewport-retry-evidence', { path: output, contentType: 'application/json' });
     await page.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }).catch(() => {});
   }

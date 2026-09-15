@@ -1,3 +1,4 @@
+import { browserTestWorkspacePath } from './test-workspace';
 import fs from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { browserLivePanel, browserLiveVideo, selectAgent } from '../e2e/fixtures/selectors';
@@ -7,7 +8,7 @@ import { browserLivePanel, browserLiveVideo, selectAgent } from '../e2e/fixtures
 // credentials, text, binary input, handover identifiers or page content.
 type Observation = { page: number; document: string; socket?: number; event: string; at: number };
 const provenance = JSON.parse(fs.readFileSync(process.env.BROWSER_INPUT_PROVENANCE!, 'utf8'));
-const workspace = '/workspaces/01M01TTSDZBFGM28NPHGTFZ17T/chat';
+const workspace = browserTestWorkspacePath;
 
 test('popout transfers one client viewer and returns only to its owner after actual close', async ({ page: source, context }, info) => {
   const observations: Observation[] = [], pageIDs = new Map<Page, number>();
@@ -144,7 +145,7 @@ test('popout transfers one client viewer and returns only to its owner after act
     marks.push({ label: 'native-close-owner-only-return-ready', at: new Date().toISOString() });
   } finally {
     const artifact = info.outputPath('popout-handoff-evidence.json');
-    fs.writeFileSync(artifact, JSON.stringify({ provenance, sourcePage: sourceID, marks, observations, overflow, errors }, null, 2));
+    fs.writeFileSync(artifact, JSON.stringify({ provenance, testWorkspace: browserTestWorkspacePath, sourcePage: sourceID, marks, observations, overflow, errors }, null, 2));
     await info.attach('popout-handoff-evidence', { path: artifact, contentType: 'application/json' });
     if (popup && !popup.isClosed()) await popup.close().catch(() => {});
     if (!source.isClosed()) await source.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }).catch(() => {});

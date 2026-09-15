@@ -105,7 +105,7 @@ func (q *dedicatedInputQueue) run(ctx context.Context, done chan struct{}, wake 
 		if found {
 			q.active = &queued
 			q.activeDeadline = time.Time{}
-			if queued.frame.Kind == "wheel" && q.activeDispatchBudget > 0 {
+			if (queued.frame.Kind == "wheel" || inputTransition(queued.frame.Kind)) && q.activeDispatchBudget > 0 {
 				q.activeDeadline = time.Now().Add(q.activeDispatchBudget)
 			}
 			q.armExpiryLocked()
@@ -149,14 +149,70 @@ func (q *dedicatedInputQueue) run(ctx context.Context, done chan struct{}, wake 
 	}
 }
 
-// A single losslessly merged wheel continuation may wait for its active
-// wheel's original deadline. Mixed actions retain the oldest-entry deadline.
+// One compatible wheel or exact press release may wait for its active
+// operation's original deadline. Mixed actions retain the oldest-entry deadline.
 func (q *dedicatedInputQueue) compatibleContinuationLocked() bool {
 	if q.active == nil || q.activeDeadline.IsZero() || len(q.frames) != 1 || len(q.held) != 0 {
 		return false
 	}
 	active := *q.active
-	return mergePendingWheel(&active, q.frames[0].frame)
+	return mergePendingWheel(&active, q.frames[0].frame) || matchingPressRelease(active.frame, q.frames[0].frame)
+}
+
+// A release exception never merges or replays either event. It only keeps the
+// sole matching release eligible until the active press's existing deadline.
+func matchingPressRelease(press, release generated.BrowserInputFrame) bool {
+	if (press.Kind != "mouse_down" || release.Kind != "mouse_up") && (press.Kind != "key_down" || release.Kind != "key_up") {
+		return false
+	}
+	if press.CaptureId == nil || *press.CaptureId == "" || press.CaptureGeneration == nil || *press.CaptureGeneration <= 0 ||
+		press.ReliableSeq == nil || release.ReliableSeq == nil || *release.ReliableSeq != *press.ReliableSeq+1 ||
+		press.GestureBarrier == nil || release.GestureBarrier == nil || *release.GestureBarrier != *press.GestureBarrier+1 {
+		return false
+	}
+	a, b := press, release
+	if press.Kind == "mouse_down" {
+		if press.Button == nil || (*press.Button != "left" && *press.Button != "middle" && *press.Button != "right") || press.X == nil || press.Y == nil {
+			return false
+		}
+	} else {
+		// Physical identity survives layout-dependent changes to key/keyCode.
+		// Without it, retain the ordinary queue deadline instead of guessing.
+		if press.Code == nil || *press.Code == "" || release.Code == nil || *press.Code != *release.Code {
+			return false
+		}
+		a.Key, b.Key, a.KeyCode, b.KeyCode = nil, nil, nil, nil
+		if release.Text != nil {
+			return false
+		}
+		// Printable text belongs to the press; compare without changing delivery.
+		a.Text = nil
+		modifier := 0
+		switch *press.Code {
+		case "AltLeft", "AltRight":
+			modifier = 1
+		case "ControlLeft", "ControlRight":
+			modifier = 2
+		case "MetaLeft", "MetaRight":
+			modifier = 4
+		case "ShiftLeft", "ShiftRight":
+			modifier = 8
+		}
+		before, after := 0, 0
+		if press.Modifiers != nil {
+			before = *press.Modifiers
+		}
+		if release.Modifiers != nil {
+			after = *release.Modifiers
+		}
+		if before&^modifier != after&^modifier {
+			return false
+		}
+		a.Modifiers, b.Modifiers = nil, nil
+	}
+	a.Kind, b.Kind = "", ""
+	a.ReliableSeq, b.ReliableSeq, a.GestureBarrier, b.GestureBarrier = nil, nil, nil, nil
+	return reflect.DeepEqual(a, b)
 }
 
 func (q *dedicatedInputQueue) expiryDeadlineLocked() time.Time {
@@ -174,7 +230,7 @@ func (q *dedicatedInputQueue) expiryDeadlineLocked() time.Time {
 	return deadline
 }
 
-// This timer also bounds a hung active wheel sink, independently of whether
+// This timer also bounds hung active wheel/press/release sinks, independently of whether
 // its implementation cooperates with its own browser-operation timeout.
 func (q *dedicatedInputQueue) armExpiryLocked() {
 	q.stopExpiryLocked()
