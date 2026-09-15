@@ -1919,6 +1919,24 @@ func persistFreshInstallDefaultAgentID(configPath, agentID string) error {
 // churn), making the second boot a byte-level no-op (judgment-first spec
 // test 16).
 func persistSeededSkillGrants(configPath string, markers []string) error {
+	return persistConfigMarkerList(configPath, "seeded_skill_grants", markers)
+}
+
+// persistSeededToolPolicyUpdates durably records
+// config.seeded_tool_policy_updates (the one-time seeded tool-policy update
+// markers coreagent.SeedConfig checks, e.g. the Worker goal_claim update)
+// into config.json. Same contract as persistSeededSkillGrants: raw-map
+// read-modify-write that preserves every other key, and no write at all when
+// the on-disk value already matches.
+func persistSeededToolPolicyUpdates(configPath string, markers []string) error {
+	return persistConfigMarkerList(configPath, "seeded_tool_policy_updates", markers)
+}
+
+// persistConfigMarkerList writes markers under the top-level config.json key
+// key, preserving every other key exactly as-is, and skips the write entirely
+// when the on-disk list already equals markers (byte-level no-op on a
+// settled install).
+func persistConfigMarkerList(configPath, key string, markers []string) error {
 	raw, err := os.ReadFile(configPath)
 	if err != nil {
 		return fmt.Errorf("read config: %w", err)
@@ -1928,7 +1946,7 @@ func persistSeededSkillGrants(configPath string, markers []string) error {
 		return fmt.Errorf("parse config: %w", unmarshalErr)
 	}
 	// Skip the write entirely when the on-disk value already matches.
-	if existing, ok := m["seeded_skill_grants"].([]any); ok && len(existing) == len(markers) {
+	if existing, ok := m[key].([]any); ok && len(existing) == len(markers) {
 		same := true
 		for i := range markers {
 			if s, isStr := existing[i].(string); !isStr || s != markers[i] {
@@ -1940,7 +1958,7 @@ func persistSeededSkillGrants(configPath string, markers []string) error {
 			return nil
 		}
 	}
-	m["seeded_skill_grants"] = markers
+	m[key] = markers
 	out, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {
 		return fmt.Errorf("serialize config: %w", err)
@@ -2180,66 +2198,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		return fmt.Errorf("error creating provider: %w", err)
 	}
 
-	// ADR-054 D2/D3: bring in any agents already persisted as entity records
-	// (entities/agents/<id>.json) from a previous run BEFORE SeedConfig looks
-	// at cfg.Agents.List to decide which core agents are "already present" —
-	// otherwise every boot would look like a fresh install (cfg.Agents.List
-	// starts empty: config.LoadConfig strips config.json's legacy agents.list
-	// unconditionally, see legacy_agents_list.go) and SeedConfig would
-	// re-create core agents from their seed defaults on every restart,
-	// discarding any operator customization. Strict variant: a roster-
-	// population failure here (genuine store error, every on-disk record
-	// unparseable, or a same-process non-empty→empty regression) must abort
-	// boot rather than silently proceed with an empty/partial roster — see
-	// populateAgentsListFromEntityStoreStrict's doc for the verified
-	// privilege-escalation chain an empty roster otherwise opens up.
-	if rosterErr := populateAgentsListFromEntityStoreStrict(cfg, homePath); rosterErr != nil {
-		return fmt.Errorf("gateway: could not populate agent roster from entity store at boot: %w", rosterErr)
-	}
-
-	// Seed core agents into config on first boot. Core agents are stored in
-	// cfg.Agents.List with Locked=true so they appear alongside custom agents
-	// in the REST API with type "core". SeedConfig is idempotent — it only adds
-	// agents that are not already present (checked by ID).
-	if coreagent.SeedConfig(cfg) {
-		// ADR-054 D2/§11: core agents now persist as entity records
-		// (entities/agents/<id>.json) — never back into config.json's
-		// agents.list. config.SaveConfig here would be a double violation:
-		// (a) it is the full-struct save CLAUDE.md forbids for exactly this
-		// reason ("corrupts API keys" via SecureString round-trip), and (b)
-		// anything it wrote to agents.list would be stripped again on the
-		// very next config.LoadConfig call, so it would not even survive.
-		// persistSeededCoreAgents persists every agent SeedConfig
-		// added-or-touched (its own "re-enforce identity fields on existing
-		// core agents" pass, and any brand-new core agent it appended) via
-		// the agent store — see its own doc comment for the corrupt-record
-		// handling that makes this safe against a single bad entity file.
-		if seedErr := persistSeededCoreAgents(homePath, cfg.Agents.List); seedErr != nil {
-			return seedErr
-		}
-	}
-
-	// ADR-074 D4: durably record the one-shot skills-migration markers
-	// SeedConfig checked/wrote in memory (e.g. the define-done allowlist
-	// append). ADR-080 D-SKILL's own marker (adr080-define-goal-rename,
-	// the "define-done"→"define-goal" allowlist REWRITE — see
-	// coreagent.applyDefineGoalRenameMigration) rides the exact same
-	// cfg.SeededSkillGrants slice and is persisted by this same call; the
-	// matching skill-DIRECTORY cleanup (deleting the orphaned
-	// $OMNIPUS_HOME/skills/define-done/) is a separate, later step — see the
-	// call to skills.SeedDefaults below. The agent-side appends were just
-	// persisted by persistSeededCoreAgents above; this writes the marker into
-	// config.json so the migration never re-runs. Best-effort like the
-	// default_agent_id persist above: a failure only means the (idempotent,
-	// additive) check runs again next boot — not a boot-time fatal. The
-	// helper skips the write entirely when the on-disk key already matches,
-	// so a settled install's boot performs no config.json write here at all.
-	if len(cfg.SeededSkillGrants) > 0 {
-		if persistErr := persistSeededSkillGrants(configPath, cfg.SeededSkillGrants); persistErr != nil {
-			slog.Warn("gateway: could not persist seeded_skill_grants to config.json; "+
-				"the additive skills migration will be re-checked on the next boot",
-				"error", persistErr)
-		}
+	// ADR-054 D2/D3 + SeedConfig + its one-time migrations, persisted. The
+	// whole sequence lives in seedAndPersistAgentRoster (boot_agent_roster.go)
+	// so the upgrade path can be tested against a real on-disk fixture with
+	// exactly the calls boot makes, in exactly this order.
+	if rosterErr := seedAndPersistAgentRoster(cfg, homePath, configPath); rosterErr != nil {
+		return rosterErr
 	}
 
 	// RELEASE BLOCKER fix follow-up (2026-07-26): on a genuinely fresh

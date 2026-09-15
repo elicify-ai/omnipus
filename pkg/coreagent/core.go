@@ -395,12 +395,14 @@ var allStaticToolNames = []string{
 	// stop_plan/inspect_session already document).
 	"set_goal",
 	// goal_claim (ADR-084 D12, JUDGE-FR-087-FR-089): the tool-call claim
-	// channel, seeded per Constraint #6/ADR-077 in EVERY position set_goal
-	// occupies and with the same values — see set_goal's comment directly
-	// above. Its own preconditions (not policy) refuse a delegated sub-turn
-	// or a goalless session. Landed here, in the six per-agent seed maps and
-	// in pkg/config/defaults.go's ceiling, all in one commit: an unnamed
-	// override key here PANICS validateOverrideKeys at boot.
+	// channel, seeded per Constraint #6/ADR-077 in every per-agent seed map.
+	// Its values match set_goal's everywhere EXCEPT the Worker, which is allow
+	// here and deny for set_goal: a native task run finishes only through an
+	// upheld goal_claim (ADR-084 §11, ADR-043 §8, issue #710) and the Worker
+	// takes task runs, while set_goal stays refused on task sessions. Its own
+	// preconditions (not policy) refuse a delegated sub-turn that is not a
+	// task's own run, and a goalless session. An unnamed override key here
+	// PANICS validateOverrideKeys at boot.
 	"goal_claim",
 	"list_tasks", "create_task", "update_task", "delete_task", "list_agents",
 	"remember", "recall_memory", "run_retrospective", "recall_conversation",
@@ -762,16 +764,33 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// (Constraint #6), so it is named too rather than left to
 			// inference.
 			"set_goal": deny,
-			// goal_claim (ADR-084 D12) is an EXPLICIT "deny" here for
-			// exactly the set_goal reason directly above: its global
-			// ceiling is "allow" (pkg/config/defaults.go), so leaving it
-			// ABSENT from this sparse map would silently GRANT it to the
-			// Worker. A generic delegated worker session should never
-			// author its own goal record's completion claim — the tool's
-			// own scope preconditions already refuse it at delegation
-			// depth > 0, but "unusable grant" is not a posture this
-			// codebase ships (Constraint #6), so it is named too.
-			"goal_claim": deny,
+			// goal_claim (ADR-084 D12) is an EXPLICIT "allow" here, and
+			// unlike set_goal directly above it is not denied. A task can be
+			// assigned to the Worker, and a native task run completes ONLY
+			// when its goal_claim is upheld by the Judge (ADR-084 §11,
+			// ADR-043 §8, issue #710): update_task refuses a status write on
+			// the caller's own running task, so goal_claim is the only way a
+			// Worker task run can finish. The tool's own preconditions allow
+			// a task's own run to claim at any delegation depth and still
+			// refuse a delegated sub-turn that is not a task run
+			// (pkg/tools/goal_claim.go::Execute), so an ordinary delegated
+			// Worker session still cannot claim its parent's goal.
+			//
+			// This entry was "deny" until 2026-09-15, on the premise that
+			// the preconditions refused every Worker call anyway. Once task
+			// runs could claim, that deny made every task assigned to the
+			// Worker loop through its tries without ever finishing (live
+			// smoke test on build f4e482561).
+			//
+			// Founder decision 2026-09-15: goal_claim is allowed by default
+			// for every agent. Named explicitly rather than left absent
+			// (which would also resolve allow from today's ceiling) so the
+			// Worker's default is readable in its own stored map, and so a
+			// fresh install stores exactly what the one-time update writes
+			// on an install seeded with the old deny
+			// (applyWorkerGoalClaimAllowUpdate). An operator can still set
+			// deny afterwards; that value is kept.
+			"goal_claim": allow,
 			// --- ADR-056 roster visibility ---
 			// Same "ceiling is allow, so absence GRANTS" trap once more, and
 			// here the grant would not merely be unusable: the Worker id is
@@ -803,10 +822,12 @@ func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 			// DELEGATED run (ToolDelegationDepth > 0), so the seed only ever
 			// matters when one of these agents runs as a session owner.
 			"set_goal": allow,
-			// goal_claim (ADR-084 D12): same reasoning as set_goal directly
-			// above — its own scope precondition refuses a DELEGATED run,
-			// so the seed only ever matters when one of these agents runs
-			// as a session owner.
+			// goal_claim (ADR-084 D12): allow. It matters whenever one of
+			// these agents runs as a session owner, and whenever a task is
+			// assigned to it: a native task run finishes only through an
+			// upheld goal_claim (ADR-084 §11, issue #710), and the tool's own
+			// precondition lets a task's own run claim at any delegation
+			// depth while still refusing any other delegated sub-turn.
 			"goal_claim": allow,
 			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
 			// "ask" (never absent, never deny) for the three plan-execution
@@ -2308,7 +2329,81 @@ func SeedConfig(cfg *config.Config) bool {
 		modified = true
 	}
 
+	// Founder decision 2026-09-15 (issue #710): goal_claim is allowed by
+	// default for every agent that can own a goal or be assigned a task.
+	// One-time, marker-keyed update so an install seeded before the Worker's
+	// seed changed reaches the same default a fresh install gets. Runs AFTER
+	// the seeding loops, so a fresh install's just-seeded Worker (already
+	// allow) is left as-is and only the marker is recorded.
+	if applyWorkerGoalClaimAllowUpdate(cfg) {
+		modified = true
+	}
+
 	return modified
+}
+
+// ToolPolicyUpdateWorkerGoalClaimAllow is the marker recorded in
+// config.seeded_tool_policy_updates once the one-time Worker goal_claim
+// update has run on an install. Exported so pkg/gateway can persist it into
+// config.json after SeedConfig (SeedConfig itself does no file I/O).
+const ToolPolicyUpdateWorkerGoalClaimAllow = "adr084-worker-goal-claim-allow"
+
+// applyWorkerGoalClaimAllowUpdate moves the Worker's stored goal_claim from
+// "deny" to "allow", once per install.
+//
+// Why: a native task run completes only when its goal_claim is upheld by the
+// Judge (ADR-084 §11, ADR-043 §8, issue #710), so an agent that resolves
+// goal_claim deny can never finish a task assigned to it. The founder
+// decided on 2026-09-15 that goal_claim is allowed by default for every
+// agent. Fresh installs get that from the seed; installs seeded before the
+// change stored the old value and keep it forever unless something updates
+// it, because stored per-agent policy is data that neither SeedConfig nor
+// config.ReconcileToolPolicyCeiling rewrites (ADR-076 D2, ADR-077 D2).
+//
+// Scope, from git history: the only seed that ever wrote an explicit
+// goal_claim deny for an agent this update may touch is the Worker's
+// (coreAgentSeed's IDWorker branch, commit 1addf6e1d, 2026-09-12). The Judge
+// and PlanSupervisor also carry deny, but their whole tool policy is
+// re-applied from systemAgentSeed on every boot (seedSystemAgents), so their
+// value is the seed's current value and is not this update's to change. Every
+// other seed has always written allow, so a deny on any other agent is an
+// operator's choice and is left alone.
+//
+// A stored deny on the Worker cannot be told apart from an operator who set
+// the same value, so the update flips it exactly once: the marker is written
+// in the same pass, and once it is present this function does nothing, so a
+// deny the operator sets afterwards stays. Semantics:
+//   - Marker present: no-op.
+//   - Marker absent: for the agent with id "worker" only, a stored goal_claim
+//     of exactly "deny" becomes "allow". An absent entry stays absent (it
+//     already resolves from the ceiling); "ask" and "allow" are left as they
+//     are. No other key and no other agent is touched. The marker is recorded
+//     whether or not anything flipped.
+//
+// This is not the retired fail-closed backfill (ADR-077 D3): it never adds an
+// entry, never denies anything, runs once, and changes one named value on one
+// named agent.
+//
+// Returns true when it modified cfg (always, when the marker was absent,
+// because recording the marker is itself a modification).
+func applyWorkerGoalClaimAllowUpdate(cfg *config.Config) bool {
+	for _, marker := range cfg.SeededToolPolicyUpdates {
+		if marker == ToolPolicyUpdateWorkerGoalClaimAllow {
+			return false
+		}
+	}
+	const goalClaim = "goal_claim"
+	for i := range cfg.Agents.List {
+		a := &cfg.Agents.List[i]
+		if a.ID != string(IDWorker) || a.Tools == nil {
+			continue
+		}
+		if a.Tools.Builtin.Policies[goalClaim] == config.ToolPolicyDeny {
+			a.Tools.Builtin.Policies[goalClaim] = config.ToolPolicyAllow
+		}
+	}
+	cfg.SeededToolPolicyUpdates = append(cfg.SeededToolPolicyUpdates, ToolPolicyUpdateWorkerGoalClaimAllow)
+	return true
 }
 
 // SkillsMigrationDefineDone is the ADR-074 D4 marker recorded in

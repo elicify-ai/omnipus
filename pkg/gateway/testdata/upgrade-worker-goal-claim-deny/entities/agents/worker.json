@@ -1,0 +1,55 @@
+{
+  "id": "worker",
+  "name": "Worker",
+  "description": "General-purpose delegation worker",
+  "type": "worker",
+  "locked": true,
+  "subagents": {
+    "executor": {
+      "kind": "native"
+    }
+  },
+  "tools": {
+    "builtin": {
+      "policies": {
+        "configure_channel": "deny",
+        "configure_provider": "deny",
+        "create_agent": "deny",
+        "create_plan": "ask",
+        "create_task": "deny",
+        "create_task_in_workspace": "deny",
+        "create_workspace": "deny",
+        "delete_agent": "deny",
+        "delete_task": "deny",
+        "delete_task_in_workspace": "deny",
+        "delete_workspace": "deny",
+        "disable_channel": "deny",
+        "enable_channel": "deny",
+        "execute_plan": "ask",
+        "get_config": "deny",
+        "get_usage": "deny",
+        "get_workspace": "deny",
+        "goal_claim": "deny",
+        "inspect_session": "deny",
+        "list_channels": "deny",
+        "list_jobs": "deny",
+        "list_models": "deny",
+        "list_providers": "deny",
+        "list_tasks_in_workspace": "deny",
+        "list_workspaces": "deny",
+        "plan_correct": "deny",
+        "read_agent_metadata": "deny",
+        "run_doctor": "deny",
+        "run_task": "ask",
+        "set_config": "deny",
+        "set_goal": "deny",
+        "stop_plan": "deny",
+        "test_channel": "deny",
+        "test_provider": "deny",
+        "update_agent": "deny",
+        "update_task_in_workspace": "deny",
+        "update_workspace": "deny"
+      }
+    }
+  }
+}

@@ -4454,8 +4454,13 @@ func (a *restAPI) getConfig(w http.ResponseWriter) {
 //   - seeded_skill_grants (judgment-first spec US-4 S6 / R2-04): records which
 //     one-shot allowlist migrations have run on THIS install (ADR-074 D4) —
 //     an implementation detail of the boot seed, not operator-facing config.
+//   - seeded_tool_policy_updates: records which one-time updates to a seeded
+//     agent's stored tool policy have run on THIS install (e.g. the Worker
+//     goal_claim update, coreagent.ToolPolicyUpdateWorkerGoalClaimAllow) —
+//     the same kind of boot-seed bookkeeping.
 var wireExcludedConfigFields = []string{
 	"seeded_skill_grants",
+	"seeded_tool_policy_updates",
 }
 
 // sanitizeConfigForWire strips every wireExcludedConfigFields key from a

@@ -328,13 +328,16 @@ func DefaultConfig() *Config {
 				// goal_claim (ADR-084 D12, JUDGE-FR-089, C-70): the tool-call
 				// claim channel. Ceiling "allow" for the same reason
 				// set_goal's is directly above — it reports the CALLING
-				// session's own completion only, gated shut for a delegated
-				// sub-turn or a goalless session by the tool's own scope
-				// preconditions, never by policy. Per-agent seeds decide who
-				// holds it: every human-facing agent allow (mirroring
-				// set_goal's own seed), Judge/PlanSupervisor explicit deny
-				// via their denyAllThenOverride stamps, Worker explicit deny
-				// via tightenGlobalCeiling (see pkg/coreagent/core.go).
+				// session's own completion only, gated shut for a goalless
+				// session, and for a delegated sub-turn that is not a task's
+				// own run, by the tool's own scope preconditions, never by
+				// policy. A native task run finishes ONLY through an upheld
+				// goal_claim (ADR-084 §11, issue #710), so every agent a task
+				// can be assigned to must hold it. Per-agent seeds decide who
+				// holds it: every human-facing agent and the Worker allow
+				// (the Worker explicitly, via tightenGlobalCeiling — unlike its
+				// set_goal deny), Judge/PlanSupervisor explicit deny via their
+				// denyAllThenOverride stamps (see pkg/coreagent/core.go).
 				"goal_claim":          "allow",
 				"list_tasks":          "allow",
 				"create_task":         "allow",

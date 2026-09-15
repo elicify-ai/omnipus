@@ -203,6 +203,18 @@ type Config struct {
 	// while a grant that never existed can still be introduced exactly once.
 	SeededSkillGrants []string `json:"seeded_skill_grants,omitempty" yaml:"-"`
 
+	// SeededToolPolicyUpdates records which one-time updates to a seeded
+	// agent's stored tool policy have already run on this install. Each entry
+	// is a marker string (e.g. "adr084-worker-goal-claim-allow"); the update
+	// that owns a marker runs inside coreagent.SeedConfig when the marker is
+	// absent, and writes the marker in the same pass, so it runs exactly once
+	// and a value an operator sets afterwards is never touched again. Same
+	// lifecycle as SeededSkillGrants, kept separate so a tool-policy update is
+	// never recorded under a skills name. INTERNAL-ONLY: stripped from the
+	// GET /api/v1/config response (pkg/gateway/rest.go's
+	// wireExcludedConfigFields) and never crosses the wire.
+	SeededToolPolicyUpdates []string `json:"seeded_tool_policy_updates,omitempty" yaml:"-"`
+
 	// UnknownFields preserves JSON keys not recognized by this version of Omnipus.
 	// They are re-emitted verbatim during SaveConfig for round-trip safety (FR-004).
 	// Never serialized by json.Marshal or yaml.Marshal — only written back by MarshalJSON.

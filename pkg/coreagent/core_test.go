@@ -577,10 +577,11 @@ func TestCatalog_ContainsGoalClaimAndBrowserHandover(t *testing.T) {
 }
 
 // TestSeed_GoalClaimResolvesForEveryAgent pins JUDGE-FR-089's per-agent seed
-// requirement: explicit allow for the core roster, the subagent tier and
-// customs' default allowlist; explicit deny for Judge and PlanSupervisor
-// (via their denyAllThenOverride stamps) and for Worker (via
-// tightenGlobalCeiling) — mirroring set_goal's own seed exactly.
+// requirement: explicit allow for the core roster, the Worker, the subagent
+// tier and customs' default allowlist; explicit deny for Judge and
+// PlanSupervisor (via their denyAllThenOverride stamps). The Worker is allow,
+// unlike its set_goal deny: a native task run finishes only through an upheld
+// goal_claim (ADR-084 §11, issue #710), and the Worker takes task runs.
 func TestSeed_GoalClaimResolvesForEveryAgent(t *testing.T) {
 	cfg := &config.Config{}
 	coreagent.SeedConfig(cfg)
@@ -592,7 +593,7 @@ func TestSeed_GoalClaimResolvesForEveryAgent(t *testing.T) {
 
 	allowIDs := []coreagent.CoreAgentID{
 		coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDRay,
-		coreagent.IDPlanner, coreagent.IDExplorer, coreagent.IDResearcher,
+		coreagent.IDWorker, coreagent.IDPlanner, coreagent.IDExplorer, coreagent.IDResearcher,
 	}
 	for _, id := range allowIDs {
 		ac, ok := byID[string(id)]
@@ -602,7 +603,7 @@ func TestSeed_GoalClaimResolvesForEveryAgent(t *testing.T) {
 		assert.Equal(t, config.ToolPolicyAllow, p, "agent %q must resolve goal_claim allow", id)
 	}
 
-	denyIDs := []coreagent.CoreAgentID{coreagent.IDWorker, coreagent.IDJudge, coreagent.IDPlanSupervisor}
+	denyIDs := []coreagent.CoreAgentID{coreagent.IDJudge, coreagent.IDPlanSupervisor}
 	for _, id := range denyIDs {
 		ac, ok := byID[string(id)]
 		require.True(t, ok, "agent %q must be seeded", id)
