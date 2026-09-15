@@ -28,8 +28,8 @@ pkg/channels/manager.go	Manager.Reload	302
 pkg/config/config_refs_test.go	TestChannelConfig_AllRefsRoundTrip	377
 pkg/config/defaults.go	DefaultConfig	1003
 pkg/config/validator.go	validateBootConfig	288
-pkg/coreagent/core.go	coreAgentSeed	1060
-pkg/coreagent/core.go	SeedConfig	250
+pkg/coreagent/seed.go	coreAgentSeed	1060
+pkg/coreagent/seed.go	SeedConfig	250
 pkg/gateway/browser_webrtc_e2e_test.go	TestWebRTCEndToEndInProcess	290
 pkg/gateway/gateway.go	restartServices	260
 pkg/gateway/gateway.go	RunContextWithOptions	1090
