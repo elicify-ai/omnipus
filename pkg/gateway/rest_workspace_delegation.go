@@ -597,3 +597,23 @@ func detectDelegationCycle(adj map[string][]string) string {
 	}
 	return ""
 }
+
+// --- moved from rest_workspaces.go 2026-09-15 ---
+
+// storedDelegationEdge is an alias for the canonical delegation-edge type.
+// The shared type lives in pkg/workspace so gateway and tool writes stay
+// byte-for-byte compatible on the delegation field.
+// not-wire-format: mapped to gen.WorkspaceDelegationEdge before sending over the wire.
+type storedDelegationEdge = workspace.DelegationEdge
+
+// saveWorkspaceDelegation persists a workspace's delegation edge set to the
+// delegation store, taking the per-workspace lock SaveDelegation requires its
+// caller to hold. Use it from paths that do NOT already hold workspace.LockID
+// (the create paths); handleWorkspaceDelegationPut holds the lock across its
+// whole load-modify-write and calls workspace.SaveDelegation directly, because
+// the lock pool is not reentrant.
+func saveWorkspaceDelegation(home, id string, edges []storedDelegationEdge) error {
+	unlock := workspace.LockID(id)
+	defer unlock()
+	return workspace.SaveDelegation(home, id, edges)
+}
