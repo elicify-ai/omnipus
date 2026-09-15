@@ -18,8 +18,8 @@ type RuntimeProbe = {
 };
 type ProbeWindow = Window & { __inputSmoke: RuntimeProbe };
 
-export async function instrumentRoutes(page: Page) {
-  await page.addInitScript(() => {
+export async function instrumentRoutes(page: Page, audioInactive = false) {
+  await page.addInitScript(({ audioInactive }) => {
     const routes: RouteEvent[] = [], peers: Array<{ pc: RTCPeerConnection; labels: string[] }> = [], sockets: WebSocket[] = [];
     function record(route: string, data: unknown) {
       const kinds = ['mouse_move', 'mouse_down', 'mouse_up', 'wheel', 'key_down', 'key_up', 'text'];
@@ -39,6 +39,11 @@ export async function instrumentRoutes(page: Page) {
     const NativePeer = window.RTCPeerConnection;
     window.RTCPeerConnection = class extends NativePeer {
       constructor(...args: ConstructorParameters<typeof NativePeer>) { super(...args); peers.push({ pc: this, labels: [] }); }
+      addTransceiver(trackOrKind: MediaStreamTrack | string, init?: RTCRtpTransceiverInit) {
+        // Explicit diagnostic only: native negotiation remains real and the
+        // resulting currentDirection is independently checked by endurance.
+        return super.addTransceiver(trackOrKind, audioInactive && trackOrKind === 'audio' ? { ...init, direction: 'inactive' } : init);
+      }
       createDataChannel(label: string, options?: RTCDataChannelInit) {
         const channel = super.createDataChannel(label, options);
         peers.find(row => row.pc === this)!.labels.push(label);
@@ -69,12 +74,20 @@ export async function instrumentRoutes(page: Page) {
       },
       async mediaStats() {
         const result: Array<Record<string, unknown>> = [];
-        const fields = ['type', 'kind', 'timestamp', 'framesReceived', 'framesDecoded', 'framesDropped', 'packetsReceived', 'packetsLost', 'bytesReceived', 'jitter', 'jitterBufferDelay', 'jitterBufferEmittedCount', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'totalDecodeTime', 'totalProcessingDelay', 'freezeCount', 'totalFreezesDuration', 'pauseCount', 'totalPausesDuration', 'frameWidth', 'frameHeight', 'framesPerSecond', 'decoderImplementation', 'powerEfficientDecoder', 'estimatedPlayoutTimestamp', 'lastPacketReceivedTimestamp', 'currentRoundTripTime', 'availableIncomingBitrate', 'availableOutgoingBitrate'];
+        const fields = ['type', 'kind', 'timestamp', 'ssrc', 'totalSamplesReceived', 'concealedSamples', 'silentConcealedSamples', 'concealmentEvents', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration', 'totalSamplesDuration', 'framesReceived', 'framesDecoded', 'framesDropped', 'packetsReceived', 'packetsLost', 'bytesReceived', 'jitter', 'jitterBufferDelay', 'jitterBufferEmittedCount', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'totalDecodeTime', 'totalProcessingDelay', 'freezeCount', 'totalFreezesDuration', 'pauseCount', 'totalPausesDuration', 'frameWidth', 'frameHeight', 'framesPerSecond', 'decoderImplementation', 'powerEfficientDecoder', 'estimatedPlayoutTimestamp', 'lastPacketReceivedTimestamp', 'currentRoundTripTime', 'availableIncomingBitrate', 'availableOutgoingBitrate'];
         for (const { pc } of peers) {
           if (pc.connectionState === 'closed' || pc.getTransceivers().length === 0) continue;
+          for (const transceiver of pc.getTransceivers()) {
+            const receiver = transceiver.receiver as RTCRtpReceiver & { jitterBufferTarget?: number | null; playoutDelayHint?: number };
+            result.push({ type: 'receiver', peer: peers.findIndex(entry => entry.pc === pc), kind: receiver.track.kind,
+              direction: transceiver.direction, currentDirection: transceiver.currentDirection,
+              headerExtensions: receiver.getParameters().headerExtensions.map(({ uri, id }) => ({ uri, id })),
+              ...(receiver.jitterBufferTarget !== undefined ? { jitterBufferTarget: receiver.jitterBufferTarget } : {}),
+              ...(receiver.playoutDelayHint !== undefined ? { playoutDelayHint: receiver.playoutDelayHint } : {}) });
+          }
           const stats = await pc.getStats();
           stats.forEach(row => {
-            if ((row.type === 'inbound-rtp' && row.kind === 'video') || (row.type === 'candidate-pair' && row.state === 'succeeded' && row.nominated)) {
+            if ((row.type === 'inbound-rtp' && (row.kind === 'video' || row.kind === 'audio')) || (row.type === 'candidate-pair' && row.state === 'succeeded' && row.nominated)) {
               result.push({ peer: peers.findIndex(entry => entry.pc === pc), ...Object.fromEntries(fields.filter(key => row[key] !== undefined).map(key => [key, row[key]])) });
             }
           });
@@ -83,7 +96,7 @@ export async function instrumentRoutes(page: Page) {
       },
       peers: () => peers.map(row => ({ labels: row.labels, transceivers: row.pc.getTransceivers().length, state: row.pc.connectionState })),
     };
-  });
+  }, { audioInactive });
 }
 
 // Same authored-border/object-contain mapping as the existing browser input probe.

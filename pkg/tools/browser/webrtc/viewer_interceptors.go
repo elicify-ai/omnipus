@@ -13,6 +13,9 @@ import (
 // On Pion upgrades, compare the upstream default stages with this list. Real-wire
 // sender-clock, ingest receiver-report and viewer feedback tests guard its purpose.
 func registerViewerInterceptors(m *webrtc.MediaEngine, registry *interceptor.Registry) error {
+	if err := m.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: viewerPlayoutDelayURI}, webrtc.RTPCodecTypeVideo); err != nil {
+		return err
+	}
 	if err := webrtc.ConfigureNack(m, registry); err != nil {
 		return err
 	}
@@ -27,5 +30,10 @@ func registerViewerInterceptors(m *webrtc.MediaEngine, registry *interceptor.Reg
 	if err := webrtc.ConfigureStatsInterceptor(registry); err != nil {
 		return err
 	}
-	return webrtc.ConfigureTWCCSender(m, registry)
+	if err := webrtc.ConfigureTWCCSender(m, registry); err != nil {
+		return err
+	}
+	// Pion wraps in registration order: last runs first on outbound RTP.
+	registry.Add(viewerPlayoutDelayFactory{})
+	return nil
 }

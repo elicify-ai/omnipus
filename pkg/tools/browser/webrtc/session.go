@@ -281,8 +281,16 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 		return s
 	}
 
+	// Keep viewer-only header capabilities out of ingest negotiation.
+	viewerMediaEngine := &webrtc.MediaEngine{}
+	if err := viewerMediaEngine.RegisterDefaultCodecs(); err != nil {
+		s.logf("webrtc: register viewer codecs failed: %v (using default API without viewer-specific setup)", err)
+		s.api = webrtc.NewAPI()
+		s.apiViewer = s.api
+		return s
+	}
 	viewerInterceptors := &interceptor.Registry{}
-	if err := registerViewerInterceptors(m, viewerInterceptors); err != nil {
+	if err := registerViewerInterceptors(viewerMediaEngine, viewerInterceptors); err != nil {
 		s.logf("webrtc: register viewer interceptors failed: %v (session will reject all offers)", err)
 		s.api = webrtc.NewAPI()
 		s.apiViewer = s.api
@@ -385,7 +393,7 @@ func NewSession(cfg Config, sink InputSink, logf func(string, ...any)) *Session 
 
 	s.api = webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithInterceptorRegistry(ir), webrtc.WithSettingEngine(se))
 	s.apiViewer = webrtc.NewAPI(
-		webrtc.WithMediaEngine(m),
+		webrtc.WithMediaEngine(viewerMediaEngine),
 		webrtc.WithInterceptorRegistry(viewerInterceptors),
 		webrtc.WithSettingEngine(viewerSE),
 	)

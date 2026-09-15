@@ -16,14 +16,21 @@ const seconds = Number(process.env.BROWSER_ENDURANCE_SECONDS || 1200);
 if (![15, 120, 1200].includes(seconds)) throw Error('Use 15 seconds for calibration, 120 for diagnosis, or 1200 for acceptance');
 const resizeEvery = Number(process.env.BROWSER_ENDURANCE_RESIZE_EVERY || 12);
 if (![2, 12].includes(resizeEvery)) throw Error('Use 2 rounds for accelerated resize diagnosis or 12 for standard endurance');
+const audioMode = process.env.BROWSER_ENDURANCE_AUDIO_INACTIVE;
+if (audioMode !== undefined && audioMode !== '0' && audioMode !== '1') throw Error('BROWSER_ENDURANCE_AUDIO_INACTIVE must be 0 or 1');
+const audioInactive = audioMode === '1';
+const diagnosticMode = audioInactive ? 'audio-inactive' : 'normal';
+const fullFeatureAcceptanceEligible = !audioInactive && seconds === 1200 && resizeEvery === 12;
 const delay = 120;
-test(`${seconds}-second continuous mixed input endurance`, async ({ page }, info) => {
+test(`${seconds}-second continuous mixed input endurance (${diagnosticMode})`, async ({ page }, info) => {
   let state: InputState = { nonce: randomInt(1, 65536), clicks: 0, downs: 0, ups: 0, held: 0, scroll: 0, drags: 0, errors: 0, text: '' };
   let rounds = 0, started = 0, clientStart = 0;
   const mediaStats: unknown[] = [];
+  let videoPlayoutNegotiated = false;
+  const clientBrowserVersion = page.context().browser()?.version() ?? 'unavailable';
   const errors: string[] = [], marks: Array<{ label: string; at: string; ms?: number }> = [];
   page.on('pageerror', error => errors.push(error.message));
-  await instrumentRoutes(page);
+  await instrumentRoutes(page, audioInactive);
   const ready = async () => {
     await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
     await expect(browserLivePanel(page).getByRole('status').filter({ hasText: /Waiting for the current page|Pointer input is unavailable|Browser input is unavailable|Reconnecting video to restore browser input/ })).toHaveCount(0);
@@ -41,6 +48,43 @@ test(`${seconds}-second continuous mixed input endurance`, async ({ page }, info
     const url = new URL(target); url.searchParams.set('nonce', String(state.nonce)); url.searchParams.set('delay', String(delay));
     const address = page.getByRole('textbox', { name: 'Address bar' }); await address.fill(url.href); await address.press('Enter');
     await installPixels(page); await stateIs(page, state); await ready();
+    const initialMediaStats = await page.evaluate(async () => (window as unknown as { __inputSmoke: { mediaStats(): Promise<Array<Record<string, unknown>>> } }).__inputSmoke.mediaStats());
+    const videoReceivers = initialMediaStats.filter(row => row.type === 'receiver' && row.kind === 'video' && (row.currentDirection === 'recvonly' || row.currentDirection === 'sendrecv'));
+    videoPlayoutNegotiated = videoReceivers.length > 0 && videoReceivers.every(row =>
+      Array.isArray(row.headerExtensions) && row.headerExtensions.some((extension: { uri?: string; id?: number }) =>
+        extension.uri === 'http://www.webrtc.org/experiments/rtp-hdrext/playout-delay' && Number.isInteger(extension.id) && Number(extension.id) > 0));
+    expect(videoPlayoutNegotiated, 'viewer video must negotiate the playout-delay extension before endurance begins').toBe(true);
+    // Browser-local sampling avoids a Playwright action/trace every second.
+    // Recursive scheduling serializes this sampler's async getStats calls.
+    await page.evaluate(() => {
+      type Sample = { at: string; startedAt: number; completedAt: number; stats?: unknown; error?: string };
+      const w = window as unknown as {
+        __inputSmoke: { mediaStats(): Promise<unknown> };
+        __stopAudioTimingSampler?: () => { samples: Sample[]; inFlight: boolean; limitReached: boolean; stoppedAt: string };
+      };
+      w.__stopAudioTimingSampler?.();
+      const samples: Sample[] = [];
+      let stopped = false, inFlight = false;
+      let timer: number | undefined;
+      const sample = async () => {
+        if (stopped || samples.length >= 1500) return;
+        inFlight = true;
+        const at = new Date().toISOString(), startedAt = performance.now();
+        let stats: unknown, error: string | undefined;
+        try { stats = await w.__inputSmoke.mediaStats(); }
+        catch (cause) { error = cause instanceof Error ? cause.name : 'UnknownError'; }
+        inFlight = false;
+        if (stopped) return;
+        samples.push({ at, startedAt, completedAt: performance.now(), ...(error ? { error } : { stats }) });
+        if (samples.length < 1500) timer = window.setTimeout(() => { void sample(); }, Math.max(0, 1000 - (performance.now() - startedAt)));
+      };
+      w.__stopAudioTimingSampler = () => {
+        stopped = true;
+        if (timer !== undefined) window.clearTimeout(timer);
+        return { samples: samples.slice(), inFlight, limitReached: samples.length >= 1500, stoppedAt: new Date().toISOString() };
+      };
+      void sample();
+    });
     started = performance.now();
     clientStart = await page.evaluate(() => {
       const w = window as unknown as { __enduranceStates: Array<{at:number;text:string;alerts:string[]}>; __enduranceObserver:MutationObserver };
@@ -111,14 +155,27 @@ test(`${seconds}-second continuous mixed input endurance`, async ({ page }, info
       const bucket = routes.filter(r=>r.at>=clientStart+minute*60000 && r.at<clientStart+(minute+1)*60000);
       for (const kind of ['mouse_move','wheel','mouse_down','key_down']) expect(bucket.some(r=>r.kind===kind), `minute${minute+1} missing${kind}`).toBe(true);
     }
+    if (audioInactive) {
+      const stats = await page.evaluate(async () => (window as unknown as { __inputSmoke: { mediaStats(): Promise<Array<Record<string, unknown>>> } }).__inputSmoke.mediaStats());
+      const audio = stats.filter(row => row.type === 'receiver' && row.kind === 'audio');
+      expect(audio.length, 'diagnostic must negotiate an actual audio transceiver').toBeGreaterThan(0);
+      expect(audio.every(row => row.currentDirection === 'inactive'), 'audio must be negotiated inactive, not just muted').toBe(true);
+      expect(stats.some(row => row.type === 'inbound-rtp' && row.kind === 'video' && Number(row.framesReceived) > 0 && Number(row.framesDecoded) > 0), 'diagnostic must still receive and decode video').toBe(true);
+    }
     expect(errors).toEqual([]);
   } finally {
+    // Do not wait forever for getStats during teardown. An unfinished request
+    // is explicit in the snapshot; it cannot append after this stop boundary.
+    const audioVideoTimingSeries = await page.evaluate(() => {
+      const w = window as unknown as { __stopAudioTimingSampler?: () => unknown };
+      return w.__stopAudioTimingSampler ? w.__stopAudioTimingSampler() : { notStarted: true };
+    }).catch(() => ({ snapshotError: 'Browser context unavailable', at: new Date().toISOString() }));
     mediaStats.push(await page.evaluate(async () => ({ at: new Date().toISOString(), stats: await (window as unknown as { __inputSmoke?: { mediaStats(): Promise<unknown> } }).__inputSmoke?.mediaStats() })).catch(error => ({ statsError: String(error) })));
     const final = await page.evaluate(() => (window as unknown as { __inputSmoke?: { sample(): { state: InputState } | null } }).__inputSmoke?.sample()?.state).catch(() => null);
     const route = await routeEvidence(page).catch(() => null);
     const recentVideoFrames = await page.evaluate(() => (window as unknown as { __inputSmoke?: { frameTiming(): unknown } }).__inputSmoke?.frameTiming()).catch(() => null);
     const viewerStates = await page.evaluate(() => {const w=window as unknown as {__enduranceStates:unknown;__enduranceObserver:MutationObserver};w.__enduranceObserver?.disconnect();return w.__enduranceStates}).catch(()=>null);
-    fs.writeFileSync(info.outputPath('pressure-stress-evidence.json'), JSON.stringify({ mediaStats, recentVideoFrames, requestedSeconds:seconds, resizeEvery, activeSeconds:started ? (performance.now()-started)/1000 : 0, rounds, viewerStates, provenance, deliberateKeyHandlerMs: delay, deliberateWheelHandlerMs: delay ? 75 : 0, marks, expected: state, final, route, errors }, null, 2));
+    fs.writeFileSync(info.outputPath('pressure-stress-evidence.json'), JSON.stringify({ videoPlayoutNegotiated, clientBrowserVersion, audioVideoTimingSeries, diagnosticMode, fullFeatureAcceptanceEligible, mediaStats, recentVideoFrames, requestedSeconds:seconds, resizeEvery, activeSeconds:started ? (performance.now()-started)/1000 : 0, rounds, viewerStates, provenance, deliberateKeyHandlerMs: delay, deliberateWheelHandlerMs: delay ? 75 : 0, marks, expected: state, final, route, errors }, null, 2));
     await info.attach('pressure-stress-evidence', { path: info.outputPath('pressure-stress-evidence.json'), contentType: 'application/json' });
     await page.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }).catch(() => {});
   }

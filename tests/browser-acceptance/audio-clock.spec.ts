@@ -69,13 +69,47 @@ test('same peer silence-tone-silence with viewer muted then unmuted', async ({ p
         expect(sent.map(({ route, kind }) => ({ route, kind }))).toEqual([{ route: 'input-reliable', kind: 'mouse_down' }, { route: 'input-reliable', kind: 'mouse_up' }]);
         await expect.poll(async () => { const s = await read(); return { phase: s.phase, running: s.running, tone: s.tone }; }).toEqual({ phase, running: true, tone: phase === 1 });
         const first = await read(); owner ??= first.peer;
+        let stableStart: Awaited<ReturnType<typeof read>> | undefined;
         for (let second = 0; second < 20; second++) {
           await page.waitForTimeout(1000);
           const sample = await read(); observations.push({ requestedPhase: phase, requestedMuted: muted, ...sample });
+          if (second === 9) stableStart = sample;
           expect(sample.fixture).toBe(true); expect(sample.peer).toBe(owner); expect(sample.phase).toBe(phase); expect(sample.running).toBe(true); expect(sample.tone).toBe(phase === 1); expect(sample.muted).toBe(muted); expect(sample.paused).toBe(false);
           expect(sample.tracks).toEqual(expect.arrayContaining([{ kind: 'audio', state: 'live' }, { kind: 'video', state: 'live' }]));
         }
         expect((await read()).samples).toBeGreaterThan(first.samples);
+        const stableEnd = await read();
+        // Use the final ~10s of each phase: the initial 10s allow the source
+        // gain ramp, codec transitions and buffered pre-transition audio out.
+        // Fixture: sine amplitude .02 => expected mean-square power .02²/2.
+        // Permit substantial codec/gain variation: tone >=5% of that power;
+        // silence <=0.5%. Source pixels alone cannot satisfy these assertions.
+        const counters = (sample: Awaited<ReturnType<typeof read>>) => {
+          const audio = sample.stats.filter(row => row.kind === 'audio');
+          expect(audio, 'one inbound audio stream must supply receiver energy').toHaveLength(1);
+          const values = Object.fromEntries(['totalAudioEnergy', 'totalSamplesDuration', 'totalSamplesReceived'].map(key => {
+            const value = audio[0][key];
+            expect(typeof value, `required receiver metric ${key}`).toBe('number');
+            expect(Number.isFinite(value), `finite receiver metric ${key}`).toBe(true);
+            expect(Number(value), `nonnegative receiver metric ${key}`).toBeGreaterThanOrEqual(0);
+            return [key, Number(value)];
+          }));
+          return values;
+        };
+        expect(stableStart, 'stable receiver observation must exist').toBeDefined();
+        const before = counters(stableStart!), after = counters(stableEnd);
+        const receivedSamples = after.totalSamplesReceived - before.totalSamplesReceived;
+        const receivedDuration = after.totalSamplesDuration - before.totalSamplesDuration;
+        const receivedEnergy = after.totalAudioEnergy - before.totalAudioEnergy;
+        expect(receivedSamples, 'audio samples must advance even while viewer is muted').toBeGreaterThan(0);
+        expect(receivedDuration).toBeGreaterThan(0);
+        expect(receivedEnergy).toBeGreaterThanOrEqual(0);
+        const meanSquare = receivedEnergy / receivedDuration;
+        const authoredTonePower = 0.02 ** 2 / 2;
+        observations.push({ checkpoint: 'receiver-energy', requestedPhase: phase, requestedMuted: muted,
+          stableStartMs: stableStart!.atMs, stableEndMs: stableEnd.atMs, receivedSamples, receivedDuration, receivedEnergy, meanSquare });
+        if (phase === 1) expect(meanSquare, 'receiver must contain the authored tone energy').toBeGreaterThanOrEqual(authoredTonePower * 0.05);
+        else expect(meanSquare, 'receiver must return to silence').toBeLessThanOrEqual(authoredTonePower * 0.005);
       }
     }
     expect(errors).toEqual([]);
