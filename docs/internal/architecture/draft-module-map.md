@@ -82,7 +82,22 @@ Two same-package lanes (turn, subturn) collided on shared test files; resolved b
 
 **Comment loss found and repaired.** The lanes' "nothing dropped" checks count functions, not comments. An audit of every split (`0ea1b81b7..HEAD`) found 603 comment lines removed and never re-added. Cause: the splitter rebuilt each rewritten file from its package clause plus declarations, dropping any comment block between `package` and `import`. Fixed in the splitter (preamble now extends to the import block, both code paths, proven on a fixture) and repaired on the tree: 410 lines re-inserted verbatim from the pre-split versions across 21 files (`ae84ddf84`). The remainder are headers of test files deleted because every test in them moved, plus the ADR-082 key doc removed on purpose. **Rule added to the recipe:** a split's proof must include a comment-line audit (`git diff <base> | grep '^-//'` minus `grep '^+//'`), not only the function multiset.
 
-After batch 2: production files over 2,000: **22** (was 34); over 4,000: **3**, each dominated by one function (`loop.go::runTurn`, `config.go`, `chat.ts` store `create` call). Tools: `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` (Go) and `ts/tssplit.cjs` (TypeScript), mappings alongside.
+After batch 2: production files over 2,000: **22** (was 34); over 4,000: **3**, each dominated by one function (`loop.go::runTurn`, `config.go`, `chat.ts` store `create` call).
+
+**Wave 1, batch 3 (2026-09-15, five GLM lanes, all merged): `gateway_boot.go` 3,731 → under 2,000 apart from `setupAndStartServices`; `config.go` 4,391 → 2,782 (second cut; off the over-4,000 list); `view_write.go` 2,328 → under 2,000; `goal_loop.go` 2,147 → under 2,000; `websocket_pump.go` 2,775 → `websocket_forward.go` + `websocket_streamer.go`. Wave 1 is complete: every mechanical file split in this map has landed.** Production files over 2,000: **18**; over 4,000: **2** (`loop.go` 7,825 and `chat.ts` 6,695, each one giant function).
+
+**Wave 2 (function extraction, done in the harness, not by lanes), landed 2026-09-15:**
+
+| Function | Before | After | Shape | Oracle |
+|---|---|---|---|---|
+| `coreagent.coreAgentSeed` | 1,060 | 17 + one helper per agent | dispatcher over data literals | JSON of every ID's map byte-identical |
+| `gateway.HandleProviders` | 1,041 | 28 + one method per route; PUT staged over a `providerPut` context; list split into aggregate + row builder | router | 139 provider tests |
+| `config.DefaultConfig` | 1,003 | 136 + one constructor per section; the 474-line tool-policy map assembled from eight per-family maps | literal assembly | JSON of `DefaultConfig()` byte-identical |
+| `gateway.eventForwarder` | 1,231 | 114 + one `on<Kind>` method per event kind on an `eventForwardState`; closures became methods | loop over a switch | 387 websocket-family tests |
+
+Function grandfather list: 139 → **135**. Lesson written into the method: an identifier rewrite must skip comments and string literals (the forwarder pass briefly turned "sub-turn" into "f.sub-turn" in comments; caught by the exact comment audit and reverted).
+
+**Oracle gap found:** `RunContextWithOptions` (1,090 lines) has **no in-process test**; only the E2E shards exercise it, through the built binary. `setupAndStartServices` (1,258) has four. Extracting either is a change only the end-of-migration CI pass can confirm. Tools: `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` (Go) and `ts/tssplit.cjs` (TypeScript), mappings alongside.
 
 **Still open:** the remaining four files over 4,000 (`config.go` second cut, `websocket.go` in batch 2, `chat.ts` and `runTurn` are judgment work); batch 2 lanes; nested `CLAUDE.md` landing; the one CI pass and the red jobs it will show.
 
