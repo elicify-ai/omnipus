@@ -23,20 +23,33 @@
 //      false in-content coordinate the way the pre-fix, uncorrected
 //      `rect` math would.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame, emitBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
+import type { BrowserInputFrame } from '@/lib/api/generated/asyncapi-types'
 
-const { mockSendControl, mockSendInput, mockSendViewport, callbacksRef } = vi.hoisted(() => ({
+const { mockSendControl, mockSendInput, mockSendViewport, mockInputStart, inputStateCallback, callbacksRef } = vi.hoisted(() => ({
   mockSendControl: vi.fn(() => true),
-  mockSendInput: vi.fn((_input?: { kind: string; x: number; y: number }) => {
+  mockSendInput: vi.fn((_input: Omit<BrowserInputFrame, 'type'>) => {
     void _input // present only to give the mock the real call-argument type it's asserted against below
     return true
   }),
   mockSendViewport: vi.fn(() => true),
+  mockInputStart: vi.fn(),
+  inputStateCallback: { current: null as ((state: 'ready' | 'paused' | 'failed', reason?: string) => void) | null },
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
 }))
+
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: class extends dedicatedInputSessionStub(mockSendInput) {
+    constructor(options: { onState(state: 'ready' | 'paused' | 'failed', reason?: string): void }) { super(); inputStateCallback.current = (state, reason) => { this.state = state; options.onState(state, reason) }; queueMicrotask(() => options.onState('ready')) }
+    start() { super.start(); mockInputStart() }
+    cancelAutomaticRecovery() {}
+  } }
+})
 
 vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/browserLiveWs')>()
@@ -49,7 +62,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           connect: vi.fn(),
           detach: vi.fn(),
           close: vi.fn(),
-          sendInput: mockSendInput,
+          sendInput: vi.fn(() => true),
           sendControl: mockSendControl,
           sendTabAction: vi.fn(() => true),
           // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver
@@ -63,6 +76,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Passed via
  * the `mediaStream` test/override seam (see BrowserLiveView.webrtcSink.test.tsx)
@@ -82,6 +96,7 @@ function decodeFirstFrame() {
   Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
   Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
   fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
 }
 
 function connectFrameAndDrive() {
@@ -203,36 +218,17 @@ describe('BrowserLiveView — fillContainer sizing (BUG 1)', () => {
 })
 
 describe('BrowserLiveView — letterbox-corrected coordinate mapping (BUG 1 revert-proof)', () => {
-  // THE key regression test: before the fix, `mapPointerToDeviceCoords` fed
-  // `mapClientToDevice` the RAW container rect unconditionally. For a
-  // container whose aspect ratio doesn't match the content (exactly what
-  // `fillContainer` introduces), that mis-reports where the content edge
-  // actually is — a click in what's actually dead pillarbox space would be
-  // reported as landing 25.6px into the live page instead of clamping to the
-  // content's left edge (x: 0). Run this test against the pre-fix
-  // `mapPointerToDeviceCoords` (rect passed straight through, no
-  // `computeObjectContainRect` correction) and it fails with `x: 25.6`
-  // instead of `x: 0` — restoring that behavior locally and re-running
-  // confirms the regression.
-  it('clamps a click inside the pillarboxed dead-zone to the content edge, not a false in-content coordinate', () => {
+  // Padding is outside the page; it cannot authorize a remote click.
+  it('ignores a click inside the pillarboxed dead zone', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer />)
     connectFrameAndDrive()
     const container = stubMismatchedContainerRect()
-
-    // Content (1280x720, aspect 1.7778) pillarboxed inside the 1000x500
-    // (aspect 2.0) box: visible width = 500 * 1.7778 = 888.89, so visible
-    // content starts at x = (1000 - 888.89) / 2 = 55.56. A click at
-    // clientX=20 is well inside the dead zone to its left.
+    // A 1280×720 page contained in a 1000×500 box starts at x=55.56.
+    // A click at x=20 is padding and must never become a page-edge click.
     mockSendInput.mockClear()
     fireEvent.pointerDown(container, { clientX: 20, clientY: 250 })
-
-    expect(mockSendInput).toHaveBeenCalledTimes(1)
-    const sent = mockSendInput.mock.calls[0][0] as { kind: string; x: number; y: number }
-    expect(sent.kind).toBe('mouse_down')
-    // Uncorrected (pre-fix) math would report x ≈ 25.6 (20 * 1280/1000) — a
-    // coordinate inside the live page, when the click never actually
-    // reached visible content at all.
-    expect(sent.x).toBe(0)
+    fireEvent.pointerUp(container, { clientX: 20, clientY: 250 })
+    expect(mockSendInput.mock.calls).toEqual([])
   })
 
   it('maps a click at the exact box center to the exact content center (sanity check both pre- and post-fix agree here)', () => {
@@ -336,6 +332,7 @@ describe('BrowserLiveView — transient-resize guard and input pacing', () => {
   it('does not push a viewport while focus sits in a panel input', async () => {
     vi.useFakeTimers()
     try {
+      vi.stubGlobal('visualViewport', { scale: 1, height: window.innerHeight - 250, offsetTop: 0, addEventListener: vi.fn(), removeEventListener: vi.fn() })
       render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
       act(() => {
         callbacksRef.current?.onConnected?.()
@@ -366,6 +363,7 @@ describe('BrowserLiveView — transient-resize guard and input pacing', () => {
 
       expect(mockSendViewport).not.toHaveBeenCalled()
     } finally {
+      vi.unstubAllGlobals()
       vi.useRealTimers()
     }
   })
@@ -479,6 +477,7 @@ describe('BrowserLiveView — focus guard covers the settle window', () => {
   it('does not commit a size measured after focus entered a text field', async () => {
     vi.useFakeTimers()
     try {
+      vi.stubGlobal('visualViewport', { scale: 1, height: window.innerHeight - 250, offsetTop: 0, addEventListener: vi.fn(), removeEventListener: vi.fn() })
       render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer canAnnotate />)
       act(() => {
         callbacksRef.current?.onConnected?.()
@@ -509,6 +508,7 @@ describe('BrowserLiveView — focus guard covers the settle window', () => {
 
       expect(mockSendViewport).not.toHaveBeenCalled()
     } finally {
+      vi.unstubAllGlobals()
       vi.useRealTimers()
     }
   })
@@ -537,7 +537,7 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
   // blur produces no resize either — without an explicit blur catch-up the
   // resize is suppressed once and never retried. Resize the window while typing
   // a URL and the panel stayed pinned to the old geometry indefinitely.
-  it('commits a real resize that happened while a text field had focus, once focus leaves', async () => {
+  it('commits desktop resizing before blur and deduplicates the later blur', async () => {
     vi.useFakeTimers()
     try {
       const el = mountSettled()
@@ -554,7 +554,7 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
         window.dispatchEvent(new Event('resize'))
       })
       await vi.advanceTimersByTimeAsync(2000)
-      expect(mockSendViewport).not.toHaveBeenCalled()
+      expect(mockSendViewport).toHaveBeenCalledExactlyOnceWith(890, 1300, window.devicePixelRatio || 1)
 
       // Blur with NO further resize event. The focusout catch-up is the only
       // thing that can rescue the 1300 height now.
@@ -563,7 +563,7 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
       })
       await vi.advanceTimersByTimeAsync(2000)
 
-      expect(mockSendViewport).toHaveBeenCalledWith(890, 1300, expect.any(Number))
+      expect(mockSendViewport).toHaveBeenCalledExactlyOnceWith(890, 1300, window.devicePixelRatio || 1)
     } finally {
       vi.useRealTimers()
     }
@@ -626,5 +626,204 @@ describe('BrowserLiveView — viewport settle: recovery paths', () => {
       dprSpy.mockRestore()
       vi.useRealTimers()
     }
+  })
+})
+
+// Real layout resizing must proceed on desktop even while the user types.
+it('applies a desktop resize while the address bar remains focused', async () => {
+  vi.useFakeTimers()
+  try {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} fillContainer />)
+    act(() => { callbacksRef.current?.onConnected?.(); emitFirstFrame() })
+    const frame = screen.getByTestId('browser-live-frame')
+    vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue({ width: 800, height: 600 } as DOMRect)
+    act(() => screen.getByLabelText('Address bar').focus())
+    act(() => window.dispatchEvent(new Event('resize')))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(mockSendViewport).toHaveBeenLastCalledWith(800, 600, window.devicePixelRatio || 1)
+    expect(document.activeElement).toBe(screen.getByLabelText('Address bar'))
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+// Resize must not rebuild capture halfway through an admitted held gesture.
+describe('BrowserLiveView — resize preserves active input', () => {
+  it.each([0, 450])('sends all eight held-key presses and release before committing the latest viewport (start %ims)', async (startDelay) => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectFrameAndDrive()
+      const frame = screen.getByTestId('browser-live-frame')
+      let width = 1280
+      frame.getBoundingClientRect = () => ({ width, height: 720, top: 0, left: 0, right: width, bottom: 720, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      mockSendViewport.mockClear(); mockSendInput.mockClear()
+      width = 1200; fireEvent(window, new Event('resize'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(startDelay) })
+      for (let i = 0; i < 8; i++) {
+        fireEvent.keyDown(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37, repeat: i > 0 })
+        await act(async () => { await vi.advanceTimersByTimeAsync(180) })
+      }
+      expect(mockSendViewport).not.toHaveBeenCalled()
+      width = 1400 // Final geometry must be remeasured even without another resize event.
+      fireEvent.keyUp(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })
+      expect(mockSendInput.mock.calls.map(([input]) => input.kind)).toEqual([...Array(8).fill('key_down'), 'key_up'])
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'resizing')
+      act(() => inputStateCallback.current?.('paused'))
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'resizing')
+      act(() => inputStateCallback.current?.('paused', 'Browser fell behind. Input paused.'))
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'paused')
+      expect(screen.getByRole('alert')).toHaveTextContent('Browser fell behind')
+      act(() => inputStateCallback.current?.('failed', 'Input connection failed.'))
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'failed')
+      act(() => inputStateCallback.current?.('ready'))
+      const releaseOrder = mockSendInput.mock.invocationCallOrder.at(-1)!
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      expect(mockSendViewport).toHaveBeenCalledTimes(1)
+      expect(mockSendViewport).toHaveBeenLastCalledWith(1400, 720, window.devicePixelRatio || 1)
+      expect(mockSendViewport.mock.invocationCallOrder[0]).toBeGreaterThan(releaseOrder)
+      const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
+      confirmBrowserFrame(callbacksRef.current, video)
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'resizing')
+      act(() => {
+        callbacksRef.current?.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'recovered', capture_id: 'capture-test', capture_generation: 2, rtp_timestamp: 200, css_width: 1200, css_height: 720 })
+        emitBrowserFrame(video, { rtpTimestamp: 200, expectedDisplayTime: performance.now() })
+      })
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'resizing')
+      act(() => callbacksRef.current?.onInputControlAck?.({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 99, control_epoch: 0, ok: true, capture_id: 'capture-test', capture_generation: 2 }))
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'resizing')
+      if (startDelay === 0) {
+        act(() => {
+          callbacksRef.current?.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'recovered', capture_id: 'capture-test', capture_generation: 3, rtp_timestamp: 300, css_width: 1385, css_height: 720 })
+          callbacksRef.current?.onInputControlAck?.({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 0, ok: true, capture_id: 'capture-test', capture_generation: 3 })
+          emitBrowserFrame(video, { rtpTimestamp: 300, expectedDisplayTime: performance.now() })
+        })
+        expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'ready')
+      } else {
+        await act(async () => { await vi.advanceTimersByTimeAsync(15000) })
+        expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'failed')
+        expect(screen.getByRole('alert')).toHaveTextContent('Browser resize did not finish')
+      }
+    } finally { vi.useRealTimers() }
+  })
+  it.each(['composition', 'paste', 'composition-after-key', 'blur', 'drag'])('commits a deferred resize after %s ends without another resize event', async (mode) => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectFrameAndDrive()
+      const frame = screen.getByTestId('browser-live-frame')
+      let width = 1280
+      frame.getBoundingClientRect = () => ({ width, height: 720, top: 0, left: 0, right: width, bottom: 720, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      const text = screen.getByRole('textbox', { name: 'Remote browser text input' })
+      if (mode === 'composition' || mode === 'paste') {
+        act(() => { text.focus() })
+        fireEvent.compositionStart(text)
+      } else if (mode === 'drag') {
+        fireEvent.pointerDown(frame, { button: 0, clientX: 500, clientY: 360, pointerId: 1 })
+      } else fireEvent.keyDown(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })
+      mockSendViewport.mockClear(); mockSendInput.mockClear()
+      width = 1200; fireEvent(window, new Event('resize'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      expect(mockSendViewport).not.toHaveBeenCalled()
+      if (mode === 'composition-after-key') {
+        act(() => { text.focus() })
+        fireEvent.compositionStart(text)
+        await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+        expect(mockSendViewport).not.toHaveBeenCalled()
+        expect(mockSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['key_up'])
+        mockSendInput.mockClear()
+      }
+      if (mode === 'paste') fireEvent.paste(text, { clipboardData: { getData: () => '日本' } })
+      else if (mode === 'composition' || mode === 'composition-after-key') fireEvent.compositionEnd(text, { data: '日本' })
+      else if (mode === 'drag') fireEvent.pointerUp(frame, { button: 0, clientX: 500, clientY: 360, pointerId: 1 })
+      else fireEvent(window, new Event('blur'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      expect(mockSendViewport).toHaveBeenCalledTimes(1)
+      expect(mockSendViewport).toHaveBeenLastCalledWith(1200, 720, window.devicePixelRatio || 1)
+      const expectedKind = ['composition', 'paste', 'composition-after-key'].includes(mode) ? 'text' : mode === 'drag' ? 'mouse_up' : 'key_up'
+      expect(mockSendInput.mock.calls.map(([input]) => input.kind)).toEqual([expectedKind])
+      expect(mockSendInput.mock.invocationCallOrder[0]).toBeLessThan(mockSendViewport.mock.invocationCallOrder[0])
+    } finally { vi.useRealTimers() }
+  })
+
+  it.each(['unchanged', 'jitter', 'returned'])('never pauses on a no-op %s viewport notification during held input', async (mode) => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectFrameAndDrive()
+      const frame = screen.getByTestId('browser-live-frame')
+      let width = 1280
+      frame.getBoundingClientRect = () => ({ width, height: 720, top: 0, left: 0, right: width, bottom: 720, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      mockSendViewport.mockClear(); mockSendInput.mockClear()
+      fireEvent.keyDown(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })
+      width = mode === 'returned' ? 1400 : mode === 'jitter' ? 1287 : 1280
+      fireEvent(document, new Event('focusout'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      width = 1280
+      fireEvent.keyUp(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'ready')
+      expect(screen.queryByText('Resizing browser. Input will resume when the new picture is ready.')).not.toBeInTheDocument()
+      expect(mockSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['key_down', 'key_up'])
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      expect(mockSendViewport).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers() }
+  })
+
+})
+
+
+describe('BrowserLiveView — explicit failed viewport recovery', () => {
+  it.each(['complete', 'detach', 'supersede', 'late-picture'])('retries the latest viewport before input restart and fences completion (%s)', async (outcome) => {
+    vi.useFakeTimers()
+    try {
+      const view = render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectFrameAndDrive()
+      const frame = screen.getByTestId('browser-live-frame')
+      let width = 1280
+      frame.getBoundingClientRect = () => ({ width, height: 720, top: 0, left: 0, right: width, bottom: 720, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      width = 1200
+      fireEvent(window, new Event('resize'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      act(() => inputStateCallback.current?.('failed', 'Browser control failed. Retry input.'))
+      const latePicture = outcome === 'late-picture'
+      const video = screen.getByTestId('browser-live-video') as HTMLVideoElement
+      if (latePicture) act(() => {
+        callbacksRef.current?.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'recovered', capture_id: 'capture-test', capture_generation: 2, rtp_timestamp: 200, css_width: 1200, css_height: 720 })
+        emitBrowserFrame(video, { rtpTimestamp: 200, expectedDisplayTime: performance.now() })
+      })
+      mockSendViewport.mockClear(); mockInputStart.mockClear(); mockSendInput.mockClear()
+      fireEvent.click(screen.getByRole('button', { name: 'Retry input' }))
+      expect(mockInputStart).not.toHaveBeenCalled()
+      if (outcome === 'detach' || outcome === 'supersede') {
+        if (outcome === 'detach') view.unmount()
+        else act(() => callbacksRef.current?.onTabs?.({ type: 'browser_tabs', active_index: 1, tabs: [{ index: 0, url: 'https://example.com/' }, { index: 1, url: 'https://example.org/' }] }))
+        await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+        expect(mockSendViewport).not.toHaveBeenCalled()
+        expect(mockInputStart).not.toHaveBeenCalled()
+        return
+      }
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      expect(mockSendViewport).toHaveBeenCalledExactlyOnceWith(1200, 720, window.devicePixelRatio || 1)
+      expect(mockInputStart).toHaveBeenCalledTimes(1)
+      expect(mockInputStart.mock.invocationCallOrder[0]).toBeGreaterThan(mockSendViewport.mock.invocationCallOrder[0])
+      act(() => inputStateCallback.current?.('ready'))
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'resizing')
+      act(() => {
+        if (!latePicture) {
+          callbacksRef.current?.onVideoHealth({ type: 'browser_video_health', session_id: 's1', state: 'recovered', capture_id: 'capture-test', capture_generation: 2, rtp_timestamp: 200, css_width: 1200, css_height: 720 })
+          emitBrowserFrame(video, { rtpTimestamp: 200, expectedDisplayTime: performance.now() })
+        }
+        callbacksRef.current?.onInputControlAck?.({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 99, control_epoch: 0, ok: true, capture_id: 'capture-test', capture_generation: 2 })
+      })
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'resizing')
+      fireEvent.keyDown(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })
+      expect(mockSendInput).not.toHaveBeenCalled()
+      act(() => callbacksRef.current?.onInputControlAck?.({ type: 'browser_input_control_ack', session_id: 's1', input_epoch: 1, control_epoch: 0, ok: true, capture_id: 'capture-test', capture_generation: 2 }))
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'ready')
+    } finally { vi.useRealTimers() }
   })
 })

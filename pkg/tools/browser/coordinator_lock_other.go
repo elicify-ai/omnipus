@@ -12,6 +12,8 @@ package browser
 
 import "os"
 
+const launchLockReleasedOnExit = false
+
 // acquireLaunchLock attempts an atomic O_EXCL create of the lockfile at path.
 // Returns (file, true, nil) when created (lock taken) — the caller MUST keep it
 // open for the coordinator's lifetime and pass it to releaseLaunchLock, which

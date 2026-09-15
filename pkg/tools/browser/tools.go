@@ -328,6 +328,7 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 		return tools.ErrorResult(fmt.Sprintf("browser_click: %s", err))
 	}
 
+	clickedTabCtx := tabCtx
 	tabCtx, timeoutCancel := context.WithTimeout(tabCtx, mgr.PageTimeout())
 	defer timeoutCancel()
 
@@ -352,6 +353,10 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 		return tools.ErrorResult(scrubMarkerFromError(gerr, target, displayTarget).Error())
 	}
 
+	beforeClick, err := mgr.snapshotClickTabs(sid, clickedTabCtx)
+	if err != nil {
+		return tools.ErrorResult(fmt.Sprintf("browser_click: %s", err))
+	}
 	err = chromedp.Run(tabCtx, chromedp.Click(target, chromedp.ByQuery))
 	if err != nil {
 		// FR-037: chromedp re-checks visibility itself after the gate, and
@@ -415,7 +420,7 @@ func (t *ClickTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 	// of continuing to act on the (now-background) opener page. This is
 	// what fixes the headline ADR-041 failure: a Cal.com-style booking
 	// button that opens its flow in a new tab.
-	if outcome, rerr := mgr.ReconcileTabs(sid); rerr != nil {
+	if outcome, rerr := mgr.reconcileClickTabs(sid, beforeClick); rerr != nil {
 		logger.WarnCF("browser", "browser_click: tab reconcile failed", map[string]any{"error": rerr.Error()})
 	} else {
 		applyReconcileOutcome(result, outcome)

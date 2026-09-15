@@ -760,6 +760,36 @@ jobs:
           fi
           npx vitest run --reporter=verbose "${patterns[@]}"
 
+      - name: Install Chromium for local input fixture
+        # This one group also runs the four local Playwright harness cases.
+        # They need a browser, but not the gateway/auth/LLM E2E job setup.
+        if: matrix.group == 'lib-store'
+        run: npx playwright install --with-deps chromium
+
+      - name: Run local input fixture in Playwright
+        if: matrix.group == 'lib-store'
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: ${{ github.workspace }}/input-fixture-results.json
+        run: |
+          npx playwright test --config=tests/browser-acceptance/input-connection-fixture.config.ts --reporter=list,json
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const { stats } = JSON.parse(readFileSync("input-fixture-results.json", "utf8"));
+            if (stats.expected !== 4 || stats.unexpected !== 0 || stats.skipped !== 0 || stats.flaky !== 0) {
+              throw new Error(`Expected four passing local fixture tests: ${JSON.stringify(stats)}`);
+            }
+          '
+
+      - name: Upload local input fixture failure evidence
+        if: failure() && matrix.group == 'lib-store'
+        uses: actions/upload-artifact@v7
+        with:
+          name: input-fixture-failure
+          path: |
+            input-fixture-results.json
+            test-results/
+          retention-days: 7
+
   wire-types-lint:
     name: Wire-Types Lint
     # Enforces hard-constraint #8 (CLAUDE.md contract-first rule): every wire-

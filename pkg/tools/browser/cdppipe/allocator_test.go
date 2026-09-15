@@ -54,10 +54,8 @@ func TestLaunchStart_ModifyCmdCannotOverrideStderr(t *testing.T) {
 	}
 }
 
-// TestLaunchStart_NoErrf_StderrLeftNil proves the inverse: when the caller
-// supplied no Errf, cdppipe intentionally leaves cmd.Stderr as whatever
-// ModifyCmd set it to (or nil) — the "cdppipe owns Stderr" behavior only
-// applies when Errf is configured.
+// With no Errf callback, logging remains disabled but startup diagnostics are
+// retained privately so a launch failure can return a safe classification.
 func TestLaunchStart_NoErrf_StderrLeftNil(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("posix-only fake binary (sh)")
@@ -75,7 +73,8 @@ func TestLaunchStart_NoErrf_StderrLeftNil(t *testing.T) {
 	}
 	t.Cleanup(l.teardown)
 
-	if l.cmd.Stderr != nil {
-		t.Fatalf("expected cmd.Stderr to stay nil with no Errf configured, got %#v", l.cmd.Stderr)
+	lw, ok := l.cmd.Stderr.(*lineWriter)
+	if !ok || lw.fn != nil || lw.tail == nil {
+		t.Fatalf("expected private diagnostic capture with nil logging callback, got %#v", l.cmd.Stderr)
 	}
 }

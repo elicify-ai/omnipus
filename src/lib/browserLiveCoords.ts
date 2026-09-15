@@ -353,18 +353,18 @@ export function computeObjectContainRect(box: RectLike, contentWidth: number, co
 }
 
 /**
- * True when a keydown/keyup event represents a single printable character
- * that should be forwarded as a `text` input frame (Input.insertText on the
- * backend) rather than a `key_down`/`key_up` pair. A held Ctrl/Meta/Alt
- * modifier means the key is part of a shortcut (e.g. Ctrl+A) — those must
- * go through key_down/key_up so the backend dispatches a real key event
- * instead of literally inserting the character.
+ * Whether a physical keydown also carries text. Option on macOS and AltGraph
+ * can produce layout-composed characters; ordinary Alt/Ctrl/Meta shortcuts
+ * carry only their key transition. This does not implement IME composition.
  */
 export function isPrintableKey(e: {
   key: string
   ctrlKey: boolean
   metaKey: boolean
   altKey: boolean
-}): boolean {
-  return e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey
+  getModifierState?: (key: 'AltGraph') => boolean
+}, platform = ''): boolean {
+  if (Array.from(e.key).length !== 1 || e.metaKey) return false
+  if (e.getModifierState?.('AltGraph')) return true
+  return !e.ctrlKey && (!e.altKey || /^Mac/.test(platform))
 }

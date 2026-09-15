@@ -14,6 +14,7 @@
 // and browserWebRTC.test.ts). Mocks BrowserLiveWsConnection the same way
 // BrowserLiveView.takeTheWheel.test.tsx does.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
@@ -29,6 +30,11 @@ const { mockSendControl, mockSendInput, callbacksRef } = vi.hoisted(() => ({
 // D5: importOriginal so the real translateBrowserErrorMessage (now imported
 // by BrowserLiveView for the D5 fix) stays live under this mock — only
 // BrowserLiveWsConnection itself is replaced.
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(mockSendInput) }
+})
+
 vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/browserLiveWs')>()
   return {
@@ -40,7 +46,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           connect: vi.fn(),
           detach: vi.fn(),
           close: vi.fn(),
-          sendInput: mockSendInput,
+          sendInput: vi.fn(() => true),
           sendControl: mockSendControl,
           sendTabAction: vi.fn(() => true),
           // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver
@@ -54,6 +60,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** A fake MediaStream stand-in — jsdom has no real WebRTC/MediaStream
  * implementation, and this only needs `video.srcObject = mediaStream`
@@ -78,6 +85,7 @@ function decodeFrame(width = 1280, height = 720) {
   Object.defineProperty(video, 'videoWidth', { value: width, configurable: true })
   Object.defineProperty(video, 'videoHeight', { value: height, configurable: true })
   fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
 }
 
 /** Mirrors the sibling suites' technique: jsdom reports all-zero rects by

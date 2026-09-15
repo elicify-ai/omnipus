@@ -116,20 +116,6 @@ const (
 	viewportSettlePollInterval = 20 * time.Millisecond
 )
 
-// viewportReapplyRecaptureGrace bounds how long the tab-change viewport
-// re-apply may hold the recapture back before the picture is allowed to follow
-// the tab WITHOUT a verified geometry (round-2 finding F3).
-//
-// The tab-change path issues ONE recapture, after the re-apply, because a
-// recapture taken before the new target has been given the panel's size and
-// per-target sharpness is stale by construction. The re-apply is normally
-// fast — sibling tabs share the OS window, so the bounds call is usually a
-// no-op resize and the settle poll converges on its first read — but
-// applyViewport's worst case runs to tens of seconds, and a frozen picture is
-// not an acceptable outcome of a slow resize. Sized just above
-// viewportSettleBudget so a healthy settle never trips it.
-const viewportReapplyRecaptureGrace = 900 * time.Millisecond
-
 // scaleDegradedNoticeInterval floors how often the user-facing "the picture
 // may look soft" notice is pushed to attached viewers (round-2 finding F5).
 // The deviceScaleFactor override is renderer-bound, and the SPA re-sends a
@@ -207,14 +193,21 @@ const (
 // mirrors the AsyncAPI BrowserInputFrame `kind` enum exactly: mouse_move,
 // mouse_down, mouse_up, wheel, key_down, key_up, text, navigate.
 type LiveInput struct {
-	Kind   string
-	X, Y   float64
-	HasXY  bool   // ADR-038 finding #5: whether X/Y were actually present on the wire — see buildInputAction.
-	Button string // none|left|middle|right|back|forward ("" treated as none)
-	DeltaX float64
-	DeltaY float64
-	Key    string
-	Code   string
+	// SourceContext is the original connection or input-channel lifetime.
+	// It is assigned by the gateway, never decoded from a client payload.
+	SourceContext context.Context
+	// CaptureID and CaptureGeneration are the viewer's claim about the
+	// displayed picture.
+	CaptureID         string
+	CaptureGeneration uint64
+	Kind              string
+	X, Y              float64
+	HasXY             bool   // ADR-038 finding #5: whether X/Y were actually present on the wire — see buildInputAction.
+	Button            string // none|left|middle|right|back|forward ("" treated as none)
+	DeltaX            float64
+	DeltaY            float64
+	Key               string
+	Code              string
 	// KeyCode is the Windows virtual key code for key_down/key_up (the DOM
 	// KeyboardEvent.keyCode, e.g. Backspace=8, Enter=13, Delete=46,
 	// arrows=37-40). CDP's Input.dispatchKeyEvent needs it to actually PERFORM
@@ -255,6 +248,17 @@ type LiveInput struct {
 	// (scroll deltas, not positions) or for key/text kinds (no coordinates
 	// at all).
 	CaptureWidth, CaptureHeight float64
+
+	// Timing is an optional in-process diagnostic observer. It receives
+	// fixed stage names only, never input contents, and must not block or reenter.
+	Timing *LiveInputTimingObserver
+}
+
+// LiveInputTimingObserver is local diagnostic state, never serialized. A pointer
+// keeps LiveInput comparable and separates the observer from retained key state.
+type LiveInputTimingObserver struct { // not-wire-format: callback for local measurements only.
+	Observe       func(stage string)
+	ObserveBudget func(stage string, remaining time.Duration)
 }
 
 // StatusSink receives a live-view lifecycle notification for one attached
@@ -836,38 +840,7 @@ func (r *LiveViewRegistry) Attach(
 	onControl ControlSink,
 	onTabs TabsSink,
 ) (bool, error) {
-	sessionID = r.resolveSessionID(sessionID)
-	if viewerID == "" {
-		return false, fmt.Errorf("browser live: viewer id is required")
-	}
-	tabCtx, err := r.mgr.Session(sessionID)
-	if err != nil {
-		return false, fmt.Errorf("browser live: cannot resolve session %q: %w", sessionID, err)
-	}
-	controlledByOther, err := r.view(sessionID).attach(tabCtx, viewerID, onStatus, onControl, onTabs)
-	if err != nil {
-		return false, err
-	}
-	// A watched browsing context is never idle — see ReapIdleSessions.
-	r.mgr.ViewerAttached(sessionID)
-
-	// ADR-041 D4: give the newly-attached viewer the CURRENT tab strip
-	// immediately — a session with only one tab may never emit another
-	// tabs-changed event during this viewer's whole attachment.
-	if onTabs != nil {
-		// FR-013: asks for the STATE, not just the tabs. The two states that
-		// do not push (TabStateNoContext — nothing has ever browsed here — and
-		// TabStateEmpty — a live context between CloseTab's last-tab removal
-		// and its replacement) are the pair the old `len(tabs) > 0` guard
-		// conflated. Both still skip the push, and deliberately so: pushing an
-		// empty strip would blank a panel that is about to receive a real
-		// tabs-changed event. What changes is that the two are now visibly
-		// distinct at the call site rather than indistinguishable.
-		if state, tabs, activeIdx, terr := r.mgr.ListTabsState(sessionID); terr == nil && state == TabStateOpen {
-			onTabs(tabs, activeIdx)
-		}
-	}
-	return controlledByOther, nil
+	return r.AttachContext(context.Background(), sessionID, viewerID, onStatus, onControl, onTabs)
 }
 
 // Detach unbinds viewerID from sessionID's live view. When this was the last
@@ -894,18 +867,7 @@ func (r *LiveViewRegistry) Detach(sessionID, viewerID string) {
 //
 // Returns false if no live view exists for sessionID (nothing to resize).
 func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, deviceScaleFactor float64) (bool, error) {
-	sessionID = r.resolveSessionID(sessionID)
-	lv, ok := r.lookup(sessionID)
-	if !ok {
-		return false, nil
-	}
-	lv.mu.Lock()
-	tabCtx := lv.tabCtx
-	lv.mu.Unlock()
-	if tabCtx == nil {
-		return false, nil
-	}
-	return lv.applyViewport(tabCtx, width, height, deviceScaleFactor)
+	return r.SetViewportContext(context.Background(), sessionID, width, height, deviceScaleFactor)
 }
 
 // applyViewport resizes the tab reachable through tabCtx to width x height CSS
@@ -1015,10 +977,18 @@ func (r *LiveViewRegistry) SetViewport(sessionID string, width, height int, devi
 // Fault 1 instead of every layer silently reporting success. A partial resize
 // still returns applied=true; it is not treated as a failure, only flagged.
 //
-// Returns false only when there is nothing to resize (nil tab context).
+// Returns true once the initial bounds are acknowledged. A later caller
+// cancellation is returned alongside that observed effect.
 func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, deviceScaleFactor float64) (bool, error) {
+	return lv.applyViewportContext(context.Background(), tabCtx, width, height, deviceScaleFactor)
+}
+
+// applyViewportAdmitted keeps the original target identity for cache validation;
+// only operationCtx is passed to browser work so caller cancellation reaches it.
+// initialLayoutUnverified reports that the initial read failed before compensation.
+func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.Context, width, height int, deviceScaleFactor float64) (applied bool, initialLayoutUnverified bool, err error) {
 	if tabCtx == nil {
-		return false, nil
+		return false, false, nil
 	}
 	// Serialize the whole apply→compensate→settle→cache sequence per LiveView
 	// (live UAT 2026-07-31, pop-out): two viewers may legally send viewport
@@ -1033,19 +1003,28 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 	// discipline).
 	lv.viewportMu.Lock()
 	defer lv.viewportMu.Unlock()
+	// The input gate excludes all other viewport applies before this mutex.
+	// Keep browser executor values from tabCtx while limiting each stage to
+	// both its existing timeout and the caller's remaining lifetime.
+	run := func(timeout time.Duration, actions ...chromedp.Action) error {
+		if err := viewportContextError(caller, operationCtx); err != nil {
+			return err
+		}
+		return lv.runCDP(operationCtx, timeout, actions...)
+	}
 	// Bounds are also enforced by the wire schema (BrowserViewportFrame), but
 	// re-checked here because this is reachable from a public registry method
 	// and a future non-WS caller must not be able to hand Chromium a degenerate
 	// or enormous allocation.
 	if width < 1 || height < 1 || width > maxViewportDimension || height > maxViewportDimension {
-		return false, fmt.Errorf("browser live: viewport %dx%d out of range", width, height)
+		return false, false, fmt.Errorf("browser live: viewport %dx%d out of range", width, height)
 	}
 	if deviceScaleFactor < 1 || deviceScaleFactor > maxViewportScaleFactor {
 		// Reject rather than silently clamp (review finding): a caller asking
 		// for dsf 50 got no feedback at all under the old clamp, while an
 		// out-of-range width got an explicit error. Same input class, same
 		// treatment.
-		return false, fmt.Errorf("browser live: device scale factor %.2f out of range (1..%.0f)",
+		return false, false, fmt.Errorf("browser live: device scale factor %.2f out of range (1..%.0f)",
 			deviceScaleFactor, maxViewportScaleFactor)
 	}
 	// Combined ceiling. Each dimension and the scale factor are individually
@@ -1055,7 +1034,7 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 	// single shared Chrome backing the agent's browsing.
 	physicalPixels := float64(width) * float64(height) * deviceScaleFactor * deviceScaleFactor
 	if physicalPixels > maxViewportPhysicalPixels {
-		return false, fmt.Errorf(
+		return false, false, fmt.Errorf(
 			"browser live: viewport %dx%d @%.1fx = %.0f physical pixels, over the %.0f ceiling",
 			width, height, deviceScaleFactor, physicalPixels, maxViewportPhysicalPixels)
 	}
@@ -1085,8 +1064,19 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 	// session" — tabCtx IS that session) and Browser.setWindowBounds into one
 	// chromedp.Action. Routed through lv.runCDP, not the package-level
 	// runCDPWithTimeout, like every other CDP call site in this file.
+	if lv.mgr != nil {
+		if cs := lv.mgr.CaptureSessionForPanel(lv.sessionID); cs != nil {
+			_, target, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
+			if err != nil {
+				return false, false, err
+			}
+			if _, err := cs.BeginFrameTransition(string(target), 0, 0, deviceScaleFactor); err != nil {
+				return false, false, err
+			}
+		}
+	}
 	boundsAction := windowBoundsAction{width: width, height: height}
-	if err := lv.runCDP(tabCtx, viewportSetTimeout, boundsAction); err != nil {
+	if err := run(viewportSetTimeout, boundsAction); err != nil {
 		// One retry, and ONLY for a deadline timeout (2026-08-13 UAT: "could
 		// not resize the browser viewport" toast mid-session). A
 		// GetWindowForTarget that cannot answer within viewportSetTimeout means
@@ -1094,20 +1084,25 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 		// backlog), not that the resize is invalid — by the second attempt the
 		// stall has typically cleared. Any other error is a real failure and
 		// still surfaces immediately.
-		if !errors.Is(err, context.DeadlineExceeded) {
-			return false, fmt.Errorf("browser live: resize viewport: %w", err)
+		if viewportContextError(caller, operationCtx) != nil || !errors.Is(err, context.DeadlineExceeded) {
+			return false, false, fmt.Errorf("browser live: resize viewport: %w", err)
 		}
 		logger.WarnCF(
 			"browser",
 			"live view: set viewport timed out; retrying once (browser process momentarily starved)",
 			map[string]any{"session_id": lv.sessionID},
 		)
-		if err := lv.runCDP(tabCtx, viewportSetTimeout, boundsAction); err != nil {
-			return false, fmt.Errorf("browser live: resize viewport (after retry): %w", err)
+		if err := run(viewportSetTimeout, boundsAction); err != nil {
+			return false, false, fmt.Errorf("browser live: resize viewport (after retry): %w", err)
 		}
 	}
 
-	// Step 2: deviceScaleFactor only, on its OWN budget, and NEVER fatal — the
+	if err := viewportContextError(caller, operationCtx); err != nil {
+		return true, false, err
+	}
+
+	// Step 2: deviceScaleFactor only, on its OWN budget. A stage failure is
+	// cosmetic while the caller remains active — the
 	// window above is already the size the user asked for, and refusing that
 	// because the renderer was slow to answer a sharpness request is the exact
 	// bug viewportScaleTimeout's doc comment documents. dsf==1 clears any stale
@@ -1117,7 +1112,10 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 		scaleAction = emulation.SetDeviceMetricsOverride(0, 0, deviceScaleFactor, false)
 	}
 	scaleApplied := true
-	if err := lv.runCDP(tabCtx, viewportScaleTimeout, scaleAction); err != nil {
+	if err := run(viewportScaleTimeout, scaleAction); err != nil {
+		if ended := viewportContextError(caller, operationCtx); ended != nil {
+			return true, false, ended
+		}
 		scaleApplied = false
 		logger.WarnCF(
 			"browser",
@@ -1148,9 +1146,16 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 		lv.clearScaleDegraded()
 	}
 
+	if err := viewportContextError(caller, operationCtx); err != nil {
+		return true, false, err
+	}
+
 	// Step 3: settle-poll the tab's ACTUAL CSS layout viewport (see the
 	// mechanism section, and settleCSSViewport's own doc comment).
-	actualW, actualH, readErr := lv.settleCSSViewport(tabCtx, width, height)
+	actualW, actualH, readErr := lv.settleCSSViewport(operationCtx, width, height)
+	if err := viewportContextError(caller, operationCtx); err != nil {
+		return true, false, err
+	}
 	if readErr != nil {
 		// A failed read-back does not undo the resize above (best-effort: the
 		// resize itself already succeeded), so this is logged and swallowed
@@ -1168,7 +1173,7 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 				"requested_height": height,
 			},
 		)
-		return true, nil
+		return true, true, nil
 	}
 
 	// Chrome-delta compensation, shortfall only, single pass — see the
@@ -1182,7 +1187,10 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 		compW := clampViewportDim(width + max(shortW, 0))
 		compH := clampViewportDim(height + max(shortH, 0))
 		compensatedAskW, compensatedAskH = compW, compH
-		if err := lv.runCDP(tabCtx, viewportSetTimeout, windowBoundsAction{width: compW, height: compH}); err != nil {
+		if err := run(viewportSetTimeout, windowBoundsAction{width: compW, height: compH}); err != nil {
+			if ended := viewportContextError(caller, operationCtx); ended != nil {
+				return true, false, ended
+			}
 			logger.WarnCF(
 				"browser",
 				"live view: set viewport — chrome-delta compensation re-apply failed, keeping the pre-compensation read-back",
@@ -1194,7 +1202,13 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 				},
 			)
 		} else {
-			compW2, compH2, compErr := lv.settleCSSViewport(tabCtx, width, height)
+			if err := viewportContextError(caller, operationCtx); err != nil {
+				return true, false, err
+			}
+			compW2, compH2, compErr := lv.settleCSSViewport(operationCtx, width, height)
+			if err := viewportContextError(caller, operationCtx); err != nil {
+				return true, false, err
+			}
 			if compErr != nil {
 				lv.invalidateCSSViewportCache()
 				logger.WarnCF("browser",
@@ -1209,7 +1223,7 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 						"compensated_width":  compW,
 						"compensated_height": compH,
 					})
-				return true, nil
+				return true, false, nil
 			}
 			// The settled post-compensation read is authoritative, full stop.
 			// This used to "keep the closest" of the two read-backs, a
@@ -1224,6 +1238,10 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 			actualW, actualH = compW2, compH2
 			compensated = true
 		}
+	}
+
+	if err := viewportContextError(caller, operationCtx); err != nil {
+		return true, false, err
 	}
 
 	fields := map[string]any{
@@ -1282,7 +1300,7 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 				"actual_height":    actualH,
 			},
 		)
-		return true, nil
+		return true, false, nil
 	}
 	lv.cssViewportW = int(actualW)
 	lv.cssViewportH = int(actualH)
@@ -1303,7 +1321,7 @@ func (lv *LiveView) applyViewport(tabCtx context.Context, width, height int, dev
 	}
 	lv.mu.Unlock()
 
-	return true, nil
+	return true, false, nil
 }
 
 // viewportMeasurementIsStaleLocked reports whether a viewport measurement
@@ -1418,7 +1436,9 @@ func broadcastStatus(sinks []StatusSink, message string) {
 //
 // Must be called with no LiveView lock held (it makes CDP calls).
 func (lv *LiveView) settleCSSViewport(tabCtx context.Context, targetW, targetH int) (int64, int64, error) {
-	deadline := time.Now().Add(viewportSettleBudget)
+	settleCtx, cancel := context.WithTimeout(tabCtx, viewportSettleBudget)
+	defer cancel()
+	deadline, _ := settleCtx.Deadline()
 	var (
 		lastW, lastH int64
 		haveRead     bool
@@ -1426,7 +1446,11 @@ func (lv *LiveView) settleCSSViewport(tabCtx context.Context, targetW, targetH i
 	)
 	for {
 		var w, h int64
-		err := lv.runCDP(tabCtx, viewportSetTimeout, layoutMetricsAction{w: &w, h: &h})
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		err := lv.runCDP(settleCtx, remaining, layoutMetricsAction{w: &w, h: &h})
 		switch {
 		case err != nil:
 			lastErr = err
@@ -1444,14 +1468,14 @@ func (lv *LiveView) settleCSSViewport(tabCtx context.Context, targetW, targetH i
 		if !time.Now().Before(deadline) {
 			break
 		}
-		timer := time.NewTimer(viewportSettlePollInterval)
+		timer := time.NewTimer(min(viewportSettlePollInterval, time.Until(deadline)))
 		select {
-		case <-tabCtx.Done():
+		case <-settleCtx.Done():
 			timer.Stop()
 			if haveRead {
 				return lastW, lastH, nil
 			}
-			return 0, 0, tabCtx.Err()
+			return 0, 0, settleCtx.Err()
 		case <-timer.C:
 		}
 	}
@@ -1459,7 +1483,10 @@ func (lv *LiveView) settleCSSViewport(tabCtx context.Context, targetW, targetH i
 		return lastW, lastH, nil
 	}
 	if lastErr == nil {
-		lastErr = errors.New("no CSS viewport read completed")
+		lastErr = settleCtx.Err()
+		if lastErr == nil {
+			lastErr = errors.New("no CSS viewport read completed")
+		}
 	}
 	return 0, 0, lastErr
 }
@@ -1619,21 +1646,10 @@ func (r *LiveViewRegistry) CSSViewport(sessionID string) (w, h int, ok bool) {
 	return lv.cssViewportW, lv.cssViewportH, true
 }
 
-// Input dispatches a viewer input event via CDP, but ONLY when viewerID
-// currently holds control of sessionID (ADR-038 D6). Returns an error
-// (nothing is applied) when the viewer doesn't hold control, no live view is
-// active for the session, or the event is rate-limited.
+// Input dispatches an attached viewer's event with a bounded lifetime. Human
+// viewers share input; the presentation-only control label is not a gate.
 func (r *LiveViewRegistry) Input(sessionID, viewerID string, in LiveInput) error {
-	sessionID = r.resolveSessionID(sessionID)
-	lv, ok := r.lookup(sessionID)
-	if !ok {
-		// Real, not benign (ADR-038 finding #4): nobody has ever attached
-		// (or the tab was torn down entirely), which the caller needs to
-		// know about — unlike a not-controller/rate-limit rejection, this
-		// isn't an expected steady-state occurrence.
-		return realInputError("browser live: no active live view for session %q", sessionID)
-	}
-	return lv.dispatchInput(viewerID, in)
+	return r.InputContext(context.Background(), sessionID, viewerID, in)
 }
 
 // TakeControl grants viewerID exclusive interactive control of sessionID's
@@ -1728,22 +1744,27 @@ type LiveView struct {
 	sessionID string
 
 	mu         sync.Mutex
+	inputState *liveInputState // bookkeeping under mu; commands serialize through its gate
 	tabCtx     context.Context
 	listenCtx  context.Context // child of tabCtx; canceling it stops the death watch without touching the tab
 	stopListen context.CancelFunc
+	// Watch ownership survives source death and is retired by detach or replacement.
+	watchOwnerCtx  context.Context
+	stopWatchOwner context.CancelFunc
+	documentWatch  *liveDocumentWatch
 	// lastKnownActiveCtx (ADR-047, wave-plan W2-A item 5) tracks the most
 	// recently observed active-tab context INDEPENDENTLY of tabCtx — tabCtx
 	// only reflects the current watch's binding and stays nil until a watch
 	// is ever installed (isActiveLocked/hasEpochLocked gate on it), so a
 	// session with no viewer ever attached would otherwise never have a
 	// reliable "did the active tab actually change" signal for WebRTC
-	// recapture. Set unconditionally at the end of every onTabsChanged call;
-	// nil only before the first call.
+	// recapture. Seeded at attachment and updated on every tab notification;
+	// nil only before either establishes the active target.
 	lastKnownActiveCtx context.Context
 	viewers            map[string]struct{}
 	// statusSinks parallels viewers (ADR-038 finding #2): one optional
-	// StatusSink per attached viewerID, notified only on an unexpected
-	// session death (watchForUnexpectedDeath), never on a clean Detach.
+	// StatusSink per attached viewerID, notified on unexpected session death
+	// or failed document refresh, never on a clean Detach.
 	statusSinks map[string]StatusSink
 	// controlSinks parallels viewers (ADR-039 UAT BE-1): one optional
 	// ControlSink per attached viewerID, notified whenever some OTHER
@@ -1766,7 +1787,8 @@ type LiveView struct {
 	// directly to the former holder, because here the server is the actor
 	// and the holder never gets an "own request" reply the way a
 	// self-initiated release does.
-	releaseSinks map[string]ReleaseNotifySink
+	releaseSinks  map[string]ReleaseNotifySink
+	acquiredSinks map[string]func()
 
 	// standDownUntilPrompt is the FR-026a stand-down latch: set on every
 	// transition INTO a stood-down state (a human take, or an agent
@@ -1880,6 +1902,8 @@ type LiveView struct {
 	viewportReapplyInFlight  bool
 	viewportReapplyPending   bool
 	viewportReapplyTargetCtx context.Context
+	// Blocks capture publication until the newly active target has settled.
+	pendingViewportTarget context.Context
 
 	// scaleDegradedNotified/At throttle the user-facing "the picture may look
 	// soft" notice applyViewport pushes when the deviceScaleFactor override
@@ -2005,10 +2029,10 @@ func (lv *LiveView) hasEpochLocked() bool {
 // ADR-061: this used to also start (or piggyback on) a CDP JPEG screencast
 // here, which required releasing lv.mu before a blocking chromedp.Run call
 // (see the ADR-038 deadlock postmortem this file's other CDP call sites
-// still document — runCDPWithTimeout's doc comment). Attaching a viewer is
-// now pure in-memory bookkeeping with no CDP round trip at all, so that
-// unlock/relock dance is gone: this method runs start-to-finish under one
-// lv.mu acquisition and cannot fail.
+// still document — runCDPWithTimeout's doc comment). Attaching a viewer
+// now registers its watches under one lv.mu acquisition without waiting for
+// CDP. The document watch discovers the current page asynchronously after
+// registration and reports failures through the viewer's status sink.
 //
 // Returns controlledByOther (ADR-039 UAT BE-1): true when sessionID is
 // already controlled by a viewer other than viewerID at the moment of this
@@ -2023,6 +2047,9 @@ func (lv *LiveView) attach(
 	lv.mu.Lock()
 	defer lv.mu.Unlock()
 	lv.viewers[viewerID] = struct{}{}
+	if lv.inputState != nil {
+		delete(lv.inputState.retired, tabCtx)
+	}
 	lv.lastControlActivity = time.Now() // FR-031a liveness: an attach resets the idle clock.
 	if onStatus != nil {
 		lv.statusSinks[viewerID] = onStatus
@@ -2041,9 +2068,12 @@ func (lv *LiveView) attach(
 	}
 
 	lv.tabCtx = tabCtx
+	lv.lastKnownActiveCtx = tabCtx
+	lv.replaceWatchOwnerLocked()
 	listenCtx, cancel := context.WithCancel(tabCtx)
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel
+	lv.installDocumentWatchLocked(listenCtx, tabCtx, true)
 
 	// ADR-038 finding #2: watch for this tab context dying WITHOUT going
 	// through detach() first — e.g. BrowserManager.Shutdown() canceling
@@ -2075,10 +2105,9 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 		s(tabs, activeIdx)
 	}
 
-	// Session() always resolves the ACTIVE tab's context (ADR-041 D1) — reuse
-	// it here instead of threading a raw ctx through the tabs-changed
-	// callback, so Tab (the public snapshot type) can stay metadata-only.
-	newCtx, err := lv.mgr.Session(lv.sessionID)
+	// The notifying operation already owns target admission. A callback must
+	// only read the active target, never re-enter admission or recreate Chrome.
+	newCtx, _, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
 	if err != nil {
 		// Nothing to rebind to — e.g. the browsing context is mid-recreation
 		// after a crash. watchForUnexpectedDeath already handles notifying
@@ -2098,51 +2127,37 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 	// needsRebind/tabCtx. Guarded on lastKnownActiveCtx != nil so the very
 	// first onTabsChanged call (which only establishes the baseline) never
 	// counts as a "change".
-	activeTabChanged := lv.lastKnownActiveCtx != nil && lv.lastKnownActiveCtx != newCtx
+	oldInputTarget := lv.lastKnownActiveCtx
+	activeTabChanged := oldInputTarget != nil && oldInputTarget != newCtx
 	lv.lastKnownActiveCtx = newCtx
 	lv.mu.Unlock()
 
 	if activeTabChanged {
+		lv.retireInputTarget(oldInputTarget, newCtx)
 		// The cached CSS viewport described the tab we just LEFT. Every
 		// coordinate mapped through it from here on would be wrong, so it is
 		// dropped rather than carried across — a stale-but-positive cache is
 		// worse than an empty one (see invalidateCSSViewportCache).
 		lv.invalidateCSSViewportCache()
 
-		// Re-apply the panel's last requested viewport to the NEW target, and
-		// let THAT path own the recapture. Chrome's deviceScaleFactor override
-		// is per TARGET, not per window — measured 2026-08-16: tab A reports
-		// devicePixelRatio 2 while a tab opened afterwards in the same window
-		// reports 1, with identical innerWidth/innerHeight. So without this
-		// replay every newly-opened tab renders at 1x while the encoder is
-		// still told to capture it at 2x, which is a visibly soft picture on
-		// every single tab open. Runs asynchronously (it is several CDP round
-		// trips plus a settle poll) so the tab-set broadcast above is never
-		// held up behind it.
-		//
-		// Why the recapture moved INTO the re-apply (round-2 finding F3): this
-		// used to fire an immediate, geometry-less Recapture() here AND the
-		// re-apply fired its own RecaptureAt(verified size) a few hundred ms
-		// later — two full encoder rebuilds and two PLI bursts for one tab
-		// click, worst exactly where it hurts most (the 2-CPU hosted box). The
-		// first of the two could not be the right one anyway: it re-binds the
-		// stream BEFORE the new target has been given the panel's size and
-		// sharpness, so its geometry is stale by construction. One recapture,
-		// after the re-apply, carrying the CDP-verified viewport — with a
-		// watchdog inside the worker so a wedged resize can still never leave
-		// the picture stranded on the old tab (see reapplyViewportToNewTarget).
+		// Browser callbacks run under tab admission, so the measured update
+		// must enter asynchronously after this callback returns.
 		if !lv.reapplyViewportToNewTarget(newCtx) {
-			// Nothing to replay (no viewport has ever been requested for this
-			// session), so nobody downstream will recapture — the picture must
-			// still follow the tab. Same entry point either way, so the
-			// foreground re-assert is on EVERY tab-change path, not just the
-			// rare model-did-not-move recovery one.
-			lv.signalRecaptureForTabChange(0, 0)
+			cs := lv.mgr.CaptureSessionForPanel(lv.sessionID)
+			if cs != nil {
+				go func() {
+					if err := lv.mgr.Live().RefreshCaptureFrameContext(newCtx, lv.sessionID, cs); err != nil {
+						logger.WarnCF("browser", "live view: could not measure the newly active tab", map[string]any{"session_id": lv.sessionID, "error": err.Error()})
+					}
+				}()
+			}
 		}
 	}
 
 	if needsRebind {
-		lv.rebindWatch(newCtx)
+		// A real tab change already scheduled its measured refresh above. Do
+		// not let listener discovery start a second competing transition.
+		lv.rebindWatch(newCtx, !activeTabChanged)
 	}
 }
 
@@ -2151,13 +2166,12 @@ func (lv *LiveView) onTabsChanged(tabs []Tab, activeIdx int) {
 // encoder should converge on (0,0 = "no measurement to offer", which makes the
 // encoder fall back to its own chrome.tabs.get stability poll). A no-op when
 // this LiveView has no manager (hand-built in tests) or no capture session is
-// active — WebRTC never used, or this LiveView's session is not the one the
-// manager's single CaptureSession is bound to.
+// active for this panel. Another panel's capture is never a fallback.
 func (lv *LiveView) signalRecapture(w, h int) {
 	if lv.mgr == nil {
 		return
 	}
-	cs := lv.mgr.CaptureSession()
+	cs := lv.mgr.CaptureSessionForPanel(lv.sessionID)
 	if cs == nil {
 		return
 	}
@@ -2184,7 +2198,7 @@ func (lv *LiveView) signalRecaptureForTabChange(w, h int) {
 	if lv.mgr == nil {
 		return
 	}
-	cs := lv.mgr.CaptureSession()
+	cs := lv.mgr.CaptureSessionForPanel(lv.sessionID)
 	if cs == nil {
 		return
 	}
@@ -2224,6 +2238,7 @@ func (lv *LiveView) reapplyViewportToNewTarget(tabCtx context.Context) bool {
 	// Recorded for BOTH the spawning and the coalescing case: the worker
 	// always applies to the most recently observed target, never to the one
 	// whose switch happened to start the worker.
+	lv.pendingViewportTarget = tabCtx
 	lv.viewportReapplyTargetCtx = tabCtx
 	if lv.viewportReapplyInFlight {
 		lv.viewportReapplyPending = true
@@ -2255,77 +2270,15 @@ func (lv *LiveView) reapplyViewportToNewTarget(tabCtx context.Context) bool {
 	return true
 }
 
-// reapplyViewportPass is one pass of the re-apply worker: resize the target
-// tab, then hand the encoder the size that tab VERIFIABLY reached so its own
-// chrome.tabs.get poll converges on a known target instead of trusting two
-// reads that may agree only because both are stale.
-//
-// The watchdog is what makes "one recapture, after the re-apply" safe to do at
-// all. applyViewport's own budgets (two 5s bounds attempts, a 5s scale
-// override, a 600ms settle poll, and an at-most-one compensation re-apply) sum
-// to tens of seconds in the pathological case, and the picture must not sit on
-// the old tab for that long. So if the resize has not finished within
-// viewportReapplyRecaptureGrace, the recapture is issued immediately WITHOUT a
-// verified geometry (the encoder then falls back to its own stability poll),
-// and the post-resize one still follows with the measurement. That second
-// recapture is the price of a wedged resize, paid only there — the normal path
-// issues exactly one.
+// reapplyViewportPass applies and measures the new target once. Failed browser
+// work leaves the old picture locked; it cannot authorize guessed geometry.
 func (lv *LiveView) reapplyViewportPass(tabCtx context.Context, w, h int, scale float64) {
 	if tabCtx == nil {
 		return
 	}
-	watchdog := time.AfterFunc(viewportReapplyRecaptureGrace, func() {
-		logger.WarnCF(
-			"browser",
-			"live view: re-applying the panel's viewport to the newly-active tab is taking too long — "+
-				"recapturing now so the picture follows the tab, it will re-sharpen when the resize lands",
-			map[string]any{
-				"session_id":      lv.sessionID,
-				"requested_width": w, "requested_height": h,
-			},
-		)
-		lv.signalRecaptureForTabChange(0, 0)
-	})
-
-	_, applyErr := lv.applyViewport(tabCtx, w, h, scale)
-	watchdog.Stop()
-
-	if applyErr != nil {
-		logger.WarnCF(
-			"browser",
-			"live view: could not re-apply the panel's viewport to the newly-active tab — it may render at the wrong size or look soft until the next resize",
-			map[string]any{
-				"error":               applyErr.Error(),
-				"session_id":          lv.sessionID,
-				"requested_width":     w,
-				"requested_height":    h,
-				"device_scale_factor": scale,
-			},
-		)
-		// The resize failed, but the tab still MOVED — the picture has to
-		// follow it regardless, at whatever size the encoder can work out for
-		// itself.
-		lv.signalRecaptureForTabChange(0, 0)
-		return
+	if _, err := lv.applyViewportContextWithConvergence(context.Background(), tabCtx, w, h, scale, true); err != nil {
+		logger.WarnCF("browser", "live view: could not re-apply the panel viewport", map[string]any{"session_id": lv.sessionID, "error": err.Error()})
 	}
-	vw, vh, ok := lv.cssViewportSnapshot()
-	if !ok {
-		lv.signalRecaptureForTabChange(0, 0)
-		return
-	}
-	lv.signalRecaptureForTabChange(vw, vh)
-}
-
-// cssViewportSnapshot returns the cached CSS layout viewport, or ok=false when
-// it is unset/invalidated. The LiveView-level counterpart of the registry's
-// CSSViewport, for callers that already hold the LiveView.
-func (lv *LiveView) cssViewportSnapshot() (int, int, bool) {
-	lv.mu.Lock()
-	defer lv.mu.Unlock()
-	if lv.cssViewportW <= 0 || lv.cssViewportH <= 0 {
-		return 0, 0, false
-	}
-	return lv.cssViewportW, lv.cssViewportH, true
 }
 
 // rebindWatch re-targets an ALREADY-ACTIVE death watch to newCtx (ADR-041
@@ -2347,18 +2300,21 @@ func (lv *LiveView) cssViewportSnapshot() (int, int, bool) {
 // in-memory bookkeeping, so the whole operation now runs under one lv.mu
 // acquisition with no unlock in between — the interleaving windows those
 // fixes existed to close no longer exist, and the fixes (along with the
-// self-correcting retry loop) are gone with them.
-func (lv *LiveView) rebindWatch(newCtx context.Context) {
+// self-correcting retry loop) are gone with them. The replacement document
+// watch schedules asynchronous discovery; no CDP call runs under lv.mu.
+func (lv *LiveView) rebindWatch(newCtx context.Context, initializePicture bool) {
 	lv.mu.Lock()
 	if !lv.hasEpochLocked() || lv.tabCtx == newCtx {
 		lv.mu.Unlock()
 		return
 	}
 	oldStopListen := lv.stopListen
+	lv.replaceWatchOwnerLocked()
 	lv.tabCtx = newCtx
 	listenCtx, cancel := context.WithCancel(newCtx)
 	lv.listenCtx = listenCtx
 	lv.stopListen = cancel
+	lv.installDocumentWatchLocked(listenCtx, newCtx, initializePicture)
 	lv.mu.Unlock()
 
 	// Cancel the OLD watch after installing the new one, under no lock — the
@@ -2413,41 +2369,66 @@ func (lv *LiveView) rebindWatch(newCtx context.Context) {
 //     viewers know to re-attach.
 func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
 	<-watchedListenCtx.Done()
-
 	lv.mu.Lock()
 	if lv.listenCtx != watchedListenCtx {
-		// A clean detach, or a rebind already triggered elsewhere (e.g.
-		// onTabsChanged, possibly racing this very watcher), already
-		// superseded this epoch — nothing left for this watcher to do.
 		lv.mu.Unlock()
 		return
 	}
-	sessionID := lv.sessionID
-	mgr := lv.mgr
+	// Hand-built views may install a listen context directly. They still need
+	// the same retirement fence as a view created through Attach.
+	if lv.watchOwnerCtx == nil {
+		lv.replaceWatchOwnerLocked()
+	}
+	owner := lv.watchOwnerCtx
+	sessionID, mgr := lv.sessionID, lv.mgr
 	lv.mu.Unlock()
 
-	if mgr != nil && mgr.browserAlive(sessionID) {
-		// Not a death — a tab close/switch. See the doc comment above for
-		// why leaving lv.listenCtx exactly as-is (and returning without
-		// broadcasting) is what lets the real rebind proceed correctly.
-		return
-	}
-
-	// ADR-047 / wave-plan W2-A item 5 ("also on browser_status-relevant
-	// lifecycle: browser death -> stop session"): the browsing context is
-	// genuinely gone, so any active WebRTC capture session for this agent
-	// has nothing left to capture — its encoder page's own CDP target died
-	// along with the rest of the browser context. Stop() is idempotent and
-	// safe even if the session already noticed independently.
+	// Retain the original picture before observing browser death. Looking it
+	// up only afterward can select a recovery capture installed during the check.
+	var original *CaptureSession
+	var frame CaptureFrameState
 	if mgr != nil {
-		if cs := mgr.CaptureSession(); cs != nil {
-			cs.Stop()
+		original = mgr.CaptureSessionForPanel(sessionID)
+		if original != nil {
+			frame = original.FrameState()
+		}
+		if mgr.browserAlive(sessionID) {
+			return
 		}
 	}
-
+	if owner.Err() != nil {
+		return
+	}
+	if mgr != nil && mgr.CaptureSessionForPanel(sessionID) != original {
+		return
+	}
+	if original != nil {
+		// An unmeasured capture has not claimed this source yet. In particular,
+		// a recovery capture waiting for its first frame is not the dead picture.
+		if frame.Generation == 0 || frame.TargetID == "" || frame.Width <= 0 || frame.Height <= 0 {
+			return
+		}
+		sameFrame := func(current CaptureFrameState) bool {
+			return current.Generation == frame.Generation && current.TargetID == frame.TargetID
+		}
+		original.stopWhen(func() bool {
+			return owner.Err() == nil && sameFrame(original.frameStateLocked())
+		})
+		// Stop may drain transport work. A rebind or newer frame during that
+		// drain must not inherit the old watcher's death notification.
+		if owner.Err() != nil || !sameFrame(original.FrameState()) {
+			return
+		}
+	}
+	if mgr != nil {
+		current := mgr.CaptureSessionForPanel(sessionID)
+		// Stopping our own capture normally removes it from the manager.
+		if current != nil && current != original {
+			return
+		}
+	}
 	lv.mu.Lock()
-	if lv.listenCtx != watchedListenCtx {
-		// Superseded while this goroutine was checking mgr.browserAlive.
+	if lv.listenCtx != watchedListenCtx || lv.watchOwnerCtx != owner || owner.Err() != nil {
 		lv.mu.Unlock()
 		return
 	}
@@ -2455,10 +2436,21 @@ func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
 	lv.stopListen = nil
 	sinks := lv.snapshotStatusSinksLocked()
 	lv.mu.Unlock()
-
-	for _, s := range sinks {
-		s("browser session ended unexpectedly (the browser was restarted or shut down) — re-attach to resume watching")
+	for _, sink := range sinks {
+		if owner.Err() != nil {
+			return
+		}
+		sink("browser session ended unexpectedly (the browser was restarted or shut down) — re-attach to resume watching")
 	}
+}
+
+// replaceWatchOwnerLocked retires cleanup belonging to the previous watch.
+// This context is deliberately independent of the source tab's lifetime.
+func (lv *LiveView) replaceWatchOwnerLocked() {
+	if lv.stopWatchOwner != nil {
+		lv.stopWatchOwner()
+	}
+	lv.watchOwnerCtx, lv.stopWatchOwner = context.WithCancel(context.Background())
 }
 
 // detach removes viewerID and, if it was the last viewer, stops watching
@@ -2470,6 +2462,7 @@ func (lv *LiveView) detach(viewerID string) {
 	delete(lv.controlSinks, viewerID)
 	delete(lv.tabsSinks, viewerID)
 	delete(lv.releaseSinks, viewerID)
+	delete(lv.acquiredSinks, viewerID)
 	lv.lastControlActivity = time.Now() // FR-031a liveness: a detach resets the idle clock too.
 	wasController := lv.controller == viewerID
 	if wasController {
@@ -2485,7 +2478,11 @@ func (lv *LiveView) detach(viewerID string) {
 	}
 
 	var stopListen context.CancelFunc
-	if len(lv.viewers) == 0 && lv.isActiveLocked() {
+	if len(lv.viewers) == 0 {
+		if lv.stopWatchOwner != nil {
+			lv.stopWatchOwner()
+		}
+		lv.watchOwnerCtx, lv.stopWatchOwner = nil, nil
 		stopListen = lv.stopListen
 		lv.listenCtx = nil
 		lv.stopListen = nil
@@ -2500,6 +2497,7 @@ func (lv *LiveView) detach(viewerID string) {
 	// own detach/disconnect cleanup path — see broadcastControl's doc
 	// comment.
 	broadcastControl(otherSinks, false)
+	lv.detachInput(viewerID)
 
 	if stopListen != nil {
 		stopListen()
@@ -2579,130 +2577,10 @@ func IsBenignLiveInputError(err error) bool {
 	return errors.As(err, &liveErr) && liveErr.Kind == LiveInputErrorBenign
 }
 
-// dispatchInput validates control + rate limit, then dispatches one CDP
-// input action. Called with no locks held by the caller.
+// dispatchInput is the internal compatibility entry point. Public callers use
+// InputContext, which also verifies viewer attachment and binds its lifetime.
 func (lv *LiveView) dispatchInput(viewerID string, in LiveInput) error {
-	lv.mu.Lock()
-	// NO CONTROL GATE (operator directive, 2026-08-03). The live panel is a
-	// REAL BROWSER the human uses normally, and the agent can steer it too —
-	// both, concurrently. Input is never refused because some other viewer
-	// "holds the wheel".
-	//
-	// This replaced an exclusive single-controller lock that refused every
-	// event unless viewerID matched lv.controller. Measured consequence: a
-	// second attached viewer (another panel, a pop-out, an automation session
-	// that never detached) left the actual human with a dead mouse, dead
-	// keyboard, and a URL bar that would not submit — the panel showed
-	// "Someone else is driving" and silently dropped everything the user did.
-	// A browser that refuses input is not a browser.
-	//
-	// lv.controller is retained for PRESENTATION only (who to show as active
-	// in the header, the ADR-039 controlSinks broadcast); it must never again
-	// become an authorization decision on this path.
-	if !lv.allowInputLocked(in.Kind) {
-		lv.mu.Unlock()
-		limit := maxDiscreteInputEventsPerSecond
-		if isCoalescibleInputKind(in.Kind) {
-			limit = maxCoalescibleInputEventsPerSecond
-		}
-		return benignInputError("browser live: input rate limit exceeded for %s (%d/s)", in.Kind, limit)
-	}
-	lv.lastControlActivity = time.Now() // FR-031a liveness: real viewer input resets the idle clock.
-	tabCtx := lv.tabCtx
-	lv.mu.Unlock()
-
-	if tabCtx == nil {
-		return realInputError("browser live: session is not attached")
-	}
-
-	// Root-cause doc Fault 3: x/y arrive in the CLIENT's capture-frame pixel
-	// space, which is no longer guaranteed to equal the tab's CSS pixel
-	// space now that SetViewport (Fault 1 fix, above) can resize the tab
-	// independently of what the encoder's downscaling happens to produce.
-	// Only pointer-position kinds carry a meaningful position to rescale —
-	// wheel's DeltaX/DeltaY are scroll deltas, not positions, and key/text
-	// carry no coordinates at all.
-	switch in.Kind {
-	case "mouse_move", "mouse_down", "mouse_up", "wheel":
-		if in.HasXY && in.CaptureWidth > 0 && in.CaptureHeight > 0 {
-			rx, ry, ok := lv.rescaleToCSSViewport(tabCtx, in.X, in.Y, in.CaptureWidth, in.CaptureHeight)
-			if !ok {
-				// DROP rather than dispatch at an unmapped coordinate — see
-				// rescaleToCSSViewport's doc comment: unscaled coordinates
-				// land ~34% off (measured), i.e. on the wrong element, and a
-				// mis-aimed click can navigate away, delete or submit.
-				//
-				// Classification matters as much as the drop. A one-off miss
-				// is a transient the user retries past, so it stays benign and
-				// silent. But a SUSTAINED streak means the CDP transport is
-				// wedged or the tab is dead — and LiveInputErrorReal's own doc
-				// comment names exactly that as the thing that must reach the
-				// user ("a dead browser looked identical to a healthy, idle
-				// one", ADR-038 finding #4). Without this escalation a crashed
-				// tab would swallow every click forever with no error, since
-				// pointer kinds bail out here and never reach the real-error
-				// CDP dispatch below.
-				lv.mu.Lock()
-				failures := lv.viewportFetchFailures
-				lv.mu.Unlock()
-				if failures >= viewportFetchFailureEscalation {
-					return realInputError(
-						"browser live: cannot read the tab's CSS viewport after %d consecutive attempts — the browser tab may have crashed or the CDP transport is wedged",
-						failures,
-					)
-				}
-				return benignInputError(
-					"browser live: viewport unknown, dropped %s to avoid a mis-aimed dispatch",
-					in.Kind,
-				)
-			}
-			in.X, in.Y = rx, ry
-		}
-	}
-
-	action, err := buildInputAction(in)
-	if err != nil {
-		return realInputError("%w", err)
-	}
-
-	// ADR-039 D-A2 (BLOCKING): a user-driven navigate MUST pass the same
-	// SSRF/scheme gate the agent's browser_navigate tool applies
-	// (BrowserManager.ValidateURL — tools.go's NavigateTool.Execute) before
-	// ever reaching CDP. The live-WS input path otherwise has no URL gate of
-	// its own. A blocked URL is a real, user-visible failure (not the benign
-	// not-controller/rate-limit kind) so the gateway surfaces it as a
-	// browser_status(error) frame instead of silently dropping it.
-	//
-	// 7-reviewer BLOCKER: ValidateURL's SSRF check does DNS resolution
-	// (resolver.LookupIPAddr) with no deadline of its own. tabCtx is the
-	// live agent tab's own context — it does not expire on any per-call
-	// schedule — so calling ValidateURL(tabCtx, ...) directly means a
-	// blackholed/slow-DNS hostname can hang this call for however long the
-	// resolver is willing to wait (its own internal ceiling, 10-30s+ or
-	// unbounded). Because handleInput (browser_ws.go) runs synchronously in
-	// the connection's single readLoop goroutine, that hang freezes the
-	// WHOLE connection — it can't even process a browser_detach — which is
-	// exactly the unbounded-wait hazard the ADR-038 deadlock postmortem
-	// documented in this file (see runCDPWithTimeout's doc comment) exists
-	// to prevent. Mirror that same fix here: bound the call to a
-	// context.WithTimeout child of tabCtx, so even a wedged resolver fails
-	// this one navigate attempt in bounded time instead of hanging forever.
-	if in.Kind == "navigate" {
-		validateCtx, cancel := context.WithTimeout(tabCtx, lv.mgr.PageTimeout())
-		err := lv.mgr.ValidateURL(validateCtx, in.URL)
-		cancel()
-		if err != nil {
-			return realInputError("browser live: navigate blocked: %w", err)
-		}
-	}
-
-	// No lock held here (already released above) — bounded via lv.runCDP so
-	// a wedged transport can't hang the caller (the gateway's input-handling
-	// goroutine) forever.
-	if err := lv.runCDP(tabCtx, lv.mgr.PageTimeout(), action); err != nil {
-		return realInputError("browser live: input dispatch failed: %w", err)
-	}
-	return nil
+	return lv.dispatchInputContext(context.Background(), viewerID, in)
 }
 
 // rescaleToCSSViewport maps (x, y) from the client's capture-frame pixel
@@ -2755,6 +2633,11 @@ func (lv *LiveView) rescaleToCSSViewport(tabCtx context.Context, x, y, capW, cap
 
 		var w, h int64
 		err := lv.runCDP(tabCtx, viewportInputFetchTimeout, layoutMetricsAction{w: &w, h: &h})
+		// A canceled caller abandoned this read. It says nothing about the
+		// target's health and must not put subsequent input into backoff.
+		if tabCtx.Err() != nil {
+			return 0, 0, false
+		}
 		if err != nil || w <= 0 || h <= 0 {
 			logger.WarnCF(
 				"browser",
@@ -3052,7 +2935,21 @@ func (lv *LiveView) allowInputLocked(kind string) bool {
 // ensureControlForInput is EnsureControlForInput's per-view half — see that
 // method's doc comment for the model and the two failures it closes.
 func (lv *LiveView) ensureControlForInput(viewerID string) bool {
+	return lv.ensureControlForInputContext(context.Background(), nil, nil, viewerID)
+}
+
+// A dedicated input source must still own an attached target when it takes
+// control. Checking under the same lock as detach prevents a retired viewer
+// from recreating a human hold after its attachment was removed.
+func (lv *LiveView) ensureControlForInputContext(ctx context.Context, targetCtx, sourceCtx context.Context, viewerID string) bool {
 	lv.mu.Lock()
+	if targetCtx != nil {
+		_, attached := lv.viewers[viewerID]
+		if ctx.Err() != nil || inputSourceEnded(sourceCtx) || !attached || lv.tabCtx != targetCtx || lv.inputStateLocked().retired[targetCtx] {
+			lv.mu.Unlock()
+			return false
+		}
+	}
 	if lv.controller == viewerID {
 		lv.mu.Unlock()
 		return true
@@ -3073,7 +2970,12 @@ func (lv *LiveView) ensureControlForInput(viewerID string) bool {
 	transitioned, holdStart := lv.enterStandDownLocked()
 	notice := lv.noticeFor(StandDownByTake, "", holdStart)
 	otherSinks := lv.snapshotControlSinksExceptLocked(viewerID)
+	acquired := lv.acquiredSinks[viewerID]
 	lv.mu.Unlock()
+
+	if targetCtx != nil && acquired != nil {
+		go acquired()
+	}
 
 	// FR-041/FR-044: exactly one waiting line per unbroken hold — only the
 	// TRANSITION emits (see emitStandDownNotice; no lock is held here).
@@ -3338,6 +3240,25 @@ func (r *LiveViewRegistry) SetReleaseNotifySink(sessionID, viewerID string, sink
 	lv.mu.Unlock()
 }
 
+// SetControlAcquiredSink reports the first dedicated-input take to its own
+// viewer. ControlSink only reports changes to other viewers.
+func (r *LiveViewRegistry) SetControlAcquiredSink(sessionID, viewerID string, sink func()) {
+	sessionID = r.resolveSessionID(sessionID)
+	lv, ok := r.lookup(sessionID)
+	if !ok || viewerID == "" {
+		return
+	}
+	lv.mu.Lock()
+	defer lv.mu.Unlock()
+	if _, attached := lv.viewers[viewerID]; !attached {
+		return
+	}
+	if lv.acquiredSinks == nil {
+		lv.acquiredSinks = make(map[string]func())
+	}
+	lv.acquiredSinks[viewerID] = sink
+}
+
 // ReleaseStoodDown performs the ADR-085 server-initiated release on ONE tab
 // set: it clears the control lock (if held), the FR-026a latch and the
 // FR-047 handover-pending state together, and notifies the former holder
@@ -3382,12 +3303,32 @@ func (r *LiveViewRegistry) SetReleaseNotifySink(sessionID, viewerID string, sink
 // those ever set lv.controller, so no viewer was ever told
 // controlled_by_other=true for them and there is nothing to correct.
 func (r *LiveViewRegistry) ReleaseStoodDown(sessionID string) (formerHolder string, cleared bool) {
+	formerHolder, cleared, _ = r.releaseStoodDown(sessionID, "")
+	return formerHolder, cleared
+}
+
+// ReleaseStoodDownForViewer checks ownership and clears the entire hold in
+// one critical section. An unattached second viewer cannot clear a live
+// owner's hold between a separate Controller query and release.
+func (r *LiveViewRegistry) ReleaseStoodDownForViewer(sessionID, viewerID string) bool {
+	if viewerID == "" {
+		return false
+	}
+	_, _, allowed := r.releaseStoodDown(sessionID, viewerID)
+	return allowed
+}
+
+func (r *LiveViewRegistry) releaseStoodDown(sessionID, viewerID string) (formerHolder string, cleared, allowed bool) {
 	sessionID = r.resolveSessionID(sessionID)
 	lv, ok := r.lookup(sessionID)
 	if !ok {
-		return "", false
+		return "", false, true
 	}
 	lv.mu.Lock()
+	if viewerID != "" && lv.controller != "" && lv.controller != viewerID {
+		lv.mu.Unlock()
+		return "", false, false
+	}
 	formerHolder, cleared = lv.clearStandDownLocked()
 	var notify ReleaseNotifySink
 	var otherSinks []ControlSink
@@ -3398,13 +3339,11 @@ func (r *LiveViewRegistry) ReleaseStoodDown(sessionID string) (formerHolder stri
 		otherSinks = lv.snapshotControlSinksExceptLocked(formerHolder)
 	}
 	lv.mu.Unlock()
-
 	if notify != nil {
 		go notify()
 	}
-	// No lock held, per broadcastControl's contract; a nil slice is a no-op.
 	broadcastControl(otherSinks, false)
-	return formerHolder, cleared
+	return formerHolder, cleared, true
 }
 
 // StoodDownRelease reports one tab set that ReleaseAllStoodDown actually
@@ -3633,20 +3572,25 @@ func buildInputAction(in LiveInput) (chromedp.Action, error) {
 		if in.URL == "" {
 			return nil, fmt.Errorf("browser live: navigate input requires a non-empty url field")
 		}
-		return chromedp.Navigate(in.URL), nil
+		return navigationInputAction{url: in.URL}, nil
 	case "navigate_back":
 		// History back — no URL (goes to a previously-navigated page, already
 		// SSRF-cleared on its original navigate). Discrete, like navigate.
 		if in.HasXY || in.URL != "" {
 			return nil, fmt.Errorf("browser live: navigate_back input must not carry x/y or url")
 		}
-		return chromedp.NavigateBack(), nil
+		return historyBackInputAction{}, nil
+	case "stop_loading":
+		if in.HasXY || in.URL != "" {
+			return nil, fmt.Errorf("browser live: stop_loading input must not carry x/y or url")
+		}
+		return page.StopLoading(), nil
 	case "reload":
 		// Reload the current URL (already SSRF-cleared). Discrete, like navigate.
 		if in.HasXY || in.URL != "" {
 			return nil, fmt.Errorf("browser live: reload input must not carry x/y or url")
 		}
-		return chromedp.Reload(), nil
+		return page.Reload(), nil
 	default:
 		return nil, fmt.Errorf("browser live: unknown input kind %q", in.Kind)
 	}

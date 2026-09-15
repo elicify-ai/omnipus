@@ -13,18 +13,17 @@
 // gracefully surfaces a "could not capture" toast when canvas is
 // unavailable, without crashing or leaving the UI in a stuck state.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useUiStore } from '@/store/ui'
 
-const { mockSendControl, mockSendInput, mockConnect, mockDetach, mockClose, callbacksRef } = vi.hoisted(() => ({
-  // Returns `true` by default (mirrors a successful send on an OPEN socket) —
-  // see BrowserLiveView.takeTheWheel.test.tsx's identical hoisted mock for
-  // why this matters (the auto-release effect now reacts to a falsy return).
+const { mockSocketSendInput, mockSendControl, mockDedicatedSendInput, mockConnect, mockDetach, mockClose, callbacksRef } = vi.hoisted(() => ({
+  mockSocketSendInput: vi.fn(() => true),
   mockSendControl: vi.fn(() => true),
-  mockSendInput: vi.fn(),
+  mockDedicatedSendInput: vi.fn<(input: unknown) => boolean>(() => true),
   mockConnect: vi.fn(),
   mockDetach: vi.fn(),
   mockClose: vi.fn(),
@@ -45,7 +44,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           connect: mockConnect,
           detach: mockDetach,
           close: mockClose,
-          sendInput: mockSendInput,
+          sendInput: mockSocketSendInput,
           sendControl: mockSendControl,
           sendViewport: vi.fn(() => true),
           isConnected: true,
@@ -55,7 +54,13 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
   }
 })
 
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(mockDedicatedSendInput) }
+})
+
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Every render
  * call in this file supplies it via the `mediaStream` test/override seam
@@ -78,6 +83,7 @@ function connectAndFrame() {
     Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
     Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
     fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
   })
 }
 
@@ -116,7 +122,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     fireEvent.change(input, { target: { value: 'example.com' } })
     fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
-    expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
+    expect(mockSocketSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
   })
 
   it('does not send when the address bar is empty (no Go button — Enter submits)', () => {
@@ -126,7 +132,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
 
     // No Go button anymore; submitting an empty bar is a no-op (resolveOmniboxInput returns falsy).
     fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
-    expect(mockSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate' }))
+    expect(mockSocketSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate' }))
   })
 
   it('leaves an explicit https:// URL untouched', () => {
@@ -138,7 +144,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     fireEvent.change(input, { target: { value: 'https://example.com/path' } })
     fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
-    expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com/path' })
+    expect(mockSocketSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com/path' })
   })
 
   // ADR-040 D5: multi-word / no-dot input routes to a Google search instead
@@ -154,9 +160,9 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     fireEvent.change(input, { target: { value: 'cheap flights to tokyo' } })
     fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
-    expect(mockSendInput).toHaveBeenCalledWith({
+    expect(mockSocketSendInput).toHaveBeenCalledWith({
       kind: 'navigate',
-      url: 'https://duckduckgo.com/?q=cheap%20flights%20to%20tokyo',
+      url: 'https://www.google.com/search?q=cheap%20flights%20to%20tokyo',
     })
   })
 
@@ -182,13 +188,13 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     fireEvent.change(input, { target: { value: 'example.com' } })
     fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
-    expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
+    expect(mockSocketSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   // ADR-040 D5 "must-handle": submitting while NOT currently driving takes
   // the wheel first (sendControl('take')) before dispatching the navigate.
-  it('takes the wheel before navigating when submitted while not driving', () => {
+  it('requests ownership before navigating', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
 
@@ -197,7 +203,8 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
     expect(mockSendControl).toHaveBeenCalledWith('take')
-    expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
+    expect(mockSendControl.mock.invocationCallOrder[0]).toBeLessThan(mockSocketSendInput.mock.invocationCallOrder[0])
+    expect(mockSocketSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
   })
 
   it('does not send control:take again when submitted while already driving', () => {
@@ -211,16 +218,10 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     fireEvent.submit(screen.getByRole('textbox', { name: /address bar/i }).closest('form')!)
 
     expect(mockSendControl).not.toHaveBeenCalled()
-    expect(mockSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
+    expect(mockSocketSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
   })
 
-  // CRITICAL reviewer finding: the omnibox is now gated through the SAME
-  // driveMode as the pointer/keyboard handlers, not a hand-rolled duplicate
-  // guard — this proves controlled_by_other blocks the submit even when
-  // dispatched directly (bypassing the Go button's OWN `disabled` attribute,
-  // which already covers the click path — this is defense-in-depth for the
-  // handler itself, exercised via a direct form submit).
-  it('does not take the wheel nor navigate when controlled_by_other is true (direct submit, bypassing the disabled Go button)', () => {
+  it('allows navigation while another viewer is marked as controlling', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     act(() => {
@@ -233,8 +234,9 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     expect(form).not.toBeNull()
     fireEvent.submit(form!)
 
-    expect(mockSendControl).not.toHaveBeenCalled()
-    expect(mockSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate' }))
+    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl.mock.invocationCallOrder[0]).toBeLessThan(mockSocketSendInput.mock.invocationCallOrder[0])
+    expect(mockSocketSendInput).toHaveBeenCalledWith({ kind: 'navigate', url: 'https://example.com' })
   })
 
   // Reviewer finding: the previous hand-rolled omnibox guard never accounted
@@ -253,7 +255,7 @@ describe('BrowserLiveView — omnibox (ADR-039 D-A2, ADR-040 D5 — always visib
     fireEvent.submit(form!)
 
     expect(mockSendControl).not.toHaveBeenCalled()
-    expect(mockSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate' }))
+    expect(mockSocketSendInput).not.toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate' }))
   })
 })
 
@@ -307,7 +309,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
     expect(screen.getByTestId('browser-live-frame')).toHaveStyle({ cursor: 'crosshair' })
   })
 
-  it('exiting annotate mode re-allows a pointer click to implicitly take the wheel', () => {
+  it('exiting annotate mode re-allows dedicated pointer input', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} canAnnotate />)
     connectAndFrame()
 
@@ -321,7 +323,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
       toJSON() { return {} },
     } as DOMRect)
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
   })
 
   it('sets a crosshair cursor over the frame while annotating', () => {
@@ -342,7 +344,7 @@ describe('BrowserLiveView — Annotate mode ⟷ driving mutual exclusion (ADR-03
     fireEvent.pointerMove(container, { clientX: 60, clientY: 80 })
     fireEvent.pointerUp(container, { clientX: 60, clientY: 80 })
 
-    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockDedicatedSendInput).not.toHaveBeenCalled()
   })
 
   it('renders a live selection-box overlay while dragging in annotate mode', () => {
@@ -447,14 +449,15 @@ describe('BrowserLiveView — controlled_by_other (ADR-038, UAT FE-6, carried in
     expect(screen.getByTestId('browser-live-status-chip')).toHaveTextContent(/also viewing/i)
 
     mockSendControl.mockClear()
-    mockSendInput.mockClear()
+    mockDedicatedSendInput.mockClear()
     const container = screen.getByTestId('browser-live-frame')
     vi.spyOn(container, 'getBoundingClientRect').mockReturnValue({
       left: 0, top: 0, width: 1280, height: 720, right: 1280, bottom: 720, x: 0, y: 0,
       toJSON() { return {} },
     } as DOMRect)
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-    expect(mockSendControl).toHaveBeenCalled()
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
+    expect(mockDedicatedSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 20, y: 20 }))
   })
 
   it('shows "Click to drive" and allows click-to-drive when controlled_by_other is false/absent', () => {
@@ -472,7 +475,7 @@ describe('BrowserLiveView — controlled_by_other (ADR-038, UAT FE-6, carried in
       toJSON() { return {} },
     } as DOMRect)
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
   })
 })
 

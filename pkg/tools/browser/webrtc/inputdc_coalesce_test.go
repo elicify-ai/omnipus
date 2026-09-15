@@ -48,8 +48,8 @@ func TestCoalesce_MoveRunCollapsesToNewest(t *testing.T) {
 
 func TestCoalesce_WheelRunMergesDeltas(t *testing.T) {
 	batch := frames(t,
-		`{"kind":"wheel","x":10,"y":20,"delta_x":1,"delta_y":100}`,
-		`{"kind":"wheel","x":11,"y":21,"delta_x":2,"delta_y":100}`,
+		`{"kind":"wheel","x":12,"y":22,"delta_x":1,"delta_y":100,"capture_width":1122}`,
+		`{"kind":"wheel","x":12,"y":22,"delta_x":2,"delta_y":100,"capture_width":1122}`,
 		`{"kind":"wheel","x":12,"y":22,"delta_x":3,"delta_y":100,"capture_width":1122}`,
 	)
 	got := coalesceInputBatch(batch)
@@ -69,7 +69,7 @@ func TestCoalesce_WheelRunMergesDeltas(t *testing.T) {
 		t.Fatalf("total scroll distance must be preserved: want delta (6,300), got (%v,%v)", probe.DeltaX, probe.DeltaY)
 	}
 	if probe.X != 12 || probe.CaptureWidth != 1122 {
-		t.Fatalf("non-delta fields must ride along from the NEWEST frame, got %s", got[0])
+		t.Fatalf("the original gesture's non-delta fields must be preserved, got %s", got[0])
 	}
 }
 

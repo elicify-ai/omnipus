@@ -372,14 +372,11 @@ type pipeLaunchResult struct {
 // pipeLauncher seam and the manager's pipeLauncherFn seam; tests inject fakes
 // so they never spawn real Chrome.
 //
-// ctx is accepted for seam symmetry but the browser's lifetime is bound to
-// context.Background() (per cdppipe's contract, and because the shared
-// Chrome must outlive any single request/tool call — exactly as the pre-pipe
-// chromedp.NewExecAllocator(context.Background(), ...) did).
+// ctx controls startup cancellation. After successful startup the browser's
+// lifetime remains bound to context.Background(), so it outlives the request.
 func launchManagedPipe(ctx context.Context, execPath string, cfg pipeLaunchConfig) (*pipeLaunchResult, error) {
-	_ = ctx
 	var captured *exec.Cmd
-	rootCtx, cancel, err := cdppipe.NewPipeAllocator(context.Background(), execPath, cdppipe.PipeOptions{
+	rootCtx, cancel, err := cdppipe.NewPipeAllocatorWithStartupContext(context.Background(), ctx, execPath, cdppipe.PipeOptions{
 		Args:        cfg.args,
 		Env:         cfg.env,
 		UserDataDir: cfg.userDataDir,
@@ -601,6 +598,12 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 			if err != nil {
 				continue
 			}
+			// Even --version executes the candidate with gateway privileges.
+			// Record discovery without probing until the operator grants trust.
+			if !cfg.TrustPathChrome {
+				pathResolved = path
+				break
+			}
 			if ok, reason := probeChromiumBinary(ctx, path); !ok {
 				logger.WarnCF("browser", "chromium candidate on PATH did not execute successfully — skipping",
 					map[string]any{
@@ -745,7 +748,7 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 }
 
 // augmentWithRejectedPathChrome (FIX-HIGH-004) wraps a managed-download or
-// probe failure with a mention of a working $PATH Chrome this resolution
+// probe failure with a mention of a discovered $PATH candidate this resolution
 // discarded earlier under the default tools.browser.trust_path_chrome=false
 // policy, so the error actually surfaced to the caller/agent — not just the
 // WARN-BROWSER-007 log line — names both the rejected binary and the
@@ -756,7 +759,7 @@ func augmentWithRejectedPathChrome(err error, rejectedPathChrome string) error {
 		return err
 	}
 	return fmt.Errorf(
-		"%w (a working system Chrome was found at %s but was not used because tools.browser.trust_path_chrome=false; set tools.browser.trust_path_chrome=true to allow it)",
+		"%w (a system Chrome candidate was found at %s but was not executed because tools.browser.trust_path_chrome=false; set tools.browser.trust_path_chrome=true to allow it)",
 		err,
 		rejectedPathChrome,
 	)

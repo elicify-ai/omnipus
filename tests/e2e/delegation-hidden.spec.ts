@@ -118,15 +118,28 @@
  * delegation-hidden.spec.ts --list` was used instead to confirm it parses.
  */
 
-import { expect } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import { chatInput, assistantMessages, selectAgent } from './fixtures/selectors';
+import { completedDelegation, type DelegationFrame } from './fixtures/delegation-completion';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 // Deliberately does NOT call enableVerboseChat — this spec asserts the
 // DEFAULT (verbose-off) policy for its first half.
 
+const framesByPage = new WeakMap<Page, DelegationFrame[]>();
+
 test.beforeEach(async ({ page }) => {
+  const frames: DelegationFrame[] = [];
+  framesByPage.set(page, frames);
+  page.on('websocket', socket => {
+    if (!new URL(socket.url()).pathname.endsWith('/chat/ws')) return;
+    socket.on('framereceived', ({ payload }) => {
+      let frame: DelegationFrame;
+      try { frame = JSON.parse(payload.toString()) as DelegationFrame; } catch { return; }
+      if (['subagent_start', 'subagent_end', 'done'].includes(String(frame.type))) frames.push(frame);
+    });
+  });
   await page.goto('/');
 });
 
@@ -151,7 +164,7 @@ async function startFreshChat(page: import('@playwright/test').Page): Promise<vo
     await newChat.click();
     await expect(assistantMessages(page)).toHaveCount(0, { timeout: 10_000 });
   }
-  await selectAgent(page, /Jim/i);
+  await selectAgent(page, process.env.E2E_DELEGATION_AGENT_NAME || /Jim/i);
 }
 
 test(
@@ -166,6 +179,10 @@ test(
 
     await startFreshChat(page);
 
+    const label = `delegation-hidden-${Date.now()}`;
+    const frames = framesByPage.get(page)!;
+    // Discard prior-session replay before submitting this test's request.
+    frames.length = 0;
     const input = chatInput(page);
     await expect(input).toBeVisible({ timeout: 15_000 });
 
@@ -181,16 +198,18 @@ test(
     await input.fill(
       [
         'Call the `delegate` tool exactly once, right now, with these arguments:',
-        '  label: "delegation-hidden default-policy test"',
+        `  label: "${label}"`,
         '  task: "You are the subagent. Call the `bash` tool ONCE with action=\\"run\\" and command=\\"echo hello\\". Then reply with the single word \\"done\\". Do not use any other tool."',
         'Do not reply in prose. Do not call any other tool. Call delegate now.',
       ].join('\n'),
     );
     await input.press('Enter');
 
-    // "Turn complete" signal — the parent's final assistant message lands.
-    // 240s leaves 60s of the 300s test-level ceiling for the assertions below.
-    await expect(assistantMessages(page)).toHaveCount(1, { timeout: 240_000 });
+    // One background delegation can produce multiple parent prose messages.
+    // Require the matching child to succeed and its parent turn to complete;
+    // neither model prose nor a bubble count proves that contract.
+    await expect.poll(() => completedDelegation(frames, label), { timeout: 240_000 }).not.toBeNull();
+    await expect(page.getByTestId('stop-btn')).not.toBeVisible();
 
     // Then: the thread renders no subagent-collapsed card by default, even
     // though a real delegation genuinely happened (the differentiation this
@@ -226,6 +245,9 @@ test(
     // Then: the SAME already-completed delegation's card now renders —
     // proving the card's visibility tracks verboseChatEnabled for identical
     // underlying span data, not some other confound.
-    await expect(collapsedBlocks.first()).toBeVisible({ timeout: 15_000 });
+    const completedCard = collapsedBlocks.filter({ hasText: label });
+    await expect(completedCard).toHaveCount(1, { timeout: 15_000 });
+    await expect(completedCard).toHaveAttribute('aria-label', new RegExp(`^Subagent: ${label}, .*status success$`));
+    await expect(completedCard).toBeVisible();
   },
 );

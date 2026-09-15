@@ -1,0 +1,11 @@
+# Initial capture preparation validation
+
+Branch: `browser-improvements`. The installed instance and main were not changed.
+
+The production constructor now prepares a capture descriptor from the manager's actual active target, measured CSS viewport, and device scale before invoking the encoder injection helper. Ordinary tab commands and this snapshot share the same admission gate. After browser I/O, preparation checks that the exact session entry, target context, and target ID still match before publishing a generation. The relay's first forwarded-frame boundary commits the corresponding generation. Post-navigation foreground selection is no longer used to establish source identity.
+
+The initial six regression functions failed before implementation (exit 1, 3.179 seconds): no measured descriptor, acceptance of unmeasured dimensions, swallowed measurement failure, stale-target authorization, bypassed command admission, and missing measurement cancellation. The first implemented selection passed in 2.419 seconds. An additional stop-during-measurement regression then failed in 2.763 seconds; capture-stop cancellation is now linked to preparation without canceling the persistent shared target.
+
+The expanded preparation, injection, encoder lifetime, and existing startup selection passed in 2.721 seconds. Five deliberate faults each caused a corresponding behavioral failure: omitted target recheck, bypassed command gate, discarded measurement error, ignored capture stop, and accepted an unmeasured zero viewport. Production source was restored after every mutation. Restored tests passed in 1.525 seconds, and the same selection passed with race detection and shuffled test order in 2.635 seconds. The complete driver terminated with exit 0.
+
+This is focused code-level evidence. It does not prove integrated first-picture latency or tab/resize correctness. Lazy creation of a missing boot-time session still uses the manager's existing session-creation budget; capture preparation adds caller-bound admission and measurement but does not make that legacy startup operation independently cancelable. Full transition wiring, startup runtime tests, and the complete release review remain required.

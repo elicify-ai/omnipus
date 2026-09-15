@@ -51,7 +51,7 @@ func setupBrowserBackpressureWS(t *testing.T) (wc *browserWSConn, wpDone chan st
 		if tcpConn, ok := conn.UnderlyingConn().(*net.TCPConn); ok {
 			_ = tcpConn.SetWriteBuffer(4096) // best-effort
 		}
-		srvConn = &browserWSConn{conn: conn, sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+		srvConn = &browserWSConn{conn: conn, sendCh: make(chan browserOutboundFrame, 8), doneCh: make(chan struct{})}
 		close(connReady)
 
 		// writePump touches no BrowserWSHandler field — a zero-value receiver
@@ -102,7 +102,7 @@ func TestBrowserWritePumpEnforcesWriteDeadline_TextMessage(t *testing.T) {
 		defer close(feederDone)
 		for {
 			select {
-			case wc.sendCh <- payload:
+			case wc.sendCh <- browserOutboundFrame{data: payload}:
 			case <-wpDone:
 				return
 			}
@@ -141,12 +141,12 @@ func TestBrowserWritePumpEnforcesWriteDeadline_Ping(t *testing.T) {
 		for {
 			// Interleave pings with bulk frames, exactly as production does.
 			select {
-			case wc.sendCh <- payload:
+			case wc.sendCh <- browserOutboundFrame{data: payload}:
 			case <-wpDone:
 				return
 			}
 			select {
-			case wc.sendCh <- nil: // ping sentinel
+			case wc.sendCh <- browserOutboundFrame{}: // ping sentinel
 			case <-wpDone:
 				return
 			}

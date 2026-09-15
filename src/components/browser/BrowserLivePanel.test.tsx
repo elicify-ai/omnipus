@@ -7,13 +7,13 @@
 // BrowserLiveView.*.test.tsx. This file exercises ONLY what BrowserLivePanel
 // itself is responsible for: the docked <aside> and what it passes down.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
-import { act } from 'react'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { render, screen, fireEvent } from '@testing-library/react'
+import { act, useEffect } from 'react'
 import { useUiStore } from '@/store/ui'
-import { announcePopoutClosed } from '@/lib/browserLiveHandoff'
 
 const mockBrowserLiveViewProps = vi.fn()
+const lifecycle: string[] = []
 
 vi.mock('./BrowserLiveView', () => ({
   BrowserLiveView: (props: {
@@ -23,6 +23,7 @@ vi.mock('./BrowserLiveView', () => ({
     onPopOut?: () => void
     canAnnotate?: boolean
   }) => {
+    useEffect(() => { lifecycle.push('mounted'); return () => { lifecycle.push('detached') } }, [])
     mockBrowserLiveViewProps(props)
     return (
       <div data-testid="mock-browser-live-view">
@@ -45,6 +46,7 @@ vi.mock('./BrowserLiveView', () => ({
 import { BrowserLivePanel } from './BrowserLivePanel'
 
 beforeEach(() => {
+  lifecycle.length = 0
   mockBrowserLiveViewProps.mockClear()
   useUiStore.setState({ browserPanel: null, toasts: [] })
 })
@@ -98,158 +100,129 @@ describe('BrowserLivePanel (always-docked)', () => {
     expect('onHandToAgent' in calledProps).toBe(false)
   })
 
-  describe('onPopOut (the fullscreen escape)', () => {
-    it('opens the hash-routed pop-out URL without touching any auth token storage (ADR-044: cookie auth is inherited automatically)', () => {
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+})
 
-      render(<BrowserLivePanel />)
-      act(() => {
-        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-      })
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); window.history.replaceState({}, '', '/') })
 
-      fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+function popup() {
+  const child = { closed: false, opener: {}, location: { replace: vi.fn() }, focus: vi.fn(), close: vi.fn() }
+  child.close.mockImplementation(() => { child.closed = true })
+  vi.spyOn(window, 'open').mockReturnValue(child as unknown as Window)
+  return child
+}
+function openDock() {
+  const mounted = render(<BrowserLivePanel />)
+  act(() => useUiStore.getState().openBrowserPanel('s1', 'a1'))
+  return mounted
+}
 
-      // ADR-044: no sessionStorage → localStorage token hand-off — the
-      // same-origin omnipus-session cookie rides along automatically.
-      expect(localStorage.length).toBe(0)
-      expect(sessionStorage.length).toBe(0)
-      expect(openSpy).toHaveBeenCalledWith(
-        expect.stringMatching(/^\/#\/browser-live\?session=sess-1&agent=agent-1$/),
-        '_blank',
-        'noopener,noreferrer',
-      )
-      // UAT 2026-07-18: popping out HANDS OVER the view — the docked panel
-      // closes (unmount detaches its viewer; the server releases the drive
-      // lock on detach), so the pop-out is never wedged behind this
-      // connection's control lock ("Someone else is driving", dead input).
-      expect(useUiStore.getState().browserPanel).toBeNull()
-      expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
-
-      openSpy.mockRestore()
-    })
-
-    // a11y fix-wave (F1): closeBrowserPanel() unmounts the docked panel,
-    // which drops keyboard focus to <body> — this asserts the pop-out path
-    // restores it to the chat composer instead of stranding keyboard/SR
-    // users. Simulates the composer textarea via the SAME
-    // `data-testid="chat-input"` ChatScreen.tsx's real composer carries
-    // (BrowserLivePanel has no direct handle on ChatScreen's internal ref,
-    // so it queries by this testid — see BrowserLivePanel.tsx's own comment).
-    it('restores focus to the chat composer textarea after popping out', () => {
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
-      const composerInput = document.createElement('textarea')
-      composerInput.setAttribute('data-testid', 'chat-input')
-      document.body.appendChild(composerInput)
-
-      render(<BrowserLivePanel />)
-      act(() => {
-        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-      })
-
-      fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
-
-      expect(document.activeElement).toBe(composerInput)
-
-      openSpy.mockRestore()
-      document.body.removeChild(composerInput)
-    })
-
-    it('does not throw when popping out and the composer textarea is not mounted (graceful no-op fallback)', () => {
-      const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
-      expect(document.querySelector('[data-testid="chat-input"]')).toBeNull()
-
-      render(<BrowserLivePanel />)
-      act(() => {
-        useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-      })
-
-      expect(() => {
-        fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
-      }).not.toThrow()
-
-      openSpy.mockRestore()
-    })
-  })
-
-  it('closes via the panel close callback (onClose -> closeBrowserPanel)', () => {
+describe('exclusive popout ownership', () => {
+  it('ignores unowned broadcasts, including inside the popout document', async () => {
+    window.history.replaceState({}, '', '/#/browser-live?session=other&agent=other')
     render(<BrowserLivePanel />)
-    act(() => {
-      useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-    })
-
-    fireEvent.click(screen.getByRole('button', { name: 'mock-close' }))
+    const channel = new BroadcastChannel('omnipus-browser-live-handoff')
+    act(() => channel.postMessage({ type: 'popout-closed', sessionId: 'other-session', agentId: 'other-agent' }))
+    await new Promise(resolve => setTimeout(resolve, 300))
     expect(useUiStore.getState().browserPanel).toBeNull()
     expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
+    channel.close()
   })
-
-  it('remounts BrowserLiveView (fresh key) when a second open targets a different (session, agent) pair', () => {
-    render(<BrowserLivePanel />)
-    act(() => {
-      useUiStore.getState().openBrowserPanel('sess-1', 'agent-1')
-    })
-    act(() => {
-      useUiStore.getState().openBrowserPanel('sess-2', 'agent-2')
-    })
-
-    const lastProps = mockBrowserLiveViewProps.mock.calls.at(-1)?.[0] as Record<string, unknown>
-    expect(lastProps).toMatchObject({ sessionId: 'sess-2', agentId: 'agent-2' })
-    // Still exactly one docked panel — the key remount swaps content, not layout.
-    expect(screen.getAllByTestId('browser-live-panel-docked')).toHaveLength(1)
+  it('preserves the dock when the browser blocks a popout', () => {
+    vi.spyOn(window, 'open').mockReturnValue(null)
+    openDock()
+    fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+    expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 's1', agentId: 'a1' })
+    expect(lifecycle).toEqual(['mounted'])
   })
-
-  // BUG 2 fix (live UAT re-run 2026-07-28) — repro: pop out the live browser
-  // → close that pop-out window → the main app used to show nothing but a
-  // bare "Open browser" button (browserPanel stayed null forever), and
-  // clicking it again re-opened against whatever agent/session happened to
-  // be globally active in chat (Mia + a brand-new about:blank session)
-  // instead of the agent that actually had a live session (Ray). These
-  // tests would FAIL on pre-fix code, where BrowserLivePanel never
-  // subscribed to `onPopoutClosed` at all — `browserPanel` would stay null
-  // forever after the broadcast below, and `browser-live-panel-docked`
-  // would never appear.
-  describe('re-docking on pop-out close (BUG 2 fix)', () => {
-    it('re-opens the docked panel for the EXACT (session, agent) a pop-out announces closing, when nothing is currently docked', async () => {
-      render(<BrowserLivePanel />)
-      expect(useUiStore.getState().browserPanel).toBeNull()
-      expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
-
-      act(() => {
-        announcePopoutClosed('sess-ray-live', 'ray')
-      })
-
-      await waitFor(() => {
-        expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess-ray-live', agentId: 'ray' })
-      })
-      expect(screen.getByTestId('browser-live-panel-docked')).toBeInTheDocument()
-      expect(mockBrowserLiveViewProps).toHaveBeenCalledWith(
-        expect.objectContaining({ sessionId: 'sess-ray-live', agentId: 'ray' }),
-      )
-    })
-
-    it('does NOT clobber an already-docked panel with a stale pop-out-closed broadcast for a different session', async () => {
-      render(<BrowserLivePanel />)
-      act(() => {
-        useUiStore.getState().openBrowserPanel('sess-current', 'agent-current')
-      })
-      expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess-current', agentId: 'agent-current' })
-
-      act(() => {
-        announcePopoutClosed('sess-stale', 'agent-stale')
-      })
-      // Give the BroadcastChannel a tick to deliver, then confirm nothing changed.
-      await new Promise((resolve) => setTimeout(resolve, 10))
-      expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'sess-current', agentId: 'agent-current' })
-    })
-
-    it('stops listening once unmounted — no re-dock after the panel itself is gone', async () => {
-      const { unmount } = render(<BrowserLivePanel />)
-      unmount()
-
-      act(() => {
-        announcePopoutClosed('sess-after-unmount', 'agent-after-unmount')
-      })
-      await new Promise((resolve) => setTimeout(resolve, 10))
-      expect(useUiStore.getState().browserPanel).toBeNull()
-    })
+  it('detaches the dock and severs the opener before navigating the trusted blank tab', () => {
+    const child = popup(); let observed: unknown
+    child.location.replace.mockImplementation(() => { observed = { lifecycle: [...lifecycle], opener: child.opener } })
+    openDock()
+    fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+    expect(window.open).toHaveBeenCalledExactlyOnceWith('about:blank', '_blank')
+    expect(observed).toEqual({ lifecycle: ['mounted', 'detached'], opener: null })
+    expect(child.location.replace).toHaveBeenCalledExactlyOnceWith('/#/browser-live?session=s1&agent=a1')
+    expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
+    expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0)
   })
+  it('keeps the dock unmounted through reload and Open browser, then restores its exact owner once after native close', () => {
+    vi.useFakeTimers(); const child = popup(); openDock()
+    fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+    act(() => { vi.advanceTimersByTime(2000) }) // Reload retains the same live WindowProxy.
+    expect(useUiStore.getState().browserPanel).toBeNull()
+    act(() => useUiStore.getState().openBrowserPanel('different', 'different'))
+    expect(lifecycle).toEqual(['mounted', 'detached'])
+    expect(useUiStore.getState().browserPanel).toBeNull()
+    expect(child.focus).toHaveBeenCalledTimes(1)
+    child.closed = true
+    act(() => { vi.advanceTimersByTime(250) })
+    expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 's1', agentId: 'a1' })
+    expect(lifecycle).toEqual(['mounted', 'detached', 'mounted'])
+    act(() => useUiStore.getState().closeBrowserPanel())
+    act(() => { vi.advanceTimersByTime(2000) })
+    expect(useUiStore.getState().browserPanel).toBeNull()
+  })
+  it('does not overwrite a newer dock request after the owned child already closed', () => {
+    vi.useFakeTimers(); const child = popup(); openDock()
+    fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+    child.closed = true
+    act(() => useUiStore.getState().openBrowserPanel('new', 'new-agent'))
+    act(() => { vi.advanceTimersByTime(1000) })
+    expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 'new', agentId: 'new-agent' })
+  })
+  it('closes an unnavigable blank tab and restores the dock', () => {
+    const child = popup(); child.location.replace.mockImplementation(() => { throw new Error('navigation denied') })
+    openDock(); fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+    expect(child.close).toHaveBeenCalledTimes(1)
+    expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 's1', agentId: 'a1' })
+    expect(screen.getAllByTestId('mock-browser-live-view')).toHaveLength(1)
+  })
+  it('ends ownership on parent unmount without a delayed restoration', () => {
+    vi.useFakeTimers(); const child = popup(); const mounted = openDock()
+    fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+    mounted.unmount(); act(() => { vi.advanceTimersByTime(2000) })
+    expect(child.close).toHaveBeenCalledTimes(1)
+    expect(useUiStore.getState().browserPanel).toBeNull()
+  })
+  it('restores composer focus after successful handover', () => {
+    popup(); const composer = document.createElement('textarea'); composer.dataset.testid = 'chat-input'; document.body.appendChild(composer)
+    openDock(); fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+    expect(document.activeElement).toBe(composer)
+    composer.remove()
+  })
+  it('never mounts the global dock inside the fullscreen popout route', () => {
+    window.history.replaceState({}, '', '/#/browser-live?session=s1&agent=a1')
+    openDock()
+    expect(lifecycle).toEqual([])
+    expect(screen.queryByTestId('browser-live-panel-docked')).not.toBeInTheDocument()
+  })
+})
+
+it('closes the dock through the existing close callback', () => {
+  openDock(); fireEvent.click(screen.getByRole('button', { name: 'mock-close' }))
+  expect(useUiStore.getState().browserPanel).toBeNull()
+  expect(lifecycle).toEqual(['mounted', 'detached'])
+})
+it('remounts the dock for an explicitly changed target', () => {
+  openDock(); act(() => useUiStore.getState().openBrowserPanel('s2', 'a2'))
+  expect(mockBrowserLiveViewProps.mock.calls.at(-1)?.[0]).toMatchObject({ sessionId: 's2', agentId: 'a2' })
+  expect(lifecycle).toEqual(['mounted', 'detached', 'mounted'])
+  expect(screen.getAllByTestId('browser-live-panel-docked')).toHaveLength(1)
+})
+
+it('keeps the dock and explains a thrown popup-creation failure', () => {
+  vi.spyOn(window, 'open').mockImplementation(() => { throw new Error('popup creation denied') })
+  openDock()
+  expect(() => act(() => mockBrowserLiveViewProps.mock.calls.at(-1)?.[0].onPopOut())).not.toThrow()
+  expect(useUiStore.getState().browserPanel).toEqual({ sessionId: 's1', agentId: 'a1' })
+  expect(useUiStore.getState().toasts.at(-1)?.message).toBe('The popout could not open. The browser remains here.')
+  expect(lifecycle).toEqual(['mounted'])
+})
+it('closes the owned popout on parent pagehide without restoring a hidden dock', () => {
+  vi.useFakeTimers(); const child = popup(); openDock()
+  fireEvent.click(screen.getByRole('button', { name: 'mock-pop-out' }))
+  fireEvent(window, new Event('pagehide'))
+  act(() => { vi.advanceTimersByTime(1000) })
+  expect(child.close).toHaveBeenCalledTimes(1)
+  expect(useUiStore.getState().browserPanel).toBeNull()
 })

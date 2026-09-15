@@ -356,13 +356,19 @@ func TestSessionGoToGoFullFlow(t *testing.T) {
 
 	sess := relay.NewSession(relay.Config{}, sink, safeLogf(t))
 	t.Cleanup(func() { _ = sess.Close() })
+	var replacementLive atomic.Bool
+	sess.SetOnVideoBoundary(func(generation uint64, target string, _ uint32) {
+		if generation == 2 && target == "replacement-tab" {
+			replacementLive.Store(true)
+		}
+	})
 
 	// --- ingest #1: fake encoder offers video+audio ---
 	enc1 := newFakeEncoder(t, true)
 	enc1.startPumping(t)
 
 	offer1 := nonTrickleOffer(t, enc1.pc)
-	answer1, err := sess.HandleIngestOffer(offer1)
+	answer1, err := sess.HandleIngestOfferForGeneration(offer1, 1, "first-tab")
 	if err != nil {
 		t.Fatalf("HandleIngestOffer #1: %v", err)
 	}
@@ -438,18 +444,25 @@ func TestSessionGoToGoFullFlow(t *testing.T) {
 	// --- ingest replacement: a second encoder connects; the SAME viewer
 	// must keep receiving packets without any viewer-side action, proving
 	// the shared TrackLocalStaticRTP survives ingest replacement. ---
-	videoBefore := viewer.videoPkts.Load()
-	audioBefore := viewer.audioPkts.Load()
 
 	enc2 := newFakeEncoder(t, true)
 	enc2.startPumping(t)
 
 	offer2 := nonTrickleOffer(t, enc2.pc)
-	answer2, err := sess.HandleIngestOffer(offer2)
+	answer2, err := sess.HandleIngestOfferForGeneration(offer2, 2, "replacement-tab")
 	if err != nil {
 		t.Fatalf("HandleIngestOffer #2 (replacement): %v", err)
 	}
 	setAnswer(t, enc2.pc, answer2)
+	// Encoder1 intentionally keeps streaming throughout negotiation. Counts
+	// sampled before that handshake can be satisfied entirely by old media.
+	waitCond(t, testWait, "replacement generation to forward video", replacementLive.Load)
+	waitCond(t, testWait, "replacement audio and video feeds to be live", func() bool {
+		stats := sess.Stats()
+		return stats.HasVideo && stats.HasAudio
+	})
+	videoBefore := viewer.videoPkts.Load()
+	audioBefore := viewer.audioPkts.Load()
 
 	waitCond(t, testWait, "viewer to keep receiving video after ingest replacement", func() bool {
 		return viewer.videoPkts.Load() > videoBefore+5

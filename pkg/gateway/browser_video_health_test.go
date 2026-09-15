@@ -36,135 +36,87 @@ type videoHealthFrameDecoder struct { // not-wire-format: test-only decoder for 
 }
 
 func TestOnVideoHealth_ReachesEveryAttachedViewer(t *testing.T) {
-	handler, _ := newBrowserWSTestHandler(t, nil)
-	t.Cleanup(handler.Wait)
-
-	wcA := newTestBrowserWSConn()
-	wcB := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewer-a", wcA, "sess-a")
-	handler.registerWebRTCViewerConn("viewer-b", wcB, "sess-b")
-	t.Cleanup(func() {
-		handler.unregisterWebRTCViewerConn("viewer-a")
-		handler.unregisterWebRTCViewerConn("viewer-b")
-	})
-
-	handler.onVideoHealth(browser.VideoHealthEvent{
-		AgentID:     "mia",
-		ViewerIDs:   []string{"viewer-a", "viewer-b"},
-		State:       browser.VideoHealthLost,
-		Attempt:     1,
-		MaxAttempts: 3,
-		Detail:      "the live browser's video feed stopped — reconnecting automatically",
-	})
-
+	f := newVideoPublicationFixture(t)
+	f.cs.AddViewer("viewer-b")
+	wcB, stateB := newTabActionTestFixtures(t)
+	stateB.sessionID = "panel-b"
+	stateB.panelSessionID = stateB.mgr.PanelTabSetID("panel-b")
+	t.Cleanup(func() { stateB.clearAttachment() })
+	originB := stateB.commandAttachment()
+	epochB := stateB.beginWebRTCOffer()
+	request, ok := stateB.webRTCOfferRequest(epochB)
+	if !ok {
+		t.Fatal("fixture offer request missing")
+	}
+	require.True(t, stateB.commitWebRTCAttachmentForRequest(request, &webrtcAttachment{capture: f.cs}))
+	require.True(t, f.h.registerWebRTCViewerConnForCapture(stateB, epochB, originB.ctx, "viewer-b", wcB, "panel-b", f.cs))
+	event := f.event
+	event.ViewerIDs = []string{"viewer", "viewer-b"}
+	f.h.onVideoHealth(event)
 	for _, tc := range []struct {
 		wc      *browserWSConn
 		session string
-	}{{wcA, "sess-a"}, {wcB, "sess-b"}} {
-		var f videoHealthFrameDecoder
-		require.NoError(t, json.Unmarshal(drainOneFrame(t, tc.wc), &f))
-		require.Equal(t, string(generated.WsFrameTypeBrowserVideoHealth), f.Type,
-			"the capture feeds every viewer, so every viewer must be told when it dies")
-		require.Equal(t, "lost", f.State)
-		require.Equal(t, tc.session, f.SessionId,
-			"each viewer must get its OWN session id for correlation, not another viewer's")
-		require.NotNil(t, f.Attempt)
-		require.Equal(t, 1, *f.Attempt)
-		require.NotNil(t, f.MaxAttempts)
-		require.Equal(t, 3, *f.MaxAttempts,
-			"the panel must be able to say the recovery is bounded, not show an endless spinner")
-		require.NotNil(t, f.Detail)
-		require.Contains(t, *f.Detail, "video feed stopped")
+	}{{f.wc, "tab-action-test-session"}, {wcB, "panel-b"}} {
+		pending, ok := tc.wc.takeLatestFrame()
+		require.True(t, ok)
+		require.True(t, tc.wc.canSendFrame(pending))
+		var got videoHealthFrameDecoder
+		require.NoError(t, json.Unmarshal(pending.data, &got))
+		require.Equal(t, string(generated.WsFrameTypeBrowserVideoHealth), got.Type)
+		require.Equal(t, "recovering", got.State)
+		require.Equal(t, tc.session, got.SessionId)
+		require.NotNil(t, got.Attempt)
+		require.Equal(t, 1, *got.Attempt)
+		require.NotNil(t, got.MaxAttempts)
+		require.Equal(t, 3, *got.MaxAttempts)
 	}
 }
 
-// TestOnVideoHealth_RedactsTheDetailItForwards — the detail is free text
-// assembled server-side and could in principle carry a capture token. It goes
-// through the SAME redactor browser_webrtc_state.reason_detail uses; a second,
-// parallel implementation here would be one more place for a secret to leak
-// into a browser.
+// Detail is trusted server text but still must be redacted by the wire mapper.
+// Fan-out authorization and delivery use real session claims in adjacent tests.
 func TestOnVideoHealth_RedactsTheDetailItForwards(t *testing.T) {
-	handler, _ := newBrowserWSTestHandler(t, nil)
-	t.Cleanup(handler.Wait)
-
-	wc := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewer-redact", wc, "sess-redact")
-	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-redact") })
-
 	const secret = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	handler.onVideoHealth(browser.VideoHealthEvent{
-		AgentID:     "mia",
-		ViewerIDs:   []string{"viewer-redact"},
+	raw, err := json.Marshal(videoHealthFrame(browser.VideoHealthEvent{
 		State:       browser.VideoHealthUnrecoverable,
 		Attempt:     3,
 		MaxAttempts: 3,
 		Detail:      "capture token=" + secret + " never authenticated",
-	})
-
-	var f videoHealthFrameDecoder
-	require.NoError(t, json.Unmarshal(drainOneFrame(t, wc), &f))
-	require.Equal(t, "unrecoverable", f.State)
-	require.NotNil(t, f.Detail)
-	require.NotContains(t, *f.Detail, secret, "the capture token must never reach a browser")
-	require.Contains(t, *f.Detail, "[redacted]")
+	}))
+	require.NoError(t, err)
+	var got videoHealthFrameDecoder
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.Equal(t, "unrecoverable", got.State)
+	require.NotNil(t, got.Detail)
+	require.NotContains(t, *got.Detail, secret)
+	require.Contains(t, *got.Detail, "[redacted]")
 }
 
-// TestOnVideoHealth_DetailAndAttemptOmittedWhenAbsent — the schema marks
-// attempt/max_attempts/detail optional, and a `recovered` transition genuinely
-// has none of them. Emitting zeros would make the panel render "attempt 0 of
-// 0", which is worse than saying nothing.
+// Optional-field serialization is tested directly at its wire boundary;
+// capture authorization is covered by the real session fan-out fixtures.
 func TestOnVideoHealth_DetailAndAttemptOmittedWhenAbsent(t *testing.T) {
-	handler, _ := newBrowserWSTestHandler(t, nil)
-	t.Cleanup(handler.Wait)
-
-	wc := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewer-ok", wc, "sess-ok")
-	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-ok") })
-
-	handler.onVideoHealth(browser.VideoHealthEvent{
-		AgentID:   "mia",
-		ViewerIDs: []string{"viewer-ok"},
-		State:     browser.VideoHealthRecovered,
-	})
-
-	raw := drainOneFrame(t, wc)
-	var f videoHealthFrameDecoder
-	require.NoError(t, json.Unmarshal(raw, &f))
-	require.Equal(t, "recovered", f.State)
-	require.Nil(t, f.Attempt)
-	require.Nil(t, f.MaxAttempts)
-	require.Nil(t, f.Detail)
-	// And they are genuinely absent on the wire, not sent as JSON nulls: the
-	// contract is additionalProperties:false with optional fields, and the
-	// SPA's zod schema rejects a null where a number is declared.
-	require.False(t, strings.Contains(string(raw), "null"),
-		"optional fields must be omitted, not serialised as null — the SPA drops a frame that fails schema validation")
+	raw, err := json.Marshal(videoHealthFrame(browser.VideoHealthEvent{State: browser.VideoHealthRecovered}))
+	require.NoError(t, err)
+	var got videoHealthFrameDecoder
+	require.NoError(t, json.Unmarshal(raw, &got))
+	require.Equal(t, "recovered", got.State)
+	require.Nil(t, got.Attempt)
+	require.Nil(t, got.MaxAttempts)
+	require.Nil(t, got.Detail)
+	require.False(t, strings.Contains(string(raw), "null"))
 }
 
-// TestOnVideoHealth_UnknownViewerIsSkippedNotFatal — a viewer can detach
-// between the snapshot taken inside the capture session and this fan-out. That
-// is ordinary, and must not stop the remaining viewers being told.
 func TestOnVideoHealth_UnknownViewerIsSkippedNotFatal(t *testing.T) {
-	handler, _ := newBrowserWSTestHandler(t, nil)
-	t.Cleanup(handler.Wait)
-
-	wc := newTestBrowserWSConn()
-	handler.registerWebRTCViewerConn("viewer-present", wc, "sess-present")
-	t.Cleanup(func() { handler.unregisterWebRTCViewerConn("viewer-present") })
-
-	handler.onVideoHealth(browser.VideoHealthEvent{
-		AgentID:     "mia",
-		ViewerIDs:   []string{"viewer-gone", "viewer-present"},
-		State:       browser.VideoHealthRecovering,
-		Attempt:     2,
-		MaxAttempts: 3,
-	})
-
-	var f videoHealthFrameDecoder
-	require.NoError(t, json.Unmarshal(drainOneFrame(t, wc), &f))
-	require.Equal(t, "recovering", f.State)
-	require.NotNil(t, f.Attempt)
-	require.Equal(t, 2, *f.Attempt)
+	f := newVideoPublicationFixture(t)
+	event := f.event
+	event.ViewerIDs = []string{"viewer-gone", "viewer"}
+	f.h.onVideoHealth(event)
+	pending, ok := f.wc.takeLatestFrame()
+	require.True(t, ok)
+	var got videoHealthFrameDecoder
+	require.NoError(t, json.Unmarshal(pending.data, &got))
+	require.Equal(t, "recovering", got.State)
+	require.NotNil(t, got.Attempt)
+	require.Equal(t, 1, *got.Attempt)
 }
 
 // TestHandleAttach_RegistersTheVideoHealthObserver is a SOURCE guard, and its

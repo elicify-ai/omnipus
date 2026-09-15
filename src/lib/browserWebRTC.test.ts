@@ -244,16 +244,16 @@ describe('BrowserWebRTCSession — happy path', () => {
     pc.onicegatheringstatechange?.()
     await flush()
 
-    expect(sendOffer).toHaveBeenCalledWith('fake-offer-sdp')
+    expect(sendOffer).toHaveBeenCalledWith({ sdp: 'fake-offer-sdp', offer_id: 1 })
     expect(machine.state).toBe('offering') // still waiting for the answer
 
-    machine.applyAnswer('fake-answer-sdp')
+    machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'fake-answer-sdp', capture_id: 'capture-1', capture_generation: 1, offer_id: 1 })
     await flush()
     expect(pc.setRemoteDescription).toHaveBeenCalledWith({ type: 'answer', sdp: 'fake-answer-sdp' })
 
     const fakeStream = { addTrack: vi.fn() } as unknown as MediaStream
     pc.ontrack?.({ streams: [fakeStream], track: {} } as unknown as RTCTrackEvent)
-    expect(onStream).toHaveBeenCalledWith(fakeStream)
+    expect(onStream).toHaveBeenCalledWith(fakeStream, { captureId: 'capture-1', generation: 1, offerId: 1 })
 
     pc.iceConnectionState = 'connected'
     pc.oniceconnectionstatechange?.()
@@ -267,7 +267,7 @@ describe('BrowserWebRTCSession — happy path', () => {
     machine.onStream(onStream)
     machine.start(vi.fn())
     await driveToOfferSent(pc)
-    machine.applyAnswer('sdp')
+    machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'sdp', capture_id: 'capture-1', capture_generation: 1, offer_id: 1 })
     await flush()
 
     const videoTrack = {} as MediaStreamTrack
@@ -473,7 +473,7 @@ describe('BrowserWebRTCSession — fallback triggers', () => {
     machine.onFallback(onFallback)
     machine.start(vi.fn())
     await driveToOfferSent(pc)
-    machine.applyAnswer('sdp')
+    machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'sdp', capture_id: 'capture-1', capture_generation: 1, offer_id: 1 })
     await flush()
 
     await wait(60)
@@ -488,7 +488,7 @@ describe('BrowserWebRTCSession — fallback triggers', () => {
     machine.onFallback(onFallback)
     machine.start(vi.fn())
     await driveToOfferSent(pc)
-    machine.applyAnswer('sdp')
+    machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'sdp', capture_id: 'capture-1', capture_generation: 1, offer_id: 1 })
     await flush()
 
     pc.iceConnectionState = 'failed'
@@ -554,7 +554,7 @@ describe('BrowserWebRTCSession — hasConnectedOnce + extended first-attempt ans
     await driveToOfferSent(pc)
     expect(machine.hasConnectedOnce).toBe(false)
 
-    machine.applyAnswer('sdp')
+    machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'sdp', capture_id: 'capture-1', capture_generation: 1, offer_id: 1 })
     await flush()
     pc.iceConnectionState = 'connected'
     pc.oniceconnectionstatechange?.()
@@ -637,7 +637,7 @@ describe('BrowserWebRTCSession — hasConnectedOnce + extended first-attempt ans
       pcs[0].iceGatheringState = 'complete'
       pcs[0].onicegatheringstatechange?.()
       await vi.advanceTimersByTimeAsync(0)
-      machine.applyAnswer('sdp')
+      machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'sdp', capture_id: 'capture-1', capture_generation: 1, offer_id: 1 })
       await vi.advanceTimersByTimeAsync(0)
       pcs[0].iceConnectionState = 'connected'
       pcs[0].oniceconnectionstatechange?.()
@@ -1010,7 +1010,7 @@ describe('BrowserWebRTCSession — sendOffer failure (MED, fix-wave B)', () => {
     machine.start(sendOffer)
     await driveToOfferSent(pc)
 
-    expect(sendOffer).toHaveBeenCalledWith('fake-offer-sdp')
+    expect(sendOffer).toHaveBeenCalledWith({ sdp: 'fake-offer-sdp', offer_id: 1 })
     expect(onFallback).toHaveBeenCalledWith('offer-send-failed')
     expect(machine.state).toBe('fallback')
     expect(pc.close).toHaveBeenCalled()
@@ -1133,7 +1133,7 @@ describe('BrowserWebRTCSession — ICE gathering timeout (LOW, fix-wave B)', () 
       pc.onicegatheringstatechange?.()
       await vi.advanceTimersByTimeAsync(0)
 
-      expect(sendOffer).toHaveBeenCalledWith('fake-offer-sdp')
+      expect(sendOffer).toHaveBeenCalledWith({ sdp: 'fake-offer-sdp', offer_id: 1 })
     } finally {
       vi.useRealTimers()
     }
@@ -1143,7 +1143,7 @@ describe('BrowserWebRTCSession — ICE gathering timeout (LOW, fix-wave B)', () 
 describe('BrowserWebRTCSession — applyAnswer defensive no-ops', () => {
   it('does not throw and stays idle when called before start()', () => {
     const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(makeFakePc()) })
-    expect(() => machine.applyAnswer('sdp')).not.toThrow()
+    expect(() => machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'sdp', capture_id: 'capture-1', capture_generation: 1, offer_id: 1 })).not.toThrow()
     expect(machine.state).toBe('idle')
   })
 })
@@ -1285,7 +1285,7 @@ describe('BrowserWebRTCSession — retry budget (2026-07-30 UAT: permanent pictu
       await vi.advanceTimersByTimeAsync(0)
       pcs[1].iceGatheringState = 'complete'
       pcs[1].onicegatheringstatechange?.()
-      machine.applyAnswer('sdp')
+      machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'sdp', capture_id: 'capture-1', capture_generation: 1, offer_id: 2 })
       await vi.advanceTimersByTimeAsync(0)
       pcs[1].iceConnectionState = 'connected'
       pcs[1].oniceconnectionstatechange?.()
@@ -1364,4 +1364,192 @@ describe('gateway-supplied ICE servers', () => {
     await vi.waitFor(() => expect(pc.createOffer).toHaveBeenCalled())
     machine.stop()
   })
+})
+
+describe('BrowserWebRTCSession — capture and attempt identity', () => {
+  it('ignores callbacks captured from a peer that was stopped and replaced', async () => {
+    const oldPc = makeFakePc()
+    const newPc = makeFakePc()
+    const peers = [oldPc, newPc]
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(peers.shift()!), maxRetries: 0 })
+    const onStream = vi.fn()
+    machine.onStream(onStream)
+    machine.start(vi.fn())
+    await driveToOfferSent(oldPc)
+    const staleTrack = oldPc.ontrack!
+    const staleIce = oldPc.oniceconnectionstatechange!
+    machine.stop()
+    machine.start(vi.fn())
+    await driveToOfferSent(newPc)
+    oldPc.iceConnectionState = 'connected'
+    staleIce()
+    staleTrack({ streams: [{}], track: {} } as unknown as RTCTrackEvent)
+    expect(machine.state).toBe('offering')
+    machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'current-answer', capture_id: 'capture-1', capture_generation: 1, offer_id: 2 })
+    await flush()
+    expect(onStream.mock.calls).toEqual([])
+    machine.stop()
+  })
+
+  it('rejects an unbound answer without applying it to a peer', async () => {
+    const pc = makeFakePc()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc), maxRetries: 0 })
+    machine.start(vi.fn())
+    await driveToOfferSent(pc)
+    expect(machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'unbound' })).toBe(false)
+    expect(pc.setRemoteDescription.mock.calls).toEqual([])
+    machine.stop()
+  })
+
+  it('binds a fresh viewer offer and its accepted answer to the requested capture pair', async () => {
+    const pc = makeFakePc()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc), maxRetries: 0 })
+    const send = vi.fn()
+    const expected = { captureId: 'capture-current', generation: 2 }
+    machine.start(send, expected)
+    expected.captureId = 'mutated-by-caller'
+    expected.generation = 3
+    await driveToOfferSent(pc)
+    expect(send.mock.calls).toEqual([[{ sdp: 'fake-offer-sdp', offer_id: 1, capture_id: 'capture-current', capture_generation: 2 }]])
+    const answer = { type: 'browser_webrtc_answer' as const, sdp: 'answer', offer_id: 1, capture_id: 'capture-current', capture_generation: 2 }
+    expect(machine.applyAnswer({ ...answer, capture_id: 'capture-old' })).toBe(false)
+    expect(machine.applyAnswer({ ...answer, capture_generation: 1 })).toBe(false)
+    expect(pc.setRemoteDescription.mock.calls).toEqual([])
+    expect(machine.applyAnswer(answer)).toBe(true)
+    await flush()
+    expect(pc.setRemoteDescription.mock.calls).toEqual([[{ type: 'answer', sdp: 'answer' }]])
+    machine.stop()
+  })
+
+  it('rejects a late answer for an older attempt even when capture and generation match', async () => {
+    const oldPc = makeFakePc()
+    const newPc = makeFakePc()
+    const peers = [oldPc, newPc]
+    const send = vi.fn()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(peers.shift()!), maxRetries: 0 })
+    machine.start(send)
+    await driveToOfferSent(oldPc)
+    machine.stop()
+    machine.start(send)
+    await driveToOfferSent(newPc)
+    const answer = { type: 'browser_webrtc_answer' as const, sdp: 'old-answer', capture_id: 'capture-1', capture_generation: 1, offer_id: 1 }
+    expect(machine.applyAnswer(answer)).toBe(false)
+    expect(newPc.setRemoteDescription.mock.calls).toEqual([])
+    expect(machine.applyAnswer({ ...answer, sdp: 'current-answer', offer_id: 2 })).toBe(true)
+    await flush()
+    expect(newPc.setRemoteDescription.mock.calls).toEqual([[{ type: 'answer', sdp: 'current-answer' }]])
+    machine.stop()
+  })
+
+  it('publishes tracks only after the current answer succeeds and includes its server identity', async () => {
+    const pc = makeFakePc()
+    let resolveAnswer!: () => void
+    pc.setRemoteDescription.mockImplementation(() => new Promise<void>(resolve => { resolveAnswer = resolve }))
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc), maxRetries: 0 })
+    const onStream = vi.fn()
+    machine.onStream(onStream)
+    machine.start(vi.fn())
+    await driveToOfferSent(pc)
+    const stream = {} as MediaStream
+    machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'answer', capture_id: 'capture-1', capture_generation: 1, offer_id: 1 })
+    pc.ontrack!({ streams: [stream], track: {} } as unknown as RTCTrackEvent)
+    expect(onStream.mock.calls).toEqual([])
+    resolveAnswer()
+    await flush()
+    expect(onStream.mock.calls).toEqual([[stream, { captureId: 'capture-1', generation: 1, offerId: 1 }]])
+    machine.stop()
+  })
+  it('invalidates peer identity before closing a failed peer can emit a track callback', async () => {
+    const pc = makeFakePc()
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc), maxRetries: 0 })
+    const onStream = vi.fn()
+    machine.onStream(onStream)
+    machine.start(vi.fn())
+    await driveToOfferSent(pc)
+    machine.applyAnswer({ type: 'browser_webrtc_answer', sdp: 'answer', capture_id: 'capture-1', capture_generation: 1, offer_id: 1 })
+    await flush()
+    pc.close.mockImplementation(() => pc.ontrack!({ streams: [{}], track: {} } as unknown as RTCTrackEvent))
+    machine.applyState({ available: false })
+    expect(onStream.mock.calls).toEqual([])
+    expect(machine.state).toBe('fallback')
+    machine.stop()
+  })
+
+})
+
+
+describe('BrowserWebRTCSession — receiver liveness', () => {
+  it.each(['closed', 'failed', 'ended'] as const)('retires a proven %s receiver without relying on a browser event and offers media again', async (failure) => {
+    vi.useFakeTimers()
+    const pc = makeFakePc(), replacement = makeFakePc()
+    pc.iceGatheringState = replacement.iceGatheringState = 'complete'
+    const factory = vi.fn().mockReturnValueOnce(asRTCPeerConnection(pc)).mockReturnValue(asRTCPeerConnection(replacement))
+    const machine = new BrowserWebRTCSession({ pcFactory: factory, retryDelayMs: 1000 })
+    const onFallback = vi.fn(), sendOffer = vi.fn()
+    machine.onFallback(onFallback)
+    try {
+      machine.start(sendOffer)
+      await vi.advanceTimersByTimeAsync(0)
+      pc.iceConnectionState = 'connected'; pc.oniceconnectionstatechange?.()
+      const track = { kind: 'video', readyState: 'live' }
+      pc.ontrack?.({ track, streams: [new FakeMediaStream([track as MediaStreamTrack])] } as unknown as RTCTrackEvent)
+      if (failure === 'ended') track.readyState = 'ended'
+      else Object.assign(pc, { connectionState: failure, iceConnectionState: failure })
+      await vi.advanceTimersByTimeAsync(250)
+      expect(onFallback.mock.calls).toEqual([[failure === 'ended' ? 'video-track-ended' : failure === 'closed' ? 'media-closed' : 'connection-failed']])
+      expect(machine.state).toBe('fallback')
+      expect(pc.close).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(factory).toHaveBeenCalledTimes(2)
+      expect(sendOffer).toHaveBeenCalledTimes(2)
+      machine.stop()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { machine.stop(); vi.useRealTimers() }
+  })
+
+  it('does not treat an unchanged live picture as failure, and ignores retired receiver callbacks', async () => {
+    vi.useFakeTimers()
+    const pc = makeFakePc(), replacement = makeFakePc()
+    pc.iceGatheringState = replacement.iceGatheringState = 'complete'
+    const peers = [pc, replacement]
+    const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(peers.shift()!), maxRetries: 0 })
+    const onFallback = vi.fn(); machine.onFallback(onFallback)
+    try {
+      machine.start(vi.fn()); await vi.advanceTimersByTimeAsync(0)
+      pc.iceConnectionState = 'connected'; pc.oniceconnectionstatechange?.()
+      const track = { kind: 'video', readyState: 'live' }
+      pc.ontrack?.({ track, streams: [new FakeMediaStream([track as MediaStreamTrack])] } as unknown as RTCTrackEvent)
+      await vi.advanceTimersByTimeAsync(10000)
+      expect(machine.state).toBe('connected'); expect(onFallback).not.toHaveBeenCalled()
+      const retiredCallback = (pc as unknown as RTCPeerConnection).onconnectionstatechange
+      machine.stop(); expect(vi.getTimerCount()).toBe(0)
+      machine.start(vi.fn()); await vi.advanceTimersByTimeAsync(0)
+      replacement.iceConnectionState = 'connected'; replacement.oniceconnectionstatechange?.()
+      Object.assign(pc, { connectionState: 'closed' }); track.readyState = 'ended'
+      retiredCallback?.call(asRTCPeerConnection(pc), new Event('connectionstatechange'))
+      await vi.advanceTimersByTimeAsync(250)
+      expect(machine.state).toBe('connected'); expect(onFallback).not.toHaveBeenCalled()
+      machine.stop(); expect(vi.getTimerCount()).toBe(0)
+    } finally { machine.stop(); vi.useRealTimers() }
+  })
+})
+
+it('owns opt-in receiver diagnostics for exactly the media peer lifetime', async () => {
+  vi.useFakeTimers()
+  window.history.replaceState({}, '', '/?browserVideoDiagnostics=1')
+  const getStats = vi.fn(async () => new Map() as RTCStatsReport)
+  const pc = Object.assign(makeFakePc(), { getStats })
+  const machine = new BrowserWebRTCSession({ pcFactory: () => asRTCPeerConnection(pc) })
+  try {
+    machine.start(vi.fn(() => true))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(getStats).toHaveBeenCalledTimes(1)
+    expect(window.__omnipusVideoDiagnostics?.samples).toHaveLength(1)
+    machine.stop()
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(getStats).toHaveBeenCalledTimes(1)
+  } finally {
+    machine.stop(); vi.useRealTimers(); window.history.replaceState({}, '', '/')
+    delete window.__omnipusVideoDiagnostics
+  }
 })

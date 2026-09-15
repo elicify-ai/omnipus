@@ -116,7 +116,7 @@ func TestBrowserStartPage_HasSearchBox(t *testing.T) {
 	handleBrowserStartPage(rec, httptest.NewRequest(http.MethodGet, browserStartPagePath, nil))
 	body := rec.Body.String()
 
-	assert.Contains(t, body, `<form`, "a real form, so Enter submits without JS")
+	assert.Contains(t, body, `<form action="https://www.google.com/search" method="GET" role="search">`, "landing search uses the same reachable provider as the omnibox, with native form submission")
 	assert.Contains(t, body, `method="GET"`, "search must be a plain GET navigation")
 	assert.Contains(t, body, `name="q"`, "the query parameter the search engine expects")
 	assert.Contains(t, body, `role="search"`, "landmark role so assistive tech can find it")

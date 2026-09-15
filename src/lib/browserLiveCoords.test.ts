@@ -202,6 +202,19 @@ describe('mapMouseButton', () => {
 })
 
 describe('isPrintableKey', () => {
+  it('recognizes composed Mac Option text without treating ordinary Alt as text', () => {
+    const event = { key: '@', ctrlKey: false, metaKey: false, altKey: true }
+    expect(isPrintableKey(event, 'MacIntel')).toBe(true)
+    expect(isPrintableKey(event, 'Linux x86_64')).toBe(false)
+    expect(isPrintableKey({ ...event, ctrlKey: true }, 'MacIntel')).toBe(false)
+    expect(isPrintableKey({ ...event, metaKey: true }, 'MacIntel')).toBe(false)
+  })
+  it('recognizes AltGraph composed text but preserves ordinary Ctrl Alt shortcuts', () => {
+    const event = { key: '@', ctrlKey: true, metaKey: false, altKey: true, getModifierState: (key: string) => key === 'AltGraph' }
+    expect(isPrintableKey(event, 'Win32')).toBe(true)
+    expect(isPrintableKey({ ...event, getModifierState: () => false }, 'Win32')).toBe(false)
+    expect(isPrintableKey({ ...event, metaKey: true }, 'Win32')).toBe(false)
+  })
   it('treats a bare letter as printable', () => {
     expect(isPrintableKey({ key: 'a', ctrlKey: false, metaKey: false, altKey: false })).toBe(true)
   })

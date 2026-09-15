@@ -101,7 +101,7 @@ describe('BrowserLiveWsConnection — connect handshake', () => {
 
     const frames = sentFrames()
     expect(frames).toEqual([
-      { type: 'browser_attach', session_id: 'sess-1', agent_id: 'agent-1' },
+      { type: 'browser_attach', session_id: 'sess-1', agent_id: 'agent-1', input_mode: 'dedicated' },
     ])
   })
 
@@ -123,7 +123,7 @@ describe('BrowserLiveWsConnection — connect handshake', () => {
     openSocket()
 
     expect(sentFrames()).toEqual([
-      { type: 'browser_attach', session_id: 'sess-1', agent_id: 'agent-1' },
+      { type: 'browser_attach', session_id: 'sess-1', agent_id: 'agent-1', input_mode: 'dedicated' },
     ])
     expect(callbacks.onError).not.toHaveBeenCalled()
     expect(lastWsInstance.close).not.toHaveBeenCalled()
@@ -288,26 +288,14 @@ describe('BrowserLiveWsConnection — inbound frame dispatch', () => {
 })
 
 describe('BrowserLiveWsConnection — outbound sends', () => {
-  it('sendInput wraps the payload with type:"browser_input"', () => {
+  it.each(['mouse_move', 'mouse_down', 'mouse_up', 'key_down', 'key_up', 'text', 'wheel'] as const)('refuses %s on the signaling socket even without input options', (kind) => {
     const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', makeCallbacks())
     conn.connect()
     openSocket()
     lastWsInstance.send.mockClear()
-
-    conn.sendInput({ kind: 'mouse_move', x: 100, y: 50, modifiers: 0 })
-
-    expect(sentFrames()).toEqual([{ type: 'browser_input', kind: 'mouse_move', x: 100, y: 50, modifiers: 0 }])
-  })
-
-  it('sendInput for a text kind sends only kind/text/modifiers', () => {
-    const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', makeCallbacks())
-    conn.connect()
-    openSocket()
-    lastWsInstance.send.mockClear()
-
-    conn.sendInput({ kind: 'text', text: 'a', modifiers: 0 })
-
-    expect(sentFrames()).toEqual([{ type: 'browser_input', kind: 'text', text: 'a', modifiers: 0 }])
+    expect(conn.sendInput({ kind, x: 100, y: 50, text: 'a', modifiers: 0 })).toBe(false)
+    expect(sentFrames()).toEqual([])
+    conn.close()
   })
 
   it('sendControl("take") sends a browser_control frame with action:take', () => {
@@ -377,18 +365,30 @@ describe('BrowserLiveWsConnection — outbound sends', () => {
     openSocket()
     lastWsInstance.send.mockClear()
 
-    conn.sendWebRTCOffer('v=0...')
+    conn.sendWebRTCOffer({ sdp: 'v=0...', offer_id: 1 })
 
     expect(sentFrames()).toEqual([
-      { type: 'browser_webrtc_offer', session_id: 'sess-1', agent_id: 'agent-1', sdp: 'v=0...' },
+      { type: 'browser_webrtc_offer', session_id: 'sess-1', agent_id: 'agent-1', sdp: 'v=0...', offer_id: 1 },
     ])
+  })
+
+  it('sends exact capture and offer identities for a fresh viewer', () => {
+    const conn = new BrowserLiveWsConnection('s1', 'a1', makeCallbacks())
+    conn.connect()
+    openSocket()
+    conn.sendWebRTCOffer({ sdp: 'offer', offer_id: 2, capture_id: 'capture-a', capture_generation: 3 })
+    expect(JSON.parse(lastWsInstance!.send.mock.calls.at(-1)![0])).toEqual({
+      type: 'browser_webrtc_offer', session_id: 's1', agent_id: 'a1', sdp: 'offer',
+      offer_id: 2, capture_id: 'capture-a', capture_generation: 3,
+    })
+    conn.close()
   })
 
   it('sendWebRTCOffer is a no-op (returns false) when the socket is not open', () => {
     const conn = new BrowserLiveWsConnection('sess-1', 'agent-1', makeCallbacks())
     conn.connect()
     lastWsInstance.readyState = 3 // CLOSED
-    expect(conn.sendWebRTCOffer('v=0...')).toBe(false)
+    expect(conn.sendWebRTCOffer({ sdp: 'v=0...', offer_id: 1 })).toBe(false)
   })
 
   it('detach() sends a browser_detach frame carrying the session id', () => {
@@ -462,7 +462,7 @@ describe('BrowserLiveWsConnection — close / reconnect', () => {
     lastWsInstance.send.mockClear()
     openSocket()
     expect(sentFrames()).toEqual([
-      { type: 'browser_attach', session_id: 'sess-1', agent_id: 'agent-1' },
+      { type: 'browser_attach', session_id: 'sess-1', agent_id: 'agent-1', input_mode: 'dedicated' },
     ])
   })
 
@@ -672,4 +672,62 @@ describe('translateBrowserErrorMessage — D5 protocol-internal closed set', () 
   it('passes an unrecognized raw string through unchanged', () => {
     expect(translateBrowserErrorMessage('completely unrelated message')).toBe('completely unrelated message')
   })
+})
+
+// Input must stay bounded locally. No replay is safe for non-idempotent clicks
+// or text after a congested connection has accepted earlier events.
+describe('browser input backpressure', () => {
+  it.each([65535, 65536, 65537])('bounds queued input at 64 KiB (buffer=%i)', (bufferedAmount) => {
+    const conn = new BrowserLiveWsConnection('s1', 'a1', makeCallbacks())
+    conn.connect()
+    openSocket()
+    Object.defineProperty(lastWsInstance, 'bufferedAmount', { value: bufferedAmount })
+    lastWsInstance.send.mockClear()
+    const sent = conn.sendInput({ kind: 'navigate', url: 'https://example.com' })
+    expect(sent).toBe(bufferedAmount < 65536)
+    expect(sentFrames()).toEqual(bufferedAmount < 65536 ? [{ type: 'browser_input', kind: 'navigate', url: 'https://example.com' }] : [])
+    expect(lastWsInstance.close.mock.calls).toEqual(bufferedAmount < 65536 ? [] : [[4008, 'input_backpressure']])
+    conn.close()
+  })
+})
+
+describe('dedicated input attachment', () => {
+  it('selects one route and fences every ordered control before sending it', () => {
+    let epoch = 0
+    const beforeControl = vi.fn(() => ({ input_epoch: 3, control_epoch: ++epoch }))
+    const conn = new BrowserLiveWsConnection('s', 'a', makeCallbacks(), { beforeControl })
+    conn.connect(); openSocket()
+    expect(sentFrames()).toEqual([{ type: 'browser_attach', session_id: 's', agent_id: 'a', input_mode: 'dedicated' }])
+    expect(conn.sendInput({ kind: 'text', text: 'no fallback' })).toBe(false)
+    conn.sendControl('take'); conn.sendTabAction('open'); conn.sendViewport(800, 600, 1); conn.sendInput({ kind: 'navigate', url: 'https://example.com' })
+    expect(sentFrames().slice(1)).toEqual([
+      { type: 'browser_control', action: 'take', input_epoch: 3, control_epoch: 1 },
+      { type: 'browser_tab_action', session_id: 's', agent_id: 'a', action: 'open', input_epoch: 3, control_epoch: 2 },
+      { type: 'browser_viewport', session_id: 's', agent_id: 'a', width: 800, height: 600, device_scale_factor: 1, input_epoch: 3, control_epoch: 3 },
+      { type: 'browser_input', kind: 'navigate', url: 'https://example.com', input_epoch: 3, control_epoch: 4 },
+    ])
+    conn.close()
+  })
+  it('routes separately validated input answers and acknowledgments', () => {
+    const callbacks = { ...makeCallbacks(), onInputAnswer: vi.fn(), onInputControlAck: vi.fn() }
+    const conn = new BrowserLiveWsConnection('s', 'a', callbacks)
+    conn.connect(); openSocket()
+    const answer = { type: 'browser_input_answer', session_id: 's', offer_id: 1, input_epoch: 1, control_epoch: 0, sdp: 'answer' }
+    const ack = { type: 'browser_input_control_ack', session_id: 's', input_epoch: 1, control_epoch: 1, ok: true }
+    for (const frame of [answer, ack, { ...answer, input_epoch: -1 }]) lastWsInstance.onmessage?.({ data: JSON.stringify(frame) })
+    expect(callbacks.onInputAnswer.mock.calls).toEqual([[answer]])
+    expect(callbacks.onInputControlAck.mock.calls).toEqual([[ack]])
+    expect(callbacks.onWebRTCAnswer).not.toHaveBeenCalled()
+    conn.close()
+  })
+})
+
+it.each([true, false])('sends Stop loading only after control admission (allowed=%s)', allowed => {
+  const beforeControl = vi.fn(() => allowed ? { input_epoch: 7, control_epoch: 12 } : null)
+  const conn = new BrowserLiveWsConnection('s', 'a', makeCallbacks(), { beforeControl })
+  conn.connect(); openSocket(); lastWsInstance.send.mockClear()
+  expect(conn.sendInput({ kind: 'stop_loading' })).toBe(allowed)
+  expect(beforeControl).toHaveBeenCalledTimes(1)
+  expect(sentFrames()).toEqual(allowed ? [{ type: 'browser_input', kind: 'stop_loading', input_epoch: 7, control_epoch: 12 }] : [])
+  conn.close()
 })

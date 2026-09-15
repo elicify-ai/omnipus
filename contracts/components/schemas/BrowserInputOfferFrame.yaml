@@ -1,0 +1,40 @@
+title: BrowserInputOfferFrame
+description: ADR-081 attachment-scoped dedicated input signaling. Never starts or replaces media capture.
+type: object
+required:
+  - type
+  - session_id
+  - input_epoch
+  - control_epoch
+  - offer_id
+  - agent_id
+  - sdp
+additionalProperties: false
+properties:
+  type:
+    type: string
+    const: browser_input_offer
+  session_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  input_epoch:
+    type: integer
+    minimum: 1
+    maximum: 9007199254740991
+  control_epoch:
+    type: integer
+    minimum: 0
+    maximum: 9007199254740991
+  offer_id:
+    type: integer
+    minimum: 1
+    maximum: 9007199254740991
+  agent_id:
+    type: string
+    minLength: 1
+    maxLength: 128
+  sdp:
+    type: string
+    minLength: 1
+    maxLength: 131072

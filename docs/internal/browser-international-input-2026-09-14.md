@@ -1,0 +1,130 @@
+# International text input and binary browser gestures
+
+## Intended behavior
+
+The local operating system and viewer browser own layout processing and text
+composition. A real local editable target receives dead keys, input-method
+composition, committed Unicode and plain-text paste. Provisional candidates stay
+local; finished text goes to the remote browser exactly once. Cancelling or
+leaving the current input session must not insert pending text into another page.
+
+Ordinary physical key-down/key-up events retain their locally resolved character
+on key-down. This allows remote game/shortcut handlers to cancel the browser's
+text default action, including Space. Candidate-selection keys belong to the
+local input method while composition is active. Outside composition, Escape
+keeps its existing release-control behavior.
+
+The user separately authorized compact binary input packets. The dedicated
+reliable and latest-position WebRTC channels retain their current responsibilities.
+A versioned binary encoding replaces JSON for human gestures; signaling and
+browser commands retain their existing representation. There is no WebSocket
+input fallback. Malformed or incompatible packets must fail explicitly before
+normal identity, geometry, ordering and control admission.
+
+## Validation contract
+
+Expected outcomes derive from the requested behavior, not observed implementation:
+
+- Space fires once and inserts no space when the page cancels its default action.
+- Physical A, arrows and German Mac logical Option-L retain exact events/releases.
+- Provisional composition inserts nothing remotely; committed `日本é🙂` inserts
+  once, including its exact Unicode. Cancellation inserts nothing.
+- Native committed text without a physical key reaches the remote field once.
+- Focus loss, navigation, control release and source replacement invalidate
+  pending composition; late events cannot target the next document/session.
+- Plain-text paste preserves Unicode and newlines. Unsupported oversized input
+  is refused visibly, without partial replay.
+- TypeScript and Go use independently specified binary golden vectors, with
+  truncation, invalid UTF-8, nonfinite numbers, unsupported version and trailing
+  bytes rejected. Existing admission and transport-routing checks remain active.
+- Live evidence requires binary dedicated gestures, exact rendered output and
+  zero held keys or unexpected errors. A real Chromium composition test verifies
+  browser event handling; it does not emulate every operating-system input method.
+
+## Initial evidence and limits
+
+A native local Chromium probe using `Input.imeSetComposition` and
+`Input.insertText` emitted its final composing input before `compositionend`.
+Cancelling emitted an empty composition end and removed provisional text.
+Implementation must also handle browsers that emit a final input after the end.
+
+The old Amsterdam runtime `47179a4c3` reproduced the missing composition path:
+ordinary `a@` arrived, but the expected composed `日本é🙂` did not. The native
+composition-start assertion passed; rendered text stayed `a@` with two rather
+than three committed insertions.
+
+The real binary peer and codec tests passed, including independent bit-position
+goldens for all 20 fields, Unicode/BOM preservation and malformed framing.
+Gateway schema/channel admission and live-source release checks passed (4.064s).
+Three isolated Go faults (version, trailing bytes, integer guard) were caught;
+unmodified peer/codec tests passed again (1.204s). Three isolated frontend faults
+(JSON sender, swapped coordinate fields, BOM stripping) were also caught.
+
+Example encoded packet sizes with a 64-byte capture identity were hover 139 vs
+245 JSON bytes, wheel 155 vs 268, key 143 vs 279 and composed text 129 vs 234.
+These are packet-size comparisons, not measured latency or CPU improvements.
+The decoder fills the existing typed frame directly; a single internal JSON
+marshal retains the existing schema-validation boundary.
+
+The final 240 composition/routing/focus regressions and 65 binary transport/codec
+checks passed. Relevant lint and the production frontend build passed. Three
+isolated composition faults (duplicate commit, stale-focus commit and candidate
+key leakage) were caught. Two independent composition reviews found no remaining
+concrete defect in the tested browser event-order scope.
+
+Amsterdam runtime `027306f0952e7752f5c1494063e29b740ca6f437` was deployed. Installed
+and running binary SHA256
+`ac929510214b744e6d287ecd95ec04b8d987dc8c438bfb279ed9a761134a877e` matched, and
+machine configuration was preserved.
+
+The original Space/A/arrow/logical Option-L regression passed in 21.2 seconds
+using exclusively binary dedicated gestures. International composition passed
+in 27.8 seconds: exact final text `a@日本é🙂🙂`, four insertions, three balanced
+physical key pairs, no held keys or page/fixture errors, no provisional/canceled
+or late-after-blur insertion, and ten binary reliable messages.
+
+The first new-candidate run passed the functional checks but failed the test's
+assumption that CDP composition-end events are trusted. A separate pristine
+Chromium probe demonstrated trusted starts and untrusted ends for the same CDP
+operations. The test now checks that exact six-event driver lifecycle, explicitly
+as characterization of the automation API, while retaining all behavioral
+oracles. No runtime change was needed for this test correction.
+
+The broader normal-URL smoke passed in 50.7 seconds: 13 clicks, exact Unicode
+text `Zażółć 世界`, 300 scroll pixels, one drag, tab return/resize, held-key
+release on connection loss, and successful post-recovery input. All 57 gestures
+were binary (55 reliable, two hover), with zero page/fixture/cleanup errors.
+The bounded log capture contained no dispatch-failure or deadline-exceeded
+messages. Physical OS input-method and keyboard hardware combinations remain
+a manual test dimension;
+these tests establish browser composition handling, not exhaustive device coverage.
+
+References: [UI Events](https://www.w3.org/TR/uievents/),
+[Input Events](https://www.w3.org/TR/input-events-2/),
+[beforeinput behavior](https://developer.mozilla.org/en-US/docs/Web/API/Element/beforeinput_event).
+
+
+## Retest after the invalid-channel user report
+
+The user's recent-session log at 05:45:07 UTC records `invalid_input`; this fixed
+category does not identify which channel property was rejected. The exact UI
+message reported was `invalid input data channel`.
+
+A fresh authenticated keyboard retest passed in 22.6 seconds with exact Space,
+arrows, text and logical Option-L over binary input. The initial attempt reached
+the sign-in screen because the test authentication had expired; it did not test
+input behavior. Authentication was refreshed before the successful run.
+
+An isolated live probe reproduced the exact reported error by advertising empty
+DCEP protocols, matching the pre-binary client's connection options. Retry created
+two new empty-protocol channels and failed again. Disabling that interception and
+fully reloading the page created two `omnipus.input.v1` channels and reached ready
+without the error. This passed in 32.1 seconds. The probe simulates old connection
+options, not every behavior of the previous client bundle.
+
+An already-open pre-update client is therefore a verified reproduction mechanism
+and the leading explanation for the user's session, not direct evidence of the
+user's actual loaded bundle. Retry reuses loaded JavaScript; a full page reload
+loads the new protocol. The generic Retry UI lacks an explicit upgrade/reload
+path. No protocol checks were relaxed and no runtime changes were deployed in
+this retest. The user was directed to reload the entire Omnipus page.

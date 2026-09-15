@@ -121,7 +121,7 @@ const browserStartPageHTML = `<!doctype html>
          static and self-contained: no JS, no API call, nothing to break
          offline. The browser navigates normally, exactly as if the URL had
          been typed into the address bar above. -->
-    <form action="https://duckduckgo.com/" method="GET" role="search">
+    <form action="https://www.google.com/search" method="GET" role="search">
       <svg class="glass" viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>
       </svg>

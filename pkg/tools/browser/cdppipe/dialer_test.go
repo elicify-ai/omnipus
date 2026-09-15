@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/gobwas/ws"
@@ -26,10 +28,17 @@ import (
 // case in production — installDialer runs on every NewPipeAllocator call,
 // one per browser launch.
 //
-// This is the first (and, among this package's default-tag tests, only)
-// caller of installDialer, so dialerOnce has not fired yet when this test
-// runs — no reset of that package-level sync.Once is needed or attempted.
+// Run in a subprocess so installing/restoring the process-global dialer cannot
+// consume sync.Once for other allocator tests, regardless of test order.
 func TestInstallDialer_RoutesSyntheticAndFallsThroughForNormalAddr(t *testing.T) {
+	if os.Getenv("OMNIPUS_DIALER_TEST_HELPER") != "1" {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestInstallDialer_RoutesSyntheticAndFallsThroughForNormalAddr$")
+		cmd.Env = append(os.Environ(), "OMNIPUS_DIALER_TEST_HELPER=1", "GORACE=atexit_sleep_ms=0")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("isolated dialer assertions failed: %v\n%s", err, out)
+		}
+		return
+	}
 	origNetDial := ws.DefaultDialer.NetDial
 	t.Cleanup(func() { ws.DefaultDialer.NetDial = origNetDial })
 

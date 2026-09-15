@@ -149,7 +149,7 @@ type webrtcStateFrameDecoder struct { // not-wire-format: decode-only test asser
 // sendCriticalGen/sendFrameGen (sendCh), never touches wc.conn directly.
 func newTestBrowserWSConn() *browserWSConn {
 	return &browserWSConn{
-		sendCh: make(chan []byte, 8),
+		sendCh: make(chan browserOutboundFrame, 8),
 		doneCh: make(chan struct{}),
 	}
 }
@@ -158,7 +158,8 @@ func newTestBrowserWSConn() *browserWSConn {
 func drainOneFrame(t *testing.T, wc *browserWSConn) json.RawMessage {
 	t.Helper()
 	select {
-	case data := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		data := queued.data
 		return data
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for a frame on sendCh")
@@ -194,7 +195,9 @@ func TestHandleWebRTCOffer_GateLadder_DisabledByConfig(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "webrtc_enabled=false must report available=false")
@@ -208,7 +211,8 @@ func TestHandleWebRTCOffer_GateLadder_InvalidFrame(t *testing.T) {
 
 	wc := newTestBrowserWSConn()
 	var state browserConnState
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", []byte("not json"), al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, []byte("not json"))
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -234,7 +238,9 @@ func TestHandleWebRTCOffer_GateLadder_MissingFields(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -263,7 +269,9 @@ func TestHandleWebRTCOffer_GateLadder_UnknownAgent(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	raw := drainOneFrame(t, wc)
 	var f struct {
@@ -316,7 +324,9 @@ func TestHandleWebRTCOffer_GateLadder_NotCapable(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available)
@@ -396,7 +406,9 @@ func TestHandleWebRTCOffer_CapableButLaunchFails(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "a launch failure must degrade to available=false, never break the JPEG fallback")
@@ -810,55 +822,16 @@ func TestCaptureIngestWSHandler_ValidateInbound_RejectsSchemaInvalidHello(t *tes
 }
 
 func TestCaptureIngestWSHandler_HelloSupersedesPreviousConnection(t *testing.T) {
-	_, al := newBrowserWSTestHandler(t, nil)
-	reg := newCaptureRegistry()
-	var calls int32
-	cs, err := browser.NewCaptureSessionWithDeps(nil, "agent-a", &fakeRelay{}, fakeEncoderStarter(&calls, nil), nil)
-	require.NoError(t, err)
-	reg.set("agent-a", cs)
-
-	handler := newCaptureIngestWSHandler(al, reg)
-	srv := httptest.NewServer(handler)
-	t.Cleanup(srv.Close)
-
-	wsURL := "ws" + srv.URL[len("http"):] + "/api/v1/browser/capture-ingest"
-	dialer := websocket.Dialer{HandshakeTimeout: 5 * time.Second}
-
-	hello := generated.BrowserCaptureHelloFrame{
-		Type:       string(generated.WsFrameTypeBrowserCaptureHello),
-		Token:      cs.TokenHex(),
-		ExtVersion: "1.0.0",
-	}
-	data, err := json.Marshal(hello)
-	require.NoError(t, err)
-
-	conn1, resp1, err := dialer.Dial(wsURL, nil)
-	require.NoError(t, err)
-	if resp1 != nil {
-		resp1.Body.Close()
-	}
-	t.Cleanup(func() { _ = conn1.Close() })
-	require.NoError(t, conn1.WriteMessage(websocket.TextMessage, data))
-
-	// Give the server a moment to bind conn1 as the current ingest connection.
-	time.Sleep(100 * time.Millisecond)
-
-	conn2, resp2, err := dialer.Dial(wsURL, nil)
-	require.NoError(t, err)
-	if resp2 != nil {
-		resp2.Body.Close()
-	}
-	t.Cleanup(func() { _ = conn2.Close() })
-	require.NoError(t, conn2.WriteMessage(websocket.TextMessage, data))
-
-	// conn1 must be closed by the server once conn2's hello supersedes it.
-	conn1.SetReadDeadline(time.Now().Add(3 * time.Second)) // errcheck rationale (out of errcheck scope; kept as documentation): test websocket conn deadline; a failure here only affects test timing, not correctness
-	_, _, readErr := conn1.ReadMessage()
-	require.Error(
-		t,
-		readErr,
-		"the OLD ingest connection must be closed once a second hello with the same token arrives",
-	)
+	cs, _, url := ingestWireFixture(t)
+	conn1 := ingestWireConnect(t, cs, url)
+	require.Equal(t, "recapture", ingestWireRead(t, conn1, "browser_capture_control")["action"])
+	conn2 := ingestWireConnect(t, cs, url)
+	require.Equal(t, "recapture", ingestWireRead(t, conn2, "browser_capture_control")["action"])
+	require.NoError(t, conn1.SetReadDeadline(time.Now().Add(time.Second)))
+	_, _, err := conn1.ReadMessage()
+	require.Error(t, err, "the old socket must close after the replacement authenticates")
+	ingestWireSendOffer(t, conn2, 1, 1, "page-a")
+	require.Equal(t, "qualified-answer", ingestWireRead(t, conn2, "browser_capture_answer")["sdp"])
 }
 
 // ── ADR-048 condition-2 fence (re-scoped 2026-07-18) ─────────────────────────
@@ -934,7 +907,9 @@ func TestHandleWebRTCOffer_OtherAgentViewedCapture_Denied(t *testing.T) {
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	got := decodeWebRTCState(t, drainOneFrame(t, wc))
 	require.False(t, got.Available, "an actively-viewed conflicting capture must deny the offer")
@@ -1014,7 +989,9 @@ func TestHandleWebRTCOffer_OtherAgentViewerlessCapture_Superseded(t *testing.T) 
 	data, err := json.Marshal(frame)
 	require.NoError(t, err)
 
-	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), 0)
+	data, offerEpoch := prepareWebRTCHandlerFixture(t, handler, al, &state, data)
+
+	handler.handleWebRTCOffer(wc, &state, "viewer-1", "user-1", data, al.GetConfig(), offerEpoch)
 
 	// FIX WAVE A finding 3: otherCS.Stop() now runs off h.captureFenceMu
 	// (fired via `go otherCS.Stop()` so one agent's teardown can't block a
@@ -1049,7 +1026,7 @@ func TestCaptureRegistry_OtherSessions(t *testing.T) {
 
 	others := reg.otherSessions("agent-a")
 	require.Len(t, others, 1)
-	require.Contains(t, others, "agent-b")
-	require.Empty(t, reg.otherSessions("zzz-nonexistent")["agent-c"])
+	require.Equal(t, "agent-b", others[csB])
+	require.Equal(t, "agent-a", reg.otherSessions("zzz-nonexistent")[csA])
 	require.Len(t, reg.otherSessions("zzz-nonexistent"), 2)
 }

@@ -8,6 +8,9 @@ package webrtc
 import (
 	"net"
 	"testing"
+
+	"github.com/pion/ice/v4"
+	pion "github.com/pion/webrtc/v4"
 )
 
 // A Session serves TWO legs from one object: the loopback ingest leg (gateway
@@ -40,8 +43,8 @@ func TestSession_DefaultConfigKeepsPreADR062Behaviour(t *testing.T) {
 	}
 }
 
-// A Session exists PER AGENT. If each bound the fixed media port itself, the
-// first agent would win and every later agent would silently fall back to an
+// Captures can coexist and be recreated. If each bound the fixed media port,
+// the first capture would win and every later capture would fall back to an
 // ephemeral port — a multi-agent hosted install with video for one agent and
 // an unexplained failure for the rest. The socket is therefore passed IN,
 // already bound, and shared.
@@ -52,9 +55,10 @@ func TestSession_SharedMediaConnServesManySessions(t *testing.T) {
 	}
 	defer func() { _ = conn.Close() }()
 
-	// Three agents, one socket — none of them may fail or take ownership.
+	mux := newTestUDPMux(t, conn)
+	// Three captures, one mux — none may fail or take ownership.
 	for i := 0; i < 3; i++ {
-		s := NewSession(Config{MediaConn: conn}, nil, nil)
+		s := NewSession(Config{MediaUDPMux: mux}, nil, nil)
 		if s.apiViewer == nil {
 			t.Fatalf("session %d: viewer API missing", i)
 		}
@@ -69,4 +73,11 @@ func TestSession_SharedMediaConnServesManySessions(t *testing.T) {
 	if _, err := conn.WriteTo([]byte("still alive"), conn.LocalAddr()); err != nil {
 		t.Fatalf("shared socket was closed by a Session: %v", err)
 	}
+}
+
+func newTestUDPMux(t *testing.T, conn net.PacketConn) ice.UDPMux {
+	t.Helper()
+	mux := pion.NewICEUDPMux(nil, conn)
+	t.Cleanup(func() { _ = mux.Close() })
+	return mux
 }

@@ -20,11 +20,14 @@ package browser
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/chromedp/cdproto/cdp"
+	"github.com/chromedp/cdproto/page"
 	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,15 +67,8 @@ func (l *ingestLedger) lastDims() (int, int) {
 	return d[0], d[1]
 }
 
-func (l *ingestLedger) reset() {
-	l.mu.Lock()
-	l.actions, l.dims = nil, nil
-	l.mu.Unlock()
-}
-
-// orderLog records the interleaving of the foreground re-assert and the
-// control frame, which is the only thing that makes the re-assert worth
-// anything: the encoder re-queries Chrome when the frame arrives.
+// orderLog records foreground selection, measurement, and the qualified
+// encoder command at their actual boundaries.
 type orderLog struct {
 	mu   sync.Mutex
 	seen []string
@@ -103,12 +99,12 @@ func (o *orderLog) snapshot() []string {
 func TestOnTabsChanged_BurstOfTabChangesStillReachesTheLastTab(t *testing.T) {
 	tabA, cancelA := context.WithCancel(context.Background())
 	t.Cleanup(cancelA)
-	tabB, cancelB := context.WithCancel(context.Background())
+	tabB, cancelB := context.WithCancel(context.WithValue(context.Background(), viewportTargetTestKey{}, "B"))
 	t.Cleanup(cancelB)
-	tabC, cancelC := context.WithCancel(context.Background())
+	tabC, cancelC := context.WithCancel(context.WithValue(context.Background(), viewportTargetTestKey{}, "C"))
 	t.Cleanup(cancelC)
 
-	entry := &tabEntry{ctx: tabB, cancel: cancelB}
+	entry := &tabEntry{ctx: tabB, cancel: cancelB, targetID: "burst-B"}
 	mgr := &BrowserManager{
 		started:  true,
 		sessions: map[string]*sessionEntry{"s1": {tabs: []*tabEntry{entry}, activeIdx: 0}},
@@ -119,7 +115,7 @@ func TestOnTabsChanged_BurstOfTabChangesStillReachesTheLastTab(t *testing.T) {
 	cs.mu.Lock()
 	cs.foregroundAssertFn = func(context.Context) bool { return true }
 	cs.mu.Unlock()
-	mgr.capture = cs
+	mgr.captures = map[string]*CaptureSession{"s1": cs}
 
 	var (
 		mu       sync.Mutex
@@ -128,6 +124,9 @@ func TestOnTabsChanged_BurstOfTabChangesStillReachesTheLastTab(t *testing.T) {
 		sawB     = make(chan struct{})
 		sawBOnce sync.Once
 	)
+	var releaseOnce sync.Once
+	releaseB := func() { releaseOnce.Do(func() { close(holdB) }) }
+	t.Cleanup(releaseB)
 	lv := &LiveView{
 		mgr:                mgr,
 		sessionID:          "s1",
@@ -146,12 +145,18 @@ func TestOnTabsChanged_BurstOfTabChangesStillReachesTheLastTab(t *testing.T) {
 			mu.Lock()
 			resized = append(resized, ctx)
 			mu.Unlock()
-			if ctx == tabB {
+			if ctx.Value(viewportTargetTestKey{}) == "B" {
 				sawBOnce.Do(func() { close(sawB) })
 				<-holdB // hold B's re-apply open so C's change lands mid-flight
 			}
+		case viewportFrameGeometryAction:
+			if ctx.Value(viewportTargetTestKey{}) == "C" {
+				*a.width, *a.height, *a.scale = 640, 480, 2
+			} else {
+				*a.width, *a.height, *a.scale = 800, 600, 2
+			}
 		case layoutMetricsAction:
-			if ctx == tabC {
+			if ctx.Value(viewportTargetTestKey{}) == "C" {
 				*a.w, *a.h = 640, 480 // C's real geometry
 			} else {
 				*a.w, *a.h = 800, 600 // B's — must never end up cached while C is active
@@ -170,16 +175,17 @@ func TestOnTabsChanged_BurstOfTabChangesStillReachesTheLastTab(t *testing.T) {
 	// C becomes active while B's re-apply is still in flight.
 	mgr.mu.Lock()
 	entry.ctx = tabC
+	entry.targetID = "burst-C"
 	mgr.mu.Unlock()
 	lv.onTabsChanged(nil, 0)
 
-	close(holdB)
+	releaseB()
 
 	require.Eventually(t, func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		for _, c := range resized {
-			if c == tabC {
+			if c.Value(viewportTargetTestKey{}) == "C" {
 				return true
 			}
 		}
@@ -243,73 +249,101 @@ func TestApplyViewport_DiscardsAMeasurementTheActiveTabHasMovedPast(t *testing.T
 
 // --- F3: the re-assert belongs on the path users take every time ------------
 
-// newAttachedLiveManager builds a real BrowserManager + LiveViewRegistry with
-// a real attached LiveView and a capture session, i.e. the whole
-// SwitchTab -> notifyTabsChanged -> handleTabsChanged -> onTabsChanged chain
-// the product actually runs. The existing manager-level guard
-// (TestSwitchTab_DifferentIndexDoesNotDoubleFireRecapture) stubs that chain
-// out with a fake bridge, which is why it kept passing while the end-to-end
-// invariant it stands for stopped holding.
+// newAttachedLiveManager drives real tab callbacks and the qualified ingest
+// boundary; only browser protocol execution and the relay are substituted.
 func newAttachedLiveManager(t *testing.T) (*BrowserManager, *LiveView, *CaptureSession, *ingestLedger, *orderLog) {
 	t.Helper()
 	m := newTestManagerWithFakeTabs(t)
-	m.live = newLiveViewRegistry(m)
-
-	relay := &fakeRelay{}
-	cs, err := m.EnsureCaptureSession(func() (*CaptureSession, error) {
-		return NewCaptureSessionWithDeps(m, "agent-e2e", relay, fakeEncoderStarter(new(int32), nil), nil)
-	})
-	require.NoError(t, err)
-
-	order := &orderLog{}
-	cs.mu.Lock()
-	cs.foregroundAssertFn = func(context.Context) bool {
-		order.add("foreground-assert")
-		return true
-	}
-	cs.mu.Unlock()
-	ledger := &ingestLedger{}
-	cs.BindIngest(func(action string, _ *string, w, h int, _ int) error {
-		order.add("control:" + action)
-		ledger.mu.Lock()
-		ledger.actions = append(ledger.actions, action)
-		ledger.dims = append(ledger.dims, [2]int{w, h})
-		ledger.mu.Unlock()
-		return nil
-	}, func() {})
-
-	_, err = m.Session(testSessionID)
-	require.NoError(t, err)
-	_, err = m.live.Attach(testSessionID, "viewer-1", nil, nil, nil)
+	m.memoryPressureFn = func(int) (bool, bool) { return false, true }
+	t.Cleanup(m.Shutdown)
+	_, err := m.Session(testSessionID)
 	require.NoError(t, err)
 	for i := 0; i < 2; i++ {
 		_, err = m.OpenTab(testSessionID)
 		require.NoError(t, err)
 	}
-	_, activeIdx, err := m.ListTabs(testSessionID)
+	lv := m.live.view(testSessionID)
+	order := &orderLog{}
+	m.tabFocusFn = func(_ context.Context, actions ...chromedp.Action) error {
+		for _, action := range actions {
+			if _, ok := action.(*page.BringToFrontParams); ok {
+				order.add("focus")
+			}
+		}
+		return nil
+	}
+	executor := liveInputExecutor(func(_ context.Context, method string, _, result any) error {
+		switch method {
+		case "Page.getFrameTree":
+			fixtureValue[*page.GetFrameTreeReturns](result).FrameTree = &page.FrameTree{Frame: &cdp.Frame{ID: "main", LoaderID: "loaded"}}
+		case "Page.createIsolatedWorld":
+			fixtureValue[*page.CreateIsolatedWorldReturns](result).ExecutionContextID = 71
+		case "Runtime.evaluate":
+		default:
+			return fmt.Errorf("unexpected tab fixture protocol command %s", method)
+		}
+		return nil
+	})
+	lv.runCDP = func(ctx context.Context, _ time.Duration, actions ...chromedp.Action) error {
+		for _, action := range actions {
+			switch a := action.(type) {
+			case viewportFrameGeometryAction:
+				*a.width, *a.height, *a.scale = 800, 600, 1
+				order.add("measure")
+			case layoutMetricsAction:
+				*a.w, *a.h = 800, 600
+			case documentPaintAction, chromedp.ActionFunc:
+				if runErr := action.Do(cdp.WithExecutor(ctx, executor)); runErr != nil {
+					return runErr
+				}
+			}
+		}
+		return nil
+	}
+	_, err = m.live.AttachContext(context.Background(), testSessionID, "viewer-1", nil, nil, nil)
 	require.NoError(t, err)
-	require.Equal(t, 2, activeIdx, "setup expects the last-opened tab to be active")
-
-	lv, ok := m.live.lookup(testSessionID)
-	require.True(t, ok, "attaching must have created a live view")
-
-	// Let the setup's own tab-change traffic settle, then start counting.
-	time.Sleep(150 * time.Millisecond)
-	ledger.reset()
-	order.mu.Lock()
-	order.seen = nil
-	order.mu.Unlock()
+	// Discovery belongs to the already-loaded fake page, before capture starts.
+	// Do not leave an asynchronous initial query holding an empty response.
+	require.Eventually(t, func() bool {
+		lv.mu.Lock()
+		watch := lv.documentWatch
+		lv.mu.Unlock()
+		if watch == nil {
+			return false
+		}
+		watch.mu.Lock()
+		defer watch.mu.Unlock()
+		return watch.frameID == "main" && watch.processed.Load() >= 1
+	}, time.Second, time.Millisecond)
+	cs, err := NewCaptureSessionWithDeps(m, "agent-e2e", &adapterRelay{nextToken: 40}, fakeEncoderStarter(new(int32), nil), nil)
+	require.NoError(t, err)
+	cs.panelSessionID = testSessionID
+	_, err = m.EnsureCaptureSessionForPanel(testSessionID, func() (*CaptureSession, error) { return cs, nil })
+	require.NoError(t, err)
+	_, targetID, err := m.activeTargetSnapshot(testSessionID)
+	require.NoError(t, err)
+	_, err = cs.BeginFrameTransition(string(targetID), 800, 600, 1)
+	require.NoError(t, err)
+	// Same-index recovery still requests best-effort focus before its retained frame.
+	cs.foregroundAssertFn = func(context.Context) bool { return true }
+	ledger := &ingestLedger{}
+	_, _, err = cs.BindIngestRecaptureContext(context.Background(), func(string, *string, int, int, int) error { return nil }, func(ctx context.Context, frame CaptureFrameState, current func() bool) error {
+		if ctx.Err() != nil || !current() {
+			return context.Canceled
+		}
+		order.add("control:recapture")
+		ledger.mu.Lock()
+		ledger.actions = append(ledger.actions, "recapture")
+		ledger.dims = append(ledger.dims, [2]int{frame.Width, frame.Height})
+		ledger.mu.Unlock()
+		return nil
+	}, func() {})
+	require.NoError(t, err)
 	return m, lv, cs, ledger, order
 }
 
-// The ORDINARY tab switch — a human clicking a different tab — must get the
-// same independent foreground re-assert the rare "the model did not move"
-// recovery path already had. Round 1 justified that re-assert on the grounds
-// that BrowserManager.activateTabInChrome is best-effort and its failure is a
-// WARN log and nothing more; wiring it to the rare path only is that reasoning
-// applied backwards. Without it, a failed activateTabInChrome leaves the
-// encoder's own chrome.tabs.query({active:true}) answering with the tab the
-// user just left, and the picture never follows the click.
+// A normal tab switch focuses the selected target, measures it, then sends
+// one qualified recapture. The encoder binds the explicit target ID.
 func TestSwitchTab_OrdinarySwitchReassertsForegroundBeforeTheControlFrame(t *testing.T) {
 	m, _, _, ledger, order := newAttachedLiveManager(t)
 
@@ -318,12 +352,11 @@ func TestSwitchTab_OrdinarySwitchReassertsForegroundBeforeTheControlFrame(t *tes
 
 	require.Eventually(t, func() bool { return ledger.recaptures() == 1 }, 3*time.Second, 5*time.Millisecond,
 		"an ordinary tab switch owes the encoder exactly one recapture")
-	require.Eventually(t, func() bool { return len(order.snapshot()) == 2 }, 3*time.Second, 5*time.Millisecond,
-		"the ordinary switch must re-assert the foreground tab, not just trust the best-effort activation")
+	require.Eventually(t, func() bool { return len(order.snapshot()) == 3 }, 3*time.Second, 5*time.Millisecond,
+		"the selected target must be focused and measured before recapture")
 
-	assert.Equal(t, []string{"foreground-assert", "control:recapture"}, order.snapshot(),
-		"Chrome must be told which tab is foreground BEFORE the encoder is told to re-query it — "+
-			"the reverse order re-binds to whatever Chrome still believed")
+	assert.Equal(t, []string{"focus", "measure", "control:recapture"}, order.snapshot(),
+		"the encoder must receive measured geometry after the selected target is focused")
 }
 
 // One user action, one encoder rebuild. With a viewport already applied, the
@@ -338,9 +371,15 @@ func TestSwitchTab_WithAViewportAppliedRecapturesOnceWithTheVerifiedSize(t *test
 
 	lv.mu.Lock()
 	lv.lastRequestedW, lv.lastRequestedH, lv.lastRequestedScale = 633, 686, 2
-	lv.runCDP = func(_ context.Context, _ time.Duration, actions ...chromedp.Action) error {
-		if a, ok := actions[0].(layoutMetricsAction); ok {
+	previous := lv.runCDP
+	lv.runCDP = func(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
+		switch a := actions[0].(type) {
+		case layoutMetricsAction:
 			*a.w, *a.h = 633, 686
+		case viewportFrameGeometryAction:
+			*a.width, *a.height, *a.scale = 633, 686, 2
+		case documentPaintAction, chromedp.ActionFunc:
+			return previous(ctx, timeout, actions...)
 		}
 		return nil
 	}

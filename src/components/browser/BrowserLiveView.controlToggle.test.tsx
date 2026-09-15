@@ -15,17 +15,19 @@
 // simulate the video decoding its first real frame — the direct replacement
 // for the old `onScreencast` call.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
 import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 
-const { mockSendControl, mockSendInput, mockConnect, mockDetach, mockClose, callbacksRef } = vi.hoisted(() => ({
+const { mockSocketSendInput, mockSendControl, mockDedicatedSendInput, mockConnect, mockDetach, mockClose, callbacksRef } = vi.hoisted(() => ({
   // Returns `true` by default (mirrors a successful send on an OPEN socket) —
   // see BrowserLiveView.takeTheWheel.test.tsx's identical hoisted mock for
   // why this matters (the auto-release effect now reacts to a falsy return).
+  mockSocketSendInput: vi.fn(() => true),
   mockSendControl: vi.fn(() => true),
-  mockSendInput: vi.fn(),
+  mockDedicatedSendInput: vi.fn(() => true),
   mockConnect: vi.fn(),
   mockDetach: vi.fn(),
   mockClose: vi.fn(),
@@ -46,7 +48,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           connect: mockConnect,
           detach: mockDetach,
           close: mockClose,
-          sendInput: mockSendInput,
+          sendInput: mockSocketSendInput,
           sendControl: mockSendControl,
           sendViewport: vi.fn(() => true),
           isConnected: true,
@@ -56,7 +58,13 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
   }
 })
 
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(mockDedicatedSendInput) }
+})
+
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. */
 function fakeMediaStream(id = 'stream-1'): MediaStream {
@@ -88,6 +96,7 @@ function connectAndFrame() {
     Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
     Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
     fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
   })
 }
 
@@ -202,7 +211,7 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
     // Pointer/keyboard handlers must no-op while disconnected, not silently
     // attempt (and drop) a send — click-to-drive must not fire against a
     // dead transport either (ADR-040 D2 addition: connectedRef guard).
-    mockSendInput.mockClear()
+    mockDedicatedSendInput.mockClear()
     mockSendControl.mockClear()
     const container = stubFrameRect()
     fireEvent.pointerMove(container, { clientX: 20, clientY: 20 })
@@ -210,7 +219,7 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
     fireEvent.pointerUp(container, { clientX: 20, clientY: 20 })
     fireEvent.keyDown(container, { key: 'a' })
     fireEvent.keyUp(container, { key: 'a' })
-    expect(mockSendInput).not.toHaveBeenCalled()
+    expect(mockDedicatedSendInput).not.toHaveBeenCalled()
     expect(mockSendControl).not.toHaveBeenCalled()
   })
 
@@ -241,10 +250,10 @@ describe('BrowserLiveView — connection lifecycle chip (ADR-040 D6)', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Navigation blocked: target resolves to a private address.')
 
     // And input keeps flowing — the human is still actually in control.
-    mockSendInput.mockClear()
+    mockDedicatedSendInput.mockClear()
     const container = stubFrameRect()
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
+    expect(mockDedicatedSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
   })
 
   // Reviewer finding F1(a): a `control_only` frame's SOLE purpose is to

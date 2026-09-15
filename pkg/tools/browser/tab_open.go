@@ -176,7 +176,7 @@ func openNewTab(
 	}
 
 	ctx, cancel, firstRun := steps.attach(id)
-	if err := runFirstAttach(firstRun, time.Until(deadline)); err != nil {
+	if err := runFirstAttachContext(parent, firstRun, time.Until(deadline)); err != nil {
 		// Close before cancel: the target still exists and the browser
 		// session is live, so the close is answered; cancelling first would
 		// race chromedp's own (1s-bounded, attach-dependent) cleanup.

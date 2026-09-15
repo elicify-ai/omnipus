@@ -46,18 +46,18 @@ import (
 // stub installed by config.SetMemoryProviderForTest drives it.
 //
 // Its profile root is deliberately UNCREATABLE: cfg.ProfileDir sits under a
-// path that is a regular FILE, so os.MkdirAll in the pool's launch step fails
-// with ENOTDIR before a coordinator is ever built. Nothing here can spawn
+// path that is a regular FILE, so creating the launch lock's parent fails
+// with a filesystem path error before binary resolution. Nothing here can spawn
 // Chrome, resolve a binary or reach the network — which is what makes the
 // admit branch observable in a unit test at all:
 //
 //	gate REFUSED   -> ErrBrowserMemoryRefused, and no profile directory is
 //	                  ever attempted (the refusal happens before configFor).
-//	gate ADMITTED  -> "cannot create profile directory", which is only
+//	gate ADMITTED  -> a mkdir PathError at the blocker, which is only
 //	                  reachable PAST the gate.
 //
 // Two distinguishable errors, one real Acquire, no Chrome.
-func gatePoolForTest(t *testing.T) *browser.BrowserPool {
+func gatePoolForTest(t *testing.T) (*browser.BrowserPool, string) {
 	t.Helper()
 	home := t.TempDir()
 	blocker := filepath.Join(home, "not-a-directory")
@@ -67,14 +67,14 @@ func gatePoolForTest(t *testing.T) *browser.BrowserPool {
 		Headless:    true,
 		PageTimeout: time.Second,
 		ProfileDir:  filepath.Join(blocker, "profiles", "default"),
-	})
+	}), blocker
 }
 
 // TestUnmeasurable_PoolRefusesWhileAgentsHoldAtFloor drives BOTH consumers —
 // the real browser pool and the real agent admission controller — off one stub
 // and asserts they respond DIFFERENTLY.
 func TestUnmeasurable_PoolRefusesWhileAgentsHoldAtFloor(t *testing.T) {
-	pool := gatePoolForTest(t)
+	pool, blocker := gatePoolForTest(t)
 	defer pool.Shutdown()
 	key := browserTestKey(t, "one-predicate")
 
@@ -87,6 +87,7 @@ func TestUnmeasurable_PoolRefusesWhileAgentsHoldAtFloor(t *testing.T) {
 		func() (bool, bool) { return false, false },
 		func() (uint64, bool) { return 0, false },
 	)
+	defer restore()
 	resetMemoryAdmissionRefusalLogForTest()
 
 	// --- Half 1: the REAL POOL, on an unmeasurable host. ---------------
@@ -102,8 +103,10 @@ func TestUnmeasurable_PoolRefusesWhileAgentsHoldAtFloor(t *testing.T) {
 		"the pool REFUSED its first browser on an unmeasurable host (%v).\n"+
 			"THE TWO RESPONSES HAVE COLLAPSED: the pool has adopted refuse-to-RUN. FR-082's floor is one browser "+
 			"per host — an install that cannot read /proc must still be able to browse.", firstErr)
-	require.Contains(t, firstErr.Error(), "profile directory",
-		"expected the past-the-gate failure (%v) — if this is some other error the admit branch is no longer what is being observed", firstErr)
+	var pathErr *os.PathError
+	require.ErrorAs(t, firstErr, &pathErr, "admission must reach the fixture’s filesystem blocker")
+	require.Equal(t, "mkdir", pathErr.Op)
+	require.Equal(t, blocker, pathErr.Path, "the intended fixture blocker must cause the failure")
 
 	// --- Half 2: AGENT ADMISSION, same stub. ---------------------------
 	const configuredCapWellAboveTheFloor = 50
@@ -139,7 +142,8 @@ func TestUnmeasurable_PoolRefusesWhileAgentsHoldAtFloor(t *testing.T) {
 		"the pool ADMITTED a browser one byte below its own launch headroom (err=%v).\n"+
 			"THE TWO RESPONSES HAVE COLLAPSED: the pool is no longer refusing to grow at zero, "+
 			"which is the only admission control at this level — every tab counter was deleted (ADR-075 D1.5a).", refusedErr)
-	require.NotContains(t, refusedErr.Error(), "profile directory",
+	var refusedPathErr *os.PathError
+	require.False(t, errors.As(refusedErr, &refusedPathErr),
 		"the refusal must happen BEFORE the launch is attempted, not after")
 	require.Empty(t, pool.LiveKeys(), "a refused acquire must leave no live browser behind")
 

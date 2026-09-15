@@ -1,0 +1,34 @@
+<!doctype html><meta charset="utf-8"><title>Matching release after a short renderer stall</title>
+<style>
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#151515;color:white;font:16px sans-serif}canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}button{position:fixed;top:64%;height:9%;width:38%;font-size:20px;box-sizing:border-box}#arm-mouse{left:8%}#target{left:54%}#arm-key{left:8%;top:82%}input{display:none}
+</style>
+<canvas id="pixels"></canvas><input id="text"><button id="arm-mouse">Arm mouse press</button><button id="target">Press and release</button><button id="arm-key">Arm keyboard press</button>
+<script>
+const nonce=Number(new URL(location.href).searchParams.get('nonce'));
+if(!Number.isInteger(nonce)||nonce<1||nonce>65535)throw Error('Valid fixture nonce required');
+const canvas=document.getElementById('pixels'),ctx=canvas.getContext('2d'),text=document.getElementById('text');
+// Standard probe words, with scroll/drags used for the two visible arm counters.
+const state={nonce,clicks:0,downs:0,ups:0,held:0,scroll:0,drags:0,errors:0};
+let mouseArmed=false,keyArmed=false;
+function trusted(e){if(!e.isTrusted)state.errors++}
+function stall(){const until=performance.now()+1200;while(performance.now()<until){}}
+function paint(){
+ const w=canvas.width=document.documentElement.clientWidth,h=canvas.height=document.documentElement.clientHeight;
+ canvas.style.width=w+'px';canvas.style.height=h+'px';
+ 
+ ctx.fillStyle='#ff00ff';ctx.fillRect(0,0,w,h);ctx.fillStyle='#151515';ctx.fillRect(w*.025,h*.025,w*.95,h*.95);
+ const words=[...Object.values(state),...Array.from({length:32},(_,i)=>text.value.charCodeAt(i)||0)];
+ const bits=[];words.forEach((v,index)=>{for(let i=0;i<(index<8?32:16);i++)bits.push((v>>>i)&1)});
+ bits.forEach((b,i)=>{ctx.fillStyle=b?'#fff':'#000';ctx.fillRect(w*(.1+(i%32)*.8/32),h*(.06+Math.floor(i/32)*.5/24),w*.8/32,h*.5/24)});
+}
+
+document.getElementById('arm-mouse').addEventListener('click',e=>{trusted(e);mouseArmed=true;state.scroll++;paint()});
+document.getElementById('arm-key').addEventListener('click',e=>{trusted(e);keyArmed=true;state.drags++;paint()});
+const target=document.getElementById('target');
+target.addEventListener('mousedown',e=>{trusted(e);state.downs++;state.held|=1;if(mouseArmed){mouseArmed=false;stall()}else state.errors++;paint()});
+target.addEventListener('mouseup',e=>{trusted(e);state.ups++;state.held&=~1;paint()});
+target.addEventListener('click',e=>{trusted(e);state.clicks++;paint()});
+addEventListener('keydown',e=>{if(e.code!=='ArrowLeft')return;trusted(e);e.preventDefault();state.downs++;state.held|=2;if(keyArmed){keyArmed=false;stall()}else state.errors++;paint()});
+addEventListener('keyup',e=>{if(e.code!=='ArrowLeft')return;trusted(e);e.preventDefault();state.ups++;state.held&=~2;paint()});
+addEventListener('resize',paint);paint();
+</script>

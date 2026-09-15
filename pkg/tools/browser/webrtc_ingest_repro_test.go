@@ -77,6 +77,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/captureext"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
@@ -105,25 +106,6 @@ type reproHelloFrame struct {
 	Type       string `json:"type"`
 	Token      string `json:"token"`
 	ExtVersion string `json:"ext_version"`
-}
-
-type reproOfferFrame struct {
-	Type string `json:"type"`
-	SDP  string `json:"sdp"`
-}
-
-type reproAnswerFrame struct {
-	Type string `json:"type"`
-	SDP  string `json:"sdp"`
-}
-
-type reproControlFrame struct {
-	Type           string  `json:"type"`
-	Action         string  `json:"action"`
-	Reason         *string `json:"reason,omitempty"`
-	ExpectedWidth  int     `json:"expected_width,omitempty"`
-	ExpectedHeight int     `json:"expected_height,omitempty"`
-	MaxBitrate     int     `json:"max_bitrate,omitempty"`
 }
 
 type reproErrorFrame struct {
@@ -234,12 +216,40 @@ func (s *reproIngestServer) handle(w http.ResponseWriter, r *http.Request) {
 	s.logf("ingest-ws: hello accepted (ext_version=%s)", hello.ExtVersion)
 
 	send := func(action string, reason *string, expectedW, expectedH, maxBitrate int) error {
-		return sendJSON(reproControlFrame{
+		positive := func(n int) *int {
+			if n > 0 {
+				return &n
+			}
+			return nil
+		}
+		return sendJSON(generated.BrowserCaptureControlFrame{
 			Type: "browser_capture_control", Action: action, Reason: reason,
-			ExpectedWidth: expectedW, ExpectedHeight: expectedH, MaxBitrate: maxBitrate,
+			ExpectedWidth: positive(expectedW), ExpectedHeight: positive(expectedH), MaxBitrate: positive(maxBitrate),
 		})
 	}
-	prevClose, epoch := cs.BindIngest(send, func() { _ = conn.Close() })
+	recapture := func(ctx context.Context, frame CaptureFrameState, current func() bool) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !current() {
+			return context.Canceled
+		}
+		generation := int(frame.Generation)
+		if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+			return err
+		}
+		return conn.WriteJSON(generated.BrowserCaptureControlFrame{
+			Type: "browser_capture_control", Action: "recapture", CaptureGeneration: &generation,
+			TargetId: &frame.TargetID, ExpectedWidth: &frame.Width, ExpectedHeight: &frame.Height, CaptureScale: &frame.Scale,
+		})
+	}
+	prevClose, epoch, err := cs.BindIngestRecaptureContext(r.Context(), send, recapture, func() { _ = conn.Close() })
+	if err != nil {
+		s.logf("ingest-ws: bind failed: %v", err)
+		return
+	}
 	if prevClose != nil {
 		prevClose()
 	}
@@ -263,18 +273,23 @@ func (s *reproIngestServer) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		switch probe.Type {
 		case "browser_capture_offer":
-			var offer reproOfferFrame
+			var offer generated.BrowserCaptureOfferFrame
 			if err := json.Unmarshal(raw, &offer); err != nil {
 				continue
 			}
-			answer, err := cs.HandleIngestOffer(offer.SDP)
+			if offer.OfferId == nil || *offer.OfferId < 1 || offer.CaptureGeneration == nil || *offer.CaptureGeneration < 1 || offer.TargetId == nil || *offer.TargetId == "" {
+				s.logf("ingest-ws: offer lacks required capture identity")
+				return
+			}
+			answer, err := cs.HandleIngestOfferForBinding(r.Context(), epoch, uint64(*offer.OfferId), offer.Sdp, uint64(*offer.CaptureGeneration), *offer.TargetId)
 			if err != nil {
 				s.logf("ingest-ws: HandleIngestOffer failed: %v", err)
 				_ = sendJSON(reproErrorFrame{Type: "error", Message: err.Error()})
 				return
 			}
 			trigger := s.noteOffer()
-			if err := sendJSON(reproAnswerFrame{Type: "browser_capture_answer", SDP: answer}); err != nil {
+			if err := sendJSON(generated.BrowserCaptureAnswerFrame{Type: "browser_capture_answer", Sdp: answer,
+				OfferId: offer.OfferId, CaptureGeneration: offer.CaptureGeneration, TargetId: offer.TargetId}); err != nil {
 				s.logf("ingest-ws: send answer: %v", err)
 				return
 			}

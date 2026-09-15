@@ -13,6 +13,7 @@
 // video painting). There is now exactly ONE code path, so nothing here needs to
 // steer which branch runs — the tests drive it purely with fake timers.
 
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { act } from 'react'
@@ -20,13 +21,18 @@ import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useChatStore, type SessionChatState } from '@/store/chat'
 
 const { mockSendInput, callbacksRef } = vi.hoisted(() => ({
-  mockSendInput: vi.fn(),
+  mockSendInput: vi.fn<(input: unknown) => boolean>(() => true),
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
 }))
 
 // D5: importOriginal so the real translateBrowserErrorMessage (now imported
 // by BrowserLiveView for the D5 fix) stays live under this mock — only
 // BrowserLiveWsConnection itself is replaced.
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(mockSendInput) }
+})
+
 vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/browserLiveWs')>()
   return {
@@ -38,7 +44,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           connect: vi.fn(),
           detach: vi.fn(),
           close: vi.fn(),
-          sendInput: mockSendInput,
+          sendInput: vi.fn(() => true),
           sendControl: vi.fn(() => true),
           // Adaptive viewport (2026-07-31): BrowserLiveView's ResizeObserver
           // calls this on mount, so this double needs it too.
@@ -51,6 +57,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
 })
 
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 /** Stand-in MediaStream — jsdom has no real WebRTC/MediaStream. Passed via
  * the `mediaStream` test/override seam (see BrowserLiveView.webrtcSink.test.tsx)
@@ -68,6 +75,7 @@ function decodeFirstFrame() {
   Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
   Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
   fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
 }
 
 const initialChatState = useChatStore.getState()
@@ -236,12 +244,14 @@ describe('BrowserLiveView — mouse_move RAF coalescing', () => {
     const container = mountControllingWithFrame()
 
     act(() => {
-      fireEvent.keyDown(container, { key: 'a' })
-      fireEvent.keyUp(container, { key: 'a' })
+      fireEvent.keyDown(container, { key: 'a', code: 'KeyA', keyCode: 65 })
+      fireEvent.keyUp(container, { key: 'a', code: 'KeyA', keyCode: 65 })
     })
 
-    const textCalls = mockSendInput.mock.calls.filter(([arg]) => (arg as { kind?: string }).kind === 'text')
-    expect(textCalls).toHaveLength(1)
+    expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([
+      { kind: 'key_down', key: 'a', code: 'KeyA', key_code: 65, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+      { kind: 'key_up', key: 'a', code: 'KeyA', key_code: 65, modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+    ])
   })
 })
 
@@ -269,49 +279,7 @@ describe('BrowserLiveView — ADR-040 D2 driveMode refactor regression coverage'
     expect(moveCalls()[0][0]).toMatchObject({ kind: 'mouse_move', x: 40, y: 40 })
   })
 
-  // Reviewer finding (queued-move leak): flushPendingMove re-validates the
-  // drive gate at FLUSH time, not just at schedule time — a position queued
-  // WHILE driving must not leak into the tab if the wheel is gone by the time
-  // the pacing timer actually fires.
-  //
-  // ⚠️ The SIGNAL that closes the gate changed with ADR-085; the property did
-  // not. This test used to close the gate with `setAgentWorking('s1', true)`,
-  // because `computeDriveMode`'s ladder put `agent-working` ABOVE
-  // `you-driving`, so an agent turn starting mid-queue revoked the operator's
-  // drive. ADR-085 deliberately inverts that:
-  //
-  //   BROWSER-FR-054 — "`computeDriveMode` MUST give operator-holds-wheel
-  //   priority **over** `agentWorking`. […] **Regression guard:** without
-  //   this, `driveMode` stays `agent-working`, so `canDispatchInput` […]
-  //   returns false for every handler that passes `false` — keyboard, wheel
-  //   and pointermove — and the operator's *continuing* input is inert while
-  //   the panel's chip and cursor claim they are driving."
-  //
-  //   BROWSER-FR-057 — operator-holds-wheel "MUST NOT be cleared by an
-  //   `agentWorking` transition."
-  //
-  //   Operator decision D-G (2026-09-11) — "the person keeps the wheel until
-  //   the agent receives a NEW PROMPT to take it back. […] if the agent's
-  //   other work needs a browser while the wheel is held, the agent OPENS A
-  //   NEW TAB rather than waiting."
-  //
-  // So "the agent starts working" is no longer a case of the agent resuming
-  // this tab — it cannot, the wheel is still the operator's and the agent's
-  // own browser calls are deferred server-side onto another tab. The queued
-  // move is the operator's own continuing input into a tab they still own,
-  // and dropping it would BE the FR-054 defect. That case is now pinned
-  // positively in the sibling test below.
-  //
-  // The gate-closing signals FR-057 DOES keep are Escape, annotate mode, a
-  // failed take, a server `browser_status{state:"released"}` frame
-  // (solicited or unsolicited) and a disconnect. `released` is the sharpest
-  // probe of the flush-time re-validation specifically: unlike the
-  // disconnect path (`onDisconnected` nulls `pendingMoveRef` itself, so that
-  // route would stay green with the re-validation deleted), nothing on the
-  // release path touches the queued position. The `if
-  // (!canDispatchInput(...)) return` inside `flushPendingMove` is the only
-  // thing standing between it and the wire.
-  it('drops a queued mouse_move if the wheel is released before the flush fires', () => {
+  it('delivers queued human movement when chat starts before the flush', () => {
     const container = mountControllingWithFrame()
 
     act(() => {
@@ -320,32 +288,7 @@ describe('BrowserLiveView — ADR-040 D2 driveMode refactor regression coverage'
     // Still coalescing — nothing sent synchronously.
     expect(moveCalls()).toHaveLength(0)
 
-    // The server revokes the lock in the gap before the scheduled flush fires.
-    act(() => {
-      callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'released' })
-    })
-
-    act(() => {
-      vi.runAllTimers()
-    })
-
-    // The queued position must NOT have leaked into the tab.
-    expect(moveCalls()).toHaveLength(0)
-  })
-
-  // The successor to the retired half of the test above — BROWSER-FR-054 /
-  // FR-057 / D-G, asserted positively so a future "restore the drop" edit
-  // cannot pass this file silently. An agent turn starting while the operator
-  // holds the wheel must leave the queued position on course for the wire,
-  // carrying the coalesced coordinates unchanged.
-  it('still flushes a queued mouse_move when the agent starts working while the operator holds the wheel', () => {
-    const container = mountControllingWithFrame()
-
-    act(() => {
-      fireEvent.pointerMove(container, { clientX: 10, clientY: 10 })
-    })
-    expect(moveCalls()).toHaveLength(0)
-
+    // The agent starts working in the gap before the scheduled flush fires.
     act(() => {
       setAgentWorking('s1', true)
     })

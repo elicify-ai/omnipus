@@ -1,22 +1,4 @@
-// Unit tests for the /browser-live pop-out route (BrowserLiveRoute) —
-// BUG 1 + BUG 2 fixes (live UAT re-run 2026-07-28).
-//
-// BUG 1: this route must pass `fillContainer` to BrowserLiveView so the
-// media element fills the pop-out window instead of staying capped at
-// intrinsic size (see BrowserLiveView.fillContainer.test.tsx for the
-// sizing/coordinate-mapping proof itself — this file only proves the ROUTE
-// wires the prop through).
-//
-// BUG 2: closing the pop-out (via the in-app Close button OR a native
-// tab-close, which never runs any in-app handler) must announce a
-// same-origin `popout-closed` signal for the EXACT (session, agent) this
-// pop-out was showing, so BrowserLivePanel.tsx can re-dock itself — see
-// BrowserLivePanel.test.tsx's "restores itself" tests for the consumer side.
-//
-// TanStack Router is mocked the same way -sessions.$sessionId.test.tsx does:
-// createFileRoute's returned "Route" object needs a stubbed `useSearch` (the
-// real one requires a full RouterProvider tree neither test needs).
-
+// Popout route layout and close behavior; ownership belongs to the originating app.
 import React from 'react'
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, fireEvent, screen } from '@testing-library/react'
@@ -36,13 +18,8 @@ vi.mock('@tanstack/react-router', async (importOriginal) => {
   }
 })
 
-const { mockAnnouncePopoutClosed, mockBrowserLiveViewProps } = vi.hoisted(() => ({
-  mockAnnouncePopoutClosed: vi.fn(),
+const { mockBrowserLiveViewProps } = vi.hoisted(() => ({
   mockBrowserLiveViewProps: vi.fn(),
-}))
-
-vi.mock('@/lib/browserLiveHandoff', () => ({
-  announcePopoutClosed: mockAnnouncePopoutClosed,
 }))
 
 vi.mock('@/components/browser/BrowserLiveView', () => ({
@@ -96,37 +73,30 @@ describe('BrowserLiveRoute — BUG 1: fillContainer wiring', () => {
   })
 })
 
-describe('BrowserLiveRoute — BUG 2: announce pop-out-closed hand-off', () => {
-  it('announces popout-closed for the exact (session, agent) when the in-app Close button is clicked', () => {
+describe('BrowserLiveRoute — owner-controlled handover', () => {
+  it('closes its own window without broadcasting a premature restore', () => {
+    const channel = vi.spyOn(globalThis, 'BroadcastChannel')
     render(<BrowserLiveRoute />)
     fireEvent.click(screen.getByRole('button', { name: 'mock-close' }))
-    expect(mockAnnouncePopoutClosed).toHaveBeenCalledWith('s1', 'a1')
+    expect(window.close).toHaveBeenCalledExactlyOnceWith()
+    expect(mockNavigate).toHaveBeenCalledExactlyOnceWith({ to: '/' })
+    expect(channel).not.toHaveBeenCalled()
+    channel.mockRestore()
   })
-
-  it('also announces on a native tab-close (pagehide) even if the in-app Close button was never clicked', () => {
-    const { unmount } = render(<BrowserLiveRoute />)
-    expect(mockAnnouncePopoutClosed).not.toHaveBeenCalled()
-
-    // Simulates the browser firing `pagehide` on a native tab-close/Cmd+W —
-    // no click, no onClose call, nothing but the window teardown event.
+  it('does not broadcast restoration on reload/pagehide', () => {
+    const channel = vi.spyOn(globalThis, 'BroadcastChannel')
+    const mounted = render(<BrowserLiveRoute />)
     fireEvent(window, new Event('pagehide'))
-    expect(mockAnnouncePopoutClosed).toHaveBeenCalledWith('s1', 'a1')
-
-    unmount()
+    expect(channel).not.toHaveBeenCalled()
+    expect(window.close).not.toHaveBeenCalled()
+    mounted.unmount(); fireEvent(window, new Event('pagehide'))
+    expect(channel).not.toHaveBeenCalled()
+    channel.mockRestore()
   })
-
-  it('removes the pagehide listener on unmount (no stale announce after the route itself unmounts cleanly)', () => {
-    const { unmount } = render(<BrowserLiveRoute />)
-    unmount()
-    mockAnnouncePopoutClosed.mockClear()
-    fireEvent(window, new Event('pagehide'))
-    expect(mockAnnouncePopoutClosed).not.toHaveBeenCalled()
-  })
-
-  it('does not announce when session/agent search params are missing (nothing meaningful to hand off)', () => {
+  it('does not mount a viewer without session and agent', () => {
     mockSearch = {}
     render(<BrowserLiveRoute />)
-    fireEvent(window, new Event('pagehide'))
-    expect(mockAnnouncePopoutClosed).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('mock-browser-live-view')).not.toBeInTheDocument()
+    expect(screen.getByText(/Missing session or agent/)).toBeInTheDocument()
   })
 })

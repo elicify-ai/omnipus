@@ -54,6 +54,24 @@ describe('submitAnnotation', () => {
     mockInspectBrowserElement.mockResolvedValue({ ok: false })
   })
 
+  it.each(['before upload', 'during upload', 'during inspection'])('omits retired enrichment %s while preserving screenshot delivery', async phase => {
+    let current = phase !== 'before upload'
+    mockUploadFiles.mockImplementation(async () => {
+      if (phase === 'during upload') current = false
+      return { files: [{ name: 'annotation.png', path: 'annotation.png', size: 3, content_type: 'image/png', ref: 'media://ref-1' }] }
+    })
+    mockInspectBrowserElement.mockImplementation(async () => {
+      if (phase === 'during inspection') current = false
+      return { ok: true, tag: 'button', text: 'RETIRED ELEMENT' }
+    })
+    await submitAnnotation({ comment: 'Explain this', file: makeFile(), point: { x: 640, y: 360 }, isPointCurrent: () => current, sessionId: 'sess-1', agentId: 'agent-1' })
+    expect(mockInspectBrowserElement).toHaveBeenCalledTimes(phase === 'during inspection' ? 1 : 0)
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1)
+    expect(sendMessageSpy.mock.calls[0][0]).toContain('Explain this')
+    expect(sendMessageSpy.mock.calls[0][0]).not.toContain('RETIRED ELEMENT')
+    expect(sendMessageSpy.mock.calls[0][1].mediaRefs).toEqual(['media://ref-1'])
+  })
+
   it('throws when sessionId is empty', async () => {
     await expect(
       submitAnnotation({ comment: 'hi', file: makeFile(), point: { x: 1, y: 1 }, sessionId: '', agentId: 'agent-1' }),

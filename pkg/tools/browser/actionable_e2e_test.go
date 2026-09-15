@@ -76,20 +76,10 @@ const gateFixtureHTML = `<!doctype html><html><head><style>
     // RT2 — i.e. exactly ONE FRAME apart. A CSS 'animation: slide 1s linear
     // infinite' moves the element as a function of the animation timeline, and
     // Blink samples that timeline at the LAST PRODUCED FRAME's time, so one
-    // frame of motion is '300px x (frame interval / 1s)'. On a fast foreground
-    // tab (60Hz) that is ~5px and the fixture works. On a tab that is not
-    // foregrounded it does not: this project has already measured such a tab
-    // compositing at roughly one frame every one-to-two seconds (see
-    // capture_session.go's reassertForegroundAsync), and one second is exactly
-    // the animation's period. The motion per frame then collapses to nothing —
-    // measured against this project's own Chrome at 1s and 2s sampling gaps,
-    // the box moved by between 0.000px and 0.031px and was byte-identical on
-    // 2 of 18 samples. An identical box is precisely what gateProbe.sameBox
-    // reports as STABLE, so the gate passed an element that never stops
-    // moving and TestWaitActionable_StabilityOneFrameApart went red. Chrome's
-    // anti-backgrounding flags do not close this: exec_resolver.go already
-    // sets all three and the same note records that a background tab still
-    // composites at ~0.5fps regardless.
+    // frame of motion depends on the elapsed sampling interval. Sampling at
+    // an integer multiple of a looping animation's period can observe the
+    // same box twice despite continuous animation. The fixture must avoid
+    // that aliasing without assuming a particular foreground/background rate.
     //
     // Stepping per FRAME removes the dependency on frame rate entirely: one
     // frame of motion is moverStepPx, always. The step and the wrap are

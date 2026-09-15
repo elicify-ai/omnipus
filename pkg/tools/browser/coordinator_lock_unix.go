@@ -15,6 +15,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+const launchLockReleasedOnExit = true
+
 // acquireLaunchLock attempts a non-blocking exclusive flock on the lockfile at
 // path. Returns (file, true, nil) when the lock is taken — the caller MUST keep
 // file open for the coordinator's lifetime and pass it to releaseLaunchLock to

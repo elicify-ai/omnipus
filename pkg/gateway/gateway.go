@@ -5817,6 +5817,10 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer shutdownCancel()
 
+	if !isReload && runningServices.browserWS != nil {
+		runningServices.browserWS.closeMediaTransport()
+	}
+
 	// reload should not stop channel manager
 	if !isReload && runningServices.ChannelManager != nil {
 		runningServices.ChannelManager.StopAll(shutdownCtx)

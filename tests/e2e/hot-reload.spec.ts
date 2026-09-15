@@ -111,11 +111,13 @@ async function authedPut(
     headers,
     body: JSON.stringify(data),
   });
+  // Fetch bodies are single-use, including when JSON parsing fails.
+  const text = await res.text();
   let body: unknown;
   try {
-    body = await res.json();
+    body = JSON.parse(text);
   } catch {
-    body = await res.text();
+    body = text;
   }
   return { status: res.status, body };
 }
@@ -127,11 +129,13 @@ async function authedGet(path: string): Promise<{ status: number; body: unknown 
   const res = await fetch(`${handle.baseURL}${path}`, {
     headers: { Authorization: `Bearer ${adminToken}` },
   });
+  // Fetch bodies are single-use, including when JSON parsing fails.
+  const text = await res.text();
   let body: unknown;
   try {
-    body = await res.json();
+    body = JSON.parse(text);
   } catch {
-    body = await res.text();
+    body = text;
   }
   return { status: res.status, body };
 }

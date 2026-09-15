@@ -161,7 +161,7 @@ func dialAuthedBrowserWS(t *testing.T) *websocket.Conn {
 // TestBrowserWS_ReadLoop_StaysResponsiveWhileViewportHandlerRuns is the
 // primary regression test for fix A on the viewport path.
 //
-// BDD: Given an authenticated browser socket,
+// BDD: Given an authenticated browser socket with its original attachment,
 // When a browser_viewport frame's handler is still running (simulated at the
 // browserConnWorkHook seam, standing in for the MEASURED 6.95s SetViewport),
 // Then the connection still reads and answers the NEXT client frame.
@@ -169,7 +169,23 @@ func dialAuthedBrowserWS(t *testing.T) *websocket.Conn {
 // If handleViewport is ever moved back inline onto readLoop, the probe frame
 // is never read and this fails by timeout.
 func TestBrowserWS_ReadLoop_StaysResponsiveWhileViewportHandlerRuns(t *testing.T) {
-	conn := dialAuthedBrowserWS(t)
+	// Viewport admission requires a committed attachment. Keep the socket,
+	// attach handler and work queue real; only Chrome's protocol is scripted.
+	handler, al := newMeasuredBrowserWSTestHandler(t, nil)
+	t.Cleanup(handler.Wait)
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	conn := dialBrowserTestWS(t, srv)
+	t.Cleanup(func() { _ = conn.Close() })
+	sendWSAuthFrameDevMode(t, conn)
+	agent := al.GetRegistry().GetDefaultAgent()
+	require.NotNil(t, agent)
+	require.NoError(t, conn.WriteJSON(generated.BrowserAttachFrame{
+		Type:      string(generated.WsFrameTypeBrowserAttach),
+		AgentId:   agent.ID,
+		SessionId: "viewport-readloop-session",
+	}))
+	require.Equal(t, "attached", readBrowserStatusFrame(t, conn, 5*time.Second).State)
 	entered, release := blockSlowHandler(t, workKindViewport)
 
 	frame, err := json.Marshal(generated.BrowserViewportFrame{
@@ -423,7 +439,7 @@ func TestBrowserWS_AttachEpoch_SupersededCommitIsRefused(t *testing.T) {
 // it built instead of leaving a dangling viewer).
 func TestBrowserWS_HandleDetach_InvalidatesAnInFlightAttach(t *testing.T) {
 	handler, _ := newBrowserWSTestHandler(t, nil)
-	wc := &browserWSConn{sendCh: make(chan []byte, 8), doneCh: make(chan struct{})}
+	wc := &browserWSConn{sendCh: make(chan browserOutboundFrame, 8), doneCh: make(chan struct{})}
 	var state browserConnState
 
 	epoch := state.beginAttach() // dispatchAttach ran; handleAttach is "still negotiating"
@@ -497,7 +513,8 @@ func TestBrowserWS_HandleViewport_RefusalIsThrottled(t *testing.T) {
 
 	_ = readWCFrame(t, wc, 2*time.Second) // the first refusal
 	select {
-	case extra := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		extra := queued.data
 		t.Fatalf("an identical refusal inside the cooldown must be suppressed, got a second frame: %s", extra)
 	case <-time.After(200 * time.Millisecond):
 	}
@@ -520,7 +537,8 @@ func TestBrowserWS_HandleViewport_ControllingViewer_NotRefused(t *testing.T) {
 	handler.handleViewport(wc, state, "viewer-A", marshalViewportFrame(t, 900, 1010))
 
 	select {
-	case frame := <-wc.sendCh:
+	case queued := <-wc.sendCh:
+		frame := queued.data
 		t.Fatalf("the controlling viewer's own resize must not be refused, got: %s", frame)
 	case <-time.After(200 * time.Millisecond):
 	}

@@ -61,6 +61,15 @@ var allowlistedRawFSFiles = map[string]string{
 // already routes through tools.ResolvePath, so recursing here adds real
 // coverage rather than immediately needing a browser/tools.go entry).
 var allowlistedRawFSFilesBrowser = map[string]string{
+	"manager_local_startup.go": "local browser startup creates only cfg.ProfileDir, " +
+		"the operator-configured profile directory; extracted from manager.go, " +
+		"with no caller-supplied path tool argument or per-turn workspace access.",
+	"pool_retirement.go": "retirement removes only markerPathFor(key), a browser " +
+		"ownership marker computed from homeDir and the validated browsing key; " +
+		"extracted from pool.go, never a caller-supplied path tool argument.",
+	"profile_launch_lock.go": "creates the parent of a sibling launch lock derived " +
+		"only from the immutable operator-configured browser profile identity; " +
+		"this coordinates launch and deletion, not per-turn file access.",
 	"installer.go": "downloads and unpacks the pinned Chromium build into a " +
 		"system-managed, version-keyed install directory " +
 		"($OMNIPUS_HOME/browser/<version>/) driven entirely by the pinned " +

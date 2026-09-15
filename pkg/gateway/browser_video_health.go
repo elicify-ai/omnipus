@@ -22,10 +22,8 @@ package gateway
 // quietly substitute another stream or swallow the event.
 
 import (
-	"errors"
 	"log/slog"
 
-	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
 )
 
@@ -56,43 +54,15 @@ func (h *BrowserWSHandler) onVideoHealth(ev browser.VideoHealthEvent) {
 		slog.Info("browser-video: live video health changed", logAttrs...)
 	}
 
-	frame := generated.BrowserVideoHealthFrame{
-		Type:  string(generated.WsFrameTypeBrowserVideoHealth),
-		State: string(ev.State),
-	}
-	if ev.Attempt > 0 {
-		attempt := ev.Attempt
-		frame.Attempt = &attempt
-	}
-	if ev.MaxAttempts > 0 {
-		maxAttempts := ev.MaxAttempts
-		frame.MaxAttempts = &maxAttempts
-	}
-	// Reuse the browser_webrtc_state redactor rather than writing a second
-	// one: it whitespace-collapses, strips labelled secrets / bearer tokens /
-	// bare long hex runs (the capture token's shape) and cuts to the schema's
-	// length bound on a rune boundary. A parallel implementation here would be
-	// one more place for a capture token to leak into a browser.
-	if detail := webrtcReasonDetail(errors.New(ev.Detail)); ev.Detail != "" && detail != "" {
-		frame.Detail = &detail
-	}
-
 	for _, viewerID := range ev.ViewerIDs {
-		v, ok := h.viewerConns.Load(viewerID)
+		value, ok := h.viewerConns.Load(viewerID)
 		if !ok {
-			// The viewer detached between the snapshot and now. Normal, and
-			// nothing to do: a viewer that is gone needs no telling.
 			continue
 		}
-		vc, ok := v.(*webrtcViewerConn)
-		if !ok {
-			slog.Warn("browser-video: viewer registry held an unexpected value; skipping",
-				"viewer_id", viewerID, "agent_id", ev.AgentID)
+		vc, ok := value.(*webrtcViewerConn)
+		if !ok || vc == nil {
 			continue
 		}
-		f := frame // copy per viewer: SessionId differs
-		sessionID := vc.sessionID
-		f.SessionId = &sessionID
-		vc.wc.sendCriticalGen(f, dropContext(sessionID, viewerID, "video-health:"+string(ev.State)))
+		h.publishVideoHealth(viewerID, vc, vc.capture, vc.attachmentCtx, ev)
 	}
 }

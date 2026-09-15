@@ -90,14 +90,14 @@ func TestHandleControlRelease_ClearsTheStandDownLatchNotJustTheLock(t *testing.T
 	raw, err := os.ReadFile("browser_ws.go")
 	require.NoError(t, err)
 	src := string(raw)
-	start := strings.Index(src, "func (h *BrowserWSHandler) handleControl(")
+	start := strings.Index(src, "func (h *BrowserWSHandler) handleControlContext(")
 	require.GreaterOrEqual(t, start, 0)
 	body := src[start:]
 	if end := strings.Index(body, "\n}\n"); end >= 0 {
 		body = body[:end]
 	}
 
-	assert.Contains(t, body, "ReleaseStoodDown(",
+	assert.Contains(t, body, "ReleaseStoodDownForViewer(",
 		"the release action must clear the lock, the FR-026a latch and any handover-pending state "+
 			"together")
 	assert.NotContains(t, body, "Live().ReleaseControl(",

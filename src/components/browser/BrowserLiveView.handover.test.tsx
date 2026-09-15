@@ -1,3 +1,4 @@
+import { installBrowserFrameCallbacks, confirmBrowserFrame } from './browserFrameTestUtils'
 // BrowserLiveView.handover.test.tsx — ADR-085 (BROWSER-FR-001, FR-053–FR-059)
 // regression coverage for the "take the wheel never ends the agent's turn"
 // rebuild. Wave B5 (joint delivery plan §3). Mocks BrowserLiveWsConnection
@@ -23,9 +24,10 @@ import type { BrowserLiveWsCallbacks } from '@/lib/browserLiveWs'
 import { useChatStore, type SessionChatState } from '@/store/chat'
 import { useUiStore } from '@/store/ui'
 
-const { mockSendControl, mockSendInput, mockSendTabAction, mockSendViewport, callbacksRef } = vi.hoisted(() => ({
+const { mockSocketSendInput, mockSendControl, mockSendInput, mockSendTabAction, mockSendViewport, callbacksRef } = vi.hoisted(() => ({
   mockSendControl: vi.fn(() => true),
-  mockSendInput: vi.fn(),
+  mockSendInput: vi.fn<(input: Record<string, unknown>) => boolean>(() => true),
+  mockSocketSendInput: vi.fn(() => true),
   mockSendTabAction: vi.fn(() => true),
   mockSendViewport: vi.fn(() => true),
   callbacksRef: { current: null as BrowserLiveWsCallbacks | null },
@@ -42,7 +44,7 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
           connect: vi.fn(),
           detach: vi.fn(),
           close: vi.fn(),
-          sendInput: mockSendInput,
+          sendInput: mockSocketSendInput,
           sendControl: mockSendControl,
           sendTabAction: mockSendTabAction,
           sendViewport: mockSendViewport,
@@ -53,7 +55,13 @@ vi.mock('@/lib/browserLiveWs', async (importOriginal) => {
   }
 })
 
+vi.mock('@/lib/browserInputWebRTC', async () => {
+  const { dedicatedInputSessionStub } = await import('./dedicatedInputTestUtils')
+  return { BrowserInputWebRTCSession: dedicatedInputSessionStub(mockSendInput) }
+})
+
 import { BrowserLiveView } from './BrowserLiveView'
+installBrowserFrameCallbacks()
 
 function fakeMediaStream(id = 'stream-1'): MediaStream {
   return { id } as unknown as MediaStream
@@ -68,6 +76,7 @@ function connectAndFrame() {
     Object.defineProperty(video, 'videoWidth', { value: 1280, configurable: true })
     Object.defineProperty(video, 'videoHeight', { value: 720, configurable: true })
     fireEvent.loadedMetadata(video)
+    confirmBrowserFrame(callbacksRef.current, video)
   })
 }
 
@@ -180,6 +189,7 @@ describe('BrowserLiveView — BROWSER-FR-053 structural assertion', () => {
 // ── BROWSER-FR-053/FR-054 — the headline regression ─────────────────────────
 describe('BrowserLiveView — the operator keeps driving after the click that took the wheel (BROWSER-FR-053/FR-054)', () => {
   it('keeps dispatching keyboard, wheel and pointermove AFTER the pointerup that took the wheel, while the agent is still working', async () => {
+    vi.useFakeTimers()
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
@@ -196,20 +206,19 @@ describe('BrowserLiveView — the operator keeps driving after the click that to
 
     // Keyboard dispatches synchronously (handleKeyDown calls dispatchInput
     // directly — no pacer involved).
-    fireEvent.keyDown(container, { key: 'a' })
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'text', text: 'a' }))
+    fireEvent.keyDown(container, { key: 'a', code: 'KeyA', keyCode: 65 })
+    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'key_down', key: 'a', code: 'KeyA', text: 'a' }))
 
     // Wheel and pointermove are coalesced onto a single MOVE_FLUSH_MS timer
     // (scheduleInputFlush) — switch to fake timers to observe the flush.
-    vi.useFakeTimers()
     mockSendInput.mockClear()
     fireEvent.wheel(container, { deltaX: 0, deltaY: 120 })
-    await vi.advanceTimersByTimeAsync(30)
+    await act(async () => { await vi.advanceTimersByTimeAsync(30) })
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'wheel' }))
 
     mockSendInput.mockClear()
     fireEvent.pointerMove(container, { clientX: 30, clientY: 30 })
-    await vi.advanceTimersByTimeAsync(30)
+    await act(async () => { await vi.advanceTimersByTimeAsync(30) })
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_move' }))
   })
 })
@@ -300,7 +309,7 @@ describe('BrowserLiveView — a wheel held across the end of one turn survives t
   // ever asking) must clear operator-holds-wheel exactly the same as a
   // solicited one, and a plain `control_only` broadcast frame (telling this
   // viewer about SOMEONE ELSE's control change) must NOT.
-  it('clears operator-holds-wheel on an UNSOLICITED server released frame, and re-takes on the next click', () => {
+  it('clears operator-holds-wheel on an UNSOLICITED server released frame, and accepts the next dedicated click', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     const container = stubFrameRect()
@@ -321,17 +330,17 @@ describe('BrowserLiveView — a wheel held across the end of one turn survives t
     })
     expect(screen.getByTestId('browser-live-status-chip')).not.toHaveTextContent("You're driving")
 
-    // The `controllingRef` guard that used to block a re-take
-    // (`if (controllingRef.current) return`) must have cleared too.
+    // The next deliberate input carries its own server-side ownership claim.
     mockSendControl.mockClear()
     fireEvent.pointerDown(container, { clientX: 25, clientY: 25 })
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down', x: 25, y: 25 }))
+    expect(mockSocketSendInput).not.toHaveBeenCalled()
   })
 })
 
 // ── BROWSER-FR-056 — coverage, not a regression guard ───────────────────────
-describe('BrowserLiveView — one click both acquires the wheel and dispatches, from every entry point (BROWSER-FR-056, coverage)', () => {
-  it('acquires the wheel and dispatches in one click from the frame, the omnibox, the tab strip and Take over', () => {
+describe('BrowserLiveView — one action dispatches from every entry point without cancelling chat (BROWSER-FR-056, coverage)', () => {
+  it('dispatches through dedicated input and tab control, while explicit Take over requests ownership', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
     connectAndFrame()
     emitTabs(0, [
@@ -340,9 +349,9 @@ describe('BrowserLiveView — one click both acquires the wheel and dispatches, 
     ])
     const container = stubFrameRect()
 
-    // 1) The frame.
+    // 1) The server acquires ownership with the dedicated click itself.
     fireEvent.pointerDown(container, { clientX: 20, clientY: 20 })
-    expect(mockSendControl).toHaveBeenCalledWith('take')
+    expect(mockSendControl).not.toHaveBeenCalledWith('take')
     expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'mouse_down' }))
     ackControlling()
     act(() => {
@@ -356,7 +365,8 @@ describe('BrowserLiveView — one click both acquires the wheel and dispatches, 
     fireEvent.change(addressBar, { target: { value: 'example.com' } })
     fireEvent.submit(addressBar.closest('form') as HTMLFormElement)
     expect(mockSendControl).toHaveBeenCalledWith('take')
-    expect(mockSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate' }))
+    expect(mockSocketSendInput).toHaveBeenCalledWith(expect.objectContaining({ kind: 'navigate' }))
+    expect(mockSendControl.mock.invocationCallOrder[0]).toBeLessThan(mockSocketSendInput.mock.invocationCallOrder[0])
     ackControlling()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'released' })
@@ -368,6 +378,7 @@ describe('BrowserLiveView — one click both acquires the wheel and dispatches, 
     fireEvent.click(screen.getByTestId('browser-tab-1'))
     expect(mockSendControl).toHaveBeenCalledWith('take')
     expect(mockSendTabAction).toHaveBeenCalledWith('switch', 1)
+    expect(mockSendControl.mock.invocationCallOrder[0]).toBeLessThan(mockSendTabAction.mock.invocationCallOrder[0])
     ackControlling()
     act(() => {
       callbacksRef.current?.onStatus?.({ type: 'browser_status', state: 'released' })
