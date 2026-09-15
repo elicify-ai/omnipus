@@ -200,7 +200,7 @@ func TestResolveSessionStore_CorruptMeta_ReturnsStoreNotNil(t *testing.T) {
 	logFile := filepath.Join(tmpDir, "resolve-corrupt.log")
 
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)
@@ -278,7 +278,7 @@ func TestResolveSessionStore_MissingSession_StaysSilent(t *testing.T) {
 	logFile := filepath.Join(tmpDir, "resolve-missing.log")
 
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)
@@ -330,7 +330,7 @@ func TestResolveWorkspaceIDForContinuation_CorruptMeta_WarnsDownstream(t *testin
 	logFile := filepath.Join(tmpDir, "continuation-corrupt.log")
 
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)

@@ -375,7 +375,7 @@ func TestVaultSearch_SchemaLoadFailureMakesRecordsIncomplete(t *testing.T) {
 func TestVaultSearchFind_ErrorIsLogged(t *testing.T) {
 	logFile := filepath.Join(t.TempDir(), "vault-search-find-error.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	require.NoError(t, logger.EnableFileLogging(logFile))
 	t.Cleanup(func() {

@@ -71,7 +71,7 @@ func captureLogFile(t *testing.T, level logger.LogLevel) func() string {
 	t.Helper()
 	logFile := filepath.Join(t.TempDir(), "reconcile-meta.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(level)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)

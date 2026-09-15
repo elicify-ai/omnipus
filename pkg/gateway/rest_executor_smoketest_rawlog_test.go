@@ -66,7 +66,7 @@ func TestPostAgentsExecutorSmokeTest_RawErrorLoggedServerSide(t *testing.T) {
 	// EnableFileLogging and read the file back afterward.
 	logFile := filepath.Join(t.TempDir(), "executor-smoketest-rawlog.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	require.NoError(t, logger.EnableFileLogging(logFile))
 	t.Cleanup(func() {
