@@ -83,28 +83,64 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   test.setTimeout(600_000)
   await startFreshChatWithJim(page)
 
-  // Setup: per-test Main agent (chat-target plan owner + member assignee)
-  // in its own workspace core_team. A fresh agent per test avoids the
-  // multi-workspace find_for_agent ambiguity that cancels member turns.
-  // `bash: allow` is required for the `check` criteria below — a fresh
-  // custom agent is seeded fully deny-by-default (verified empirically:
-  // omitting this override makes every check fail closed regardless of
-  // command, which would make the "definitely met" and "definitely unmet"
-  // recipes indistinguishable).
+  // Setup: per-test Main agent (chat-target plan owner) in its own workspace
+  // core_team. A fresh agent per test avoids the multi-workspace
+  // find_for_agent ambiguity that cancels member turns. `bash: allow` is
+  // required for the plan's `check` DoD below — a fresh custom agent is
+  // seeded fully deny-by-default (verified empirically: omitting this
+  // override makes every check fail closed regardless of command, which
+  // would make the "definitely met" and "definitely unmet" recipes
+  // indistinguishable).
   const ownerId = await createMainAgent(page, `conformance-t2-owner-${Date.now()}`, { bash: 'allow' })
+  // The members' assignees: stub external-CLI workers that end every run with
+  // a blocked claim, so each member ends Failed "Blocked: <cause>" on its
+  // first try — no LLM on the worker side, no Judge call, no task attempt
+  // used, no restart (ADR-043 §8, ADR-084 §11). One per member, exactly as
+  // Conformance_t3b_TargetedRetryOnlyE2E assigns its m2. See the members
+  // comment below for why.
+  const memberBlockedText = blockedMarker(
+    'this member is a fixed test fixture that deliberately produces no work; it is not transient and a retry ' +
+      'would end the same way',
+  )
+  const m1WorkerId = await createStubCliWorkerAgent(page, `conformance-t2-m1-stub-${Date.now()}`, {
+    firstTry: memberBlockedText,
+  })
+  const m2WorkerId = await createStubCliWorkerAgent(page, `conformance-t2-m2-stub-${Date.now()}`, {
+    firstTry: memberBlockedText,
+  })
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t2',
-    core_team: [ownerId],
+    core_team: [ownerId, m1WorkerId, m2WorkerId],
   })
   if (!wsRes.ok) throw new Error(`t2: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
 
-  // Create a plan with TWO members (each a deterministic, machine-checked
-  // `exit 0` — fast and judgment-free, so "all members terminal" is reached
-  // quickly and reliably) and a plan-level DoD that can NEVER be satisfied
-  // (`exit 1`, expected 0) — forcing a deterministic round-1 UNMET verdict.
-  // The plan-lint gate (G-16) requires disjoint write_sets per parallel
-  // member; we comply here.
+  // Create a plan with TWO members that each end at once — deterministically,
+  // with no LLM involved — and a plan-level DoD that can NEVER be satisfied
+  // (`exit 1`, expected 0), forcing a deterministic round-1 UNMET verdict.
+  // What t2 proves starts once all members are terminal: the unmet verdict,
+  // the hold, and F2. How the members got there is not under test.
+  //
+  // WHY NOT native members with a trivially passing check (`exit 0`), as this
+  // test used until 2026-09-15: under the two-level task-run model (ADR-086
+  // §8, issue #710) a member reaches `done` only through a Judge verdict, so
+  // each native member costs at least a worker LLM turn plus a Judge LLM
+  // turn, and a try the Judge rules unmet keeps the worker going in the same
+  // run. That is real, unbounded model latency inside Step 1's fixed 120s.
+  // With two serial native members this whole test took 1.4m in one CI run
+  // and 2.7m in another, and in release/v0.1.1 CI run 34930936198 (job
+  // 104259035627) m2 was still in progress when Step 1's 120s ran out — plan
+  // state running, plan_phase dispatching, progress 0.5, the Judge still
+  // working m2 — before the retry passed. The same class of failure, and the
+  // same fix, as Conformance_t3b_TargetedRetryOnlyE2E's m2 below.
+  //
+  // WHY INDEPENDENT, not m2 blocked by m1 as before: a dependent is promoted
+  // only when its blocker is DONE (pkg/task/blocked_by.go; see
+  // processPlan's planStuckAfterMemberCancel comment, pkg/agent/
+  // plan_engine.go), so a failed m1 would leave m2 blocked forever and the
+  // plan would never reach all-terminal. No step of t2 asserts dispatch
+  // order. The plan-lint gate (G-16) requires disjoint write_sets per
+  // parallel member; we comply here.
   const { planId } = await createPlanWithMembers(
     page,
     workspaceId,
@@ -112,7 +148,7 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
     {
       title: 't2 conformance plan',
       goal: 'produce a verdict of met or unmet for both members',
-      description: 'two serial members, each with a machine-checked criterion',
+      description: 'two independent members that each end at once, and a definition of done that can never be met',
       dod: [checkCriterion('deterministic unmet DoD — forces round-1 unmet for the F2 proof', 'exit 1', 0)],
       bounds: { plan_judge_max_rounds: 5 },
     },
@@ -122,15 +158,18 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
         title: 'member one',
         prompt: 'reply with the literal word alpha',
         write_set: ['out/m1.txt'],
-        criteria: [checkCriterion('m1 trivially passes', 'exit 0', 0)],
+        agent_id: m1WorkerId,
+        // Never judged: the stub worker ends every run with a blocked claim,
+        // before any Judge call. A criterion is still mandatory at creation.
+        criteria: [proseCriterion('m1 replied with the word alpha')],
       },
       {
         label: 'm2',
         title: 'member two',
         prompt: 'reply with the literal word beta',
-        blocked_by_labels: ['m1'],
         write_set: ['out/m2.txt'],
-        criteria: [checkCriterion('m2 trivially passes', 'exit 0', 0)],
+        agent_id: m2WorkerId,
+        criteria: [proseCriterion('m2 replied with the word beta')],
       },
     ],
     createdPlanIds,
