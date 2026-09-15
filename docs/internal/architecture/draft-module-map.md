@@ -10,7 +10,7 @@
 - `rest.go` file list (10 new `rest_*`; do not recreate tasks/workspaces/plans/auth). **Founder agreed 2026-09-12.**
 
 - Tools: channel grain (one package per family, not per `Name()`); dissolve `pkg/sysagent/tools` into product families. **Founder agreed 2026-09-12.**
-- Size budgets: a file warns at 2,000 lines and fails at 4,000; a function warns at 120 lines and fails at 240. Same numbers for production and test code. **Founder ruled 2026-09-15.** Test design in "How we enforce it" below.
+- Size budgets: a file warns at 2,000 lines and fails at 4,000; a function warns at 120 lines and fails at 240. Same numbers for production and test code. **React components warn at both lines and never fail.** **Founder ruled 2026-09-15.** Test design in "How we enforce it" below.
 
 **Changes 2026-09-15** (validation after ff11e8249; every number below is re-measured against `release/v0.1.1` @ `1f996b01d`, not carried over):
 
@@ -28,7 +28,7 @@
 - PR #685 touched nothing outside the browser module that this map measures: `loop.go`, `rest.go`, `chat.ts`, `api.ts`, `config.go`, `plan_engine.go`, `delegate.go` are line-for-line unchanged; `gateway.go` +4, `websocket.go` +2. Function counts, `rest_*.go` count, `pkg/tools` count and the root `CLAUDE.md` length all match.
 - PR #685 doubled the browser file count: `pkg/tools/browser` 51 to 110 non-test files, its `webrtc/` subpackage 8 to 25, `pkg/gateway/browser_*.go` 5 to 27. 81 new files, 9,174 lines, largest 667. The three browser rows in the giants tables are rewritten against that structure. `browser_webrtc.go` fell from 2,108 to 1,378 lines and leaves the list.
 - Lesson from PR #685, recorded in "How files grew": siblings were added but the two giants barely moved (`manager.go` +43 to 4,167, `live.go` -56 to 3,616). New code went to new files; old code stayed put. A ratchet that only blocks growth would have passed this. The warn threshold exists so the giants are named on every PR, not only when they grow.
-- Founder ruling on budgets (files warn 2,000 / fail 4,000; functions warn 120 / fail 240) replaces the earlier "target / hard" wording. "How we enforce it" is now a test design, with grandfather-list sizes measured at `d9a0c6941`.
+- Founder ruling on budgets (files warn 2,000 / fail 4,000; functions warn 120 / fail 240; React components warn only, no fail line) replaces the earlier "target / hard" wording. "How we enforce it" is now a test design, with grandfather-list sizes measured at `d9a0c6941`.
 - A separate sizing study (`function-size-recommendation-2026-09-15.md`) added statement counts and nesting depth. Its proposed numbers are superseded by the ruling; its two durable findings are kept below: a statement-count signal for phase two, and the order of the first ten functions to bring down.
 - Review fixes: `pkg/library` versus `pkg/media/library` now stated the same way in both drafts; the unassigned-tools count corrected from nine to eleven; ADR-067/068 triples noted; founder decisions gathered in one table; function baseline linked by filename.
 
@@ -493,6 +493,7 @@ Two levels for each unit. **Warn** means the check prints the offender on every 
 |---|---|---|---|
 | File | over 2,000 lines | over 4,000 lines | 2,000 is one Read call in the Claude Code harness; 4,000 is two. Past two, an agent cannot hold the file. |
 | Function | over 120 lines | over 240 lines | 120 is the `funlen` threshold the repo already configured; 97% of functions fit under it today. 240 is two of those; only the real tail is above it. |
+| React component | over 120 lines, and again over 240 | never | A component is split by extracting child components and custom hooks. That is different work from extracting a Go helper: a state-heavy component (`AgentProfile` has 25 state variables, `BrowserLiveView` has 18 effects) needs a hook per concern, and hook order is load-bearing. The founder chose to name these on every PR rather than block them. Hooks (`use*`) and every other TS function keep the 240 fail line. |
 
 A function or file that is over the fail line **today** is grandfathered by name and may only shrink. A **new** function or file must be under the fail line, full stop. Warnings are informational for old code and a review prompt for new code: a new 150-line function is legal, but the reviewer sees it named.
 
@@ -504,10 +505,12 @@ What that costs today, measured at `release/v0.1.1` @ `d9a0c6941` with the scann
 | Test files | 17 | 0 (the only test file over 4,000 is `pkg/api/generated/contract_test.go`, which is generated and skipped) |
 | Go production functions | 315 | 70 (26 in `pkg/gateway`, 16 in `pkg/agent`, 8 in `pkg/tools`, 5 in `pkg/sysagent/tools`, 15 elsewhere) |
 | Go test functions | 281 | 20 |
-| TS production functions | 184 | 83 (mostly whole React components written as one function) |
+| TS production functions | 184 (140 of them components) | 13: 10 plain functions and 3 hooks. The 70 components over 240 are warned, not listed. Six of the 10 plain functions are in `src/store/chat.ts`, led by the store `create` call (4,568) and `handleFrame` (2,775). |
 | TS test functions | 214 | 36 |
 
-So the initial grandfather lists hold 10 files and 209 functions. Both lists only shrink.
+So the initial grandfather lists hold 10 files and 139 functions (70 Go production, 20 Go test, 13 TS production, 36 TS test). Both lists only shrink. The 70 components over 240 appear as `WARN` on every PR and are tracked in the same output, but never fail the build.
+
+**Why no component ceiling, in numbers.** Of the 547 components in `src/`, the median is 48 lines and three quarters are under 122, so long components are the exception here too. But of the 83 TS functions over 240, 70 are components, and the two largest of those need real restructuring: `AgentProfile` (2,789 lines, 25 state variables) and `BrowserLiveView` (2,770 lines, 18 effects, 38 memoised callbacks). Markup-heavy components such as `SandboxSection` (1,176 lines of JSX in one return) split cheaply into sections; state-heavy ones do not. The founder chose visibility over a hard stop for this one category.
 
 **What is exempt by construction:** `pkg/api/generated/`, `src/lib/api/generated/`, `pkg/gateway/spa/`, `node_modules/`, `dist/`, `.gitnexus/`. Nothing else. Data literals such as `DefaultConfig` (1,003 lines, 3 statements) and `coreAgentSeed` (1,060 lines, 76 statements) are **not** exempt; they go on the grandfather list like everything else and come down by splitting the literal per agent or per section. An exemption for "data" would become the place every long function claims to be, and the sizing study found that statement count cannot reliably tell data from logic either (`coreAgentSeed` builds its table with individual assignments).
 
@@ -531,10 +534,10 @@ Prose in `CLAUDE.md` will not hold, and a linter can be switched off in one YAML
 
 | Piece | Path | What it does |
 |---|---|---|
-| Scanner | `scripts/funlen/` (Go program, `go run ./scripts/funlen`) and `scripts/tsfunlen.cjs` | Ports of the bench scanners into the repo. Go: `go/ast` walk of every `*.go`, span per `FuncDecl`. TS: TypeScript compiler API walk of `src/**/*.ts(x)`, span per function declaration, method, function expression, arrow function, constructor, accessor. Output: `lines<TAB>file:line<TAB>name`, longest first. No third-party dependency beyond the repo's own `typescript`. |
-| Gate | `scripts/check-function-budget.sh` | Runs both scanners. Prints every function over 120 as `WARN`. Fails on any function over 240 that is not on the grandfather list, and on any listed function whose span is higher than its listed number. |
-| Grandfather list | `scripts/budgets/functions.txt` | One line per function: `file<TAB>qualified name<TAB>lines`. Keyed by name, not line number, so a function that moves within a file or to a sibling file in the same package keeps its entry. Starts with the 209 functions above. Only shrinks. |
-| Self-check | `scripts/check-function-budget-selfcheck.sh` | Temp Go package and temp TS file with fixtures: a 241-line unlisted function must fail; a listed function one under its number must pass; one over must fail; a 121-line unlisted function must produce exactly one `WARN` line and exit 0. |
+| Scanner | `scripts/funlen/` (Go program, `go run ./scripts/funlen`) and `scripts/tsfunlen.cjs` | Ports of the bench scanners into the repo. Go: `go/ast` walk of every `*.go`, span per `FuncDecl`. TS: TypeScript compiler API walk of `src/**/*.ts(x)`, span per function declaration, method, function expression, arrow function, constructor, accessor. **Anonymous callbacks count**: the body passed to `useEffect`, `create`, `produce`, `withBucket` and the like is a function and is reported as `(arg of useEffect)`; without this the two largest functions in the repo are invisible. **Component detection**: a function is a component when it is in a `.tsx` file, its name (or the variable it is assigned to, looking through `memo(...)` and `forwardRef(...)`) starts with an uppercase letter, and its body contains a `return` whose expression is a JSX element, fragment, or a conditional/logical expression of those. Anything else, including `use*` hooks and anonymous callbacks inside a component, is a plain function. The scanner prints a fourth column, `component` or `function`, so the classification is visible and reviewable, not hidden in the gate. Output: `lines<TAB>file:line<TAB>name<TAB>kind`, longest first. No third-party dependency beyond the repo's own `typescript`. |
+| Gate | `scripts/check-function-budget.sh` | Runs both scanners. Prints every function over 120 as `WARN`, and every component over 240 as a second `WARN` with the word `component` so the two tiers are distinguishable in the log. Fails on any non-component function over 240 that is not on the grandfather list, and on any listed function whose span is higher than its listed number. Components never fail. |
+| Grandfather list | `scripts/budgets/functions.txt` | One line per function: `file<TAB>qualified name<TAB>lines`. Keyed by name, not line number, so a function that moves within a file or to a sibling file in the same package keeps its entry. Starts with the 139 functions above. Only shrinks. Components are not on it. |
+| Self-check | `scripts/check-function-budget-selfcheck.sh` | Temp Go package and temp TS files with fixtures: a 241-line unlisted function must fail; a listed function one under its number must pass; one over must fail; a 121-line unlisted function must produce exactly one `WARN` line and exit 0; a 241-line PascalCase `.tsx` function returning JSX must produce a `WARN … component` line and exit 0; the same 241-line body renamed to `useThing` (a hook) must fail. The last two prove the classifier is wired, not just written. |
 
 ### Wiring, three places, none optional
 
@@ -548,7 +551,7 @@ Prose in `CLAUDE.md` will not hold, and a linter can be switched off in one YAML
 
 - Exit 0 with no output when clean. Exit 0 with `WARN` lines when only warnings. Exit 1 with `FAIL` lines when any fail.
 - One line per finding, machine-readable: `WARN file:line function 153 > 120` or `FAIL file 4,212 > 4,000 (not grandfathered)` or `FAIL file:line function 1,502 > listed 1,489`.
-- The gate prints its own grandfather-list size at the end (`grandfathered: 10 files, 209 functions`) so a shrinking list is visible in every CI log, and a list that stopped shrinking is visible too.
+- The gate prints its own grandfather-list size at the end (`grandfathered: 10 files, 139 functions; components over 240: 70`) so a shrinking list is visible in every CI log, and a list that stopped shrinking is visible too. The component count is the one number on that line that has no fail line behind it, so it is the one to watch by hand.
 
 ### What the tests prove and what they do not
 
@@ -575,9 +578,20 @@ From the sizing study, ordered by cost and risk, not by size alone:
 
 Also from the study: `pkg/tools/task.go::TaskUpdateTool.Execute` (397) and `pkg/sysagent/tools/task.go::TaskUpdateTool.Execute` (392) are near-duplicates. The `sysagent` dissolution above removes one of them for free.
 
+**TypeScript, first six**, same logic:
+
+| # | Function | Lines | Kind | Why in this position |
+|---|---|---|---|---|
+| 1 | `src/store/chat.ts` store `create` call | 4,568 | plain | Largest function in the repo. Slices per concern (messages, streaming, tool clamp, buckets), which is also the `chat.ts` file split above. No React difficulty. |
+| 2 | `src/store/chat.ts::handleFrame` | 2,775 | plain | One switch over frame types; each case becomes a handler. |
+| 3 | `src/components/settings/SandboxSection.tsx::SandboxSection` | 1,049 | component | 8 state variables, 1,176 lines of markup. Cut the return into sections; cheapest component win. |
+| 4 | `src/components/library/LibraryExplorer.tsx::LibraryExplorer` | 1,300 | component | 7 state variables, 658 lines of markup. Same move. |
+| 5 | `src/components/agents/AgentProfile.tsx::AgentProfile` | 2,789 | component | 25 state variables. One hook per concern (identity form, model, tools) before any markup cut. Warned, not blocked. |
+| 6 | `src/components/browser/BrowserLiveView.tsx::BrowserLiveView` | 2,770 | component | 18 effects, 38 memoised callbacks. Hardest split in the SPA; do last, with the browser module owner. Warned, not blocked. |
+
 ### Root `CLAUDE.md` gets three lines
 
-The one-job rule; "a file warns at 2,000 and fails at 4,000, a function warns at 120 and fails at 240"; "do not add to a grandfathered file or function, extract first". No essay.
+The one-job rule; "a file warns at 2,000 and fails at 4,000, a function warns at 120 and fails at 240, a React component only warns"; "do not add to a grandfathered file or function, extract first". No essay.
 
 The splitter at `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` is the mechanical *how* for a file cut, not the gate. The gate is CI.
 
