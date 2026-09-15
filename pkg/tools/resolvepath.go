@@ -845,6 +845,16 @@ func (h *PathHandle) Close() error {
 	return h.root.Close()
 }
 
+// resolvePath carries the shared state of ResolvePath across its stages.
+type resolvePath struct {
+	ctx      context.Context
+	policy   fspolicy.FSPolicy
+	toolName string
+	callID   string
+	op       FSOp
+	rawPath  string
+}
+
 // ResolvePath is the single, mandatory path-resolution chokepoint (FR-003).
 // rawPath is the caller-supplied (LLM/tool-argument) path; policy is the
 // turn's single source-of-record FSPolicy (fspolicy.EffectiveFSPolicy).
@@ -906,27 +916,10 @@ func ResolvePath(
 	op FSOp,
 	rawPath string,
 ) (*PathHandle, error) {
-	// ctx and toolName are now consumed below by the ADR-072 D10/D6.1.1
-	// skills-gate check (ToolAgentID/ToolTranscriptSessionID/ToolWorkspaceID
-	// read ctx; toolName is carried onto a write handle's audit fields).
-	// callID remains a P2 seam only — the ask-flow will consult it once
-	// filesystem_scope=ask lands. Referenced here only to make the current
-	// no-op deliberate rather than silently unused.
-	_ = callID
+	rp := &resolvePath{ctx: ctx, policy: policy, toolName: toolName, callID: callID, op: op, rawPath: rawPath}
 
-	switch op {
-	case FSOpRead, FSOpList, FSOpSend, FSOpWrite, FSOpExec, FSOpServe:
-		// known, explicit op — proceed.
-	default:
-		// FR-2.4: the zero value (and any unrecognized string) is refused
-		// loudly rather than defaulted. Every production call site already
-		// passes one of the named constants above.
-		return nil, fmt.Errorf("%w: FSOp %q is invalid — ResolvePath requires an explicit, known FSOp (the zero value is refused, not defaulted)",
-			ErrPathInvalid, op)
-	}
-
-	if err := policy.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrPathInvalid, err)
+	if r0, r1, stop := rp.validateInputs(); stop {
+		return r0, r1
 	}
 
 	// realWorkDir is policy.WorkDir resolved through the exact same
@@ -947,17 +940,49 @@ func ResolvePath(
 	// rejects every legitimate in-workspace path as escaping scope. Resolving
 	// unconditionally here is idempotent (a no-op) when the caller already
 	// resolved WorkDir, and closes the gap when it didn't.
-	realWorkDir, err := resolveRealpathUnderWorkDir(policy.WorkDir, "")
-	if err != nil {
-		return nil, fmt.Errorf("%w: resolve working directory %q: %w", ErrPathInvalid, policy.WorkDir, err)
+	return rp.resolveValidatedPath()
+}
+
+// validateInputs validates the requested filesystem operation and policy.
+func (rp *resolvePath) validateInputs() (*PathHandle, error, bool) {
+	// ctx and toolName are now consumed below by the ADR-072 D10/D6.1.1
+	// skills-gate check (ToolAgentID/ToolTranscriptSessionID/ToolWorkspaceID
+	// read ctx; toolName is carried onto a write handle's audit fields).
+	// callID remains a P2 seam only — the ask-flow will consult it once
+	// filesystem_scope=ask lands. Referenced here only to make the current
+	// no-op deliberate rather than silently unused.
+	_ = rp.callID
+
+	switch rp.op {
+	case FSOpRead, FSOpList, FSOpSend, FSOpWrite, FSOpExec, FSOpServe:
+		// known, explicit op — proceed.
+	default:
+		// FR-2.4: the zero value (and any unrecognized string) is refused
+		// loudly rather than defaulted. Every production call site already
+		// passes one of the named constants above.
+		return nil, fmt.Errorf("%w: FSOp %q is invalid — ResolvePath requires an explicit, known FSOp (the zero value is refused, not defaulted)",
+			ErrPathInvalid, rp.op), true
 	}
 
-	realAbs, err := resolveRealpathUnderWorkDir(rawPath, policy.WorkDir)
+	if err := rp.policy.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrPathInvalid, err), true
+	}
+	return nil, nil, false
+}
+
+// resolveValidatedPath resolves and gates the validated path, then returns the appropriate host, mount, or workspace-rooted handle.
+func (rp *resolvePath) resolveValidatedPath() (*PathHandle, error) {
+	realWorkDir, err := resolveRealpathUnderWorkDir(rp.policy.WorkDir, "")
+	if err != nil {
+		return nil, fmt.Errorf("%w: resolve working directory %q: %w", ErrPathInvalid, rp.policy.WorkDir, err)
+	}
+
+	realAbs, err := resolveRealpathUnderWorkDir(rp.rawPath, rp.policy.WorkDir)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrPathInvalid, err)
 	}
 
-	if fspolicy.IsCarveOut(realAbs, policy) {
+	if fspolicy.IsCarveOut(realAbs, rp.policy) {
 		return nil, ErrCarveOut
 	}
 
@@ -988,26 +1013,26 @@ func ResolvePath(
 	// not just instruction files, since D6.1.1's audit trail is about who
 	// wrote into a recognised skills location, not what they wrote.
 	var skillsWriteAudit *skillsWriteAuditFields
-	if shelf, matched := classifySkillsGate(rawPath, realAbs, policy); matched {
-		switch op {
+	if shelf, matched := classifySkillsGate(rp.rawPath, realAbs, rp.policy); matched {
+		switch rp.op {
 		case FSOpRead, FSOpList, FSOpSend:
-			if shelf == skillShelfRegistry && isSkillInstructionFile(rawPath, realAbs) {
-				return nil, skillsGateDenialError(rawPath)
+			if shelf == skillShelfRegistry && isSkillInstructionFile(rp.rawPath, realAbs) {
+				return nil, skillsGateDenialError(rp.rawPath)
 			}
 		case FSOpWrite, FSOpServe:
 			if shelf == skillShelfRegistry {
-				return nil, skillsRegistryNonReadDenialError(rawPath, op)
+				return nil, skillsRegistryNonReadDenialError(rp.rawPath, rp.op)
 			}
 			skillsWriteAudit = &skillsWriteAuditFields{
 				shelf:       shelf,
-				toolName:    toolName,
-				agentID:     ToolAgentID(ctx),
-				sessionID:   ToolTranscriptSessionID(ctx),
-				workspaceID: ToolWorkspaceID(ctx),
+				toolName:    rp.toolName,
+				agentID:     ToolAgentID(rp.ctx),
+				sessionID:   ToolTranscriptSessionID(rp.ctx),
+				workspaceID: ToolWorkspaceID(rp.ctx),
 			}
 		case FSOpExec:
 			if shelf == skillShelfRegistry {
-				return nil, skillsRegistryNonReadDenialError(rawPath, op)
+				return nil, skillsRegistryNonReadDenialError(rp.rawPath, rp.op)
 			}
 		}
 	}
@@ -1016,7 +1041,7 @@ func ResolvePath(
 		// FR-2.2: the decision now depends on op, not solely on
 		// policy.Scope. fspolicy.IsCarveOut has already refused the secret
 		// set unconditionally above (step 2), before op is ever consulted.
-		switch op {
+		switch rp.op {
 		case FSOpRead, FSOpList, FSOpSend:
 			// ADR-084 JUDGE-FR-060: a read-confined turn (the Judge and
 			// PlanSupervisor — see fspolicy.FSPolicy.ReadConfined) loses the
@@ -1041,17 +1066,17 @@ func ResolvePath(
 			// worker whose output is under review controls the workspace and
 			// can plant the link between writing the artifact and the
 			// adjudication reading it.
-			if policy.ReadConfined {
+			if rp.policy.ReadConfined {
 				return nil, fmt.Errorf(
 					"%w: %q resolves to %q, outside the effective working directory %q (read-confined turn)",
-					ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
+					ErrOutsideScope, rp.rawPath, realAbs, rp.policy.WorkDir)
 			}
 
 			// Reads (and sends — FR-2.3/FR-2.3a: send_file follows the open-
 			// read rule, governed by tool policy rather than a path
 			// restriction) are allowed anywhere outside the secret set,
 			// independent of policy.Scope.
-			return &PathHandle{abs: realAbs, policy: policy}, nil
+			return &PathHandle{abs: realAbs, policy: rp.policy}, nil
 
 		case FSOpWrite, FSOpServe:
 			// Writes, and web_serve (FR-2.3b: preserved exactly, not a new
@@ -1080,8 +1105,8 @@ func ResolvePath(
 			// root, at the moment of the syscall — not merely at this earlier
 			// string check. See matchedAllowedRoot's doc comment for the
 			// remaining, narrower residual this does not close.
-			if root, ok := matchedAllowedRoot(realAbs, policy.AllowedRoots); ok {
-				handle, mountErr := newMountRootHandle(root, rawPath, realAbs, policy)
+			if root, ok := matchedAllowedRoot(realAbs, rp.policy.AllowedRoots); ok {
+				handle, mountErr := newMountRootHandle(root, rp.rawPath, realAbs, rp.policy)
 				if mountErr != nil {
 					return nil, mountErr
 				}
@@ -1089,23 +1114,23 @@ func ResolvePath(
 				return handle, nil
 			}
 			return nil, fmt.Errorf("%w: %q resolves to %q, outside the effective working directory %q and no mount covers it",
-				ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
+				ErrOutsideScope, rp.rawPath, realAbs, rp.policy.WorkDir)
 
 		case FSOpExec:
 			// Unchanged from the pre-FR-2 behaviour (per the ADR-062 kernel
 			// model): every op used to dispatch on Scope alone, and exec
 			// stays on that exact path.
-			switch policy.Scope {
+			switch rp.policy.Scope {
 			case fspolicy.FSScopeConfined:
 				return nil, fmt.Errorf("%w: %q resolves to %q, outside the effective working directory %q",
-					ErrOutsideScope, rawPath, realAbs, policy.WorkDir)
+					ErrOutsideScope, rp.rawPath, realAbs, rp.policy.WorkDir)
 			case fspolicy.FSScopeUnrestricted:
-				return &PathHandle{abs: realAbs, policy: policy}, nil
+				return &PathHandle{abs: realAbs, policy: rp.policy}, nil
 			case fspolicy.FSScopeAsk, fspolicy.FSScopeAllow:
 				return nil, fmt.Errorf("%w: filesystem_scope %q is not yet supported by ResolvePath (P2)",
-					ErrPathInvalid, policy.Scope)
+					ErrPathInvalid, rp.policy.Scope)
 			default:
-				return nil, fmt.Errorf("resolvepath: internal error: unknown filesystem scope %q", policy.Scope)
+				return nil, fmt.Errorf("resolvepath: internal error: unknown filesystem scope %q", rp.policy.Scope)
 			}
 
 		default:
@@ -1113,7 +1138,7 @@ func ResolvePath(
 			// known constants above. Kept as defense-in-depth so a future
 			// FSOp addition that forgets to extend this switch fails loudly
 			// instead of silently taking an unintended branch.
-			return nil, fmt.Errorf("%w: FSOp %q has no ResolvePath decision rule", ErrPathInvalid, op)
+			return nil, fmt.Errorf("%w: FSOp %q has no ResolvePath decision rule", ErrPathInvalid, rp.op)
 		}
 	}
 
@@ -1156,18 +1181,18 @@ func ResolvePath(
 	if realAbs == realWorkDir {
 		rel = "."
 	} else {
-		rel, err = safeRelPath(realWorkDir, rawPath)
+		rel, err = safeRelPath(realWorkDir, rp.rawPath)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	root, err := os.OpenRoot(policy.WorkDir)
+	root, err := os.OpenRoot(rp.policy.WorkDir)
 	if err != nil {
-		return nil, fmt.Errorf("resolvepath: open working directory root %q: %w", policy.WorkDir, err)
+		return nil, fmt.Errorf("resolvepath: open working directory root %q: %w", rp.policy.WorkDir, err)
 	}
 
-	return &PathHandle{root: root, rel: rel, abs: realAbs, policy: policy, skillsWriteAudit: skillsWriteAudit}, nil
+	return &PathHandle{root: root, rel: rel, abs: realAbs, policy: rp.policy, skillsWriteAudit: skillsWriteAudit}, nil
 }
 
 // matchedAllowedRoot reports whether candidate falls on or under any of roots
