@@ -4,6 +4,7 @@ import { expect, test } from '@playwright/test';
 import { browserLiveFrame, browserLivePanel, browserLiveVideo, selectAgent } from '../e2e/fixtures/selectors';
 
 import { instrumentRoutes, routeEvidence } from './input-connection-probe';
+import { browserTestWorkspacePath } from './test-workspace';
 
 const fixture = fs.readFileSync(fileURLToPath(new URL('./audio-clock-fixture.html', import.meta.url)), 'utf8');
 const target = new URL(JSON.parse(fs.readFileSync(process.env.BROWSER_INPUT_FIXTURE_CONFIG!, 'utf8')).url);
@@ -47,9 +48,12 @@ test('same peer silence-tone-silence with viewer muted then unmuted', async ({ p
   });
   try {
     const served = await page.request.get(target.href, { maxRedirects: 0 }); expect(served.status()).toBe(200); expect(await served.text()).toBe(fixture);
-    await page.goto('/workspaces/01M01TTSDZBFGM28NPHGTFZ17T/chat'); await selectAgent(page, 'Browser UAT Test');
+    await page.goto(browserTestWorkspacePath);
+    await expect(page).toHaveURL(url => url.hash === browserTestWorkspacePath.slice(1)); await selectAgent(page, 'Browser UAT Test');
+    const startupAt = Date.now();
     await page.getByRole('button', { name: 'Open browser', exact: true }).click(); await expect(browserLivePanel(page)).toBeVisible();
-    await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready');
+    await expect(page.locator('[data-input-mode="dedicated"]')).toHaveAttribute('data-input-state', 'ready', { timeout: 45000 });
+    observations.push({ checkpoint: 'initial-ready', startupMs: Date.now() - startupAt });
     const address = page.getByRole('textbox', { name: 'Address bar' }); await address.fill(target.href); await address.press('Enter');
     await expect.poll(async () => { try { const s = await read(); return s.fixture && s.phase === -1; } catch { return false; } }, { timeout: 45000 }).toBe(true);
     let owner: number | undefined;
@@ -121,7 +125,7 @@ test('same peer silence-tone-silence with viewer muted then unmuted', async ({ p
   } finally {
     const final = await read().catch(() => null);
     const routing = await routeEvidence(page).catch(() => null);
-    fs.writeFileSync(info.outputPath('audio-clock-evidence.json'), JSON.stringify({ provenance, observations, errors, final, routing }, null, 2));
+    fs.writeFileSync(info.outputPath('audio-clock-evidence.json'), JSON.stringify({ provenance, testWorkspace: browserTestWorkspacePath, observations, errors, final, routing }, null, 2));
     await info.attach('audio-clock-evidence', { path: info.outputPath('audio-clock-evidence.json'), contentType: 'application/json' });
     await page.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }).catch(() => {});
   }
