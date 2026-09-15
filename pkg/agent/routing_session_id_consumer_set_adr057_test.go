@@ -472,6 +472,13 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	if got := counts[u19BucketPreArm]; got != 3 {
 		t.Errorf("pre-arm key reads = %d, want 3 (FR-016's three direct sites: cancel_prearm.go x2, subturn.go x1)", got)
 	}
+	// typedTurnExit's stamp (ADR-066 D7, counted below) lives in loop.go's
+	// emitTurnErrorFrame, which typedTurnExit and subturn.go's
+	// subTurnTimedOutResult (UAT A-17: a delegation force-cancelled at its
+	// time limit) share — one read, one frame shape, two exits. The
+	// force-cancel is the exit a timed-out child took through typedTurnExit
+	// before the force-cancel existed, so sharing the emitter adds no
+	// consumer, and the emitter never hands the value back to a caller.
 	if got := counts[u19BucketWSStamping]; got != 20 {
 		t.Errorf("WS-payload-stamping reads = %d, want 20 (loop.go x18, subturn.go x2: SubTurnSpawnPayload + "+
 			"SubTurnEndPayload). loop.go grew from 2 to 13 in the 2026-08 UAT remediation, then to 14 when "+

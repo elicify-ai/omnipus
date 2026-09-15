@@ -29,6 +29,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -134,6 +135,35 @@ func TestSubTurn_TimedOutChild_StartsNoFurtherToolCalls(t *testing.T) {
 		transcriptStore:     sessionStore,
 	}
 
+	// The force-cancel also records WHY the child stopped (asserted at the
+	// end). Subscribed with a generous buffer: EventKindError is best-effort on
+	// the bus — a full subscriber drops it — and the child emits many events
+	// before the one pinned here.
+	sub := al.SubscribeEvents(1024)
+	var (
+		framesMu sync.Mutex
+		frames   []ErrorPayload
+	)
+	collected := make(chan struct{})
+	go func() {
+		defer close(collected)
+		for evt := range sub.C {
+			if p, ok := evt.Payload.(ErrorPayload); ok && evt.Kind == EventKindError && p.Stage == "subturn_timeout" {
+				framesMu.Lock()
+				frames = append(frames, p)
+				framesMu.Unlock()
+			}
+		}
+	}()
+	var unsubscribeOnce sync.Once
+	unsubscribe := func() {
+		unsubscribeOnce.Do(func() {
+			al.UnsubscribeEvents(sub.ID)
+			<-collected
+		})
+	}
+	t.Cleanup(unsubscribe)
+
 	const limit = 1500 * time.Millisecond
 
 	type outcome struct {
@@ -190,4 +220,17 @@ func TestSubTurn_TimedOutChild_StartsNoFurtherToolCalls(t *testing.T) {
 	assert.True(t, got.res.IsError, "a timed-out delegation must not read as a success: %q", got.res.ForLLM)
 	assert.False(t, got.res.Interrupted,
 		"a timeout is not a user/parent cancellation — it must not be reported as interrupted")
+
+	// The force-cancel's error frame: exactly one, on the delegating chat's
+	// routing session (ADR-057: a child inherits it, so a reload or a second
+	// tab of that chat still receives the frame), classified as a timeout and
+	// worded as the delegation's own time limit.
+	unsubscribe()
+	framesMu.Lock()
+	defer framesMu.Unlock()
+	require.Len(t, frames, 1, "want exactly one subturn_timeout error frame for the force-cancelled child")
+	assert.Equal(t, parentSessionID, frames[0].SessionID,
+		"the force-cancel frame must carry the delegating chat's routing session id")
+	assert.Equal(t, string(CodeTurnTimedOut), frames[0].Code)
+	assert.Contains(t, frames[0].Message, "time limit")
 }

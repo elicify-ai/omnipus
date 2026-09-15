@@ -2198,18 +2198,15 @@ func subTurnTimedOutResult(al *AgentLoop, childTS *turnState, limit time.Duratio
 		llm := TranslateTurnError(err)
 		llm.Message = fmt.Sprintf("This delegated task reached its %s time limit and was force-cancelled. "+
 			"It made no further tool calls or changes after that point.", limit)
-		al.emitEvent(
-			EventKindError,
-			childTS.eventMeta("spawnSubTurn", "subturn.force_cancel"),
-			ErrorPayload{
-				Stage:     "subturn_timeout",
-				ChatID:    childTS.opts.ChatID,
-				Code:      string(llm.Code),
-				Message:   llm.Message,
-				SessionID: string(childTS.routingSessionID),
-			},
-		)
-		childTS.appendClassifiedError(EventKindError.String(), "subturn_timeout", llm)
+		// The same error frame and transcript record typedTurnExit writes for
+		// a turn that timed out on its own, through the same emitter: before
+		// the force-cancel existed, a timed-out child exited through
+		// typedTurnExit, and this is that record with truthful wording. The
+		// frame's session id is stamped inside emitTurnErrorFrame (loop.go),
+		// so this function never reads routingSessionID and adds no consumer
+		// to ADR-057 FR-014's closed set.
+		al.emitTurnErrorFrame(childTS, childTS.eventMeta("spawnSubTurn", "subturn.force_cancel"),
+			"subturn_timeout", "subturn_timeout", llm)
 	}
 
 	return &tools.ToolResult{

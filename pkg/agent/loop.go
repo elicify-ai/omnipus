@@ -13801,18 +13801,7 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 	}
 	llm := typedExitError(code, cause)
 
-	al.emitEvent(
-		EventKindError,
-		ts.eventMeta("runTurn", "turn.error"),
-		ErrorPayload{
-			Stage:     "llm",
-			ChatID:    ts.opts.ChatID,
-			Code:      string(llm.Code),
-			Message:   llm.Message,
-			SessionID: string(ts.routingSessionID),
-		},
-	)
-	ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+	al.emitTurnErrorFrame(ts, ts.eventMeta("runTurn", "turn.error"), "llm", "runTurn", llm)
 	level("agent", "Turn exited: "+string(code), map[string]any{
 		"agent_id":  ts.agent.ID,
 		"iteration": iteration,
@@ -13821,6 +13810,34 @@ func (al *AgentLoop) typedTurnExit(ts *turnState, iteration int, llmModel string
 		"cause":     cause.Error(),
 	})
 	return turnResult{status: status}, status, fmt.Errorf("%w: %w", sentinel, cause)
+}
+
+// emitTurnErrorFrame emits one EventKindError frame for a turn that ended on a
+// classified error, and records the same error in that turn's transcript so a
+// reload re-renders it. payloadStage is the frame's Stage; transcriptStage is
+// the transcript entry's stage.
+//
+// ADR-057 FR-014: this is a WS-payload-stamping consumer of routingSessionID.
+// The frame's SessionID is ts.routingSessionID — the session a second tab or a
+// reload is attached to; a webchat ChatID alone is a dead per-connection id —
+// and the value never leaves this function. Two exits share it: typedTurnExit
+// (a turn cancelled, timed out, or out of context) and subturn.go's
+// subTurnTimedOutResult (a delegation force-cancelled at its time limit, the
+// exit a timed-out child took through typedTurnExit before the force-cancel
+// existed). Code that needs the id for any other purpose must read the field
+// itself and justify that read against the consumer-set test
+// (routing_session_id_consumer_set_adr057_test.go).
+func (al *AgentLoop) emitTurnErrorFrame(
+	ts *turnState, meta EventMeta, payloadStage, transcriptStage string, llm LLMError,
+) {
+	al.emitEvent(EventKindError, meta, ErrorPayload{
+		Stage:     payloadStage,
+		ChatID:    ts.opts.ChatID,
+		Code:      string(llm.Code),
+		Message:   llm.Message,
+		SessionID: string(ts.routingSessionID),
+	})
+	ts.appendClassifiedError(EventKindError.String(), transcriptStage, llm)
 }
 
 // abortTurn finalizes a hard-aborted turn. It differentiates two cases by
