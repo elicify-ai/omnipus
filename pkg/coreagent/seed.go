@@ -502,1064 +502,1099 @@ func tightenGlobalCeiling(overrides map[string]config.ToolPolicy) map[string]con
 //
 // The returned map is an independent allocation — callers may mutate it safely.
 func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
-	allow := config.ToolPolicyAllow
-	deny := config.ToolPolicyDeny
-	ask := config.ToolPolicyAsk
 	if id == IDWorker {
-		// Worker tracks the seeded global tool-policy ceiling
-		// (sandbox.tool_policies, pkg/config/defaults.go) for every tool NOT
-		// listed here — a deliberate design choice (operator-confirmed), not
-		// an oversight: everything absent from this map inherits the global
-		// default via coverage-validator OR-semantics
-		// (config.ValidateToolPolicyCoverage). Only the categories below are
-		// tightened past the global ceiling to "deny": channels, providers,
-		// platform, most of agents (list_agents stays open), most of tasks
-		// (list_tasks/update_task/set_todos stay open), and workspaces.
-		//
-		// This sparseness is preserved across upgrades:
-		// backfillToolPolicyCatalogDrift (tool_policy_catalog_drift.go) fills
-		// a pre-existing agent's missing entries from THIS map's keys, never
-		// from the full catalog, so a name deliberately left out here keeps
-		// inheriting the ceiling. The corollary is the one to remember when
-		// editing this map: a tool that should sit BELOW the ceiling must be
-		// written out here explicitly, on the upgrade path exactly as on the
-		// fresh-install path.
-		//
-		// EXCEPTION (ADR-081 D11, FR-009 — founder ruling): "grep" is the
-		// first entry this map carries that is NOT a below-ceiling
-		// tightening — its value ("allow") is IDENTICAL to the global
-		// ceiling, so by every rule stated above it could simply be left
-		// absent and inherit. It is written out anyway, deliberately
-		// breaking the "every entry here tightens below the ceiling"
-		// pattern: the grep founder ruling
-		// (unified-search-and-grep-spec.md MV-8) requires an EXPLICIT
-		// "allow" for every agent tier with no posture left to silent
-		// inheritance — including the Worker, whose otherwise-sparse map
-		// would normally leave a ceiling-matching "allow" implicit. See the
-		// matching note on tool_policy_catalog_drift.go's "What it
-		// deliberately does NOT do" section.
-		return tightenGlobalCeiling(map[string]config.ToolPolicy{
-			// --- Channels ---
-			"enable_channel":    deny,
-			"configure_channel": deny,
-			"disable_channel":   deny,
-			"list_channels":     deny,
-			"test_channel":      deny,
-			// --- Providers ---
-			"configure_provider": deny,
-			"list_providers":     deny,
-			"test_provider":      deny,
-			"list_models":        deny,
-			// --- Platform ---
-			"get_config": deny,
-			"set_config": deny,
-			"run_doctor": deny,
-			"get_usage":  deny,
-			// --- Agents (list_agents stays at the global default) ---
-			"create_agent":        deny,
-			"update_agent":        deny,
-			"delete_agent":        deny,
-			"read_agent_metadata": deny,
-			// --- Tasks (update_task/set_todos/list_tasks stay at the global default) ---
-			"create_task":              deny,
-			"delete_task":              deny,
-			"create_task_in_workspace": deny,
-			"update_task_in_workspace": deny,
-			"delete_task_in_workspace": deny,
-			"list_tasks_in_workspace":  deny,
-			// --- Workspaces ---
-			"create_workspace": deny,
-			"update_workspace": deny,
-			"delete_workspace": deny,
-			"list_workspaces":  deny,
-			"get_workspace":    deny,
-			// --- ADR-052 planning/verifier tools ---
-			// create_plan/execute_plan/run_task are EXPLICIT "ask" here.
-			//
-			// They were deliberately ABSENT until 2026-07-28, inheriting
-			// "ask" from the global ceiling (DS-6) — correct only for as
-			// long as that ceiling stayed "ask". When the ceiling was
-			// raised to "allow" (so Jim's own seeded "allow" could finally
-			// resolve at all; see pkg/config/defaults.go's ADR-052 note),
-			// absence here would have silently GRANTED all three to the
-			// Worker: the exact "ceiling is allow, so absence GRANTS" trap
-			// that inspect_session, stop_plan/plan_correct and list_jobs
-			// below each already document, hit a fourth time. Caught by
-			// tool_policy_effective_resolution_test.go — which is why that
-			// test asserts the whole seeded roster, not just Jim.
-			//
-			// "ask", not "deny": this restores exactly the posture the
-			// Worker had before the ceiling moved. Tightening it further
-			// would be an unrelated policy change smuggled in on a bug fix.
-			"create_plan":  ask,
-			"execute_plan": ask,
-			"run_task":     ask,
-			// inspect_session, by contrast, is an EXPLICIT "deny" here
-			// (fix-wave finding #2) — NOT absent: the global ceiling now
-			// seeds inspect_session "allow" (raising the ceiling so the
-			// Judge's own "allow" resolves cleanly under strictest-wins,
-			// see defaults.go), so an absent entry here would silently
-			// inherit that "allow" instead of the deny every non-Judge
-			// agent must carry.
-			"inspect_session": deny,
-			// --- ADR-055 containment (FR-006b exception 1) ---
-			// stop_plan is an EXPLICIT "deny" here for exactly the
-			// inspect_session reason directly above, not for a new one:
-			// its global ceiling is "allow" (pkg/config/defaults.go), so
-			// leaving it ABSENT from this sparse map would silently GRANT
-			// it to the Worker. A Worker can never be a plan's
-			// owner_agent_id, so the grant would be unusable rather than
-			// dangerous — but "unusable grant" is not a posture this
-			// codebase ships (Constraint #6). plan_correct needs no entry
-			// of its own: it is not in this map either, and its ceiling
-			// grant is likewise held shut by the engine's exact-identity
-			// gate — but the same "explicit beats inherited" reasoning
-			// applies, so it is named too rather than left to inference.
-			"stop_plan":    deny,
-			"plan_correct": deny,
-			// set_goal (ADR-088 D2) is an EXPLICIT "deny" here for exactly
-			// the inspect_session/stop_plan/plan_correct reason directly
-			// above: its global ceiling is "allow" (pkg/config/defaults.go),
-			// so leaving it ABSENT from this sparse map would silently GRANT
-			// it to the Worker. A generic delegated worker session should
-			// never author its own goal record — the tool's own scope
-			// preconditions already refuse it at delegation depth > 0, but
-			// "unusable grant" is not a posture this codebase ships
-			// (Constraint #6), so it is named too rather than left to
-			// inference.
-			"set_goal": deny,
-			// goal_claim (ADR-084 D12) is an EXPLICIT "allow" here, and
-			// unlike set_goal directly above it is not denied. A task can be
-			// assigned to the Worker, and a native task run completes ONLY
-			// when its goal_claim is upheld by the Judge (ADR-084 §11,
-			// ADR-043 §8, issue #710): update_task refuses a status write on
-			// the caller's own running task, so goal_claim is the only way a
-			// Worker task run can finish. The tool's own preconditions allow
-			// a task's own run to claim at any delegation depth and still
-			// refuse a delegated sub-turn that is not a task run
-			// (pkg/tools/goal_claim.go::Execute), so an ordinary delegated
-			// Worker session still cannot claim its parent's goal.
-			//
-			// This entry was "deny" until 2026-09-15, on the premise that
-			// the preconditions refused every Worker call anyway. Once task
-			// runs could claim, that deny made every task assigned to the
-			// Worker loop through its tries without ever finishing (live
-			// smoke test on build f4e482561).
-			//
-			// Founder decision 2026-09-15: goal_claim is allowed by default
-			// for every agent. Named explicitly rather than left absent
-			// (which would also resolve allow from today's ceiling) so the
-			// Worker's default is readable in its own stored map, and so a
-			// fresh install stores exactly what the one-time update writes
-			// on an install seeded with the old deny
-			// (applyWorkerGoalClaimAllowUpdate). An operator can still set
-			// deny afterwards; that value is kept.
-			"goal_claim": allow,
-			// --- ADR-056 roster visibility ---
-			// Same "ceiling is allow, so absence GRANTS" trap once more, and
-			// here the grant would not merely be unusable: the Worker id is
-			// occupied by every generic delegated session in the installation
-			// at once, so a Worker roster would enumerate sibling branches of
-			// unrelated parent turns rather than its own work. See
-			// coreAgentSeed's ROSTER VISIBILITY rule.
-			"list_jobs": deny,
-			// --- ADR-068 D15.3 knowledge-base tools ---
-			// EXPLICIT deny, all six — the "ceiling is allow, so absence
-			// GRANTS" trap once more (see inspect_session / stop_plan /
-			// list_jobs above). D15.3 seeds a posture for the FOUR BASE
-			// AGENTS and nobody else, and every other seeded agent reaches
-			// deny via denyAllThenOverride's fully-enumerated default. This
-			// sparse map is the one seed that would not, so the deny is
-			// written out.
-			//
-			// Read-only knowledge_describe/knowledge_find/knowledge_read are
-			// denied here for the same reason list_jobs is: the Worker id is
-			// occupied by every generic delegated session in the
-			// installation at once, so a grant to "the Worker" is a grant to
-			// all of them. An operator who wants a delegated worker reading
-			// a knowledge base changes this on their own install
-			// (Constraint #6 — this is seeded data, not a branch).
-			"knowledge_describe": deny,
-			"knowledge_find":     deny,
-			"knowledge_read":     deny,
-			// knowledge_list (KB-2a) — the same Worker-id-is-shared reason as
-			// the three read tools directly above.
-			"knowledge_list":        deny,
-			"knowledge_edit":        deny,
-			"knowledge_restructure": deny,
-			"knowledge_configure":   deny,
-			// knowledge_base_create (KB-1) — the Worker cannot own a plan or
-			// be addressed individually (see list_jobs/roster-visibility
-			// reasoning above); a knowledge base "created by the Worker"
-			// would be indistinguishable from one created by any other
-			// delegated session sharing that id, so this stays denied for
-			// the same reason every other Worker write above does.
-			"knowledge_base_create": deny,
-			// --- ADR-081 D11 (FR-009, founder ruling) ---
-			// grep: EXPLICIT allow — the one entry in this map that MATCHES
-			// the ceiling rather than tightening below it. See the EXCEPTION
-			// note on this map's intro comment above: the founder ruling for
-			// grep leaves no agent's posture, including the Worker's, to
-			// silent ceiling inheritance.
-			"grep": allow,
-		})
+		return workerSeedPolicies()
 	}
-	// The delegation-only specialist tier (Planner/Explorer/Researcher) is a
-	// leaf/near-leaf surface: narrower and more predictable than the base
-	// agents. Deny-by-default; only the tools each role plausibly needs are
-	// allowed. None of these ever get bash or any system-management tool
-	// (create_agent, set_config, add_mcp_server, …) — those stay denied.
 	if IsSubagentTierID(id) {
-		ask := config.ToolPolicyAsk
-		overrides := map[string]config.ToolPolicy{
-			// Every leaf reports its result back.
-			"send_message": allow,
-			// AskUserQuestion (spec US-7 S1): allow for the whole human-facing
-			// subagent tier. The tool's own owner-session gate rejects any
-			// call from a DELEGATED run of these agents toward
-			// message_parent(question:true); the seed keeps the tool usable
-			// whenever one of them runs as a session owner.
-			"AskUserQuestion": allow,
-			// set_goal (ADR-088 D2): same reasoning as AskUserQuestion
-			// immediately above — its own scope precondition refuses a
-			// DELEGATED run (ToolDelegationDepth > 0), so the seed only ever
-			// matters when one of these agents runs as a session owner.
-			"set_goal": allow,
-			// goal_claim (ADR-084 D12): allow. It matters whenever one of
-			// these agents runs as a session owner, and whenever a task is
-			// assigned to it: a native task run finishes only through an
-			// upheld goal_claim (ADR-084 §11, issue #710), and the tool's own
-			// precondition lets a task's own run claim at any delegation
-			// depth while still refusing any other delegated sub-turn.
-			"goal_claim": allow,
-			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
-			// "ask" (never absent, never deny) for the three plan-execution
-			// tools — an operator-approval prompt gates any attempted use.
-			"create_plan":  ask,
-			"execute_plan": ask,
-			"run_task":     ask,
-			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
-			// same literal value. See coreAgentSeed's doc comment.
-			"stop_plan": ask,
-			// ADR-081 D11 (FR-009, founder ruling): grep is allowed for the
-			// WHOLE specialist tier — Planner, Explorer and Researcher alike
-			// — unlike knowledge_describe/knowledge_find/knowledge_read
-			// above, which are denied for this tier specifically because the
-			// Worker/specialist ids are shared across every concurrent
-			// delegated run of that role. grep carries no such identity
-			// ambiguity: it is scoped per-call to the CALLING agent's own
-			// workspace root and mounts (FR-020), so a grant to "the
-			// Planner" never crosses into a sibling delegated session's
-			// files the way a knowledge-base grant would. The founder ruling
-			// grants it unprompted to every agent tier with no posture left
-			// to silent inheritance.
-			"grep": allow,
-		}
-		switch id {
-		case IDPlanner:
-			// Decomposes a goal into a task DAG, delegating to Explorer/
-			// Researcher for context (bounded depth in the trust graph).
-			// Read-only file access, full task-management surface, delegate,
-			// and persistent memory to record decompositions. No browser —
-			// the Planner only decomposes, it doesn't browse.
-			overrides["read_file"] = allow
-			overrides["list_directory"] = allow
-			// Chat-uploaded files land in this workspace's library (D3,
-			// library-spec) — matches the read_file/list_directory allowance above.
-			overrides["library_list"] = allow
-			overrides["library_read"] = allow
-			overrides["request_mount"] = ask
-			overrides["list_mounts"] = allow
-			overrides["create_task"] = allow
-			overrides["update_task"] = allow
-			overrides["list_tasks"] = allow
-			overrides["delegate"] = allow
-			overrides["message_parent"] = allow
-			overrides["remember"] = allow
-			overrides["recall_memory"] = allow
-			overrides["run_retrospective"] = allow
-			overrides["recall_conversation"] = allow
-			// Structural floor (CLAUDE.md constraint 6): every agent needs
-			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
-			// seeded here as real data rather than the retired compositor.go
-			// hardcoded force-allow.
-			overrides["ToolSearch"] = allow
-			// Structural floor (ADR-072 D1, mirroring the ToolSearch
-			// structural floor immediately above): every agent needs the
-			// Skill tool to load ANY skill's content at all — the "# Skills"
-			// menu advertises skills but nothing else can ever load one.
-			overrides["Skill"] = allow
-		case IDExplorer:
-			// File + memory exploration (internal context): read-only
-			// filesystem, persistent memory, plus interactive/visual
-			// browsing for pages that need rendering (NOT browser_evaluate).
-			overrides["read_file"] = allow
-			overrides["list_directory"] = allow
-			// Chat-uploaded files land in this workspace's library (D3,
-			// library-spec) — matches the read_file/list_directory allowance above.
-			overrides["library_list"] = allow
-			overrides["library_read"] = allow
-			overrides["request_mount"] = ask
-			overrides["list_mounts"] = allow
-			overrides["remember"] = allow
-			overrides["recall_memory"] = allow
-			overrides["run_retrospective"] = allow
-			overrides["recall_conversation"] = allow
-			for _, b := range []string{
-				"browser_navigate", "browser_click", "browser_type",
-				"browser_screenshot", "browser_get_text", "browser_wait",
-				// ADR-041 D3 — tab-management, same allow as the rest of the
-				// interactive/visual browsing surface above.
-				"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
-				// ADR-075 D2 (FR-024) — parity with Jim and Ray on the new
-				// interaction verbs and the accessibility snapshot. None of
-				// the five is arbitrary-code-adjacent, which is the property
-				// the existing ten-allow/one-deny carve-out actually turns on:
-				// browser_evaluate stays denied here for the same reason it
-				// always was.
-				"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
-				// ADR-075 D2 FR-035/A-12 — allow for every browser-capable
-				// agent. A dialog wedges the tab for whoever hits it, so the
-				// verb that clears it has to be held by everyone who can open
-				// one. The dangerous half is guarded at the ARGUMENT, not
-				// here: `accept` defaults to false, and accepting is refused
-				// on a run with nobody to approve it. A tool policy cannot see
-				// an argument, so it cannot make that distinction.
-				"browser_handle_dialog",
-				// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow —
-				// this agent holds the full browser action set above, so it
-				// holds the verb that stands down from it.
-				"browser_handover",
-			} {
-				overrides[b] = allow
-			}
-			// FR-021: browser_upload_file is ASK for every agent that HOLDS
-			// the browser surface, delegation-tier workers included. A
-			// per-agent deny here was proposed and overruled by the operator;
-			// what answers the "nobody to approve an unattended ask" concern
-			// is FR-029 — the tool is not registered at all until #659 lands —
-			// not a tighter seed on this agent.
-			overrides["browser_upload_file"] = ask
-			// FR-030: the file:// refusal now points the agent at serve_web,
-			// and a pointer to a tool this agent resolves DENY for is #242's
-			// dead end relocated one failed tool call further away. This agent
-			// already holds write access within its confinement, so the
-			// marginal capability is serving an already-writable file over the
-			// existing token-authenticated preview route.
-			overrides["serve_web"] = allow
-			// Structural floor (CLAUDE.md constraint 6): every agent needs
-			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
-			// seeded here as real data rather than the retired compositor.go
-			// hardcoded force-allow.
-			overrides["ToolSearch"] = allow
-			// Structural floor (ADR-072 D1, mirroring the ToolSearch
-			// structural floor immediately above): every agent needs the
-			// Skill tool to load ANY skill's content at all — the "# Skills"
-			// menu advertises skills but nothing else can ever load one.
-			overrides["Skill"] = allow
-		case IDResearcher:
-			// External-source research: web search/fetch, read-only file
-			// access (for fetched/local docs), persistent memory, plus
-			// interactive/visual browsing for sources that need it.
-			overrides["search_web"] = allow
-			overrides["fetch_url"] = allow
-			overrides["read_file"] = allow
-			// Chat-uploaded files land in this workspace's library (D3,
-			// library-spec) — Researcher gets read access only (matches his
-			// read_file-only allowance; he has no list_directory either).
-			overrides["library_read"] = allow
-			overrides["request_mount"] = ask
-			overrides["list_mounts"] = allow
-			overrides["remember"] = allow
-			overrides["recall_memory"] = allow
-			overrides["run_retrospective"] = allow
-			overrides["recall_conversation"] = allow
-			for _, b := range []string{
-				"browser_navigate", "browser_click", "browser_type",
-				"browser_screenshot", "browser_get_text", "browser_wait",
-				// ADR-041 D3 — tab-management, same allow as the rest of the
-				// interactive/visual browsing surface above.
-				"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
-				// ADR-075 D2 (FR-024) — parity with Jim and Ray on the new
-				// interaction verbs and the accessibility snapshot. None of
-				// the five is arbitrary-code-adjacent, which is the property
-				// the existing ten-allow/one-deny carve-out actually turns on:
-				// browser_evaluate stays denied here for the same reason it
-				// always was.
-				"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
-				// ADR-075 D2 FR-035/A-12 — allow for every browser-capable
-				// agent. A dialog wedges the tab for whoever hits it, so the
-				// verb that clears it has to be held by everyone who can open
-				// one. The dangerous half is guarded at the ARGUMENT, not
-				// here: `accept` defaults to false, and accepting is refused
-				// on a run with nobody to approve it. A tool policy cannot see
-				// an argument, so it cannot make that distinction.
-				"browser_handle_dialog",
-				// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow —
-				// this agent holds the full browser action set above, so it
-				// holds the verb that stands down from it.
-				"browser_handover",
-			} {
-				overrides[b] = allow
-			}
-			// FR-021: browser_upload_file is ASK for every agent that HOLDS
-			// the browser surface, delegation-tier workers included. A
-			// per-agent deny here was proposed and overruled by the operator;
-			// what answers the "nobody to approve an unattended ask" concern
-			// is FR-029 — the tool is not registered at all until #659 lands —
-			// not a tighter seed on this agent.
-			overrides["browser_upload_file"] = ask
-			// FR-030: the file:// refusal now points the agent at serve_web,
-			// and a pointer to a tool this agent resolves DENY for is #242's
-			// dead end relocated one failed tool call further away. This agent
-			// already holds write access within its confinement, so the
-			// marginal capability is serving an already-writable file over the
-			// existing token-authenticated preview route.
-			overrides["serve_web"] = allow
-			// Structural floor (CLAUDE.md constraint 6): every agent needs
-			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
-			// seeded here as real data rather than the retired compositor.go
-			// hardcoded force-allow.
-			overrides["ToolSearch"] = allow
-			// Structural floor (ADR-072 D1, mirroring the ToolSearch
-			// structural floor immediately above): every agent needs the
-			// Skill tool to load ANY skill's content at all — the "# Skills"
-			// menu advertises skills but nothing else can ever load one.
-			overrides["Skill"] = allow
-		}
-		return denyAllThenOverride(overrides)
+		return subagentTierSeedPolicies(id)
 	}
 	switch id {
 	case IDAva:
-		// Ava — the Builder. LEAST-PRIVILEGE: deny-by-default, allow only the
-		// tools her role needs (build/maintain agents, author skills, assign a
-		// team to a workspace). This replaces the old allow-by-default + "system.*"
-		// deny rail, which the §7 tool rename silently broke — the renamed
-		// management tools (create_workspace, set_config, …) no longer match the
-		// "system.*" glob, so every former-system tool fell through to allow.
-		ask := config.ToolPolicyAsk
-		return denyAllThenOverride(map[string]config.ToolPolicy{
-			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
-			// the user structured clarification questions.
-			"AskUserQuestion": allow,
-			// set_goal (ADR-088 D2): every human-facing agent may author its
-			// own session's goal record — seeded alongside AskUserQuestion.
-			"set_goal": allow,
-			// goal_claim (ADR-084 D12): every human-facing agent may claim
-			// its own session's goal complete — seeded alongside set_goal.
-			"goal_claim": allow,
-			// Agent lifecycle — her core job. Delete is consent-gated (ask).
-			"create_agent": allow,
-			"update_agent": allow,
-			"delete_agent": ask,
-			"list_agents":  allow,
-			// Model selection + slug research (research the exact slug; never guess).
-			"list_models": allow,
-			"search_web":  allow,
-			"fetch_url":   allow,
-			// Persistent memory (FR-016/FR-017) — remember the user's design prefs.
-			"remember":            allow,
-			"recall_memory":       allow,
-			"run_retrospective":   allow,
-			"recall_conversation": allow,
-			// Communication / handoff (hand back to Mia/Jim when out of scope).
-			"send_message": allow,
-			"switch_agent": allow,
-			// Skill discovery + authoring (FR-9.2). Authoring/install are
-			// consent-gated (ask) so every skill-tree write routes through approval.
-			"find_skills":   allow,
-			"list_skills":   allow,
-			"create_skill":  ask,
-			"edit_skill":    ask,
-			"install_skill": ask,
-			// Assign a freshly-built team to a workspace via core_team. NOT
-			// create/delete_workspace — workspace lifecycle is Jim/admin. The read
-			// pair lets her find the workspace and see its current team first.
-			"update_workspace": allow,
-			"list_workspaces":  allow,
-			"get_workspace":    allow,
-			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
-			// "ask" (never absent, never deny) for the three plan-execution
-			// tools — an operator-approval prompt gates any attempted use.
-			"create_plan":  ask,
-			"execute_plan": ask,
-			"run_task":     ask,
-			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
-			// same literal value. See coreAgentSeed's doc comment.
-			"stop_plan": ask,
-			// ADR-056 roster visibility: Ava is a chat target and can therefore
-			// be a plan's owner (after an operator approves her "ask"), so she
-			// must be able to find the plan she owns in order to stop it. See
-			// coreAgentSeed's ROSTER VISIBILITY rule.
-			"list_jobs": allow,
-			// Structural floor (CLAUDE.md constraint 6): every agent needs
-			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
-			// seeded here as real data rather than the retired compositor.go
-			// hardcoded force-allow.
-			"ToolSearch": allow,
-			// Structural floor (ADR-072 D1, mirroring the ToolSearch
-			// structural floor immediately above): every agent needs the
-			// Skill tool to load ANY skill's content at all — the "# Skills"
-			// menu advertises skills but nothing else can ever load one.
-			"Skill": allow,
-			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS rather
-			// than by read/write (superseding ADR-067 D17's file). Retrieval
-			// (knowledge_describe/knowledge_find/knowledge_read) is allow
-			// for all four base agents: read-only, and scoped by the tool
-			// itself to this agent's workspace mounts (ADR-068's own
-			// isolation carries forward D7's). Ava was previously full-allow
-			// on every ADR-067 write too, because under that model EVERY
-			// write touched exactly one file she named — "she is a BUILDER,
-			// so she holds the write half unprompted, the same way she
-			// holds create_agent/update_agent" no longer holds unmodified,
-			// because ADR-068's split changes what the writes DO:
-			// knowledge_edit is still that one-file case (kept unprompted-
-			// adjacent by staying "ask" rather than "allow" only because
-			// this is the family's FIRST release under the new engine —
-			// see coreAgentSeed's doc note on this being a conservative
-			// default, not a permanent verdict on her role); but
-			// knowledge_restructure CASCADES to files she never named
-			// (every inbound-linking note gets rewritten on a rename/move/
-			// trash) and knowledge_configure changes what EXISTING records
-			// MEAN (a schema edit reclassifies every record of that type
-			// already on disk — see its own execEditRecordType/
-			// execCreateRecordType cascade report). Neither blast radius is
-			// bounded by what Ava's own arguments named, which is precisely
-			// the property that made every other ADR-067 write safe to grant
-			// her unprompted. So all three writes are "ask" here, not
-			// "allow" — a role-based exception for a specific agent is a
-			// decision for a human operator to make on their own install
-			// (Constraint #6), not a default this seed grants on Ava's
-			// behalf for an operation whose full effect she cannot bound
-			// from her own call.
-			"knowledge_describe": allow,
-			"knowledge_find":     allow,
-			"knowledge_read":     allow,
-			// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
-			// founder-ratified 2026-09-08) — allow, same read-tier posture as the
-			// three read tools above: it reports what already exists, touching
-			// nothing.
-			"knowledge_list":        allow,
-			"knowledge_edit":        ask,
-			"knowledge_restructure": ask,
-			"knowledge_configure":   ask,
-			// knowledge_base_create (KB-1, same defect list) — "ask", not "allow":
-			// it creates a new folder+marker in the operator's own Library, an
-			// effect this agent's own call cannot bound, matching the write-three's
-			// own "ask" reasoning immediately above.
-			"knowledge_base_create": ask,
-			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
-			// for every agent tier, including Ava — unlike the knowledge
-			// writes just above, it mutates nothing (a read-only recursive
-			// name/content search confined to her own workspace root and
-			// mounts, FR-020), so none of the cascade/control-plane
-			// reasoning that keeps those three at "ask" applies here.
-			"grep": allow,
-		})
+		return avaSeedPolicies()
 	case IDMia:
-		// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
-		// allow only the everyday-assistant surface (chat, memory, your tasks,
-		// email, light lookups). She ROUTES heavy work
-		// (build/shell/browser/research/admin) to Ava/Jim/Ray rather than doing
-		// it — matching her persona, which already refuses shell/browser.
-		ask := config.ToolPolicyAsk
-		return denyAllThenOverride(map[string]config.ToolPolicy{
-			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
-			// the user structured clarification questions.
-			"AskUserQuestion": allow,
-			// set_goal (ADR-088 D2): every human-facing agent may author its
-			// own session's goal record — seeded alongside AskUserQuestion.
-			"set_goal": allow,
-			// goal_claim (ADR-084 D12): every human-facing agent may claim
-			// its own session's goal complete — seeded alongside set_goal.
-			"goal_claim": allow,
-			// Converse / route.
-			"send_message": allow,
-			"switch_agent": allow,
-			"list_agents":  allow, // knows who to route to
-			"send_file":    allow, // share an artifact in chat
-			// Memory — her signature (memory-rich, cross-workspace recall).
-			"remember":            allow,
-			"recall_memory":       allow,
-			"run_retrospective":   allow,
-			"recall_conversation": allow,
-			// Your tasks ("runs your tasks"). Delete is consent-gated (ask).
-			"create_task": allow,
-			"update_task": allow,
-			"list_tasks":  allow,
-			"delete_task": ask,
-			"set_todos":   allow,
-			// Email — her domain.
-			"read_inbox":   allow,
-			"read_message": allow,
-			"reply":        allow,
-			"send_email":   allow,
-			"search_email": allow,
-			// Light lookups + skill discovery (she uses summarize/daily-briefing).
-			"search_web":  allow,
-			"fetch_url":   allow,
-			"find_skills": allow,
-			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
-			// "ask" (never absent, never deny) for the three plan-execution
-			// tools — an operator-approval prompt gates any attempted use.
-			"create_plan":  ask,
-			"execute_plan": ask,
-			"run_task":     ask,
-			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
-			// same literal value. See coreAgentSeed's doc comment.
-			"stop_plan": ask,
-			// ADR-056 roster visibility: "what of mine is still running?" is an
-			// everyday-assistant question, and Mia already owns the task surface
-			// it reports on. She is a chat target, so she can also own a plan
-			// once an operator approves the "ask" above — and would then need
-			// this to find it. See coreAgentSeed's ROSTER VISIBILITY rule.
-			"list_jobs": allow,
-			// Structural floor (CLAUDE.md constraint 6): every agent needs
-			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
-			// seeded here as real data rather than the retired compositor.go
-			// hardcoded force-allow.
-			"ToolSearch": allow,
-			// Structural floor (ADR-072 D1, mirroring the ToolSearch
-			// structural floor immediately above): every agent needs the
-			// Skill tool to load ANY skill's content at all — the "# Skills"
-			// menu advertises skills but nothing else can ever load one.
-			"Skill": allow,
-			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
-			// (superseding ADR-067 D17's file). Retrieval
-			// (knowledge_describe/knowledge_find/knowledge_read) is allow —
-			// read-only, workspace-scoped by the tool itself, and this
-			// supersedes the ADR-067-era distinction between knowledge_tasks
-			// and knowledge_search: knowledge_find is now the ONE retrieval
-			// surface (it answers task queries too, via `kind: task` —
-			// FR-076a), so there is no longer a second, narrower read name
-			// for a stricter posture to attach to.
-			//
-			// knowledge_edit, knowledge_restructure and knowledge_configure
-			// are all "ask". Mia ROUTES heavy work rather than doing it, and
-			// every one of these lands on the operator's REAL disk outside
-			// the Library's audit path — so the everyday assistant asks
-			// before writing there, exactly as she asks before delete_task.
-			// This is the SAME "ask" ADR-067's knowledge_create/
-			// knowledge_move carried for her; ADR-068 does not loosen it —
-			// knowledge_restructure and knowledge_configure are, if
-			// anything, a WIDER blast radius than the single-file writes
-			// that already warranted asking (see coreAgentSeed's IDAva case
-			// for the cascade/control-plane argument, which applies
-			// identically here).
-			"knowledge_describe": allow,
-			"knowledge_find":     allow,
-			"knowledge_read":     allow,
-			// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
-			// founder-ratified 2026-09-08) — allow, same read-tier posture as the
-			// three read tools above: it reports what already exists, touching
-			// nothing.
-			"knowledge_list":        allow,
-			"knowledge_edit":        ask,
-			"knowledge_restructure": ask,
-			"knowledge_configure":   ask,
-			// knowledge_base_create (KB-1, same defect list) — "ask", not "allow":
-			// it creates a new folder+marker in the operator's own Library, an
-			// effect this agent's own call cannot bound, matching the write-three's
-			// own "ask" reasoning immediately above.
-			"knowledge_base_create": ask,
-			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
-			// for every agent tier, including Mia — unlike the knowledge
-			// writes just above, it mutates nothing (a read-only recursive
-			// name/content search confined to her own workspace root and
-			// mounts, FR-020), so the "she asks before writing there"
-			// reasoning above does not apply to a tool that never writes.
-			"grep": allow,
-		})
+		return miaSeedPolicies()
 	case IDRay:
-		// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
-		// allow only the research surface (search + read the web and local docs,
-		// drive a browser for interactive sources, write up findings to files,
-		// synthesize with memory, present with citations). No shell, no admin, no
-		// task/agent management — he researches and reports, he doesn't build or run.
-		ask := config.ToolPolicyAsk
-		return denyAllThenOverride(map[string]config.ToolPolicy{
-			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
-			// the user structured clarification questions.
-			"AskUserQuestion": allow,
-			// set_goal (ADR-088 D2): every human-facing agent may author its
-			// own session's goal record — seeded alongside AskUserQuestion.
-			"set_goal": allow,
-			// goal_claim (ADR-084 D12): every human-facing agent may claim
-			// its own session's goal complete — seeded alongside set_goal.
-			"goal_claim": allow,
-			// Web research.
-			"search_web": allow,
-			"fetch_url":  allow,
-			// Interactive / visual research (NOT browser_evaluate — arbitrary JS).
-			"browser_navigate":   allow,
-			"browser_click":      allow,
-			"browser_type":       allow,
-			"browser_get_text":   allow,
-			"browser_wait":       allow,
-			"browser_screenshot": allow,
-			// ADR-041 D3 — tab-management, same allow as the rest of Ray's
-			// interactive/visual browsing surface.
-			"browser_list_tabs":  allow,
-			"browser_switch_tab": allow,
-			"browser_close_tab":  allow,
-			"browser_open_tab":   allow,
-			// ADR-075 D2 — the interaction verbs and the accessibility
-			// snapshot. Same allow as the rest of Ray's browsing surface, and
-			// for the same reason browser_evaluate above is NOT: none of these
-			// five runs arbitrary code.
-			"browser_select_option": allow,
-			"browser_press_key":     allow,
-			"browser_hover":         allow,
-			"browser_snapshot":      allow,
-			// ADR-075 D2 FR-035/A-12 — the dialog recovery verb, allow. See
-			// the note on the delegation-tier seeds above: the consequential
-			// half (`accept:true`) is an argument-level guard, not a policy
-			// value, because policy cannot see arguments.
-			"browser_handle_dialog": allow,
-			// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow. Ray
-			// holds the full browser action set above, so he holds the verb
-			// that stands down from it — an agent that can drive the
-			// operator's browser must be able to hand it back.
-			"browser_handover": allow,
-			// FR-021 — ask, not deny. Attaching a file to a page on the
-			// operator's signed-in session is the one browser verb that hands
-			// their data outward, so it is consent-gated on every agent that
-			// holds the browser surface.
-			"browser_upload_file": ask,
-			// FR-030 — the file:// refusal now names serve_web, so Ray must be
-			// able to reach it; a pointer to a tool he resolves deny for is
-			// #242's dead end one failed call further away.
-			"serve_web": allow,
-			// Local sources + writing up research results.
-			"read_file":      allow,
-			"list_directory": allow,
-			"write_file":     allow,
-			"append_file":    allow,
-			"edit_file":      allow,
-			// Chat-uploaded files land in this workspace's library (D3,
-			// library-spec) — Ray needs to find and read them, matching his
-			// read_file/list_directory allowance above.
-			"library_list":  allow,
-			"library_read":  allow,
-			"request_mount": ask,
-			"list_mounts":   allow,
-			// Persistent memory (carries research context across sessions).
-			"remember":            allow,
-			"recall_memory":       allow,
-			"run_retrospective":   allow,
-			"recall_conversation": allow,
-			// Deep-research delegation: fan out parallel research subagents
-			// (delegate → many workers/Researcher) and poll them, then synthesize.
-			// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
-			"delegate": allow,
-			// message_parent (ADR-053 §5.1): only actually callable when Ray
-			// himself is running as a delegated child session, but seeded
-			// allow here to mirror delegate's posture exactly.
-			"message_parent": allow,
-			// Present / route / share an artifact.
-			"send_message": allow,
-			"switch_agent": allow,
-			"send_file":    allow,
-			// Working aids (his summarize skill; a research checklist).
-			"find_skills": allow,
-			"set_todos":   allow,
-			// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
-			// "ask" (never absent, never deny) for the three plan-execution
-			// tools — an operator-approval prompt gates any attempted use.
-			"create_plan":  ask,
-			"execute_plan": ask,
-			"run_task":     ask,
-			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
-			// same literal value. See coreAgentSeed's doc comment.
-			"stop_plan": ask,
-			// ADR-056 roster visibility: Ray fans out parallel research
-			// subagents (delegate: allow above) and then synthesizes, so the
-			// "which of my delegated children are still running?" roster is
-			// directly on his critical path. See coreAgentSeed's ROSTER
-			// VISIBILITY rule.
-			"list_jobs": allow,
-			// Structural floor (CLAUDE.md constraint 6): every agent needs
-			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
-			// seeded here as real data rather than the retired compositor.go
-			// hardcoded force-allow.
-			"ToolSearch": allow,
-			// Structural floor (ADR-072 D1, mirroring the ToolSearch
-			// structural floor immediately above): every agent needs the
-			// Skill tool to load ANY skill's content at all — the "# Skills"
-			// menu advertises skills but nothing else can ever load one.
-			"Skill": allow,
-			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
-			// (superseding ADR-067 D17's file). Ray is the Scout: retrieval
-			// (knowledge_describe/knowledge_find/knowledge_read) is squarely
-			// his job and is allow — "what is still open in this vault?" is
-			// a survey question, and knowledge_find now answers it directly
-			// via `kind: task` (FR-076a), superseding the old
-			// knowledge_tasks/knowledge_search split this comment used to
-			// reason about separately.
-			//
-			// knowledge_edit, knowledge_restructure and knowledge_configure
-			// are all "ask" — unchanged posture from ADR-067's knowledge_
-			// create/knowledge_move: he researches and reports rather than
-			// editing the operator's knowledge base, and his file writes go
-			// to the workspace (write_file/append_file above), not to a
-			// mounted vault. knowledge_restructure/knowledge_configure are a
-			// WIDER blast radius than the single-file writes that already
-			// warranted asking (see coreAgentSeed's IDAva case for the
-			// cascade/control-plane argument), so there is no case for
-			// loosening either past "ask" for a role whose job was never to
-			// write there at all.
-			"knowledge_describe": allow,
-			"knowledge_find":     allow,
-			"knowledge_read":     allow,
-			// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
-			// founder-ratified 2026-09-08) — allow, same read-tier posture as the
-			// three read tools above: it reports what already exists, touching
-			// nothing.
-			"knowledge_list":        allow,
-			"knowledge_edit":        ask,
-			"knowledge_restructure": ask,
-			"knowledge_configure":   ask,
-			// knowledge_base_create (KB-1, same defect list) — "ask", not "allow":
-			// it creates a new folder+marker in the operator's own Library, an
-			// effect this agent's own call cannot bound, matching the write-three's
-			// own "ask" reasoning immediately above.
-			"knowledge_base_create": ask,
-			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
-			// for every agent tier, including Ray — and squarely his job: a
-			// read-only recursive name/content search over local sources,
-			// confined to his own workspace root and mounts (FR-020), is the
-			// research surface this agent already holds (read_file,
-			// list_directory, search_web, fetch_url above), not a write that
-			// would warrant the "ask" his knowledge writes carry.
-			"grep": allow,
-		})
+		return raySeedPolicies()
 	case IDJim:
-		// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
-		// allow only the tools his role needs (plan, delegate, manage tasks +
-		// workspaces, run shell/browser). This replaces
-		// the old allow-by-default + "system.*" deny rail, which the §7 tool
-		// rename silently broke — renamed management tools (create_workspace,
-		// set_config, …) no longer match the "system.*" glob, so every
-		// former-system tool fell through to allow.
-		ask := config.ToolPolicyAsk
-		return denyAllThenOverride(map[string]config.ToolPolicy{
-			// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
-			// the user structured clarification questions.
-			"AskUserQuestion": allow,
-			// set_goal (ADR-088 D2): every human-facing agent may author its
-			// own session's goal record — seeded alongside AskUserQuestion.
-			"set_goal": allow,
-			// goal_claim (ADR-084 D12): every human-facing agent may claim
-			// its own session's goal complete — seeded alongside set_goal.
-			"goal_claim": allow,
-			// File operations — read, write, and navigate the workspace.
-			"read_file":      allow,
-			"write_file":     allow,
-			"edit_file":      allow,
-			"append_file":    allow,
-			"list_directory": allow,
-			// Chat-uploaded files land in this workspace's library (D3,
-			// library-spec) — Jim needs to find and read them, matching his
-			// read_file/list_directory allowance above.
-			"library_list":  allow,
-			"library_read":  allow,
-			"request_mount": ask,
-			"list_mounts":   allow,
-			// External lookups.
-			"search_web": allow,
-			"fetch_url":  allow,
-			// Web serving — scaffolds and serves web apps in the sandbox.
-			"serve_web": allow,
-			// Shell execution — sandboxed shell, foreground + background
-			// (ADR-036: exec/workspace_shell/workspace_shell_bg merged into
-			// one universally-registered tool, governed by this policy alone).
-			"bash": allow,
-			// Communication / routing.
-			"send_message": allow,
-			"send_file":    allow,
-			"switch_agent": allow,
-			// Persistent memory (carries planning context across sessions).
-			"remember":            allow,
-			"recall_memory":       allow,
-			"run_retrospective":   allow,
-			"recall_conversation": allow,
-			"set_todos":           allow,
-			// Delegation — delegate to subagents, poll them, list who's available.
-			// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
-			"delegate": allow,
-			// message_parent (ADR-053 §5.1): only actually callable when Jim
-			// himself is running as a delegated child session, but seeded
-			// allow here to mirror delegate's posture exactly.
-			"message_parent": allow,
-			"list_agents":    allow,
-			// Task management (current workspace).
-			"create_task": allow,
-			"list_tasks":  allow,
-			"update_task": allow,
-			// Task management (cross-workspace).
-			"create_task_in_workspace": allow,
-			"list_tasks_in_workspace":  allow,
-			"update_task_in_workspace": allow,
-			// Workspace lifecycle — Jim manages workspaces (not just reads them).
-			"get_workspace":    allow,
-			"list_workspaces":  allow,
-			"update_workspace": allow,
-			"create_workspace": allow,
-			// Skill discovery + installation (NOT authoring — that's Ava's domain).
-			"find_skills":   allow,
-			"list_skills":   allow,
-			"install_skill": allow,
-			// MCP server management. Jim may SEE the configured servers, but not
-			// add one: an MCP server definition is a program the gateway launches
-			// unconfined, so adding one escapes the sandbox through the front door
-			// (config.json is in the ADR-062 secret set exactly so an agent cannot
-			// write that entry with write_file). Denied in the global seed for the
-			// same reason — see the long rationale on "add_mcp_server" in
-			// pkg/config/defaults.go. Seeded data, not a code branch (CLAUDE.md
-			// constraint 6): an operator who wants Jim installing MCP servers
-			// changes this entry on their own install.
-			"list_mcp_servers": allow,
-			"add_mcp_server":   config.ToolPolicyDeny,
-			// Browser automation (interactive/visual work in the sandboxed browser).
-			// browser_evaluate (arbitrary JS) is operator-approved for Jim and stays
-			// runtime-gated by sandbox.browser_evaluate_enabled regardless of policy.
-			"browser_navigate":   allow,
-			"browser_click":      allow,
-			"browser_type":       allow,
-			"browser_wait":       allow,
-			"browser_get_text":   allow,
-			"browser_screenshot": allow,
-			"browser_evaluate":   allow,
-			// ADR-041 D3 — tab-management, same allow as the rest of Jim's
-			// browser automation surface.
-			"browser_list_tabs":  allow,
-			"browser_switch_tab": allow,
-			"browser_close_tab":  allow,
-			"browser_open_tab":   allow,
-			// ADR-075 D2 — the interaction verbs and the accessibility
-			// snapshot, same allow as the rest of Jim's browser surface.
-			"browser_select_option": allow,
-			"browser_press_key":     allow,
-			"browser_hover":         allow,
-			"browser_snapshot":      allow,
-			// ADR-075 D2 FR-035/A-12 — the dialog recovery verb, allow. See
-			// the note on the delegation-tier seeds above: the consequential
-			// half (`accept:true`) is an argument-level guard, not a policy
-			// value, because policy cannot see arguments.
-			"browser_handle_dialog": allow,
-			// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow, same
-			// reasoning as Ray's — Jim holds the full browser action set,
-			// so he holds the verb that stands down from it.
-			"browser_handover": allow,
-			// FR-021 — ask even for Jim, who holds every other browser grant
-			// including browser_evaluate. Attaching a file is the one verb
-			// that hands the operator's data OUT of the machine, and the
-			// consent gate is on the direction of travel, not on the agent.
-			"browser_upload_file": ask,
-			// Delete / remove operations are consent-gated (ask) — standing rule.
-			"delete_task":              ask,
-			"delete_task_in_workspace": ask,
-			"delete_workspace":         ask,
-			"remove_mcp_server":        ask,
-			// ADR-052 FR-005/R2-06: Jim is the ONLY seeded agent granted
-			// unprompted plan-execution — consistent with his orchestrator
-			// role. Every other seeded agent gets an explicit "ask" instead
-			// (never absent, never deny); the Judge gets "deny"
-			// (systemAgentSeed, DS-6).
-			//
-			// These three RESOLVE to "allow" for Jim only because the global
-			// ceiling for them is also "allow" (pkg/config/defaults.go). It
-			// was "ask" until 2026-07-28, which — under the strictest-wins
-			// global x agent merge — silently overruled all three entries
-			// below and made this whole grant dead on every install. If you
-			// are tightening the ceiling for any of these, you are reverting
-			// that fix: tool_policy_effective_resolution_test.go will fail,
-			// and it is telling you the truth.
-			"create_plan":  allow,
-			"execute_plan": allow,
-			"run_task":     allow,
-			// FR-006b seed rule: stop_plan rides with execute_plan, same map,
-			// same literal value — so the orchestrator who is the only agent
-			// seeded to START a plan unprompted is also the one seeded to STOP
-			// it unprompted. Its ceiling has always been "allow", so it kept
-			// resolving allow even while execute_plan's did not; both now do.
-			"stop_plan": allow,
-			// ADR-056 roster visibility: Jim is the only agent seeded to START
-			// a plan unprompted and the only one whose stop_plan actually
-			// RESOLVES allow, so he is the one agent for whom containment must
-			// work with no human in the loop — which needs a plan id he did not
-			// necessarily mint this turn. He is also the heaviest delegator.
-			// See coreAgentSeed's ROSTER VISIBILITY rule.
-			"list_jobs": allow,
-			// Structural floor (CLAUDE.md constraint 6): every agent needs
-			// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
-			// seeded here as real data rather than the retired compositor.go
-			// hardcoded force-allow.
-			"ToolSearch": allow,
-			// Structural floor (ADR-072 D1, mirroring the ToolSearch
-			// structural floor immediately above): every agent needs the
-			// Skill tool to load ANY skill's content at all — the "# Skills"
-			// menu advertises skills but nothing else can ever load one.
-			"Skill": allow,
-			// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
-			// (superseding ADR-067 D17's file). Retrieval
-			// (knowledge_describe/knowledge_find/knowledge_read) is allow
-			// for all four base agents.
-			//
-			// UNLIKE Ava/Mia/Ray above, Jim's writes (knowledge_edit,
-			// knowledge_restructure, knowledge_configure) stay "allow" too,
-			// and this is a DELIBERATE exception argued from Jim's own
-			// already-seeded posture a few lines above ("bash": allow), not
-			// an oversight that forgot to tighten him along with the other
-			// three. An "ask" gate on knowledge_restructure/
-			// knowledge_configure has real teeth for an agent who cannot
-			// otherwise touch the operator's files — that is exactly why
-			// Ava/Mia/Ray hold it. Jim already holds unprompted bash, and
-			// bash can rewrite, rename or delete anything in a mounted
-			// collection — including reproducing knowledge_restructure's
-			// cascade or knowledge_configure's schema rewrite by hand, with
-			// no prompt at all. Gating the knowledge-tool EQUIVALENTS behind
-			// "ask" for him specifically would not reduce what he can do; it
-			// would only make the orchestrator depend on a human to do
-			// through the audited, journal-backed tool what he could
-			// already do unaudited through bash. That is exactly the
-			// "protects nothing" prompt this codebase's own seeding
-			// philosophy warns against — training an operator to click
-			// through confirmations that gate nothing real, which erodes
-			// trust in the ones that do (see the analogous
-			// knowledge_tasks-vs-knowledge_search reasoning this file
-			// carried before ADR-068, now superseded but the same warning
-			// still holds for Jim's case here).
-			"knowledge_describe": allow,
-			"knowledge_find":     allow,
-			"knowledge_read":     allow,
-			// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
-			// founder-ratified 2026-09-08) — allow, same read-tier posture as the
-			// three read tools above: it reports what already exists, touching
-			// nothing.
-			"knowledge_list":        allow,
-			"knowledge_edit":        allow,
-			"knowledge_restructure": allow,
-			"knowledge_configure":   allow,
-			// knowledge_base_create (KB-1, same defect list) — allow, the same
-			// deliberate exception this case already argues for the write three
-			// above: unprompted bash can already create arbitrary folders and
-			// files, so gating the audited equivalent behind "ask" would protect
-			// nothing real here either.
-			"knowledge_base_create": allow,
-			// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
-			// for every agent tier, Jim included — consistent with his
-			// existing unprompted bash and knowledge-write grants above: a
-			// read-only recursive search confined to his own workspace root
-			// and mounts (FR-020) is a strictly narrower capability than
-			// what he can already do unaudited through bash.
-			"grep": allow,
-		})
+		return jimSeedPolicies()
 	}
 	// Defensive fallback for an ID outside the known roster (All() only ever
 	// passes Mia/Jim/Ava/Ray/Worker/Planner/Explorer/Researcher, so this branch
 	// should be unreachable) — deny every known tool, no implicit allow.
 	return denyAllThenOverride(nil)
+}
+
+// workerSeedPolicies is the Worker's seeded tool policy: sparse, tightening only listed tools below the global ceiling (see the comment inside).
+func workerSeedPolicies() map[string]config.ToolPolicy {
+	allow := config.ToolPolicyAllow
+	deny := config.ToolPolicyDeny
+	ask := config.ToolPolicyAsk
+	// Worker tracks the seeded global tool-policy ceiling
+	// (sandbox.tool_policies, pkg/config/defaults.go) for every tool NOT
+	// listed here — a deliberate design choice (operator-confirmed), not
+	// an oversight: everything absent from this map inherits the global
+	// default via coverage-validator OR-semantics
+	// (config.ValidateToolPolicyCoverage). Only the categories below are
+	// tightened past the global ceiling to "deny": channels, providers,
+	// platform, most of agents (list_agents stays open), most of tasks
+	// (list_tasks/update_task/set_todos stay open), and workspaces.
+	//
+	// This sparseness is preserved across upgrades:
+	// backfillToolPolicyCatalogDrift (tool_policy_catalog_drift.go) fills
+	// a pre-existing agent's missing entries from THIS map's keys, never
+	// from the full catalog, so a name deliberately left out here keeps
+	// inheriting the ceiling. The corollary is the one to remember when
+	// editing this map: a tool that should sit BELOW the ceiling must be
+	// written out here explicitly, on the upgrade path exactly as on the
+	// fresh-install path.
+	//
+	// EXCEPTION (ADR-081 D11, FR-009 — founder ruling): "grep" is the
+	// first entry this map carries that is NOT a below-ceiling
+	// tightening — its value ("allow") is IDENTICAL to the global
+	// ceiling, so by every rule stated above it could simply be left
+	// absent and inherit. It is written out anyway, deliberately
+	// breaking the "every entry here tightens below the ceiling"
+	// pattern: the grep founder ruling
+	// (unified-search-and-grep-spec.md MV-8) requires an EXPLICIT
+	// "allow" for every agent tier with no posture left to silent
+	// inheritance — including the Worker, whose otherwise-sparse map
+	// would normally leave a ceiling-matching "allow" implicit. See the
+	// matching note on tool_policy_catalog_drift.go's "What it
+	// deliberately does NOT do" section.
+	return tightenGlobalCeiling(map[string]config.ToolPolicy{
+		// --- Channels ---
+		"enable_channel":    deny,
+		"configure_channel": deny,
+		"disable_channel":   deny,
+		"list_channels":     deny,
+		"test_channel":      deny,
+		// --- Providers ---
+		"configure_provider": deny,
+		"list_providers":     deny,
+		"test_provider":      deny,
+		"list_models":        deny,
+		// --- Platform ---
+		"get_config": deny,
+		"set_config": deny,
+		"run_doctor": deny,
+		"get_usage":  deny,
+		// --- Agents (list_agents stays at the global default) ---
+		"create_agent":        deny,
+		"update_agent":        deny,
+		"delete_agent":        deny,
+		"read_agent_metadata": deny,
+		// --- Tasks (update_task/set_todos/list_tasks stay at the global default) ---
+		"create_task":              deny,
+		"delete_task":              deny,
+		"create_task_in_workspace": deny,
+		"update_task_in_workspace": deny,
+		"delete_task_in_workspace": deny,
+		"list_tasks_in_workspace":  deny,
+		// --- Workspaces ---
+		"create_workspace": deny,
+		"update_workspace": deny,
+		"delete_workspace": deny,
+		"list_workspaces":  deny,
+		"get_workspace":    deny,
+		// --- ADR-052 planning/verifier tools ---
+		// create_plan/execute_plan/run_task are EXPLICIT "ask" here.
+		//
+		// They were deliberately ABSENT until 2026-07-28, inheriting
+		// "ask" from the global ceiling (DS-6) — correct only for as
+		// long as that ceiling stayed "ask". When the ceiling was
+		// raised to "allow" (so Jim's own seeded "allow" could finally
+		// resolve at all; see pkg/config/defaults.go's ADR-052 note),
+		// absence here would have silently GRANTED all three to the
+		// Worker: the exact "ceiling is allow, so absence GRANTS" trap
+		// that inspect_session, stop_plan/plan_correct and list_jobs
+		// below each already document, hit a fourth time. Caught by
+		// tool_policy_effective_resolution_test.go — which is why that
+		// test asserts the whole seeded roster, not just Jim.
+		//
+		// "ask", not "deny": this restores exactly the posture the
+		// Worker had before the ceiling moved. Tightening it further
+		// would be an unrelated policy change smuggled in on a bug fix.
+		"create_plan":  ask,
+		"execute_plan": ask,
+		"run_task":     ask,
+		// inspect_session, by contrast, is an EXPLICIT "deny" here
+		// (fix-wave finding #2) — NOT absent: the global ceiling now
+		// seeds inspect_session "allow" (raising the ceiling so the
+		// Judge's own "allow" resolves cleanly under strictest-wins,
+		// see defaults.go), so an absent entry here would silently
+		// inherit that "allow" instead of the deny every non-Judge
+		// agent must carry.
+		"inspect_session": deny,
+		// --- ADR-055 containment (FR-006b exception 1) ---
+		// stop_plan is an EXPLICIT "deny" here for exactly the
+		// inspect_session reason directly above, not for a new one:
+		// its global ceiling is "allow" (pkg/config/defaults.go), so
+		// leaving it ABSENT from this sparse map would silently GRANT
+		// it to the Worker. A Worker can never be a plan's
+		// owner_agent_id, so the grant would be unusable rather than
+		// dangerous — but "unusable grant" is not a posture this
+		// codebase ships (Constraint #6). plan_correct needs no entry
+		// of its own: it is not in this map either, and its ceiling
+		// grant is likewise held shut by the engine's exact-identity
+		// gate — but the same "explicit beats inherited" reasoning
+		// applies, so it is named too rather than left to inference.
+		"stop_plan":    deny,
+		"plan_correct": deny,
+		// set_goal (ADR-088 D2) is an EXPLICIT "deny" here for exactly
+		// the inspect_session/stop_plan/plan_correct reason directly
+		// above: its global ceiling is "allow" (pkg/config/defaults.go),
+		// so leaving it ABSENT from this sparse map would silently GRANT
+		// it to the Worker. A generic delegated worker session should
+		// never author its own goal record — the tool's own scope
+		// preconditions already refuse it at delegation depth > 0, but
+		// "unusable grant" is not a posture this codebase ships
+		// (Constraint #6), so it is named too rather than left to
+		// inference.
+		"set_goal": deny,
+		// goal_claim (ADR-084 D12) is an EXPLICIT "allow" here, and
+		// unlike set_goal directly above it is not denied. A task can be
+		// assigned to the Worker, and a native task run completes ONLY
+		// when its goal_claim is upheld by the Judge (ADR-084 §11,
+		// ADR-043 §8, issue #710): update_task refuses a status write on
+		// the caller's own running task, so goal_claim is the only way a
+		// Worker task run can finish. The tool's own preconditions allow
+		// a task's own run to claim at any delegation depth and still
+		// refuse a delegated sub-turn that is not a task run
+		// (pkg/tools/goal_claim.go::Execute), so an ordinary delegated
+		// Worker session still cannot claim its parent's goal.
+		//
+		// This entry was "deny" until 2026-09-15, on the premise that
+		// the preconditions refused every Worker call anyway. Once task
+		// runs could claim, that deny made every task assigned to the
+		// Worker loop through its tries without ever finishing (live
+		// smoke test on build f4e482561).
+		//
+		// Founder decision 2026-09-15: goal_claim is allowed by default
+		// for every agent. Named explicitly rather than left absent
+		// (which would also resolve allow from today's ceiling) so the
+		// Worker's default is readable in its own stored map, and so a
+		// fresh install stores exactly what the one-time update writes
+		// on an install seeded with the old deny
+		// (applyWorkerGoalClaimAllowUpdate). An operator can still set
+		// deny afterwards; that value is kept.
+		"goal_claim": allow,
+		// --- ADR-056 roster visibility ---
+		// Same "ceiling is allow, so absence GRANTS" trap once more, and
+		// here the grant would not merely be unusable: the Worker id is
+		// occupied by every generic delegated session in the installation
+		// at once, so a Worker roster would enumerate sibling branches of
+		// unrelated parent turns rather than its own work. See
+		// coreAgentSeed's ROSTER VISIBILITY rule.
+		"list_jobs": deny,
+		// --- ADR-068 D15.3 knowledge-base tools ---
+		// EXPLICIT deny, all six — the "ceiling is allow, so absence
+		// GRANTS" trap once more (see inspect_session / stop_plan /
+		// list_jobs above). D15.3 seeds a posture for the FOUR BASE
+		// AGENTS and nobody else, and every other seeded agent reaches
+		// deny via denyAllThenOverride's fully-enumerated default. This
+		// sparse map is the one seed that would not, so the deny is
+		// written out.
+		//
+		// Read-only knowledge_describe/knowledge_find/knowledge_read are
+		// denied here for the same reason list_jobs is: the Worker id is
+		// occupied by every generic delegated session in the
+		// installation at once, so a grant to "the Worker" is a grant to
+		// all of them. An operator who wants a delegated worker reading
+		// a knowledge base changes this on their own install
+		// (Constraint #6 — this is seeded data, not a branch).
+		"knowledge_describe": deny,
+		"knowledge_find":     deny,
+		"knowledge_read":     deny,
+		// knowledge_list (KB-2a) — the same Worker-id-is-shared reason as
+		// the three read tools directly above.
+		"knowledge_list":        deny,
+		"knowledge_edit":        deny,
+		"knowledge_restructure": deny,
+		"knowledge_configure":   deny,
+		// knowledge_base_create (KB-1) — the Worker cannot own a plan or
+		// be addressed individually (see list_jobs/roster-visibility
+		// reasoning above); a knowledge base "created by the Worker"
+		// would be indistinguishable from one created by any other
+		// delegated session sharing that id, so this stays denied for
+		// the same reason every other Worker write above does.
+		"knowledge_base_create": deny,
+		// --- ADR-081 D11 (FR-009, founder ruling) ---
+		// grep: EXPLICIT allow — the one entry in this map that MATCHES
+		// the ceiling rather than tightening below it. See the EXCEPTION
+		// note on this map's intro comment above: the founder ruling for
+		// grep leaves no agent's posture, including the Worker's, to
+		// silent ceiling inheritance.
+		"grep": allow,
+	})
+}
+
+// The delegation-only specialist tier (Planner/Explorer/Researcher) is a
+// leaf/near-leaf surface: narrower and more predictable than the base
+// agents. Deny-by-default; only the tools each role plausibly needs are
+// allowed. None of these ever get bash or any system-management tool
+// (create_agent, set_config, add_mcp_server, …) — those stay denied.
+// subagentTierSeedPolicies returns that policy for one of the three.
+func subagentTierSeedPolicies(id CoreAgentID) map[string]config.ToolPolicy {
+	allow := config.ToolPolicyAllow
+	ask := config.ToolPolicyAsk
+	overrides := map[string]config.ToolPolicy{
+		// Every leaf reports its result back.
+		"send_message": allow,
+		// AskUserQuestion (spec US-7 S1): allow for the whole human-facing
+		// subagent tier. The tool's own owner-session gate rejects any
+		// call from a DELEGATED run of these agents toward
+		// message_parent(question:true); the seed keeps the tool usable
+		// whenever one of them runs as a session owner.
+		"AskUserQuestion": allow,
+		// set_goal (ADR-088 D2): same reasoning as AskUserQuestion
+		// immediately above — its own scope precondition refuses a
+		// DELEGATED run (ToolDelegationDepth > 0), so the seed only ever
+		// matters when one of these agents runs as a session owner.
+		"set_goal": allow,
+		// goal_claim (ADR-084 D12): allow. It matters whenever one of
+		// these agents runs as a session owner, and whenever a task is
+		// assigned to it: a native task run finishes only through an
+		// upheld goal_claim (ADR-084 §11, issue #710), and the tool's own
+		// precondition lets a task's own run claim at any delegation
+		// depth while still refusing any other delegated sub-turn.
+		"goal_claim": allow,
+		// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+		// "ask" (never absent, never deny) for the three plan-execution
+		// tools — an operator-approval prompt gates any attempted use.
+		"create_plan":  ask,
+		"execute_plan": ask,
+		"run_task":     ask,
+		// FR-006b seed rule: stop_plan rides with execute_plan, same map,
+		// same literal value. See coreAgentSeed's doc comment.
+		"stop_plan": ask,
+		// ADR-081 D11 (FR-009, founder ruling): grep is allowed for the
+		// WHOLE specialist tier — Planner, Explorer and Researcher alike
+		// — unlike knowledge_describe/knowledge_find/knowledge_read
+		// above, which are denied for this tier specifically because the
+		// Worker/specialist ids are shared across every concurrent
+		// delegated run of that role. grep carries no such identity
+		// ambiguity: it is scoped per-call to the CALLING agent's own
+		// workspace root and mounts (FR-020), so a grant to "the
+		// Planner" never crosses into a sibling delegated session's
+		// files the way a knowledge-base grant would. The founder ruling
+		// grants it unprompted to every agent tier with no posture left
+		// to silent inheritance.
+		"grep": allow,
+	}
+	switch id {
+	case IDPlanner:
+		// Decomposes a goal into a task DAG, delegating to Explorer/
+		// Researcher for context (bounded depth in the trust graph).
+		// Read-only file access, full task-management surface, delegate,
+		// and persistent memory to record decompositions. No browser —
+		// the Planner only decomposes, it doesn't browse.
+		overrides["read_file"] = allow
+		overrides["list_directory"] = allow
+		// Chat-uploaded files land in this workspace's library (D3,
+		// library-spec) — matches the read_file/list_directory allowance above.
+		overrides["library_list"] = allow
+		overrides["library_read"] = allow
+		overrides["request_mount"] = ask
+		overrides["list_mounts"] = allow
+		overrides["create_task"] = allow
+		overrides["update_task"] = allow
+		overrides["list_tasks"] = allow
+		overrides["delegate"] = allow
+		overrides["message_parent"] = allow
+		overrides["remember"] = allow
+		overrides["recall_memory"] = allow
+		overrides["run_retrospective"] = allow
+		overrides["recall_conversation"] = allow
+		// Structural floor (CLAUDE.md constraint 6): every agent needs
+		// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+		// seeded here as real data rather than the retired compositor.go
+		// hardcoded force-allow.
+		overrides["ToolSearch"] = allow
+		// Structural floor (ADR-072 D1, mirroring the ToolSearch
+		// structural floor immediately above): every agent needs the
+		// Skill tool to load ANY skill's content at all — the "# Skills"
+		// menu advertises skills but nothing else can ever load one.
+		overrides["Skill"] = allow
+	case IDExplorer:
+		// File + memory exploration (internal context): read-only
+		// filesystem, persistent memory, plus interactive/visual
+		// browsing for pages that need rendering (NOT browser_evaluate).
+		overrides["read_file"] = allow
+		overrides["list_directory"] = allow
+		// Chat-uploaded files land in this workspace's library (D3,
+		// library-spec) — matches the read_file/list_directory allowance above.
+		overrides["library_list"] = allow
+		overrides["library_read"] = allow
+		overrides["request_mount"] = ask
+		overrides["list_mounts"] = allow
+		overrides["remember"] = allow
+		overrides["recall_memory"] = allow
+		overrides["run_retrospective"] = allow
+		overrides["recall_conversation"] = allow
+		for _, b := range []string{
+			"browser_navigate", "browser_click", "browser_type",
+			"browser_screenshot", "browser_get_text", "browser_wait",
+			// ADR-041 D3 — tab-management, same allow as the rest of the
+			// interactive/visual browsing surface above.
+			"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
+			// ADR-075 D2 (FR-024) — parity with Jim and Ray on the new
+			// interaction verbs and the accessibility snapshot. None of
+			// the five is arbitrary-code-adjacent, which is the property
+			// the existing ten-allow/one-deny carve-out actually turns on:
+			// browser_evaluate stays denied here for the same reason it
+			// always was.
+			"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
+			// ADR-075 D2 FR-035/A-12 — allow for every browser-capable
+			// agent. A dialog wedges the tab for whoever hits it, so the
+			// verb that clears it has to be held by everyone who can open
+			// one. The dangerous half is guarded at the ARGUMENT, not
+			// here: `accept` defaults to false, and accepting is refused
+			// on a run with nobody to approve it. A tool policy cannot see
+			// an argument, so it cannot make that distinction.
+			"browser_handle_dialog",
+			// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow —
+			// this agent holds the full browser action set above, so it
+			// holds the verb that stands down from it.
+			"browser_handover",
+		} {
+			overrides[b] = allow
+		}
+		// FR-021: browser_upload_file is ASK for every agent that HOLDS
+		// the browser surface, delegation-tier workers included. A
+		// per-agent deny here was proposed and overruled by the operator;
+		// what answers the "nobody to approve an unattended ask" concern
+		// is FR-029 — the tool is not registered at all until #659 lands —
+		// not a tighter seed on this agent.
+		overrides["browser_upload_file"] = ask
+		// FR-030: the file:// refusal now points the agent at serve_web,
+		// and a pointer to a tool this agent resolves DENY for is #242's
+		// dead end relocated one failed tool call further away. This agent
+		// already holds write access within its confinement, so the
+		// marginal capability is serving an already-writable file over the
+		// existing token-authenticated preview route.
+		overrides["serve_web"] = allow
+		// Structural floor (CLAUDE.md constraint 6): every agent needs
+		// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+		// seeded here as real data rather than the retired compositor.go
+		// hardcoded force-allow.
+		overrides["ToolSearch"] = allow
+		// Structural floor (ADR-072 D1, mirroring the ToolSearch
+		// structural floor immediately above): every agent needs the
+		// Skill tool to load ANY skill's content at all — the "# Skills"
+		// menu advertises skills but nothing else can ever load one.
+		overrides["Skill"] = allow
+	case IDResearcher:
+		// External-source research: web search/fetch, read-only file
+		// access (for fetched/local docs), persistent memory, plus
+		// interactive/visual browsing for sources that need it.
+		overrides["search_web"] = allow
+		overrides["fetch_url"] = allow
+		overrides["read_file"] = allow
+		// Chat-uploaded files land in this workspace's library (D3,
+		// library-spec) — Researcher gets read access only (matches his
+		// read_file-only allowance; he has no list_directory either).
+		overrides["library_read"] = allow
+		overrides["request_mount"] = ask
+		overrides["list_mounts"] = allow
+		overrides["remember"] = allow
+		overrides["recall_memory"] = allow
+		overrides["run_retrospective"] = allow
+		overrides["recall_conversation"] = allow
+		for _, b := range []string{
+			"browser_navigate", "browser_click", "browser_type",
+			"browser_screenshot", "browser_get_text", "browser_wait",
+			// ADR-041 D3 — tab-management, same allow as the rest of the
+			// interactive/visual browsing surface above.
+			"browser_list_tabs", "browser_switch_tab", "browser_close_tab", "browser_open_tab",
+			// ADR-075 D2 (FR-024) — parity with Jim and Ray on the new
+			// interaction verbs and the accessibility snapshot. None of
+			// the five is arbitrary-code-adjacent, which is the property
+			// the existing ten-allow/one-deny carve-out actually turns on:
+			// browser_evaluate stays denied here for the same reason it
+			// always was.
+			"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
+			// ADR-075 D2 FR-035/A-12 — allow for every browser-capable
+			// agent. A dialog wedges the tab for whoever hits it, so the
+			// verb that clears it has to be held by everyone who can open
+			// one. The dangerous half is guarded at the ARGUMENT, not
+			// here: `accept` defaults to false, and accepting is refused
+			// on a run with nobody to approve it. A tool policy cannot see
+			// an argument, so it cannot make that distinction.
+			"browser_handle_dialog",
+			// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow —
+			// this agent holds the full browser action set above, so it
+			// holds the verb that stands down from it.
+			"browser_handover",
+		} {
+			overrides[b] = allow
+		}
+		// FR-021: browser_upload_file is ASK for every agent that HOLDS
+		// the browser surface, delegation-tier workers included. A
+		// per-agent deny here was proposed and overruled by the operator;
+		// what answers the "nobody to approve an unattended ask" concern
+		// is FR-029 — the tool is not registered at all until #659 lands —
+		// not a tighter seed on this agent.
+		overrides["browser_upload_file"] = ask
+		// FR-030: the file:// refusal now points the agent at serve_web,
+		// and a pointer to a tool this agent resolves DENY for is #242's
+		// dead end relocated one failed tool call further away. This agent
+		// already holds write access within its confinement, so the
+		// marginal capability is serving an already-writable file over the
+		// existing token-authenticated preview route.
+		overrides["serve_web"] = allow
+		// Structural floor (CLAUDE.md constraint 6): every agent needs
+		// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+		// seeded here as real data rather than the retired compositor.go
+		// hardcoded force-allow.
+		overrides["ToolSearch"] = allow
+		// Structural floor (ADR-072 D1, mirroring the ToolSearch
+		// structural floor immediately above): every agent needs the
+		// Skill tool to load ANY skill's content at all — the "# Skills"
+		// menu advertises skills but nothing else can ever load one.
+		overrides["Skill"] = allow
+	}
+	return denyAllThenOverride(overrides)
+}
+
+// avaSeedPolicies is Ava's seeded tool policy.
+func avaSeedPolicies() map[string]config.ToolPolicy {
+	allow := config.ToolPolicyAllow
+	// Ava — the Builder. LEAST-PRIVILEGE: deny-by-default, allow only the
+	// tools her role needs (build/maintain agents, author skills, assign a
+	// team to a workspace). This replaces the old allow-by-default + "system.*"
+	// deny rail, which the §7 tool rename silently broke — the renamed
+	// management tools (create_workspace, set_config, …) no longer match the
+	// "system.*" glob, so every former-system tool fell through to allow.
+	ask := config.ToolPolicyAsk
+	return denyAllThenOverride(map[string]config.ToolPolicy{
+		// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
+		// the user structured clarification questions.
+		"AskUserQuestion": allow,
+		// set_goal (ADR-088 D2): every human-facing agent may author its
+		// own session's goal record — seeded alongside AskUserQuestion.
+		"set_goal": allow,
+		// goal_claim (ADR-084 D12): every human-facing agent may claim
+		// its own session's goal complete — seeded alongside set_goal.
+		"goal_claim": allow,
+		// Agent lifecycle — her core job. Delete is consent-gated (ask).
+		"create_agent": allow,
+		"update_agent": allow,
+		"delete_agent": ask,
+		"list_agents":  allow,
+		// Model selection + slug research (research the exact slug; never guess).
+		"list_models": allow,
+		"search_web":  allow,
+		"fetch_url":   allow,
+		// Persistent memory (FR-016/FR-017) — remember the user's design prefs.
+		"remember":            allow,
+		"recall_memory":       allow,
+		"run_retrospective":   allow,
+		"recall_conversation": allow,
+		// Communication / handoff (hand back to Mia/Jim when out of scope).
+		"send_message": allow,
+		"switch_agent": allow,
+		// Skill discovery + authoring (FR-9.2). Authoring/install are
+		// consent-gated (ask) so every skill-tree write routes through approval.
+		"find_skills":   allow,
+		"list_skills":   allow,
+		"create_skill":  ask,
+		"edit_skill":    ask,
+		"install_skill": ask,
+		// Assign a freshly-built team to a workspace via core_team. NOT
+		// create/delete_workspace — workspace lifecycle is Jim/admin. The read
+		// pair lets her find the workspace and see its current team first.
+		"update_workspace": allow,
+		"list_workspaces":  allow,
+		"get_workspace":    allow,
+		// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+		// "ask" (never absent, never deny) for the three plan-execution
+		// tools — an operator-approval prompt gates any attempted use.
+		"create_plan":  ask,
+		"execute_plan": ask,
+		"run_task":     ask,
+		// FR-006b seed rule: stop_plan rides with execute_plan, same map,
+		// same literal value. See coreAgentSeed's doc comment.
+		"stop_plan": ask,
+		// ADR-056 roster visibility: Ava is a chat target and can therefore
+		// be a plan's owner (after an operator approves her "ask"), so she
+		// must be able to find the plan she owns in order to stop it. See
+		// coreAgentSeed's ROSTER VISIBILITY rule.
+		"list_jobs": allow,
+		// Structural floor (CLAUDE.md constraint 6): every agent needs
+		// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+		// seeded here as real data rather than the retired compositor.go
+		// hardcoded force-allow.
+		"ToolSearch": allow,
+		// Structural floor (ADR-072 D1, mirroring the ToolSearch
+		// structural floor immediately above): every agent needs the
+		// Skill tool to load ANY skill's content at all — the "# Skills"
+		// menu advertises skills but nothing else can ever load one.
+		"Skill": allow,
+		// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS rather
+		// than by read/write (superseding ADR-067 D17's file). Retrieval
+		// (knowledge_describe/knowledge_find/knowledge_read) is allow
+		// for all four base agents: read-only, and scoped by the tool
+		// itself to this agent's workspace mounts (ADR-068's own
+		// isolation carries forward D7's). Ava was previously full-allow
+		// on every ADR-067 write too, because under that model EVERY
+		// write touched exactly one file she named — "she is a BUILDER,
+		// so she holds the write half unprompted, the same way she
+		// holds create_agent/update_agent" no longer holds unmodified,
+		// because ADR-068's split changes what the writes DO:
+		// knowledge_edit is still that one-file case (kept unprompted-
+		// adjacent by staying "ask" rather than "allow" only because
+		// this is the family's FIRST release under the new engine —
+		// see coreAgentSeed's doc note on this being a conservative
+		// default, not a permanent verdict on her role); but
+		// knowledge_restructure CASCADES to files she never named
+		// (every inbound-linking note gets rewritten on a rename/move/
+		// trash) and knowledge_configure changes what EXISTING records
+		// MEAN (a schema edit reclassifies every record of that type
+		// already on disk — see its own execEditRecordType/
+		// execCreateRecordType cascade report). Neither blast radius is
+		// bounded by what Ava's own arguments named, which is precisely
+		// the property that made every other ADR-067 write safe to grant
+		// her unprompted. So all three writes are "ask" here, not
+		// "allow" — a role-based exception for a specific agent is a
+		// decision for a human operator to make on their own install
+		// (Constraint #6), not a default this seed grants on Ava's
+		// behalf for an operation whose full effect she cannot bound
+		// from her own call.
+		"knowledge_describe": allow,
+		"knowledge_find":     allow,
+		"knowledge_read":     allow,
+		// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
+		// founder-ratified 2026-09-08) — allow, same read-tier posture as the
+		// three read tools above: it reports what already exists, touching
+		// nothing.
+		"knowledge_list":        allow,
+		"knowledge_edit":        ask,
+		"knowledge_restructure": ask,
+		"knowledge_configure":   ask,
+		// knowledge_base_create (KB-1, same defect list) — "ask", not "allow":
+		// it creates a new folder+marker in the operator's own Library, an
+		// effect this agent's own call cannot bound, matching the write-three's
+		// own "ask" reasoning immediately above.
+		"knowledge_base_create": ask,
+		// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
+		// for every agent tier, including Ava — unlike the knowledge
+		// writes just above, it mutates nothing (a read-only recursive
+		// name/content search confined to her own workspace root and
+		// mounts, FR-020), so none of the cascade/control-plane
+		// reasoning that keeps those three at "ask" applies here.
+		"grep": allow,
+	})
+}
+
+// miaSeedPolicies is Mia's seeded tool policy.
+func miaSeedPolicies() map[string]config.ToolPolicy {
+	allow := config.ToolPolicyAllow
+	// Mia — the Assistant (default agent). LEAST-PRIVILEGE: deny-by-default,
+	// allow only the everyday-assistant surface (chat, memory, your tasks,
+	// email, light lookups). She ROUTES heavy work
+	// (build/shell/browser/research/admin) to Ava/Jim/Ray rather than doing
+	// it — matching her persona, which already refuses shell/browser.
+	ask := config.ToolPolicyAsk
+	return denyAllThenOverride(map[string]config.ToolPolicy{
+		// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
+		// the user structured clarification questions.
+		"AskUserQuestion": allow,
+		// set_goal (ADR-088 D2): every human-facing agent may author its
+		// own session's goal record — seeded alongside AskUserQuestion.
+		"set_goal": allow,
+		// goal_claim (ADR-084 D12): every human-facing agent may claim
+		// its own session's goal complete — seeded alongside set_goal.
+		"goal_claim": allow,
+		// Converse / route.
+		"send_message": allow,
+		"switch_agent": allow,
+		"list_agents":  allow, // knows who to route to
+		"send_file":    allow, // share an artifact in chat
+		// Memory — her signature (memory-rich, cross-workspace recall).
+		"remember":            allow,
+		"recall_memory":       allow,
+		"run_retrospective":   allow,
+		"recall_conversation": allow,
+		// Your tasks ("runs your tasks"). Delete is consent-gated (ask).
+		"create_task": allow,
+		"update_task": allow,
+		"list_tasks":  allow,
+		"delete_task": ask,
+		"set_todos":   allow,
+		// Email — her domain.
+		"read_inbox":   allow,
+		"read_message": allow,
+		"reply":        allow,
+		"send_email":   allow,
+		"search_email": allow,
+		// Light lookups + skill discovery (she uses summarize/daily-briefing).
+		"search_web":  allow,
+		"fetch_url":   allow,
+		"find_skills": allow,
+		// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+		// "ask" (never absent, never deny) for the three plan-execution
+		// tools — an operator-approval prompt gates any attempted use.
+		"create_plan":  ask,
+		"execute_plan": ask,
+		"run_task":     ask,
+		// FR-006b seed rule: stop_plan rides with execute_plan, same map,
+		// same literal value. See coreAgentSeed's doc comment.
+		"stop_plan": ask,
+		// ADR-056 roster visibility: "what of mine is still running?" is an
+		// everyday-assistant question, and Mia already owns the task surface
+		// it reports on. She is a chat target, so she can also own a plan
+		// once an operator approves the "ask" above — and would then need
+		// this to find it. See coreAgentSeed's ROSTER VISIBILITY rule.
+		"list_jobs": allow,
+		// Structural floor (CLAUDE.md constraint 6): every agent needs
+		// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+		// seeded here as real data rather than the retired compositor.go
+		// hardcoded force-allow.
+		"ToolSearch": allow,
+		// Structural floor (ADR-072 D1, mirroring the ToolSearch
+		// structural floor immediately above): every agent needs the
+		// Skill tool to load ANY skill's content at all — the "# Skills"
+		// menu advertises skills but nothing else can ever load one.
+		"Skill": allow,
+		// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
+		// (superseding ADR-067 D17's file). Retrieval
+		// (knowledge_describe/knowledge_find/knowledge_read) is allow —
+		// read-only, workspace-scoped by the tool itself, and this
+		// supersedes the ADR-067-era distinction between knowledge_tasks
+		// and knowledge_search: knowledge_find is now the ONE retrieval
+		// surface (it answers task queries too, via `kind: task` —
+		// FR-076a), so there is no longer a second, narrower read name
+		// for a stricter posture to attach to.
+		//
+		// knowledge_edit, knowledge_restructure and knowledge_configure
+		// are all "ask". Mia ROUTES heavy work rather than doing it, and
+		// every one of these lands on the operator's REAL disk outside
+		// the Library's audit path — so the everyday assistant asks
+		// before writing there, exactly as she asks before delete_task.
+		// This is the SAME "ask" ADR-067's knowledge_create/
+		// knowledge_move carried for her; ADR-068 does not loosen it —
+		// knowledge_restructure and knowledge_configure are, if
+		// anything, a WIDER blast radius than the single-file writes
+		// that already warranted asking (see coreAgentSeed's IDAva case
+		// for the cascade/control-plane argument, which applies
+		// identically here).
+		"knowledge_describe": allow,
+		"knowledge_find":     allow,
+		"knowledge_read":     allow,
+		// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
+		// founder-ratified 2026-09-08) — allow, same read-tier posture as the
+		// three read tools above: it reports what already exists, touching
+		// nothing.
+		"knowledge_list":        allow,
+		"knowledge_edit":        ask,
+		"knowledge_restructure": ask,
+		"knowledge_configure":   ask,
+		// knowledge_base_create (KB-1, same defect list) — "ask", not "allow":
+		// it creates a new folder+marker in the operator's own Library, an
+		// effect this agent's own call cannot bound, matching the write-three's
+		// own "ask" reasoning immediately above.
+		"knowledge_base_create": ask,
+		// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
+		// for every agent tier, including Mia — unlike the knowledge
+		// writes just above, it mutates nothing (a read-only recursive
+		// name/content search confined to her own workspace root and
+		// mounts, FR-020), so the "she asks before writing there"
+		// reasoning above does not apply to a tool that never writes.
+		"grep": allow,
+	})
+}
+
+// raySeedPolicies is Ray's seeded tool policy.
+func raySeedPolicies() map[string]config.ToolPolicy {
+	allow := config.ToolPolicyAllow
+	// Ray — the Scout / research analyst. LEAST-PRIVILEGE: deny-by-default,
+	// allow only the research surface (search + read the web and local docs,
+	// drive a browser for interactive sources, write up findings to files,
+	// synthesize with memory, present with citations). No shell, no admin, no
+	// task/agent management — he researches and reports, he doesn't build or run.
+	ask := config.ToolPolicyAsk
+	return denyAllThenOverride(map[string]config.ToolPolicy{
+		// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
+		// the user structured clarification questions.
+		"AskUserQuestion": allow,
+		// set_goal (ADR-088 D2): every human-facing agent may author its
+		// own session's goal record — seeded alongside AskUserQuestion.
+		"set_goal": allow,
+		// goal_claim (ADR-084 D12): every human-facing agent may claim
+		// its own session's goal complete — seeded alongside set_goal.
+		"goal_claim": allow,
+		// Web research.
+		"search_web": allow,
+		"fetch_url":  allow,
+		// Interactive / visual research (NOT browser_evaluate — arbitrary JS).
+		"browser_navigate":   allow,
+		"browser_click":      allow,
+		"browser_type":       allow,
+		"browser_get_text":   allow,
+		"browser_wait":       allow,
+		"browser_screenshot": allow,
+		// ADR-041 D3 — tab-management, same allow as the rest of Ray's
+		// interactive/visual browsing surface.
+		"browser_list_tabs":  allow,
+		"browser_switch_tab": allow,
+		"browser_close_tab":  allow,
+		"browser_open_tab":   allow,
+		// ADR-075 D2 — the interaction verbs and the accessibility
+		// snapshot. Same allow as the rest of Ray's browsing surface, and
+		// for the same reason browser_evaluate above is NOT: none of these
+		// five runs arbitrary code.
+		"browser_select_option": allow,
+		"browser_press_key":     allow,
+		"browser_hover":         allow,
+		"browser_snapshot":      allow,
+		// ADR-075 D2 FR-035/A-12 — the dialog recovery verb, allow. See
+		// the note on the delegation-tier seeds above: the consequential
+		// half (`accept:true`) is an argument-level guard, not a policy
+		// value, because policy cannot see arguments.
+		"browser_handle_dialog": allow,
+		// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow. Ray
+		// holds the full browser action set above, so he holds the verb
+		// that stands down from it — an agent that can drive the
+		// operator's browser must be able to hand it back.
+		"browser_handover": allow,
+		// FR-021 — ask, not deny. Attaching a file to a page on the
+		// operator's signed-in session is the one browser verb that hands
+		// their data outward, so it is consent-gated on every agent that
+		// holds the browser surface.
+		"browser_upload_file": ask,
+		// FR-030 — the file:// refusal now names serve_web, so Ray must be
+		// able to reach it; a pointer to a tool he resolves deny for is
+		// #242's dead end one failed call further away.
+		"serve_web": allow,
+		// Local sources + writing up research results.
+		"read_file":      allow,
+		"list_directory": allow,
+		"write_file":     allow,
+		"append_file":    allow,
+		"edit_file":      allow,
+		// Chat-uploaded files land in this workspace's library (D3,
+		// library-spec) — Ray needs to find and read them, matching his
+		// read_file/list_directory allowance above.
+		"library_list":  allow,
+		"library_read":  allow,
+		"request_mount": ask,
+		"list_mounts":   allow,
+		// Persistent memory (carries research context across sessions).
+		"remember":            allow,
+		"recall_memory":       allow,
+		"run_retrospective":   allow,
+		"recall_conversation": allow,
+		// Deep-research delegation: fan out parallel research subagents
+		// (delegate → many workers/Researcher) and poll them, then synthesize.
+		// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
+		"delegate": allow,
+		// message_parent (ADR-053 §5.1): only actually callable when Ray
+		// himself is running as a delegated child session, but seeded
+		// allow here to mirror delegate's posture exactly.
+		"message_parent": allow,
+		// Present / route / share an artifact.
+		"send_message": allow,
+		"switch_agent": allow,
+		"send_file":    allow,
+		// Working aids (his summarize skill; a research checklist).
+		"find_skills": allow,
+		"set_todos":   allow,
+		// ADR-052 FR-005: every seeded agent OTHER than Jim is explicit
+		// "ask" (never absent, never deny) for the three plan-execution
+		// tools — an operator-approval prompt gates any attempted use.
+		"create_plan":  ask,
+		"execute_plan": ask,
+		"run_task":     ask,
+		// FR-006b seed rule: stop_plan rides with execute_plan, same map,
+		// same literal value. See coreAgentSeed's doc comment.
+		"stop_plan": ask,
+		// ADR-056 roster visibility: Ray fans out parallel research
+		// subagents (delegate: allow above) and then synthesizes, so the
+		// "which of my delegated children are still running?" roster is
+		// directly on his critical path. See coreAgentSeed's ROSTER
+		// VISIBILITY rule.
+		"list_jobs": allow,
+		// Structural floor (CLAUDE.md constraint 6): every agent needs
+		// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+		// seeded here as real data rather than the retired compositor.go
+		// hardcoded force-allow.
+		"ToolSearch": allow,
+		// Structural floor (ADR-072 D1, mirroring the ToolSearch
+		// structural floor immediately above): every agent needs the
+		// Skill tool to load ANY skill's content at all — the "# Skills"
+		// menu advertises skills but nothing else can ever load one.
+		"Skill": allow,
+		// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
+		// (superseding ADR-067 D17's file). Ray is the Scout: retrieval
+		// (knowledge_describe/knowledge_find/knowledge_read) is squarely
+		// his job and is allow — "what is still open in this vault?" is
+		// a survey question, and knowledge_find now answers it directly
+		// via `kind: task` (FR-076a), superseding the old
+		// knowledge_tasks/knowledge_search split this comment used to
+		// reason about separately.
+		//
+		// knowledge_edit, knowledge_restructure and knowledge_configure
+		// are all "ask" — unchanged posture from ADR-067's knowledge_
+		// create/knowledge_move: he researches and reports rather than
+		// editing the operator's knowledge base, and his file writes go
+		// to the workspace (write_file/append_file above), not to a
+		// mounted vault. knowledge_restructure/knowledge_configure are a
+		// WIDER blast radius than the single-file writes that already
+		// warranted asking (see coreAgentSeed's IDAva case for the
+		// cascade/control-plane argument), so there is no case for
+		// loosening either past "ask" for a role whose job was never to
+		// write there at all.
+		"knowledge_describe": allow,
+		"knowledge_find":     allow,
+		"knowledge_read":     allow,
+		// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
+		// founder-ratified 2026-09-08) — allow, same read-tier posture as the
+		// three read tools above: it reports what already exists, touching
+		// nothing.
+		"knowledge_list":        allow,
+		"knowledge_edit":        ask,
+		"knowledge_restructure": ask,
+		"knowledge_configure":   ask,
+		// knowledge_base_create (KB-1, same defect list) — "ask", not "allow":
+		// it creates a new folder+marker in the operator's own Library, an
+		// effect this agent's own call cannot bound, matching the write-three's
+		// own "ask" reasoning immediately above.
+		"knowledge_base_create": ask,
+		// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
+		// for every agent tier, including Ray — and squarely his job: a
+		// read-only recursive name/content search over local sources,
+		// confined to his own workspace root and mounts (FR-020), is the
+		// research surface this agent already holds (read_file,
+		// list_directory, search_web, fetch_url above), not a write that
+		// would warrant the "ask" his knowledge writes carry.
+		"grep": allow,
+	})
+}
+
+// jimSeedPolicies is Jim's seeded tool policy.
+func jimSeedPolicies() map[string]config.ToolPolicy {
+	allow := config.ToolPolicyAllow
+	// Jim — the Planner & Orchestrator. LEAST-PRIVILEGE: deny-by-default,
+	// allow only the tools his role needs (plan, delegate, manage tasks +
+	// workspaces, run shell/browser). This replaces
+	// the old allow-by-default + "system.*" deny rail, which the §7 tool
+	// rename silently broke — renamed management tools (create_workspace,
+	// set_config, …) no longer match the "system.*" glob, so every
+	// former-system tool fell through to allow.
+	ask := config.ToolPolicyAsk
+	return denyAllThenOverride(map[string]config.ToolPolicy{
+		// AskUserQuestion (spec US-7 S1): every human-facing agent may ask
+		// the user structured clarification questions.
+		"AskUserQuestion": allow,
+		// set_goal (ADR-088 D2): every human-facing agent may author its
+		// own session's goal record — seeded alongside AskUserQuestion.
+		"set_goal": allow,
+		// goal_claim (ADR-084 D12): every human-facing agent may claim
+		// its own session's goal complete — seeded alongside set_goal.
+		"goal_claim": allow,
+		// File operations — read, write, and navigate the workspace.
+		"read_file":      allow,
+		"write_file":     allow,
+		"edit_file":      allow,
+		"append_file":    allow,
+		"list_directory": allow,
+		// Chat-uploaded files land in this workspace's library (D3,
+		// library-spec) — Jim needs to find and read them, matching his
+		// read_file/list_directory allowance above.
+		"library_list":  allow,
+		"library_read":  allow,
+		"request_mount": ask,
+		"list_mounts":   allow,
+		// External lookups.
+		"search_web": allow,
+		"fetch_url":  allow,
+		// Web serving — scaffolds and serves web apps in the sandbox.
+		"serve_web": allow,
+		// Shell execution — sandboxed shell, foreground + background
+		// (ADR-036: exec/workspace_shell/workspace_shell_bg merged into
+		// one universally-registered tool, governed by this policy alone).
+		"bash": allow,
+		// Communication / routing.
+		"send_message": allow,
+		"send_file":    allow,
+		"switch_agent": allow,
+		// Persistent memory (carries planning context across sessions).
+		"remember":            allow,
+		"recall_memory":       allow,
+		"run_retrospective":   allow,
+		"recall_conversation": allow,
+		"set_todos":           allow,
+		// Delegation — delegate to subagents, poll them, list who's available.
+		// ADR-036 merged spawn/run_subagent/check_spawn_status into "delegate".
+		"delegate": allow,
+		// message_parent (ADR-053 §5.1): only actually callable when Jim
+		// himself is running as a delegated child session, but seeded
+		// allow here to mirror delegate's posture exactly.
+		"message_parent": allow,
+		"list_agents":    allow,
+		// Task management (current workspace).
+		"create_task": allow,
+		"list_tasks":  allow,
+		"update_task": allow,
+		// Task management (cross-workspace).
+		"create_task_in_workspace": allow,
+		"list_tasks_in_workspace":  allow,
+		"update_task_in_workspace": allow,
+		// Workspace lifecycle — Jim manages workspaces (not just reads them).
+		"get_workspace":    allow,
+		"list_workspaces":  allow,
+		"update_workspace": allow,
+		"create_workspace": allow,
+		// Skill discovery + installation (NOT authoring — that's Ava's domain).
+		"find_skills":   allow,
+		"list_skills":   allow,
+		"install_skill": allow,
+		// MCP server management. Jim may SEE the configured servers, but not
+		// add one: an MCP server definition is a program the gateway launches
+		// unconfined, so adding one escapes the sandbox through the front door
+		// (config.json is in the ADR-062 secret set exactly so an agent cannot
+		// write that entry with write_file). Denied in the global seed for the
+		// same reason — see the long rationale on "add_mcp_server" in
+		// pkg/config/defaults.go. Seeded data, not a code branch (CLAUDE.md
+		// constraint 6): an operator who wants Jim installing MCP servers
+		// changes this entry on their own install.
+		"list_mcp_servers": allow,
+		"add_mcp_server":   config.ToolPolicyDeny,
+		// Browser automation (interactive/visual work in the sandboxed browser).
+		// browser_evaluate (arbitrary JS) is operator-approved for Jim and stays
+		// runtime-gated by sandbox.browser_evaluate_enabled regardless of policy.
+		"browser_navigate":   allow,
+		"browser_click":      allow,
+		"browser_type":       allow,
+		"browser_wait":       allow,
+		"browser_get_text":   allow,
+		"browser_screenshot": allow,
+		"browser_evaluate":   allow,
+		// ADR-041 D3 — tab-management, same allow as the rest of Jim's
+		// browser automation surface.
+		"browser_list_tabs":  allow,
+		"browser_switch_tab": allow,
+		"browser_close_tab":  allow,
+		"browser_open_tab":   allow,
+		// ADR-075 D2 — the interaction verbs and the accessibility
+		// snapshot, same allow as the rest of Jim's browser surface.
+		"browser_select_option": allow,
+		"browser_press_key":     allow,
+		"browser_hover":         allow,
+		"browser_snapshot":      allow,
+		// ADR-075 D2 FR-035/A-12 — the dialog recovery verb, allow. See
+		// the note on the delegation-tier seeds above: the consequential
+		// half (`accept:true`) is an argument-level guard, not a policy
+		// value, because policy cannot see arguments.
+		"browser_handle_dialog": allow,
+		// browser_handover (ADR-085 BROWSER-FR-051, C-70): allow, same
+		// reasoning as Ray's — Jim holds the full browser action set,
+		// so he holds the verb that stands down from it.
+		"browser_handover": allow,
+		// FR-021 — ask even for Jim, who holds every other browser grant
+		// including browser_evaluate. Attaching a file is the one verb
+		// that hands the operator's data OUT of the machine, and the
+		// consent gate is on the direction of travel, not on the agent.
+		"browser_upload_file": ask,
+		// Delete / remove operations are consent-gated (ask) — standing rule.
+		"delete_task":              ask,
+		"delete_task_in_workspace": ask,
+		"delete_workspace":         ask,
+		"remove_mcp_server":        ask,
+		// ADR-052 FR-005/R2-06: Jim is the ONLY seeded agent granted
+		// unprompted plan-execution — consistent with his orchestrator
+		// role. Every other seeded agent gets an explicit "ask" instead
+		// (never absent, never deny); the Judge gets "deny"
+		// (systemAgentSeed, DS-6).
+		//
+		// These three RESOLVE to "allow" for Jim only because the global
+		// ceiling for them is also "allow" (pkg/config/defaults.go). It
+		// was "ask" until 2026-07-28, which — under the strictest-wins
+		// global x agent merge — silently overruled all three entries
+		// below and made this whole grant dead on every install. If you
+		// are tightening the ceiling for any of these, you are reverting
+		// that fix: tool_policy_effective_resolution_test.go will fail,
+		// and it is telling you the truth.
+		"create_plan":  allow,
+		"execute_plan": allow,
+		"run_task":     allow,
+		// FR-006b seed rule: stop_plan rides with execute_plan, same map,
+		// same literal value — so the orchestrator who is the only agent
+		// seeded to START a plan unprompted is also the one seeded to STOP
+		// it unprompted. Its ceiling has always been "allow", so it kept
+		// resolving allow even while execute_plan's did not; both now do.
+		"stop_plan": allow,
+		// ADR-056 roster visibility: Jim is the only agent seeded to START
+		// a plan unprompted and the only one whose stop_plan actually
+		// RESOLVES allow, so he is the one agent for whom containment must
+		// work with no human in the loop — which needs a plan id he did not
+		// necessarily mint this turn. He is also the heaviest delegator.
+		// See coreAgentSeed's ROSTER VISIBILITY rule.
+		"list_jobs": allow,
+		// Structural floor (CLAUDE.md constraint 6): every agent needs
+		// ToolSearch to reach ANY tiered (lazy/search-only) tool at all —
+		// seeded here as real data rather than the retired compositor.go
+		// hardcoded force-allow.
+		"ToolSearch": allow,
+		// Structural floor (ADR-072 D1, mirroring the ToolSearch
+		// structural floor immediately above): every agent needs the
+		// Skill tool to load ANY skill's content at all — the "# Skills"
+		// menu advertises skills but nothing else can ever load one.
+		"Skill": allow,
+		// ADR-068 D15.3 — knowledge base, split by BLAST RADIUS
+		// (superseding ADR-067 D17's file). Retrieval
+		// (knowledge_describe/knowledge_find/knowledge_read) is allow
+		// for all four base agents.
+		//
+		// UNLIKE Ava/Mia/Ray above, Jim's writes (knowledge_edit,
+		// knowledge_restructure, knowledge_configure) stay "allow" too,
+		// and this is a DELIBERATE exception argued from Jim's own
+		// already-seeded posture a few lines above ("bash": allow), not
+		// an oversight that forgot to tighten him along with the other
+		// three. An "ask" gate on knowledge_restructure/
+		// knowledge_configure has real teeth for an agent who cannot
+		// otherwise touch the operator's files — that is exactly why
+		// Ava/Mia/Ray hold it. Jim already holds unprompted bash, and
+		// bash can rewrite, rename or delete anything in a mounted
+		// collection — including reproducing knowledge_restructure's
+		// cascade or knowledge_configure's schema rewrite by hand, with
+		// no prompt at all. Gating the knowledge-tool EQUIVALENTS behind
+		// "ask" for him specifically would not reduce what he can do; it
+		// would only make the orchestrator depend on a human to do
+		// through the audited, journal-backed tool what he could
+		// already do unaudited through bash. That is exactly the
+		// "protects nothing" prompt this codebase's own seeding
+		// philosophy warns against — training an operator to click
+		// through confirmations that gate nothing real, which erodes
+		// trust in the ones that do (see the analogous
+		// knowledge_tasks-vs-knowledge_search reasoning this file
+		// carried before ADR-068, now superseded but the same warning
+		// still holds for Jim's case here).
+		"knowledge_describe": allow,
+		"knowledge_find":     allow,
+		"knowledge_read":     allow,
+		// knowledge_list (KB-2a, defect-list-knowledge-base-ux-2026-09-08.md,
+		// founder-ratified 2026-09-08) — allow, same read-tier posture as the
+		// three read tools above: it reports what already exists, touching
+		// nothing.
+		"knowledge_list":        allow,
+		"knowledge_edit":        allow,
+		"knowledge_restructure": allow,
+		"knowledge_configure":   allow,
+		// knowledge_base_create (KB-1, same defect list) — allow, the same
+		// deliberate exception this case already argues for the write three
+		// above: unprompted bash can already create arbitrary folders and
+		// files, so gating the audited equivalent behind "ask" would protect
+		// nothing real here either.
+		"knowledge_base_create": allow,
+		// ADR-081 D11 (FR-009, founder ruling): grep is unprompted allow
+		// for every agent tier, Jim included — consistent with his
+		// existing unprompted bash and knowledge-write grants above: a
+		// read-only recursive search confined to his own workspace root
+		// and mounts (FR-020) is a strictly narrower capability than
+		// what he can already do unaudited through bash.
+		"grep": allow,
+	})
 }
 
 // coreAgentSkills returns the seeded per-agent skill allowlist (FR-9.4). The
