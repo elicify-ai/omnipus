@@ -2,7 +2,6 @@
 # Seeded 2026-09-15 from scripts/funlen and scripts/tsfunlen.cjs at this tip (139 entries: 70 Go production, 20 Go test, 13 TS production, 36 TS test — see docs/internal/architecture/size-budget-grandfather-2026-09-15.md). A PR may lower a listed number or delete a line; it may never raise a number or add a new one.
 # file	qualified name	lines
 cmd/omnipus/internal/run/run.go	Run	284
-pkg/agent/cancel.go	AgentLoop.RequestCancel	584
 pkg/agent/external_dispatch.go	runExternalCLISubTurn	277
 pkg/agent/goal_flow_integration_test.go	TestGoalClarify_WebCardRoundtrip	323
 pkg/agent/goal_loop_command.go	AgentLoop.applyGoalCommandPrompt	285
