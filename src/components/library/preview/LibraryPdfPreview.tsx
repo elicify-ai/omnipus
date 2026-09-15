@@ -228,6 +228,48 @@ const FALLBACK_RENDER_WIDTH = 800
  *  fires on a genuine wedge. */
 export const PDF_FIRST_PAGE_TIMEOUT_MS = 45_000
 
+/** How long the byte DOWNLOAD alone may take before it is reported as a
+ *  failure — separate from `PDF_FIRST_PAGE_TIMEOUT_MS` above
+ *  (SILENT-FAILURES-pdf-pool.md finding 3). A download is bounded by the
+ *  network, not by whether the PARSING worker is wedged, and the two used to
+ *  share one clock: a large, legitimate PDF on a slow connection could be cut
+ *  off mid-download by the SAME 45s deadline, with an error that blamed "the
+ *  parsing worker" for a stage it had not even reached. Generous relative to
+ *  the first-page deadline for exactly that reason — a slow but honest
+ *  download can legitimately take longer than 45s without the worker being
+ *  involved at all. */
+export const PDF_DOWNLOAD_TIMEOUT_MS = 120_000
+
+/** Test-only override for `PDF_DOWNLOAD_TIMEOUT_MS`, mirroring
+ *  `__setPdfFirstPageTimeoutForTests` below. Production never calls this;
+ *  `null` restores the real value. */
+let downloadTimeoutOverrideMs: number | null = null
+export function __setPdfDownloadTimeoutForTests(ms: number | null): void {
+  downloadTimeoutOverrideMs = ms
+}
+function downloadTimeoutMs(): number {
+  return downloadTimeoutOverrideMs ?? PDF_DOWNLOAD_TIMEOUT_MS
+}
+
+/** How long a SINGLE PDF.js runtime-asset request may hang before the probe
+ *  gives up (SILENT-FAILURES-pdf-pool.md finding 4, "one hung asset request
+ *  breaks every PDF"). `fetchAsset` used to have no timeout at all, so one
+ *  request that never answered wedged the shared, page-wide `assetProbe`
+ *  memo forever — every PDF on the page failed only after the (then-shared)
+ *  45s watchdog, and "Try again" waited on the identical stuck promise,
+ *  since the memo only clears on rejection. */
+const PDF_ASSET_FETCH_TIMEOUT_MS = 15_000
+
+/** Test-only override for `PDF_ASSET_FETCH_TIMEOUT_MS`. Production never
+ *  calls this; `null` restores the real value. */
+let assetFetchTimeoutOverrideMs: number | null = null
+export function __setPdfAssetFetchTimeoutForTests(ms: number | null): void {
+  assetFetchTimeoutOverrideMs = ms
+}
+function assetFetchTimeoutMs(): number {
+  return assetFetchTimeoutOverrideMs ?? PDF_ASSET_FETCH_TIMEOUT_MS
+}
+
 /** How long `PDFDocumentLoadingTask.destroy()` gets to shut the transport
  *  down politely before the Worker thread is terminated outright. `destroy()`
  *  ends by asking the worker to `Terminate` and AWAITING its reply
@@ -304,11 +346,30 @@ class PdfAssetError extends Error {}
 let assetProbe: Promise<void> | null = null
 
 async function fetchAsset(url: string, what: string): Promise<Response> {
+  // Finding 4 — bounded so one hung request cannot wedge the shared,
+  // page-wide asset memo forever (see `PDF_ASSET_FETCH_TIMEOUT_MS`'s own
+  // comment). A dedicated controller, not the caller's own abort signal:
+  // this timeout is about the REQUEST, not about this document's load being
+  // cancelled, and `ensureRuntimeAssets`'s memo is intentionally shared
+  // across every mounted PDF — it has no single caller's signal to use.
+  const controller = new AbortController()
+  const timedOut = { current: false }
+  const timer = setTimeout(() => {
+    timedOut.current = true
+    controller.abort()
+  }, assetFetchTimeoutMs())
   let res: Response
   try {
-    res = await fetch(url, { credentials: 'same-origin' })
+    res = await fetch(url, { credentials: 'same-origin', signal: controller.signal })
   } catch (err) {
-    throw new PdfAssetError(`Could not load ${what} from ${url}: ${String(err)}`)
+    throw new PdfAssetError(
+      timedOut.current
+        ? `Could not load ${what} from ${url}: the request did not finish within ` +
+            `${Math.round(assetFetchTimeoutMs() / 1000)} seconds.`
+        : `Could not load ${what} from ${url}: ${String(err)}`,
+    )
+  } finally {
+    clearTimeout(timer)
   }
   if (!res.ok) {
     throw new PdfAssetError(`Could not load ${what}: ${url} returned HTTP ${res.status}`)
@@ -606,6 +667,57 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
       lease.release()
     }
 
+    // SILENT-FAILURES-pdf-pool.md findings 1 & 9 — ends the Worker THREAD
+    // before releasing the pool SLOT, no matter which path this load ends
+    // through (a worker crash, any other failure via `failLoad`, or
+    // unmount). Releasing a slot grants it to the next queued document
+    // SYNCHRONOUSLY (pdfWorkerPool.ts's `grantNext`), so releasing while
+    // THIS document's thread is still alive briefly puts a real THIRD
+    // `Worker` on the page even though the pool still reports a tidy two —
+    // finding 1's confirmed-in-browser defect, and finding 9's "3 workers
+    // for up to 2s" on ordinary unmount. Every failure path used to call
+    // bare `releaseLease()` and leave the thread running for something
+    // else (usually never) to terminate; this makes ending the thread part
+    // of ending the load, always, and holds the slot for exactly as long
+    // as the thread is alive — never less.
+    let endingWorker = false
+    let workerTerminated = false
+    const terminateWorkerThread = () => {
+      if (workerTerminated) return
+      workerTerminated = true
+      try {
+        port?.terminate()
+      } catch {
+        // Already gone; nothing to do.
+      }
+    }
+    const endWorkerThreadThenReleaseLease = () => {
+      if (endingWorker) return
+      endingWorker = true
+      // Already terminated (the worker's own `error` listener got there
+      // first) or never constructed at all (failed before the worker
+      // existed) — nothing to wait on, release now.
+      if (workerTerminated || !loadingTask) {
+        terminateWorkerThread()
+        releaseLease()
+        return
+      }
+      // Same polite-then-forced shutdown the cleanup below has always used
+      // (see its own comment for the three measured reasons
+      // `loadingTask.destroy()` alone does not end a caller-supplied
+      // worker) — just reachable from every path that ends this load, not
+      // only unmount, and gating the release on it completing.
+      const grace = setTimeout(terminateWorkerThread, WORKER_TERMINATE_GRACE_MS)
+      void loadingTask
+        .destroy()
+        .catch(() => {})
+        .finally(() => {
+          clearTimeout(grace)
+          terminateWorkerThread()
+          releaseLease()
+        })
+    }
+
     let firstPageWatchdog: ReturnType<typeof setTimeout> | null = null
     const clearFirstPageWatchdog = () => {
       if (firstPageWatchdog === null) return
@@ -629,7 +741,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
       if (loadFailed) return
       loadFailed = true
       clearFirstPageWatchdog()
-      releaseLease()
+      endWorkerThreadThenReleaseLease()
       if (!cancelled) {
         setError(err instanceof Error ? err.message : String(err))
         setStatus('error')
@@ -688,22 +800,9 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         }
         setStatus('loading')
 
-        // The deadline starts HERE, not at mount: time spent queued behind
-        // the pool's ceiling is a legitimate, explained wait (the `queued`
-        // state says so), and counting it would turn a page holding several
-        // PDFs into a page that reports false failures.
-        firstPageWatchdog = setTimeout(() => {
-          failLoad(
-            new Error(
-              `This PDF did not put a page on screen within ${Math.round(firstPageTimeoutMs() / 1000)} seconds. ` +
-                `It stopped at: ${stage}. The parsing worker may have run out of memory or stopped responding — ` +
-                `try again, and if it keeps happening this document may be too large or too damaged to render here.`,
-            ),
-          )
-        }, firstPageTimeoutMs())
-
         // Assets first: a missing directory must fail with a name, not with a
-        // blank page (FR-018b).
+        // blank page (FR-018b). Deliberately NOT covered by the first-page
+        // watchdog below — see its own comment for why.
         stage = 'checking the PDF.js runtime assets'
         await ensureRuntimeAssets()
         if (cancelled) return
@@ -723,12 +822,53 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
           // response returned for these exact bytes (EMB-007) — no read
           // happened on this path, so nothing to update it from.
         } else {
+          // SILENT-FAILURES-pdf-pool.md finding 3 — the byte download gets
+          // its OWN deadline and its OWN honest message, separate from the
+          // parsing watchdog below. A large PDF on a slow connection used to
+          // be cut off by the SAME 45s the parser gets, and the resulting
+          // error blamed "the parsing worker" for a stage the worker had not
+          // even reached yet. Every "Try again" then repeated the identical
+          // doomed download.
           stage = `downloading ${entry.name}`
-          const read = await fetchPdfBytes(workspaceId, entry.path, abort.signal)
-          data = read.bytes
-          versionRef.current = read.version
+          let downloadTimedOut = false
+          const downloadTimer = setTimeout(() => {
+            downloadTimedOut = true
+            abort.abort()
+          }, downloadTimeoutMs())
+          try {
+            const read = await fetchPdfBytes(workspaceId, entry.path, abort.signal)
+            data = read.bytes
+            versionRef.current = read.version
+          } catch (err) {
+            if (downloadTimedOut) {
+              throw new Error(
+                `This PDF did not finish downloading within ${Math.round(downloadTimeoutMs() / 1000)} seconds. ` +
+                  `That is the network connection, not the PDF parser — check the connection and try again.`,
+                { cause: err },
+              )
+            }
+            throw err
+          } finally {
+            clearTimeout(downloadTimer)
+          }
         }
         if (cancelled) return
+
+        // The first-page deadline starts HERE — once the bytes are in hand —
+        // not at mount and not while they were still downloading (finding 3
+        // above). Time spent queued behind the pool's ceiling, checking
+        // assets, or downloading is a legitimate, separately-explained wait;
+        // counting it against the PARSER's deadline is what let a slow
+        // network masquerade as a wedged worker.
+        firstPageWatchdog = setTimeout(() => {
+          failLoad(
+            new Error(
+              `This PDF did not put a page on screen within ${Math.round(firstPageTimeoutMs() / 1000)} seconds. ` +
+                `It stopped at: ${stage}. The parsing worker may have run out of memory or stopped responding — ` +
+                `try again, and if it keeps happening this document may be too large or too damaged to render here.`,
+            ),
+          )
+        }, firstPageTimeoutMs())
 
         // FR-019c — our own worker, handed to PDF.js as a port, so there is no
         // fake-worker fallback branch to fall into.
@@ -771,14 +911,14 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
               // EMB-032 — poisoned-worker eviction. This worker is done for
               // THIS document only (a worker error rejects only the leases
               // held on that worker — there is one lease and one worker per
-              // document, never shared); free its pool slot immediately
-              // rather than waiting for unmount (failLoad does that), and
-              // terminate it so nothing keeps talking to a dead transport.
-              try {
-                workerPort.terminate()
-              } catch {
-                // Already gone; nothing to do.
-              }
+              // document, never shared); terminate it immediately so nothing
+              // keeps talking to a dead transport (the shared
+              // `terminateWorkerThread` below, not a separate call, so
+              // `failLoad`'s own `endWorkerThreadThenReleaseLease` sees it is
+              // already done and releases the slot right away rather than
+              // waiting out a `destroy()` grace period against a worker that
+              // is already gone).
+              terminateWorkerThread()
               const cause = ev.message ? ` Cause: ${ev.message}` : ''
               // Two genuinely different failures, said differently, because
               // "was not opened" is a lie once it HAS been opened and the
@@ -1006,30 +1146,52 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
         // own header for why releasing on render success would break
         // EMB-032's "at most two worker instances" ceiling rather than
         // honour it).
-        if (!cancelled) setAllPagesRendered(true)
+        if (!cancelled) {
+          setAllPagesRendered(true)
+          if (variant === 'inline') {
+            // SILENT-FAILURES-pdf-pool.md finding 2 — "a waiting PDF never
+            // opens on a short note". An inline embed has no header to reach
+            // Edit mode from at all (see this file's own note on
+            // `pageFragment` above — the SAME asymmetry, applied generally:
+            // every inline mount, fragment or not, is view-only because
+            // `PreviewHeaderSlotProvider` does not exist outside the pane).
+            // So nothing past this point — a static canvas already drawn,
+            // and the D-37 zoom control, which is CSS `zoom` only, never a
+            // re-render — ever talks to this worker again. Holding its pool
+            // slot for the rest of this component's mounted lifetime is
+            // correct for the PANE (Edit/Save keep using it, see
+            // pdfWorkerPool.ts's header), but on an inline embed it only
+            // starves a queued sibling on a note too short to ever unmount
+            // anything via LazyEmbedMount's 1800px margin. Ending the
+            // thread and freeing the slot HERE is what makes "will open
+            // automatically once another PDF finishes loading" true on a
+            // short page, not only a long one.
+            endWorkerThreadThenReleaseLease()
+          }
+        }
       } catch (err) {
         if (cancelled) {
           clearFirstPageWatchdog()
-          releaseLease()
+          endWorkerThreadThenReleaseLease()
           return
         }
-        if (isAbortError(err)) {
-          clearFirstPageWatchdog()
-          releaseLease()
-          return
-        }
-        // PDF.js aborts in-flight renders by rejecting; that is not a failure.
-        if (err && typeof err === 'object' && (err as { name?: string }).name === 'RenderingCancelledException') {
-          clearFirstPageWatchdog()
-          releaseLease()
+        // SILENT-FAILURES-pdf-pool.md finding 8 — every abort THIS load
+        // starts sets `cancelled` first (see `failLoad` and this effect's
+        // cleanup), so reaching here with `cancelled` still false means
+        // something else cancelled work this load never asked to end —
+        // latent today, but a real, reportable failure if it ever happens,
+        // not a silent, watchdog-disarmed return.
+        if (isAbortError(err) || (err && typeof err === 'object' && (err as { name?: string }).name === 'RenderingCancelledException')) {
+          failLoad(err instanceof Error ? err : new Error(String(err)))
           return
         }
         // Every OTHER failure ends this load attempt for good. `failLoad`
-        // releases the pool slot (so a queued document is not held behind one
-        // that is never going to finish), stops the watchdog, and renders the
-        // reason. The `workerFailed` path above already went through the same
-        // function before this catch was reached; its `loadFailed` latch is
-        // what makes calling it twice safe.
+        // ends the worker thread and releases the pool slot (so a queued
+        // document is not held behind one that is never going to finish),
+        // stops the watchdog, and renders the reason. The `workerFailed`
+        // path above already went through the same function before this
+        // catch was reached; its `loadFailed` latch is what makes calling it
+        // twice safe.
         failLoad(err)
       }
     })()
@@ -1038,11 +1200,6 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
       cancelled = true
       abort.abort()
       clearFirstPageWatchdog()
-      // Frees this document's pool slot immediately on unmount (rather than
-      // waiting for the async chain above to notice `cancelled`), so a
-      // component unmounted by lazy-mount's "well outside the viewport"
-      // (EMB-065) does not keep a queued sibling waiting.
-      releaseLease()
       for (const cancel of cancelRender) {
         try {
           cancel()
@@ -1052,58 +1209,22 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
       }
 
       // ── Ending the Worker THREAD. This is ours to do. ───────────────────
-      // This used to be `void loadingTask?.destroy()` alone, under a comment
-      // claiming that "destroys the worker we handed in — one call covers
-      // both". Measured against the real pdfjs-dist 6.2.108 in node_modules,
-      // that is false three separate ways for a CALLER-SUPPLIED worker:
-      //
-      //  1. `getDocument` assigns `task._worker` only inside `if (!worker)`
-      //     (build/pdf.mjs) — i.e. only when IT created the worker. Ours is
-      //     passed in, so `_worker` stays null and
-      //     `PDFDocumentLoadingTask.destroy`'s `this._worker?.destroy()` is a
-      //     no-op.
-      //  2. Even when reached, `PDFWorker.destroy()` terminates `#webWorker`
-      //     — and `#initializeFromPort` (the path `PDFWorker.create({port})`
-      //     takes) never assigns `#webWorker`. It sets `#port` and
-      //     `#messageHandler` only.
-      //  3. `WorkerTransport.destroy()` SENDS a "Terminate" message and
-      //     awaits the worker's reply. It never touches the port.
-      //
-      // So the thread outlived every unmount. `LazyEmbedMount` unmounts and
-      // remounts PDF embeds as they scroll, which made every scroll-past-and-
-      // back leak one live worker holding a parsed PDF, while `pdfWorkerPool`
-      // — which counts LEASES, not threads — kept reporting a tidy "at most
-      // two". Nothing surfaced until the renderer was OOM-killed.
-      //
-      // Point 3 also means `destroy()` NEVER SETTLES when the worker has
-      // stopped replying (its reply is what resolves it), so the polite
-      // teardown gets a bounded grace period and the thread is terminated
-      // either way. We constructed it; we end it.
-      const thread = port
-      let terminated = false
-      const terminateThread = () => {
-        if (terminated) return
-        terminated = true
-        try {
-          thread?.terminate()
-        } catch {
-          // Already gone; nothing to do.
-        }
-      }
-      if (!loadingTask) {
-        terminateThread()
-        return
-      }
-      const grace = setTimeout(terminateThread, WORKER_TERMINATE_GRACE_MS)
-      void loadingTask
-        .destroy()
-        .catch(() => {})
-        .finally(() => {
-          clearTimeout(grace)
-          terminateThread()
-        })
+      // `endWorkerThreadThenReleaseLease` (defined above, shared with
+      // `failLoad`) is what actually ends it — see its own comment for the
+      // three measured reasons a bare `loadingTask.destroy()` does not end a
+      // CALLER-SUPPLIED worker, and for why the slot is held until the
+      // thread is confirmed gone rather than freed first: freeing it first
+      // let a queued sibling construct a genuinely fresh THIRD `Worker`
+      // while this one was still shutting down (finding 9 — up to 2s of 3
+      // live workers on every unmount, `LazyEmbedMount`'s scroll-past-and-
+      // back included), even though `pdfWorkerPool` — which counts LEASES,
+      // not threads — kept reporting a tidy "at most two". Idempotent with
+      // whatever the async chain above already did (a worker crash or any
+      // other in-flight failure), so calling it again here on a load that
+      // already ended is a safe no-op, not a second teardown.
+      endWorkerThreadThenReleaseLease()
     }
-  }, [workspaceId, entry.path, reloadNonce, pageFragment])
+  }, [workspaceId, entry.path, reloadNonce, pageFragment, variant])
 
   // Edit-mode AnnotationLayer mount/unmount. Runs only once every page has
   // finished its base render (see `allPagesRendered` above) — entering Edit
