@@ -526,14 +526,31 @@ type agentModelParamsInput struct {
 	MaxTokens   *int
 }
 
+// restAPIRegisterAdditionalEndpoints carries the shared state of registerAdditionalEndpoints across its stages.
+type restAPIRegisterAdditionalEndpoints struct {
+	a  *restAPI
+	cm httpHandlerRegistrar
+}
+
 // registerAdditionalEndpoints registers handlers for endpoints the frontend calls.
 // Each returns a valid JSON response matching the shape the frontend expects,
 // preventing "Unexpected token '<'" errors from the SPA catch-all.
 func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
-	cm.RegisterHTTPHandler("/api/v1/state", a.withOptionalAuth(a.HandleState))
-	cm.RegisterHTTPHandler("/api/v1/system/cli-detect", a.withAuth(a.HandleSystemCliDetect))
+	rae := &restAPIRegisterAdditionalEndpoints{a: a, cm: cm}
+
+	rae.registerCoreRoutes()
+
+	rae.registerSettingsAndAccountRoutes()
+
+	rae.registerAncillaryRoutes()
+}
+
+// registerCoreRoutes registers state, system, task, workspace, library, provider, tool, channel, agent, mailbox, token, and activity routes.
+func (rae *restAPIRegisterAdditionalEndpoints) registerCoreRoutes() {
+	rae.cm.RegisterHTTPHandler("/api/v1/state", rae.a.withOptionalAuth(rae.a.HandleState))
+	rae.cm.RegisterHTTPHandler("/api/v1/system/cli-detect", rae.a.withAuth(rae.a.HandleSystemCliDetect))
 	// withAuth, never withOptionalAuth: this lists the operator's own disk.
-	cm.RegisterHTTPHandler("/api/v1/system/folders", a.withAuth(a.HandleSystemFolders))
+	rae.cm.RegisterHTTPHandler("/api/v1/system/folders", rae.a.withAuth(rae.a.HandleSystemFolders))
 	// POST /api/v1/system/cli-validate — spawns a caller-supplied path
 	// (<cli> --version), so it is hardened as a privileged diagnostic (ADR-030
 	// §11 F-01). CREATE-PARITY auth: plain withAuth, exactly like createAgent /
@@ -541,11 +558,11 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// the subagent can validate it). A DEDICATED rate limiter (cliValidateLimiter,
 	// distinct from validateLimiter) throttles the spawn endpoint; the handler
 	// additionally enforces a per-caller in-flight cap and audits each call.
-	cm.RegisterHTTPHandler(
+	rae.cm.RegisterHTTPHandler(
 		"/api/v1/system/cli-validate",
-		a.withAuth(withRateLimit(cliValidateLimiter, a.HandleSystemCliValidate)),
+		rae.a.withAuth(withRateLimit(cliValidateLimiter, rae.a.HandleSystemCliValidate)),
 	)
-	cm.RegisterHTTPHandler("/api/v1/status", a.withAuth(a.HandleStatus))
+	rae.cm.RegisterHTTPHandler("/api/v1/status", rae.a.withAuth(rae.a.HandleStatus))
 	// GET /api/v1/tasks/occurrences — Calendar Recurrence Redesign occurrence
 	// expansion endpoint (FR-008, contracts/openapi.yaml operationId
 	// listTaskOccurrences). Registered as an EXACT pattern, independent of
@@ -559,37 +576,37 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// DEDICATED taskReadLimiter (240/min, rest_auth.go) — NOT configLimiter
 	// and NOT plain withAuth like the task CRUD routes immediately below
 	// (which carry no limiter).
-	cm.RegisterHTTPHandler(
+	rae.cm.RegisterHTTPHandler(
 		"/api/v1/tasks/occurrences",
-		a.withAuth(withRateLimit(taskReadLimiter, a.HandleTaskOccurrences)),
+		rae.a.withAuth(withRateLimit(taskReadLimiter, rae.a.HandleTaskOccurrences)),
 	)
-	cm.RegisterHTTPHandler("/api/v1/tasks", a.withAuth(a.HandleTasks))
-	cm.RegisterHTTPHandler("/api/v1/tasks/", a.withAuth(a.HandleTasks))
+	rae.cm.RegisterHTTPHandler("/api/v1/tasks", rae.a.withAuth(rae.a.HandleTasks))
+	rae.cm.RegisterHTTPHandler("/api/v1/tasks/", rae.a.withAuth(rae.a.HandleTasks))
 	// Plans REST surface (ADR-049 D1, Wave 2-C1). GET/POST /workspaces/{id}/plans
 	// is dispatched from HandleWorkspaces (rest_workspaces.go); individual plan
 	// GET/PUT/DELETE and /approve /stop live here.
-	cm.RegisterHTTPHandler("/api/v1/plans", a.withAuth(a.HandlePlans))
-	cm.RegisterHTTPHandler("/api/v1/plans/", a.withAuth(a.HandlePlans))
-	cm.RegisterHTTPHandler("/api/v1/workspaces", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
-	cm.RegisterHTTPHandler("/api/v1/workspaces/", a.withAuth(withRateLimit(configLimiter, a.HandleWorkspaces)))
+	rae.cm.RegisterHTTPHandler("/api/v1/plans", rae.a.withAuth(rae.a.HandlePlans))
+	rae.cm.RegisterHTTPHandler("/api/v1/plans/", rae.a.withAuth(rae.a.HandlePlans))
+	rae.cm.RegisterHTTPHandler("/api/v1/workspaces", rae.a.withAuth(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
+	rae.cm.RegisterHTTPHandler("/api/v1/workspaces/", rae.a.withAuth(withRateLimit(configLimiter, rae.a.HandleWorkspaces)))
 	// Library file explorer (rest_library.go). withUploadAuth, not plain
 	// withAuth: /library/{id}/upload streams multipart straight through this
 	// dispatcher, and withAuth's body limit would truncate it. Every JSON
 	// route behind this dispatcher is still independently capped at 1MB by
 	// decodeAndValidate, so relaxing the outer limit does not widen the
 	// attack surface for the non-upload operations.
-	cm.RegisterHTTPHandler("/api/v1/library", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibrary)))
+	rae.cm.RegisterHTTPHandler("/api/v1/library", rae.a.withUploadAuth(withRateLimit(configLimiter, rae.a.HandleLibrary)))
 	// ADR-067 stage 2: the subtree entry point is HandleLibraryTree, which peels
 	// off /library/{id}/knowledge* (rest_knowledge.go) and hands everything else
 	// to HandleLibrary unchanged. It is a shim rather than four more
 	// registrations because the workspace id sits in the MIDDLE of those
 	// patterns and this mux has no path wildcards — see HandleLibraryTree's doc.
-	cm.RegisterHTTPHandler("/api/v1/library/", a.withUploadAuth(withRateLimit(configLimiter, a.HandleLibraryTree)))
+	rae.cm.RegisterHTTPHandler("/api/v1/library/", rae.a.withUploadAuth(withRateLimit(configLimiter, rae.a.HandleLibraryTree)))
 	// ADR-067 stage 1 (FR-003f): the preview-token mint endpoint and the bare
 	// /library-preview/ serving prefix. Registered from rest_library_preview.go
 	// so the two halves share one token store. The mint path is an EXACT
 	// pattern, so it outranks the "/api/v1/library/" subtree above.
-	a.registerLibraryPreviewRoutes(cm)
+	rae.a.registerLibraryPreviewRoutes(rae.cm)
 	// GET/PUT /api/v1/providers/default-model (ADR-068 FR-018/FR-042,
 	// T068-11): its OWN route with the high-blast-radius adminWrap chain
 	// (withAuth → RequireNotBypass — 401 unauthenticated, 503 under
@@ -598,7 +615,7 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// provider id (MAJ-002); the dynamic mux matches this exact path before
 	// the subtree prefix below, so a PUT here can never reach the
 	// /providers/{id} upsert branch.
-	cm.RegisterHTTPHandler("/api/v1/providers/default-model", a.adminWrap(a.HandleDefaultModel))
+	rae.cm.RegisterHTTPHandler("/api/v1/providers/default-model", rae.a.adminWrap(rae.a.HandleDefaultModel))
 	// GET /api/v1/providers/catalog (ADR-067 FR-017, T067-10). Its own
 	// exact path, registered ahead of the /providers/ subtree dispatcher:
 	// "catalog" is a reserved path segment and is never a provider id, and
@@ -615,36 +632,39 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// metadata (provider/model ids, tiers, context windows) with no
 	// operator secret or account-specific field anywhere in it, so the
 	// full document is served either way.
-	cm.RegisterHTTPHandler("/api/v1/providers/catalog", a.withOptionalAuth(a.HandleProvidersCatalog))
-	cm.RegisterHTTPHandler("/api/v1/providers", a.withOptionalAuth(a.HandleProviders))
-	cm.RegisterHTTPHandler("/api/v1/providers/", a.withOptionalAuth(a.HandleProviders))
-	cm.RegisterHTTPHandler("/api/v1/mcp-servers", a.withAuth(a.HandleMCPServers))
-	cm.RegisterHTTPHandler("/api/v1/mcp-servers/", a.withAuth(a.HandleMCPServers))
-	cm.RegisterHTTPHandler("/api/v1/storage/stats", a.withAuth(a.HandleStorageStats))
-	cm.RegisterHTTPHandler("/api/v1/tools", a.withAuth(a.HandleToolsRegistry))
-	cm.RegisterHTTPHandler("/api/v1/tools/builtin", a.withAuth(a.HandleBuiltinToolsDeprecated))
-	cm.RegisterHTTPHandler("/api/v1/tools/mcp", a.withAuth(a.HandleMCPTools))
-	cm.RegisterHTTPHandler("/api/v1/tool-approvals/", a.withAuth(a.HandleToolApprovals))
-	cm.RegisterHTTPHandler("/api/v1/channels", a.withAuth(a.HandleChannels))
-	cm.RegisterHTTPHandler("/api/v1/channels/", a.withAuth(a.HandleChannels))
-	cm.RegisterHTTPHandler("/api/v1/agents/", a.withAuth(a.HandleAgents))
+	rae.cm.RegisterHTTPHandler("/api/v1/providers/catalog", rae.a.withOptionalAuth(rae.a.HandleProvidersCatalog))
+	rae.cm.RegisterHTTPHandler("/api/v1/providers", rae.a.withOptionalAuth(rae.a.HandleProviders))
+	rae.cm.RegisterHTTPHandler("/api/v1/providers/", rae.a.withOptionalAuth(rae.a.HandleProviders))
+	rae.cm.RegisterHTTPHandler("/api/v1/mcp-servers", rae.a.withAuth(rae.a.HandleMCPServers))
+	rae.cm.RegisterHTTPHandler("/api/v1/mcp-servers/", rae.a.withAuth(rae.a.HandleMCPServers))
+	rae.cm.RegisterHTTPHandler("/api/v1/storage/stats", rae.a.withAuth(rae.a.HandleStorageStats))
+	rae.cm.RegisterHTTPHandler("/api/v1/tools", rae.a.withAuth(rae.a.HandleToolsRegistry))
+	rae.cm.RegisterHTTPHandler("/api/v1/tools/builtin", rae.a.withAuth(rae.a.HandleBuiltinToolsDeprecated))
+	rae.cm.RegisterHTTPHandler("/api/v1/tools/mcp", rae.a.withAuth(rae.a.HandleMCPTools))
+	rae.cm.RegisterHTTPHandler("/api/v1/tool-approvals/", rae.a.withAuth(rae.a.HandleToolApprovals))
+	rae.cm.RegisterHTTPHandler("/api/v1/channels", rae.a.withAuth(rae.a.HandleChannels))
+	rae.cm.RegisterHTTPHandler("/api/v1/channels/", rae.a.withAuth(rae.a.HandleChannels))
+	rae.cm.RegisterHTTPHandler("/api/v1/agents/", rae.a.withAuth(rae.a.HandleAgents))
 	// M11: list all configured mailboxes (never 404s; empty list = none) so the
 	// SPA doesn't have to probe every agent's /agents/{id}/mailbox endpoint.
-	cm.RegisterHTTPHandler("/api/v1/mailboxes", a.withAuth(a.listMailboxes))
-	cm.RegisterHTTPHandler("/api/v1/config/gateway/rotate-token", a.withAuth(a.rotateGatewayToken))
-	cm.RegisterHTTPHandler("/api/v1/activity", a.withAuth(a.HandleActivity))
+	rae.cm.RegisterHTTPHandler("/api/v1/mailboxes", rae.a.withAuth(rae.a.listMailboxes))
+	rae.cm.RegisterHTTPHandler("/api/v1/config/gateway/rotate-token", rae.a.withAuth(rae.a.rotateGatewayToken))
+	rae.cm.RegisterHTTPHandler("/api/v1/activity", rae.a.withAuth(rae.a.HandleActivity))
+}
 
+// registerSettingsAndAccountRoutes registers schedules, notifications, settings, security, account, integration, automation, and voice routes.
+func (rae *restAPIRegisterAdditionalEndpoints) registerSettingsAndAccountRoutes() {
 	// Schedules CRUD + run-now + pause (#264).
-	cm.RegisterHTTPHandler("/api/v1/schedules", a.withAuth(a.HandleSchedules))
-	cm.RegisterHTTPHandler("/api/v1/schedules/", a.withAuth(a.HandleSchedules))
+	rae.cm.RegisterHTTPHandler("/api/v1/schedules", rae.a.withAuth(rae.a.HandleSchedules))
+	rae.cm.RegisterHTTPHandler("/api/v1/schedules/", rae.a.withAuth(rae.a.HandleSchedules))
 	// Header notification center (#264).
-	cm.RegisterHTTPHandler("/api/v1/notifications", a.withAuth(a.HandleNotifications))
-	cm.RegisterHTTPHandler("/api/v1/notifications/", a.withAuth(a.HandleNotifications))
+	rae.cm.RegisterHTTPHandler("/api/v1/notifications", rae.a.withAuth(rae.a.HandleNotifications))
+	rae.cm.RegisterHTTPHandler("/api/v1/notifications/", rae.a.withAuth(rae.a.HandleNotifications))
 
 	// Memory settings endpoint (FR-019 / US-6, ADR-027): readable/writable by any
 	// authenticated user (A2/G-02 — not admin-only because recap and retention
 	// settings are non-sensitive operational knobs without blast-radius risk).
-	cm.RegisterHTTPHandler("/api/v1/settings/memory", a.withAuth(a.HandleMemorySettings))
+	rae.cm.RegisterHTTPHandler("/api/v1/settings/memory", rae.a.withAuth(rae.a.HandleMemorySettings))
 
 	// Context-budget settings endpoint (ADR-066 D9, FR-036 / US-11): the D4
 	// per-surface caps, the D6 absolute trigger, the D10 ingest bound, the D2
@@ -652,31 +672,31 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// posture as /settings/memory (withAuth, not RequireNotBypass) per the
 	// contract. This is the operator's only escape from the
 	// context_window_unknown turn refusal, which names it by hand.
-	cm.RegisterHTTPHandler("/api/v1/settings/context", a.withAuth(a.HandleContextSettings))
+	rae.cm.RegisterHTTPHandler("/api/v1/settings/context", rae.a.withAuth(rae.a.HandleContextSettings))
 
 	// Settings endpoints (Wave 4).
 	// GET /api/v1/audit-log — the audit log contains every privileged action,
 	// tool-use trace, and LLM request; gated behind authentication only under
 	// the single-account model.
 	// Chain: withAuth (verifies token) → handler.
-	cm.RegisterHTTPHandler("/api/v1/audit-log", a.withAuth(a.HandleAuditLog))
-	cm.RegisterHTTPHandler("/api/v1/security/exec-allowlist", a.withAuth(a.HandleExecAllowlist))
+	rae.cm.RegisterHTTPHandler("/api/v1/audit-log", rae.a.withAuth(rae.a.HandleAuditLog))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/exec-allowlist", rae.a.withAuth(rae.a.HandleExecAllowlist))
 	// Wave 3 security endpoints (SEC-25, SEC-28).
-	cm.RegisterHTTPHandler("/api/v1/security/exec-proxy-status", a.withAuth(a.HandleExecProxyStatus))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/exec-proxy-status", rae.a.withAuth(rae.a.HandleExecProxyStatus))
 	// High-blast-radius security endpoints.
 	// Chain: withAuth → RequireNotBypass → handler.
 	// CSRF is enforced by the global WrapHTTPHandler layer (no per-handler wiring needed).
-	cm.RegisterHTTPHandler("/api/v1/config/pending-restart", a.adminWrap(a.HandlePendingRestart))
+	rae.cm.RegisterHTTPHandler("/api/v1/config/pending-restart", rae.a.adminWrap(rae.a.HandlePendingRestart))
 	// O4-backend: UI-triggerable graceful self-restart. High blast radius —
 	// RequireNotBypass (dev_mode_bypass → 503) via adminWrap.
-	cm.RegisterHTTPHandler("/api/v1/gateway/restart", a.adminWrap(a.HandleGatewayRestart))
+	rae.cm.RegisterHTTPHandler("/api/v1/gateway/restart", rae.a.adminWrap(rae.a.HandleGatewayRestart))
 	// O14 god-mode toggle. High blast radius — RequireNotBypass via adminWrap,
 	// and the POST additionally requires a password re-auth consent token
 	// (enforced inside the handler via requireReAuth).
-	cm.RegisterHTTPHandler("/api/v1/gateway/god-mode", a.adminWrap(a.HandleGodMode))
-	cm.RegisterHTTPHandler("/api/v1/security/audit-log", a.adminWrap(a.HandleSandboxAuditLog))
-	cm.RegisterHTTPHandler("/api/v1/security/skill-trust", a.adminWrap(a.HandleSkillTrust))
-	cm.RegisterHTTPHandler("/api/v1/security/prompt-guard", a.adminWrap(a.HandlePromptGuard))
+	rae.cm.RegisterHTTPHandler("/api/v1/gateway/god-mode", rae.a.adminWrap(rae.a.HandleGodMode))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/audit-log", rae.a.adminWrap(rae.a.HandleSandboxAuditLog))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/skill-trust", rae.a.adminWrap(rae.a.HandleSkillTrust))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/prompt-guard", rae.a.adminWrap(rae.a.HandlePromptGuard))
 	// /api/v1/security/rate-limits handles GET (read state — the response carries
 	// the live daily-cost meter and current cap config, sensitive observability)
 	// and PUT (write — gated by RequireNotBypass, since dev_mode_bypass would
@@ -684,84 +704,87 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 	// with adminWrap to bring it in line with the other high-blast-radius
 	// security endpoints below and to satisfy item 7 of v0.2-#155 (admin-route
 	// bypass coverage).
-	cm.RegisterHTTPHandler("/api/v1/security/rate-limits", a.adminWrap(a.HandleRateLimits))
-	cm.RegisterHTTPHandler("/api/v1/security/sandbox-config", a.adminWrap(a.HandleSandboxConfig))
-	cm.RegisterHTTPHandler("/api/v1/security/session-scope", a.adminWrap(a.HandleSessionScope))
-	cm.RegisterHTTPHandler("/api/v1/security/retention", a.adminWrap(a.HandleRetention))
-	cm.RegisterHTTPHandler("/api/v1/security/retention/sweep", a.adminWrap(a.HandleRetentionSweep))
-	cm.RegisterHTTPHandler("/api/v1/performance", a.adminWrap(a.HandlePerformance))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/rate-limits", rae.a.adminWrap(rae.a.HandleRateLimits))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/sandbox-config", rae.a.adminWrap(rae.a.HandleSandboxConfig))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/session-scope", rae.a.adminWrap(rae.a.HandleSessionScope))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/retention", rae.a.adminWrap(rae.a.HandleRetention))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/retention/sweep", rae.a.adminWrap(rae.a.HandleRetentionSweep))
+	rae.cm.RegisterHTTPHandler("/api/v1/performance", rae.a.adminWrap(rae.a.HandlePerformance))
 	// Wave 5 security endpoints (SEC-01/02/03).
-	cm.RegisterHTTPHandler("/api/v1/security/sandbox-status", a.withAuth(a.HandleSandboxStatus))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/sandbox-status", rae.a.withAuth(rae.a.HandleSandboxStatus))
 	// /api/v1/security/sandbox-config is registered above with adminWrap — do NOT
 	// re-register here; Go ServeMux takes the last registration, and a lighter
 	// wrapper here would silently drop the dev_mode_bypass gate.
 	// GET/PUT /api/v1/security/tool-policies — readable and writable by the
 	// single authenticated account (PUT authorization enforced inside
 	// HandleToolPolicies).
-	cm.RegisterHTTPHandler("/api/v1/security/tool-policies", a.withAuth(a.HandleToolPolicies))
+	rae.cm.RegisterHTTPHandler("/api/v1/security/tool-policies", rae.a.withAuth(rae.a.HandleToolPolicies))
 	// GET /api/v1/credentials — even though plaintext is not returned, the
 	// credential ref names reveal what integrations exist, so this is gated
 	// behind authentication.
 	// Chain: withAuth (verifies token) → handler.
-	cm.RegisterHTTPHandler("/api/v1/credentials", a.withAuth(a.HandleCredentials))
-	cm.RegisterHTTPHandler("/api/v1/credentials/", a.withAuth(a.HandleCredentials))
+	rae.cm.RegisterHTTPHandler("/api/v1/credentials", rae.a.withAuth(rae.a.HandleCredentials))
+	rae.cm.RegisterHTTPHandler("/api/v1/credentials/", rae.a.withAuth(rae.a.HandleCredentials))
 	// Option A keeps workspace and media IDs as separately validated path segments;
 	// the legacy global media route remains below for backward compatibility.
-	cm.RegisterHTTPHandler("/api/v1/media/workspace/", a.withOptionalAuth(a.HandleMediaByRef))
-	cm.RegisterHTTPHandler("/api/v1/media/", a.withOptionalAuth(a.HandleMedia))
-	cm.RegisterHTTPHandler("/api/v1/backup", a.withAuth(a.HandleCreateBackup))
-	cm.RegisterHTTPHandler("/api/v1/backups", a.withAuth(a.HandleListBackups))
-	cm.RegisterHTTPHandler("/api/v1/restore", a.withAuth(a.HandleRestore))
+	rae.cm.RegisterHTTPHandler("/api/v1/media/workspace/", rae.a.withOptionalAuth(rae.a.HandleMediaByRef))
+	rae.cm.RegisterHTTPHandler("/api/v1/media/", rae.a.withOptionalAuth(rae.a.HandleMedia))
+	rae.cm.RegisterHTTPHandler("/api/v1/backup", rae.a.withAuth(rae.a.HandleCreateBackup))
+	rae.cm.RegisterHTTPHandler("/api/v1/backups", rae.a.withAuth(rae.a.HandleListBackups))
+	rae.cm.RegisterHTTPHandler("/api/v1/restore", rae.a.withAuth(rae.a.HandleRestore))
 	// Exact match takes precedence over the /sessions/ prefix handler for this specific path.
-	cm.RegisterHTTPHandler("/api/v1/sessions/all", a.withAuth(a.HandleClearSessions))
-	cm.RegisterHTTPHandler("/api/v1/about", a.withAuth(a.HandleAbout))
-	cm.RegisterHTTPHandler("/api/v1/user-context", a.withAuth(a.HandleUserContext))
-	cm.RegisterHTTPHandler(
+	rae.cm.RegisterHTTPHandler("/api/v1/sessions/all", rae.a.withAuth(rae.a.HandleClearSessions))
+	rae.cm.RegisterHTTPHandler("/api/v1/about", rae.a.withAuth(rae.a.HandleAbout))
+	rae.cm.RegisterHTTPHandler("/api/v1/user-context", rae.a.withAuth(rae.a.HandleUserContext))
+	rae.cm.RegisterHTTPHandler(
 		"/api/v1/onboarding/complete",
-		a.withOptionalAuth(withRateLimit(onboardingCompleteLimiter, a.HandleCompleteOnboarding)),
+		rae.a.withOptionalAuth(withRateLimit(onboardingCompleteLimiter, rae.a.HandleCompleteOnboarding)),
 	)
-	cm.RegisterHTTPHandler(
+	rae.cm.RegisterHTTPHandler(
 		"/api/v1/onboarding/probe-provider",
-		a.withOptionalAuth(withRateLimit(onboardingCompleteLimiter, a.HandleOnboardingProbeProvider)),
+		rae.a.withOptionalAuth(withRateLimit(onboardingCompleteLimiter, rae.a.HandleOnboardingProbeProvider)),
 	)
-	cm.RegisterHTTPHandler("/api/v1/auth/login", a.withOptionalAuth(a.HandleLogin))
-	cm.RegisterHTTPHandler("/api/v1/auth/validate", a.withAuth(withRateLimit(validateLimiter, a.HandleValidateToken)))
-	cm.RegisterHTTPHandler("/api/v1/auth/logout", a.withAuth(a.HandleLogout))
-	cm.RegisterHTTPHandler("/api/v1/auth/change-password", a.withAuth(a.HandleChangePassword))
+	rae.cm.RegisterHTTPHandler("/api/v1/auth/login", rae.a.withOptionalAuth(rae.a.HandleLogin))
+	rae.cm.RegisterHTTPHandler("/api/v1/auth/validate", rae.a.withAuth(withRateLimit(validateLimiter, rae.a.HandleValidateToken)))
+	rae.cm.RegisterHTTPHandler("/api/v1/auth/logout", rae.a.withAuth(rae.a.HandleLogout))
+	rae.cm.RegisterHTTPHandler("/api/v1/auth/change-password", rae.a.withAuth(rae.a.HandleChangePassword))
 	// Password re-auth consent primitive (Spec-6 FR-12.2). Distinct from
 	// RequireNotBypass (a 503 dev-mode guard) — this re-verifies the user's one
 	// password before a sensitive settings change.
-	cm.RegisterHTTPHandler("/api/v1/auth/reauth", a.withAuth(withRateLimit(reauthLimiter, a.HandleReAuth)))
+	rae.cm.RegisterHTTPHandler("/api/v1/auth/reauth", rae.a.withAuth(withRateLimit(reauthLimiter, rae.a.HandleReAuth)))
 
 	// Integrations provider-picker — search + voice-input providers (Spec-6
 	// FR-12.1). GET lists; PUT (gated by the re-auth consent token) configures.
-	cm.RegisterHTTPHandler("/api/v1/integrations/providers", a.withAuth(a.HandleIntegrationProviders))
-	cm.RegisterHTTPHandler("/api/v1/integrations/providers/", a.withAuth(a.HandleIntegrationProviders))
+	rae.cm.RegisterHTTPHandler("/api/v1/integrations/providers", rae.a.withAuth(rae.a.HandleIntegrationProviders))
+	rae.cm.RegisterHTTPHandler("/api/v1/integrations/providers/", rae.a.withAuth(rae.a.HandleIntegrationProviders))
 	// Automations — trigger→action display projection over schedules (W3-AC
 	// UI reframe). Read-only; writes go through /api/v1/schedules.
-	cm.RegisterHTTPHandler("/api/v1/automations", a.withAuth(a.HandleAutomations))
+	rae.cm.RegisterHTTPHandler("/api/v1/automations", rae.a.withAuth(rae.a.HandleAutomations))
 	// Composer mic — voice transcription (Spec-6 FR-12.1).
-	cm.RegisterHTTPHandler("/api/v1/voice/transcribe", a.withAuth(a.HandleTranscribe))
+	rae.cm.RegisterHTTPHandler("/api/v1/voice/transcribe", rae.a.withAuth(rae.a.HandleTranscribe))
 	// Voice provider descriptor (agent-form spec §4.10.1). Drives the dropdown /
 	// free-text / disabled widget in the agent edit slide-over.
-	cm.RegisterHTTPHandler("/api/v1/voice/provider", a.withAuth(a.HandleVoiceProvider))
+	rae.cm.RegisterHTTPHandler("/api/v1/voice/provider", rae.a.withAuth(rae.a.HandleVoiceProvider))
+}
 
+// registerAncillaryRoutes registers upload, metrics, version, devices, token statistics, and browser inspection routes.
+func (rae *restAPIRegisterAdditionalEndpoints) registerAncillaryRoutes() {
 	// File upload endpoints (Milestone 3).
-	cm.RegisterHTTPHandler("/api/v1/upload", a.withUploadAuth(a.HandleUpload))
-	cm.RegisterHTTPHandler("/api/v1/uploads/", a.withOptionalAuth(a.HandleServeUpload))
+	rae.cm.RegisterHTTPHandler("/api/v1/upload", rae.a.withUploadAuth(rae.a.HandleUpload))
+	rae.cm.RegisterHTTPHandler("/api/v1/uploads/", rae.a.withOptionalAuth(rae.a.HandleServeUpload))
 
 	// Prometheus-compatible metrics endpoint (FR-039).
 	// Unauthenticated for Prometheus scrape compatibility; does not expose secrets.
-	cm.RegisterHTTPHandler("/metrics", http.HandlerFunc(a.HandleMetrics))
+	rae.cm.RegisterHTTPHandler("/metrics", http.HandlerFunc(rae.a.HandleMetrics))
 
 	// Version endpoint — unauthenticated; returns build SHA for frontend version-drift detection (#110).
-	cm.RegisterHTTPHandler("/api/v1/version", http.HandlerFunc(a.HandleVersion))
+	rae.cm.RegisterHTTPHandler("/api/v1/version", http.HandlerFunc(rae.a.HandleVersion))
 
 	// GET /api/v1/devices — returns pending pairing requests and paired devices.
 	// Admin-only. Device pairing infrastructure is not yet implemented; the handler
 	// returns valid empty arrays so the SPA DevicesSection renders its empty state
 	// rather than 404-ing. Traces to: contracts/components/schemas/DevicesResponse.yaml.
-	cm.RegisterHTTPHandler("/api/v1/devices", a.adminWrap(a.HandleDevices))
+	rae.cm.RegisterHTTPHandler("/api/v1/devices", rae.a.adminWrap(rae.a.HandleDevices))
 
 	// The legacy GTD /board/tasks endpoints were folded into the unified
 	// /api/v1/tasks surface in Sprint 2 (one store, one wire schema). See
@@ -770,13 +793,13 @@ func (a *restAPI) registerAdditionalEndpoints(cm httpHandlerRegistrar) {
 
 	// Token usage stats endpoint (Wave 2b).
 	// Traces to: contracts/components/schemas/TokenUsageSummary.yaml.
-	cm.RegisterHTTPHandler("/api/v1/stats/tokens", a.withAuth(withRateLimit(configLimiter, a.HandleTokenStats)))
+	rae.cm.RegisterHTTPHandler("/api/v1/stats/tokens", rae.a.withAuth(withRateLimit(configLimiter, rae.a.HandleTokenStats)))
 
 	// Best-effort DOM inspect for the live interactive browser panel
 	// (ADR-039 D-B3) — resolves the element at a point so the SPA can attach
 	// its text/HTML when a user annotates a spot. Sibling to, but registered
 	// independently of, /api/v1/browser/ws (gateway.go).
-	cm.RegisterHTTPHandler("/api/v1/browser/inspect", a.withAuth(a.HandleBrowserInspect))
+	rae.cm.RegisterHTTPHandler("/api/v1/browser/inspect", rae.a.withAuth(rae.a.HandleBrowserInspect))
 }
 
 // registerPreviewEndpoints registers /preview/ on the MAIN mux (ADR-044,
