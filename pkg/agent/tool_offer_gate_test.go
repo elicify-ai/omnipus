@@ -85,6 +85,36 @@ func scriptedToolCall(id, name, args string) providers.ToolCall {
 	}
 }
 
+// TestToolNotOfferedMessage_PreviewVsSearchOnlyWording pins the refusal text
+// for the two lazy-tier visibility classes (pkg/tools/manifest.go's
+// ManifestVisibility). BuildCompressedManifest only ever renders a "More
+// tools" preview line for a ManifestPreviewed (Tier 2) name — a
+// ManifestSearchOnly (Tier 3) name, e.g. AskUserQuestion/set_goal/
+// find_skills, gets zero preview text. Before this fix toolNotOfferedMessage
+// told the model "It is listed under More tools" for BOTH classes, which was
+// false for Tier 3 and could send the model hunting a listing that never
+// existed instead of just calling ToolSearch with the name it already has.
+func TestToolNotOfferedMessage_PreviewVsSearchOnlyWording(t *testing.T) {
+	t.Run("previewed lazy tool is told it is listed under More tools", func(t *testing.T) {
+		require.Equal(t, tools.ManifestPreviewed, tools.ToolManifestVisibility("bash"),
+			"test precondition: bash must be a Tier 2 previewed lazy tool")
+		msg := toolNotOfferedMessage("bash", goalForcingDecision{}, true)
+		assert.Contains(t, msg, "It is listed under More tools", "bash: %q", msg)
+		assert.Contains(t, msg, "load it with ToolSearch first", "bash: %q", msg)
+	})
+
+	t.Run("search-only lazy tool is NOT told it is listed under More tools", func(t *testing.T) {
+		require.Equal(t, tools.ManifestSearchOnly, tools.ToolManifestVisibility("find_skills"),
+			"test precondition: find_skills must be a Tier 3 search-only lazy tool")
+		msg := toolNotOfferedMessage("find_skills", goalForcingDecision{}, true)
+		assert.NotContains(t, msg, "It is listed under More tools",
+			"find_skills has zero preview text in the manifest block — telling the model it is "+
+				"\"listed under More tools\" is false, got %q", msg)
+		assert.Contains(t, msg, "ToolSearch", "must still point the model at ToolSearch, got %q", msg)
+		assert.Contains(t, msg, `"find_skills"`, "must name the exact tool to load, got %q", msg)
+	})
+}
+
 func TestGoalTurn_NarrowedRequest_RefusesUnofferedToolsAndOmitsManifestNote(t *testing.T) {
 	provider := &offerGateCaptureProvider{responses: []*providers.LLMResponse{{
 		ToolCalls: []providers.ToolCall{
@@ -188,7 +218,13 @@ func TestCompressedRequest_UnloadedLazyToolRefusedUntilToolSearchLoadsIt(t *test
 	content, found := toolResultFor(afterDirect, "direct-1")
 	require.True(t, found, "the refused direct call must have a paired tool result")
 	assert.Contains(t, content, "is not available in this request")
-	assert.Contains(t, content, "load it with ToolSearch first")
+	// find_skills is ManifestSearchOnly (Tier 3, not in previewedLazyToolNames):
+	// it renders zero preview text in the "More tools" block, so the refusal
+	// must not claim it is listed there (see TestToolNotOfferedMessage_PreviewVsSearchOnlyWording)
+	// — it must instead point the model straight at ToolSearch with the exact name.
+	assert.NotContains(t, content, "It is listed under More tools")
+	assert.Contains(t, content, "ToolSearch")
+	assert.Contains(t, content, `"find_skills"`)
 
 	assert.Equal(t, int32(1), counter.calls.Load(),
 		"only the call made after ToolSearch loaded the tool (same response) may run; the direct call before it must not")

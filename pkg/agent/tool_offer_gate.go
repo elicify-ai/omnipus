@@ -103,8 +103,22 @@ func toolNotOfferedMessage(toolName string, goalForce goalForcingDecision, lazy 
 	case goalForce.layer1:
 		msg += " Right now only set_goal can be called: register the goal with set_goal first. " +
 			"Your full tool set comes back once the goal record is registered."
-	case lazy:
+	case lazy && tools.ToolManifestVisibility(toolName) == tools.ManifestPreviewed:
+		// ManifestPreviewed (Tier 2) tools get a real "  - <name> — ..." line
+		// in the compressed manifest's "More tools" block (BuildCompressedManifest,
+		// pkg/tools/manifest.go) — "listed under More tools" is literally true here.
 		msg += " It is listed under More tools: load it with ToolSearch first, then call it."
+	case lazy:
+		// ManifestSearchOnly (Tier 3) tools — the majority of the lazy tier,
+		// e.g. AskUserQuestion, set_goal, find_skills — render ZERO preview
+		// text in that block (ADR-071 D3 §4.4, BuildCompressedManifest's
+		// ManifestVisibility filter): they are invisible until looked up by
+		// name or query. Telling the model it is "listed under More tools"
+		// here is false and can send it hunting a listing that does not
+		// exist instead of just calling ToolSearch with the name it already
+		// has. Point it at the one thing that actually works: call
+		// ToolSearch by this tool's exact name.
+		msg += fmt.Sprintf(" Call ToolSearch with %q in names to load it, then call it.", toolName)
 	}
 	return msg
 }
