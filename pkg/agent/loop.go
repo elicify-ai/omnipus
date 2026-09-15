@@ -8925,6 +8925,19 @@ func (al *AgentLoop) runAgentLoop(
 		// returns a non-nil error for every system-initiated abort (case 2),
 		// which the `if err != nil` branch above already returned from. See
 		// abortTurn's doc comment for the full case split.
+		//
+		// A task executor's worker turn (opts.RunningTaskID, set only by
+		// processTaskDirect) is the one caller this silence misleads: the task
+		// run loop reads a nil error as a turn that ended without a claim and
+		// prompts the worker again, spending its goal tries and then a task
+		// attempt — a hard Stop restarted the work. It gets the typed stop
+		// instead, so task_run_loop.go::finishRunTurn ends the task "Stopped: …"
+		// with no attempt and no restart, as it already does for a graceful
+		// stop and an external-CLI worker's cancel. The Judge's turns set
+		// IsTaskRun but not RunningTaskID and keep the silent unwind.
+		if opts.RunningTaskID != "" {
+			return "", fmt.Errorf("%w: %w", ErrTurnCanceled, context.Canceled)
+		}
 		return "", nil
 	}
 
