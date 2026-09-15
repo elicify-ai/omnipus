@@ -263,6 +263,52 @@ func (r CollectionRoot) ResolveContainedNoSymlink(fsys LinkFS, relPath string) (
 	return resolved, nil
 }
 
+// ResolveControlWritePath verifies an ABSOLUTE path under the collection root
+// with the no-symlink rule (FR-044) and returns it unchanged. It exists for
+// the .omnipus-vault control plane — the trash, records, views and id-sequence
+// files, whose paths are joined as plain text by the configure, restructure,
+// record-identity and rederive write paths. A symlink planted in the vault's
+// control folder (an agent's bash replacing .omnipus-vault/trash or /records
+// with a link to a directory outside the workspace) would otherwise be
+// followed silently on WRITE — on every platform where the gateway process
+// itself is not kernel-confined (macOS, the fallback backend, Windows).
+// D-14 follow-up; see the fix report FIX4-REPORT for the inventory.
+//
+// The path need not exist yet: ResolveContainedNoSymlink resolves the deepest
+// existing ancestor and compares the resolved chain against the lexical one,
+// so a missing leaf is fine but any linked component anywhere in the chain
+// refuses before any os.* call runs.
+func (r CollectionRoot) ResolveControlWritePath(fsys LinkFS, abs string) (string, error) {
+	if !r.Valid() {
+		return "", fmt.Errorf("%w: root not initialised", ErrCollectionRootInvalid)
+	}
+	rel, err := r.Rel(abs)
+	if err != nil {
+		return "", err
+	}
+	return r.ResolveContainedNoSymlink(fsys, rel)
+}
+
+// resolveControlWritePath is the root-string form for call sites that do not
+// already hold a CollectionRoot. rootPath and abs must be consistently
+// spelled (the caller's abs is built from the caller's rootPath); the check
+// strips that prefix and then runs the no-symlink rule against the RESOLVED
+// root. NewCollectionRoot resolves the root itself (on macOS /var is a link
+// to /private/var), so an abs that still carries the caller's unresolved
+// spelling must never be compared against it directly — that comparison is
+// what the Rel-first shape got wrong.
+func resolveControlWritePath(fsys LinkFS, rootPath, abs string) (string, error) {
+	root, err := NewCollectionRoot(fsys, rootPath)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(filepath.Clean(rootPath), filepath.Clean(abs))
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("%w: %q is not under %q", ErrOutsideCollection, abs, rootPath)
+	}
+	return root.ResolveContainedNoSymlink(fsys, filepath.ToSlash(rel))
+}
+
 // IsAbsoluteTarget reports whether a link target names an absolute filesystem
 // location on ANY platform, independent of the platform this binary runs on.
 // A POSIX build must still refuse "C:\Users\x\.ssh\id_rsa", because the note

@@ -351,6 +351,12 @@ func (tr *Trasher) Trash(req TrashRequest) (*TrashResult, error) {
 		}
 		trashFileRel := path.Join(trashDirRel, from)
 		trashFileAbs := filepath.Join(tr.Root.Path(), filepath.FromSlash(trashFileRel))
+		// D-14 follow-up: the trash destination is a joined control-folder
+		// path; a symlinked .omnipus-vault/trash would land the note OUTSIDE
+		// the vault. Verify before any mkdir or move (FR-044 rule).
+		if _, vErr := tr.Root.ResolveControlWritePath(fsys, trashFileAbs); vErr != nil {
+			return fmt.Errorf("knowledge: trash destination refused: %w", vErr)
+		}
 		if mkErr := os.MkdirAll(filepath.Dir(trashFileAbs), markerDirPerm); mkErr != nil {
 			return fmt.Errorf("knowledge: create trash directory: %w", mkErr)
 		}
@@ -840,6 +846,16 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 
 	var result RestoreResult
 	lockErr := WithNoteWriteLock(tr.lockConfig(), orig, func() error {
+		// D-14 follow-up: the SOURCE comes from the trash folder, which a
+		// symlink could have retargeted outside the vault; restoring would then
+		// import that outside file into the vault and delete the original.
+		// Verify the source against the collection before any move (FR-044).
+		if _, vErr := tr.Root.ResolveControlWritePath(fsys, chosen.FileAbs); vErr != nil {
+			return fmt.Errorf("knowledge: restore source refused: %w", vErr)
+		}
+		if _, vErr := tr.Root.ResolveControlWritePath(fsys, destAbs); vErr != nil {
+			return fmt.Errorf("knowledge: restore destination refused: %w", vErr)
+		}
 		if mkErr := os.MkdirAll(filepath.Dir(destAbs), markerDirPerm); mkErr != nil {
 			return fmt.Errorf("knowledge: create %q: %w", path.Dir(orig), mkErr)
 		}

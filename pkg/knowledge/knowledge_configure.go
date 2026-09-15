@@ -1326,6 +1326,9 @@ func controlPlaneLockKey(root, abs string) string {
 // author.go's own reasoning for CreateNote, restated in this file's header).
 func createControlPlaneFile(target mutationTarget, abs string, data []byte) error {
 	return WithNoteWriteLock(target.lock, controlPlaneLockKey(target.collection.Root(), abs), func() error {
+		if _, vErr := resolveControlWritePath(OSLinkFS(), target.collection.Root(), abs); vErr != nil {
+			return fmt.Errorf("knowledge: control-plane write refused: %w", vErr)
+		}
 		if mkErr := os.MkdirAll(filepath.Dir(abs), controlPlaneDirPerm); mkErr != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(abs), mkErr)
 		}
@@ -1354,6 +1357,9 @@ func createControlPlaneFile(target mutationTarget, abs string, data []byte) erro
 // file cannot interleave with this one, in-process or cross-process.
 func overwriteControlPlaneFile(target mutationTarget, abs string, data []byte) error {
 	return WithNoteWriteLock(target.lock, controlPlaneLockKey(target.collection.Root(), abs), func() error {
+		if _, vErr := resolveControlWritePath(OSLinkFS(), target.collection.Root(), abs); vErr != nil {
+			return fmt.Errorf("knowledge: control-plane write refused: %w", vErr)
+		}
 		if mkErr := os.MkdirAll(filepath.Dir(abs), controlPlaneDirPerm); mkErr != nil {
 			return fmt.Errorf("create %s: %w", filepath.Dir(abs), mkErr)
 		}
@@ -1365,6 +1371,9 @@ func overwriteControlPlaneFile(target mutationTarget, abs string, data []byte) e
 // delete_view), inside the same lock.
 func removeControlPlaneFile(target mutationTarget, abs string) error {
 	return WithNoteWriteLock(target.lock, controlPlaneLockKey(target.collection.Root(), abs), func() error {
+		if _, vErr := resolveControlWritePath(OSLinkFS(), target.collection.Root(), abs); vErr != nil {
+			return fmt.Errorf("knowledge: control-plane delete refused: %w", vErr)
+		}
 		if rerr := os.Remove(abs); rerr != nil {
 			return rerr
 		}
