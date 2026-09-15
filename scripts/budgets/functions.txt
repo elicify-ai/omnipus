@@ -26,7 +26,6 @@ pkg/audit/logger_test.go	TestAuditLogger_WriteAndRotate	270
 pkg/audit/rotation_test.go	TestRotationBySizeAndDaily	309
 pkg/channels/manager.go	Manager.Reload	302
 pkg/config/config_refs_test.go	TestChannelConfig_AllRefsRoundTrip	377
-pkg/config/validator.go	validateBootConfig	288
 pkg/coreagent/seed.go	SeedConfig	250
 pkg/gateway/browser_webrtc_e2e_test.go	TestWebRTCEndToEndInProcess	290
 pkg/gateway/gateway_reload.go	restartServices	260

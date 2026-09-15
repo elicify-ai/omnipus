@@ -268,174 +268,208 @@ func applyWorkspacePathGuard(cfg *Config) {
 	cfg.Agents.Defaults.RestrictToWorkspace = *cfg.Sandbox.WorkspacePathGuard
 }
 
+// validateBootConfigState carries the shared state of validateBootConfig across its stages.
+type validateBootConfigState struct {
+	cfg *Config
+}
+
 // validateBootConfig validates the fully-loaded Config struct against the
 // constraints added by the path-sandbox-and-capability-tiers.
 // Called after struct unmarshal and env-override application.
 func validateBootConfig(cfg *Config) error {
+	vb := &validateBootConfigState{cfg: cfg}
+
+	if r0, stop := vb.validateSandbox(); stop {
+		return r0
+	}
+
+	if r0, stop := vb.validatePlanning(); stop {
+		return r0
+	}
+
+	vb.applyServiceDefaults()
+
+	if r0, stop := vb.validateTier3Commands(); stop {
+		return r0
+	}
+
+	return vb.validateGateway()
+}
+
+// validateSandbox resolves workspace settings and validates sandbox and build bounds.
+func (vb *validateBootConfigState) validateSandbox() (error, bool) {
 	// --- ADR-068 §6: resolve the operator-facing workspace path guard ---
 	// Runs first so that everything below (and every consumer after boot)
 	// sees the single settled value of RestrictToWorkspace. This cannot
 	// fail: the key is a tri-state *bool, so there is no invalid value to
 	// reject — which is why it applies a setting here rather than returning
 	// an error like its neighbours.
-	applyWorkspacePathGuard(cfg)
+	applyWorkspacePathGuard(vb.cfg)
 
 	// --- FR-002a: AllowReadPaths and AllowWritePaths validation ---
-	if err := validateAllowPaths(cfg.Tools.AllowReadPaths, "cfg.Tools.AllowReadPaths"); err != nil {
-		return err
+	if err := validateAllowPaths(vb.cfg.Tools.AllowReadPaths, "cfg.Tools.AllowReadPaths"); err != nil {
+		return err, true
 	}
-	if err := validateAllowPaths(cfg.Tools.AllowWritePaths, "cfg.Tools.AllowWritePaths"); err != nil {
-		return err
+	if err := validateAllowPaths(vb.cfg.Tools.AllowWritePaths, "cfg.Tools.AllowWritePaths"); err != nil {
+		return err, true
 	}
 
 	// --- : Numeric sandbox field bounds ---
 
 	// Apply default then validate MaxConcurrentDevServers.
-	if cfg.Sandbox.MaxConcurrentDevServers == 0 {
-		cfg.Sandbox.MaxConcurrentDevServers = 2
+	if vb.cfg.Sandbox.MaxConcurrentDevServers == 0 {
+		vb.cfg.Sandbox.MaxConcurrentDevServers = 2
 	}
-	if cfg.Sandbox.MaxConcurrentDevServers < 1 || cfg.Sandbox.MaxConcurrentDevServers > 100 {
+	if vb.cfg.Sandbox.MaxConcurrentDevServers < 1 || vb.cfg.Sandbox.MaxConcurrentDevServers > 100 {
 		return fmt.Errorf(
 			"config error: cfg.Sandbox.MaxConcurrentDevServers=%d is out of range [1, 100]",
-			cfg.Sandbox.MaxConcurrentDevServers,
-		)
+			vb.cfg.Sandbox.MaxConcurrentDevServers,
+		), true
 	}
 
 	// Apply default then validate MaxConcurrentBuilds.
-	if cfg.Sandbox.MaxConcurrentBuilds == 0 {
-		cfg.Sandbox.MaxConcurrentBuilds = 2
+	if vb.cfg.Sandbox.MaxConcurrentBuilds == 0 {
+		vb.cfg.Sandbox.MaxConcurrentBuilds = 2
 	}
-	if cfg.Sandbox.MaxConcurrentBuilds < 1 || cfg.Sandbox.MaxConcurrentBuilds > 100 {
+	if vb.cfg.Sandbox.MaxConcurrentBuilds < 1 || vb.cfg.Sandbox.MaxConcurrentBuilds > 100 {
 		return fmt.Errorf(
 			"config error: cfg.Sandbox.MaxConcurrentBuilds=%d is out of range [1, 100]",
-			cfg.Sandbox.MaxConcurrentBuilds,
-		)
+			vb.cfg.Sandbox.MaxConcurrentBuilds,
+		), true
 	}
 
 	// Apply default then validate BuildStatic.TimeoutSeconds.
-	if cfg.Tools.BuildStatic.TimeoutSeconds == 0 {
-		cfg.Tools.BuildStatic.TimeoutSeconds = 300
+	if vb.cfg.Tools.BuildStatic.TimeoutSeconds == 0 {
+		vb.cfg.Tools.BuildStatic.TimeoutSeconds = 300
 	}
-	if cfg.Tools.BuildStatic.TimeoutSeconds < 1 || cfg.Tools.BuildStatic.TimeoutSeconds > 3600 {
+	if vb.cfg.Tools.BuildStatic.TimeoutSeconds < 1 || vb.cfg.Tools.BuildStatic.TimeoutSeconds > 3600 {
 		return fmt.Errorf(
 			"config error: cfg.Tools.BuildStatic.TimeoutSeconds=%d is out of range [1, 3600]",
-			cfg.Tools.BuildStatic.TimeoutSeconds,
-		)
+			vb.cfg.Tools.BuildStatic.TimeoutSeconds,
+		), true
 	}
 
 	// Apply default then validate BuildStatic.MemoryLimitBytes.
-	if cfg.Tools.BuildStatic.MemoryLimitBytes == 0 {
-		cfg.Tools.BuildStatic.MemoryLimitBytes = 536870912 // 512 MiB
+	if vb.cfg.Tools.BuildStatic.MemoryLimitBytes == 0 {
+		vb.cfg.Tools.BuildStatic.MemoryLimitBytes = 536870912 // 512 MiB
 	}
 	const memMin uint64 = 67108864   // 64 MiB
 	const memMax uint64 = 4294967295 // ~4 GiB
-	if cfg.Tools.BuildStatic.MemoryLimitBytes < memMin || cfg.Tools.BuildStatic.MemoryLimitBytes > memMax {
+	if vb.cfg.Tools.BuildStatic.MemoryLimitBytes < memMin || vb.cfg.Tools.BuildStatic.MemoryLimitBytes > memMax {
 		return fmt.Errorf(
 			"config error: cfg.Tools.BuildStatic.MemoryLimitBytes=%d is out of range [%d, %d]",
-			cfg.Tools.BuildStatic.MemoryLimitBytes, memMin, memMax,
-		)
+			vb.cfg.Tools.BuildStatic.MemoryLimitBytes, memMin, memMax,
+		), true
 	}
 
 	// Apply defaults for DevServerPortRange if unset, then validate.
 	// FR-024 / type-design F-24: reject malformed ranges (min>max, out-of-bounds)
 	// at boot rather than at first web_serve dev-mode tool call.
-	if cfg.Sandbox.DevServerPortRange.IsZero() {
-		cfg.Sandbox.DevServerPortRange = PortRange{18000, 18999}
+	if vb.cfg.Sandbox.DevServerPortRange.IsZero() {
+		vb.cfg.Sandbox.DevServerPortRange = PortRange{18000, 18999}
 	}
-	if err := cfg.Sandbox.DevServerPortRange.Validate(); err != nil {
-		return err
+	if err := vb.cfg.Sandbox.DevServerPortRange.Validate(); err != nil {
+		return err, true
 	}
+	return nil, false
+}
 
+// validatePlanning applies and validates planning defaults and bounds.
+func (vb *validateBootConfigState) validatePlanning() (error, bool) {
 	// --- ADR-049 D7: Planning bounds (spec Part A §G) ---
 	// Every field, when non-zero, must be >=1; zero applies the documented
 	// default (mirrors PortRange.IsZero's default-apply pattern above).
 	// CheckTimeoutSeconds additionally has an upper bound [1, 3600].
 	// TaskMaxAttempts (task attempts, the outer limit) and GoalMaxRounds (goal
 	// tries, the inner limit) are separate limits (founder decision 2026-09-14).
-	if cfg.Planning.TaskMaxAttempts == 0 {
-		cfg.Planning.TaskMaxAttempts = DefaultTaskMaxAttempts
+	if vb.cfg.Planning.TaskMaxAttempts == 0 {
+		vb.cfg.Planning.TaskMaxAttempts = DefaultTaskMaxAttempts
 	}
-	if cfg.Planning.TaskMaxAttempts < 1 {
+	if vb.cfg.Planning.TaskMaxAttempts < 1 {
 		return fmt.Errorf(
 			"config error: cfg.Planning.TaskMaxAttempts=%d must be at least 1",
-			cfg.Planning.TaskMaxAttempts,
-		)
+			vb.cfg.Planning.TaskMaxAttempts,
+		), true
 	}
-	if cfg.Planning.GoalMaxRounds == 0 {
-		cfg.Planning.GoalMaxRounds = DefaultGoalMaxRounds
+	if vb.cfg.Planning.GoalMaxRounds == 0 {
+		vb.cfg.Planning.GoalMaxRounds = DefaultGoalMaxRounds
 	}
-	if cfg.Planning.GoalMaxRounds < 1 {
+	if vb.cfg.Planning.GoalMaxRounds < 1 {
 		return fmt.Errorf(
 			"config error: cfg.Planning.GoalMaxRounds=%d must be at least 1",
-			cfg.Planning.GoalMaxRounds,
-		)
+			vb.cfg.Planning.GoalMaxRounds,
+		), true
 	}
-	if cfg.Planning.PlanJudgeMaxRounds == 0 {
-		cfg.Planning.PlanJudgeMaxRounds = DefaultPlanJudgeMaxRounds
+	if vb.cfg.Planning.PlanJudgeMaxRounds == 0 {
+		vb.cfg.Planning.PlanJudgeMaxRounds = DefaultPlanJudgeMaxRounds
 	}
-	if cfg.Planning.PlanJudgeMaxRounds < 1 {
+	if vb.cfg.Planning.PlanJudgeMaxRounds < 1 {
 		return fmt.Errorf(
 			"config error: cfg.Planning.PlanJudgeMaxRounds=%d must be at least 1",
-			cfg.Planning.PlanJudgeMaxRounds,
-		)
+			vb.cfg.Planning.PlanJudgeMaxRounds,
+		), true
 	}
-	if cfg.Planning.LoopMaxRuns == 0 {
-		cfg.Planning.LoopMaxRuns = DefaultLoopMaxRuns
+	if vb.cfg.Planning.LoopMaxRuns == 0 {
+		vb.cfg.Planning.LoopMaxRuns = DefaultLoopMaxRuns
 	}
-	if cfg.Planning.LoopMaxRuns < 1 {
+	if vb.cfg.Planning.LoopMaxRuns < 1 {
 		return fmt.Errorf(
 			"config error: cfg.Planning.LoopMaxRuns=%d must be at least 1",
-			cfg.Planning.LoopMaxRuns,
-		)
+			vb.cfg.Planning.LoopMaxRuns,
+		), true
 	}
-	if cfg.Planning.IdleExpiryDays == 0 {
-		cfg.Planning.IdleExpiryDays = DefaultIdleExpiryDays
+	if vb.cfg.Planning.IdleExpiryDays == 0 {
+		vb.cfg.Planning.IdleExpiryDays = DefaultIdleExpiryDays
 	}
-	if cfg.Planning.IdleExpiryDays < 1 {
+	if vb.cfg.Planning.IdleExpiryDays < 1 {
 		return fmt.Errorf(
 			"config error: cfg.Planning.IdleExpiryDays=%d must be at least 1",
-			cfg.Planning.IdleExpiryDays,
-		)
+			vb.cfg.Planning.IdleExpiryDays,
+		), true
 	}
-	if cfg.Planning.GlobalActiveLoopCap == 0 {
-		cfg.Planning.GlobalActiveLoopCap = DefaultGlobalActiveLoopCap
+	if vb.cfg.Planning.GlobalActiveLoopCap == 0 {
+		vb.cfg.Planning.GlobalActiveLoopCap = DefaultGlobalActiveLoopCap
 	}
-	if cfg.Planning.GlobalActiveLoopCap < 1 {
+	if vb.cfg.Planning.GlobalActiveLoopCap < 1 {
 		return fmt.Errorf(
 			"config error: cfg.Planning.GlobalActiveLoopCap=%d must be at least 1",
-			cfg.Planning.GlobalActiveLoopCap,
-		)
+			vb.cfg.Planning.GlobalActiveLoopCap,
+		), true
 	}
-	if cfg.Planning.CheckTimeoutSeconds == 0 {
-		cfg.Planning.CheckTimeoutSeconds = DefaultCheckTimeoutSeconds
+	if vb.cfg.Planning.CheckTimeoutSeconds == 0 {
+		vb.cfg.Planning.CheckTimeoutSeconds = DefaultCheckTimeoutSeconds
 	}
-	if cfg.Planning.CheckTimeoutSeconds < 1 || cfg.Planning.CheckTimeoutSeconds > 3600 {
+	if vb.cfg.Planning.CheckTimeoutSeconds < 1 || vb.cfg.Planning.CheckTimeoutSeconds > 3600 {
 		return fmt.Errorf(
 			"config error: cfg.Planning.CheckTimeoutSeconds=%d is out of range [1, 3600]",
-			cfg.Planning.CheckTimeoutSeconds,
-		)
+			vb.cfg.Planning.CheckTimeoutSeconds,
+		), true
 	}
 	// ADR-052 FR-032: verifier transcript-window token bound.
-	if cfg.Planning.VerifierWindowTokens == 0 {
-		cfg.Planning.VerifierWindowTokens = DefaultVerifierWindowTokens
+	if vb.cfg.Planning.VerifierWindowTokens == 0 {
+		vb.cfg.Planning.VerifierWindowTokens = DefaultVerifierWindowTokens
 	}
-	if cfg.Planning.VerifierWindowTokens < 1 {
+	if vb.cfg.Planning.VerifierWindowTokens < 1 {
 		return fmt.Errorf(
 			"config error: cfg.Planning.VerifierWindowTokens=%d must be at least 1",
-			cfg.Planning.VerifierWindowTokens,
-		)
+			vb.cfg.Planning.VerifierWindowTokens,
+		), true
 	}
 	// ADR-079 D1: /goal compile session-transcript-window token bound.
-	if cfg.Planning.GoalCompileWindowTokens == 0 {
-		cfg.Planning.GoalCompileWindowTokens = DefaultGoalCompileWindowTokens
+	if vb.cfg.Planning.GoalCompileWindowTokens == 0 {
+		vb.cfg.Planning.GoalCompileWindowTokens = DefaultGoalCompileWindowTokens
 	}
-	if cfg.Planning.GoalCompileWindowTokens < 1 {
+	if vb.cfg.Planning.GoalCompileWindowTokens < 1 {
 		return fmt.Errorf(
 			"config error: cfg.Planning.GoalCompileWindowTokens=%d must be at least 1",
-			cfg.Planning.GoalCompileWindowTokens,
-		)
+			vb.cfg.Planning.GoalCompileWindowTokens,
+		), true
 	}
+	return nil, false
+}
 
+// applyServiceDefaults applies session messaging, workspace serving, and egress defaults.
+func (vb *validateBootConfigState) applyServiceDefaults() {
 	// --- ADR-053 §8: session_messaging (FR-195's 21 keys) ---
 	// The kill-switch trio defaults to ENABLED (the plane is live on a fresh
 	// install). Numeric tunables default to the ADR §Contract Surface values
@@ -455,36 +489,36 @@ func validateBootConfig(cfg *Config) error {
 	// (including a pointer to false) is the operator's own explicit choice
 	// and is left completely alone. An all-three-explicit-false config now
 	// stays off across load/validate/re-marshal.
-	if cfg.SessionMessaging.Enabled == nil {
-		cfg.SessionMessaging.Enabled = boolPtr(DefaultSessionMessagingEnabled)
+	if vb.cfg.SessionMessaging.Enabled == nil {
+		vb.cfg.SessionMessaging.Enabled = boolPtr(DefaultSessionMessagingEnabled)
 	}
-	if cfg.SessionMessaging.WakeEnabled == nil {
-		cfg.SessionMessaging.WakeEnabled = boolPtr(DefaultSessionMessagingWakeEnabled)
+	if vb.cfg.SessionMessaging.WakeEnabled == nil {
+		vb.cfg.SessionMessaging.WakeEnabled = boolPtr(DefaultSessionMessagingWakeEnabled)
 	}
-	if cfg.SessionMessaging.AdjudicationEnabled == nil {
-		cfg.SessionMessaging.AdjudicationEnabled = boolPtr(DefaultSessionMessagingAdjudicationEnabled)
+	if vb.cfg.SessionMessaging.AdjudicationEnabled == nil {
+		vb.cfg.SessionMessaging.AdjudicationEnabled = boolPtr(DefaultSessionMessagingAdjudicationEnabled)
 	}
-	if cfg.SessionMessaging.ChildSendRatePerMinute == 0 {
-		cfg.SessionMessaging.ChildSendRatePerMinute = DefaultSMChildSendRatePerMinute
+	if vb.cfg.SessionMessaging.ChildSendRatePerMinute == 0 {
+		vb.cfg.SessionMessaging.ChildSendRatePerMinute = DefaultSMChildSendRatePerMinute
 	}
-	if cfg.SessionMessaging.InboxUnackedMax == 0 {
-		cfg.SessionMessaging.InboxUnackedMax = DefaultSMInboxUnackedMax
+	if vb.cfg.SessionMessaging.InboxUnackedMax == 0 {
+		vb.cfg.SessionMessaging.InboxUnackedMax = DefaultSMInboxUnackedMax
 	}
-	if cfg.SessionMessaging.InboxPerTypeCeiling == 0 {
-		cfg.SessionMessaging.InboxPerTypeCeiling = DefaultSMInboxPerTypeCeiling
+	if vb.cfg.SessionMessaging.InboxPerTypeCeiling == 0 {
+		vb.cfg.SessionMessaging.InboxPerTypeCeiling = DefaultSMInboxPerTypeCeiling
 	}
 
 	// Apply defaults for ServeWorkspace durations.
-	if cfg.Tools.ServeWorkspace.MaxDurationSeconds == 0 {
-		cfg.Tools.ServeWorkspace.MaxDurationSeconds = 86400 // 24 h
+	if vb.cfg.Tools.ServeWorkspace.MaxDurationSeconds == 0 {
+		vb.cfg.Tools.ServeWorkspace.MaxDurationSeconds = 86400 // 24 h
 	}
-	if cfg.Tools.ServeWorkspace.MinDurationSeconds == 0 {
-		cfg.Tools.ServeWorkspace.MinDurationSeconds = 60
+	if vb.cfg.Tools.ServeWorkspace.MinDurationSeconds == 0 {
+		vb.cfg.Tools.ServeWorkspace.MinDurationSeconds = 60
 	}
 
 	// Apply default EgressAllowList.
-	if len(cfg.Sandbox.EgressAllowList) == 0 {
-		cfg.Sandbox.EgressAllowList = []string{
+	if len(vb.cfg.Sandbox.EgressAllowList) == 0 {
+		vb.cfg.Sandbox.EgressAllowList = []string{
 			"registry.npmjs.org",
 			"*.npmjs.org",
 			"*.npmjs.com",
@@ -494,7 +528,10 @@ func validateBootConfig(cfg *Config) error {
 			"nodejs.org",
 		}
 	}
+}
 
+// validateTier3Commands rejects empty or overly broad Tier 3 command entries.
+func (vb *validateBootConfigState) validateTier3Commands() (error, bool) {
 	// Validate Tier3Commands: each entry must have ≥2 non-empty tokens after
 	// strings.Fields. The baseline allow-list always uses "binary subcommand"
 	// format (e.g. "next dev", "vite dev"). A single-token entry like "node"
@@ -504,23 +541,27 @@ func validateBootConfig(cfg *Config) error {
 	//
 	// Empty-string entries are also rejected: they are almost certainly a
 	// config authoring mistake (e.g. a trailing comma in a JSON array).
-	for i, entry := range cfg.Sandbox.Tier3Commands {
+	for i, entry := range vb.cfg.Sandbox.Tier3Commands {
 		tokens := strings.Fields(entry)
 		switch {
 		case len(tokens) == 0:
 			return fmt.Errorf(
 				"config error: cfg.Sandbox.Tier3Commands[%d] is empty or all-whitespace — remove or replace it",
 				i,
-			)
+			), true
 		case len(tokens) == 1:
 			return fmt.Errorf(
 				"config error: cfg.Sandbox.Tier3Commands[%d]=%q has only one token %q; "+
 					"entries must specify \"binary subcommand\" (≥2 tokens, e.g. \"remix dev\")",
 				i, entry, tokens[0],
-			)
+			), true
 		}
 	}
+	return nil, false
+}
 
+// validateGateway validates the public URL and authentication mismatch log level.
+func (vb *validateBootConfigState) validateGateway() error {
 	// --- ADR-044: gateway.public_url must be a well-formed absolute http(s) URL ---
 	// canonicalGatewayOrigin() (pkg/gateway/middleware/origin.go) returns this
 	// value VERBATIM (only TrimSpace'd) and uses it as the web_serve/preview
@@ -529,7 +570,7 @@ func validateBootConfig(cfg *Config) error {
 	// derived from host:port instead); anything else must parse as an absolute
 	// http(s) URL with a host, or it would silently produce broken preview
 	// links and a bogus origin.
-	if pu := strings.TrimSpace(cfg.Gateway.PublicURL); pu != "" {
+	if pu := strings.TrimSpace(vb.cfg.Gateway.PublicURL); pu != "" {
 		parsed, err := url.Parse(pu)
 		scheme := ""
 		if err == nil {
@@ -544,16 +585,16 @@ func validateBootConfig(cfg *Config) error {
 	}
 
 	// --- : AuthMismatchLogLevel ---
-	if cfg.Gateway.AuthMismatchLogLevel == "" {
-		cfg.Gateway.AuthMismatchLogLevel = "warn"
+	if vb.cfg.Gateway.AuthMismatchLogLevel == "" {
+		vb.cfg.Gateway.AuthMismatchLogLevel = "warn"
 	}
-	switch cfg.Gateway.AuthMismatchLogLevel {
+	switch vb.cfg.Gateway.AuthMismatchLogLevel {
 	case "debug", "info", "warn":
 		// valid
 	default:
 		return fmt.Errorf(
 			"config error: cfg.Gateway.AuthMismatchLogLevel=%q is invalid; must be one of: debug, info, warn",
-			cfg.Gateway.AuthMismatchLogLevel,
+			vb.cfg.Gateway.AuthMismatchLogLevel,
 		)
 	}
 
