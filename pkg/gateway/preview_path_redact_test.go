@@ -351,7 +351,7 @@ func TestPreviewPath_TokenNeverLogged(t *testing.T) {
 //     of the six because the audit chain is HMAC-linked and outlives log
 //     rotation) — the real CSRF middleware is driven to a real 403 and the
 //     route it hands to the reporter is asserted; the reporter closure in
-//     gateway.go is then asserted from SOURCE, because it is constructed
+//     gateway_boot.go is then asserted from SOURCE, because it is constructed
 //     inside setupServices and cannot be invoked from a package test.
 //   - Site 3 (CSRF safe-method re-mint failure) — NOT drivable: it fires only
 //     when crypto/rand fails, which has no injection seam. Covered by source.
@@ -454,7 +454,7 @@ func TestRequestPathRedaction_EveryLoggingSite(t *testing.T) {
 		require.Equal(t, 1, reportCalls, "the reporter must have fired exactly once")
 
 		// The middleware hands the raw route over deliberately (its documented
-		// contract). What FR-003e requires is that the CONSUMER — gateway.go's
+		// contract). What FR-003e requires is that the CONSUMER — gateway_boot.go's
 		// reporter closure, which writes the audit entry — redacts it. Prove
 		// the redaction of exactly this value is clean; the closure is proved
 		// to apply it by TestRequestPathRedaction_ReporterClosureRedactsRoute.
@@ -478,8 +478,8 @@ type redactionRecordingSite struct {
 
 var expectedRedactionSites = []redactionRecordingSite{
 	{file: "rest_auth.go", what: "withRateLimit: 429 rate-limit warning"},
-	{file: "gateway.go", what: "CSRF mismatch reporter: slog fallback when no audit logger is wired"},
-	{file: "gateway.go", what: "CSRF mismatch reporter: the AUDIT entry (HMAC-chained, outlives log rotation)"},
+	{file: "gateway_boot.go", what: "CSRF mismatch reporter: slog fallback when no audit logger is wired"},
+	{file: "gateway_boot.go", what: "CSRF mismatch reporter: the AUDIT entry (HMAC-chained, outlives log rotation)"},
 	{file: "rest_preview_audit.go", what: "emitPreviewAuditEntry: details[\"sanitized_path\"]"},
 	{file: filepath.Join("middleware", "bypass_gate.go"), what: "RequireNotBypass: 503 forensic warning"},
 	{file: filepath.Join("middleware", "csrf.go"), what: "CSRFMiddleware: safe-method cookie re-mint failure"},
@@ -545,7 +545,7 @@ func TestRequestPathRedaction_SourceInventory(t *testing.T) {
 // TestRequestPathRedaction_ReporterClosureRedactsRoute guards the single worst
 // site by name.
 //
-// gateway.go's CSRF mismatch reporter writes `route` into an audit.Entry. That
+// gateway_boot.go's CSRF mismatch reporter writes `route` into an audit.Entry. That
 // record is HMAC-chained and outlives log rotation, so a token written there is
 // the most durable leak the product can produce. The closure is built inside
 // setupServices and cannot be invoked from a package test, so it is asserted

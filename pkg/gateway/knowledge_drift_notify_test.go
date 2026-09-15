@@ -397,28 +397,51 @@ func TestDriftNotify_NilDependenciesFallBackToTheLog(t *testing.T) {
 // failure this whole change exists to remove: code that LOOKS wired.
 //
 // Every test above builds the notifier itself. None of them would notice if
-// gateway.go went on passing nil, and the product would ship with a fully
-// tested notifier that production never installs — which is precisely the state
-// the file was in before (DriftNotify left nil on purpose, with a comment
-// explaining why).
+// the gateway*.go family went on passing nil, and the product would ship with
+// a fully tested notifier that production never installs — which is precisely
+// the state the file was in before (DriftNotify left nil on purpose, with a
+// comment explaining why).
 //
-// It reads the boot file's source rather than booting a gateway, for the same
+// It reads the boot sources rather than booting a gateway, for the same
 // reason its sibling TestStartKnowledgeLifecycle_IsCalledUNCONDITIONALLYFromBoot
 // does: a whole gateway is not cheap enough to stand up here.
+//
+// The family, not the file: gateway.go is split by job
+// (docs/internal/architecture/draft-module-map.md), so the boot wiring's FILE
+// is not a stable identity for the boot sequence — the gateway*.go family is.
 //
 // DIES ON: passing nil (or any non-call expression) as startKnowledgeLifecycle's
 // drift-notify argument; dropping the argument entirely.
 func TestDriftNotify_BootActuallyPassesTheNotifier(t *testing.T) {
-	const bootFile = "gateway.go"
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, bootFile, nil, 0)
-	require.NoError(t, err, "parse %s", bootFile)
-
 	var (
 		found      bool
 		argCount   int
 		notifierFn string
 	)
+	for _, bootFile := range gatewayFamilyFilesForTest(t) {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, bootFile, nil, 0)
+		require.NoError(t, err, "parse %s", bootFile)
+		collectDriftNotifyCallSite(file, &found, &argCount, &notifierFn)
+	}
+
+	require.True(t, found, "startKnowledgeLifecycle is never called from the gateway*.go family")
+	require.Equal(t, 4, argCount,
+		"startKnowledgeLifecycle is called from the gateway*.go family without a "+
+			"drift-notify argument")
+	assert.Equal(t, "knowledgeDriftNotifier", notifierFn,
+		"startKnowledgeLifecycle's 4th argument in the gateway*.go family is not a "+
+			"knowledgeDriftNotifier(...) call. A nil there ships the whole "+
+			"drift-notification lane dead — the operator is told nothing while every "+
+			"test in this file stays green, which is the exact failure mode this "+
+			"change was written to end")
+}
+
+// collectDriftNotifyCallSite folds one family file's startKnowledgeLifecycle
+// call sites into the aggregate its caller asserts on: whether the call exists
+// at all, how many arguments it carries, and what expression sits in the 4th
+// (drift-notify) position.
+func collectDriftNotifyCallSite(file *ast.File, found *bool, argCount *int, notifierFn *string) {
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
@@ -428,26 +451,17 @@ func TestDriftNotify_BootActuallyPassesTheNotifier(t *testing.T) {
 		if !ok || ident.Name != "startKnowledgeLifecycle" {
 			return true
 		}
-		found = true
-		argCount = len(call.Args)
+		*found = true
+		*argCount = len(call.Args)
 		if len(call.Args) >= 4 {
 			if inner, isCall := call.Args[3].(*ast.CallExpr); isCall {
 				if fn, isIdent := inner.Fun.(*ast.Ident); isIdent {
-					notifierFn = fn.Name
+					*notifierFn = fn.Name
 				}
 			}
 		}
 		return false
 	})
-
-	require.Truef(t, found, "startKnowledgeLifecycle is never called from %s", bootFile)
-	require.Equalf(t, 4, argCount,
-		"startKnowledgeLifecycle is called from %s without a drift-notify argument", bootFile)
-	assert.Equalf(t, "knowledgeDriftNotifier", notifierFn,
-		"startKnowledgeLifecycle's 4th argument in %s is not a knowledgeDriftNotifier(...) "+
-			"call. A nil there ships the whole drift-notification lane dead — the operator "+
-			"is told nothing while every test in this file stays green, which is the exact "+
-			"failure mode this change was written to end", bootFile)
 }
 
 // captureSlog lives in rest_onboarding_test.go — same package, same purpose.

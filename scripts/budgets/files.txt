@@ -3,7 +3,6 @@
 # size-budget-grandfather-2026-09-15.md, re-measured at release/v0.1.1 @ 0ea1b81b7.
 pkg/agent/loop.go	7825
 pkg/config/config.go	4391
-pkg/gateway/gateway.go	6645
 pkg/gateway/websocket.go	6221
 pkg/tools/browser/manager.go	4167
 src/store/chat.ts	6695

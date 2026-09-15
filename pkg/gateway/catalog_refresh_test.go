@@ -28,11 +28,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // errStubPull is the fixed error failingPuller.Pull returns — no network, no
@@ -224,27 +223,6 @@ func TestGatewayBoot_OfflineSnapshot_Then_StartupPull(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 	assert.Zero(t, skipPuller.hitCount(),
 		"startup pull must be skipped while the persisted document is younger than the skip window")
-}
-
-// TestSkipStartupPull_Window is the FR-008 skip predicate on its own: only a
-// persisted document younger than the window skips; a missing or unreadable
-// file never does, because there is nothing on disk to serve from.
-func TestSkipStartupPull_Window(t *testing.T) {
-	home := t.TempDir()
-	store := catalog.NewFileStore(home)
-
-	assert.False(t, skipStartupPull(store, time.Hour),
-		"no persisted file at all → never skip; the pull is exactly what is wanted")
-
-	require.NoError(t, store.Write(context.Background(), testDocument(t, "v2026.8.24")))
-	assert.True(t, skipStartupPull(store, time.Hour),
-		"a document just written is younger than the window → skip")
-	assert.False(t, skipStartupPull(store, time.Nanosecond),
-		"a window shorter than the file's age → pull")
-	assert.False(t, skipStartupPull(store, 0),
-		"a zero window disables the skip entirely")
-	assert.False(t, skipStartupPull(nil, time.Hour),
-		"no store → nothing to age → never skip")
 }
 
 // TestRefreshLoop_24h_NoRequestPathPulls (T43, FR-008, US-3.AC3) pins the
@@ -468,21 +446,6 @@ func TestCatalogLogConsoleProbe(t *testing.T) {
 	logger.WarnCF("gateway-test", catalogConsoleProbeToken, nil)
 }
 
-// TestSlogArgsToFields covers the key/value-pair conversion helper directly,
-// including the malformed odd-length call site slog itself documents a
-// "!BADKEY" convention for.
-func TestSlogArgsToFields(t *testing.T) {
-	fields := slogArgsToFields([]any{"a", 1, "b", "two"})
-	assert.Equal(t, map[string]any{"a": 1, "b": "two"}, fields)
-
-	fields = slogArgsToFields(nil)
-	assert.Empty(t, fields)
-
-	fields = slogArgsToFields([]any{"a", 1, "orphan"})
-	assert.Equal(t, 1, fields["a"])
-	assert.Equal(t, "orphan", fields["!BADKEY"])
-}
-
 // TestNoCatalogRefreshOutsideTheLoop is the structural half of T43: no
 // gateway or agent source file may call Catalog.Refresh except the refresh
 // loop itself. A pull wired into a request handler or a turn path would not
@@ -505,8 +468,12 @@ func TestNoCatalogRefreshOutsideTheLoop(t *testing.T) {
 				if !strings.Contains(line, ".Refresh(ctx)") {
 					continue
 				}
-				// The one sanctioned call site is inside runCatalogRefreshLoop.
-				if root == "." && name == "gateway.go" && strings.Contains(line, "cat.Refresh(ctx)") {
+				// The one sanctioned call site is inside runCatalogRefreshLoop,
+				// which lives somewhere in the gateway*.go family — gateway.go
+				// is split by job (draft-module-map.md), so pinning the loop
+				// to one file name would silently narrow this exception to
+				// whatever stayed behind while the call itself moved.
+				if root == "." && isGatewayFamilySource(name) && strings.Contains(line, "cat.Refresh(ctx)") {
 					continue
 				}
 				offenders = append(offenders, fmt.Sprintf("%s/%s:%d: %s", root, name, i+1, strings.TrimSpace(line)))

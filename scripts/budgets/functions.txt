@@ -31,9 +31,9 @@ pkg/config/validator.go	validateBootConfig	288
 pkg/coreagent/seed.go	coreAgentSeed	1060
 pkg/coreagent/seed.go	SeedConfig	250
 pkg/gateway/browser_webrtc_e2e_test.go	TestWebRTCEndToEndInProcess	290
-pkg/gateway/gateway.go	restartServices	260
+pkg/gateway/gateway_reload.go	restartServices	260
 pkg/gateway/gateway.go	RunContextWithOptions	1090
-pkg/gateway/gateway.go	setupAndStartServices	1258
+pkg/gateway/gateway_boot.go	setupAndStartServices	1258
 pkg/gateway/replay.go	streamReplay	687
 pkg/gateway/rest_agents_create.go	restAPI.createAgent	534
 pkg/gateway/rest_agents_update.go	restAPI.updateAgent	999
