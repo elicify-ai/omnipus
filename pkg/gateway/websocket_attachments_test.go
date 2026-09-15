@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
@@ -71,7 +71,7 @@ func TestBuildTranscriptAttachments_WorkspaceRef(t *testing.T) {
 	api.HandleUpload(rr, req)
 	require.Equal(t, http.StatusCreated, rr.Code, "body: %s", rr.Body.String())
 
-	var resp gen.UploadFilesResponse
+	var resp generated.UploadFilesResponse
 	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &resp))
 	require.Len(t, resp.Files, 1)
 	require.NotNil(t, resp.Files[0].Ref)

@@ -45,7 +45,7 @@ import (
 	"strings"
 	"testing"
 
-	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -146,7 +146,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 
 		require.Equal(t, http.StatusCreated, w.Code,
 			"a worker that IS a workspace team member must be directly assignable; body=%s", w.Body.String())
-		var created gen.Task
+		var created generated.Task
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
 		require.NotNil(t, created.AgentId)
 		assert.Equal(t, "hans", *created.AgentId)
@@ -215,7 +215,7 @@ func TestTaskPost_WorkerAssignment(t *testing.T) {
 			"a subagent_3p (external-CLI) worker that IS a workspace team member must be accepted — "+
 				"ADR-042 wired external-CLI task execution; body=%s",
 			w.Body.String())
-		var created gen.Task
+		var created generated.Task
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
 		require.NotNil(t, created.AgentId)
 		assert.Equal(t, "gustav", *created.AgentId,
@@ -262,7 +262,7 @@ func TestTaskPatch_WorkerAssignment(t *testing.T) {
 		w := patchTask(t, api, created.Id, `{"agent_id":"hans"}`)
 		require.Equal(t, http.StatusOK, w.Code,
 			"PATCH assigning a workspace-team-member worker must succeed; body=%s", w.Body.String())
-		var updated gen.Task
+		var updated generated.Task
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
 		require.NotNil(t, updated.AgentId)
 		assert.Equal(t, "hans", *updated.AgentId)
@@ -284,7 +284,7 @@ func TestTaskPatch_WorkerAssignment(t *testing.T) {
 		rGet.URL.Path = "/api/v1/tasks/" + created.Id
 		api.HandleTasks(wGet, rGet)
 		require.Equal(t, http.StatusOK, wGet.Code)
-		var got gen.Task
+		var got generated.Task
 		require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &got))
 		assert.Nil(t, got.AgentId, "task must not have an agent_id after a rejected PATCH")
 	})
@@ -299,7 +299,7 @@ func TestTaskPatch_WorkerAssignment(t *testing.T) {
 		w := patchTask(t, api, created.Id, `{"agent_id":"gustav"}`)
 		require.Equal(t, http.StatusOK, w.Code,
 			"PATCH assigning an on-team subagent_3p worker must succeed (ADR-042); body=%s", w.Body.String())
-		var updated gen.Task
+		var updated generated.Task
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
 		require.NotNil(t, updated.AgentId)
 		assert.Equal(t, "gustav", *updated.AgentId)
@@ -385,7 +385,7 @@ func TestTaskPatch_AgentOnDifferentWorkspaceTeam_Rejected(t *testing.T) {
 	rGet.URL.Path = "/api/v1/tasks/" + created.Id
 	api.HandleTasks(wGet, rGet)
 	require.Equal(t, http.StatusOK, wGet.Code)
-	var got gen.Task
+	var got generated.Task
 	require.NoError(t, json.Unmarshal(wGet.Body.Bytes(), &got))
 	assert.Nil(t, got.AgentId, "task must not have an agent_id after a rejected PATCH")
 
@@ -466,11 +466,11 @@ func TestHandleChatMessage_RejectsWorkerAgentID(t *testing.T) {
 			var f replayFrameDecoder
 			require.NoError(t, json.Unmarshal(raw, &f))
 			switch f.Type {
-			case string(gen.WsFrameTypeError):
+			case string(generated.WsFrameTypeError):
 				sawError = true
 				assert.Contains(t, strings.ToLower(f.Message), "worker",
 					"the error frame must explain a worker cannot be a chat target")
-			case string(gen.WsFrameTypeSessionStarted):
+			case string(generated.WsFrameTypeSessionStarted):
 				sawSessionStarted = true
 			}
 		default:
