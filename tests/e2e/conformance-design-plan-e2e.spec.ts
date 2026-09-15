@@ -39,45 +39,6 @@ import {
 } from './fixtures/conformance-helpers'
 import { blockedMarker } from './fixtures/stub-external-cli'
 
-// ── Judge-unavailability pause (silent-stall oracle) ─────────────────────────
-//
-// A plan-level judge round retries an unavailable Judge FOREVER inside the
-// round on the 60/120/300s D7 backoff, bounded only by planJudgeRoundTimeout
-// (10 min). That is legitimate behaviour — a provider blip must not fail a
-// plan — but for those ten minutes the plan used to sit at
-// state="running" / plan_phase="judging" with NOTHING saying why, which is
-// indistinguishable from a wedge. This suite failed on exactly that
-// (Conformance_t3b, 3/3 twice, "observed state=running phase=judging").
-//
-// The engine now writes Plan.paused_reason with this stable prefix for the
-// duration of each backoff (pkg/plan's PausedReasonJudgeUnavailable,
-// pkg/agent/plan_engine.go's noteJudgeUnavailable), so the two cases are now
-// distinguishable from the outside — and this file asserts BOTH directions:
-//
-//   - a plan carrying this reason is legitimately HELD, not wedged;
-//   - a plan sitting at plan_phase="judging" past the judge call timeout
-//     WITHOUT this reason is a FAILURE. That is the silent stall, and it must
-//     never pass again just because a wedge and a backoff look alike.
-const JUDGE_PAUSE_PREFIX = 'judge temporarily unavailable'
-
-// judgeCallTimeout (pkg/agent/judge.go) bounds ONE verifier turn. A single
-// healthy-but-slow turn can therefore legitimately hold plan_phase="judging"
-// for up to 120s with no pause reason; past that the turn has either errored
-// (→ backoff → paused_reason) or the round has moved on.
-const JUDGE_CALL_TIMEOUT_MS = 120_000
-
-// Grace on top of JUDGE_CALL_TIMEOUT_MS before an unexplained "judging" is
-// called a stall. Covers poll jitter and a round boundary that falls between
-// two samples (the judge_rounds reset below covers the common case of that,
-// this covers the rest). Deliberately small — the whole point is that a
-// multi-minute silent judging phase must be reportable.
-const SILENT_JUDGE_STALL_MS = JUDGE_CALL_TIMEOUT_MS + 30_000
-
-/** True when a `running` plan is legitimately held on a judge-unavailability backoff. */
-function heldOnJudgeBackoff(state: string, pausedReason: string | undefined): boolean {
-  return state === 'running' && (pausedReason ?? '').startsWith(JUDGE_PAUSE_PREFIX)
-}
-
 // ── Conformance_t2_PlanLifecycleE2E ──────────────────────────────────────────
 //
 // BDD (§9.1 t2): plan lifecycle — Execute → gated approve → members per DAG
@@ -122,28 +83,64 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   test.setTimeout(600_000)
   await startFreshChatWithJim(page)
 
-  // Setup: per-test Main agent (chat-target plan owner + member assignee)
-  // in its own workspace core_team. A fresh agent per test avoids the
-  // multi-workspace find_for_agent ambiguity that cancels member turns.
-  // `bash: allow` is required for the `check` criteria below — a fresh
-  // custom agent is seeded fully deny-by-default (verified empirically:
-  // omitting this override makes every check fail closed regardless of
-  // command, which would make the "definitely met" and "definitely unmet"
-  // recipes indistinguishable).
+  // Setup: per-test Main agent (chat-target plan owner) in its own workspace
+  // core_team. A fresh agent per test avoids the multi-workspace
+  // find_for_agent ambiguity that cancels member turns. `bash: allow` is
+  // required for the plan's `check` DoD below — a fresh custom agent is
+  // seeded fully deny-by-default (verified empirically: omitting this
+  // override makes every check fail closed regardless of command, which
+  // would make the "definitely met" and "definitely unmet" recipes
+  // indistinguishable).
   const ownerId = await createMainAgent(page, `conformance-t2-owner-${Date.now()}`, { bash: 'allow' })
+  // The members' assignees: stub external-CLI workers that end every run with
+  // a blocked claim, so each member ends Failed "Blocked: <cause>" on its
+  // first try — no LLM on the worker side, no Judge call, no task attempt
+  // used, no restart (ADR-043 §8, ADR-084 §11). One per member, exactly as
+  // Conformance_t3b_TargetedRetryOnlyE2E assigns its m2. See the members
+  // comment below for why.
+  const memberBlockedText = blockedMarker(
+    'this member is a fixed test fixture that deliberately produces no work; it is not transient and a retry ' +
+      'would end the same way',
+  )
+  const m1WorkerId = await createStubCliWorkerAgent(page, `conformance-t2-m1-stub-${Date.now()}`, {
+    firstTry: memberBlockedText,
+  })
+  const m2WorkerId = await createStubCliWorkerAgent(page, `conformance-t2-m2-stub-${Date.now()}`, {
+    firstTry: memberBlockedText,
+  })
   const wsRes = await apiFetch<{ id: string }>(page, 'POST', '/api/v1/workspaces', {
     name: 'conformance-t2',
-    core_team: [ownerId],
+    core_team: [ownerId, m1WorkerId, m2WorkerId],
   })
   if (!wsRes.ok) throw new Error(`t2: POST /workspaces failed ${wsRes.status}: ${wsRes.raw}`)
   const workspaceId = wsRes.body.id
 
-  // Create a plan with TWO members (each a deterministic, machine-checked
-  // `exit 0` — fast and judgment-free, so "all members terminal" is reached
-  // quickly and reliably) and a plan-level DoD that can NEVER be satisfied
-  // (`exit 1`, expected 0) — forcing a deterministic round-1 UNMET verdict.
-  // The plan-lint gate (G-16) requires disjoint write_sets per parallel
-  // member; we comply here.
+  // Create a plan with TWO members that each end at once — deterministically,
+  // with no LLM involved — and a plan-level DoD that can NEVER be satisfied
+  // (`exit 1`, expected 0), forcing a deterministic round-1 UNMET verdict.
+  // What t2 proves starts once all members are terminal: the unmet verdict,
+  // the hold, and F2. How the members got there is not under test.
+  //
+  // WHY NOT native members with a trivially passing check (`exit 0`), as this
+  // test used until 2026-09-15: under the two-level task-run model (ADR-086
+  // §8, issue #710) a member reaches `done` only through a Judge verdict, so
+  // each native member costs at least a worker LLM turn plus a Judge LLM
+  // turn, and a try the Judge rules unmet keeps the worker going in the same
+  // run. That is real, unbounded model latency inside Step 1's fixed 120s.
+  // With two serial native members this whole test took 1.4m in one CI run
+  // and 2.7m in another, and in release/v0.1.1 CI run 34930936198 (job
+  // 104259035627) m2 was still in progress when Step 1's 120s ran out — plan
+  // state running, plan_phase dispatching, progress 0.5, the Judge still
+  // working m2 — before the retry passed. The same class of failure, and the
+  // same fix, as Conformance_t3b_TargetedRetryOnlyE2E's m2 below.
+  //
+  // WHY INDEPENDENT, not m2 blocked by m1 as before: a dependent is promoted
+  // only when its blocker is DONE (pkg/task/blocked_by.go; see
+  // processPlan's planStuckAfterMemberCancel comment, pkg/agent/
+  // plan_engine.go), so a failed m1 would leave m2 blocked forever and the
+  // plan would never reach all-terminal. No step of t2 asserts dispatch
+  // order. The plan-lint gate (G-16) requires disjoint write_sets per
+  // parallel member; we comply here.
   const { planId } = await createPlanWithMembers(
     page,
     workspaceId,
@@ -151,7 +148,7 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
     {
       title: 't2 conformance plan',
       goal: 'produce a verdict of met or unmet for both members',
-      description: 'two serial members, each with a machine-checked criterion',
+      description: 'two independent members that each end at once, and a definition of done that can never be met',
       dod: [checkCriterion('deterministic unmet DoD — forces round-1 unmet for the F2 proof', 'exit 1', 0)],
       bounds: { plan_judge_max_rounds: 5 },
     },
@@ -161,15 +158,18 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
         title: 'member one',
         prompt: 'reply with the literal word alpha',
         write_set: ['out/m1.txt'],
-        criteria: [checkCriterion('m1 trivially passes', 'exit 0', 0)],
+        agent_id: m1WorkerId,
+        // Never judged: the stub worker ends every run with a blocked claim,
+        // before any Judge call. A criterion is still mandatory at creation.
+        criteria: [proseCriterion('m1 replied with the word alpha')],
       },
       {
         label: 'm2',
         title: 'member two',
         prompt: 'reply with the literal word beta',
-        blocked_by_labels: ['m1'],
         write_set: ['out/m2.txt'],
-        criteria: [checkCriterion('m2 trivially passes', 'exit 0', 0)],
+        agent_id: m2WorkerId,
+        criteria: [proseCriterion('m2 replied with the word beta')],
       },
     ],
     createdPlanIds,
@@ -217,19 +217,38 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   ).toBe(true)
 
   // --- Step 2: the F2 round-burn proof itself -----------------------------
-  // Sample (judge_rounds, member terminal signature, plan_phase) at fine
-  // granularity while the plan sits at the hold. The F2 invariant, stated
-  // causally: judge_rounds may only advance between two samples whose
-  // member signature ALSO changed (a real correction landed and changed
-  // the DAG) — an increment between two samples with an IDENTICAL member
-  // signature is exactly the bug F2 exists to prevent (re-judging an
-  // unchanged terminal state on every idle tick). The sampling window ends
-  // either at its own deadline or as soon as the plan leaves the hold
-  // (whichever first — sampling past that point is not testing F2 anymore).
+  // Sample (plan_phase, judge_rounds, supervision.correction_rounds, member
+  // terminal signature) at fine granularity while the plan sits at the hold.
+  // The F2 invariant, stated causally: judge_rounds may only advance between
+  // two samples across which the plan's evidence ALSO changed. The engine
+  // starts a genuinely fresh round for exactly two reasons reachable here
+  // (pkg/agent/plan_engine.go, lastUnmetTerminalSignature's doc comment):
+  //   - the member terminal signature changed; or
+  //   - a correction was applied. AppendCorrection clears the gate for every
+  //     verb ("correction = new activity", INV-7), and
+  //     countCorrectionAndClearWake increments supervision.correction_rounds
+  //     in the same step — never reset, so a higher count is the wire-visible
+  //     record that a correction landed.
+  // A round between two samples where NEITHER changed is exactly the bug F2
+  // exists to prevent (re-judging an unchanged idle hold on a tick). The
+  // sampling window ends either at its own deadline or as soon as the plan
+  // leaves the hold (whichever first — sampling past that point is not
+  // testing F2 anymore).
+  //
+  // WHY THE MEMBER SIGNATURE ALONE IS NOT ENOUGH: with members that end at
+  // once, PlanSupervisor's targeted_retry re-runs a failed member, the member
+  // fails again within seconds, and the plan is re-judged and back at the
+  // hold before the next 4s sample. Both samples read "failed" for every
+  // member, yet a correction really landed and a fresh round is correct.
+  // release/v0.1.1 CI run 34938204261 (job 104280897259) showed exactly that:
+  // each judge_rounds step 1→5 arrived together with a correction_rounds step
+  // 0→4 and a new updated_at on the ONE member that was retried, while between
+  // corrections judge_rounds held for ~40s across several 30s engine ticks.
   interface Sample {
     tMs: number
     phase: string
     judgeRounds: number
+    correctionRounds: number
     signature: string
   }
   const samples: Sample[] = []
@@ -238,7 +257,11 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   const t0 = Date.now()
   while (Date.now() < sampleWindowDeadline) {
     const [planPoll, members] = await Promise.all([
-      apiFetch<{ plan_phase?: string; judge_rounds?: number }>(page, 'GET', `/api/v1/plans/${planId}`),
+      apiFetch<{ plan_phase?: string; judge_rounds?: number; supervision?: { correction_rounds?: number } }>(
+        page,
+        'GET',
+        `/api/v1/plans/${planId}`,
+      ),
       listPlanMemberTasks(page, workspaceId, planId),
     ])
     if (!planPoll.ok) throw new Error(`t2: GET /plans/{id} poll (F2 sampling) failed ${planPoll.status}: ${planPoll.raw}`)
@@ -246,6 +269,7 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
       tMs: Date.now() - t0,
       phase: planPoll.body.plan_phase ?? '',
       judgeRounds: planPoll.body.judge_rounds ?? 0,
+      correctionRounds: planPoll.body.supervision?.correction_rounds ?? 0,
       signature: memberSignature(members),
     })
     if (planPoll.body.plan_phase !== HOLD_PHASE) break
@@ -253,7 +277,7 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   }
 
   // Causal invariant: for every consecutive pair, judge_rounds may only
-  // increase alongside a member-signature change.
+  // increase alongside a member-signature change or an applied correction.
   const violations: string[] = []
   let sawHeldUnchangedPair = false
   for (let i = 1; i < samples.length; i++) {
@@ -261,13 +285,15 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
     const cur = samples[i]
     const roundsAdvanced = cur.judgeRounds > prev.judgeRounds
     const signatureChanged = cur.signature !== prev.signature
-    if (prev.phase === HOLD_PHASE && !signatureChanged) {
+    const correctionApplied = cur.correctionRounds > prev.correctionRounds
+    if (prev.phase === HOLD_PHASE && !signatureChanged && !correctionApplied) {
       sawHeldUnchangedPair = true
       if (roundsAdvanced) {
         violations.push(
           `t=${prev.tMs}ms→${cur.tMs}ms: judge_rounds ${prev.judgeRounds}→${cur.judgeRounds} advanced while the ` +
-            `member terminal signature stayed IDENTICAL ("${prev.signature}") and phase stayed ` +
-            'awaiting_supervision — this is exactly the F2 round-burn bug (re-judging an unchanged idle hold).',
+            `member terminal signature stayed IDENTICAL ("${prev.signature}"), no correction was applied ` +
+            `(correction_rounds stayed ${prev.correctionRounds}) and phase stayed awaiting_supervision — this is ` +
+            'exactly the F2 round-burn bug (re-judging an unchanged idle hold).',
         )
       }
     }
@@ -278,14 +304,25 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
       `Full sample trace: ${JSON.stringify(samples)}`,
   ).toEqual([])
   // The invariant above is only a meaningful proof if we actually observed
-  // at least one held, signature-unchanged consecutive pair to test it
+  // at least one held, evidence-unchanged consecutive pair to test it
   // against — otherwise it holds vacuously (every sample happened to land
   // on a round transition). Require genuine coverage of the idle case.
   expect(
     sawHeldUnchangedPair,
     'F2 sampling window never observed two consecutive samples that were BOTH held at awaiting_supervision ' +
-      `with an unchanged member signature — the invariant above was not genuinely exercised. Sample trace: ${JSON.stringify(samples)}`,
+      'with an unchanged member signature and no correction applied between them — the invariant above was not ' +
+      `genuinely exercised. Sample trace: ${JSON.stringify(samples)}`,
   ).toBe(true)
+  // correction_rounds is never reset (countCorrectionAndClearWake), so a
+  // regression would mean the counter the invariant above leans on is itself
+  // unreliable — which would let a real round burn hide behind it.
+  for (let i = 1; i < samples.length; i++) {
+    expect(
+      samples[i].correctionRounds,
+      `t2: supervision.correction_rounds must never decrease — observed ${samples[i - 1].correctionRounds} → ` +
+        `${samples[i].correctionRounds} at sample ${i}. Trace: ${JSON.stringify(samples)}`,
+    ).toBeGreaterThanOrEqual(samples[i - 1].correctionRounds)
+  }
   // judge_rounds must never have been observed to REGRESS either (a
   // completely different failure mode from round-burn, but still a broken
   // invariant worth catching for free from the same trace).
@@ -316,35 +353,21 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   // 2026-07-30, CI shard llm-conformance: this plan was observed at
   // state="running" phase="dispatching" at window-close — exactly the
   // documented post-correction re-run, not a stall.
-  //
-  // ALSO acceptable, and now explicitly named rather than swept up by the
-  // "judging is an active phase" clause above: state="running" with a
-  // paused_reason starting JUDGE_PAUSE_PREFIX. That is a plan waiting out a
-  // D7 judge backoff — held on purpose, and now SAYING so (see this file's
-  // header). It is a legitimate terminus for this window precisely because
-  // the plan is no longer silent about it.
   const ACTIVE_ROUND_PHASES = new Set(['dispatching', 'judging', 'synthesizing'])
   const HELD_PHASES = new Set([HOLD_PHASE, 'stalled'])
   const finalDeadline = Date.now() + 180_000
   let planState = ''
   let planPhase = ''
-  let planPausedReason = ''
   let reachedTerminalOrHold = false
   while (Date.now() < finalDeadline) {
-    const poll = await apiFetch<{ state: string; plan_phase?: string; paused_reason?: string }>(
-      page,
-      'GET',
-      `/api/v1/plans/${planId}`,
-    )
+    const poll = await apiFetch<{ state: string; plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
     if (!poll.ok) throw new Error(`t2: GET /plans/{id} poll (final) failed ${poll.status}: ${poll.raw}`)
     planState = poll.body.state
     planPhase = poll.body.plan_phase ?? ''
-    planPausedReason = poll.body.paused_reason ?? ''
     if (
       planState === 'done' ||
       planState === 'failed' ||
       HELD_PHASES.has(planPhase) ||
-      heldOnJudgeBackoff(planState, planPausedReason) ||
       (planState === 'running' && ACTIVE_ROUND_PHASES.has(planPhase))
     ) {
       reachedTerminalOrHold = true
@@ -354,9 +377,8 @@ test('Conformance_t2_PlanLifecycleE2E: Execute → approve → members → deter
   }
   expect(
     reachedTerminalOrHold,
-    `t2: plan ${planId} must be at a documented terminus (done/failed), still legitimately held/stalled, ` +
-      `paused on a judge backoff, or observably still progressing through an active round — observed ` +
-      `state="${planState}" phase="${planPhase}" paused_reason="${planPausedReason}". ` +
+    `t2: plan ${planId} must be at a documented terminus (done/failed), still legitimately held/stalled, or ` +
+      `observably still progressing through an active round — observed state="${planState}" phase="${planPhase}". ` +
       'A wedge here means the correction-append → re-judge cycle stalled after the sampling window.',
   ).toBe(true)
 })
@@ -462,8 +484,10 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   //        in the same run, up to Tries per goal (default 20), and every try is
   //        a worker LLM turn plus a Judge call on the member's Definition of
   //        Done. A check that can never pass therefore kept m2 in progress for
-  //        many minutes and the plan did not reach the hold within Step 1's
-  //        120s (CI run 34917711499: 4 of 4 attempts timed out there). Tries per
+  //        many minutes and the plan did not reach the hold within the then
+  //        120s first-hold deadline (CI run 34917711499: 4 of 4 attempts timed
+  //        out there; that separate deadline is gone — see the observation
+  //        window's comment below). Tries per
   //        goal cannot be lowered for one test either: PUT /api/v1/performance
   //        answers 503 while dev_mode_bypass is on, and every CI e2e gateway
   //        runs with it on. A blocked claim is the documented way a run ends at
@@ -522,86 +546,55 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
 
   const HOLD_PHASE = 'awaiting_supervision'
 
-  // --- Step 1: MANDATORY — reach the hold at least once -------------------
-  // With m2 ending Failed "Blocked: <transient cause>" on its first try, a
-  // round-1 unmet verdict (and the awaiting_supervision hold it triggers) is
-  // expected reliably.
-  let reachedHoldOnce = false
-  const firstHoldDeadline = Date.now() + 120_000
-  while (Date.now() < firstHoldDeadline) {
-    const poll = await apiFetch<{ plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
-    if (!poll.ok) throw new Error(`t3b: GET /plans/{id} poll (first hold) failed ${poll.status}: ${poll.raw}`)
-    if (poll.body.plan_phase === HOLD_PHASE) {
-      reachedHoldOnce = true
-      break
-    }
-    await page.waitForTimeout(1_500)
-  }
-  expect(
-    reachedHoldOnce,
-    `t3b: plan ${planId} must reach plan_phase=awaiting_supervision within 120s of approval — m2 ` +
-      '(its stub worker ends every run Blocked at once) makes a round-1 unmet verdict expected reliably.',
-  ).toBe(true)
-
-  // --- Step 2: observe the REAL correction mechanism over the plan's full
-  // round budget. Same session/transcript plumbing as
-  // Conformance_t3_PlanningReplanningE2E — a NEW session may be minted each
-  // time the plan opens a fresh park, so every session id ever observed is
-  // tracked and all of them are inspected at the end.
+  // --- Observe the plan from approval, over its full round budget ---------
+  // ONE window, starting at approval, covers what used to be two steps with
+  // two deadlines:
+  //   - the plan MUST reach the hold at least once — still mandatory, and
+  //     asserted first once the window closes; and
+  //   - the REAL correction mechanism, observed over the plan's full round
+  //     budget. Same session/transcript plumbing as
+  //     Conformance_t3_PlanningReplanningE2E — a NEW session may be minted
+  //     each time the plan opens a fresh park, so every session id ever
+  //     observed is tracked and all of them are inspected at the end.
+  //
+  // WHY THE FIRST HOLD NO LONGER HAS ITS OWN 120s DEADLINE: nothing on the
+  // path to it has a bound that short. Both members end within seconds of
+  // approval; the plan engine then needs up to two 30s ticks
+  // (defaultPlanEngineTickInterval) to admit the plan and to start its first
+  // judge round; and the Judge must then reach a verdict — a real model turn,
+  // because this DoD is prose by design (it is what steers PlanSupervisor to
+  // targeted_retry, so a deterministic check cannot stand in for it). The
+  // product bounds that turn only at DefaultJudgeTimeoutSeconds (420s). In
+  // release/v0.1.1 CI run 34938204261 (job 104280897259) the failing attempt
+  // was approved 07:03:21, running 07:03:52 and judging 07:04:22, and its
+  // Judge was still on its eighth step when the 120s deadline stopped the plan
+  // at 07:05:22; in the passing retry the first verdict took ~47s and a later
+  // round ~2 minutes. That deadline measured model latency, not a product
+  // property. The total budget from approval is unchanged — the old 120s
+  // first-hold deadline plus the old 420s observation window is this window's
+  // 540s — and the plan is polled at the old 1.5s cadence until the first hold
+  // is seen.
+  const observeWindowMs = 540_000
   const seenSessionIds = new Set<string>()
+  let reachedHoldOnce = false
   let finalPlanState = ''
   let finalPlanPhase = ''
-  let finalPausedReason = ''
-  // Silent-stall oracle (see this file's header). Tracks how long the plan has
-  // been continuously observed at plan_phase="judging" WITHOUT a
-  // judge-unavailability paused_reason. The judge_rounds reset below keeps a
-  // round boundary that falls between two samples from being misread as one
-  // long judging phase.
-  let judgingSinceMs: number | null = null
-  let judgingSinceRounds = -1
-  let silentJudgeStall: string | null = null
-  const observeDeadline = Date.now() + 420_000
+  const observeDeadline = Date.now() + observeWindowMs
   while (Date.now() < observeDeadline) {
-    const poll = await apiFetch<{
-      state: string
-      plan_phase?: string
-      paused_reason?: string
-      judge_rounds?: number
-      supervision?: { session_id?: string }
-    }>(page, 'GET', `/api/v1/plans/${planId}`)
+    const poll = await apiFetch<{ state: string; plan_phase?: string; supervision?: { session_id?: string } }>(
+      page,
+      'GET',
+      `/api/v1/plans/${planId}`,
+    )
     if (!poll.ok) throw new Error(`t3b: GET /plans/{id} poll (observe) failed ${poll.status}: ${poll.raw}`)
     finalPlanState = poll.body.state
     finalPlanPhase = poll.body.plan_phase ?? ''
-    finalPausedReason = poll.body.paused_reason ?? ''
-    const rounds = poll.body.judge_rounds ?? 0
+    if (finalPlanPhase === HOLD_PHASE) reachedHoldOnce = true
     const sid = poll.body.supervision?.session_id
     if (sid) seenSessionIds.add(sid)
-
-    const explained = finalPausedReason.startsWith(JUDGE_PAUSE_PREFIX)
-    if (finalPlanState === 'running' && finalPlanPhase === 'judging' && !explained) {
-      if (judgingSinceMs === null || rounds !== judgingSinceRounds) {
-        judgingSinceMs = Date.now()
-        judgingSinceRounds = rounds
-      }
-      const heldMs = Date.now() - judgingSinceMs
-      if (heldMs > SILENT_JUDGE_STALL_MS && silentJudgeStall === null) {
-        silentJudgeStall =
-          `plan ${planId} sat at state="running" plan_phase="judging" for ${Math.round(heldMs / 1000)}s ` +
-          `(judge_rounds stayed at ${rounds}) with paused_reason="${finalPausedReason}". A verifier turn is ` +
-          `capped at ${JUDGE_CALL_TIMEOUT_MS / 1000}s, so past that the round is either retrying an ` +
-          'unavailable judge — which MUST surface as paused_reason "' +
-          `${JUDGE_PAUSE_PREFIX}…" — or genuinely wedged. Either way, a plan that says nothing here is the ` +
-          'defect: an operator watching the board cannot tell the two apart.'
-      }
-    } else {
-      judgingSinceMs = null
-      judgingSinceRounds = -1
-    }
-
     if (finalPlanState === 'done' || finalPlanState === 'failed') break
-    await page.waitForTimeout(4_000)
+    await page.waitForTimeout(reachedHoldOnce ? 4_000 : 1_500)
   }
-  expect(silentJudgeStall, `t3b: silent judge stall — ${silentJudgeStall}`).toBeNull()
 
   // Collect every plan_correct call (any status) across every adjudication
   // session this plan ever used.
@@ -615,6 +608,18 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
   const diagnostic =
     `plan state="${finalPlanState}" phase="${finalPlanPhase}"; sessions=${[...seenSessionIds].join(',')}; ` +
     `all plan_correct calls: ${JSON.stringify(allCalls)}`
+
+  // MANDATORY, checked first: the plan reached the hold at least once. With
+  // m2 ending Failed "Blocked: <transient cause>" on its first try, a round-1
+  // unmet verdict — and the awaiting_supervision hold it triggers — is
+  // expected reliably; never reaching it inside the whole window means the
+  // unmet verdict or the hold path is broken.
+  expect(
+    reachedHoldOnce,
+    `t3b: plan ${planId} never reached plan_phase=awaiting_supervision within ${observeWindowMs / 1000}s of ` +
+      'approval — m2 (its stub worker ends every run Blocked at once) makes a round-1 unmet verdict expected ' +
+      `reliably. ${diagnostic}`,
+  ).toBe(true)
 
   // MANDATORY: the mechanism actually committed at least one correction.
   // Zero committed corrections after a full round budget with one
@@ -675,20 +680,9 @@ test("Conformance_t3b_TargetedRetryOnlyE2E: re-plan applies TARGETED-RETRY as th
 
   // No-wedge sanity: the plan must not still be stuck neither terminal nor
   // held after the full observation window.
-  //
-  // A plan paused on a judge backoff counts as legitimately held — it is
-  // waiting on an unavailable Judge, on purpose, and is now SAYING so. This is
-  // the one case that used to sink this test as an unexplained
-  // state="running" phase="judging"; it is admitted here only because the
-  // silent-stall oracle above has already failed the run if the plan ever sat
-  // at "judging" past the judge call timeout WITHOUT saying why. The pair is
-  // the point: a visible pause is a hold, a silent one is a failure.
   expect(
-    finalPlanState === 'done' ||
-      finalPlanState === 'failed' ||
-      finalPlanPhase === HOLD_PHASE ||
-      heldOnJudgeBackoff(finalPlanState, finalPausedReason),
+    finalPlanState === 'done' || finalPlanState === 'failed' || finalPlanPhase === HOLD_PHASE,
     `t3b: plan ${planId} must be at a documented terminus or still legitimately held after the observation ` +
-      `window — observed state="${finalPlanState}" phase="${finalPlanPhase}" paused_reason="${finalPausedReason}".`,
+      `window — observed state="${finalPlanState}" phase="${finalPlanPhase}".`,
   ).toBe(true)
 })

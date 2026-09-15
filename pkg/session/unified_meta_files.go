@@ -294,6 +294,30 @@ func u5ReadLoopFile(sessionDir string) (u5LoopFile, error) {
 // throughout (the "Locked" suffix, same convention as the retired
 // writeMetaLocked and readMetaLocked).
 
+// sessionFileLockPath returns the sidecar file whose OS lock serializes
+// cross-process writers of the session file at path (meta.json, stats.json,
+// loop.json, pending_ask.json) — never the session file itself.
+//
+// fileutil.WithFlock opens the path it locks with O_CREATE. Locking the target
+// therefore created an EMPTY target on its first write and left it in place
+// through WriteFileAtomic's temp-file write and fsync, until the rename
+// replaced it. Any reader without this store's session shard — a second store
+// over the same directory, another process — could read zero bytes and report
+// the session corrupt (FR-056), and a crash inside that window would have left
+// the empty file behind for good, defeating the atomic write entirely. Locking
+// the target also locked an inode the rename then unlinks, so a writer that
+// opened the path before the rename and one that opened it after held locks on
+// two different files. A sidecar is never renamed over, so it has neither
+// problem; this is the pattern pkg/entity (Store.lockPath) already uses.
+//
+// The sidecar is never removed while the session exists; it disappears with
+// the session directory. Every lister of a session directory filters by name
+// (*.jsonl partitions, the four named meta files), so it is never mistaken for
+// session content.
+func sessionFileLockPath(path string) string {
+	return path + ".lock"
+}
+
 // u5WriteIdentityLocked writes meta.json and updates ONLY the identity
 // field group (including Type and the ADR-057 FR-008 ParentSessionID) on
 // the cached entry. Also wires FR-097's parent-index ADD side
@@ -307,7 +331,7 @@ func (us *UnifiedStore) u5WriteIdentityLocked(sessionID string, meta *UnifiedMet
 		return fmt.Errorf("unified_store: marshal meta.json: %w", err)
 	}
 	metaPath := filepath.Join(us.baseDir, sessionID, "meta.json")
-	if err := fileutil.WithFlock(metaPath, func() error {
+	if err := fileutil.WithFlock(sessionFileLockPath(metaPath), func() error {
 		return writeFileAtomicFn(metaPath, data, 0o600)
 	}); err != nil {
 		return err
@@ -361,7 +385,7 @@ func (us *UnifiedStore) u5WriteStatsLocked(sessionID string, meta *UnifiedMeta) 
 		return fmt.Errorf("unified_store: marshal stats.json: %w", err)
 	}
 	statsPath := filepath.Join(us.baseDir, sessionID, "stats.json")
-	if err := fileutil.WithFlock(statsPath, func() error {
+	if err := fileutil.WithFlock(sessionFileLockPath(statsPath), func() error {
 		return writeFileAtomicFn(statsPath, data, 0o600)
 	}); err != nil {
 		return err
@@ -393,7 +417,7 @@ func (us *UnifiedStore) u5WriteLoopLocked(sessionID string, meta *UnifiedMeta) e
 		return fmt.Errorf("unified_store: marshal loop.json: %w", err)
 	}
 	loopPath := filepath.Join(us.baseDir, sessionID, "loop.json")
-	if err := fileutil.WithFlock(loopPath, func() error {
+	if err := fileutil.WithFlock(sessionFileLockPath(loopPath), func() error {
 		return writeFileAtomicFn(loopPath, data, 0o600)
 	}); err != nil {
 		return err

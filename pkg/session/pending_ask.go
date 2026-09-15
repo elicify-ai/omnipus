@@ -109,7 +109,7 @@ func (us *UnifiedStore) u5WritePendingAskLocked(sessionID string, meta *UnifiedM
 		return fmt.Errorf("unified_store: marshal pending_ask.json: %w", err)
 	}
 	pendingAskPath := filepath.Join(us.baseDir, sessionID, "pending_ask.json")
-	if err := fileutil.WithFlock(pendingAskPath, func() error {
+	if err := fileutil.WithFlock(sessionFileLockPath(pendingAskPath), func() error {
 		return writeFileAtomicFn(pendingAskPath, data, 0o600)
 	}); err != nil {
 		return err

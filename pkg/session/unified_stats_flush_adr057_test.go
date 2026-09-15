@@ -169,7 +169,31 @@ func TestStatsThrottle_ExactCountersAfterInterval(t *testing.T) {
 		require.NoError(t, store.AppendTranscript(sessionID, TranscriptEntry{Role: "user", Content: "x", Tokens: 3}))
 	}
 
-	time.Sleep(4 * store.StatsFlushInterval())
+	// Wait for the REAL periodic flusher to persist the pending delta — the
+	// decision under test — instead of sleeping a multiple of the interval.
+	// A fixed sleep assumed the flusher's tick and its fsync-bound write both
+	// finish inside 4 intervals (320ms); on a contended CI runner they did
+	// not, and the reopened store below then read stats.json while the first
+	// store was still writing it. The dirty mark is cleared only after the
+	// write has fully landed (u6FlushDirtySessionLocked), and nothing here
+	// re-dirties the session, so once it is clear no write is in flight. The
+	// deadline is a backstop against a dead flusher, not the thing measured.
+	isDirty := func() bool {
+		for _, id := range store.u6SnapshotDirtySessions() {
+			if id == sessionID {
+				return true
+			}
+		}
+		return false
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for isDirty() {
+		if time.Now().After(deadline) {
+			t.Fatalf("the periodic flusher never persisted the pending delta within 10s of a %v interval",
+				store.StatsFlushInterval())
+		}
+		time.Sleep(store.StatsFlushInterval() / 2)
+	}
 
 	got, err := store.GetMeta(sessionID)
 	require.NoError(t, err)

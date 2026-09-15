@@ -1596,6 +1596,10 @@ func spawnSubTurn(
 	}
 	// W1-12: only emit span lifecycle events when parentSpawnCallID is non-empty.
 	if emitSpanEvents {
+		// The span counts as active from before its spawn event until after its
+		// end event (the cleanup defer below) — markSubTurnSpanOpen's doc
+		// comment (steering.go) explains why the turn registry alone cannot say.
+		al.markSubTurnSpanOpen(parentSpawnCallID)
 		slog.Debug("subagent_start",
 			"span_id", spanID,
 			"parent_call_id", parentSpawnCallID,
@@ -1945,6 +1949,11 @@ func spawnSubTurn(
 					Reason:    endReason,
 				},
 			)
+			// The end event is now queued for every subscriber (EventBus.Emit
+			// delivers on this goroutine, with a bounded blocking retry for this
+			// must-not-drop kind), so only now may the span stop counting as
+			// active — see markSubTurnSpanOpen (steering.go).
+			al.markSubTurnSpanEnded(parentSpawnCallID)
 		}
 
 		// ADR-057 FR-033/W10d (US-6 AS-4): the child-turn-terminal CloseSession

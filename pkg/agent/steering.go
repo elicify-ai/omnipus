@@ -925,9 +925,15 @@ func (al *AgentLoop) sessionTurnsStillAlive(sessionID string) []*turnState {
 // see "active" so it withholds the fabricated "done 0ms" snapshot rather than
 // serving it as genuine. See turnState.subTurnRecordPersisted's doc comment
 // (turn.go) for the full mechanics.
+//
+// A span whose EventKindSubTurnEnd has not been emitted yet is also active,
+// whatever activeTurnStates says at that instant — see markSubTurnSpanOpen.
 func (al *AgentLoop) IsSubTurnActiveForSpawnCall(parentSpawnCallID string) bool {
 	if parentSpawnCallID == "" {
 		return false
+	}
+	if al.subTurnSpanOpen(parentSpawnCallID) {
+		return true
 	}
 	active := false
 	al.activeTurnStates.Range(func(_, value any) bool {
@@ -945,6 +951,71 @@ func (al *AgentLoop) IsSubTurnActiveForSpawnCall(parentSpawnCallID string) bool 
 		return true
 	})
 	return active
+}
+
+// markSubTurnSpanOpen records that spawnSubTurn is about to emit
+// EventKindSubTurnSpawn for parentSpawnCallID; markSubTurnSpanEnded removes
+// that record only AFTER the span's EventKindSubTurnEnd has been emitted.
+// Between the two, IsSubTurnActiveForSpawnCall reports the span active.
+//
+// Why the turn registry alone cannot answer "is this span still running": it
+// stops reporting a finished child as active BEFORE the child's end event
+// exists, in two places.
+//
+//  1. runTurn's own deferred clearActiveTurn removes the child from
+//     activeTurnStates during its unwind, and spawnSubTurn re-stores it only
+//     after runTurn has returned (subturn.go, "Re-register childTS"). For that
+//     whole unwind the Range scan finds nothing.
+//  2. spawnSubTurn's cleanup defer sets subTurnRecordPersisted, and only then
+//     emits EventKindSubTurnEnd.
+//
+// The WS forwarder's orphan watchdog (pkg/gateway/websocket.go,
+// startOrphanWatchdog) asks this question to decide whether a span still open
+// after its parent ended is orphaned. Answered "not active" in either gap, it
+// synthesized subagent_end{status:"interrupted"} for a delegation that was
+// completing normally, ahead of (or right after) the real success frame.
+//
+// EventBus.Emit hands the end event to every subscriber's buffer on the
+// emitting goroutine (a bounded blocking retry for this must-not-drop kind,
+// then a counted drop). So once this record is gone, the end event is already
+// queued for every subscriber that did not drop it — which is what lets a
+// subscriber decide an orphan only after consuming what was already queued.
+//
+// A count, not a set, so two spawns sharing one call ID cannot end each other.
+func (al *AgentLoop) markSubTurnSpanOpen(parentSpawnCallID string) {
+	if parentSpawnCallID == "" {
+		return
+	}
+	al.subTurnSpansMu.Lock()
+	defer al.subTurnSpansMu.Unlock()
+	if al.openSubTurnSpans == nil {
+		al.openSubTurnSpans = make(map[string]int)
+	}
+	al.openSubTurnSpans[parentSpawnCallID]++
+}
+
+// markSubTurnSpanEnded is markSubTurnSpanOpen's counterpart; see its doc
+// comment. Called only after EventKindSubTurnEnd has been emitted.
+func (al *AgentLoop) markSubTurnSpanEnded(parentSpawnCallID string) {
+	if parentSpawnCallID == "" {
+		return
+	}
+	al.subTurnSpansMu.Lock()
+	defer al.subTurnSpansMu.Unlock()
+	if n := al.openSubTurnSpans[parentSpawnCallID]; n > 1 {
+		al.openSubTurnSpans[parentSpawnCallID] = n - 1
+		return
+	}
+	delete(al.openSubTurnSpans, parentSpawnCallID)
+}
+
+// subTurnSpanOpen reports whether parentSpawnCallID has a span whose spawn
+// event was emitted and whose end event has not been; see
+// markSubTurnSpanOpen.
+func (al *AgentLoop) subTurnSpanOpen(parentSpawnCallID string) bool {
+	al.subTurnSpansMu.Lock()
+	defer al.subTurnSpansMu.Unlock()
+	return al.openSubTurnSpans[parentSpawnCallID] > 0
 }
 
 func (al *AgentLoop) InterruptHard() error {

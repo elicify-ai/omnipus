@@ -117,8 +117,14 @@ type AgentLoop struct {
 	// recallSpans holds the transient in-memory recall span per session
 	// (FR-019): key sessionKey (string), value *RecallSpan. Never persisted;
 	// set by recall_conversation, read/dropped by windowTrim + assembly.
-	recallSpans        sync.Map     // key: sessionKey (string), value: *RecallSpan
-	activeTurnStates   sync.Map     // key: sessionKey (string), value: *turnState
+	recallSpans      sync.Map // key: sessionKey (string), value: *RecallSpan
+	activeTurnStates sync.Map // key: sessionKey (string), value: *turnState
+	// openSubTurnSpans counts, per parentSpawnCallID, the sub-turn spans whose
+	// EventKindSubTurnSpawn has been emitted and whose EventKindSubTurnEnd has
+	// not been emitted yet. Guarded by subTurnSpansMu, allocated lazily. See
+	// markSubTurnSpanOpen (steering.go) for why liveness needs it.
+	subTurnSpansMu     sync.Mutex
+	openSubTurnSpans   map[string]int
 	subTurnCounter     atomic.Int64 // Counter for generating unique SubTurn IDs
 	sessionActiveAgent sync.Map     // key: "session:"+sessionID (string), value: agentID (string); set by handoff, cleared on agent deletion
 	// lastSwitchToDefault records, per session, whether the most recent
