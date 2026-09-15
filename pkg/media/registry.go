@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
@@ -32,6 +33,13 @@ type registryRecord struct {
 
 const registryVersion = 1
 
+// writeRegistryFile replaces registry.json atomically. It is a package variable
+// only so a test can park one save between its snapshot and its write, to prove
+// saves on one store reach disk in snapshot order
+// (TestSaveRegistry_LaterSaveNeverOverwrittenByEarlierSnapshot). Production code
+// never reassigns it.
+var writeRegistryFile = fileutil.WriteFileAtomic
+
 // registryPath returns the on-disk path for the persisted registry. Empty
 // string means persistence is disabled (e.g. unit tests where TempDir
 // resolves to a per-test scratch directory).
@@ -46,9 +54,25 @@ func registryPath() string {
 // SaveRegistry serializes the current ref → path/meta mapping to disk so a
 // subsequent process can resolve refs that outlived their original
 // in-memory store. Best-effort: failures are logged but do not block
-// callers. Safe to call from any code path that already holds, or does
-// not hold, s.mu — it acquires its own RLock.
+// callers.
+//
+// Saves on one store are serialized by registryMu, and the snapshot is taken
+// inside that critical section, so a save that starts later always writes a
+// snapshot at least as new as any earlier save's: an older snapshot can never
+// replace a newer one on disk. The file is replaced through
+// fileutil.WriteFileAtomic (uniquely named temp file, fsync, rename), so
+// writers registryMu does not cover — a second store in this process, or
+// another process sharing the same OMNIPUS_HOME — can never interleave bytes
+// into registry.json; the last complete snapshot renamed into place wins.
+// (A fixed "registry.json.tmp" shared by concurrent saves is what produced
+// "invalid character 'e' after top-level value" on load.)
+//
+// Lock order is registryMu, then s.mu. Must not be called while holding
+// s.mu: the snapshot takes s.mu.RLock.
 func (s *FileMediaStore) SaveRegistry() {
+	s.registryMu.Lock()
+	defer s.registryMu.Unlock()
+
 	path := registryPath()
 	if path == "" {
 		return
@@ -85,16 +109,9 @@ func (s *FileMediaStore) SaveRegistry() {
 		return
 	}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		logger.WarnCF("media", "registry: write tmp failed",
-			map[string]any{"path": tmp, "error": err.Error()})
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		logger.WarnCF("media", "registry: rename failed",
+	if err := writeRegistryFile(path, data, 0o600); err != nil {
+		logger.WarnCF("media", "registry: write failed",
 			map[string]any{"path": path, "error": err.Error()})
-		_ = os.Remove(tmp)
 	}
 }
 

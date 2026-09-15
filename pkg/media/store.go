@@ -128,10 +128,19 @@ type FileMediaStore struct {
 
 	// saveMu guards the debounced-save state. saveTimer coalesces multiple
 	// Store/ReleaseAll calls into one disk write per saveDebounce window;
-	// see scheduleSave.
-	saveMu      sync.Mutex
-	saveTimer   *time.Timer
-	saveStopped bool
+	// see scheduleSave. saveInFlight counts saves that have started but not
+	// finished (a fired debounce callback, or Stop's final flush) so Stop can
+	// wait for them.
+	saveMu       sync.Mutex
+	saveTimer    *time.Timer
+	saveStopped  bool
+	saveInFlight sync.WaitGroup
+
+	// registryMu serializes SaveRegistry on this store: the snapshot and the
+	// write both happen under it, so saves reach disk in the order their
+	// snapshots were taken. Lock order: registryMu, then mu. Never acquired
+	// while holding saveMu.
+	registryMu sync.Mutex
 }
 
 // saveDebounce is the coalescing window for SaveRegistry. Calls landing
@@ -535,8 +544,12 @@ func (s *FileMediaStore) Start() {
 
 // Stop terminates the background cleanup goroutine and flushes any pending
 // registry save synchronously, ensuring writes scheduled just before exit
-// are not lost.
-// Safe to call multiple times; only the first call closes the channel.
+// are not lost. It also waits for a debounced save that had already started,
+// so once Stop returns this store never writes registry.json again: no save
+// lands after shutdown, after a reload has handed over to a new store, or
+// (in tests) inside a directory a later test now owns.
+// Safe to call multiple times, including concurrently; only the first call
+// closes the channel, and every call returns only after the final flush.
 func (s *FileMediaStore) Stop() {
 	s.flushPendingSave()
 	if s.stop == nil {
@@ -558,31 +571,54 @@ func (s *FileMediaStore) scheduleSave() {
 		return
 	}
 	if s.saveTimer != nil {
-		// A save is already pending; the in-flight timer will pick up the
-		// state at fire-time. SaveRegistry takes its own RLock snapshot so
-		// concurrent map mutations between schedule and fire are safe.
+		// A save is scheduled and has not started yet. It takes its snapshot
+		// only after it starts (see runScheduledSave), so it will include the
+		// mutation that led to this call.
 		return
 	}
-	s.saveTimer = time.AfterFunc(saveDebounce, func() {
-		s.SaveRegistry()
-		s.saveMu.Lock()
-		s.saveTimer = nil
-		s.saveMu.Unlock()
-	})
+	s.saveTimer = time.AfterFunc(saveDebounce, s.runScheduledSave)
 }
 
-// flushPendingSave runs any pending registry write synchronously and blocks
-// further scheduling. Called from Stop on graceful shutdown.
+// runScheduledSave is the debounce timer's callback. It clears saveTimer
+// BEFORE saving: from that moment on, a mutation schedules a fresh save
+// instead of assuming this one — whose snapshot may already be taken —
+// covers it. Clearing only after the write left such a mutation unsaved
+// until some unrelated later mutation, i.e. lost on restart.
+func (s *FileMediaStore) runScheduledSave() {
+	s.saveMu.Lock()
+	if s.saveStopped {
+		// Stop got here first; its final flush replaces this save.
+		s.saveMu.Unlock()
+		return
+	}
+	s.saveTimer = nil
+	s.saveInFlight.Add(1)
+	s.saveMu.Unlock()
+
+	defer s.saveInFlight.Done()
+	s.SaveRegistry()
+}
+
+// flushPendingSave runs any pending registry write synchronously, blocks
+// further scheduling, and waits for every save already in flight. Called
+// from Stop on graceful shutdown.
 func (s *FileMediaStore) flushPendingSave() {
 	s.saveMu.Lock()
 	hadPending := s.saveTimer != nil
 	if hadPending {
+		// saveTimer is still set, so its callback has not passed the
+		// saveStopped check yet: if the timer already fired, the callback
+		// returns without saving and this flush replaces it.
 		s.saveTimer.Stop()
 		s.saveTimer = nil
+		s.saveInFlight.Add(1)
 	}
 	s.saveStopped = true
 	s.saveMu.Unlock()
+
 	if hadPending {
 		s.SaveRegistry()
+		s.saveInFlight.Done()
 	}
+	s.saveInFlight.Wait()
 }

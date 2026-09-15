@@ -46,6 +46,17 @@ func writeLegacyFixture(t *testing.T, store *media.FileMediaStore, scope, filena
 	return ref
 }
 
+// newIsolatedStore returns a FileMediaStore whose registry writes land in a
+// per-test OMNIPUS_HOME and whose debounced save is flushed and stopped at test
+// cleanup, so it can never fire later into another test's directory.
+func newIsolatedStore(t *testing.T) *media.FileMediaStore {
+	t.Helper()
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	s := media.NewFileMediaStore()
+	t.Cleanup(s.Stop)
+	return s
+}
+
 // TestResolver_RejectsCrossWorkspaceRef asserts the FR-028a STRIDE Spoofing
 // guard: an agent in ws-B resolving a media://workspace/ws-A/<id> ref MUST
 // be rejected, a missing caller context MUST be rejected, and only a caller
@@ -68,7 +79,7 @@ func TestResolver_RejectsCrossWorkspaceRef(t *testing.T) {
 		t.Fatalf("expected workspace ref, got %q", ref)
 	}
 
-	store := media.NewFileMediaStore()
+	store := newIsolatedStore(t)
 	store.SetWorkspaceLibraryProvider(func(workspaceID string) (media.WorkspaceLibraryResolver, error) {
 		if workspaceID != wsA {
 			// The guard authorizes before the provider is consulted, so a
@@ -136,7 +147,7 @@ func TestIsCallerWorkspaceDenied_DistinguishesGuardDenialFromRoutineFailure(t *t
 		t.Fatalf("UploadFixture: %v", uploadErr)
 	}
 
-	store := media.NewFileMediaStore()
+	store := newIsolatedStore(t)
 	store.SetWorkspaceLibraryProvider(func(workspaceID string) (media.WorkspaceLibraryResolver, error) {
 		if workspaceID != wsA {
 			return nil, media.ErrCrossWorkspaceRef
@@ -190,7 +201,7 @@ func TestIsCallerWorkspaceDenied_DistinguishesGuardDenialFromRoutineFailure(t *t
 // refs, and a non-nil caller workspace does not change legacy behavior
 // either (FR-030: no auto-rescoping).
 func TestResolver_LegacyCallSites_UnaffectedByNilableContextParam(t *testing.T) {
-	store := media.NewFileMediaStore()
+	store := newIsolatedStore(t)
 	ref := writeLegacyFixture(t, store, "upload:sess-1", "photo.png", "image/png")
 
 	legacyPath, legacyMeta, legacyErr := store.ResolveWithMeta(ref)
@@ -247,7 +258,7 @@ func TestResolver_WorkspaceLibraryFirstThenLegacyFallback(t *testing.T) {
 		t.Fatalf("UploadFixture: %v", uploadErr)
 	}
 
-	store := media.NewFileMediaStore()
+	store := newIsolatedStore(t)
 	store.SetWorkspaceLibraryProvider(func(workspaceID string) (media.WorkspaceLibraryResolver, error) {
 		if workspaceID != wsA {
 			return nil, media.ErrCrossWorkspaceRef

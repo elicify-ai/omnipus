@@ -19,9 +19,26 @@ func createTempFile(t *testing.T, dir, name string) string {
 	return path
 }
 
+// newTestStore returns a FileMediaStore confined to this test. OMNIPUS_HOME
+// points at a per-test directory, so any registry write lands there instead of
+// the shared $TMPDIR/omnipus_media, and Stop runs at cleanup, so no debounced
+// save outlives the test. Without this, a store's debounced save fired
+// saveDebounce after its test had already returned and resolved OMNIPUS_HOME at
+// that moment, which could be a later test's directory; that is how
+// TestStore_RegistryPersistsAcrossBoot read a foreign, corrupt registry in CI.
+// Cleanup runs in reverse order: Stop flushes, then OMNIPUS_HOME is restored,
+// then the directory is removed.
+func newTestStore(t *testing.T) *FileMediaStore {
+	t.Helper()
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	s := NewFileMediaStore()
+	t.Cleanup(s.Stop)
+	return s
+}
+
 func TestStoreAndResolve(t *testing.T) {
 	dir := t.TempDir()
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	path := createTempFile(t, dir, "photo.jpg")
 
@@ -45,7 +62,7 @@ func TestStoreAndResolve(t *testing.T) {
 
 func TestReleaseAll(t *testing.T) {
 	dir := t.TempDir()
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	paths := make([]string, 3)
 	refs := make([]string, 3)
@@ -79,7 +96,7 @@ func TestReleaseAll(t *testing.T) {
 
 func TestReleaseAllForgetOnlyKeepsFile(t *testing.T) {
 	dir := t.TempDir()
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	path := createTempFile(t, dir, "workspace.txt")
 	ref, err := store.Store(path, MediaMeta{
@@ -104,7 +121,7 @@ func TestReleaseAllForgetOnlyKeepsFile(t *testing.T) {
 
 func TestReleaseAllSharedPathDeletesOnFinalRefOnly(t *testing.T) {
 	dir := t.TempDir()
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	path := createTempFile(t, dir, "shared.jpg")
 	refA, err := store.Store(path, MediaMeta{
@@ -146,7 +163,7 @@ func TestReleaseAllSharedPathDeletesOnFinalRefOnly(t *testing.T) {
 
 func TestReleaseAllMixedPoliciesKeepsFile(t *testing.T) {
 	dir := t.TempDir()
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	path := createTempFile(t, dir, "shared.txt")
 	if _, err := store.Store(path, MediaMeta{
@@ -179,7 +196,7 @@ func TestReleaseAllMixedPoliciesKeepsFile(t *testing.T) {
 
 func TestMultiScopeIsolation(t *testing.T) {
 	dir := t.TempDir()
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	pathA := createTempFile(t, dir, "fileA.jpg")
 	pathB := createTempFile(t, dir, "fileB.jpg")
@@ -214,7 +231,7 @@ func TestMultiScopeIsolation(t *testing.T) {
 }
 
 func TestReleaseAllIdempotent(t *testing.T) {
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	// ReleaseAll on non-existent scope should not error
 	if err := store.ReleaseAll("nonexistent"); err != nil {
@@ -236,7 +253,7 @@ func TestReleaseAllIdempotent(t *testing.T) {
 
 func TestReleaseAllCleansMappingsIfRefsMissing(t *testing.T) {
 	dir := t.TempDir()
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	path := createTempFile(t, dir, "file.jpg")
 	ref, err := store.Store(path, MediaMeta{Source: "test"}, "scope1")
@@ -265,7 +282,7 @@ func TestReleaseAllCleansMappingsIfRefsMissing(t *testing.T) {
 }
 
 func TestStoreNonexistentFile(t *testing.T) {
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	_, err := store.Store("/nonexistent/path/file.jpg", MediaMeta{Source: "test"}, "scope1")
 	if err == nil {
@@ -280,7 +297,7 @@ func TestStoreNonexistentFile(t *testing.T) {
 
 func TestResolveWithMeta(t *testing.T) {
 	dir := t.TempDir()
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	path := createTempFile(t, dir, "image.png")
 	meta := MediaMeta{
@@ -320,7 +337,7 @@ func TestResolveWithMeta(t *testing.T) {
 
 func TestConcurrentSafety(t *testing.T) {
 	dir := t.TempDir()
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	const goroutines = 20
 	const filesPerGoroutine = 5
@@ -357,19 +374,24 @@ func TestConcurrentSafety(t *testing.T) {
 
 // --- TTL cleanup tests ---
 
-func newTestStoreWithCleanup(maxAge time.Duration) *FileMediaStore {
+// newTestStoreWithCleanup is newTestStore for a store with TTL cleanup
+// configured: per-test OMNIPUS_HOME, Stop at cleanup.
+func newTestStoreWithCleanup(t *testing.T, maxAge time.Duration) *FileMediaStore {
+	t.Helper()
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	s := NewFileMediaStoreWithCleanup(MediaCleanerConfig{
 		Enabled:  true,
 		MaxAge:   maxAge,
 		Interval: time.Hour, // won't tick in tests
 	})
+	t.Cleanup(s.Stop)
 	return s
 }
 
 func TestCleanExpiredRemovesOldEntries(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
-	store := newTestStoreWithCleanup(10 * time.Minute)
+	store := newTestStoreWithCleanup(t, 10*time.Minute)
 	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
 
 	path := createTempFile(t, dir, "old.jpg")
@@ -396,7 +418,7 @@ func TestCleanExpiredRemovesOldEntries(t *testing.T) {
 func TestCleanExpiredForgetOnlyKeepsFile(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
-	store := newTestStoreWithCleanup(10 * time.Minute)
+	store := newTestStoreWithCleanup(t, 10*time.Minute)
 	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
 
 	path := createTempFile(t, dir, "workspace.txt")
@@ -435,7 +457,7 @@ func TestCleanExpiredForgetOnlyKeepsFile(t *testing.T) {
 func TestCleanExpiredKeepsSessionPinnedMedia(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
-	store := newTestStoreWithCleanup(10 * time.Minute)
+	store := newTestStoreWithCleanup(t, 10*time.Minute)
 	// Store the entry "20 minutes ago" so it is well past MaxAge.
 	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
 
@@ -473,7 +495,7 @@ func TestCleanExpiredKeepsSessionPinnedMedia(t *testing.T) {
 func TestCleanExpiredKeepsNonExpired(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
-	store := newTestStoreWithCleanup(10 * time.Minute)
+	store := newTestStoreWithCleanup(t, 10*time.Minute)
 	store.nowFunc = func() time.Time { return now }
 
 	path := createTempFile(t, dir, "fresh.jpg")
@@ -498,7 +520,7 @@ func TestCleanExpiredKeepsNonExpired(t *testing.T) {
 func TestCleanExpiredMixedAges(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
-	store := newTestStoreWithCleanup(10 * time.Minute)
+	store := newTestStoreWithCleanup(t, 10*time.Minute)
 
 	// Store old entry
 	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
@@ -526,7 +548,7 @@ func TestCleanExpiredMixedAges(t *testing.T) {
 func TestCleanExpiredSharedPathDeletesOnFinalRefOnly(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
-	store := newTestStoreWithCleanup(10 * time.Minute)
+	store := newTestStoreWithCleanup(t, 10*time.Minute)
 
 	path := createTempFile(t, dir, "shared.jpg")
 
@@ -573,7 +595,7 @@ func TestCleanExpiredSharedPathDeletesOnFinalRefOnly(t *testing.T) {
 func TestCleanExpiredCleansEmptyScopes(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
-	store := newTestStoreWithCleanup(10 * time.Minute)
+	store := newTestStoreWithCleanup(t, 10*time.Minute)
 
 	// Store old entry as the only one in scope
 	store.nowFunc = func() time.Time { return now.Add(-20 * time.Minute) }
@@ -609,11 +631,13 @@ func TestStartStopLifecycle(t *testing.T) {
 }
 
 func TestCleanExpiredZeroMaxAge(t *testing.T) {
+	t.Setenv("OMNIPUS_HOME", t.TempDir())
 	store := NewFileMediaStoreWithCleanup(MediaCleanerConfig{
 		Enabled:  true,
 		MaxAge:   0,
 		Interval: time.Hour,
 	})
+	t.Cleanup(store.Stop) // Store below schedules a debounced save
 
 	dir := t.TempDir()
 	path := createTempFile(t, dir, "file.jpg")
@@ -663,7 +687,7 @@ func TestStartZeroMaxAgeNoPanic(t *testing.T) {
 
 func TestConcurrentCleanupSafety(t *testing.T) {
 	dir := t.TempDir()
-	store := newTestStoreWithCleanup(50 * time.Millisecond)
+	store := newTestStoreWithCleanup(t, 50*time.Millisecond)
 	store.nowFunc = time.Now
 
 	const workers = 10
@@ -718,7 +742,7 @@ func TestConcurrentCleanupSafety(t *testing.T) {
 
 func TestRefToScopeConsistency(t *testing.T) {
 	dir := t.TempDir()
-	store := NewFileMediaStore()
+	store := newTestStore(t)
 
 	// Store entries in two scopes
 	ref1, _ := store.Store(createTempFile(t, dir, "a.jpg"), MediaMeta{Source: "test"}, "s1")
@@ -778,6 +802,9 @@ func TestStore_RegistryPersistsAcrossBoot(t *testing.T) {
 	p2 := createTempFile(t, dir, "persist-b.png")
 
 	store1 := NewFileMediaStore()
+	// Store schedules a debounced save; Stop at cleanup (before OMNIPUS_HOME is
+	// restored) so it cannot fire later into another test's directory.
+	t.Cleanup(store1.Stop)
 	ref1, err := store1.Store(p1, MediaMeta{
 		Filename:      "persist-a.jpg",
 		ContentType:   "image/jpeg",
