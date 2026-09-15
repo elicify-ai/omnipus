@@ -624,12 +624,40 @@ func (al *AgentLoop) resolveToolClaim(store *session.UnifiedStore, sessionID str
 	return found, status, evidence, goalID, nil
 }
 
+// agentLoopCheckGoalLoopAfterTurn carries the shared state of checkGoalLoopAfterTurn across its stages.
+type agentLoopCheckGoalLoopAfterTurn struct {
+	al           *AgentLoop
+	ctx          context.Context
+	agentInst    *AgentInstance
+	opts         processOptions
+	result       *turnResult
+	store        *session.UnifiedStore
+	sessionID    string
+	rec          *goal.Goal
+	toolFound    bool
+	toolEvidence string
+	marker       goalStatusMarker
+}
+
 func (al *AgentLoop) checkGoalLoopAfterTurn(
 	ctx context.Context,
 	agentInst *AgentInstance,
 	opts processOptions,
 	result *turnResult,
 ) {
+	gl := &agentLoopCheckGoalLoopAfterTurn{al: al, ctx: ctx, agentInst: agentInst, opts: opts, result: result}
+
+	if gl.checkEligibility() {
+		return
+	}
+
+	gl.resolveClaim()
+
+	gl.handleOutcome()
+}
+
+// checkEligibility rejects turns that cannot advance a chat-owned goal loop and loads the active chat goal.
+func (gl *agentLoopCheckGoalLoopAfterTurn) checkEligibility() bool {
 	// Founder decision 2026-09-14 (one Judge pipeline): a TASK run's goal is
 	// owned end-to-end by the task executor (pkg/agent/task_run_loop.go) —
 	// its turns' claims, the parks, the Judge dispatches and the try budget
@@ -637,18 +665,18 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	// resolve a task run's claim or schedule a second adjudication for it
 	// (the B-5 duplicate-pipeline defect), so a task-run turn never proceeds
 	// past this gate. Chat goals keep this hook as their only consumer.
-	if opts.IsTaskRun {
-		return
+	if gl.opts.IsTaskRun {
+		return true
 	}
-	if result == nil || opts.TranscriptStore == nil || opts.TranscriptSessionID == "" {
-		return
+	if gl.result == nil || gl.opts.TranscriptStore == nil || gl.opts.TranscriptSessionID == "" {
+		return true
 	}
 	// askuserquestion-tool-spec §0.7 (M-R2-5): TurnEndStatusParked is NOT a
 	// natural turn stop — a parked clarification/compile turn (AskUserQuestion,
 	// or any future ParksTurn tool) never advances the goal round, invokes the
 	// Judge, or re-dispatches. The gate lives here, at the function's entry.
-	if result.status == TurnEndStatusParked {
-		return
+	if gl.result.status == TurnEndStatusParked {
+		return true
 	}
 	// review r2 RV3: origin-gate the hook itself, not just IsTaskRun. /goal and
 	// /loop can coexist on one session; a /loop/cron/heartbeat/async turn
@@ -663,31 +691,35 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	// should ever advance IT, and IsTaskRun is the one signal that
 	// unambiguously identifies them) may proceed — mirrors
 	// applyGoalCommandPrompt's own origin gate for the non-task cases.
-	if !opts.UserInitiated && opts.SenderID != goalLoopFollowUpSenderID && !opts.IsTaskRun {
-		return
+	if !gl.opts.UserInitiated && gl.opts.SenderID != goalLoopFollowUpSenderID && !gl.opts.IsTaskRun {
+		return true
 	}
-	if agentInst == nil {
-		return
+	if gl.agentInst == nil {
+		return true
 	}
-	store := opts.TranscriptStore
-	sessionID := opts.TranscriptSessionID
+	gl.store = gl.opts.TranscriptStore
+	gl.sessionID = gl.opts.TranscriptSessionID
 
 	// ADR-086: the entry condition is the existence of an ACTIVE goal record
 	// bound to this session — the direct replacement for the retired
 	// `rec.Prompt != ""` check, and the one lookup that serves a
 	// task-owned goal as well as a chat-owned one (GOAL-FR-013).
-	rec := activeGoalForSession(sessionID)
-	if rec == nil {
-		return // no active goal — fast path
+	gl.rec = activeGoalForSession(gl.sessionID)
+	if gl.rec == nil {
+		return true // no active goal — fast path
 	}
 	// A task-owned goal is consumed ONLY by the task executor
 	// (task_run_loop.go), even when a turn in its session arrives through a
 	// non-task path: resolving its claim here would start a second Judge
 	// pipeline on the same goal.
-	if rec.OwnerKind == generated.GoalOwnerKindTask {
-		return
+	if gl.rec.OwnerKind == generated.GoalOwnerKindTask {
+		return true
 	}
+	return false
+}
 
+// resolveClaim lifts a prior Stop pause, resolves claims, and clears user-resumable pause states.
+func (gl *agentLoopCheckGoalLoopAfterTurn) resolveClaim() {
 	// Founder decision 2026-09-14 (UAT B-1 run 4): lift the Stop-pause once a
 	// genuine new turn was asked for on this session — a user message saved
 	// after the Stop (liftGoalKeeperStopPauseIfNewTurn). The turn that was
@@ -697,9 +729,9 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	// goalLoopFollowUpSenderID) are never eligible. A task run saves no user
 	// message of its own (processTaskDirect), so on a task session the pause
 	// lifts only once the user messages that thread.
-	if (opts.UserInitiated || opts.IsTaskRun) && al.liftGoalKeeperStopPauseIfNewTurn(store, sessionID) {
+	if (gl.opts.UserInitiated || gl.opts.IsTaskRun) && gl.al.liftGoalKeeperStopPauseIfNewTurn(gl.store, gl.sessionID) {
 		logger.InfoCF("agent", "goal: a user message arrived after the Stop — the Stop-pause on the goal keeper is lifted",
-			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID})
+			map[string]any{"component": "goal", "session_id": gl.sessionID, "goal_id": gl.rec.GoalID})
 	}
 
 	// ADR-053 Phase-2 §1 (FR-101, superseded in shape but not in spirit by
@@ -717,8 +749,10 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	// not bump) so a claim already resolved by an earlier pass through this
 	// function is never re-discovered by a later one just because activity
 	// went un-bumped in between.
-	scanSince, _ := al.goalClaimScanWatermark(rec.GoalID)
-	toolFound, toolStatus, toolEvidence, _, claimScanErr := al.resolveToolClaim(store, sessionID, scanSince)
+	scanSince, _ := gl.al.goalClaimScanWatermark(gl.rec.GoalID)
+	var toolStatus string
+	var claimScanErr error
+	gl.toolFound, toolStatus, gl.toolEvidence, _, claimScanErr = gl.al.resolveToolClaim(gl.store, gl.sessionID, scanSince)
 	// silent-SF-3 (review): advance the watermark ONLY on a clean scan. It
 	// used to advance unconditionally, including when resolveToolClaim
 	// returned the zero tuple because the transcript READ FAILED — which
@@ -727,11 +761,10 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	// re-scan of the same window on the next turn; advancing it past an
 	// unread window loses the claim permanently.
 	if claimScanErr == nil {
-		al.setGoalClaimScanWatermark(rec.GoalID, time.Now())
+		gl.al.setGoalClaimScanWatermark(gl.rec.GoalID, time.Now())
 	}
 
-	var marker goalStatusMarker
-	if toolFound {
+	if gl.toolFound {
 		// FR-092: the tool call is authoritative — result.finalContent is
 		// NOT parsed for markers at all this turn. HasEvidence is always
 		// true for a tool-recorded `met` claim (the tool itself refuses a
@@ -739,16 +772,16 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		// is exactly what makes the bare-claim bounce (FR-091) unreachable
 		// for the tool path, by construction — not a branch this file has
 		// to special-case.
-		marker = goalStatusMarker{Present: true, Status: toolStatus, HasEvidence: toolStatus == tools.GoalClaimStatusMet}
-		if prose := parseGoalStatusMarker(result.finalContent); prose.Present {
+		gl.marker = goalStatusMarker{Present: true, Status: toolStatus, HasEvidence: toolStatus == tools.GoalClaimStatusMet}
+		if prose := parseGoalStatusMarker(gl.result.finalContent); prose.Present {
 			logger.InfoCF("agent", "goal claim: both channels fired in one turn — the tool call is authoritative (JUDGE-FR-092)",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "tool_status": toolStatus, "marker_status": prose.Status})
+				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "tool_status": toolStatus, "marker_status": prose.Status})
 		}
 	} else {
 		// FR-091: the prose marker parser is UNCHANGED and remains the
 		// fallback — parsed here only when no successful tool claim exists
 		// for this turn.
-		marker = parseGoalStatusMarker(result.finalContent)
+		gl.marker = parseGoalStatusMarker(gl.result.finalContent)
 	}
 
 	// G-5 resume (US-2 AS-3): a genuine user reply (UserInitiated) to a
@@ -757,37 +790,40 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 	// fall through to the classification below rather than judging here. The
 	// goal loop's own re-injected follow-up (SenderID == goalLoopFollowUpSenderID)
 	// does NOT clear the pause — only a real user message resumes.
-	if opts.UserInitiated && al.goalIsWaitingOnUser(rec.GoalID) {
-		al.goalSetWaitingOnUser(rec.GoalID, false)
-		al.bumpGoalActivityOnTurn(rec.GoalID)
+	if gl.opts.UserInitiated && gl.al.goalIsWaitingOnUser(gl.rec.GoalID) {
+		gl.al.goalSetWaitingOnUser(gl.rec.GoalID, false)
+		gl.al.bumpGoalActivityOnTurn(gl.rec.GoalID)
 	}
 	// JUDGE-FR-093/R-24: the SAME resume applies to a blocked park — a
 	// genuine operator message is the only thing that clears it, mirroring
 	// waiting_on_user exactly.
-	if opts.UserInitiated && al.goalIsBlocked(rec.GoalID) {
-		al.goalSetBlocked(rec.GoalID, false)
-		al.bumpGoalActivityOnTurn(rec.GoalID)
+	if gl.opts.UserInitiated && gl.al.goalIsBlocked(gl.rec.GoalID) {
+		gl.al.goalSetBlocked(gl.rec.GoalID, false)
+		gl.al.bumpGoalActivityOnTurn(gl.rec.GoalID)
 	}
+}
 
+// handleOutcome dispatches the resolved claim or records ordinary goal activity.
+func (gl *agentLoopCheckGoalLoopAfterTurn) handleOutcome() {
 	switch {
-	case marker.Present && marker.Status == goalStatusWaitingOnUser:
+	case gl.marker.Present && gl.marker.Status == goalStatusWaitingOnUser:
 		// FR-104 / G-5: typed pause. NO verdict, NO round consumed; idle
 		// settlement SUPPRESSED while the pause holds (goalIsWaitingOnUser,
 		// checked in maybeSettleGoalIdle). Explicit Non-Behavior: only this
 		// typed marker counts — never a prose classifier.
-		al.goalSetWaitingOnUser(rec.GoalID, true)
+		gl.al.goalSetWaitingOnUser(gl.rec.GoalID, true)
 		// The claim — its status and the worker's one-line question, when it
 		// gave one — is recorded on the goal record through the one claim
 		// writer a task run uses too (GOAL-FR-013/FR-014).
-		if cerr := recordGoalClaim(rec.GoalID, generated.GoalLatestClaimStatusWaitingOnUser, toolEvidence); cerr != nil {
+		if cerr := recordGoalClaim(gl.rec.GoalID, generated.GoalLatestClaimStatusWaitingOnUser, gl.toolEvidence); cerr != nil {
 			logger.WarnCF("agent", "goal: could not persist the waiting_on_user claim onto the goal record",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": cerr.Error()})
+				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "error": cerr.Error()})
 		}
-		al.emitGoalStatusFrame(sessionID, rec.GoalID, rec.Prompt, rec.Round,
-			rec.MaxRounds, "waiting on user", goalPillWaitingOnUser)
+		gl.al.emitGoalStatusFrame(gl.sessionID, gl.rec.GoalID, gl.rec.Prompt, gl.rec.Round,
+			gl.rec.MaxRounds, "waiting on user", goalPillWaitingOnUser)
 		return
 
-	case marker.Present && marker.Status == tools.GoalClaimStatusBlocked:
+	case gl.marker.Present && gl.marker.Status == tools.GoalClaimStatusBlocked:
 		// JUDGE-FR-093: `blocked` parks the goal without an adjudication and
 		// without consuming a round — reachable ONLY through the goal_claim
 		// tool (FR-091 forbids extending the prose marker parser to
@@ -795,19 +831,19 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		// toolFound branch above). Distinct from waiting_on_user in what it
 		// asks of the operator: "I cannot proceed and it is not something
 		// you can answer directly" rather than "I need an answer".
-		al.goalSetBlocked(rec.GoalID, true)
+		gl.al.goalSetBlocked(gl.rec.GoalID, true)
 		// The one-line reason the worker gave (goal_claim carries it as
 		// evidence for blocked) is kept so the operator can see why — through
 		// the one claim writer a task run uses too (GOAL-FR-013).
-		if cerr := recordGoalClaim(rec.GoalID, generated.GoalLatestClaimStatusBlocked, toolEvidence); cerr != nil {
+		if cerr := recordGoalClaim(gl.rec.GoalID, generated.GoalLatestClaimStatusBlocked, gl.toolEvidence); cerr != nil {
 			logger.WarnCF("agent", "goal: could not persist the blocked claim onto the goal record",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": cerr.Error()})
+				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "error": cerr.Error()})
 		}
-		al.emitGoalStatusFrame(sessionID, rec.GoalID, rec.Prompt, rec.Round,
-			rec.MaxRounds, "blocked", goalPillBlocked)
+		gl.al.emitGoalStatusFrame(gl.sessionID, gl.rec.GoalID, gl.rec.Prompt, gl.rec.Round,
+			gl.rec.MaxRounds, "blocked", goalPillBlocked)
 		return
 
-	case marker.Present && marker.Status == goalStatusMet && marker.HasEvidence:
+	case gl.marker.Present && gl.marker.Status == goalStatusMet && gl.marker.HasEvidence:
 		// G-1 / JUDGE-FR-098: an explicit completion claim WITH evidence —
 		// tool or marker. Under D13 the Judge is dispatched AFTER this
 		// turn's own answer has been delivered, off the critical path
@@ -831,44 +867,44 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		// This refused claim does NOT clear the bare-claim streak and does
 		// NOT count as a claim for any purpose (FR-101's own text) — it
 		// simply returns without recording deferred work.
-		if al.goalAdjudicationInFlight(sessionID) {
+		if gl.al.goalAdjudicationInFlight(gl.sessionID) {
 			logger.InfoCF("agent", "goal claim: adjudication already in-flight; refusing the second claim (JUDGE-FR-101)",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID})
-			result.followUps = append(result.followUps, bus.InboundMessage{
-				Channel: opts.Channel, ChatID: opts.ChatID,
+				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID})
+			gl.result.followUps = append(gl.result.followUps, bus.InboundMessage{
+				Channel: gl.opts.Channel, ChatID: gl.opts.ChatID,
 				Sender: bus.SenderInfo{CanonicalID: goalLoopFollowUpSenderID},
 				Content: "An adjudication for this goal is already running in the background. " +
 					"Its verdict will arrive on its own — there is no need to claim again right now.",
-				SessionID: sessionID, SessionKey: opts.SessionKey,
+				SessionID: gl.sessionID, SessionKey: gl.opts.SessionKey,
 			})
 			return
 		}
 		// Clear any bounce streak (the worker satisfied the evidence gate).
-		al.clearGoalBareClaimStreak(rec.GoalID)
+		gl.al.clearGoalBareClaimStreak(gl.rec.GoalID)
 		// JUDGE-FR-094: the tool path's evidence argument becomes ClaimText,
 		// occupying the SAME position the marker path's whole
 		// result.finalContent occupies — a narrower, less injectable input.
-		claimText := result.finalContent
-		evidence := marker.EvidenceText
-		if toolFound {
-			claimText = toolEvidence
-			evidence = toolEvidence
+		claimText := gl.result.finalContent
+		evidence := gl.marker.EvidenceText
+		if gl.toolFound {
+			claimText = gl.toolEvidence
+			evidence = gl.toolEvidence
 		}
 		// GOAL-FR-013/FR-014: the met claim is recorded on the goal record
 		// before the Judge is dispatched, through the one claim writer a task
 		// run uses (task_run_loop.go::adjudicateRunClaim) — so a chat goal's
 		// record carries its latest claim whether or not the Judge then runs.
-		if cerr := recordGoalClaim(rec.GoalID, generated.GoalLatestClaimStatusMet, evidence); cerr != nil {
+		if cerr := recordGoalClaim(gl.rec.GoalID, generated.GoalLatestClaimStatusMet, evidence); cerr != nil {
 			logger.WarnCF("agent", "goal: could not persist the met claim onto the goal record",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": cerr.Error()})
+				map[string]any{"session_id": gl.sessionID, "goal_id": gl.rec.GoalID, "error": cerr.Error()})
 		}
-		result.goalDeferredAdjudication = &goalDeferredAdjudicationWork{
-			agentInst: agentInst, workspaceID: opts.WorkspaceID,
-			sessionID: sessionID, claimText: claimText,
+		gl.result.goalDeferredAdjudication = &goalDeferredAdjudicationWork{
+			agentInst: gl.agentInst, workspaceID: gl.opts.WorkspaceID,
+			sessionID: gl.sessionID, claimText: claimText,
 		}
 		return
 
-	case marker.Present && marker.Status == goalStatusMet:
+	case gl.marker.Present && gl.marker.Status == goalStatusMet:
 		// G-4: bare claim (GOAL_STATUS: met with NO [goal:evidence]). Bounce
 		// economics — 1st free (teaching steer), 2nd costs a round. NEVER
 		// invokes the Judge (nothing to judge). Claiming stays cheaper than
@@ -876,7 +912,7 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		// by construction (the tool itself refuses an empty-evidence `met`
 		// call at the call boundary, so a tool-recorded `met` always carries
 		// HasEvidence=true and lands in the arm above instead).
-		al.handleBareGoalClaim(ctx, agentInst, opts, store, sessionID, rec, result)
+		gl.al.handleBareGoalClaim(gl.ctx, gl.agentInst, gl.opts, gl.store, gl.sessionID, gl.rec, gl.result)
 		return
 
 	default:
@@ -888,9 +924,9 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		// value also lands here: the deterministic not-a-claim-not-a-pause
 		// fallback (FR-104 AS-2 — no marker means not-waiting, and by
 		// symmetry not a claim either).
-		al.bumpGoalActivityOnTurn(rec.GoalID)
-		al.emitGoalStatusFrame(sessionID, rec.GoalID, rec.Prompt, rec.Round,
-			rec.MaxRounds, rec.LatestReason, goalPillActive)
+		gl.al.bumpGoalActivityOnTurn(gl.rec.GoalID)
+		gl.al.emitGoalStatusFrame(gl.sessionID, gl.rec.GoalID, gl.rec.Prompt, gl.rec.Round,
+			gl.rec.MaxRounds, gl.rec.LatestReason, goalPillActive)
 		// ADR-088 D3 AMENDMENT item 3 (2026-09-07): the immediate post-turn
 		// correction that replaces provider tool-choice forcing as the
 		// enforcement point. An ordinary (non-parked, non-waiting, non-claim)
@@ -898,7 +934,7 @@ func (al *AgentLoop) checkGoalLoopAfterTurn(
 		// the working agent skipped its first-move door entirely. Nudge it
 		// right now rather than waiting for the idle keeper's quiet window
 		// (D6c) to notice.
-		al.maybeNudgeUnregisteredGoal(store, sessionID, rec, agentInst, opts)
+		gl.al.maybeNudgeUnregisteredGoal(gl.store, gl.sessionID, gl.rec, gl.agentInst, gl.opts)
 	}
 }
 
