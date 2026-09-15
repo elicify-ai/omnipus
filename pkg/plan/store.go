@@ -110,10 +110,17 @@ func (s *Store) write(p *Plan) error {
 		return fmt.Errorf("plan: marshal %q: %w", p.ID, err)
 	}
 	path := s.path(p.ID)
-	return fileutil.WithFlock(path, func() error {
-		return fileutil.WriteFileAtomic(path, data, 0o600)
+	// Lock the plan file's sidecar, never the file this write renames over
+	// (see fileutil.SidecarLockPath).
+	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+		return writeFileAtomicFn(path, data, 0o600)
 	})
 }
+
+// writeFileAtomicFn is fileutil.WriteFileAtomic, held in a package variable so
+// a test can pause a plan write inside its lock (store_lock_test.go).
+// Production code never reassigns it.
+var writeFileAtomicFn = fileutil.WriteFileAtomic
 
 // Lock returns the per-plan striped mutex for id. Callers performing a manual
 // read-modify-write outside Create/Update should hold this for the whole RMW.
@@ -719,8 +726,11 @@ func (s *Store) Delete(id string) error {
 	if p.State == StateRunning {
 		return verr("cannot delete a running plan %q; stop it or wait for it to complete first", id)
 	}
-	if rmErr := os.Remove(s.path(id)); rmErr != nil {
-		if os.IsNotExist(rmErr) {
+	// RemoveLocked takes the sidecar lock write takes, so a writer in another
+	// process cannot rename the plan back into place, and removes the sidecar
+	// with the plan so a deleted plan leaves no lock file behind.
+	if rmErr := fileutil.RemoveLocked(s.path(id)); rmErr != nil {
+		if errors.Is(rmErr, os.ErrNotExist) {
 			return ErrNotFound
 		}
 		return fmt.Errorf("plan: delete %q: %w", id, rmErr)
