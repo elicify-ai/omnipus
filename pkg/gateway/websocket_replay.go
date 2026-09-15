@@ -147,6 +147,26 @@ const replayLiveBufferCap = 1000
 // this via W1-5's error+done emission so the client can recover.
 var errSendTimeout = fmt.Errorf("ws: send channel full — replay send timeout")
 
+// wsHandlerHandleAttachSession carries the shared state of handleAttachSession across its stages.
+type wsHandlerHandleAttachSession struct {
+	h              *WSHandler
+	ctx            context.Context
+	chatID         string
+	attachID       string
+	since          *string
+	wc             *wsConn
+	store          *session.UnifiedStore
+	entries        []session.TranscriptEntry
+	rs             replayStats
+	replayStart    time.Time
+	catchUpText    string
+	catchUpAgentID string
+	hasCatchUp     bool
+	framesEmitted  int
+	replayErr      error
+	durationMS     int64
+}
+
 // handleAttachSession loads an existing session's transcript and replays it to
 // the client via streamReplay, then sets the connection's active session to the
 // requested session.
@@ -167,31 +187,53 @@ func (h *WSHandler) handleAttachSession(
 	since *string,
 	wc *wsConn,
 ) {
-	if err := validateEntityID(attachID); err != nil {
-		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+	wh := &wsHandlerHandleAttachSession{h: h, ctx: ctx, chatID: chatID, attachID: attachID, since: since, wc: wc}
+
+	if wh.loadReplay() {
+		return
+	}
+
+	wh.bindConnection()
+
+	wh.runReplay()
+
+	if wh.finishReplay() {
+		return
+	}
+
+	wh.sendCatchUp()
+
+	wh.resumeLiveSession()
+}
+
+// loadReplay validates the session, loads its transcript, applies the cursor, and records replay-start statistics.
+func (wh *wsHandlerHandleAttachSession) loadReplay() bool {
+	if err := validateEntityID(wh.attachID); err != nil {
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
 			Message: "invalid session_id",
 		})
-		return
+		return true
 	}
 
-	store := h.resolveSessionStore(attachID)
-	if store == nil {
-		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+	wh.store = wh.h.resolveSessionStore(wh.attachID)
+	if wh.store == nil {
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
 			Message: "session not found",
 		})
-		return
+		return true
 	}
 
-	entries, err := store.ReadTranscript(attachID)
+	var err error
+	wh.entries, err = wh.store.ReadTranscript(wh.attachID)
 	if err != nil {
-		slog.Warn("ws: attach_session: could not read transcript", "session_id", attachID, "error", err)
-		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+		slog.Warn("ws: attach_session: could not read transcript", "session_id", wh.attachID, "error", err)
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:    string(generated.WsFrameTypeError),
 			Message: "could not read session transcript",
 		})
-		return
+		return true
 	}
 
 	// Apply since-cursor filter when the client requests incremental replay.
@@ -202,25 +244,29 @@ func (h *WSHandler) handleAttachSession(
 	// Rationale: the cursor is the most recent frame the SPA has *already processed*,
 	// so an entry at exactly that timestamp was already seen.  Strict less-than would
 	// re-emit the boundary entry and cause a duplicate on the SPA.
-	entries = applySinceCursor(ctx, attachID, since, entries, wc)
+	wh.entries = applySinceCursor(wh.ctx, wh.attachID, wh.since, wh.entries, wh.wc)
 
-	rs := computeReplayStats(entries)
+	wh.rs = computeReplayStats(wh.entries)
 
 	// FR-I-013: structured log at replay start.
 	// Include orphan/duplicate/truncated counts so the replay_start log
 	// line carries enough context to debug fidelity issues without replay_end.
 	slog.Info("ws: replay_start",
 		"event", "replay_start",
-		"session_id", attachID,
-		"entry_count_loaded", len(entries),
-		"tool_call_count_loaded", rs.toolCallCount,
-		"span_count_detected", rs.spanCount,
-		"orphan_count", rs.orphanCount,
-		"duplicate_tool_call_id_count", rs.duplicateToolCallIDCount,
-		"truncated_result_count", rs.truncatedResultCount,
+		"session_id", wh.attachID,
+		"entry_count_loaded", len(wh.entries),
+		"tool_call_count_loaded", wh.rs.toolCallCount,
+		"span_count_detected", wh.rs.spanCount,
+		"orphan_count", wh.rs.orphanCount,
+		"duplicate_tool_call_id_count", wh.rs.duplicateToolCallIDCount,
+		"truncated_result_count", wh.rs.truncatedResultCount,
 	)
-	replayStart := time.Now()
+	wh.replayStart = time.Now()
+	return false
+}
 
+// bindConnection binds the connection to the attached session, snapshots live text, and arms live-frame diversion.
+func (wh *wsHandlerHandleAttachSession) bindConnection() {
 	// FR-I-009 / W1-1: register for live-event forwarding BEFORE starting replay
 	// so no live events are lost during the replay window.
 	//
@@ -232,8 +278,8 @@ func (h *WSHandler) handleAttachSession(
 	//
 	// This replaces the previous wc.sendCh swap which caused a data race because
 	// writePump and pingPump read wc.sendCh concurrently with no synchronization.
-	if wc.replayDivertCh == nil {
-		wc.replayDivertCh = make(chan []byte, replayLiveBufferCap)
+	if wh.wc.replayDivertCh == nil {
+		wh.wc.replayDivertCh = make(chan []byte, replayLiveBufferCap)
 	}
 
 	// Register for live event forwarding now (before flipping the replay flag).
@@ -284,14 +330,14 @@ func (h *WSHandler) handleAttachSession(
 	// duplicate, no gap" ordering argument this depends on. catchUpText/
 	// catchUpAgentID are used after replay finishes but before the
 	// divert-buffered live frames are drained, below.
-	h.mu.Lock()
-	if oldTID, ok := h.taskChatIDs[chatID]; ok {
-		delete(h.sessionIDs, oldTID)
+	wh.h.mu.Lock()
+	if oldTID, ok := wh.h.taskChatIDs[wh.chatID]; ok {
+		delete(wh.h.sessionIDs, oldTID)
 	}
-	h.taskChatIDs[chatID] = attachID
-	h.sessionIDs[attachID] = attachID
-	h.sessionIDs[chatID] = attachID
-	catchUpText, catchUpAgentID, hasCatchUp := h.snapshotLiveStreamerLocked(attachID)
+	wh.h.taskChatIDs[wh.chatID] = wh.attachID
+	wh.h.sessionIDs[wh.attachID] = wh.attachID
+	wh.h.sessionIDs[wh.chatID] = wh.attachID
+	wh.catchUpText, wh.catchUpAgentID, wh.hasCatchUp = wh.h.snapshotLiveStreamerLocked(wh.attachID)
 	// ADR-082 review CR1/S1: emit session_state{session_id, active_turn} from
 	// this SAME h.mu critical section, BEFORE any replay frame — not, as
 	// before this fix, at the very end of this function (after the replay-
@@ -308,29 +354,32 @@ func (h *WSHandler) handleAttachSession(
 	// token{catch-up} → token*{live} → done{stats.tokens}. This call also
 	// covers the replay-error early return below (CR10) — session_state is
 	// already sent by the time any replay failure could occur.
-	h.emitSessionState(wc, attachID)
-	h.mu.Unlock()
+	wh.h.emitSessionState(wh.wc, wh.attachID)
+	wh.h.mu.Unlock()
 
 	// Arm the divert: any sendConnGenFrame calls after this point will route live
 	// frames into replayDivertCh instead of sendCh.
-	wc.isReplayingLive.Store(true)
+	wh.wc.isReplayingLive.Store(true)
+}
 
+// runReplay constructs the replay emitter and streams the persisted session frames.
+func (wh *wsHandlerHandleAttachSession) runReplay() {
 	// Run replay: emit frames directly into wc.sendCh via emitFn, bypassing the
 	// divert.  W1-10: a per-frame 5 s timeout prevents indefinite blocking when
 	// the client is not draining the socket.
 	emitFn := func(f any) error {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if wh.ctx.Err() != nil {
+			return wh.ctx.Err()
 		}
 		data, merr := json.Marshal(f)
 		if merr != nil {
 			return merr
 		}
 		select {
-		case wc.sendCh <- data:
+		case wh.wc.sendCh <- data:
 			return nil
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-wh.ctx.Done():
+			return wh.ctx.Err()
 		case <-time.After(5 * time.Second):
 			return errSendTimeout
 		}
@@ -340,28 +389,31 @@ func (h *WSHandler) handleAttachSession(
 	// spawnIDsWithChildren for a second time.
 	var mediaStore media.MediaStore
 	var isSpanActive func(string) bool
-	if h.agentLoop != nil {
-		mediaStore = h.agentLoop.GetMediaStore()
+	if wh.h.agentLoop != nil {
+		mediaStore = wh.h.agentLoop.GetMediaStore()
 		// Wire real sub-turn liveness into replay so a spawn/delegate call
 		// whose placeholder ack (async delegation: Status="success",
 		// DurationMS≈0) has not yet been corrected by the real
 		// EventKindSubTurnEnd is never shown as a fabricated "done" — see
 		// agent.AgentLoop.IsSubTurnActiveForSpawnCall's doc comment.
-		isSpanActive = h.agentLoop.IsSubTurnActiveForSpawnCall
+		isSpanActive = wh.h.agentLoop.IsSubTurnActiveForSpawnCall
 	}
 	// askuserquestion-tool-spec v3 §0.6: hand replay the session's terminal
 	// (answered/cancelled) AskUserQuestion record, if any, so the collapsed
 	// card is reconstructed on cold history load and the §0.2 resume message
 	// never renders as a raw JSON bubble — see streamReplay's terminalAsk doc.
-	terminalAsk := loadTerminalAskRecord(store, attachID)
-	framesEmitted, replayErr := streamReplay(ctx, attachID, entries, rs, emitFn, mediaStore, h.toolStore, isSpanActive, terminalAsk)
+	terminalAsk := loadTerminalAskRecord(wh.store, wh.attachID)
+	wh.framesEmitted, wh.replayErr = streamReplay(wh.ctx, wh.attachID, wh.entries, wh.rs, emitFn, mediaStore, wh.h.toolStore, isSpanActive, terminalAsk)
 
-	durationMS := time.Since(replayStart).Milliseconds()
+	wh.durationMS = time.Since(wh.replayStart).Milliseconds()
+}
 
-	if replayErr != nil {
+// finishReplay handles replay failure or records successful replay completion.
+func (wh *wsHandlerHandleAttachSession) finishReplay() bool {
+	if wh.replayErr != nil {
 		// Disarm the divert before emitting the abort frames so that sendConnGenFrame
 		// routes them to sendCh.
-		wc.isReplayingLive.Store(false)
+		wh.wc.isReplayingLive.Store(false)
 		// ADR-082 review CR10: the divert was armed (wc.isReplayingLive.Store(true),
 		// above) and this connection could have been diverting live frames into
 		// wc.replayDivertCh for the whole failed-replay window — those frames
@@ -378,44 +430,48 @@ func (h *WSHandler) handleAttachSession(
 		// atomically with the bind before replay even started) — this fix adds
 		// only the missing divert cleanup; the previous version returned here
 		// leaving replayDivertCh untouched.
-		drainReplayDivertChDiscard(wc)
+		drainReplayDivertChDiscard(wh.wc)
 		slog.Warn("ws: replay_aborted",
 			"event", "replay_aborted",
-			"session_id", attachID,
-			"frames_emitted", framesEmitted,
-			"duration_ms", durationMS,
-			"error", replayErr,
+			"session_id", wh.attachID,
+			"frames_emitted", wh.framesEmitted,
+			"duration_ms", wh.durationMS,
+			"error", wh.replayErr,
 		)
 		// W1-5: emit error + synthetic done so the client clears isReplaying and
 		// re-enables the composer.  Use sendConnGenFrame (generated types).
-		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:      string(generated.WsFrameTypeError),
-			SessionId: &attachID,
-			Message:   "replay aborted: " + replayErr.Error(),
+			SessionId: &wh.attachID,
+			Message:   "replay aborted: " + wh.replayErr.Error(),
 		})
 		replayErrTrue := true
-		sendConnGenFrame(wc, string(generated.WsFrameTypeDone), generated.DoneFrame{
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeDone), generated.DoneFrame{
 			Type:      string(generated.WsFrameTypeDone),
-			SessionId: attachID,
+			SessionId: wh.attachID,
 			Stats: &generated.DoneStats{
 				ReplayError: &replayErrTrue,
 			},
 		})
-		return
+		return true
 	}
 
 	// FR-I-013: structured log at replay end.
 	// Include the full stats set so replay_end is a self-contained diagnostic record.
 	slog.Info("ws: replay_end",
 		"event", "replay_end",
-		"session_id", attachID,
-		"frames_emitted", framesEmitted,
-		"duration_ms", durationMS,
-		"orphan_count", rs.orphanCount,
-		"duplicate_tool_call_id_count", rs.duplicateToolCallIDCount,
-		"truncated_result_count", rs.truncatedResultCount,
+		"session_id", wh.attachID,
+		"frames_emitted", wh.framesEmitted,
+		"duration_ms", wh.durationMS,
+		"orphan_count", wh.rs.orphanCount,
+		"duplicate_tool_call_id_count", wh.rs.duplicateToolCallIDCount,
+		"truncated_result_count", wh.rs.truncatedResultCount,
 	)
+	return false
+}
 
+// sendCatchUp sends the live streamer's accumulated text after persisted replay frames.
+func (wh *wsHandlerHandleAttachSession) sendCatchUp() {
 	// ADR-082 D3/FR-007: catch-up token. If attachID had an in-flight
 	// streamer at bind time (snapshotted above, atomically with the bind),
 	// emit ONE token frame carrying its accumulated-so-far text — written
@@ -431,14 +487,14 @@ func (h *WSHandler) handleAttachSession(
 	// postdate this snapshot, in arrival order, with no duplicate and no
 	// gap. Skipped when there is no in-flight turn (hasCatchUp false) or
 	// its accumulated text is still empty.
-	if hasCatchUp && catchUpText != "" {
+	if wh.hasCatchUp && wh.catchUpText != "" {
 		catchUpFrame := generated.TokenFrame{
 			Type:      string(generated.WsFrameTypeToken),
-			Content:   catchUpText,
-			SessionId: attachID,
+			Content:   wh.catchUpText,
+			SessionId: wh.attachID,
 		}
-		if catchUpAgentID != "" {
-			catchUpFrame.AgentId = &catchUpAgentID
+		if wh.catchUpAgentID != "" {
+			catchUpFrame.AgentId = &wh.catchUpAgentID
 		}
 		if data, mErr := json.Marshal(catchUpFrame); mErr == nil {
 			// ADR-082 review CR9/F4: route this through the SAME droppedTokens
@@ -454,20 +510,23 @@ func (h *WSHandler) handleAttachSession(
 			// sendCh, strictly between the replay history and the
 			// divert-buffered live frames drained just below.
 			select {
-			case wc.sendCh <- data:
-			case <-wc.doneCh:
-				wc.droppedTokens.Add(1)
-			case <-ctx.Done():
-				wc.droppedTokens.Add(1)
+			case wh.wc.sendCh <- data:
+			case <-wh.wc.doneCh:
+				wh.wc.droppedTokens.Add(1)
+			case <-wh.ctx.Done():
+				wh.wc.droppedTokens.Add(1)
 			case <-time.After(5 * time.Second):
-				slog.Warn("ws: catch-up token send timed out", "session_id", attachID)
-				wc.droppedTokens.Add(1)
+				slog.Warn("ws: catch-up token send timed out", "session_id", wh.attachID)
+				wh.wc.droppedTokens.Add(1)
 			}
 		} else {
-			slog.Error("ws: marshal catch-up token frame failed", "session_id", attachID, "error", mErr)
+			slog.Error("ws: marshal catch-up token frame failed", "session_id", wh.attachID, "error", mErr)
 		}
 	}
+}
 
+// resumeLiveSession drains diverted live frames, hydrates agent history, and re-emits goal status.
+func (wh *wsHandlerHandleAttachSession) resumeLiveSession() {
 	// FR-I-009: drain any live events buffered during replay, in arrival order,
 	// BEFORE disarming the divert flag.
 	//
@@ -495,13 +554,13 @@ func (h *WSHandler) handleAttachSession(
 	//   the frame is dropped rather than blocking the drain indefinitely.  A drop
 	//   here is a live message the user will never see, so drainReplayDivert
 	//   reports it to the client instead of only counting it — see its doc comment.
-	if !drainReplayDivert(ctx, wc, attachID, chatID) {
+	if !drainReplayDivert(wh.ctx, wh.wc, wh.attachID, wh.chatID) {
 		return
 	}
 
-	h.mu.Lock()
-	h.sessionIDs[chatID] = attachID
-	h.mu.Unlock()
+	wh.h.mu.Lock()
+	wh.h.sessionIDs[wh.chatID] = wh.attachID
+	wh.h.mu.Unlock()
 
 	// Hydrate the per-agent session.SessionStore from the transcript so the
 	// next LLM turn sees the prior conversation. Without this, the SPA
@@ -512,14 +571,14 @@ func (h *WSHandler) handleAttachSession(
 	// archive with ≥ 1 line is the live record of the session — rebuilding
 	// it from the UI transcript was the verified mechanism that dropped
 	// every tool result and reset Skip on each reopen (US-15).
-	if h.agentLoop.AgentArchiveNonEmpty(attachID) {
+	if wh.h.agentLoop.AgentArchiveNonEmpty(wh.attachID) {
 		slog.Debug("ws: attach_session: agent archive non-empty; hydration skipped",
-			"session_id", attachID)
-	} else if err := h.agentLoop.HydrateAgentHistoryFromTranscript(attachID); err != nil {
+			"session_id", wh.attachID)
+	} else if err := wh.h.agentLoop.HydrateAgentHistoryFromTranscript(wh.attachID); err != nil {
 		slog.Warn("ws: attach_session: hydrate agent history failed",
-			"session_id", attachID, "error", err)
-		sidCopy := attachID
-		sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			"session_id", wh.attachID, "error", err)
+		sidCopy := wh.attachID
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 			Type:      string(generated.WsFrameTypeError),
 			SessionId: &sidCopy,
 			Message:   "could not restore conversation context — agent may not remember earlier turns",
@@ -535,7 +594,7 @@ func (h *WSHandler) handleAttachSession(
 	// replay started), so a re-emitted event here reaches it exactly like
 	// any other live goal_status push. No-op when the attached session has
 	// no active goal or no record registered yet.
-	h.agentLoop.EmitGoalStatusRehydrate(attachID)
+	wh.h.agentLoop.EmitGoalStatusRehydrate(wh.attachID)
 
 	// ADR-082 review CR1/S1: session_state is now emitted ONCE, at the START
 	// of this attach (atomically with the bind + catch-up snapshot, above) —
@@ -544,7 +603,7 @@ func (h *WSHandler) handleAttachSession(
 	// attach (after the replay-terminating done, the catch-up token, and the
 	// divert drain), so a reconnecting SPA had no active_turn signal until
 	// after everything else had already arrived.
-	slog.Debug("ws: attached to session", "chat_id", chatID, "session_id", attachID)
+	slog.Debug("ws: attached to session", "chat_id", wh.chatID, "session_id", wh.attachID)
 }
 
 // drainReplayDivertChDiscard empties wc.replayDivertCh, discarding every
