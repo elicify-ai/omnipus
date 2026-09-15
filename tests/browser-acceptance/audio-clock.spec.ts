@@ -44,7 +44,7 @@ test('same peer silence-tone-silence with viewer muted then unmuted', async ({ p
       for (const key of ['timestamp', 'framesDecoded', 'framesDropped', 'packetsReceived', 'packetsLost', 'jitter', 'jitterBufferDelay', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'jitterBufferEmittedCount', 'totalDecodeTime', 'totalProcessingDelay', 'totalSamplesReceived', 'concealedSamples', 'silentConcealedSamples', 'insertedSamplesForDeceleration', 'removedSamplesForAcceleration', 'estimatedPlayoutTimestamp', 'audioLevel', 'totalAudioEnergy', 'totalSamplesDuration']) if (typeof row[key] === 'number' && Number.isFinite(row[key])) out[key] = row[key];
       stats.push(out);
     }
-    return { atMs: performance.now(), fixture, phase, running: running[1] > 180 && running[0] < 80, tone: energy[1] > 180 && energy[0] < 80, samples, muted: video.muted, paused: video.paused, peer: peers.indexOf(pc), tracks: stream.getTracks().map(t => ({ kind: t.kind, state: t.readyState })), stats };
+    return { atMs: performance.now(), decodedWidth: video.videoWidth, decodedHeight: video.videoHeight, viewerWidth: video.clientWidth, viewerHeight: video.clientHeight, fixture, phase, running: running[1] > 180 && running[0] < 80, tone: energy[1] > 180 && energy[0] < 80, samples, muted: video.muted, paused: video.paused, peer: peers.indexOf(pc), tracks: stream.getTracks().map(t => ({ kind: t.kind, state: t.readyState })), stats };
   });
   try {
     const served = await page.request.get(target.href, { maxRedirects: 0 }); expect(served.status()).toBe(200); expect(await served.text()).toBe(fixture);
