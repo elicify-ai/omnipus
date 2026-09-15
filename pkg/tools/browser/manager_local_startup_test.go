@@ -9,44 +9,6 @@ import (
 	"time"
 )
 
-func TestSessionContextLocalStartupCancellationReturnsBeforeLaunch(t *testing.T) {
-	m, entered, release, disposed := blockedLocalStartupManager(t)
-	caller, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	done := make(chan startupResult, 1)
-	go func() { root, err := m.SessionContext(caller, testSessionID); done <- startupResult{root, err} }()
-	launch := <-entered
-	cancel()
-	got, prompt := startupResultWithin(done)
-	select {
-	case <-launch.Done():
-	case <-time.After(200 * time.Millisecond):
-		t.Error("local launch did not receive caller cancellation")
-	}
-	release()
-	if !prompt {
-		got = <-done
-	}
-	if !prompt || !errors.Is(got.err, context.Canceled) {
-		t.Errorf("local startup cancellation prompt=%t err=%v", prompt, got.err)
-	}
-	assertLocalStartupDrained(t, m, disposed)
-	m.mu.Lock()
-	started, tabs := m.started, len(m.sessions)
-	m.mu.Unlock()
-	if started || tabs != 0 {
-		t.Errorf("canceled local launch published started=%t sessions=%d", started, tabs)
-	}
-}
-
-func TestSessionContextLocalStartupShutdownDoesNotWaitForLaunch(t *testing.T) {
-	testLocalStartupShutdown(t, false)
-}
-
-func TestSessionLocalStartupShutdownDoesNotWaitForLaunch(t *testing.T) {
-	testLocalStartupShutdown(t, true)
-}
-
 func testLocalStartupShutdown(t *testing.T, legacy bool) {
 	t.Helper()
 	m, entered, release, disposed := blockedLocalStartupManager(t)

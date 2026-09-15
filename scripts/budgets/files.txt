@@ -6,6 +6,5 @@ pkg/agent/plan_engine.go	6130
 pkg/config/config.go	5278
 pkg/gateway/gateway.go	6645
 pkg/gateway/websocket.go	6221
-pkg/tools/browser/manager.go	4167
 pkg/tools/delegate.go	4145
 src/store/chat.ts	6695
