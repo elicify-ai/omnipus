@@ -70,11 +70,6 @@ const (
 	// the policy is rebuilt per response and the reader re-reads the list on
 	// the app-state query's schedule (ADR-083 A-14).
 	GatewayVideoEmbedHosts ConfigKey = "gateway.video_embed_hosts"
-	// GatewayOrphanedTurnGraceSeconds bounds the orphan-foreground-turn
-	// watchdog's grace period (ADR-045). Read live on every WS teardown — it
-	// is deliberately NOT in RestartGatedKeys, matching GatewayPreviewEnabled's
-	// precedent.
-	GatewayOrphanedTurnGraceSeconds ConfigKey = "gateway.orphaned_turn_grace_seconds"
 	// ToolsWebServeWarmup is the dotted JSON path of the web_serve warmup
 	// timeout in config.json. The on-disk key is still named
 	// `tools.run_in_workspace.warmup_timeout_seconds` for backwards
