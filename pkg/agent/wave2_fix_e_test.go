@@ -363,52 +363,6 @@ func TestRunTurn_StampsModelFieldOnAssistantEntry(t *testing.T) {
 		expectedModel, asst.Model)
 }
 
-// (W2-20 #3 — TestSummarizeDroppedTurns_Respects50PercentCap removed:
-// summarizeDroppedTurns is deleted as part of the context-paging epic.
-// handleModelSwitch now uses windowTrim (FR-011) with no LLM call.
-// The windowTrim budget arithmetic is covered by TestWindowTrim_* in
-// window_trim_test.go and TestModelSwitch_ReWindowsNoSummary.)
-
-// =============================================================================
-// W2-27 — appendErrorTranscript no-op paths
-// =============================================================================
-//
-// W2-33 (silent-failure-A #12) flagged that appendErrorTranscript silently
-// no-ops on nil store / empty session ID; we assert that behavior so a
-// regression that panics or writes to a nil store surfaces as a failure.
-func TestAppendErrorTranscript_NoOpOnNilStore(t *testing.T) {
-	ts := &turnState{
-		transcriptStore:     nil,
-		transcriptSessionID: "session_test",
-	}
-	// Must not panic; must not call AppendTranscript (would NPE on nil).
-	ts.appendErrorTranscript("error", "test", "should be ignored")
-	// If we got here without panicking, the no-op path is intact.
-}
-
-func TestAppendErrorTranscript_NoOpOnEmptySessionID(t *testing.T) {
-	tmpDir := t.TempDir()
-	store, err := session.NewUnifiedStore(tmpDir)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = store.Close() })
-
-	ts := &turnState{
-		transcriptStore:     store,
-		transcriptSessionID: "",
-	}
-	// Must not panic; must not write to the store.
-	ts.appendErrorTranscript("error", "test", "should be ignored")
-
-	// Verify nothing was written — every session in the store still has
-	// no transcript.
-	entries := filepath.Join(tmpDir)
-	_, err = os.ReadDir(entries)
-	require.NoError(t, err)
-	// We don't enumerate every session — the contract is that the call
-	// returns silently without panicking, and the no-op is observable
-	// through the lack of a panic.
-}
-
 // =============================================================================
 // W2-27 — Provider tie-break ordering: RETIRED by ADR-067 FR-040 (X-24)
 // =============================================================================

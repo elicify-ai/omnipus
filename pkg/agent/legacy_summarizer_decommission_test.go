@@ -64,7 +64,6 @@ func TestDecommission_NoLegacySummarizerSymbols(t *testing.T) {
 	filesOwned := []string{
 		"loop.go",
 		"context.go",
-		"turn.go",
 		"events.go",
 		"subturn.go",
 		"steering.go",
@@ -106,6 +105,19 @@ func TestDecommission_NoLegacySummarizerSymbols(t *testing.T) {
 			assert.NotContains(t, content, pattern,
 				"file %s must not reference the decommissioned summariser symbol %q", filename, pattern)
 		}
+	}
+
+	// turn.go was split into turn*.go siblings (turn_exit.go, turn_stream.go,
+	// turn_transcript.go) on 2026-09-15 — scan the whole family so a forbidden
+	// symbol cannot evade this guard by moving file.
+	turnFamilySrc := readTurnSourcesForTest(t)
+	for _, pattern := range forbiddenDefinitions {
+		assert.NotContains(t, turnFamilySrc, pattern,
+			"turn*.go family must not define the legacy summariser routine %q", pattern)
+	}
+	for _, pattern := range forbiddenSymbols {
+		assert.NotContains(t, turnFamilySrc, pattern,
+			"turn*.go family must not reference the decommissioned summariser symbol %q", pattern)
 	}
 
 	// SummarizeTokenPercent — the knob this test once pinned in place as the
