@@ -233,8 +233,13 @@ func (te *TaskExecutor) finishRunTurn(
 	sessStore := te.agentLoop.GetAgentStore(t.AgentID)
 
 	if turnErr != nil {
+		// The one place a turn error's raw text is kept: the operator's log,
+		// where registered credentials are scrubbed (logger's
+		// sensitiveValueReplacer). Everything a person or model reads below
+		// is built from its plain message instead.
 		logger.ErrorCF("task_executor", "Agent execution failed"+logSuffix,
-			map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "error": turnErr.Error()})
+			map[string]any{"task_id": t.ID, "agent_id": t.AgentID, "error": turnErr.Error(),
+				"code": string(TranslateTurnError(turnErr).Code)})
 
 		if errors.Is(turnErr, ErrTaskRunNotDispatched) {
 			te.appendRunErrorTranscript(t, taskSessionID, sessStore, fmt.Sprintf("Task execution failed: %v", turnErr))
@@ -270,9 +275,19 @@ func (te *TaskExecutor) finishRunTurn(
 			return runStepContinue, steer, ""
 		}
 
-		te.appendRunErrorTranscript(t, taskSessionID, sessStore, fmt.Sprintf("Task execution failed: %v", turnErr))
+		// A temporary error breaks the run and restarts it. Everything built from
+		// it below — the run's transcript, and the reason the run failed, which
+		// becomes the task result, the restarted run's first prompt, the goal
+		// record's reason, the goal outcome line and the owner's wake — states
+		// the error in the contract's plain words for its typed code, never in
+		// the error's own text: a provider error's text carries the provider's
+		// raw response body, which can echo a credential or the request. The
+		// raw error stays only in the ERROR log line above, where registered
+		// credentials are scrubbed.
+		plain := turnErrorUserText(turnErr)
+		te.appendRunErrorTranscript(t, taskSessionID, sessStore, "Task execution failed: "+plain)
 		te.transitionTaskLifecycle(taskSessionID, session.LifecycleFailed, "execution_error")
-		return te.failedRunStep(ctx, t, taskSessionID, fmt.Sprintf("execution error: %v", turnErr), run)
+		return te.failedRunStep(ctx, t, taskSessionID, "execution error: "+plain, run)
 	}
 
 	if taskSessionID != "" && resp != "" && sessStore != nil {

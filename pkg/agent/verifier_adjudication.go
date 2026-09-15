@@ -1626,7 +1626,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			}
 			al.noteGoalJudgeRetryWait(in, attempt, judgeRetryCause(callErr))
 			if waitErr := al.judgeBackoffWait(ctx, attempt, callErr.Error()); waitErr != nil {
-				return nil, "", "", true, callErr.Error(), nil, nil
+				return nil, "", "", true, judgeTransientFailureReason(callErr), nil, nil
 			}
 			continue
 		}
@@ -2083,6 +2083,18 @@ func judgeRetryCause(callErr error) string {
 		return "its model stopped responding mid-call"
 	}
 	return "its model returned an error"
+}
+
+// judgeTransientFailureReason is the Reason of an adjudication that stopped
+// waiting to retry a transient Judge turn failure (the caller's ctx ended
+// during judgeRetryBackoff). Its readers show it to people and to models — the
+// task run writes it onto the task, the chat goal paints it on its pill, the
+// plan engine stores it in the plan's handover and wakes PlanSupervisor with it
+// — so it is plain language, never the raw provider error, whose text carries
+// the provider's response body (ADR-051 §RD5 CRIT-001). The raw error stays in
+// judgeBackoffWait's WARN log line, where registered credentials are scrubbed.
+func judgeTransientFailureReason(callErr error) string {
+	return "the Judge's turn failed: " + judgeRetryCause(callErr)
 }
 
 // JudgeUnfinishedReasonPrefix prefixes the Reason of an adjudication that

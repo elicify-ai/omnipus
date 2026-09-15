@@ -5270,7 +5270,10 @@ func (al *AgentLoop) hookAbortError(ts *turnState, stage string, decision HookDe
 		reason = "hook requested turn abort"
 	}
 
-	err := fmt.Errorf("hook aborted turn during %s: %s", stage, reason)
+	// curatedTurnError: this text is written here, from a hook's decision —
+	// never a provider's response — so a task run may show it as written
+	// (turnErrorUserText), exactly as the chat bubble below does.
+	err := &curatedTurnError{text: fmt.Sprintf("hook aborted turn during %s: %s", stage, reason)}
 	// FIX 3: compute the classifier code once and thread it onto the live
 	// ErrorPayload so the WS forwarder (FIX 2) does not have to re-translate
 	// this curated message from scratch — mirroring appendErrorTranscript's
@@ -13909,7 +13912,10 @@ func (al *AgentLoop) abortTurn(ts *turnState, stage, reason string) (turnResult,
 	if reason == "" {
 		reason = "no reason provided"
 	}
-	err := fmt.Errorf("turn aborted during %s: %s", stage, reason)
+	// curatedTurnError: the stage and a hook's or the tool-denial budget's own
+	// reason — never a provider's response — so a task run may show it as
+	// written (turnErrorUserText), exactly as the event payload below does.
+	err := &curatedTurnError{text: fmt.Sprintf("turn aborted during %s: %s", stage, reason)}
 	// Wave 2 (BLOCK 2 / IMPORTANT 1): system-initiated aborts are
 	// operator-shaped; preserve the original reason verbatim in both the
 	// returned error AND the event payload (a user/operator needs to see

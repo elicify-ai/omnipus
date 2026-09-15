@@ -243,6 +243,13 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 
 	skip := getCallerSkip()
 
+	// A registered credential never reaches the console or gateway.log (see
+	// sensitiveValueReplacer): scrubbed once, here, before both sinks below.
+	if r := sensitiveValueReplacer.Load(); r != nil {
+		message = r.Replace(message)
+		fields = scrubFields(r, fields)
+	}
+
 	// Snapshot the two zerolog.Logger globals under a brief read-lock.
 	// zerolog.Logger is a plain value struct (writer interface, level,
 	// sampler, ...) with no internal mutex, so copying it is safe and gives

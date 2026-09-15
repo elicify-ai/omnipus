@@ -251,7 +251,8 @@ type LLMErrorAttribution = generated.LLMErrorAttribution
 //     capability, content, and auth rejections.
 //   - Detail: opaque diagnostic for Verbose Chat. May include provider
 //     identity / model / status / body preview; NEVER persisted; NEVER
-//     rendered outside Verbose Chat.
+//     rendered outside Verbose Chat; every registered credential scrubbed
+//     out of it (buildDetail).
 type LLMError struct {
 	Code      LLMErrorCode
 	Message   string
@@ -878,6 +879,37 @@ func TranslateTurnError(err error) LLMError {
 	return TranslateLLMError(pe, err.Error())
 }
 
+// curatedTurnError is a turn error whose text Omnipus wrote and which carries
+// no provider response: a turn a hook or the tool-denial budget aborted
+// (hookAbortError, abortTurn — the reason is the hook's decision or the
+// budget's own wording), and an external-CLI run that failed, whose CLI output
+// was already replaced by the plain message for its code (SanitizeRunnerError).
+// It lets turnErrorUserText show these actionable, provider-free reasons as
+// written — the chat bubble already does — while every other turn error is
+// shown only as its plain message.
+type curatedTurnError struct{ text string }
+
+func (e *curatedTurnError) Error() string { return e.text }
+
+// turnErrorUserText is what a person or a model may read about a turn that
+// ended on err: the contract's plain message for err's typed code
+// (TranslateTurnError), never err's own text. A provider error's text carries
+// the provider's raw response body — common.ProviderError.Error renders
+// body=%q, and providers.FailoverError / FallbackExhaustedError wrap it — which
+// can echo a credential fragment or the request payload (ADR-051 §RD5
+// CRIT-001). The one exception is a curatedTurnError anywhere in err's chain:
+// its own text (never the wrapping text around it) is shown as written unless
+// the classifier reads a provider-shaped signal in it — abortTurn's rule for
+// the chat bubble, so a task and a chat thread say the same thing.
+func turnErrorUserText(err error) string {
+	llm := TranslateTurnError(err)
+	var curated *curatedTurnError
+	if errors.As(err, &curated) && llm.Code == CodeUnknown {
+		return curated.Error()
+	}
+	return llm.Message
+}
+
 // Typed turn-exit sentinels (ADR-066 D7, FR-034). runTurn's formerly silent
 // return sites wrap one of these together with the raw cause
 // (`fmt.Errorf("%w: %w", ErrTurnCanceled, cause)`), so a caller can errors.Is
@@ -952,6 +984,13 @@ func isRetryable(code LLMErrorCode) bool {
 // May contain provider identity, model, status code, and a body preview —
 // the operator-facing diagnostic that the user-facing Message is generic
 // over.
+//
+// Every registered credential is scrubbed out of it
+// (logger.ScrubSensitiveValues, the replacer config.RegisterSensitiveValues
+// publishes): the detail crosses the WebSocket on every error frame, whether
+// or not the browser shows it, and a provider's body can echo the key it was
+// sent. The body is scrubbed BEFORE its preview is cut, so the cut can never
+// split a credential into a fragment the replacer no longer recognises.
 func buildDetail(pe *ProviderError, message string) string {
 	var parts []string
 	if pe != nil {
@@ -959,7 +998,7 @@ func buildDetail(pe *ProviderError, message string) string {
 			parts = append(parts, "status="+itoa(pe.Status))
 		}
 		if len(pe.Body) > 0 {
-			preview := strings.TrimSpace(pe.Body)
+			preview := strings.TrimSpace(logger.ScrubSensitiveValues(pe.Body))
 			if len(preview) > 512 {
 				preview = preview[:512] + "..."
 			}
@@ -967,7 +1006,7 @@ func buildDetail(pe *ProviderError, message string) string {
 		}
 	}
 	if len(parts) == 0 && message != "" {
-		parts = append(parts, message)
+		parts = append(parts, logger.ScrubSensitiveValues(message))
 	}
 	return strings.Join(parts, " ")
 }

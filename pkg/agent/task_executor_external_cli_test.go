@@ -370,12 +370,14 @@ func TestProcessTaskDirect_ExternalCLIWorker_Timeout_TaskFailsWithoutHanging(t *
 	// branch sets runErr = ctx.Err() (context.DeadlineExceeded), which
 	// propagates unwrapped through runExternalCLISubTurn's result.Err ->
 	// processTaskDirectExternalCLI's %w-wrapped error -> the task run loop's
-	// "execution error: %v" — locking in a stable "deadline exceeded"
-	// substring so this test can't silently start passing for the wrong
-	// reason (e.g. a different, non-timeout failure).
-	if !strings.Contains(final.Result, "deadline exceeded") {
-		t.Errorf("task Result = %q, want it to mention the ctx-deadline timeout (%q)",
-			final.Result, "deadline exceeded")
+	// "execution error: <plain message>". The task result states a turn error
+	// in the contract's plain words for its typed code, never in the error's
+	// own text (task_run_error_leak_test.go), so this locks in the timed-out
+	// message: only a deadline classifies as CodeTurnTimedOut, so this test
+	// can't silently start passing for the wrong reason (a cancel reads
+	// turn_canceled's message, any other failure its own).
+	if want := UserMessageForCode(CodeTurnTimedOut); !strings.Contains(final.Result, want) {
+		t.Errorf("task Result = %q, want it to carry the timed-out message %q", final.Result, want)
 	}
 	if provider.calls != 0 {
 		t.Fatalf("native LLM provider was called %d times, want 0", provider.calls)
