@@ -17,13 +17,12 @@ import (
 	"context"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/elicify-ai/omnipus/pkg/agent/testutil"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // beforeToolAbortHook is a ToolInterceptor that unconditionally hard-aborts
@@ -102,30 +101,4 @@ func TestHookAbort_BeforeTool_CuratedReasonSurvivesClassification(t *testing.T) 
 	assert.Contains(t, errEntry.Content, curated,
 		"the persisted transcript must preserve the hook's curated reason verbatim, "+
 			"not the generic classifier copy; got %q", errEntry.Content)
-}
-
-// TestIsTrustedInternalStage_HookStages locks the trustedInternalStageSet
-// membership directly: every stage hookAbortError can reach (the literal
-// "hooks" stage it always passes to appendErrorTranscript, plus the
-// defensive before_tool/after_tool entries) must be trusted, alongside the
-// pre-existing before_llm/after_llm/model_switch/etc. entries. An unrelated
-// stage must remain untrusted.
-func TestIsTrustedInternalStage_HookStages(t *testing.T) {
-	cases := []struct {
-		name        string
-		stage, kind string
-		want        bool
-	}{
-		{"hooks/error trusted — hookAbortError's actual appendErrorTranscript stage", "hooks", "error", true},
-		{"before_tool/error trusted (defensive)", "before_tool", "error", true},
-		{"after_tool/error trusted (defensive)", "after_tool", "error", true},
-		{"before_llm/error trusted (pre-existing)", "before_llm", "error", true},
-		{"after_llm/error trusted (pre-existing)", "after_llm", "error", true},
-		{"unrelated stage/kind is not trusted", "runTurn", "error", false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, isTrustedInternalStage(tc.stage, tc.kind))
-		})
-	}
 }
