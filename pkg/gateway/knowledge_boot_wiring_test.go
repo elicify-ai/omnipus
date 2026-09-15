@@ -123,7 +123,7 @@ func TestStartKnowledgeLifecycle_OpensEveryRecordedMountAndPublishesIt(t *testin
 //
 // Booting a whole gateway inside a unit test is not cheap enough to do here,
 // so the call site is read from the source — but "the call expression appears
-// somewhere in gateway.go" is a claim a `if false { startKnowledgeLifecycle(…) }`
+// somewhere in the gateway*.go family" is a claim a `if false { startKnowledgeLifecycle(…) }`
 // satisfies, and a feature flag that is off at boot satisfies it too. That is
 // the documented weakness of the AST guard this project already shipped for
 // the sibling call (registerKnowledgeBuiltinMetadata) and it survived exactly
@@ -134,32 +134,42 @@ func TestStartKnowledgeLifecycle_OpensEveryRecordedMountAndPublishesIt(t *testin
 // lifecycle behind any condition has to come and change this test, which is
 // the point.
 //
+// The family, not the file: gateway.go is split by job
+// (docs/internal/architecture/draft-module-map.md), so the boot wiring's FILE
+// is not a stable identity for the boot sequence — the gateway*.go family is.
+//
 // DIES ON: deleting the call; wrapping it in `if false { … }`; moving it
 // inside any conditional or loop.
 func TestStartKnowledgeLifecycle_IsCalledUNCONDITIONALLYFromBoot(t *testing.T) {
-	const bootFile = "gateway.go"
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, bootFile, nil, 0)
-	require.NoError(t, err, "parse %s", bootFile)
+	var found, unconditional, stopFound bool
+	for _, name := range gatewayFamilyFilesForTest(t) {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		require.NoErrorf(t, err, "parse %s", name)
 
-	found, unconditional := findUnconditionalCall(file, "startKnowledgeLifecycle")
-	require.Truef(t, found,
-		"startKnowledgeLifecycle is never called from %s. Without it no collection index "+
-			"is opened at boot, no knowledge_index_progress frame is ever emitted and no "+
-			"drift schedule starts — FR-030, FR-039 and FR-080 all silently do nothing, "+
-			"and CI stays green", bootFile)
-	assert.Truef(t, unconditional,
-		"startKnowledgeLifecycle IS called from %s but only inside a conditional or a "+
-			"loop. A condition that is false at boot ships the whole indexing lifecycle "+
-			"dead with this test still green, which is precisely the blind spot that let "+
-			"the sibling registerKnowledgeBuiltinMetadata call survive an `if false` "+
-			"mutation. If the call genuinely must become conditional, this test has to "+
-			"change with it", bootFile)
+		f, u := findUnconditionalCall(file, "startKnowledgeLifecycle")
+		found = found || f
+		unconditional = unconditional || u
 
-	stopFound, _ := findUnconditionalCall(file, "stopKnowledgeLifecycles")
-	assert.Truef(t, stopFound,
-		"stopKnowledgeLifecycles is never called from %s, so every open index and every "+
-			"drift schedule survives shutdown", bootFile)
+		s, _ := findUnconditionalCall(file, "stopKnowledgeLifecycles")
+		stopFound = stopFound || s
+	}
+	require.True(t, found,
+		"startKnowledgeLifecycle is never called from the gateway*.go family. Without it "+
+			"no collection index is opened at boot, no knowledge_index_progress frame is "+
+			"ever emitted and no drift schedule starts — FR-030, FR-039 and FR-080 all "+
+			"silently do nothing, and CI stays green")
+	assert.True(t, unconditional,
+		"startKnowledgeLifecycle IS called from the gateway*.go family but only inside a "+
+			"conditional or a loop. A condition that is false at boot ships the whole "+
+			"indexing lifecycle dead with this test still green, which is precisely the "+
+			"blind spot that let the sibling registerKnowledgeBuiltinMetadata call "+
+			"survive an `if false` mutation. If the call genuinely must become "+
+			"conditional, this test has to change with it")
+
+	assert.True(t, stopFound,
+		"stopKnowledgeLifecycles is never called from the gateway*.go family, so every "+
+			"open index and every drift schedule survives shutdown")
 }
 
 // findUnconditionalCall reports whether name is called anywhere in file, and

@@ -505,8 +505,12 @@ func TestNoCatalogRefreshOutsideTheLoop(t *testing.T) {
 				if !strings.Contains(line, ".Refresh(ctx)") {
 					continue
 				}
-				// The one sanctioned call site is inside runCatalogRefreshLoop.
-				if root == "." && name == "gateway.go" && strings.Contains(line, "cat.Refresh(ctx)") {
+				// The one sanctioned call site is inside runCatalogRefreshLoop,
+				// which lives somewhere in the gateway*.go family — gateway.go
+				// is split by job (draft-module-map.md), so pinning the loop
+				// to one file name would silently narrow this exception to
+				// whatever stayed behind while the call itself moved.
+				if root == "." && isGatewayFamilySource(name) && strings.Contains(line, "cat.Refresh(ctx)") {
 					continue
 				}
 				offenders = append(offenders, fmt.Sprintf("%s/%s:%d: %s", root, name, i+1, strings.TrimSpace(line)))
