@@ -380,22 +380,62 @@ func stringSliceArg(args map[string]any, key string) ([]string, error) {
 	return out, nil
 }
 
+// messageParentToolExecute carries the shared state of Execute across its stages.
+type messageParentToolExecute struct {
+	t               *MessageParentTool
+	ctx             context.Context
+	args            map[string]any
+	kind            string
+	childSessionID  string
+	rec             *session.LifecycleRecord
+	err             error
+	ownerKey        string
+	messageID       string
+	now             time.Time
+	parentSessionID *string
+	sm              generated.SessionMessage
+	correlationID   string
+	waitParks       bool
+	appendResult    *session.AppendResult
+}
+
 func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	mt := &messageParentToolExecute{t: t, ctx: ctx, args: args}
+
+	if r0, stop := mt.validateContext(); stop {
+		return r0
+	}
+
+	mt.rec, mt.err = mt.t.lifecycle.Load(mt.childSessionID)
+	if r0, stop := mt.prepareMessage(); stop {
+		return r0
+	}
+
+	if r0, stop := mt.encodeMessage(); stop {
+		return r0
+	}
+
+	mt.appendResult, mt.err = mt.t.inbox.Append(mt.ownerKey, mt.sm)
+	return mt.finishDelivery()
+}
+
+// validateContext validates tool configuration and the delegated child context.
+func (mt *messageParentToolExecute) validateContext() (*ToolResult, bool) {
 	// arch-M2 (Phase-2 review): FR-196 kill switch on the SYNC tool path. The
 	// async consumer honors session_messaging.enabled per event; the direct
 	// inbox.Append below used to bypass it. Check first, before any store
 	// touch, so a disabled plane rejects the call with a clear error.
-	if !t.sessionMessagingPlaneEnabled() {
-		return ErrorResult("message_parent: the session-messaging plane is disabled (session_messaging.enabled = false)")
+	if !mt.t.sessionMessagingPlaneEnabled() {
+		return ErrorResult("message_parent: the session-messaging plane is disabled (session_messaging.enabled = false)"), true
 	}
-	if t.inbox == nil || t.lifecycle == nil {
-		return ErrorResult("message_parent: tool not fully configured (missing inbox/lifecycle store)")
+	if mt.t.inbox == nil || mt.t.lifecycle == nil {
+		return ErrorResult("message_parent: tool not fully configured (missing inbox/lifecycle store)"), true
 	}
 
-	kind, _ := args["kind"].(string)
-	kind = strings.TrimSpace(kind)
-	if kind == "" {
-		return ErrorResult("kind is required: one of progress, checkpoint, artifact, blocker, question, handback")
+	mt.kind, _ = mt.args["kind"].(string)
+	mt.kind = strings.TrimSpace(mt.kind)
+	if mt.kind == "" {
+		return ErrorResult("kind is required: one of progress, checkpoint, artifact, blocker, question, handback"), true
 	}
 
 	// The durable LifecycleRecord is persisted keyed by the child's OWN
@@ -408,8 +448,8 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 	// under the transcript id was a 100%-reproducible miss: a freshly minted
 	// UUID delegate session id can never coincidentally equal the parent's
 	// transcript id.
-	childSessionID := strings.TrimSpace(ToolDelegateSessionID(ctx))
-	if childSessionID == "" {
+	mt.childSessionID = strings.TrimSpace(ToolDelegateSessionID(mt.ctx))
+	if mt.childSessionID == "" {
 		// A native task run's root turn carries tools.WithRunningTaskID on ctx
 		// (task_executor.go, set before processTaskDirect) but is never a
 		// delegated child — only pkg/agent/subturn.go's spawnSubTurn calls
@@ -421,178 +461,181 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 		// parent to attribute"), so there is no parent inbox this call could
 		// ever reach even if the context plumbing were added. Name the actual
 		// completion/reporting path instead of a generic session error.
-		if strings.TrimSpace(ToolRunningTaskID(ctx)) != "" {
+		if strings.TrimSpace(ToolRunningTaskID(mt.ctx)) != "" {
 			return ErrorResult("message_parent: this task run has no parent session to message — " +
 				"it was dispatched directly, not delegated. Report progress in your reasoning, and report " +
 				"your outcome with goal_claim (status \"met\" when verified done, \"blocked\" when something " +
-				"stops you, \"waiting_on_user\" when only the operator can proceed).")
+				"stops you, \"waiting_on_user\" when only the operator can proceed)."), true
 		}
-		return ErrorResult("message_parent: no session context available for this call")
+		return ErrorResult("message_parent: no session context available for this call"), true
 	}
+	return nil, false
+}
 
-	rec, err := t.lifecycle.Load(childSessionID)
-	if err != nil {
+// prepareMessage validates the lifecycle record and prepares the message's shared routing fields.
+func (mt *messageParentToolExecute) prepareMessage() (*ToolResult, bool) {
+	if mt.err != nil {
 		return ErrorResult(fmt.Sprintf(
 			"message_parent: no durable session record for this session (%v) — message_parent may only be "+
-				"called from within a delegated child session", err,
-		))
+				"called from within a delegated child session", mt.err,
+		)), true
 	}
-	if rec.Is3P {
+	if mt.rec.Is3P {
 		return ErrorResult("message_parent: not available to external-CLI (3P) sessions (D5) — " +
-			"3P children never advertise this tool; use the delegate tool's normal fire-and-collect flow instead")
+			"3P children never advertise this tool; use the delegate tool's normal fire-and-collect flow instead"), true
 	}
-	ownerKey := ownerKeyFor(rec)
-	if ownerKey == "" {
-		return ErrorResult("message_parent: could not resolve this session's parent/owner scope (owner_scope_id unset)")
-	}
-
-	messageID, _ := stringArg(args, "message_id")
-	if strings.TrimSpace(messageID) == "" {
-		messageID = uuid.NewString()
+	mt.ownerKey = ownerKeyFor(mt.rec)
+	if mt.ownerKey == "" {
+		return ErrorResult("message_parent: could not resolve this session's parent/owner scope (owner_scope_id unset)"), true
 	}
 
-	now := t.now().UTC()
-	var parentSessionID *string
-	if rec.OwnerScopeKind == session.OwnerScopeParentSession && rec.OwnerScopeID != "" {
-		id := rec.OwnerScopeID
-		parentSessionID = &id
+	mt.messageID, _ = stringArg(mt.args, "message_id")
+	if strings.TrimSpace(mt.messageID) == "" {
+		mt.messageID = uuid.NewString()
 	}
 
-	var sm generated.SessionMessage
-	var correlationID string
-	var waitParks bool
+	mt.now = mt.t.now().UTC()
 
-	switch kind {
+	if mt.rec.OwnerScopeKind == session.OwnerScopeParentSession && mt.rec.OwnerScopeID != "" {
+		id := mt.rec.OwnerScopeID
+		mt.parentSessionID = &id
+	}
+	return nil, false
+}
+
+// encodeMessage validates kind-specific arguments and encodes the typed session message.
+func (mt *messageParentToolExecute) encodeMessage() (*ToolResult, bool) {
+	switch mt.kind {
 	case "progress":
-		text, ok := stringArg(args, "text")
+		text, ok := stringArg(mt.args, "text")
 		if !ok || strings.TrimSpace(text) == "" {
-			return ErrorResult("text is required and must be a non-empty string for kind=progress")
+			return ErrorResult("text is required and must be a non-empty string for kind=progress"), true
 		}
 		v := generated.SessionMessageProgress{
-			MessageId:       messageID,
-			SessionId:       childSessionID,
-			ParentSessionId: parentSessionID,
-			CreatedAt:       now,
+			MessageId:       mt.messageID,
+			SessionId:       mt.childSessionID,
+			ParentSessionId: mt.parentSessionID,
+			CreatedAt:       mt.now,
 			Depth:           1,
 			UntrustedOrigin: true,
-			SenderIdentity:  rec.AgentID,
-			Text:            t.filterText(text),
+			SenderIdentity:  mt.rec.AgentID,
+			Text:            mt.t.filterText(text),
 		}
-		if pctRaw, present := args["pct"]; present && pctRaw != nil {
+		if pctRaw, present := mt.args["pct"]; present && pctRaw != nil {
 			pct, perr := toIntArg(pctRaw)
 			if perr != nil {
-				return ErrorResult("pct must be an integer 0-100")
+				return ErrorResult("pct must be an integer 0-100"), true
 			}
 			v.Pct = &pct
 		}
-		if encodeErr := sm.FromSessionMessageProgress(v); encodeErr != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode progress: %v", encodeErr))
+		if encodeErr := mt.sm.FromSessionMessageProgress(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode progress: %v", encodeErr)), true
 		}
 
 	case "checkpoint":
-		summary, ok := stringArg(args, "summary")
+		summary, ok := stringArg(mt.args, "summary")
 		if !ok || strings.TrimSpace(summary) == "" {
-			return ErrorResult("summary is required and must be a non-empty string for kind=checkpoint")
+			return ErrorResult("summary is required and must be a non-empty string for kind=checkpoint"), true
 		}
 		v := generated.SessionMessageCheckpoint{
-			MessageId:       messageID,
-			SessionId:       childSessionID,
-			ParentSessionId: parentSessionID,
-			CreatedAt:       now,
+			MessageId:       mt.messageID,
+			SessionId:       mt.childSessionID,
+			ParentSessionId: mt.parentSessionID,
+			CreatedAt:       mt.now,
 			Depth:           1,
 			UntrustedOrigin: true,
-			SenderIdentity:  rec.AgentID,
-			Summary:         t.filterText(summary),
+			SenderIdentity:  mt.rec.AgentID,
+			Summary:         mt.t.filterText(summary),
 		}
-		if rsf, ok := stringArg(args, "result_so_far"); ok {
-			filtered := t.filterText(rsf)
+		if rsf, ok := stringArg(mt.args, "result_so_far"); ok {
+			filtered := mt.t.filterText(rsf)
 			v.ResultSoFar = &filtered
 		}
-		if cr, ok := stringArg(args, "commit_ref"); ok {
+		if cr, ok := stringArg(mt.args, "commit_ref"); ok {
 			// Security-MINOR-1: commit_ref is a path-like field a child
 			// could exfiltrate through (a filename carrying a secret).
 			// Route it through the same content-egress filter as free text.
-			filtered := t.filterText(cr)
+			filtered := mt.t.filterText(cr)
 			v.CommitRef = &filtered
 		}
-		if encodeErr := sm.FromSessionMessageCheckpoint(v); encodeErr != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode checkpoint: %v", encodeErr))
+		if encodeErr := mt.sm.FromSessionMessageCheckpoint(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode checkpoint: %v", encodeErr)), true
 		}
 
 	case "artifact":
-		paths, perr := stringSliceArg(args, "paths")
+		paths, perr := stringSliceArg(mt.args, "paths")
 		if perr != nil {
-			return ErrorResult(perr.Error())
+			return ErrorResult(perr.Error()), true
 		}
 		if len(paths) == 0 {
-			return ErrorResult("paths is required and must be a non-empty array of strings for kind=artifact")
+			return ErrorResult("paths is required and must be a non-empty array of strings for kind=artifact"), true
 		}
 		v := generated.SessionMessageArtifact{
-			MessageId:       messageID,
-			SessionId:       childSessionID,
-			ParentSessionId: parentSessionID,
-			CreatedAt:       now,
+			MessageId:       mt.messageID,
+			SessionId:       mt.childSessionID,
+			ParentSessionId: mt.parentSessionID,
+			CreatedAt:       mt.now,
 			Depth:           1,
 			UntrustedOrigin: true,
-			SenderIdentity:  rec.AgentID,
+			SenderIdentity:  mt.rec.AgentID,
 			// Security-MINOR-1: paths are path-like fields a child could
 			// exfiltrate through (a filename carrying a secret). Route each
 			// through the same content-egress filter as free text.
-			Paths: filterStringSlice(t.filterText, paths),
+			Paths: filterStringSlice(mt.t.filterText, paths),
 		}
-		if note, ok := stringArg(args, "note"); ok {
-			filtered := t.filterText(note)
+		if note, ok := stringArg(mt.args, "note"); ok {
+			filtered := mt.t.filterText(note)
 			v.Note = &filtered
 		}
-		if encodeErr := sm.FromSessionMessageArtifact(v); encodeErr != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode artifact: %v", encodeErr))
+		if encodeErr := mt.sm.FromSessionMessageArtifact(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode artifact: %v", encodeErr)), true
 		}
 
 	case "blocker":
-		text, ok := stringArg(args, "text")
+		text, ok := stringArg(mt.args, "text")
 		if !ok || strings.TrimSpace(text) == "" {
-			return ErrorResult("text is required and must be a non-empty string for kind=blocker")
+			return ErrorResult("text is required and must be a non-empty string for kind=blocker"), true
 		}
-		severity, _ := stringArg(args, "severity")
+		severity, _ := stringArg(mt.args, "severity")
 		switch severity {
 		case "low", "medium", "high":
 		default:
-			return ErrorResult(`severity is required for kind=blocker and must be one of "low", "medium", "high"`)
+			return ErrorResult(`severity is required for kind=blocker and must be one of "low", "medium", "high"`), true
 		}
 		v := generated.SessionMessageBlocker{
-			MessageId:       messageID,
-			SessionId:       childSessionID,
-			ParentSessionId: parentSessionID,
-			CreatedAt:       now,
+			MessageId:       mt.messageID,
+			SessionId:       mt.childSessionID,
+			ParentSessionId: mt.parentSessionID,
+			CreatedAt:       mt.now,
 			Depth:           1,
 			UntrustedOrigin: true,
-			SenderIdentity:  rec.AgentID,
-			Text:            t.filterText(text),
+			SenderIdentity:  mt.rec.AgentID,
+			Text:            mt.t.filterText(text),
 			Severity:        generated.SessionMessageBlockerSeverity(severity),
 		}
-		if cid, ok := stringArg(args, "correlation_id"); ok && cid != "" {
+		if cid, ok := stringArg(mt.args, "correlation_id"); ok && cid != "" {
 			v.CorrelationId = &cid
 		}
-		if encodeErr := sm.FromSessionMessageBlocker(v); encodeErr != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode blocker: %v", encodeErr))
+		if encodeErr := mt.sm.FromSessionMessageBlocker(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode blocker: %v", encodeErr)), true
 		}
 
 	case "question":
-		text, ok := stringArg(args, "text")
+		text, ok := stringArg(mt.args, "text")
 		if !ok || strings.TrimSpace(text) == "" {
-			return ErrorResult("text is required and must be a non-empty string for kind=question")
+			return ErrorResult("text is required and must be a non-empty string for kind=question"), true
 		}
-		waitRaw, present := args["wait"]
+		waitRaw, present := mt.args["wait"]
 		if !present || waitRaw == nil {
-			return ErrorResult("wait is required (boolean) for kind=question")
+			return ErrorResult("wait is required (boolean) for kind=question"), true
 		}
 		wait, ok := waitRaw.(bool)
 		if !ok {
-			return ErrorResult("wait must be a boolean for kind=question")
+			return ErrorResult("wait must be a boolean for kind=question"), true
 		}
-		correlationID, _ = stringArg(args, "correlation_id")
-		if strings.TrimSpace(correlationID) == "" {
-			correlationID = uuid.NewString()
+		mt.correlationID, _ = stringArg(mt.args, "correlation_id")
+		if strings.TrimSpace(mt.correlationID) == "" {
+			mt.correlationID = uuid.NewString()
 		}
 		// FR-131 (M3, fail-closed default): an omitted/absent authority tag
 		// defaults to owner_required. FR-139's runtime content-based upgrade
@@ -601,61 +644,61 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 		// only the mandatory fail-closed default a Phase-2 caller layers the
 		// upgrade heuristic on top of.
 		authority := generated.SessionMessageQuestionAuthority("owner_required")
-		if a, ok := stringArg(args, "authority"); ok && a == "self_ok" {
+		if a, ok := stringArg(mt.args, "authority"); ok && a == "self_ok" {
 			authority = generated.SessionMessageQuestionAuthority("self_ok")
 		}
 		v := generated.SessionMessageQuestion{
-			MessageId:       messageID,
-			SessionId:       childSessionID,
-			ParentSessionId: parentSessionID,
-			CreatedAt:       now,
+			MessageId:       mt.messageID,
+			SessionId:       mt.childSessionID,
+			ParentSessionId: mt.parentSessionID,
+			CreatedAt:       mt.now,
 			Depth:           1,
 			UntrustedOrigin: true,
-			SenderIdentity:  rec.AgentID,
-			Text:            t.filterText(text),
+			SenderIdentity:  mt.rec.AgentID,
+			Text:            mt.t.filterText(text),
 			Wait:            wait,
-			CorrelationId:   correlationID,
+			CorrelationId:   mt.correlationID,
 			Authority:       &authority,
 		}
-		if encodeErr := sm.FromSessionMessageQuestion(v); encodeErr != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode question: %v", encodeErr))
+		if encodeErr := mt.sm.FromSessionMessageQuestion(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode question: %v", encodeErr)), true
 		}
-		waitParks = wait
+		mt.waitParks = wait
 
 	case "handback":
-		mode, _ := stringArg(args, "mode")
+		mode, _ := stringArg(mt.args, "mode")
 		switch mode {
 		case "final", "pause":
 		default:
-			return ErrorResult(`mode is required for kind=handback and must be "final" or "pause"`)
+			return ErrorResult(`mode is required for kind=handback and must be "final" or "pause"`), true
 		}
-		resultSoFar, _ := stringArg(args, "result_so_far")
-		artifacts, aerr := stringSliceArg(args, "artifacts")
+		resultSoFar, _ := stringArg(mt.args, "result_so_far")
+		artifacts, aerr := stringSliceArg(mt.args, "artifacts")
 		if aerr != nil {
-			return ErrorResult(aerr.Error())
+			return ErrorResult(aerr.Error()), true
 		}
-		openQuestions, oerr := stringSliceArg(args, "open_questions")
+		openQuestions, oerr := stringSliceArg(mt.args, "open_questions")
 		if oerr != nil {
-			return ErrorResult(oerr.Error())
+			return ErrorResult(oerr.Error()), true
 		}
 		filteredOQ := make([]string, len(openQuestions))
 		for i, q := range openQuestions {
-			filteredOQ[i] = t.filterText(q)
+			filteredOQ[i] = mt.t.filterText(q)
 		}
 		v := generated.SessionMessageHandback{
-			MessageId:       messageID,
-			SessionId:       childSessionID,
-			ParentSessionId: parentSessionID,
-			CreatedAt:       now,
+			MessageId:       mt.messageID,
+			SessionId:       mt.childSessionID,
+			ParentSessionId: mt.parentSessionID,
+			CreatedAt:       mt.now,
 			Depth:           1,
 			UntrustedOrigin: true,
-			SenderIdentity:  rec.AgentID,
+			SenderIdentity:  mt.rec.AgentID,
 			Mode:            generated.SessionMessageHandbackMode(mode),
-			ResultSoFar:     t.filterText(resultSoFar),
+			ResultSoFar:     mt.t.filterText(resultSoFar),
 			// Security-MINOR-1: artifacts are path-like fields a child could
 			// exfiltrate through (a filename carrying a secret). Route each
 			// through the same content-egress filter as free text.
-			Artifacts:     filterStringSlice(t.filterText, artifacts),
+			Artifacts:     filterStringSlice(mt.t.filterText, artifacts),
 			OpenQuestions: filteredOQ,
 		}
 		if v.Artifacts == nil {
@@ -664,52 +707,55 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 		if v.OpenQuestions == nil {
 			v.OpenQuestions = []string{}
 		}
-		if encodeErr := sm.FromSessionMessageHandback(v); encodeErr != nil {
-			return ErrorResult(fmt.Sprintf("message_parent: encode handback: %v", encodeErr))
+		if encodeErr := mt.sm.FromSessionMessageHandback(v); encodeErr != nil {
+			return ErrorResult(fmt.Sprintf("message_parent: encode handback: %v", encodeErr)), true
 		}
 
 	default:
 		return ErrorResult(fmt.Sprintf(
-			"invalid kind %q: must be one of progress, checkpoint, artifact, blocker, question, handback", kind,
-		))
+			"invalid kind %q: must be one of progress, checkpoint, artifact, blocker, question, handback", mt.kind,
+		)), true
 	}
+	return nil, false
+}
 
-	appendResult, err := t.inbox.Append(ownerKey, sm)
-	if err != nil {
+// finishDelivery checks delivery, performs follow-up bookkeeping, and returns the response.
+func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
+	if mt.err != nil {
 		// Never-silent-drop (FR-125): every rejection surfaces to the child
 		// as a clear tool error.
-		return ErrorResult(fmt.Sprintf("message_parent: %v", err)).WithError(err)
+		return ErrorResult(fmt.Sprintf("message_parent: %v", mt.err)).WithError(mt.err)
 	}
 
-	if waitParks {
-		if perr := t.parkNeedsInput(childSessionID, correlationID, now); perr != nil {
+	if mt.waitParks {
+		if perr := mt.t.parkNeedsInput(mt.childSessionID, mt.correlationID, mt.now); perr != nil {
 			return ErrorResult(fmt.Sprintf("message_parent: question accepted but failed to park session: %v", perr)).WithError(perr)
 		}
 	}
 
-	if t.waker != nil && messageParentWakeableKinds[kind] && !appendResult.Deduped {
-		wakeContent := summarizeForWake(kind, sm)
-		if werr := t.waker.WakeParent(ctx, kind, MessageParentWakeEvent{
-			Channel:             rec.OriginChannel,
-			ChatID:              rec.OriginChatID,
-			AgentID:             rec.AgentID,
-			TranscriptSessionID: childSessionID,
+	if mt.t.waker != nil && messageParentWakeableKinds[mt.kind] && !mt.appendResult.Deduped {
+		wakeContent := summarizeForWake(mt.kind, mt.sm)
+		if werr := mt.t.waker.WakeParent(mt.ctx, mt.kind, MessageParentWakeEvent{
+			Channel:             mt.rec.OriginChannel,
+			ChatID:              mt.rec.OriginChatID,
+			AgentID:             mt.rec.AgentID,
+			TranscriptSessionID: mt.childSessionID,
 			Content:             wakeContent,
 		}); werr != nil {
 			// Best-effort: the message is already durably stored; a wake
 			// failure/suppression must never fail the tool call itself.
-			logMessageParentWakeFailure(kind, werr)
+			logMessageParentWakeFailure(mt.kind, werr)
 		}
 	}
 
-	resp := generated.MessageParentResponse{Accepted: true, MessageId: &appendResult.MessageID}
-	if correlationID != "" {
-		resp.CorrelationId = &correlationID
+	resp := generated.MessageParentResponse{Accepted: true, MessageId: &mt.appendResult.MessageID}
+	if mt.correlationID != "" {
+		resp.CorrelationId = &mt.correlationID
 	}
 	payload, merr := json.Marshal(resp)
 	var result *ToolResult
 	if merr != nil {
-		result = NewToolResult(fmt.Sprintf("message_parent: accepted (message_id=%s)", appendResult.MessageID))
+		result = NewToolResult(fmt.Sprintf("message_parent: accepted (message_id=%s)", mt.appendResult.MessageID))
 	} else {
 		result = NewToolResult(string(payload))
 	}
@@ -720,7 +766,7 @@ func (t *MessageParentTool) Execute(ctx context.Context, args map[string]any) *T
 	// success path. Without this flag the in-memory turn loop has no way to
 	// learn its own session was just durably parked into needs_input and
 	// keeps iterating past it (the exact defect this fix closes).
-	if waitParks {
+	if mt.waitParks {
 		result.ParksTurn = true
 	}
 	return result
