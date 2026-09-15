@@ -286,22 +286,3 @@ func TestLoadConfigWithStoreAndSelfHealHook_NoCLIMigration_HookNotInvoked(t *tes
 	require.NoError(t, err)
 	assert.False(t, hookCalled, "onSelfHeal must not fire when nothing needed migrating")
 }
-
-// TestVerifyTokenAgainst_MatchesCLITokenSlot proves the extracted
-// VerifyTokenAgainst helper works directly against a Gateway.CLIToken slot
-// (a single *TokenEntry, not a UserConfig) — the shape pkg/gateway's
-// auth/websocket CLI-token check is expected to use.
-func TestVerifyTokenAgainst_MatchesCLITokenSlot(t *testing.T) {
-	hash := hashFull(t, "supersecretclitoken")
-
-	cliToken := TokenEntry{ID: "cli01", Hash: hash}
-
-	err := VerifyTokenAgainst([]TokenEntry{cliToken}, BcryptHash(""), "supersecretclitoken")
-	assert.NoError(t, err, "correct raw token must verify against the CLIToken slot")
-
-	err = VerifyTokenAgainst([]TokenEntry{cliToken}, BcryptHash(""), "wrong-token")
-	assert.Error(t, err, "incorrect raw token must fail verification")
-
-	err = VerifyTokenAgainst(nil, BcryptHash(""), "supersecretclitoken")
-	assert.ErrorIs(t, err, ErrNoHashSet, "an empty token set must report ErrNoHashSet")
-}

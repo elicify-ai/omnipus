@@ -29,38 +29,6 @@ func hashFull(t *testing.T, raw string) BcryptHash {
 	return BcryptHash(h)
 }
 
-func TestTokenIDFromRaw(t *testing.T) {
-	cases := map[string]string{
-		"omnipus_deadbeef_aabbccdd": "deadbeef", // id-tagged
-		"omnipus_aabbccdd":          "",         // legacy single-segment
-		"omnipus_":                  "",         // degenerate
-		"random-token":              "",         // non-omnipus
-		"":                          "",
-	}
-	for raw, want := range cases {
-		if got := TokenIDFromRaw(raw); got != want {
-			t.Errorf("TokenIDFromRaw(%q) = %q, want %q", raw, got, want)
-		}
-	}
-}
-
-func TestTokenSecret(t *testing.T) {
-	// ID-tagged token: secret is the body only.
-	if got := TokenSecret("omnipus_deadbeef_aabbcc"); got != "aabbcc" {
-		t.Errorf("TokenSecret(id-tagged) = %q, want %q", got, "aabbcc")
-	}
-	// Legacy token: secret is the whole string.
-	if got := TokenSecret("omnipus_aabbcc"); got != "omnipus_aabbcc" {
-		t.Errorf("TokenSecret(legacy) = %q, want whole", got)
-	}
-	// The bcrypt input must stay <= 72 bytes for a real-sized token.
-	full := "omnipus_deadbeef_" + // 17 bytes prefix+id+sep
-		"00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff" // 64 hex
-	if n := len(TokenSecret(full)); n != 64 {
-		t.Errorf("TokenSecret body length = %d, want 64 (must be <=72 for bcrypt)", n)
-	}
-}
-
 // TestVerifyToken_IDIndexedMatch proves the fast path: an ID-tagged token is
 // verified against the matching set entry.
 func TestVerifyToken_IDIndexedMatch(t *testing.T) {

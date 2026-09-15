@@ -28,8 +28,6 @@ import (
 	"time"
 
 	"github.com/caarlos0/env/v11"
-	"golang.org/x/crypto/bcrypt"
-
 	"github.com/elicify-ai/omnipus/pkg"
 	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -273,68 +271,6 @@ type OmnipusRetentionConfig struct {
 	// agent. 0 = use default (30 days). Used by MemoryStore.SweepRetros.
 	// Spec v7 FR-034.
 	MemoryRetrosDays int `json:"memory_retros_days,omitempty"`
-}
-
-// RetentionSessionDays returns the configured session retention days, defaulting to 90.
-func (r OmnipusRetentionConfig) RetentionSessionDays() int {
-	if r.SessionDays <= 0 {
-		return 90
-	}
-	return r.SessionDays
-}
-
-// IsDisabled reports whether retention enforcement is entirely suppressed (keep forever).
-func (r OmnipusRetentionConfig) IsDisabled() bool { return r.Disabled }
-
-// RetentionMemoryRetrosDays returns the configured retro retention, defaulting
-// to 180. Retrospecives outlive their transcripts (session default is 90 days)
-// so reflections remain queryable long after the raw transcript is swept.
-// Spec v7 FR-034 — used by MemoryStore.SweepRetros and the recall search
-// window for retrospectives.
-func (r OmnipusRetentionConfig) RetentionMemoryRetrosDays() int {
-	if r.MemoryRetrosDays <= 0 {
-		return 180
-	}
-	return r.MemoryRetrosDays
-}
-
-// RetentionMode summarizes the (session_days, disabled) pair into one of
-// three operator-facing states. Use Mode() on OmnipusRetentionConfig to
-// derive it; the underlying struct fields remain the authoritative
-// storage shape for backward compatibility (see
-// TestRetention_ZeroSessionDaysStillMeansDefault90).
-type RetentionMode int
-
-const (
-	RetentionDefault RetentionMode = iota // session_days <= 0 && !Disabled
-	RetentionCustom                       // session_days > 0 && !Disabled
-	RetentionForever                      // Disabled == true
-)
-
-// String returns a lowercase stable label ("default" / "custom" / "forever").
-// Used by log lines and by TS consumers via the wire.
-func (m RetentionMode) String() string {
-	switch m {
-	case RetentionCustom:
-		return "custom"
-	case RetentionForever:
-		return "forever"
-	default:
-		return "default"
-	}
-}
-
-// Mode classifies the retention config into one of three states.
-// Disabled takes precedence over SessionDays — setting disabled: true with
-// session_days: 99 still means "forever".
-func (r OmnipusRetentionConfig) Mode() RetentionMode {
-	if r.Disabled {
-		return RetentionForever
-	}
-	if r.SessionDays > 0 {
-		return RetentionCustom
-	}
-	return RetentionDefault
 }
 
 // OmnipusCompactionConfig holds context compression settings per Appendix E §E.5.3.
@@ -628,224 +564,6 @@ func shouldLogExplicitCeilingWarn(now time.Time) bool {
 // answer to "what if the gate is wrong", not the operating point.
 const physicalConcurrencySafetyCeiling = 2000
 
-// memorySignal is one determinable (available, total) reading of this
-// host's memory. Two sources can produce one — the kernel's own host-wide
-// figures and the process's cgroup limit — and either, both, or neither may
-// be determinable at any moment.
-type memorySignal struct {
-	available uint64
-	total     uint64
-}
-
-// memorySignals returns every DETERMINABLE memory signal, in no particular
-// order. An empty slice means this host's memory cannot be measured at all:
-// a Windows host (no reader exists), a BSD host (no reader exists), or a
-// Linux host whose /proc/meminfo is unreadable (gVisor, distroless, a
-// hardened seccomp profile). That is a first-class answer, not an error, and
-// it is the ONLY thing that makes the two-valued accessors below report
-// ok=false.
-//
-// The two sources:
-//
-//  1. The host-wide reading — /proc/meminfo's MemAvailable and MemTotal on
-//     Linux, an assembled sysctl approximation on Darwin. Accounts for
-//     reclaimable page cache (unlike MemFree).
-//  2. The process's cgroup memory limit and the headroom under it
-//     (readCgroupMemoryBudgetBytes), when a finite limit is configured —
-//     common in containerized deployments (Docker, Fly Machines,
-//     Kubernetes), where the limit is frequently far tighter than the host's
-//     own total memory and is a STABLE, explicitly configured ceiling rather
-//     than a live kernel heuristic.
-//
-// Both are collected because they answer DIFFERENT questions and a caller
-// wants the tighter answer to each. Critically (FR-079), an undeterminable
-// signal is OMITTED rather than contributed as a zero: the previous code
-// compared a cgroup reading against a host-wide reading that had silently
-// fabricated 4 GB when /proc/meminfo was unreadable, so on a /proc-less
-// container the invented number could win the comparison and discard the one
-// signal that was real.
-func memorySignals() []memorySignal {
-	var out []memorySignal
-	if avail, ok := readMemAvailableBytes(); ok {
-		if total, ok := readMemTotalBytes(); ok && total > 0 {
-			out = append(out, memorySignal{available: avail, total: total})
-		}
-	}
-	if avail, limit, ok := cgroupBudgetProvider(); ok && limit > 0 {
-		out = append(out, memorySignal{available: avail, total: limit})
-	}
-	return out
-}
-
-// availableRAMBytes returns the current best estimate of memory available
-// for starting new work, in bytes, and whether that estimate could be made
-// at all.
-//
-// It is the MINIMUM over the DETERMINABLE signals only (FR-079), so a tight
-// container limit is never exceeded by trusting an unconstrained host-wide
-// reading, and an unreadable host-wide reading never discards a real cgroup
-// one. ok is false when NEITHER signal is determinable — never when one is
-// merely tighter than the other.
-//
-// Known limitation, accepted deliberately: MemAvailable can under-report for
-// a period after a fresh boot/container start before the page-cache
-// subsystem has warmed up (observed live: 28 MB measured on a box that
-// settled at ~370 MB once warm — docs/internal/uat/
-// max-parallel-concurrency-gap-2026-07-31.md G4, cross-referenced against
-// parallelism-cost-measurement-2026-08-04.md's clean-idle baseline). This is
-// NOT "solved" by re-sampling with a short in-process delay at boot — the
-// warm-up lag observed is tied to the box's actual workload history, not
-// milliseconds, so a boot-time retry loop would not reliably help and would
-// only delay every gateway boot for no real benefit. Instead, this value is
-// deliberately never frozen at boot for any live caller: every production
-// call site re-reads it at the moment of admission, so a transient low
-// boot-time reading self-corrects as soon as the host's real availability
-// changes, with no operator action required.
-func availableRAMBytes() (uint64, bool) {
-	signals := memorySignals()
-	if len(signals) == 0 {
-		return 0, false
-	}
-	tightest := signals[0].available
-	for _, sig := range signals[1:] {
-		if sig.available < tightest {
-			tightest = sig.available
-		}
-	}
-	return tightest, true
-}
-
-// memoryPressureRatioThreshold is THE threshold. Singular, deliberately.
-//
-// Every admission consumer in this process — the browser pool at launch and
-// at every tab open, agent admission on the delegation path — asks the same
-// question of the same numbers through MemoryPressureHigh, and this is the
-// number it compares against. A second threshold constant anywhere would
-// re-create the exact defect this work exists to remove: two mechanisms
-// disagreeing about one machine, each individually defensible, together
-// incoherent.
-//
-// 0.85 means "85% of the memory budget is in non-reclaimable use". Under a
-// cgroup limit that is memory.current-minus-reclaimable over memory.max —
-// i.e. the ratio the browser-pool spec names directly. Off a cgroup it is
-// the same shape against the host-wide figures. The value leaves roughly a
-// seventh of the budget as headroom, which on any host large enough to run
-// a browser at all is more than one Chrome's measured launch cost.
-const memoryPressureRatioThreshold = 0.85
-
-// MemoryPressureHigh reports whether this host is above
-// memoryPressureRatioThreshold, and whether that could be determined.
-//
-// THIS IS THE SHARED SEAM (FR-068). It is the one accessor and the one
-// threshold every consumer reads; sameness between the browser pool and
-// agent admission is a property of them calling this function, not of them
-// happening to compute equal answers. Test seams that stub memory do so by
-// replacing this function's provider (see SetMemoryProviderForTest), which
-// is what lets one stub drive both consumers in one test body.
-//
-// The two return values mean different things and must not be collapsed:
-//
-//   - (false, true) — measured, and there is headroom. Admit.
-//   - (true, true)  — measured, and the host is under pressure. Refuse to
-//     grow. This is a HARD stop, not a hint.
-//   - (_, false)    — this host's memory cannot be measured at all. Each
-//     consumer takes its own documented unmeasurable-host branch. Neither
-//     refuses to RUN; both refuse to GROW past a conservative floor.
-//
-// The ratio is computed per determinable signal and the WORST (highest) is
-// returned, matching availableRAMBytes taking the tightest available figure:
-// a container at 90% of its cgroup limit is under pressure even if the host
-// it sits on is idle.
-func MemoryPressureHigh() (high bool, ok bool) {
-	WarnOnMemoryMechanismFirstUse()
-	return memoryProvider()
-}
-
-// AvailableMemoryBytes is the exported two-valued live-memory accessor:
-// bytes of headroom, and whether that could be determined at all.
-//
-// Callers wanting a yes/no admission decision should use MemoryPressureHigh
-// instead — it carries the one shared threshold, so a caller that compares
-// this figure against a threshold of its own has quietly created the second
-// mechanism. This exists for callers that need an absolute figure, notably
-// the browser pool's per-launch headroom check (does this host have room for
-// one more Chrome), which is a bytes question and not a ratio question.
-func AvailableMemoryBytes() (uint64, bool) {
-	WarnOnMemoryMechanismFirstUse()
-	return availableMemoryProvider()
-}
-
-// cgroupBudgetProvider is the cgroup-signal seam. Package-level and
-// cross-platform (unlike cgroupRoot, which only exists on Linux) so a test can
-// control or forbid the cgroup reading on any platform — notably to prove the
-// containerisation predicate never consults it.
-var cgroupBudgetProvider = readCgroupMemoryBudgetBytes
-
-// SetCgroupBudgetProviderForTest replaces the cgroup memory-limit reader for
-// the duration of a test and returns a restore function. Exported because the
-// FR-076 independence property — containerisation is detected WITHOUT reading
-// the limit — is only assertable by making the reader fail loudly if touched.
-func SetCgroupBudgetProviderForTest(fn func() (uint64, uint64, bool)) func() {
-	prev := cgroupBudgetProvider
-	cgroupBudgetProvider = fn
-	return func() { cgroupBudgetProvider = prev }
-}
-
-// memoryProvider and availableMemoryProvider are the injection seam. They
-// are package-level vars, following the same pattern as procMeminfoPath and
-// cgroupRoot in this package, purely so a test can drive every consumer of
-// the memory mechanism off ONE stub and assert they behave identically at
-// the seam rather than inferring sameness from equal outcomes. Production
-// code never reassigns them.
-var (
-	memoryProvider          = liveMemoryPressureHigh
-	availableMemoryProvider = availableRAMBytes
-)
-
-// liveMemoryPressureHigh is MemoryPressureHigh's real implementation.
-func liveMemoryPressureHigh() (bool, bool) {
-	signals := memorySignals()
-	if len(signals) == 0 {
-		return false, false
-	}
-	worst := 0.0
-	for _, sig := range signals {
-		if sig.total == 0 {
-			continue
-		}
-		var used float64
-		if sig.available < sig.total {
-			used = float64(sig.total-sig.available) / float64(sig.total)
-		}
-		if used > worst {
-			worst = used
-		}
-	}
-	return worst > memoryPressureRatioThreshold, true
-}
-
-// SetMemoryProviderForTest replaces BOTH memory accessors with stubs for the
-// duration of a test and returns a restore function. Exported because the
-// consumers under test live in other packages (pkg/agent, pkg/tools/browser)
-// and the whole point of the seam is that one stub drives all of them.
-//
-// It is a test helper in a production file for the same reason
-// procMeminfoPath is a var: the alternative is threading an interface
-// through every admission call site, which is a much larger change to make
-// one property assertable.
-func SetMemoryProviderForTest(pressure func() (bool, bool), available func() (uint64, bool)) func() {
-	prevPressure, prevAvailable := memoryProvider, availableMemoryProvider
-	if pressure != nil {
-		memoryProvider = pressure
-	}
-	if available != nil {
-		availableMemoryProvider = available
-	}
-	return func() {
-		memoryProvider, availableMemoryProvider = prevPressure, prevAvailable
-	}
-}
-
 type HooksConfig struct {
 	Enabled   bool                         `json:"enabled"`
 	Defaults  HookDefaultsConfig           `json:"defaults,omitempty"`
@@ -978,44 +696,6 @@ type AgentModelConfig struct {
 	Provider string `json:"provider,omitempty"`
 }
 
-func (m *AgentModelConfig) UnmarshalJSON(data []byte) error {
-	var s string
-	if err := json.Unmarshal(data, &s); err == nil {
-		m.Primary = s
-		m.Fallbacks = nil
-		m.Provider = ""
-		return nil
-	}
-	type raw struct {
-		Primary   string   `json:"primary"`
-		Fallbacks []string `json:"fallbacks"`
-		Provider  string   `json:"provider"`
-	}
-	var r raw
-	if err := json.Unmarshal(data, &r); err != nil {
-		return err
-	}
-	m.Primary = r.Primary
-	m.Fallbacks = r.Fallbacks
-	m.Provider = r.Provider
-	return nil
-}
-
-func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
-	// Emit the bare-string form only when there is nothing but a primary slug —
-	// no fallbacks and no explicit provider. Once Provider is set the object form
-	// is required so the routing key round-trips (O3).
-	if len(m.Fallbacks) == 0 && m.Provider == "" && m.Primary != "" {
-		return json.Marshal(m.Primary)
-	}
-	type raw struct {
-		Primary   string   `json:"primary,omitempty"`
-		Fallbacks []string `json:"fallbacks,omitempty"`
-		Provider  string   `json:"provider,omitempty"`
-	}
-	return json.Marshal(raw(m))
-}
-
 // AgentModelParams holds per-agent LLM sampling parameter overrides
 // (contracts/components/schemas/AgentUpdateRequest.yaml's `model_params`).
 // Every field is a pointer so nil distinguishes "caller never set this" from
@@ -1069,190 +749,6 @@ type FallbackModel struct {
 // {Model: <string>, Provider: ""} at unmarshal time; the empty Provider is
 // filled in by NormalizeFallbacks after the parent *Config is available.
 type FallbackModelSlice []FallbackModel
-
-// UnmarshalJSON decodes either form (FR-005 + FR-006).
-//
-// Examples accepted:
-//   - ["claude-sonnet-4.6", "gpt-4o-mini"]
-//   - [{"model":"claude-sonnet-4.6","provider":"anthropic"}]
-//   - ["openrouter/foo", {"model":"claude-sonnet-4.6","provider":"anthropic"}]
-//
-// Empty / missing / null decodes to a nil slice (semantically identical to
-// "no fallback configured").
-func (f *FallbackModelSlice) UnmarshalJSON(data []byte) error {
-	if len(data) == 0 || string(data) == "null" {
-		*f = nil
-		return nil
-	}
-
-	// 1) Try the homogeneous []FallbackModel form first.
-	var objs []FallbackModel
-	if err := json.Unmarshal(data, &objs); err == nil {
-		*f = objs
-		return nil
-	}
-
-	// 2) Try []string for the legacy wire form.
-	var legacy []string
-	if err := json.Unmarshal(data, &legacy); err == nil {
-		out := make(FallbackModelSlice, len(legacy))
-		for i, s := range legacy {
-			out[i] = FallbackModel{Model: s}
-		}
-		*f = out
-		return nil
-	}
-
-	// 3) Mixed form: an array of either strings or objects. Walk element by
-	// element so we preserve order in a mixed legacy + new payload.
-	var raw []json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("fallback_models must be a JSON array of strings or {model, provider} objects: %w", err)
-	}
-	out := make(FallbackModelSlice, 0, len(raw))
-	for i, r := range raw {
-		var s string
-		if err := json.Unmarshal(r, &s); err == nil {
-			out = append(out, FallbackModel{Model: s})
-			continue
-		}
-		var fb FallbackModel
-		if err := json.Unmarshal(r, &fb); err != nil {
-			return fmt.Errorf("fallback_models[%d]: must be a string or an object: %w", i, err)
-		}
-		out = append(out, fb)
-	}
-	*f = out
-	return nil
-}
-
-// MarshalJSON writes the canonical object form (FR-005). Always emits
-// [{"model":"...","provider":"..."}]; the legacy string-only form is never
-// emitted on write — loaders see only the normalized object form on
-// round-trip.
-func (f FallbackModelSlice) MarshalJSON() ([]byte, error) {
-	type wire struct {
-		Model    string `json:"model"`
-		Provider string `json:"provider,omitempty"`
-	}
-	if len(f) == 0 {
-		return []byte("[]"), nil
-	}
-	out := make([]wire, len(f))
-	for i, fb := range f {
-		out[i] = wire(fb)
-	}
-	return json.Marshal(out)
-}
-
-// NormalizeFallbacks is the single entry-point used at config load to
-// resolve fallback entries that arrived without a provider field (legacy
-// strings, or empty-providers on legacy objects). The resolver mirrors the
-// chat-side `buildModelListResolver` passthrough logic: any slug that
-// matches a configured provider entry is taken verbatim; any slug that
-// doesn't match but where a passthrough provider (openrouter, vivgrid)
-// is configured is routed through the passthrough provider; otherwise the
-// entry is left with an empty provider (the resolver above will fail
-// closed at apply time).
-//
-// Order is preserved (FR-006). nil input → nil output. Already-resolved
-// entries (Provider != "") are passed through unchanged.
-//
-// Traces to: spec §11 Dataset 2 / FR-006 / FR-007.
-func NormalizeFallbacks(cfg *Config, in []FallbackModel) []FallbackModel {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make([]FallbackModel, len(in))
-	for i, fb := range in {
-		if strings.TrimSpace(fb.Model) == "" {
-			continue // drop empty entries
-		}
-		if strings.TrimSpace(fb.Provider) != "" {
-			out[i] = fb // already resolved
-			continue
-		}
-		// Legacy string entry — resolve provider.
-		out[i] = FallbackModel{
-			Model:    fb.Model,
-			Provider: resolveFallbackProvider(cfg, fb.Model),
-		}
-	}
-	return out
-}
-
-// resolveFallbackProvider picks a provider for a fallback model slug when
-// the caller didn't pin one. Mirrors the passthrough logic in
-// pkg/agent/model_resolution.go::buildModelListResolver (kept duplicated
-// here to avoid a config→agent import cycle — pkg/agent already imports
-// pkg/config).
-//
-// Resolution order (mirrors FindModelConfigBySlug's rungs):
-//  1. Exact match against any configured provider's Model (the slug)
-//     → that provider's Provider field.
-//  2. Any configured provider is a passthrough (openrouter / vivgrid) →
-//     that passthrough provider.
-//  3. Otherwise empty string (apply-time resolver will error out).
-//
-// The display-alias rung is gone with ModelConfig.ModelName (ADR-067
-// FR-013 / X-25): a row is addressed by its (provider, model) pair.
-//
-// Step 3 cannot call providers.IsPassthroughProvider directly — pkg/providers
-// already imports pkg/config, so the reverse direction would be a cycle. The
-// check below mirrors that helper's passthrough-name list, but the provider-id
-// comparison itself is exact after TrimSpace with no case folding (ADR-067
-// FR-036: every provider-id comparison in pkg/agent, pkg/gateway, pkg/providers
-// — and this in-package duplicate — MUST be exact). pkg/providers' own copy is
-// deliberately case-insensitive on the name (its own doc comment says so) and
-// is out of scope here; the two are no longer byte-identical by design.
-func resolveFallbackProvider(cfg *Config, slug string) string {
-	provider, _ := ResolveSlugProvider(cfg, slug)
-	return provider
-}
-
-// ResolveSlugProvider resolves the provider a bare model slug would route
-// through today, and reports whether that resolution happened only via the
-// passthrough rung (rule 3: openrouter / vivgrid). It is the exported face
-// of resolveFallbackProvider's rungs, added for ADR-068 FR-012: the
-// dependents computation in pkg/gateway (provider_dependents.go) must apply
-// the exact same rungs — an agent whose slug exact-matches a provider row is
-// a `primary` dependent, one that resolves only through rule 3 is a
-// `passthrough` dependent — so the rule lives here once and is consumed
-// there, never duplicated.
-//
-// Returns ("", false) when nothing configured can serve the slug.
-func ResolveSlugProvider(cfg *Config, slug string) (provider string, viaPassthrough bool) {
-	if cfg == nil {
-		return "", false
-	}
-	slug = strings.TrimSpace(slug)
-	if slug == "" {
-		return "", false
-	}
-
-	// 1: match against what each provider row serves.
-	for _, p := range cfg.Providers {
-		if p == nil {
-			continue
-		}
-		if strings.TrimSpace(p.Model) == slug {
-			return strings.TrimSpace(p.Provider), false
-		}
-	}
-	// 2: passthrough fallback (openrouter, vivgrid).
-	for _, p := range cfg.Providers {
-		if p == nil {
-			continue
-		}
-		provName := strings.TrimSpace(p.Provider)
-		if provName == "openrouter" || provName == "vivgrid" ||
-			strings.Contains(strings.ToLower(p.APIBase), "openrouter.ai") {
-			return provName, true
-		}
-	}
-
-	return "", false
-}
 
 type AgentConfig struct {
 	ID          string            `json:"id"`
@@ -1355,29 +851,8 @@ type AgentConfig struct {
 	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 }
 
-// MemoryEnabledEffective resolves the memory-injection flag (ADR-052
-// FR-039): a non-nil MemoryEnabled wins; nil (the field was never set)
-// resolves to true, preserving pre-FR-039 behavior for every agent that
-// doesn't opt out.
-func (a AgentConfig) MemoryEnabledEffective() bool {
-	return a.MemoryEnabled == nil || *a.MemoryEnabled
-}
-
 // AgentType classifies an agent for scope-based tool visibility filtering.
 type AgentType string
-
-const (
-	AgentTypeSystem AgentType = "system"
-	AgentTypeCore   AgentType = "core"
-	AgentTypeCustom AgentType = "custom"
-	// AgentTypeWorker is a sub-agent worker: a depth-limited, ephemeral labor
-	// tier invoked ONLY via delegation. A worker is NOT a chat target (it never
-	// receives inbound channel messages and is never resolved as the default
-	// agent), has no heartbeat, and cannot be marked as the routing default.
-	// Workers carry an Executor (Subagents.Executor) selecting native /
-	// external-cli / remote-a2a. "A tool you point at work, not a colleague."
-	AgentTypeWorker AgentType = "worker"
-)
 
 // AgentShellPolicy configures per-agent shell command deny patterns for the
 // workspace.shell tool. It is stored on AgentConfig so
@@ -1434,92 +909,6 @@ type AgentMCPServerBinding struct {
 	Tools []string `json:"tools,omitempty"` // empty or ["*"] = all tools from that server
 }
 
-// ResolveType returns the effective agent type. If the Type field is set, it is
-// returned directly. Otherwise the type is inferred: known core agent IDs →
-// AgentTypeCore; everything else → AgentTypeCustom. The caller must provide
-// isCoreAgent to avoid an import cycle with the coreagent package.
-func (a AgentConfig) ResolveType(isCoreAgent func(string) bool) AgentType {
-	if a.Type != "" {
-		return a.Type
-	}
-	if isCoreAgent != nil && isCoreAgent(a.ID) {
-		return AgentTypeCore
-	}
-	return AgentTypeCustom
-}
-
-// IsWorker reports whether this agent is a sub-agent worker (Type==worker).
-//
-// Worker is an EXPLICIT classification — it is only ever set via the Type field
-// (workers are not inferred from an ID list), so the check does not need the
-// isCoreAgent resolver and is safe to call without it. A worker is a
-// delegation-only labor tier: never a chat target, never the routing default,
-// no heartbeat. See AgentTypeWorker.
-func (a AgentConfig) IsWorker() bool {
-	return a.Type == AgentTypeWorker
-}
-
-// IsSystem reports whether this agent is a System Agent (Type==system, ADR-049
-// D3) — a seeded, locked, non-privileged internal-LLM agent (e.g. the Judge)
-// that executes as a no-tools structured call. System Agents are NOT chat
-// targets and are excluded from default-fallback, routing bindings, delegation
-// pickers, and team rosters. Like IsWorker, this is an EXPLICIT classification
-// carried only via the Type field (System Agents are never inferred from an ID
-// list), so the check is safe to call without the isCoreAgent resolver.
-func (a AgentConfig) IsSystem() bool {
-	return a.Type == AgentTypeSystem
-}
-
-// IsChatTarget reports whether this agent may receive inbound channel messages
-// and be resolved as the default/routing agent. Every agent kind is a chat
-// target EXCEPT a worker and a System Agent. Routing (resolveDefaultAgentID,
-// first-enabled fallback) and the default-agent setter/repair use this to
-// exclude workers; System Agents are excluded for the same reason (ADR-049 D3):
-// the Judge is an out-of-turn internal-LLM agent, never a live persona a user
-// can address.
-func (a AgentConfig) IsChatTarget() bool {
-	return !a.IsWorker() && !a.IsSystem()
-}
-
-// IsExternalCLIWorker reports whether this agent is a subagent_3p — a worker
-// that delegates to an external CLI tool (claude-code, codex, opencode, …)
-// rather than running on the native Omnipus agent engine.
-//
-// The predicate is true when BOTH conditions hold:
-//  1. Type == AgentTypeWorker (IsWorker() is true).
-//  2. Subagents.Executor.Kind == ExecutorKindExternalCLI ("external-cli").
-//
-// Subagent_3p agents run on a separate engine and their token usage is not
-// tracked through Omnipus's provider layer, so they must be excluded from
-// token aggregation reports.  This is the single authoritative implementation;
-// both rest_stats.go and the get_usage sysagent tool delegate to it via
-// (*Config).IsExternalCLIWorkerID.
-func (a AgentConfig) IsExternalCLIWorker() bool {
-	return a.IsWorker() &&
-		a.Subagents != nil &&
-		a.Subagents.Executor != nil &&
-		a.Subagents.Executor.Kind == ExecutorKindExternalCLI
-}
-
-// IsExternalCLIWorkerID reports whether the agent with the given ID is a
-// subagent_3p (external CLI worker).  Returns false when agentID is empty,
-// when cfg is nil, or when no agent with that ID exists in the config list.
-//
-// This is the lookup variant used by callers that have a *Config and an agent
-// ID string (rest_stats.go, the get_usage sysagent tool) so that neither
-// caller needs to inline the two-condition predicate.
-func (c *Config) IsExternalCLIWorkerID(agentID string) bool {
-	if c == nil || agentID == "" {
-		return false
-	}
-	for i := range c.Agents.List {
-		if c.Agents.List[i].ID == agentID {
-			return c.Agents.List[i].IsExternalCLIWorker()
-		}
-	}
-	return false
-}
-
 // DelegationMode is the mode in which delegation is allowed.
 // "await" = synchronous subagent (blocks caller).
 // "background" = async spawn (caller continues).
@@ -1532,25 +921,6 @@ const (
 	DelegationModeTask       DelegationMode = "task"
 )
 
-// AgentRefKind enumerates the legal values for AgentRef.Kind.
-//
-// AgentRef.Validate() checks a non-empty value against this set, but ADR-037
-// removed AgentRef's last production caller (AgentConfig.DelegationPolicy /
-// AgentDefaults.DelegationPolicy no longer exist, and nothing else in the
-// runtime constructs a user-supplied AgentRef) — Validate now has no
-// production caller at all; it is exercised only by TestAgentRef_Validate.
-// AgentRef itself survives as coreagent's compile-time seed-DTO shape
-// (config.DelegationPolicy.To — see coreagent.SeedDelegationEdges), which is
-// hardcoded Go data, not user input, so there is nothing left to validate at
-// load time.
-const (
-	// AgentRefKindLocal resolves the ref by id within the running instance.
-	AgentRefKindLocal = "local"
-	// AgentRefKindRemoteA2A is reserved for the future A2A protocol; the kind is
-	// accepted by validation but not enforced/dispatched in v0.1.0.
-	AgentRefKindRemoteA2A = "remote-a2a"
-)
-
 // AgentRef is an agent reference used in delegation policy targets.
 // Kind is currently "local" (resolved by id within the instance) or
 // "remote-a2a" (reserved for future A2A protocol; not enforced in v0.1.0).
@@ -1558,27 +928,6 @@ const (
 type AgentRef struct {
 	Kind string `json:"kind"` // "local" or "remote-a2a"
 	ID   string `json:"id"`
-}
-
-// Validate rejects a non-empty AgentRef.Kind that is outside the known set.
-// An empty Kind is accepted for back-compat: callers default an absent kind to
-// "local". Only a present-but-unknown value (a typo) is an error, so it fails
-// loudly rather than silently downgrading routing.
-//
-// The Kind is canonicalized (lowercased + trimmed) BEFORE the membership check
-// so Validate accepts exactly what the API write path and route.go accept —
-// both normalize the kind the same way. Validating the raw value would reject a
-// mixed-case/whitespace payload (e.g. {"kind":"Local"}) that the API gate let
-// through and that routes fine, bricking the very next config load. Genuinely-
-// unknown values (e.g. "robot") are still rejected.
-func (r AgentRef) Validate() error {
-	switch strings.ToLower(strings.TrimSpace(r.Kind)) {
-	case "", AgentRefKindLocal, AgentRefKindRemoteA2A:
-		return nil
-	default:
-		return fmt.Errorf("invalid agent ref kind %q (want %q or %q)",
-			r.Kind, AgentRefKindLocal, AgentRefKindRemoteA2A)
-	}
 }
 
 // DelegationPolicy is a plain seed DTO for a core agent's bootstrap delegation
@@ -1616,18 +965,6 @@ type DelegationPolicy struct {
 //     schema for forward-compatibility, rejected at dispatch in v0.1.0.
 type ExecutorKind string
 
-const (
-	// ExecutorKindNative is the default: sub-agent runs inside the Omnipus agent loop.
-	ExecutorKindNative ExecutorKind = "native"
-	// ExecutorKindExternalCLI drives an external CLI agent (claude-code, codex,
-	// opencode) over a JSON-streaming subprocess. ACTIVE in v0.1.0: dispatch resolves
-	// it to runner.DispatchKindExternalCLI and runs it worktree-isolated under the
-	// CLI's own sandbox (consent best-effort post-hoc — see consent.go).
-	ExecutorKindExternalCLI ExecutorKind = "external-cli"
-	// ExecutorKindRemoteA2A is reserved. Accepted in schema; rejected at dispatch in v0.1.0.
-	ExecutorKindRemoteA2A ExecutorKind = "remote-a2a"
-)
-
 // ExecutorConfig specifies how a sub-agent's tasks are executed.
 // When nil (the default), behavior is identical to Kind="native".
 //
@@ -1658,14 +995,6 @@ type ExecutorConfig struct { // not-wire-format
 	// values are passed safely; warn (but do not reject) on shell-injection
 	// chars in the value (per agent-form spec §4.19 / W3).
 	CLIArgs string `json:"cli_args,omitempty"`
-}
-
-// EffectiveKind returns the ExecutorKind with nil-safe defaulting to native.
-func (ec *ExecutorConfig) EffectiveKind() ExecutorKind {
-	if ec == nil || ec.Kind == "" {
-		return ExecutorKindNative
-	}
-	return ec.Kind
 }
 
 type SubagentsConfig struct {
@@ -1913,44 +1242,6 @@ type AgentDefaults struct {
 	RecapFallbackModels FallbackModelSlice `json:"recap_fallback_models,omitempty"`
 }
 
-// GetIdleTimeoutMinutes returns the idle timeout, defaulting to 30.
-func (d *AgentDefaults) GetIdleTimeoutMinutes() int {
-	if d.IdleTimeoutMinutes <= 0 {
-		return 30
-	}
-	return d.IdleTimeoutMinutes
-}
-
-// GetBootstrapRecapMaxPerMinute returns the rate limit, defaulting to 5.
-func (d *AgentDefaults) GetBootstrapRecapMaxPerMinute() int {
-	if d.BootstrapRecapMaxPerMinute <= 0 {
-		return 5
-	}
-	return d.BootstrapRecapMaxPerMinute
-}
-
-const DefaultMaxMediaSize = 20 * 1024 * 1024 // 20 MB
-
-func (d *AgentDefaults) GetMaxMediaSize() int {
-	if d.MaxMediaSize > 0 {
-		return d.MaxMediaSize
-	}
-	return DefaultMaxMediaSize
-}
-
-// GetToolFeedbackMaxArgsLength returns the max args preview length for tool feedback messages.
-func (d *AgentDefaults) GetToolFeedbackMaxArgsLength() int {
-	if d.ToolFeedback.MaxArgsLength > 0 {
-		return d.ToolFeedback.MaxArgsLength
-	}
-	return 300
-}
-
-// IsToolFeedbackEnabled returns true when tool feedback messages should be sent to the chat.
-func (d *AgentDefaults) IsToolFeedbackEnabled() bool {
-	return d.ToolFeedback.Enabled
-}
-
 // DefaultModel is the persisted (provider, model) pair at
 // agents.defaults.default_model — the shape of contract DefaultModel.yaml
 // minus the window fields ADR-066's ResolveWindow projects onto the GET body.
@@ -1962,23 +1253,6 @@ func (d *AgentDefaults) IsToolFeedbackEnabled() bool {
 type DefaultModel struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
-}
-
-// IsZero reports whether no default model is set (no model half).
-func (d DefaultModel) IsZero() bool {
-	return strings.TrimSpace(d.Model) == ""
-}
-
-// String renders the pair as "provider/model" ("model" alone when the
-// provider half is empty) for logs and error text.
-func (d DefaultModel) String() string {
-	if d.IsZero() {
-		return ""
-	}
-	if p := strings.TrimSpace(d.Provider); p != "" {
-		return p + "/" + strings.TrimSpace(d.Model)
-	}
-	return strings.TrimSpace(d.Model)
 }
 
 // ChannelIdentityKind enumerates the legal values for ChannelIdentity.Kind.
@@ -3239,120 +2513,6 @@ type UserConfig struct {
 // oldest entries are evicted (logged by the caller). Prevents an unbounded
 // token set from a long-lived account that logs in from many clients.
 const MaxUserTokens = 10
-
-// TokenIDFromRaw extracts the embedded non-secret ID prefix from a raw bearer
-// token of the form "omnipus_<id>_<body>". Returns "" when the token is not in
-// the ID-tagged form (e.g. a legacy "omnipus_<hex>" token or an env token),
-// signaling callers to fall back to scanning the whole set.
-func TokenIDFromRaw(raw string) string {
-	const prefix = "omnipus_"
-	if !strings.HasPrefix(raw, prefix) {
-		return ""
-	}
-	rest := raw[len(prefix):]
-	idx := strings.IndexByte(rest, '_')
-	if idx <= 0 {
-		// No second underscore → legacy "omnipus_<hex>" form with no ID.
-		return ""
-	}
-	return rest[:idx]
-}
-
-// TokenSecret returns the substring of a raw bearer token that is bcrypt-hashed
-// to produce a token-set entry's Hash.
-//
-// SEC-1 / bcrypt 72-byte limit: an ID-tagged token "omnipus_<id>_<body>" is
-// 81 bytes — past bcrypt's 72-byte input ceiling, beyond which bytes are
-// silently ignored. Because the ID prefix is NON-SECRET routing metadata, we
-// bcrypt only the secret <body> (the 256-bit entropy). Generation and
-// verification MUST agree on this, so both go through TokenSecret. A legacy
-// token with no ID is returned whole (its stored hash was computed over the
-// full "omnipus_<hex>" string, which is exactly 72 bytes).
-func TokenSecret(raw string) string {
-	if id := TokenIDFromRaw(raw); id != "" {
-		// Strip "omnipus_<id>_" leaving the secret body.
-		return raw[len("omnipus_")+len(id)+1:]
-	}
-	return raw
-}
-
-// VerifyTokenAgainst checks raw against the given token set (and, for
-// backward compatibility, a single legacy hash). Returns nil on a match.
-//
-// Extracted from the (*UserConfig) VerifyToken method so any token-bearing
-// config shape — the (now singular) human account's UserConfig.Tokens, or
-// the standalone Gateway.CLIToken slot — can be verified without needing a
-// full UserConfig. SEC-1: it first parses the embedded ID prefix and, when
-// present, verifies against ONLY the matching entry's hash (constant-time
-// bcrypt compare over the secret body). When the ID is absent (legacy token)
-// it scans every token entry and the legacy single hash. Returns nil on a
-// match, ErrNoHashSet when tokens is empty and legacyHash is zero, or the
-// bcrypt mismatch error otherwise.
-func VerifyTokenAgainst(tokens []TokenEntry, legacyHash BcryptHash, raw string) error {
-	if raw == "" {
-		return ErrNoHashSet
-	}
-	if len(tokens) == 0 && legacyHash.IsZero() {
-		return ErrNoHashSet
-	}
-
-	secret := TokenSecret(raw)
-
-	// Fast path: direct index by embedded ID prefix.
-	if id := TokenIDFromRaw(raw); id != "" {
-		for i := range tokens {
-			if tokens[i].ID == id {
-				return tokens[i].Hash.Verify(secret)
-			}
-		}
-		// ID present but no matching entry — fall through to a full scan so a
-		// race (entry just appended/evicted) or a colliding legacy token still
-		// gets a fair chance, then report mismatch.
-	}
-
-	// Scan the full token set (legacy token, or ID lookup miss).
-	for i := range tokens {
-		if tokens[i].Hash.Verify(secret) == nil {
-			return nil
-		}
-	}
-	// Legacy single-token field — its hash was computed over the FULL raw token.
-	if !legacyHash.IsZero() && legacyHash.Verify(raw) == nil {
-		return nil
-	}
-	return bcrypt.ErrMismatchedHashAndPassword
-}
-
-// VerifyToken reports whether raw matches any active bearer token for this user.
-//
-// SEC-1: it first parses the embedded ID prefix and, when present, verifies
-// against ONLY the matching entry's hash (constant-time bcrypt compare over the
-// secret body). When the ID is absent (legacy token) it scans every token entry
-// and the legacy single TokenHash. Returns nil on a match, ErrNoHashSet when the
-// user holds no tokens at all, or the bcrypt mismatch error otherwise.
-func (u *UserConfig) VerifyToken(raw string) error {
-	return VerifyTokenAgainst(u.Tokens, u.TokenHash, raw)
-}
-
-// HasActiveToken reports whether the user holds at least one live bearer token
-// (either in the new Tokens set or the legacy TokenHash field).
-func (u *UserConfig) HasActiveToken() bool {
-	return len(u.Tokens) > 0 || !u.TokenHash.IsZero()
-}
-
-// VerifyCLIToken checks raw against the machine-only CLI bearer credential
-// (g.CLIToken), the decoupled counterpart of UserConfig.VerifyToken.
-// Nil-safe: when no CLI token has been minted yet (g.CLIToken == nil) it
-// returns the same ErrNoHashSet that VerifyTokenAgainst returns for an empty
-// token set, so callers don't need their own nil check before calling this —
-// replacing the `if cfg.Gateway.CLIToken != nil { ... }` guard that was
-// previously duplicated at every call site.
-func (g *GatewayConfig) VerifyCLIToken(raw string) error {
-	if g.CLIToken == nil {
-		return ErrNoHashSet
-	}
-	return VerifyTokenAgainst([]TokenEntry{*g.CLIToken}, "", raw)
-}
 
 type GatewayConfig struct {
 	Host          string       `json:"host"                      env:"OMNIPUS_GATEWAY_HOST"`
@@ -4987,30 +4147,6 @@ func (t *ToolsConfig) ApplyWarmupTimeoutDefault() {
 	}
 }
 
-// SetUserTokenHash sets the token hash for a user identified by username.
-func (c *Config) SetUserTokenHash(username, token string) error {
-	for i := range c.Gateway.Users {
-		if c.Gateway.Users[i].Username == username {
-			hash, err := bcryptHash(token)
-			if err != nil {
-				return fmt.Errorf("bcrypt hash failed: %w", err)
-			}
-			c.Gateway.Users[i].TokenHash = BcryptHash(hash)
-			return nil
-		}
-	}
-	return fmt.Errorf("user %q not found", username)
-}
-
-// bcryptHash creates a bcrypt hash of the input string.
-func bcryptHash(input string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(input), bcrypt.DefaultCost)
-	if err != nil {
-		return "", err
-	}
-	return string(hash), nil
-}
-
 func MergeAPIKeys(apiKey string, apiKeys []string) []string {
 	seen := make(map[string]struct{})
 	var all []string
@@ -5067,29 +4203,6 @@ func MergeAPIKeys(apiKey string, apiKeys []string) []string {
 // model reads and in structured log fields. Change it and both break
 // silently.
 const ReasonMemoryPressure = "memory_pressure"
-
-// MemoryPressureHighFromSignalsForTest builds a MemoryPressureHigh provider
-// from one synthetic (available, total) pair, running the REAL threshold
-// comparison over it.
-//
-// Tests use it rather than stubbing the boolean directly so that a consumer
-// test actually exercises the shared comparison — including the boundary,
-// where "> threshold" and ">= threshold" differ at exactly one value and
-// nowhere else. A test that stubs the boolean proves the consumer branches on
-// what it is told; this proves the consumer branches on what the mechanism
-// decides.
-func MemoryPressureHighFromSignalsForTest(available, total uint64) func() (bool, bool) {
-	return func() (bool, bool) {
-		if total == 0 {
-			return false, false
-		}
-		used := 0.0
-		if available < total {
-			used = float64(total-available) / float64(total)
-		}
-		return used > memoryPressureRatioThreshold, true
-	}
-}
 
 // --- ADR-084 D9: judge turn timeout, per-adjudication caps, cost ceiling ---
 //
