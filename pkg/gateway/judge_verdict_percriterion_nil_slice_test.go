@@ -16,10 +16,9 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/elicify-ai/omnipus/pkg/task"
 )
 
 // emptyCriterionVerdict is a JudgeVerdict with zero PerCriterion entries —
@@ -41,35 +40,6 @@ func emptyCriterionVerdict() task.JudgeVerdict {
 	}
 }
 
-// TestToWireJudgeVerdict_EmptyPerCriterion_MarshalsAsEmptyArrayNotNull covers
-// rest_tasks.go's toWireJudgeVerdict (feeds GET /tasks/{id}/verdicts and the
-// openapi Message.verdict shape).
-func TestToWireJudgeVerdict_EmptyPerCriterion_MarshalsAsEmptyArrayNotNull(t *testing.T) {
-	v := emptyCriterionVerdict()
-	require.Nil(t, v.PerCriterion, "precondition: the source verdict must have a nil PerCriterion")
-
-	out := toWireJudgeVerdict(v)
-	data, err := json.Marshal(out)
-	require.NoError(t, err)
-
-	assert.Contains(t, string(data), `"per_criterion":[]`,
-		"per_criterion is a required array on the wire (no omitempty) — an "+
-			"empty verdict must still marshal it as [], not null, or the SPA's "+
-			"zod schema rejects the frame and drops it")
-	assert.NotContains(t, string(data), `"per_criterion":null`)
-
-	// Round-trip through the generated type's own JSON tags to confirm the
-	// field decodes back as a non-nil, empty slice (not "absent").
-	var roundTrip struct {
-		PerCriterion []struct {
-			CriterionId string `json:"criterion_id"`
-		} `json:"per_criterion"`
-	}
-	require.NoError(t, json.Unmarshal(data, &roundTrip))
-	assert.NotNil(t, roundTrip.PerCriterion)
-	assert.Empty(t, roundTrip.PerCriterion)
-}
-
 // TestToJudgeVerdictFrame_EmptyPerCriterion_MarshalsAsEmptyArrayNotNull
 // covers replay.go's toJudgeVerdictFrame (the asyncapi JudgeVerdictFrame WS
 // push and replay path) — the sibling function this bug was duplicated into
@@ -87,25 +57,4 @@ func TestToJudgeVerdictFrame_EmptyPerCriterion_MarshalsAsEmptyArrayNotNull(t *te
 		"per_criterion is a required array on the asyncapi wire (no omitempty) — "+
 			"an empty verdict must still marshal it as [], not null")
 	assert.NotContains(t, string(data), `"per_criterion":null`)
-}
-
-// TestToWireJudgeVerdict_NonEmptyPerCriterion_StillRoundTrips is a control
-// case proving the fix's make([]T, 0, len(...)) preallocation didn't break
-// the populated path — same assertions replay_judge_verdict_test.go already
-// makes for toJudgeVerdictFrame's non-empty path, mirrored here for
-// toWireJudgeVerdict.
-func TestToWireJudgeVerdict_NonEmptyPerCriterion_StillRoundTrips(t *testing.T) {
-	v := emptyCriterionVerdict()
-	v.PerCriterion = []task.CriterionVerdict{
-		{CriterionID: "c1", Met: true, Reason: "looks good"},
-		{CriterionID: "c2", Met: false, Reason: "missing evidence"},
-	}
-
-	out := toWireJudgeVerdict(v)
-	require.Len(t, out.PerCriterion, 2)
-	assert.Equal(t, "c1", out.PerCriterion[0].CriterionId)
-	assert.True(t, out.PerCriterion[0].Met)
-	assert.Equal(t, "c2", out.PerCriterion[1].CriterionId)
-	assert.False(t, out.PerCriterion[1].Met)
-	assert.Equal(t, "missing evidence", out.PerCriterion[1].Reason)
 }

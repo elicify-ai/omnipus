@@ -4,14 +4,6 @@
 
 package gateway
 
-// rest_task_runs_test.go — tests for GET /api/v1/tasks/{id}/runs (ADR-050
-// docs/internal/architecture/ADR-050-task-run-history-model.md,
-// docs/internal/specs/task-run-history-spec.md §3.6). Exercises the real
-// dispatch path (api.HandleTasks) the same way rest_tasks_test.go's
-// putTaskTodos/putTaskDependencies/deleteTask helpers do, so the "runs" case
-// wired into HandleTasks' sub-resource switch is covered end to end, not
-// just handleTaskRuns in isolation.
-
 import (
 	"bytes"
 	"context"
@@ -24,15 +16,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // taskRunNowSuccessProvider is a scripted LLMProvider that always returns a
@@ -511,4 +502,99 @@ func TestTaskRunNow_LiveExecutor_ViaRealServer(t *testing.T) {
 		assert.NotContains(t, *matched.Result, "context canceled",
 			"a genuine Done result must never contain the context-cancellation failure text")
 	})
+}
+
+// --- moved from rest_tasks.go tests 2026-09-15 ---
+
+// TestHandleTaskRestart_GateDelegatesToTaskPackage is a regression check
+// that centralizing the restart reason-gate into task.ValidateStandaloneRestart
+// (pkg/task/store.go) did not change the handler's observable behavior: a
+// genuinely-failed task (no cancel_reason) still 409s via POST
+// /tasks/{id}/restart, and its status/cancel_reason are left untouched by
+// the rejected call (RestartReset must never run).
+func TestHandleTaskRestart_GateDelegatesToTaskPackage(t *testing.T) {
+	api := newTestRestAPIWithPlans(t)
+	wsID := createTestWorkspace(t, api, "Restart Gate Delegation WS")
+	taskID := mustCreateTask(t, api, wsID, "genuinely failed, attempts exhausted", "")
+
+	failedStatus := task.StatusFailed
+	attempts := 3
+	_, err := api.taskStore.Update(taskID, task.Patch{Status: &failedStatus, AttemptCount: &attempts})
+	require.NoError(t, err)
+
+	w := postTaskAction(t, api, taskID, "restart")
+	require.Equal(t, http.StatusConflict, w.Code, "genuinely-failed task must still 409 on restart; body=%s", w.Body.String())
+
+	reloaded, gerr := api.taskStore.Get(taskID)
+	require.NoError(t, gerr)
+	assert.Equal(t, task.StatusFailed, reloaded.Status, "rejected restart must leave status untouched")
+	assert.Equal(t, 3, reloaded.AttemptCount, "rejected restart must not have run RestartReset (attempt_count untouched)")
+	assert.Empty(t, reloaded.CancelReason)
+}
+
+// TestTaskStopConflictOutcome_Classification is the deterministic,
+// state-by-state proof of the fix: it exercises taskStopConflictOutcome
+// directly against every state handleTaskStop can observe on the post-error
+// re-read, with no dependence on goroutine scheduling. This is the
+// mutation-test load-bearing case — reverting the production fix removes
+// taskStopConflictOutcome entirely, which fails this test to even compile.
+func TestTaskStopConflictOutcome_Classification(t *testing.T) {
+	cases := []struct {
+		name               string
+		status             task.Status
+		cancelReason       task.CancelReason
+		wantHandled        bool
+		wantAlreadyStopped bool
+		wantMessageHas     string
+	}{
+		{
+			name:        "still in_progress -> not handled, caller falls back to 500",
+			status:      task.StatusInProgress,
+			wantHandled: false,
+		},
+		{
+			name:               "failed by a user Stop (this request lost the race) -> already stopped, 200",
+			status:             task.StatusFailed,
+			cancelReason:       task.CancelReasonStoppedByUser,
+			wantHandled:        true,
+			wantAlreadyStopped: true,
+		},
+		{
+			name:           "failed for an unrelated reason -> genuine conflict, 409",
+			status:         task.StatusFailed,
+			cancelReason:   "",
+			wantHandled:    true,
+			wantMessageHas: `"failed"`,
+		},
+		{
+			name:           "completed normally before the stop landed -> genuine conflict, 409",
+			status:         task.StatusDone,
+			wantHandled:    true,
+			wantMessageHas: `"done"`,
+		},
+		{
+			name:           "never started -> genuine conflict, 409",
+			status:         task.StatusInbox,
+			wantHandled:    true,
+			wantMessageHas: `"inbox"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tk := &task.Task{ID: "t1", Status: tc.status, CancelReason: tc.cancelReason}
+			outcome, handled := taskStopConflictOutcome(tk)
+			require.Equal(t, tc.wantHandled, handled)
+			if !tc.wantHandled {
+				return
+			}
+			assert.Equal(t, tc.wantAlreadyStopped, outcome.alreadyStopped)
+			if tc.wantMessageHas != "" {
+				assert.Contains(t, outcome.message, tc.wantMessageHas)
+			}
+			if tc.wantAlreadyStopped {
+				assert.Empty(t, outcome.message, "no 409 body text is needed for the success path")
+			}
+		})
+	}
 }
