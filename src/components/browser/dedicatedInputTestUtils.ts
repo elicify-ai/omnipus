@@ -12,6 +12,7 @@ export function dedicatedInputSessionStub(send: (input: Omit<BrowserInputFrame, 
     stop() { this.state = 'idle' }
     resetAttachment() { this.state = 'ready' }
     setICEServers() {}
+    cancelAutomaticRecovery() {}
     applyAnswer() { return true }
     applyState() {}
     applyControlAck() { return true }

@@ -13,6 +13,8 @@ type RuntimeProbe = {
   closeSocket(): void;
   openedSockets(): number;
   peers(): Array<{ labels: string[]; transceivers: number; state: string }>;
+  mediaStats(): Promise<Array<Record<string, unknown>>>;
+  frameTiming(): Array<Record<string, number>>;
 };
 type ProbeWindow = Window & { __inputSmoke: RuntimeProbe };
 
@@ -54,7 +56,7 @@ export async function instrumentRoutes(page: Page) {
       send(data: Parameters<WebSocket['send']>[0]) { super.send(data); if (sockets.includes(this)) record('websocket', data); }
     };
     (window as unknown as ProbeWindow).__inputSmoke = {
-      openedSockets: () => openedSockets, routes, sample: () => null, sameMedia: () => false,
+      openedSockets: () => openedSockets, routes, sample: () => null, sameMedia: () => false, frameTiming: () => [],
       closeInput() {
         const active = peers.filter(row => row.labels.includes('input-reliable') && row.pc.connectionState !== 'closed');
         if (active.length !== 1 || active[0].pc.getTransceivers().length !== 0) throw Error('Expected exactly one data-only input peer');
@@ -64,6 +66,20 @@ export async function instrumentRoutes(page: Page) {
         const active = sockets.filter(socket => socket.readyState === WebSocket.OPEN);
         if (active.length !== 1) throw Error('Expected exactly one live browser socket');
         active[0].close(4000, 'bounded input smoke');
+      },
+      async mediaStats() {
+        const result: Array<Record<string, unknown>> = [];
+        const fields = ['type', 'kind', 'timestamp', 'framesReceived', 'framesDecoded', 'framesDropped', 'packetsReceived', 'packetsLost', 'bytesReceived', 'jitter', 'jitterBufferDelay', 'jitterBufferEmittedCount', 'jitterBufferTargetDelay', 'jitterBufferMinimumDelay', 'totalDecodeTime', 'totalProcessingDelay', 'freezeCount', 'totalFreezesDuration', 'pauseCount', 'totalPausesDuration', 'frameWidth', 'frameHeight', 'framesPerSecond', 'decoderImplementation', 'powerEfficientDecoder', 'estimatedPlayoutTimestamp', 'lastPacketReceivedTimestamp', 'currentRoundTripTime', 'availableIncomingBitrate', 'availableOutgoingBitrate'];
+        for (const { pc } of peers) {
+          if (pc.connectionState === 'closed' || pc.getTransceivers().length === 0) continue;
+          const stats = await pc.getStats();
+          stats.forEach(row => {
+            if ((row.type === 'inbound-rtp' && row.kind === 'video') || (row.type === 'candidate-pair' && row.state === 'succeeded' && row.nominated)) {
+              result.push({ peer: peers.findIndex(entry => entry.pc === pc), ...Object.fromEntries(fields.filter(key => row[key] !== undefined).map(key => [key, row[key]])) });
+            }
+          });
+        }
+        return result;
       },
       peers: () => peers.map(row => ({ labels: row.labels, transceivers: row.pc.getTransceivers().length, state: row.pc.connectionState })),
     };
@@ -81,6 +97,21 @@ export async function installPixels(page: Page) {
     const ctx = locator.getContext('2d', { willReadFrequently: true })!, cells = grid.getContext('2d', { willReadFrequently: true })!;
     grid.width = 32; grid.height = 24; cells.imageSmoothingEnabled = false;
     const probe = (window as unknown as ProbeWindow).__inputSmoke;
+    const frames: Array<Record<string, number>> = [];
+    probe.frameTiming = () => frames.slice(-600);
+    if (video.requestVideoFrameCallback) {
+      const recordFrame: VideoFrameRequestCallback = (_now, metadata) => {
+        const row: Record<string, number> = { at: performance.now() };
+        const values = metadata as unknown as Record<string, number>;
+        for (const key of ['rtpTimestamp', 'receiveTime', 'captureTime', 'processingDuration', 'presentationTime', 'expectedDisplayTime', 'presentedFrames', 'width', 'height']) {
+          if (typeof values[key] === 'number') row[key] = values[key];
+        }
+        frames.push(row);
+        if (frames.length > 700) frames.splice(0, 100);
+        if (video.isConnected) video.requestVideoFrameCallback(recordFrame);
+      };
+      video.requestVideoFrameCallback(recordFrame);
+    }
     probe.sameMedia = () => document.contains(video) && video.srcObject === stream && stream.getVideoTracks()[0] === track && track.readyState === 'live' && !video.paused && video.readyState >= 2;
     probe.sample = () => {
       if (!probe.sameMedia() || !video.videoWidth || !video.videoHeight) return null;

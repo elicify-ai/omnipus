@@ -23,3 +23,17 @@ Installed/running binary and unchanged machine configuration verified. Slow-whee
 A pending resize now withdraws input readiness as soon as the held gesture finishes, before the scheduled viewport operation can race with the next gesture. It shows a resizing status until the exact accepted control acknowledgement identifies a fresh capture that has actually been displayed. This reuses the backend geometry validation, including legitimate scrollbar differences. Old frames and unrelated acknowledgements cannot restore readiness. Real input failures remain visible, and an unfinished handover produces an error after 15 seconds. Paste and composition finish admission before the handover starts.
 
 The 23 focused frontend tests pass. Three mutations—removing acknowledgement correlation, removing immediate handover, and extending the timeout—were caught. Full live endurance must be repeated on the next verified build; the test is unchanged.
+
+## Candidate 9b372a50b running verification
+
+The installed and running binary hash is862291c07764f876f2e7ea253f370d7825f1872def48d00ed4db129334127b93. Amsterdam machine configuration is preserved. The 20-minute run is underway and has passed its first resize plus subsequent key/scroll rounds. This is progress, not acceptance until the entire run and its assertions finish.
+
+Related dedicated-input/recovery tests passed (18 tests); frame-generation tests passed (14 tests) after the negotiated-transport test stub gained the existing cancelAutomaticRecovery method. No production behavior or assertions were changed for that test-fixture repair.
+
+## 9b372a50b failure and next diagnosis
+
+The run failed at 527.56 active seconds, after 61 complete rounds. All 30 final wheel inputs reached the server and completed by00:02:39.255 UTC. The video was still advancing through older scroll states around00:02:43, ending60 units short at the unchanged five-second assertion. This proves a failed visible-response check; it does not prove permanent input loss. Input queue wait was at most161ms for that burst. The delayed stage after Chrome acknowledgement remains unproven.
+
+A separate confirmed defect caused a400ms resizing notice after ordinary focus changes with unchanged geometry. The next frontend fix deduplicates geometry before deferral and again before releasing a held gesture. Its26 tests and mutation check pass.
+
+The next run records receiver buffer/decode/RTT statistics per round and a bounded recent frame-presentation timeline. Continuous host CPU/steal/cgroup samples will cover the whole run. A120-second diagnostic with resizing every two rounds can test whether repeated capture replacement reproduces the slowdown sooner; this cannot satisfy the20-minute acceptance requirement. Default acceptance remains1200 seconds with resizing every12 rounds and unchanged exact-result/five-second checks.

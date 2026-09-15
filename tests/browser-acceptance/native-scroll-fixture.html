@@ -1,0 +1,29 @@
+<!doctype html><meta charset="utf-8"><title>Native document scroll and trusted hover</title>
+<style>
+html{margin:0;overflow-y:scroll;scroll-behavior:auto}body{margin:0;min-height:400vh;background:repeating-linear-gradient(#183650 0px,#183650 99px,#276c91 100px,#276c91 199px);font:16px sans-serif}canvas{position:fixed;inset:0;width:100%;height:100%;pointer-events:none}input,button{position:fixed;top:64%;height:9%;font-size:20px;box-sizing:border-box}input{left:8%;width:38%}button{left:54%;width:38%}
+</style>
+<canvas id="pixels"></canvas><input id="text" aria-label="Native scroll text"><button id="click">Focus text</button>
+<script>
+const nonce=Number(new URL(location.href).searchParams.get('nonce'));
+if(!Number.isInteger(nonce)||nonce<1||nonce>65535)throw Error('Valid fixture nonce required');
+const canvas=document.getElementById('pixels'),ctx=canvas.getContext('2d'),text=document.getElementById('text');
+// Existing eight-word pixel protocol: nonce, trusted mousemove count, clientX,
+// clientY, CSS client width, native document scrollTop, CSS client height, errors.
+const state={nonce,moves:0,x:0,y:0,width:0,scroll:0,height:0,errors:0};
+function paint(){
+ const w=canvas.width=document.documentElement.clientWidth,h=canvas.height=document.documentElement.clientHeight;
+ canvas.style.width=w+'px';canvas.style.height=h+'px';
+ state.width=w;state.height=h;state.scroll=Math.round(document.scrollingElement.scrollTop);
+ ctx.fillStyle='#ff00ff';ctx.fillRect(0,0,w,h);ctx.fillStyle='#151515';ctx.fillRect(w*.025,h*.025,w*.95,h*.95);
+ const words=[...Object.values(state),...Array.from({length:32},(_,i)=>text.value.charCodeAt(i)||0)];
+ const bits=[];words.forEach((v,index)=>{for(let i=0;i<(index<8?32:16);i++)bits.push((v>>>i)&1)});
+ bits.forEach((b,i)=>{ctx.fillStyle=b?'#fff':'#000';ctx.fillRect(w*(.1+(i%32)*.8/32),h*(.06+Math.floor(i/32)*.5/24),w*.8/32,h*.5/24)});
+}
+addEventListener('mousemove',e=>{if(!e.isTrusted)state.errors++;else state.moves++;state.x=Math.round(e.clientX);state.y=Math.round(e.clientY);paint()});
+// Observe the browser's actual scrolling result; there is deliberately no wheel listener.
+addEventListener('scroll',paint,{passive:true});
+addEventListener('resize',paint);
+text.addEventListener('input',e=>{if(!e.isTrusted||text.value.length>32)state.errors++;paint()});
+document.getElementById('click').addEventListener('click',()=>text.focus());
+paint();
+</script>

@@ -13,11 +13,14 @@ if (target.origin !== 'https://uat-omnipus.fly.dev' || !target.pathname.startsWi
 const provenance = JSON.parse(fs.readFileSync(process.env.BROWSER_INPUT_PROVENANCE!, 'utf8'));
 
 const seconds = Number(process.env.BROWSER_ENDURANCE_SECONDS || 1200);
-if (![15, 1200].includes(seconds)) throw Error('Use15seconds only for harness calibration, or1200seconds for acceptance');
+if (![15, 120, 1200].includes(seconds)) throw Error('Use 15 seconds for calibration, 120 for diagnosis, or 1200 for acceptance');
+const resizeEvery = Number(process.env.BROWSER_ENDURANCE_RESIZE_EVERY || 12);
+if (![2, 12].includes(resizeEvery)) throw Error('Use 2 rounds for accelerated resize diagnosis or 12 for standard endurance');
 const delay = 120;
 test(`${seconds}-second continuous mixed input endurance`, async ({ page }, info) => {
   let state: InputState = { nonce: randomInt(1, 65536), clicks: 0, downs: 0, ups: 0, held: 0, scroll: 0, drags: 0, errors: 0, text: '' };
   let rounds = 0, started = 0, clientStart = 0;
+  const mediaStats: unknown[] = [];
   const errors: string[] = [], marks: Array<{ label: string; at: string; ms?: number }> = [];
   page.on('pageerror', error => errors.push(error.message));
   await instrumentRoutes(page);
@@ -82,9 +85,10 @@ test(`${seconds}-second continuous mixed input endurance`, async ({ page }, info
       const a = await point(page, .6, .86), b = await point(page, .87, .86);
       await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 12 }); await page.mouse.up();
       state = { ...state, drags: state.drags + 1, downs: state.downs + 1, ups: state.ups + 1 }; await stateIs(page, state); await ready();
+      mediaStats.push(await page.evaluate(async () => ({ at: new Date().toISOString(), stats: await (window as unknown as { __inputSmoke: { mediaStats(): Promise<unknown> } }).__inputSmoke.mediaStats() })));
       rounds++;
-      if (rounds % 12 === 0) {
-        await page.setViewportSize(rounds % 24 === 0 ? {width:1440,height:1000} : {width:1600,height:1100});
+      if (rounds % resizeEvery === 0) {
+        await page.setViewportSize(rounds % (resizeEvery * 2) === 0 ? {width:1440,height:1000} : {width:1600,height:1100});
         await stateIs(page,state); await ready();
       }
       const progress = {at:new Date().toISOString(),rounds,activeSeconds:(performance.now()-started)/1000,expected:state};
@@ -109,10 +113,12 @@ test(`${seconds}-second continuous mixed input endurance`, async ({ page }, info
     }
     expect(errors).toEqual([]);
   } finally {
+    mediaStats.push(await page.evaluate(async () => ({ at: new Date().toISOString(), stats: await (window as unknown as { __inputSmoke?: { mediaStats(): Promise<unknown> } }).__inputSmoke?.mediaStats() })).catch(error => ({ statsError: String(error) })));
     const final = await page.evaluate(() => (window as unknown as { __inputSmoke?: { sample(): { state: InputState } | null } }).__inputSmoke?.sample()?.state).catch(() => null);
     const route = await routeEvidence(page).catch(() => null);
+    const recentVideoFrames = await page.evaluate(() => (window as unknown as { __inputSmoke?: { frameTiming(): unknown } }).__inputSmoke?.frameTiming()).catch(() => null);
     const viewerStates = await page.evaluate(() => {const w=window as unknown as {__enduranceStates:unknown;__enduranceObserver:MutationObserver};w.__enduranceObserver?.disconnect();return w.__enduranceStates}).catch(()=>null);
-    fs.writeFileSync(info.outputPath('pressure-stress-evidence.json'), JSON.stringify({ requestedSeconds:seconds, activeSeconds:started ? (performance.now()-started)/1000 : 0, rounds, viewerStates, provenance, deliberateKeyHandlerMs: delay, deliberateWheelHandlerMs: delay ? 75 : 0, marks, expected: state, final, route, errors }, null, 2));
+    fs.writeFileSync(info.outputPath('pressure-stress-evidence.json'), JSON.stringify({ mediaStats, recentVideoFrames, requestedSeconds:seconds, resizeEvery, activeSeconds:started ? (performance.now()-started)/1000 : 0, rounds, viewerStates, provenance, deliberateKeyHandlerMs: delay, deliberateWheelHandlerMs: delay ? 75 : 0, marks, expected: state, final, route, errors }, null, 2));
     await info.attach('pressure-stress-evidence', { path: info.outputPath('pressure-stress-evidence.json'), contentType: 'application/json' });
     await page.getByRole('button', { name: 'Close live browser panel', exact: true }).click({ timeout: 5000 }).catch(() => {});
   }

@@ -1606,7 +1606,7 @@ export function BrowserLiveView({
       // resize follows to replay it. The focusout listener registered below is
       // what closes that hole: it re-runs this same path once focus leaves, at
       // which point the size is real and either commits or dedups.
-      if (inputDefersResize() || textFieldHasFocus(el)) return
+      if (textFieldHasFocus(el)) return
 
       const box = el.getBoundingClientRect()
       const w = Math.round(box.width)
@@ -1621,6 +1621,8 @@ export function BrowserLiveView({
         if (viewportHandoffRef.current?.target === null) finishViewportHandoff()
         return
       }
+
+      if (inputDefersResize()) return
 
       // SETTLE CHECK: only commit a size that has held still. A drag, an
       // animated sidebar, or a transient overlay produces a stream of
@@ -1668,7 +1670,7 @@ export function BrowserLiveView({
           // through a 250ms window. Bailing without re-arming is safe ONLY
           // because the focusout listener below re-runs push() on blur; that
           // is what makes this a DEFERRAL rather than a drop.
-          if (inputDefersResize() || textFieldHasFocus(el)) return
+          if (textFieldHasFocus(el)) return
 
           // Re-read the DPR instead of reusing push()'s: the chase can span a
           // window being dragged between displays with different pixel ratios.
@@ -1691,6 +1693,7 @@ export function BrowserLiveView({
             if (viewportHandoffRef.current?.target === null) finishViewportHandoff()
             return
           }
+          if (inputDefersResize()) return
           const css = captureRef.current.css
           if (!css || css.width !== nw || css.height !== nh || (settled && settled.dpr !== settleDpr)) beginViewportHandoff()
           const handoff = viewportHandoffRef.current
@@ -1725,7 +1728,13 @@ export function BrowserLiveView({
     const resumeAfterInput = () => {
       if (!deferredForInput || resizeInputBusyRef.current()) return
       deferredForInput = false
-      beginViewportHandoff()
+      // Focus churn can notify without resizing; a real change can also
+      // return to the sent size while input is held. Neither needs a pause.
+      const box = el.getBoundingClientRect()
+      const w = Math.round(box.width), h = Math.round(box.height)
+      const previous = lastSentViewportRef.current
+      if (previous && Math.abs(previous.w - w) < 8 && Math.abs(previous.h - h) < 8 && previous.dpr === (window.devicePixelRatio || 1)) return
+      if (w > 0 && h > 0) beginViewportHandoff()
       schedule()
     }
     resumeViewportRef.current = resumeAfterInput

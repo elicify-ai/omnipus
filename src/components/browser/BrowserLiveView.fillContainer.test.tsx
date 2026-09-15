@@ -746,4 +746,28 @@ describe('BrowserLiveView — resize preserves active input', () => {
     } finally { vi.useRealTimers() }
   })
 
+  it.each(['unchanged', 'jitter', 'returned'])('never pauses on a no-op %s viewport notification during held input', async (mode) => {
+    vi.useFakeTimers()
+    try {
+      render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+      connectFrameAndDrive()
+      const frame = screen.getByTestId('browser-live-frame')
+      let width = 1280
+      frame.getBoundingClientRect = () => ({ width, height: 720, top: 0, left: 0, right: width, bottom: 720, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      mockSendViewport.mockClear(); mockSendInput.mockClear()
+      fireEvent.keyDown(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })
+      width = mode === 'returned' ? 1400 : mode === 'jitter' ? 1287 : 1280
+      fireEvent(document, new Event('focusout'))
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      width = 1280
+      fireEvent.keyUp(frame, { key: 'ArrowLeft', code: 'ArrowLeft', keyCode: 37 })
+      expect(frame.closest('[data-input-mode]')).toHaveAttribute('data-input-state', 'ready')
+      expect(screen.queryByText('Resizing browser. Input will resume when the new picture is ready.')).not.toBeInTheDocument()
+      expect(mockSendInput.mock.calls.map(([input]) => input.kind)).toEqual(['key_down', 'key_up'])
+      await act(async () => { await vi.advanceTimersByTimeAsync(800) })
+      expect(mockSendViewport).not.toHaveBeenCalled()
+    } finally { vi.useRealTimers() }
+  })
+
 })
