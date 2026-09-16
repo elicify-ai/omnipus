@@ -6,7 +6,7 @@
 `/cache/runci.sh` on the workers is a separate step — editing the repo file does not update
 the executing copy (see `deploy/ci-worker/CLAUDE.md`, "Redeploying runci.sh").
 **Scope:** the local PR-runner's per-run latency. Queueing between concurrent operators is
-out of scope — that is what the second worker (`ci-omnipus-3`, added 2026-09-12) addresses.
+out of scope — that is what the second worker (`a third worker app`, added 2026-09-12) addresses.
 
 ---
 
@@ -134,7 +134,7 @@ fails on four facts, each independently sufficient:
    `go build ./...` + `go test ./...`; the go-test lane would stretch, and it is already
    the critical path.
 
-The existing second worker (`ci-omnipus-3`) already covers the problem multi-machine
+The existing second worker (`a third worker app`) already covers the problem multi-machine
 actually solves here — queueing when one operator's run holds the lock — without giving
 up any single-run latency.
 
@@ -148,3 +148,5 @@ empirical question about one number: **how long does a single `go-test` run take
 stretches past what the current total wall clock saves, the tier is not worth operating;
 if it does not, it might be. Measure one run on each shape before reasoning further —
 do not decide this from list prices and core counts.
+
+> **Update 2026-09-16:** the separate worker apps referred to above were destroyed. The cluster is now ONE app, `ci-omnipus-1`, with several machines — one per tier, each with its own `/cache` volume and its own lock. See `deploy/ci-worker/ci-cluster.sh`.

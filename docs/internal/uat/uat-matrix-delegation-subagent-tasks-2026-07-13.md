@@ -1,5 +1,7 @@
 # UAT Matrix — Delegation + Live Browser Control
 
+
+> **Note (2026-09-16):** the evidence screenshots this report links to under `docs/internal/uat/screenshots/` were deleted from the repository (820 files, 65 MB of run evidence for campaigns that had shipped). The image links below no longer resolve; the findings and verdicts are unchanged.
 **Status:** Review draft v2 (extended with browser surfaces) — artefact for operator sign-off before execution  
 **Date:** 2026-07-13 (v2 same day — browser extension)  
 **Branch target:** `hotfix/v0.1.1` (includes browser ADR-038→041 + delegation ADR-032/036/037/040)  

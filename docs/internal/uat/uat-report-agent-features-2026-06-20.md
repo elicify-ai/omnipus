@@ -1,5 +1,7 @@
 # UAT Report: Agent Features — Human-Impersonated Exploratory Testing
 
+
+> **Note (2026-09-16):** the evidence screenshots this report links to under `docs/internal/uat/screenshots/` were deleted from the repository (820 files, 65 MB of run evidence for campaigns that had shipped). The image links below no longer resolve; the findings and verdicts are unchanged.
 **Date:** 2026-06-20
 **Branch:** `hotfix/v0.1.1`
 **Method:** 7 LLM "users" (Claude Sonnet) each drove an isolated headless-Chromium browser against its own

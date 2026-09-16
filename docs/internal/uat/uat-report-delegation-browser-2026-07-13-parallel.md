@@ -1,5 +1,7 @@
 # UAT Report — Delegation + Browser Control (parallel run)
 
+
+> **Note (2026-09-16):** the evidence screenshots this report links to under `docs/internal/uat/screenshots/` were deleted from the repository (820 files, 65 MB of run evidence for campaigns that had shipped). The image links below no longer resolve; the findings and verdicts are unchanged.
 **Run ID:** `2026-07-13-parallel`  
 **Tip binary:** `/tmp/omnipus-preview` (build lineage includes browser; tree HEAD `2259cdaf`)  
 **Method:** Parallel isolated gateways + CLI force-tool product agents + Playwright **library** SPA drivers (harness `docs/internal/uat/harness/`)  

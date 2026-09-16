@@ -1,5 +1,7 @@
 # Omnipus 0.1.0 — Full UAT Report (human-impersonation, Playwright)
 
+
+> **Note (2026-09-16):** the evidence screenshots this report links to under `docs/internal/uat/screenshots/` were deleted from the repository (820 files, 65 MB of run evidence for campaigns that had shipped). The image links below no longer resolve; the findings and verdicts are unchanged.
 **Date:** 2026-06-21 · **Target:** `hotfix/v0.1.1` (complete 0.1.0 line) · **Method:** 8 parallel subagents,
 each its own isolated gateway + headless Chromium, each impersonating a named human persona, screenshotting
 every step and reporting bugs + UX issues + **how it felt** (usability + ship-readiness). Plan:

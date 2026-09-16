@@ -1,5 +1,7 @@
 # UAT Execution Plan — Delegation + Browser (human-impersonation, Playwright MCP, parallel)
 
+
+> **Note (2026-09-16):** the evidence screenshots this report links to under `docs/internal/uat/screenshots/` were deleted from the repository (820 files, 65 MB of run evidence for campaigns that had shipped). The image links below no longer resolve; the findings and verdicts are unchanged.
 **Status:** Ready for operator go  
 **Date:** 2026-07-13  
 **Matrix (case catalog):** [`uat-matrix-delegation-subagent-tasks-2026-07-13.md`](./uat-matrix-delegation-subagent-tasks-2026-07-13.md) (v2)  

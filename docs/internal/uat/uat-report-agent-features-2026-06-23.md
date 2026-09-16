@@ -1,5 +1,7 @@
 # UAT Report — Agent Features (full updated run)
 
+
+> **Note (2026-09-16):** the evidence screenshots this report links to under `docs/internal/uat/screenshots/` were deleted from the repository (820 files, 65 MB of run evidence for campaigns that had shipped). The image links below no longer resolve; the findings and verdicts are unchanged.
 **Date:** 2026-06-23
 **Method:** Human-impersonation exploratory testing. 8 isolated gateways (ports 6061–6068), each driven by its own headless Chromium subagent through the journeys in `uat-plan-agent-features.md` (Journeys 1–13, including the new Security/MCP/Upload journeys).
 **Build:** current `feat/0.1.0-uat-fixes` HEAD (`0e741ea4`), freshly built so it includes this session's production changes (browser-default fix, global-override lock UI, new core-agent prompts). **Model:** `openrouter/z-ai/glm-5-turbo`.
