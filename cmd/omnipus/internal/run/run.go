@@ -124,6 +124,25 @@ type Options struct {
 	Stderr io.Writer
 }
 
+// run carries the shared state of Run across its stages.
+type run struct {
+	ctx      context.Context
+	o        Options
+	httpBase string
+	authed   bool
+	ret0     error
+}
+
+// runFlow reports how a block stage of run wants the conductor to proceed.
+type runFlow int
+
+const (
+	runNext runFlow = iota
+	runReturn
+	runContinue
+	runBreak
+)
+
 // Run executes a single one-shot chat turn against the local Omnipus gateway.
 //
 // It returns nil after a clean done frame (process should exit 0).
@@ -137,29 +156,32 @@ type Options struct {
 // agent loop). Check DoneStats.TurnFailed in the done frame to detect a failed
 // turn without string-sniffing the assistant content.
 func Run(ctx context.Context, o Options) error {
+	rn := &run{ctx: ctx, o: o}
+
 	// Default nil writers to io.Discard so callers that omit them don't panic.
-	if o.Stdout == nil {
-		o.Stdout = io.Discard
+	if rn.o.Stdout == nil {
+		rn.o.Stdout = io.Discard
 	}
-	if o.Stderr == nil {
-		o.Stderr = io.Discard
+	if rn.o.Stderr == nil {
+		rn.o.Stderr = io.Discard
 	}
 
 	// FR-007 P0 guard: remote gateway support is deferred.
-	if o.URL != "" {
+	if rn.o.URL != "" {
 		return ErrRemoteUnsupported
 	}
 
-	timeout := o.Timeout
+	timeout := rn.o.Timeout
 	if timeout == 0 {
 		timeout = defaultTimeout
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	var cancel context.CancelFunc
+	rn.ctx, cancel = context.WithTimeout(rn.ctx, timeout)
 	defer cancel()
 
-	wsURL := "ws://" + o.Addr + "/api/v1/chat/ws"
-	httpBase := "http://" + o.Addr
+	wsURL := "ws://" + rn.o.Addr + "/api/v1/chat/ws"
+	rn.httpBase = "http://" + rn.o.Addr
 
 	// Dial the WebSocket. A connection-refused error maps to ErrGatewayDown;
 	// any other dial error is also treated as gateway-down since from the user's
@@ -167,12 +189,12 @@ func Run(ctx context.Context, o Options) error {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 	}
-	conn, wsResp, err := dialer.DialContext(ctx, wsURL, nil)
+	conn, wsResp, err := dialer.DialContext(rn.ctx, wsURL, nil)
 	if wsResp != nil {
 		defer wsResp.Body.Close()
 	}
 	if err != nil {
-		slog.Debug("run: WS dial failed", "addr", o.Addr, "error", err)
+		slog.Debug("run: WS dial failed", "addr", rn.o.Addr, "error", err)
 		return ErrGatewayDown
 	}
 	defer conn.Close()
@@ -193,7 +215,7 @@ func Run(ctx context.Context, o Options) error {
 	// immediately; the next ReadMessage call returns an error that we map to
 	// ErrTimeout (see the ctxFired / ctx.Err() check after every read error below).
 	go func() {
-		<-ctx.Done()
+		<-rn.ctx.Done()
 		ctxFired.Store(true)
 		_ = conn.SetReadDeadline(time.Now())
 	}()
@@ -201,7 +223,7 @@ func Run(ctx context.Context, o Options) error {
 	// The first frame MUST be the auth frame (FR-019 / authenticateWS contract).
 	authFrame := generated.AuthFrame{
 		Type:  string(generated.WsFrameTypeAuth),
-		Token: o.Token,
+		Token: rn.o.Token,
 	}
 	authData, marshalErr := json.Marshal(authFrame)
 	if marshalErr != nil {
@@ -215,14 +237,14 @@ func Run(ctx context.Context, o Options) error {
 	// requested (US-2 AC-2: omit entirely when no --model).
 	msgFrame := generated.MessageFrame{
 		Type:    string(generated.WsFrameTypeMessage),
-		Content: o.Prompt,
+		Content: rn.o.Prompt,
 	}
-	if o.Agent != "" {
-		msgFrame.AgentId = &o.Agent
+	if rn.o.Agent != "" {
+		msgFrame.AgentId = &rn.o.Agent
 	}
-	if o.Model != "" {
+	if rn.o.Model != "" {
 		msgFrame.Metadata = map[string]any{
-			"model_name": o.Model,
+			"model_name": rn.o.Model,
 		}
 	}
 	msgData, marshalErr := json.Marshal(msgFrame)
@@ -260,10 +282,11 @@ func Run(ctx context.Context, o Options) error {
 	// meaning authentication succeeded and a session is established.
 	// Used to distinguish auth-phase error frames (→ ErrKeyInvalid) from
 	// post-auth error frames (→ wrapped error).
-	authed := false
+	rn.authed = false
 
 	// Read loop: receive frames until done or error. The read blocks until a
 	// frame arrives or the ctx.Done() goroutine kicks the deadline at --timeout.
+runLoop1:
 	for {
 		_, raw, readErr := conn.ReadMessage()
 		if readErr != nil {
@@ -271,7 +294,7 @@ func Run(ctx context.Context, o Options) error {
 			// so if the read unblocked from that kick, ctxFired is already true.
 			// ctx.Err() is a belt-and-suspenders for full propagation. Either way
 			// the run exceeded --timeout (or was canceled) → ErrTimeout.
-			if ctxFired.Load() || ctx.Err() != nil {
+			if ctxFired.Load() || rn.ctx.Err() != nil {
 				return ErrTimeout
 			}
 
@@ -290,135 +313,155 @@ func Run(ctx context.Context, o Options) error {
 
 		// Decode just the type discriminator first, then re-decode into the
 		// specific struct. This avoids importing a full JSON schema dispatcher.
-		var envelope struct {
-			Type string `json:"type"`
+
+		switch rn.handleFrame(raw) {
+		case runReturn:
+			return rn.ret0
+		case runContinue:
+			continue runLoop1
 		}
-		if jsonErr := json.Unmarshal(raw, &envelope); jsonErr != nil {
-			slog.Warn("run: ignoring malformed frame", "error", jsonErr)
-			continue
-		}
 
-		switch generated.WsFrameType(envelope.Type) {
-		case generated.WsFrameTypeSessionStarted:
-			// The server has minted a session — authentication succeeded and the
-			// turn has started. Mark as authed so subsequent error frames are
-			// treated as post-auth turn errors, not auth rejections.
-			authed = true
-			var f generated.SessionStartedFrame
-			if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil {
-				fmt.Fprintf(o.Stderr, "[session %s]\n", f.SessionId)
-			}
-
-		case generated.WsFrameTypeToken:
-			// LLM token: stream to stdout (US-3 AC-1 — stdout = result text only).
-			// Receiving a token also proves authentication succeeded.
-			authed = true
-			var f generated.TokenFrame
-			if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil {
-				fmt.Fprint(o.Stdout, f.Content)
-			}
-
-		case generated.WsFrameTypeToolCallStart:
-			// Tool started: report to stderr (US-3 AC-1).
-			var f generated.ToolCallStartFrame
-			if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil {
-				fmt.Fprintf(o.Stderr, "[tool: %s]\n", f.Tool)
-			}
-
-		case generated.WsFrameTypeToolCallResult:
-			// Tool finished: report status to stderr.
-			var f generated.ToolCallResultFrame
-			if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil {
-				if f.Error != nil {
-					fmt.Fprintf(o.Stderr, "[tool: %s error: %s]\n", f.Tool, *f.Error)
-				} else {
-					fmt.Fprintf(o.Stderr, "[tool: %s done]\n", f.Tool)
-				}
-			}
-
-		case generated.WsFrameTypeToolApprovalRequired:
-			// FR-005 / US-4: resolve via REST, not via the legacy WS frame.
-			// The WS exec_approval_response hits a different registry and hangs 90 s.
-			var f generated.ToolApprovalRequiredFrame
-			if jsonErr := json.Unmarshal(raw, &f); jsonErr != nil {
-				slog.Warn("run: malformed tool_approval_required frame", "error", jsonErr)
-				continue
-			}
-			action := generated.ToolApprovalActionRequestActionDeny
-			if o.Yes {
-				action = generated.ToolApprovalActionRequestActionApprove
-			}
-			resolveErr := resolveApprovalWithRetry(ctx, httpBase, o.Token, f.ApprovalId, action)
-			if resolveErr != nil {
-				// The POST failed after one retry. Continuing to a 90 s server
-				// timeout is the exact hang this REST path exists to avoid — exit
-				// non-zero immediately instead.
-				fmt.Fprintf(o.Stderr, "[approval: failed to resolve %s: %v]\n", f.ApprovalId, resolveErr)
-				return ErrApprovalFailed
-			}
-			if action == generated.ToolApprovalActionRequestActionDeny {
-				fmt.Fprintf(o.Stderr, "denied tool: %s\n", f.ToolName)
-			}
-
-		case generated.WsFrameTypeDone:
-			// Terminal frame: the turn is complete. Write a trailing newline to
-			// stdout so the shell prompt starts on its own line (A1).
-			fmt.Fprintln(o.Stdout)
-
-			// Check whether the engine used its error/limit fallback path. The
-			// fallback content has already been streamed to stdout via token frames
-			// above; returning ErrTurnFailed causes the process to exit non-zero
-			// so the caller knows the turn did not complete cleanly.
-			var f generated.DoneFrame
-			if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil &&
-				f.Stats != nil &&
-				f.Stats.TurnFailed != nil &&
-				*f.Stats.TurnFailed {
-				return ErrTurnFailed
-			}
-			return nil
-
-		case generated.WsFrameTypeError:
-			// Server-side error frame. Two sub-cases:
-			//   1. Not yet authed: this is an auth-phase rejection (the live gateway
-			//      sends an error frame BEFORE the ClosePolicyViolation close — see
-			//      pkg/gateway/websocket.go:665-706). Return ErrKeyInvalid so the
-			//      caller prints the FR-019 rotation hint.
-			//   2. Already authed: this is a post-auth turn/provider error. Report
-			//      to stderr and return a wrapped error (non-zero exit, US-3 AC-2).
-			var f generated.ErrorFrame
-			if jsonErr := json.Unmarshal(raw, &f); jsonErr != nil {
-				if !authed {
-					return ErrKeyInvalid
-				}
-				return fmt.Errorf("run: agent error (malformed error frame)")
-			}
-			if !authed {
-				// Auth-phase error (FR-019 primary path).
-				return ErrKeyInvalid
-			}
-			// Post-auth error.
-			fmt.Fprintf(o.Stderr, "error: %s\n", f.Message)
-			return fmt.Errorf("run: agent error: %s", f.Message)
-
-		case generated.WsFrameTypeSubagentStart,
-			generated.WsFrameTypeSubagentEnd,
-			generated.WsFrameTypeAgentSwitched,
-			generated.WsFrameTypeTaskStatusChanged,
-			generated.WsFrameTypeRateLimit,
-			generated.WsFrameTypeSystemOverload,
-			generated.WsFrameTypeCancelStage,
-			generated.WsFrameTypePong:
-			// Progress frames: no stdout output (US-3 AC-1); progress to stderr
-			// for the subagent/overload cases.
-			fmt.Fprintf(o.Stderr, "[%s]\n", envelope.Type)
-
-		default:
-			// Unrecognized frame type (replay, pairing, etc.): silently ignore so
-			// future frame additions don't break existing CLI binaries.
-			slog.Debug("run: ignoring unrecognized frame", "type", envelope.Type)
-		}
 	}
+}
+
+// handleFrame decodes and handles one frame received from the gateway.
+func (rn *run) handleFrame(raw []byte) runFlow {
+	var envelope struct {
+		Type string `json:"type"`
+	}
+	if jsonErr := json.Unmarshal(raw, &envelope); jsonErr != nil {
+		slog.Warn("run: ignoring malformed frame", "error", jsonErr)
+		return runContinue
+	}
+
+	switch generated.WsFrameType(envelope.Type) {
+	case generated.WsFrameTypeSessionStarted:
+		// The server has minted a session — authentication succeeded and the
+		// turn has started. Mark as authed so subsequent error frames are
+		// treated as post-auth turn errors, not auth rejections.
+		rn.authed = true
+		var f generated.SessionStartedFrame
+		if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil {
+			fmt.Fprintf(rn.o.Stderr, "[session %s]\n", f.SessionId)
+		}
+
+	case generated.WsFrameTypeToken:
+		// LLM token: stream to stdout (US-3 AC-1 — stdout = result text only).
+		// Receiving a token also proves authentication succeeded.
+		rn.authed = true
+		var f generated.TokenFrame
+		if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil {
+			fmt.Fprint(rn.o.Stdout, f.Content)
+		}
+
+	case generated.WsFrameTypeToolCallStart:
+		// Tool started: report to stderr (US-3 AC-1).
+		var f generated.ToolCallStartFrame
+		if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil {
+			fmt.Fprintf(rn.o.Stderr, "[tool: %s]\n", f.Tool)
+		}
+
+	case generated.WsFrameTypeToolCallResult:
+		// Tool finished: report status to stderr.
+		var f generated.ToolCallResultFrame
+		if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil {
+			if f.Error != nil {
+				fmt.Fprintf(rn.o.Stderr, "[tool: %s error: %s]\n", f.Tool, *f.Error)
+			} else {
+				fmt.Fprintf(rn.o.Stderr, "[tool: %s done]\n", f.Tool)
+			}
+		}
+
+	case generated.WsFrameTypeToolApprovalRequired:
+		// FR-005 / US-4: resolve via REST, not via the legacy WS frame.
+		// The WS exec_approval_response hits a different registry and hangs 90 s.
+		var f generated.ToolApprovalRequiredFrame
+		if jsonErr := json.Unmarshal(raw, &f); jsonErr != nil {
+			slog.Warn("run: malformed tool_approval_required frame", "error", jsonErr)
+			return runContinue
+		}
+		action := generated.ToolApprovalActionRequestActionDeny
+		if rn.o.Yes {
+			action = generated.ToolApprovalActionRequestActionApprove
+		}
+		resolveErr := resolveApprovalWithRetry(rn.ctx, rn.httpBase, rn.o.Token, f.ApprovalId, action)
+		if resolveErr != nil {
+			// The POST failed after one retry. Continuing to a 90 s server
+			// timeout is the exact hang this REST path exists to avoid — exit
+			// non-zero immediately instead.
+			fmt.Fprintf(rn.o.Stderr, "[approval: failed to resolve %s: %v]\n", f.ApprovalId, resolveErr)
+			rn.ret0 = ErrApprovalFailed
+			return runReturn
+		}
+		if action == generated.ToolApprovalActionRequestActionDeny {
+			fmt.Fprintf(rn.o.Stderr, "denied tool: %s\n", f.ToolName)
+		}
+
+	case generated.WsFrameTypeDone:
+		// Terminal frame: the turn is complete. Write a trailing newline to
+		// stdout so the shell prompt starts on its own line (A1).
+		fmt.Fprintln(rn.o.Stdout)
+
+		// Check whether the engine used its error/limit fallback path. The
+		// fallback content has already been streamed to stdout via token frames
+		// above; returning ErrTurnFailed causes the process to exit non-zero
+		// so the caller knows the turn did not complete cleanly.
+		var f generated.DoneFrame
+		if jsonErr := json.Unmarshal(raw, &f); jsonErr == nil &&
+			f.Stats != nil &&
+			f.Stats.TurnFailed != nil &&
+			*f.Stats.TurnFailed {
+			rn.ret0 = ErrTurnFailed
+			return runReturn
+		}
+		rn.ret0 = nil
+		return runReturn
+
+	case generated.WsFrameTypeError:
+		// Server-side error frame. Two sub-cases:
+		//   1. Not yet authed: this is an auth-phase rejection (the live gateway
+		//      sends an error frame BEFORE the ClosePolicyViolation close — see
+		//      pkg/gateway/websocket.go:665-706). Return ErrKeyInvalid so the
+		//      caller prints the FR-019 rotation hint.
+		//   2. Already authed: this is a post-auth turn/provider error. Report
+		//      to stderr and return a wrapped error (non-zero exit, US-3 AC-2).
+		var f generated.ErrorFrame
+		if jsonErr := json.Unmarshal(raw, &f); jsonErr != nil {
+			if !rn.authed {
+				rn.ret0 = ErrKeyInvalid
+				return runReturn
+			}
+			rn.ret0 = fmt.Errorf("run: agent error (malformed error frame)")
+			return runReturn
+		}
+		if !rn.authed {
+			// Auth-phase error (FR-019 primary path).
+			rn.ret0 = ErrKeyInvalid
+			return runReturn
+		}
+		// Post-auth error.
+		fmt.Fprintf(rn.o.Stderr, "error: %s\n", f.Message)
+		rn.ret0 = fmt.Errorf("run: agent error: %s", f.Message)
+		return runReturn
+
+	case generated.WsFrameTypeSubagentStart,
+		generated.WsFrameTypeSubagentEnd,
+		generated.WsFrameTypeAgentSwitched,
+		generated.WsFrameTypeTaskStatusChanged,
+		generated.WsFrameTypeRateLimit,
+		generated.WsFrameTypeSystemOverload,
+		generated.WsFrameTypeCancelStage,
+		generated.WsFrameTypePong:
+		// Progress frames: no stdout output (US-3 AC-1); progress to stderr
+		// for the subagent/overload cases.
+		fmt.Fprintf(rn.o.Stderr, "[%s]\n", envelope.Type)
+
+	default:
+		// Unrecognized frame type (replay, pairing, etc.): silently ignore so
+		// future frame additions don't break existing CLI binaries.
+		slog.Debug("run: ignoring unrecognized frame", "type", envelope.Type)
+	}
+	return runNext
 }
 
 // resolveApprovalWithRetry calls resolveApproval and, on failure, retries once.
