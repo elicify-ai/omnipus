@@ -146,7 +146,7 @@ Evidence: `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/results/v
 a failure rather than merge something broken — the cost of skipping the smoke test would have been
 wasted lane time, not a bad merge. Smoke-test a new tool on one real function before fanning out.
 
-**Wave 4 (queued, not yet launched):** one lane per file still over 240, driven by `extractfn-v2`,
+**Wave 4 (launched 2026-09-16, 17 Codex `gpt-5.6-sol` lanes, 8 concurrent, driven by `extractfn-v2`):** one lane per file still over 240, driven by `extractfn-v2`,
 including the four largest functions in the repository (`runTurn` 4,364; `spawnSubTurn` 1,489;
 `registerSharedTools` 1,297; `setupAndStartServices` 1,258).
 
@@ -161,7 +161,7 @@ merge script re-runs it after merging and rejects any diff that touches code or 
 Findings the lanes surfaced about the *product* (not the docs) are collected in
 `results/docs-open-questions.md`.
 
-**Still open (2026-09-16):** files over 4,000 are down to **2** (`loop.go`, shrinking as `runTurn` is extracted, and `chat.ts`, untouched so far); wave 4 (the 29 Go functions still over 240, `extractfn-v2`) is queued; **20 Go TEST functions** over 240 have no plan yet and the gate applies the same numbers to test code; the TypeScript side has **184** production functions over 120 and **117** over 240 (components are warn-only by founder ruling, so the hard-fail set is led by `chat.ts`); nested `CLAUDE.md` landing; the documentation track's second wave (index, concepts and interface tour rewrites, connector rename); and the one CI pass with the red jobs it will show.
+**Still open (2026-09-16):** files over 4,000 are down to **2** (`loop.go`, shrinking as `runTurn` is extracted, and `chat.ts`, untouched so far); wave 4 is running (18 production functions still over 240 across 17 file lanes); **20 Go TEST functions** over 240 have no plan yet and the gate applies the same numbers to test code; the TypeScript side has **184** production functions over 120 and **117** over 240 (components are warn-only by founder ruling, so the hard-fail set is led by `chat.ts`); nested `CLAUDE.md` landing; the documentation track's second wave (index, concepts and interface tour rewrites, connector rename); and the one CI pass with the red jobs it will show.
 
 **Decisions for the founder (2026-09-15), each with a recommendation:**
 
