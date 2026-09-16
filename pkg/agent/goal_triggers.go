@@ -748,7 +748,6 @@ type agentLoopRunGoalAdjudication struct {
 	sessionID         string
 	store             *session.UnifiedStore
 	rec               *goal.Goal
-	met               bool
 	gstore            *goal.Store
 	attempt           int
 	verdict           *task.JudgeVerdict
@@ -773,7 +772,6 @@ const (
 // agentLoopRunGoalAdjudicationAdvance carries the shared state of runGoalAdjudication across its stages.
 type agentLoopRunGoalAdjudicationAdvance struct {
 	deliverSteer func(steer string)
-	met          bool
 	ag           *agentLoopRunGoalAdjudication
 	ret0         bool
 }
@@ -1002,7 +1000,6 @@ func (al *AgentLoop) runGoalAdjudication(
 		case agentLoopRunGoalAdjudicationReturn:
 			return aa.ag.ret0
 		}
-
 	}
 
 	if aa.ag.attempt >= aa.ag.maxRounds {
@@ -1113,7 +1110,6 @@ func (aa *agentLoopRunGoalAdjudicationAdvance) advanceUnmetGoal() agentLoopRunGo
 
 // projectVerdict projects the Judge verdict onto the goal record's criteria and definition.
 func (ag *agentLoopRunGoalAdjudication) projectVerdict() {
-
 	if fresh, gerr := ag.gstore.Get(ag.rec.GoalID); gerr != nil || fresh == nil {
 		logger.WarnCF("agent", "goal trigger: could not re-read the goal record for verdict projection",
 			map[string]any{"session_id": ag.sessionID, "goal_id": ag.rec.GoalID, "error": errString(gerr)})

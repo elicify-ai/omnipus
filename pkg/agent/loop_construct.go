@@ -151,7 +151,7 @@ func (nal *newAgentLoop) initializeCore() {
 }
 
 // initializeAudit constructs audit logging and wires it into registries when enabled.
-func (nal *newAgentLoop) initializeAudit() (*AgentLoop, error, bool) {
+func (nal *newAgentLoop) initializeAudit() (*AgentLoop, bool, error) {
 	// SEC-15: Initialize structured audit logging (ON by default since the
 	// 2026-09-11 founder decision — see cfg.Sandbox.AuditLog's doc comment)
 	// and policy evaluation (always on). Audit directory is ~/.omnipus/system/
@@ -231,7 +231,7 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, error, bool) {
 				logger.ErrorCF("agent",
 					"Audit logger construction failed; aborting boot because sandbox.audit_log=true was explicitly set",
 					map[string]any{"error": auditErr.Error(), "dir": auditDir})
-				return nil, &audit.LoggerConstructionError{Dir: auditDir, Err: auditErr}, true
+				return nil, true, &audit.LoggerConstructionError{Dir: auditDir, Err: auditErr}
 			}
 			logger.ErrorCF("agent",
 				"Audit logger construction failed; continuing WITHOUT audit logging because audit_log is on by default, not by explicit configuration. "+
@@ -275,7 +275,7 @@ func (nal *newAgentLoop) initializeAudit() (*AgentLoop, error, bool) {
 			tools.SetSkillsWriteAuditLogger(auditLogger)
 		}
 	}
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // initializeSecurity builds policy enforcement, sandboxing, prompt protection, and the exec proxy.
