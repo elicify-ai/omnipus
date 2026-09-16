@@ -1,12 +1,12 @@
-# Agents
+# Editorial decisions
 
-Agents are who does the work in Omnipus. Four of them ship with the product, you can create your own, and the Agents screen in the sidebar is where you meet all of them.
+Agents do the work in Omnipus. Four ship with the product, and you can create your own from the Agents screen.
 
 ## What it is
 
 Open **Agents** in the sidebar and the roster has three sections:
 
-- **Built-in roster** — the four agents Omnipus ships with. They are locked, they sit first, and Mia is the default on a fresh install.
+- **Built-in roster** — the four agents Omnipus ships with. They are locked, and Mia is the initial default.
 - **Main agents** — chat colleagues you create yourself.
 - **Sub-agent workers** — workers you create yourself. They never chat with you; other agents delegate work to them.
 
@@ -34,7 +34,7 @@ All four can hand the conversation to another agent when you ask them to. Ava is
 
 ## How to set your default agent
 
-The default agent is who Omnipus picks when a conversation has no more specific agent assigned — a connector conversation that does not name one, for example.
+Omnipus picks the default when a conversation has no specific agent assigned.
 
 1. Open **Agents** in the sidebar.
 2. Find the card of the agent you want as the default.
@@ -60,11 +60,11 @@ You create one of three types. The create buttons sit in the section headers of 
 4. Main and Subagent have a third step, **Tools**, for tool permissions, skills, and fallback models. An external worker has no Tools step — it brings its own.
 5. Create the agent. Its card appears in its section.
 
-To change an agent later, open its card. The edit slide-over saves every change as you type; the footer shows when it last saved. The tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** sits in the footer and asks you to confirm.
+To change an agent, open its card. The edit slide-over saves as you type. Its tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** asks you to confirm.
 
 ## Workers and delegation
 
-A worker never appears in your chat. Another agent calls on it through delegation, hands it one task, and reports the result back to you.
+A worker never appears in your chat. Another agent delegates one task to it and reports the result to you.
 
 ```mermaid
 flowchart LR
@@ -88,15 +88,17 @@ Two things to watch with external workers:
 - The tool choice is fixed when you create the worker. To move to a different tool, create a new worker. The path to the tool's program stays editable.
 - Omnipus tool permissions do not reach inside the external tool. It uses its own tools and its own safety settings; the allow, ask, and deny rules govern Omnipus [tools](tools.md) only.
 
-## Heartbeats
+## How to set up a heartbeat
 
-A heartbeat is a scheduled check-in for one agent in one workspace. It is configured on the agent, so this page owns it.
+A heartbeat is a scheduled check-in for one agent in one workspace. The same agent can have a different heartbeat, or none, in each workspace. Workers cannot have heartbeats.
 
 1. Open the workspace **Team** tab and open the agent from there. The edit slide-over now shows a **Heartbeat** tab.
-2. Turn the heartbeat on and set an interval of five minutes or more.
-3. Write the message the agent receives at each check-in — for example, "check the inbox and start a task for anything new."
+2. Open **Heartbeat** and switch **Enable heartbeat** on.
+3. Set **Interval (minutes)** to five or more.
+4. Write the **Heartbeat body**, which is the prompt the agent receives at each check-in. For example: "Check the inbox and start a task for anything new."
+5. Click **Save heartbeat**. The agent now runs the prompt on that interval in a dedicated heartbeat session.
 
-If nothing needs attention, the agent replies with a short all-clear. Scheduled task work is a different feature; the [calendar](calendar.md) page covers it.
+If nothing needs attention, the agent records an all-clear. Heartbeat sessions stay at the top of the sidebar session list. Scheduled task work is a different feature; the [calendar](calendar.md) page covers it.
 
 ## Limits and things to watch
 

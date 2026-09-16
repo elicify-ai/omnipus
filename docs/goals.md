@@ -63,7 +63,11 @@ Each goal shows as a labelled pill at the bottom-right of the chat:
 |---|---|---|
 | active | Work is under way | Steer by chatting |
 | waiting on you | Paused, waiting for you | Reply in chat |
+| judge unavailable | Judging is paused because the Judge cannot run | Wait for the Judge to become available |
+| re-planning | A plan needs your correction before work continues | Review the request and reply |
 | judging | The Judge is reading the work | Wait |
+| god mode blocks judging | Judging is disabled while god mode is on | Turn off god mode in Settings, under Security |
+| verifying elsewhere | Another judgment of the same work is already running | Wait for that verdict |
 | blocked | Something stands in the way | Remove the obstacle |
 | claim overturned | The agent said done; the Judge disagreed | Read the reasons |
 | done | Every criterion was judged met | Read the verdict |
