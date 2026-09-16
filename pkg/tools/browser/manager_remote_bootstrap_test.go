@@ -86,7 +86,7 @@ func TestRemoteBootstrapConnectsBeforeActivatedAttachment(t *testing.T) {
 	create, created := positions["Target.createTarget"]
 	activate, activated := positions["Target.activateTarget"]
 	attach, attached := positions["Target.attachToTarget"]
-	if !created || !activated || !attached || !(create < activate && activate < attach) {
+	if !created || !activated || !attached || create >= activate || activate >= attach {
 		t.Fatalf("remote tab was not created, activated, then attached: %v", got)
 	}
 	if chromedp.FromContext(ctx).Browser == nil || chromedp.FromContext(ctx).Target == nil {
@@ -124,7 +124,7 @@ func TestRemoteBootstrapCancelledDialReturnsWithoutTab(t *testing.T) {
 	cancelCaller()
 	select {
 	case err := <-done:
-		if err != context.Canceled {
+		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancellation = %v", err)
 		}
 	case <-time.After(time.Second):

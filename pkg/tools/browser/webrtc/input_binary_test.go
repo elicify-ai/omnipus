@@ -24,8 +24,8 @@ func TestInputBinaryGoldenAndStrictFraming(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, golden, encoded)
 	for size := 0; size < len(golden); size++ {
-		_, err := DecodeInputPacket(golden[:size])
-		require.ErrorIs(t, err, errInputBinary, "prefix %d", size)
+		_, decodeErr := DecodeInputPacket(golden[:size])
+		require.ErrorIs(t, decodeErr, errInputBinary, "prefix %d", size)
 	}
 	_, err = DecodeInputPacket(append(append([]byte(nil), golden...), 0))
 	require.ErrorIs(t, err, errInputBinary)
@@ -41,10 +41,10 @@ func TestInputBinaryGoldenAndStrictFraming(t *testing.T) {
 
 func TestInputBinaryPreservesUnicodeAndAllFields(t *testing.T) {
 	for _, text := range []string{"", "Zażółć 世界 👋", strings.Repeat("🙂", 8192)} {
-		one, zero, max, code, mods := 1, 0, 9007199254740991, 76, 1
+		one, zero, maxSafeInteger, code, mods := 1, 0, 9007199254740991, 76, 1
 		x, y, width, height, dx, dy := -0.5, 0.0, 640.5, 480.0, -1.25, 0.0
 		key, physical, button, url, capture := "@", "KeyL", "left", "", "capture"
-		want := generated.BrowserInputFrame{Type: "browser_input", Kind: "key_down", Text: &text, InputEpoch: &one, ControlEpoch: &zero, ReliableSeq: &one, HoverSeq: &one, GestureBarrier: &zero, X: &x, Y: &y, CaptureWidth: &width, CaptureHeight: &height, DeltaX: &dx, DeltaY: &dy, Key: &key, Code: &physical, KeyCode: &code, Modifiers: &mods, Button: &button, Url: &url, CaptureId: &capture, CaptureGeneration: &max}
+		want := generated.BrowserInputFrame{Type: "browser_input", Kind: "key_down", Text: &text, InputEpoch: &one, ControlEpoch: &zero, ReliableSeq: &one, HoverSeq: &one, GestureBarrier: &zero, X: &x, Y: &y, CaptureWidth: &width, CaptureHeight: &height, DeltaX: &dx, DeltaY: &dy, Key: &key, Code: &physical, KeyCode: &code, Modifiers: &mods, Button: &button, Url: &url, CaptureId: &capture, CaptureGeneration: &maxSafeInteger}
 		encoded, err := EncodeInputPacket(want)
 		require.NoError(t, err)
 		actual, err := DecodeInputPacket(encoded)

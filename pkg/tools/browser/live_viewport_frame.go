@@ -57,11 +57,11 @@ func (lv *LiveView) viewportMatchesRequest(ctx context.Context, measured Capture
 	}
 	capture := lv.mgr.CaptureSessionForPanel(lv.sessionID)
 	var innerW, innerH, clientW, clientH int
-	if err := lv.runCDP(ctx, viewportScaleTimeout, viewportContentGeometryAction{&innerW, &innerH, &clientW, &clientH}); err != nil {
-		return false, err
+	if runErr := lv.runCDP(ctx, viewportScaleTimeout, viewportContentGeometryAction{&innerW, &innerH, &clientW, &clientH}); runErr != nil {
+		return false, runErr
 	}
-	if err := ctx.Err(); err != nil {
-		return false, err
+	if contextErr := ctx.Err(); contextErr != nil {
+		return false, contextErr
 	}
 	current, currentTarget, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
 	if err != nil {
@@ -266,8 +266,8 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 				}
 				return anyApplied, fmt.Errorf("browser live: new tab viewport did not converge: requested %dx%d, measured %dx%d", width, height, measured.Width, measured.Height)
 			}
-			if err := lv.acceptViewportConvergence(operation, tabCtx, measured, !converge); err != nil {
-				return anyApplied, fmt.Errorf("viewport convergence acceptance: %w", err)
+			if convergenceErr := lv.acceptViewportConvergence(operation, tabCtx, measured, !converge); convergenceErr != nil {
+				return anyApplied, fmt.Errorf("viewport convergence acceptance: %w", convergenceErr)
 			}
 			ready, err = cs.BeginFrameTransition(measured.TargetID, measured.Width, measured.Height, measured.Scale)
 			if err != nil {
@@ -530,27 +530,24 @@ type windowBoundsAction struct {
 
 // liveViewApplyViewportAdmitted carries the shared state of applyViewportAdmitted across its stages.
 type liveViewApplyViewportAdmitted struct {
-	lv                      *LiveView
-	caller                  context.Context
-	tabCtx                  context.Context
-	operationCtx            context.Context
-	width                   int
-	height                  int
-	deviceScaleFactor       float64
-	applied                 bool
-	initialLayoutUnverified bool
-	err                     error
-	run                     func(timeout time.Duration, actions ...chromedp.Action) error
-	startActiveCtx          context.Context
-	scaleApplied            bool
-	actualW                 int64
-	actualH                 int64
-	compensated             bool
-	compensatedAskW         int
-	compensatedAskH         int
-	ret0                    bool
-	ret1                    bool
-	ret2                    error
+	lv                *LiveView
+	caller            context.Context
+	tabCtx            context.Context
+	operationCtx      context.Context
+	width             int
+	height            int
+	deviceScaleFactor float64
+	run               func(timeout time.Duration, actions ...chromedp.Action) error
+	startActiveCtx    context.Context
+	scaleApplied      bool
+	actualW           int64
+	actualH           int64
+	compensated       bool
+	compensatedAskW   int
+	compensatedAskH   int
+	ret0              bool
+	ret1              bool
+	ret2              error
 }
 
 // liveViewApplyViewportAdmittedFlow reports how a block stage of liveViewApplyViewportAdmitted wants the conductor to proceed.

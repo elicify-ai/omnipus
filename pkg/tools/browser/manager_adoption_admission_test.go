@@ -29,7 +29,7 @@ func TestPopupAttachDoesNotBlockExistingTabCommands(t *testing.T) {
 			return base(ctx, id)
 		}
 		done := make(chan error, 1)
-		go func() { _, err := m.adoptTarget(testSessionID, "slow-popup"); done <- err }()
+		go func() { _, adoptionErr := m.adoptTarget(testSessionID, "slow-popup"); done <- adoptionErr }()
 		<-entered
 		caller, cancel := context.WithTimeout(context.Background(), time.Second)
 		_, commandErr := m.SwitchTabContext(caller, testSessionID, 0)
@@ -69,7 +69,10 @@ func TestPopupAttachCommitsUnderGateAndCoalesces(t *testing.T) {
 			err    error
 		}
 		done := make(chan outcome, 2)
-		adopt := func() { r, err := m.adoptTarget(testSessionID, "shared-popup"); done <- outcome{r, err} }
+		adopt := func() {
+			result, adoptionErr := m.adoptTarget(testSessionID, "shared-popup")
+			done <- outcome{result, adoptionErr}
+		}
 		go adopt()
 		<-entered
 		go adopt()
@@ -117,16 +120,16 @@ func TestPopupAttachCannotPublishIntoReplacementSession(t *testing.T) {
 		base := m.createTabFn
 		var prepared *tabEntry
 		m.createTabFn = func(ctx context.Context, id target.ID) (*tabEntry, error) {
-			tab, err := base(ctx, id)
+			tab, createErr := base(ctx, id)
 			if id == "retired-popup" {
 				prepared = tab
 				close(entered)
 				<-finish
 			}
-			return tab, err
+			return tab, createErr
 		}
 		done := make(chan error, 1)
-		go func() { _, err := m.adoptTarget(testSessionID, "retired-popup"); done <- err }()
+		go func() { _, adoptionErr := m.adoptTarget(testSessionID, "retired-popup"); done <- adoptionErr }()
 		<-entered
 		m.CloseSession(testSessionID)
 		replacement, err := m.Session(testSessionID)
@@ -153,14 +156,14 @@ func TestPopupAttachPublicationDeadlineDiscardsOnlyPreparedTarget(t *testing.T) 
 		base := m.createTabFn
 		var prepared *tabEntry
 		m.createTabFn = func(ctx context.Context, id target.ID) (*tabEntry, error) {
-			tab, err := base(ctx, id)
+			tab, createErr := base(ctx, id)
 			prepared = tab
 			close(entered)
 			<-finish
-			return tab, err
+			return tab, createErr
 		}
 		done := make(chan error, 1)
-		go func() { _, err := m.adoptTarget(testSessionID, "unpublished-popup"); done <- err }()
+		go func() { _, adoptionErr := m.adoptTarget(testSessionID, "unpublished-popup"); done <- adoptionErr }()
 		<-entered
 		caller, cancel := context.WithTimeout(context.Background(), time.Second)
 		release, err := m.acquireLiveTabCommand(caller, testSessionID)
