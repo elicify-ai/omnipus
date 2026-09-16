@@ -197,6 +197,11 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/skills/config_bridge.go:54":   true,
 	"pkg/agent/loop.go:1978":           true,
 
+	// MarketplaceConfig.Workspace (pkg/skills), not AgentConfig — the same
+	// unrelated type whose producing lines config_bridge.go:53,54 are
+	// already allowed above. Added 2026-09-16 with the SSRF-client test.
+	"pkg/skills/config_bridge_test.go:133": true,
+
 	"pkg/skills/github_registry_test.go:24":  true,
 	"pkg/skills/github_registry_test.go:35":  true,
 	"pkg/skills/github_registry_test.go:46":  true,
