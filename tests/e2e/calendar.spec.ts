@@ -418,9 +418,16 @@ test(
       const task = await createTaskWithDue(workspaceId, 'E2E drag reschedule', dueDate);
       taskId = task.id;
     } catch (err) {
-      // Tasks endpoint not available in this build — annotated skip so the gap is visible.
-      test.skip(true, `createTaskWithDue failed — tasks endpoint unavailable: ${err}`);
-      return;
+      // Tasks endpoint not available — a missing/broken implementation is RED
+      // by policy, not a skip ("use … a BLOCKED message so CI shows red, not
+      // skipped" — fixtures/skip-tracking.ts). Converted 2026-09-16 from a raw
+      // test.skip() that bypassed the skip gate entirely.
+      throw new Error(
+        `BLOCKED: createTaskWithDue failed — tasks endpoint unavailable: ${err}. ` +
+        'The drag assertions are meaningless without a seeded task, and an unavailable ' +
+        'tasks endpoint is an implementation or environment gap the skip policy requires ' +
+        'to fail, not skip green.',
+      );
     }
 
     try {
@@ -437,12 +444,21 @@ test(
       const targetDate = `${year}-${month}-13`;
       const targetCell = page.locator(`.fc-daygrid-day[data-date="${targetDate}"]`);
 
-      // If the target cell is not in view (e.g. we seeded day-10 which IS day-10
-      // but day-13 doesn't exist due to month length) — skip gracefully.
+      // If the target cell is not in view, the grid precondition is unmet —
+      // see the BLOCKED throw below for why that is a defect, not a skip.
       const cellVisible = await targetCell.isVisible({ timeout: 5_000 }).catch(() => false);
       if (!cellVisible) {
-        test.skip(true, 'target day-13 cell not visible in current month — grid precondition unmet');
-        return;
+        // The historical skip reason ("day-13 doesn't exist due to month
+        // length") is mathematically impossible — no month is shorter than 28
+        // days — so an absent cell means the grid rendered the wrong month or
+        // did not render at all. That is a defect: RED, not a skip. Converted
+        // 2026-09-16 from a raw test.skip() that bypassed the skip gate.
+        throw new Error(
+          'BLOCKED: target day-13 cell not visible in the rendered Month grid — grid precondition unmet. ' +
+          'FullCalendar month view always renders days 1-28 of the current month, so an absent ' +
+          'cell means the calendar rendered the wrong month or the grid did not render — a ' +
+          'defect, not a skip condition.',
+        );
       }
 
       // Perform the drag — from chip bounding box centre to day-13 cell centre
@@ -515,9 +531,16 @@ test(
       const task = await createTaskWithDue(workspaceId, 'E2E revert test', dueDate);
       taskId = task.id;
     } catch (err) {
-      // Tasks endpoint not available in this build — annotated skip so the gap is visible.
-      test.skip(true, `createTaskWithDue failed — tasks endpoint unavailable: ${err}`);
-      return;
+      // Tasks endpoint not available — a missing/broken implementation is RED
+      // by policy, not a skip ("use … a BLOCKED message so CI shows red, not
+      // skipped" — fixtures/skip-tracking.ts). Converted 2026-09-16 from a raw
+      // test.skip() that bypassed the skip gate entirely.
+      throw new Error(
+        `BLOCKED: createTaskWithDue failed — tasks endpoint unavailable: ${err}. ` +
+        'The revert-on-failure assertions are meaningless without a seeded task, and an ' +
+        'unavailable tasks endpoint is an implementation or environment gap the skip policy ' +
+        'requires to fail, not skip green.',
+      );
     }
 
     try {
@@ -533,8 +556,15 @@ test(
 
       const cellVisible = await targetCell.isVisible({ timeout: 5_000 }).catch(() => false);
       if (!cellVisible) {
-        test.skip(true, 'target day-18 cell not visible in current month — grid precondition unmet');
-        return;
+        // Same reasoning as test (j)'s day-13 guard: day 18 exists in every
+        // month, so an absent cell is a rendering defect. RED, not a skip.
+        // Converted 2026-09-16 from a raw test.skip() that bypassed the gate.
+        throw new Error(
+          'BLOCKED: target day-18 cell not visible in the rendered Month grid — grid precondition unmet. ' +
+          'FullCalendar month view always renders days 1-28 of the current month, so an absent ' +
+          'cell means the calendar rendered the wrong month or the grid did not render — a ' +
+          'defect, not a skip condition.',
+        );
       }
 
       // Intercept all PATCH requests to /api/v1/tasks/* and return 500

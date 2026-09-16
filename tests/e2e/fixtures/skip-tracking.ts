@@ -90,9 +90,13 @@ import { execSync } from 'child_process';
 
 // ── Formally tracked skips ──────────────────────────────────────────────────────
 //
-// These entries document all raw test.skip() and test.fixme() calls in the
-// E2E suite. Each entry references the GitHub issue that blocks the underlying
-// feature. Update the `until` date when the issue is resolved or the deadline
+// As of 2026-09-16 the suite contains NO raw test.skip() / test.fixme() calls.
+// Every former raw skip was converted to one of the three treatments the policy
+// below defines: a preflight that fails fast (missing env var), a BLOCKED
+// failure that goes red (missing implementation / broken environment), or — for
+// genuine configuration preconditions only — a softSkip() call with an entry
+// here. Each entry references the GitHub issue that tracks the underlying
+// condition. Update the `until` date when the issue is resolved or the deadline
 // is formally extended.
 export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?: string }[] = [
   // chat.spec.ts (f) — #105 RESOLVED: investigation found the outbound-queue
@@ -120,29 +124,23 @@ export const SKIP_ALLOWLIST: { test: string; issue: string; until: string; note?
   // violation, before the injection was reverted. Entry removed; the
   // underlying assumption was stale, not a real product gap.
 
-  // browser-live-video.spec.ts — a RAW `test.skip(...)`, which this gate cannot
-  // see today (see the header note: direct test.skip/test.fixme bypass capture,
-  // tracked under #155 for v0.2). It is listed here for the reason
-  // skip-baseline.json states in its own comment — raw skips are pre-documented
-  // so the gate does not immediately fail when capture is extended. That comment
-  // had become false: every prior entry was resolved and removed, and this skip
-  // was added afterwards without one.
-  //
-  // The skip itself is deliberate and well-argued in the spec: it records TWO
-  // rejected diagnoses so nobody repeats them (it is not `connect-src 'self'`
-  // blocking the WebSocket, and it is not the loopback origin spelling), and it
-  // states its own unskip condition. It is listed, not removed.
-  //
-  // WHY THIS MATTERS BEYOND BOOKKEEPING: this spec is the ONLY end-to-end
-  // coverage of the live browser video path, and #613 exists specifically to
-  // confirm it passes after the congestion fix landed. While it is skipped and
-  // invisible, #613 cannot be answered — the evidence it asks for is not being
-  // produced by any run.
+  // browser-live-video.spec.ts — #613 RESOLVED by deletion of the raw skip.
+  // The spec contains no skip at all anymore: its test body is a complete
+  // unconditional assertion sequence whose honesty gate THROWS on a JPEG
+  // fallback or a dead capture (see the sink-detection block and the
+  // first-frame readiness bar), so every run of the suite produces exactly
+  // the evidence issue #613 asks for ("confirm browser-live-video e2e passes
+  // post-96419349"). The entry had become stale by the file's own deletion
+  // criterion — its note described a raw test.skip that no longer existed
+  // anywhere in the spec — and is removed. #613 itself is still OPEN
+  // and may now be closable; closing it is a human decision, not one made
+  // from the cleanup lane that removed this entry.
+
   {
-    test: 'live browser view streams genuinely playing video with real audio and realtime input',
-    issue: 'https://github.com/elicify-ai/omnipus/issues/613',
+    test: '(D) real backend: pairing WS frame delivered after channel enable',
+    issue: 'https://github.com/elicify-ai/omnipus/issues/299',
     until: '2026-12-31',
-    note: 'Raw test.skip in browser-live-video.spec.ts: the page never loads under the current CSP and the run times out reporting "no ingest video track" — the reported symptom is video, the actual failure is a page that never loaded. Unskip when the headed run across Chromium, Firefox and WebKit has identified the directive, or the policy is narrowed to the proven-safe document set. Do NOT unskip by loosening the test.',
+    note: 'Genuine configuration precondition, not a defect: a -tags lite build deliberately omits whatsmeow (WhatsApp native unavailable by design — issue #299, the lite-build capability-gating issue this spec\'s own header already traces to), so this backend can never emit the pairing QR the test waits on. Converted 2026-09-16 from a raw test.skip() to softSkip() so the skip is counted in every skip-manifest.json instead of bypassing governance. The until date is a forced re-look, not a resolution promise — lite builds will not gain whatsmeow; if no better mechanism exists by then (e.g. a shard-level lite profile), extend the date with justification rather than silently.',
   },
 ];
 

@@ -62,6 +62,7 @@ import * as fs from 'fs'
 import * as path from 'path'
 import type { Route, WebSocketRoute } from '@playwright/test'
 import { expect, test } from '@playwright/test'
+import { softSkip } from './fixtures/skip-tracking'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
@@ -363,8 +364,10 @@ test(
 // QR, and delivers the whatsapp_pairing WS frame to the SPA end-to-end.
 //
 // Skip condition: if GET /api/v1/channels returns native_available:false for
-// WhatsApp (i.e., the binary is a lite build without whatsmeow), the test is
-// skipped with test.skip() — there is no QR to wait for in that case.
+// WhatsApp (i.e., the binary is a lite build without whatsmeow), the test
+// softSkips through the tracked allow-list entry (issue #299) — there is no
+// QR to wait for in that case. A FAILED GET is not a skip: it throws BLOCKED
+// and goes red (2026-09-16 skip-governance conversion).
 //
 // Cleanup: the test disables the WhatsApp channel after the assertion to avoid
 // leaving the gateway in a state where whatsmeow tries to connect and generates
@@ -413,12 +416,16 @@ test(
     test.setTimeout(60_000)
 
     // ── Step 1: Check native_available from the real API ──
-    // If the binary is a lite build (no whatsmeow), native_available is false
-    // and we cannot receive a real QR — skip rather than fail.
+    // Lite build (no whatsmeow) → genuine configuration precondition → tracked
+    // softSkip (SKIP_ALLOWLIST, issue #299). A FAILED GET is not a precondition
+    // — the gateway must already be up and authed (global-setup) — so it throws.
     const channelsResp = await page.request.get(`${BASE_URL}/api/v1/channels`)
     if (!channelsResp.ok()) {
-      test.skip(true, `GET /api/v1/channels failed: ${channelsResp.status()} — cannot determine native_available`)
-      return
+      throw new Error(
+        `BLOCKED: GET /api/v1/channels failed: ${channelsResp.status()} — cannot determine ` +
+        'native_available. The gateway must already be up and authed (global-setup.ts); a ' +
+        'failing channels list is a defect, not a precondition to skip on.',
+      )
     }
     const channels = (await channelsResp.json()) as Array<{
       id: string
@@ -427,10 +434,8 @@ test(
     }>
     const whatsappEntry = channels.find((c) => c.id === 'whatsapp')
     if (!whatsappEntry?.native_available) {
-      test.skip(
-        true,
-        'WhatsApp native_available=false (lite build without whatsmeow) — no QR to wait for',
-      )
+      // Full rationale lives in the SKIP_ALLOWLIST note for this test.
+      softSkip(test, 'WhatsApp native_available=false (lite build without whatsmeow) — no QR to wait for.')
       return
     }
 
