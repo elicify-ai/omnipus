@@ -1,6 +1,6 @@
-> Back to [Channels](../channels.md)
+> Back to [Connectors](../connectors.md)
 
-# Feishu
+# Feishu connector
 
 Feishu (international name: Lark) is a ByteDance enterprise collaboration platform. The channel connects via the Lark Open Platform WebSocket SDK — no public webhook URL is required.
 

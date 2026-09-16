@@ -1,6 +1,6 @@
-> Back to [Channels](../channels.md)
+> Back to [Connectors](../connectors.md)
 
-# Telegram
+# Telegram connector
 
 The Telegram channel receives messages via long polling (30-second timeout) using the Telegram Bot API. It supports text, media attachments (photos, voice, audio, documents), streaming replies, and automatic bot command registration.
 

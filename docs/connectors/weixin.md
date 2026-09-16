@@ -1,6 +1,6 @@
-> Back to [Channels](../channels.md)
+> Back to [Connectors](../connectors.md)
 
-# Weixin (WeChat Personal)
+# Weixin connector (WeChat Personal)
 
 Omnipus connects to a personal WeChat account using the Tencent iLink REST API via long polling. The channel is personal-account only — it does not use WeChat Official Accounts or Work WeChat.
 
