@@ -634,7 +634,72 @@ func (s *wsStreamer) Update(_ context.Context, content string) error {
 	return nil
 }
 
+// wsStreamerFinalize carries the shared state of Finalize across its stages.
+type wsStreamerFinalize struct {
+	s                          *wsStreamer
+	finalContent               string
+	tokensF                    float64
+	costF                      float64
+	promptTokensF              int
+	completionTokensF          int
+	cacheReadF                 int
+	cacheWriteF                int
+	durF                       float64
+	transcriptAlreadyPersisted bool
+	producedModel              string
+	turnFailed                 bool
+	continuationContent        string
+	hasContinuation            bool
+	truncationReason           string
+	producerAgentID            string
+	turnID                     string
+	parentSpawnCallID          string
+	shadow                     bool
+	targets                    []*wsConn
+}
+
 func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
+	wsf := &wsStreamerFinalize{s: s, finalContent: finalContent}
+
+	wsf.prepareFinalize()
+
+	// Release this turn's live-stream ownership claim (if held) so a
+	// different, still-running turn on the same chatID can become the live
+	// owner (see WSHandler.streamOwners' doc comment). Finalize is the
+	// normal, once-per-turn release point via turnState's deferred
+	// finalizeStreamer (pkg/agent/turn.go) — safe/no-op when this stream was
+	// never the owner (a shadow stream) or never claimed at all (e.g. an
+	// immediate tool-only round with no narration text, so Update() was
+	// never called). See ReleaseStreamOwnership for the other release
+	// points (Cancel, and finalizeStreamer's B4 abandoned-turn path, which
+	// deliberately skips the rest of this method).
+	// ReleaseStreamOwnership also unregisters this streamer from
+	// h.liveStreamers[s.sessionID] when it is still the currently-registered
+	// one (ADR-082 review CR4/F2) — see that method's doc comment. Finalize
+	// used to do this deletion itself, inline, right here; it is now shared
+	// with every other release path (Cancel, and finalizeStreamer's B4
+	// abandoned-turn early return, pkg/agent/turn.go) so an abandoned turn
+	// cannot leave a phantom liveStreamers entry (and therefore a phantom
+	// catch-up token with no done frame ever following it) for a session
+	// that no longer has any turn actually in flight.
+	wsf.s.ReleaseStreamOwnership()
+
+	// ADR-082 D2/D3: resolve the CURRENT set of connections bound to this
+	// session, under the SAME h.mu critical section Update uses, for the
+	// same "no duplicate, no gap" ordering reason (see Update's doc comment).
+
+	if h := wsf.s.wsHandler(); h != nil && wsf.s.sessionID != "" {
+		h.mu.Lock()
+		wsf.targets = h.resolveSessionConnsLocked("", wsf.s.sessionID)
+		h.mu.Unlock()
+	}
+
+	wsf.sendDone()
+	return wsf.persistTranscript()
+}
+
+// prepareFinalize snapshots turn statistics and resolves whether this streamer is shadowed.
+func (wsf *wsStreamerFinalize) prepareFinalize() {
 	// ADR-082 D2/FR-014: TokensDropped is no longer computed here as a single
 	// turn-level value — a drop is a property of ONE connection's send
 	// buffer, not the turn. Each connection gets its own generated.DoneStats
@@ -643,33 +708,33 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// Include turn-level token/cost/duration if the agent loop pushed them via
 	// SetTurnStats before this call (issue #12). Zero values are still emitted
 	// so the client can reset the session counters for turns with no LLM usage.
-	s.statsMu.Lock()
-	tokensF := float64(s.statsTokens)
-	costF := s.statsCostUSD
+	wsf.s.statsMu.Lock()
+	wsf.tokensF = float64(wsf.s.statsTokens)
+	wsf.costF = wsf.s.statsCostUSD
 	// Read the split under the same lock as the total, so the entry cannot
 	// carry a total from one turn and a split from another.
-	promptTokensF := s.statsPromptTokens
-	completionTokensF := s.statsCompletionTokens
-	cacheReadF := s.statsCacheRead
-	cacheWriteF := s.statsCacheWrite
-	durF := float64(s.statsDuration.Milliseconds())
-	transcriptAlreadyPersisted := s.transcriptPersisted
-	producedModel := s.producedModel
-	turnFailed := s.statsTurnFailed
-	continuationContent := s.continuationContent
-	hasContinuation := s.hasContinuation
+	wsf.promptTokensF = wsf.s.statsPromptTokens
+	wsf.completionTokensF = wsf.s.statsCompletionTokens
+	wsf.cacheReadF = wsf.s.statsCacheRead
+	wsf.cacheWriteF = wsf.s.statsCacheWrite
+	wsf.durF = float64(wsf.s.statsDuration.Milliseconds())
+	wsf.transcriptAlreadyPersisted = wsf.s.transcriptPersisted
+	wsf.producedModel = wsf.s.producedModel
+	wsf.turnFailed = wsf.s.statsTurnFailed
+	wsf.continuationContent = wsf.s.continuationContent
+	wsf.hasContinuation = wsf.s.hasContinuation
 	// ADR-087 D2/D4a/D4b, WP C: read under statsMu, same pattern as
 	// continuationContent — SetTruncation (called by the agent loop's
 	// finalizeStreamer immediately before Finalize) and Finalize (turn end)
 	// may run on different goroutines in principle even though in practice
 	// they are sequenced back-to-back by finalizeStreamer itself.
-	truncationReason := s.truncationReason
+	wsf.truncationReason = wsf.s.truncationReason
 	// FIX 5a/5c: read under statsMu — SetProducerAgentID/SetTurnID (called by
 	// the agent loop at streaming-call start) may run on a different
 	// goroutine than Finalize (called at turn end).
-	producerAgentID := s.agentID
-	turnID := s.turnID
-	parentSpawnCallID := s.parentSpawnCallID
+	wsf.producerAgentID = wsf.s.agentID
+	wsf.turnID = wsf.s.turnID
+	wsf.parentSpawnCallID = wsf.s.parentSpawnCallID
 	// A-I4 round 4 / Finding A: resolve the live-stream shadow gate HERE too,
 	// not just in Update(). Every turn — root OR a delegated child sub-turn —
 	// runs through the exact same pkg/agent/loop.go runTurn/finalizeStreamer
@@ -713,49 +778,21 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// reach Finalize with shadowResolved still false and default to
 	// isShadowStream=false (treated as live), which is wrong for a child
 	// sub-turn that happened to stream zero tokens of its own.
-	if !s.shadowResolved {
-		if parentSpawnCallID != "" {
-			s.isShadowStream = true
-		} else if turnID != "" && s.sessionID != "" && s.channel != nil && s.channel.wsHandler != nil {
+	if !wsf.s.shadowResolved {
+		if wsf.parentSpawnCallID != "" {
+			wsf.s.isShadowStream = true
+		} else if wsf.turnID != "" && wsf.s.sessionID != "" && wsf.s.channel != nil && wsf.s.channel.wsHandler != nil {
 			// ADR-082 review F6: keyed by sessionID — see Update's identical gate.
-			s.isShadowStream = !claimStreamOwnership(&s.channel.wsHandler.streamOwners, s.sessionID, turnID)
+			wsf.s.isShadowStream = !claimStreamOwnership(&wsf.s.channel.wsHandler.streamOwners, wsf.s.sessionID, wsf.turnID)
 		}
-		s.shadowResolved = true
+		wsf.s.shadowResolved = true
 	}
-	shadow := s.isShadowStream
-	s.statsMu.Unlock()
+	wsf.shadow = wsf.s.isShadowStream
+	wsf.s.statsMu.Unlock()
+}
 
-	// Release this turn's live-stream ownership claim (if held) so a
-	// different, still-running turn on the same chatID can become the live
-	// owner (see WSHandler.streamOwners' doc comment). Finalize is the
-	// normal, once-per-turn release point via turnState's deferred
-	// finalizeStreamer (pkg/agent/turn.go) — safe/no-op when this stream was
-	// never the owner (a shadow stream) or never claimed at all (e.g. an
-	// immediate tool-only round with no narration text, so Update() was
-	// never called). See ReleaseStreamOwnership for the other release
-	// points (Cancel, and finalizeStreamer's B4 abandoned-turn path, which
-	// deliberately skips the rest of this method).
-	// ReleaseStreamOwnership also unregisters this streamer from
-	// h.liveStreamers[s.sessionID] when it is still the currently-registered
-	// one (ADR-082 review CR4/F2) — see that method's doc comment. Finalize
-	// used to do this deletion itself, inline, right here; it is now shared
-	// with every other release path (Cancel, and finalizeStreamer's B4
-	// abandoned-turn early return, pkg/agent/turn.go) so an abandoned turn
-	// cannot leave a phantom liveStreamers entry (and therefore a phantom
-	// catch-up token with no done frame ever following it) for a session
-	// that no longer has any turn actually in flight.
-	s.ReleaseStreamOwnership()
-
-	// ADR-082 D2/D3: resolve the CURRENT set of connections bound to this
-	// session, under the SAME h.mu critical section Update uses, for the
-	// same "no duplicate, no gap" ordering reason (see Update's doc comment).
-	var targets []*wsConn
-	if h := s.wsHandler(); h != nil && s.sessionID != "" {
-		h.mu.Lock()
-		targets = h.resolveSessionConnsLocked("", s.sessionID)
-		h.mu.Unlock()
-	}
-
+// sendDone sends per-connection completion frames for a visible stream.
+func (wsf *wsStreamerFinalize) sendDone() {
 	// A-I4 round 4 / Finding A: a shadow stream (a delegated child sub-turn
 	// that never owned — and, per the rule above, can never win — this
 	// chatID's live-stream slot) must not send its own "done" either. Its
@@ -765,19 +802,19 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// write below stays unconditional — persistence must not depend on live
 	// visibility — only the live-facing signals (done frame, fan-out,
 	// markStreamed) are gated.
-	if !shadow {
+	if !wsf.shadow {
 		// ADR-082 D2/FR-014: send one done frame PER bound connection, each
 		// carrying that connection's own TokensDropped — a drop on one
 		// connection's send buffer must never be reported (or withheld) on
 		// another connection's done frame.
-		for _, conn := range targets {
+		for _, conn := range wsf.targets {
 			connStats := &generated.DoneStats{
-				Tokens:     &tokensF,
-				Cost:       &costF,
-				DurationMs: &durF,
+				Tokens:     &wsf.tokensF,
+				Cost:       &wsf.costF,
+				DurationMs: &wsf.durF,
 			}
-			if turnFailed {
-				tf := turnFailed
+			if wsf.turnFailed {
+				tf := wsf.turnFailed
 				connStats.TurnFailed = &tf
 			}
 			// ADR-087 D2 (finding #10): mirror the truncation annotation onto
@@ -788,10 +825,10 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 			// without waiting for a reload/reattach round-trip through
 			// replay. Populated from the SAME truncationReason this Finalize
 			// call stamped on the transcript entry.
-			if truncationReason != "" {
+			if wsf.truncationReason != "" {
 				truncatedCopy := true
 				connStats.Truncated = &truncatedCopy
-				reasonCopy := truncationReason
+				reasonCopy := wsf.truncationReason
 				connStats.TruncationReason = &reasonCopy
 			}
 			// ADR-082 review F10: Swap(0), not Load — droppedTokens is a
@@ -806,12 +843,12 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 			}
 			doneFrame := generated.DoneFrame{
 				Type:      string(generated.WsFrameTypeDone),
-				SessionId: s.sessionID,
+				SessionId: wsf.s.sessionID,
 				Stats:     connStats,
 			}
 			data, mErr := json.Marshal(doneFrame)
 			if mErr != nil {
-				slog.Error("ws: marshal done frame failed", "session_id", s.sessionID, "error", mErr)
+				slog.Error("ws: marshal done frame failed", "session_id", wsf.s.sessionID, "error", mErr)
 				continue
 			}
 			sendRawFrameBytes(conn, string(generated.WsFrameTypeDone), data)
@@ -819,10 +856,14 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 		// Only mark as streamed if we actually sent content. If the LLM failed
 		// before producing any tokens, let the outbound Send path deliver the
 		// error message — otherwise the user sees a stuck "thinking" spinner.
-		if s.channel != nil && s.accumulated.Len() > 0 {
-			s.channel.markStreamed(s.chatID)
+		if wsf.s.channel != nil && wsf.s.accumulated.Len() > 0 {
+			wsf.s.channel.markStreamed(wsf.s.chatID)
 		}
 	}
+}
+
+// persistTranscript records the completed assistant response when the round was not already persisted.
+func (wsf *wsStreamerFinalize) persistTranscript() error {
 	// Record the full assistant response to the session transcript — unless the
 	// agent loop already persisted this round's narration via
 	// appendIntermediateAssistantTranscript (#416 gate fix). This happens when
@@ -831,23 +872,23 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 	// Writing here too would duplicate the assistant bubble on replay. We still
 	// sent the done frame, fan-out, and markStreamed above — only the append is
 	// suppressed.
-	if s.agentStore != nil && s.sessionID != "" && !transcriptAlreadyPersisted {
-		content := s.accumulated.String()
-		if hasContinuation {
+	if wsf.s.agentStore != nil && wsf.s.sessionID != "" && !wsf.transcriptAlreadyPersisted {
+		content := wsf.s.accumulated.String()
+		if wsf.hasContinuation {
 			// ADR-087 D6.1/§2.8: this streamer is per PROVIDER CALL, not per
 			// turn — its own `accumulated` buffer (and finalContent, which
 			// for a continuation's per-call streamer would also just be the
 			// suffix) holds only the LAST call's text. continuationContent
 			// carries the full prefix+suffix answer the live bubble showed;
 			// persist THAT, not the buffer.
-			content = continuationContent
-		} else if content == "" && finalContent != "" {
+			content = wsf.continuationContent
+		} else if content == "" && wsf.finalContent != "" {
 			// Fallback: when accumulated is empty (every Update() call silently
 			// failed because the client WS was already closed), use the
 			// finalContent the agent loop passed in. Without this fallback,
 			// disconnected mid-stream turns would leave no assistant entry in
 			// transcript.jsonl and the user sees nothing on reconnect/replay.
-			content = finalContent
+			content = wsf.finalContent
 		}
 		// ADR-087 D2/D4a/D4b: a truncated turn must still get an entry even
 		// when content is empty — D4a is the deliberate "cut off before any
@@ -860,28 +901,28 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 		// stamping directly — either silently no-op'd (no entry to find) or,
 		// worse, walked back and mis-stamped an EARLIER same-turn narration
 		// entry as truncated. See truncationReason's own field doc comment.
-		if content != "" || truncationReason != "" {
+		if content != "" || wsf.truncationReason != "" {
 			entry := session.TranscriptEntry{
 				ID:      uuid.New().String(),
 				Role:    "assistant",
-				AgentID: producerAgentID,
+				AgentID: wsf.producerAgentID,
 				// TurnID (FIX 5c/1): stamped via SetTurnID so a mid-stream
 				// cancel's turn_canceled entry can be correlated with THIS
 				// entry on replay.
-				TurnID:    turnID,
+				TurnID:    wsf.turnID,
 				Content:   content,
 				Timestamp: time.Now().UTC(),
-				Tokens:    int(tokensF),
-				Cost:      costF,
-				Model:     producedModel,
+				Tokens:    int(wsf.tokensF),
+				Cost:      wsf.costF,
+				Model:     wsf.producedModel,
 				// The provider's token split. Without these four fields the
 				// session-stats aggregator sees no split and falls back to
 				// booking the whole turn total as output, which is how every
 				// webchat session came to report tokens_in: 0.
-				PromptTokens:     promptTokensF,
-				CompletionTokens: completionTokensF,
-				CacheReadTokens:  cacheReadF,
-				CacheWriteTokens: cacheWriteF,
+				PromptTokens:     wsf.promptTokensF,
+				CompletionTokens: wsf.completionTokensF,
+				CacheReadTokens:  wsf.cacheReadF,
+				CacheWriteTokens: wsf.cacheWriteF,
 				// ParentSpawnCallID: stamped via SetParentSpawnCallID so a
 				// delegation child sub-turn's own streamed narration/final
 				// response carries the same nesting correlation its
@@ -889,7 +930,7 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 				// / appendAssistantTranscript) already stamp — see
 				// session.TranscriptEntry.ParentSpawnCallID's doc comment.
 				// Empty (the common case) for a root turn.
-				ParentSpawnCallID: parentSpawnCallID,
+				ParentSpawnCallID: wsf.parentSpawnCallID,
 			}
 			// ADR-087 D2/D4a/D4b, WP C: stamp Truncated/TruncationReason in
 			// THIS SAME WRITE — whether content is empty (D4a) or non-empty
@@ -898,9 +939,9 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 			// MarkLastEntryTruncated call after Finalize returns. See
 			// truncationReason's own field doc comment for why the post-hoc
 			// call was the bug.
-			if truncationReason != "" {
+			if wsf.truncationReason != "" {
 				entry.Truncated = true
-				entry.TruncationReason = truncationReason
+				entry.TruncationReason = wsf.truncationReason
 			}
 			// ADR-057 FR-001/FR-002 (W3): AppendTranscriptStrict refuses loudly
 			// (and creates nothing on disk) when s.sessionID does not resolve to
@@ -910,9 +951,9 @@ func (s *wsStreamer) Finalize(_ context.Context, finalContent string) error {
 			// changes (loud vs. silently minting an orphan session directory) —
 			// so surface it as a counter increment (BDD-03) alongside the
 			// pre-existing WARN.
-			if err := s.agentStore.AppendTranscriptStrict(s.sessionID, entry); err != nil {
+			if err := wsf.s.agentStore.AppendTranscriptStrict(wsf.s.sessionID, entry); err != nil {
 				wsTranscriptWriteFailures.Add(1)
-				slog.Warn("ws: could not record streamed assistant message", "session_id", s.sessionID, "error", err)
+				slog.Warn("ws: could not record streamed assistant message", "session_id", wsf.s.sessionID, "error", err)
 			}
 		}
 	}
