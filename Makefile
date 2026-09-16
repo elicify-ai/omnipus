@@ -223,7 +223,12 @@ build-all: spa-embed generate
 	# aarch64, and macOS arm64 as supported, so the NetBSD lines were aspirational
 	# rather than load-bearing — the `build` workflow on main has been red on
 	# every push since 2026-04-26 purely because of these two lines.
-	# Re-add once both upstream issues are resolved.
+	# Do NOT re-add: BSD is not a supported platform (founder decision
+	# 2026-09-16 — supported platforms are Linux, macOS and Windows), so
+	# the upstream issues above are moot. pkg/daemon no longer compiles on
+	# BSD targets by design: its fallback isZombie (returned false
+	# unconditionally, making dead processes read as alive) was deleted
+	# rather than shipped for an unsupported platform.
 	@echo "All builds complete"
 
 ## release-snapshot: Run goreleaser locally without publishing (produces dist/ artifacts).
