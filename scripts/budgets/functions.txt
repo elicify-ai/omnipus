@@ -54,7 +54,6 @@ pkg/task/store.go	Store.updateLocked	310
 pkg/tools/browser/exec_resolver.go	execPathCaches.resolve	277
 pkg/tools/browser/live_viewport_frame.go	LiveView.applyViewportAdmitted	337
 pkg/tools/delegate_run.go	DelegateTool.executeAsync	341
-pkg/tools/delegate_park.go	DelegateTool.executeRespond	255
 pkg/tools/delegate_run.go	DelegateTool.executeRun	277
 pkg/tools/resolvepath.go	ResolvePath	270
 pkg/tools/set_goal_test.go	TestSetGoalTool_ValidatesAndWrites	246
