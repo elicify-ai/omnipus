@@ -2,25 +2,25 @@
 
 The Omnipus process sandbox is deliberately scoped. It applies Landlock (filesystem and TCP port rules) plus a seccomp BPF filter to the gateway process itself before any HTTP listener binds, and inherits both layers to every forked child via Landlock's per-thread domain and `SECCOMP_FILTER_FLAG_TSYNC`. It does **not** attempt to be a container, a hypervisor, a network firewall, or a kernel-level network packet filter — destination-IP-level egress for compiled binaries spawned through `bash` (ADR-036 unified the retired `exec`/`workspace_shell`/`workspace_shell_bg` tools into it) is enforced in userspace by the SSRF checker and the egress proxy, not at the kernel layer. This page lists the specific places where enforcement degrades from kernel-level to application-level checks, or where a feature appears in the config but is unimplemented.
 
-## Platforms without LSM enforcement
+## Platforms with partial or no kernel confinement
 
-On macOS, Windows, and Linux kernels older than 5.13, `sandbox.SelectBackend()` returns a `FallbackBackend` and `applySandbox` follows the graceful-degradation path (`pkg/gateway/sandbox_apply.go:271-289`). The gateway logs `sandbox.degraded` at boot and continues serving with application-level path checks only.
+Which backend you get is per-platform. On Windows there is no kernel sandbox at all: `sandbox.SelectBackend()` always returns the `FallbackBackend`. On Linux kernels older than 5.13, Landlock is unavailable and the same fallback applies. On macOS, Seatbelt confines the processes Omnipus starts, but the gateway process itself is never confined; the fallback applies there only when `sandbox-exec` is missing or disabled. Whenever the fallback is in force, `applySandbox` follows the graceful-degradation path (`applyNonLinuxSandbox` in `pkg/gateway/sandbox_apply.go`): the gateway logs `sandbox.degraded` at boot and continues serving with application-level path checks only.
 
 ### No Landlock filesystem confinement
 
-On unsupported platforms, there is no Landlock filesystem confinement on the gateway or its children. Tool path-guard checks (`pkg/tools/path_audit.go`, the per-tool allow-list inside each builtin) are still enforced in Go, but a compromised tool that bypasses the Go check has no kernel net to catch it.
+Outside Linux there is no Landlock filesystem confinement. On macOS, children are kernel-confined by a Seatbelt profile when sandboxing is in enforce mode; the gateway itself never is, and enforce mode is required — permissive mode installs no Seatbelt profile at all. Tool path-guard checks (`pkg/tools/path_audit.go`, the per-tool allow-list inside each builtin) are still enforced in Go, but a compromised tool that bypasses the Go check has no kernel net to catch it on Windows, on old-Linux fallback, or on the unconfined macOS gateway.
 
 ### No seccomp filter
 
-The deny-list of dangerous syscalls (`ptrace`, `mount`, `bpf`, `kexec_load`, `init_module`, etc.) is not installed on unsupported platforms — see `pkg/sandbox/seccomp_linux.go:28-42` for the canonical list.
+The deny-list of dangerous syscalls (`ptrace`, `mount`, `bpf`, `kexec_load`, `init_module`, etc.) is a Linux-only mechanism and is not installed on any other platform — see `pkg/sandbox/seccomp_linux.go:28-42` for the canonical list.
 
-### No kernel-level port allow-list
+### No kernel-level port allow-list on Windows and old Linux
 
-`cfg.Sandbox.DevServerPortRange` is honored by the gateway's own dev-server registry but not by the kernel, so a compiled child can bind any port the OS permits.
+`cfg.Sandbox.DevServerPortRange` is honored by the gateway's own dev-server registry. On macOS the port allow-list is also enforced in each child's Seatbelt profile. On Windows and pre-5.13 Linux the kernel does not enforce it, so there a compiled child can bind any port the OS permits.
 
 ### Windows kernel sandbox unimplemented
 
-The Windows kernel-sandbox story (Job Objects + Restricted Tokens + DACL) described in `docs/internal/BRD/Omnipus Windows BRD appendic.md` is specified but not implemented. Windows currently uses `FallbackBackend`.
+Windows has no kernel sandbox: `selectBackendPlatform` (`pkg/sandbox/sandbox_other.go`) returns the `FallbackBackend` everywhere Windows runs. Job Objects are used, but only to cap a child's memory and to kill children when the gateway dies — not for confinement. A real confinement design exists (a low-integrity token plus deny rules on secrets, no admin rights needed) and is deliberately deferred.
 
 `/health` and `/api/v1/security/sandbox-status` both report `backend: "fallback"` and `kernel_level: false` in this configuration, and the field `disabled_by: "kernel_unsupported"` may appear when the operator asked for `enforce` but the kernel cannot deliver it.
 
