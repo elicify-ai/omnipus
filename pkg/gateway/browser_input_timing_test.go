@@ -47,6 +47,29 @@ func TestBrowserInputTimingIsOptInBoundedAndConcurrent(t *testing.T) {
 	require.Nil(t, newBrowserInputTiming(true, &seq, frame, time.Now()), "limit+1 must not allocate a record")
 }
 
+// The safe-integer ceiling is a wire contract, not an implementation detail:
+// the boundary value is a valid counter, one past it is malformed and must
+// collapse to zero exactly like any other out-of-range value.
+func TestBrowserInputTimingCounterBoundaries(t *testing.T) {
+	const maximum = 9007199254740991
+	for _, tc := range []struct {
+		name string
+		in   *int
+		want int
+	}{
+		{"missing", nil, 0},
+		{"negative", payloadInt(-1), 0},
+		{"zero", payloadInt(0), 0},
+		{"one", payloadInt(1), 1},
+		{"maximum", payloadInt(maximum), maximum},
+		{"one past maximum", payloadInt(maximum + 1), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, boundedTimingCounter(tc.in))
+		})
+	}
+}
+
 func TestBrowserInputTimingUsesLocalOffsetsAndRedactsPayload(t *testing.T) {
 	var seq atomic.Uint64
 	sensitive := "private URL, typed text, or supplied capture identifier"

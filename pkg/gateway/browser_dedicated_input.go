@@ -308,7 +308,7 @@ func (h *BrowserWSHandler) dispatchDedicatedControl(wc *browserWSConn, state *br
 		// A control refusal must remain distinguishable from transport loss
 		// after the client closes its input peer. Echo the failed request's
 		// identity, never a newer control; malformed counters stay bounded.
-		if f.ControlEpoch != nil && *f.ControlEpoch >= 0 && *f.ControlEpoch <= 9007199254740991 {
+		if f.ControlEpoch != nil && *f.ControlEpoch >= 0 && int64(*f.ControlEpoch) <= maxBrowserCounter {
 			control = *f.ControlEpoch
 			acknowledge = true
 		}

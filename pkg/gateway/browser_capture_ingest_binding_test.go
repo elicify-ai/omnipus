@@ -45,8 +45,14 @@ func (r *wireIngestRelay) HandleIngestOfferForBinding(ctx context.Context, token
 	return "qualified-answer", nil
 }
 func ingestWireFixture(t *testing.T) (*browser.CaptureSession, *wireIngestRelay, string) {
+	return ingestWireFixtureWithValidation(t, true)
+}
+
+// With inbound schema validation off, the production admission guards in
+// serveBoundIngest are the only rejection layer a malformed offer faces.
+func ingestWireFixtureWithValidation(t *testing.T, validate bool) (*browser.CaptureSession, *wireIngestRelay, string) {
 	t.Helper()
-	_, al := newBrowserWSTestHandler(t, func(cfg *config.Config) { cfg.Gateway.ValidateInbound = true })
+	_, al := newBrowserWSTestHandler(t, func(cfg *config.Config) { cfg.Gateway.ValidateInbound = validate })
 	relay := &wireIngestRelay{token: 60, entered: make(chan wireIngestOffer, 16)}
 	var starts int32
 	cs, err := browser.NewCaptureSessionWithDeps(nil, "wire-fixture", relay, fakeEncoderStarter(&starts, nil), nil)
@@ -119,6 +125,44 @@ func TestCaptureIngestWireEchoesAcceptedOfferIdentity(t *testing.T) {
 	ingestWireSendOffer(t, conn, 7, 1, "page-a")
 	require.Equal(t, map[string]any{"type": "browser_capture_answer", "sdp": "qualified-answer", "offer_id": float64(7), "capture_generation": float64(1), "target_id": "page-a"}, ingestWireRead(t, conn, "browser_capture_answer"))
 	require.Equal(t, wireIngestOffer{71, 7, 1, "v=0\r\n", "page-a"}, ingestWireAwaitOffer(t, r))
+}
+
+// The safe-integer ceiling applies to the offer and generation counters with
+// schema validation disabled, so the production admission guard itself is the
+// layer under test: the boundary value negotiates, one past it is refused
+// before negotiation and closes only its own socket.
+func TestCaptureIngestWireSafeIntegerBound(t *testing.T) {
+	const maximum = 9007199254740991
+	t.Run("boundary offer negotiates", func(t *testing.T) {
+		cs, r, url := ingestWireFixtureWithValidation(t, false)
+		conn := ingestWireConnect(t, cs, url)
+		ingestWireSendOffer(t, conn, maximum, 1, "page-a")
+		require.Equal(t, map[string]any{"type": "browser_capture_answer", "sdp": "qualified-answer", "offer_id": float64(maximum), "capture_generation": float64(1), "target_id": "page-a"}, ingestWireRead(t, conn, "browser_capture_answer"))
+		require.Equal(t, wireIngestOffer{71, maximum, 1, "v=0\r\n", "page-a"}, ingestWireAwaitOffer(t, r))
+	})
+	t.Run("offer overflow is refused", func(t *testing.T) {
+		cs, r, url := ingestWireFixtureWithValidation(t, false)
+		conn := ingestWireConnect(t, cs, url)
+		ingestWireSendOffer(t, conn, maximum+1, 1, "page-a")
+		frame := ingestWireRead(t, conn, "error")
+		require.Equal(t, "capture ingest offer requires capture generation, target and offer ID", frame["message"])
+		_, _, err := conn.ReadMessage()
+		require.Error(t, err)
+		select {
+		case <-r.entered:
+			t.Fatal("offer above the safe-integer bound reached negotiation")
+		default:
+		}
+	})
+	t.Run("generation overflow is refused", func(t *testing.T) {
+		cs, _, url := ingestWireFixtureWithValidation(t, false)
+		conn := ingestWireConnect(t, cs, url)
+		ingestWireSendOffer(t, conn, 1, maximum+1, "page-a")
+		frame := ingestWireRead(t, conn, "error")
+		require.Equal(t, "capture ingest offer requires capture generation, target and offer ID", frame["message"])
+		_, _, err := conn.ReadMessage()
+		require.Error(t, err)
+	})
 }
 
 func TestCaptureIngestWireRejectsMissingIdentity(t *testing.T) {

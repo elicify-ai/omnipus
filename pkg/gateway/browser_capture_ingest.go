@@ -96,7 +96,7 @@ func (h *captureIngestWSHandler) serveBoundIngest(conn *websocket.Conn, cs *brow
 				continue
 			}
 			frame := offer.frame
-			if frame.CaptureGeneration == nil || *frame.CaptureGeneration <= 0 || *frame.CaptureGeneration > 9007199254740991 || frame.OfferId == nil || *frame.OfferId <= 0 || *frame.OfferId > 9007199254740991 || frame.TargetId == nil || *frame.TargetId == "" {
+			if frame.CaptureGeneration == nil || *frame.CaptureGeneration <= 0 || int64(*frame.CaptureGeneration) > maxBrowserCounter || frame.OfferId == nil || *frame.OfferId <= 0 || int64(*frame.OfferId) > maxBrowserCounter || frame.TargetId == nil || *frame.TargetId == "" {
 				sendError(errors.New("capture ingest offer requires capture generation, target and offer ID"))
 				return
 			}

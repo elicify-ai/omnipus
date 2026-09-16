@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/security"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser"
+	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
 )
 
 func webRTCInputRouteManager(t *testing.T) *browser.BrowserManager {
@@ -164,6 +166,56 @@ func TestWebRTCContextSinkSuppressesCanceledCompletion(t *testing.T) {
 			sink(source, "viewer", []byte(`{"type":"browser_input","kind":"text","text":"in-flight"}`))
 			if calls != 1 || replies != 0 {
 				t.Fatalf("canceled completion dispatches=%d replies=%d want1,0", calls, replies)
+			}
+		})
+	}
+}
+
+// The queue-timing observer range obeys the same safe-integer ceiling as the
+// counters themselves: a range ending at the boundary is adopted, one ending
+// past it keeps the single-input default. The sampling failure window is the
+// only surface where the adopted range becomes observable.
+func TestWebRTCContextSinkTimingRangeSafeIntegerBound(t *testing.T) {
+	const maximum = 9007199254740991
+	for _, tc := range []struct {
+		name                      string
+		first, last, count        int
+		wantFirst, wantLast, want int
+	}{
+		{"midrange range is adopted", 0, 5, 6, 0, 5, 6},
+		{"boundary range is adopted", 0, maximum, maximum + 1, 0, maximum, maximum + 1},
+		{"one past boundary is refused", 0, maximum + 1, maximum + 2, 0, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("OMNIPUS_BROWSER_INPUT_TIMING", "1")
+			mgr := webRTCInputRouteManager(t)
+			route, err := withWebRTCInputRoute(context.Background(), mgr, "panel", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sampling := &browserInputTimingSampling{}
+			queued := webrtc.InputQueueTiming{FirstReliableSeq: tc.first, LastReliableSeq: tc.last, InputCount: tc.count}
+			sink := newWebRTCContextInputSinkWithDispatchSampling(false, sampling, func(context.Context, *browser.BrowserManager, string, string, browser.LiveInput) error {
+				return nil
+			}, func() webrtc.InputQueueTiming { return queued })
+			sink(route, "viewer", []byte(`{"type":"browser_input","kind":"mouse_down"}`))
+			var record map[string]any
+			sampling.failure("queue_full", time.Now(), func(args ...any) {
+				if record != nil {
+					return
+				}
+				record = map[string]any{}
+				for i := 0; i+1 < len(args); i += 2 {
+					if key, ok := args[i].(string); ok {
+						record[key] = args[i+1]
+					}
+				}
+			})
+			if record == nil {
+				t.Fatal("timing record never reached the failure window")
+			}
+			if record["first_reliable_seq"] != tc.wantFirst || record["last_reliable_seq"] != tc.wantLast || record["input_count"] != tc.want {
+				t.Fatalf("adopted range first=%v last=%v count=%v want %d/%d/%d", record["first_reliable_seq"], record["last_reliable_seq"], record["input_count"], tc.wantFirst, tc.wantLast, tc.want)
 			}
 		})
 	}
