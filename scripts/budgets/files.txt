@@ -1,3 +1,11 @@
 # scripts/budgets/files.txt — file-size budget grandfather list (shrink-only)
 # Format: path<TAB>lines. Seeded 2026-09-15 from docs/internal/architecture/
 # size-budget-grandfather-2026-09-15.md, re-measured at release/v0.1.1 @ 0ea1b81b7.
+#
+# A file split must re-key its rows by hand. Rows are keyed by exact path with
+# no fallback: after a split the original path's row keeps its pre-split count,
+# so that file can grow back to its old size with no FAIL, and a row whose path
+# no longer exists is never reported. Re-key: lower the number to the
+# re-measured count, or delete the row once the file is under 4,000 lines;
+# never add a row for a file a split created — new files must be under 4,000
+# lines. Same trap and precedent as functions.txt (see its header).

@@ -1,5 +1,19 @@
 # Function-size budget grandfather list (shrink-only).
 # Seeded 2026-09-15 from scripts/funlen and scripts/tsfunlen.cjs at this tip (139 entries: 70 Go production, 20 Go test, 13 TS production, 36 TS test — see docs/internal/architecture/size-budget-grandfather-2026-09-15.md). A PR may lower a listed number or delete a line; it may never raise a number or add a new one.
+#
+# A file split must re-key its rows by hand. Rows are keyed by file + qualified
+# name; the directory-level fallback in check-function-budget.sh covers a move
+# to a sibling file in the same package and nothing else, and it keeps the OLD
+# number. A move to another directory fails loud ("not grandfathered") and also
+# strands the old row; a same-directory move or an in-place shrink fails
+# nothing while the row keeps its pre-split number, so the function can grow
+# back to that number undetected — dead and stale rows are never reported.
+# After a split, point each moved row at its new address and lower its number
+# to the re-measured count; never add a row for anything not already
+# grandfathered (an extracted function must come in under 240). Precedent:
+# scripts/check-greenfield-providers.sh re-keyed its path-keyed list for the
+# 2026-09-15 config.go split. See docs/internal/architecture/
+# size-budget-grandfather-2026-09-15.md.
 # file	qualified name	lines
 pkg/agent/cancel.go	AgentLoop.RequestCancel	584
 pkg/agent/external_dispatch.go	runExternalCLISubTurn	277
