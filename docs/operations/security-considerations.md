@@ -95,6 +95,41 @@ The credential store (`~/.omnipus/credentials.json`) is encrypted with a 256-bit
 
 Key provisioning priority, rotation procedure, and the auto-generate first-boot behavior are documented in [ADR-004](../internal/architecture/ADR-004-credential-boot-contract.md#master-key-provisioning). Follow the key rotation steps there before decommissioning a server or moving the data directory.
 
+### Master key provisioning
+
+The gateway tries master-key sources in this order and stops at the first one that succeeds:
+
+| Priority | Source | Operator requirement |
+|---|---|---|
+| 1 | `OMNIPUS_MASTER_KEY` | Supply a 64-character hexadecimal key. |
+| 2 | `OMNIPUS_KEY_FILE` | Point to a regular file containing that key with mode `0600`. |
+| 3 | `$OMNIPUS_HOME/master.key` | Keep the generated or installed file at mode `0600`. |
+| 4 | Fresh-install generation | Available only when neither a key nor `credentials.json` already exists. |
+| 5 | Interactive passphrase | Requires an attached terminal. |
+
+The encrypted store is `$OMNIPUS_HOME/credentials.json`. Omnipus uses AES-256-GCM and writes the store with mode `0600`. An existing store with no usable key causes startup to fail. Omnipus never generates a replacement key over existing encrypted data.
+
+For unattended deployments, provision `OMNIPUS_MASTER_KEY` or `OMNIPUS_KEY_FILE`. Back up the corresponding key separately from `credentials.json`. A copy of the encrypted store without its key cannot be recovered.
+
+## Sensitive-value filtering
+
+Resolved credential values are registered at startup and after a successful configuration reload. Omnipus uses that complete current set to scrub selected content before it reaches a model or an audit record.
+
+Filtering is best-effort and can be switched off. Configure it under `tools` in `config.json`:
+
+```json
+{
+  "tools": {
+    "filter_sensitive_data": true,
+    "filter_min_length": 8
+  }
+}
+```
+
+`filter_sensitive_data` defaults to `true`. `filter_min_length` defaults to `8`; shorter content bypasses this filter. The matching environment variables are `OMNIPUS_TOOLS_FILTER_SENSITIVE_DATA` and `OMNIPUS_TOOLS_FILTER_MIN_LENGTH`.
+
+This filter only covers values Omnipus has registered and patterns recognized by the audit redactor. It does not discover every secret in arbitrary text. Treat any suspected exposure as real and rotate the affected credential.
+
 ---
 
 ## Run by trusted users only

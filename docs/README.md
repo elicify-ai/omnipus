@@ -60,5 +60,5 @@ For whoever operates the server.
 | [Platform support](operations/platform-support.md) | Built and shipped platforms |
 | [Debugging](debug.md), [observability](observability.md) | Logs, sessions, events |
 | Configuration reference | [All keys](configuration.md), [versioning](config-versioning.md), [tools](tools_configuration.md), [tool catalog](tools-reference.md), [providers](providers.md) |
-| Security reference | [Credential encryption](credential_encryption.md), [security config](security_configuration.md), [sensitive-data filtering](sensitive_data_filtering.md) |
+| Security | [Permissions, sandboxing, credentials, and audit history](security.md) |
 | Advanced | [Hooks](hooks/README.md), [WebSocket protocol](protocol/websocket-protocol.md), [config migration](migration/model-list-migration.md) |

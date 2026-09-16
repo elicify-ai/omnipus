@@ -1,80 +1,81 @@
 # Security for users
 
-Omnipus agents can run shell commands, read and write files, and use the web on your machine. This page covers the four rails that keep that access in check, and the one switch that turns most of them off.
+Omnipus can run tools, shell commands, and programs on your machine. You control that access through permissions, the sandbox, encrypted credentials, and an audit log.
 
 ## What it is
 
-- **Permissions** decide, tool by tool, whether an agent may run something, must ask you first, or may never run it: **Allow**, **Ask**, or **Deny**.
-- **The sandbox** is the operating system itself policing the programs an agent starts. It still stops a program that ignores Omnipus's own rules.
-- **The credential vault** keeps every secret — model provider keys, connector tokens — encrypted in one file. Plain settings files hold only a reference, never the secret.
-- **The audit log** records what agents ran, what was allowed or refused, and who changed which security setting.
+Security in Omnipus uses several protections together. Tool policies decide whether an agent can call a tool. The sandbox limits what started programs can reach. The credential vault encrypts saved secrets. The audit log records security events, policy decisions, and tool executions.
+
+Secret filtering adds another layer. It replaces registered credential values before selected content reaches a model. This filtering is best-effort and can be switched off. It does not make pasted or unregistered secrets safe.
 
 ## When you would use it
 
-Set permissions when you decide how much freedom your agents get; meet the Ask setting whenever an agent wants something you have not pre-approved. Add secrets when you connect a model provider or a [connector](connectors.md); check the audit log when you want to know what happened while you were away. The Security tab opens with a health score; each finding links to its fix.
+Review security settings before agents handle private files or untrusted content. Set stricter tool policies for actions that could change data, spend money, or contact another service.
 
-## How to set what agents may do
+Use the credential vault when you add an application programming interface key, connector token, or another secret. Review the audit log when you need to understand an allowed, denied, or failed action.
 
-1. Open **Settings** and pick the **Security** tab.
-2. Under **Protection settings**, choose **Agent tool access**: "Must ask first (safer)" or "Run freely". This is the default for every tool you have not set individually. The same section has **Shell command approval**: auto-allow, ask each time, or always deny.
-3. To set one [tool](tools.md) at a time, expand **Advanced / technical details** and open **Tool Access — Global Policies**. Every tool in the grid has an Allow, Ask, or Deny control.
-4. To tighten one agent only, open that [agent's](agents.md) **Tools** tab. An agent-specific rule can restrict below the global setting, never loosen it. The stricter of the two wins.
-5. When a tool is set to Ask, a dialog appears while the agent works. Choose **Allow** (this once), **Always Allow** (remembers these exact arguments), or **Deny**. Keyboard focus starts on Deny, and closing the dialog counts as Deny.
+## How to control agent access
 
-There is no hidden third layer: a tool resolves from the global setting unless an agent rule restricts it further. Removing a setting does not deny the tool — the global default applies again. To lock one down, set Deny explicitly.
+1. Open **Settings**, then select **Security**. You see the security health summary and the main protection settings.
+2. Under **Agent tool access**, choose **Must ask first (safer)** or **Run freely**. This sets the default behavior.
+3. Set **Shell command approval** to **Auto-allow**, **Ask each time**, or **Always deny**.
+4. Open **Advanced / technical details** to set global rules for individual tools. Choose Allow, Ask, or Deny for each tool.
+5. Open an agent's **Tools** tab when you need a rule for that agent. A global Deny cannot be loosened there.
+6. Review each approval request before you respond. Choose **Approve**, **Always Allow**, or **Deny**. Always Allow remembers the exact arguments for that call.
 
-## What the sandbox does, and what it does not
+These controls answer different questions.
 
-The sandbox has three modes, under Settings, Security, Advanced, Process Sandbox:
-
-- **Enforce** — the operating system itself stops a program that reaches outside what you allowed.
-- **Permissive** — every violation is written to the audit log, but nothing is blocked. Useful for seeing what enforcing would break.
-- **Off** — no operating-system protection at all. Development only.
-
-A separate setting, the **filesystem model**, decides what an agent may read and run. Writes are unaffected: they stay inside the workspace and any folders you have mounted.
-
-- **Open** (the default) — agents can read and run anything on this machine, except Omnipus's own secrets.
-- **Confined** — agents can only read and run things in places you have listed. Safer, and more likely to break a tool that needs a file you did not anticipate.
-
-What you actually get depends on your operating system:
-
-| Operating system | Confined | Not confined |
+| Control | What it decides | Use it when |
 |---|---|---|
-| Linux, kernel 5.13 or newer | The gateway and every program an agent starts, at the kernel level | In the Open model, agents can read anything you can read, apart from Omnipus's own secret files |
-| macOS | The programs an agent starts | The Omnipus gateway process itself |
-| Windows, and older Linux kernels | Nothing at the operating-system level | Enforcement is application-level only: Omnipus refuses in its own code, but a program that ignores that is not contained |
+| Tool policy | Whether an agent may call a tool | You want Allow, Ask, or Deny for a specific capability |
+| Shell command approval | How shell commands are handled | You want a separate default for commands |
+| Process sandbox | What started programs may reach | You want operating-system isolation where the platform supports it |
+| Filesystem model | What agents may read and run | You want open access or a confined list of locations |
+| Shell workspace limit | Whether commands may name paths outside the working folder | You want a command-text check separate from the sandbox |
 
-## The credential vault and your master key
+The process sandbox offers three modes. **Enforce** blocks violations. **Permissive** records violations without blocking them. **Off** removes operating-system protection, but it does not disable the shell workspace limit or blocked command patterns.
 
-Every secret you give Omnipus is encrypted with AES-256-GCM, a standard and widely reviewed cipher, and stored in one file on your machine. When you configure a connector, its token lands in the vault automatically. Omnipus filters the vault's secret values out of what agents send to their models. The filter is on by default; you can switch it off with `tools.filter_sensitive_data` in `config.json`.
+The **Confined** filesystem model limits reads and execution to listed locations. The **Open** model lets agents read and run anything your account can reach, apart from Omnipus secret files. Writes remain limited to the workspace and mounted folders. Changes to the filesystem model take effect after a gateway restart.
 
-The vault is unlocked by a master key. On first start, Omnipus creates it as `master.key` in its data folder (`~/.omnipus` by default) and prints a warning to back it up. Lose the master key and every stored credential is permanently inaccessible. There is no recovery.
+The Security screen reports the protection available on your current platform. If kernel-level protection is unavailable, Omnipus falls back to checks in the application. A program that ignores those checks is not contained by the operating system.
 
-In Settings, Security, Credential Vault, you can add a key, remove one, or rotate the master key. Every change asks you to re-type your password first.
+## How to manage saved secrets
 
-## The audit log
+1. Open **Settings**, then select **Security**.
+2. Find **Credential Vault** and select **Add key**.
+3. Enter a key name and its value, then select **Save**.
+4. Re-type your password if Omnipus asks you to confirm the change.
+5. To remove a saved secret, select its remove button and confirm **Remove**.
+6. To replace the vault's master protection, select **Rotate master key**, enter a new passphrase, and select **Rotate**.
 
-The audit log is on by default. It records each tool call with its decision, shell commands, file operations, and security setting changes with the user and the old and new values. Open it from Settings, Security, Advanced, Audit Log, View Log. It refreshes every 30 seconds and filters by event and decision. Each entry is cryptographically sealed to the one before it, so the viewer can show "Chain verified" — and "Chain broken" at the exact entry where the file was edited. On disk, the log lives at `~/.omnipus/system/audit.jsonl`.
+Omnipus stores credential values in an encrypted file. Settings refer to credentials by name instead of storing their plain values. On a fresh installation, Omnipus creates a master key and warns you to back it up. If you lose that key, existing credentials cannot be recovered.
 
-## God mode
+Rotation re-encrypts the whole vault with the new passphrase. Back up the new passphrase because Omnipus needs it to unlock the vault later.
 
-God mode is one switch in Settings, Gateway, Danger zone. Turning it on removes all permission prompts (every Ask becomes Allow) and disables the kernel sandbox, the outbound-network restrictions, and the shell guard. Audit logging, the prompt-injection defense, and rate limiting stay on.
+## How to review security activity
 
-Changing it requires re-typing your password. The first enable needs a gateway restart; until then you can cancel, and every toggle is audit-logged. While active, a red banner says so at the top of the Gateway tab.
+1. Open **Settings**, select **Security**, then open **Advanced / technical details**.
+2. Find **Audit Log** and select **View Log**.
+3. Filter entries by event or decision to narrow the list.
+4. Check the chain status. **Chain verified** means the displayed log passed its integrity check.
+
+The viewer refreshes every 30 seconds. The log includes security events, policy decisions, and tool executions. It can show security-setting changes with their previous and new values.
 
 ## Limits and things to watch
 
-- On Windows and Linux kernels older than 5.13, there is no operating-system sandbox — only the rules Omnipus enforces in its own code.
-- On macOS, the programs agents start are confined, but the Omnipus gateway itself is not.
-- The Open filesystem model trades safety for working tools: anything you can read, your agents can read. Permission to read is not secrecy — a misled agent can read a file and post its contents to a connector.
-- Sandbox Off disables the operating-system checks but not every rule: the shell workspace limit and the blocked command patterns are separate settings and stay as configured.
-- Secret filtering is best-effort. It hides the values Omnipus holds, not every possible secret: one pasted into a chat can still travel. Rotate anything exposed.
-- A lost master key cannot be reconstructed. Back it up when Omnipus first creates it.
+- Security controls reduce risk but do not make every agent action safe. Read approval details before allowing a request.
+- **Permissive** sandbox mode observes violations but does not stop them. **Off** removes operating-system protection.
+- Kernel-level protection varies by operating system and kernel capability. Trust the status shown on your Security screen for this installation.
+- The Open filesystem model allows agents to read anything your account can read, except protected Omnipus secret files.
+- Secret filtering is best-effort and can be switched off. It only knows registered credential values. Rotate a secret if you think it was exposed.
+- Removing a credential is permanent. Services that refer to it may stop working.
+- Losing the master key makes the encrypted credential store permanently inaccessible.
+- **God-mode** under **Settings**, **Gateway** removes every permission prompt and disables the kernel sandbox, outbound-network restrictions, and shell guard for every agent. Audit logging, prompt protection, and rate limiting remain active. Enabling it requires your password and may require a gateway restart.
 
 ## Related pages
 
-- [tools](tools.md) — the catalog of built-in tools these permissions apply to
-- [agents](agents.md) — each agent's Tools tab, where per-agent restrictions live
-- [connectors](connectors.md) — connecting chat platforms, whose tokens are stored in the vault
-- [settings](settings.md) — the rest of the Settings screen
-- [sandbox limitations](operations/sandbox-limitations.md) — operator-level detail on what the sandbox cannot do
+- [tools](tools.md) — understand the capabilities controlled by tool policies
+- [agents](agents.md) — set restrictions for one agent
+- [connectors](connectors.md) — add services whose tokens are stored as credentials
+- [settings](settings.md) — manage the rest of the application settings
+- [sandbox limitations](operations/sandbox-limitations.md) — read platform-specific operator guidance
