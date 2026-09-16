@@ -9,6 +9,8 @@ package browser
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -241,8 +243,17 @@ func TestActionabilityGate_ConfigKeyIsActuallyRead(t *testing.T) {
 	}
 
 	// The write side: something pushes live config in, on reload.
-	loopSrc := readSourceForTest(t, "../../agent/loop.go")
-	if !strings.Contains(loopSrc, "browser.SetActionabilityGate(cfg.Tools.Browser.ActionabilityGate)") {
+	agentFiles, err := filepath.Glob("../../agent/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agentSrc strings.Builder
+	for _, name := range agentFiles {
+		if !strings.HasSuffix(name, "_test.go") {
+			agentSrc.WriteString(readSourceForTest(t, name))
+		}
+	}
+	if !regexp.MustCompile(`browser\.SetActionabilityGate\(\s*(?:[A-Za-z_]\w*\.)*cfg\.Tools\.Browser\.ActionabilityGate\s*\)`).MatchString(agentSrc.String()) {
 		t.Error("tools.browser.actionability_gate has no writer — the operator would set it and nothing would change, which is the failure mode this project has shipped before")
 	}
 }

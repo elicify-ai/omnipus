@@ -612,14 +612,15 @@ func TestMidTurnBudget_SameBudgetAsWindowTrim(t *testing.T) {
 		if len(calls) < 2 {
 			t.Fatalf("expected the pre-turn and timeout-recovery sites in loop.go, found %d call(s)", len(calls))
 		}
+		budgetFromTurnAgent := regexp.MustCompile(`^agentContextBudget\(\s*(?:[A-Za-z_]\w*\.)*ts\.agent\s*\)$`)
 		for _, c := range calls {
-			if strings.TrimSpace(c[1]) != "agentContextBudget(ts.agent)" {
-				t.Errorf("isOverContextBudget site passes %q — every site must pass agentContextBudget(ts.agent)", c[1])
+			if !budgetFromTurnAgent.MatchString(strings.TrimSpace(c[1])) {
+				t.Errorf("isOverContextBudget site passes %q — every site must pass agentContextBudget through a receiver chain ending in ts.agent", c[1])
 			}
 		}
 		// windowTrim derives its suffix fit-check budget from the same helper.
 		wt := sliceFromMarkerForTest(t, src, "func (al *AgentLoop) windowTrim(")
-		if !strings.Contains(wt, "agentContextBudget(agent)") {
+		if !regexp.MustCompile(`agentContextBudget\(\s*(?:[A-Za-z_]\w*\.)*agent\s*\)`).MatchString(wt) {
 			t.Error("windowTrim must compute its budget via agentContextBudget(agent), not an inline formula")
 		}
 	})
@@ -636,7 +637,8 @@ func TestMidTurnBudget_SameBudgetAsWindowTrim(t *testing.T) {
 		// of loop.go call sites must cover the append sites (8 denial-family
 		// + the main result site + the skipped-results site).
 		loopSrc := readLoopSourcesForTest(t)
-		if got := strings.Count(loopSrc, "al.midTurnWindowCheck(ts, messages, providerToolDefs)"); got < 10 {
+		midTurnCalls := regexp.MustCompile(`\.midTurnWindowCheck\(\s*(?:[A-Za-z_]\w*\.)*ts\s*,\s*(?:[A-Za-z_]\w*\.)*messages\s*,\s*(?:[A-Za-z_]\w*\.)*providerToolDefs\s*\)`).FindAllString(loopSrc, -1)
+		if got := len(midTurnCalls); got < 10 {
 			t.Errorf("loop.go has %d midTurnWindowCheck sites; every admitted-result append must be followed by the check (want ≥ 10)", got)
 		}
 	})
