@@ -1,6 +1,6 @@
 # Security for users
 
-Omnipus agents can run shell commands, read and write files, and use the web on your machine. This page covers the four rails that keep that access in check — permissions, the sandbox, the credential vault, and the audit log — and the one switch that turns most of them off.
+Omnipus agents can run shell commands, read and write files, and use the web on your machine. This page covers the four rails that keep that access in check, and the one switch that turns most of them off.
 
 ## What it is
 
@@ -11,7 +11,7 @@ Omnipus agents can run shell commands, read and write files, and use the web on 
 
 ## When you would use it
 
-Set permissions when you decide how much freedom your agents get; meet the Ask setting whenever an agent wants something you have not pre-approved. Add secrets when you connect a model provider or a [connector](connectors.md); check the audit log when you want to know what happened while you were away. The Security tab opens with a health score and a link from each finding to its fix.
+Set permissions when you decide how much freedom your agents get; meet the Ask setting whenever an agent wants something you have not pre-approved. Add secrets when you connect a model provider or a [connector](connectors.md); check the audit log when you want to know what happened while you were away. The Security tab opens with a health score; each finding links to its fix.
 
 ## How to set what agents may do
 
@@ -31,7 +31,7 @@ The sandbox has three modes, under Settings, Security, Advanced, Process Sandbox
 - **Permissive** — every violation is written to the audit log, but nothing is blocked. Useful for seeing what enforcing would break.
 - **Off** — no operating-system protection at all. Development only.
 
-A separate setting, the **filesystem model**, decides what an agent may read and run. Neither option changes what it may write: writes stay inside the workspace and any folders you have mounted.
+A separate setting, the **filesystem model**, decides what an agent may read and run. Writes are unaffected: they stay inside the workspace and any folders you have mounted.
 
 - **Open** (the default) — agents can read and run anything on this machine, except Omnipus's own secrets.
 - **Confined** — agents can only read and run things in places you have listed. Safer, and more likely to break a tool that needs a file you did not anticipate.
@@ -46,9 +46,9 @@ What you actually get depends on your operating system:
 
 ## The credential vault and your master key
 
-Every secret you give Omnipus is encrypted with AES-256-GCM, a standard and widely reviewed cipher, and stored in one file on your machine. When you configure a connector, its token lands in the vault automatically. Stored secrets are scrubbed from agent output and the audit log.
+Every secret you give Omnipus is encrypted with AES-256-GCM, a standard and widely reviewed cipher, and stored in one file on your machine. When you configure a connector, its token lands in the vault automatically. Omnipus filters the vault's secret values out of what agents send to their models. The filter is on by default; you can switch it off with `tools.filter_sensitive_data` in `config.json`.
 
-The vault is unlocked by a master key. On first start, Omnipus creates it as a file named `master.key` in its data folder (`~/.omnipus` by default) and prints a warning to back it up. Lose the master key and every stored credential is permanently inaccessible. There is no recovery.
+The vault is unlocked by a master key. On first start, Omnipus creates it as `master.key` in its data folder (`~/.omnipus` by default) and prints a warning to back it up. Lose the master key and every stored credential is permanently inaccessible. There is no recovery.
 
 In Settings, Security, Credential Vault, you can add a key, remove one, or rotate the master key. Every change asks you to re-type your password first.
 
@@ -58,9 +58,9 @@ The audit log is on by default. It records each tool call with its decision, she
 
 ## God mode
 
-God mode is one switch in Settings, Gateway, Danger zone. Turning it on removes all permission prompts — every Ask becomes Allow, for every agent — and disables the kernel sandbox, the outbound-network restrictions, and the shell guard. Audit logging, the prompt-injection defense, and rate limiting stay on.
+God mode is one switch in Settings, Gateway, Danger zone. Turning it on removes all permission prompts (every Ask becomes Allow) and disables the kernel sandbox, the outbound-network restrictions, and the shell guard. Audit logging, the prompt-injection defense, and rate limiting stay on.
 
-Changing it requires re-typing your password. The first enable needs a gateway restart; until then you can cancel the authorization, and every toggle is audit-logged. While active, a red banner says so at the top of the Gateway tab.
+Changing it requires re-typing your password. The first enable needs a gateway restart; until then you can cancel, and every toggle is audit-logged. While active, a red banner says so at the top of the Gateway tab.
 
 ## Limits and things to watch
 
@@ -68,7 +68,7 @@ Changing it requires re-typing your password. The first enable needs a gateway r
 - On macOS, the programs agents start are confined, but the Omnipus gateway itself is not.
 - The Open filesystem model trades safety for working tools: anything you can read, your agents can read. Permission to read is not secrecy — a misled agent can read a file and post its contents to a connector.
 - Sandbox Off disables the operating-system checks but not every rule: the shell workspace limit and the blocked command patterns are separate settings and stay as configured.
-- Removing a tool's setting restores the global default; it does not deny the tool.
+- Secret filtering is best-effort. It hides the values Omnipus holds, not every possible secret: one pasted into a chat can still travel. Rotate anything exposed.
 - A lost master key cannot be reconstructed. Back it up when Omnipus first creates it.
 
 ## Related pages

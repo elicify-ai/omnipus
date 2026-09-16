@@ -98,5 +98,3 @@ Credentials (`access_token_ref`, `crypto_passphrase_ref`) are resolved from the 
 - Placeholder message with in-place edit on final reply (`MessageEditor`)
 - Auto-join invited rooms (`join_on_invite`)
 - End-to-end encryption via `goolm` + `cryptohelper` (opt-in via `crypto_passphrase_ref`)
-
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

@@ -43,8 +43,8 @@ Each tab and neighbor screen has one job.
 | Settings, Providers | Connect providers, manage keys and sign-ins, set the default model |
 | Settings, Models | Context budget: how much of each tool result stays in the conversation, and which context length each model is assumed to have |
 | Settings, Integrations | Web-search and voice-input providers, with their keys |
-| Settings, Security | Sandbox mode, credential vault, god mode, audit log, and the per-agent rate limits |
-| Settings, Gateway | The address and port the gateway listens on; restarting it |
+| Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
+| Settings, Gateway | The address and port the gateway listens on; restarting it; god mode in its danger zone |
 | Settings, Data | Session retention, storage numbers, backups, clearing sessions |
 | Settings, Memory | What the team remembers: recap and retrospective settings |
 | Settings, Devices | Pairing additional devices; hidden unless enabled on your install |
@@ -72,7 +72,7 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 
 ## Related pages
 
-- [security](security.md) — the rest of the Security tab: the sandbox, the encrypted credential vault, god mode, and the audit log.
+- [security](security.md) — the rest of the Security tab: the sandbox, the encrypted credential vault, and the audit log.
 - [tools](tools.md) — which tools agents may use, and the allow, ask, and deny permissions that govern them.
 - [agents](agents.md) — giving one agent its own model instead of the default, and choosing the default agent.
 - [memory](memory.md) — what the team remembers between chats, behind the Memory tab.

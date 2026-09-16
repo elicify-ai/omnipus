@@ -56,5 +56,3 @@ Omnipus connects to QQ via the official QQ Bot Open Platform API using a persist
 **Capabilities implemented:** `TypingCapable` (typing status via QQ API), `MediaSender` (image and file upload via base64 inline or URL). The channel registers handlers for both C2C (`handleC2CMessage`) and group @-mention (`handleGroupATMessage`) events. Message deduplication is performed with a time-bounded map (5-minute TTL) to suppress duplicates from QQ's at-least-once delivery.
 
 **Group chats.** The QQ Bot API requires an @-mention in group chats for the bot to receive the message. `group_trigger.mention_only` is therefore the effective default for group interactions regardless of its value; `group_trigger.prefixes` applies to the content after the @-mention is stripped.
-
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

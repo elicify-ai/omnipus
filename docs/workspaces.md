@@ -66,7 +66,7 @@ flowchart LR
   Q -->|no| R[The handoff is refused]
 ```
 
-A handoff is allowed only when a trust line for that pair exists in the workspace where the work is running; with no line, it is refused. New workspaces arrive with the standard trust lines between the built-in agents already drawn, so delegation works before you configure anything.
+A handoff is allowed only when a trust line for that pair exists in the workspace where the work is running; with no line, it is refused. A workspace you create starts with Ava alone and no trust lines; the auto-created first workspace is the exception — it ships with the built-in roster and their standard trust lines.
 
 The same two agents can be trusted together in one workspace and not in another, because each workspace keeps its own lines. That is deliberate: trust describes a working relationship inside a team, not a property of an agent.
 
