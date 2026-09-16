@@ -41,6 +41,26 @@ func (a *restAPI) withUploadAuth(handler http.HandlerFunc) http.HandlerFunc {
 // type within gen.UploadFilesResponse.Files. Use gen.UploadedFile directly for
 // struct literals.
 
+// restAPIHandleUpload carries the shared state of HandleUpload across its stages.
+type restAPIHandleUpload struct {
+	a            *restAPI
+	w            http.ResponseWriter
+	sessionID    string
+	workspaceID  string
+	resp         gen.UploadFilesResponse
+	workspaceLib *library.Library
+}
+
+// restAPIHandleUploadFlow reports how a block stage of restAPIHandleUpload wants the conductor to proceed.
+type restAPIHandleUploadFlow int
+
+const (
+	restAPIHandleUploadNext restAPIHandleUploadFlow = iota
+	restAPIHandleUploadReturn
+	restAPIHandleUploadContinue
+	restAPIHandleUploadBreak
+)
+
 // HandleUpload handles POST /api/v1/upload — streams multipart file uploads to disk.
 // Files are stored at ~/.omnipus/uploads/{session_id}/{sanitized_filename}.
 // Max file size per part: 100 MB. Data is streamed directly to disk; the full
@@ -52,33 +72,32 @@ func (a *restAPI) withUploadAuth(handler http.HandlerFunc) http.HandlerFunc {
 // of the legacy session-scoped uploads dir. When no workspace_id is present,
 // the legacy path is used unchanged (backward compat).
 func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
+	ru := &restAPIHandleUpload{a: a, w: w}
+
 	if r.Method != http.MethodPost {
-		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		jsonErr(ru.w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	// session_id may come from either a query parameter or a form field that
 	// appears before any file parts. We prefer the query param for simplicity.
-	sessionID := r.URL.Query().Get("session_id")
+	ru.sessionID = r.URL.Query().Get("session_id")
 	// workspace_id (ADR-051 Rev 4 FR-001) follows the same pattern: query
 	// param first, form field as fallback before the file parts.
-	workspaceID := r.URL.Query().Get("workspace_id")
+	ru.workspaceID = r.URL.Query().Get("workspace_id")
 
 	// Parse the multipart stream without buffering file content in memory.
 	reader, err := r.MultipartReader()
 	if err != nil {
 		slog.Warn("rest: upload: multipart reader failed", "error", err)
-		jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid multipart request: %v", err))
+		jsonErr(ru.w, http.StatusBadRequest, fmt.Sprintf("invalid multipart request: %v", err))
 		return
 	}
-
-	var resp gen.UploadFilesResponse
 
 	// workspaceLib is resolved lazily on the first file part when workspace_id
 	// is set. A nil workspaceLib means workspace routing is unavailable, so the
 	// handler falls back to the legacy session-scoped path (graceful
 	// degradation — the file still uploads, just not to the library).
-	var workspaceLib *library.Library
 
 	for {
 		part, err := reader.NextPart()
@@ -87,7 +106,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			slog.Warn("rest: upload: read part failed", "error", err)
-			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("multipart read error: %v", err))
+			jsonErr(ru.w, http.StatusBadRequest, fmt.Sprintf("multipart read error: %v", err))
 			return
 		}
 
@@ -96,24 +115,24 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 		// Non-file field — check for session_id / workspace_id overrides.
 		if fileName == "" {
-			if formName == "session_id" && sessionID == "" {
+			if formName == "session_id" && ru.sessionID == "" {
 				buf, readErr := io.ReadAll(io.LimitReader(part, 256))
 				part.Close()
 				if readErr != nil {
 					slog.Warn("rest: upload: read session_id field", "error", readErr)
-					jsonErr(w, http.StatusBadRequest, "could not read session_id field")
+					jsonErr(ru.w, http.StatusBadRequest, "could not read session_id field")
 					return
 				}
-				sessionID = strings.TrimSpace(string(buf))
-			} else if formName == "workspace_id" && workspaceID == "" {
+				ru.sessionID = strings.TrimSpace(string(buf))
+			} else if formName == "workspace_id" && ru.workspaceID == "" {
 				buf, readErr := io.ReadAll(io.LimitReader(part, 256))
 				part.Close()
 				if readErr != nil {
 					slog.Warn("rest: upload: read workspace_id field", "error", readErr)
-					jsonErr(w, http.StatusBadRequest, "could not read workspace_id field")
+					jsonErr(ru.w, http.StatusBadRequest, "could not read workspace_id field")
 					return
 				}
-				workspaceID = strings.TrimSpace(string(buf))
+				ru.workspaceID = strings.TrimSpace(string(buf))
 			} else {
 				// Discard unrecognized non-file fields.
 				if _, discardErr := io.Copy(io.Discard, part); discardErr != nil {
@@ -133,15 +152,15 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		// filename normalization, MIME sniffing, sha256, the per-file size
 		// limit (100 MB), and an atomic write+manifest commit — so this path
 		// does not need to replicate any of that.
-		if workspaceID != "" {
-			if err := validateEntityID(workspaceID); err != nil {
+		if ru.workspaceID != "" {
+			if err := validateEntityID(ru.workspaceID); err != nil {
 				part.Close()
-				jsonErr(w, http.StatusBadRequest, "invalid workspace_id")
+				jsonErr(ru.w, http.StatusBadRequest, "invalid workspace_id")
 				return
 			}
-			if workspaceLib == nil && a.agentLoop != nil {
-				workspaceLib = a.agentLoop.GetWorkspaceLibrary(workspaceID)
-				if workspaceLib == nil {
+			if ru.workspaceLib == nil && ru.a.agentLoop != nil {
+				ru.workspaceLib = ru.a.agentLoop.GetWorkspaceLibrary(ru.workspaceID)
+				if ru.workspaceLib == nil {
 					// GetWorkspaceLibrary (pkg/agent/media_present.go) collapses
 					// two very different conditions into the same nil signal:
 					// "workspace library genuinely not configured" and "library
@@ -160,7 +179,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 					// deterministically separates the two cases without
 					// needing to change GetWorkspaceLibrary's signature (out
 					// of scope here: pkg/agent/).
-					lib, libErr := library.New(a.homePath, workspaceID)
+					lib, libErr := library.New(ru.a.homePath, ru.workspaceID)
 					if libErr != nil {
 						part.Close()
 						// Re-review FIX 1: was a bare slog.Error, invisible on a
@@ -169,124 +188,42 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 						// reaches $OMNIPUS_HOME/logs/gateway.log). Route through
 						// pkg/logger instead.
 						logger.ErrorCF("rest", "upload: workspace library load failed",
-							map[string]any{"workspace_id": workspaceID, "error": libErr})
-						jsonErr(w, http.StatusInternalServerError,
+							map[string]any{"workspace_id": ru.workspaceID, "error": libErr})
+						jsonErr(ru.w, http.StatusInternalServerError,
 							fmt.Sprintf("workspace media library unavailable: %v", libErr))
 						return
 					}
-					workspaceLib = lib
+					ru.workspaceLib = lib
 				}
 			}
-			if workspaceLib != nil {
-				ref, projection, uploadErr := workspaceLib.Upload(fileName, gen.MediaLibraryEntrySourceUserUpload, part)
+			if ru.workspaceLib != nil {
+				ref, projection, uploadErr := ru.workspaceLib.Upload(fileName, gen.MediaLibraryEntrySourceUserUpload, part)
 				part.Close()
-				if uploadErr != nil {
-					slog.Error("rest: upload: workspace library store failed",
-						"workspace_id", workspaceID, "filename", fileName, "error", uploadErr)
-					// Remove previously uploaded workspace files in this batch.
-					a.cleanupWorkspaceUploads(&resp, workspaceLib)
-					switch {
-					case errors.Is(uploadErr, library.ErrFileTooLarge):
-						jsonErr(w, http.StatusRequestEntityTooLarge,
-							fmt.Sprintf("file %q exceeds 100 MB limit", fileName))
-					case errors.Is(uploadErr, library.ErrInvalidFilename):
-						jsonErr(w, http.StatusBadRequest,
-							fmt.Sprintf("invalid filename: %q", fileName))
-					default:
-						jsonErr(w, http.StatusInternalServerError,
-							fmt.Sprintf("workspace media store failed: %v", uploadErr))
-					}
+
+				switch ru.finishWorkspaceUpload(fileName, ref, projection, uploadErr) {
+				case restAPIHandleUploadReturn:
 					return
 				}
 
-				var size int64
-				if projection.Size != nil {
-					size = *projection.Size
-				}
-				mimeStr := ""
-				if projection.Mime != nil {
-					mimeStr = *projection.Mime
-				}
-				// Relative path for the response — informational; the SPA
-				// serves workspace media via the media://workspace/ ref, not
-				// the /api/v1/uploads/{session_id}/{filename} URL.
-				_, mediaID, _ := media.ParseWorkspaceRef(ref)
-				relativePath := filepath.Join("workspaces", workspaceID, "media", mediaID)
-
-				// D-1 (library-spec, 2026-07-29 UAT): the media-library blob
-				// above lives in workspaces/<id>/media/ — a SIBLING of work/,
-				// structurally unreachable by every agent file tool (they
-				// open an os.Root at work/ and cannot escape it by
-				// construction, ADR-046). Dual-write the SAME bytes as a
-				// real, named file inside workspaces/<id>/work/.library/ so
-				// library_read/read_file can actually find it — this is the
-				// single change that makes the agent-visibility requirement
-				// satisfiable. The media-library entry above remains the
-				// metadata index (mime/size/sha256/refcount/source); this is
-				// purely an additional copy, never a replacement. A failure
-				// here means the upload as a whole does NOT satisfy "the
-				// agent can read this file", so it is treated as a hard
-				// upload failure — the just-created library entry is rolled
-				// back rather than left as a half-satisfied promise.
-				workRelPath, stageErr := a.stageWorkspaceUploadCopy(workspaceID, mediaID, fileName, workspaceLib)
-				if stageErr != nil {
-					logger.ErrorCF("rest", "upload: could not stage workspace library copy for agent access",
-						map[string]any{
-							"workspace_id": workspaceID, "media_id": mediaID,
-							"filename": fileName, "error": stageErr.Error(),
-						})
-					if _, delErr := workspaceLib.Delete(mediaID); delErr != nil {
-						slog.Warn("rest: upload: rollback of media-library entry failed after stage failure",
-							"media_id", mediaID, "error", delErr)
-					}
-					a.cleanupWorkspaceUploads(&resp, workspaceLib)
-					jsonErr(w, http.StatusInternalServerError,
-						fmt.Sprintf("could not stage uploaded file for agent access: %v", stageErr))
-					return
-				}
-				agent.RecordUploadWorkPath(ref, workRelPath)
-
-				var refPtr *string
-				if ref != "" {
-					refCopy := ref
-					refPtr = &refCopy
-				}
-				resp.Files = append(resp.Files, gen.UploadedFile{
-					ContentType: mimeStr,
-					Name:        projection.Filename,
-					Path:        relativePath,
-					Ref:         refPtr,
-					Size:        size,
-				})
-
-				slog.Info(
-					"rest: upload: file stored in workspace library",
-					"workspace_id", workspaceID,
-					"filename", projection.Filename,
-					"size", size,
-					"content_type", mimeStr,
-					"media_ref", ref,
-					"work_path", workRelPath,
-				)
 				continue
 			}
 			// workspace_id set but library unavailable → fall through to the
 			// legacy session-scoped path (graceful degradation).
 			slog.Warn("rest: upload: workspace library unavailable, falling back to session-scoped path",
-				"workspace_id", workspaceID)
+				"workspace_id", ru.workspaceID)
 		}
 
 		// --- Legacy session-scoped path ---
 
 		// Validate session_id before the first file write.
-		if sessionID == "" {
+		if ru.sessionID == "" {
 			part.Close()
-			jsonErr(w, http.StatusBadRequest, "session_id is required (query param or form field before files)")
+			jsonErr(ru.w, http.StatusBadRequest, "session_id is required (query param or form field before files)")
 			return
 		}
-		if err := validateEntityID(sessionID); err != nil {
+		if err := validateEntityID(ru.sessionID); err != nil {
 			part.Close()
-			jsonErr(w, http.StatusBadRequest, "invalid session_id")
+			jsonErr(ru.w, http.StatusBadRequest, "invalid session_id")
 			return
 		}
 
@@ -294,21 +231,21 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		sanitized := filepath.Base(filepath.Clean("/" + fileName))
 		if sanitized == "" || sanitized == "." || sanitized == "/" {
 			part.Close()
-			jsonErr(w, http.StatusBadRequest, fmt.Sprintf("invalid filename: %q", fileName))
+			jsonErr(ru.w, http.StatusBadRequest, fmt.Sprintf("invalid filename: %q", fileName))
 			return
 		}
 		// Additional safety: reject null bytes.
 		if strings.ContainsRune(sanitized, 0) {
 			part.Close()
-			jsonErr(w, http.StatusBadRequest, "filename contains null byte")
+			jsonErr(ru.w, http.StatusBadRequest, "filename contains null byte")
 			return
 		}
 
-		uploadDir := filepath.Join(a.homePath, "uploads", sessionID)
+		uploadDir := filepath.Join(ru.a.homePath, "uploads", ru.sessionID)
 		if mkErr := os.MkdirAll(uploadDir, 0o700); mkErr != nil {
 			part.Close()
 			slog.Error("rest: upload: mkdir failed", "dir", uploadDir, "error", mkErr)
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create upload directory: %v", mkErr))
+			jsonErr(ru.w, http.StatusInternalServerError, fmt.Sprintf("could not create upload directory: %v", mkErr))
 			return
 		}
 
@@ -334,8 +271,8 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 
 		// cleanupUploaded removes all previously uploaded files on error.
 		cleanupUploaded := func() {
-			for _, prev := range resp.Files {
-				os.Remove(filepath.Join(a.homePath, prev.Path))
+			for _, prev := range ru.resp.Files {
+				os.Remove(filepath.Join(ru.a.homePath, prev.Path))
 			}
 		}
 
@@ -343,7 +280,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 			part.Close()
 			slog.Error("rest: upload: create file failed", "path", destPath, "error", createErr)
 			cleanupUploaded()
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not create file: %v", createErr))
+			jsonErr(ru.w, http.StatusInternalServerError, fmt.Sprintf("could not create file: %v", createErr))
 			return
 		}
 
@@ -355,90 +292,193 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		f.Close()
 		part.Close()
 
-		if copyErr != nil {
-			slog.Error("rest: upload: copy failed", "path", destPath, "error", copyErr)
-			if rmErr := os.Remove(destPath); rmErr != nil && !os.IsNotExist(rmErr) {
-				slog.Warn("rest: upload: remove partial file failed", "path", destPath, "error", rmErr)
-			}
-			cleanupUploaded()
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("file write failed: %v", copyErr))
+		switch ru.finishLegacyUpload(sanitized, destPath, contentType, cleanupUploaded, written, copyErr) {
+		case restAPIHandleUploadReturn:
 			return
 		}
 
-		if written > maxUploadFileSize {
-			if rmErr := os.Remove(destPath); rmErr != nil && !os.IsNotExist(rmErr) {
-				slog.Warn("rest: upload: remove oversized file failed", "path", destPath, "error", rmErr)
-			}
-			cleanupUploaded()
-			jsonErr(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file %q exceeds 100 MB limit", sanitized))
-			return
-		}
-
-		// Relative path for the response — callers use this to construct the
-		// /api/v1/uploads/{session_id}/{filename} URL.
-		relativePath := filepath.Join("uploads", sessionID, sanitized)
-
-		// #254: register the uploaded file in the media store so it gets a
-		// media:// ref. The SPA echoes this ref back in the message frame's
-		// "media" array; the agent loop then threads it into the LLM content
-		// array as a multimodal content block so the agent can see the file.
-		// CleanupPolicyForgetOnly: the uploads dir is operator-visible data —
-		// the media store must never auto-delete the file. Registration failure
-		// is non-fatal: the file is still downloadable via path, the agent just
-		// won't see it inline.
-		// #254 stale media store fix: always fetch the current store via the
-		// agent loop so uploads survive a restartServices store swap. Fall back
-		// to a.mediaStore only when the agent loop is not yet wired (e.g. tests
-		// that construct a restAPI with a direct mediaStore but no agentLoop).
-		var ref string
-		store := a.agentLoop.GetMediaStore()
-		if store == nil {
-			store = a.mediaStore
-		}
-		if store != nil {
-			var storeErr error
-			ref, storeErr = store.Store(destPath, media.MediaMeta{
-				Filename:      sanitized,
-				ContentType:   contentType,
-				Source:        "upload:webchat",
-				CleanupPolicy: media.CleanupPolicyForgetOnly,
-			}, "upload:"+sessionID)
-			if storeErr != nil {
-				slog.Warn("rest: upload: media store registration failed",
-					"path", destPath, "error", storeErr)
-				ref = ""
-			}
-		}
-
-		slog.Info(
-			"rest: upload: file stored",
-			"session_id", sessionID,
-			"filename", sanitized,
-			"size", written,
-			"content_type", contentType,
-			"media_ref", ref,
-		)
-
-		var refPtr *string
-		if ref != "" {
-			refCopy := ref
-			refPtr = &refCopy
-		}
-		resp.Files = append(resp.Files, gen.UploadedFile{
-			ContentType: contentType,
-			Name:        sanitized,
-			Path:        relativePath,
-			Ref:         refPtr,
-			Size:        written,
-		})
 	}
 
-	if len(resp.Files) == 0 {
-		jsonErr(w, http.StatusBadRequest, "no files found in upload")
+	if len(ru.resp.Files) == 0 {
+		jsonErr(ru.w, http.StatusBadRequest, "no files found in upload")
 		return
 	}
 
-	jsonCreated(w, resp)
+	jsonCreated(ru.w, ru.resp)
+}
+
+// finishWorkspaceUpload handles a workspace library upload result, stages agent access, and records the response.
+func (ru *restAPIHandleUpload) finishWorkspaceUpload(fileName string, ref string, projection gen.MediaLibraryEntry, uploadErr error) restAPIHandleUploadFlow {
+	if uploadErr != nil {
+		slog.Error("rest: upload: workspace library store failed",
+			"workspace_id", ru.workspaceID, "filename", fileName, "error", uploadErr)
+		// Remove previously uploaded workspace files in this batch.
+		ru.a.cleanupWorkspaceUploads(&ru.resp, ru.workspaceLib)
+		switch {
+		case errors.Is(uploadErr, library.ErrFileTooLarge):
+			jsonErr(ru.w, http.StatusRequestEntityTooLarge,
+				fmt.Sprintf("file %q exceeds 100 MB limit", fileName))
+		case errors.Is(uploadErr, library.ErrInvalidFilename):
+			jsonErr(ru.w, http.StatusBadRequest,
+				fmt.Sprintf("invalid filename: %q", fileName))
+		default:
+			jsonErr(ru.w, http.StatusInternalServerError,
+				fmt.Sprintf("workspace media store failed: %v", uploadErr))
+		}
+		return restAPIHandleUploadReturn
+	}
+
+	var size int64
+	if projection.Size != nil {
+		size = *projection.Size
+	}
+	mimeStr := ""
+	if projection.Mime != nil {
+		mimeStr = *projection.Mime
+	}
+	// Relative path for the response — informational; the SPA
+	// serves workspace media via the media://workspace/ ref, not
+	// the /api/v1/uploads/{session_id}/{filename} URL.
+	_, mediaID, _ := media.ParseWorkspaceRef(ref)
+	relativePath := filepath.Join("workspaces", ru.workspaceID, "media", mediaID)
+
+	// D-1 (library-spec, 2026-07-29 UAT): the media-library blob
+	// above lives in workspaces/<id>/media/ — a SIBLING of work/,
+	// structurally unreachable by every agent file tool (they
+	// open an os.Root at work/ and cannot escape it by
+	// construction, ADR-046). Dual-write the SAME bytes as a
+	// real, named file inside workspaces/<id>/work/.library/ so
+	// library_read/read_file can actually find it — this is the
+	// single change that makes the agent-visibility requirement
+	// satisfiable. The media-library entry above remains the
+	// metadata index (mime/size/sha256/refcount/source); this is
+	// purely an additional copy, never a replacement. A failure
+	// here means the upload as a whole does NOT satisfy "the
+	// agent can read this file", so it is treated as a hard
+	// upload failure — the just-created library entry is rolled
+	// back rather than left as a half-satisfied promise.
+	workRelPath, stageErr := ru.a.stageWorkspaceUploadCopy(ru.workspaceID, mediaID, fileName, ru.workspaceLib)
+	if stageErr != nil {
+		logger.ErrorCF("rest", "upload: could not stage workspace library copy for agent access",
+			map[string]any{
+				"workspace_id": ru.workspaceID, "media_id": mediaID,
+				"filename": fileName, "error": stageErr.Error(),
+			})
+		if _, delErr := ru.workspaceLib.Delete(mediaID); delErr != nil {
+			slog.Warn("rest: upload: rollback of media-library entry failed after stage failure",
+				"media_id", mediaID, "error", delErr)
+		}
+		ru.a.cleanupWorkspaceUploads(&ru.resp, ru.workspaceLib)
+		jsonErr(ru.w, http.StatusInternalServerError,
+			fmt.Sprintf("could not stage uploaded file for agent access: %v", stageErr))
+		return restAPIHandleUploadReturn
+	}
+	agent.RecordUploadWorkPath(ref, workRelPath)
+
+	var refPtr *string
+	if ref != "" {
+		refCopy := ref
+		refPtr = &refCopy
+	}
+	ru.resp.Files = append(ru.resp.Files, gen.UploadedFile{
+		ContentType: mimeStr,
+		Name:        projection.Filename,
+		Path:        relativePath,
+		Ref:         refPtr,
+		Size:        size,
+	})
+
+	slog.Info(
+		"rest: upload: file stored in workspace library",
+		"workspace_id", ru.workspaceID,
+		"filename", projection.Filename,
+		"size", size,
+		"content_type", mimeStr,
+		"media_ref", ref,
+		"work_path", workRelPath,
+	)
+	return restAPIHandleUploadNext
+}
+
+// finishLegacyUpload handles a legacy file copy result, registers media, and records the response.
+func (ru *restAPIHandleUpload) finishLegacyUpload(sanitized string, destPath string, contentType string, cleanupUploaded func(), written int64, copyErr error) restAPIHandleUploadFlow {
+	if copyErr != nil {
+		slog.Error("rest: upload: copy failed", "path", destPath, "error", copyErr)
+		if rmErr := os.Remove(destPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			slog.Warn("rest: upload: remove partial file failed", "path", destPath, "error", rmErr)
+		}
+		cleanupUploaded()
+		jsonErr(ru.w, http.StatusInternalServerError, fmt.Sprintf("file write failed: %v", copyErr))
+		return restAPIHandleUploadReturn
+	}
+
+	if written > maxUploadFileSize {
+		if rmErr := os.Remove(destPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			slog.Warn("rest: upload: remove oversized file failed", "path", destPath, "error", rmErr)
+		}
+		cleanupUploaded()
+		jsonErr(ru.w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file %q exceeds 100 MB limit", sanitized))
+		return restAPIHandleUploadReturn
+	}
+
+	// Relative path for the response — callers use this to construct the
+	// /api/v1/uploads/{session_id}/{filename} URL.
+	relativePath := filepath.Join("uploads", ru.sessionID, sanitized)
+
+	// #254: register the uploaded file in the media store so it gets a
+	// media:// ref. The SPA echoes this ref back in the message frame's
+	// "media" array; the agent loop then threads it into the LLM content
+	// array as a multimodal content block so the agent can see the file.
+	// CleanupPolicyForgetOnly: the uploads dir is operator-visible data —
+	// the media store must never auto-delete the file. Registration failure
+	// is non-fatal: the file is still downloadable via path, the agent just
+	// won't see it inline.
+	// #254 stale media store fix: always fetch the current store via the
+	// agent loop so uploads survive a restartServices store swap. Fall back
+	// to a.mediaStore only when the agent loop is not yet wired (e.g. tests
+	// that construct a restAPI with a direct mediaStore but no agentLoop).
+	var ref string
+	store := ru.a.agentLoop.GetMediaStore()
+	if store == nil {
+		store = ru.a.mediaStore
+	}
+	if store != nil {
+		var storeErr error
+		ref, storeErr = store.Store(destPath, media.MediaMeta{
+			Filename:      sanitized,
+			ContentType:   contentType,
+			Source:        "upload:webchat",
+			CleanupPolicy: media.CleanupPolicyForgetOnly,
+		}, "upload:"+ru.sessionID)
+		if storeErr != nil {
+			slog.Warn("rest: upload: media store registration failed",
+				"path", destPath, "error", storeErr)
+			ref = ""
+		}
+	}
+
+	slog.Info(
+		"rest: upload: file stored",
+		"session_id", ru.sessionID,
+		"filename", sanitized,
+		"size", written,
+		"content_type", contentType,
+		"media_ref", ref,
+	)
+
+	var refPtr *string
+	if ref != "" {
+		refCopy := ref
+		refPtr = &refCopy
+	}
+	ru.resp.Files = append(ru.resp.Files, gen.UploadedFile{
+		ContentType: contentType,
+		Name:        sanitized,
+		Path:        relativePath,
+		Ref:         refPtr,
+		Size:        written,
+	})
+	return restAPIHandleUploadNext
 }
 
 // cleanupWorkspaceUploads removes previously uploaded workspace library files
