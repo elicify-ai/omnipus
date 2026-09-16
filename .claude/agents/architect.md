@@ -20,12 +20,12 @@ Every time you are invoked, perform these steps before any analysis:
 
 1. **Read `CLAUDE.md`** — internalize hard constraints, tech stack, architecture patterns
 2. **Read relevant BRD sections** based on the design question:
-   - `docs/internal/BRD/Omnipus BRD.md` — 27 security + 18 functional requirements
-   - `docs/internal/BRD/Omnipus_BRD_AppendixB_Feature_Parity.md` — 38 feature parity requirements
-   - `docs/internal/BRD/Omnipus_BRD_AppendixC_UI_Spec.md` — UI/UX spec (React 19, Vite 6, shadcn/ui)
-   - `docs/internal/BRD/Omnipus_BRD_AppendixD_System_Agent.md` — system agent, 41 tools, 3 agent types
-   - `docs/internal/BRD/Omnipus_BRD_AppendixE_DataModel.md` — file-based data model, schemas
-   - `docs/internal/BRD/Omnipus Windows BRD appendic.md` — Windows kernel security
+   - `docs/internal/_archive/BRD/Omnipus BRD.md` — 27 security + 18 functional requirements
+   - `docs/internal/_archive/BRD/Omnipus_BRD_AppendixB_Feature_Parity.md` — 38 feature parity requirements
+   - `docs/internal/_archive/BRD/Omnipus_BRD_AppendixC_UI_Spec.md` — UI/UX spec (React 19, Vite 6, shadcn/ui)
+   - `docs/internal/_archive/BRD/Omnipus_BRD_AppendixD_System_Agent.md` — system agent, 41 tools, 3 agent types
+   - `docs/internal/_archive/BRD/Omnipus_BRD_AppendixE_DataModel.md` — file-based data model, schemas
+   - `docs/internal/_archive/BRD/Omnipus Windows BRD appendic.md` — Windows kernel security
 3. **Scan existing code** — Glob `pkg/**/*.go`, `cmd/**/*.go`, `internal/**/*.go`, `src/**/*.{ts,tsx}`, `packages/**/*.{ts,tsx}` to understand current state
 4. **Know your teammates** — Glob `.claude/agents/*.md` to understand team boundaries:
    - `backend-lead` — Go backend implementation

@@ -2,7 +2,7 @@
 
 **Status:** draft (2026-09-12; re-validated 2026-09-15 after the library-improvements merge ff11e8249; not implemented, not an ADR, not a spec)
 **Companion:** [draft-module-map.md](draft-module-map.md) (code). This note is the same idea for **docs**. The companion is adding a **knowledge** product module for the same feature this note calls Knowledge Base — cross-reference it, don't duplicate its module boundary here.
-**Do not:** rewrite user guides or delete `.preview-doc/` until this is accepted.
+**Do not:** rewrite user guides or delete `docs/internal/_archive/preview-doc-v03-concept/` until this is accepted.
 
 **Changes 2026-09-15** (re-validation after `ff11e8249` landed on `release/v0.1.1`):
 - Second pass after PR #685 (browser-improvements, `a809b838f`): no user handbook file changed, no stale-text line moved. PR #685 added 78 loose investigation notes at the root of `docs/internal/` (`browser-*-2026-09-*.md`, `runtime-latency-validation.md`) and one more ADR-081 ("dedicated browser input connection"). Archive rule and ADR notes below updated; ADR file count is now 151.
@@ -42,13 +42,13 @@ Last notable user-doc commit touching these files (2026-08-28) was the Channels 
 
 So: **yes, the user/operator layer is substantially stale.** ADRs/specs are not the problem. This handbook is.
 
-## `.preview-doc/` — may be deleted (not done)
+## `docs/internal/_archive/preview-doc-v03-concept/` — may be deleted (not done)
 
-18 HTML concept pages for the v0.3 Workspaces direction (confirmed 2026-09-15, `ls .preview-doc/*.html | wc -l`). CLAUDE.md already says they supersede the 2026-05 `docs/internal/design/` drafts **in intent**. They are discussion-stage, not shipping docs.
+18 HTML concept pages for the v0.3 Workspaces direction (confirmed 2026-09-15, `ls docs/internal/_archive/preview-doc-v03-concept/*.html | wc -l`). CLAUDE.md already says they supersede the 2026-05 `docs/internal/design/` drafts **in intent**. They are discussion-stage, not shipping docs.
 
-**Recommendation:** delete `.preview-doc/` once this docs map is accepted, *after* any still-true ideas are pointed at from ADRs/specs (or dropped). Do not treat HTML mockups as a third handbook. **Not deleted in this pass.**
+**Recommendation:** delete `docs/internal/_archive/preview-doc-v03-concept/` once this docs map is accepted, *after* any still-true ideas are pointed at from ADRs/specs (or dropped). Do not treat HTML mockups as a third handbook. **Not deleted in this pass.**
 
-`docs/internal/design/*-2026-05.md` (Rooms, 5-core) stays marked superseded; do not teach from it.
+`docs/internal/_archive/design-2026-05-rooms-era/*.md` (Rooms, 5-core) stays marked superseded; do not teach from it.
 
 ## Audit (2026-09-12) — four parallel read-only passes
 
@@ -91,7 +91,7 @@ Stale (line numbers re-verified 2026-09-15, all held):
 
 ### BRD — delete (founder direction)
 
-`docs/internal/BRD/` is a **March 2026** draft (six files). It is not the 2026-09 product:
+`docs/internal/_archive/BRD/` is a **March 2026** draft (six files). It is not the 2026-09 product:
 
 - Roster: 3+1 (General Assistant / Researcher / Content Creator + Omnipus system agent) — not Mia/Jim/Ava/Ray.
 - Appendix D: exclusive 41-tool **system agent** that drives the UI — that agent does not exist.
@@ -101,13 +101,13 @@ Stale (line numbers re-verified 2026-09-15, all held):
 - **Zero** goals-as-entities, Judge, Plan Supervisor.
 - Appendix A: Windows Job Objects as if they ship — they do not.
 
-**Do:** remove `docs/internal/BRD/` from the live tree when this map is accepted. Optional: one-page tombstone in `docs/internal/_archive/` so nobody implements from git history by accident. **Not deleted in this pass.**
+**Do:** remove `docs/internal/_archive/BRD/` from the live tree when this map is accepted. Optional: one-page tombstone in `docs/internal/_archive/` so nobody implements from git history by accident. **Not deleted in this pass.**
 
-### `docs/internal/design/*-2026-05.md` — archive
+### `docs/internal/_archive/design-2026-05-rooms-era/*.md` — archive
 
-Five files, Rooms / two-room / Command Center / Max in `sandbox-redesign`. CLAUDE.md already says superseded by `.preview-doc/` intent. Move to `_archive/design-2026-05-rooms-era/` with a banner. Do not teach from them.
+Five files, Rooms / two-room / Command Center / Max in `sandbox-redesign`. CLAUDE.md already says superseded by `docs/internal/_archive/preview-doc-v03-concept/` intent. Move to `_archive/design-2026-05-rooms-era/` with a banner. Do not teach from them.
 
-### `.preview-doc/` — delete after handbook rewrite (fourth pass complete)
+### `docs/internal/_archive/preview-doc-v03-concept/` — delete after handbook rewrite (fourth pass complete)
 
 18 HTML pages (2026-08-12) + two PNG QA folders. **ADR-019 already ratified the direction.** Chat-as-workspace-tab, 4-base roster, Automations/Tasks redirects, per-workspace delegation, email-as-tool — **shipping**.
 
@@ -115,7 +115,7 @@ Superseded inside the HTML itself: original email model (ADR-033), Rooms framing
 
 Unique leftovers (optional one-liners in an ADR or git history, not a reason to keep the folder): `delegation-audit.html` (if anything is not in ADR-037), `tools-catalog.html` (78-tool snapshot, likely drifted), `impact.html` effort table.
 
-**Do:** delete `.preview-doc/` when the user handbook rewrite is accepted. Pointer: “historical v0.3 concept is in git (2026-08-12).” Visual QA PNGs need not be preserved. **Not deleted in this pass.**
+**Do:** delete `docs/internal/_archive/preview-doc-v03-concept/` when the user handbook rewrite is accepted. Pointer: “historical v0.3 concept is in git (2026-08-12).” Visual QA PNGs need not be preserved. **Not deleted in this pass.**
 
 The 2026-05 `design/` Rooms drafts are a *separate* delete/archive (see above); they are not saved by keeping the HTML.
 
@@ -186,8 +186,8 @@ Internal:
 
 | Keep | Remove from live path |
 |---|---|
-| `architecture/ADR-*` | `docs/internal/BRD/` (delete; optional archive tombstone) |
-| `specs/` | `.preview-doc/` (after handbook rewrite) |
+| `architecture/ADR-*` | `docs/internal/_archive/BRD/` (delete; optional archive tombstone) |
+| `specs/` | `docs/internal/_archive/preview-doc-v03-concept/` (after handbook rewrite) |
 | `architecture/AS-IS-architecture.md` (stamp frozen or refresh) | `design/*-2026-05.md` → `_archive/` |
 | | Root `HANDOVER-*`, `*-rootcause-*`, and the dated evidence notes `browser-*-2026-09-*.md` / `runtime-*.md` (78 files from PR #685, plus the earlier `browser-*-2026-07-*` pair) → `_archive/` or the closing issue. Evidence for a merged PR belongs in git history and the PR, not at the root of the internal tree. |
 
@@ -201,8 +201,8 @@ Re-ordered 2026-09-15: Knowledge Base moved to step 1. It has no stale prose to 
 4. `channels.md` → Connectors; new screenshots.
 5. Add `workspaces.md`, `tasks.md`, `plans.md`, `calendar.md`, `goals.md`, `agents.md`, `browser.md`, `tools.md`, `previews.md`, `security.md`. Fold `configuration.md`/`tools-reference.md`/`providers.md`/`routing.md`/credential-and-security docs per the "Existing docs the tree never assigned" table below. Keep `memory.md` as-is (light audit only).
 6. Operator EDIT pass: `tools_configuration.md` (`bash`), `troubleshooting.md` (port 5000), `security-considerations.md`, `getting-started.md` docker, `platform-support.md`.
-7. Delete `docs/internal/BRD/`. Archive 2026-05 design drafts.
-8. Delete `.preview-doc/` when (1–6) hold anything still true.
+7. Delete `docs/internal/_archive/BRD/`. Archive 2026-05 design drafts.
+8. Delete `docs/internal/_archive/preview-doc-v03-concept/` when (1–6) hold anything still true.
 9. Do **not** rewrite ADRs/specs.
 
 ## Enforcement (later)
@@ -265,11 +265,11 @@ This is a re-validation pass, not an implementation pass. Checked directly again
 
 - **0 of 13 new pages exist**: `workspaces.md`, `tasks.md`, `plans.md`, `calendar.md`, `goals.md`, `agents.md`, `tools.md`, `knowledge.md`, `library.md`, `browser.md`, `previews.md`, `security.md`, `settings.md` — none present in `docs/`. (The `connectors.md` rename and `connectors/` retitle are separate — a rename, not a new page — and also not done.)
 - **No rewrite started**: `concepts.md` and `using-omnipus-ui.md` still teach five teammates including Max and the Command Center, word for word (see the re-verified line citations above).
-- **BRD still live**: `docs/internal/BRD/` (6 files) is still in the tree, not archived or deleted.
-- **`.preview-doc/` still live**: 18 HTML files, not deleted.
-- **2026-05 design drafts still live**: the five `docs/internal/design/*-2026-05.md` files are still in their original location; `_archive/design-2026-05-rooms-era/` does not exist (`ls docs/internal/_archive/` shows no such directory).
+- **BRD still live**: `docs/internal/_archive/BRD/` (6 files) is still in the tree, not archived or deleted.
+- **`docs/internal/_archive/preview-doc-v03-concept/` still live**: 18 HTML files, not deleted.
+- **2026-05 design drafts still live**: the five `docs/internal/_archive/design-2026-05-rooms-era/*.md` files are still in their original location; `_archive/design-2026-05-rooms-era/` does not exist (`ls docs/internal/_archive/` shows no such directory).
 - **No enforcement script**: `scripts/check-no-stale-user-docs.sh` does not exist. For comparison, the repo already has 25 other `scripts/check-no-*.sh` guards (e.g. `check-no-jpeg-screencast.sh`, `check-no-fail-closed-backfill.sh`, `check-no-goal-confirm-gate.sh`) — the precedent for wiring a mechanical guard into CI is well established, this one specifically just hasn't been written yet.
 
 ## Out of scope this pass
 
-Editing any user guide. Deleting BRD, `.preview-doc/`, or design drafts. Splitting `CLAUDE.md` (module-map draft).
+Editing any user guide. Deleting BRD, `docs/internal/_archive/preview-doc-v03-concept/`, or design drafts. Splitting `CLAUDE.md` (module-map draft).

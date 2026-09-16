@@ -1,18 +1,26 @@
-# Archived internal docs
+# Archive
 
-**Completed / historical artifacts — kept for the record. NOT the current
-direction; do not use them to plan or implement new work.**
+Superseded internal material. Nothing here describes the product as it ships today. It is kept
+because it records what we intended at the time, which is sometimes the only explanation for why
+something is built the way it is.
 
-- `plan/` — shipped v0.1/v0.2 **wave** (wave0–5) and **sprint** (h/i/j/k) specs,
-  v0.1 ship-readiness, and superseded planning notes. The features they
-  describe are implemented on `main`.
-- `investigation/` — point-in-time review-pass outputs (code-reviewer,
-  code-simplifier, type-design-analyzer, silent-failure-hunter, architect, …)
-  from past implementation waves.
+Archived 2026-09-16 by founder decision, after the handbook rewrite replaced what these documents
+were standing in for.
 
-**Current / authoritative material instead:**
-- `docs/internal/architecture/AS-IS-architecture.md` — code-cited as-is.
-- Accepted `docs/internal/architecture/ADR-*`.
-- Active specs in `docs/internal/specs/`.
-- The v0.3 direction is captured in the Workspaces concept (`.preview-doc/`)
-  and a forthcoming ADR (supersedes the `docs/internal/design/*-2026-05` drafts).
+| Folder | What it was | Why it moved |
+|---|---|---|
+| `BRD/` | The original business requirements, main document plus appendices A to E and a competitive analysis | Superseded by the shipped product and by the decision records. Useful only as history. |
+| `preview-doc-v03-concept/` | The v0.3 Workspaces concept, 16 pages of HTML | It was the working direction for v0.3. The parts that shipped are now documented in the handbook; the rest is pre-decision thinking. |
+| `design-2026-05-rooms-era/` | Five design drafts from May 2026: sandbox, memory, tasks, projects interface, settings and notifications | They use the retired "Rooms" and five-teammate vocabulary. Read the decision records instead. |
+
+**Do not write new material here, and do not cite anything here as current.** New reasoning goes in
+a decision record, new intent goes in a specification, and anything a user needs goes in the
+handbook under `docs/`.
+
+## About links that still point at the old locations
+
+Decision records, dated plans and past test notes still cite the original paths. That is deliberate.
+Those documents are a record of what was true when they were written, and rewriting their citations
+would make the record lie. Only the documents that are current authority were re-pointed here: the
+repository instructions, the roadmap, the internal index, the documentation map and the subagent
+definitions. If a link from a historical document lands nowhere, the file it wanted is in this folder.
