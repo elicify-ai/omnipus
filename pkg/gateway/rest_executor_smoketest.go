@@ -295,6 +295,20 @@ func smokeTestFail(errMsg string, durationMs int, usedAgentWorkspace bool) gen.E
 	}
 }
 
+// restAPIRunExecutorSmokeTest carries the shared state of runExecutorSmokeTest across its stages.
+type restAPIRunExecutorSmokeTest struct {
+	cli                string
+	cliArgsRaw         string
+	durationMs         func() int
+	resolvedBinary     string
+	usedAgentWorkspace bool
+	runID              string
+	safeArgs           []string
+	responseText       string
+	ok                 bool
+	errMsg             string
+}
+
 // runExecutorSmokeTest performs the actual dispatch without any HTTP
 // concern, so it is directly unit-testable. It returns the wire response
 // plus the resolved binary path/name (for the caller's audit record — the
@@ -303,8 +317,10 @@ func (a *restAPI) runExecutorSmokeTest(
 	ctx context.Context,
 	cli, model, cliPath, cliArgsRaw, agentID string,
 ) (gen.ExecutorSmokeTestResponse, string) {
+	ra := &restAPIRunExecutorSmokeTest{cli: cli, cliArgsRaw: cliArgsRaw}
+
 	start := time.Now()
-	durationMs := func() int { return int(time.Since(start).Milliseconds()) }
+	ra.durationMs = func() int { return int(time.Since(start).Milliseconds()) }
 
 	// Pre-spawn guard (mirrors validateCLI's fail-closed pre-spawn check in
 	// rest_clivalidate.go): resolve the spawn target the SAME way the runtime
@@ -317,16 +333,16 @@ func (a *restAPI) runExecutorSmokeTest(
 	// via $PATH instead of short-circuiting.
 	target := cliPath
 	if target == "" {
-		target = runner.DefaultCLIBinary(cli)
+		target = runner.DefaultCLIBinary(ra.cli)
 	}
 	resolvedTarget, lpErr := exec.LookPath(target)
 	if lpErr != nil || !isRegularExecutableFile(resolvedTarget) {
 		return smokeTestFail(
-			fmt.Sprintf("%q CLI binary not found or not executable (%s)", cli, target),
-			durationMs(), false,
+			fmt.Sprintf("%q CLI binary not found or not executable (%s)", ra.cli, target),
+			ra.durationMs(), false,
 		), target
 	}
-	resolvedBinary := absResolvePath(target)
+	ra.resolvedBinary = absResolvePath(target)
 
 	// Working-directory resolution: when agentID names a real, saved agent,
 	// run in THAT agent's own dedicated directory — the same place a genuine
@@ -401,8 +417,8 @@ func (a *restAPI) runExecutorSmokeTest(
 		if mkErr := os.MkdirAll(resolved, 0o755); mkErr != nil {
 			return smokeTestFail(
 				fmt.Sprintf("could not prepare agent directory: %v", mkErr),
-				durationMs(), false,
-			), resolvedBinary
+				ra.durationMs(), false,
+			), ra.resolvedBinary
 		}
 		workDir = resolved
 		isEphemeralWorkspace = false
@@ -411,21 +427,21 @@ func (a *restAPI) runExecutorSmokeTest(
 		if mkRootErr := os.MkdirAll(root, 0o700); mkRootErr != nil {
 			return smokeTestFail(
 				fmt.Sprintf("could not prepare scratch workspace: %v", mkRootErr),
-				durationMs(), false,
-			), resolvedBinary
+				ra.durationMs(), false,
+			), ra.resolvedBinary
 		}
 		dir, mkErr := os.MkdirTemp(root, "run-")
 		if mkErr != nil {
 			return smokeTestFail(
 				fmt.Sprintf("could not create scratch workspace: %v", mkErr),
-				durationMs(),
+				ra.durationMs(),
 				false,
-			), resolvedBinary
+			), ra.resolvedBinary
 		}
 		workDir = dir
 		isEphemeralWorkspace = true
 	}
-	usedAgentWorkspace := !isEphemeralWorkspace
+	ra.usedAgentWorkspace = !isEphemeralWorkspace
 	// Ephemeral scratch workspace — NEVER a real agent's persistent
 	// workspace — removed unconditionally once the run ends, success or
 	// failure. Gated strictly on isEphemeralWorkspace: when a real agent's
@@ -440,24 +456,7 @@ func (a *restAPI) runExecutorSmokeTest(
 		}
 	}()
 
-	runID := fmt.Sprintf("smoke-%d", time.Now().UnixNano())
-
-	// filterKey is the internal denylist key each driver's OWN buildArgs
-	// passes to filterDangerousCLIArgs — "claude", not the wire
-	// "claude-code"; codex/opencode's wire and internal names coincide.
-	// Shared with executor-preview via the ONE runner.FilterKey helper (see
-	// its doc) instead of each endpoint re-deriving this mapping
-	// independently.
-	filterKey := runner.FilterKey(cli)
-	parsedArgs := runner.ParseCLIArgs(cliArgsRaw, runID)
-	// Defense in depth: filter dangerous cli_args here too, on top of each
-	// driver's own internal filterDangerousCLIArgs call in buildArgs() — a
-	// dangerous arg cannot sneak into a REAL run through either path. Dropped
-	// tokens are already logged by the driver's own internal call
-	// (logDroppedCLIArgs), so the detail return here is intentionally
-	// discarded — this call's only job is to make sure the ARGV actually
-	// passed to Run never carries a denylisted flag.
-	safeArgs, _ := runner.FilterDangerousCLIArgsDetailed(filterKey, parsedArgs)
+	ra.prepareArguments()
 
 	// Belt-and-suspenders context: RunOptions.TimeoutSeconds is what each
 	// driver enforces internally (its own context.WithTimeout, firing at
@@ -478,36 +477,36 @@ func (a *restAPI) runExecutorSmokeTest(
 	// routing every event through the real runner.ConsentDispatcher with a
 	// nil handler (see the file-header "Consent" bullet). Passing nil here
 	// too keeps the driver's own stored field consistent with that posture.
-	driver, err := smokeTestNewDriver(cli, nil)
+	driver, err := smokeTestNewDriver(ra.cli, nil)
 	if err != nil {
 		return smokeTestFail(
 			fmt.Sprintf("could not construct driver: %v", err),
-			durationMs(),
-			usedAgentWorkspace,
-		), resolvedBinary
+			ra.durationMs(),
+			ra.usedAgentWorkspace,
+		), ra.resolvedBinary
 	}
 
 	evCh, runErr := driver.Run(runCtx, runner.RunOptions{
-		RunID:          runID,
+		RunID:          ra.runID,
 		WorkDir:        workDir,
 		Input:          smokeTestPrompt,
 		Env:            sandbox.ScrubGatewayEnvForRunner(),
 		TimeoutSeconds: smokeTestTimeoutSeconds,
 		MaxTurns:       smokeTestMaxTurns,
 		CLIPath:        cliPath,
-		CLIArgs:        safeArgs,
+		CLIArgs:        ra.safeArgs,
 		Model:          model,
 	})
 	if runErr != nil {
 		return smokeTestFail(
-			fmt.Sprintf("failed to start %s: %v", cli, runErr),
-			durationMs(),
-			usedAgentWorkspace,
-		), resolvedBinary
+			fmt.Sprintf("failed to start %s: %v", ra.cli, runErr),
+			ra.durationMs(),
+			ra.usedAgentWorkspace,
+		), ra.resolvedBinary
 	}
 
 	slog.Info("executor-smoke-test: run started",
-		"run_id", runID, "cli", cli, "timeout_s", smokeTestTimeoutSeconds, "max_turns", smokeTestMaxTurns)
+		"run_id", ra.runID, "cli", ra.cli, "timeout_s", smokeTestTimeoutSeconds, "max_turns", smokeTestMaxTurns)
 
 	// Route every event through the REAL runner.ConsentDispatcher (the same
 	// wiring pkg/agent/external_dispatch.go uses for production dispatch) —
@@ -522,10 +521,10 @@ func (a *restAPI) runExecutorSmokeTest(
 	out := make(chan runner.RunEvent, 64)
 	go func() {
 		defer close(out)
-		runner.ConsentDispatcher(runCtx, evCh, driver, runID, "", nil, out)
+		runner.ConsentDispatcher(runCtx, evCh, driver, ra.runID, "", nil, out)
 	}()
 
-	responseText, ok, errMsg := drainSmokeTestRun(runCtx, runID, out)
+	ra.responseText, ra.ok, ra.errMsg = drainSmokeTestRun(runCtx, ra.runID, out)
 
 	// If runCtx ended (client disconnect, or this handler's own
 	// smokeTestDrainGrace backstop — NOT the normal "the run finished"
@@ -547,11 +546,38 @@ func (a *restAPI) runExecutorSmokeTest(
 		drainUntilClosedOrGrace(evCh, smokeTestCancelGrace)
 	}
 
+	return ra.buildResponse()
+}
+
+// prepareArguments builds the run identifier and filters caller-supplied CLI arguments.
+func (ra *restAPIRunExecutorSmokeTest) prepareArguments() {
+	ra.runID = fmt.Sprintf("smoke-%d", time.Now().UnixNano())
+
+	// filterKey is the internal denylist key each driver's OWN buildArgs
+	// passes to filterDangerousCLIArgs — "claude", not the wire
+	// "claude-code"; codex/opencode's wire and internal names coincide.
+	// Shared with executor-preview via the ONE runner.FilterKey helper (see
+	// its doc) instead of each endpoint re-deriving this mapping
+	// independently.
+	filterKey := runner.FilterKey(ra.cli)
+	parsedArgs := runner.ParseCLIArgs(ra.cliArgsRaw, ra.runID)
+	// Defense in depth: filter dangerous cli_args here too, on top of each
+	// driver's own internal filterDangerousCLIArgs call in buildArgs() — a
+	// dangerous arg cannot sneak into a REAL run through either path. Dropped
+	// tokens are already logged by the driver's own internal call
+	// (logDroppedCLIArgs), so the detail return here is intentionally
+	// discarded — this call's only job is to make sure the ARGV actually
+	// passed to Run never carries a denylisted flag.
+	ra.safeArgs, _ = runner.FilterDangerousCLIArgsDetailed(filterKey, parsedArgs)
+}
+
+// buildResponse builds and logs the final smoke-test response.
+func (ra *restAPIRunExecutorSmokeTest) buildResponse() (gen.ExecutorSmokeTestResponse, string) {
 	var resp gen.ExecutorSmokeTestResponse
-	if ok {
-		resp = smokeTestOK(responseText, durationMs(), usedAgentWorkspace)
+	if ra.ok {
+		resp = smokeTestOK(ra.responseText, ra.durationMs(), ra.usedAgentWorkspace)
 	} else {
-		resp = smokeTestFail(errMsg, durationMs(), usedAgentWorkspace)
+		resp = smokeTestFail(ra.errMsg, ra.durationMs(), ra.usedAgentWorkspace)
 	}
 
 	// The response body's Error field is already sanitized (never raw
@@ -562,13 +588,13 @@ func (a *restAPI) runExecutorSmokeTest(
 	// actually resolve to something here; the RAW message (when it differs)
 	// is logged separately, tied to the same run_id, inside
 	// drainSmokeTestRun's EventKindError case below.
-	finishArgs := []any{"run_id", runID, "cli", cli, "ok", ok, "duration_ms", resp.DurationMs}
-	if !ok && resp.Error != nil {
+	finishArgs := []any{"run_id", ra.runID, "cli", ra.cli, "ok", ra.ok, "duration_ms", resp.DurationMs}
+	if !ra.ok && resp.Error != nil {
 		finishArgs = append(finishArgs, "error", *resp.Error)
 	}
 	slog.Info("executor-smoke-test: run finished", finishArgs...)
 
-	return resp, resolvedBinary
+	return resp, ra.resolvedBinary
 }
 
 // smokeTestPermissionDeniedErr is the specific, non-generic error surfaced
