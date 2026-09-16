@@ -100,8 +100,9 @@ func ClawHubMarketplaceFromConfig(
 }
 
 // FirstGitHubMarketplaceCreds returns the resolved token and proxy for the
-// first enabled github marketplace entry in cfg, or ("", "") when none is
-// configured. Used to seed the shared SkillInstaller (which predates the
+// first github marketplace entry in cfg, or ("", "") when none is configured.
+// Enabled is not consulted — the first github-typed entry wins even when
+// disabled. Used to seed the shared SkillInstaller (which predates the
 // per-marketplace list and serves github installs globally).
 func FirstGitHubMarketplaceCreds(
 	cfg *config.Config,
