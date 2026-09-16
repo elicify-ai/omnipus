@@ -76,7 +76,7 @@ const (
 )
 
 // validStates is the set of allowed State values.
-var validStates = map[State]bool{ //nolint:gochecknoglobals
+var validStates = map[State]bool{
 	StateDraft:    true,
 	StateApproved: true,
 	StateRunning:  true,
@@ -144,7 +144,7 @@ func (p *Plan) PermitsMemberDispatch() bool {
 // still {StateFailed: true} only), and it does not widen approved's OTHER
 // edges — approved->running still goes exclusively through the engine's cap
 // admission (tryStartApprovedPlan), never through this matrix directly.
-var legalPlanTransitions = map[State]map[State]bool{ //nolint:gochecknoglobals
+var legalPlanTransitions = map[State]map[State]bool{
 	StateDraft:    {StateDraft: true, StateApproved: true},
 	StateApproved: {StateDraft: true, StateApproved: true, StateRunning: true, StateFailed: true},
 	StateRunning:  {StateRunning: true, StateDone: true, StateFailed: true},
@@ -280,7 +280,7 @@ const (
 )
 
 // validPlanPhases is the set of allowed non-empty PlanPhase values.
-var validPlanPhases = map[PlanPhase]bool{ //nolint:gochecknoglobals
+var validPlanPhases = map[PlanPhase]bool{
 	PhaseDispatching:         true,
 	PhaseJudging:             true,
 	PhaseSynthesizing:        true,
@@ -293,7 +293,7 @@ var validPlanPhases = map[PlanPhase]bool{ //nolint:gochecknoglobals
 // set — the phases from which a plan correction may be applied. It has exactly
 // two members and is deliberately NOT "any phase": a plan at dispatching or
 // judging is still rejected.
-var supervisionEligiblePhases = map[PlanPhase]bool{ //nolint:gochecknoglobals
+var supervisionEligiblePhases = map[PlanPhase]bool{
 	PhaseAwaitingSupervision: true,
 	PhaseStalled:             true,
 }
@@ -368,7 +368,7 @@ const (
 )
 
 // validFailedReasons is the set of allowed non-empty FailedReason values.
-var validFailedReasons = map[FailedReason]bool{ //nolint:gochecknoglobals
+var validFailedReasons = map[FailedReason]bool{
 	FailedReasonJudgeRoundsExhausted:   true,
 	FailedReasonStoppedByUser:          true,
 	FailedReasonIdleExpired:            true,
@@ -418,7 +418,7 @@ const PausedReasonJudgeUnavailable = "judge temporarily unavailable"
 // like PlanPhase/FailedReason's own "empty means unset" convention.
 // PausedReasonJudgeUnavailable is deliberately NOT here — it is prefix-matched
 // (see IsJudgeUnavailablePausedReason).
-var validPausedReasons = map[string]bool{ //nolint:gochecknoglobals
+var validPausedReasons = map[string]bool{
 	PausedReasonOwnerDisabled: true,
 }
 

@@ -67,7 +67,7 @@ var intentLogDevKeyWarnOnce sync.Once
 // that branch would be unreachable from any test (mirrors this codebase's
 // established swappable-seam-for-testability pattern, e.g. pkg/session's
 // sessionLockAcquireFn/sessionLockReleaseFn).
-var intentLogIsTestingFn = testing.Testing //nolint:gochecknoglobals
+var intentLogIsTestingFn = testing.Testing
 
 // resolveChainKey returns key if non-empty (copied defensively). Otherwise it
 // returns an error in production — mirrors pkg/audit/hmac.go's resolveChainKey

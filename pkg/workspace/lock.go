@@ -12,8 +12,6 @@ import "github.com/elicify-ai/omnipus/pkg/task"
 // JSONLStore uses for per-session serialization (pkg/memory/jsonl.go:21-77)
 // and pkg/task itself uses for per-task files (task.TaskFileLock) — so
 // memory usage stays O(1) regardless of workspace count.
-//
-//nolint:gochecknoglobals
 var fileLock = &task.StripedLock{}
 
 // LockID acquires the mutex shard for the given workspace ID and returns an

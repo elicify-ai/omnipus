@@ -40,6 +40,4 @@ func (s *StripedLock) Get(key string) *sync.Mutex {
 // TaskFileLock is the process-wide shared StripedLock for unified task files.
 // Both the REST gateway handlers and the task tools must acquire this lock
 // keyed by task ID before performing a read-modify-write on any task file.
-//
-//nolint:gochecknoglobals
 var TaskFileLock = &StripedLock{}

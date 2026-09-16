@@ -2,11 +2,12 @@ package webrtc
 
 import (
 	"errors"
-	"github.com/pion/rtcp"
-	"github.com/pion/rtp"
 	"testing"
 	"testing/synctest"
 	"time"
+
+	"github.com/pion/rtcp"
+	"github.com/pion/rtp"
 )
 
 func TestAudioTimingForwarderMeasuresBoundariesOutsideLock(t *testing.T) {
@@ -72,11 +73,13 @@ func TestAudioTimingRetiredFeedDoesNotRecord(t *testing.T) {
 
 // A retired feed is rejected before inspecting its packet, as before diagnostics.
 func TestAudioTimingRetiredNilPacketRejectedBeforeInspection(t *testing.T) {
- var f mediaForwarder
- f.begin(2,48000)
- accepted,err:=f.write(1,nil,time.Now(),func(*rtp.Packet)error {
-  t.Error("retired writer called")
-  return nil
- })
- if accepted || err!=nil { t.Fatalf("retired nil packet: accepted=%v err=%v",accepted,err) }
+	var f mediaForwarder
+	f.begin(2, 48000)
+	accepted, err := f.write(1, nil, time.Now(), func(*rtp.Packet) error {
+		t.Error("retired writer called")
+		return nil
+	})
+	if accepted || err != nil {
+		t.Fatalf("retired nil packet: accepted=%v err=%v", accepted, err)
+	}
 }
