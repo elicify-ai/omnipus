@@ -117,3 +117,8 @@ pkg/**/system/cost.json
 
 # GitNexus per-area skills (regenerated each analyze; clustering is non-deterministic)
 .claude/skills/generated/
+
+# UAT evidence screenshots. The harness (docs/internal/uat/harness/) writes
+# these on every run; 820 of them (65 MB) were tracked and deleted 2026-09-16.
+# They are run evidence, not source - keep them local, do not commit them again.
+docs/internal/uat/screenshots/
