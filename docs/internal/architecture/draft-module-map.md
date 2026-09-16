@@ -161,7 +161,22 @@ merge script re-runs it after merging and rejects any diff that touches code or 
 Findings the lanes surfaced about the *product* (not the docs) are collected in
 `results/docs-open-questions.md`.
 
-**Still open (2026-09-16):** files over 4,000 are down to **2** (`loop.go`, shrinking as `runTurn` is extracted, and `chat.ts`, untouched so far); wave 4 is running (18 production functions still over 240 across 17 file lanes); **20 Go TEST functions** over 240 have no plan yet and the gate applies the same numbers to test code; the TypeScript side has **184** production functions over 120 and **117** over 240 (components are warn-only by founder ruling, so the hard-fail set is led by `chat.ts`); nested `CLAUDE.md` landing; the documentation track's second wave (index, concepts and interface tour rewrites, connector rename); and the one CI pass with the red jobs it will show.
+**Test functions: grandfathered (founder ruling, 2026-09-16).** 20 Go TEST functions exceed 240
+lines, from 246 to 396, collectively 1,483 lines over; none exceeds double the limit, and 261 more
+sit in the 121-240 warning band out of 20,677 test functions. They are **not** being extracted.
+Reasons: all 20 are already on the shrink-only list and the gate exits 0, so no new oversized test
+can land and none of these can grow; and 17 of the 20 are long by design — 14 are subtest containers
+(one holds 35 named scenarios) and 3 are table-driven, shapes where the length IS the list of cases.
+The mechanical extractor is actively wrong for them: moving a body into a method separates a scenario
+name from its assertions and moves the line a failure reports. The budget exists for change safety in
+production code, which a long enumerated test does not threaten.
+**One exception, opportunistic, by hand, not by tool:** three are linear scripts with no subtests
+(`browser_webrtc_e2e_test.go::TestWebRTCEndToEndInProcess` 290,
+`tests/perf/load_2000_sessions_test.go::TestLoad2000Sessions` 264,
+`pkg/knowledge/links_test.go::TestKnowledge_NoLanguageModelInTheGraphPath` 258). A failure anywhere in
+those reports one function. Convert them to named subtests whenever someone next touches them.
+
+**Still open (2026-09-16):** files over 4,000 are down to **2** (`loop.go`, shrinking as `runTurn` is extracted, and `chat.ts`, untouched so far); wave 4 is running (18 production functions still over 240 across 17 file lanes); the TypeScript side has **184** production functions over 120 and **117** over 240 (components are warn-only by founder ruling, so the hard-fail set is led by `chat.ts`); nested `CLAUDE.md` landing; the documentation track's second wave (index, concepts and interface tour rewrites, connector rename); and the one CI pass with the red jobs it will show.
 
 **Decisions for the founder (2026-09-15), each with a recommendation:**
 
