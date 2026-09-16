@@ -28,6 +28,10 @@ The cross-compile path works (`GOOS=darwin GOARCH=amd64 go build ./cmd/omnipus`)
 
 Tracked as [#113](https://github.com/elicify-ai/omnipus/issues/113). Roughly 15 unit tests assume POSIX semantics (file mode bits, advisory `flock`, fork-time signals). The kernel-sandbox story (Job Objects + Restricted Tokens + DACL) described in `docs/internal/BRD/Omnipus Windows BRD appendic.md` is specified but unimplemented; on Windows the sandbox falls back to application-level checks like on macOS.
 
+Windows also has no available-memory reader. Agent concurrency therefore stays at its unmeasurable-host floor unless you set `performance.max_parallel_agents` explicitly, and the browser pool permits one browser for the whole host. No amount of physical RAM raises those automatic floors. Windows support is degraded and unsupported for these memory-governed features.
+
+This differs from Linux with an unreadable `/proc/meminfo`, such as a gVisor, distroless, or hardened-seccomp deployment. That remains a supported deployment, but Omnipus cannot measure its available memory and therefore applies the same conservative floors. Restore a readable procfs or set the agent limit explicitly when the deployment can support more concurrency.
+
 ### Linux riscv64, loong64, armv7, mipsle
 
 Go has cross-compile targets but there are no GitHub Actions runners and no smoke tests. Build with `GOOS=linux GOARCH=<arch> go build -tags goolm,stdjson ./cmd/omnipus`. The seccomp BPF emitter is currently architecture-gated to amd64 and arm64 (`pkg/sandbox/seccomp_linux_amd64.go`, `pkg/sandbox/seccomp_linux_arm64.go`); on other architectures the gateway should fall back gracefully but the path is not exercised.

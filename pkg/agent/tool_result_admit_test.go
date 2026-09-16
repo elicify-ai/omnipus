@@ -14,6 +14,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -738,7 +739,15 @@ func TestChokePoint_ProducerListByGrep(t *testing.T) {
 	}
 	assert.Empty(t, vmsgs, "files constructing role:tool messages outside the choke point (FR-009):\n%s", strings.Join(vmsgs, "\n"))
 
-	discarded := scanDiscardedChokePointResults(t, "loop.go")
+	var discarded []chokePointViolation
+	loopFiles, err := filepath.Glob("loop*.go")
+	require.NoError(t, err)
+	for _, name := range loopFiles {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		discarded = append(discarded, scanDiscardedChokePointResults(t, name)...)
+	}
 	dmsgs := make([]string, 0, len(discarded))
 	for _, v := range discarded {
 		dmsgs = append(dmsgs, fmt.Sprintf("%s: %s", v.pos, v.kind))
@@ -750,7 +759,7 @@ func TestChokePoint_ProducerListByGrep(t *testing.T) {
 	// property. This just confirms no call site was silently deleted; a
 	// legitimate new call site is expected to raise the floor, not fail it.
 	loopSrc := readLoopSourcesForTest(t)
-	calls := strings.Count(loopSrc, "al.admitToolResult(ts,")
+	calls := len(regexp.MustCompile(`\.admitToolResult\(\s*(?:[A-Za-z_]\w*\.)*ts\s*,`).FindAllString(loopSrc, -1))
 	assert.GreaterOrEqual(t, calls, 10, "loop.go: success path + seven denied sites + skipped site + the T066-15 argument-refusal site (FR-016) = at least 10 choke-point calls")
 
 	for _, fname := range []string{"attach_hydrate.go", "recall_conversation.go"} {

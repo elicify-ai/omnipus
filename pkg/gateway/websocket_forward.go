@@ -711,7 +711,7 @@ func (f *eventForwardState) onTurnEnd(evt agent.Event) {
 	var watchdogReason string
 	switch p.Status {
 	case agent.TurnEndStatusAborted:
-		watchdogReason = "parent_cancelled" //nolint:misspell // wire value, frontend TS union
+		watchdogReason = "parent_cancelled"
 	case agent.TurnEndStatusError:
 		watchdogReason = "parent_timeout"
 	case agent.TurnEndStatusCompleted:

@@ -563,16 +563,18 @@ func TestResolveContextWindow_ByLocality(t *testing.T) {
 
 	t.Run("gate order: the window gate sits after the workspace gate, before the first budget check", func(t *testing.T) {
 		src := readLoopSourcesForTest(t)
-		runTurn := sliceFromMarkerForTest(t, src, "func (al *AgentLoop) runTurn(")
-		wsGate := strings.Index(runTurn, "resolveTurnWorkDirOrRefuse(turnCtx")
-		windowGate := strings.Index(runTurn, "ErrContextWindowUnknown")
+		runTurnStages := sliceFromMarkerForTest(t, src, "func (rp *agentLoopRunTurnPrepare) resolveWorkspaceAndModel(")
+		wsGate := strings.Index(runTurnStages, "resolveTurnWorkDirOrRefuse(")
+		windowGateMatch := regexp.MustCompile(`windowErr\s*:=\s*fmt\.Errorf\(\s*"%w:[^"]*"\s*,\s*ErrContextWindowUnknown`).FindStringIndex(runTurnStages)
 		// Either form of the predicate: the pre-turn site uses the
 		// measured-token overload (isOverContextBudgetTokens) so it charges
 		// the SENT tool surface, the one windowTrim measures.
-		budget := regexp.MustCompile(`isOverContextBudget(?:Tokens)?\(`).FindStringIndex(runTurn)
+		budget := regexp.MustCompile(`isOverContextBudget(?:Tokens)?\(`).FindStringIndex(runTurnStages)
 		require.NotNil(t, budget, "runTurn must carry a pre-turn budget check")
+		require.NotNil(t, windowGateMatch, "runTurn must refuse an unknown window with ErrContextWindowUnknown")
+		windowGate := windowGateMatch[0]
 		require.Positive(t, wsGate)
-		require.Positive(t, windowGate, "runTurn must refuse an unknown window with ErrContextWindowUnknown")
+		require.Positive(t, windowGate)
 		require.Positive(t, budget[0])
 		assert.Greater(t, windowGate, wsGate, "context_window_unknown is evaluated after the earlier pre-turn refusals")
 		assert.Less(t, windowGate, budget[0], "the refusal must fire before any budget check reads the window")
@@ -693,8 +695,9 @@ func TestWindowAgreement_OneBudgetAllSites(t *testing.T) {
 		// charge exactly what windowTrim charges).
 		calls := regexp.MustCompile(`isOverContextBudget(?:Tokens)?\(\s*([^,]+),`).FindAllStringSubmatch(src, -1)
 		require.GreaterOrEqual(t, len(calls), 2, "pre-turn and timeout-recovery sites")
+		budgetFromTurnAgent := regexp.MustCompile(`^agentContextBudget\(\s*(?:[A-Za-z_]\w*\.)*ts\.agent\s*\)$`)
 		for _, c := range calls {
-			assert.Equal(t, "agentContextBudget(ts.agent)", strings.TrimSpace(c[1]))
+			assert.Regexp(t, budgetFromTurnAgent, strings.TrimSpace(c[1]))
 		}
 		switchFn := sliceFromMarkerForTest(t, src, "func (al *AgentLoop) handleModelSwitch(")
 		switchFn = switchFn[:strings.Index(switchFn, "\n}\n")]

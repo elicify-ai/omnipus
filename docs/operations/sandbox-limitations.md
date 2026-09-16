@@ -46,6 +46,12 @@ Glob host patterns are **not** supported. `*.internal.corp` will be stored as a 
 
 The CIDR allow-list interacts with the kernel layer asymmetrically. Landlock `NET_CONNECT_TCP` (ABI v4+) filters by destination port only — the kernel cannot match by IP. So a compiled binary spawned through `bash` (ADR-036 unified the retired `exec`/`workspace_shell`/`workspace_shell_bg` tools into it) that dials `https://192.168.1.1/` on port 443 is permitted by the kernel (443 is on the connect allow-list for legitimate HTTPS) and only the gateway-controlled HTTP clients (`search_web`, `fetch_url`, the skills installer, MCP fetches) see the CIDR filter via `SSRFChecker`. This gap is documented in `pkg/config/sandbox.go:248-257`; operators concerned about it should set `bash`'s tool-policy to `deny` or `ask` (CLAUDE.md hard constraint 6 — `bash` has no feature-flag gate, only an explicit per-agent tool-policy entry) on agents that handle untrusted content.
 
+## Container detection blind spot
+
+Container detection cannot distinguish one deployment shape from bare metal: a cgroup-v2 pod in its own cgroup namespace, with service links disabled and no `/.dockerenv`. Its cgroup path is only `0::/`, which is also valid on a bare-metal system. Omnipus therefore may not warn that an unlimited container is sizing work against the node's memory.
+
+Set `OMNIPUS_CONTAINERIZED=1` for this deployment shape. This declares that Omnipus is containerized so the missing-memory-limit warning can run; it does not set a memory limit. Configure the limit in the container runtime as well.
+
 ## Production warning banner
 
 When `OMNIPUS_ENV=production` is set in the environment and `sandbox.mode` resolves to `off` or `permissive`, the gateway prints a multi-line banner to stderr at boot and then every 60 seconds thereafter. The banner is intentionally loud and unmissable in journald or Docker logs.

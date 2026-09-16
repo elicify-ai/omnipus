@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1095,8 +1094,7 @@ func TestGetSession_TranscriptWithMixedEntries_PassesSessionDetailSchema(t *test
 		"GET /sessions/{id} must return 200; got %d body=%s", w.Code, w.Body.String())
 
 	// Validate the envelope against SessionDetail.yaml.
-	//nolint:dogsled // runtime.Caller returns 4 values; only the file path is needed.
-	_, thisFile, _, _ := runtime.Caller(0)
+	thisFile := gatewayTestCallerFile(t)
 	contractsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "contracts", "components", "schemas")
 	loader := newYAMLSchemaLoader(t)
 	compiler := jsonschema.NewCompiler()

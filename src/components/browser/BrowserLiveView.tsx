@@ -2554,7 +2554,7 @@ export function BrowserLiveView({
       </div>}
       {viewportHandoffState !== 'idle' && (inputState === 'ready' || inputState === 'paused') && !inputError && !displayError && (
         <div role={viewportHandoffState === 'failed' ? 'alert' : 'status'} className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
-          {viewportHandoffState === 'failed' ? <>Browser resize did not finish. <button type="button" onClick={() => setConnectionAttempt(attempt => attempt + 1)}>Retry browser</button></> : 'Resizing browser. Input will resume when the new picture is ready.'}
+          {viewportHandoffState === 'failed' ? <>Browser resize did not finish. <button type="button" tabIndex={0} onClick={() => setConnectionAttempt(attempt => attempt + 1)}>Retry browser</button></> : 'Resizing browser. Input will resume when the new picture is ready.'}
         </div>
       )}
       {/* == Row A: tabs + window controls =============================
@@ -2700,6 +2700,7 @@ export function BrowserLiveView({
         </button>
         <button
           type="button"
+          tabIndex={0}
           onClick={() => handleToolbarNav('stop_loading')}
           disabled={!connected || annotateMode}
           aria-label="Stop loading"

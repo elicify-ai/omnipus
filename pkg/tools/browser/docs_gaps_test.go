@@ -17,6 +17,7 @@ package browser
 // kind of declaration gets lost, and this is what notices.
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +33,47 @@ func readRepoDoc(t *testing.T, rel string) string {
 	return string(body)
 }
 
+func readHandbookDocContaining(t *testing.T, statement string) (string, string) {
+	t.Helper()
+	root := repoRoot(t)
+	docsRoot := filepath.Join(root, "docs")
+	var name, body string
+	err := filepath.WalkDir(docsRoot, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case "internal", "marketing", "plan":
+				if path != docsRoot {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".md" {
+			return nil
+		}
+		contents, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if strings.Contains(string(contents), statement) {
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
+			name, body = filepath.ToSlash(rel), string(contents)
+			return fs.SkipAll
+		}
+		return nil
+	})
+	require.NoError(t, err, "search handbook for %q", statement)
+	require.NotEmpty(t, name,
+		"no user- or operator-facing handbook page contains %q; the reorganisation dropped a statement this test requires users to be told", statement)
+	return name, body
+}
+
 // TestDocs_WindowsBrowserGapIsDocumented is FR-066.
 //
 // The gap: pkg/config has no memory reader for Windows, so
@@ -42,14 +84,18 @@ func readRepoDoc(t *testing.T, rel string) string {
 // That is a real limitation with no workaround, so an operator must be able to
 // find it before they spend an afternoon on it.
 func TestDocs_WindowsBrowserGapIsDocumented(t *testing.T) {
-	for _, doc := range []string{"CHANGELOG.md", "docs/configuration.md"} {
-		body := strings.ToLower(readRepoDoc(t, doc))
+	doc, handbook := readHandbookDocContaining(t, "degraded and unsupported")
+	for _, item := range []struct{ name, body string }{
+		{"CHANGELOG.md", readRepoDoc(t, "CHANGELOG.md")},
+		{doc, handbook},
+	} {
+		body := strings.ToLower(item.body)
 		require.Contains(t, body, "windows",
-			"%s must name Windows — the browser floor there is one instance whatever the machine's RAM", doc)
+			"%s must name Windows — the browser floor there is one instance whatever the machine's RAM", item.name)
 		require.True(t,
 			strings.Contains(body, "degraded and unsupported") || strings.Contains(body, "degraded-unsupported"),
 			"%s must say the Windows browser posture is degraded and unsupported, not merely that a "+
-				"reader is missing — the consequence is what an operator needs, not the cause", doc)
+				"reader is missing — the consequence is what an operator needs, not the cause", item.name)
 	}
 }
 
@@ -66,7 +112,7 @@ func TestDocs_WindowsBrowserGapIsDocumented(t *testing.T) {
 // CLOSED profiles are swept. An operator who read it as a size limit would
 // conclude their disk was safe.
 func TestDocs_ContinuousDriveGapIsDocumented(t *testing.T) {
-	cfgDoc := readRepoDoc(t, "docs/configuration.md")
+	_, cfgDoc := readHandbookDocContaining(t, "cache_trim_interval")
 	require.Contains(t, cfgDoc, "cache_trim_interval",
 		"the config documentation must name the key")
 	require.Contains(t, strings.ToLower(cfgDoc), "does not bound",

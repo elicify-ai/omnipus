@@ -118,8 +118,11 @@ func newRunnerHarness(
 // executor/bus/store (avoids the triple-blank-identifier lint).
 func newRunnerOnly(t *testing.T, cfg *config.Config, registered map[string]bool) *scheduledRunner {
 	t.Helper()
-	r, _, _, _ := newRunnerHarness(t, cfg, registered) //nolint:dogsled // single accessor for the runner
-	return r
+	runner, executor, msgBus, notifs := newRunnerHarness(t, cfg, registered)
+	_ = executor
+	_ = msgBus
+	_ = notifs
+	return runner
 }
 
 func baseConfig() *config.Config {

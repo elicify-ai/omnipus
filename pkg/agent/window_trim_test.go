@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -934,13 +935,14 @@ func TestWindowTrim_AlreadyFitsEvictsNothing(t *testing.T) {
 // conversation windowTrim then measured as fitting.
 func TestBudgetSites_MeasureTheSentToolSurface(t *testing.T) {
 	loop := readLoopSourcesForTest(t)
+	turnAgent := `(?:[A-Za-z_]\w*\.)*ts\.agent`
 
 	assert.NotContains(t, loop, "toolDefs := ts.agent.Tools.ToProviderDefs()",
 		"a budget site must not charge the whole tool registry — use "+
 			"al.sentToolSurfaceTokens(ts.agent, ts.sessionKey), the surface windowTrim measures")
-	assert.NotContains(t, loop, "isOverContextBudget(agentContextBudget(ts.agent)",
+	assert.NotRegexp(t, regexp.MustCompile(`isOverContextBudget\(\s*agentContextBudget\(\s*`+turnAgent+`\s*\)`), loop,
 		"the pre-turn and timeout-recovery sites must compare through "+
 			"isOverContextBudgetTokens with the measured sent surface")
-	assert.Contains(t, loop, "isOverContextBudgetTokens(agentContextBudget(ts.agent)",
+	assert.Regexp(t, regexp.MustCompile(`isOverContextBudgetTokens\(\s*agentContextBudget\(\s*`+turnAgent+`\s*\)`), loop,
 		"the token-count predicate is how those sites share windowTrim's measurement")
 }

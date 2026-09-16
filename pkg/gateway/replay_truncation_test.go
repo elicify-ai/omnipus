@@ -15,7 +15,6 @@ package gateway
 import (
 	"encoding/json"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -35,8 +34,7 @@ import (
 // reuses its newYAMLSchemaLoader/jsonifyYAML helpers).
 func loadReplayMessageFrameSchema(t *testing.T) *jsonschema.Schema {
 	t.Helper()
-	//nolint:dogsled // runtime.Caller returns 4 values; only the file path is needed.
-	_, thisFile, _, _ := runtime.Caller(0)
+	thisFile := gatewayTestCallerFile(t)
 	contractsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "contracts", "components", "schemas")
 	loader := newYAMLSchemaLoader(t)
 	compiler := jsonschema.NewCompiler()

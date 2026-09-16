@@ -427,8 +427,6 @@ func detectKnowledgeBaseInRoot(root *library.Root, rel string) (isKB, establishe
 // content, not a second independent one; that same test fails against a
 // handler that re-reads the file for its token instead of deriving it from
 // the bytes already in hand.
-//
-//nolint:gochecknoglobals // a test seam, nil in production.
 var libraryContentGetRaceHook func()
 
 // libraryETagValue renders a knowledge version token as the RFC 7232

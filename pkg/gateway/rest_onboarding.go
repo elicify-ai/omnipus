@@ -1357,7 +1357,6 @@ func (a *restAPI) HandleOnboardingProbeProvider(w http.ResponseWriter, r *http.R
 
 // decodeAndValidate decodes the probe request and validates its provider, authentication, model, and API-key fields.
 func (ro *restAPIHandleOnboardingProbeProvider) decodeAndValidate() bool {
-
 	var validateEnabled bool
 	if ro.a.agentLoop != nil {
 		validateEnabled = ro.a.agentLoop.GetConfig().Gateway.ValidateInbound

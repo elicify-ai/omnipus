@@ -5,13 +5,67 @@
 package config
 
 import (
+	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
 
+type handbookPage struct {
+	name string
+	body string
+}
+
+// readHandbookPageContaining resolves moved handbook content by what it says,
+// rather than by a filename that can become stale during the next reorganisation.
+// Internal design records are deliberately excluded: they are not documentation
+// that a user or operator can reasonably be expected to find.
+func readHandbookPageContaining(t *testing.T, root, statement string) handbookPage {
+	t.Helper()
+	docsRoot := filepath.Join(root, "docs")
+	var match handbookPage
+	err := filepath.WalkDir(docsRoot, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case "internal", "marketing", "plan":
+				if path != docsRoot {
+					return filepath.SkipDir
+				}
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".md" {
+			return nil
+		}
+		body, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		if strings.Contains(string(body), statement) {
+			rel, relErr := filepath.Rel(root, path)
+			if relErr != nil {
+				return relErr
+			}
+			match = handbookPage{name: filepath.ToSlash(rel), body: string(body)}
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("search handbook for %q: %v", statement, err)
+	}
+	if match.name == "" {
+		t.Fatalf("no user- or operator-facing handbook page contains %q; the reorganisation dropped a statement this test requires users to be told", statement)
+	}
+	return match
+}
+
 // These tests assert on the CONTENT of two operator-facing artefacts —
-// CHANGELOG.md and docs/configuration.md — because for this change the words
+// CHANGELOG.md and the handbook page containing each guarded statement — because
 // ARE the deliverable for a large part of it. An operator's entire model of
 // what happened to their concurrency settings comes from the release note, and
 // a wrong sentence there is a support burden that outlives the code.
@@ -34,12 +88,13 @@ import (
 func TestDocs_NoComputedDefaultIsAnnounced(t *testing.T) {
 	root := repoRoot(t)
 	changelog := readRepoFile(t, filepath.Join(root, "CHANGELOG.md"))
-	configDoc := readRepoFile(t, filepath.Join(root, "docs", "configuration.md"))
+	configPage := readHandbookPageContaining(t, root, "no longer a computed default")
+	configDoc := configPage.body
 
 	// --- The positive: both artefacts must SAY it. ---
 	for _, doc := range []struct{ name, body string }{
 		{"CHANGELOG.md", changelog},
-		{"docs/configuration.md", configDoc},
+		{configPage.name, configDoc},
 	} {
 		if !strings.Contains(doc.body, "no longer a computed default") {
 			t.Errorf("%s does not contain the phrase \"no longer a computed default\". An operator whose concurrency behaviour changed has to be able to find out that it did, and why.", doc.name)
@@ -59,7 +114,7 @@ func TestDocs_NoComputedDefaultIsAnnounced(t *testing.T) {
 	}
 	for _, doc := range []struct{ name, body string }{
 		{"CHANGELOG.md", changelog},
-		{"docs/configuration.md", configDoc},
+		{configPage.name, configDoc},
 	} {
 		lower := strings.ToLower(doc.body)
 		for _, f := range forbidden {
@@ -72,7 +127,7 @@ func TestDocs_NoComputedDefaultIsAnnounced(t *testing.T) {
 	// The SPA's wording must match the release note's, or an operator reading
 	// one and looking at the other concludes they are about different things.
 	if !strings.Contains(configDoc, "automatic — bounded by available memory") {
-		t.Error("docs/configuration.md does not quote the exact phrase the Settings panel renders. An operator who reads the doc and then looks at the UI must recognise what they are seeing.")
+		t.Errorf("%s does not quote the exact phrase the Settings panel renders. An operator who reads the doc and then looks at the UI must recognise what they are seeing.", configPage.name)
 	}
 }
 
@@ -96,11 +151,12 @@ func TestDocs_NoComputedDefaultIsAnnounced(t *testing.T) {
 func TestDocs_WindowsAcceptedGVisorSupported(t *testing.T) {
 	root := repoRoot(t)
 	changelog := readRepoFile(t, filepath.Join(root, "CHANGELOG.md"))
-	configDoc := readRepoFile(t, filepath.Join(root, "docs", "configuration.md"))
+	configPage := readHandbookPageContaining(t, root, "supported deployment")
+	configDoc := configPage.body
 
 	for _, doc := range []struct{ name, body string }{
 		{"CHANGELOG.md", changelog},
-		{"docs/configuration.md", configDoc},
+		{configPage.name, configDoc},
 	} {
 		lower := strings.ToLower(doc.body)
 
@@ -150,7 +206,8 @@ func TestDocs_WindowsAcceptedGVisorSupported(t *testing.T) {
 // words, not leave it to be inferred from a number.
 func TestDocs_UnmeasurableFloorRefusesToGrowNotToRun(t *testing.T) {
 	root := repoRoot(t)
-	configDoc := readRepoFile(t, filepath.Join(root, "docs", "configuration.md"))
+	configPage := readHandbookPageContaining(t, root, "refuses to grow, never to run")
+	configDoc := configPage.body
 
 	// Normalise markdown emphasis and whitespace so the assertion is on the
 	// SENTENCE, not on how it happens to be marked up.
@@ -170,11 +227,11 @@ func TestDocs_UnmeasurableFloorRefusesToGrowNotToRun(t *testing.T) {
 
 	if !strings.Contains(strings.ToLower(configDoc), "floor of **two**") &&
 		!strings.Contains(strings.ToLower(configDoc), "floor of two") {
-		t.Error("docs/configuration.md does not say what the floor actually IS. An operator seeing their third concurrent turn refused needs to recognise the behaviour as the documented floor rather than as a bug.")
+		t.Errorf("%s does not say what the floor actually IS. An operator seeing their third concurrent turn refused needs to recognise the behaviour as the documented floor rather than as a bug.", configPage.name)
 	}
 
 	if !strings.Contains(configDoc, "explicitly") {
-		t.Error("docs/configuration.md does not tell an operator on an unmeasurable host that setting performance.max_parallel_agents explicitly is the way out. The floor is not the end of the story and the doc should not leave it as one.")
+		t.Errorf("%s does not tell an operator on an unmeasurable host that setting performance.max_parallel_agents explicitly is the way out. The floor is not the end of the story and the doc should not leave it as one.", configPage.name)
 	}
 }
 
@@ -188,11 +245,12 @@ func TestDocs_UnmeasurableFloorRefusesToGrowNotToRun(t *testing.T) {
 // OOM-killed.
 func TestDocs_ContainerBlindSpotIsDeclared(t *testing.T) {
 	root := repoRoot(t)
-	configDoc := readRepoFile(t, filepath.Join(root, "docs", "configuration.md"))
+	configPage := readHandbookPageContaining(t, root, "OMNIPUS_CONTAINERIZED")
+	configDoc := configPage.body
 	changelog := readRepoFile(t, filepath.Join(root, "CHANGELOG.md"))
 
 	for _, doc := range []struct{ name, body string }{
-		{"docs/configuration.md", configDoc},
+		{configPage.name, configDoc},
 		{"CHANGELOG.md", changelog},
 	} {
 		if !strings.Contains(doc.body, "OMNIPUS_CONTAINERIZED") {
@@ -201,6 +259,6 @@ func TestDocs_ContainerBlindSpotIsDeclared(t *testing.T) {
 	}
 
 	if !strings.Contains(strings.ToLower(configDoc), "cgroup-v2 pod in its own") {
-		t.Error("docs/configuration.md does not describe the specific shape the container detection misses. \"Detection is best-effort\" is not actionable; naming the shape is.")
+		t.Errorf("%s does not describe the specific shape the container detection misses. \"Detection is best-effort\" is not actionable; naming the shape is.", configPage.name)
 	}
 }

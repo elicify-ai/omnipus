@@ -359,10 +359,7 @@ func (ps *restAPIPutSandboxConfig) authenticateAndDecode() bool {
 	ps.r.Body = http.MaxBytesReader(ps.w, ps.r.Body, 1<<20)
 
 	validateEnabled := ps.a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(ps.w, ps.r, "SandboxConfigUpdate", &ps.body, validateEnabled) {
-		return true
-	}
-	return false
+	return !decodeAndValidate(ps.w, ps.r, "SandboxConfigUpdate", &ps.body, validateEnabled)
 }
 
 // resolveAndValidate resolves the requested fields and validates the complete change before persistence.

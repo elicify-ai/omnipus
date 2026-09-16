@@ -24,13 +24,11 @@ Two jobs that look like settings live on their own pages: what agents may do is 
 
 1. Open Settings from the sidebar's user menu. The Providers tab opens first.
 2. Click **Connect a provider**. Search the catalog or browse it by company. The [providers and models](providers-and-models.md) page explains the choices without duplicating the live list.
-3. Pick a provider. Some companies offer more than one way in, shown as variants: a pay-as-you-go API, a coding plan, or sign-in with an account you already have. Where sign-in exists it is the pre-selected choice.
+3. Pick a provider and one of its available variants: API, coding plan, or account sign-in.
 4. If the variant wants an API key, paste the key and click **Connect**. The row appears with its status.
-5. If the variant uses sign-in, one of two flows follows, and the dialog tells you which:
-   - You get a link and a code. Open the link, enter the code, approve. The dialog updates on its own; a code is valid for 15 minutes.
-   - You get a command to run in a terminal on this machine, such as `copilot login`, and then click **Check sign-in**. The vendor's own tool keeps the credential; Omnipus never sees or stores it.
+5. If the variant uses sign-in, follow the dialog. It either gives you a link and code, or a local command such as `copilot login` followed by **Check sign-in**. With the command flow, the vendor's tool keeps the credential.
 6. Set the **default model** on the card at the top of the tab. That is the model new chats use unless an agent has its own.
-7. The row actions: **Test** re-checks the connection, **Check with my account** lists the models your account can genuinely use, and **Remove provider** deletes it. Removing the provider behind your default model asks you to pick a replacement default as part of the removal.
+7. Use **Test** to re-check the connection, **Check with my account** to list available models, or **Remove provider** to delete it. Removing the default provider first asks for its replacement.
 
 API keys are stored encrypted on this server, never in the main configuration file. See [security](security.md) for how the encrypted store works.
 
@@ -54,7 +52,11 @@ Each tab and neighbor screen has one job.
 | Profile | Your name, timezone, font size, password, and workspace context |
 | Usage | Token totals by period, agent, model, and session |
 
-Usage answers "what did we spend". It counts tokens, not money: totals for the day, week, month, or all time, split into cached and uncached, with breakdowns by agent and by model, and a per-session list you can open. Cached tokens are part of the total, not added on top. Your provider's invoice is where tokens become dollars; Omnipus has no prices to multiply by.
+Usage counts tokens, not money. It shows totals by period, agent, model, and session, split into cached and uncached tokens. Cached tokens are included in the total. See the provider's invoice for costs.
+
+There is no longer a computed default for `performance.max_parallel_agents`. Leave the field blank to let live available memory govern each new agent turn; the Performance tab reports this as "automatic — bounded by available memory". Set a positive whole number when you need an explicit cap.
+
+If the host cannot measure available memory, Omnipus holds agent concurrency at a floor of **two** turns. It refuses to grow, never to run: the first two turns can start, while a third concurrent turn is refused. Set `performance.max_parallel_agents` explicitly if the host can safely support more.
 
 The rate limits live in Settings, Security, under its advanced section. Two numbers, both per agent: model calls per hour, and tool calls per minute. Leave either blank for no limit.
 

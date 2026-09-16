@@ -22,7 +22,8 @@ func TestNewTargetViewportUsesContentsSizeWhenOuterBoundsDoNotConverge(t *testin
 			case "Browser.getWindowForTarget":
 				fixtureValue[*browser.GetWindowForTargetReturns](result).WindowID = 42
 			case "Browser.setContentsSize":
-				got := params.(*browser.SetContentsSizeParams)
+				got, ok := params.(*browser.SetContentsSizeParams)
+				require.True(t, ok, "contents-size parameters have unexpected type %T", params)
 				require.Equal(t, browser.WindowID(42), got.WindowID)
 				require.Equal(t, int64(1426), got.Width)
 				require.Equal(t, int64(718), got.Height)

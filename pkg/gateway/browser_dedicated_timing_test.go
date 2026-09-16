@@ -169,7 +169,11 @@ func TestDedicatedTimingBudgetsAndErrorClasses(t *testing.T) {
 	p.emit = func(args ...any) {
 		record = map[string]any{}
 		for i := 0; i < len(args); i += 2 {
-			record[args[i].(string)] = args[i+1]
+			key, ok := args[i].(string)
+			if !ok {
+				t.Fatalf("timing field name has type %T, want string", args[i])
+			}
+			record[key] = args[i+1]
 		}
 	}
 	p.finish()
@@ -232,7 +236,11 @@ func TestDedicatedTimingCoversEveryGestureWithoutPayload(t *testing.T) {
 			probe.emit = func(args ...any) {
 				record = map[string]any{}
 				for i := 0; i < len(args); i += 2 {
-					record[args[i].(string)] = args[i+1]
+					key, ok := args[i].(string)
+					if !ok {
+						t.Fatalf("timing field name has type %T, want string", args[i])
+					}
+					record[key] = args[i+1]
 				}
 			}
 			probe.finish()
@@ -257,7 +265,11 @@ func TestDedicatedTimingRollingFailureWindowSurvivesInitialBudgets(t *testing.T)
 	emit := func(args ...any) {
 		record := map[string]any{}
 		for i := 0; i < len(args); i += 2 {
-			record[args[i].(string)] = args[i+1]
+			key, ok := args[i].(string)
+			if !ok {
+				t.Fatalf("timing field name has type %T, want string", args[i])
+			}
+			record[key] = args[i+1]
 		}
 		records = append(records, record)
 	}
@@ -317,7 +329,11 @@ func TestDedicatedTimingClosedConnectionFlushesWithoutActiveInput(t *testing.T) 
 	emit := func(args ...any) {
 		record := map[string]any{}
 		for i := 0; i < len(args); i += 2 {
-			record[args[i].(string)] = args[i+1]
+			key, ok := args[i].(string)
+			if !ok {
+				t.Fatalf("timing field name has type %T, want string", args[i])
+			}
+			record[key] = args[i+1]
 		}
 		records = append(records, record)
 	}
@@ -391,7 +407,11 @@ func TestDedicatedTimingFailureWindowIncludesCanceledInFlightCompletion(t *testi
 	emit := func(args ...any) {
 		record := map[string]any{}
 		for i := 0; i < len(args); i += 2 {
-			record[args[i].(string)] = args[i+1]
+			key, ok := args[i].(string)
+			if !ok {
+				t.Fatalf("timing field name has type %T, want string", args[i])
+			}
+			record[key] = args[i+1]
 		}
 		records = append(records, record)
 	}

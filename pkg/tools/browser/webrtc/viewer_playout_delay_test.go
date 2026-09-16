@@ -24,8 +24,8 @@ func TestViewerPlayoutDelayNegotiatedVideo(t *testing.T) {
 			}
 			defer i.Close()
 			h := rtp.Header{Version: 2, SequenceNumber: 91, Timestamp: 123456, SSRC: 42}
-			if err := h.SetExtension(3, []byte{9, 8}); err != nil {
-				t.Fatal(err)
+			if extensionErr := h.SetExtension(3, []byte{9, 8}); extensionErr != nil {
+				t.Fatal(extensionErr)
 			}
 			original := h.Clone()
 			payload := []byte{4, 5, 6}
@@ -44,13 +44,13 @@ func TestViewerPlayoutDelayNegotiatedVideo(t *testing.T) {
 				if got.Timestamp != 123456 || got.SequenceNumber != 91 || got.SSRC != 42 || !bytes.Equal(p, payload) || !reflect.DeepEqual(a, attrs) {
 					t.Error("media identity/payload/attributes changed")
 				}
-				if _, err := got.Marshal(); err != nil {
-					t.Errorf("invalid wire header: %v", err)
+				if _, marshalErr := got.Marshal(); marshalErr != nil {
+					t.Errorf("invalid wire header: %v", marshalErr)
 				}
 				return 17, sentinel
 			}))
 			n, err := w.Write(&h, payload, attrs)
-			if n != 17 || err != sentinel || calls != 1 {
+			if n != 17 || !errors.Is(err, sentinel) || calls != 1 {
 				t.Fatalf("writer result=%d,%v calls%d", n, err, calls)
 			}
 			if !reflect.DeepEqual(h, original) {
@@ -137,8 +137,8 @@ func TestViewerPlayoutDelayOnlyViewerNegotiatesExtension(t *testing.T) {
 		}
 		defer pc.Close()
 		for _, kind := range []pion.RTPCodecType{pion.RTPCodecTypeAudio, pion.RTPCodecTypeVideo} {
-			if _, err := pc.AddTransceiverFromKind(kind, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionSendonly}); err != nil {
-				t.Fatal(err)
+			if _, transceiverErr := pc.AddTransceiverFromKind(kind, pion.RTPTransceiverInit{Direction: pion.RTPTransceiverDirectionSendonly}); transceiverErr != nil {
+				t.Fatal(transceiverErr)
 			}
 		}
 		offer, err := pc.CreateOffer(nil)

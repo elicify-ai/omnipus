@@ -18,7 +18,11 @@ func TestAudioTimingForwarderMeasuresBoundariesOutsideLock(t *testing.T) {
 		var got []audioTimingSummary
 		f.audioTiming = newAudioTiming(func(s audioTimingSummary) {
 			done := make(chan struct{})
-			go func() { f.mu.Lock(); f.mu.Unlock(); close(done) }()
+			go func() {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				close(done)
+			}()
 			select {
 			case <-done:
 			case <-time.After(time.Second):
@@ -31,7 +35,7 @@ func TestAudioTimingForwarderMeasuresBoundariesOutsideLock(t *testing.T) {
 		go func() { time.Sleep(10 * time.Millisecond); f.mu.Unlock() }()
 		sentinel := errors.New("authored writer failure")
 		accepted, err := f.write(1, &rtp.Packet{Header: rtp.Header{Timestamp: 1000, SequenceNumber: 1}}, start, func(*rtp.Packet) error { time.Sleep(20 * time.Millisecond); return sentinel })
-		if !accepted || err != sentinel {
+		if !accepted || !errors.Is(err, sentinel) {
 			t.Fatalf("diagnostic changed write outcome: %v %v", accepted, err)
 		}
 		f.mu.Lock()

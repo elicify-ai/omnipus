@@ -203,8 +203,8 @@ func (s *reproIngestServer) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var hello reproHelloFrame
-	if err := json.Unmarshal(raw, &hello); err != nil || hello.Type != "browser_capture_hello" {
-		s.logf("ingest-ws: first frame was not a hello (%v)", err)
+	if decodeErr := json.Unmarshal(raw, &hello); decodeErr != nil || hello.Type != "browser_capture_hello" {
+		s.logf("ingest-ws: first frame was not a hello (%v)", decodeErr)
 		return
 	}
 	cs := s.lookup(hello.Token)
@@ -230,15 +230,15 @@ func (s *reproIngestServer) handle(w http.ResponseWriter, r *http.Request) {
 	recapture := func(ctx context.Context, frame CaptureFrameState, current func() bool) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
-		if err := ctx.Err(); err != nil {
-			return err
+		if contextErr := ctx.Err(); contextErr != nil {
+			return contextErr
 		}
 		if !current() {
 			return context.Canceled
 		}
 		generation := int(frame.Generation)
-		if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
-			return err
+		if deadlineErr := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); deadlineErr != nil {
+			return deadlineErr
 		}
 		return conn.WriteJSON(generated.BrowserCaptureControlFrame{
 			Type: "browser_capture_control", Action: "recapture", CaptureGeneration: &generation,

@@ -63,7 +63,7 @@ func (lv *LiveView) withViewportAdmission(caller, tabCtx context.Context, work f
 				err = fmt.Errorf("viewport completion: %w", ended)
 			} else if !errors.Is(err, ended) {
 				// Caller cancellation still wins, without erasing the failed stage.
-				err = fmt.Errorf("%v: %w", err, ended)
+				err = fmt.Errorf("%w: %w", err, ended)
 			}
 		}
 	}()

@@ -96,8 +96,8 @@ func TestDedicatedInputPeerExpiryRecoversOnSameNativeChannels(t *testing.T) {
 		frame.GestureBarrier = &seq
 		key, code := "a", "KeyA"
 		frame.Key, frame.Code = &key, &code
-		packet, err := EncodeInputPacket(frame)
-		require.NoError(t, err)
+		packet, encodeErr := EncodeInputPacket(frame)
+		require.NoError(t, encodeErr)
 		require.NoError(t, reliable.Send(packet))
 	}
 	receive := func() deliveredInput {

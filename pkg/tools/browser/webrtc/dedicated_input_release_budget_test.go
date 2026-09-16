@@ -16,9 +16,10 @@ func releaseBudgetFrame(kind string, seq, barrier int) generated.BrowserInputFra
 	x, y, width, height := 120.0, 240.0, 800.0, 600.0
 	capture, button, code, key := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "left", "ArrowLeft", "ArrowLeft"
 	f := generated.BrowserInputFrame{Kind: kind, InputEpoch: &epoch, ControlEpoch: &control, ReliableSeq: &seq, GestureBarrier: &barrier, CaptureId: &capture, CaptureGeneration: &generation, CaptureWidth: &width, CaptureHeight: &height, Modifiers: &modifiers}
-	if kind == "mouse_down" || kind == "mouse_up" || kind == "mouse_move" {
+	switch kind {
+	case "mouse_down", "mouse_up", "mouse_move":
 		f.X, f.Y, f.Button = &x, &y, &button
-	} else if kind == "key_down" || kind == "key_up" {
+	case "key_down", "key_up":
 		f.Code, f.Key = &code, &key
 	}
 	return f

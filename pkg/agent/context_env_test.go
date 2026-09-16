@@ -268,7 +268,7 @@ func TestContextBuilder_Cache_InvalidatesOnLastSessionWrite(t *testing.T) {
 // ---------------------------------------------------------------------------
 // #63 — TestSubturn_ContextBuilderPointerShared
 // Traces to: env-awareness-and-memory-spec.md, subturn.go.
-// Child agent struct literal assigns ContextBuilder: execSource.ContextBuilder
+// Child agent struct literal assigns ContextBuilder from execSource.ContextBuilder
 // — execSource is the resolved delegation TARGET when one was named, else
 // baseAgent for self-delegation (operator-confirmed no-inheritance principle:
 // a delegated sub-turn runs as the target's own instance, not a clone of the
@@ -294,7 +294,7 @@ func TestSubturn_ContextBuilderPointerShared(t *testing.T) {
 		t.Fatalf("read subturn.go: %v", err)
 	}
 	// Must contain the exact share-by-reference assignment.
-	re := regexp.MustCompile(`ContextBuilder\s*:\s*execSource\.ContextBuilder\s*,`)
+	re := regexp.MustCompile(`ContextBuilder\s*:\s*(?:[A-Za-z_]\w*\.)?execSource\.ContextBuilder\s*,`)
 	if !re.Match(src) {
 		t.Fatalf("subturn.go no longer shares the source agent's ContextBuilder by reference — " +
 			"this is a design change; update FR-058 or restore the assignment")
