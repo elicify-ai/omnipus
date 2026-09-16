@@ -270,6 +270,38 @@ This is a re-validation pass, not an implementation pass. Checked directly again
 - **2026-05 design drafts still live**: the five `docs/internal/_archive/design-2026-05-rooms-era/*.md` files are still in their original location; `_archive/design-2026-05-rooms-era/` does not exist (`ls docs/internal/_archive/` shows no such directory).
 - **No enforcement script**: `scripts/check-no-stale-user-docs.sh` does not exist. For comparison, the repo already has 25 other `scripts/check-no-*.sh` guards (e.g. `check-no-jpeg-screencast.sh`, `check-no-fail-closed-backfill.sh`, `check-no-goal-confirm-gate.sh`) — the precedent for wiring a mechanical guard into CI is well established, this one specifically just hasn't been written yet.
 
+## Founder rulings, 2026-09-16
+
+**1. When sources disagree, lanes escalate — they do not decide.** The earlier rule was "the code
+wins". It is replaced: when the code, this design and a review finding disagree about what is true,
+the lane leaves the disputed claim OUT of the page, writes everything else, and records the conflict
+in its report under `## ESCALATE` with what each source says and the `file:line` for each. Nobody
+answers a lane mid-run, so escalating means not deciding and not writing it, never stalling the lane.
+Recorded in `DOC-RECIPE.md` hard rule 5 and `DOC-STYLE.md`.
+
+**2. Superseded internal material is ARCHIVED, not deleted.** Done: `docs/internal/BRD/`,
+`.preview-doc/` and the five `design/*-2026-05.md` drafts now live under `docs/internal/_archive/`
+with a README explaining what each was. Current-authority documents (this map, `CLAUDE.md`,
+`ROADMAP.md`, the internal index, the subagent definitions) were re-pointed; decision records and
+dated plans keep their original citations on purpose, because rewriting them would falsify the
+record.
+
+**3. Wave 3 scope (launched 2026-09-16): the 12 legacy pages, generated reference tables, and an
+end-to-end worked tutorial.** A screenshot pass was considered and not chosen. The legacy pages are
+folded into the pages that now own their subject (`security`, `settings`, `tools`, `connectors`) or
+moved under `operations/` with its own index, and the folded originals are deleted.
+
+**4. Editorial decisions.** Heartbeats are owned by `agents.md`, with `calendar.md` carrying a
+sentence and a link. `goals.md` documents all thirteen goal states. `providers.md` and
+`configuration.md` fold into `settings.md` now rather than later. Usage stays folded into
+`settings.md` and does NOT get its own page. **New page requested: `providers-and-models.md`**, a
+reference for every supported provider and the models known to work, written so it cannot rot.
+
+**Still to design: the generated reference tables.** The tool catalog, the settings defaults and the
+provider/model list should be emitted from the code rather than typed, because an audit already
+caught one hand-counted number that was certain to drift. This needs a generator, a home for it, and
+a check that fails when the committed output is stale — the same shape as `make verify-contracts`.
+
 ## Out of scope this pass
 
 Editing any user guide. Deleting BRD, `docs/internal/_archive/preview-doc-v03-concept/`, or design drafts. Splitting `CLAUDE.md` (module-map draft).
