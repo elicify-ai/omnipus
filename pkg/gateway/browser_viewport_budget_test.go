@@ -12,24 +12,24 @@ import (
 func TestBrowserViewportBudgetBoundaries(t *testing.T) {
 	for _, viewport := range []bool{false, true} {
 		t.Run(map[bool]string{false: "ordinary", true: "viewport"}[viewport], func(t *testing.T) {
+			var operationErr func() error
 			synctest.Test(t, func(t *testing.T) {
 				var q browserCommandQueue
 				var wg sync.WaitGroup
-				var operation context.Context
 				budget := 5 * time.Second
 				if viewport {
 					budget = 10 * time.Second
 				}
-				q.submit(&wg, browserCommand{viewport: viewport, run: func(ctx context.Context) { operation = ctx; <-ctx.Done() }})
+				q.submit(&wg, browserCommand{viewport: viewport, run: func(ctx context.Context) { operationErr = ctx.Err; <-ctx.Done() }})
 				synctest.Wait()
 				time.Sleep(budget - time.Nanosecond)
-				if operation.Err() != nil {
-					t.Fatalf("expired before boundary: %v", operation.Err())
+				if operationErr() != nil {
+					t.Fatalf("expired before boundary: %v", operationErr())
 				}
 				time.Sleep(time.Nanosecond)
 				synctest.Wait()
-				if !errors.Is(operation.Err(), context.DeadlineExceeded) {
-					t.Fatalf("did not expire at boundary: %v", operation.Err())
+				if !errors.Is(operationErr(), context.DeadlineExceeded) {
+					t.Fatalf("did not expire at boundary: %v", operationErr())
 				}
 				wg.Wait()
 			})
@@ -57,13 +57,13 @@ func TestBrowserViewportBudgetCountsQueueAge(t *testing.T) {
 func TestBrowserViewportBudgetCancellation(t *testing.T) {
 	for _, closeQueue := range []bool{false, true} {
 		t.Run(map[bool]string{false: "discard", true: "close"}[closeQueue], func(t *testing.T) {
+			var operationErr func() error
 			synctest.Test(t, func(t *testing.T) {
 				var q browserCommandQueue
 				var wg sync.WaitGroup
-				var operation context.Context
 				discarded := false
 				ran := false
-				q.submit(&wg, browserCommand{viewport: true, run: func(ctx context.Context) { operation = ctx; <-ctx.Done() }})
+				q.submit(&wg, browserCommand{viewport: true, run: func(ctx context.Context) { operationErr = ctx.Err; <-ctx.Done() }})
 				synctest.Wait()
 				q.submit(&wg, browserCommand{viewport: true, run: func(context.Context) { ran = true }, onDiscard: func() { discarded = true }})
 				if closeQueue {
@@ -72,8 +72,8 @@ func TestBrowserViewportBudgetCancellation(t *testing.T) {
 					q.discard()
 				}
 				wg.Wait()
-				if !errors.Is(operation.Err(), context.Canceled) || !discarded || ran {
-					t.Fatalf("cancellation=%v discarded=%v ran=%v", operation.Err(), discarded, ran)
+				if !errors.Is(operationErr(), context.Canceled) || !discarded || ran {
+					t.Fatalf("cancellation=%v discarded=%v ran=%v", operationErr(), discarded, ran)
 				}
 			})
 		})
@@ -114,12 +114,12 @@ func TestBrowserViewportBudgetClassification(t *testing.T) {
 func TestBrowserViewportSupersession(t *testing.T) {
 	for _, control := range []bool{false, true} {
 		t.Run(map[bool]string{false: "gesture", true: "administrative"}[control], func(t *testing.T) {
+			var activeErr func() error
 			synctest.Test(t, func(t *testing.T) {
 				var q browserCommandQueue
 				var wg sync.WaitGroup
-				var active context.Context
 				ran := false
-				q.submit(&wg, browserCommand{viewport: true, run: func(ctx context.Context) { active = ctx; <-ctx.Done() }})
+				q.submit(&wg, browserCommand{viewport: true, run: func(ctx context.Context) { activeErr = ctx.Err; <-ctx.Done() }})
 				synctest.Wait()
 				q.submit(&wg, browserCommand{supersedesViewport: control, run: func(ctx context.Context) {
 					if ctx.Err() != nil {
@@ -129,11 +129,11 @@ func TestBrowserViewportSupersession(t *testing.T) {
 				}})
 				synctest.Wait()
 				if control {
-					if !errors.Is(active.Err(), context.Canceled) || !ran {
-						t.Errorf("control did not promptly supersede: err=%v ran=%v", active.Err(), ran)
+					if !errors.Is(activeErr(), context.Canceled) || !ran {
+						t.Errorf("control did not promptly supersede: err=%v ran=%v", activeErr(), ran)
 					}
-				} else if active.Err() != nil || ran {
-					t.Errorf("gesture interrupted viewport: err=%v ran=%v", active.Err(), ran)
+				} else if activeErr() != nil || ran {
+					t.Errorf("gesture interrupted viewport: err=%v ran=%v", activeErr(), ran)
 				}
 				q.close()
 				wg.Wait()
@@ -183,12 +183,12 @@ func TestBrowserViewportSupersessionValidatedClassification(t *testing.T) {
 }
 
 func TestBrowserViewportQueuedIntermediateCannotDelayStop(t *testing.T) {
+	var activeErr func() error
 	synctest.Test(t, func(t *testing.T) {
 		var q browserCommandQueue
 		var wg sync.WaitGroup
 		release := make(chan struct{})
-		var active context.Context
-		q.submit(&wg, browserCommand{viewport: true, run: func(ctx context.Context) { active = ctx; <-release }})
+		q.submit(&wg, browserCommand{viewport: true, run: func(ctx context.Context) { activeErr = ctx.Err; <-release }})
 		synctest.Wait()
 		queuedRan := false
 		queuedCanceled := false
@@ -202,7 +202,7 @@ func TestBrowserViewportQueuedIntermediateCannotDelayStop(t *testing.T) {
 			}
 		}, onDiscard: func() { discarded = true }})
 		q.submit(&wg, browserCommand{supersedesViewport: true, run: func(ctx context.Context) { stopRan = ctx.Err() == nil }})
-		if !errors.Is(active.Err(), context.Canceled) {
+		if !errors.Is(activeErr(), context.Canceled) {
 			t.Error("active viewport not canceled")
 		}
 		close(release)

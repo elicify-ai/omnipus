@@ -295,35 +295,29 @@ func setupAndStartServices(
 	stg := &setupAndStartServicesState{ctx: ctx, cfg: cfg, bundle: bundle, agentLoop: agentLoop, msgBus: msgBus, homePath: homePath, credStore: credStore, sandboxResult: sandboxResult, builtinReg: builtinReg, mcpReg: mcpReg, allowGodMode: allowGodMode}
 
 	if r0, r1, stop := stg.startSchedulers(); stop {
-		rs, retErr = r0, r1
-		return
+		return r0, r1
 	}
 
 	if r0, r1, stop := stg.setupMediaAndChannels(); stop {
-		rs, retErr = r0, r1
-		return
+		return r0, r1
 	}
 
 	if r0, r1, stop := stg.wireInteractiveServices(); stop {
-		rs, retErr = r0, r1
-		return
+		return r0, r1
 	}
 
 	if r0, r1, stop := stg.setupPlans(); stop {
-		rs, retErr = r0, r1
-		return
+		return r0, r1
 	}
 
 	if r0, r1, stop := stg.startPlanEngine(); stop {
-		rs, retErr = r0, r1
-		return
+		return r0, r1
 	}
 
 	stg.buildRESTAPI()
 
 	if r0, r1, stop := stg.prepareListener(); stop {
-		rs, retErr = r0, r1
-		return
+		return r0, r1
 	}
 
 	// The HTTP listener is now accepting connections. If any later boot step
@@ -341,8 +335,7 @@ func setupAndStartServices(
 	}()
 
 	if r0, r1, stop := stg.registerProcess(); stop {
-		rs, retErr = r0, r1
-		return
+		return r0, r1
 	}
 
 	return stg.startBackgroundServices()
@@ -456,7 +449,7 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, error, bool
 	}
 	stg.agentLoop.SetLoopScheduler(stg.runningServices.LoopScheduler)
 	fmt.Println("✓ Loop scheduler started")
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
 }
 
 // setupMediaAndChannels constructs the media and channel services, wires them into the agent loop, and emits boot warnings.
@@ -574,7 +567,7 @@ func (stg *setupAndStartServicesState) setupMediaAndChannels() (*services, error
 	// The GHSA-pv8c-p6jf-3fpp channel block was removed; operators must now
 	// configure per-agent ToolPolicyCfg to restrict bash.
 	emitGHSARemovalWarn(stg.cfg)
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
 }
 
 // wireInteractiveServices constructs preview, chat, browser, approval, and interactive-question services and wires their callbacks.
@@ -804,7 +797,7 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, err
 		slog.Warn("gateway: message_parent: failed to wake parent session",
 			"kind", kind, "error", err)
 	})
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
 }
 
 // setupPlans constructs the plan and session-messaging stores and installs them on the agent loop.
@@ -959,7 +952,7 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, error, bool) {
 		return nil, fmt.Errorf("gateway: session-messaging store wiring failed — SetSessionMessagingStores did not install a non-nil inbox"), true
 	}
 	fmt.Println("✓ Session-messaging plane wired (delegate + message_parent stores injected)")
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
 }
 
 // startPlanEngine configures and starts the plan engine when its task dependencies are available.
@@ -1076,7 +1069,7 @@ func (stg *setupAndStartServicesState) startPlanEngine() (*services, error, bool
 	} else {
 		fmt.Println("⚠ Plan engine disabled: task store/executor unavailable")
 	}
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
 }
 
 // buildRESTAPI constructs the REST API, registers its core routes, and performs pre-listener reconciliation.
@@ -1365,7 +1358,7 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, error, bool
 	if stg.err = stg.runningServices.ChannelManager.StartAll(context.Background()); stg.err != nil {
 		return nil, fmt.Errorf("error starting channels: %w", stg.err), true
 	}
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
 }
 
 // registerProcess starts post-listener catalog work, writes process discovery files, and starts the device service.
@@ -1466,7 +1459,7 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, error, bool
 	} else if stg.cfg.Devices.Enabled {
 		fmt.Println("✓ Device event service started")
 	}
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
 }
 
 // startBackgroundServices starts the shutdown-aware orphan and browser cleanup loops and returns the running services.

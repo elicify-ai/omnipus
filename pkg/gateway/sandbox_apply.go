@@ -264,8 +264,7 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 	as := &applySandboxState{opts: opts}
 
 	if r0, r1, stop := as.resolveFilesystemModel(); stop {
-		result, err = r0, r1
-		return
+		return r0, r1
 	}
 	// Stamped once here rather than at each of the several `return result, nil`
 	// sites: a new early return added later would otherwise silently report an
@@ -277,8 +276,7 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 	}()
 
 	if r0, r1, stop := as.resolveModeAndBackend(); stop {
-		result, err = r0, r1
-		return
+		return r0, r1
 	}
 
 	as.buildPolicy()
@@ -286,8 +284,7 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 	as.publishTurnPolicyBase()
 
 	if r0, r1, stop := as.applyNonLinuxSandbox(); stop {
-		result, err = r0, r1
-		return
+		return r0, r1
 	}
 
 	return as.applyLinuxSandbox()
@@ -320,7 +317,7 @@ func (as *applySandboxState) resolveFilesystemModel() (*SandboxApplyResult, erro
 		}
 		as.filesystemModel = parsed
 	}
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // nil result and nil error mean this stage completed and sandbox setup should continue.
 }
 
 // resolveModeAndBackend resolves sandbox mode, selects the backend, and handles an explicitly disabled sandbox.
@@ -395,7 +392,7 @@ func (as *applySandboxState) resolveModeAndBackend() (*SandboxApplyResult, error
 		}
 		return as.result, nil, true
 	}
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // nil result and nil error mean this stage completed and sandbox setup should continue.
 }
 
 // buildPolicy computes the ordered filesystem and network policy and records how secrets are protected.
@@ -718,7 +715,7 @@ func (as *applySandboxState) applyNonLinuxSandbox() (*SandboxApplyResult, error,
 		}
 		return as.result, nil, true
 	}
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // nil result and nil error mean this stage completed and sandbox setup should continue.
 }
 
 // applyLinuxSandbox hardens the gateway, applies Landlock before seccomp, and records the final Linux state.

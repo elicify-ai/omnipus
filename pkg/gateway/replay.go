@@ -346,7 +346,6 @@ func streamReplay(
 		// FR-I-001: emit tool_call_start + tool_call_result for each ToolCall.
 	streamReplayStateLoop1:
 		for ti, tc := range entry.ToolCalls {
-
 			switch sr.classifyToolCall(ei, entry, ti, tc) {
 			case streamReplayStateContinue:
 				continue streamReplayStateLoop1

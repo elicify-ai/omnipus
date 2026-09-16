@@ -215,7 +215,7 @@ func (a *restAPI) putUserContext(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write USER.md: %v", err))
 		return
 	}
-	jsonOK(w, gen.UserContextResponse{Content: req.Content})
+	jsonOK(w, gen.UserContextResponse(req))
 }
 
 // --- App State ---
