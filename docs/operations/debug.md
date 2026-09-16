@@ -26,7 +26,7 @@ If you need to inspect the complete output of a command or the exact payload sen
 omnipus start --debug --no-truncate
 ```
 
-When this flag is active, the global truncation function is disabled. This is useful for verifying the exact syntax of the messages sent to the provider, reading the complete output of tools like `exec`, `web_fetch`, or `read_file`, and debugging the session history saved in memory.
+When this flag is active, the global truncation function is disabled. This is useful for verifying the exact syntax of messages sent to the provider, reading complete output from tools such as `bash`, `fetch_url`, or `read_file`, and debugging session history.
 
 ## Tool Call Visibility in Debug Logs
 
@@ -45,8 +45,8 @@ When debug mode is active, the agent emits structured log entries at each stage 
 A typical synchronous tool call produces two consecutive lines in the console:
 
 ```
-[...] [INFO] agent: LLM requested tool calls {tools=[web_search], count=1, iteration=1}
-[...] [INFO] agent: Tool call: web_search({"query":"omnipus release notes"}) {tool=web_search, iteration=1}
+[...] [INFO] agent: LLM requested tool calls {tools=[search_web], count=1, iteration=1}
+[...] [INFO] agent: Tool call: search_web({"query":"omnipus release notes"}) {tool=search_web, iteration=1}
 ```
 
 The arguments preview is hard-capped at **200 characters** in the logs regardless of the `--no-truncate` flag, because it belongs to the `INFO`-level path. Use `--no-truncate` together with `--debug` to see the full `tools_json` field emitted by the `Full LLM request` DEBUG entry, which contains every tool definition sent to the model.
@@ -71,7 +71,7 @@ Debug logs are server-side only. If you want the agent to send a visible notific
 When `enabled` is `true`, every tool call sends a short message to the chat before the tool result is returned to the model. The message looks like:
 
 ```bash
-🔧 `web_search`
+Tool: `search_web`
 {"query": "omnipus release notes"}
 ```
 

@@ -1,6 +1,6 @@
 # Tools
 
-Tools are the hands an agent works with: reading and writing files, searching the web, running commands, sending email. This page covers where tools come from and how you control which ones an agent may use.
+Tools let an agent read and write files, search the web, run commands, and send email. This page covers where tools come from and how you control access.
 
 ## What it is
 
@@ -13,7 +13,7 @@ Tools come from two places:
 
 Every tool, built-in or from a server, has a policy with three values: **Allow**, **Ask** or **Deny**. You set it in two places — once for the whole installation, once per agent.
 
-The built-in groups you will meet in practice:
+The built-in groups you will meet in practice are below. For every current name and description, use the generated [built-in tool catalog](reference/built-in-tools.md). The **Built-in Tools** tab is the live list for your installation.
 
 | Group | Tools you will notice | What they do |
 |---|---|---|
@@ -24,7 +24,7 @@ The built-in groups you will meet in practice:
 | Communication | `send_email`, `read_inbox`, `send_message` | Send email and chat messages |
 | Delegation | `delegate` | Hand work to another agent |
 
-The catalog is deep, but an agent sees only its common tools directly; the rest are available and the agent searches the catalog when a task calls for one. If an agent owns a tool and does not reach for it, name the tool in your request.
+An agent sees common tools directly and searches the rest when a task calls for one. If it does not reach for a tool, name it in your request.
 
 ## When you would use it
 
@@ -87,7 +87,7 @@ To connect one:
 3. Choose **Local program** (a command that runs on your machine) or **Network address** (an https address, for hosted services). A local program asks you to confirm you trust it.
 4. Save. The server appears with its connection status, and its tools join the catalog.
 
-Server tools carry the server's name, so you can tell where a tool came from. In both policy editors they sit in their own group under the server's name, and one Allow/Ask/Deny control covers every tool from that server in one click. The stricter-wins rule above applies to them like any other tool. The **Built-in Tools** tab of the same screen lists the whole catalog by capability area — a good place to browse.
+Server tools carry the server's name, so you can tell where a tool came from. In both policy editors they sit in their own group under the server's name. One Allow, Ask or Deny control covers every tool from that server. The stricter-wins rule applies to them like any other tool.
 
 ## Limits and things to watch
 
@@ -106,3 +106,4 @@ Server tools carry the server's name, so you can tell where a tool came from. In
 - [settings](settings.md) — the Settings screen, including the global tool policies under Security.
 - [security](security.md) — the sandbox that contains what tools are allowed to do.
 - [browser](browser.md) — the browser tools and the live browser panel.
+- [built-in tool catalog](reference/built-in-tools.md) — the generated list of every built-in tool in this release.

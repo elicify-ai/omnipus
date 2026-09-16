@@ -38,7 +38,7 @@ Each session has a single JSONL file at `~/.omnipus/agents/<agentID>/sessions/<s
   "tool_calls": [
     {
       "id":         "call_…",
-      "tool":       "web_search",
+      "tool":       "search_web",
       "status":     "success",      // success | error | pending | denied
       "duration_ms": 1230,
       "parameters": {"query": "…"},
@@ -82,15 +82,15 @@ While a turn is running, the agent loop emits typed events into the in-process e
 
 #### WebSocket subscribers (SPA chat view)
 
-Every event is fanned out to connected clients. The chat UI shows the live progression: "Tool call: web_search" → "Tool call complete" → "LLM response streaming" → "Turn end". This is what gives the chat its real-time feel.
+Every event is fanned out to connected clients. The chat UI shows the live progression: "Tool call: search_web" → "Tool call complete" → "LLM response streaming" → "Turn end". This is what gives the chat its real-time feel.
 
 #### Subprocess hooks
 
-External processes can subscribe to the same event feed via JSON-RPC over stdin/stdout. Every event becomes a `hook.event` notification. Authors observe (read-only), or in-process hooks can intercept and rewrite. See [hooks/README.md](hooks/README.md). The wire format uses the canonical string name of each `EventKind` so authors don't carry private int → name tables (per issue #164).
+External processes can subscribe to the same event feed via JSON-RPC over stdin/stdout. Every event becomes a `hook.event` notification. Authors observe (read-only), or in-process hooks can intercept and rewrite. See [hooks](../hooks/README.md). The wire format uses the canonical string name of each `EventKind` so authors don't carry private int → name tables (per issue #164).
 
 #### Audit log
 
-A subset of security-relevant events (tool calls, denials, sandbox state changes, cancel events, rate limits) are mirrored into `~/.omnipus/system/audit.jsonl` with HMAC chain integrity (v0.2 hardening, #155 item 1). See [Security for users](security.md).
+A subset of security-relevant events (tool calls, denials, sandbox state changes, cancel events, rate limits) are mirrored into `~/.omnipus/system/audit.jsonl` with HMAC chain integrity (v0.2 hardening, #155 item 1). See [Security for users](../security.md).
 
 ### Event payload shape
 
@@ -142,8 +142,8 @@ Everything is captured. Nothing is silent. An operator can audit any turn after 
 
 ## See also
 
-[hooks/README.md](hooks/README.md) explains how to write a subprocess hook that consumes the event stream.
+[Hooks](../hooks/README.md) explains how to write a subprocess hook that consumes the event stream.
 
-[Security for users](security.md) covers the audit log and sensitive-value filtering.
+[Security for users](../security.md) covers the audit log and sensitive-value filtering.
 
-[memory.md](memory.md) describes how transcripts become memory via auto-recap at session close.
+[Memory](../memory.md) describes how transcripts become memory via auto-recap at session close.
