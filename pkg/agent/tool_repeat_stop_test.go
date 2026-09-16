@@ -207,8 +207,43 @@ func TestRunTurn_CallsBelowRepeatStop_CompleteNormally(t *testing.T) {
 		finalContent, err := al.ProcessDirect(context.Background(), "check both lists", "test-session-repeat-alternating")
 		require.NoError(t, err)
 		assert.Equal(t, "done", finalContent, "20 calls that never repeat back-to-back must not stop the turn")
-		assert.Equal(t, int32(10), jobs.calls.Load())
-		assert.Equal(t, int32(10), tasks.calls.Load())
+
+		// The dispatch counts below are the design values under the D-23
+		// oscillation breaker (2026-09-13, predating this test): an
+		// alternating pair of calls whose RESULTS repeat byte-for-byte is a
+		// period-2 oscillation, and the call that would extend it to a 5th
+		// full cycle is refused WITHOUT dispatch. These stubs return fixed
+		// content (a stalled poll), so the 5th and 10th list_tasks — the
+		// second member of each cycle, the only member that ever EXTENDS the
+		// pattern — are the two refusals; every list_jobs dispatches because
+		// the cycle's first member is never the extender. That gives
+		// jobs=10, tasks=8. The original expectation of 10/10 predates
+		// reconciliation with D-23 and was stale at birth: this data is
+		// exactly the "poll/read pair that has genuinely stalled" case D-23's
+		// own doc says must trip. The repeat-STOP never fires (no two
+		// consecutive calls share a signature), which is this subtest's
+		// actual subject — that is what the "done" assertion above guards.
+		assert.Equal(t, int32(10), jobs.calls.Load(),
+			"the first member of the 2-call cycle is never the cycle-extender, so every list_jobs must dispatch")
+		assert.Equal(t, int32(8), tasks.calls.Load(),
+			"the 5th and 10th list_tasks are the D-23 5th-repetition refusals and must not dispatch")
+
+		// Pin WHICH guard refused, so this stays red if the oscillation
+		// breaker disappears (counts drift back to 10) or over-fires (counts
+		// drop below 8). The final request's history carries every tool
+		// result of the turn, one message per call, dispatched or refused.
+		finalRequest := provider.AllRequests()[len(provider.AllRequests())-1]
+		refusals := 0
+		for _, m := range finalRequest {
+			if m.Role == "tool" && strings.Contains(m.Content,
+				"would be the 5th repetition of the same 2-call cycle") {
+				refusals++
+			}
+		}
+		assert.Equal(t, 2, refusals,
+			"exactly the two cycle-extending list_tasks calls may be refused, by the oscillation breaker")
+		assert.Equal(t, 21, provider.CallCount(),
+			"20 tool rounds plus the final text round; no round may be spent or lost to the refusals")
 	})
 
 	t.Run("seven_identical_successes_is_below_the_stop", func(t *testing.T) {
