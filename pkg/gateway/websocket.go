@@ -1072,13 +1072,34 @@ func (h *WSHandler) authenticateWS(conn *websocket.Conn, wc *wsConn, r *http.Req
 // is closed by gorilla/websocket (SetReadLimit causes a protocol-level close).
 const wsMaxMessageBytes = 5 * 1024 * 1024
 
+// wsHandlerReadLoop carries the shared state of readLoop across its stages.
+type wsHandlerReadLoop struct {
+	h      *WSHandler
+	ctx    context.Context
+	wc     *wsConn
+	chatID string
+}
+
+// wsHandlerReadLoopFlow reports how a block stage of wsHandlerReadLoop wants the conductor to proceed.
+type wsHandlerReadLoopFlow int
+
+const (
+	wsHandlerReadLoopNext wsHandlerReadLoopFlow = iota
+	wsHandlerReadLoopReturn
+	wsHandlerReadLoopContinue
+	wsHandlerReadLoopBreak
+)
+
 // readLoop processes client frames until the connection closes.
 func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsConn, chatID string) {
+	wh := &wsHandlerReadLoop{h: h, ctx: ctx, wc: wc, chatID: chatID}
+
 	// Enforce a hard read limit so clients cannot exhaust server memory with
 	// oversized frames. gorilla/websocket will return an error on the next
 	// ReadMessage call if the incoming frame exceeds this limit.
 	conn.SetReadLimit(wsMaxMessageBytes)
 
+wsHandlerReadLoopLoop1:
 	for {
 		_, data, err := conn.ReadMessage()
 		if err != nil {
@@ -1090,7 +1111,7 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				slog.Warn(
 					"ws: message too large, closing connection",
 					"chat_id",
-					chatID,
+					wh.chatID,
 					"limit_bytes",
 					wsMaxMessageBytes,
 				)
@@ -1101,7 +1122,7 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 				return
 			}
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				slog.Debug("ws: connection closed unexpectedly", "chat_id", chatID, "error", err)
+				slog.Debug("ws: connection closed unexpectedly", "chat_id", wh.chatID, "error", err)
 				return
 			}
 			// Every other ReadMessage failure previously fell through to a
@@ -1113,12 +1134,12 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 			var netErr net.Error
 			isTimeout := errors.As(err, &netErr) && netErr.Timeout()
 			slog.Debug("ws: readLoop exiting on ReadMessage error",
-				"chat_id", chatID, "error", err, "is_timeout", isTimeout)
+				"chat_id", wh.chatID, "error", err, "is_timeout", isTimeout)
 			return
 		}
 
 		if err := conn.SetReadDeadline(time.Now().Add(wsPongWait)); err != nil {
-			slog.Warn("ws: SetReadDeadline failed, exiting readLoop", "chat_id", chatID, "error", err)
+			slog.Warn("ws: SetReadDeadline failed, exiting readLoop", "chat_id", wh.chatID, "error", err)
 			return
 		}
 
@@ -1126,7 +1147,7 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 		var peek wsTypeOnly
 		if err := json.Unmarshal(data, &peek); err != nil {
 			slog.Warn("ws: malformed frame", "error", err)
-			sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 				Type:    string(generated.WsFrameTypeError),
 				Message: "malformed message frame",
 			})
@@ -1135,22 +1156,22 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 
 		// Per-frame JSON Schema validation (mirrors REST decodeAndValidate).
 		// Gated by gateway.validate_inbound; when false the check is a no-op.
-		validateEnabled := h.agentLoop.GetConfig().Gateway.ValidateInbound
+		validateEnabled := wh.h.agentLoop.GetConfig().Gateway.ValidateInbound
 		if validateEnabled {
 			schemaName := wsFrameSchemaName(peek.Type)
 			if schemaName != "" {
 				if errMsg, serverErr := ValidateInboundFrameJSON(schemaName, data); errMsg != "" {
 					_wsInboundFrameDropped.Add(1)
-					wc.inboundDropped.Add(1)
+					wh.wc.inboundDropped.Add(1)
 					if serverErr {
 						// Server-side compile failure — log and drop; do not reveal details.
 						slog.Error("ws: inbound schema unavailable, dropping frame",
-							"schema", schemaName, "frame_type", peek.Type, "chat_id", chatID)
+							"schema", schemaName, "frame_type", peek.Type, "chat_id", wh.chatID)
 					} else {
 						// Client-side schema violation — send descriptive error frame.
 						slog.Warn("ws: inbound frame schema validation failed — dropping",
-							"schema", schemaName, "frame_type", peek.Type, "error", errMsg, "chat_id", chatID)
-						sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+							"schema", schemaName, "frame_type", peek.Type, "error", errMsg, "chat_id", wh.chatID)
+						sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
 							Type:    string(generated.WsFrameTypeError),
 							Message: "frame schema validation failed (" + schemaName + "): " + errMsg,
 						})
@@ -1160,196 +1181,206 @@ func (h *WSHandler) readLoop(ctx context.Context, conn *websocket.Conn, wc *wsCo
 			}
 		}
 
-		switch peek.Type {
-		case string(generated.WsFrameTypeMessage):
-			var f generated.MessageFrame
-			if err := json.Unmarshal(data, &f); err != nil {
-				slog.Warn("ws: malformed message frame", "error", err)
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: "malformed message frame",
-				})
-				continue
-			}
-			if f.Content == "" && len(f.Media) == 0 {
-				continue
-			}
-			var agentID string
-			if f.AgentId != nil {
-				agentID = *f.AgentId
-			}
-			var sessionID string
-			if f.SessionId != nil {
-				sessionID = *f.SessionId
-			}
-			var modelName string
-			if v, ok := f.Metadata["model_name"].(string); ok {
-				if strings.TrimSpace(v) != "" {
-					modelName = v
-				}
-			}
-			// M4: workspace→turn binding. When the message originates from a
-			// workspace chat the SPA sets metadata.workspace_id; we stamp it on
-			// the session meta so task_create/delegation lands on this workspace.
-			var workspaceID string
-			if v, ok := f.Metadata["workspace_id"].(string); ok {
-				workspaceID = strings.TrimSpace(v)
-			}
-			// Workspace-setup kickoff: the SPA sends this flag on a
-			// workspace's first open so the server records the trigger as a
-			// system-role transcript entry (not a user bubble), clears
-			// SetupPending exactly once, and gives the session a clean title —
-			// see contracts/asyncapi.yaml metadata.workspace_setup_kickoff.
-			//
-			// Kickoff intent is signaled by KEY PRESENCE, not a loose
-			// type assertion — see parseSetupKickoffMetadata's doc comment. A
-			// key that IS present but not exactly boolean true is rejected
-			// outright instead of ever reaching handleChatMessage as a normal
-			// message.
-			setupKickoff, malformedKickoff := parseSetupKickoffMetadata(f.Metadata)
-			if malformedKickoff {
-				slog.Warn("ws: malformed workspace_setup_kickoff metadata — rejecting",
-					"chat_id", chatID, "value", f.Metadata["workspace_setup_kickoff"])
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: "malformed workspace_setup_kickoff metadata",
-				})
-				continue
-			}
-			h.handleChatMessage(
-				ctx, chatID, sessionID, f.Content, agentID, f.Media,
-				modelName, workspaceID, setupKickoff, wc,
-			)
-		case string(generated.WsFrameTypeCancel):
-			var f generated.CancelFrame
-			if err := json.Unmarshal(data, &f); err != nil {
-				slog.Warn("ws: malformed cancel frame", "error", err)
-				continue
-			}
-			if f.SessionId == "" {
-				wc.inboundDropped.Add(1)
-				slog.Warn("ws: cancel frame missing required session_id — dropping",
-					"chat_id", chatID)
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: "cancel requires session_id",
-				})
-				continue
-			}
-			h.handleCancel(wc, f.SessionId)
-		case string(generated.WsFrameTypeAttachSession):
-			var f generated.AttachSessionFrame
-			if err := json.Unmarshal(data, &f); err != nil {
-				slog.Warn("ws: malformed attach_session frame", "error", err)
-				continue
-			}
-			slog.Info("ws: attach_session frame received",
-				"chat_id", chatID,
-				"requested_session_id", f.SessionId,
-			)
-			if f.SessionId != "" {
-				h.handleAttachSession(ctx, chatID, f.SessionId, f.Since, wc)
-			} else {
-				slog.Warn("ws: attach_session with empty session_id", "chat_id", chatID)
-			}
-		case string(generated.WsFrameTypeSessionClose):
-			var f generated.SessionCloseFrame
-			if err := json.Unmarshal(data, &f); err != nil {
-				slog.Warn("ws: malformed session_close frame", "error", err)
-				continue
-			}
-			// FR-023: explicit session close request from the client.
-			if f.SessionId == "" {
-				wc.inboundDropped.Add(1)
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: "session_close requires session_id",
-				})
-				continue
-			}
-			if err := validation.EntityID(f.SessionId); err != nil {
-				wc.inboundDropped.Add(1)
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: "invalid session_id",
-				})
-				continue
-			}
-			h.agentLoop.CloseSession(f.SessionId, "explicit")
-			sid := f.SessionId
-			sendConnGenFrame(wc, string(generated.WsFrameTypeSessionCloseAck), generated.SessionCloseAckFrame{
-				Type:      string(generated.WsFrameTypeSessionCloseAck),
-				SessionId: f.SessionId,
-				Id:        &sid,
-			})
-		case string(generated.WsFrameTypePing):
-			// Application-layer pong: the SPA's 60s "any frame received" liveness
-			// check needs a server-originated frame during idle. Gorilla WS-protocol
-			// ping/pong runs independently as NAT-keepalive.
-			// Debounced to 1 pong/100ms/conn so a flood of pings cannot amplify into
-			// outbound traffic against writePump's serialized sendCh.
-			nowNs := time.Now().UnixNano()
-			lastNs := wc.lastPongSentUnixNano.Load()
-			if nowNs-lastNs >= int64(100*time.Millisecond) {
-				wc.lastPongSentUnixNano.Store(nowNs)
-				sendConnGenFrame(wc, string(generated.WsFrameTypePong), generated.PongFrame{
-					Type: string(generated.WsFrameTypePong),
-				})
-			}
-		case string(generated.WsFrameTypeDevicePairingResponse):
-			var f generated.DevicePairingResponseFrame
-			if err := json.Unmarshal(data, &f); err != nil {
-				slog.Warn("ws: malformed device_pairing_response frame", "error", err)
-				wc.inboundDropped.Add(1)
-				continue
-			}
-			h.handleDevicePairingResponse(f.DeviceId, f.Decision)
-		case string(generated.WsFrameTypeWhatsappPairingSubscribe):
-			// #283 (Option B): scope whatsapp_pairing frames to the connection(s)
-			// viewing a channel's pairing UI so the QR secret isn't broadcast to
-			// every tab. active=true subscribes this conn; false clears it. Any
-			// connection reaching this point in readLoop is already authenticated
-			// (single-account model), so no further role gate applies.
-			var f generated.WhatsAppPairingSubscribeFrame
-			if err := json.Unmarshal(data, &f); err != nil {
-				slog.Warn("ws: malformed whatsapp_pairing_subscribe frame", "error", err)
-				wc.inboundDropped.Add(1)
-				continue
-			}
-			if f.ChannelId == "" {
-				wc.inboundDropped.Add(1)
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: "whatsapp_pairing_subscribe requires channel_id",
-				})
-				continue
-			}
-			h.subscribePairingInterest(wc, f.ChannelId, f.Active)
-		case string(generated.WsFrameTypeAskUserAnswer):
-			// AskUserQuestion card submission/cancel (askuserquestion-tool-
-			// spec v3 §3): bridge to askuser.Registry.Submit / CancelByUser.
-			// Full semantic validation (ownership, membership, arity,
-			// first-valid-wins) is the registry's; the schema gate above
-			// (wsFrameSchemaName → AskUserAnswerFrame) bounds the shape.
-			var f generated.AskUserAnswerFrame
-			if err := json.Unmarshal(data, &f); err != nil {
-				slog.Warn("ws: malformed ask_user_answer frame", "error", err)
-				wc.inboundDropped.Add(1)
-				continue
-			}
-			if f.CardId == "" || f.SessionId == "" {
-				wc.inboundDropped.Add(1)
-				sendConnGenFrame(wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
-					Type:    string(generated.WsFrameTypeError),
-					Message: "ask_user_answer requires card_id and session_id",
-				})
-				continue
-			}
-			h.handleAskUserAnswer(wc, f)
-		default:
-			slog.Debug("ws: unknown frame type ignored", "type", peek.Type, "chat_id", chatID)
+		switch wh.dispatchFrame(data, peek) {
+		case wsHandlerReadLoopContinue:
+			continue wsHandlerReadLoopLoop1
 		}
+
 	}
+}
+
+// dispatchFrame dispatches one validated WebSocket frame to its type-specific handler.
+func (wh *wsHandlerReadLoop) dispatchFrame(data []byte, peek wsTypeOnly) wsHandlerReadLoopFlow {
+	switch peek.Type {
+	case string(generated.WsFrameTypeMessage):
+		var f generated.MessageFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			slog.Warn("ws: malformed message frame", "error", err)
+			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: "malformed message frame",
+			})
+			return wsHandlerReadLoopContinue
+		}
+		if f.Content == "" && len(f.Media) == 0 {
+			return wsHandlerReadLoopContinue
+		}
+		var agentID string
+		if f.AgentId != nil {
+			agentID = *f.AgentId
+		}
+		var sessionID string
+		if f.SessionId != nil {
+			sessionID = *f.SessionId
+		}
+		var modelName string
+		if v, ok := f.Metadata["model_name"].(string); ok {
+			if strings.TrimSpace(v) != "" {
+				modelName = v
+			}
+		}
+		// M4: workspace→turn binding. When the message originates from a
+		// workspace chat the SPA sets metadata.workspace_id; we stamp it on
+		// the session meta so task_create/delegation lands on this workspace.
+		var workspaceID string
+		if v, ok := f.Metadata["workspace_id"].(string); ok {
+			workspaceID = strings.TrimSpace(v)
+		}
+		// Workspace-setup kickoff: the SPA sends this flag on a
+		// workspace's first open so the server records the trigger as a
+		// system-role transcript entry (not a user bubble), clears
+		// SetupPending exactly once, and gives the session a clean title —
+		// see contracts/asyncapi.yaml metadata.workspace_setup_kickoff.
+		//
+		// Kickoff intent is signaled by KEY PRESENCE, not a loose
+		// type assertion — see parseSetupKickoffMetadata's doc comment. A
+		// key that IS present but not exactly boolean true is rejected
+		// outright instead of ever reaching handleChatMessage as a normal
+		// message.
+		setupKickoff, malformedKickoff := parseSetupKickoffMetadata(f.Metadata)
+		if malformedKickoff {
+			slog.Warn("ws: malformed workspace_setup_kickoff metadata — rejecting",
+				"chat_id", wh.chatID, "value", f.Metadata["workspace_setup_kickoff"])
+			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: "malformed workspace_setup_kickoff metadata",
+			})
+			return wsHandlerReadLoopContinue
+		}
+		wh.h.handleChatMessage(
+			wh.ctx, wh.chatID, sessionID, f.Content, agentID, f.Media,
+			modelName, workspaceID, setupKickoff, wh.wc,
+		)
+	case string(generated.WsFrameTypeCancel):
+		var f generated.CancelFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			slog.Warn("ws: malformed cancel frame", "error", err)
+			return wsHandlerReadLoopContinue
+		}
+		if f.SessionId == "" {
+			wh.wc.inboundDropped.Add(1)
+			slog.Warn("ws: cancel frame missing required session_id — dropping",
+				"chat_id", wh.chatID)
+			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: "cancel requires session_id",
+			})
+			return wsHandlerReadLoopContinue
+		}
+		wh.h.handleCancel(wh.wc, f.SessionId)
+	case string(generated.WsFrameTypeAttachSession):
+		var f generated.AttachSessionFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			slog.Warn("ws: malformed attach_session frame", "error", err)
+			return wsHandlerReadLoopContinue
+		}
+		slog.Info("ws: attach_session frame received",
+			"chat_id", wh.chatID,
+			"requested_session_id", f.SessionId,
+		)
+		if f.SessionId != "" {
+			wh.h.handleAttachSession(wh.ctx, wh.chatID, f.SessionId, f.Since, wh.wc)
+		} else {
+			slog.Warn("ws: attach_session with empty session_id", "chat_id", wh.chatID)
+		}
+	case string(generated.WsFrameTypeSessionClose):
+		var f generated.SessionCloseFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			slog.Warn("ws: malformed session_close frame", "error", err)
+			return wsHandlerReadLoopContinue
+		}
+		// FR-023: explicit session close request from the client.
+		if f.SessionId == "" {
+			wh.wc.inboundDropped.Add(1)
+			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: "session_close requires session_id",
+			})
+			return wsHandlerReadLoopContinue
+		}
+		if err := validation.EntityID(f.SessionId); err != nil {
+			wh.wc.inboundDropped.Add(1)
+			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: "invalid session_id",
+			})
+			return wsHandlerReadLoopContinue
+		}
+		wh.h.agentLoop.CloseSession(f.SessionId, "explicit")
+		sid := f.SessionId
+		sendConnGenFrame(wh.wc, string(generated.WsFrameTypeSessionCloseAck), generated.SessionCloseAckFrame{
+			Type:      string(generated.WsFrameTypeSessionCloseAck),
+			SessionId: f.SessionId,
+			Id:        &sid,
+		})
+	case string(generated.WsFrameTypePing):
+		// Application-layer pong: the SPA's 60s "any frame received" liveness
+		// check needs a server-originated frame during idle. Gorilla WS-protocol
+		// ping/pong runs independently as NAT-keepalive.
+		// Debounced to 1 pong/100ms/conn so a flood of pings cannot amplify into
+		// outbound traffic against writePump's serialized sendCh.
+		nowNs := time.Now().UnixNano()
+		lastNs := wh.wc.lastPongSentUnixNano.Load()
+		if nowNs-lastNs >= int64(100*time.Millisecond) {
+			wh.wc.lastPongSentUnixNano.Store(nowNs)
+			sendConnGenFrame(wh.wc, string(generated.WsFrameTypePong), generated.PongFrame{
+				Type: string(generated.WsFrameTypePong),
+			})
+		}
+	case string(generated.WsFrameTypeDevicePairingResponse):
+		var f generated.DevicePairingResponseFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			slog.Warn("ws: malformed device_pairing_response frame", "error", err)
+			wh.wc.inboundDropped.Add(1)
+			return wsHandlerReadLoopContinue
+		}
+		wh.h.handleDevicePairingResponse(f.DeviceId, f.Decision)
+	case string(generated.WsFrameTypeWhatsappPairingSubscribe):
+		// #283 (Option B): scope whatsapp_pairing frames to the connection(s)
+		// viewing a channel's pairing UI so the QR secret isn't broadcast to
+		// every tab. active=true subscribes this conn; false clears it. Any
+		// connection reaching this point in readLoop is already authenticated
+		// (single-account model), so no further role gate applies.
+		var f generated.WhatsAppPairingSubscribeFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			slog.Warn("ws: malformed whatsapp_pairing_subscribe frame", "error", err)
+			wh.wc.inboundDropped.Add(1)
+			return wsHandlerReadLoopContinue
+		}
+		if f.ChannelId == "" {
+			wh.wc.inboundDropped.Add(1)
+			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: "whatsapp_pairing_subscribe requires channel_id",
+			})
+			return wsHandlerReadLoopContinue
+		}
+		wh.h.subscribePairingInterest(wh.wc, f.ChannelId, f.Active)
+	case string(generated.WsFrameTypeAskUserAnswer):
+		// AskUserQuestion card submission/cancel (askuserquestion-tool-
+		// spec v3 §3): bridge to askuser.Registry.Submit / CancelByUser.
+		// Full semantic validation (ownership, membership, arity,
+		// first-valid-wins) is the registry's; the schema gate above
+		// (wsFrameSchemaName → AskUserAnswerFrame) bounds the shape.
+		var f generated.AskUserAnswerFrame
+		if err := json.Unmarshal(data, &f); err != nil {
+			slog.Warn("ws: malformed ask_user_answer frame", "error", err)
+			wh.wc.inboundDropped.Add(1)
+			return wsHandlerReadLoopContinue
+		}
+		if f.CardId == "" || f.SessionId == "" {
+			wh.wc.inboundDropped.Add(1)
+			sendConnGenFrame(wh.wc, string(generated.WsFrameTypeError), generated.ErrorFrame{
+				Type:    string(generated.WsFrameTypeError),
+				Message: "ask_user_answer requires card_id and session_id",
+			})
+			return wsHandlerReadLoopContinue
+		}
+		wh.h.handleAskUserAnswer(wh.wc, f)
+	default:
+		slog.Debug("ws: unknown frame type ignored", "type", peek.Type, "chat_id", wh.chatID)
+	}
+	return wsHandlerReadLoopNext
 }
 
 // wsFrameSchemaName maps a WS frame type string to the corresponding inbound
