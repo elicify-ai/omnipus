@@ -1,133 +1,79 @@
-# Getting started — your first 10 minutes
+# Getting started
 
-Welcome! This is the fastest path from nothing to your first real conversation with
-your AI team. Every step has something concrete to do. Let's go.
+This page takes you from an empty machine to your first conversation with an agent. You install Omnipus, create the one admin account, and start chatting in the workspace that is created for you.
 
-## 1. What you need
+## What it is
 
-You need a machine or Docker — a Linux or macOS computer, or anywhere you can run Docker.
+Omnipus is a self-hosted app: you run it on your own machine or server, and everything it stores stays in one directory there. A single binary — or a single container — serves the web interface and the API on one port, `5000`. Nothing else is exposed.
 
-You also need one LLM API key. This is the AI "brain" behind your agents. The easiest first
-pick is **[OpenRouter](providers.md)** or **OpenAI** — sign up and copy an API key.
-Prefer fully local and free? Use **[Ollama](providers.md)**, which runs models on
-your own machine with no key at all.
+The first run asks you for two things: the admin account that will own this install, and one AI provider whose models power the agents. You bring the provider. A key from OpenAI or OpenRouter works, and a provider that runs models on your own machine, such as Ollama, needs no key at all. Omnipus creates everything else: a workspace named **My Workspace**, and a first agent, **Mia**, ready to talk.
 
-That's it. See **[providers.md](providers.md)** for the full list of 35+ supported providers.
+## When you would use it
 
-## 2. Install in one line
+Use this page once, on a fresh install or a new machine. If Omnipus is already running, sign in at the same address and go straight to your [workspaces](workspaces.md). If it will not start, begin with [troubleshooting](troubleshooting.md).
 
-**Native install** (Linux/macOS):
+## How to go from nothing to your first conversation
+
+1. **Get a provider key.** Sign up with OpenAI or OpenRouter and copy the API key. The setup screen suggests both. Running models locally with Ollama also works and needs no key.
+2. **Install Omnipus.** Pick one of the three methods in the table below and run its command.
+3. **Start it.** With a native install, run `omnipus start` in a terminal. With Docker, the container from step 2 is already running.
+4. **Open `http://localhost:5000`.** On a fresh install the app takes you straight to the setup wizard. On a Mac, the first start may ask you to approve the binary under System Settings, then Privacy & Security.
+5. **Work through the wizard's three screens.** The wizard table below describes each one. **Finish** creates your account and saves the provider in one step, then logs you in.
+6. **Select Start chatting** on the "Mia — Assistant" screen. The app opens **My Workspace** on its **Chat** tab.
+7. **Type a message and send it.** Mia answers. Use the agent picker next to the message box to talk to a different agent. The workspace's other tabs — Tasks, Calendar, Library, Team — sit at the top of the screen.
+
+Three ways to install, and what each is good for:
+
+| Method | Good for | Command |
+|---|---|---|
+| One-line installer | Linux (x86-64 or ARM64) and Apple-Silicon Macs | below |
+| Docker, published image | Windows, Intel Macs, and any machine with Docker | below |
+| Build from source | Developers contributing to Omnipus | [project README](../README.md) |
+
+Native install:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh
 ```
 
-**Or with Docker** (one line):
+Docker:
 
 ```bash
-docker run -d -p 127.0.0.1:5000:5000 -p 127.0.0.1:5001:5001 -v "$PWD/data:/root/.omnipus" ghcr.io/elicify-ai/omnipus:latest
+mkdir -p ./data
+docker run -d \
+  -p 127.0.0.1:5000:5000 \
+  -e OMNIPUS_GATEWAY_HOST=0.0.0.0 \
+  -v "$PWD/data:/root/.omnipus" \
+  ghcr.io/elicify-ai/omnipus:latest
 ```
 
-These are the quick paths. For every install option (Docker variants,
-build-from-source, and more), see the **Install section of the
-[project README](../README.md)**.
+`OMNIPUS_GATEWAY_HOST=0.0.0.0` is required in Docker. By default Omnipus listens on the loopback address of its own machine, and inside a container that is the container itself, not yours. Every Docker option, including a larger image with browser support, is in [docker.md](docker.md).
 
-If you installed natively, start the app:
+The wizard is three numbered screens plus a closing screen:
 
-```bash
-omnipus start
-```
+| Screen | What you do | What Omnipus does |
+|---|---|---|
+| 1 — What should I call you? | Type the admin username | Accepts any name that is not empty |
+| 2 — Set your password | Choose a password of at least 8 characters, twice | Shows how strong it is |
+| 3 — Add a model key | Pick a provider, paste the key, pick "Model for your first agent" | Checks the connection for the model you picked |
+| Last — Mia, Assistant | Select Start chatting | Logs you in and opens the Chat tab |
 
-Then open **http://localhost:5000** in your browser. (With Docker, it's already
-running — just open that address.)
+The check on screen 3 runs when you pick a model, or when you press its Check connection button. **Finish** stays locked until that check passes for the model you selected, so a working key with a broken model cannot get through setup.
 
-## 3. First boot: the setup wizard
+## Limits and things to watch
 
-The first time you open the web app, a short wizard walks you through setup. It only
-takes a minute:
+- **One port, not two.** The web interface, the API, and agent-built previews all arrive through port `5000`. There is no second port `5001`; an older guide that opens one is out of date.
+- **Port 5000 is a popular port.** The macOS AirPlay receiver and many dev tools use it. If it is taken, pick another port with `gateway.port` in the config, or the `OMNIPUS_GATEWAY_PORT` variable, and open that instead. [troubleshooting](troubleshooting.md) walks through it.
+- **Keep the address private until setup is done.** Whoever completes the wizard owns the install. The default binding, and the Docker command above, keep it reachable only from your own machine.
+- **The installer covers three platforms.** Linux x86-64, Linux ARM64, and Apple-Silicon Macs. Windows and Intel Macs use the Docker image instead.
+- **Back up the master key.** Omnipus encrypts every secret it stores. The encryption key is `master.key`, inside the data directory: `~/.omnipus/` natively, the mounted `./data` folder with Docker. Lose it and every stored credential is unrecoverable.
+- **The published Docker image has no browser.** Agents that browse the web need the larger image you build yourself — see [docker.md](docker.md).
 
-1. **Welcome** — a quick hello. Click to begin.
-2. **Provider + API key** — pick your provider (e.g. OpenRouter), paste your API key,
-   and hit **Test connection** to confirm it works.
-3. **Your account** — choose a username and password (at least 8 characters). This is
-   your login.
-4. **Model** — pick which model your agents should use, from the provider you just tested.
-5. **Complete** — done! The wizard logs you straight in.
+## Related pages
 
-> 📸 **Screenshot needed:** the onboarding wizard mid-flow — the Provider step with an
-> API key pasted and the "Test connection" button visible.
-
-![The Omnipus login screen](marketing/screenshots/01-login.png)
-*After setup, this is where you sign back in.*
-
-## 4. Say hi to Mia
-
-Open **Chat** from the sidebar. By default, you're already talking to **Mia**, your
-Coach & Guide. Type this and send it:
-
-> **Hi — what can this do?**
-
-Mia will introduce the team and suggest what to try next.
-
-![The empty chat with Mia](marketing/screenshots/02-chat-empty-mia.png)
-*Mia greets you on first open — just start typing.*
-
-## 5. Watch a handoff
-
-Now ask for something specific. Try:
-
-> **I need help building a small website.**
-
-Mia recognizes this is a building task and **hands you off to Jim**, the general-purpose
-agent — all in the same conversation. You'll see a small handoff card in the chat noting
-the switch, and Jim picks up the thread without you repeating yourself.
-
-![Mia handing off to Jim](marketing/screenshots/16-handoff-mia-to-jim.png)
-*Control passes to a teammate in the same chat — no copy-paste.*
-
-## 6. Try the specialists
-
-You can also work with a specialist directly.
-
-### Ask Ray to research something
-
-> **Ray, what are the top 3 open-source note-taking apps right now? Include links.**
-
-Ray searches the web and answers with citations — he won't bluff.
-
-![Ray running a research task](marketing/screenshots/14-ray-research-demo.png)
-*Ray returns answers backed by sources.*
-
-### Ask Jim to create a file or scope a task
-
-> **Jim, create a file called notes.md with a short to-do list for launching a blog.**
-
-**Want to pick an agent on purpose?** Use the **agent picker** at the top of the chat
-to switch teammates mid-conversation, any time.
-
-![The agent picker menu](marketing/screenshots/12-agent-picker-menu.png)
-*Switch agents whenever you like.*
-
-## 7. Build your own agent with Ava
-
-Need a teammate the built-ins don't cover? Ask **Ava**:
-
-> **Ava, I want an agent that helps me plan weekly meals.**
-
-Ava interviews you with a few questions, then builds a brand-new custom agent for you.
-When she's done, it shows up in your roster alongside the others.
-
-![Ava building a new agent](marketing/screenshots/15-ava-build-agent.png)
-*Ava turns a short interview into a custom agent.*
-
-## 8. Where to go next
-
-**Connect a chat channel** (talk to your agents from Telegram, Discord, and more): **[channels.md](channels.md)**
-
-**Prefer the terminal?** **[Using the CLI](using-omnipus-cli.md)**
-
-**Full tour of the web app:** **[Using the web app](using-omnipus-ui.md)**
-
-**The mental model behind it all:** **[How Omnipus works](concepts.md)**
-
-**Something not working?** **[Troubleshooting](troubleshooting.md)**
+- [workspaces](workspaces.md) — what the container you just landed in holds, and how to run more than one
+- [agents](agents.md) — the four agents that ship with Omnipus, and how to add your own
+- [concepts](concepts.md) — the mental model behind agents, workspaces, and connectors
+- [settings](settings.md) — changing providers, models, and limits after the install
+- [connectors](connectors.md) — reaching your agents from Telegram, Discord, and other apps
+- [troubleshooting](troubleshooting.md) — the first stop when something does not start
