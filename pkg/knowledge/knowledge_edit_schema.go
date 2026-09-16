@@ -696,17 +696,26 @@ func knowledgeEditValidateAssembledFrontmatter(set *records.SchemaSet, report *r
 	// questions independent rather than threading one parse's internals
 	// through both.
 	fm, ferr := records.ParseFrontmatter(content)
-	if ferr != nil {
-		// Not this function's failure to report, by the same reasoning
-		// knowledgeEditResolveSchema's own doc comment gives: an unparsable
-		// frontmatter block is reported through the governance reason
-		// (knowledgeEditUnparsable), not as an error — the caller's own
-		// CreateNote call still writes the note as ordinary content when
-		// nothing else refuses it, which is correct: an unparsable
-		// frontmatter block is not this layer's problem to solve.
-		return content, knowledgeEditGovernance{Reason: knowledgeEditUnparsable}, nil //nolint:nilerr // reported via the governance reason, not an error
+	if ferr == nil {
+		return governAssembledFrontmatter(schema, typeName, content, fm)
 	}
+	// Not this function's failure to report, by the same reasoning
+	// knowledgeEditResolveSchema's own doc comment gives: an unparsable
+	// frontmatter block is reported through the governance reason
+	// (knowledgeEditUnparsable), not as an error — the caller's own
+	// CreateNote call still writes the note as ordinary content when
+	// nothing else refuses it, which is correct: an unparsable
+	// frontmatter block is not this layer's problem to solve.
+	return content, knowledgeEditGovernance{Reason: knowledgeEditUnparsable}, nil
+}
 
+// governAssembledFrontmatter is the parsable half of
+// knowledgeEditValidateAssembledFrontmatter: it walks every declared property
+// present in the parsed frontmatter, validates it against schema, and
+// re-spells accepted values in their canonical form. Its error returns are
+// real refusals (a value the schema will not accept); the "unparsable"
+// non-failure verdict belongs to the caller, which owns that classification.
+func governAssembledFrontmatter(schema *records.Schema, typeName string, content []byte, fm records.Frontmatter) ([]byte, knowledgeEditGovernance, error) {
 	out := content
 	for _, key := range fm.Keys {
 		if key == records.RecordTypeKey || key == records.RecordIDKey || key == records.RecordIDKeyNamespaced {

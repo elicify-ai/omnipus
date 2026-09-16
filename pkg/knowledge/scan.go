@@ -310,23 +310,24 @@ func Scan(root string) (*ScanResult, error) {
 			res.Problems = append(res.Problems, ScanProblem{
 				RelPath: rel, Reason: ScanProblemUnreadable, Detail: statErr.Error(),
 			})
-			return nil //nolint:nilerr // reported as a ScanProblem; the walk must continue
+		} else {
+			// The birth time comes from the os.FileInfo already in hand, so on
+			// every platform but Linux this is a struct-field read rather than a
+			// syscall. It lives in pkg/fileutil rather than in the package that
+			// STORES it because pkg/records/propindex's own tests import this
+			// package, so depending on propindex here is an import cycle in the
+			// test binary.
+			entry := ScanEntry{
+				RelPath:      rel,
+				Kind:         ScanKindFor(rel),
+				Size:         fi.Size(),
+				ModTimeNanos: fi.ModTime().UnixNano(),
+			}
+			if bt, ok := fileutil.BirthTime(path, fi); ok {
+				entry.CtimeNanos, entry.HasCtime = bt.UnixNano(), true
+			}
+			res.Entries = append(res.Entries, entry)
 		}
-		// The birth time comes from the os.FileInfo already in hand, so on every
-		// platform but Linux this is a struct-field read rather than a syscall.
-		// It lives in pkg/fileutil rather than in the package that STORES it
-		// because pkg/records/propindex's own tests import this package, so
-		// depending on propindex here is an import cycle in the test binary.
-		entry := ScanEntry{
-			RelPath:      rel,
-			Kind:         ScanKindFor(rel),
-			Size:         fi.Size(),
-			ModTimeNanos: fi.ModTime().UnixNano(),
-		}
-		if bt, ok := fileutil.BirthTime(path, fi); ok {
-			entry.CtimeNanos, entry.HasCtime = bt.UnixNano(), true
-		}
-		res.Entries = append(res.Entries, entry)
 		return nil
 	})
 	if walkErr != nil {

@@ -274,10 +274,7 @@ func insideDir(root, candidate string) (string, bool) {
 func dirSizeBytes(path string) int64 {
 	var total int64
 	_ = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
-		if err != nil || info == nil {
-			return nil //nolint:nilerr // an unreadable entry is skipped, not fatal
-		}
-		if !info.IsDir() {
+		if err == nil && info != nil && !info.IsDir() {
 			total += info.Size()
 		}
 		return nil

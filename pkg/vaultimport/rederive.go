@@ -151,21 +151,31 @@ func RederiveBase(vaultRoot, baseRelPath string) (*RederiveBaseResult, error) {
 	}
 
 	pb, parseErr := ParseBaseFile(data)
-	if parseErr != nil {
-		// A base that no longer parses is a REFUSAL about content, not an
-		// infrastructure error: the existing views stay, and the caller is
-		// told why in the operator's own terms. KeptExisting is populated
-		// because the refusal's own contract is to NAME what it deliberately
-		// left on disk — an operator told only "refused" cannot tell a
-		// non-destructive refusal from one that deleted their views.
-		return &RederiveBaseResult{ //nolint:nilerr // a content refusal is a verdict carried in the result, not an error
-			BaseRelPath:   baseRelPath,
-			Status:        OutcomeRefused,
-			RefusedReason: parseErr.Error(),
-			KeptExisting:  mine,
-		}, nil
+	if parseErr == nil {
+		return fileTranslatedBase(vaultRoot, baseRelPath, pb, schemaIdx, slugs, mine)
 	}
+	// A base that no longer parses is a REFUSAL about content, not an
+	// infrastructure error: the existing views stay, and the caller is
+	// told why in the operator's own terms. KeptExisting is populated
+	// because the refusal's own contract is to NAME what it deliberately
+	// left on disk — an operator told only "refused" cannot tell a
+	// non-destructive refusal from one that deleted their views.
+	return &RederiveBaseResult{
+		BaseRelPath:   baseRelPath,
+		Status:        OutcomeRefused,
+		RefusedReason: parseErr.Error(),
+		KeptExisting:  mine,
+	}, nil
+}
 
+// fileTranslatedBase is the parsable half of RederiveBase: translate the
+// parsed base, write the views it declares, and delete this source's views
+// the edited base no longer declares. Its error returns are the
+// infrastructure failures RederiveBase's contract reserves the error channel
+// for; a refusal is a verdict about the base's content and comes back as
+// Status == OutcomeRefused — here via the translator, and for an unparsable
+// base via RederiveBase's own return above.
+func fileTranslatedBase(vaultRoot, baseRelPath string, pb *ParsedBase, schemaIdx *SchemaIndex, slugs *SlugRegistry, mine []string) (*RederiveBaseResult, error) {
 	outcome, produced := TranslateBase(pb, baseRelPath, schemaIdx, slugs)
 
 	res := &RederiveBaseResult{
