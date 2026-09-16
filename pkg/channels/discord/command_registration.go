@@ -55,12 +55,11 @@ func (c *DiscordChannel) RegisterCommands(ctx context.Context, defs []commands.D
 				"count": len(appCmds),
 			},
 		)
-		return nil //nolint:nilerr // FR-28: log WARN and continue; text parsing still works
+	} else {
+		logger.InfoCF("discord", "Discord slash commands registered globally", map[string]any{
+			"count": len(appCmds),
+		})
 	}
-
-	logger.InfoCF("discord", "Discord slash commands registered globally", map[string]any{
-		"count": len(appCmds),
-	})
 	return nil
 }
 

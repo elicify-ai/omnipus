@@ -211,15 +211,13 @@ func (dw *darwinWatcher) addTree(startRel string, out chan<- fsEvent, stop <-cha
 		if d.Type()&fs.ModeSymlink != 0 {
 			return filepath.SkipDir
 		}
-		rel, relErr := filepath.Rel(dw.root, path)
-		if relErr != nil {
-			// path always comes from WalkDir under dw.root, so this cannot
-			// actually fail in practice; skipping rather than aborting the
-			// whole walk matches this file's "one bad path must not cost the
-			// rest of the tree" contract if it somehow ever did.
-			return nil //nolint:nilerr // deliberate skip-and-continue, not a swallowed failure
+		rel, ok := watchRel(dw.root, path)
+		if !ok {
+			// Unconvertible for the reason watchRel documents: not possible
+			// for a WalkDir-produced path, skipped rather than aborting the
+			// whole walk if it somehow ever did.
+			return nil
 		}
-		rel = filepath.ToSlash(rel)
 		if rel == "." {
 			rel = ""
 		}

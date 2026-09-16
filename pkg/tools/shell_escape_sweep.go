@@ -149,21 +149,7 @@ func sweepEscapingSymlinks(roots, allowed []string, since time.Time) escapeSweep
 			if d.Type()&fs.ModeSymlink == 0 {
 				return nil
 			}
-			info, lerr := os.Lstat(p)
-			if lerr != nil {
-				return nil //nolint:nilerr // a link that vanished mid-walk is not this sweep's concern
-			}
-			if symlinkChangeTime(info).Before(since) {
-				return nil
-			}
-			target, rerr := os.Readlink(p)
-			if rerr != nil {
-				return nil //nolint:nilerr // unreadable link: cannot judge it, cannot have been written by us
-			}
-			if !symlinkTargetEscapes(p, target, allowed) {
-				return nil
-			}
-			res.Found = append(res.Found, escapedSymlink{Link: p, Target: target})
+			res.judgeSymlink(p, since, allowed)
 			return nil
 		})
 		if err != nil {
@@ -176,6 +162,31 @@ func sweepEscapingSymlinks(roots, allowed []string, since time.Time) escapeSweep
 	}
 	sort.Slice(res.Found, func(i, j int) bool { return res.Found[i].Link < res.Found[j].Link })
 	return res
+}
+
+// judgeSymlink appends the link at p to res.Found when it is a symlink whose
+// change time falls inside the sweep window and whose target resolves outside
+// every allowed root. A link that cannot be inspected is skipped, never fatal:
+// one that vanished mid-walk is not this sweep's concern, and an unreadable
+// link cannot be judged, so it cannot have been written through this process's
+// file tools either. The walk continues either way — which is why this is a
+// void method on the result rather than an error-returning helper the walk
+// callback would have to swallow an error from.
+func (res *escapeSweepResult) judgeSymlink(p string, since time.Time, allowed []string) {
+	info, lerr := os.Lstat(p)
+	if lerr != nil {
+		return
+	}
+	if symlinkChangeTime(info).Before(since) {
+		return
+	}
+	target, rerr := os.Readlink(p)
+	if rerr != nil {
+		return
+	}
+	if symlinkTargetEscapes(p, target, allowed) {
+		res.Found = append(res.Found, escapedSymlink{Link: p, Target: target})
+	}
 }
 
 // symlinkTargetEscapes reports whether the link at linkPath, pointing at

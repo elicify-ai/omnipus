@@ -255,14 +255,10 @@ func seededContentMatches(destDir string) (bool, error) {
 			// actually recover it. Verified: chmod 000 on one seeded file
 			// made Seed fail on every subsequent call forever, reporting
 			// not_capable, while the replace that would have fixed it was
-			// never reached.
+			// never reached. The drift verdict rides in match, not in err,
+			// and the walk keeps going.
 			match = false
-			// nilerr: returning nil here is the POINT — an unreadable seeded
-			// file is drift to be REPLACED, not an error to propagate. See
-			// the comment above.
-			return nil //nolint:nilerr // unreadable seed == drift, handled by the replace path
-		}
-		if !bytes.Equal(want, got) {
+		} else if !bytes.Equal(want, got) {
 			match = false
 		}
 		return nil

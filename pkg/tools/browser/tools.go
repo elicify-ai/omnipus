@@ -711,6 +711,28 @@ func (t *ScreenshotTool) Parameters() map[string]any {
 	}
 }
 
+// waitForPageSettle polls document.readyState until it reports "complete"
+// (up to 30 tries, 100ms apart), then sleeps 500ms more for client-side JS
+// frameworks to finish painting. Best-effort readyState poll: any error
+// during the poll is non-fatal — it stops the poll and lets the screenshot
+// action that follows try anyway. Void on purpose: this poll has no failure
+// mode worth reporting, so it returns nothing rather than an error whose
+// only possible value is nil.
+func waitForPageSettle(ctx context.Context) {
+	for i := 0; i < 30; i++ {
+		var state string
+		if evalErr := chromedp.Evaluate(`document.readyState`, &state).Do(ctx); evalErr != nil {
+			return
+		}
+		if state == "complete" {
+			// Extra settle time for JS frameworks (React hydration, etc.)
+			_ = chromedp.Sleep(500 * time.Millisecond).Do(ctx)
+			return
+		}
+		_ = chromedp.Sleep(100 * time.Millisecond).Do(ctx)
+	}
+}
+
 func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	mgr, key, _, owner, sid, failure := resolveTurn(ctx, t.res, &t.browserAudit, t.Name())
 	if failure != nil {
@@ -750,22 +772,8 @@ func (t *ScreenshotTool) Execute(ctx context.Context, args map[string]any) *tool
 	err = chromedp.Run(
 		tabCtx,
 		chromedp.ActionFunc(func(ctx context.Context) error {
-			// Best-effort readyState poll. Any error during the poll is
-			// non-fatal — we fall through and let FullScreenshot try anyway.
-			for i := 0; i < 30; i++ {
-				var state string
-				evalErr := chromedp.Evaluate(`document.readyState`, &state).Do(ctx)
-				if evalErr != nil {
-					break
-				}
-				if state == "complete" {
-					// Extra settle time for JS frameworks (React hydration, etc.)
-					_ = chromedp.Sleep(500 * time.Millisecond).Do(ctx)
-					break
-				}
-				_ = chromedp.Sleep(100 * time.Millisecond).Do(ctx)
-			}
-			return nil //nolint:nilerr // poll errors are non-fatal by design
+			waitForPageSettle(ctx)
+			return nil
 		}),
 		chromedp.FullScreenshot(&buf, 90),
 		// Capture the current URL + title so the model KNOWS where it is —

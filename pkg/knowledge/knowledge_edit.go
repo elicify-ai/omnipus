@@ -884,19 +884,10 @@ func (t *EditTool) execSetProperty(ctx context.Context, target mutationTarget, a
 // so a type that appears between this pre-read and the lock is caught too.
 func (t *EditTool) mintPromotionID(target mutationTarget, rel, typeName string, set *records.SchemaSet) (string, error) {
 	typeName = strings.TrimSpace(typeName)
-	root, err := NewCollectionRoot(OSLinkFS(), target.collection.Root())
-	if err != nil {
-		return "", nil //nolint:nilerr // the write path refuses this itself
+	rec, readable := promotionTargetNote(target, rel)
+	if !readable {
+		return "", nil
 	}
-	abs, err := root.ResolveContainedNoSymlink(OSLinkFS(), rel)
-	if err != nil {
-		return "", nil //nolint:nilerr // likewise
-	}
-	current, err := ReadNoteContent(OSLinkFS(), abs)
-	if err != nil {
-		return "", nil //nolint:nilerr // likewise
-	}
-	rec := records.ParseRecord(rel, current)
 	if id := rec.ID(); id != "" {
 		// Who holds this id in the destination type right now, if anyone —
 		// named in either refusal so the caller sees the collision, not a
@@ -933,6 +924,30 @@ func (t *EditTool) mintPromotionID(target mutationTarget, rel, typeName string, 
 		return "", fmt.Errorf("minting an identifier for record type %q produced %d, wanted 1", sc.Type, len(ids))
 	}
 	return ids[0], nil
+}
+
+// promotionTargetNote reads the note a set_property of `type` might promote
+// into a record, through the same containment rules the write path enforces.
+// ok is false when the note cannot be read at all — deliberately NOT an
+// error, per mintPromotionID's contract ("", nil): the write's own path
+// performs the same reads under its own lock and refuses them properly, so
+// the pre-read answering "" just lets that refusal speak. A (Record, bool)
+// pair instead of an error return states that outright: there is no failure
+// here that mintPromotionID could report without duplicating it.
+func promotionTargetNote(target mutationTarget, rel string) (records.Record, bool) {
+	root, err := NewCollectionRoot(OSLinkFS(), target.collection.Root())
+	if err != nil {
+		return records.Record{}, false
+	}
+	abs, err := root.ResolveContainedNoSymlink(OSLinkFS(), rel)
+	if err != nil {
+		return records.Record{}, false
+	}
+	current, err := ReadNoteContent(OSLinkFS(), abs)
+	if err != nil {
+		return records.Record{}, false
+	}
+	return records.ParseRecord(rel, current), true
 }
 
 // knowledgeEditRefuseTypeChange is the cross-type rule mintPromotionID's doc

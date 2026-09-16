@@ -39,6 +39,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -678,4 +679,21 @@ func sendEvent(out chan<- fsEvent, ev fsEvent, stop <-chan struct{}) {
 	case out <- ev:
 	case <-stop:
 	}
+}
+
+// watchRel converts a path yielded by a WalkDir rooted at root into the
+// slash-separated, root-relative form the watchers report and register under.
+// ok is false when filepath.Rel refuses the conversion — impossible for a
+// path WalkDir itself produced under a clean root, but a skip, not an abort,
+// if it ever happens: one bad path must not cost the rest of the tree its
+// instant coverage, which is both platform addTree walks' governing
+// contract. The (string, bool) pair instead of an error return states that
+// outright: a refusal here is an answer for the caller to skip past, not a
+// fault for it to propagate up the walk.
+func watchRel(root, path string) (string, bool) {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
