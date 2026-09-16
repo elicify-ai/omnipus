@@ -90,12 +90,13 @@ func TestStatus_StalePID_NeverExisted(t *testing.T) {
 	}
 }
 
-// TestStatus_StalePID_HighDeadPID plants a very large PID that is extremely
-// unlikely to be alive.  Status must report not-running and remove the file.
+// TestStatus_StalePID_HighDeadPID plants a PID that no supported platform can
+// allocate (Linux caps pid_max at 2^22 = 4194304; macOS/FreeBSD/NetBSD cap at
+// 99999; Windows allocates PIDs as multiples of 4, and 2^31-1 is not one).
+// Status must report not-running and remove the file; reporting this PID
+// running is a regression in stale-PID detection, not an environment quirk.
 func TestStatus_StalePID_HighDeadPID(t *testing.T) {
 	home := newHome(t)
-	// 2^31-1 (max int32) is accepted by the kernel as a PID but will never be
-	// running in a normal test environment.
 	const deadPID = 2147483647
 	writePIDFile(t, home, deadPID)
 
@@ -104,8 +105,7 @@ func TestStatus_StalePID_HighDeadPID(t *testing.T) {
 		t.Fatalf("Status: unexpected error: %v", err)
 	}
 	if running {
-		// If somehow PID 2147483647 is running, skip gracefully.
-		t.Skip("PID 2147483647 appears to be alive; skipping test")
+		t.Fatalf("Status: expected not-running for dead PID %d (unallocatable on every supported platform), got running", deadPID)
 	}
 
 	if got := readPIDFile(t, home); got != "" {
@@ -367,13 +367,16 @@ func TestCheckProcess_OwnPID(t *testing.T) {
 	}
 }
 
-// TestCheckProcess_DeadPID verifies that a dead PID is not alive.
+// TestCheckProcess_DeadPID verifies that a dead PID is not alive. PID
+// 2147483647 cannot be allocated on any platform Omnipus ships to (Linux
+// pid_max ≤ 2^22; macOS/FreeBSD/NetBSD cap at 99999; Windows PIDs are
+// multiples of 4 and this one is not), so reporting it alive is a regression
+// in checkProcess, never an environment quirk.
 func TestCheckProcess_DeadPID(t *testing.T) {
-	// PID 2147483647 is effectively guaranteed not to be alive.
 	const deadPID = 2147483647
 	alive, _, _ := checkProcess(deadPID)
 	if alive {
-		t.Skipf("PID %d appears alive; skipping", deadPID)
+		t.Fatalf("checkProcess(%d): expected alive=false for a PID no platform can allocate, got true", deadPID)
 	}
 }
 
