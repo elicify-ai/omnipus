@@ -33,6 +33,7 @@ pkg/gateway/rest_onboarding_probe_test.go	TestProbeProviderID_Validation	268
 pkg/gateway/rest_providers_delete.go	restAPI.runProviderDelete	260
 pkg/gateway/rest_tasks_occurrences_test.go	TestRestTasks_OccurrencesEndpoint	384
 pkg/gateway/rest_uploads.go	restAPI.HandleUpload	389
+pkg/gateway/sandbox_apply.go	applySandbox	504
 pkg/gateway/task_occurrences_overlay_test.go	TestOccurrenceOverlay	373
 pkg/gateway/task_occurrences_test.go	TestOccurrences_BucketingAndCaps	396
 pkg/gateway/websocket_chat.go	WSHandler.handleChatMessage	595
