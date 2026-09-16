@@ -230,11 +230,16 @@ func unique[T comparable](input []T) []T {
 // (MarshalJSON returns "[NOT_HERE]") so secrets never leak into API responses
 // or logged config. On UnmarshalJSON it reads the plaintext value verbatim.
 //
+// The receiver split below is deliberate and load-bearing: the Marshal pair
+// are VALUE receivers so redaction applies to non-addressable values too (map
+// values, bare values — with pointer receivers both encoders silently fall
+// back to struct encoding and emit `{}`), while the Unmarshal trio must be
+// pointer receivers per the encoding contracts (they mutate in place).
+// pkg/config/security_test.go's NonAddressable cases guard exactly this.
+//
 // Callers that need to store credentials separately should use the encrypted
 // credentials.json store via ModelConfig.APIKeyRef instead of putting secrets
 // directly in config.json.
-//
-//nolint:recvcheck
 type SecureString struct {
 	resolved string
 }

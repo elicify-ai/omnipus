@@ -13,11 +13,10 @@ import (
 // EventKind identifies a structured agent-loop event.
 //
 // MarshalJSON uses a value receiver and UnmarshalJSON uses a pointer receiver
-// — the standard Go JSON codec pair. recvcheck is suppressed here because
-// MarshalJSON cannot use a pointer receiver without breaking fmt.Stringer
-// for value instances (e.g. range-loop variables).
-//
-//nolint:recvcheck
+// — the standard Go JSON codec pair. (recvcheck is disabled repo-wide for
+// this forced pattern — see .golangci.yaml.) MarshalJSON cannot use a
+// pointer receiver without breaking fmt.Stringer for value instances
+// (e.g. range-loop variables).
 type EventKind uint8
 
 const (

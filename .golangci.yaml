@@ -87,6 +87,25 @@ linters:
     # after a dedicated style-cleanup commit post-merge.
     - dupl
     - godoclint
+
+    # recvcheck — disabled repo-wide (founder decision, 2026-09-16): Go's
+    # encoding contracts FORCE mixed value/pointer receivers on exactly three
+    # types in this repo, and the linter has found no real defect among them:
+    #   - config.SecureString (pkg/config/security.go): UnmarshalJSON/
+    #     UnmarshalYAML/UnmarshalText must be pointer receivers (they mutate
+    #     in place), while MarshalJSON/MarshalYAML must stay VALUE receivers
+    #     so non-addressable values (map values, bare values) still redact —
+    #     guarded by pkg/config/security_test.go's NonAddressable cases.
+    #   - workspace.DelegationEdge (pkg/workspace/delegation.go):
+    #     UnmarshalJSON is a pointer receiver; Validate is deliberately a
+    #     value receiver so composite-literal edges can call it directly.
+    #   - agent.EventKind (pkg/agent/events.go): MarshalJSON is a value
+    #     receiver (a pointer receiver would break fmt.Stringer for value
+    #     instances); UnmarshalJSON is a pointer receiver.
+    # Satisfying recvcheck here would weaken the SecureString redaction or
+    # remove a deliberate nil guard / value-call ergonomics — fixes that make
+    # the code worse to silence a linter that found nothing.
+    - recvcheck
   settings:
     errcheck:
       check-type-assertions: true
