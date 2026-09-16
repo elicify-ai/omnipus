@@ -6,7 +6,7 @@ Agents are who does the work in Omnipus. Four of them ship with the product, you
 
 Open **Agents** in the sidebar and the roster has three sections:
 
-- **Built-in roster** — the four agents Omnipus ships with. They are locked, they sit first on the screen, and Mia is the default on a fresh install.
+- **Built-in roster** — the four agents Omnipus ships with. They are locked, they sit first, and Mia is the default on a fresh install.
 - **Main agents** — chat colleagues you create yourself.
 - **Sub-agent workers** — workers you create yourself. They never chat with you; other agents delegate work to them.
 
@@ -54,13 +54,13 @@ You create one of three types. The create buttons sit in the section headers of 
 | Subagent | The Omnipus engine | Other agents, through delegation | No |
 | Subagent (External) | An external command-line tool | Other agents, through delegation | No |
 
-1. Click **+ New Main** or **+ New Subagent** in its section header. For an external worker, click **+ Add Subagent (External)** and pick the command-line tool from the menu; entries for tools that are not installed on the host are greyed out.
+1. Click **+ New Main** or **+ New Subagent** in its section header. For an external worker, click **+ Add Subagent (External)** and pick the command-line tool from the menu; entries for tools not installed on the host are greyed out.
 2. Fill in **Identity**: name, color, icon, and model. For workers, the description is required — it is what other agents read to decide when to delegate to this one.
 3. Fill in **Personality**: the soul, the agent's persona prompt, is required for every type.
 4. Main and Subagent have a third step, **Tools**, for tool permissions, skills, and fallback models. An external worker has no Tools step — it brings its own.
 5. Create the agent. Its card appears in its section.
 
-To change an agent later, open its card. The edit slide-over saves every change as you type; there is no save button, and the footer shows when it last saved. The tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** sits in the footer and asks you to confirm.
+To change an agent later, open its card. The edit slide-over saves every change as you type; the footer shows when it last saved. The tabs are **Basics**, **Personality**, **Tools**, **Skills**, and **Advanced**; an external worker shows **Runtime** instead of Tools and Skills. **Delete agent** sits in the footer and asks you to confirm.
 
 ## Workers and delegation
 
@@ -100,7 +100,7 @@ If nothing needs attention, the agent replies with a short all-clear. Scheduled 
 
 ## Limits and things to watch
 
-- The built-in roster is locked. Name, description, persona, color, icon, and skills cannot change. Model, tool permissions, and limits stay editable.
+- The built-in roster is locked. Name, description, persona, color, icon, and skills cannot change. Model and limits stay editable; tool permissions are read-only — create a custom agent to change those.
 - Workers are invisible to chat. They have no voice, no heartbeat, and can never be the default.
 - A worker with no delegation edge does nothing. Wire the edge on the workspace Team tab.
 - An external worker depends on its tool being installed. If the tool is missing, the create menu shows it greyed out.

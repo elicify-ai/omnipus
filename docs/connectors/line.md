@@ -64,5 +64,3 @@ Omnipus connects to LINE Official Accounts via the [LINE Messaging API](https://
 - **Message length.** LINE caps individual text messages at 5 000 characters; longer responses are automatically split.
 - **HTTPS required.** LINE will not deliver webhooks to plain HTTP endpoints.
 - **Webhook security.** The LINE channel itself signature-verifies every inbound request — HMAC-SHA256 of the raw body using your Channel Secret, compared against the `X-Line-Signature` header. The shared gateway mux does no HMAC enforcement (see `pkg/channels/README.md` §12.4). If you reverse-proxy the webhook path with nginx / Caddy / Cloudflare, **do not strip the `X-Line-Signature` header** — that breaks verification and inbound delivery will fail.
-
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

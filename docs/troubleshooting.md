@@ -61,7 +61,7 @@ Finish onboarding to fix it. Open `http://localhost:5000` — on a fresh install
 
 ### 404 "No endpoints found that support tool use"
 
-The model cannot call tools, and Omnipus sends its tool list with every request, so the request is rejected outright. Small open models often lack tool support — `google/gemma-2-9b-it` is a known example. Pick a tool-capable model instead, such as `z-ai/glm-5.2` or `z-ai/glm-5.3-flash` on OpenRouter. Change the default in **Settings → Providers**, or edit `agents.defaults.default_model` in `config.json`.
+The model cannot call tools, and Omnipus sends its tool list with every request, so the request is rejected outright. Small open models often lack tool support. In the model picker, the **Recommended for chat** mark appears only on models that can call tools. Change the default in **Settings → Providers**, or edit `agents.defaults.default_model` in `config.json`.
 
 ### 400 "invalid model ID" or a rejected provider
 

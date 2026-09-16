@@ -8,7 +8,7 @@ A tool is one capability an agent can call while it works. When an agent uses a 
 
 Tools come from two places:
 
-- **Built-in tools** ship with Omnipus — about ninety of them, grouped by capability area.
+- **Built-in tools** ship with Omnipus — a large catalog; the **Built-in Tools** tab under Skills & Tools lists the current set.
 - **Tools from connected servers.** Omnipus speaks MCP (Model Context Protocol), an open standard many services publish tools to. Connect a server and its tools appear next to the built-in ones.
 
 Every tool, built-in or from a server, has a policy with three values: **Allow**, **Ask** or **Deny**. You set it in two places — once for the whole installation, once per agent.

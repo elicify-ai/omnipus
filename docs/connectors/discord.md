@@ -59,5 +59,3 @@ Omnipus connects to Discord as a bot using the [discordgo](https://github.com/bw
 - **Message length.** Discord caps individual messages at 2 000 characters; longer responses are automatically split.
 - **Group chats.** In guild text channels, use `group_trigger.mention_only: true` so the bot only responds when directly @-mentioned.
 - **Deprecated top-level `mention_only`.** `DiscordConfig` still has a top-level `mention_only` field for backward compatibility, but the channel code reads only `group_trigger.mention_only`. The top-level field is inert — leave it unset and configure under `group_trigger`.
-
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

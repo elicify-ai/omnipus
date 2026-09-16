@@ -53,5 +53,3 @@ channel.
 **Capabilities implemented:** `TypingCapable` (typing status via iLink API), `MediaSender` (image and file upload/download via CDN). Supports inbound images, voice, and file attachments.
 
 **Rate limits.** Avoid high-frequency automated broadcasts; WeChat anti-spam systems may restrict accounts that send messages at excessive rates.
-
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).

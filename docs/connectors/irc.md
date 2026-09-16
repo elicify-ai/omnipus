@@ -80,5 +80,3 @@ Omnipus connects to any IRC server via a persistent TCP connection (optionally T
 - **Reconnect behavior.** `ircevent.Connection.Loop()` handles reconnection and channel rejoin transparently. The `onConnect` callback fires on every successful connect, re-running NickServ identification and channel joins.
 - **Group chat trigger.** In IRC channels (targets starting with `#` or `&`), the group trigger controls response. The most common IRC convention — `botnick: message` or `botnick, message` — is recognized as a mention and the prefix is stripped before the message reaches the agent.
 - **Direct messages.** PRIVMSGs sent directly to the bot's nick (not to a channel) are always handled without trigger filtering.
-
-For deeper details on how channels are orchestrated, see [pkg/channels/README.md](../../pkg/channels/README.md).
