@@ -408,6 +408,24 @@ const BUG_OMNIPUS_HOME =
   process.env.OMNIPUS_HOME ||
   (process.env.HOME ? path.join(process.env.HOME, '.omnipus') : '')
 
+// Preflight (2026-09-16): an unresolvable OMNIPUS_HOME used to soft-skip the
+// Bug-Hans test below (green with nothing executed — forbidden by the skip
+// policy); it now fails fast instead.
+function requireBugHarnessHome(): void {
+  if (!BUG_OMNIPUS_HOME) {
+    throw new Error(
+      '[E2E preflight] OMNIPUS_HOME is not set (and $HOME is unavailable, so the\n' +
+      '~/.omnipus fallback cannot resolve either).\n' +
+      'The Bug-Hans test writes its seeded per-agent session under\n' +
+      '$OMNIPUS_HOME/agents/… and cannot run without it. Its absence previously\n' +
+      'soft-skipped the test — a green run with nothing executed, which the skip\n' +
+      'policy forbids (tests/e2e/README.md).\n\n' +
+      'To fix:\n' +
+      '  export OMNIPUS_HOME=/tmp/omnipus-e2e  (CI sets this in .github/workflows/pr.yml).',
+    )
+  }
+}
+
 test.describe('Bug-Hans: per-agent session resume must not produce "session not found"', () => {
   // NOTE (fixed 2026-08-24, was `.fixme` since 2026-05-30): the test sets
   // up a per-agent session by writing meta.json + transcript.jsonl into
@@ -441,10 +459,7 @@ test.describe('Bug-Hans: per-agent session resume must not produce "session not 
   // the fix and pass with it.
   test('(Bug-Hans-a) follow-up message on a per-agent session succeeds', async ({ page }) => {
     test.slow() // real LLM call once the message lands; budget accordingly
-    if (!BUG_OMNIPUS_HOME) {
-      test.skip(true, 'OMNIPUS_HOME unavailable')
-      return
-    }
+    requireBugHarnessHome() // unresolvable home is a fail-fast preflight, not a skip (helper above)
     // Collect every WS frame the SPA receives for the life of the test. The
     // hash-router navigation in step 4 below does NOT open a new
     // WebSocket — the connection opened by step 1's page.goto('/') persists

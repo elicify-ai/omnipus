@@ -28,17 +28,29 @@ import { test, expect } from '@playwright/test'
 
 const BASE_URL = process.env.OMNIPUS_URL || 'http://localhost:6060'
 
+// Preflight (2026-09-16): an unset OMNIPUS_URL used to soft-skip the test below
+// (green with nothing executed — forbidden by the skip policy); it now fails
+// fast instead. Local dev: set OMNIPUS_URL=http://localhost:5000 (or similar).
+// CI: seeded via tests/e2e/global-setup.ts and set in .github/workflows/pr.yml.
+function requireOmnipusUrl(): void {
+  if (!process.env.OMNIPUS_URL) {
+    throw new Error(
+      '[E2E preflight] OMNIPUS_URL is not set.\n' +
+      'This test drives the embedded-SPA gateway and cannot run without one. An unset\n' +
+      'URL previously soft-skipped it — a green run with nothing executed, which the\n' +
+      'skip policy forbids (tests/e2e/README.md §Skip policy).\n\n' +
+      'To fix:\n' +
+      '  export OMNIPUS_URL=http://localhost:6060  (or wherever the gateway listens —\n' +
+      '  CI sets this in .github/workflows/pr.yml and deploy/ci-worker/runci.sh).',
+    )
+  }
+}
+
 // T4 — burst resilience: inject 200 synthetic frames, verify heap + responsiveness.
 test(
   'SPA handles 200 synthetic tool_call_result frames without heap blow-up',
   async ({ page }) => {
-    // Skip when running against an unreachable target (CI without seeded gateway).
-    // Local dev: set OMNIPUS_URL=http://localhost:5000 (or similar). CI: seed via
-    // tests/e2e/global-setup.ts.
-    test.skip(
-      !process.env.OMNIPUS_URL,
-      'OMNIPUS_URL not set — set to a running gateway URL (e.g. http://localhost:5000) to run this test.',
-    )
+    requireOmnipusUrl() // unset URL is a fail-fast preflight, not a skip (helper above)
 
     // ── Gate: requires a running Omnipus instance ─────────────────────────────
     // This test MUST run against the embedded SPA binary, not the Vite dev

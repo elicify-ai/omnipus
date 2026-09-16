@@ -1,7 +1,13 @@
 # SPA Gaps — Playwright Test Requirements
 
 This file tracks features referenced by E2E tests that are not yet implemented in the SPA
-(`src/`). Each item maps to one or more `test.fixme` calls in the spec files.
+(`src/`). Each item maps to one or more ordinary `test(...)` blocks in the spec files —
+there are no `test.fixme` calls in this suite. Those tests were written against the
+intended UI and fail red while the feature is missing (e.g. `auth.spec.ts (c)` waits for
+a `dev-mode-banner` testid that AppShell never renders; `version-drift.spec.ts` waits for
+a toast the SPA never shows), which is deliberate: a missing SPA feature surfaces as a
+red test, not a silent skip. Resolving an item makes its test pass without further
+changes; the entry is then checked off here.
 
 ---
 

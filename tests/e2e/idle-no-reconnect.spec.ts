@@ -17,9 +17,11 @@
  * URL defaults to OMNIPUS_URL env var or http://localhost:6060.
  *
  * NOTE: This test waits 90 s of real time. It is marked with test.slow() so
- * Playwright allocates a longer timeout. In CI environments where 90 s is
- * unacceptable, set SKIP_SLOW_E2E=1 to skip it (documented in the skip guard
- * below). The test is still runnable locally: npx playwright test idle-no-reconnect.
+ * Playwright allocates a longer timeout. There is no SKIP_SLOW_E2E opt-out
+ * anymore: setting it now fails the test loudly (see the preflight below) — a
+ * green run with this test silently skipped is the false green the suite's
+ * skip policy forbids (tests/e2e/README.md §Skip policy). The test is still
+ * runnable locally: npx playwright test idle-no-reconnect.
  */
 
 import { test, expect } from '@playwright/test'
@@ -34,9 +36,20 @@ test(
     // timeout by 3.
     test.slow()
 
-    // Skip in CI environments that cannot afford 90 s real-time waits.
+    // Preflight (2026-09-16): SKIP_SLOW_E2E=1 used to soft-skip this test,
+    // reporting green with nothing executed — the exact false green the skip
+    // policy forbids. It now fails fast instead; the 90 s idle window IS the
+    // regression this test guards and cannot be traded away by an env var.
     if (process.env.SKIP_SLOW_E2E === '1') {
-      test.skip(true, 'SKIP_SLOW_E2E=1 — skipping 90 s idle reconnect test in this environment')
+      throw new Error(
+        '[E2E preflight] SKIP_SLOW_E2E=1 is set, but this suite no longer honors it as a silent skip.\n' +
+        'A green run with this test skipped is exactly the false green the skip policy\n' +
+        'forbids (tests/e2e/README.md §Skip policy; tests/e2e/fixtures/skip-tracking.ts).\n\n' +
+        'To fix:\n' +
+        '  unset SKIP_SLOW_E2E and let the test run — it needs 90 s of real idle time\n' +
+        '  by design (that is the heartbeat regression it guards), or budget for it\n' +
+        '  in the CI environment that set the flag.',
+      )
     }
 
     // Track WebSocket openings. We record the URL for each newly opened WS so

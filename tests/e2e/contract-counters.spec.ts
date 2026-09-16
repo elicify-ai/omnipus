@@ -168,9 +168,18 @@ test('navigating to a session with tool_call + turn_canceled entries fires no Ap
   // bearer token; use page.request (or just bare fetch via evaluate) so the
   // request carries that auth.
   const omnipusHome = process.env.OMNIPUS_HOME
+  // Preflight (2026-09-16): a missing OMNIPUS_HOME used to soft-skip this test
+  // (green with nothing executed — forbidden by the skip policy); it now fails
+  // fast instead.
   if (!omnipusHome) {
-    test.skip(true, 'OMNIPUS_HOME env var must be set for this test (it usually is via CI)')
-    return
+    throw new Error(
+      '[E2E preflight] OMNIPUS_HOME is not set.\n' +
+      'This test seeds a session transcript directly into $OMNIPUS_HOME/sessions/… and\n' +
+      'cannot run without it. Its absence previously soft-skipped the test — a green run\n' +
+      'with nothing executed, which the skip policy forbids (tests/e2e/README.md).\n\n' +
+      'To fix:\n' +
+      '  export OMNIPUS_HOME=/tmp/omnipus-e2e  (CI sets this in .github/workflows/pr.yml).',
+    )
   }
 
   // Use the existing default agent ("main") to create a session. Must pass
