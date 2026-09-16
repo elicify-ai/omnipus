@@ -60,7 +60,7 @@ Bindings are evaluated top-to-bottom. The first match wins. The last entry (`cha
 
 ## Match precedence
 
-Within a binding, criteria are matched in this order (`pkg/routing/route.go::ResolveRoute`). The first criterion that matches stamps the route's `MatchedBy` field on the returned `ResolvedRoute`; the value is used for observability and downstream filtering but the gateway does **not** log a per-message "matched by" line from `route.go` itself (see [observability.md](observability.md) for the actual event log surface).
+Within a binding, criteria are matched in this order (`pkg/routing/route.go::ResolveRoute`). The first criterion that matches stamps the route's `MatchedBy` field on the returned `ResolvedRoute`; the value is used for observability and downstream filtering but the gateway does **not** log a per-message "matched by" line from `route.go` itself (see [operator observability](operations/observability.md) for the actual event log surface).
 
 | `matched_by` | Trigger |
 |---|---|
@@ -156,4 +156,4 @@ A typical multi-channel deployment has one Omnipus binary fielding messages from
 
 [memory.md](memory.md) explains what survives a hand-off (the transcript) and what doesn't (per-agent memory).
 
-[observability.md](observability.md) describes how every routing decision is logged with its `matched_by` value.
+[Operator observability](operations/observability.md) describes how every routing decision is logged with its `matched_by` value.

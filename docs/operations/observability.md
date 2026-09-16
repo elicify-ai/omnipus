@@ -1,4 +1,4 @@
-# Observability: session history and the event stream
+# Operator observability: session history and the event stream
 
 Every action an Omnipus agent takes is visible. There are two complementary surfaces.
 
@@ -76,21 +76,21 @@ While a turn is running, the agent loop emits typed events into the in-process e
 | **Sub-turns (sub-agents, spawn)** | `subturn_spawn`, `subturn_end`, `subturn_result_delivered`, `subturn_orphan` |
 | **Steering / interrupt** | `steering_injected`, `follow_up_queued`, `interrupt_received` |
 | **System / errors** | `error`, `rate_limit`, `background_process_kill` |
-| **Channel / user-facing** | `whatsapp_pairing`, `notification` |
+| **Connector / user-facing** | `whatsapp_pairing`, `notification` |
 
 ### Who consumes the events
 
-#### WebSocket subscribers (SPA chat view)
+### WebSocket subscribers (SPA chat view)
 
 Every event is fanned out to connected clients. The chat UI shows the live progression: "Tool call: web_search" → "Tool call complete" → "LLM response streaming" → "Turn end". This is what gives the chat its real-time feel.
 
-#### Subprocess hooks
+### Subprocess hooks
 
-External processes can subscribe to the same event feed via JSON-RPC over stdin/stdout. Every event becomes a `hook.event` notification. Authors observe (read-only), or in-process hooks can intercept and rewrite. See [hooks/README.md](hooks/README.md). The wire format uses the canonical string name of each `EventKind` so authors don't carry private int → name tables (per issue #164).
+External processes can subscribe to the same event feed via JSON-RPC over stdin/stdout. Every event becomes a `hook.event` notification. Authors observe (read-only), or in-process hooks can intercept and rewrite. See [hooks/README.md](../hooks/README.md). The wire format uses the canonical string name of each `EventKind` so authors don't carry private integer-to-name tables (per issue #164).
 
-#### Audit log
+### Audit log
 
-A subset of security-relevant events (tool calls, denials, sandbox state changes, cancel events, rate limits) are mirrored into `~/.omnipus/system/audit.jsonl` with HMAC chain integrity (v0.2 hardening, #155 item 1). See [security_configuration.md](security_configuration.md).
+A subset of security-relevant events (tool calls, denials, sandbox state changes, cancel events, rate limits) are mirrored into `~/.omnipus/system/audit.jsonl` with HMAC chain integrity (v0.2 hardening, #155 item 1). See [security_configuration.md](../security_configuration.md).
 
 ### Event payload shape
 
@@ -140,10 +140,10 @@ A normal turn produces, in order:
 
 Everything is captured. Nothing is silent. An operator can audit any turn after the fact by reading the JSONL; a developer can subscribe live via a subprocess hook to watch every event as it happens.
 
-## See also
+## Related pages
 
-[hooks/README.md](hooks/README.md) explains how to write a subprocess hook that consumes the event stream.
+[hooks/README.md](../hooks/README.md) explains how to write a subprocess hook that consumes the event stream.
 
-[security_configuration.md](security_configuration.md) covers the audit log, HMAC chain, and sensitive-data redaction.
+[security_configuration.md](../security_configuration.md) covers the audit log, HMAC chain, and sensitive-data redaction.
 
-[memory.md](memory.md) describes how transcripts become memory via auto-recap at session close.
+[memory.md](../memory.md) describes how transcripts become memory via auto-recap at session close.

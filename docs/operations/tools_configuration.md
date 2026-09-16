@@ -1,4 +1,4 @@
-# Tools Configuration
+# Operator tool configuration
 
 Omnipus's tools configuration is located in the `tools` field of `config.json`.
 
@@ -30,7 +30,7 @@ Omnipus's tools configuration is located in the `tools` field of `config.json`.
 
 Before tool results are sent to the LLM, Omnipus can filter sensitive values (API keys, tokens, secrets) from the output. This prevents the LLM from seeing its own credentials.
 
-See [Sensitive Data Filtering](sensitive_data_filtering.md) for full documentation.
+See [Sensitive Data Filtering](../sensitive_data_filtering.md) for full documentation.
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -141,7 +141,7 @@ At runtime, the `web_search` tool accepts the following parameters:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `query` | string | yes | Search query string |
-| `count` | integer | no | Number of results to return. Default: `10`, max: `10` |
+| `count` | integer | no | Number of results to return. Default: `10`, maximum: `10` |
 | `range` | string | no | Optional time filter: `d` (day), `w` (week), `m` (month), `y` (year) |
 
 If `range` is omitted, Omnipus performs an unrestricted search.
@@ -156,43 +156,39 @@ If `range` is omitted, Omnipus performs an unrestricted search.
 }
 ```
 
-## Exec Tool
+## Bash tool
 
-The exec tool is used to execute shell commands.
+The `bash` tool executes shell commands. Its configuration keeps the historical `tools.exec` name for compatibility.
 
-| Config                 | Type  | Default | Description                                |
-|------------------------|-------|---------|--------------------------------------------|
-| `enabled`              | bool  | true    | Enable the exec tool                        |
-| `enable_deny_patterns` | bool  | true    | Enable default dangerous command blocking  |
-| `custom_deny_patterns` | array | []      | Custom deny patterns (regular expressions) |
+| Config | Type | Default | Description |
+|---|---|---|---|
+| `enabled` | bool | true | Enable the tool |
+| `approval` | string | empty | Set to `ask` for interactive approval or `off` to skip it |
+| `allowed_binaries` | array | `[]` | Allow only matching binary names when the list is not empty |
+| `enable_proxy` | bool | false | Route child HTTP traffic through the local egress proxy |
 
-### Disabling the Exec Tool
+### Disabling the bash tool
 
-To completely disable the `exec` tool, set `enabled` to `false`:
+To disable the `bash` tool for an agent, set its tool policy to `deny`:
 
-**Via config file:**
+**Via agent configuration:**
 ```json
 {
-  "tools": {
-    "exec": {
-      "enabled": false
+  "tools_cfg": {
+    "builtin": {
+      "policies": {
+        "bash": "deny"
+      }
     }
   }
 }
 ```
 
-**Via environment variable:**
-```bash
-OMNIPUS_TOOLS_EXEC_ENABLED=false
-```
-
-> **Note:** When disabled, the agent will not be able to execute shell commands. This also affects the Cron tool's ability to run scheduled shell commands.
-
 ### Functionality
 
-**`enable_deny_patterns`** — Set to `false` to completely disable the default dangerous command blocking patterns.
+**`allowed_binaries`** — Add glob patterns for binaries the tool may run. A non-empty list denies every other binary.
 
-**`custom_deny_patterns`** — Add custom deny regex patterns; commands matching these will be blocked.
+**`enable_proxy`** — Set to `true` to provide `HTTP_PROXY` and `HTTPS_PROXY` to child processes.
 
 ### Default Blocked Command Patterns
 
@@ -215,32 +211,30 @@ By default, Omnipus blocks the following categories of dangerous commands:
 
 ### Known Architectural Limitation
 
-The exec guard only validates the top-level command sent to Omnipus. It does **not** recursively inspect child
+The `bash` guard only validates the top-level command sent to Omnipus. It does **not** recursively inspect child
 processes spawned by build tools or scripts after that command starts running.
 
 Workflows that can bypass the direct command guard once the initial command is allowed include `make run`, `go run ./cmd/...`, `cargo run`, and `npm run build`.
 
-This means the guard is useful for blocking obviously dangerous direct commands, but it is **not** a full sandbox for
+This means the guard blocks clearly dangerous direct commands, but it is **not** a full sandbox for
 unreviewed build pipelines. If your threat model includes untrusted code in the workspace, use stronger isolation such
 as containers, VMs, or an approval flow around build-and-run commands.
 
-### Configuration Example
+### Configuration example
 
 ```json
 {
   "tools": {
     "exec": {
-      "enable_deny_patterns": true,
-      "custom_deny_patterns": [
-        "\\brm\\s+-r\\b",
-        "\\bkillall\\s+python"
-      ]
+      "approval": "ask",
+      "allowed_binaries": ["git", "go", "npm"],
+      "enable_proxy": true
     }
   }
 }
 ```
 
-## Cron Tool
+## Cron tool
 
 The cron tool is used for scheduling periodic tasks.
 
@@ -249,7 +243,7 @@ The cron tool is used for scheduling periodic tasks.
 | `exec_timeout_minutes` | int  | 5       | Execution timeout in minutes, 0 means no limit |
 | `allow_command`        | bool | false   | Allow cron tasks to execute shell commands      |
 
-## MCP Tool
+## Model Context Protocol tools
 
 The MCP tool enables integration with external Model Context Protocol servers.
 
@@ -303,7 +297,7 @@ If `type` is omitted, transport is auto-detected: a `url` being set implies `sse
 
 ### Configuration Examples
 
-#### 1) Stdio MCP server
+### 1) Stdio MCP server
 
 ```json
 {
@@ -326,7 +320,7 @@ If `type` is omitted, transport is auto-detected: a `url` being set implies `sse
 }
 ```
 
-#### 2) Remote SSE/HTTP MCP server
+### 2) Remote SSE/HTTP MCP server
 
 ```json
 {
@@ -348,7 +342,7 @@ If `type` is omitted, transport is auto-detected: a `url` being set implies `sse
 }
 ```
 
-#### 3) Massive MCP setup with Tool Discovery enabled
+### 3) Massive MCP setup with Tool Discovery enabled
 
 *In this example, the LLM will only see the `tool_search_tool_bm25`. It will search and unlock Github or Postgres tools
 dynamically only when requested by the user.*
@@ -404,7 +398,7 @@ dynamically only when requested by the user.*
 }
 ```
 
-#### 4) Mixed setup: per-server deferred override
+### 4) Mixed setup: per-server deferred override
 
 *Discovery is enabled globally, but `filesystem` is pinned as always-visible while `context7` follows the global
 default (deferred). `aws` explicitly opts in to deferred mode even though it is the same as the global default.*
@@ -463,8 +457,8 @@ The skills tool configures skill discovery and installation via registries like 
 | `registries.clawhub.skills_path`       | string | `""`                 | Skills API path                                                                              |
 | `registries.clawhub.download_path`     | string | `""`                 | Download API path                                                                            |
 | `registries.clawhub.timeout`           | int    | 0                    | Request timeout in seconds (0 = default)                                                     |
-| `registries.clawhub.max_zip_size`      | int    | 0                    | Max skill zip size in bytes (0 = default)                                                    |
-| `registries.clawhub.max_response_size` | int    | 0                    | Max API response size in bytes (0 = default)                                                 |
+| `registries.clawhub.max_zip_size`      | int    | 0                    | Maximum skill zip size in bytes (0 = default)                                                |
+| `registries.clawhub.max_response_size` | int    | 0                    | Maximum API response size in bytes (0 = default)                                             |
 
 ### GitHub Integration
 
@@ -477,8 +471,8 @@ The skills tool configures skill discovery and installation via registries like 
 
 | Config                    | Type | Default | Description                                |
 |---------------------------|------|---------|--------------------------------------------|
-| `max_concurrent_searches` | int  | 2       | Max concurrent skill search requests       |
-| `search_cache.max_size`   | int  | 50      | Max cached search results                  |
+| `max_concurrent_searches` | int  | 2       | Maximum concurrent skill search requests   |
+| `search_cache.max_size`   | int  | 50      | Maximum cached search results              |
 | `search_cache.ttl_seconds`| int  | 300     | Cache TTL in seconds                       |
 
 ### Configuration Example
@@ -515,7 +509,6 @@ All configuration options can be overridden via environment variables with the f
 | Variable | Effect |
 |---|---|
 | `OMNIPUS_TOOLS_WEB_BRAVE_ENABLED=true` | Enable Brave search |
-| `OMNIPUS_TOOLS_EXEC_ENABLED=false` | Disable the exec tool |
 | `OMNIPUS_TOOLS_EXEC_ENABLE_DENY_PATTERNS=false` | Disable default deny patterns |
 | `OMNIPUS_TOOLS_CRON_EXEC_TIMEOUT_MINUTES=10` | Set cron exec timeout |
 | `OMNIPUS_TOOLS_MCP_ENABLED=true` | Enable MCP integration |

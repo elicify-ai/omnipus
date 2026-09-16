@@ -1,6 +1,6 @@
 # Troubleshooting
 
-Fixes for common problems, grouped by symptom. For a running-but-odd gateway (the Omnipus server process), [debug.md](debug.md) covers reading its logs in depth.
+Fixes for common problems, grouped by symptom. For a running-but-odd gateway (the Omnipus server process), [operator debugging](operations/debug.md) covers reading its logs in depth.
 
 ## What it is
 
@@ -11,7 +11,7 @@ A symptom-first fix list for startup failures, unreachable gateways, login and A
 1. Open `$OMNIPUS_HOME/logs/gateway_panic.log` (default: `~/.omnipus/logs/`). A startup crash always writes there, even when nothing appears on screen.
 2. Open `$OMNIPUS_HOME/logs/gateway.log` — the running gateway's log stream, and the reason behind most failed requests.
 3. Run `omnipus doctor`, which checks your configuration for known unsafe settings.
-4. Still unexplained? Restart with `omnipus start --debug` — see [debug.md](debug.md).
+4. Still unexplained? Restart with `omnipus start --debug` — see [operator debugging](operations/debug.md).
 
 ## The gateway exits during startup
 
@@ -129,7 +129,7 @@ mkdir -p "$TMPDIR"
 
 ## Related pages
 
-- [debug.md](debug.md) — reading gateway logs and running with `--debug`.
+- [Operator debugging](operations/debug.md) — reading gateway logs and running with `--debug`.
 - [getting-started.md](getting-started.md) — install and first-run setup, including onboarding.
 - [configuration.md](configuration.md) — the `config.json` keys named here.
 - [credential_encryption.md](credential_encryption.md) — how the master key and the encrypted store work.

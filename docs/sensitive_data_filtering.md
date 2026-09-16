@@ -153,6 +153,5 @@ knowledge is unaffected.
 [Credential Encryption](credential_encryption.md) — encrypting API keys at rest
 in `credentials.json`.
 
-[Tools Configuration](tools_configuration.md).
-
+[Operator tool configuration](operations/tools_configuration.md).
 

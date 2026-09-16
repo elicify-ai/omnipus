@@ -1,4 +1,4 @@
-# Config Schema Versioning Guide
+# Operator guide to config schema versioning
 
 ## Overview
 
@@ -108,31 +108,31 @@ Create a test in `pkg/config/migration_test.go` (or a versioned `_test.go` file)
 
 ## Migration Best Practices
 
-#### Field-by-Field Copy in Migrate()
+### Field-by-Field Copy in Migrate()
 
 `configV0.Migrate()` copies fields explicitly. New fields on the destination must be added to the migration body, or they will be silently lost.
 
-#### Backward Compatibility
+### Backward Compatibility
 
 Old configs continue to load via the v0 path. Never delete the `configV0` struct or its `Migrate()` method without confirming no v0 configs exist in the wild.
 
-#### No Data Loss
+### No Data Loss
 
 Every field the old struct carries must be either preserved on the new struct, transformed, or explicitly retired. Silent drops cause operator confusion.
 
-#### Idempotent
+### Idempotent
 
 Running `Migrate()` on an already-migrated config is not a supported path — the input is expected to be a v0 config. But the loader for the current version (`loadConfig`) is idempotent and safe to call on hot-reload.
 
-#### Auto-Save
+### Auto-Save
 
 After a v0 → v1 migration succeeds, the loader writes the migrated config back to disk (deferred in `LoadConfig`). No manual save step is required.
 
-#### Test Thoroughly
+### Test Thoroughly
 
 Test with real user config files in addition to synthetic test data. Edge cases found in production configs are often the ones that matter most.
 
-#### Update Defaults
+### Update Defaults
 
 Keep `pkg/config/defaults.go` in sync with the latest schema whenever a migration adds or renames fields, so a fresh `DefaultConfig()` reflects the same shape as a migrated user config.
 

@@ -1,4 +1,4 @@
-# Debugging Omnipus
+# Operator debugging
 
 Omnipus performs multiple complex interactions under the hood for every single request it receives — from routing messages and evaluating complexity, to executing tools and adapting to model failures. Being able to see exactly what is happening is crucial, not just for troubleshooting potential issues, but also for truly understanding how the agent operates.
 
@@ -18,7 +18,7 @@ In this mode, the system formats logs extensively and displays previews of syste
 
 By default, Omnipus truncates very long strings (such as the *System Prompt* or large JSON output results) in the debug logs to keep the console readable.
 
-If you need to inspect the complete output of a command or the exact payload sent to the LLM model, use the `--no-truncate` flag.
+If you need to inspect the complete output of a command or the exact payload sent to the large language model, use the `--no-truncate` flag.
 
 **Note:** This flag *only* works when combined with `--debug` mode.
 
@@ -26,7 +26,7 @@ If you need to inspect the complete output of a command or the exact payload sen
 omnipus start --debug --no-truncate
 ```
 
-When this flag is active, the global truncation function is disabled. This is useful for verifying the exact syntax of the messages sent to the provider, reading the complete output of tools like `exec`, `web_fetch`, or `read_file`, and debugging the session history saved in memory.
+When this flag is active, the global truncation function is disabled. This is useful for verifying the exact syntax of the messages sent to the provider, reading the complete output of tools like `bash`, `web_fetch`, or `read_file`, and debugging the session history saved in memory.
 
 ## Tool Call Visibility in Debug Logs
 
@@ -36,7 +36,7 @@ When debug mode is active, the agent emits structured log entries at each stage 
 |---|---|---|---|
 | `LLM requested tool calls` | INFO | `tools`, `count`, `iteration` | List of tool names the model decided to call |
 | `Tool call: <name>(<args>)` | INFO | `tool`, `iteration` | The tool name and a preview of its arguments (truncated to 200 chars) |
-| `Sent tool result to user` | DEBUG | `tool`, `content_len` | Fired when a tool result is forwarded to the chat channel |
+| `Sent tool result to user` | DEBUG | `tool`, `content_len` | Fired when a tool result is forwarded to the chat |
 | `TTL tick after tool execution` | DEBUG | `agent_id`, `iteration` | MCP tool-discovery TTL decrement after each tool round |
 | `Async tool completed, publishing result` | INFO | `tool`, `content_len`, `channel` | Only for tools that run asynchronously in the background |
 
@@ -53,7 +53,7 @@ The arguments preview is hard-capped at **200 characters** in the logs regardles
 
 ## Real-Time Tool Feedback in Chat (tool_feedback)
 
-Debug logs are server-side only. If you want the agent to send a visible notification directly into the chat channel every time it executes a tool — useful when sharing the bot with other users or for transparency — enable the `tool_feedback` feature in `config.json`:
+Debug logs are server-side only. If you want the agent to send a visible notification directly into the chat every time it executes a tool — useful when sharing the agent with other users or for transparency — enable the `tool_feedback` feature in `config.json`:
 
 ```json
 {
