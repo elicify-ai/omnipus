@@ -1,184 +1,135 @@
 # Troubleshooting
 
-Common operator issues, grouped by symptom. If the gateway started, [debug.md](debug.md) covers how to read its logs. If the gateway never starts, this page is the right place.
+Fixes for common problems, grouped by symptom. For a running-but-odd gateway (the Omnipus server process), [debug.md](debug.md) covers reading its logs in depth.
 
-## The Gateway Exits 0 or 1 Immediately
+## What it is
 
-### "no providers configured. Please add entries to model_list in your config"
+A symptom-first fix list for startup failures, unreachable gateways, login and API errors, model-provider rejections, credential lockouts, and stale builds. It assumes Omnipus is installed — if not, start with [getting-started.md](getting-started.md).
 
-You're booting a fresh `~/.omnipus/` with no provider yet.
+## How to start diagnosing
 
-#### Drive the Web Onboarding Wizard (recommended)
+1. Open `$OMNIPUS_HOME/logs/gateway_panic.log` (default: `~/.omnipus/logs/`). A startup crash always writes there, even when nothing appears on screen.
+2. Open `$OMNIPUS_HOME/logs/gateway.log` — the running gateway's log stream, and the reason behind most failed requests.
+3. Run `omnipus doctor`, which checks your configuration for known unsafe settings.
+4. Still unexplained? Restart with `omnipus start --debug` — see [debug.md](debug.md).
 
-Start Omnipus and visit `http://localhost:5000`:
+## The gateway exits during startup
 
-```bash
-omnipus start
-```
+If it exits with no output at all, read `gateway_panic.log`, as above.
 
-On a fresh install the gateway boots into limited mode automatically (no flag needed). The wizard at `/onboarding` walks Welcome → Provider → API Key → Model → Account → Done, then the gateway is fully provisioned.
+### Exit code 78: the kernel sandbox failed to apply
 
-#### Use the Interactive CLI Wizard
+The sandbox (Omnipus's process-level confinement for agent work) refused to start on a kernel that claims to support it, and the gateway fails closed rather than listen half-protected. Look for `sandbox apply failed` in `gateway.log`, then start with `omnipus start --sandbox=permissive` (violations logged, not blocked) or, for development only, `--sandbox=off`. Valid values are `enforce`, `permissive`, and `off`; a typo exits with code 2. `OMNIPUS_ENV=production` with the sandbox weakened prints a repeating warning banner — deliberate, not a fault. Full detail: [operations/sandbox-config.md](operations/sandbox-config.md).
 
-Same end result, no browser:
+### It exits with "bind: address already in use"
 
-```bash
-omnipus onboard
-```
-
-This prompts for provider, API key (hidden input), model, and username/password. It writes the encrypted API key into `credentials.json`, the provider entry and your account into `config.json`, and marks onboarding complete in `system/state.json`.
-
-### Gateway Exits Silently — Nothing on stdout
-
-Check `$OMNIPUS_HOME/logs/gateway_panic.log` for the startup error. The runtime panic handler always writes there, even when the rest of the boot path can't log. Once you've fixed the underlying problem, you can delete the file — it's recreated on the next crash.
-
-`$OMNIPUS_HOME/logs/gateway.log` carries the running gateway's normal log stream, useful when the gateway *did* start but a request fails.
-
-### Exit Code 78 ("EX_CONFIG")
-
-The kernel sandbox failed to apply on a kernel that claims Landlock support. This is a **fail-closed** path — the HTTP listener never binds. Inspect `gateway.log` for `sandbox apply failed`, then either lower the kernel's expectations with `omnipus start --sandbox=permissive` (log violations without blocking) or `omnipus start --sandbox=off` for development. The valid values for `--sandbox` are `enforce|permissive|off` (parsed by `sandbox.ParseMode` at `cmd/omnipus/internal/gateway/command.go:62-71`; an invalid value exits 2 with a usage error). The exit-code contract is documented in the command's `Long` help text (`cmd/omnipus/internal/gateway/command.go:45-49`) and the sentinel error path is at `cmd/omnipus/internal/gateway/command.go:100-107`.
-
-Setting `OMNIPUS_ENV=production` causes a recurring stderr nag banner when the sandbox is off or permissive, by design.
-
-Full sandbox configuration: [operations/sandbox-config.md](operations/sandbox-config.md). Known limitations (macOS, Windows, older kernels): [operations/sandbox-limitations.md](operations/sandbox-limitations.md).
-
-## "Port Conflict" — Gateway Appears to Start but You Can't Reach It
-
-Default ports are **5000** (SPA + API) and **5001** (preview iframes). If another process is bound to either, the gateway either falls through to a different port or fails silently — Linux behaviour depends on the listening socket.
-
-Check what's bound:
+The gateway serves everything — web app, API, and agent-built previews — on a single listener, `gateway.port`, default **5000**. There is no second preview port. If another process holds the port, the gateway retries the bind twice, then exits with a clear boot error; it never falls back to a different port. Check what holds it:
 
 ```bash
-lsof -i :5000 -i :5001 | grep LISTEN
+lsof -i :5000 | grep LISTEN
 ```
 
-If you see another process, change the gateway's ports in `~/.omnipus/config.json`:
+Stop that process, or set another port in `~/.omnipus/config.json` and start again:
 
 ```json
 {
-  "gateway": {
-    "host": "127.0.0.1",
-    "port": 5500,
-    "preview_port": 5501
-  }
+  "gateway": { "host": "127.0.0.1", "port": 5500 }
 }
 ```
 
-Restart, then visit `http://localhost:5500`.
+The port is read at startup; a running gateway does not move its listener.
 
-## "401 Unauthorized" on Every Request
+## Every request returns 401 Unauthorized
 
-The auth decision tree in `pkg/gateway/auth.go::checkBearerAuth` is:
+The web app signs you in once, then rides a session cookie. Scripts must present a Bearer token belonging to a configured account or the gateway's CLI token, or match `OMNIPUS_BEARER_TOKEN`.
 
-1. No `Authorization: Bearer …` header on a protected route → **401**.
-2. `cfg.gateway.users` populated → token must match a registered user.
-3. `OMNIPUS_BEARER_TOKEN` env set → token must constant-time-equal the env value.
-4. No users **and** no env token → `gateway.dev_mode_bypass: true` lets the caller through; `false` returns 401 *"no users configured, complete onboarding first"*.
+| Message you see | Why it happens | What to do |
+|---|---|---|
+| `unauthorized: no users configured, complete onboarding first` | Fresh install: no account, no `OMNIPUS_BEARER_TOKEN` | Complete onboarding — next section |
+| `unauthorized: missing Bearer token` | A script sent no token, or your browser session expired | Sign in again, or send a Bearer token |
+| `unauthorized: invalid Bearer token` | The token matches no account and no CLI token | Re-issue the token, or fix `OMNIPUS_BEARER_TOKEN` |
 
-The most common failure is **(4)** with `dev_mode_bypass: false` on a fresh install before you've completed onboarding. The web onboarding wizard works with bypass off (those endpoints use `withOptionalAuth`, not `withAuth`), but if you're hitting `/api/v1/agents` or `/api/v1/sessions` directly, you need either a configured account (run onboarding) or a temporary `OMNIPUS_BEARER_TOKEN=<your-token>` env variable.
+For local development only, `"dev_mode_bypass": true` under `gateway` lets requests through with no token; the gateway warns at boot and answers 503 on admin routes while it is on. Never enable it on a machine others can reach.
 
-For local dev, set `dev_mode_bypass: true` in `config.json` — but **never in production**. The flag triggers a one-time stderr `WARN` at boot and a `503` on a hand-picked allow-list of high-blast-radius routes (e.g. `PUT /api/v1/security/sandbox-config`) as defence in depth.
+## Chat replies with a limited-mode message
 
-## LLM Call Returns 404 "No Endpoints Found That Support Tool Use"
+On a fresh install the gateway boots into **limited mode**: it serves the web app but has no model, and every chat message returns the reason, such as `no default model configured; gateway started in limited mode`. The same happens when the API key behind your default model stops resolving; each reply then names the credential at fault.
 
-You picked a model that doesn't support tool calling. Omnipus sends a tool list with every LLM request, so the model must support OpenAI-style function calling.
+Finish onboarding to fix it. Open `http://localhost:5000` — on a fresh install every screen leads to the wizard (your name, a password, then a provider and its API key). Without a browser, `omnipus onboard` prompts for provider, key, model, and account.
 
-Known offenders on OpenRouter: `google/gemma-2-9b-it`, most small open-source models without explicit tool-use training.
+## The provider rejects your model requests
 
-Known-good defaults are `z-ai/glm-5v-turbo` (the project's standard demo model), `anthropic/claude-3.5-haiku`, `google/gemini-2.5-flash`, and `openai/gpt-4o`.
+### 404 "No endpoints found that support tool use"
 
-Change the default in Settings → Providers, or edit `agents.defaults.default_model` in `config.json` to the exact `{"provider": ..., "model": ...}` pair of one of these entries in the `providers` array.
+The model cannot call tools, and Omnipus sends its tool list with every request, so the request is rejected outright. Small open models often lack tool support — `google/gemma-2-9b-it` is a known example. Pick a tool-capable model instead, such as `z-ai/glm-5.2` or `z-ai/glm-5.3-flash` on OpenRouter. Change the default in **Settings → Providers**, or edit `agents.defaults.default_model` in `config.json`.
 
-## Provider Model Name Issues
+### 400 "invalid model ID" or a rejected provider
 
-### "provider X is not a known protocol"
-
-The `provider` field in your `providers[]` entry doesn't match a registered protocol. Run `omnipus providers list` (if available) or check `pkg/providers/factory_provider.go` for the canonical list — OpenRouter is `openrouter`, Anthropic is `anthropic`, etc.
-
-### Provider Returns 400 "invalid model ID"
-
-The `model` field in your provider entry is what gets sent to the LLM API verbatim. OpenRouter, for example, expects the **full** model ID including the provider prefix.
-
-`"model": "claude-3.5-haiku"` is wrong — OpenRouter rejects it. `"model": "anthropic/claude-3.5-haiku"` is right — OpenRouter routes correctly.
-
-Sample working entry:
+The `model` value reaches the provider exactly as written; on OpenRouter, IDs carry a vendor prefix (`z-ai/glm-5.2`, not `glm-5.2`). The `provider` value must be an ID the catalog knows, such as `openrouter` or `anthropic`. A working entry:
 
 ```json
 {
   "providers": [
     {
-      "model_name": "fast",
+      "name": "fast",
       "provider": "openrouter",
-      "model": "z-ai/glm-5v-turbo",
+      "model": "z-ai/glm-5.2",
       "api_key_ref": "openrouter_api_key"
     }
   ],
   "agents": {
-    "defaults": { "model_name": "fast" }
+    "defaults": {
+      "default_model": { "provider": "openrouter", "model": "z-ai/glm-5.2" }
+    }
   }
 }
 ```
 
-`api_key_ref` points to the encrypted credential under that name in `credentials.json`. To set it without editing the file directly:
+`api_key_ref` names an entry in the encrypted credential store. Set it without touching files with `omnipus credentials set openrouter_api_key sk-or-v1-...`, or use **Settings → Security → Credential Vault** in the web app.
 
-```bash
-omnipus credentials set openrouter_api_key sk-or-v1-...
-```
+## Saving a secret fails with "credential store locked"
 
-Or use the SPA at **Settings → Security → Credential Vault**.
+The encrypted credential store needs a master key. The gateway looks for one in this order:
 
-## "credential store locked: set OMNIPUS_MASTER_KEY or unlock before saving secrets"
-
-The credential store can't be unlocked. The unlock modes are tried in priority order:
-
-| Priority | Mode | Description |
+| Priority | Source of the key | Notes |
 |---|---|---|
-| 1 | `OMNIPUS_MASTER_KEY` | 64-char hex 256-bit key in the env |
-| 2 | `OMNIPUS_KEY_FILE` | Path to a 0600 file with the hex key |
-| 3 | `$OMNIPUS_HOME/master.key` | Auto-loaded if it exists with mode 0600 |
-| 4 | Auto-generate | Fires only on a fresh install when no env key, no key file, and no existing `credentials.json` |
-| 5 | Interactive prompt | Needs a TTY |
+| 1 | `OMNIPUS_MASTER_KEY` | 64-character hex key in the environment |
+| 2 | `OMNIPUS_KEY_FILE` | Path to a 0600-permission file holding the hex key |
+| 3 | `$OMNIPUS_HOME/master.key` | Loaded automatically when present with 0600 permissions |
+| 4 | Auto-generate | Only on a fresh install with no key and no `credentials.json` |
+| 5 | Interactive prompt | Terminal only |
 
-If you saw the warning *"Omnipus generated a new master key on fresh install. Key file: …/master.key. BACK THIS FILE UP."* on first boot — heed it. Losing `master.key` loses every credential in `credentials.json`. There is no recovery.
+A fresh install warns you to back up `master.key`. Heed it: losing that file makes every stored credential permanently unreadable, with no recovery. Full model: [credential_encryption.md](credential_encryption.md).
 
-Full credential model: [credential_encryption.md](credential_encryption.md).
+## The web app looks outdated after a source build
 
-## SPA Shows Stale UI / "Old" Buttons After a Source Build
-
-When you build from source, the Go binary embeds the SPA from `pkg/gateway/spa/` via `go:embed`. **That directory is not the Vite output.** You must sync them before rebuilding:
+The Go binary embeds the web app from `pkg/gateway/spa/` — a copy of the frontend build output, not the output itself, so building without refreshing that copy serves an old interface. `make build` refreshes it and builds in one step. Confirm a change reached the binary by searching the bundled assets for a string only it contains:
 
 ```bash
-npm run build                       # builds to dist/spa/
-rm -rf pkg/gateway/spa/assets
-cp -r dist/spa/* pkg/gateway/spa/   # sync to embed dir
-make build                          # rebuilds the Go binary
+grep -c "<your new string>" pkg/gateway/spa/assets/index-*.js
 ```
 
-`make build` runs the `spa-embed` target first, so the canonical workflow is just `make build` — skip manual `go build` unless you know why.
+A count of 0 means the copy is stale.
 
-To verify the embedded SPA matches the source, grep the hashed bundle:
+## Two more errors with short fixes
+
+**"priority must be between 1 and 5"** — task priority runs from 1 (highest) to 5 (lowest); 3 is the default, and anything outside the range is rejected.
+
+**"failed to move downloaded file ... invalid cross-device link"** — the skills installer downloads to the system temp directory, then moves the file into the workspace; the move fails when the two sit on different filesystems, as in containers with mounted volumes. Point `TMPDIR` at a directory on the workspace's filesystem before starting the gateway:
 
 ```bash
-grep -c "<YOUR_NEW_STRING>" pkg/gateway/spa/assets/index-*.js   # must be >0
+export TMPDIR=/path/to/workspace/tmp
+mkdir -p "$TMPDIR"
 ```
 
-## Tasks Fail with "priority must be 1-5"
+## Limits and things to watch
 
-The OpenAPI schema says `priority: 0-100`, but the underlying `taskstore` validator caps at 1-5. Use a priority in that range. (Open contract drift, separate issue.)
+- Sandbox strength depends on the operating system: Linux confines the gateway and everything it starts, macOS confines only the processes Omnipus launches, and Windows uses application-level checks alone. Details: [operations/sandbox-limitations.md](operations/sandbox-limitations.md).
+- Behind a reverse proxy, set `gateway.public_url` to the address browsers actually reach; preview links and WebSocket origin checks derive from it. See [operations/reverse-proxy.md](operations/reverse-proxy.md).
 
-## Cross-Device Rename in Skills Installer (Test Environments)
+## Related pages
 
-**Symptom:** `failed to move downloaded file: rename /tmp/omnipus-dl-* /your/workspace/...: invalid cross-device link`.
-
-**Cause:** The skills installer downloads to `/tmp` then `os.Rename`s into the target workspace. When `/tmp` and the workspace are on different filesystems (common in CI containers with mounted volumes), the rename fails.
-
-**Fix:** Set `TMPDIR` to a path on the same filesystem as the workspace before starting the gateway. `make`/`go test` users should also set `GOTMPDIR` to match.
-
-```bash
-export TMPDIR=/your/workspace/tmp
-mkdir -p $TMPDIR
-```
-
-## Still Stuck?
-
-Read `gateway_panic.log` first, then `gateway.log`. Run with `--debug` and `--no-truncate` to see the full LLM request payloads — see [debug.md](debug.md). Search [open issues](https://github.com/elicify-ai/omnipus/issues) and file a new one with the log excerpt and your config minus secrets.
+- [debug.md](debug.md) — reading gateway logs and running with `--debug`.
+- [getting-started.md](getting-started.md) — install and first-run setup, including onboarding.
+- [configuration.md](configuration.md) — the `config.json` keys named here.
+- [credential_encryption.md](credential_encryption.md) — how the master key and the encrypted store work.
