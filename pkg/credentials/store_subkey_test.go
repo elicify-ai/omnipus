@@ -69,8 +69,9 @@ func TestDeriveSubkey_DeterministicAcrossCallsAndStores(t *testing.T) {
 
 	first, err := storeA.DeriveSubkey(testAuditChainInfo)
 	require.NoError(t, err)
+	var again []byte
 	for i := 0; i < 3; i++ {
-		again, err := storeA.DeriveSubkey(testAuditChainInfo)
+		again, err = storeA.DeriveSubkey(testAuditChainInfo)
 		require.NoError(t, err)
 		require.Equal(t, first, again, "repeated call %d must reproduce the subkey", i)
 	}

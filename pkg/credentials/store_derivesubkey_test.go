@@ -49,8 +49,9 @@ func TestDeriveSubkey_Deterministic(t *testing.T) {
 
 	first, err := st.DeriveSubkey(audit.AuditChainKeyInfo)
 	require.NoError(t, err)
+	var again []byte
 	for i := 0; i < 3; i++ {
-		again, err := st.DeriveSubkey(audit.AuditChainKeyInfo)
+		again, err = st.DeriveSubkey(audit.AuditChainKeyInfo)
 		require.NoError(t, err)
 		assert.True(t, bytes.Equal(first, again),
 			"repeat call %d must reproduce the same subkey", i)
