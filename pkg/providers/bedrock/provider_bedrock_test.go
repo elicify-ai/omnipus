@@ -561,6 +561,71 @@ func TestParseResponse_MultipleToolCalls(t *testing.T) {
 	assert.Equal(t, "tool_b", resp.ToolCalls[1].Function.Name)
 }
 
+func TestParseResponse_ToolCallNumbersReachToolAsNumbers(t *testing.T) {
+	// A tool_use block whose input carries numbers in every position — top
+	// level, nested in an object, and inside an array — next to a string, a
+	// bool and a null that must survive untouched. "big" exceeds int64 and
+	// float64's exact integer range, so any decode that routes through a
+	// float would visibly mangle it. Deserialized by the SDK's real response
+	// path (see converseViaTestServer).
+	output := converseViaTestServer(t, `{
+		"output": {
+			"message": {
+				"role": "assistant",
+				"content": [
+					{
+						"toolUse": {
+							"toolUseId": "call_num_1",
+							"name": "resize",
+							"input": {
+								"count": 3,
+								"ratio": 1.5,
+								"big": 12345678901234567890,
+								"list": [1, 2],
+								"nested": {"depth": 42},
+								"label": "unchanged",
+								"active": true,
+								"missing": null
+							}
+						}
+					}
+				]
+			}
+		},
+		"stopReason": "tool_use"
+	}`)
+
+	resp, err := parseResponse(output)
+
+	require.NoError(t, err)
+	require.Len(t, resp.ToolCalls, 1)
+	tc := resp.ToolCalls[0]
+
+	// Surface 1: the decoded Arguments map. reflect.DeepEqual compares
+	// types, so a smithy document.Number (a named string type) fails here
+	// even though its textual value matches.
+	assert.Equal(t, map[string]any{
+		"count":   json.Number("3"),
+		"ratio":   json.Number("1.5"),
+		"big":     json.Number("12345678901234567890"),
+		"list":    []any{json.Number("1"), json.Number("2")},
+		"nested":  map[string]any{"depth": json.Number("42")},
+		"label":   "unchanged",
+		"active":  true,
+		"missing": nil,
+	}, tc.Arguments)
+
+	// Surface 2: the serialized Function.Arguments string, compared exactly.
+	// encoding/json emits map keys in sorted order, so the full string is a
+	// deterministic oracle: "3" (stringified), 3.0 (float-coerced) and
+	// 1.2345678901234567e+19 (float-mangled big) are all distinct here.
+	require.NotNil(t, tc.Function)
+	assert.Equal(t,
+		`{"active":true,"big":12345678901234567890,"count":3,"label":"unchanged",`+
+			`"list":[1,2],"missing":null,"nested":{"depth":42},"ratio":1.5}`,
+		tc.Function.Arguments)
+}
+
 func TestParseResponse_ToolCallWithNilInput(t *testing.T) {
 	output := &bedrockruntime.ConverseOutput{
 		Output: &types.ConverseOutputMemberMessage{

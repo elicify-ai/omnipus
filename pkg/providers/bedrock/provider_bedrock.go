@@ -24,6 +24,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	smithydocument "github.com/aws/smithy-go/document"
 
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/providers/common"
@@ -569,6 +570,11 @@ func parseResponse(output *bedrockruntime.ConverseOutput) (*LLMResponse, error) 
 						}
 					}
 
+					// Numeric leaves decoded above are smithydocument.Number,
+					// a named string type; rewrite them before either surface
+					// below consumes them so numbers reach the tool as numbers.
+					args = normalizeDocumentNumbers(args).(map[string]any)
+
 					// Serialize arguments to JSON string for FunctionCall
 					argsJSON, err := json.Marshal(args)
 					if err != nil {
@@ -615,4 +621,39 @@ func parseResponse(output *bedrockruntime.ConverseOutput) (*LLMResponse, error) 
 		FinishReason: finishReason,
 		Usage:        usage,
 	}, nil
+}
+
+// normalizeDocumentNumbers rewrites every smithy document.Number in a decoded
+// tool-use input to a json.Number, in place.
+//
+// smithy-go's document decoder represents a JSON number decoded into an
+// open value as smithydocument.Number (decoder.go: "type Number string" —
+// a named string type; the bedrockruntime document package does not
+// re-export it). Left as-is it corrupts both argument surfaces parseResponse
+// produces: encoding/json marshals the named string type as a quoted JSON
+// string, and a consumer of the raw Arguments map receives a string where
+// the tool's schema promised a number. json.Number is the standard
+// encoder's counterpart that marshals unquoted, preserving the original
+// literal exactly (3 stays 3, never 3.0, and values beyond float64
+// precision survive verbatim).
+//
+// Mutating the value in place is safe: the map is allocated by parseResponse
+// for a single content block and nothing else holds it or its nested values.
+func normalizeDocumentNumbers(v any) any {
+	switch t := v.(type) {
+	case smithydocument.Number:
+		return json.Number(string(t))
+	case map[string]any:
+		for k, e := range t {
+			t[k] = normalizeDocumentNumbers(e)
+		}
+		return t
+	case []any:
+		for i, e := range t {
+			t[i] = normalizeDocumentNumbers(e)
+		}
+		return t
+	default:
+		return v
+	}
 }
