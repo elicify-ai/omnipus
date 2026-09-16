@@ -49,6 +49,8 @@ type Reader struct {
 	store propindex.Store
 }
 
+var _ knowledge.PropertyIndexReader = (*Reader)(nil)
+
 // NewReader wraps an already-open store. The caller keeps ownership: Close
 // here closes the store it was given, and a caller that wants to keep the
 // store should not call it.

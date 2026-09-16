@@ -4,14 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/commands"
 )
-
-// TestSlackChannel_ImplementsCommandRegistrarCapable verifies the interface is satisfied.
-func TestSlackChannel_ImplementsCommandRegistrarCapable(t *testing.T) {
-	var _ channels.CommandRegistrarCapable = (*SlackChannel)(nil)
-}
 
 // TestSlackRegisterCommands_ReturnsNil verifies graceful no-op with /cancel.
 func TestSlackRegisterCommands_ReturnsNil(t *testing.T) {

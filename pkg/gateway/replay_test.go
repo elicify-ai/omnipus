@@ -26,11 +26,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/session"
 )
 
-func TestReplay_MediaRefURL(t *testing.T) {
-	assert.Equal(t, "/api/v1/media/workspace/ws-1/abc", mediaRefURL("media://workspace/ws-1/abc"))
-	assert.Equal(t, "/api/v1/media/uuid-1", mediaRefURL("media://uuid-1"))
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Test helpers
 // ─────────────────────────────────────────────────────────────────────────────

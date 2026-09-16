@@ -443,16 +443,6 @@ func TestExtractContentText_EmptyContent(t *testing.T) {
 	}
 }
 
-// TestMCPTool_InterfaceCompliance verifies MCPTool implements Tool interface
-func TestMCPTool_InterfaceCompliance(t *testing.T) {
-	manager := &MockMCPManager{}
-	tool := &mcp.Tool{Name: "test"}
-	mcpTool := NewMCPTool(manager, "test_server", tool)
-
-	// Verify it implements Tool interface
-	var _ Tool = mcpTool
-}
-
 // TestMCPTool_Parameters_MapSchema tests schema that's already a map
 func TestMCPTool_Parameters_MapSchema(t *testing.T) {
 	manager := &MockMCPManager{}

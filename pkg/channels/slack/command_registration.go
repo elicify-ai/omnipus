@@ -4,9 +4,12 @@ import (
 	"context"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/commands"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
+
+var _ channels.CommandRegistrarCapable = (*SlackChannel)(nil)
 
 // slackCommandManifestNote is the guidance logged at startup so operators know
 // exactly what to add to their Slack App manifest or dashboard.
