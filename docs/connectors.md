@@ -1,96 +1,93 @@
 # Connectors
 
-Connectors link your agents to the chat apps you already use: you message Omnipus on Telegram, Discord, or WhatsApp, and the reply arrives in the same conversation. Naming: the screen says connector; the programming interface underneath still uses the older name channel.
+Connectors let you talk to your agents from chat apps such as Telegram, Discord, and WhatsApp. You choose which workspace and agent answer each connected account.
 
 ## What it is
 
-A connector is a live bridge between one chat platform and your agents. You send a message on the platform; Omnipus decides which agent answers; the reply comes back in the same place.
+A connector is a bridge between an outside chat app and Omnipus. A message arrives through the connector, Omnipus chooses an agent, and the reply returns to the same conversation.
 
-- The web chat inside the app is built in and always on — no setup, no routing choices.
-- Thirteen platforms can be connected; the table below lists them.
-- Email is not chat. A mailbox gives one agent its own inbox to work through ([Email mailboxes](#email-mailboxes)).
+The screen is called **Connectors**. Some technical settings and addresses still use the older term `channel`.
 
-Secrets you paste go into the encrypted credential store, never the plain config file. See [security](security.md).
+Email works differently. An email mailbox belongs to one agent in one workspace. It is not a chat connector.
 
 ## When you would use it
 
-- You want to reach your agents from your phone, or from the app your team already lives in.
-- You want one place served by one agent — a WhatsApp number that always answers as Ava.
-- You want an agent to work an email inbox on its own, turning mail into tasks.
+- You want to reach an agent from your phone or your team's usual chat app.
+- You want a particular account to be answered by one workspace agent.
+- You want separate personal and work accounts on the same chat platform.
+- You want an agent to read and send email through its own mailbox.
 
 ## How to connect a chat app
 
-1. Open **Connectors** in the sidebar. Not-yet-connected platforms appear as cards with a **Configure** link; connected ones sit in groups, one row per account.
-2. Click **Configure**. A side panel opens with the fields that platform needs — for Telegram a bot token, for Slack a bot token and an app token. The [connector's own page](#connectors-you-can-set-up) says where to get each value.
-3. Fill in the fields. When you re-open a connected account, leave a secret field blank to keep the stored value.
-4. Under **Routing**, pick a **Workspace** and then a **Default agent**, or leave the workspace unset.
-5. Click **Save & Enable**. The row shows **Enabled** and messages start flowing. For WhatsApp, a QR appears in the panel — scan it on your phone under **Linked Devices** → **Link a Device**.
-6. For a second account on the same platform, click **Add another…** on its group. You pick the workspace and agent; the app names the account, so a personal and a work WhatsApp can run side by side.
+1. Open **Connectors**. Platforms that are not connected yet show **Configure**.
+2. Select **Configure** for the platform you want. A panel opens with its required fields.
+3. Enter the platform credentials. Use the platform guide below to find the values you need.
+4. Choose a **Workspace** and an agent. The agent list contains members of that workspace.
+5. Select **Save & Enable**. The connected account appears with an **Enabled** status.
+6. To connect another account on the same platform, select **Add another…** beside its group.
 
-## Choosing who answers
+## Choosing which agent answers
 
-The **Routing** part of the panel has two controls: **Workspace** and **Default agent**.
+A workspace-bound connector sends every incoming message on that account to the agent you selected. The selected agent must remain a member of that workspace and must be able to answer chats.
 
-- **Bound to a workspace.** The agent list narrows to that workspace's team, and the agent you pick answers every message on that connector. This is the flow used when adding an account.
-- **No workspace.** Messages go to your default agent — the one with the star on the [Agents](agents.md) screen — unless a finer rule matches first. Finer rules, aimed at a specific person or group, live in the config file and win over the connector's own choice.
+An unbound connector can use a connector-level default agent. If that choice is empty, Omnipus uses the starred default agent from [Agents](agents.md).
 
-```mermaid
-flowchart TD
-  M[Message arrives] --> Q1{A rule names this sender?}
-  Q1 -->|matches| R[That rule's agent answers]
-  Q1 -->|none matches| Q2{The connector names an agent?}
-  Q2 -->|it does| D[That agent answers]
-  Q2 -->|it does not| G[Your default agent answers]
-```
+More specific rules can override the unbound connector's choice. Omnipus checks them from most specific to least specific.
 
-An unbound connector falls through three checks: a rule for the sender, its own agent, then your global default. A bound connector skips them — its agent answers everything.
+| Match | What it identifies | Priority |
+|---|---|---|
+| Peer | A particular person or a parent conversation | First |
+| Guild | A Discord guild | After peer |
+| Team | A Slack team | After guild |
+| Account | One account on a platform | After team |
+| Connector wildcard | Any account on one platform | After account |
+| Default agent | Messages with no matching rule | Last |
+
+The first matching rule decides which agent answers. Detailed rules are set in configuration rather than on the Connectors screen.
 
 ## Connectors you can set up
 
-Each connector has a page with the exact fields, where to get each credential, and the config-file equivalent for automated setups.
+Each guide explains the credentials and platform-specific setup.
 
-| Connector | Effort | What to know | Guide |
-|---|---|---|---|
-| Telegram | Easy | Bot token from BotFather; voice notes become text when transcription is set up | [Telegram](connectors/telegram.md) |
-| Discord | Easy | Bot over WebSocket; can be limited to @-mentions in groups | [Discord](connectors/discord.md) |
-| WhatsApp | Easy | Scan a QR code in the panel after enabling; in every standard build | [WhatsApp](connectors/whatsapp_native.md) |
-| Weixin | Easy | Scan a QR in the panel to link a personal WeChat account | [Weixin](connectors/weixin.md) |
-| Slack | Easy | Socket mode: an outgoing connection, no public address needed | [Slack](connectors/slack.md) |
-| Matrix | Medium | Works with any homeserver, including one you host | [Matrix](connectors/matrix.md) |
-| QQ | Medium | Official bot API; a quick-setup page creates the bot | [QQ](connectors/qq.md) |
-| DingTalk | Medium | Stream mode: an outgoing connection, no public address needed | [DingTalk](connectors/dingtalk.md) |
-| IRC | Medium | Any IRC server, with TLS | [IRC](connectors/irc.md) |
-| LINE | Advanced | Needs an HTTPS address reachable from the internet | [LINE](connectors/line.md) |
-| WeCom | Advanced | AI bot over WebSocket; bind by scanning a QR in the panel | [WeCom](connectors/wecom.md) |
-| Feishu | Advanced | Requires a published app with the bot capability | [Feishu](connectors/feishu.md) |
-| Google Chat | Advanced | Interactive bot via a service account, or a send-only webhook | [Google Chat](connectors/google-chat.md) |
+| Connector | What to know | Guide |
+|---|---|---|
+| Telegram | Uses a bot token | [Telegram](connectors/telegram.md) |
+| Discord | Connects a Discord bot | [Discord](connectors/discord.md) |
+| WhatsApp | Links by scanning a QR code | [WhatsApp](connectors/whatsapp_native.md) |
+| Weixin | Links a personal WeChat account | [Weixin](connectors/weixin.md) |
+| Slack | Uses Slack socket mode | [Slack](connectors/slack.md) |
+| Matrix | Connects to a Matrix homeserver | [Matrix](connectors/matrix.md) |
+| QQ | Uses the official bot interface | [QQ](connectors/qq.md) |
+| DingTalk | Uses stream mode | [DingTalk](connectors/dingtalk.md) |
+| IRC | Connects to an IRC server | [IRC](connectors/irc.md) |
+| LINE | Needs a public HTTPS address | [LINE](connectors/line.md) |
+| WeCom | Links an AI bot | [WeCom](connectors/wecom.md) |
+| Feishu | Uses a published app with bot access | [Feishu](connectors/feishu.md) |
+| Google Chat | Uses a service account or a send-only webhook | [Google Chat](connectors/google-chat.md) |
 
-## Email mailboxes
+## How to add an email mailbox
 
-A mailbox gives one agent, in one workspace, an inbox of its own: IMAP for reading, SMTP for sending. Every agent-and-workspace pair can hold one mailbox, so one agent can keep a different inbox in each workspace.
+1. Open **Connectors** and find **Email Mailbox**.
+2. Select **Add mailbox**. The **Email Mailbox Account** panel opens.
+3. Choose the **Workspace**, then choose the **Owning agent**.
+4. Enter the email address, password, Internet Message Access Protocol (IMAP) server, and Simple Mail Transfer Protocol (SMTP) server.
+5. Select **Save Mailbox**. The mailbox appears with an **Active** status when it is enabled and configured.
 
-The agent checks its inbox on its heartbeat, the periodic wake-up an agent runs. Mail it cannot fully handle becomes a task on that workspace's [Board](tasks.md), assigned to that agent, capped at 25 per check. You watch the Board, not an inbox.
-
-1. On the Connectors screen, find the **Email** section and click **Add mailbox**.
-2. Pick the **Workspace** and the **Owning agent**; only that workspace's team members are offered.
-3. Enter the email address and password (an app password where the provider uses them), the IMAP server (TLS, usually port 993), and the SMTP server (usually 587 or 465). Ports are optional.
-4. Save. The mailbox appears in the list as **Active**.
-5. Re-open it with **Configure**. **Remove Mailbox** deletes it, after asking you to confirm.
+Use **Configure** to change a mailbox. **Remove Mailbox** deletes it and its stored credentials after confirmation.
 
 ## Limits and things to watch
 
-- Stored secrets are never shown again, in either panel. A blank password field means "keep what is stored", not "erase it".
-- A connector row can show **Failed to start** with the reason underneath — for example a revoked token. Re-open Configure and paste a fresh value.
-- Saving checks required fields before anything is written, so you cannot enable a half-filled connector.
-- **Disable** pauses a row and keeps everything. The trash icon deletes that account for good: configuration, credentials, and stored state.
-- On a lite build (a smaller binary some operators compile), WhatsApp is unavailable and its panel says so.
-- LINE, and Google Chat in webhook mode, need the gateway reachable over HTTPS — a reverse proxy or tunnel.
-- There is no inbox view for email. Board tasks are the only place unhandled mail surfaces.
+- A saved secret is not shown again. Leave its field blank when editing if you want to keep the stored value.
+- A connector can show **Failed to start** when its credentials or connection fail. Open **Configure** to correct it.
+- **Disable** stops a connected account without deleting its configuration.
+- Deleting an account removes its configuration, credentials, and stored state.
+- A workspace-bound connector cannot fall back to another agent if its selected agent is later deleted or becomes ineligible. Update the connector's routing choice.
+- WhatsApp may be unavailable in a lite build.
+- LINE and Google Chat webhook mode need a public HTTPS address.
 
 ## Related pages
 
-- [Agents](agents.md) — the starred default agent, and agents that answer on connectors.
-- [Workspaces](workspaces.md) — the teams a bound connector's agent must belong to.
-- [Tasks](tasks.md) — the Board, where unhandled email lands.
-- [Security](security.md) — the credential vault storing every connector secret.
-- [Tools](tools.md) — the email tools an agent uses to read and send mail.
+- [Agents](agents.md) — choose the starred default agent and manage agents that can answer chats.
+- [Workspaces](workspaces.md) — manage the team available to a workspace-bound connector.
+- [Security](security.md) — understand how Omnipus protects connector credentials.
+- [Tools](tools.md) — learn about the email tools agents use.

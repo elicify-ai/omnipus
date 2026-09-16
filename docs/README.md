@@ -43,7 +43,7 @@ Talk from your platforms.
 | Page | What it covers |
 |---|---|
 | [Connectors](connectors.md) | Setup and default agent |
-| [Routing](routing.md) | Which agent answers |
+| [Connectors](connectors.md) | Connect chat apps and choose which agent answers |
 | Platform guides | [Telegram](connectors/telegram.md), [Discord](connectors/discord.md), [Slack](connectors/slack.md), [WhatsApp](connectors/whatsapp_native.md), [Matrix](connectors/matrix.md), [IRC](connectors/irc.md), [LINE](connectors/line.md), [Google Chat](connectors/google-chat.md), [DingTalk](connectors/dingtalk.md), [Feishu](connectors/feishu.md), [WeCom](connectors/wecom.md), [WeChat](connectors/weixin.md), [QQ](connectors/qq.md) |
 
 ## Running the box
