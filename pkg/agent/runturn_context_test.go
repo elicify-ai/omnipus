@@ -359,9 +359,27 @@ func TestRunTurn_InjectedSpanSubjectToD5(t *testing.T) {
 			}}}, nil
 		}
 	}
+	// The script's first step after the recall is a ToolSearch promotion, not
+	// decoration. Under the fixture's compressed manifest (ADR-071) a lazy
+	// tool is callable only after ToolSearch promotes it, and big_tool — a
+	// test stub unknown to pkg/tools/manifest.go — resolves ManifestLazy, so
+	// it is never in the sent defs on its own. When the offer gate
+	// (toolNotOfferedRefusal, tool_offer_gate.go — ADR-071 §1.1 / ADR-088 D3)
+	// met this fixture's Compressed=true (set for the token-accounting
+	// reasons documented above), the two bare big_tool calls were refused as
+	// "not offered", no 60,000-char result ever entered the slice, no
+	// pressure ever materialized, and the span was correctly never dropped —
+	// the failure this test hit after the merge combined those two branches.
+	// A compliant model promotes the tool first; the script does too.
+	promoteBigTool := func() (*providers.LLMResponse, error) {
+		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{
+			ID: "d5-promote", Type: "function", Name: "ToolSearch",
+			Arguments: map[string]any{"names": []string{"big_tool"}},
+		}}}, nil
+	}
 	provider := &recallInjectionProvider{
 		first:  map[string]any{"turn_range": "1-1"},
-		script: []func() (*providers.LLMResponse, error){bigCall("d5-1", "one"), bigCall("d5-2", "two")},
+		script: []func() (*providers.LLMResponse, error){promoteBigTool, bigCall("d5-1", "one"), bigCall("d5-2", "two")},
 	}
 	// W was 50,000 (B ≈ 44k) until the feat/library-improvements merge
 	// (integrate/library-improvements-v0.1.1) unconditionally registered the
@@ -404,13 +422,23 @@ func TestRunTurn_InjectedSpanSubjectToD5(t *testing.T) {
 		Policies: map[string]config.ToolPolicy{
 			"recall_conversation": config.ToolPolicyAllow,
 			"big_tool":            config.ToolPolicyAllow,
+			// ToolSearch must be in the agent's OWN map (mirroring the
+			// "seeded as real data for every agent" floor production ships,
+			// pkg/coreagent/seed.go / seed_system.go), not just the
+			// filter-time backstop: the exec-time TOCTOU re-check
+			// (resolveToolPolicyAtExec) re-resolves the policy from this map
+			// and fails closed to deny on any tool with no entry — a
+			// hand-built map that omits it shows ToolSearch in the defs but
+			// has its calls denied as a "mid-turn policy change", so the
+			// promotion step below never runs.
+			"ToolSearch": config.ToolPolicyAllow,
 		},
 	})
 	agent.Sessions.TruncateHistory(recallInjectionSessionKey, len(turns)*2-2)
 
 	_, err := al.processTaskDirect(context.Background(), agent.ID, "recall then work", recallInjectionSessionKey, "chat-50d")
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, provider.calls(), 4, "recall + two big steps + the final call")
+	require.Equal(t, 5, provider.calls(), "recall + ToolSearch promotion + two big steps + the final answer")
 
 	req2 := provider.request(2)
 	if !requestContains(req2, nonce) {
