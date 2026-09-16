@@ -125,7 +125,7 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 | `search_engine` | string | `search_std`                                      | Search engine type                       |
 | `max_results`   | int    | 5                                                 | Maximum number of results                |
 
-> **Note:** `api_key_ref` is the production schema: it stores the name of an environment variable (e.g. `BRAVE_API_KEY`) whose value, resolved at load time from the encrypted credential store, holds the actual key. The legacy plaintext `api_key` field is silently dropped by the loader, as is the older `api_keys[]` array form (multi-key rotation now lives on the `providers` config instead — see `docs/providers.md`).
+> **Note:** `api_key_ref` is the production schema: it stores the name of an environment variable (e.g. `BRAVE_API_KEY`) whose value, resolved at load time from the encrypted credential store, holds the actual key. The legacy plaintext `api_key` field is silently dropped by the loader, as is the older `api_keys[]` array form (multi-key rotation now lives on the `providers` config instead — see [providers and models](providers-and-models.md)).
 
 ### Additional Web Settings
 

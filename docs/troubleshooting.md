@@ -131,5 +131,5 @@ mkdir -p "$TMPDIR"
 
 - [debug.md](debug.md) — reading gateway logs and running with `--debug`.
 - [getting-started.md](getting-started.md) — install and first-run setup, including onboarding.
-- [configuration.md](configuration.md) — the `config.json` keys named here.
+- [settings.md](settings.md) — the user-facing settings named here.
 - [credential_encryption.md](credential_encryption.md) — how the master key and the encrypted store work.

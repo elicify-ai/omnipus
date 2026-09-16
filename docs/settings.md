@@ -6,7 +6,7 @@ Settings is where you connect the model providers your agents run on, set the li
 
 The Settings screen is a row of tabs: Providers, Models, Integrations, Security, Gateway, Data, Memory, Devices, Performance, Chat, and About. The Devices tab appears only when your install enables device pairing, so most people never see it.
 
-Most settings save themselves the moment you change them, and a small indicator next to each one confirms the save. Two exceptions behave differently: anything that touches a secret (an API key, a credential) asks you to re-type your password before it is accepted, and gateway listening changes ask for a restart.
+Many settings save after you change them, and a small indicator reports the result. Security-sensitive changes may ask you to re-enter your password. Changes to the gateway listener and process sandbox need a restart before the running gateway uses them.
 
 Personal things are not tabs here. Profile is its own screen, holding your name, timezone, password, and the context your agents read about you. Usage is its own screen, showing token totals by agent, model, and session.
 
@@ -23,16 +23,16 @@ Two jobs that look like settings live on their own pages: what agents may do is 
 ## How to connect a model provider
 
 1. Open Settings from the sidebar's user menu. The Providers tab opens first.
-2. Click **Connect a provider**. A panel lists every provider Omnipus knows about, grouped by company, with a search field.
+2. Click **Connect a provider**. A panel shows popular providers, a searchable full list, and a custom endpoint option.
 3. Pick a provider. Some companies offer more than one way in, shown as variants: a pay-as-you-go API, a coding plan, or sign-in with an account you already have. Where sign-in exists it is the pre-selected choice.
 4. If the variant wants an API key, paste the key and click **Connect**. The row appears with its status.
 5. If the variant uses sign-in, one of two flows follows, and the dialog tells you which:
    - You get a link and a code. Open the link, enter the code, approve. The dialog updates on its own; a code is valid for 15 minutes.
    - You get a command to run in a terminal on this machine, such as `copilot login`, and then click **Check sign-in**. The vendor's own tool keeps the credential; Omnipus never sees or stores it.
-6. Set the **default model** on the card at the top of the tab. That is the model new chats use unless an agent has its own.
+6. Set the default model on the card at the top of the tab. New chats use it unless an agent has its own model.
 7. The row actions: **Test** re-checks the connection, **Check with my account** lists the models your account can genuinely use, and **Remove provider** deletes it. Removing the provider behind your default model asks you to pick a replacement default as part of the removal.
 
-API keys are stored encrypted on this server, never in the main configuration file. See [security](security.md) for how the encrypted store works.
+API keys are stored in the encrypted credential store, not in the main configuration file. See [security](security.md) for the protections around credentials. See [providers and models](providers-and-models.md) for supported providers, sign-in methods, and model details.
 
 ## Where each setting lives
 
@@ -44,7 +44,7 @@ Each tab and neighbor screen has one job.
 | Settings, Models | Context budget: how much of each tool result stays in the conversation, and which context length each model is assumed to have |
 | Settings, Integrations | Web-search and voice-input providers, with their keys |
 | Settings, Security | Sandbox mode, credential vault, audit log, and the per-agent rate limits |
-| Settings, Gateway | The address and port the gateway listens on; restarting it; god mode in its danger zone |
+| Settings, Gateway | The address and port the gateway listens on, restart controls, and the option to turn off process isolation |
 | Settings, Data | Session retention, storage numbers, backups, clearing sessions |
 | Settings, Memory | What the team remembers: recap and retrospective settings |
 | Settings, Devices | Pairing additional devices; hidden unless enabled on your install |
@@ -67,7 +67,7 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 - **Clear all sessions** on the Data tab deletes every transcript at once. There is no undo; make a backup first if the history matters.
 - Restoring a backup overwrites current data and needs a gateway restart to take effect.
 - A sign-in can expire. The provider row shows the state, and signing in again the same way restores it.
-- Model changes on the Models tab apply on the next turn, with no restart; gateway port changes do need a restart.
+- Model changes apply on the next turn. Gateway listener and process-sandbox changes need a restart.
 - Your Profile display settings stay in this browser. The workspace context, by contrast, lives on the server, so every browser and agent sees the same text.
 
 ## Related pages
@@ -77,3 +77,4 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 - [agents](agents.md) — giving one agent its own model instead of the default, and choosing the default agent.
 - [memory](memory.md) — what the team remembers between chats, behind the Memory tab.
 - [connectors](connectors.md) — connector accounts and their credentials, managed on the Connectors screen.
+- [providers and models](providers-and-models.md) — supported providers, sign-in choices, and model reference.

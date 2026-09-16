@@ -59,6 +59,6 @@ For whoever operates the server.
 | [Reverse proxy](operations/reverse-proxy.md) | One listener behind TLS |
 | [Platform support](operations/platform-support.md) | Built and shipped platforms |
 | [Debugging](debug.md), [observability](observability.md) | Logs, sessions, events |
-| Configuration reference | [All keys](configuration.md), [versioning](config-versioning.md), [tools](tools_configuration.md), [tool catalog](tools-reference.md), [providers](providers.md) |
+| Configuration reference | [Settings](settings.md), [versioning](config-versioning.md), [tools](tools_configuration.md), [tool catalog](tools-reference.md), [providers and models](providers-and-models.md) |
 | Security reference | [Credential encryption](credential_encryption.md), [security config](security_configuration.md), [sensitive-data filtering](sensitive_data_filtering.md) |
 | Advanced | [Hooks](hooks/README.md), [WebSocket protocol](protocol/websocket-protocol.md), [config migration](migration/model-list-migration.md) |
