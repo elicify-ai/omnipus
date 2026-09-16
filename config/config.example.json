@@ -419,10 +419,6 @@
       "enabled": true
     }
   },
-  "devices": {
-    "enabled": false,
-    "monitor_usb": true
-  },
   "voice": {
     "model_name": "",
     "echo_transcription": false

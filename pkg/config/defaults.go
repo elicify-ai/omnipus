@@ -169,10 +169,6 @@ func DefaultConfig() *Config {
 			RunTimeoutSeconds: DefaultSchedulesRunTimeoutSeconds,
 			RetryBackoffMs:    append([]int64(nil), DefaultSchedulesRetryBackoffMs...),
 		},
-		Devices: DevicesConfig{
-			Enabled:    false,
-			MonitorUSB: true,
-		},
 		Voice: VoiceConfig{
 			ModelName:         "",
 			EchoTranscription: false,

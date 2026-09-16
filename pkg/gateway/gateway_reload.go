@@ -31,14 +31,12 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/cron"
-	"github.com/elicify-ai/omnipus/pkg/devices"
 	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/heartbeat"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/notifications"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/state"
 	"github.com/elicify-ai/omnipus/pkg/voice"
 )
 
@@ -69,7 +67,6 @@ type servicesSnapshot struct {
 	TaskTrigger    *agent.TaskTriggerScheduler
 	LoopScheduler  *agent.LoopScheduler
 	MediaStore     media.MediaStore
-	DeviceService  *devices.Service
 }
 
 func snapshotServices(svc *services) servicesSnapshot {
@@ -80,7 +77,6 @@ func snapshotServices(svc *services) servicesSnapshot {
 		TaskTrigger:    svc.TaskTrigger,
 		LoopScheduler:  svc.LoopScheduler,
 		MediaStore:     svc.MediaStore,
-		DeviceService:  svc.DeviceService,
 	}
 }
 
@@ -91,7 +87,6 @@ func restoreServices(svc *services, snap servicesSnapshot) {
 	svc.TaskTrigger = snap.TaskTrigger
 	svc.LoopScheduler = snap.LoopScheduler
 	svc.MediaStore = snap.MediaStore
-	svc.DeviceService = snap.DeviceService
 }
 
 // beginReload claims the single-flight reload slot.
@@ -331,7 +326,7 @@ func executeReload(
 	// Snapshot all service fields that restartServices mutates so they can be
 	// restored atomically if the reload fails. bundle and ChannelManager are
 	// mutated here in executeReload itself; the rest are mutated in
-	// restartServices (CronService, TaskTrigger, MediaStore, DeviceService).
+	// restartServices (CronService, TaskTrigger, MediaStore).
 	// TaskDrain and MailboxDrain are also recreated by restartServices but are
 	// NOT part of this atomic rollback snapshot.
 	snap := snapshotServices(runningServices)
@@ -604,7 +599,7 @@ func restartServices(
 		return r0
 	}
 
-	if r0, stop := rs.restartDevicesAndVoice(); stop {
+	if r0, stop := rs.restartVoice(); stop {
 		return r0
 	}
 
@@ -821,33 +816,8 @@ func (rs *restartServicesState) reloadChannels() (error, bool) {
 	return nil, false
 }
 
-// restartDevicesAndVoice restarts device handling and refreshes the configured transcriber.
-func (rs *restartServicesState) restartDevicesAndVoice() (error, bool) {
-	// Stop the previous DeviceService before replacing it to avoid goroutine
-	// leaks: the old service's goroutine would keep running with a dangling
-	// pointer if we only overwrite the field.
-	if oldDS := rs.runningServices.DeviceService; oldDS != nil {
-		oldDS.Stop()
-	}
-	stateManager := state.NewManager(rs.cfg.AgentHomeBasePath())
-	rs.runningServices.DeviceService = devices.NewService(devices.Config{
-		Enabled:    rs.cfg.Devices.Enabled,
-		MonitorUSB: rs.cfg.Devices.MonitorUSB,
-	}, stateManager)
-	rs.runningServices.DeviceService.SetBus(rs.msgBus)
-	if err := rs.runningServices.DeviceService.Start(context.Background()); err != nil {
-		if rs.cfg.Devices.Enabled {
-			return fmt.Errorf("device service: %w", err), true
-		}
-		logger.WarnCF(
-			"device",
-			"device service start failed (devices disabled, continuing)",
-			map[string]any{"error": err.Error()},
-		)
-	} else if rs.cfg.Devices.Enabled {
-		fmt.Println("  ✓ Device event service restarted")
-	}
-
+// restartVoice refreshes the configured transcriber.
+func (rs *restartServicesState) restartVoice() (error, bool) {
 	transcriber := voice.DetectTranscriber(rs.cfg, rs.runningServices.bundle)
 	rs.al.SetTranscriber(transcriber)
 	if transcriber != nil {

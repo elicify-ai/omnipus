@@ -184,7 +184,7 @@ func TestValidateConfigKeyLands_Table(t *testing.T) {
 		"gateway":                             "a bare section — writing a whole object is legal",
 		"agents.defaults.default_model.model": "three levels down, inside a nested struct",
 		"tools.read_file.max_read_file_size":  "three levels down",
-		"devices.enabled":                     "a bool",
+		"gateway.hot_reload":                  "a bool",
 		"tools.web.enabled":                   "PROMOTED from the untagged embedded ToolConfig",
 		"tools.web.brave.enabled":             "a named nested struct beside the embedded one",
 		"channels.telegram.enabled":           "a field of an EXISTING map entry",

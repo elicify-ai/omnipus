@@ -209,27 +209,27 @@ func TestConfigSet_RequiresRestartFlag(t *testing.T) {
 // field on config.Config at all — "heartbeat." is listed in
 // knownConfigPrefixes but names no section — so that write was dropped by
 // json.Unmarshal and set_config reported success anyway. The test passed
-// because it only ever looked at requires_restart. devices.enabled is a real
-// bool field (config.DevicesConfig.Enabled) that is likewise not restart-gated,
-// so it tests requires_restart against a write that actually happens.
+// because it only ever looked at requires_restart. gateway.hot_reload is a
+// real bool field that is likewise not restart-gated, so it tests
+// requires_restart against a write that actually happens.
 // See TestConfigSet_PhantomSectionRejected for the heartbeat case itself.
 func TestConfigSet_NoRestartForNonRestartKey(t *testing.T) {
 	deps, cfg := newTestDeps()
-	cfg.Devices.Enabled = false
+	cfg.Gateway.HotReload = false
 
 	result := systools.NewConfigSetTool(deps).Execute(context.Background(), map[string]any{
-		"key":   "devices.enabled",
+		"key":   "gateway.hot_reload",
 		"value": true,
 	})
 	if result.IsError {
-		t.Fatalf("set devices.enabled failed: %s", result.ForLLM)
+		t.Fatalf("set gateway.hot_reload failed: %s", result.ForLLM)
 	}
 	m := parseSuccess(t, result.ForLLM)
 	if m["requires_restart"] == true {
-		t.Errorf("requires_restart = true for devices.enabled, expected false")
+		t.Errorf("requires_restart = true for gateway.hot_reload, expected false")
 	}
-	if !cfg.Devices.Enabled {
-		t.Errorf("cfg.Devices.Enabled = false — the write this test reports on did not happen")
+	if !cfg.Gateway.HotReload {
+		t.Errorf("cfg.Gateway.HotReload = false — the write this test reports on did not happen")
 	}
 }
 
