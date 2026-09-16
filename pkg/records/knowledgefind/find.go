@@ -1036,24 +1036,69 @@ const (
 		"an aggregate-only query streams the same candidates through the same bound and is refused the same way"
 )
 
+// findRecordsState carries the shared state of findRecords across its stages.
+type findRecordsState struct {
+	ctx            context.Context
+	d              Deps
+	q              *query
+	echo           string
+	sel            propindex.Selector
+	wordPaths      map[string]TextHit
+	wordHits       []TextHit
+	wordsTruncated bool
+	relaxedProblem *generated.RecordProblem
+	nearSet        map[string]bool
+	nearAnchorPath string
+	err            error
+	ev             *evaluation
+}
+
 // findRecords is the note/record path: narrow, bound, stream, decide in Go.
 func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.VaultFindResponse, error) {
-	sel := q.selector(d.PathPrefix)
+	fd := &findRecordsState{ctx: ctx, d: d, q: q, echo: echo}
+
+	if r0, r1, stop := fd.searchWords(); stop {
+		return r0, r1
+	}
+
+	if r0, r1, stop := fd.narrowNear(); stop {
+		return r0, r1
+	}
+
+	if r0, r1, stop := fd.requireStore(); stop {
+		return r0, r1
+	}
+
+	if r0, r1, stop := fd.boundCandidates(); stop {
+		return r0, r1
+	}
+
+	if r0, r1, stop := fd.prepareEvaluation(); stop {
+		return r0, r1
+	}
+
+	fd.recordDiagnostics()
+
+	return fd.streamCandidates()
+}
+
+// searchWords runs the plain-word search and returns early when the result is conclusive.
+func (fd *findRecordsState) searchWords() (generated.VaultFindResponse, error, bool) {
+	fd.sel = fd.q.selector(fd.d.PathPrefix)
 
 	// The plain-word half runs FIRST when it is asked for, because it produces a
 	// PATH SET the typed half then intersects. The answer is the intersection,
 	// never the union: a caller who asked for both and received either is being
 	// told something false about their vault.
-	var wordPaths map[string]TextHit
+
 	// wordHits keeps the hits IN RANK ORDER as well as by path. The map is what
 	// the typed half intersects against; the slice is what the text-only path
 	// below returns when there is no typed half to intersect with.
-	var wordHits []TextHit
-	var wordsTruncated bool
+
 	// relaxedProblem is non-nil when the text index answered from its
 	// OR-ranked fallback tier (TextHit.Relaxed) — see relaxedWordsProblem.
-	var relaxedProblem *generated.RecordProblem
-	if q.words != "" {
+
+	if fd.q.words != "" {
 		// FIX F6 (code review A): ask for ONE MORE than the fanout. A real
 		// text index has no way to say "there were more" other than by
 		// actually handing back more than was asked for — Search's own
@@ -1075,13 +1120,13 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		// reports truncated=true whenever it cannot prove the kind's own
 		// population is fully accounted for, exactly the way the plain
 		// fanout+1 check below already does for the unkinded case.
-		fanout := textFanout(q.limit)
-		hits, truncated, err := fetchWordHits(ctx, d.Text, q, fanout)
+		fanout := textFanout(fd.q.limit)
+		hits, truncated, err := fetchWordHits(fd.ctx, fd.d.Text, fd.q, fanout)
 		if err != nil {
 			ref := refuse(problem(generated.RecordProblemCodeIndexUnavailable,
-				fmt.Sprintf("the text index could not answer %q: %v", q.words, err),
+				fmt.Sprintf("the text index could not answer %q: %v", fd.q.words, err),
 				"re-run, or run knowledge_describe check_integrity to see the index state"), err)
-			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+			return refusalResponse(generated.VaultFindRequest{}, fd.echo, ref), ref, true
 		}
 		if truncated {
 			// The corpus held more than the fanout — or, for a kind-narrowed
@@ -1092,14 +1137,14 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 			// complete no matter what the typed filter and the evaluation
 			// below find. Reported below (see ev.recordProblems), never
 			// assumed away.
-			wordsTruncated = true
+			fd.wordsTruncated = true
 		}
-		wordHits = hits
-		wordPaths = make(map[string]TextHit, len(hits))
+		fd.wordHits = hits
+		fd.wordPaths = make(map[string]TextHit, len(hits))
 		for _, h := range hits {
-			wordPaths[h.Path] = h
+			fd.wordPaths[h.Path] = h
 		}
-		relaxedProblem = relaxedWordsProblem(ctx, d, q, hits)
+		fd.relaxedProblem = relaxedWordsProblem(fd.ctx, fd.d, fd.q, hits)
 		// A genuine zero-hit answer — the vocabulary check, NearestTerms,
 		// "did you mean" — is refused to a TRUNCATED query: those exist to
 		// tell the caller their spelling found nothing in a corpus this layer
@@ -1110,7 +1155,7 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		// path below (0 candidates ever match wordPaths, exactly as an
 		// ordinary zero-survivor query does), which is where the truncation
 		// problem is actually recorded.
-		if len(wordPaths) == 0 && !wordsTruncated {
+		if len(fd.wordPaths) == 0 && !fd.wordsTruncated {
 			// F1: a zero-hit word search must not report completeness for a
 			// query that ALSO depends on the properties index (a typed
 			// filter, record type, near, join, group_by, sort, select, or a
@@ -1130,9 +1175,9 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 			// refuse exactly like a kind=attachment word-hit already does,
 			// not answer a confident zero because textOnlyServable was
 			// never consulted for it.
-			if d.Store == nil && !q.textOnlyServable() {
-				ref := propertiesIndexUnavailableRefusal(d)
-				return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+			if fd.d.Store == nil && !fd.q.textOnlyServable() {
+				ref := propertiesIndexUnavailableRefusal(fd.d)
+				return refusalResponse(generated.VaultFindRequest{}, fd.echo, ref), ref, true
 			}
 			// R1 (docs/internal/design/knowledge-tools-remediation.md):
 			// complete:true over zero hits is a claim that the corpus was
@@ -1143,13 +1188,17 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 			// fix for F-9: the query that reproduced it (`words="Vorlex"`
 			// over an unindexed vault with 11 matching notes on disk)
 			// reached this exact branch and returned Complete:true.
-			if r := checkTextIndexPopulated(ctx, d.Text); r != nil {
-				return refusalResponse(generated.VaultFindRequest{}, echo, r), r
+			if r := checkTextIndexPopulated(fd.ctx, fd.d.Text); r != nil {
+				return refusalResponse(generated.VaultFindRequest{}, fd.echo, r), r, true
 			}
-			return zeroHitResponse(ctx, d, q, echo), nil
+			return zeroHitResponse(fd.ctx, fd.d, fd.q, fd.echo), nil, true
 		}
 	}
+	return *new(generated.VaultFindResponse), nil, false
+}
 
+// narrowNear intersects the query with records reachable from the near anchor.
+func (fd *findRecordsState) narrowNear() (generated.VaultFindResponse, error, bool) {
 	// `near`/`hops` runs AFTER words for the same reason B1/B2 run after both:
 	// it is the most expensive narrowing input (a graph walk, not an index
 	// lookup), so a query already known to be zero-hit from the cheaper words
@@ -1158,24 +1207,27 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// composes the two with one extra membership test rather than a second
 	// mechanism (FR-076: near MUST NOT bypass, weaken or replace any filter
 	// supplied alongside it, in either direction — AC-F2).
-	var nearSet map[string]bool
-	var nearAnchorPath string
-	if q.near != "" {
-		reached, anchorPath, r := nearReachable(ctx, d, q)
+
+	if fd.q.near != "" {
+		reached, anchorPath, r := nearReachable(fd.ctx, fd.d, fd.q)
 		if r != nil {
-			return refusalResponse(generated.VaultFindRequest{}, echo, r), r
+			return refusalResponse(generated.VaultFindRequest{}, fd.echo, r), r, true
 		}
 		// Zero ONLY when neither the graph nor the anchor placed anything: an
 		// anchor that resolved to an ordinary note (empty graph, non-empty
 		// anchorPath) is NOT a zero-hit query — it still has hop 0 to return.
 		if len(reached) == 0 && anchorPath == "" {
-			return zeroHitResponse(ctx, d, q, echo), nil
+			return zeroHitResponse(fd.ctx, fd.d, fd.q, fd.echo), nil, true
 		}
-		nearSet = reached
-		nearAnchorPath = anchorPath
+		fd.nearSet = reached
+		fd.nearAnchorPath = anchorPath
 	}
+	return *new(generated.VaultFindResponse), nil, false
+}
 
-	if d.Store == nil {
+// requireStore serves text-only queries or refuses when the properties store is unavailable.
+func (fd *findRecordsState) requireStore() (generated.VaultFindResponse, error, bool) {
+	if fd.d.Store == nil {
 		// PLAIN WORDS STILL WORK WITH NO PROPERTIES INDEX, because that is what
 		// the platform posture promises in as many words: propindex_stub.go's
 		// header says "What keeps working on such a build: knowledge_read, and
@@ -1184,13 +1236,17 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 		// platform gate never named a capability either, because a words-only
 		// query has none, so the caller received a generic "the properties
 		// index is not open" for a question bleve alone could answer.
-		if q.textOnlyServable() {
-			return textOnlyResponse(d, q, echo, wordHits, wordsTruncated, relaxedProblem), nil
+		if fd.q.textOnlyServable() {
+			return textOnlyResponse(fd.d, fd.q, fd.echo, fd.wordHits, fd.wordsTruncated, fd.relaxedProblem), nil, true
 		}
-		ref := propertiesIndexUnavailableRefusal(d)
-		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+		ref := propertiesIndexUnavailableRefusal(fd.d)
+		return refusalResponse(generated.VaultFindRequest{}, fd.echo, ref), ref, true
 	}
+	return *new(generated.VaultFindResponse), nil, false
+}
 
+// boundCandidates counts the narrowed population and refuses work beyond the candidate bound.
+func (fd *findRecordsState) boundCandidates() (generated.VaultFindResponse, error, bool) {
 	// ── B1: bound WORK, before anything is retrieved ────────────────────────
 	//
 	// It counts the narrowed candidate POPULATION and it is taken BEFORE the
@@ -1198,25 +1254,30 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// remedy is SCOPE or KIND and deliberately NOT "add a filter" — a filter
 	// does not change the number that fired, and naming a remedy that does not
 	// reduce the number is worse than naming none.
-	total, err := d.Store.CountCandidates(ctx, sel)
-	if err != nil {
+	var total int
+	total, fd.err = fd.d.Store.CountCandidates(fd.ctx, fd.sel)
+	if fd.err != nil {
 		ref := refuse(problem(generated.RecordProblemCodeIndexUnavailable,
-			fmt.Sprintf("the properties index could not count candidates: %v", err),
-			"run knowledge_describe check_integrity"), err)
-		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+			fmt.Sprintf("the properties index could not count candidates: %v", fd.err),
+			"run knowledge_describe check_integrity"), fd.err)
+		return refusalResponse(generated.VaultFindRequest{}, fd.echo, ref), ref, true
 	}
 	if total > propindex.BoundNarrowedCandidates {
 		subject := "records"
-		if q.recordType != "" {
-			subject = "candidate records of type " + q.recordType
+		if fd.q.recordType != "" {
+			subject = "candidate records of type " + fd.q.recordType
 		}
 		ref := refuse(problem(generated.RecordProblemCodeEvaluationBoundExceeded,
 			fmt.Sprintf("this query would evaluate %s %s; the limit is %s",
 				group3(total), subject, group3(propindex.BoundNarrowedCandidates)),
 			narrowedCandidateRemedy), nil)
-		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+		return refusalResponse(generated.VaultFindRequest{}, fd.echo, ref), ref, true
 	}
+	return *new(generated.VaultFindResponse), nil, false
+}
 
+// prepareEvaluation loads child metadata and constructs the candidate evaluator.
+func (fd *findRecordsState) prepareEvaluation() (generated.VaultFindResponse, error, bool) {
 	// THE CHILD-TABLE PREPASSES, before the candidate stream and after B1.
 	//
 	// After B1 because a query that would be refused for evaluating 80,000
@@ -1224,14 +1285,14 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// because FR-131 forbids joining a second child table into the candidate
 	// statement, so the only place to assemble `file.tags`/`file.links` is
 	// beside the stream rather than inside it.
-	files, r := newFileMetaSource(ctx, d, q)
+	files, r := newFileMetaSource(fd.ctx, fd.d, fd.q)
 	if r != nil {
-		return refusalResponse(generated.VaultFindRequest{}, echo, r), r
+		return refusalResponse(generated.VaultFindRequest{}, fd.echo, r), r, true
 	}
 
-	cmp := records.Comparator{ResolveRelation: d.Resolve}
-	ev := &evaluation{q: q, cmp: cmp, words: wordPaths, near: nearSet, nearAnchorPath: nearAnchorPath, files: files,
-		plainNotesOnly: d.PlainNotesOnly}
+	cmp := records.Comparator{ResolveRelation: fd.d.Resolve}
+	fd.ev = &evaluation{q: fd.q, cmp: cmp, words: fd.wordPaths, near: fd.nearSet, nearAnchorPath: fd.nearAnchorPath, files: files,
+		plainNotesOnly: fd.d.PlainNotesOnly}
 
 	// THE STORE'S COVERAGE CAVEAT, BEFORE ANY ROW IS EVALUATED (Codex review
 	// 2026-09-14, finding 6). A store whose recovery could not read every
@@ -1243,8 +1304,8 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// like the text index's freshness caveat below. It fires on EVERY
 	// evaluation, not only word-carrying ones, because a typed query is at
 	// least as able to miss a record in an unreadable file as a word search.
-	if cav := strings.TrimSpace(d.StoreCoverageCaveat); cav != "" {
-		ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeIndexUnavailable,
+	if cav := strings.TrimSpace(fd.d.StoreCoverageCaveat); cav != "" {
+		fd.ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeIndexUnavailable,
 			cav,
 			"make the named files readable (check permissions or cloud-sync placeholders), then re-run; "+
 				"run knowledge_describe check_integrity to see the index state")})
@@ -1254,10 +1315,14 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// last clause) so `now()`/`today()` give the same answer for every
 	// candidate. A per-candidate clock read would put records on opposite sides
 	// of `due < today()` in one response that has no error to show for it.
-	if ev.q.namespace().formulas.Len() > 0 {
-		ev.formulas = records.NewFormulaEvaluator(ev.q.namespace().formulas, cmp, queryNow(d))
+	if fd.ev.q.namespace().formulas.Len() > 0 {
+		fd.ev.formulas = records.NewFormulaEvaluator(fd.ev.q.namespace().formulas, cmp, queryNow(fd.d))
 	}
+	return *new(generated.VaultFindResponse), nil, false
+}
 
+// recordDiagnostics records query-level truncation and index-coverage diagnostics.
+func (fd *findRecordsState) recordDiagnostics() {
 	// FIX F6: the fanout truncation detected above is a property of the
 	// QUERY, not of any one record — Records is deliberately empty, matching
 	// scope_truncated and page_size_clamped's own shape (RecordProblem.yaml).
@@ -1267,14 +1332,14 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// single-problem response built directly from `ref`, bypassing e.problems
 	// entirely — but a refusal already carries Complete:false and its own
 	// named cause, so it is not the silent-success shape F6 is about.)
-	if relaxedProblem != nil {
-		ev.recordProblems([]generated.RecordProblem{*relaxedProblem})
+	if fd.relaxedProblem != nil {
+		fd.ev.recordProblems([]generated.RecordProblem{*fd.relaxedProblem})
 	}
-	if wordsTruncated {
-		ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeTextSearchTruncated,
+	if fd.wordsTruncated {
+		fd.ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeTextSearchTruncated,
 			fmt.Sprintf("the text index holds more than %s matches for %q; "+
 				"only the top-ranked %s were considered before the typed filter ran",
-				group3(textFanout(q.limit)), q.words, group3(textFanout(q.limit))),
+				group3(textFanout(fd.q.limit)), fd.q.words, group3(textFanout(fd.q.limit))),
 			"add or tighten a typed `filter` — unlike `words`, it is evaluated over "+
 				"the full narrowed candidate population, not this fanout")})
 	}
@@ -1298,8 +1363,8 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 	// same code the zero-hit refusal uses for the identical "the index cannot
 	// be trusted to be whole" fact — because there is no narrower code and a
 	// new one is a wire-contract change owned elsewhere.
-	if q.words != "" {
-		if fr, ok := d.Text.(TextFreshnessReporter); ok {
+	if fd.q.words != "" {
+		if fr, ok := fd.d.Text.(TextFreshnessReporter); ok {
 			// GENUINE incompleteness is NewFiles > 0: files on disk that are not
 			// in the index AT ALL, so a matching one cannot appear in this
 			// result — the exact "term in 68 notes, returned for 1" symptom.
@@ -1323,14 +1388,14 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 			// TextFreshnessReporter is unavailable or errors) already treats a
 			// freshness failure as worth reporting rather than silent; this
 			// mirrors that for the non-zero-hit path instead of dropping it.
-			switch fresh, ferr := fr.IndexFreshness(ctx); {
+			switch fresh, ferr := fr.IndexFreshness(fd.ctx); {
 			case ferr != nil:
-				ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeIndexUnavailable,
+				fd.ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeIndexUnavailable,
 					fmt.Sprintf("the text index's freshness could not be verified: %v — this `words` result "+
 						"may under-report if the index is behind", ferr),
 					"re-run, or run knowledge_describe check_integrity to see the index state")})
 			case fresh.ScannedFiles > 0 && fresh.NewFiles > 0:
-				ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeIndexUnavailable,
+				fd.ev.recordProblems([]generated.RecordProblem{problem(generated.RecordProblemCodeIndexUnavailable,
 					fmt.Sprintf("the text index has not finished indexing this knowledge base — it currently reflects "+
 						"%s of the %s files on disk (%s not yet indexed), so this `words` result may "+
 						"under-report: matching files that are not yet indexed cannot appear here",
@@ -1339,28 +1404,31 @@ func findRecords(ctx context.Context, d Deps, q *query, echo string) (generated.
 			}
 		}
 	}
+}
 
+// streamCandidates streams candidates through the evaluator and assembles the response.
+func (fd *findRecordsState) streamCandidates() (generated.VaultFindResponse, error) {
 	// ── B2: bound MEMORY, during evaluation ─────────────────────────────────
 	//
 	// It counts SURVIVORS and aborts the stream. It is not a precondition and
 	// cannot be: "the rows surviving the filter" is a quantity only the Go
 	// comparator can produce, and it produces it by evaluating candidates.
-	err = d.Store.Candidates(ctx, sel, ev.visit)
-	if err != nil {
-		if propindex.IsBoundExceeded(err) {
+	fd.err = fd.d.Store.Candidates(fd.ctx, fd.sel, fd.ev.visit)
+	if fd.err != nil {
+		if propindex.IsBoundExceeded(fd.err) {
 			ref := refuse(problem(generated.RecordProblemCodeCandidateCapExceeded,
 				fmt.Sprintf("this query matched more than %s records; the limit is %s",
 					group3(propindex.BoundSurvivors), group3(propindex.BoundSurvivors)),
-				candidateCapRemedy), err)
-			return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+				candidateCapRemedy), fd.err)
+			return refusalResponse(generated.VaultFindRequest{}, fd.echo, ref), ref
 		}
 		ref := refuse(problem(generated.RecordProblemCodeIndexUnavailable,
-			fmt.Sprintf("the properties index could not stream candidates: %v", err),
-			"run knowledge_describe check_integrity"), err)
-		return refusalResponse(generated.VaultFindRequest{}, echo, ref), ref
+			fmt.Sprintf("the properties index could not stream candidates: %v", fd.err),
+			"run knowledge_describe check_integrity"), fd.err)
+		return refusalResponse(generated.VaultFindRequest{}, fd.echo, ref), ref
 	}
 
-	return ev.assemble(ctx, d, echo), nil
+	return fd.ev.assemble(fd.ctx, fd.d, fd.echo), nil
 }
 
 // propertiesIndexUnavailableRefusal is the one refusal for "this query needs
