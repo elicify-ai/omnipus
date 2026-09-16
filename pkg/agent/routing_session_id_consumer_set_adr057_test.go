@@ -87,7 +87,7 @@
 //     SubTurnEndPayload.SessionID sites (FR-017) — every one of these
 //     populates a wire-bound payload's SessionID/ProducingSessionID from
 //     routingSessionID, the literal act FR-012/FR-017 require. Cross-checked
-//     against the W5 audit artefact (pkg/gateway/websocket.go, FR-089) below:
+//     against the W5 audit artefact (pkg/gateway/websocket_forward.go, FR-089) below:
 //     that artefact's own text lists exactly the frame types these four
 //     sites feed (tool_call_start, tool_call_result, done, subagent_start,
 //     subagent_end) among its class-(a)/class-(b) rows — read LIVE from the
@@ -246,6 +246,34 @@ var u19RoutingSessionIDScanFiles = []string{
 	"events.go",
 	"session_messaging_wire.go",
 	"browser_deferral.go",
+	// The 2026-09-16 stage-conductor splits (5fb77ec5c for loop.go,
+	// 2911aeb85 for external_dispatch.go) moved loop.go's WS-payload
+	// stamps into per-stage sibling files — 11 reads left loop.go (which
+	// kept 7), every one landing in one of the four loop_run_turn*.go
+	// files below, read-preserving. The ten-file list above went blind to
+	// those 11 reads the moment the split landed, which is what made the
+	// test fail with total=21 against want 32.
+	//
+	// external_dispatch.go is a DIFFERENT, older omission: its two
+	// ErrorPayload stamps predate the K=32 derivation (they arrived with
+	// the ADR-081 branch's e515e5ed9, 2026-08-17) and the file was simply
+	// never on the list — the K=32 derivation under-counted the closed
+	// set by exactly those 2 reads (the true set was already 34 then; the
+	// test passed because it never scanned the file). See wantTotal
+	// below.
+	"external_dispatch.go",
+	"loop_run_turn.go",
+	"loop_run_turn_iterations.go",
+	"loop_run_turn_response.go",
+	"loop_run_turn_tools.go",
+	// The remaining four mention routingSessionID in prose only (verified
+	// 2026-09-16: zero AST reads). Scanning them and finding nothing is
+	// itself the closure proof this list exists to make — a read that ever
+	// DOES appear there classifies into no bucket and fails closed.
+	"loop_policy.go",
+	"goal_triggers.go",
+	"loop_browser.go",
+	"active_turn_info.go",
 }
 
 // u19RoutingSessionIDBucket classifies one read into its FR-014 (or, for the
@@ -300,15 +328,24 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 		// FR-016's two direct citations both live in the same pre-arm
 		// key-building function.
 		return u19BucketPreArm
-	case "loop.go":
-		// loop.go's two sites are u9ToolExecSessionIDs (feeds
+	case "loop.go", "external_dispatch.go", "loop_run_turn.go",
+		"loop_run_turn_iterations.go", "loop_run_turn_response.go",
+		"loop_run_turn_tools.go":
+		// loop.go's two original sites are u9ToolExecSessionIDs (feeds
 		// tool_call_start/tool_call_result) and TurnEndPayload's SessionID
 		// stamp (inside runTurn's deferred EventKindTurnEnd emission — an
 		// anonymous func literal, whose ast.FuncDecl-based funcName here is
-		// "runTurn", the enclosing named declaration). Every routingSessionID
-		// read this test finds in loop.go is a WS-payload-stamping site by
-		// construction — there is no pre-arm/role-B site in this file — so
-		// no funcName disambiguation is needed.
+		// "runTurn", the enclosing named declaration). The 2026-09-16
+		// stage-conductor split moved 11 of loop.go's 18 stamps into the
+		// loop_run_turn*.go siblings (runTurn's conductor chain:
+		// prepare/finalize/iteration/response/tools stages), and
+		// external_dispatch.go carries its own two ErrorPayload stamps for
+		// external-CLI sub-turn exits. Every routingSessionID read in this
+		// whole file family was verified per-site at the 2026-09-16
+		// re-derivation to populate a wire-bound payload's SessionID
+		// (ErrorPayload / RateLimitPayload / TurnEndPayload / ToolExec*) —
+		// there is no pre-arm/role-B site in any of them — so no funcName
+		// disambiguation is needed.
 		return u19BucketWSStamping
 	case "browser_deferral.go":
 		// ADR-085 BROWSER-FR-022 (B123): browserRootChatSessionID is
@@ -322,9 +359,17 @@ func u19ClassifyRoutingSessionIDRead(t *testing.T, r u19RoutingSessionIDRead) u1
 		}
 	case "subturn.go":
 		switch r.funcName {
-		case "spawnSubTurn":
-			// spawnSubTurn hosts all four of subturn.go's sites (pre-arm, the
-			// FR-011 inheritance copy, and both WS-payload stamps).
+		case "spawnSubTurn", "configureChildTurn", "publishChildSpawn":
+			// subturn.go's four sites (pre-arm, the FR-011 inheritance copy,
+			// and both WS-payload stamps) live across spawnSubTurn and the two
+			// spawnSubTurnState methods the function was split into —
+			// configureChildTurn (the FR-011 inheritance copy moved there
+			// whole, marker intact) and publishChildSpawn (SubTurnSpawnPayload's
+			// stamp). The split relocated reads without adding or removing
+			// any: subturn.go's contribution to every bucket below is
+			// unchanged, and each read still classifies by its own intent
+			// marker. The funcName list stays EXHAUSTIVE and explicit — a read
+			// in any other subturn.go function still fails closed below.
 			//
 			// Disambiguated by an INTENT MARKER on the source line, not by
 			// line number. The line-number form broke twice on a single branch
@@ -388,16 +433,19 @@ func u19MarkerFor(t *testing.T, r u19RoutingSessionIDRead) string {
 	return marker
 }
 
-// u19CountClassAInWS5Artefact reads pkg/gateway/websocket.go's own FR-089 W5
-// audit classification comment (anchored at "ADR-057 FR-089 — W5 audit
-// classification artefact") and counts its "class (a)" occurrences — a LIVE
-// read of the committed artefact, never a hardcoded number, per "#29 MUST
+// u19CountClassAInWS5Artefact reads pkg/gateway/websocket_forward.go's own
+// FR-089 W5 audit classification comment (anchored at "ADR-057 FR-089 — W5
+// audit classification artefact") and counts its "class (a)" occurrences — a
+// LIVE read of the committed artefact, never a hardcoded number, per "#29 MUST
 // read that artefact rather than hardcoding a number." Used only as a
 // cross-check that the WS-stamping bucket's size is grounded in a real,
 // committed classification and not an arbitrary constant this test invented.
+// (The artefact originally lived in websocket.go; the gateway's forwarder
+// split moved it to websocket_forward.go, host of every frame-construction
+// case it classifies.)
 func u19CountClassAInWS5Artefact(t *testing.T) int {
 	t.Helper()
-	path := filepath.Join("..", "gateway", "websocket.go")
+	path := filepath.Join("..", "gateway", "websocket_forward.go")
 	src, err := os.ReadFile(path)
 	require.NoErrorf(t, err, "read %s (W5 audit artefact host file)", path)
 	text := string(src)
@@ -424,8 +472,9 @@ func u19CountClassAInWS5Artefact(t *testing.T) int {
 // (binding Rule 4 — proving the search is live) BEFORE asserting closure,
 // then asserts every read classifies into one of the four named buckets
 // with the exact expected per-bucket count, and finally asserts the grand
-// total is exactly K=17 (9 role-B + 3 pre-arm + 4 WS-stamping + 1
-// inheritance-copy) — none outside the set, none silently missing.
+// total is exactly 34 (7 role-B + 3 pre-arm + 22 WS-stamping + 1
+// inheritance-copy + 1 browser control-gate) — none outside the set, none
+// silently missing.
 func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	fset := token.NewFileSet()
 	agentDir := "."
@@ -488,20 +537,25 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	// force-cancel is the exit a timed-out child took through typedTurnExit
 	// before the force-cancel existed, so sharing the emitter adds no
 	// consumer, and the emitter never hands the value back to a caller.
-	if got := counts[u19BucketWSStamping]; got != 20 {
-		t.Errorf("WS-payload-stamping reads = %d, want 20 (loop.go x18, subturn.go x2: SubTurnSpawnPayload + "+
-			"SubTurnEndPayload). loop.go grew from 2 to 13 in the 2026-08 UAT remediation, then to 14 when "+
-			"ADR-066 D7 (T066-11) added typedTurnExit's ErrorPayload stamp for the typed turn exits, then to 15 "+
-			"when ADR-066 D3 (T066-09) added runTurn's context_window_unknown pre-turn refusal (the same "+
-			"ErrorPayload shape as the workspace refusal right above it), then to 16 when ADR-067 FR-016 "+
-			"(T067-09) added runTurn's needs_provider pre-turn refusal — the FIRST of the three pre-turn "+
-			"gates — then to 17 when ADR-068 FR-015 (T068-12) added runTurn's model_unassigned "+
+	if got := counts[u19BucketWSStamping]; got != 22 {
+		t.Errorf("WS-payload-stamping reads = %d, want 22 (loop.go x7 after the 2026-09-16 stage-conductor "+
+			"split, its four loop_run_turn*.go siblings x11, external_dispatch.go x2, subturn.go x2: "+
+			"SubTurnSpawnPayload + SubTurnEndPayload). loop.go's count grew from 2 to 13 in the 2026-08 UAT "+
+			"remediation, then to 14 when ADR-066 D7 (T066-11) added typedTurnExit's ErrorPayload stamp for "+
+			"the typed turn exits, then to 15 when ADR-066 D3 (T066-09) added runTurn's context_window_unknown "+
+			"pre-turn refusal (the same ErrorPayload shape as the workspace refusal right above it), then to 16 "+
+			"when ADR-067 FR-016 (T067-09) added runTurn's needs_provider pre-turn refusal — the FIRST of the "+
+			"three pre-turn gates — then to 17 when ADR-068 FR-015 (T068-12) added runTurn's model_unassigned "+
 			"pre-turn refusal, the SECOND of those three, completing the ladder "+
 			"(needs_provider → model_unassigned → context_window_unknown), then to 18 when commit b6ca6055 "+
 			"(2026-09-13, the orphan tool-call markup fix) added runTurn's orphan_tool_markup terminal "+
 			"ErrorPayload stamp — the 'repair budget spent' error emitted after maxOrphanToolMarkupRepairs "+
-			"re-prompts when a model's tool call keeps arriving as unparseable text. Each emits that same "+
-			"ErrorPayload shape: every live "+
+			"re-prompts when a model's tool call keeps arriving as unparseable text. The 2026-09-16 "+
+			"stage-conductor splits (5fb77ec5c loop.go, 2911aeb85 external_dispatch.go) then REDISTRIBUTED "+
+			"those 18 read-preservingly — 7 stayed in loop.go, 11 moved into the loop_run_turn*.go conductor "+
+			"stages — and the 2026-09-16 re-derivation added external_dispatch.go's 2 ErrorPayload stamps, "+
+			"which had existed since the ADR-081 branch's e515e5ed9 (2026-08-17) but were never on the scan "+
+			"list, taking the bucket from 20 to 22. Each emits that same ErrorPayload shape: every live "+
 			"ErrorPayload and RateLimitPayload emit site now stamps SessionID with routingSessionID, "+
 			"because ServeHTTP mints a fresh webchat: uuid per connection — an error carrying only the "+
 			"ChatID was dropped by matchesEvent for a second tab or a reload, which is how a provider 429 "+
@@ -518,22 +572,30 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 			"browserRootChatSessionID — ADR-085 BROWSER-FR-022, added by wave B123)", got)
 	}
 
-	// 7 role-B + 3 pre-arm + 20 WS-stamping + 1 inheritance + 1 browser
-	// control-gate = 32. Was 31 before commit b6ca6055 (2026-09-13, the
-	// orphan tool-call markup fix) added runTurn's orphan_tool_markup
-	// terminal ErrorPayload stamp, widening the WS-stamping bucket to 18
-	// loop.go reads (see above). Was 30 before wave B123 (ADR-085
-	// BROWSER-FR-022) added the fifth bucket. Before that: 9 role-B (32
-	// total) before ADR-082 D1 deleted the two role-B predicates
-	// (hasLiveCriticalDelegate, getActiveRootTurnStateForSession) that
-	// existed solely for the now-retired orphan-foreground-turn watchdog.
-	// Before that: 17 before the 2026-08 UAT remediation widened the
-	// WS-stamping bucket (see above), 28 before ADR-066 D7's typedTurnExit
-	// stamp, 29 before ADR-066 D3's context_window_unknown refusal stamp
-	// (T066-09), 30 before ADR-067 FR-016's needs_provider refusal stamp
-	// (T067-09), and 31 before ADR-068 FR-015's model_unassigned refusal
-	// stamp (T068-12).
-	const wantTotal = 32
+	// 7 role-B + 3 pre-arm + 22 WS-stamping + 1 inheritance + 1 browser
+	// control-gate = 34. Was 32 before the 2026-09-16 re-derivation, which
+	// (a) re-attached the 11 reads the 2026-09-16 stage-conductor splits
+	// (5fb77ec5c loop.go, 2911aeb85 external_dispatch.go) had moved out of
+	// loop.go into the loop_run_turn*.go files this test's file list did
+	// not yet name — a pure rediscovery, not a code change — and (b) added
+	// external_dispatch.go to the list at all, exposing its 2 ErrorPayload
+	// stamps that had existed since e515e5ed9 (2026-08-17, the ADR-081
+	// branch) without ever being counted: the K=32 derivation under-counted
+	// by exactly those 2 (the true closed set was already 34). Was 31
+	// before commit b6ca6055 (2026-09-13, the orphan tool-call markup fix)
+	// added runTurn's orphan_tool_markup terminal ErrorPayload stamp,
+	// widening the WS-stamping bucket to 18 loop.go reads (see above). Was
+	// 30 before wave B123 (ADR-085 BROWSER-FR-022) added the fifth bucket.
+	// Before that: 9 role-B (32 total) before ADR-082 D1 deleted the two
+	// role-B predicates (hasLiveCriticalDelegate,
+	// getActiveRootTurnStateForSession) that existed solely for the
+	// now-retired orphan-foreground-turn watchdog. Before that: 17 before
+	// the 2026-08 UAT remediation widened the WS-stamping bucket (see
+	// above), 28 before ADR-066 D7's typedTurnExit stamp, 29 before
+	// ADR-066 D3's context_window_unknown refusal stamp (T066-09), 30
+	// before ADR-067 FR-016's needs_provider refusal stamp (T067-09), and
+	// 31 before ADR-068 FR-015's model_unassigned refusal stamp (T068-12).
+	const wantTotal = 34
 	if len(all) != wantTotal {
 		t.Fatalf("total routingSessionID reads = %d, want exactly %d (the closed consumer set) — "+
 			"either a new read was added outside the four named buckets, or one of the buckets "+
@@ -553,7 +615,7 @@ func TestRoutingSessionID_ConsumerSetIsClosed(t *testing.T) {
 	// non-empty committed text rather than silently no-op'ing.
 	classACount := u19CountClassAInWS5Artefact(t)
 	require.GreaterOrEqualf(t, classACount, 1,
-		"the W5 audit artefact (pkg/gateway/websocket.go) reports %d class-(a) frame types — "+
+		"the W5 audit artefact (pkg/gateway/websocket_forward.go) reports %d class-(a) frame types — "+
 			"expected >= 1; a broken read of the artefact (renamed anchor, moved file) would also "+
 			"report 0 here, so this is itself a Rule-4 positive-lower-bound check on the cross-check",
 		classACount)
