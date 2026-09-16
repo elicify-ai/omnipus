@@ -593,9 +593,8 @@ func spawnSubTurn(
 		}()
 	}
 
-	if r0, r1, stop := ex.ss.rejectCancellingAncestor(); stop {
-		result, err = r0, r1
-		return
+	if r0, stop, r1 := ex.ss.rejectCancellingAncestor(); stop {
+		return r0, r1
 	}
 
 	// 0. Acquire concurrency semaphore FIRST to ensure it's released even if early validation fails.
@@ -652,22 +651,19 @@ func spawnSubTurn(
 		}
 	}
 
-	if r0, r1, stop := ex.ss.validateAndCreateContext(); stop {
-		result, err = r0, r1
-		return
+	if r0, stop, r1 := ex.ss.validateAndCreateContext(); stop {
+		return r0, r1
 	}
 	defer ex.ss.st.cancel()
 
-	if r0, r1, stop := ex.ss.resolveDelegateIdentity(); stop {
-		result, err = r0, r1
-		return
+	if r0, stop, r1 := ex.ss.resolveDelegateIdentity(); stop {
+		return r0, r1
 	}
 
 	ex.ss.st.buildDelegateAgent()
 
-	if r0, r1, stop := ex.ss.createChildSession(); stop {
-		result, err = r0, r1
-		return
+	if r0, stop, r1 := ex.ss.createChildSession(); stop {
+		return r0, r1
 	}
 
 	ex.ss.st.configureChildTurn()
@@ -1190,7 +1186,7 @@ func (ex *spawnSubTurnExecutionState) executeNativeChildTurn() {
 }
 
 // rejectCancellingAncestor rejects spawning beneath a cancelling turn and loads the runtime configuration.
-func (ss *spawnSubTurnSetupState) rejectCancellingAncestor() (*tools.ToolResult, error, bool) {
+func (ss *spawnSubTurnSetupState) rejectCancellingAncestor() (*tools.ToolResult, bool, error) {
 	// -0.5. Cancellation gate (chain-reaction supersession of ADR-057
 	// FR-024 — the GATE half, see turnState.cancelling's doc comment, turn.go,
 	// and ErrSessionCancelling's doc comment, above, for the full rationale).
@@ -1218,17 +1214,17 @@ func (ss *spawnSubTurnSetupState) rejectCancellingAncestor() (*tools.ToolResult,
 				"parent_turn_id":     ss.st.parentTS.turnID,
 				"cancelling_turn_id": p.turnID,
 			})
-			return nil, ErrSessionCancelling, true
+			return nil, true, ErrSessionCancelling
 		}
 	}
 
 	// Get effective SubTurn configuration
 	ss.st.rtCfg = ss.st.al.getSubTurnConfig()
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // validateAndCreateContext validates the request and creates the independent child context.
-func (ss *spawnSubTurnSetupState) validateAndCreateContext() (*tools.ToolResult, error, bool) {
+func (ss *spawnSubTurnSetupState) validateAndCreateContext() (*tools.ToolResult, bool, error) {
 	// 1. Depth limit check. cfg.ResolvedMaxDepth, when set, is the effective
 	// cap the delegation-graph gate (enforceEdgeModeAndDepth) already
 	// authorized THIS specific call against — it takes precedence over
@@ -1244,12 +1240,12 @@ func (ss *spawnSubTurnSetupState) validateAndCreateContext() (*tools.ToolResult,
 			"depth":     ss.st.parentTS.depth,
 			"max_depth": effectiveMaxDepth,
 		})
-		return nil, ErrDepthLimitExceeded, true
+		return nil, true, ErrDepthLimitExceeded
 	}
 
 	// 2. Config validation
 	if ss.st.cfg.Model == "" {
-		return nil, ErrInvalidSubTurnConfig, true
+		return nil, true, ErrInvalidSubTurnConfig
 	}
 
 	// 2b. ADR-053 D1/R§8.5: weave the curated context snapshot's
@@ -1299,11 +1295,11 @@ func (ss *spawnSubTurnSetupState) validateAndCreateContext() (*tools.ToolResult,
 	// its cancel funcs).
 	ss.forceCancelAt = time.Now().Add(ss.timeout)
 	ss.st.childCtx, ss.st.cancel = context.WithTimeout(context.Background(), ss.timeout+subTurnForceCancelBackstop)
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // resolveDelegateIdentity resolves the child identity and dispatch kind.
-func (ss *spawnSubTurnSetupState) resolveDelegateIdentity() (*tools.ToolResult, error, bool) {
+func (ss *spawnSubTurnSetupState) resolveDelegateIdentity() (*tools.ToolResult, bool, error) {
 	// ADR-053 S2/D1: when the caller (pkg/tools/delegate.go's executeRun)
 	// already minted a durable session_id BEFORE dispatch (so it could
 	// persist the initial `queued` LifecycleRecord and hand the id back to
@@ -1351,7 +1347,7 @@ func (ss *spawnSubTurnSetupState) resolveDelegateIdentity() (*tools.ToolResult, 
 		baseAgent = ss.st.al.registry.GetDefaultAgent()
 	}
 	if baseAgent == nil {
-		return nil, errors.New("parent turnState has no agent instance"), true
+		return nil, true, errors.New("parent turnState has no agent instance")
 	}
 
 	// ADR-032 / no-inheritance identity fix: resolve the actual DELEGATE named
@@ -1388,7 +1384,7 @@ func (ss *spawnSubTurnSetupState) resolveDelegateIdentity() (*tools.ToolResult, 
 				"parent_id",
 				ss.st.parentTS.turnID,
 			)
-			return nil, fmt.Errorf("%w: %q", ErrDelegationTargetUnresolved, ss.st.cfg.TargetAgentID), true
+			return nil, true, fmt.Errorf("%w: %q", ErrDelegationTargetUnresolved, ss.st.cfg.TargetAgentID)
 		}
 	}
 	ss.st.execSource = baseAgent
@@ -1411,9 +1407,9 @@ func (ss *spawnSubTurnSetupState) resolveDelegateIdentity() (*tools.ToolResult, 
 		canonical, outcome := resolveRequestedSkillForChild(ss.st.execSource.ContextBuilder, requested)
 		switch outcome {
 		case requestedSkillDenied:
-			return nil, fmt.Errorf("%w: agent %q, skill %q", tools.ErrRequestedSkillDenied, ss.st.execSource.ID, requested), true
+			return nil, true, fmt.Errorf("%w: agent %q, skill %q", tools.ErrRequestedSkillDenied, ss.st.execSource.ID, requested)
 		case requestedSkillUnresolvable:
-			return nil, fmt.Errorf("%w: skill %q", tools.ErrRequestedSkillNotFound, requested), true
+			return nil, true, fmt.Errorf("%w: skill %q", tools.ErrRequestedSkillNotFound, requested)
 		case requestedSkillGranted:
 			ss.st.canonicalRequestedSkill = canonical
 		}
@@ -1427,11 +1423,11 @@ func (ss *spawnSubTurnSetupState) resolveDelegateIdentity() (*tools.ToolResult, 
 	// resolving it early does not change when the sub-turn actually fails —
 	// only when the DECISION is computed.
 	ss.dispatchKind, ss.dispatchErr = runner.ResolveDispatch(executorConfigOf(ss.st.execSource))
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // createChildSession creates or resumes the child's durable session and records its task.
-func (ss *spawnSubTurnSetupState) createChildSession() (*tools.ToolResult, error, bool) {
+func (ss *spawnSubTurnSetupState) createChildSession() (*tools.ToolResult, bool, error) {
 	// ADR-057 US-2/D1 (W1 agent half, FR-005/FR-006/FR-008/FR-009/FR-010):
 	// mint a REAL, store-backed session under the EXACT childID computed
 	// above — the child no longer shares the parent's transcript.jsonl.
@@ -1450,7 +1446,7 @@ func (ss *spawnSubTurnSetupState) createChildSession() (*tools.ToolResult, error
 	// value.
 	ss.st.sharedStore = ss.st.al.GetSessionStore()
 	if ss.st.sharedStore == nil {
-		return nil, fmt.Errorf("subturn: no shared session store wired — cannot mint a real session for delegated child %q", ss.st.childID), true
+		return nil, true, fmt.Errorf("subturn: no shared session store wired — cannot mint a real session for delegated child %q", ss.st.childID)
 	}
 	if ss.st.cfg.IsResume {
 		// Warm resume (native `delegate follow_up` on a terminal session —
@@ -1469,7 +1465,7 @@ func (ss *spawnSubTurnSetupState) createChildSession() (*tools.ToolResult, error
 		// a real, non-nil error here rather than silently "resuming" into
 		// nothing.
 		if _, getErr := ss.st.sharedStore.GetMeta(ss.st.childID); getErr != nil {
-			return nil, fmt.Errorf("subturn: resume child session %q: %w", ss.st.childID, getErr), true
+			return nil, true, fmt.Errorf("subturn: resume child session %q: %w", ss.st.childID, getErr)
 		}
 		// No SetMeta here: this is not a new parent->child edge. childID's
 		// ParentSessionID was already stamped by the session's FIRST
@@ -1487,7 +1483,7 @@ func (ss *spawnSubTurnSetupState) createChildSession() (*tools.ToolResult, error
 			ss.st.parentTS.channel,
 			ss.st.agent.ID,
 		); createErr != nil {
-			return nil, fmt.Errorf("subturn: create child session %q: %w", ss.st.childID, createErr), true
+			return nil, true, fmt.Errorf("subturn: create child session %q: %w", ss.st.childID, createErr)
 		}
 		// FR-008 (the parent->child edge itself): CreateSessionWithID mints the
 		// session but never persists ParentSessionID (grep -c ParentSessionID
@@ -1503,7 +1499,7 @@ func (ss *spawnSubTurnSetupState) createChildSession() (*tools.ToolResult, error
 		// keeps its ORIGINAL edge untouched.
 		childParentSessionID := ss.st.parentTS.transcriptSessionID
 		if setMetaErr := ss.st.sharedStore.SetMeta(ss.st.childID, session.MetaPatch{ParentSessionID: &childParentSessionID}); setMetaErr != nil {
-			return nil, fmt.Errorf("subturn: stamp parent edge for child %q: %w", ss.st.childID, setMetaErr), true
+			return nil, true, fmt.Errorf("subturn: stamp parent edge for child %q: %w", ss.st.childID, setMetaErr)
 		}
 	}
 
@@ -1555,7 +1551,7 @@ func (ss *spawnSubTurnSetupState) createChildSession() (*tools.ToolResult, error
 	}
 
 	ss.st.prepareProcessOptions()
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // buildDelegateAgent builds the delegated agent from the resolved target identity.

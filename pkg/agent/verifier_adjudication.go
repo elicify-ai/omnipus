@@ -1599,7 +1599,6 @@ agentLoopRunVerifierAdjudicationLoop1:
 		case agentLoopRunVerifierAdjudicationReturn:
 			return vs.va.ret0, vs.va.ret1, vs.va.ret2, vs.va.ret3, vs.va.ret4, vs.va.ret5, vs.va.ret6
 		}
-
 	}
 }
 
