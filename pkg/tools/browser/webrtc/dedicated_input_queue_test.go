@@ -548,10 +548,10 @@ func TestDedicatedInputQueueReliableAgeBoundary(t *testing.T) {
 				entered, release := make(chan struct{}), make(chan struct{})
 				dispatched := make(chan int, 4)
 				failed := make(chan string, 2)
-				var active context.Context
+				active := make(chan context.Context, 1)
 				q := newDedicatedInputQueue(context.Background(), 1, 0, func(ctx context.Context, frame generated.BrowserInputFrame) {
 					if *frame.ReliableSeq == 1 {
-						active = ctx
+						active <- ctx
 						close(entered)
 						<-release
 					}
@@ -564,6 +564,7 @@ func TestDedicatedInputQueueReliableAgeBoundary(t *testing.T) {
 				}
 				q.submit(false, frame("key_down", 1, 1))
 				<-entered
+				activeCtx := <-active
 				q.submit(false, frame("key_up", 2, 2))
 				q.submit(false, frame("text", 3, 2))
 				time.Sleep(sample.age)
@@ -578,7 +579,7 @@ func TestDedicatedInputQueueReliableAgeBoundary(t *testing.T) {
 					default:
 						t.Fatal("expired reliable backlog did not explicitly fail")
 					}
-					if active.Err() != context.Canceled {
+					if activeCtx.Err() != context.Canceled {
 						t.Fatal("expired peer source was not canceled for held-input cleanup")
 					}
 					if len(dispatched) != 1 {
@@ -598,7 +599,7 @@ func TestDedicatedInputQueueReliableAgeBoundary(t *testing.T) {
 							t.Fatalf("missing ordered input %d", want)
 						}
 					}
-					if active.Err() != nil || len(failed) != 0 {
+					if activeCtx.Err() != nil || len(failed) != 0 {
 						t.Fatal("fresh reliable input was canceled")
 					}
 				}
