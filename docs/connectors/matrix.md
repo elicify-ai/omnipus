@@ -6,13 +6,13 @@ Matrix channel for Omnipus. Uses the `mautrix-go` library with the `goolm` pure-
 
 ## Build requirement
 
-The Matrix channel requires the `goolm` build tag **and CGo enabled** in the gateway:
+Matrix is included in the standard release build. The channel needs the `goolm` build tag, which every release build already passes:
 
 ```bash
-CGO_ENABLED=1 go build -tags goolm,stdjson ./...
+CGO_ENABLED=0 go build -tags goolm,stdjson ./...
 ```
 
-The matrix subpackage itself only needs `goolm`, but `pkg/gateway/channel_matrix.go` is gated by `//go:build !mipsle && !netbsd && !(freebsd && arm) && cgo`, so a `CGO_ENABLED=0` build silently excludes Matrix from the gateway even when `goolm` is set. Matrix is unavailable on `linux/mipsle`, `netbsd/*`, and `freebsd/arm` due to upstream `modernc.org/sqlite` and `modernc.org/libc` build failures on those targets.
+The `goolm` tag selects the pure-Go OLM implementation, so no CGo is required. One target still loses Matrix: on `linux/mipsle`, the SQLite library underneath has no working build, so the channel is compiled out. BSD targets (FreeBSD, OpenBSD, NetBSD) are not supported platforms for Omnipus at all — see [platform support](../operations/platform-support.md).
 
 ## Configuration
 

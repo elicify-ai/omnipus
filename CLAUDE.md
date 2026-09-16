@@ -116,7 +116,7 @@ technology well and does not read code for a living.
 
 ## Tech Stack
 
-**Backend:** Go (go.mod requires 1.26.4; targets 1.22+). Key packages: `golang.org/x/sys/unix` (Landlock/seccomp), `chromedp`, `whatsmeow` (WhatsApp), `discordgo`, `mymmrac/telego` (Telegram), `slack-go`, `modernc.org/sqlite` (pure-Go SQLite, no CGo — whatsmeow, Matrix's E2EE crypto store, and the vault's derived properties index; it cannot build on `linux/mipsle`, `netbsd/*` or `freebsd/arm`, see `pkg/gateway/channel_matrix.go:20-28`). All channels are in-process Go. Channels wrapping a non-Go runtime (e.g. Signal → `signal-cli`) spawn a sidecar from their own `Start()` and talk over localhost HTTP — there is no generic stdio bridge protocol. (WhatsApp is pure-Go in-process via whatsmeow, NOT a sidecar example.)
+**Backend:** Go (go.mod requires 1.26.4; targets 1.22+). Key packages: `golang.org/x/sys/unix` (Landlock/seccomp), `chromedp`, `whatsmeow` (WhatsApp), `discordgo`, `mymmrac/telego` (Telegram), `slack-go`, `modernc.org/sqlite` (pure-Go SQLite, no CGo — whatsmeow, Matrix's E2EE crypto store, and the vault's derived properties index; it cannot build on `linux/mipsle`, see `pkg/gateway/channel_matrix.go`). All channels are in-process Go. Channels wrapping a non-Go runtime (e.g. Signal → `signal-cli`) spawn a sidecar from their own `Start()` and talk over localhost HTTP — there is no generic stdio bridge protocol. (WhatsApp is pure-Go in-process via whatsmeow, NOT a sidecar example.)
 
 **Frontend:** TypeScript, React 19, Vite 6, shadcn/ui (Radix + Tailwind v4), AssistantUI (chat), Phosphor Icons, Zustand (UI state), TanStack Query (server state), TanStack Router, Framer Motion. Vite builds to `dist/spa/`, copied to `pkg/gateway/spa/`, embedded via `go:embed`.
 
@@ -146,6 +146,8 @@ Manual key file: `openssl rand -hex 32 > master.key && chmod 600 master.key && e
 **Sandboxing:** `SandboxBackend` interface — Linux (Landlock+seccomp), macOS (Seatbelt via `sandbox-exec`), Fallback (app-level). Policy + audit are cross-platform; only the enforcement backend varies.
 
 ⚠️ **There is NO Windows sandbox backend.** This line previously claimed "Windows (Job Objects+Restricted Tokens+DACL)". That was wrong in the way that matters most — it describes a protection an operator could reasonably rely on, and none of it exists. `selectBackendPlatform` (`pkg/sandbox/sandbox_other.go`) returns `FallbackBackend` on Windows, i.e. application-level enforcement only. Job Objects ARE used (`pkg/sandbox/hardened_exec_windows.go`) but purely for a memory cap and kill-on-parent-death; that file's own header states "DACL, Restricted Token, and AppContainer are out of scope (not implemented)". A real backend (Low integrity token + deny ACEs, no admin rights required) is designed but deliberately deferred to its own ADR — see ADR-062 §4.3.
+
+**Supported platforms (founder decision, 2026-09-16): Linux, macOS, Windows — and nothing else.** The BSDs (FreeBSD, OpenBSD, NetBSD) are explicitly out: no CI leg builds them, no release artifact ships for them, nothing is tested there, and no BSD-specific code path or build-tag term is maintained. Do not add `//go:build freebsd|netbsd|openbsd` terms or BSD branches back — that is a regression against this decision, not portability.
 
 **Platform posture, accurately:** macOS confines only CHILDREN (Seatbelt cannot push an already-running process into a profile without CGo, so the gateway itself is not confined); Linux confines the gateway AND its children (Landlock is per-thread and inherited); Windows confines neither.
 
