@@ -176,7 +176,34 @@ production code, which a long enumerated test does not threaten.
 `pkg/knowledge/links_test.go::TestKnowledge_NoLanguageModelInTheGraphPath` 258). A failure anywhere in
 those reports one function. Convert them to named subtests whenever someone next touches them.
 
-**Still open (2026-09-16):** files over 4,000 are down to **2** (`loop.go`, shrinking as `runTurn` is extracted, and `chat.ts`, untouched so far); wave 4 is running (18 production functions still over 240 across 17 file lanes); the TypeScript side has **184** production functions over 120 and **117** over 240 (components are warn-only by founder ruling, so the hard-fail set is led by `chat.ts`); nested `CLAUDE.md` landing; the documentation track's second wave (index, concepts and interface tour rewrites, connector rename); and the one CI pass with the red jobs it will show.
+**Documentation track — waves 1 and 2 are COMPLETE (2026-09-16, 22 GLM 5.3 lanes via `claudez`).**
+Wave 1 wrote the 13 pages the design listed as missing: knowledge, library, workspaces, tasks,
+plans, calendar, goals, agents, tools, browser, previews, security, settings. Wave 2 rewrote or
+edited the 9 that existed: the index, concepts, the interface tour, the connectors rename
+(`channels.md` and `docs/channels/` became `connectors.md` and `docs/connectors/` with `git mv`, all
+13 per-connector pages carried over and every link re-pointed), the command-line page, getting
+started, troubleshooting, skills and a memory audit. **All 22 pass `lanes/check-doc.sh`**, which
+gates headings, a table, banned terms (`Command Center`, `Max`, `five teammates`), emoji, unresolved
+links, links into internal documents, word count and heading depth. 34 user pages now exist.
+
+Method worth reusing: one style guide (`DOC-STYLE.md`) fixes tone and page shape for every lane, the
+design map is required reading for each lane, and a mechanical checker must exit 0 before a lane may
+commit — the merge script re-runs it afterwards and rejects any diff touching code or internal docs.
+Tone held across 22 independently written pages.
+
+The lanes also found **product** defects while confirming surfaces, listed in
+`/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/results/docs-open-questions.md`: an
+error message pointing at a settings field that does not exist, a recurrence editor no longer
+showing the stored time zone its spec requires, an unreachable create-workspace form, and pinning
+with no control. Four editorial calls for the founder are in the same file.
+
+Still to do in documentation: the 12 legacy operator/advanced pages the design marks fold-or-keep
+(`configuration`, `providers`, `routing`, `tools-reference`, `credential_encryption`,
+`security_configuration`, `sensitive_data_filtering`, `observability`, `debug`, `docker`,
+`config-versioning`, `tools_configuration`), deleting `docs/internal/BRD/` and `.preview-doc/`,
+archiving the 2026-05 design drafts, and the `check-no-stale-user-docs.sh` guard.
+
+**Still open (2026-09-16):** files over 4,000 are down to **2** (`loop.go`, shrinking as `runTurn` is extracted, and `chat.ts`, untouched so far); wave 4 is running (18 production functions still over 240 across 17 file lanes); the TypeScript side has **184** production functions over 120 and **117** over 240 (components are warn-only by founder ruling, so the hard-fail set is led by `chat.ts`); nested `CLAUDE.md` landing; the documentation track's legacy-page fold and the archive/delete steps; and the one CI pass with the red jobs it will show.
 
 **Decisions for the founder (2026-09-15), each with a recommendation:**
 
