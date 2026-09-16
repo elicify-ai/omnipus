@@ -40,8 +40,10 @@ var pollInterval = 100 * time.Millisecond
 // because Unix has kill(pid,0) as a reliable liveness signal — if it's alive
 // and we can't read its name, it is most likely our own process.
 //
-// Zombie processes (State: Z in /proc/<pid>/status) are treated as dead:
-// they cannot serve traffic and the gateway PID file should be cleared.
+// Zombie processes (exited but not yet reaped by their parent) are treated
+// as dead: they cannot serve traffic and the gateway PID file should be
+// cleared. Zombie detection is platform-specific — see the daemon_zombie_*.go
+// files (Linux /proc, macOS sysctl, documented fallback elsewhere).
 func checkProcess(pid int) (alive bool, isOmnipus bool, identityErr error) {
 	// PID 0 is never a valid user-space process PID.
 	if pid <= 0 {
@@ -58,8 +60,9 @@ func checkProcess(pid int) (alive bool, isOmnipus bool, identityErr error) {
 	// Any error other than ESRCH (e.g. EPERM — process exists but we can't
 	// signal it) still means the process is alive.
 
-	// On Linux, check for zombie state. A zombie holds the PID but cannot
-	// serve traffic; we treat it as dead so the PID file is cleared.
+	// Check for zombie state (platform-specific; see daemon_zombie_*.go).
+	// A zombie holds the PID but cannot serve traffic; we treat it as dead
+	// so the PID file is cleared.
 	if isZombie(pid) {
 		slog.Debug("daemon: process is a zombie — treating as dead", "pid", pid)
 		return false, false, nil
@@ -83,21 +86,16 @@ func checkProcess(pid int) (alive bool, isOmnipus bool, identityErr error) {
 	return true, isOmnipus, nil
 }
 
-// isZombie reports whether the process is in zombie state by reading
-// /proc/<pid>/status. Returns false on any read error (conservative: assume
-// not zombie).
-func isZombie(pid int) bool {
-	statusPath := fmt.Sprintf("/proc/%d/status", pid)
-	data, err := os.ReadFile(statusPath)
-	if err != nil {
-		return false
+// processGone reports whether pid has exited. A process that has exited but
+// not yet been reaped by its parent (a zombie) is gone for our purposes: it
+// can no longer run, serve traffic, or handle a signal. kill(pid, 0) alone
+// cannot see this — the probe succeeds while the unreaped PID entry survives —
+// so the zombie check from daemon_zombie_*.go is the second half of the test.
+func processGone(pid int) bool {
+	if err := syscall.Kill(pid, 0); err == syscall.ESRCH {
+		return true
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		if strings.HasPrefix(line, "State:") {
-			return strings.Contains(line, "Z")
-		}
-	}
-	return false
+	return isZombie(pid)
 }
 
 // resolveExeName attempts to find the executable name for the given PID.
@@ -201,7 +199,7 @@ func killProcess(pid int) error {
 	deadline := time.Now().Add(stopGracePeriod)
 	for time.Now().Before(deadline) {
 		time.Sleep(pollInterval)
-		if err := syscall.Kill(pid, 0); err == syscall.ESRCH {
+		if processGone(pid) {
 			// Process exited cleanly within the grace period.
 			slog.Debug("daemon: process exited after SIGTERM", "pid", pid)
 			return nil
