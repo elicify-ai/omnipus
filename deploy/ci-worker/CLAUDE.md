@@ -83,11 +83,39 @@ The Go test/build suite is run on a dedicated Fly worker, **never in the dev pod
   ```bash
   fly ssh console --app ci-omnipus -C "/cache/runci.sh <ref> <gate>"
   ```
-- **Gates**: `all | go-build | go-vet | go-test | go-race | records-no-sqlite | contracts | spa | gofmt | quick | embed-build | e2e`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE"). `records-no-sqlite` (added for review finding F7) runs `pkg/gateway/rest_knowledge_find_propindexless_test.go`'s two tests under `-tags goolm,stdjson,records_no_sqlite` — the `records_no_sqlite` build tag otherwise appears nowhere in CI, so this is the only gate (here or in `.github/workflows/pr.yml`'s mirrored step) that ever exercises that honesty-contract carve-out. `e2e` runs the full Playwright matrix (40 specs, ~20–30 min) — see "E2E gate" below.
+- **Gates**: `all | all-no-e2e | go-build | go-vet | go-test | go-race | records-no-sqlite | contracts | spa | gofmt | quick | embed-build | e2e`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE"). `records-no-sqlite` (added for review finding F7) runs `pkg/gateway/rest_knowledge_find_propindexless_test.go`'s two tests under `-tags goolm,stdjson,records_no_sqlite` — the `records_no_sqlite` build tag otherwise appears nowhere in CI, so this is the only gate (here or in `.github/workflows/pr.yml`'s mirrored step) that ever exercises that honesty-contract carve-out. `e2e` runs the full Playwright matrix (40 specs, ~20–30 min) — see "E2E gate" below.
 - **When to use it**:
   - Pre-push verification on a feature branch **before** opening a PR (when you want a signal without burning a PR slot).
   - Pre-merge gate on a hotfix / release branch (faster turnaround than the public PR workflow).
   - Any time the dev pod can't run the suite (OOM, RAM pressure, root disk > 90%).
+
+**`all-no-e2e` gate (setup once, three parallel groups).** `all` minus `go-race` and `e2e`,
+restructured so the shared setup is paid once per run instead of once per gate. Measured
+2026-09-15: driving gates one SSH call at a time ran `fetch + checkout` 5× and `npm ci` 4×
+against the same warm `/cache`. The gate runs `npm ci` and `verify-contracts` serially first,
+then fans the rest out over three concurrent groups — A (go: `go-build → go-vet → go-test`),
+B (node: `typecheck → vitest`), C (static: `gofmt → cli-verb-guard → golangci-lint`) — and
+runs `records-no-sqlite` after they drain. Two placements are deliberate and load-bearing,
+not oversights:
+- `verify-contracts` is NOT inside a group: `scripts/gen-contracts.sh` rewrites
+  `pkg/api/generated/*.go` in place and `rm -f`s + re-copies
+  `pkg/gateway/inboundschemas/*.yaml`, which `pkg/gateway/inboundschemas/schemas.go` embeds
+  via `//go:embed *.yaml` — racing that against a concurrent `go build ./...` fails the build
+  with "no matching files found" inside the empty window. That is a manufactured false RED,
+  so regeneration completes before anything compiles.
+- `records-no-sqlite` runs only after every group has drained: it links a second
+  `pkg/gateway` test binary under the goolm tags, and `go-test` must never run beside
+  another Go test binary (this project's known OOM spike class).
+
+Operational reading notes: while the groups run, the console prints only a once-a-minute
+`[all-no-e2e] groups still running` heartbeat — full per-gate output is buffered to
+per-group files under `$TMPDIR` and emitted in fixed order (A, then B, then C) after
+`wait`, so a ~30+ min quiet phase is EXPECTED, not a wedged run (trap 2 below covers
+reconnecting to check `ps` if in doubt). Every gate still prints its
+`<gate> -> exit <code>` line and the final `RESULT` verdict in the unchanged format.
+Group failures never hide each other: all three groups always run to completion, and any
+non-zero group exit fails the run. Full rationale, measured baseline and the rejected
+alternatives: `docs/internal/architecture/ci-worker-parallelization.md`.
 
 **Three false-signal traps — read before trusting a verdict** (the first two hit during the
 v0.1.0 epic, 2026-06-14; the third on 2026-07-26):

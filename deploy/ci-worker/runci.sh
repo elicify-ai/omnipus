@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Omnipus CI worker entrypoint for a single gate run.
 # Usage: runci.sh <git-ref> <gate>
-#   gate ∈ { all | go-build | go-vet | lint | go-test | go-race | records-no-sqlite | contracts | spa | gofmt | quick | embed-build | e2e }
+#   gate ∈ { all | all-no-e2e | go-build | go-vet | lint | go-test | go-race | records-no-sqlite | contracts | spa | gofmt | quick | embed-build | e2e }
+#   all-no-e2e = `all` minus go-race/e2e, with setup (npm ci + verify-contracts) done once and
+#   the remaining checks fanned out over three parallel groups — see run_all_no_e2e.
 # Requires env GIT_REMOTE (authenticated clone URL), set as a Fly secret.
 #   The `e2e` gate additionally requires OPENROUTER_API_KEY (Fly secret) — set on ci-omnipus via
 #   `fly secrets set OPENROUTER_API_KEY=<value> --app ci-omnipus`.
@@ -1121,6 +1123,123 @@ run_e2e() {
   return "$shard_rc"
 }
 
+# ── all-no-e2e — one setup, three parallel gate groups ──────────────────────
+#
+# `all` minus go-race and e2e, structured to stop paying the shared setup more
+# than once. Measured on this worker 2026-09-15 (full analysis in
+# docs/internal/architecture/ci-worker-parallelization.md): driving gates one
+# SSH call at a time ran `fetch + checkout` 5 times and `npm ci` 4 times in a
+# single evening, all against the same warm /cache volume. This gate does the
+# fetch/checkout (top of script, unchanged), then npm ci and verify-contracts
+# ONCE in a serial setup phase, then fans the remaining checks out over three
+# concurrent groups, then runs records-no-sqlite after they drain.
+#
+#   Group A (go, RAM-heavy): go-build → go-vet → go-test
+#   Group B (node):          typecheck → vitest
+#   Group C (static):        gofmt → cli-verb-guard → golangci-lint
+#
+# Two checks are deliberately NOT inside the fan-out, for reasons measured in
+# this repo rather than style:
+#   * verify-contracts REGENERATES the very tree group A compiles against:
+#     scripts/gen-contracts.sh rewrites pkg/api/generated/*.go in place, gofmt
+#     -w's them, and its Step 5 does `rm -f pkg/gateway/inboundschemas/*.yaml`
+#     before re-copying — and pkg/gateway/inboundschemas/schemas.go declares
+#     `//go:embed *.yaml`, so a concurrent `go build ./...` globbing that
+#     directory inside the empty window dies with "no matching files found".
+#     Racing it against go-build/go-vet/go-test manufactures false REDs, so it
+#     runs in the serial setup phase, before anything compiles.
+#   * records-no-sqlite builds and runs a pkg/gateway test binary under the
+#     goolm tags — the same OLM-link class whose unbounded concurrency is this
+#     project's known OOM spike — so it runs only after every group has
+#     drained: go-test must never run beside another Go test binary, and
+#     nothing may run beside go-test either.
+#
+# Scheduling inside group A is run_gotest's own existing `-p 2` + GOMAXPROCS=4
+# (2 binaries × 4 threads = 8 Go threads ≈ 8 vCPUs): Go never claims more than
+# the whole box, leaving the node lanes (vitest caps itself at --maxWorkers=4)
+# to timeshare. The worst combined oversubscription is ~2:1, for the few
+# minutes golangci-lint's analysis can overlap go-test's build phase — far
+# from the 4:1 that flaked timing tests (run_gotest's 2026-07-17 comment), and
+# the flake filter plus the `--- FAIL` carve-out remain as the backstop.
+#
+# Every group runs to completion regardless of another group's outcome (the
+# same contract `step` gives inside one gate). Each group's output is buffered
+# to its own file and emitted in a FIXED order (A, then B, then C) after
+# `wait` — a bare interleaved log could misattribute a failure — and the
+# `<gate> -> exit <code>` lines keep their exact `step` format, which external
+# harnesses grep for. While the groups run, a heartbeat prints once a minute:
+# the alternative (a silent console for the ~30+ min go-test lane) is the
+# stale-log trap in deploy/ci-worker/CLAUDE.md — operators reconnect, see no
+# output, and read a live run as wedged.
+run_all_no_e2e() {
+  local base="$TMPDIR/runci-all-no-e2e"
+  local log_a="$base.group-a.log" log_b="$base.group-b.log" log_c="$base.group-c.log"
+  local done_sent="$base.groups-done"
+  local pid_a pid_b pid_c hb_pid code_a code_b code_c
+
+  # Serial setup phase: node_modules and the regenerated contract artifacts
+  # exist BEFORE any group starts (see the verify-contracts note above).
+  step npm-ci run_npm
+  step verify-contracts run_contracts
+
+  rm -f "$done_sent"
+
+  ( rc=0
+    step go-build run_gobuild
+    step go-vet run_govet
+    step go-test run_gotest
+    exit "$rc"
+  ) > "$log_a" 2>&1 &
+  pid_a=$!
+  ( rc=0
+    step typecheck run_typecheck
+    step vitest run_vitest
+    exit "$rc"
+  ) > "$log_b" 2>&1 &
+  pid_b=$!
+  ( rc=0
+    step gofmt run_gofmt
+    step cli-verb-guard run_cli_verb_guard
+    step golangci-lint run_lint
+    exit "$rc"
+  ) > "$log_c" 2>&1 &
+  pid_c=$!
+
+  ( while [ ! -e "$done_sent" ]; do
+      sleep 60
+      [ -e "$done_sent" ] && break
+      printf '[all-no-e2e] groups still running — buffered output so far (bytes): go=%s node=%s static=%s\n' \
+        "$(wc -c < "$log_a" | tr -d '[:space:]')" \
+        "$(wc -c < "$log_b" | tr -d '[:space:]')" \
+        "$(wc -c < "$log_c" | tr -d '[:space:]')"
+    done ) &
+  hb_pid=$!
+
+  wait "$pid_a"; code_a=$?
+  wait "$pid_b"; code_b=$?
+  wait "$pid_c"; code_c=$?
+  : > "$done_sent"
+  kill "$hb_pid" 2>/dev/null || true
+  wait "$hb_pid" 2>/dev/null || true
+  rm -f "$done_sent"
+
+  log "group A (go: go-build → go-vet → go-test) — buffered output"
+  cat "$log_a"
+  log "group B (node: typecheck → vitest) — buffered output"
+  cat "$log_b"
+  log "group C (static: gofmt → cli-verb-guard → golangci-lint) — buffered output"
+  cat "$log_c"
+
+  # After the drain: the one gate that may not share the box with a Go test
+  # binary (see the header comment).
+  step records-no-sqlite run_records_no_sqlite
+
+  if [ "$code_a" -ne 0 ] || [ "$code_b" -ne 0 ] || [ "$code_c" -ne 0 ]; then
+    rc=1
+  fi
+  return 0
+}
+
 case "$GATE" in
   gofmt)           step gofmt run_gofmt ;;
   go-build)        step go-build run_gobuild ;;
@@ -1135,6 +1254,7 @@ case "$GATE" in
   embed-build)     step npm-ci run_npm; step spa-embed run_spaembed; step go-build run_gobuild ;;
   e2e)             step e2e run_e2e ;;
   cli-verb-guard)  step cli-verb-guard run_cli_verb_guard ;;
+  all-no-e2e)      run_all_no_e2e ;;
   all)
     step cli-verb-guard run_cli_verb_guard
     step npm-ci run_npm
