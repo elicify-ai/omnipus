@@ -247,8 +247,8 @@ func TestConfigSet_LegitimateWritesStillLand(t *testing.T) {
 		{"tools.read_file.max_read_file_size", float64(123456),
 			func(c *config.Config) bool { return c.Tools.ReadFile.MaxReadFileSize == 123456 },
 			"a doubly-nested field"},
-		{"devices.enabled", true,
-			func(c *config.Config) bool { return c.Devices.Enabled }, "a bool field"},
+		{"gateway.hot_reload", true,
+			func(c *config.Config) bool { return c.Gateway.HotReload }, "a bool field"},
 		// The embedded-struct rule: WebToolsConfig embeds ToolConfig with no
 		// json name, so encoding/json PROMOTES Enabled and "tools.web.enabled"
 		// must resolve to it. A schema walk using reflect.VisibleFields' looser
@@ -406,7 +406,7 @@ func TestConfigSet_EveryReportedSuccessIsReadableBack(t *testing.T) {
 		{"gateway.host", "127.0.0.5"},
 		{"agents.defaults.default_model.model", "glm-4.7"},
 		{"tools.read_file.max_read_file_size", float64(123456)},
-		{"devices.enabled", true},
+		{"gateway.hot_reload", true},
 		{"tools.web.enabled", true},
 		{"channels.telegram.enabled", true},
 		// The keys that used to report success and vanish.

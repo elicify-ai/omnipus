@@ -150,7 +150,6 @@ func TestValidateConfigKey_LegitimateKeysStillAccepted(t *testing.T) {
 		"tools.manifest.compressed",
 		"tools.delegate.require_parent_agent_id",
 		"channels.discord.enabled",
-		"devices.enabled",
 	}
 	for _, key := range allowed {
 		t.Run(key, func(t *testing.T) {

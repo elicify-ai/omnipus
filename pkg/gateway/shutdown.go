@@ -152,9 +152,6 @@ func omnipusGracefulShutdown(
 	}
 	// Heartbeat + cron were already stopped in step 1 (they trigger turns).
 	// Stop the remaining services that have no turn side effects.
-	if runningServices.DeviceService != nil {
-		runningServices.DeviceService.Stop()
-	}
 	if runningServices.HealthServer != nil {
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel2()

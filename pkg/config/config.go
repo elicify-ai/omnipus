@@ -49,7 +49,6 @@ type Config struct {
 	Hooks     HooksConfig                      `json:"hooks,omitempty"     yaml:"-"`
 	Tools     ToolsConfig                      `json:"tools"               yaml:",inline"`
 	Schedules SchedulesConfig                  `json:"schedules,omitempty" yaml:"-"`
-	Devices   DevicesConfig                    `json:"devices"             yaml:"-"`
 	Voice     VoiceConfig                      `json:"voice"               yaml:"-"`
 	// Mailboxes holds email mailbox accounts (M11), keyed agent ID → workspace
 	// ID → mailbox: every (agent, workspace) pair may hold its own mailbox — an
@@ -1245,11 +1244,6 @@ type SchedulesConfig struct {
 	// RetryBackoffMs[N] ms, capped at len(RetryBackoffMs) attempts before
 	// resuming normal cadence. Default [60000,120000,300000].
 	RetryBackoffMs []int64 `json:"retry_backoff_ms,omitempty"`
-}
-
-type DevicesConfig struct {
-	Enabled    bool `json:"enabled"     env:"OMNIPUS_DEVICES_ENABLED"`
-	MonitorUSB bool `json:"monitor_usb" env:"OMNIPUS_DEVICES_MONITOR_USB"`
 }
 
 type VoiceConfig struct {

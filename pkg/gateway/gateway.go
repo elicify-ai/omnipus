@@ -51,7 +51,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/credentials"
 	"github.com/elicify-ai/omnipus/pkg/cron"
-	"github.com/elicify-ai/omnipus/pkg/devices"
 	"github.com/elicify-ai/omnipus/pkg/health"
 	"github.com/elicify-ai/omnipus/pkg/heartbeat"
 	"github.com/elicify-ai/omnipus/pkg/logger"
@@ -198,7 +197,6 @@ type services struct {
 	// warm-up (startBrowserWarmBoot) lives, because it needs this gateway's
 	// own listener to already be accepting.
 	browserWS        *BrowserWSHandler
-	DeviceService    *devices.Service
 	HealthServer     *health.Server
 	manualReloadChan chan struct{}
 	// reloadCoalesceMu guards reloadInFlight and reloadRequested. Together they
@@ -1635,9 +1633,6 @@ func stopAndCleanupServices(runningServices *services, shutdownTimeout time.Dura
 	// reload should not stop channel manager
 	if !isReload && runningServices.ChannelManager != nil {
 		runningServices.ChannelManager.StopAll(shutdownCtx)
-	}
-	if runningServices.DeviceService != nil {
-		runningServices.DeviceService.Stop()
 	}
 	if runningServices.TaskDrain != nil {
 		runningServices.TaskDrain.Stop()

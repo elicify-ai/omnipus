@@ -39,7 +39,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/cron"
 	"github.com/elicify-ai/omnipus/pkg/daemon"
 	"github.com/elicify-ai/omnipus/pkg/datamodel"
-	"github.com/elicify-ai/omnipus/pkg/devices"
 	"github.com/elicify-ai/omnipus/pkg/email"
 	"github.com/elicify-ai/omnipus/pkg/gateway/middleware"
 	"github.com/elicify-ai/omnipus/pkg/goal"
@@ -56,7 +55,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/skills"
-	"github.com/elicify-ai/omnipus/pkg/state"
 	"github.com/elicify-ai/omnipus/pkg/task"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/elicify-ai/omnipus/pkg/voice"
@@ -1435,30 +1433,6 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, bool, error
 		stg.cfg.Gateway.Port,
 	)
 
-	stateManager := state.NewManager(stg.cfg.AgentHomeBasePath())
-	stg.runningServices.DeviceService = devices.NewService(devices.Config{
-		Enabled:    stg.cfg.Devices.Enabled,
-		MonitorUSB: stg.cfg.Devices.MonitorUSB,
-	}, stateManager)
-	stg.runningServices.DeviceService.SetBus(stg.msgBus)
-	// Invariant: when cfg.Devices.Enabled==true, a Start failure is fatal and
-	// propagated to the caller (Run returns the error). When disabled, Start
-	// failures are only warnings. A unit test for this path is not included
-	// because devices.Service is a concrete struct (not an interface) and
-	// mocking it would require invasive refactoring; the behavior is exercised
-	// by integration tests that configure a real USB monitor on supported hosts.
-	if stg.err = stg.runningServices.DeviceService.Start(context.Background()); stg.err != nil {
-		if stg.cfg.Devices.Enabled {
-			return nil, true, fmt.Errorf("device service: %w", stg.err)
-		}
-		logger.WarnCF(
-			"device",
-			"device service start failed (devices disabled, continuing)",
-			map[string]any{"error": stg.err.Error()},
-		)
-	} else if stg.cfg.Devices.Enabled {
-		fmt.Println("✓ Device event service started")
-	}
 	return nil, false, nil
 }
 

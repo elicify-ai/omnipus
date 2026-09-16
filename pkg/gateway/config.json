@@ -162,10 +162,6 @@
       "session_store_path": ""
     }
   },
-  "devices": {
-    "enabled": false,
-    "monitor_usb": false
-  },
   "gateway": {
     "host": "127.0.0.1",
     "hot_reload": false,
