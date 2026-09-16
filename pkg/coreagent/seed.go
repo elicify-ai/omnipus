@@ -1777,6 +1777,14 @@ func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
 //nolint:gochecknoglobals
 var seedMu sync.Mutex
 
+// seedConfig carries the shared state of SeedConfig across its stages.
+type seedConfig struct {
+	cfg            *config.Config
+	existing       map[string]bool
+	modified       bool
+	isFreshInstall bool
+}
+
 // SeedConfig ensures all core agents exist in cfg.Agents.List with Locked=true
 // and with the correct constructor-seeded tool policy (FR-010, FR-022).
 //
@@ -1787,83 +1795,46 @@ var seedMu sync.Mutex
 //
 // Returns true if config was modified (caller should save).
 func SeedConfig(cfg *config.Config) bool {
+	sc := &seedConfig{cfg: cfg}
+
 	seedMu.Lock()
 	defer seedMu.Unlock()
 
-	existing := make(map[string]bool, len(cfg.Agents.List))
-	for _, a := range cfg.Agents.List {
-		existing[a.ID] = true
+	sc.existing = make(map[string]bool, len(sc.cfg.Agents.List))
+	for _, a := range sc.cfg.Agents.List {
+		sc.existing[a.ID] = true
 	}
 
-	modified := false
+	sc.modified = false
 
-	// Fresh-install defaults: enable recap + bootstrap recap so new installs
-	// get session summaries out of the box. Only fires when NO agents exist
-	// yet (the agents list is empty — the hallmark of a first boot). Existing
-	// configs keep their stored values; SeedConfig runs on every boot so
-	// touching these fields unconditionally would override operator changes.
-	isFreshInstall := len(existing) == 0
-	if isFreshInstall {
-		if !cfg.Agents.Defaults.AutoRecapEnabled {
-			cfg.Agents.Defaults.AutoRecapEnabled = true
-			modified = true
-		}
-		if !cfg.Agents.Defaults.BootstrapRecapEnabled {
-			cfg.Agents.Defaults.BootstrapRecapEnabled = true
-			modified = true
-		}
-	}
-
-	// RELEASE BLOCKER fix: Mia being "the default agent" on a fresh install
-	// was previously ONLY expressed via the per-entity AgentConfig.Default
-	// stamp on her fresh-seed record below (isDefault := ca.ID == IDMia) —
-	// but ADR-054 D6.4 moved default-agent RESOLUTION entirely to the
-	// settings singleton (cfg.Agents.Defaults.DefaultAgentID; see
-	// pkg/agent.AgentRegistry.GetDefaultAgent and
-	// pkg/routing.RouteResolver.resolveDefaultAgentID) and nothing ever seeded
-	// THAT field, so a fresh install had NO configured default at all:
-	// webchat and channel routing each fell back to a DIFFERENT priority-2/3
-	// default and disagreed. Seed the singleton here, on the exact same
-	// isFreshInstall gate the AutoRecap seed above uses, so a fresh install's
-	// actual resolved default matches the documented "Mia is default" intent.
-	// The per-entity Default:true stamp on Mia's fresh-seed record below is
-	// UNCHANGED (kept for backward display compatibility per config.go's
-	// ADR-054 D6.4 note) — this only adds the singleton write alongside it.
-	// Guarded by "still empty" so an operator's pre-boot env override
-	// (OMNIPUS_DEFAULT_AGENT_ID) is never clobbered, and so this is a
-	// fresh-install-only seed, not a re-enforcement that would overwrite an
-	// operator's later choice on every subsequent boot.
-	if isFreshInstall && strings.TrimSpace(cfg.Agents.Defaults.DefaultAgentID) == "" {
-		cfg.Agents.Defaults.DefaultAgentID = string(IDMia)
-		modified = true
-	}
+	sc.seedFreshInstallDefaults()
 
 	// Re-enforce identity fields on existing core agents (tamper protection + rename).
-	for i := range cfg.Agents.List {
-		ca := ByID(CoreAgentID(cfg.Agents.List[i].ID))
+	for i := range sc.cfg.Agents.List {
+		ca := ByID(CoreAgentID(sc.cfg.Agents.List[i].ID))
 		if ca == nil {
 			continue
 		}
-		a := &cfg.Agents.List[i]
+		a := &sc.cfg.Agents.List[i]
 		if !a.Locked {
 			a.Locked = true
-			modified = true
+			sc.modified = true
 		}
 		if a.Name != ca.Name {
 			a.Name = ca.Name
-			modified = true
+			sc.modified = true
 		}
 		if a.Description != ca.Description {
 			a.Description = ca.Description
-			modified = true
+			sc.modified = true
 		}
 		if a.Color != ca.Color {
 			a.Color = ca.Color
-			modified = true
+			sc.modified = true
 		}
 		if a.Icon != ca.Icon {
 			a.Icon = ca.Icon
-			modified = true
+			sc.modified = true
 		}
 		// Fresh-install-only skill-allowlist seed (ADR-072 D5.1, FR-034).
 		// Under D5, an empty/absent Skills list means "the operator granted
@@ -1877,10 +1848,10 @@ func SeedConfig(cfg *config.Config) bool {
 		// Gating on isFreshInstall (same flag as the AutoRecap/DefaultAgentID
 		// seeds above) makes this fire once, on the very first boot, and
 		// never again. Do NOT restore this to an unconditional migration.
-		if isFreshInstall && len(a.Skills) == 0 {
+		if sc.isFreshInstall && len(a.Skills) == 0 {
 			if seedSkills := coreAgentSkills(ca.ID); len(seedSkills) > 0 {
 				a.Skills = seedSkills
-				modified = true
+				sc.modified = true
 			}
 		}
 
@@ -1895,12 +1866,12 @@ func SeedConfig(cfg *config.Config) bool {
 		}
 		if a.Type != wantType {
 			a.Type = wantType
-			modified = true
+			sc.modified = true
 		}
 		if IsSubagentTierID(ca.ID) {
 			if a.Default {
 				a.Default = false
-				modified = true
+				sc.modified = true
 			}
 			// Idempotent executor migration: the seeded subagent-tier agents run
 			// native. Fill the executor only when the existing entry has none, so an
@@ -1911,7 +1882,7 @@ func SeedConfig(cfg *config.Config) bool {
 			}
 			if a.Subagents.Executor == nil {
 				a.Subagents.Executor = &config.ExecutorConfig{Kind: config.ExecutorKindNative}
-				modified = true
+				sc.modified = true
 			}
 		}
 
@@ -1937,7 +1908,7 @@ func SeedConfig(cfg *config.Config) bool {
 	}
 
 	for _, ca := range All() {
-		if existing[string(ca.ID)] {
+		if sc.existing[string(ca.ID)] {
 			continue
 		}
 		policies := coreAgentSeed(ca.ID)
@@ -1987,8 +1958,8 @@ func SeedConfig(cfg *config.Config) bool {
 				Executor: &config.ExecutorConfig{Kind: config.ExecutorKindNative},
 			}
 		}
-		cfg.Agents.List = append(cfg.Agents.List, newAgent)
-		modified = true
+		sc.cfg.Agents.List = append(sc.cfg.Agents.List, newAgent)
+		sc.modified = true
 	}
 
 	// --- System Agents (ADR-049 D3) ---
@@ -1999,8 +1970,8 @@ func SeedConfig(cfg *config.Config) bool {
 	// the core re-enforcement loop); only Model/Provider and the soul
 	// (SOUL.md, lazily materialized from JudgeDefaultRubric — ADR-052 FR-038)
 	// are operator-editable and therefore preserved across boots.
-	if seedSystemAgents(cfg, existing) {
-		modified = true
+	if seedSystemAgents(sc.cfg, sc.existing) {
+		sc.modified = true
 	}
 
 	// ADR-074 D4: one-shot, marker-keyed, additive-only define-done migration
@@ -2009,8 +1980,8 @@ func SeedConfig(cfg *config.Config) bool {
 	// — ADR-080 D-SKILL renamed the seeded grant — take no append via the
 	// define-goal guard inside applyDefineDoneSkillsMigration below) and only
 	// the marker is recorded.
-	if applyDefineDoneSkillsMigration(cfg) {
-		modified = true
+	if applyDefineDoneSkillsMigration(sc.cfg) {
+		sc.modified = true
 	}
 
 	// ADR-080 D-SKILL: one-shot, marker-keyed REWRITE migration for installs
@@ -2020,8 +1991,8 @@ func SeedConfig(cfg *config.Config) bool {
 	// Must run AFTER applyDefineDoneSkillsMigration so both markers can land
 	// in the SAME boot for that double-upgrade case, with the token already
 	// renamed by the time this pass returns.
-	if applyDefineGoalRenameMigration(cfg) {
-		modified = true
+	if applyDefineGoalRenameMigration(sc.cfg) {
+		sc.modified = true
 	}
 
 	// Founder decision 2026-09-15 (issue #710): goal_claim is allowed by
@@ -2030,11 +2001,55 @@ func SeedConfig(cfg *config.Config) bool {
 	// seed changed reaches the same default a fresh install gets. Runs AFTER
 	// the seeding loops, so a fresh install's just-seeded Worker (already
 	// allow) is left as-is and only the marker is recorded.
-	if applyWorkerGoalClaimAllowUpdate(cfg) {
-		modified = true
+	if applyWorkerGoalClaimAllowUpdate(sc.cfg) {
+		sc.modified = true
 	}
 
-	return modified
+	return sc.modified
+}
+
+// seedFreshInstallDefaults enables recap defaults and selects Mia when the roster is empty.
+func (sc *seedConfig) seedFreshInstallDefaults() {
+	// Fresh-install defaults: enable recap + bootstrap recap so new installs
+	// get session summaries out of the box. Only fires when NO agents exist
+	// yet (the agents list is empty — the hallmark of a first boot). Existing
+	// configs keep their stored values; SeedConfig runs on every boot so
+	// touching these fields unconditionally would override operator changes.
+	sc.isFreshInstall = len(sc.existing) == 0
+	if sc.isFreshInstall {
+		if !sc.cfg.Agents.Defaults.AutoRecapEnabled {
+			sc.cfg.Agents.Defaults.AutoRecapEnabled = true
+			sc.modified = true
+		}
+		if !sc.cfg.Agents.Defaults.BootstrapRecapEnabled {
+			sc.cfg.Agents.Defaults.BootstrapRecapEnabled = true
+			sc.modified = true
+		}
+	}
+
+	// RELEASE BLOCKER fix: Mia being "the default agent" on a fresh install
+	// was previously ONLY expressed via the per-entity AgentConfig.Default
+	// stamp on her fresh-seed record below (isDefault := ca.ID == IDMia) —
+	// but ADR-054 D6.4 moved default-agent RESOLUTION entirely to the
+	// settings singleton (cfg.Agents.Defaults.DefaultAgentID; see
+	// pkg/agent.AgentRegistry.GetDefaultAgent and
+	// pkg/routing.RouteResolver.resolveDefaultAgentID) and nothing ever seeded
+	// THAT field, so a fresh install had NO configured default at all:
+	// webchat and channel routing each fell back to a DIFFERENT priority-2/3
+	// default and disagreed. Seed the singleton here, on the exact same
+	// isFreshInstall gate the AutoRecap seed above uses, so a fresh install's
+	// actual resolved default matches the documented "Mia is default" intent.
+	// The per-entity Default:true stamp on Mia's fresh-seed record below is
+	// UNCHANGED (kept for backward display compatibility per config.go's
+	// ADR-054 D6.4 note) — this only adds the singleton write alongside it.
+	// Guarded by "still empty" so an operator's pre-boot env override
+	// (OMNIPUS_DEFAULT_AGENT_ID) is never clobbered, and so this is a
+	// fresh-install-only seed, not a re-enforcement that would overwrite an
+	// operator's later choice on every subsequent boot.
+	if sc.isFreshInstall && strings.TrimSpace(sc.cfg.Agents.Defaults.DefaultAgentID) == "" {
+		sc.cfg.Agents.Defaults.DefaultAgentID = string(IDMia)
+		sc.modified = true
+	}
 }
 
 // ToolPolicyUpdateWorkerGoalClaimAllow is the marker recorded in
