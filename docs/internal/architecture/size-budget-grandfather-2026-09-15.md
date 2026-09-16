@@ -6,6 +6,22 @@
 
 **Component classification here** is the report heuristic: a `.tsx` file and a name starting with an uppercase letter. The gate's rule is stricter (the body must return JSX, looking through `memo` and `forwardRef`); expect a handful of moves between the component and function lists when the real scanner runs. Anonymous callbacks are named `(arg of X)` after the call they are passed to.
 
+## After a file split, re-key the grandfather rows
+
+Both lists are keyed by exact address — `path<TAB>lines` in `scripts/budgets/files.txt`, `file<TAB>qualified name<TAB>lines` in `scripts/budgets/functions.txt`. The function list has one fallback: a row also matches its function at any sibling file in the same package directory, keeping the listed number. Nothing else follows a move. A split therefore breaks the keying in two directions, and only one of them fails loud:
+
+| What the split did | What the gate does | Ratchet |
+|---|---|---|
+| Item lands at an address no row matches (function moved to another directory, extracted function over 240, new file over 4,000) | FAIL, on the next run | Tight — the failure is doing its job |
+| Row's address no longer exists | Nothing. Dead rows are never reported. | The row guards nothing |
+| Item shrank but its row kept the pre-split number | Nothing, until the item grows past that number | Loose — it can grow back to its pre-split size with no FAIL |
+
+So re-keying is a manual step in every split: point each moved row at its new address and lower its number to the re-measured count (for a file now under 4,000, deleting the row is tighter still). Re-pointing a row that moved is not widening. Adding a row for something that was not grandfathered before the split is widening, and is forbidden: an extracted function or a new file must come in under the fail line (240 / 4,000). One extra trap in the function list: the directory fallback keeps the largest number among same-named rows in a directory, so a stale row can inflate the ceiling of a different function with the same name.
+
+The ratchet is shrink-only for the same reason the lists exist: every number is a snapshot of debt already present at seed time. Numbers move down and rows get deleted; they are never raised and never added. That is what makes the lists a retirement plan rather than a license — a split that could re-key numbers upward, or mint rows for its own output, would reset the debt instead of paying it down.
+
+Worked precedents. `scripts/check-greenfield-providers.sh` (the `GENERIC_EXEMPT_LINES` dict) is keyed by path; the 2026-09-15 split of `pkg/config/config.go` moved its exact exempted lines into per-area files, the guard passed before the split and failed after it purely because of the path keying, and the rows were re-keyed — same lines, same count, new paths. On the budget lists themselves, compare this file with `scripts/budgets/functions.txt`: `handleFrame` was seeded here at 2,775 lines in `src/store/chat.ts` and is listed there at 1,773 in `src/store/chat/slices/frames.ts` — address moved, number lowered, which is what a correct re-key looks like.
+
 ## Summary
 
 | List | Entries | Effect |
