@@ -13,9 +13,6 @@ Omnipus's tools configuration is located in the `tools` field of `config.json`.
     "mcp": {
       ...
     },
-    "exec": {
-      ...
-    },
     "cron": {
       ...
     },
@@ -30,7 +27,7 @@ Omnipus's tools configuration is located in the `tools` field of `config.json`.
 
 Before tool results are sent to the LLM, Omnipus can filter sensitive values (API keys, tokens, secrets) from the output. This prevents the LLM from seeing its own credentials.
 
-See [Security for users](security.md) for the user-facing limits and [operator security considerations](operations/security-considerations.md#sensitive-value-filtering) for configuration details.
+See [Security for users](../security.md) for the user-facing limits and [operator security considerations](security-considerations.md#sensitive-value-filtering) for configuration details.
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|
@@ -125,7 +122,7 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 | `search_engine` | string | `search_std`                                      | Search engine type                       |
 | `max_results`   | int    | 5                                                 | Maximum number of results                |
 
-> **Note:** `api_key_ref` is the production schema: it stores the name of an environment variable (e.g. `BRAVE_API_KEY`) whose value, resolved at load time from the encrypted credential store, holds the actual key. The legacy plaintext `api_key` field is silently dropped by the loader, as is the older `api_keys[]` array form (multi-key rotation now lives on the `providers` config instead — see `docs/providers.md`).
+> **Note:** `api_key_ref` stores the name of an environment variable whose value is resolved from the encrypted credential store. The legacy plaintext `api_key` and older `api_keys[]` forms are dropped by the loader. See [providers and models](../providers-and-models.md) for the user-facing provider model.
 
 ### Additional Web Settings
 
@@ -134,9 +131,9 @@ Baidu Search uses the [Qianfan AI Search API](https://cloud.baidu.com/doc/qianfa
 | `prefer_native`          | bool     | true    | Prefer provider's native search over configured search engines |
 | `private_host_whitelist` | string[] | `[]`    | Private/internal hosts allowed for web fetching                |
 
-### `web_search` Tool Parameters
+### `search_web` tool parameters
 
-At runtime, the `web_search` tool accepts the following parameters:
+At runtime, the `search_web` tool accepts the following parameters:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -146,7 +143,7 @@ At runtime, the `web_search` tool accepts the following parameters:
 
 If `range` is omitted, Omnipus performs an unrestricted search.
 
-### Example `web_search` Call
+### Example `search_web` call
 
 ```json
 {
@@ -156,89 +153,9 @@ If `range` is omitted, Omnipus performs an unrestricted search.
 }
 ```
 
-## Exec Tool
+## Bash tool
 
-The exec tool is used to execute shell commands.
-
-| Config                 | Type  | Default | Description                                |
-|------------------------|-------|---------|--------------------------------------------|
-| `enabled`              | bool  | true    | Enable the exec tool                        |
-| `enable_deny_patterns` | bool  | true    | Enable default dangerous command blocking  |
-| `custom_deny_patterns` | array | []      | Custom deny patterns (regular expressions) |
-
-### Disabling the Exec Tool
-
-To completely disable the `exec` tool, set `enabled` to `false`:
-
-**Via config file:**
-```json
-{
-  "tools": {
-    "exec": {
-      "enabled": false
-    }
-  }
-}
-```
-
-**Via environment variable:**
-```bash
-OMNIPUS_TOOLS_EXEC_ENABLED=false
-```
-
-> **Note:** When disabled, the agent will not be able to execute shell commands. This also affects the Cron tool's ability to run scheduled shell commands.
-
-### Functionality
-
-**`enable_deny_patterns`** — Set to `false` to completely disable the default dangerous command blocking patterns.
-
-**`custom_deny_patterns`** — Add custom deny regex patterns; commands matching these will be blocked.
-
-### Default Blocked Command Patterns
-
-By default, Omnipus blocks the following categories of dangerous commands:
-
-| Category | Examples |
-|---|---|
-| Delete commands | `rm -rf`, `del /f/q`, `rmdir /s` |
-| Disk operations | `format`, `mkfs`, `diskpart`, `dd if=`, writing to `/dev/sd*` |
-| System operations | `shutdown`, `reboot`, `poweroff` |
-| Command substitution | `$()`, `${}`, backticks |
-| Pipe to shell | `| sh`, `| bash` |
-| Privilege escalation | `sudo`, `chmod`, `chown` |
-| Process control | `pkill`, `killall`, `kill -9` |
-| Remote operations | `curl | sh`, `wget | sh`, `ssh` |
-| Package management | `apt`, `yum`, `dnf`, `npm install -g`, `pip install --user` |
-| Containers | `docker run`, `docker exec` |
-| Git | `git push`, `git force` |
-| Other | `eval`, `source *.sh` |
-
-### Known Architectural Limitation
-
-The exec guard only validates the top-level command sent to Omnipus. It does **not** recursively inspect child
-processes spawned by build tools or scripts after that command starts running.
-
-Workflows that can bypass the direct command guard once the initial command is allowed include `make run`, `go run ./cmd/...`, `cargo run`, and `npm run build`.
-
-This means the guard is useful for blocking obviously dangerous direct commands, but it is **not** a full sandbox for
-unreviewed build pipelines. If your threat model includes untrusted code in the workspace, use stronger isolation such
-as containers, VMs, or an approval flow around build-and-run commands.
-
-### Configuration Example
-
-```json
-{
-  "tools": {
-    "exec": {
-      "enable_deny_patterns": true,
-      "custom_deny_patterns": [
-        "\\brm\\s+-r\\b",
-        "\\bkillall\\s+python"
-      ]
-    }
-  }
-}
-```
+`bash` is the shell-command tool. It has no `tools.exec` feature switch: it is registered for every agent and governed by the global and per-agent Allow, Ask, or Deny policies. Set its policy to Deny to block shell commands, or Ask to require approval. See [sandbox configuration](sandbox-config.md) for the process boundary and [tools](../tools.md) for policy behavior.
 
 ## Cron Tool
 
@@ -277,8 +194,8 @@ and injected into the context for a configured number of turns (`ttl`).
 | `enabled`            | bool | false   | Global default: if `true`, all MCP tools are hidden and loaded on-demand via search; if `false`, all tools are loaded into context. Individual servers can override this with the per-server `deferred` field. |
 | `ttl`                | int  | 5       | Number of conversational turns a discovered tool remains unlocked                                                                 |
 | `max_search_results` | int  | 5       | Maximum number of tools returned per search query                                                                                 |
-| `use_bm25`           | bool | true    | Enable the natural language/keyword search tool (`tool_search_tool_bm25`). **Warning**: consumes more resources than regex search |
-| `use_regex`          | bool | false   | Enable the regex pattern search tool (`tool_search_tool_regex`)                                                                   |
+| `use_bm25`           | bool | true    | Let `ToolSearch` match natural-language and keyword queries. **Warning**: consumes more resources than regex search |
+| `use_regex`          | bool | false   | Let `ToolSearch` match regular-expression queries |
 
 > **Note:** If `discovery.enabled` is `true`, you MUST enable at least one search engine (`use_bm25` or `use_regex`),
 > otherwise the application will fail to start.
@@ -350,7 +267,7 @@ If `type` is omitted, transport is auto-detected: a `url` being set implies `sse
 
 #### 3) Massive MCP setup with Tool Discovery enabled
 
-*In this example, the LLM will only see the `tool_search_tool_bm25`. It will search and unlock Github or Postgres tools
+*In this example, the model sees `ToolSearch`. It can search for and unlock GitHub or Postgres tools
 dynamically only when requested by the user.*
 
 ```json
@@ -515,8 +432,6 @@ All configuration options can be overridden via environment variables with the f
 | Variable | Effect |
 |---|---|
 | `OMNIPUS_TOOLS_WEB_BRAVE_ENABLED=true` | Enable Brave search |
-| `OMNIPUS_TOOLS_EXEC_ENABLED=false` | Disable the exec tool |
-| `OMNIPUS_TOOLS_EXEC_ENABLE_DENY_PATTERNS=false` | Disable default deny patterns |
 | `OMNIPUS_TOOLS_CRON_EXEC_TIMEOUT_MINUTES=10` | Set cron exec timeout |
 | `OMNIPUS_TOOLS_MCP_ENABLED=true` | Enable MCP integration |
 

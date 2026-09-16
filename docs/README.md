@@ -48,17 +48,4 @@ Talk from your platforms.
 
 ## Running the box
 
-For whoever operates the server.
-
-| Page | What it covers |
-|---|---|
-| [Docker](docker.md) | Container deployment |
-| [Sandbox configuration](operations/sandbox-config.md) | Process sandbox setup |
-| [Sandbox limitations](operations/sandbox-limitations.md) | Where enforcement steps down |
-| [Operator security](operations/security-considerations.md) | Hardening a deployment |
-| [Reverse proxy](operations/reverse-proxy.md) | One listener behind TLS |
-| [Platform support](operations/platform-support.md) | Built and shipped platforms |
-| [Debugging](debug.md), [observability](observability.md) | Logs, sessions, events |
-| Configuration reference | [All keys](configuration.md), [versioning](config-versioning.md), [tools](tools_configuration.md), [tool catalog](tools-reference.md), [providers](providers.md) |
-| Security | [Permissions, sandboxing, credentials, and audit history](security.md) |
-| Advanced | [Hooks](hooks/README.md), [WebSocket protocol](protocol/websocket-protocol.md), [config migration](migration/model-list-migration.md) |
+The [operator guide](operations/README.md) covers deployment, configuration, security, logs, and maintenance. Docker deployment remains in the [Docker guide](docker.md).

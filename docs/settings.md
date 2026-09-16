@@ -1,12 +1,12 @@
 # Settings
 
-Settings is where you connect the model providers your agents run on, set the limits they work under, tell them who you are, and watch what they spend. Three screens do this job, all reached from the user menu in the sidebar: Settings, Profile, and Usage.
+Settings connects model providers, sets agent limits, records your context, and shows usage. The sidebar user menu opens Settings, Profile, and Usage.
 
 ## What it is
 
 The Settings screen is a row of tabs: Providers, Models, Integrations, Security, Gateway, Data, Memory, Devices, Performance, Chat, and About. The Devices tab appears only when your install enables device pairing, so most people never see it.
 
-Most settings save themselves the moment you change them, and a small indicator next to each one confirms the save. Two exceptions behave differently: anything that touches a secret (an API key, a credential) asks you to re-type your password before it is accepted, and gateway listening changes ask for a restart.
+Most settings save when changed, with an indicator confirming the save. Secret changes ask you to re-type your password. Gateway listening changes require a restart.
 
 Personal things are not tabs here. Profile is its own screen, holding your name, timezone, password, and the context your agents read about you. Usage is its own screen, showing token totals by agent, model, and session.
 
@@ -23,7 +23,7 @@ Two jobs that look like settings live on their own pages: what agents may do is 
 ## How to connect a model provider
 
 1. Open Settings from the sidebar's user menu. The Providers tab opens first.
-2. Click **Connect a provider**. A panel lists every provider Omnipus knows about, grouped by company, with a search field.
+2. Click **Connect a provider**. Search the catalog or browse it by company. The [providers and models](providers-and-models.md) page explains the choices without duplicating the live list.
 3. Pick a provider. Some companies offer more than one way in, shown as variants: a pay-as-you-go API, a coding plan, or sign-in with an account you already have. Where sign-in exists it is the pre-selected choice.
 4. If the variant wants an API key, paste the key and click **Connect**. The row appears with its status.
 5. If the variant uses sign-in, one of two flows follows, and the dialog tells you which:
@@ -77,3 +77,4 @@ Profile holds one setting your agents read every turn: **Workspace Context**. It
 - [agents](agents.md) — giving one agent its own model instead of the default, and choosing the default agent.
 - [memory](memory.md) — what the team remembers between chats, behind the Memory tab.
 - [connectors](connectors.md) — connector accounts and their credentials, managed on the Connectors screen.
+- [providers and models](providers-and-models.md) — how providers, sign-in methods, models, and defaults fit together.
