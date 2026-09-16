@@ -170,6 +170,18 @@ func agentCreateToolsCfgFromWire[P ~string](tc *struct {
 	return out
 }
 
+// restAPICreateAgent carries the shared state of createAgent across its stages.
+type restAPICreateAgent struct {
+	a                 *restAPI
+	w                 http.ResponseWriter
+	r                 *http.Request
+	soul              string
+	toolsCfgIn        *agentCreateToolsCfgInput
+	ac                config.AgentConfig
+	createSoulContent string
+	defaultModelName  string
+}
+
 // createAgent handles POST /api/v1/agents.
 //
 // The wire contract is a discriminated union: AgentCreateRequestMain /
@@ -190,37 +202,75 @@ func agentCreateToolsCfgFromWire[P ~string](tc *struct {
 // type is REQUIRED on every variant: a missing or unrecognized type value is
 // a 400.
 func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
+	cra := &restAPICreateAgent{a: a, w: w, r: r}
 
-	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
-		jsonErr(w, http.StatusBadRequest, "could not read request body")
+	if cra.prepareAgent() {
 		return
 	}
-	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
-		jsonErr(w, http.StatusBadRequest, "request body is required")
+	if cra.buildToolConfig() {
 		return
+	}
+	if cra.persistAgent() {
+		return
+	}
+	if cra.writeSoul() {
+		return
+	}
+
+	cra.publishResponse()
+}
+
+// restAPICreateAgentPrepareAgent carries the shared state of prepareAgent across its stages.
+type restAPICreateAgentPrepareAgent struct {
+	cra            *restAPICreateAgent
+	createType     config.AgentType
+	name           string
+	description    *string
+	model          *string
+	provider       *string
+	color          *string
+	icon           *string
+	skills         *[]string
+	fallbackModels *[]gen.FallbackModel
+	shellPolicyIn  *agentCreateShellPolicyInput
+	modelParamsIn  *agentModelParamsInput
+}
+
+// prepareAgent decodes and validates the request and builds the persistent agent config.
+func (cra *restAPICreateAgent) prepareAgent() bool {
+	pap := &restAPICreateAgentPrepareAgent{cra: cra}
+
+	validateEnabled := pap.cra.a.agentLoop.GetConfig().Gateway.ValidateInbound
+
+	raw, err := io.ReadAll(io.LimitReader(pap.cra.r.Body, 1<<20))
+	if err != nil {
+		jsonErr(pap.cra.w, http.StatusBadRequest, "could not read request body")
+		return true
+	}
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		jsonErr(pap.cra.w, http.StatusBadRequest, "request body is required")
+		return true
 	}
 
 	var typePeek struct {
 		Type *string `json:"type"`
 	}
 	if err := json.Unmarshal(raw, &typePeek); err != nil {
-		jsonErr(w, http.StatusBadRequest, "invalid JSON body")
-		return
+		jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
+		return true
 	}
 	const typeErrMsg = "type is required and must be one of Main, Subagent, subagent_3p"
 	if typePeek.Type == nil {
-		jsonErr(w, http.StatusBadRequest, typeErrMsg)
-		return
+		jsonErr(pap.cra.w, http.StatusBadRequest, typeErrMsg)
+		return true
 	}
 	// ADR-049 D3: System Agents (the Judge category) are seed-only. The ONLY
 	// creation path is coreagent.SeedConfig — never the REST create path nor the
 	// create_agent tool. Reject with a precise message before the generic
 	// variant switch so a client sending {"type":"system"} gets a clear 400.
 	if *typePeek.Type == "system" {
-		jsonErr(w, http.StatusBadRequest, "system agents are not creatable")
-		return
+		jsonErr(pap.cra.w, http.StatusBadRequest, "system agents are not creatable")
+		return true
 	}
 	var variantName string
 	switch *typePeek.Type {
@@ -234,23 +284,23 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		// Covers "core" / "system" (seeded-only classifications — the only way
 		// to obtain one is via SeedConfig, never the REST create path) and any
 		// other unrecognized value.
-		jsonErr(w, http.StatusBadRequest, typeErrMsg)
-		return
+		jsonErr(pap.cra.w, http.StatusBadRequest, typeErrMsg)
+		return true
 	}
 	// Boundary translation between wire (Main/Subagent/subagent_3p) and
 	// persisted config (custom/worker) — single source of truth in
 	// coreagent.ResolveType.
-	createType := coreagent.ResolveType(gen.AgentType(*typePeek.Type))
+	pap.createType = coreagent.ResolveType(gen.AgentType(*typePeek.Type))
 
 	if validateEnabled {
 		if errMsg, serverErr := validateBodyAgainstSchema(variantName, raw); errMsg != "" {
 			if serverErr {
-				jsonErr(w, http.StatusInternalServerError, "inbound schema unavailable")
+				jsonErr(pap.cra.w, http.StatusInternalServerError, "inbound schema unavailable")
 			} else {
-				jsonErr(w, http.StatusBadRequest,
+				jsonErr(pap.cra.w, http.StatusBadRequest,
 					fmt.Sprintf("request body does not match schema %s: %s", variantName, errMsg))
 			}
-			return
+			return true
 		}
 	}
 
@@ -266,69 +316,56 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// fields — a subagent_3p create supplying any of those is rejected at
 	// decode time, both because the Go type has no matching field and
 	// because the strict decoder refuses to silently drop it.
-	var (
-		name           string
-		description    *string
-		model          *string
-		provider       *string
-		color          *string
-		icon           *string
-		soul           string
-		skills         *[]string
-		fallbackModels *[]gen.FallbackModel
-		shellPolicyIn  *agentCreateShellPolicyInput
-		toolsCfgIn     *agentCreateToolsCfgInput
-		executorIn     *executorRequestInput
-		modelParamsIn  *agentModelParamsInput
-	)
+
+	var executorIn *executorRequestInput
 
 	switch *typePeek.Type {
 	case "Main":
 		var vreq gen.AgentCreateRequestMain
-		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
-			return
+		if !decodeAgentCreateVariant(pap.cra.w, raw, *typePeek.Type, variantName, &vreq) {
+			return true
 		}
-		name = vreq.Name
-		description = vreq.Description
-		model = vreq.Model
-		provider = vreq.Provider
-		color = vreq.Color
-		icon = vreq.Icon
-		soul = vreq.Soul
-		skills = vreq.Skills
-		fallbackModels = vreq.FallbackModels
-		shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
-		toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
-		modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
+		pap.name = vreq.Name
+		pap.description = vreq.Description
+		pap.model = vreq.Model
+		pap.provider = vreq.Provider
+		pap.color = vreq.Color
+		pap.icon = vreq.Icon
+		pap.cra.soul = vreq.Soul
+		pap.skills = vreq.Skills
+		pap.fallbackModels = vreq.FallbackModels
+		pap.shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
+		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
+		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
 	case "Subagent":
 		var vreq gen.AgentCreateRequestSubagent
-		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
-			return
+		if !decodeAgentCreateVariant(pap.cra.w, raw, *typePeek.Type, variantName, &vreq) {
+			return true
 		}
-		name = vreq.Name
-		description = vreq.Description
-		model = vreq.Model
-		provider = vreq.Provider
-		color = vreq.Color
-		icon = vreq.Icon
-		soul = vreq.Soul
-		skills = vreq.Skills
-		fallbackModels = vreq.FallbackModels
-		shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
-		toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
-		modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
+		pap.name = vreq.Name
+		pap.description = vreq.Description
+		pap.model = vreq.Model
+		pap.provider = vreq.Provider
+		pap.color = vreq.Color
+		pap.icon = vreq.Icon
+		pap.cra.soul = vreq.Soul
+		pap.skills = vreq.Skills
+		pap.fallbackModels = vreq.FallbackModels
+		pap.shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
+		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
+		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
 	case "subagent_3p":
 		var vreq gen.AgentCreateRequestSubagent3p
-		if !decodeAgentCreateVariant(w, raw, *typePeek.Type, variantName, &vreq) {
-			return
+		if !decodeAgentCreateVariant(pap.cra.w, raw, *typePeek.Type, variantName, &vreq) {
+			return true
 		}
-		name = vreq.Name
-		description = vreq.Description
-		model = vreq.Model
-		provider = vreq.Provider
-		color = vreq.Color
-		icon = vreq.Icon
-		soul = vreq.Soul
+		pap.name = vreq.Name
+		pap.description = vreq.Description
+		pap.model = vreq.Model
+		pap.provider = vreq.Provider
+		pap.color = vreq.Color
+		pap.icon = vreq.Icon
+		pap.cra.soul = vreq.Soul
 		executorIn = &executorRequestInput{
 			Cli:          executorCliStr(vreq.Executor.Cli),
 			CliPath:      vreq.Executor.CliPath,
@@ -339,10 +376,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 
 	// Trim before the empty check so a whitespace-only name ("   ") is rejected
 	// rather than silently accepted (UAT fix). Persist the trimmed value.
-	name = strings.TrimSpace(name)
-	if name == "" {
-		jsonErr(w, http.StatusUnprocessableEntity, "name is required")
-		return
+	pap.name = strings.TrimSpace(pap.name)
+	if pap.name == "" {
+		jsonErr(pap.cra.w, http.StatusUnprocessableEntity, "name is required")
+		return true
 	}
 	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — it is
 	// the switch_agent target sentinel that always means "the configured
@@ -351,10 +388,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// part 3 upgrade-time WARN below covers agents that predate this check).
 	// Create's id is always a fresh uuid.New().String() (never operator-
 	// chosen), so only the name half of this rule is reachable here.
-	if strings.EqualFold(name, tools.SwitchAgentDefaultTarget) {
-		jsonErr(w, http.StatusBadRequest,
-			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", name, tools.SwitchAgentDefaultTarget))
-		return
+	if strings.EqualFold(pap.name, tools.SwitchAgentDefaultTarget) {
+		jsonErr(pap.cra.w, http.StatusBadRequest,
+			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", pap.name, tools.SwitchAgentDefaultTarget))
+		return true
 	}
 	// subagent_3p executor.cli_path: required (spec §9.2), whitespace-only
 	// rejected. The schema requires the `executor` object itself to be
@@ -366,29 +403,66 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// what (if anything) the client sent — kind "is exposed in responses but
 	// is NOT a writable field on create/update — clients cannot choose kind
 	// directly" (contracts/components/schemas/ExecutorConfig.yaml).
-	if createType == config.AgentTypeWorker && *typePeek.Type == string(gen.AgentTypeSubagent3p) {
+	if pap.createType == config.AgentTypeWorker && *typePeek.Type == string(gen.AgentTypeSubagent3p) {
 		if executorIn == nil || executorIn.CliPath == nil || strings.TrimSpace(*executorIn.CliPath) == "" {
-			jsonErr(w, http.StatusBadRequest, "executor.cli_path is required for subagent_3p agents")
-			return
+			jsonErr(pap.cra.w, http.StatusBadRequest, "executor.cli_path is required for subagent_3p agents")
+			return true
 		}
 	}
+	if r0, stop := pap.validateAndBuildConfig(); stop {
+		return r0
+	}
+	// Sub-agent executor. Mapped into AgentConfig.Subagents.Executor so it is
+	// actually persisted. A native Subagent (no Executor property on the wire
+	// at all) always gets a native runtime here. A subagent_3p always gets
+	// kind=external-cli — the wire schema requires `executor` to be present
+	// for that variant and, per the field matrix, kind is server-derived
+	// (never client-writable) rather than read from the request.
+	if pap.createType == config.AgentTypeWorker {
+		if *typePeek.Type == string(gen.AgentTypeSubagent3p) {
+			execCfg, errMsg := executorConfigFromRequest(string(config.ExecutorKindExternalCLI), executorIn.Cli)
+			if errMsg != "" {
+				jsonErr(pap.cra.w, http.StatusBadRequest, errMsg)
+				return true
+			}
+			if executorIn.CliPath != nil {
+				execCfg.CLIPath = *executorIn.CliPath
+			}
+			if executorIn.EnvOverrides != nil {
+				execCfg.EnvOverrides = *executorIn.EnvOverrides
+			}
+			if executorIn.CliArgs != nil {
+				execCfg.CLIArgs = *executorIn.CliArgs
+			}
+			pap.cra.ac.Subagents = &config.SubagentsConfig{Executor: execCfg}
+		} else {
+			pap.cra.ac.Subagents = &config.SubagentsConfig{
+				Executor: &config.ExecutorConfig{Kind: config.ExecutorKindNative},
+			}
+		}
+	}
+	return false
+}
+
+// validateAndBuildConfig validates shared fields and builds the base persistent agent config.
+func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool) {
 	// Referential validation: reject unknown skill IDs before doing any work.
-	if skills != nil && len(*skills) > 0 {
-		if errMsg := a.validateSkillIDs(*skills); errMsg != "" {
-			jsonErr(w, http.StatusBadRequest, errMsg)
-			return
+	if pap.skills != nil && len(*pap.skills) > 0 {
+		if errMsg := pap.cra.a.validateSkillIDs(*pap.skills); errMsg != "" {
+			jsonErr(pap.cra.w, http.StatusBadRequest, errMsg)
+			return true, true
 		}
 	}
 	descTrimmed := ""
-	if description != nil {
-		descTrimmed = strings.TrimSpace(*description)
+	if pap.description != nil {
+		descTrimmed = strings.TrimSpace(*pap.description)
 	}
 	// W2 spec §4.3 / §9.2 F-02 (mirror of PUT path): Subagent and subagent_3p
 	// require a non-empty description after trim. A worker without a
 	// description cannot be routed to by the orchestrator.
-	if createType == config.AgentTypeWorker && descTrimmed == "" {
-		jsonErr(w, http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)")
-		return
+	if pap.createType == config.AgentTypeWorker && descTrimmed == "" {
+		jsonErr(pap.cra.w, http.StatusBadRequest, "description is required for worker agents (Subagent, subagent_3p)")
+		return true, true
 	}
 	// O12.1 — voice is Main-only (form matrix row 13): no runtime check is
 	// needed here any more. AgentCreateRequestSubagent / …Subagent3p
@@ -400,9 +474,9 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// is capped at 2 entries. Server-enforced so direct REST callers (not the
 	// SPA) cannot smuggle more entries past the schema validator. subagent_3p
 	// has no fallback_models property (fallbackModels stays nil for that variant).
-	if fallbackModels != nil && len(*fallbackModels) > 2 {
-		jsonErr(w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
-		return
+	if pap.fallbackModels != nil && len(*pap.fallbackModels) > 2 {
+		jsonErr(pap.cra.w, http.StatusBadRequest, "fallback_models exceeds maxItems: 2")
+		return true, true
 	}
 	// model_params.top_p (T2): removed from the wire entirely — see
 	// agentModelParamsInput's doc comment. No explicit rejection is needed
@@ -414,48 +488,48 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// W2 spec §4.7 / §9.2 row 8: whitespace-only soul is rejected (the wire
 	// schema enforces minLength:1; whitespace-only is the natural
 	// soft-bypass). Backend trims before validation.
-	if soul == "" || strings.TrimSpace(soul) == "" {
-		jsonErr(w, http.StatusBadRequest, "soul is required (whitespace-only is rejected as minLength violation)")
-		return
+	if pap.cra.soul == "" || strings.TrimSpace(pap.cra.soul) == "" {
+		jsonErr(pap.cra.w, http.StatusBadRequest, "soul is required (whitespace-only is rejected as minLength violation)")
+		return true, true
 	}
 	colorVal := ""
-	if color != nil {
-		colorVal = *color
+	if pap.color != nil {
+		colorVal = *pap.color
 	}
 	iconVal := ""
-	if icon != nil {
-		iconVal = *icon
+	if pap.icon != nil {
+		iconVal = *pap.icon
 	}
 	// color hex regex (spec §4.4).
 	if colorVal != "" {
 		if matched, _ := regexp.MatchString(`^#[0-9A-Fa-f]{6}$`, colorVal); !matched {
-			jsonErr(w, http.StatusBadRequest, "color must be a valid hex code (e.g. #D4AF37)")
-			return
+			jsonErr(pap.cra.w, http.StatusBadRequest, "color must be a valid hex code (e.g. #D4AF37)")
+			return true, true
 		}
 	}
 	// icon maxLength:50 (spec §4.4).
 	if len(iconVal) > 50 {
-		jsonErr(w, http.StatusBadRequest, "icon exceeds maxLength: 50")
-		return
+		jsonErr(pap.cra.w, http.StatusBadRequest, "icon exceeds maxLength: 50")
+		return true, true
 	}
 	// ac is the in-memory config record. Locked is left at its zero value
 	// (false) for BOTH custom and worker creates — the API is the operator's
 	// surface for editing; only SeedConfig-seeded agents are locked. A newly
 	// created worker is therefore editable (unlike the seeded default
 	// general-purpose worker, which is locked by coreagent.SeedConfig).
-	ac := config.AgentConfig{
+	pap.cra.ac = config.AgentConfig{
 		ID:          uuid.New().String(),
-		Name:        name,
+		Name:        pap.name,
 		Description: descTrimmed,
 		Color:       colorVal,
 		Icon:        iconVal,
-		Type:        createType,
+		Type:        pap.createType,
 	}
-	if model != nil && *model != "" {
-		ac.Model = &config.AgentModelConfig{Primary: *model}
+	if pap.model != nil && *pap.model != "" {
+		pap.cra.ac.Model = &config.AgentModelConfig{Primary: *pap.model}
 		// O3 two-field model: persist the explicit primary provider when supplied.
-		if provider != nil && strings.TrimSpace(*provider) != "" {
-			ac.Model.Provider = strings.TrimSpace(*provider)
+		if pap.provider != nil && strings.TrimSpace(*pap.provider) != "" {
+			pap.cra.ac.Model.Provider = strings.TrimSpace(*pap.provider)
 		}
 	}
 	// model_params (T1 fix): createAgent previously decoded model_params fine
@@ -464,57 +538,33 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// commit 2b057e15 (Q1) fixed for PUT. mergeAgentModelParams is the exact
 	// helper that fix introduced for updateAgent; existing is nil here since
 	// this is a brand-new agent record.
-	ac.ModelParams = mergeAgentModelParams(nil, modelParamsIn)
+	pap.cra.ac.ModelParams = mergeAgentModelParams(nil, pap.modelParamsIn)
 	// shell_policy: mapped onto AgentConfig so it is actually persisted.
 	// subagent_3p has no shell_policy property on the wire (shellPolicyIn
 	// stays nil for that variant — the CLI manages its own isolation), so it
 	// stays unset there, matching updateAgent's rejection of this field on a
 	// subagent_3p PUT.
-	if shellPolicyIn != nil {
+	if pap.shellPolicyIn != nil {
 		sp := &config.AgentShellPolicy{}
-		if shellPolicyIn.EnableDenyPatterns != nil {
-			sp.EnableDenyPatterns = *shellPolicyIn.EnableDenyPatterns
+		if pap.shellPolicyIn.EnableDenyPatterns != nil {
+			sp.EnableDenyPatterns = *pap.shellPolicyIn.EnableDenyPatterns
 		}
-		if len(shellPolicyIn.CustomDenyPatterns) > 0 {
-			sp.CustomDenyPatterns = make([]string, len(shellPolicyIn.CustomDenyPatterns))
-			copy(sp.CustomDenyPatterns, shellPolicyIn.CustomDenyPatterns)
+		if len(pap.shellPolicyIn.CustomDenyPatterns) > 0 {
+			sp.CustomDenyPatterns = make([]string, len(pap.shellPolicyIn.CustomDenyPatterns))
+			copy(sp.CustomDenyPatterns, pap.shellPolicyIn.CustomDenyPatterns)
 		}
-		ac.ShellPolicy = sp
+		pap.cra.ac.ShellPolicy = sp
 	}
 	// Heartbeat is workspace-scoped (ADR-027); no per-agent heartbeat at create.
-	if skills != nil && len(*skills) > 0 {
-		ac.Skills = make([]string, len(*skills))
-		copy(ac.Skills, *skills)
+	if pap.skills != nil && len(*pap.skills) > 0 {
+		pap.cra.ac.Skills = make([]string, len(*pap.skills))
+		copy(pap.cra.ac.Skills, *pap.skills)
 	}
-	// Sub-agent executor. Mapped into AgentConfig.Subagents.Executor so it is
-	// actually persisted. A native Subagent (no Executor property on the wire
-	// at all) always gets a native runtime here. A subagent_3p always gets
-	// kind=external-cli — the wire schema requires `executor` to be present
-	// for that variant and, per the field matrix, kind is server-derived
-	// (never client-writable) rather than read from the request.
-	if createType == config.AgentTypeWorker {
-		if *typePeek.Type == string(gen.AgentTypeSubagent3p) {
-			execCfg, errMsg := executorConfigFromRequest(string(config.ExecutorKindExternalCLI), executorIn.Cli)
-			if errMsg != "" {
-				jsonErr(w, http.StatusBadRequest, errMsg)
-				return
-			}
-			if executorIn.CliPath != nil {
-				execCfg.CLIPath = *executorIn.CliPath
-			}
-			if executorIn.EnvOverrides != nil {
-				execCfg.EnvOverrides = *executorIn.EnvOverrides
-			}
-			if executorIn.CliArgs != nil {
-				execCfg.CLIArgs = *executorIn.CliArgs
-			}
-			ac.Subagents = &config.SubagentsConfig{Executor: execCfg}
-		} else {
-			ac.Subagents = &config.SubagentsConfig{
-				Executor: &config.ExecutorConfig{Kind: config.ExecutorKindNative},
-			}
-		}
-	}
+	return false, false
+}
+
+// buildToolConfig validates and builds the agent's builtin and MCP tool configuration.
+func (cra *restAPICreateAgent) buildToolConfig() bool {
 	// ADR-037: delegation_policy is retired from the wire entirely — the
 	// per-workspace delegation graph (Team tab) is the sole delegation
 	// mechanism. There is nothing left to map/validate/persist here.
@@ -549,17 +599,17 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// legitimately falls through to the server-generated, complete, deny-seeded
 	// baseline — that is not a caller gap, and subagent_3p has no tools_cfg on
 	// the wire at all.
-	if toolsCfgIn != nil && toolsCfgIn.BuiltinPolicies != nil {
+	if cra.toolsCfgIn != nil && cra.toolsCfgIn.BuiltinPolicies != nil {
 		if defects := config.ValidateSubmittedToolPolicyMap(
-			toolsCfgIn.BuiltinPolicies, buildKnownBuiltinToolNames(),
+			cra.toolsCfgIn.BuiltinPolicies, buildKnownBuiltinToolNames(),
 		); !defects.Empty() {
-			jsonErr(w, http.StatusBadRequest,
+			jsonErr(cra.w, http.StatusBadRequest,
 				"tools_cfg.builtin.policies "+defects.String())
-			return
+			return true
 		}
 	}
 	baseCfg := coreagent.NewCustomAgentToolsCfg()
-	if toolsCfgIn != nil {
+	if cra.toolsCfgIn != nil {
 		builtin := config.AgentBuiltinToolsCfg{
 			// Inherit the fully-enumerated deny-by-default seed (every static
 			// tool present with an explicit "deny" or "allow" entry, no
@@ -572,21 +622,26 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		// Merge caller-supplied policies; the caller's per-tool entry (exact
 		// name, never a wildcard) overrides the corresponding seed entry.
-		for k, v := range toolsCfgIn.BuiltinPolicies {
+		for k, v := range cra.toolsCfgIn.BuiltinPolicies {
 			builtin.Policies[k] = config.ToolPolicy(v)
 		}
-		ac.Tools = &config.AgentToolsCfg{Builtin: builtin}
-		if len(toolsCfgIn.MCPServers) > 0 {
-			servers := make([]config.AgentMCPServerBinding, 0, len(toolsCfgIn.MCPServers))
-			for _, s := range toolsCfgIn.MCPServers {
+		cra.ac.Tools = &config.AgentToolsCfg{Builtin: builtin}
+		if len(cra.toolsCfgIn.MCPServers) > 0 {
+			servers := make([]config.AgentMCPServerBinding, 0, len(cra.toolsCfgIn.MCPServers))
+			for _, s := range cra.toolsCfgIn.MCPServers {
 				servers = append(servers, config.AgentMCPServerBinding{ID: s.ID, Tools: s.Tools})
 			}
-			ac.Tools.MCP = config.AgentMCPToolsCfg{Servers: servers}
+			cra.ac.Tools.MCP = config.AgentMCPToolsCfg{Servers: servers}
 		}
 	} else {
 		// No caller-supplied tools config: use the full base config.
-		ac.Tools = baseCfg
+		cra.ac.Tools = baseCfg
 	}
+	return false
+}
+
+// persistAgent persists the new agent under the tool-policy coverage guard.
+func (cra *restAPICreateAgent) persistAgent() bool {
 	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: reject
 	// the create if the new agent's tool-policy map — together with the
 	// global sandbox.tool_policies — would leave any static builtin tool
@@ -601,10 +656,10 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// doc comment), via withToolPolicyCoverageGuard: it returns false once it
 	// has already written the HTTP response (error case), so the caller just
 	// returns.
-	if ok := a.withToolPolicyCoverageGuard(
-		w,
+	if ok := cra.a.withToolPolicyCoverageGuard(
+		cra.w,
 		func(c *config.Config) {
-			c.Agents.List = append(c.Agents.List, ac)
+			c.Agents.List = append(c.Agents.List, cra.ac)
 		},
 		func(gaps []config.CoverageGap) string {
 			return fmt.Sprintf(
@@ -625,15 +680,20 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 		// a nil error here means ac is durably confirmed on disk before this
 		// handler ever reports success to the caller.
 		func(m map[string]any) error {
-			if err := agentstore.New(a.homePath).Create(ac.ID, &ac); err != nil {
+			if err := agentstore.New(cra.a.homePath).Create(cra.ac.ID, &cra.ac); err != nil {
 				return fmt.Errorf("create agent entity record: %w", err)
 			}
 			return nil
 		},
 		"rest: save agent entity record for new agent",
 	); !ok {
-		return
+		return true
 	}
+	return false
+}
+
+// writeSoul writes the agent soul and captures the default model for the response.
+func (cra *restAPICreateAgent) writeSoul() bool {
 	// Persist the create-time soul to SOUL.md. createAgent previously
 	// write-dropped req.Soul: the contract accepted it, the FE sent it, but
 	// nothing ever landed on disk — and a "draft" agent created without a
@@ -644,26 +704,30 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// idempotent against itself). soul is required on every variant (schema
 	// minLength:1, enforced again above), so this is always non-empty in
 	// practice — the guard stays as defense-in-depth.
-	var createSoulContent string
-	if soul != "" {
-		createSoulContent = strings.TrimSpace(soul)
-		workspace, wsErr := agentWorkspacePath(a.agentLoop.GetConfig(), ac.ID, ac.Home, a.homePath)
+
+	if cra.soul != "" {
+		cra.createSoulContent = strings.TrimSpace(cra.soul)
+		workspace, wsErr := agentWorkspacePath(cra.a.agentLoop.GetConfig(), cra.ac.ID, cra.ac.Home, cra.a.homePath)
 		if wsErr != nil {
-			slog.Error("rest: agentWorkspacePath for create", "agent_id", ac.ID, "error", wsErr)
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
-			return
+			slog.Error("rest: agentWorkspacePath for create", "agent_id", cra.ac.ID, "error", wsErr)
+			jsonErr(cra.w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
+			return true
 		}
 		soulPath := filepath.Join(workspace, "SOUL.md")
-		if err := fileutil.WriteFileAtomic(soulPath, []byte(createSoulContent), 0o600); err != nil {
-			slog.Error("rest: write SOUL.md for new agent", "agent_id", ac.ID, "error", err)
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not write SOUL.md: %v", err))
-			return
+		if err := fileutil.WriteFileAtomic(soulPath, []byte(cra.createSoulContent), 0o600); err != nil {
+			slog.Error("rest: write SOUL.md for new agent", "agent_id", cra.ac.ID, "error", err)
+			jsonErr(cra.w, http.StatusInternalServerError, fmt.Sprintf("could not write SOUL.md: %v", err))
+			return true
 		}
 	}
 	// Capture the default model name BEFORE the fast upsert to avoid a race
 	// between it (which may swap the live config) and the read below.
-	defaultModelName := a.agentLoop.GetConfig().Agents.Defaults.DefaultModel.Model
+	cra.defaultModelName = cra.a.agentLoop.GetConfig().Agents.Defaults.DefaultModel.Model
+	return false
+}
 
+// publishResponse publishes the agent to the live registry and returns the created response.
+func (cra *restAPICreateAgent) publishResponse() {
 	// Persistence succeeded. Publish the new agent into the live AgentRegistry
 	// BEFORE we answer 201 — via the ADR-054 fast path (issue #571), not a
 	// full config reload: creating one agent must not restart channels, cron,
@@ -678,48 +742,48 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	// a half-wired agent.
 	//
 	// The "warning" field signals a partial success — frontend must check this field.
-	createReloadWarning := a.fastAgentUpsert(ac.ID)
+	createReloadWarning := cra.a.fastAgentUpsert(cra.ac.ID)
 	// Build the response from local variables only (do NOT read from live config — race).
-	respModel := defaultModelName
-	if ac.Model != nil && ac.Model.Primary != "" {
-		respModel = ac.Model.Primary
+	respModel := cra.defaultModelName
+	if cra.ac.Model != nil && cra.ac.Model.Primary != "" {
+		respModel = cra.ac.Model.Primary
 	}
 	// Capture execution config AFTER reload (TriggerReload may have swapped the live config).
-	cfgAfterCreate := a.agentLoop.GetConfig()
+	cfgAfterCreate := cra.a.agentLoop.GetConfig()
 	ag := buildAgentDefaults(cfgAfterCreate)
-	ag.Id = ac.ID
-	ag.Name = ac.Name
-	if ac.Description != "" {
-		ag.Description = &ac.Description
+	ag.Id = cra.ac.ID
+	ag.Name = cra.ac.Name
+	if cra.ac.Description != "" {
+		ag.Description = &cra.ac.Description
 	}
-	if ac.Color != "" {
-		ag.Color = &ac.Color
+	if cra.ac.Color != "" {
+		ag.Color = &cra.ac.Color
 	}
-	if ac.Icon != "" {
-		ag.Icon = &ac.Icon
+	if cra.ac.Icon != "" {
+		ag.Icon = &cra.ac.Icon
 	}
 	// Type reflects the chosen classification (custom or worker). For
 	// "custom" this matches the pre-existing hardcoded behavior. For
 	// "worker" it surfaces the create-time choice so the response — and
 	// subsequent GET / list reads via coreagent.ResolveType — round-trips the
 	// agent kind the caller actually created (Main/Subagent/subagent_3p on the wire).
-	ag.Type = coreagent.ToWireType(ac)
-	ag.Locked = ac.Locked
-	applyAgentOverrides(&ag, &ac)
+	ag.Type = coreagent.ToWireType(cra.ac)
+	ag.Locked = cra.ac.Locked
+	applyAgentOverrides(&ag, &cra.ac)
 	ag.Model = &respModel
-	setAgentModelProvider(&ag, ac.Model)
+	setAgentModelProvider(&ag, cra.ac.Model)
 	// Echo the just-persisted soul so the FE round-trip works. Status is
 	// derived from the soul too: a non-empty soul moves the agent out of "draft".
-	ag.Soul = createSoulContent
-	ag.Status = gen.AgentStatus(computeAgentStatus(ac.ID, nil, createSoulContent, ac.Locked))
-	if len(ac.Skills) > 0 {
-		skillsResp := make([]string, len(ac.Skills))
-		copy(skillsResp, ac.Skills)
+	ag.Soul = cra.createSoulContent
+	ag.Status = gen.AgentStatus(computeAgentStatus(cra.ac.ID, nil, cra.createSoulContent, cra.ac.Locked))
+	if len(cra.ac.Skills) > 0 {
+		skillsResp := make([]string, len(cra.ac.Skills))
+		copy(skillsResp, cra.ac.Skills)
 		ag.Skills = &skillsResp
 	}
-	setAgentExecutorResponse(&ag, ac.Subagents)
+	setAgentExecutorResponse(&ag, cra.ac.Subagents)
 	if createReloadWarning != "" {
 		ag.Warning = &createReloadWarning
 	}
-	jsonCreated(w, ag)
+	jsonCreated(cra.w, ag)
 }
