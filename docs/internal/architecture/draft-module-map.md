@@ -99,7 +99,69 @@ Function grandfather list: 139 → **135**. Lesson written into the method: an i
 
 **Oracle gap found:** `RunContextWithOptions` (1,090 lines) has **no in-process test**; only the E2E shards exercise it, through the built binary. `setupAndStartServices` (1,258) has four. Extracting either is a change only the end-of-migration CI pass can confirm. Tools: `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` (Go) and `ts/tssplit.cjs` (TypeScript), mappings alongside.
 
-**Still open:** the remaining four files over 4,000 (`config.go` second cut, `websocket.go` in batch 2, `chat.ts` and `runTurn` are judgment work); batch 2 lanes; nested `CLAUDE.md` landing; the one CI pass and the red jobs it will show.
+**Wave 3 (function extraction by lane, 2026-09-16, Codex `gpt-5.6-sol` via `codex exec`, one
+worktree per file, 14 concurrent):** 56 file lanes queued from the over-240 list. **34 lanes merged**
+with `[skip ci]`, each one reviewed mechanically before merge (build and vet clean, no function
+signature changed or removed, zero comment lines lost, zero non-test string literals changed, both
+budget gates exit 0, and the lane's own oracle test set identical before and after). **8 lanes made
+no change at all** because the frozen `extractfn-v1` refused the function — named results, work
+nested inside a loop body, or a large func literal — and the recipe forbids hand-editing around a
+refusal. **2 lanes were held** by the automated review and merged only after the harness confirmed
+both flags were false positives (see "Audit false positives" below).
+
+**Three defects in the merge machinery, found and fixed during this wave:**
+
+1. The merge daemon appended every pending lane to its processed list *before* the batch had merged
+   them. One failure therefore stranded 24 finished lanes, each marked done but never merged. Fixed
+   by unmarking them and re-running; the daemon's ordering remains a known sharp edge.
+2. `merge-lane.sh` accepted a conflict in `files.txt`, or in `files.txt` plus `functions.txt`, but
+   not in `functions.txt` alone — the single most likely case. One lane failed on it. The allow-list
+   is now membership-based: every conflicted path must be one of the two budget lists.
+3. `merge-batch.sh` stopped at the first merge failure, so one bad lane blocked 23 good ones. It now
+   continues; `merge-lane.sh` already aborts its own merge cleanly on any failure.
+
+**Audit false positives (both confirmed harmless, both worth knowing):** the review's string-literal
+audit counts *added* literals, so a lane that follows recipe step 3b and moves new types into a
+sibling file trips it with nothing but the new file's import paths (19 added, 0 removed). And the
+report-text heuristic that looks for words like "differs" matched inside a lane's own oracle *test
+name regex*. Neither indicates a behaviour change; both need a human read of the report.
+
+**`extractfn-v2` (built 2026-09-16, `bin/extractfn-v2`; v1 stays frozen and byte-identical):** adds
+three capabilities the biggest functions need — `block` stages for statements inside a loop body or
+any nested block, with `return`/`continue`/`break` leaving the region converted into flow codes the
+conductor re-issues (adding a loop label when the target has none); a `closure` stage that moves the
+body of any func literal into a method behind a thin forwarder, so `defer`/`go`/call-argument
+ordering is untouched; and support for named results, refusing only when a `defer` or closure
+*assigns* a named result. 23 fixtures, `gofmt`/`vet`/`go test` all exit 0, and output byte-identical
+to v1 on the three original fixtures.
+
+**Smoke-tested on real code before any lane used it, which is how two compile bugs were caught:** on
+`registerSharedTools` the tool left a hoisted `var` for a region-local in the conductor as well as in
+the method, and rewrote a later conductor `x, err := f()` into the illegal `x, st.err := f()` once
+`err` had been promoted to a field. Both were fixed with a fixture each; the repro then built clean.
+The `closure` kind passed first time: `updateAgent` 999 → 717 with a 286-line method, compiling.
+Evidence: `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/results/v2-smoke-2026-09-16.md`.
+
+**Lesson:** the recipe's build-after-write step would have made every affected lane revert and report
+a failure rather than merge something broken — the cost of skipping the smoke test would have been
+wasted lane time, not a bad merge. Smoke-test a new tool on one real function before fanning out.
+
+**Wave 4 (queued, not yet launched):** one lane per file still over 240, driven by `extractfn-v2`,
+including the four largest functions in the repository (`runTurn` 4,364; `spawnSubTurn` 1,489;
+`registerSharedTools` 1,297; `setupAndStartServices` 1,258).
+
+**Documentation track (started 2026-09-16, runs in parallel, 13 GLM 5.3 lanes via `claudez`):**
+executes `draft-docs-map.md`. One page per lane, one worktree each: knowledge, library, workspaces,
+tasks, plans, calendar, goals, agents, tools, browser, previews, security, settings. Every lane reads
+the docs map first, then a single style guide
+(`/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/DOC-STYLE.md`) that fixes tone, page
+skeleton, tables, mermaid-only diagrams, link rules and banned terms. A mechanical gate
+(`lanes/check-doc.sh`) enforces the enforceable parts and must exit 0 before a lane may commit; the
+merge script re-runs it after merging and rejects any diff that touches code or internal documents.
+Findings the lanes surfaced about the *product* (not the docs) are collected in
+`results/docs-open-questions.md`.
+
+**Still open (2026-09-16):** files over 4,000 are down to **2** (`loop.go`, shrinking as `runTurn` is extracted, and `chat.ts`, untouched so far); wave 4 (the 29 Go functions still over 240, `extractfn-v2`) is queued; **20 Go TEST functions** over 240 have no plan yet and the gate applies the same numbers to test code; the TypeScript side has **184** production functions over 120 and **117** over 240 (components are warn-only by founder ruling, so the hard-fail set is led by `chat.ts`); nested `CLAUDE.md` landing; the documentation track's second wave (index, concepts and interface tour rewrites, connector rename); and the one CI pass with the red jobs it will show.
 
 **Decisions for the founder (2026-09-15), each with a recommendation:**
 
