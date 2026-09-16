@@ -161,6 +161,19 @@ func (a *restAPI) providerDeleteStoreUsable() error {
 	return a.credentialStoreReady()
 }
 
+// restAPIRunProviderDelete carries the shared state of runProviderDelete across its stages.
+type restAPIRunProviderDelete struct {
+	a              *restAPI
+	r              *http.Request
+	providerID     string
+	newDefault     *gen.DefaultModelUpdateRequest
+	dependents     []gen.ProviderDependent
+	oldPair        config.DefaultModel
+	defaultChanged bool
+	credRef        string
+	oauthRef       string
+}
+
 // runProviderDelete recomputes the deletion facts and runs steps 0-4 under
 // a.configMu. Returns exactly one of:
 //   - resp non-nil, status 200: all steps completed (caller runs step 5);
@@ -170,36 +183,38 @@ func (a *restAPI) providerDeleteStoreUsable() error {
 func (a *restAPI) runProviderDelete(
 	r *http.Request, providerID string, newDefault *gen.DefaultModelUpdateRequest,
 ) (resp *gen.ProviderDeleteResponse, status int, errMsg, errField string) {
-	a.configMu.Lock()
-	defer a.configMu.Unlock()
+	rd := &restAPIRunProviderDelete{a: a, r: r, providerID: providerID, newDefault: newDefault}
 
-	cfg := a.agentLoop.GetConfig()
-	if !providerConfigured(cfg, providerID) {
+	rd.a.configMu.Lock()
+	defer rd.a.configMu.Unlock()
+
+	cfg := rd.a.agentLoop.GetConfig()
+	if !providerConfigured(cfg, rd.providerID) {
 		return nil, http.StatusNotFound, "provider not configured", ""
 	}
 
 	// MAJ-018: recompute under the lock — the response is authoritative,
 	// the GET /providers values the dialog rendered are advisory.
-	dependents := computeProviderDependents(cfg, providerID)
-	backsDefault := providerBacksDefault(cfg, providerID)
+	rd.dependents = computeProviderDependents(cfg, rd.providerID)
+	backsDefault := providerBacksDefault(cfg, rd.providerID)
 
 	if backsDefault {
-		if newDefault == nil {
+		if rd.newDefault == nil {
 			return nil, http.StatusConflict,
 				"provider backs the default model; supply new_default", ""
 		}
-		if st, msg, field := a.validateProviderDeleteNewDefault(cfg, providerID, newDefault); st != 0 {
+		if st, msg, field := rd.a.validateProviderDeleteNewDefault(cfg, rd.providerID, rd.newDefault); st != 0 {
 			return nil, st, msg, field
 		}
 	}
 
-	oldPair := cfg.Agents.Defaults.DefaultModel
-	defaultChanged := false
+	rd.oldPair = cfg.Agents.Defaults.DefaultModel
+	rd.defaultChanged = false
 	failed := func() (*gen.ProviderDeleteResponse, int, string, string) {
 		return &gen.ProviderDeleteResponse{
 			Deleted:        false,
-			Dependents:     dependents,
-			DefaultChanged: defaultChanged,
+			Dependents:     rd.dependents,
+			DefaultChanged: rd.defaultChanged,
 		}, http.StatusInternalServerError, "", ""
 	}
 
@@ -207,18 +222,18 @@ func (a *restAPI) runProviderDelete(
 	// default change ahead of the row removal so no moment exists where the
 	// default names a missing provider).
 	if backsDefault {
-		ndProvider := strings.TrimSpace(newDefault.Provider)
-		ndModel := strings.TrimSpace(newDefault.Model)
-		if err := a.updateConfigJSONLocked(func(m map[string]any) error {
+		ndProvider := strings.TrimSpace(rd.newDefault.Provider)
+		ndModel := strings.TrimSpace(rd.newDefault.Model)
+		if err := rd.a.updateConfigJSONLocked(func(m map[string]any) error {
 			defaults := ensureMap(m, "agents", "defaults")
 			defaults["default_model"] = map[string]any{"provider": ndProvider, "model": ndModel}
 			return nil
 		}); err != nil {
 			slog.Error("rest: provider delete: new_default write failed",
-				"provider_id", providerID, "error", err)
+				"provider_id", rd.providerID, "error", err)
 			return failed()
 		}
-		defaultChanged = true
+		rd.defaultChanged = true
 	}
 
 	// Step 1 — clear dependent AGENTS in the entity store (ADR-054: agents
@@ -231,24 +246,24 @@ func (a *restAPI) runProviderDelete(
 	for i := range cfg.Agents.List {
 		agentIDs[cfg.Agents.List[i].ID] = struct{}{}
 	}
-	store := agentstore.New(a.homePath)
-	for _, dep := range dependents {
+	store := agentstore.New(rd.a.homePath)
+	for _, dep := range rd.dependents {
 		if _, isAgent := agentIDs[dep.Id]; !isAgent {
 			continue
 		}
 		if hook := testHookProviderDeleteEntityUpdate; hook != nil {
 			if err := hook(dep.Id); err != nil {
 				slog.Error("rest: provider delete: entity update failed (injected)",
-					"provider_id", providerID, "agent_id", dep.Id, "error", err)
+					"provider_id", rd.providerID, "agent_id", dep.Id, "error", err)
 				return failed()
 			}
 		}
 		if _, err := store.Update(dep.Id, func(rec *config.AgentConfig) error {
-			clearAgentProviderRefs(cfg, rec, providerID)
+			clearAgentProviderRefs(cfg, rec, rd.providerID)
 			return nil
 		}); err != nil {
 			slog.Error("rest: provider delete: entity update failed",
-				"provider_id", providerID, "agent_id", dep.Id, "error", err)
+				"provider_id", rd.providerID, "agent_id", dep.Id, "error", err)
 			return failed()
 		}
 	}
@@ -263,9 +278,9 @@ func (a *restAPI) runProviderDelete(
 			return false
 		}
 		resolved, _ := config.ResolveSlugProvider(cfg, slug)
-		return resolved == providerID
+		return resolved == rd.providerID
 	}
-	if err := a.updateConfigJSONLocked(func(m map[string]any) error {
+	if err := rd.a.updateConfigJSONLocked(func(m map[string]any) error {
 		if hook := testHookProviderDeleteConfigWrite; hook != nil {
 			if hookErr := hook(); hookErr != nil {
 				return hookErr
@@ -276,7 +291,7 @@ func (a *restAPI) runProviderDelete(
 			kept := make([]any, 0, len(list))
 			for _, item := range list {
 				if row, isMap := item.(map[string]any); isMap {
-					if p, _ := row["provider"].(string); strings.TrimSpace(p) == providerID {
+					if p, _ := row["provider"].(string); strings.TrimSpace(p) == rd.providerID {
 						continue
 					}
 				}
@@ -293,7 +308,7 @@ func (a *restAPI) runProviderDelete(
 				pruneSlugList(defaults, "image_model_fallbacks", resolvesToProvider)
 				clearSlugValue(defaults, "image_model", resolvesToProvider)
 				clearSlugValue(defaults, "recap_model", resolvesToProvider)
-				pruneFallbackEntries(defaults, "recap_fallback_models", providerID, resolvesToProvider)
+				pruneFallbackEntries(defaults, "recap_fallback_models", rd.providerID, resolvesToProvider)
 			}
 		}
 		if voice, ok := m["voice"].(map[string]any); ok {
@@ -306,7 +321,7 @@ func (a *restAPI) runProviderDelete(
 				kept := make([]any, 0, len(list))
 				for _, item := range list {
 					if row, isMap := item.(map[string]any); isMap {
-						if p, _ := row["provider"].(string); strings.TrimSpace(p) == providerID {
+						if p, _ := row["provider"].(string); strings.TrimSpace(p) == rd.providerID {
 							continue
 						}
 					}
@@ -318,7 +333,7 @@ func (a *restAPI) runProviderDelete(
 		return nil
 	}); err != nil {
 		slog.Error("rest: provider delete: config write failed",
-			"provider_id", providerID, "error", err)
+			"provider_id", rd.providerID, "error", err)
 		return failed()
 	}
 
@@ -326,7 +341,7 @@ func (a *restAPI) runProviderDelete(
 	// FR-021, T067-11). Keyed on the provider id rather than on
 	// SHA-256(providerID+":"+ref) so a row whose credential ref changed
 	// during the process's lifetime still loses every stale answer.
-	a.entitlements.evictProvider(providerID)
+	rd.a.entitlements.evictProvider(rd.providerID)
 
 	// Step 3 — delete the credentials; absence is success
 	// (credentials.NotFoundError is absorbed by removeStoredCredential).
@@ -352,21 +367,39 @@ func (a *restAPI) runProviderDelete(
 	// api_key row must never destroy a still-configured "openai-chatgpt"
 	// row's live ChatGPT grant; oauthRef stays "" (nothing to remove) when
 	// providerID isn't the owner.
-	credRef := providerID + "_API_KEY"
-	refsToDelete := []string{credRef}
-	var oauthRef string
-	if providers_pkg.OAuthEntryOwner(providerID) {
-		oauthRef = credentials.OAuthEntryName(providers_pkg.OAuthVendorID(providerID))
-		refsToDelete = append(refsToDelete, oauthRef)
+	rd.credRef = rd.providerID + "_API_KEY"
+	refsToDelete := []string{rd.credRef}
+
+	if providers_pkg.OAuthEntryOwner(rd.providerID) {
+		rd.oauthRef = credentials.OAuthEntryName(providers_pkg.OAuthVendorID(rd.providerID))
+		refsToDelete = append(refsToDelete, rd.oauthRef)
 	}
 	for _, ref := range refsToDelete {
-		if err := a.removeStoredCredential(ref); err != nil {
+		if err := rd.a.removeStoredCredential(ref); err != nil {
 			slog.Error("rest: provider delete: credential delete failed",
-				"provider_id", providerID, "credential_ref", ref, "error", err)
+				"provider_id", rd.providerID, "credential_ref", ref, "error", err)
 			return failed()
 		}
 	}
 
+	rd.auditAndLogRemoval()
+
+	resp = &gen.ProviderDeleteResponse{
+		Deleted:        true,
+		Dependents:     rd.dependents,
+		DefaultChanged: rd.defaultChanged,
+	}
+	if rd.defaultChanged {
+		resp.NewDefault = &gen.DefaultModelUpdateRequest{
+			Provider: strings.TrimSpace(rd.newDefault.Provider),
+			Model:    strings.TrimSpace(rd.newDefault.Model),
+		}
+	}
+	return resp, http.StatusOK, "", ""
+}
+
+// auditAndLogRemoval records the provider deletion in the audit log and structured application log.
+func (rd *restAPIRunProviderDelete) auditAndLogRemoval() {
 	// Step 4 — audit with the ref NAME, never the value (MAJ-016).
 	// Best-effort like every other gateway audit emission: losing the log
 	// line must not strand a half-deleted retryable state that is actually
@@ -381,27 +414,27 @@ func (a *restAPI) runProviderDelete(
 	// be losing a live OAuth grant) had nothing to go on. auditActor
 	// returns "" for an anonymous pre-auth caller, its documented default,
 	// never a guess.
-	if a.auditor != nil {
+	if rd.a.auditor != nil {
 		details := map[string]any{
-			"provider":        providerID,
-			"credential_ref":  credRef,
-			"dependents":      len(dependents),
-			"default_changed": defaultChanged,
-			"source_ip":       a.clientIPWithLiveFallback(r),
+			"provider":        rd.providerID,
+			"credential_ref":  rd.credRef,
+			"dependents":      len(rd.dependents),
+			"default_changed": rd.defaultChanged,
+			"source_ip":       rd.a.clientIPWithLiveFallback(rd.r),
 		}
-		if oauthRef != "" {
-			details["oauth_credential_ref"] = oauthRef
+		if rd.oauthRef != "" {
+			details["oauth_credential_ref"] = rd.oauthRef
 		}
-		if defaultChanged {
-			details["old_default_provider"] = oldPair.Provider
-			details["old_default_model"] = oldPair.Model
-			details["new_default_provider"] = strings.TrimSpace(newDefault.Provider)
-			details["new_default_model"] = strings.TrimSpace(newDefault.Model)
+		if rd.defaultChanged {
+			details["old_default_provider"] = rd.oldPair.Provider
+			details["old_default_model"] = rd.oldPair.Model
+			details["new_default_provider"] = strings.TrimSpace(rd.newDefault.Provider)
+			details["new_default_model"] = strings.TrimSpace(rd.newDefault.Model)
 		}
-		if err := a.auditor.Log(&audit.Entry{
+		if err := rd.a.auditor.Log(&audit.Entry{
 			Event:    EventProviderDeleted,
 			Decision: audit.DecisionAllow,
-			User:     auditActor(r),
+			User:     auditActor(rd.r),
 			Details:  details,
 		}); err != nil {
 			slog.Warn("audit write failed", "event", EventProviderDeleted, "error", err)
@@ -410,22 +443,9 @@ func (a *restAPI) runProviderDelete(
 
 	// The ref name is loggable; the key value never is (SC-003's log check).
 	slog.Info("rest: provider removed",
-		"provider_id", providerID, "credential_ref", credRef,
-		"oauth_credential_ref", oauthRef,
-		"dependents", len(dependents), "default_changed", defaultChanged)
-
-	resp = &gen.ProviderDeleteResponse{
-		Deleted:        true,
-		Dependents:     dependents,
-		DefaultChanged: defaultChanged,
-	}
-	if defaultChanged {
-		resp.NewDefault = &gen.DefaultModelUpdateRequest{
-			Provider: strings.TrimSpace(newDefault.Provider),
-			Model:    strings.TrimSpace(newDefault.Model),
-		}
-	}
-	return resp, http.StatusOK, "", ""
+		"provider_id", rd.providerID, "credential_ref", rd.credRef,
+		"oauth_credential_ref", rd.oauthRef,
+		"dependents", len(rd.dependents), "default_changed", rd.defaultChanged)
 }
 
 // validateProviderDeleteNewDefault enforces the FR-011 new_default rules,
