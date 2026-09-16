@@ -32,6 +32,43 @@ const replayMaxResultBytes = 1 * 1024 * 1024
 // when a result is truncated. Per FR-I-011: 10 KiB.
 const replayResultPreviewBytes = 10 * 1024
 
+// streamReplayState carries the shared state of streamReplay across its stages.
+type streamReplayState struct {
+	sessionID            string
+	entries              []session.TranscriptEntry
+	toolStore            *toolResultStore
+	isSpanActive         func(parentSpawnCallID string) bool
+	terminalAsk          *askuser.PendingSet
+	terminalAskEmitted   bool
+	seenPaths            map[string]struct{}
+	spawnIDsWithChildren map[string]bool
+	spanRealAgentIDs     map[string]string
+	latestByID           map[string]tcAddr
+	lastSeenAgentID      string
+	msgFrame             generated.ReplayMessageFrame
+	tcID                 string
+	tcParentID           string
+	isNested             bool
+	isOrphan             bool
+	effectiveAgentID     string
+	isSpawnParent        bool
+	stillActive          bool
+	spanID               string
+	spanAgentID          string
+	subStart             generated.SubagentStartFrame
+	subEnd               generated.SubagentEndFrame
+}
+
+// streamReplayStateFlow reports how a block stage of streamReplayState wants the conductor to proceed.
+type streamReplayStateFlow int
+
+const (
+	streamReplayStateNext streamReplayStateFlow = iota
+	streamReplayStateReturn
+	streamReplayStateContinue
+	streamReplayStateBreak
+)
+
 // streamReplay emits replay frames for the given transcript entries, calling
 // emit for each frame in order.  It is extracted from handleAttachSession so
 // that unit tests can drive it with a slice-backed sink without a real
@@ -83,86 +120,9 @@ func streamReplay(
 	isSpanActive func(parentSpawnCallID string) bool,
 	terminalAsk *askuser.PendingSet,
 ) (framesEmitted int, err error) {
-	// terminalAsk is the session's persisted TERMINAL (answered/cancelled)
-	// AskUserQuestion record from UnifiedMeta's PendingAskJSON (see
-	// loadTerminalAskRecord), or nil. askuserquestion-tool-spec v3 §0.6: the
-	// collapsed card on history reload renders from THIS record — not from
-	// the tool_call/tool_result pair (which holds only the park-time
-	// "pending" stub) and not from parsing the resume message — so replay
-	// reconstructs it into an ask_user_question frame (the same frame the
-	// live terminal emission sent, mirroring how judge_verdict entries are
-	// rebuilt above). A still-PENDING record is never passed here (and is
-	// defensively dropped below): the live pending card is the registry's to
-	// deliver via session_state's pending_asks snapshot.
-	if terminalAsk != nil && terminalAsk.Status == askuser.StatusPending {
-		terminalAsk = nil
-	}
-	terminalAskEmitted := false
-	// isSpanActive lets a caller (handleAttachSession, wired to
-	// agent.AgentLoop.IsSubTurnActiveForSpawnCall) tell replay that a given
-	// spawn/delegate ToolCall's real sub-turn is STILL genuinely running,
-	// even though its persisted record may carry a placeholder terminal
-	// status (async delegation writes Status="success", DurationMS≈0 the
-	// instant the spawning call returns — see
-	// session.UnifiedStore.UpdateToolCallStatus's doc comment — well before
-	// the delegate itself finishes). When isSpanActive reports true for a
-	// call, streamReplay withholds that call's own terminal frame(s)
-	// (tool_call_result / subagent_end) so the client is never shown a
-	// fabricated "done" for a turn that has not actually completed — it
-	// sees only tool_call_start / subagent_start, the same "started, no
-	// result yet" shape a genuinely in-flight LIVE call would show. The
-	// real completion then arrives over the live WS event stream once the
-	// sub-turn actually finishes. nil is treated as "nothing is active"
-	// (never withhold) — callers that have no liveness authority (e.g.
-	// tests) can pass nil safely.
-	if isSpanActive == nil {
-		isSpanActive = func(string) bool { return false }
-	}
+	sr := &streamReplayState{sessionID: sessionID, entries: entries, toolStore: toolStore, isSpanActive: isSpanActive, terminalAsk: terminalAsk}
 
-	// Track underlying file paths already emitted so the SPA never receives
-	// two media frames for the same file. Older transcripts can carry
-	// multiple media:// refs pointing at the same on-disk file (browser.
-	// screenshot stored an inline copy AND send_file registered a second
-	// ref before the RefByPath dedup landed). Without this guard, both
-	// frames replay and the user sees the screenshot twice.
-	seenPaths := make(map[string]struct{})
-	// ── Pass 1: build ancillary indexes ─────────────────────────────────────
-
-	// spawnIDsPresent: set of ToolCall.IDs where tool == "spawn" or "delegate"
-	// AND at least one other tool call in the transcript has ParentToolCallID
-	// == that ID. This is the signal that the parent span has live children
-	// to bracket. See buildSpawnIDsWithChildren's own doc comment below for
-	// why both tool names are checked (ADR-036 spawn→delegate rename).
-	spawnIDsWithChildren := buildSpawnIDsWithChildren(entries)
-
-	// spanRealAgentIDs maps a spawn/delegate ToolCall.ID (that has at least
-	// one child) to the REAL delegate agent's own ID, resolved from its
-	// first nested child tool call's own transcript entry. See
-	// buildSpanRealAgentIDs' doc comment for why this differs from — and is
-	// more correct than — entry.AgentID on the OUTER spawn/delegate call.
-	spanRealAgentIDs := buildSpanRealAgentIDs(entries, spawnIDsWithChildren)
-
-	// deduped: for each ToolCall.ID keep only the index of the last occurrence
-	// across ALL entries.  key = ToolCall.ID, value = (entryIdx, tcIdx).
-	latestByID := make(map[string]tcAddr)
-	for ei, entry := range entries {
-		for ti, tc := range entry.ToolCalls {
-			if tc.ID == "" {
-				continue
-			}
-			if prev, dup := latestByID[string(tc.ID)]; dup {
-				// Duplicate detected — log the previous address for diagnostics; last occurrence wins.
-				slog.Warn("replay: duplicate tool_call_id detected — only latest will emit",
-					"previous_entry_index", prev.entryIdx,
-					"previous_tool_index", prev.tcIdx,
-					"event", "replay_duplicate_tool_call_id",
-					"session_id", sessionID,
-					"tool_call_id", string(tc.ID),
-				)
-			}
-			latestByID[string(tc.ID)] = tcAddr{ei, ti}
-		}
-	}
+	sr.prepareReplay()
 
 	// ── Pass 2: emit frames ──────────────────────────────────────────────────
 
@@ -181,54 +141,19 @@ func streamReplay(
 	// Nil params are coerced to an empty map to satisfy the schema contract
 	// (ToolCallStartFrame.yaml: params is required and must be an object, never null).
 	buildStart := func(tc session.ToolCall, agentID, parentCallID string) generated.ToolCallStartFrame {
-		params := tc.Parameters
-		if params == nil {
-			params = map[string]any{}
-		}
-		f := generated.ToolCallStartFrame{
-			Type:      string(generated.WsFrameTypeToolCallStart),
-			SessionId: sessionID,
-			CallId:    string(tc.ID),
-			Tool:      tc.Tool,
-			Params:    params,
-		}
-		if agentID != "" {
-			f.AgentId = &agentID
-		}
-		if parentCallID != "" {
-			f.ParentCallId = &parentCallID
-		}
-		return f
+		return sr.buildStartFrame(tc, agentID, parentCallID)
 	}
 
 	// buildResult returns a generated.ToolCallResultFrame for tc.
 	buildResult := func(tc session.ToolCall, agentID, parentCallID string) generated.ToolCallResultFrame {
-		resultPayload := truncateResult(sessionID, tc, toolStore)
-		durationMs := int(tc.DurationMS)
-		f := generated.ToolCallResultFrame{
-			Type:       string(generated.WsFrameTypeToolCallResult),
-			SessionId:  sessionID,
-			CallId:     string(tc.ID),
-			Tool:       tc.Tool,
-			Result:     resultPayload,
-			Status:     toolCallResultStatus(tc.Status),
-			DurationMs: &durationMs,
-		}
-		if agentID != "" {
-			f.AgentId = &agentID
-		}
-		if parentCallID != "" {
-			f.ParentCallId = &parentCallID
-		}
-		applyPersistedFailureReason(&f, tc)
-		return f
+		return sr.buildResultFrame(tc, agentID, parentCallID)
 	}
 
 	// lastSeenAgentID tracks the most recent non-empty AgentID across entries.
 	// Used as fallback when a spawn entry has an empty AgentID.
-	lastSeenAgentID := ""
+	sr.lastSeenAgentID = ""
 
-	for ei, entry := range entries {
+	for ei, entry := range sr.entries {
 		// FR-I-006: skip compaction entries.
 		if entry.Type == session.EntryTypeCompaction {
 			continue
@@ -250,7 +175,7 @@ func streamReplay(
 		if entry.Type == session.EntryTypeTurnCancelled {
 			cancelFrame := generated.ReplayMessageFrame{
 				Type:      string(generated.WsFrameTypeReplayMessage),
-				SessionId: sessionID,
+				SessionId: sr.sessionID,
 				Role:      "turn_canceled",
 				Content:   turnCancelledContent(entry),
 			}
@@ -281,10 +206,10 @@ func streamReplay(
 			var verdict task.JudgeVerdict
 			if uerr := json.Unmarshal([]byte(entry.Content), &verdict); uerr != nil {
 				slog.Warn("replay: could not parse judge_verdict transcript entry — skipping",
-					"session_id", sessionID, "entry_id", entry.ID, "error", uerr)
+					"session_id", sr.sessionID, "entry_id", entry.ID, "error", uerr)
 				continue
 			}
-			if err2 := emitFrame(toJudgeVerdictFrame(sessionID, verdict)); err2 != nil {
+			if err2 := emitFrame(toJudgeVerdictFrame(sr.sessionID, verdict)); err2 != nil {
 				return framesEmitted, err2
 			}
 			continue
@@ -303,7 +228,7 @@ func streamReplay(
 		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == "browser_handover_notice" {
 			if err2 := emitFrame(generated.BrowserHandoverNoticeFrame{
 				Type:      string(generated.WsFrameTypeBrowserHandoverNotice),
-				SessionId: sessionID,
+				SessionId: sr.sessionID,
 				MessageId: entry.ID,
 				Text:      entry.Content,
 			}); err2 != nil {
@@ -322,18 +247,18 @@ func streamReplay(
 		// text is not lost.
 		if entry.Type == session.EntryTypeSystem && entry.SystemSubtype == session.SystemSubtypeGoalOutcome {
 			if entry.GoalOutcome != nil {
-				if err2 := emitFrame(goalOutcomeFrame(sessionID, entry.ID, *entry.GoalOutcome)); err2 != nil {
+				if err2 := emitFrame(goalOutcomeFrame(sr.sessionID, entry.ID, *entry.GoalOutcome)); err2 != nil {
 					return framesEmitted, err2
 				}
 				continue
 			}
 			slog.Warn("replay: goal_outcome transcript entry carries no outcome — replaying it as a plain entry",
-				"session_id", sessionID, "entry_id", entry.ID)
+				"session_id", sr.sessionID, "entry_id", entry.ID)
 		}
 
 		// Update the running fallback agent ID.
 		if entry.AgentID != "" {
-			lastSeenAgentID = entry.AgentID
+			sr.lastSeenAgentID = entry.AgentID
 		}
 
 		// AskUserQuestion resume messages (spec v3 §0.2) — the persisted
@@ -357,9 +282,9 @@ func streamReplay(
 		// calls, so skipping the whole entry loses nothing else.
 		if entry.Role == "user" {
 			if cardID, isResume := askuser.ParseResumeCardID(entry.Content); isResume {
-				if terminalAsk != nil && !terminalAskEmitted && terminalAsk.CardID == cardID {
-					terminalAskEmitted = true
-					if err2 := emitFrame(buildAskUserQuestionFrame(terminalAsk)); err2 != nil {
+				if sr.terminalAsk != nil && !sr.terminalAskEmitted && sr.terminalAsk.CardID == cardID {
+					sr.terminalAskEmitted = true
+					if err2 := emitFrame(buildAskUserQuestionFrame(sr.terminalAsk)); err2 != nil {
 						return framesEmitted, err2
 					}
 				}
@@ -385,61 +310,15 @@ func streamReplay(
 			// empty Role would fall through to the assistant render path and the
 			// rate-limit text would render as a regular assistant bubble.
 			if entry.Type == session.EntryTypeSystem && entry.Status == "error" {
-				if err2 := emitFrame(buildReplayErrorFrame(sessionID, entry)); err2 != nil {
+				if err2 := emitFrame(buildReplayErrorFrame(sr.sessionID, entry)); err2 != nil {
 					return framesEmitted, err2
 				}
 				continue
 			}
-			msgFrame := generated.ReplayMessageFrame{
-				Type:      string(generated.WsFrameTypeReplayMessage),
-				SessionId: sessionID,
-				Role:      entry.Role,
-				Content:   entry.Content,
-			}
-			if entry.AgentID != "" {
-				agentIDCopy := entry.AgentID
-				msgFrame.AgentId = &agentIDCopy
-			}
-			// Wave 3 fix 5c/1: surface TranscriptEntry.TurnID — stamped on
-			// every real assistant entry at its three production write sites:
-			// pkg/agent/turn.go's appendIntermediateAssistantTranscript and
-			// appendAssistantTranscript (both set TurnID: ts.turnID), and
-			// pkg/gateway/websocket.go's wsStreamer.Finalize (stamped via
-			// SetTurnID, mirroring SetProducerAgentID's pattern) — so the
-			// client can correlate a later turn_canceled frame to the
-			// specific assistant message it cancels. Empty for legacy
-			// entries written before turn-id stamping landed.
-			if entry.TurnID != "" {
-				turnIDCopy := entry.TurnID
-				msgFrame.TurnId = &turnIDCopy
-			}
-			// Phase 1B (FR-013/FR-014): surface per-turn model. Populated from
-			// TranscriptEntry.Model on every assistant message written via
-			// pkg/agent/turn.go since Phase 1B landed. Empty for legacy turns;
-			// the UI omits the model field entirely (no placeholder) for those
-			// entries — see MessageItem.tsx model-footer rendering (FR-014).
-			if entry.Model != "" {
-				modelCopy := entry.Model
-				msgFrame.Model = &modelCopy
-			}
-			// ADR-087 D2: surface truncation on every replayed assistant
-			// entry that carries it — not only the empty-content case above.
-			// D4b (auto-continue exhausted/ineligible) stamps Truncated on
-			// an entry that DOES have content, and that must replay with the
-			// same "(cut off at the output limit)" suffix as a live turn.
-			// Absent reason on a truncated entry means "cancelled" (legacy —
-			// every entry written before TruncationReason existed was always
-			// a cancel; see TranscriptEntry.TruncationReason's doc comment).
-			if entry.Role == "assistant" && entry.Truncated {
-				truncatedCopy := true
-				msgFrame.Truncated = &truncatedCopy
-				reason := entry.TruncationReason
-				if reason == "" {
-					reason = "cancelled"
-				}
-				msgFrame.TruncationReason = &reason
-			}
-			if err2 := emitFrame(msgFrame); err2 != nil {
+
+			sr.buildEntryMessage(entry)
+
+			if err2 := emitFrame(sr.msgFrame); err2 != nil {
 				return framesEmitted, err2
 			}
 
@@ -454,7 +333,7 @@ func streamReplay(
 				strings.HasPrefix(entry.Content, "Handoff:") {
 				switchF := generated.AgentSwitchedFrame{
 					Type:      string(generated.WsFrameTypeAgentSwitched),
-					SessionId: sessionID,
+					SessionId: sr.sessionID,
 				}
 				agentIDCopy := entry.AgentID
 				switchF.AgentId = &agentIDCopy
@@ -465,95 +344,17 @@ func streamReplay(
 		}
 
 		// FR-I-001: emit tool_call_start + tool_call_result for each ToolCall.
+	streamReplayStateLoop1:
 		for ti, tc := range entry.ToolCalls {
-			if tc.ID == "" {
-				continue
-			}
-			tcID := string(tc.ID)
-			tcParentID := string(tc.ParentToolCallID)
-			// Dedup: skip if this is not the latest occurrence.
-			if latest := latestByID[tcID]; latest.entryIdx != ei || latest.tcIdx != ti {
-				continue
+
+			switch sr.classifyToolCall(ei, entry, ti, tc) {
+			case streamReplayStateContinue:
+				continue streamReplayStateLoop1
 			}
 
-			isNested := tcParentID != ""
-			parentIsSpawn := isNested && spawnIDsWithChildren[tcParentID]
-			isOrphan := isNested && !parentIsSpawn
-
-			if isNested && parentIsSpawn {
-				// This tool call will be emitted by emitNestedToolCalls when its
-				// parent spawn is processed.  Skip it here to avoid double-emission.
-				continue
-			}
-
-			if isOrphan {
-				// FR-I-007: orphan — parent not found in transcript.
-				slog.Warn("replay: orphan tool call — parent spawn not in transcript",
-					"event", "replay_orphan",
-					"session_id", sessionID,
-					"parent_tool_call_id", tcParentID,
-				)
-				// The orphan is emitted as a flat tool call (no ParentCallID on the wire).
-				// This causes the client to take the non-nested rendering path immediately
-				// rather than waiting 10 s for the orphan TTL to expire.
-				// The slog.Warn above records the full context for operator debugging.
-			}
-
-			// Resolve the effective agent ID for this tool call's frames.
-			// If the spawn entry has an empty AgentID, fall back to the most recently
-			// seen agent ID in the transcript so the span is never emitted with a blank agent_id.
-			effectiveAgentID := entry.AgentID
-			if effectiveAgentID == "" {
-				effectiveAgentID = lastSeenAgentID
-			}
-
-			// isDelegateSpawnCall identifies a spawn/delegate tool call (the
-			// two names checked mirror buildSpawnIDsWithChildren's own
-			// ADR-036 rename note). Used below both to resolve span-level
-			// agent-id and to gate the still-active liveness check — a
-			// terminal snapshot is only ever withheld for THIS call kind,
-			// never for an ordinary tool call.
-			isDelegateSpawnCall := tc.Tool == "spawn" || tc.Tool == "delegate"
-
-			// Finding C (A-I4 round 4): every spawn/delegate call gets a
-			// subagent_start/subagent_end bracket on replay, matching live
-			// unconditionally — pkg/agent/subturn.go's spawnSubTurn always
-			// fires EventKindSubTurnSpawn/EventKindSubTurnEnd for a delegate
-			// call regardless of how many tool calls the CHILD itself made,
-			// so pkg/gateway/websocket.go's eventForwarder always emits a
-			// live subagent_start/subagent_end pair too. This used to be
-			// gated on spawnIDsWithChildren (spans requiring at least one
-			// RECORDED NESTED CHILD tool call) — correct for deciding
-			// whether emitNestedToolCalls has anything to emit, but wrong as
-			// the gate for whether to bracket at all: a delegate whose child
-			// replies directly with zero tool calls (a common case — many
-			// delegated tasks are simple, no-tool Q&A, and it's also exactly
-			// what a child interrupted before its first tool call looks
-			// like) got NO span bracket whatsoever on reload, silently
-			// dropping the nested "label, 0 steps, status, duration"
-			// progress row live always shows, even though the outer call's
-			// own Status/DurationMS are fully known and persisted either
-			// way. isDelegateSpawnCall (above) is the correct test — it
-			// doesn't require any children to exist; emitNestedToolCalls
-			// below naturally emits zero nested frames when there are none.
-			isSpawnParent := isDelegateSpawnCall
-
-			// stillActive is true when isSpanActive (wired to
-			// agent.AgentLoop.IsSubTurnActiveForSpawnCall) reports that this
-			// spawn/delegate call's REAL sub-turn has not actually finished
-			// yet, even though its persisted ToolCall record may already
-			// carry a terminal-looking Status/DurationMS (async delegation's
-			// placeholder ack — see streamReplay's isSpanActive doc comment
-			// above). When true, this call's OWN terminal frame(s) —
-			// tool_call_result / subagent_end — are withheld so the client
-			// is never shown a fabricated "done" for a turn that is, in
-			// truth, still working; the real completion arrives later over
-			// the live WS event stream.
-			stillActive := isDelegateSpawnCall && isSpanActive(tcID)
-
-			if isSpawnParent {
+			if sr.isSpawnParent {
 				// Emit tool_call_start for the spawn call itself FIRST.
-				if err2 := emitFrame(buildStart(tc, effectiveAgentID, "")); err2 != nil {
+				if err2 := emitFrame(buildStart(tc, sr.effectiveAgentID, "")); err2 != nil {
 					return framesEmitted, err2
 				}
 
@@ -571,24 +372,10 @@ func streamReplay(
 				// childTS.agentID, pkg/agent/subturn.go) — this makes replay
 				// match live instead of mislabeling the specialized
 				// per-agent span with the delegator's own identity.
-				spanID := "span_" + tcID
-				taskLabel := resolveTaskLabel(tc)
-				spanAgentID := effectiveAgentID
-				if realAgentID, ok := spanRealAgentIDs[tcID]; ok && realAgentID != "" {
-					spanAgentID = realAgentID
-				}
-				subStart := generated.SubagentStartFrame{
-					Type:         string(generated.WsFrameTypeSubagentStart),
-					SessionId:    sessionID,
-					SpanId:       spanID,
-					ParentCallId: tcID,
-					TaskLabel:    taskLabel,
-				}
-				if spanAgentID != "" {
-					agentIDCopy := spanAgentID
-					subStart.AgentId = &agentIDCopy
-				}
-				if err2 := emitFrame(subStart); err2 != nil {
+
+				sr.buildSubagentStart(tc)
+
+				if err2 := emitFrame(sr.subStart); err2 != nil {
 					return framesEmitted, err2
 				}
 
@@ -608,13 +395,13 @@ func streamReplay(
 				// OUTER span's own terminal frames are conditionally withheld
 				// below.
 				_, _, nestedErr := emitNestedToolCalls(
-					ctx, sessionID, tcID, entries, latestByID, effectiveAgentID, emitFrame, toolStore,
+					ctx, sr.sessionID, sr.tcID, sr.entries, sr.latestByID, sr.effectiveAgentID, emitFrame, sr.toolStore,
 				)
 				if nestedErr != nil {
 					return framesEmitted, nestedErr
 				}
 
-				if stillActive {
+				if sr.stillActive {
 					// Withhold subagent_end + the outer tool_call_result: the
 					// real sub-turn is still genuinely running. The client
 					// already has tool_call_start + subagent_start for this
@@ -641,27 +428,18 @@ func streamReplay(
 				// rendering (pkg/gateway/websocket.go's EventKindSubTurnEnd
 				// handler) has always used this real status/duration directly —
 				// this makes replay match it.
-				spanDurationMS := int(tc.DurationMS)
-				subEnd := generated.SubagentEndFrame{
-					Type:       string(generated.WsFrameTypeSubagentEnd),
-					SessionId:  sessionID,
-					SpanId:     spanID,
-					DurationMs: &spanDurationMS,
-					Status:     resolveStatus(tc.Status),
-				}
-				if spanAgentID != "" {
-					agentIDCopy := spanAgentID
-					subEnd.AgentId = &agentIDCopy
-				}
-				if err2 := emitFrame(subEnd); err2 != nil {
+
+				sr.buildSubagentEnd(tc)
+
+				if err2 := emitFrame(sr.subEnd); err2 != nil {
 					return framesEmitted, err2
 				}
 
 				// Emit tool_call_result for the spawn call.
-				if err2 := emitFrame(buildResult(tc, effectiveAgentID, "")); err2 != nil {
+				if err2 := emitFrame(buildResult(tc, sr.effectiveAgentID, "")); err2 != nil {
 					return framesEmitted, err2
 				}
-				if mf, ok := buildMediaFrame(sessionID, tc, mediaStore, seenPaths); ok {
+				if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths); ok {
 					if err2 := emitFrame(mf); err2 != nil {
 						return framesEmitted, err2
 					}
@@ -673,13 +451,13 @@ func streamReplay(
 			// Orphan tool calls are emitted WITHOUT ParentCallID so the
 			// client takes the flat non-nested path immediately (not after 10s TTL).
 			parentForFlat := ""
-			if isNested && !isOrphan {
-				parentForFlat = tcParentID
+			if sr.isNested && !sr.isOrphan {
+				parentForFlat = sr.tcParentID
 			}
-			if err2 := emitFrame(buildStart(tc, effectiveAgentID, parentForFlat)); err2 != nil {
+			if err2 := emitFrame(buildStart(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
 				return framesEmitted, err2
 			}
-			if stillActive {
+			if sr.stillActive {
 				// A spawn/delegate call whose real sub-turn is still running
 				// but has made no (recorded) nested tool calls yet — e.g. a
 				// background delegate reloaded before its first step landed
@@ -688,10 +466,10 @@ func streamReplay(
 				// tool_call_start, i.e. genuinely in progress.
 				continue
 			}
-			if err2 := emitFrame(buildResult(tc, effectiveAgentID, parentForFlat)); err2 != nil {
+			if err2 := emitFrame(buildResult(tc, sr.effectiveAgentID, parentForFlat)); err2 != nil {
 				return framesEmitted, err2
 			}
-			if mf, ok := buildMediaFrame(sessionID, tc, mediaStore, seenPaths); ok {
+			if mf, ok := buildMediaFrame(sr.sessionID, tc, mediaStore, sr.seenPaths); ok {
 				if err2 := emitFrame(mf); err2 != nil {
 					return framesEmitted, err2
 				}
@@ -707,8 +485,8 @@ func streamReplay(
 	// may have filtered the resume entry out. Re-sending the same terminal
 	// card on a later incremental replay is idempotent — the SPA stores the
 	// card verbatim per session.
-	if terminalAsk != nil && !terminalAskEmitted {
-		if err2 := emitFrame(buildAskUserQuestionFrame(terminalAsk)); err2 != nil {
+	if sr.terminalAsk != nil && !sr.terminalAskEmitted {
+		if err2 := emitFrame(buildAskUserQuestionFrame(sr.terminalAsk)); err2 != nil {
 			return framesEmitted, err2
 		}
 	}
@@ -724,7 +502,7 @@ func streamReplay(
 		dupCount := rs.duplicateToolCallIDCount
 		if err2 := emit(generated.ReplayWarningFrame{
 			Type:      string(generated.WsFrameTypeReplayWarning),
-			SessionId: sessionID,
+			SessionId: sr.sessionID,
 			Message:   "transcript contained duplicate tool calls — older copies omitted",
 			Stats: &generated.ReplayWarningStats{
 				DuplicateToolCallIdCount: &dupCount,
@@ -747,7 +525,7 @@ func streamReplay(
 	}
 	if err2 := emit(generated.DoneFrame{
 		Type:      string(generated.WsFrameTypeDone),
-		SessionId: sessionID,
+		SessionId: sr.sessionID,
 		Stats: &generated.DoneStats{
 			FramesEmitted:            &framesEmittedF,
 			OrphanCount:              &orphanCountF,
@@ -758,6 +536,314 @@ func streamReplay(
 		return framesEmitted, err2
 	}
 	return framesEmitted, nil
+}
+
+// prepareReplay normalizes replay inputs and builds the ancillary indexes.
+func (sr *streamReplayState) prepareReplay() {
+	// terminalAsk is the session's persisted TERMINAL (answered/cancelled)
+	// AskUserQuestion record from UnifiedMeta's PendingAskJSON (see
+	// loadTerminalAskRecord), or nil. askuserquestion-tool-spec v3 §0.6: the
+	// collapsed card on history reload renders from THIS record — not from
+	// the tool_call/tool_result pair (which holds only the park-time
+	// "pending" stub) and not from parsing the resume message — so replay
+	// reconstructs it into an ask_user_question frame (the same frame the
+	// live terminal emission sent, mirroring how judge_verdict entries are
+	// rebuilt above). A still-PENDING record is never passed here (and is
+	// defensively dropped below): the live pending card is the registry's to
+	// deliver via session_state's pending_asks snapshot.
+	if sr.terminalAsk != nil && sr.terminalAsk.Status == askuser.StatusPending {
+		sr.terminalAsk = nil
+	}
+	sr.terminalAskEmitted = false
+	// isSpanActive lets a caller (handleAttachSession, wired to
+	// agent.AgentLoop.IsSubTurnActiveForSpawnCall) tell replay that a given
+	// spawn/delegate ToolCall's real sub-turn is STILL genuinely running,
+	// even though its persisted record may carry a placeholder terminal
+	// status (async delegation writes Status="success", DurationMS≈0 the
+	// instant the spawning call returns — see
+	// session.UnifiedStore.UpdateToolCallStatus's doc comment — well before
+	// the delegate itself finishes). When isSpanActive reports true for a
+	// call, streamReplay withholds that call's own terminal frame(s)
+	// (tool_call_result / subagent_end) so the client is never shown a
+	// fabricated "done" for a turn that has not actually completed — it
+	// sees only tool_call_start / subagent_start, the same "started, no
+	// result yet" shape a genuinely in-flight LIVE call would show. The
+	// real completion then arrives over the live WS event stream once the
+	// sub-turn actually finishes. nil is treated as "nothing is active"
+	// (never withhold) — callers that have no liveness authority (e.g.
+	// tests) can pass nil safely.
+	if sr.isSpanActive == nil {
+		sr.isSpanActive = func(string) bool { return false }
+	}
+
+	// Track underlying file paths already emitted so the SPA never receives
+	// two media frames for the same file. Older transcripts can carry
+	// multiple media:// refs pointing at the same on-disk file (browser.
+	// screenshot stored an inline copy AND send_file registered a second
+	// ref before the RefByPath dedup landed). Without this guard, both
+	// frames replay and the user sees the screenshot twice.
+	sr.seenPaths = make(map[string]struct{})
+	// ── Pass 1: build ancillary indexes ─────────────────────────────────────
+
+	// spawnIDsPresent: set of ToolCall.IDs where tool == "spawn" or "delegate"
+	// AND at least one other tool call in the transcript has ParentToolCallID
+	// == that ID. This is the signal that the parent span has live children
+	// to bracket. See buildSpawnIDsWithChildren's own doc comment below for
+	// why both tool names are checked (ADR-036 spawn→delegate rename).
+	sr.spawnIDsWithChildren = buildSpawnIDsWithChildren(sr.entries)
+
+	// spanRealAgentIDs maps a spawn/delegate ToolCall.ID (that has at least
+	// one child) to the REAL delegate agent's own ID, resolved from its
+	// first nested child tool call's own transcript entry. See
+	// buildSpanRealAgentIDs' doc comment for why this differs from — and is
+	// more correct than — entry.AgentID on the OUTER spawn/delegate call.
+	sr.spanRealAgentIDs = buildSpanRealAgentIDs(sr.entries, sr.spawnIDsWithChildren)
+
+	// deduped: for each ToolCall.ID keep only the index of the last occurrence
+	// across ALL entries.  key = ToolCall.ID, value = (entryIdx, tcIdx).
+	sr.latestByID = make(map[string]tcAddr)
+	for ei, entry := range sr.entries {
+		for ti, tc := range entry.ToolCalls {
+			if tc.ID == "" {
+				continue
+			}
+			if prev, dup := sr.latestByID[string(tc.ID)]; dup {
+				// Duplicate detected — log the previous address for diagnostics; last occurrence wins.
+				slog.Warn("replay: duplicate tool_call_id detected — only latest will emit",
+					"previous_entry_index", prev.entryIdx,
+					"previous_tool_index", prev.tcIdx,
+					"event", "replay_duplicate_tool_call_id",
+					"session_id", sr.sessionID,
+					"tool_call_id", string(tc.ID),
+				)
+			}
+			sr.latestByID[string(tc.ID)] = tcAddr{ei, ti}
+		}
+	}
+}
+
+// buildStartFrame builds a tool-call start frame with schema-safe parameters.
+func (sr *streamReplayState) buildStartFrame(tc session.ToolCall, agentID string, parentCallID string) generated.ToolCallStartFrame {
+	params := tc.Parameters
+	if params == nil {
+		params = map[string]any{}
+	}
+	f := generated.ToolCallStartFrame{
+		Type:      string(generated.WsFrameTypeToolCallStart),
+		SessionId: sr.sessionID,
+		CallId:    string(tc.ID),
+		Tool:      tc.Tool,
+		Params:    params,
+	}
+	if agentID != "" {
+		f.AgentId = &agentID
+	}
+	if parentCallID != "" {
+		f.ParentCallId = &parentCallID
+	}
+	return f
+}
+
+// buildResultFrame builds a persisted tool-call result frame.
+func (sr *streamReplayState) buildResultFrame(tc session.ToolCall, agentID string, parentCallID string) generated.ToolCallResultFrame {
+	resultPayload := truncateResult(sr.sessionID, tc, sr.toolStore)
+	durationMs := int(tc.DurationMS)
+	f := generated.ToolCallResultFrame{
+		Type:       string(generated.WsFrameTypeToolCallResult),
+		SessionId:  sr.sessionID,
+		CallId:     string(tc.ID),
+		Tool:       tc.Tool,
+		Result:     resultPayload,
+		Status:     toolCallResultStatus(tc.Status),
+		DurationMs: &durationMs,
+	}
+	if agentID != "" {
+		f.AgentId = &agentID
+	}
+	if parentCallID != "" {
+		f.ParentCallId = &parentCallID
+	}
+	applyPersistedFailureReason(&f, tc)
+	return f
+}
+
+// buildEntryMessage builds an ordinary replay message with optional metadata.
+func (sr *streamReplayState) buildEntryMessage(entry session.TranscriptEntry) {
+	sr.msgFrame = generated.ReplayMessageFrame{
+		Type:      string(generated.WsFrameTypeReplayMessage),
+		SessionId: sr.sessionID,
+		Role:      entry.Role,
+		Content:   entry.Content,
+	}
+	if entry.AgentID != "" {
+		agentIDCopy := entry.AgentID
+		sr.msgFrame.AgentId = &agentIDCopy
+	}
+	// Wave 3 fix 5c/1: surface TranscriptEntry.TurnID — stamped on
+	// every real assistant entry at its three production write sites:
+	// pkg/agent/turn.go's appendIntermediateAssistantTranscript and
+	// appendAssistantTranscript (both set TurnID: ts.turnID), and
+	// pkg/gateway/websocket.go's wsStreamer.Finalize (stamped via
+	// SetTurnID, mirroring SetProducerAgentID's pattern) — so the
+	// client can correlate a later turn_canceled frame to the
+	// specific assistant message it cancels. Empty for legacy
+	// entries written before turn-id stamping landed.
+	if entry.TurnID != "" {
+		turnIDCopy := entry.TurnID
+		sr.msgFrame.TurnId = &turnIDCopy
+	}
+	// Phase 1B (FR-013/FR-014): surface per-turn model. Populated from
+	// TranscriptEntry.Model on every assistant message written via
+	// pkg/agent/turn.go since Phase 1B landed. Empty for legacy turns;
+	// the UI omits the model field entirely (no placeholder) for those
+	// entries — see MessageItem.tsx model-footer rendering (FR-014).
+	if entry.Model != "" {
+		modelCopy := entry.Model
+		sr.msgFrame.Model = &modelCopy
+	}
+	// ADR-087 D2: surface truncation on every replayed assistant
+	// entry that carries it — not only the empty-content case above.
+	// D4b (auto-continue exhausted/ineligible) stamps Truncated on
+	// an entry that DOES have content, and that must replay with the
+	// same "(cut off at the output limit)" suffix as a live turn.
+	// Absent reason on a truncated entry means "cancelled" (legacy —
+	// every entry written before TruncationReason existed was always
+	// a cancel; see TranscriptEntry.TruncationReason's doc comment).
+	if entry.Role == "assistant" && entry.Truncated {
+		truncatedCopy := true
+		sr.msgFrame.Truncated = &truncatedCopy
+		reason := entry.TruncationReason
+		if reason == "" {
+			reason = "cancelled"
+		}
+		sr.msgFrame.TruncationReason = &reason
+	}
+}
+
+// classifyToolCall classifies one tool call and resolves its replay identity.
+func (sr *streamReplayState) classifyToolCall(ei int, entry session.TranscriptEntry, ti int, tc session.ToolCall) streamReplayStateFlow {
+	if tc.ID == "" {
+		return streamReplayStateContinue
+	}
+	sr.tcID = string(tc.ID)
+	sr.tcParentID = string(tc.ParentToolCallID)
+	// Dedup: skip if this is not the latest occurrence.
+	if latest := sr.latestByID[sr.tcID]; latest.entryIdx != ei || latest.tcIdx != ti {
+		return streamReplayStateContinue
+	}
+
+	sr.isNested = sr.tcParentID != ""
+	parentIsSpawn := sr.isNested && sr.spawnIDsWithChildren[sr.tcParentID]
+	sr.isOrphan = sr.isNested && !parentIsSpawn
+
+	if sr.isNested && parentIsSpawn {
+		// This tool call will be emitted by emitNestedToolCalls when its
+		// parent spawn is processed.  Skip it here to avoid double-emission.
+		return streamReplayStateContinue
+	}
+
+	if sr.isOrphan {
+		// FR-I-007: orphan — parent not found in transcript.
+		slog.Warn("replay: orphan tool call — parent spawn not in transcript",
+			"event", "replay_orphan",
+			"session_id", sr.sessionID,
+			"parent_tool_call_id", sr.tcParentID,
+		)
+		// The orphan is emitted as a flat tool call (no ParentCallID on the wire).
+		// This causes the client to take the non-nested rendering path immediately
+		// rather than waiting 10 s for the orphan TTL to expire.
+		// The slog.Warn above records the full context for operator debugging.
+	}
+
+	// Resolve the effective agent ID for this tool call's frames.
+	// If the spawn entry has an empty AgentID, fall back to the most recently
+	// seen agent ID in the transcript so the span is never emitted with a blank agent_id.
+	sr.effectiveAgentID = entry.AgentID
+	if sr.effectiveAgentID == "" {
+		sr.effectiveAgentID = sr.lastSeenAgentID
+	}
+
+	// isDelegateSpawnCall identifies a spawn/delegate tool call (the
+	// two names checked mirror buildSpawnIDsWithChildren's own
+	// ADR-036 rename note). Used below both to resolve span-level
+	// agent-id and to gate the still-active liveness check — a
+	// terminal snapshot is only ever withheld for THIS call kind,
+	// never for an ordinary tool call.
+	isDelegateSpawnCall := tc.Tool == "spawn" || tc.Tool == "delegate"
+
+	// Finding C (A-I4 round 4): every spawn/delegate call gets a
+	// subagent_start/subagent_end bracket on replay, matching live
+	// unconditionally — pkg/agent/subturn.go's spawnSubTurn always
+	// fires EventKindSubTurnSpawn/EventKindSubTurnEnd for a delegate
+	// call regardless of how many tool calls the CHILD itself made,
+	// so pkg/gateway/websocket.go's eventForwarder always emits a
+	// live subagent_start/subagent_end pair too. This used to be
+	// gated on spawnIDsWithChildren (spans requiring at least one
+	// RECORDED NESTED CHILD tool call) — correct for deciding
+	// whether emitNestedToolCalls has anything to emit, but wrong as
+	// the gate for whether to bracket at all: a delegate whose child
+	// replies directly with zero tool calls (a common case — many
+	// delegated tasks are simple, no-tool Q&A, and it's also exactly
+	// what a child interrupted before its first tool call looks
+	// like) got NO span bracket whatsoever on reload, silently
+	// dropping the nested "label, 0 steps, status, duration"
+	// progress row live always shows, even though the outer call's
+	// own Status/DurationMS are fully known and persisted either
+	// way. isDelegateSpawnCall (above) is the correct test — it
+	// doesn't require any children to exist; emitNestedToolCalls
+	// below naturally emits zero nested frames when there are none.
+	sr.isSpawnParent = isDelegateSpawnCall
+
+	// stillActive is true when isSpanActive (wired to
+	// agent.AgentLoop.IsSubTurnActiveForSpawnCall) reports that this
+	// spawn/delegate call's REAL sub-turn has not actually finished
+	// yet, even though its persisted ToolCall record may already
+	// carry a terminal-looking Status/DurationMS (async delegation's
+	// placeholder ack — see streamReplay's isSpanActive doc comment
+	// above). When true, this call's OWN terminal frame(s) —
+	// tool_call_result / subagent_end — are withheld so the client
+	// is never shown a fabricated "done" for a turn that is, in
+	// truth, still working; the real completion arrives later over
+	// the live WS event stream.
+	sr.stillActive = isDelegateSpawnCall && sr.isSpanActive(sr.tcID)
+	return streamReplayStateNext
+}
+
+// buildSubagentStart builds the start frame for a delegated subagent span.
+func (sr *streamReplayState) buildSubagentStart(tc session.ToolCall) {
+	sr.spanID = "span_" + sr.tcID
+	taskLabel := resolveTaskLabel(tc)
+	sr.spanAgentID = sr.effectiveAgentID
+	if realAgentID, ok := sr.spanRealAgentIDs[sr.tcID]; ok && realAgentID != "" {
+		sr.spanAgentID = realAgentID
+	}
+	sr.subStart = generated.SubagentStartFrame{
+		Type:         string(generated.WsFrameTypeSubagentStart),
+		SessionId:    sr.sessionID,
+		SpanId:       sr.spanID,
+		ParentCallId: sr.tcID,
+		TaskLabel:    taskLabel,
+	}
+	if sr.spanAgentID != "" {
+		agentIDCopy := sr.spanAgentID
+		sr.subStart.AgentId = &agentIDCopy
+	}
+}
+
+// buildSubagentEnd builds the terminal frame for a delegated subagent span.
+func (sr *streamReplayState) buildSubagentEnd(tc session.ToolCall) {
+	spanDurationMS := int(tc.DurationMS)
+	sr.subEnd = generated.SubagentEndFrame{
+		Type:       string(generated.WsFrameTypeSubagentEnd),
+		SessionId:  sr.sessionID,
+		SpanId:     sr.spanID,
+		DurationMs: &spanDurationMS,
+		Status:     resolveStatus(tc.Status),
+	}
+	if sr.spanAgentID != "" {
+		agentIDCopy := sr.spanAgentID
+		sr.subEnd.AgentId = &agentIDCopy
+	}
 }
 
 // buildAskUserQuestionFrame wraps a terminal AskUserQuestion record in the
