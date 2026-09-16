@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -247,7 +248,11 @@ func Confirm() bool {
 }
 
 func (m *MigrateInstance) PrintSummary(result *Result) {
-	fmt.Println()
+	m.printSummary(os.Stdout, result)
+}
+
+func (m *MigrateInstance) printSummary(w io.Writer, result *Result) {
+	fmt.Fprintln(w)
 	parts := []string{}
 	if result.FilesCopied > 0 {
 		parts = append(parts, fmt.Sprintf("%d files copied", result.FilesCopied))
@@ -263,22 +268,26 @@ func (m *MigrateInstance) PrintSummary(result *Result) {
 	}
 
 	if len(parts) > 0 {
-		fmt.Printf("Migration complete! %s.\n", strings.Join(parts, ", "))
+		fmt.Fprintf(w, "Migration complete! %s.\n", strings.Join(parts, ", "))
 	} else {
-		fmt.Println("Migration complete! No actions taken.")
+		fmt.Fprintln(w, "Migration complete! No actions taken.")
 	}
 
 	if len(result.Errors) > 0 {
-		fmt.Println()
-		fmt.Printf("%d errors occurred:\n", len(result.Errors))
+		fmt.Fprintln(w)
+		fmt.Fprintf(w, "%d errors occurred:\n", len(result.Errors))
 		for _, e := range result.Errors {
-			fmt.Printf("  - %v\n", e)
+			fmt.Fprintf(w, "  - %v\n", e)
 		}
 	}
 }
 
 func PrintPlan(actions []Action, warnings []string) {
-	fmt.Println("Planned actions:")
+	printPlan(os.Stdout, actions, warnings)
+}
+
+func printPlan(w io.Writer, actions []Action, warnings []string) {
+	fmt.Fprintln(w, "Planned actions:")
 	copies := 0
 	skips := 0
 	backups := 0
@@ -287,34 +296,34 @@ func PrintPlan(actions []Action, warnings []string) {
 	for _, action := range actions {
 		switch action.Type {
 		case ActionConvertConfig:
-			fmt.Printf("  [config]  %s -> %s\n", action.Source, action.Target)
+			fmt.Fprintf(w, "  [config]  %s -> %s\n", action.Source, action.Target)
 			configCount++
 		case ActionCopy:
-			fmt.Printf("  [copy]    %s\n", filepath.Base(action.Source))
+			fmt.Fprintf(w, "  [copy]    %s\n", filepath.Base(action.Source))
 			copies++
 		case ActionBackup:
-			fmt.Printf("  [backup]  %s (exists, will backup and overwrite)\n", filepath.Base(action.Target))
+			fmt.Fprintf(w, "  [backup]  %s (exists, will backup and overwrite)\n", filepath.Base(action.Target))
 			backups++
 			copies++
 		case ActionSkip:
 			if action.Description != "" {
-				fmt.Printf("  [skip]    %s (%s)\n", filepath.Base(action.Source), action.Description)
+				fmt.Fprintf(w, "  [skip]    %s (%s)\n", filepath.Base(action.Source), action.Description)
 			}
 			skips++
 		case ActionCreateDir:
-			fmt.Printf("  [mkdir]   %s\n", action.Target)
+			fmt.Fprintf(w, "  [mkdir]   %s\n", action.Target)
 		}
 	}
 
 	if len(warnings) > 0 {
-		fmt.Println()
-		fmt.Println("Warnings:")
-		for _, w := range warnings {
-			fmt.Printf("  - %s\n", w)
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Warnings:")
+		for _, warning := range warnings {
+			fmt.Fprintf(w, "  - %s\n", warning)
 		}
 	}
 
-	fmt.Println()
-	fmt.Printf("%d files to copy, %d configs to convert, %d backups needed, %d skipped\n",
+	fmt.Fprintln(w)
+	fmt.Fprintf(w, "%d files to copy, %d configs to convert, %d backups needed, %d skipped\n",
 		copies, configCount, backups, skips)
 }
