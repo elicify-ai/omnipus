@@ -277,6 +277,20 @@ type JudgeCriteriaResult struct {
 	Reason string
 }
 
+// agentLoopJudgeCriteria carries the shared state of JudgeCriteria across its stages.
+type agentLoopJudgeCriteria struct {
+	al                *AgentLoop
+	ctx               context.Context
+	in                JudgeCriteriaInput
+	machineCriteria   []task.AcceptanceCriterion
+	behaviorCriteria  []task.AcceptanceCriterion
+	proseCriteria     []task.AcceptanceCriterion
+	perCriterion      []task.CriterionVerdict
+	evidence          []task.EvidenceRecord
+	couldNotVerifyIDs []string
+	noteNonVerdict    func(criterionID string, class NonVerdictClass) (withheld bool, couldNotVerify bool)
+}
+
 // JudgeCriteria is the SINGLE reusable evidence-ladder judge entrypoint
 // (ADR-049 D2/D5, spec Part B §B, FR-049..057; ADR-052 FR-011/012). Machine-
 // checkable criteria dispatch through in.AssigneeAgentID's OWN registered
@@ -307,6 +321,21 @@ type JudgeCriteriaResult struct {
 // all — machine-only criteria adjudicate purely from real exit codes, and
 // Unavailable is impossible in that case (FR-052's all-machine scenario).
 func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) JudgeCriteriaResult {
+	jc := &agentLoopJudgeCriteria{al: al, ctx: ctx, in: in}
+
+	if r0, stop := jc.validateAndClassify(); stop {
+		return r0
+	}
+
+	if r0, stop := jc.runDeterministicRungs(); stop {
+		return r0
+	}
+
+	return jc.runProseRungAndFinalize()
+}
+
+// validateAndClassify validates the input and partitions criteria by evidence rung.
+func (jc *agentLoopJudgeCriteria) validateAndClassify() (JudgeCriteriaResult, bool) {
 	// Item 9 (7-reviewer gate): a malformed JudgeCriteriaInput (Scope
 	// mismatched against its correlating id, or an unknown Scope) fails
 	// CLOSED with an explicit unmet reason on every criterion — never
@@ -314,42 +343,45 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 	// attempt/round and to retry; a shape violation is not a transient
 	// judge-availability problem and retrying it verbatim would just
 	// violate the same invariant again).
-	if violation := in.validate(); violation != "" {
+	if violation := jc.in.validate(); violation != "" {
 		logger.ErrorCF("agent", "judge: JudgeCriteriaInput failed validation (fail-closed)",
-			map[string]any{"reason": violation, "scope": in.Scope})
-		return al.finalizeVerdict(
-			in, failClosedProseVerdicts(in.Criteria, "invalid JudgeCriteriaInput: "+violation), nil, "", "",
-		)
+			map[string]any{"reason": violation, "scope": jc.in.Scope})
+		return jc.al.finalizeVerdict(
+			jc.in, failClosedProseVerdicts(jc.in.Criteria, "invalid JudgeCriteriaInput: "+violation), nil, "", "",
+		), true
 	}
 
-	var machineCriteria, behaviorCriteria, proseCriteria []task.AcceptanceCriterion
-	perCriterion := make([]task.CriterionVerdict, 0, len(in.Criteria))
-	for _, c := range in.Criteria {
+	jc.perCriterion = make([]task.CriterionVerdict, 0, len(jc.in.Criteria))
+	for _, c := range jc.in.Criteria {
 		switch c.Kind {
 		case task.KindCheck:
-			machineCriteria = append(machineCriteria, c)
+			jc.machineCriteria = append(jc.machineCriteria, c)
 		case task.KindBehavior:
 			// Rung 2 (ADR-052 FR-034): deterministic, no-LLM scan of the
 			// session's tool-call log — dispatched below alongside the
 			// machine checks, never to the LLM verifier.
-			behaviorCriteria = append(behaviorCriteria, c)
+			jc.behaviorCriteria = append(jc.behaviorCriteria, c)
 		case task.KindProse:
-			proseCriteria = append(proseCriteria, c)
+			jc.proseCriteria = append(jc.proseCriteria, c)
 		default:
 			// Fail-closed (NFR-2, review r1 silent-failure MEDIUM 4): an
 			// unrecognized criterion kind must never be silently dropped from
 			// adjudication (which would let the overall verdict come back MET
 			// with the unknown-kind criterion simply never checked). Synthesize
 			// an explicit unmet verdict for it instead.
-			perCriterion = append(perCriterion, task.CriterionVerdict{
+			jc.perCriterion = append(jc.perCriterion, task.CriterionVerdict{
 				CriterionID: c.ID,
 				Met:         false,
 				Reason:      "unknown criterion kind (fail-closed)",
 			})
 		}
 	}
+	return *new(JudgeCriteriaResult), false
+}
 
-	var evidence []task.EvidenceRecord
+// runDeterministicRungs runs deterministic checks and withholds adjudication when verification cannot yet complete.
+func (jc *agentLoopJudgeCriteria) runDeterministicRungs() (JudgeCriteriaResult, bool) {
+
 	// --- Rung ordering: deterministic rungs first, AND-combine (FR-049/052,
 	// FR-034). Machine-check (rung 1) and behavior-scan (rung 2) both execute
 	// BEFORE the prose verifier (rung 3) so the prose Judge's user message
@@ -367,7 +399,7 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 	// Unavailable so the round is not consumed. A real judgment (NonVerdictNone)
 	// resets the tracker (the blocker cleared). classifyNonVerdict is the named
 	// M1 predicate (goal_compile.go) — CONSUMED here, never redefined (DoD-11).
-	unitKey := verifierUnitID(in)
+	unitKey := verifierUnitID(jc.in)
 	tracker := currentUnableToVerifyTracker()
 	gate := currentUnjudgeableEscalationGate()
 	// Fix-wave finding 3 (14-reviewer sign-off): the escalate-once gate must
@@ -385,8 +417,8 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 	// chain). Task/plan scope are unaffected — their unitKey already
 	// identifies one concrete task/plan instance, not a reusable session.
 	escalationKey := unitKey
-	if in.Scope == task.VerdictScopeGoal {
-		if fp := goalCriteriaLadderFingerprint(in.Criteria); fp != "" {
+	if jc.in.Scope == task.VerdictScopeGoal {
+		if fp := goalCriteriaLadderFingerprint(jc.in.Criteria); fp != "" {
 			escalationKey = unitKey + ":" + fp
 		}
 	}
@@ -400,9 +432,8 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 	// string the worker/operator sees distinguishes "could not verify" from
 	// "not done" WITHOUT resurrecting a retired outcome field: the
 	// partition is real engine-tracked state, not a text-sniff of Reason.
-	var couldNotVerifyIDs []string
 
-	noteNonVerdict := func(criterionID string, class NonVerdictClass) (withheld, couldNotVerify bool) {
+	jc.noteNonVerdict = func(criterionID string, class NonVerdictClass) (withheld, couldNotVerify bool) {
 		key := unitKey + "/" + criterionID
 		switch class {
 		case NonVerdictNone:
@@ -432,24 +463,24 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 	}
 
 	withheld := false
-	for _, c := range machineCriteria {
-		v, ev, nv := al.runMachineCheck(ctx, in.AssigneeAgentID, c, in.Attempt, in.TaskID, in.WorkspaceID)
+	for _, c := range jc.machineCriteria {
+		v, ev, nv := jc.al.runMachineCheck(jc.ctx, jc.in.AssigneeAgentID, c, jc.in.Attempt, jc.in.TaskID, jc.in.WorkspaceID)
 		if ev != nil {
-			evidence = append(evidence, *ev)
+			jc.evidence = append(jc.evidence, *ev)
 		}
-		wh, cnv := noteNonVerdict(c.ID, nv)
+		wh, cnv := jc.noteNonVerdict(c.ID, nv)
 		if wh {
 			withheld = true
 			continue
 		}
 		if cnv {
-			couldNotVerifyIDs = append(couldNotVerifyIDs, c.ID)
+			jc.couldNotVerifyIDs = append(jc.couldNotVerifyIDs, c.ID)
 		}
-		perCriterion = append(perCriterion, v)
+		jc.perCriterion = append(jc.perCriterion, v)
 	}
 
-	for _, c := range behaviorCriteria {
-		v, nv := al.runBehaviorScan(in, c)
+	for _, c := range jc.behaviorCriteria {
+		v, nv := jc.al.runBehaviorScan(jc.in, c)
 		// JUDGE-FR-108 case 2 (D14, wave E10): a mechanically-decidable
 		// tier-1 contradiction — every recorded call of the criterion's
 		// declared tool errored — vetoes a rung-2 Met the count alone would
@@ -459,17 +490,17 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 		// itself is untouched (FR-107); this reads a second, independent
 		// copy of the same session.
 		if nv == NonVerdictNone {
-			v = applyBehaviorContradictionVeto(al.resolveBehaviorScanEntries(in), c, v)
+			v = applyBehaviorContradictionVeto(jc.al.resolveBehaviorScanEntries(jc.in), c, v)
 		}
-		wh, cnv := noteNonVerdict(c.ID, nv)
+		wh, cnv := jc.noteNonVerdict(c.ID, nv)
 		if wh {
 			withheld = true
 			continue
 		}
 		if cnv {
-			couldNotVerifyIDs = append(couldNotVerifyIDs, c.ID)
+			jc.couldNotVerifyIDs = append(jc.couldNotVerifyIDs, c.ID)
 		}
-		perCriterion = append(perCriterion, v)
+		jc.perCriterion = append(jc.perCriterion, v)
 	}
 
 	// A freshly-blocked deterministic rung withholds the whole adjudication
@@ -479,19 +510,23 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 		return JudgeCriteriaResult{
 			Unavailable: true,
 			Reason:      "unable_to_verify: a deterministic criterion's verification mechanism could not run (re-run, G-3)",
-		}
+		}, true
 	}
+	return *new(JudgeCriteriaResult), false
+}
 
+// runProseRungAndFinalize runs prose adjudication when required and finalizes the verdict.
+func (jc *agentLoopJudgeCriteria) runProseRungAndFinalize() JudgeCriteriaResult {
 	var judgeModel, judgeAgentID string
-	if len(proseCriteria) > 0 {
+	if len(jc.proseCriteria) > 0 {
 		// G-3/G-15 (FR-144); fix GX-E-3: feed the REAL, CUMULATIVE
 		// write-set-scoped workspace diff (spanning the whole round, not just
 		// the latest commit) from the Phase-1 git evidence layer into the
 		// prose Judge's context, so it sees the actual file changes — not a
 		// transcript window alone.
-		diffText, diffHead := al.resolveVerifierDiffText(in)
-		proseVerdicts, model, jaID, unavailable, reason, unjudgeableIDs, unableToVerifyIDs := al.runVerifierAdjudication(
-			ctx, in, proseCriteria, evidence, diffText,
+		diffText, diffHead := jc.al.resolveVerifierDiffText(jc.in)
+		proseVerdicts, model, jaID, unavailable, reason, unjudgeableIDs, unableToVerifyIDs := jc.al.runVerifierAdjudication(
+			jc.ctx, jc.in, jc.proseCriteria, jc.evidence, diffText,
 		)
 		if unavailable {
 			// The verifier turn MECHANISM could not run (provider/SEC-26/ctx).
@@ -524,28 +559,28 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 			for _, v := range proseVerdicts {
 				byID[v.CriterionID] = v
 			}
-			for _, c := range proseCriteria {
-				wh, cnv := noteNonVerdict(c.ID, NonVerdictUnableToVerify)
+			for _, c := range jc.proseCriteria {
+				wh, cnv := jc.noteNonVerdict(c.ID, NonVerdictUnableToVerify)
 				if wh {
 					postProgressWithheld = true
 					continue
 				}
 				if cnv {
-					couldNotVerifyIDs = append(couldNotVerifyIDs, c.ID)
+					jc.couldNotVerifyIDs = append(jc.couldNotVerifyIDs, c.ID)
 				}
-				perCriterion = append(perCriterion, byID[c.ID])
+				jc.perCriterion = append(jc.perCriterion, byID[c.ID])
 			}
 			if postProgressWithheld {
 				return JudgeCriteriaResult{Unavailable: true, Reason: reason}
 			}
 			judgeModel, judgeAgentID = model, jaID
-			return al.finalizeVerdict(in, perCriterion, couldNotVerifyIDs, judgeModel, judgeAgentID)
+			return jc.al.finalizeVerdict(jc.in, jc.perCriterion, jc.couldNotVerifyIDs, judgeModel, judgeAgentID)
 		}
 		// Fix GX-E-3: the round genuinely completed — advance THIS unit's
 		// cumulative-diff boundary to the HEAD this call resolved, so the
 		// NEXT round's diff starts from here rather than from scratch.
-		advanceVerifierDiffBoundary(verifierUnitID(in), diffHead)
-		perCriterion = append(perCriterion, proseVerdicts...)
+		advanceVerifierDiffBoundary(verifierUnitID(jc.in), diffHead)
+		jc.perCriterion = append(jc.perCriterion, proseVerdicts...)
 		// FR-138: classify each prose criterion. A criterion the verifier RAN
 		// on but formed no judgment for (empty content / parse failure / the
 		// verifier omitted it) is criterion_unjudgeable → the unmet verdict
@@ -555,18 +590,18 @@ func (al *AgentLoop) JudgeCriteria(ctx context.Context, in JudgeCriteriaInput) J
 		for _, id := range unjudgeableIDs {
 			unjudgeableSet[id] = true
 		}
-		for _, c := range proseCriteria {
+		for _, c := range jc.proseCriteria {
 			if unjudgeableSet[c.ID] {
-				noteNonVerdict(c.ID, NonVerdictCriterionUnjudgeable)
-				couldNotVerifyIDs = append(couldNotVerifyIDs, c.ID)
+				jc.noteNonVerdict(c.ID, NonVerdictCriterionUnjudgeable)
+				jc.couldNotVerifyIDs = append(jc.couldNotVerifyIDs, c.ID)
 			} else {
-				noteNonVerdict(c.ID, NonVerdictNone)
+				jc.noteNonVerdict(c.ID, NonVerdictNone)
 			}
 		}
 		judgeModel, judgeAgentID = model, jaID
 	}
 
-	return al.finalizeVerdict(in, perCriterion, couldNotVerifyIDs, judgeModel, judgeAgentID)
+	return jc.al.finalizeVerdict(jc.in, jc.perCriterion, jc.couldNotVerifyIDs, judgeModel, judgeAgentID)
 }
 
 // finalizeVerdict computes the overall PASS/FAIL from perCriterion
