@@ -1,14 +1,9 @@
-//go:build test_harness
-
 // Sanity tests for the pkg/agent/testutil gateway harness.
-// Requires -tags=test_harness because SetTestProviderOverride is a no-op stub
-// in non-test_harness builds; without the tag the gateway cannot boot using an
-// injected ScenarioProvider and will fail with "no providers configured".
 //
 // These tests live in pkg/gateway (not pkg/agent/testutil) because the harness
-// requires RegisterGatewayRunner + RegisterProviderOverrideFuncs to be called
-// first — which happens in this package's TestMain. Placing them here avoids
-// an import cycle while still exercising the harness against the real gateway.
+// requires RegisterGatewayRunner to be called first — which happens in this
+// package's TestMain. Placing them here avoids an import cycle while still
+// exercising the harness against the real gateway.
 //
 // Traces to: temporal-puzzling-melody.md §1 acceptance contracts — harness sanity
 
