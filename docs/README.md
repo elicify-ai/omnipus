@@ -44,7 +44,7 @@ Talk from your platforms.
 |---|---|
 | [Connectors](connectors.md) | Setup and default agent |
 | [Routing](routing.md) | Which agent answers |
-| Platform guides | [Telegram](channels/telegram.md), [Discord](channels/discord.md), [Slack](channels/slack.md), [WhatsApp](channels/whatsapp_native.md), [Matrix](channels/matrix.md), [IRC](channels/irc.md), [LINE](channels/line.md), [Google Chat](channels/google-chat.md), [DingTalk](channels/dingtalk.md), [Feishu](channels/feishu.md), [WeCom](channels/wecom.md), [WeChat](channels/weixin.md), [QQ](channels/qq.md) |
+| Platform guides | [Telegram](connectors/telegram.md), [Discord](connectors/discord.md), [Slack](connectors/slack.md), [WhatsApp](connectors/whatsapp_native.md), [Matrix](connectors/matrix.md), [IRC](connectors/irc.md), [LINE](connectors/line.md), [Google Chat](connectors/google-chat.md), [DingTalk](connectors/dingtalk.md), [Feishu](connectors/feishu.md), [WeCom](connectors/wecom.md), [WeChat](connectors/weixin.md), [QQ](connectors/qq.md) |
 
 ## Running the box
 
