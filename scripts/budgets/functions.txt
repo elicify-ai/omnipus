@@ -12,9 +12,6 @@ pkg/agent/loop.go	AgentLoop.processMessage	341
 pkg/agent/loop.go	AgentLoop.runTurn	4364
 pkg/agent/loop_window.go	AgentLoop.windowTrimForce	243
 pkg/agent/loop_wire.go	registerSharedToolsWire3.registerBrowserTools	263
-pkg/agent/loop_run_turn_iterations.go	agentLoopRunTurnConductor.runIterations	534
-pkg/agent/loop_run_turn_response.go	agentLoopRunTurnResponse.callLLMWithRetries	527
-pkg/agent/loop_run_turn_tools.go	agentLoopRunTurnTools.executeToolCalls	1684
 pkg/agent/recall_conversation.go	RecallConversationTool.Execute	299
 pkg/agent/session_end.go	AgentLoop.runRecap	383
 pkg/agent/subturn.go	spawnSubTurn	1489
