@@ -918,8 +918,8 @@ func ResolvePath(
 ) (*PathHandle, error) {
 	rp := &resolvePath{ctx: ctx, policy: policy, toolName: toolName, callID: callID, op: op, rawPath: rawPath}
 
-	if r0, r1, stop := rp.validateInputs(); stop {
-		return r0, r1
+	if err := rp.validateInputs(); err != nil {
+		return nil, err
 	}
 
 	// realWorkDir is policy.WorkDir resolved through the exact same
@@ -943,8 +943,12 @@ func ResolvePath(
 	return rp.resolveValidatedPath()
 }
 
-// validateInputs validates the requested filesystem operation and policy.
-func (rp *resolvePath) validateInputs() (*PathHandle, error, bool) {
+// validateInputs validates the requested filesystem operation and policy,
+// returning the refusal error — nil means validation passed and resolution
+// should proceed. (The old (*PathHandle, error, bool) shape returned a dead
+// nil handle on every path and needed the trailing bool to disambiguate
+// (nil, nil); the error alone now carries both facts.)
+func (rp *resolvePath) validateInputs() error {
 	// ctx and toolName are now consumed below by the ADR-072 D10/D6.1.1
 	// skills-gate check (ToolAgentID/ToolTranscriptSessionID/ToolWorkspaceID
 	// read ctx; toolName is carried onto a write handle's audit fields).
@@ -960,14 +964,14 @@ func (rp *resolvePath) validateInputs() (*PathHandle, error, bool) {
 		// FR-2.4: the zero value (and any unrecognized string) is refused
 		// loudly rather than defaulted. Every production call site already
 		// passes one of the named constants above.
-		return nil, fmt.Errorf("%w: FSOp %q is invalid — ResolvePath requires an explicit, known FSOp (the zero value is refused, not defaulted)",
-			ErrPathInvalid, rp.op), true
+		return fmt.Errorf("%w: FSOp %q is invalid — ResolvePath requires an explicit, known FSOp (the zero value is refused, not defaulted)",
+			ErrPathInvalid, rp.op)
 	}
 
 	if err := rp.policy.Validate(); err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrPathInvalid, err), true
+		return fmt.Errorf("%w: %w", ErrPathInvalid, err)
 	}
-	return nil, nil, false
+	return nil
 }
 
 // resolveValidatedPath resolves and gates the validated path, then returns the appropriate host, mount, or workspace-rooted handle.
