@@ -128,6 +128,21 @@ func acquireWorkspaceRunLockCtx(ctx context.Context, workDir string) (release fu
 	}
 }
 
+// runExternalCLISubTurnState carries the shared state of runExternalCLISubTurn across its stages.
+type runExternalCLISubTurnState struct {
+	al          *AgentLoop
+	childTS     *turnState
+	timeout     time.Duration
+	agent       *AgentInstance
+	runID       string
+	timeoutSecs int
+	maxTurns    int
+	agentModel  string
+	childEnv    []string
+	execCfg     *config.ExecutorConfig
+	cliArgs     []string
+}
+
 // runExternalCLISubTurn executes a delegated sub-agent task through an external
 // CLI runner. It returns a tools.ToolResult mirroring the native sub-turn return
 // shape (ForLLM/ForUser carry the run's aggregated output; Err is set on failure).
@@ -147,18 +162,20 @@ func runExternalCLISubTurn(
 	task string,
 	timeout time.Duration,
 ) (*tools.ToolResult, error) {
-	agent := childTS.agent
-	if agent == nil || agent.Subagents == nil || agent.Subagents.Executor == nil {
+	ed := &runExternalCLISubTurnState{al: al, childTS: childTS, timeout: timeout}
+
+	ed.agent = ed.childTS.agent
+	if ed.agent == nil || ed.agent.Subagents == nil || ed.agent.Subagents.Executor == nil {
 		return nil, fmt.Errorf("external-cli dispatch: missing executor config")
 	}
-	cli := agent.Subagents.Executor.CLI
+	cli := ed.agent.Subagents.Executor.CLI
 	if cli == "" {
 		return nil, fmt.Errorf("external-cli dispatch: executor.cli is empty (set claude-code, codex, or opencode)")
 	}
 
-	runID := childTS.turnID
-	if runID == "" {
-		runID = fmt.Sprintf("ext-%d", time.Now().UnixNano())
+	ed.runID = ed.childTS.turnID
+	if ed.runID == "" {
+		ed.runID = fmt.Sprintf("ext-%d", time.Now().UnixNano())
 	}
 
 	// 1. Resolve the run's working directory: the workspace's dedicated
@@ -200,7 +217,7 @@ func runExternalCLISubTurn(
 	//    AGENT.md (Project Instructions) and the shared memory room (.omnipus/)
 	//    structurally unreachable — os.Root-confined tools cannot open a path
 	//    outside their root, not merely guarded against.
-	workDir, wsErr := resolveTurnWorkDirOrRefuse(ctx, agent.ID, agent.Home, childTS.opts.WorkspaceID)
+	workDir, wsErr := resolveTurnWorkDirOrRefuse(ctx, ed.agent.ID, ed.agent.Home, ed.childTS.opts.WorkspaceID)
 	if wsErr != nil {
 		// Same defect class as native runTurn: the sentinel was known and
 		// the driver never started, but nothing typed reached the user.
@@ -208,22 +225,22 @@ func runExternalCLISubTurn(
 		// unless the parent happened to narrate. Emit the catalogue frame
 		// and stamp the transcript the way runTurn now does.
 		llm := TranslateTurnError(wsErr)
-		chatID := childTS.chatID
+		chatID := ed.childTS.chatID
 		if chatID == "" {
-			chatID = childTS.opts.ChatID
+			chatID = ed.childTS.opts.ChatID
 		}
-		al.emitEvent(
+		ed.al.emitEvent(
 			EventKindError,
-			childTS.eventMeta("runTurn", "turn.error"),
+			ed.childTS.eventMeta("runTurn", "turn.error"),
 			ErrorPayload{
 				Stage:     "workspace",
 				ChatID:    chatID,
-				SessionID: string(childTS.routingSessionID),
+				SessionID: string(ed.childTS.routingSessionID),
 				Code:      string(llm.Code),
 				Message:   llm.Message,
 			},
 		)
-		childTS.appendClassifiedError(EventKindError.String(), "workspace", llm)
+		ed.childTS.appendClassifiedError(EventKindError.String(), "workspace", llm)
 		return nil, fmt.Errorf("external-cli dispatch: %w", wsErr)
 	}
 
@@ -267,8 +284,8 @@ func runExternalCLISubTurn(
 	// turnCancel) re-fires the same (idempotent) cancel func defensively.
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	childTS.setTurnCancel(cancel)
-	childTS.setProviderCancel(cancel)
+	ed.childTS.setTurnCancel(cancel)
+	ed.childTS.setProviderCancel(cancel)
 
 	// FIX 4 (concurrency, arch #2 warning): serialize external-CLI runs that
 	// share this workspace directory — see workspaceRunLocks' doc comment.
@@ -319,8 +336,8 @@ func runExternalCLISubTurn(
 	//    type doc for why this is a deliberately different posture from native
 	//    ask-policy tools.
 	consent := &policyApproverConsent{
-		agentID: childTS.agentID,
-		runID:   runID,
+		agentID: ed.childTS.agentID,
+		runID:   ed.runID,
 	}
 
 	// 3. Instantiate the driver for the configured CLI. The factory is a package
@@ -330,78 +347,30 @@ func runExternalCLISubTurn(
 		return nil, fmt.Errorf("external-cli dispatch: %w", err)
 	}
 
-	// 4. Bound the run: a per-run timeout + turn cap (FR-5.4).
-	timeoutSecs := int(timeout.Seconds())
-	if timeoutSecs <= 0 {
-		timeoutSecs = int(defaultSubTurnTimeout.Seconds())
-	}
-	maxTurns := agent.MaxIterations
-	if maxTurns <= 0 {
-		maxTurns = DefaultExternalMaxTurns
-	}
-
-	// FIX 5: hoist the repeated strings.TrimSpace(agent.Model) computation
-	// (previously done independently for the transcript model stamp below
-	// and again for RunOptions.Model further down) into a single local.
-	agentModel := strings.TrimSpace(agent.Model)
-
-	// Phase 1B FR-013: attribute the external-CLI sub-turn's transcript
-	// output to the agent's configured model. The external CLI runs its
-	// own LLM, but we record what model the agent would have used in the
-	// non-CLI path — consistent with how chat turns are attributed.
-	childTS.setLastProducedModel(agentModel)
-
-	// SECURITY (Spec-4 FR-5.3 / SEC-23): the spawned external CLI must NOT inherit
-	// the full gateway environment — that would leak OMNIPUS_MASTER_KEY (and every
-	// other gateway secret) into a third-party binary. ScrubGatewayEnvForRunner
-	// returns os.Environ() filtered through the generic child allowlist UNIONED with
-	// the narrow runner-credential allowlist (the model-provider API keys the CLI
-	// legitimately needs to authenticate). Passing it as RunOptions.Env makes the
-	// driver use it as the COMPLETE child env (buildChildEnv) — no os.Environ()
-	// fallback, so the master key never reaches the child.
-	childEnv := sandbox.ScrubGatewayEnvForRunner()
-
-	// FR-5.3 egress allowlist: inject HTTP_PROXY/HTTPS_PROXY pointing at the
-	// runner egress proxy so the CLI's HTTP/HTTPS traffic is forced through a
-	// loopback proxy with SSRF internal-CIDR blocking (prevents the CLI from
-	// reaching internal services / cloud metadata). Per ADR-019 FR-5.3 there is
-	// NO new confiner — the CLI self-sandboxes; Omnipus controls egress via
-	// proxy injection. Graceful degradation: an empty address (proxy could not
-	// start) means no injection — the run proceeds under the CLI's own sandbox +
-	// the workspace FS boundary.
-	childEnv = injectRunnerEgressProxy(childEnv, al.runnerEgressProxyAddr())
-
-	// MAJ-5: consume the agent's ExecutorConfig (cli_path / cli_args /
-	// env_overrides) when spawning the external CLI. cli_path overrides the
-	// driver's default binary (else $PATH); cli_args is tokenised into argv
-	// (execve, no shell — warn-not-reject on shell-metacharacters); env_overrides
-	// merge into the scrubbed child env (OMNIPUS_* keys are dropped by the driver
-	// env builder, so the master key / agent-identity vars stay protected).
-	execCfg := agent.Subagents.Executor
-	cliArgs := runner.ParseCLIArgs(execCfg.CLIArgs, runID)
+	ed.prepareRunOptions()
 
 	evCh, err := driver.Run(runCtx, runner.RunOptions{
-		RunID:          runID,
+		RunID:          ed.runID,
 		WorkDir:        workDir,
 		Input:          task,
-		Env:            childEnv,
-		TimeoutSeconds: timeoutSecs,
-		MaxTurns:       maxTurns,
-		CLIPath:        execCfg.CLIPath,
-		CLIArgs:        cliArgs,
-		EnvOverrides:   execCfg.EnvOverrides,
+		Env:            ed.childEnv,
+		TimeoutSeconds: ed.timeoutSecs,
+		MaxTurns:       ed.maxTurns,
+		CLIPath:        ed.execCfg.CLIPath,
+		CLIArgs:        ed.cliArgs,
+		EnvOverrides:   ed.execCfg.EnvOverrides,
 		// Fix C: auto-set the delegate's own configured model on the external
 		// CLI invocation. Each driver's buildArgs guards so an unmapped/empty
 		// model string is simply omitted rather than passed as garbage.
-		Model: agentModel,
+		Model: ed.agentModel,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("external-cli dispatch: driver start (%s): %w", cli, err)
 	}
 
 	slog.Info("external-cli dispatch: run started",
-		"run_id", runID, "cli", cli, "work_dir", workDir,
-		"timeout_s", timeoutSecs, "max_turns", maxTurns, "agent_id", childTS.agentID)
+		"run_id", ed.runID, "cli", cli, "work_dir", workDir,
+		"timeout_s", ed.timeoutSecs, "max_turns", ed.maxTurns, "agent_id", ed.childTS.agentID)
 
 	// 5. Route events through the consent dispatcher and drain into the transcript.
 	//    ConsentDispatcher answers permission-requests (Decide) and forwards every
@@ -411,11 +380,64 @@ func runExternalCLISubTurn(
 	out := make(chan runner.RunEvent, 64)
 	go func() {
 		defer close(out)
-		runner.ConsentDispatcher(runCtx, evCh, driver, runID, childTS.transcriptSessionID, consent, out)
+		runner.ConsentDispatcher(runCtx, evCh, driver, ed.runID, ed.childTS.transcriptSessionID, consent, out)
 	}()
 
-	result := drainExternalRun(runCtx, al, childTS, runID, cli, out)
+	result := drainExternalRun(runCtx, ed.al, ed.childTS, ed.runID, cli, out)
 	return result, result.Err
+}
+
+// prepareRunOptions derives the run limits, model, scrubbed environment, and configured CLI arguments.
+func (ed *runExternalCLISubTurnState) prepareRunOptions() {
+	// 4. Bound the run: a per-run timeout + turn cap (FR-5.4).
+	ed.timeoutSecs = int(ed.timeout.Seconds())
+	if ed.timeoutSecs <= 0 {
+		ed.timeoutSecs = int(defaultSubTurnTimeout.Seconds())
+	}
+	ed.maxTurns = ed.agent.MaxIterations
+	if ed.maxTurns <= 0 {
+		ed.maxTurns = DefaultExternalMaxTurns
+	}
+
+	// FIX 5: hoist the repeated strings.TrimSpace(agent.Model) computation
+	// (previously done independently for the transcript model stamp below
+	// and again for RunOptions.Model further down) into a single local.
+	ed.agentModel = strings.TrimSpace(ed.agent.Model)
+
+	// Phase 1B FR-013: attribute the external-CLI sub-turn's transcript
+	// output to the agent's configured model. The external CLI runs its
+	// own LLM, but we record what model the agent would have used in the
+	// non-CLI path — consistent with how chat turns are attributed.
+	ed.childTS.setLastProducedModel(ed.agentModel)
+
+	// SECURITY (Spec-4 FR-5.3 / SEC-23): the spawned external CLI must NOT inherit
+	// the full gateway environment — that would leak OMNIPUS_MASTER_KEY (and every
+	// other gateway secret) into a third-party binary. ScrubGatewayEnvForRunner
+	// returns os.Environ() filtered through the generic child allowlist UNIONED with
+	// the narrow runner-credential allowlist (the model-provider API keys the CLI
+	// legitimately needs to authenticate). Passing it as RunOptions.Env makes the
+	// driver use it as the COMPLETE child env (buildChildEnv) — no os.Environ()
+	// fallback, so the master key never reaches the child.
+	ed.childEnv = sandbox.ScrubGatewayEnvForRunner()
+
+	// FR-5.3 egress allowlist: inject HTTP_PROXY/HTTPS_PROXY pointing at the
+	// runner egress proxy so the CLI's HTTP/HTTPS traffic is forced through a
+	// loopback proxy with SSRF internal-CIDR blocking (prevents the CLI from
+	// reaching internal services / cloud metadata). Per ADR-019 FR-5.3 there is
+	// NO new confiner — the CLI self-sandboxes; Omnipus controls egress via
+	// proxy injection. Graceful degradation: an empty address (proxy could not
+	// start) means no injection — the run proceeds under the CLI's own sandbox +
+	// the workspace FS boundary.
+	ed.childEnv = injectRunnerEgressProxy(ed.childEnv, ed.al.runnerEgressProxyAddr())
+
+	// MAJ-5: consume the agent's ExecutorConfig (cli_path / cli_args /
+	// env_overrides) when spawning the external CLI. cli_path overrides the
+	// driver's default binary (else $PATH); cli_args is tokenised into argv
+	// (execve, no shell — warn-not-reject on shell-metacharacters); env_overrides
+	// merge into the scrubbed child env (OMNIPUS_* keys are dropped by the driver
+	// env builder, so the master key / agent-identity vars stay protected).
+	ed.execCfg = ed.agent.Subagents.Executor
+	ed.cliArgs = runner.ParseCLIArgs(ed.execCfg.CLIArgs, ed.runID)
 }
 
 // drainExternalRun consumes the runner's event stream, mirrors each event into the
