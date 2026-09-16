@@ -1,8 +1,10 @@
 package migrate
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -286,7 +288,16 @@ func TestMigrateInstancePrintSummary(t *testing.T) {
 		Errors:         []error{},
 	}
 
-	instance.PrintSummary(result)
+	var out bytes.Buffer
+	instance.printSummary(&out, result)
+
+	text := out.String()
+	assert.Contains(t, text, "Migration complete!")
+	assert.Contains(t, text, "5 files copied")
+	assert.Contains(t, text, "1 config converted")
+	assert.Contains(t, text, "2 backups created")
+	assert.Contains(t, text, "3 files skipped")
+	assert.NotContains(t, text, "errors occurred")
 }
 
 func TestMigrateInstancePrintSummaryWithErrors(t *testing.T) {
@@ -301,7 +312,13 @@ func TestMigrateInstancePrintSummaryWithErrors(t *testing.T) {
 		Errors:         []error{assert.AnError},
 	}
 
-	instance.PrintSummary(result)
+	var out bytes.Buffer
+	instance.printSummary(&out, result)
+
+	text := out.String()
+	assert.Contains(t, text, "Migration complete! No actions taken.")
+	assert.Contains(t, text, "1 errors occurred")
+	assert.Contains(t, text, assert.AnError.Error())
 }
 
 func TestMigrateInstancePrintSummaryNoActions(t *testing.T) {
@@ -316,7 +333,10 @@ func TestMigrateInstancePrintSummaryNoActions(t *testing.T) {
 		Errors:         []error{},
 	}
 
-	instance.PrintSummary(result)
+	var out bytes.Buffer
+	instance.printSummary(&out, result)
+
+	assert.Equal(t, "Migration complete! No actions taken.", strings.TrimSpace(out.String()))
 }
 
 func TestPrintPlan(t *testing.T) {
@@ -350,17 +370,53 @@ func TestPrintPlan(t *testing.T) {
 			Target:      "/target/newdir",
 			Description: "create directory",
 		},
+		{
+			Type:   ActionSkip,
+			Source: "/source/silent.txt",
+		},
 	}
 
 	warnings := []string{
 		"Warning: source directory not found",
 	}
 
-	PrintPlan(actions, warnings)
+	var out bytes.Buffer
+	printPlan(&out, actions, warnings)
+
+	text := out.String()
+	assert.Contains(t, text, "Planned actions:")
+	assert.Contains(t, text, "[config]")
+	assert.Contains(t, text, "/source/config.json -> /target/config.json")
+	assert.Contains(t, text, "[copy]")
+	assert.Contains(t, text, "file.txt")
+	assert.Contains(t, text, "[backup]")
+	assert.Contains(t, text, "existing.txt")
+	assert.Contains(t, text, "exists, will backup and overwrite")
+	assert.Contains(t, text, "[skip]")
+	assert.Contains(t, text, "skipped.txt")
+	assert.Contains(t, text, "skip file")
+	assert.Contains(t, text, "[mkdir]")
+	assert.Contains(t, text, "/target/newdir")
+	assert.NotContains(t, text, "silent.txt")
+	assert.Contains(t, text, "Warnings:")
+	assert.Contains(t, text, "Warning: source directory not found")
+	assert.Contains(t, text, "2 files to copy")
+	assert.Contains(t, text, "1 configs to convert")
+	assert.Contains(t, text, "1 backups needed")
+	assert.Contains(t, text, "2 skipped")
 }
 
 func TestPrintPlanEmpty(t *testing.T) {
-	PrintPlan([]Action{}, []string{})
+	var out bytes.Buffer
+	printPlan(&out, []Action{}, []string{})
+
+	text := out.String()
+	assert.Contains(t, text, "Planned actions:")
+	assert.Contains(t, text, "0 files to copy")
+	assert.Contains(t, text, "0 configs to convert")
+	assert.Contains(t, text, "0 backups needed")
+	assert.Contains(t, text, "0 skipped")
+	assert.NotContains(t, text, "Warnings:")
 }
 
 type mockOperation struct {
