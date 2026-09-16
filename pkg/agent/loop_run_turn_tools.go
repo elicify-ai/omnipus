@@ -60,7 +60,6 @@ func (rx *agentLoopRunTurnTools) executeToolCalls() agentLoopRunTurnToolsFlow {
 	ex.setGoalSucceededThisRound = false
 agentLoopRunTurnToolsExecuteLoop1:
 	for i, tc := range ex.rx.rr.normalizedToolCalls {
-
 		switch ex.validateCall(i, tc) {
 		case agentLoopRunTurnToolsExecuteReturn:
 			return ex.ret0
@@ -197,7 +196,6 @@ agentLoopRunTurnToolsExecuteLoop1:
 		case agentLoopRunTurnToolsExecuteBreak:
 			break agentLoopRunTurnToolsExecuteLoop1
 		}
-
 	}
 	return agentLoopRunTurnToolsNext
 }

@@ -549,7 +549,6 @@ func registerSharedTools(
 		// shared instance across concurrent turns on the same agent.
 
 		rw.registerSkillTool(agentID, agent)
-
 	}
 
 	rw.rs.pruneRemovedBrowsers()

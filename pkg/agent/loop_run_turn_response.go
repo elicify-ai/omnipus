@@ -77,7 +77,6 @@ func (rr *agentLoopRunTurnResponse) callLLMWithRetries() agentLoopRunTurnRespons
 
 agentLoopRunTurnResponseCallLLMWithRetriesLoop1:
 	for retry := 0; retry <= cr.maxRetries; retry++ {
-
 		switch cr.handleAttemptFailure(retry) {
 		case agentLoopRunTurnResponseCallLLMWithRetriesReturn:
 			return cr.ret0

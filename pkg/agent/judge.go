@@ -381,7 +381,6 @@ func (jc *agentLoopJudgeCriteria) validateAndClassify() (JudgeCriteriaResult, bo
 
 // runDeterministicRungs runs deterministic checks and withholds adjudication when verification cannot yet complete.
 func (jc *agentLoopJudgeCriteria) runDeterministicRungs() (JudgeCriteriaResult, bool) {
-
 	// --- Rung ordering: deterministic rungs first, AND-combine (FR-049/052,
 	// FR-034). Machine-check (rung 1) and behavior-scan (rung 2) both execute
 	// BEFORE the prose verifier (rung 3) so the prose Judge's user message

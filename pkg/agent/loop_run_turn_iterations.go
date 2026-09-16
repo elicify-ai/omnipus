@@ -106,7 +106,6 @@ turnLoop:
 		graceful, _ := er.cn.rc.rx.rr.rq.ri.rf.rt.ts.gracefulInterruptRequested()
 		return graceful
 	}() {
-
 		switch er.cn.prepareIteration() {
 		case agentLoopRunTurnConductorRunIterationsReturn:
 			return er.cn.ret0
@@ -117,7 +116,6 @@ turnLoop:
 		}
 
 		if len(er.cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 || er.cn.rc.rx.rr.rq.ri.gracefulTerminal {
-
 			switch er.cn.handleInitialResponse() {
 			case agentLoopRunTurnConductorRunIterationsReturn:
 				return er.cn.ret0
@@ -172,7 +170,6 @@ turnLoop:
 				case agentLoopRunTurnConductorRunIterationsRetryResponseBreakL2:
 					break turnLoop
 				}
-
 			}
 			// If the inner retry loop set an error, surface it via the outer error path.
 
@@ -197,7 +194,6 @@ turnLoop:
 			case agentLoopRunTurnConductorRunIterationsBreakL1:
 				break turnLoop
 			}
-
 		}
 
 		// ADR-087 D6.10 / D4 (last paragraph, "truncated and has complete
@@ -242,7 +238,6 @@ turnLoop:
 		case agentLoopRunTurnConductorRunIterationsBreakL1:
 			break turnLoop
 		}
-
 	}
 
 	// ADR-071 §4.3.1(a): advance and sweep this bucket's search-promotion

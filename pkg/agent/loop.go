@@ -752,7 +752,7 @@ func NewAgentLoop(
 
 	nal.initializeCore()
 
-	if r0, r1, stop := nal.initializeAudit(); stop {
+	if r0, stop, r1 := nal.initializeAudit(); stop {
 		return r0, r1
 	}
 
