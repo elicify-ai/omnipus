@@ -1,5 +1,5 @@
 # scripts/budgets/files.txt — file-size budget grandfather list (shrink-only)
 # Format: path<TAB>lines. Seeded 2026-09-15 from docs/internal/architecture/
 # size-budget-grandfather-2026-09-15.md, re-measured at release/v0.1.1 @ 0ea1b81b7.
-pkg/agent/loop.go	7825
+pkg/agent/loop.go	7320
 src/store/chat.ts	6695

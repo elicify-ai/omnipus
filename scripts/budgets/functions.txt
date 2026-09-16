@@ -9,10 +9,10 @@ pkg/agent/goal_loop_command.go	AgentLoop.applyGoalCommandPrompt	285
 pkg/agent/goal_triggers.go	AgentLoop.runGoalAdjudication	367
 pkg/agent/instance.go	NewAgentInstance	354
 pkg/agent/judge.go	AgentLoop.JudgeCriteria	262
-pkg/agent/loop_wire.go	registerSharedTools	1297
 pkg/agent/loop.go	AgentLoop.processMessage	341
+pkg/agent/loop_window.go	AgentLoop.windowTrimForce	243
+pkg/agent/loop_wire.go	registerSharedTools	1297
 pkg/agent/loop.go	AgentLoop.runTurn	4364
-pkg/agent/loop.go	NewAgentLoop	427
 pkg/agent/recall_conversation.go	RecallConversationTool.Execute	299
 pkg/agent/session_end.go	AgentLoop.runRecap	383
 pkg/agent/subturn.go	spawnSubTurn	1489
