@@ -96,7 +96,7 @@ func newWebRTCContextInputSinkWithDispatchSampling(validateInbound bool, samplin
 			probe = sampling.begin(frame, received)
 			// The merged wire frame keeps the first reliable sequence. The observer
 			// alone supplies the complete range; it never changes input authorization.
-			if probe != nil && queued.FirstReliableSeq == probe.reliableSeq && queued.LastReliableSeq >= queued.FirstReliableSeq && queued.LastReliableSeq <= 9007199254740991 && queued.InputCount == queued.LastReliableSeq-queued.FirstReliableSeq+1 {
+			if probe != nil && queued.FirstReliableSeq == probe.reliableSeq && queued.LastReliableSeq >= queued.FirstReliableSeq && int64(queued.LastReliableSeq) <= maxBrowserCounter && queued.InputCount == queued.LastReliableSeq-queued.FirstReliableSeq+1 {
 				probe.firstReliableSeq, probe.lastReliableSeq, probe.inputCount = queued.FirstReliableSeq, queued.LastReliableSeq, queued.InputCount
 			}
 			probe.mark("queue_started")

@@ -95,8 +95,20 @@ func browserTimingGesture(kind string) bool {
 	}
 	return false
 }
+
+// maxBrowserCounter is JavaScript's Number.MAX_SAFE_INTEGER: the largest
+// integral counter a browser can emit exactly, whether it names an input
+// epoch, a control epoch, a sequence, a capture generation, or an offer.
+// Typed int64 so the constant also compiles where int is 32 bits; there the
+// widened comparisons are vacuously satisfied, which loses nothing — a 32-bit
+// int cannot hold a value near 2^53 in the first place, and every path
+// feeding these guards (JSON decoding into int fields, the binary input
+// decoder's 32-bit integral cap) has already rejected anything larger before
+// the bound runs.
+const maxBrowserCounter int64 = 1<<53 - 1
+
 func boundedTimingCounter(v *int) int {
-	if v != nil && *v >= 0 && *v <= 9007199254740991 {
+	if v != nil && *v >= 0 && int64(*v) <= maxBrowserCounter {
 		return *v
 	}
 	return 0
