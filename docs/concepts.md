@@ -1,75 +1,82 @@
-# How Omnipus works (in plain English)
+# Concepts
 
-Omnipus is a small **team of AI agents that you run yourself**. It is not a single
-chatbot, and it is not a website you log in to that someone else hosts. You install
-it on your own machine (or in Docker), point it at an AI model, and you get five
-named teammates who can talk to you, take actions, and remember what you discussed.
+Omnipus is a team of AI agents that runs on your own machine. This page introduces the words the rest of the handbook uses. Each section gives the idea in a few sentences and links to the page that goes deeper.
 
-![The agent roster](marketing/screenshots/04-agents-roster.png)
-*Your five built-in teammates, ready to go.*
+## What it is
 
-## Meet the team
+Everything in Omnipus hangs together in one shape:
 
-You always start by talking to **Mia**. She figures out what you need and brings in
-the right specialist. Here is who does what:
+- All your work lives in a **workspace**. Chats, tasks, the calendar, files, and the team of agents belong to it.
+- **Agents** do the work. Four ship built in, and you can create your own.
+- Agents act through **tools**: reading and writing files, searching the web, running commands.
+- Work takes three shapes: **tasks**, **plans**, and **goals**.
+- **Connectors** carry your messages in from chat platforms such as Telegram or Discord.
 
-| Agent | Role | Reach for them when… |
-|-------|------|----------------------|
-| **Mia** | Coach & Guide | You're not sure who to ask. She's the default and routes you to the right teammate. |
-| **Jim** | General Purpose | You want code written, files created or edited, a task scoped, or general day-to-day help. |
-| **Ava** | Agent Builder | You want to create your own custom agent. She interviews you, then builds it. |
-| **Ray** | Researcher | You need facts from the web, with sources. He won't make things up. |
-| **Max** | Automator | You want a browser driven for you, or a task scheduled to run on its own. |
+```mermaid
+flowchart LR
+  You[You] -->|write through| Chat[Chat or connector]
+  Chat -->|delivers to| Team[Team of agents]
+  Team -->|works in| WS[Workspace]
+  Team -->|acts with| Tools[Tools]
+  Team -->|creates| Tasks[Tasks]
+  Tasks -->|chain into| Plans[Plans]
+  Goals[Goals] -->|define done for| Tasks
+```
 
-## A few ideas that make it all click
+You reach a team of agents through a chat or a connector. The agents work with tools, and the work shows up as tasks, plans, and goals inside the workspace.
 
-### Handoff
+## When you would use it
 
-When you ask Mia for something, she passes you to the right teammate inside the *same* conversation. You don't copy and paste anything or start over — the new agent simply takes over and keeps going.
+Read this page once before [getting started](getting-started.md), so the words are in place. Return to it whenever another page uses a term you have not met. This page names ideas; it does not walk through screens.
 
-### Sessions
+## The workspace
 
-A session is just one conversation. You can have as many as you like, switch which agent you're talking to at any time, and reopen an old conversation later to pick up where you left off.
+A workspace is the container your work happens in. Every chat, task, plan, file, and calendar entry belongs to exactly one workspace, and each workspace keeps its own team of agents and its own memory. On a fresh install you start with one workspace, named My Workspace, with the four built-in agents already on the team. The same agent can sit on several workspaces, so you can split work by client or by topic without doubling up. See [workspaces](workspaces.md).
 
-### Memory & self-learning
+## The agents
 
-When a chat goes quiet or ends, the app quietly writes a short recap of what happened — and records **lessons learned** (what went well, what to improve). The recap carries into your next session automatically, and the lessons are saved so an agent can recall them when they're relevant. You never manage files or notes: your team remembers the important bits, and builds on past work instead of starting cold each time.
+Agents are who does the work. Four of them ship with Omnipus, and Mia is the default on a fresh install:
 
-### Your preferences
+| Agent | Role | Reach for them when |
+|---|---|---|
+| Mia | Assistant | You want an everyday starting point. She answers and connects you with the right specialist. |
+| Jim | Planner and Orchestrator | A job has many steps. He breaks it into tasks, hands them out, and tracks them to done. |
+| Ava | Builder | You want a new agent. She interviews you, then creates it. |
+| Ray | Scout | You need research. He digs into sources and presents findings with citations. |
 
-You can tell every agent how you like to work once, and they'll all know it. In **Settings → Profile**, the *"What should the agents know about you?"* box is shared with every agent — use it for standing preferences (your name, your timezone, "always answer concisely", "I prefer Python", and so on).
+You can also create your own agents, in three kinds. A **Main** agent is a chat colleague. A **Subagent** is a worker that other agents hand work to. An **external worker** runs on a command-line agent tool you already have. Workers never chat with you. See [agents](agents.md).
 
-### Delegation & parallel work
+## Connectors
 
-Agents don't only talk to you — they can **delegate**. An agent can plan a piece of work and assign it to a teammate as a **task**; the assignee picks it up when it's started (by you, or automatically on the next scheduled sweep). Capable agents can also **spawn subagents** to work on several parts of a big job at the same time, then bring the results back together. You watch all of this on the **Command Center** task board.
+A connector links a chat platform you already use — Telegram, Discord, Slack, among others — to your agents. You write where you already write. The connector delivers the message into the workspace it is bound to, and the answer comes back in the same conversation. See [connectors](connectors.md).
 
-### Channels
+## Tasks, plans, and goals
 
-These are the ways you can reach your agents: the **web app**, the **command line (CLI)**, or **14 chat platforms** like Telegram, Discord, and Slack. The same agents and memory follow you across all of them.
+Work takes three shapes. The difference is how much work it holds, and how it runs to done:
 
-### Skills
+| Shape | What it is | Where you follow it |
+|---|---|---|
+| Task | One piece of work with an owner agent, acceptance criteria, and a definition of done | A card on the workspace board |
+| Plan | Several tasks with dependencies and one shared definition of done. The engine runs them in order, start to finish. | A tile above the board, and the graph of its tasks |
+| Goal | An outcome you state in chat with `/goal`. Work starts in the same turn, and a separate Judge agent reads the work and decides when it counts as done. | The chat where you stated it |
 
-A skill is a reusable add-on capability an agent can pull in when it's needed — think of it as a tool the agent picks up for a specific job. You can install more skills to teach your team new tricks.
+Every task carries a goal of its own, and its completion is judged the same way. A plan is the one shape where the engine starts each task in turn, so you do not start them yourself. See [tasks](tasks.md), [plans](plans.md), and [goals](goals.md).
 
-### Tools & approvals
+## Tools
 
-Agents can actually *do* things: search the web, run a command, browse a site, create a file. When an action could be sensitive, you'll see an inline **Allow / Deny / Always** prompt before anything happens, so you always stay in control. (Your API keys, by the way, are encrypted on disk.)
+A tool is one capability an agent can call while it works: reading a file, searching the web, running a command, sending email. A large set of tools ships built in, and you can connect external tool servers through MCP (Model Context Protocol, an open standard many services publish tools to). Every tool has a policy — **Allow**, **Ask**, or **Deny** — set once for the whole installation and tightened per agent. When a policy is Ask, the agent stops and waits for your approval. See [tools](tools.md).
 
-### Tasks
+## Limits and things to watch
 
-A task is a piece of background work with a title, a priority, and an agent assigned to it. You (or an agent) can create tasks, and the **Command Center** shows them on a board you can track from queued → running → done.
+- The four built-in agents are locked. They ship as they are; you add capacity by creating your own agents, not by editing the built-ins.
+- Who may hand work to whom is set inside each workspace, not on an agent. The same agent can be trusted to receive work in one workspace and not in another.
+- A task with no agent assigned cannot run. It stays on the board as a to-do for you.
 
-## Two ways to use Omnipus
+## Related pages
 
-Most people start in the **web app**, but everything also works from the **terminal**
-if you prefer typing commands. New here? See **[Getting started](getting-started.md)**.
-Then explore the **[web app tour](using-omnipus-ui.md)** or the
-**[CLI guide](using-omnipus-cli.md)** — whichever fits how you like to work.
-
-## Next steps
-
-**[Getting started — your first 10 minutes](getting-started.md)** — install and have your first chat.
-
-**[Using the web app](using-omnipus-ui.md)** — a full tour of the interface.
-
-**[Using the CLI](using-omnipus-cli.md)** — drive Omnipus from your terminal.
+- [Workspaces](workspaces.md) — the container all work happens in.
+- [Agents](agents.md) — the built-in roster and the agents you create.
+- [Tasks](tasks.md) — cards on the board, from creation to done.
+- [Plans](plans.md) — chains of tasks the engine runs for you.
+- [Goals](goals.md) — stated outcomes and how the Judge verifies them.
+- [Tools](tools.md) — what agents can do, and the Allow / Ask / Deny control.
