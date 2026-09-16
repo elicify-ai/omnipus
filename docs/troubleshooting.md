@@ -99,7 +99,7 @@ The encrypted credential store needs a master key. The gateway looks for one in 
 | 4 | Auto-generate | Only on a fresh install with no key and no `credentials.json` |
 | 5 | Interactive prompt | Terminal only |
 
-A fresh install warns you to back up `master.key`. Heed it: losing that file makes every stored credential permanently unreadable, with no recovery. Full model: [credential_encryption.md](credential_encryption.md).
+A fresh install warns you to back up `master.key`. Heed it: losing that file makes every stored credential permanently unreadable, with no recovery. See [Security for users](security.md).
 
 ## The web app looks outdated after a source build
 
@@ -132,4 +132,4 @@ mkdir -p "$TMPDIR"
 - [debug.md](debug.md) — reading gateway logs and running with `--debug`.
 - [getting-started.md](getting-started.md) — install and first-run setup, including onboarding.
 - [configuration.md](configuration.md) — the `config.json` keys named here.
-- [credential_encryption.md](credential_encryption.md) — how the master key and the encrypted store work.
+- [Security for users](security.md) — how the master key and encrypted credentials affect you.

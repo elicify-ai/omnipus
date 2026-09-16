@@ -30,7 +30,7 @@ Omnipus's tools configuration is located in the `tools` field of `config.json`.
 
 Before tool results are sent to the LLM, Omnipus can filter sensitive values (API keys, tokens, secrets) from the output. This prevents the LLM from seeing its own credentials.
 
-See [Sensitive Data Filtering](sensitive_data_filtering.md) for full documentation.
+See [Security for users](security.md) for the user-facing limits and [operator security considerations](operations/security-considerations.md#sensitive-value-filtering) for configuration details.
 
 | Config | Type | Default | Description |
 |--------|------|---------|-------------|

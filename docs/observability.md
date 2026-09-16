@@ -90,7 +90,7 @@ External processes can subscribe to the same event feed via JSON-RPC over stdin/
 
 #### Audit log
 
-A subset of security-relevant events (tool calls, denials, sandbox state changes, cancel events, rate limits) are mirrored into `~/.omnipus/system/audit.jsonl` with HMAC chain integrity (v0.2 hardening, #155 item 1). See [security_configuration.md](security_configuration.md).
+A subset of security-relevant events (tool calls, denials, sandbox state changes, cancel events, rate limits) are mirrored into `~/.omnipus/system/audit.jsonl` with HMAC chain integrity (v0.2 hardening, #155 item 1). See [Security for users](security.md).
 
 ### Event payload shape
 
@@ -144,6 +144,6 @@ Everything is captured. Nothing is silent. An operator can audit any turn after 
 
 [hooks/README.md](hooks/README.md) explains how to write a subprocess hook that consumes the event stream.
 
-[security_configuration.md](security_configuration.md) covers the audit log, HMAC chain, and sensitive-data redaction.
+[Security for users](security.md) covers the audit log and sensitive-value filtering.
 
 [memory.md](memory.md) describes how transcripts become memory via auto-recap at session close.

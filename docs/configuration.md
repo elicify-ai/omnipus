@@ -491,7 +491,7 @@ chmod 600 ~/.omnipus/.security.yml
 **How it works:**
 Values from `.security.yml` are automatically mapped to config fields. No special syntax is needed — just omit sensitive fields from `config.json`. If a field exists in both files, the `.security.yml` value takes precedence. You can mix direct values in `config.json` with security values.
 
-For complete documentation, see [`security_configuration.md`](security_configuration.md).
+For user guidance, see [Security for users](security.md). Operators can find deployment details in [security considerations](operations/security-considerations.md).
 
 #### All Supported Vendors
 
@@ -942,8 +942,8 @@ physical RAM. This is a gap that is declared rather than worked around; see the
 
 | Topic | Description |
 | ----- | ----------- |
-| [Security Configuration](security_configuration.md) | Store API keys and secrets in separate `.security.yml` file |
-| [Sensitive Data Filtering](sensitive_data_filtering.md) | Filter API keys and tokens from tool results before sending to LLM |
+| [Security for users](security.md) | Control permissions and manage encrypted credentials |
+| [Operator security considerations](operations/security-considerations.md) | Configure credential keys and sensitive-value filtering |
 | [Hook System](hooks/README.md) | Event-driven hooks: observers, interceptors, approval hooks |
 | [Steering](internal/architecture/steering.md) | Inject messages into a running agent loop between tool calls |
 | [SubTurn](internal/architecture/subturn.md) | Subagent coordination, concurrency control, lifecycle |

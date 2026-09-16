@@ -159,7 +159,7 @@ omnipus credentials delete OPENAI_API_KEY   # asks to confirm
 omnipus credentials rotate        # new passphrase
 ```
 
-The vault is locked with a master key. Keep a backup of it — without it, the secrets cannot be recovered. See [Credential encryption](credential_encryption.md). On unattended servers, supply the master key as an environment variable instead of a passphrase:
+The credential store is locked with a master key. Keep a backup of it — without it, the secrets cannot be recovered. See [Security for users](security.md). On unattended servers, supply the master key as an environment variable instead of a passphrase:
 
 ```bash
 export OMNIPUS_MASTER_KEY=<64-hex-char-key>
