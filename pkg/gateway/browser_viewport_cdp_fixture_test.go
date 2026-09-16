@@ -189,3 +189,20 @@ func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int
 	})
 	return "ws" + strings.TrimPrefix(server.URL, "http") + "/devtools/browser/viewport-fixture", observe, discovered, watchQueried
 }
+
+// newViewportCDPEndpointURL returns only the WebSocket URL of a measured CDP
+// fixture endpoint. The companion discover / watch signals exist for callers
+// that need to await specific lifecycle barriers; this caller does not — the
+// fixture's t.Cleanup closes them regardless of whether anyone awaits, and
+// the endpoint's internal observation logic is independent of the receive.
+// The wrapper keeps the call site free of blank identifiers without changing
+// the multi-return contract that newViewportCDPEndpoint uses for tests that
+// need the full result.
+func newViewportCDPEndpointURL(t *testing.T) string {
+	t.Helper()
+	endpoint, observe, discovered, watchQueried := newViewportCDPEndpoint(t, false)
+	_ = observe
+	_ = discovered
+	_ = watchQueried
+	return endpoint
+}

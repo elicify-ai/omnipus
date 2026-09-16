@@ -144,7 +144,7 @@ func (r *requestFixtureRelay) pendingCount() int {
 // manager/live-view state and measured capture refresh remain real.
 func newMeasuredBrowserWSTestHandler(t *testing.T, mutate func(*config.Config)) (*BrowserWSHandler, *agent.AgentLoop) {
 	t.Helper()
-	endpoint, _, _, _ := newViewportCDPEndpoint(t, false)
+	endpoint := newViewportCDPEndpointURL(t)
 	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 8 << 30, true }))
 	return newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		if mutate != nil {
