@@ -1,11 +1,21 @@
 # scripts/budgets/files.txt — file-size budget grandfather list (shrink-only)
 # Format: path<TAB>lines. Seeded 2026-09-15 from docs/internal/architecture/
 # size-budget-grandfather-2026-09-15.md, re-measured at release/v0.1.1 @ 0ea1b81b7.
+# Re-seeded 2026-09-17 (budget-ratchet lane): the FAIL limit tightened 4,000 ->
+# 3,155 and the seven files over it pinned at their exact counts. Each row is a
+# shrink-only ceiling — one added line fails the gate (check-file-budget.sh).
 #
 # A file split must re-key its rows by hand. Rows are keyed by exact path with
 # no fallback: after a split the original path's row keeps its pre-split count,
 # so that file can grow back to its old size with no FAIL, and a row whose path
 # no longer exists is never reported. Re-key: lower the number to the
-# re-measured count, or delete the row once the file is under 4,000 lines;
-# never add a row for a file a split created — new files must be under 4,000
+# re-measured count, or delete the row once the file is under 3,155 lines;
+# never add a row for a file a split created — new files must be under 3,155
 # lines. Same trap and precedent as functions.txt (see its header).
+pkg/agent/loop.go	3156
+pkg/agent/loop_test.go	3650
+src/components/agents/AgentProfile.test.tsx	3194
+src/components/agents/AgentProfile.tsx	3211
+src/components/chat/ChatScreen.tsx	3607
+src/lib/api.test.ts	3241
+src/store/chat.test.ts	3383

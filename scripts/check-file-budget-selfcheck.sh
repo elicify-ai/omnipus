@@ -9,7 +9,8 @@
 # Builds a throw-away synthetic tree and a throw-away budget file per case,
 # and drives the real gate against them via its --root/--budget flags:
 #
-#   (a) a 4,001-line file NOT on the budget list          -> must FAIL
+#   (a) a 3,156-line file NOT on the budget list          -> must FAIL
+#       (one line over the 3,155 FAIL limit)
 #   (b) a listed file one line UNDER its listed number    -> must pass (exit 0)
 #   (c) a listed file one line OVER its listed number     -> must FAIL
 #   (d) a 2,001-line file NOT on the list                 -> exactly one WARN,
@@ -17,6 +18,8 @@
 #   (e) a 4,001-line file under an exempt generated/ dir  -> ignored entirely
 #                                                             (exit 0, no
 #                                                             WARN/FAIL lines)
+#   (f) a file at exactly the 3,155 FAIL limit            -> WARN only, exit 0
+#       (the gate fails OVER the limit, never AT it)
 #
 # Exit: 0 all cases behave, 1 a case misbehaves, 2 harness could not run.
 
@@ -73,14 +76,14 @@ expect_exit() { # expect_exit <label> <want-exit>
   return 0
 }
 
-# (a) 4,001-line unlisted file must FAIL.
+# (a) 3,156-line unlisted file must FAIL (one line over the 3,155 limit).
 reset_tree
-make_file "pkg/a.go" 4001
+make_file "pkg/a.go" 3156
 write_budget
 run_gate
-if expect_exit "4,001-line unlisted file fails" 1; then
-  if ! printf '%s\n' "$OUT" | grep -qE '^FAIL pkg/a\.go 4001 > 4000 \(not grandfathered\)$'; then
-    echo "selfcheck FAIL: 4,001-line unlisted file — expected FAIL line not found" >&2
+if expect_exit "3,156-line unlisted file fails" 1; then
+  if ! printf '%s\n' "$OUT" | grep -qE '^FAIL pkg/a\.go 3156 > 3155 \(not grandfathered\)$'; then
+    echo "selfcheck FAIL: 3,156-line unlisted file — expected FAIL line not found" >&2
     printf '%s\n' "$OUT" | sed 's/^/    | /' >&2
     FAIL=1
   fi
@@ -133,6 +136,20 @@ if expect_exit "generated/ file is ignored" 0; then
   finding_count="$(printf '%s\n' "$OUT" | grep -cE '^(WARN|FAIL) ' || true)"
   if [ "$finding_count" -ne 0 ]; then
     echo "selfcheck FAIL: generated/ file — expected no WARN/FAIL output, got $finding_count line(s)" >&2
+    printf '%s\n' "$OUT" | sed 's/^/    | /' >&2
+    FAIL=1
+  fi
+fi
+
+# (f) a file at exactly the 3,155 FAIL limit warns only — the gate fails
+# OVER the limit, never AT it.
+reset_tree
+make_file "pkg/f.go" 3155
+write_budget
+run_gate
+if expect_exit "file at exactly the FAIL limit warns only" 0; then
+  if ! printf '%s\n' "$OUT" | grep -qE '^WARN pkg/f\.go 3155 > 2000$'; then
+    echo "selfcheck FAIL: at-limit file — expected WARN line not found" >&2
     printf '%s\n' "$OUT" | sed 's/^/    | /' >&2
     FAIL=1
   fi
