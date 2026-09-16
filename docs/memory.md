@@ -1,139 +1,99 @@
 # Memory
 
-Memory is what makes an Omnipus agent feel like it has a history. When a session ends, the agent writes a short recap and a structured retrospective. On the next turn those are read back in, so the agent remembers what happened yesterday, what went well, what did not, and what the user told it to keep. Memory compounds: every session leaves a usable trace, not just a transcript.
+Memory is what your agents keep between conversations. When a session ends, Omnipus writes a short recap of it, and anything an agent saved during it stays available to the team. This page explains what agents remember, where it lives, and which settings control it.
 
-This document describes the memory system as it ships today.
+## What it is
+
+Three kinds of memory, all stored as plain files on your machine:
+
+- **Saved notes.** An agent saves a fact, decision, reference, or lesson with the `remember` tool. A note lives in one of two rooms: a shared room the whole workspace team reads, or a private room for one agent.
+- **Recaps and retrospectives.** When a conversation has been idle for a while, a background call summarizes it — what it was about, what went well, what to improve. The recap is loaded back into the agent's context at the start of its next session, so it picks up where it left off.
+- **The transcript.** The full conversation stays on disk. Only the recent part sits in the agent's live view; the rest can be read back on demand.
+
+Every new session starts with the last recap and up to twenty recent saved notes already in the agent's context. The agent does not wait to be asked.
+
+## When you would use it
+
+- You tell an agent something worth keeping — "Remember that we invoice on the 15th" — and any teammate in the workspace can recall it in a later conversation.
+- You return the next day and the agent already knows what happened yesterday, without you restating it.
+- A conversation runs long, and the agent reads an earlier exchange back instead of guessing at it.
+- You change how often recaps happen, or which model writes them, in Settings.
+
+## How to save and recall a fact
+
+1. In a chat, tell the agent what to keep: "Remember that the staging server is called elm." The agent calls `remember`, and the tool call appears in the thread.
+2. The note lands in the shared room by default, where every agent in the workspace can recall it. Ask for a private note when only one agent should see it.
+3. In any later conversation, ask about it. The agent searches with `recall_memory` and answers from saved notes and past retrospectives.
+4. For something said earlier in the same conversation, the agent uses `recall_conversation` instead. That tool never crosses into other conversations.
+
+The two rooms:
+
+| Room | Who can read it | Good for |
+|---|---|---|
+| Shared (the default for saves) | Every agent in the workspace | Project decisions, conventions, references |
+| Private | One agent only | Personal working notes, individual lessons |
 
 ## The four memory tools
 
-All four tools are builtins registered on each agent's `ToolRegistry`. Agents always operate inside a workspace, so memory is **shared with the workspace team by default** — a teammate agent can recall what you saved. Pass `room='private'` only for notes that are just for you.
+Every agent has all four. The agent calls them on its own judgment; you trigger them by asking in chat.
 
-### `remember`
-
-Saves a durable fact, decision, reference, or lesson. Implementation: `pkg/tools/memory.go`.
-
-**Args:** `content` (string, required, ≤ 4 096 runes), `category` (required: `key_decision` | `reference` | `lesson_learned`), `room` (optional: `shared` | `private`).
-
-**Room default:** `shared` — the memory goes into the workspace team's shared room (`workspaces/<id>/.omnipus/memories/`) so every agent on the team can recall it. Pass `room='private'` to write to the agent's own private room (`agents/<id>/.omnipus/memories/`).
-
-**What lands on disk:** a Markdown file with YAML-like frontmatter under `memories/<id>.md` inside the target room (one file per memory; bleve/scorch-indexed for BM25 recall). Each file carries: `id`, `title`, `type`, `tags`, `confidence`, `status`, `author`, `born_in`.
-
-**Audit:** every call emits a `memory.remember` audit entry with the content's SHA-256 (never the raw content), byte count, category, and outcome.
-
-**Rate limits** (`pkg/tools/memory_rate_limit.go`): sliding-window limiter, defaults 60 writes/min per agent and 600 writes/min per caller. A rejection emits `memory.rate_limited` with `error_kind="rate_limited"`.
-
-### `recall_memory`
-
-Searches durable cross-session memory — saved facts **and** past retrospectives. Implementation: `pkg/tools/memory.go`.
-
-**Args:** `query` (string, required, literal substring), `limit` (default 20, max 50), `room` (optional: `private` | `shared` | `both`).
-
-**Room default:** `both` — searches the workspace shared room and the agent's private room, deduplicating by ID. Pass `room='shared'` or `room='private'` to narrow the scope.
-
-**How search works:** BM25 full-text search via a per-room bleve/scorch index (`pkg/memrooms/index/`), with a case-insensitive substring-scan fallback when the index is unavailable. Retrospectives are indexed alongside long-term memories and surface through the same query.
-
-**Use this when:** the information comes from a previous conversation. For earlier turns of the current conversation, use `recall_conversation` instead.
-
-### `recall_conversation`
-
-Pages back through earlier turns of the **current** conversation that scrolled out of the live context window. Implementation: `pkg/agent/recall_conversation.go`.
-
-**Args:** exactly one of `query` (BM25 keyword, returns ≤ 8 turns / ≤ 4 000 tokens), `turn_range` (e.g. `"5-10"`, ≤ 50 turns / ≤ 8 000 tokens), or `time` (`{from, to}` Unix seconds or RFC 3339).
-
-**Not persisted:** reads only the current session's own archive (the sliding-window breadcrumb index). It does not cross session boundaries. To find information saved across different conversations, use `recall_memory`.
-
-### `run_retrospective`
-
-Records what went well and what to improve at the end of a productive session. Implementation: `pkg/tools/memory.go`.
-
-**Args:** `went_well` (array of strings, required), `needs_improvement` (array of strings, required). At least one must be non-empty.
-
-**When to call it:** after the user has reviewed the session summary, before signing off. Do not call it mid-session.
-
-**What lands on disk:** a structured block appended to `retros/<YYYY-MM-DD>/<sessionID>_retro.md` in the agent's **private** room (retrospectives are agent-personal reflection, not shared facts). Retrospectives are returned by `recall_memory` — there is no separate `recall_retro` tool.
-
-**Auto-recap:** the same retro format is written automatically at session close via `AgentLoop.CloseSession` (`pkg/agent/session_end.go`). The explicit `run_retrospective` tool fires the same `MemoryStore.AppendRetro` path.
-
-## The two-room topology
-
-Each workspace has two memory rooms:
-
-| Room | Path | Visible to |
+| Tool | What it does | Bounds |
 |---|---|---|
-| Shared | `workspaces/<id>/.omnipus/memories/` | Every agent in the workspace |
-| Private | `agents/<id>/.omnipus/memories/` | This agent only |
+| `remember` | Saves a note as a decision, reference, or lesson | Up to 4,096 characters; shared room by default |
+| `recall_memory` | Keyword search over saved notes and past retrospectives | Both rooms by default; 20 results, at most 50 |
+| `recall_conversation` | Reads back earlier turns of the current conversation | By keyword, turn numbers, time window, or one tool result |
+| `run_retrospective` | Records what went well and what to improve | Always the agent's private room |
 
-**Write default:** `remember` defaults to `shared` — the workspace team's collective memory.
-**Read default:** `recall_memory` defaults to `both` — reads widely, returns results from whichever room has the best match.
+## What happens when a session ends
 
-Rule of thumb: shared for anything a teammate agent might need (project decisions, conventions, references); private for personal working notes and individual lessons that would be noise to the rest of the team.
+With Auto recap on (Settings → Memory; it is on by default on a new install):
 
-## Recall routing at a glance
+1. A session closes after it has been idle for the timeout you set — 30 minutes by default. After a gateway restart, any session that never got a recap gets one then, spread out a few per minute.
+2. A background model call summarizes the conversation: a recap of at most 150 words, up to five wins, and up to five items to improve.
+3. The recap is written to the agent's private room and injected into its next session. The retrospective is filed under its date and appears in `recall_memory` results.
+4. If the summary call fails, the most recent user messages are carried forward word for word, and the file is marked as a fallback — the session is not silently forgotten.
+5. The summary also proposes items worth remembering long-term. Nothing from that list is saved automatically; the agent still has to call `remember` for anything it wants to keep.
 
-| You want to recall… | Tool | How |
-|---|---|---|
-| An earlier turn of the current chat that scrolled out of view | `recall_conversation` | `query:"…"` or `turn_range:"5-10"` or `time:{from,to}` |
-| A past retrospective (went-well / needs-improvement) | `recall_memory` | `query:"…"` — retros are folded into recall_memory results |
-| A saved fact/decision/reference/lesson | `recall_memory` | `query:"…"`, `room:'both'` (default) |
+Delegated sub-task sessions never get a recap — only real conversations do.
 
-## What happens at session close (auto-recap)
+## How long conversations stay in view
 
-`AgentLoop.CloseSession(sessionID, trigger)` is the entry point (`pkg/agent/session_end.go`). Triggers: `explicit` (SPA "End session"), `lazy` (next-turn check after idle threshold), `idle` (idle-ticker fired), `bootstrap` (post-restart sweep).
+The live window holds the recent turns of a conversation. When it fills, the oldest whole turns drop out of view until the conversation fits again. Three things are worth knowing:
 
-When `Agents.Defaults.AutoRecapEnabled` is true:
+- Trimming makes no extra model call. It is arithmetic on message sizes, not a summary.
+- Nothing is deleted from disk. The transcript file keeps everything; only the live view shrinks.
+- The agent is told which turns scrolled away, and it can read them back with `recall_conversation`.
 
-1. Idempotency check via `claimedCloseSessions` (a `sync.Map`).
-2. Session transcript filtered (empty messages and sub-turn results dropped) and truncated to ~2 000 tokens keeping the tail.
-3. LLM call (light model; 60 s timeout; max 250 tokens) requesting `{"recap", "went_well", "needs_improvement", "worth_remembering"}`.
-4. On success: `memory.WriteLastSession(recap)` writes `last-session.md` (private room root), `memory.AppendRetro(sessionID, retro)` writes the day-bucketed retro (private room `retros/`).
-5. On failure: `writeHeuristicFallbackRetro` writes a deterministic fallback retro with `fallback=true`.
-
-`BootstrapRecapPass` runs on gateway start and enqueues `CloseSession` for any session that closed without a retro, throttled to `GetBootstrapRecapMaxPerMinute` starts/minute.
-
-`worth_remembering` from the LLM is parsed but not auto-written to long-term memory today. Promoting it is the Dreamcatcher pass (v0.3).
-
-## On-disk layout
-
-```
-workspaces/<ws_id>/
-└── .omnipus/
-    └── memories/
-        ├── <uuid>.md          # one file per shared long-term memory
-        └── .index/
-            ├── scorch/        # bleve BM25 index
-            ├── minhash.jsonl  # near-dup dedup links
-            └── counters.jsonl # access frequency records
-
-agents/<agent_id>/
-└── .omnipus/
-    ├── memories/
-    │   ├── <uuid>.md          # one file per private long-term memory
-    │   └── .index/            # bleve index, minhash, counters
-    ├── retros/
-    │   └── <YYYY-MM-DD>/
-    │       └── <sessionID>_retro.md  # retrospective blocks
-    └── last-session.md        # most recent recap (overwritten each session-end)
+```mermaid
+flowchart LR
+  You[You] -->|chat with| Agent[Agent]
+  Agent -->|turns accumulate| Window[Live window]
+  Window -->|fills up| Trim[Drop oldest turns]
+  Trim -->|keeps everything| Disk[Transcript on disk]
+  Agent -->|recall_conversation| Disk
+  Disk -->|earlier turns back| Agent
 ```
 
-Permissions: directories are created `0o700`; files are `0o600`. Atomic writes via `fileutil.WriteFileAtomic`; retro appends via `flock` + `O_APPEND` + `fsync`.
+When the window fills, the oldest turns leave the live view but stay on disk, ready to be read back on demand.
 
-## Near-duplicate detection
+## Limits and things to watch
 
-`MemoryStore.AppendLongTermToScope` runs a MinHash dedup check (`pkg/memrooms/minhash/`) after writing the `.md` file. If the new memory's MinHash signature exceeds the Jaccard threshold against any existing memory in the room, a `NearDupRecord` is appended to `.index/minhash.jsonl` (non-destructive — the `.md` file is kept). The sigCache is rebuilt from `.md` mtimes so externally written files are also considered.
-
-## Concurrency and safety
-
-- **Per-room bleve index** (`pkg/memrooms/index/`): lazily opened, protected by `indexMu` across both index writes and searches. `syncRoomToDiskLocked` detects mtime changes and rebuilds stale indexes.
-- **Atomic writes:** long-term memory files, `last-session.md`, and JSONL rewrites use `fileutil.WriteFileAtomic` (temp + fsync + rename).
-- **Advisory flock:** `AppendRetro` runs inside `fileutil.WithFlock` (Unix `LOCK_EX`). Windows falls back to a no-op flock with a one-time warn.
-- **Shared room concurrency:** `MemoryStore.sharedRoom` is protected by a `sync.RWMutex`; `SetWorkspaceID` swaps the pointer atomically so per-turn workspace changes never race concurrent reads.
-- **Session transcripts:** `JSONLStore` uses a 64-shard mutex pool keyed by FNV-1a hash (`pkg/memory/jsonl.go`) — O(1) memory regardless of session count.
-
-## What is not implemented yet
-
-| Capability | Status |
+| Limit | What it means for you |
 |---|---|
-| Dreamcatcher: auto-promote `worth_remembering` to shared long-term memory | Not built; tracked for v0.3 |
-| Maps of Content / graph edges / wikilinks | Not built; v0.3 |
-| Semantic (embedding-based) search | Not built; no embedding model; v0.3 |
-| Daily notes (`AppendToday`, `GetRecentDailyNotes`) | Code exists, no live caller; reserved |
+| Search matches words, not meaning | A note saved as "invoice" will not surface for "billing" unless the words overlap. There is no meaning-based search. |
+| No memory browser | No screen in the app lists saved notes, and no tool deletes one. To remove a note, delete its file under `~/.omnipus/`. |
+| Retrospectives expire | A nightly sweep deletes retrospectives older than the retention setting — 180 days by default. |
+| Transcripts expire | Session transcripts are kept 90 days by default (Settings → Data). `recall_conversation` cannot read past that. |
+| Saved notes never expire | Nothing prunes them; a workspace in use for years keeps every note. |
+| Writes are rate-limited | An agent can save at most 60 notes per minute, and one caller at most 600. Beyond that the save is rejected and the agent is told to wait. |
+| Sharing needs a workspace | The shared room exists only for work in a workspace. Outside one, every note is saved privately and the agent is told so. |
+
+Recap settings live in Settings → Memory: the Auto recap switch, the idle timeout in minutes, the restart catch-up pass and its per-minute cap, and the summarization model with its fallbacks.
+
+## Related pages
+
+- [workspaces](workspaces.md) — the team that shares the shared memory room
+- [agents](agents.md) — who reads and writes memory
+- [tools](tools.md) — the tool catalog the memory tools belong to
+- [knowledge](knowledge.md) — notes and records you write yourself, separate from agent memory
+- [settings](settings.md) — where recap and retention are configured
