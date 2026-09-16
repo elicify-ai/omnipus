@@ -6,8 +6,14 @@ package gateway
 
 import (
 	"context"
+	"fmt"
+	"go/scanner"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -73,10 +79,10 @@ func removeFromTeam(t *testing.T, home, wsID string, remaining ...string) {
 }
 
 // toolTurnCtx builds the context an agent's browser tools actually run under.
-// The two values are the ones pkg/agent/loop.go's runTurn stamps —
-// tools.WithAgentID(turnCtx, ts.agent.ID) and
-// tools.WithWorkspaceID(turnCtx, ts.opts.WorkspaceID) — and they are the ONLY
-// inputs browser.ResolveBrowsingKey reads.
+// The two values are the ones pkg/agent stamps onto every turn context — the
+// wiring TestBrowserWorkspace_ToolResolutionIsWiredToTheRealTurnContext pins
+// at the source — and they are the ONLY inputs browser.ResolveBrowsingKey
+// reads.
 func toolTurnCtx(agentID, chatWorkspaceID string) context.Context {
 	ctx := tools.WithAgentID(context.Background(), agentID)
 	if chatWorkspaceID != "" {
@@ -231,27 +237,127 @@ func TestBrowserWorkspace_NamingAnotherTeamsWorkspaceGrantsNothing(t *testing.T)
 		"another team's workspace must never be resolvable from a chat label alone")
 }
 
+// turnWorkspaceStampRe matches the one line that puts the chat's workspace on
+// the turn context: tools.WithWorkspaceID(<…>turnCtx, <…>.opts.WorkspaceID).
+//
+// Both operands may hide behind an arbitrarily deep receiver chain — the loop.go
+// split rewrote the plain `turnCtx` and `ts.opts.WorkspaceID` of the original
+// line into `rc.rx.rr.rq.ri.rf.rt.turnCtx` and
+// `rc.rx.rr.rq.ri.rf.rt.ts.opts.WorkspaceID` — so each operand is matched as an
+// identifier chain ending in its load-bearing name. Those names are what keep
+// this from being a "function name appears somewhere" check:
+//
+//   - the CONTEXT must be the turn's own (`…turnCtx`), not just any context;
+//   - the WORKSPACE must come off the turn's options (`.opts.WorkspaceID`),
+//     which is exactly what the TASK path does not do — task_executor_run.go
+//     stamps taskCtx from t.WorkspaceID, and that call must never satisfy this
+//     assertion.
+var turnWorkspaceStampRe = regexp.MustCompile(
+	`tools\.WithWorkspaceID\(\s*[\w.]*turnCtx\s*,\s*[\w.]+\.opts\.WorkspaceID\s*\)`)
+
+// codeOnlySource blanks every comment in src to spaces, using the real lexer
+// (never a regex — `//` inside a string literal is not a comment, and this
+// codebase is full of URLs). A comment is whitespace-equivalent in Go's
+// grammar, so this cannot change what the code says; what it removes is
+// commented-out CODE satisfying a source assertion — disabling the workspace
+// stamp by commenting it out passed the tripwire exactly as well as keeping
+// it, which is the silent-defeat shape this file exists to forbid.
+func codeOnlySource(t *testing.T, path string, src []byte) []byte {
+	t.Helper()
+	fset := token.NewFileSet()
+	file := fset.AddFile(path, fset.Base(), len(src))
+	var s scanner.Scanner
+	var scanErr error
+	s.Init(file, src, func(pos token.Position, msg string) {
+		if scanErr == nil {
+			scanErr = fmt.Errorf("%s: %s", pos, msg)
+		}
+	}, scanner.ScanComments)
+	out := make([]byte, len(src))
+	copy(out, src)
+	for {
+		pos, tok, lit := s.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok == token.COMMENT {
+			start := file.Offset(pos)
+			for i := start; i < start+len(lit) && i < len(out); i++ {
+				out[i] = ' '
+			}
+		}
+	}
+	require.NoError(t, scanErr, "%s must scan cleanly — it compiles, so a scan error means the "+
+		"tripwire is misreading what it guards", path)
+	return out
+}
+
+// agentPackageSource concatenates every non-test .go file under pkg/agent,
+// skipping testdata (Go never compiles those into a package), with comments
+// blanked (see codeOnlySource). The tripwire below asserts against the
+// concatenation rather than one hardcoded file because loop.go has already
+// been split into siblings once — loop_browser.go, loop_run_turn.go,
+// loop_wire.go — and a tripwire pinned to a filename breaks on the next split
+// while the wiring it guards is intact, which trains the next reader to assume
+// "stale" and weaken it.
+func agentPackageSource(t *testing.T) string {
+	t.Helper()
+	var src strings.Builder
+	files := 0
+	err := filepath.WalkDir(filepath.Join("..", "agent"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		src.Write(codeOnlySource(t, path, b))
+		src.WriteByte('\n')
+		files++
+		return nil
+	})
+	require.NoError(t, err,
+		"pkg/agent must be walkable — a tripwire that cannot read what it guards proves nothing")
+	require.NotZero(t, files,
+		"the walk found no Go sources under pkg/agent — the path is wrong and every assertion "+
+			"below would pass vacuously")
+	require.Contains(t, src.String(), "package agent",
+		"the concatenation must contain pkg/agent's own sources, not only its subpackages")
+	return src.String()
+}
+
 // TestBrowserWorkspace_ToolResolutionIsWiredToTheRealTurnContext is the hop the
 // behavioural tests above cannot execute from here.
 //
 // They call browser.ResolveBrowsingKey with a context they build themselves. If
 // production stopped routing the tools through that function, or stopped putting
 // the chat's workspace on the turn context, every assertion above would keep
-// passing while describing code nothing runs. Both call sites live in pkg/agent,
+// passing while describing code nothing runs. All three sites live in pkg/agent,
 // which imports this package's dependencies rather than the other way round, so
 // they are asserted at the source — the same compromise, for the same reason, as
-// TestBrowserTTLConfigKeys_HaveAWriter in pkg/tools/browser.
+// TestBrowserTTLConfigKeys_HaveAWriter in pkg/tools/browser. Unlike that
+// precedent, the scan covers the whole package rather than one file, so the
+// assertion survives the code being split across siblings again.
 func TestBrowserWorkspace_ToolResolutionIsWiredToTheRealTurnContext(t *testing.T) {
-	loopSrc, err := os.ReadFile(filepath.Join("..", "agent", "loop.go"))
-	require.NoError(t, err)
+	agentSrc := agentPackageSource(t)
 
-	assert.Contains(t, string(loopSrc), "browser.ResolveBrowsingKey(ctx, omnipusHome())",
+	assert.Contains(t, agentSrc, "browser.ResolveBrowsingKey(ctx, omnipusHome())",
 		"agentLoopBrowserResolver.ManagerFor must still resolve every browser tool call through "+
 			"ResolveBrowsingKey — if it moved, the tests above stopped describing the tools' real path")
-	assert.Contains(t, string(loopSrc), "turnCtx = tools.WithWorkspaceID(turnCtx, ts.opts.WorkspaceID)",
+	assert.Regexp(t, turnWorkspaceStampRe, agentSrc,
 		"the chat's workspace must still reach the turn context, or the stale-label case these "+
 			"tests exist for is no longer the case production is in")
-	assert.Contains(t, string(loopSrc), "browser.ResolveBrowsingKeyForAgent(omnipusHome(), agentID, preferredWorkspaceID)",
+	assert.Contains(t, agentSrc, "browser.ResolveBrowsingKeyForAgent(omnipusHome(), agentID, preferredWorkspaceID)",
 		"BrowserManagerForAgent must still be the panel's resolution, through the same package "+
 			"function — two resolvers is the drift this file forbids")
 }
