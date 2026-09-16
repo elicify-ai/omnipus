@@ -395,14 +395,98 @@ func u25AllSessionsForUsage(al *agent.AgentLoop) func() ([]*session.UnifiedMeta,
 	}
 }
 
+// runContextWithOptions carries the shared state of RunContextWithOptions across its stages.
+type runContextWithOptions struct {
+	ctx                context.Context
+	opts               RunOptions
+	debug              bool
+	homePath           string
+	configPath         string
+	allowEmptyStartup  bool
+	allowGodMode       bool
+	panicPath          string
+	panicFunc          func()
+	err                error
+	cfg                *config.Config
+	bundle             credentials.SecretBundle
+	credStore          *credentials.Store
+	provider           providers.LLMProvider
+	providerCatalog    *catalog.Catalog
+	msgBus             *bus.MessageBus
+	agentLoop          *agent.AgentLoop
+	liveLimits         *agent.LiveLimits
+	sandboxResult      *SandboxApplyResult
+	stopNag            context.CancelFunc
+	centralBuiltinReg  *tools.BuiltinRegistry
+	centralMCPReg      *tools.MCPRegistry
+	runningServices    *services
+	manualReloadChan   chan struct{}
+	reloadTrigger      func() error
+	sysSkillsLoader    *skills.SkillsLoader
+	sysSkillWriter     *skills.SkillWriter
+	sysRegistryManager *skills.RegistryManager
+	sysSkillInstaller  *skills.SkillInstaller
+	agentLoopCtx       context.Context
+	agentLoopCancel    context.CancelFunc
+	agentLoopDead      atomic.Bool
+	smConsumerCancel   context.CancelFunc
+	configReloadChan   <-chan *config.Config
+	stopWatch          func()
+}
+
 // RunContextWithOptions is the Sprint-J context-cancellable entry point.
 // RunContext is a thin wrapper that builds a legacy RunOptions and calls this.
 func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
-	debug := opts.Debug
-	homePath := opts.HomePath
-	configPath := opts.ConfigPath
-	allowEmptyStartup := opts.AllowEmptyStartup
-	allowGodMode := opts.AllowGodMode
+	rc := &runContextWithOptions{ctx: ctx, opts: opts}
+
+	if r0, stop := rc.initializePanicLog(); stop {
+		return r0
+	}
+	defer rc.panicFunc()
+
+	if r0, stop := rc.initializeLoggingAndDataModel(); stop {
+		return r0
+	}
+	defer logger.DisableFileLogging()
+
+	if r0, stop := rc.loadConfigAndProvider(); stop {
+		return r0
+	}
+
+	if r0, stop := rc.initializeAgentLoop(); stop {
+		return r0
+	}
+
+	if r0, stop := rc.validateAndApplySandbox(); stop {
+		return r0
+	}
+	if r0, stop := rc.startServices(); stop {
+		return r0
+	}
+
+	rc.prepareSkillServices()
+
+	rc.wireSystemTools()
+
+	rc.announceStartup()
+	defer rc.agentLoopCancel()
+
+	rc.startBackgroundServices()
+	defer rc.smConsumerCancel()
+
+	rc.configureHealthAndWatcher()
+	defer rc.stopWatch()
+
+	return rc.serveReloadLoop()
+}
+
+// initializePanicLog creates the protected log directory and initializes panic logging.
+func (rc *runContextWithOptions) initializePanicLog() (error, bool) {
+	rc.debug = rc.opts.Debug
+	rc.homePath = rc.opts.HomePath
+	rc.configPath = rc.opts.ConfigPath
+	rc.allowEmptyStartup = rc.opts.AllowEmptyStartup
+	rc.allowGodMode = rc.opts.AllowGodMode
 
 	// Create $OMNIPUS_HOME/logs ourselves, at 0700, before anything else
 	// touches it. datamodel.Init (below) also creates this directory as
@@ -414,18 +498,21 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// bits. Creating it here first, at the stricter 0700, is what stops the
 	// two logger calls' 0755 from leaking through and leaving
 	// $OMNIPUS_HOME/logs group/world-readable for the life of the install.
-	logsDir := filepath.Join(homePath, logPath)
+	logsDir := filepath.Join(rc.homePath, logPath)
 	if err := os.MkdirAll(logsDir, 0o700); err != nil {
-		return fmt.Errorf("creating log directory: %w", err)
+		return fmt.Errorf("creating log directory: %w", err), true
 	}
 
-	panicPath := filepath.Join(logsDir, panicFile)
-	panicFunc, err := logger.InitPanic(panicPath)
-	if err != nil {
-		return fmt.Errorf("error initializing panic log: %w", err)
+	rc.panicPath = filepath.Join(logsDir, panicFile)
+	rc.panicFunc, rc.err = logger.InitPanic(rc.panicPath)
+	if rc.err != nil {
+		return fmt.Errorf("error initializing panic log: %w", rc.err), true
 	}
-	defer panicFunc()
+	return nil, false
+}
 
+// initializeLoggingAndDataModel initializes file logging and the data model in boot order.
+func (rc *runContextWithOptions) initializeLoggingAndDataModel() (error, bool) {
 	// Re-review FIX 1 (two independent reviewers, plus a third verifying
 	// pass): bootLoggingAndDataModel runs logger.EnableFileLogging,
 	// installSlogBridge, and datamodel.Init in the one order that captures
@@ -434,17 +521,20 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// preamble existed. See bootLoggingAndDataModel's doc comment for the
 	// full account and why logger.InitPanic stays inline here rather than
 	// folding into that helper.
-	if err = bootLoggingAndDataModel(homePath); err != nil {
-		return err
+	if rc.err = bootLoggingAndDataModel(rc.homePath); rc.err != nil {
+		return rc.err, true
 	}
-	defer logger.DisableFileLogging()
+	return nil, false
+}
 
+// loadConfigAndProvider loads credentials and configuration, seeds agents, and installs the provider catalog.
+func (rc *runContextWithOptions) loadConfigAndProvider() (error, bool) {
 	// Construct and unlock the credential store BEFORE loading config, per the
 	// documented credential boot contract (ADR-004).
 	// Implements BRD SEC-22/SEC-23 deny-by-default behavior.
-	cfg, bundle, credStore, err := bootCredentials(homePath, configPath)
-	if err != nil {
-		return err
+	rc.cfg, rc.bundle, rc.credStore, rc.err = bootCredentials(rc.homePath, rc.configPath)
+	if rc.err != nil {
+		return rc.err, true
 	}
 
 	// v0.2 #155: derive the audit-chain HMAC key from the master key and
@@ -469,7 +559,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// an imminent boot abort a few lines later, not a soft warning to
 	// dismiss; with audit_log=false, audit.NewLogger is never even
 	// constructed and this WARN is genuinely inconsequential.
-	if chainKey, derrErr := credStore.DeriveSubkey(audit.AuditChainKeyInfo); derrErr == nil {
+	if chainKey, derrErr := rc.credStore.DeriveSubkey(audit.AuditChainKeyInfo); derrErr == nil {
 		audit.SetProcessChainKey(chainKey)
 	} else {
 		slog.Warn("audit: could not derive HMAC chain key from master key — "+
@@ -477,9 +567,9 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			"error", derrErr)
 	}
 
-	logger.SetLevelFromString(cfg.Gateway.LogLevel)
+	logger.SetLevelFromString(rc.cfg.Gateway.LogLevel)
 
-	if debug {
+	if rc.debug {
 		logger.SetLevel(logger.DEBUG)
 		fmt.Println("🔍 Debug mode enabled")
 	}
@@ -496,26 +586,26 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// restart to take effect.
 	godModeSource := "none"
 	switch {
-	case opts.AllowGodMode:
+	case rc.opts.AllowGodMode:
 		godModeSource = "--allow-god-mode"
-	case cfg.Sandbox.GodModeAllowed:
+	case rc.cfg.Sandbox.GodModeAllowed:
 		godModeSource = "sandbox.god_mode_allowed"
 	}
-	allowGodMode = resolveAllowGodMode(allowGodMode, cfg)
+	rc.allowGodMode = resolveAllowGodMode(rc.allowGodMode, rc.cfg)
 
 	// Enforce god-mode latches: abort boot if either authorization source
 	// granted god mode but the build does not support it (nogodmode tag
 	// compiles GodModeAvailable=false). Fail closed: a contradictory grant
 	// (authorized but unsupported) must never be silently downgraded to
 	// "unavailable" — it is a misconfiguration and boot must stop.
-	if allowGodMode && !sandbox.GodModeAvailable {
+	if rc.allowGodMode && !sandbox.GodModeAvailable {
 		return fmt.Errorf(
 			"gateway: god mode unavailable in this build (compiled with nogodmode); " +
 				"remove --allow-god-mode / sandbox.god_mode_allowed and restart",
-		)
+		), true
 	}
 	// Emit a persistent WARN so operators cannot claim they were not warned.
-	if allowGodMode {
+	if rc.allowGodMode {
 		fmt.Fprintf(os.Stderr,
 			"WARN: gateway started with god mode available (source: %s) — agents may have sandbox disabled\n",
 			godModeSource)
@@ -530,17 +620,17 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// into agents.defaults.default_model. The old `ModelName == ""` back-fill
 	// guard that lived here was deleted with the alias — the pair is written
 	// only by onboarding completion and the default-model PUT.
-	provider, _, err := createStartupProvider(cfg, allowEmptyStartup)
-	if err != nil {
-		return fmt.Errorf("error creating provider: %w", err)
+	rc.provider, _, rc.err = createStartupProvider(rc.cfg, rc.allowEmptyStartup)
+	if rc.err != nil {
+		return fmt.Errorf("error creating provider: %w", rc.err), true
 	}
 
 	// ADR-054 D2/D3 + SeedConfig + its one-time migrations, persisted. The
 	// whole sequence lives in seedAndPersistAgentRoster (boot_agent_roster.go)
 	// so the upgrade path can be tested against a real on-disk fixture with
 	// exactly the calls boot makes, in exactly this order.
-	if rosterErr := seedAndPersistAgentRoster(cfg, homePath, configPath); rosterErr != nil {
-		return rosterErr
+	if rosterErr := seedAndPersistAgentRoster(rc.cfg, rc.homePath, rc.configPath); rosterErr != nil {
+		return rosterErr, true
 	}
 
 	// RELEASE BLOCKER fix follow-up (2026-07-26): on a genuinely fresh
@@ -567,11 +657,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// a write failure only means the in-memory resolution (correct for this
 	// boot) does not survive a restart — not a boot-time fatal, since the
 	// gateway is otherwise fully healthy.
-	if cfg.Agents.Defaults.DefaultAgentID != "" {
-		if persistErr := persistFreshInstallDefaultAgentID(configPath, cfg.Agents.Defaults.DefaultAgentID); persistErr != nil {
+	if rc.cfg.Agents.Defaults.DefaultAgentID != "" {
+		if persistErr := persistFreshInstallDefaultAgentID(rc.configPath, rc.cfg.Agents.Defaults.DefaultAgentID); persistErr != nil {
 			slog.Warn("gateway: could not persist fresh-install default_agent_id to config.json; "+
 				"in-memory resolution is correct for this boot but will not survive a restart",
-				"default_agent_id", cfg.Agents.Defaults.DefaultAgentID, "error", persistErr)
+				"default_agent_id", rc.cfg.Agents.Defaults.DefaultAgentID, "error", persistErr)
 		}
 	}
 
@@ -588,7 +678,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// file I/O, not config.json) so it needs no safeUpdateConfigJSON/configMu
 	// involvement at all. See its doc comment for why this call site — not
 	// coreagent.SeedConfig itself — is where it lives.
-	seedSystemAgentEagerSouls(cfg)
+	seedSystemAgentEagerSouls(rc.cfg)
 
 	// ADR-067 T067-07: boot the ONE provider catalog for this process. Boot
 	// performs no network I/O — it parses the embedded snapshot, reads the
@@ -605,24 +695,28 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	//
 	// The startup pull and the 24 h ticker are NOT started here; they start
 	// after the listener is bound (see setupAndStartServices).
-	providerCatalog := catalog.Boot(
+	rc.providerCatalog = catalog.Boot(
 		context.Background(),
 		catalog.EmbeddedSnapshot,
 		catalog.NewGHReleasePuller(),
-		catalog.NewFileStore(homePath),
+		catalog.NewFileStore(rc.homePath),
 		catalogLogAdapter{},
 	)
-	agent.SetWindowCatalog(providerCatalog)
+	agent.SetWindowCatalog(rc.providerCatalog)
 	// ADR-067 FR-012: the provider FACTORY dispatches on the protocol this
 	// same document carries, so it must read the same instance — otherwise
 	// the gateway would resolve windows from the pulled document while
 	// constructing transports from the embedded snapshot.
-	providers.SetCatalog(providerCatalog)
+	providers.SetCatalog(rc.providerCatalog)
+	return nil, false
+}
 
-	msgBus := bus.NewMessageBus()
-	var agentLoop *agent.AgentLoop
-	agentLoop, err = agent.NewAgentLoop(cfg, msgBus, provider)
-	if err != nil {
+// initializeAgentLoop constructs the agent loop and starts its early background provisioning.
+func (rc *runContextWithOptions) initializeAgentLoop() (error, bool) {
+	rc.msgBus = bus.NewMessageBus()
+
+	rc.agentLoop, rc.err = agent.NewAgentLoop(rc.cfg, rc.msgBus, rc.provider)
+	if rc.err != nil {
 		// B1.2(b): when the failure is an audit logger construction error and
 		// the operator explicitly requested audit logging (cfg.Sandbox.AuditLog
 		// = true), this is a fail-closed boot abort. CLAUDE.md "audit-everything
@@ -632,7 +726,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// remediation message ("either disable `sandbox.audit_log` or fix
 		// <error>") to the operator.
 		var auditConstructErr *audit.LoggerConstructionError
-		if errors.As(err, &auditConstructErr) && cfg.Sandbox.AuditLog {
+		if errors.As(rc.err, &auditConstructErr) && rc.cfg.Sandbox.AuditLog {
 			audit.EmitBootAbortStderr(
 				"gateway.audit.construction_failed",
 				"-",
@@ -640,9 +734,9 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 				auditConstructErr,
 				nil,
 			)
-			return &SandboxBootError{Err: auditConstructErr}
+			return &SandboxBootError{Err: auditConstructErr}, true
 		}
-		return fmt.Errorf("gateway: agent loop boot failed: %w", err)
+		return fmt.Errorf("gateway: agent loop boot failed: %w", rc.err), true
 	}
 
 	// T068-10 (ADR-068 FR-010 last clause): startup sweep of orphaned
@@ -651,7 +745,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// logger exists, so the sweep's provider.credential_swept entries land
 	// in the real audit chain. Synchronous and fast (one store read, at
 	// most a handful of deletes); never fatal.
-	sweepOrphanedProviderCredentials(cfg, credStore, agentLoop.AuditLogger())
+	sweepOrphanedProviderCredentials(rc.cfg, rc.credStore, rc.agentLoop.AuditLogger())
 
 	// ADR-068 FR-046: an agent-path OAuth refresh (providers'
 	// NewStoreOAuthTokenSource, invoked mid-turn) mints a NEW access+refresh
@@ -674,13 +768,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// it is handed are folded in explicitly so the registration does not
 	// depend on the store write having already landed. Best-effort by
 	// design: a failure here must never break a turn.
-	wireOAuthSensitiveValueRegistrar(func() *config.Config { return agentLoop.GetConfig() }, credStore)
+	wireOAuthSensitiveValueRegistrar(func() *config.Config { return rc.agentLoop.GetConfig() }, rc.credStore)
 
 	// Install the same catalog instance on the agent loop: the presentation
 	// gate (ADR-067 FR-004) and ResolveWindow's rung 5 read one document, and
 	// setupAndStartServices reads it back from here for the REST surface and
 	// the refresh loop.
-	agentLoop.SetCapabilityCatalog(providerCatalog)
+	rc.agentLoop.SetCapabilityCatalog(rc.providerCatalog)
 
 	// ADR-066 D2 rung 4 (T066-10): install the on-demand, 24 h-cached live
 	// limits query AFTER NewAgentLoop has built every instance, so boot's
@@ -695,8 +789,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// The instance is RETAINED (runningServices.LiveLimits, below) so
 	// shutdown can Close it: a fetch that is still in flight when the gateway
 	// stops must not write cache/model_limits.json after RunContext returns.
-	liveLimits := newLiveLimitsForBoot(homePath, credStore, agentLoop, reloadOnLiveWindow(agentLoop))
-	agent.SetLiveWindowLookup(liveLimits.Lookup)
+	rc.liveLimits = newLiveLimitsForBoot(rc.homePath, rc.credStore, rc.agentLoop, reloadOnLiveWindow(rc.agentLoop))
+	agent.SetLiveWindowLookup(rc.liveLimits.Lookup)
 
 	// FR-007 / US-2.AC2: an agent on a `locality: local` row the catalog
 	// cannot size resolved UNKNOWN above (the rung was not installed yet) and
@@ -707,7 +801,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// stays refused indefinitely and the refusal points the operator at a
 	// control (Settings → Models → Model overrides) they should not have
 	// needed. Not a timer: one pass, only for agents that are already broken.
-	go primeUnknownWindows(agentLoop)
+	go primeUnknownWindows(rc.agentLoop)
 
 	// Boot-time browser provisioning: NewAgentLoop above just finished
 	// registering browser tools for every agent (registerSharedTools →
@@ -744,7 +838,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// There is one managed-Chromium install for every workspace
 	// (InstallRootForProfileDir is key-independent by construction, FR-037a),
 	// so this resolves it once with zero live keys.
-	if pool := agentLoop.BrowserPool(); pool != nil {
+	if pool := rc.agentLoop.BrowserPool(); pool != nil {
 		// FR-072 triggers 2 and 3, both off the boot path so neither delays it.
 		//
 		// Trigger 2 (boot): sweep every profile on disk that has no live
@@ -756,9 +850,9 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// reaper does a map scan, this walks directories. It is not the
 		// primary trigger either; pool.Close(k) returning is, and that fires
 		// within milliseconds with no interval to wait for.
-		go runBrowserCacheTrimSchedule(ctx, pool)
+		go runBrowserCacheTrimSchedule(rc.ctx, pool)
 		go func() {
-			path, ppErr := pool.Preprovision(ctx)
+			path, ppErr := pool.Preprovision(rc.ctx)
 			if ppErr != nil {
 				// logger (not slog): slog writes to fd 2, which boot's
 				// initPanicFile redirects to gateway_panic.log — operators
@@ -777,14 +871,18 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// B1.2(d) + ADR-053 D17: wire the sandbox → audit bridges now that the
 	// agent loop (and thus the audit logger) is constructed. See
 	// sandbox_audit_hooks.go; unwired symmetrically in shutdown.go.
-	wireSandboxAuditHooks(agentLoop)
+	wireSandboxAuditHooks(rc.agentLoop)
+	return nil, false
+}
 
+// validateAndApplySandbox cleans orphaned runs, validates policies, applies the sandbox, and starts its nag banner.
+func (rc *runContextWithOptions) validateAndApplySandbox() (error, bool) {
 	// Spec-4 FR-5.3 (M-4): GC orphaned external-CLI run directories left behind by
 	// a prior process (crash / SIGKILL / power loss). Runs ONCE at boot, BEFORE any
 	// new external-cli sub-agent run can be dispatched, so every run dir present is
 	// safely an orphan. Non-fatal: a reaper failure must not block boot.
 	{
-		reapCtx, reapCancel := context.WithTimeout(ctx, 60*time.Second)
+		reapCtx, reapCancel := context.WithTimeout(rc.ctx, 60*time.Second)
 		if reapRes, reapErr := runner.ReapOrphans(reapCtx); reapErr != nil {
 			slog.Warn("gateway: external-runner orphan reaper failed (non-fatal)", "error", reapErr)
 		} else if reapRes.Removed > 0 || len(reapRes.Errors) > 0 {
@@ -812,7 +910,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// the sandbox applies. Ava-equivalent core agents abort boot on violation;
 	// custom agents log and continue.
 	{
-		agentsDir := filepath.Join(homePath, "agents")
+		agentsDir := filepath.Join(rc.homePath, "agents")
 		valResults, abortBoot := config.ValidateAgentConfigs(
 			agentsDir,
 			coreagent.HasSystemAllowsInConstructorSeed,
@@ -825,7 +923,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			}
 		}
 		if abortBoot {
-			return fmt.Errorf("gateway: agent config validation failed — aborting boot (FR-062)")
+			return fmt.Errorf("gateway: agent config validation failed — aborting boot (FR-062)"), true
 		}
 
 		// Hard-validation of tool-policy COVERAGE (CLAUDE.md hard constraint
@@ -851,14 +949,14 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// remains as a never-firing correctness tripwire for anything
 		// reconcile cannot close (e.g. a genuinely corrupt config, or a
 		// catalog/defaults.go drift).
-		if gaps := repairAndValidateToolPolicyCoverage(cfg); len(gaps) > 0 {
+		if gaps := repairAndValidateToolPolicyCoverage(rc.cfg); len(gaps) > 0 {
 			for _, g := range gaps {
 				slog.Error("gateway: tool-policy coverage gap", "detail", g.String())
 			}
 			return fmt.Errorf(
 				"gateway: tool-policy coverage validation failed — aborting boot (%d gap(s), see preceding error logs)",
 				len(gaps),
-			)
+			), true
 		}
 	}
 
@@ -869,11 +967,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// ListenAndServe on the shared HTTP server. During the Apply→Install→listen
 	// window, external TCP probes receive ECONNREFUSED because the socket does
 	// not exist yet.
-	sandboxResult, sandboxErr := applySandbox(SandboxApplyOptions{
-		CLIMode:  opts.SandboxMode,
-		Cfg:      cfg,
-		HomePath: homePath,
-		Backend:  agentLoop.SandboxBackend(),
+	var sandboxErr error
+	rc.sandboxResult, sandboxErr = applySandbox(SandboxApplyOptions{
+		CLIMode:  rc.opts.SandboxMode,
+		Cfg:      rc.cfg,
+		HomePath: rc.homePath,
+		Backend:  rc.agentLoop.SandboxBackend(),
 	})
 	if sandboxErr != nil {
 		// FR-J-004: kernel apply failure on a capable kernel is fatal.
@@ -882,8 +981,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// SandboxBootError lets cmd/omnipus map this to exit code 78.
 		slog.Error("gateway: sandbox apply failed — aborting boot",
 			"error", sandboxErr,
-			"requested_mode", opts.SandboxMode)
-		return &SandboxBootError{Err: sandboxErr}
+			"requested_mode", rc.opts.SandboxMode)
+		return &SandboxBootError{Err: sandboxErr}, true
 	}
 
 	// Log the applied sandbox mode and degradation state so operators can
@@ -894,20 +993,20 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// visible via result.ApplyState in /api/v1/security/sandbox-status.
 	slog.Info(
 		"gateway: sandbox applied",
-		"applied_mode", string(sandboxResult.Mode),
-		"backend", sandboxResult.BackendName,
-		"landlock_enforced", sandboxResult.ApplyState.LandlockEnforced,
-		"seccomp_enforced", sandboxResult.ApplyState.SeccompEnforced,
-		"audit_only", sandboxResult.ApplyState.AuditOnly,
-		"disabled_by", sandboxResult.DisabledBy,
+		"applied_mode", string(rc.sandboxResult.Mode),
+		"backend", rc.sandboxResult.BackendName,
+		"landlock_enforced", rc.sandboxResult.ApplyState.LandlockEnforced,
+		"seccomp_enforced", rc.sandboxResult.ApplyState.SeccompEnforced,
+		"audit_only", rc.sandboxResult.ApplyState.AuditOnly,
+		"disabled_by", rc.sandboxResult.DisabledBy,
 	)
 
 	// Thread the actually-applied mode into the agent loop so exec tool
 	// deps use the true runtime enforcement level (not the config file value).
-	agentLoop.SetAppliedSandboxMode(sandboxResult.Mode)
+	rc.agentLoop.SetAppliedSandboxMode(rc.sandboxResult.Mode)
 
 	fmt.Println("\n📦 Agent Status:")
-	startupInfo := agentLoop.GetStartupInfo()
+	startupInfo := rc.agentLoop.GetStartupInfo()
 	toolsInfo, _ := startupInfo["tools"].(map[string]any)
 	skillsInfo, _ := startupInfo["skills"].(map[string]any)
 	if toolsInfo == nil {
@@ -930,13 +1029,18 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// starts. Any schema-compile failure aborts boot immediately with a clear error
 	// rather than silently degrading to no-validation at first request.
 	if compileErr := PreCompileAllInboundSchemas(); compileErr != nil {
-		return fmt.Errorf("gateway: inbound schema pre-compile failed: %w", compileErr)
+		return fmt.Errorf("gateway: inbound schema pre-compile failed: %w", compileErr), true
 	}
 
 	// Arm the permissive / production-off nag banner AFTER pre-compile so that a
 	// pre-compile failure does not leak the nag goroutine (StartNagBanner allocates
 	// a goroutine that must be stopped via stopNag()).
-	stopNag := StartNagBanner(sandboxResult.NagReason, nil)
+	rc.stopNag = StartNagBanner(rc.sandboxResult.NagReason, nil)
+	return nil, false
+}
+
+// startServices starts gateway services and wires their central registries and reload trigger.
+func (rc *runContextWithOptions) startServices() (error, bool) {
 	slog.Info("gateway: inbound schemas pre-compiled successfully")
 
 	// M16 (FR-001/FR-002): pre-instantiate central registries.
@@ -945,14 +1049,14 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// metadata-only instances (deps-free, never executed — per ADR-018 D-A1).
 	// After sysAgentDeps is wired (below), the registry is re-populated with live deps.
 	// MCPRegistry starts empty; MCP servers populate it at connection time.
-	centralBuiltinReg, _ := buildCentralBuiltinRegistry(nil)
-	centralMCPReg := tools.NewMCPRegistry()
+	rc.centralBuiltinReg, _ = buildCentralBuiltinRegistry(nil)
+	rc.centralMCPReg = tools.NewMCPRegistry()
 	// Wire the central registries into the agent loop so ReconcileMCP (triggered
 	// by REST/sysagent MCP writes and hot-reload) populates the SAME registry
 	// instance restAPI reads for GET /api/v1/tools and /mcp-servers tool_count —
 	// otherwise connected MCP tools would never surface outside the per-agent
 	// registries. Nil-safe on the AgentLoop side.
-	agentLoop.SetCentralMCPRegistries(centralMCPReg, centralBuiltinReg)
+	rc.agentLoop.SetCentralMCPRegistries(rc.centralMCPReg, rc.centralBuiltinReg)
 	// Wire the credential-store resolver so ReconcileMCP can resolve
 	// add_mcp_server's EnvRefs (pkg/sysagent/tools/mcp.go routes MCP server
 	// `env` secrets through the encrypted credential store instead of
@@ -962,30 +1066,30 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// defensively — bootCredentials aborts boot on failure, so this should
 	// always be non-nil in practice, but a nil receiver would panic inside
 	// Store.Get's mutex lock.
-	if credStore != nil {
-		agentLoop.SetCredentialResolver(credStore.Get)
+	if rc.credStore != nil {
+		rc.agentLoop.SetCredentialResolver(rc.credStore.Get)
 	}
 
-	runningServices, err := setupAndStartServices(
-		ctx,
-		cfg,
-		bundle,
-		agentLoop,
-		msgBus,
-		homePath,
-		credStore,
-		sandboxResult,
-		centralBuiltinReg,
-		centralMCPReg,
-		allowGodMode,
+	rc.runningServices, rc.err = setupAndStartServices(
+		rc.ctx,
+		rc.cfg,
+		rc.bundle,
+		rc.agentLoop,
+		rc.msgBus,
+		rc.homePath,
+		rc.credStore,
+		rc.sandboxResult,
+		rc.centralBuiltinReg,
+		rc.centralMCPReg,
+		rc.allowGodMode,
 	)
-	if err != nil {
-		stopNag() // don't leak the nag goroutine if service setup fails.
-		liveLimits.Close()
-		return err
+	if rc.err != nil {
+		rc.stopNag() // don't leak the nag goroutine if service setup fails.
+		rc.liveLimits.Close()
+		return rc.err, true
 	}
-	runningServices.stopNagBanner = stopNag
-	runningServices.LiveLimits = liveLimits
+	rc.runningServices.stopNagBanner = rc.stopNag
+	rc.runningServices.LiveLimits = rc.liveLimits
 
 	// Boot-time browser warm-up steps 1 and 2 — the first TAB and the WebRTC
 	// CAPTURE (see startBrowserWarmBoot's block comment). Deliberately here,
@@ -995,13 +1099,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// WS. Step 0 (the Chrome PROCESS) still runs earlier, where it has nothing
 	// to wait for. Returns immediately; nothing joins it, and nothing it does
 	// can fail boot.
-	startBrowserWarmBoot(ctx, cfg, homePath, agentLoop, runningServices.browserWS)
+	startBrowserWarmBoot(rc.ctx, rc.cfg, rc.homePath, rc.agentLoop, rc.runningServices.browserWS)
 
 	// Surface sandbox state on /health via the existing degraded/check
 	// infrastructure. Registering a RegisterCheck puts the {mode, backend,
 	// applied} triplet into the /health response body.
-	if runningServices.HealthServer != nil && sandboxResult != nil {
-		registerSandboxHealthCheck(runningServices.HealthServer, sandboxResult)
+	if rc.runningServices.HealthServer != nil && rc.sandboxResult != nil {
+		registerSandboxHealthCheck(rc.runningServices.HealthServer, rc.sandboxResult)
 	}
 
 	// The /reload trigger + manualReloadChan were wired inside
@@ -1009,10 +1113,14 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// boot-ordering race where /reload could 503 "reload not configured").
 	// Reuse them here for the reload consumer loop, the agent loop, and the
 	// sysagent ReloadFunc — do NOT re-create them.
-	manualReloadChan := runningServices.manualReloadChan
-	reloadTrigger := runningServices.reloadTrigger
-	agentLoop.SetReloadFunc(reloadTrigger)
+	rc.manualReloadChan = rc.runningServices.manualReloadChan
+	rc.reloadTrigger = rc.runningServices.reloadTrigger
+	rc.agentLoop.SetReloadFunc(rc.reloadTrigger)
+	return nil, false
+}
 
+// prepareSkillServices seeds skills and prepares marketplace-backed skill services.
+func (rc *runContextWithOptions) prepareSkillServices() {
 	// Wire management tool dependencies into the agent loop (FR-001, FR-002).
 	// Called after SetReloadFunc so the reload trigger is available to system
 	// tools that trigger hot-reload (e.g., create_agent).
@@ -1028,12 +1136,12 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		wd, wdErr := os.Getwd()
 		if wdErr != nil {
 			slog.Warn("gateway: os.Getwd failed; builtin skills dir unavailable", "error", wdErr)
-			wd = homePath
+			wd = rc.homePath
 		}
 		skillsBuiltinDir = filepath.Join(wd, "skills")
 	}
-	skillsWorkspace := cfg.AgentHomeBasePath()
-	skillsGlobalDir := filepath.Join(homePath, "skills")
+	skillsWorkspace := rc.cfg.AgentHomeBasePath()
+	skillsGlobalDir := filepath.Join(rc.homePath, "skills")
 
 	// First-boot seed of the embedded default skill set (Spec-6 U3, FR-9.3).
 	// SeedDefaults is idempotent: it only fills in skills that are missing from
@@ -1064,7 +1172,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// because define-goal is an engine-authoritative built-in (ADR-074 D4's
 	// no-drift skill), not a user-customization surface.
 	orphanedRenamedSkillDir := filepath.Join(skillsGlobalDir, "define-done")
-	if deleted, delErr := deleteOrphanedDefineDoneDir(skillsGlobalDir, cfg.SeededSkillGrants); delErr != nil {
+	if deleted, delErr := deleteOrphanedDefineDoneDir(skillsGlobalDir, rc.cfg.SeededSkillGrants); delErr != nil {
 		slog.Warn("gateway: could not delete orphaned define-done skill directory after the ADR-080 define-goal rename",
 			"dir", orphanedRenamedSkillDir, "error", delErr)
 	} else if deleted {
@@ -1072,25 +1180,25 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 			"dir", orphanedRenamedSkillDir)
 	}
 
-	sysSkillsLoader := skills.NewSkillsLoader(skillsWorkspace, skillsGlobalDir, skillsBuiltinDir)
+	rc.sysSkillsLoader = skills.NewSkillsLoader(skillsWorkspace, skillsGlobalDir, skillsBuiltinDir)
 	// SkillWriter authors/versions skills into the global skills dir so editing a
 	// built-in produces a user override rather than mutating the shipped built-in.
-	sysSkillWriter := skills.NewSkillWriter(skillsGlobalDir)
+	rc.sysSkillWriter = skills.NewSkillWriter(skillsGlobalDir)
 
 	// RegistryManager: fans out search/install to all configured marketplaces
 	// (FR-10.1 unified list). The SSRF checker (nil when SSRF is disabled) is
 	// injected into the ClawHub HTTP client so outbound registry traffic honors
 	// the SSRF policy (SEC-24).
-	ssrfChecker := agent.GetSSRFChecker(agentLoop)
+	ssrfChecker := agent.GetSSRFChecker(rc.agentLoop)
 	var ssrfClient *http.Client
 	if ssrfChecker != nil {
 		ssrfClient = ssrfChecker.SafeClient()
 	}
 	regCfg := skills.RegistryConfig{
-		Marketplaces:          skills.MarketplacesFromConfig(cfg, bundle.GetString, ssrfClient, skillsWorkspace),
-		MaxConcurrentSearches: cfg.Tools.Skills.MaxConcurrentSearches,
+		Marketplaces:          skills.MarketplacesFromConfig(rc.cfg, rc.bundle.GetString, ssrfClient, skillsWorkspace),
+		MaxConcurrentSearches: rc.cfg.Tools.Skills.MaxConcurrentSearches,
 	}
-	sysRegistryManager := skills.NewRegistryManagerFromConfig(regCfg)
+	rc.sysRegistryManager = skills.NewRegistryManagerFromConfig(regCfg)
 
 	// SkillInstaller backs remove_skill (SkillRemoveTool, its only consumer —
 	// see pkg/sysagent/tools/skill.go). skills.SkillInstaller.Uninstall joins
@@ -1114,26 +1222,29 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	//
 	// GitHub token/proxy from the first github marketplace entry (optional;
 	// empty → unauthenticated API calls).
-	githubToken, githubProxy := skills.FirstGitHubMarketplaceCreds(cfg, bundle.GetString)
-	sysSkillInstaller, err := skills.NewSkillInstallerWithSSRF(
-		homePath, githubToken, githubProxy, ssrfChecker,
+	githubToken, githubProxy := skills.FirstGitHubMarketplaceCreds(rc.cfg, rc.bundle.GetString)
+	rc.sysSkillInstaller, rc.err = skills.NewSkillInstallerWithSSRF(
+		rc.homePath, githubToken, githubProxy, ssrfChecker,
 	)
-	if err != nil {
+	if rc.err != nil {
 		slog.Warn("gateway: could not create skill installer; remove_skill unavailable",
-			"error", err)
-		sysSkillInstaller = nil
+			"error", rc.err)
+		rc.sysSkillInstaller = nil
 	}
+}
 
+// wireSystemTools wires system-tool dependencies and refreshes the central builtin registry.
+func (rc *runContextWithOptions) wireSystemTools() {
 	sysAgentDeps := &systools.Deps{
-		Home:         homePath,
-		ConfigPath:   configPath,
-		GetCfg:       agentLoop.GetConfig,
-		MutateConfig: agentLoop.MutateConfig,
+		Home:         rc.homePath,
+		ConfigPath:   rc.configPath,
+		GetCfg:       rc.agentLoop.GetConfig,
+		MutateConfig: rc.agentLoop.MutateConfig,
 		SaveConfigLocked: func(c *config.Config) error {
-			return config.SaveConfig(configPath, c)
+			return config.SaveConfig(rc.configPath, c)
 		},
-		CredStore:  credStore,
-		ReloadFunc: reloadTrigger,
+		CredStore:  rc.credStore,
+		ReloadFunc: rc.reloadTrigger,
 		// WaitForReloadFunc: AgentDeleteTool's synchronous reload wait (see
 		// systools.Deps.WaitForReloadFunc's doc comment for the delete_agent →
 		// list_agents ghost-listing race this closes). Built on the same
@@ -1141,7 +1252,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// restAPI.triggerReloadAndWait, so a delete_agent tool call blocks for
 		// exactly as long as REST's DELETE /api/v1/agents/{id} does before
 		// either call reports success.
-		WaitForReloadFunc: func() error { return waitForReload(agentLoop) },
+		WaitForReloadFunc: func() error { return waitForReload(rc.agentLoop) },
 		// UpsertAgentFastFunc (issue #571, sysagent half): mirrors rest.go's
 		// fastAgentUpsert so system.agent.create/update (an agent creating or
 		// updating another agent) gets the same fast-path publish REST
@@ -1168,28 +1279,28 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// than reloading config.json from disk or re-resolving credentials
 		// (neither of which agent CRUD via the entity store can affect).
 		UpsertAgentFastFunc: func(agentID string) error {
-			if agentLoop.IsReloadPending() {
-				return reloadTrigger()
+			if rc.agentLoop.IsReloadPending() {
+				return rc.reloadTrigger()
 			}
-			if err := agentLoop.MutateConfig(func(cfg *config.Config) error {
-				return populateAgentsListFromEntityStoreStrict(cfg, homePath)
+			if err := rc.agentLoop.MutateConfig(func(cfg *config.Config) error {
+				return populateAgentsListFromEntityStoreStrict(cfg, rc.homePath)
 			}); err != nil {
 				slog.Warn("gateway: sysagent fast agent upsert: could not refresh the agent roster "+
 					"from the entity store; falling back to full reload",
 					"agent_id", agentID, "error", err)
-				return reloadTrigger()
+				return rc.reloadTrigger()
 			}
-			if _, err := agentLoop.UpsertAgentFast(agentLoop.GetConfig(), agentID); err != nil {
+			if _, err := rc.agentLoop.UpsertAgentFast(rc.agentLoop.GetConfig(), agentID); err != nil {
 				slog.Warn("gateway: sysagent fast agent upsert failed; falling back to full reload",
 					"agent_id", agentID, "error", err)
-				return reloadTrigger()
+				return rc.reloadTrigger()
 			}
 			return nil
 		},
-		SkillsLoader:    sysSkillsLoader,
-		RegistryManager: sysRegistryManager,
-		SkillInstaller:  sysSkillInstaller,
-		SkillWriter:     sysSkillWriter,
+		SkillsLoader:    rc.sysSkillsLoader,
+		RegistryManager: rc.sysRegistryManager,
+		SkillInstaller:  rc.sysSkillInstaller,
+		SkillWriter:     rc.sysSkillWriter,
 		// §4 behavioral-parity gap: the cross-workspace task tools
 		// (create/update/delete_task_in_workspace) must enforce the SAME FR-6.2
 		// delegation policy the same-workspace create_task/update_task tools
@@ -1198,17 +1309,17 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// registered once on a central registry, so a per-agent checker can't be
 		// bound at construction). MUST be wired in production — leaving it nil
 		// fails OPEN.
-		DelegationDeny: agentLoop.NewSysagentDelegationDeny(),
+		DelegationDeny: rc.agentLoop.NewSysagentDelegationDeny(),
 		// D2 rule 5 (FR-017/052, review r1 major M5): create_task_in_workspace
 		// parity with the plain create_task tool's own bash-policy checker —
 		// MUST be wired in production, leaving it nil fails CLOSED (unlike
 		// DelegationDeny above) per systools.Deps.ResolveBashPolicy's doc
 		// comment.
-		ResolveBashPolicy: agentLoop.NewSysagentBashPolicyResolver(),
+		ResolveBashPolicy: rc.agentLoop.NewSysagentBashPolicyResolver(),
 		// Founder decision 2026-09-15: create/update_task_in_workspace refuse an
 		// assignee that cannot finish the task — the same answer as the plain
 		// task tools and the task run's pre-run check.
-		AssigneeCannotFinish: agentLoop.TaskAssigneeCannotFinish,
+		AssigneeCannotFinish: rc.agentLoop.TaskAssigneeCannotFinish,
 		// ADR-057 U9 changed ListAllSessions' signature to
 		// (limit, offset int, parentSessionID string, flat bool), so it can no
 		// longer be assigned here as a bare method value — this field's type
@@ -1217,14 +1328,14 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// u25AllSessionsForUsage's doc comment for why flat=true is required
 		// here (FR-104: roots-only would silently under-count delegated
 		// children's token spend).
-		ListSessions: u25AllSessionsForUsage(agentLoop),
+		ListSessions: u25AllSessionsForUsage(rc.agentLoop),
 		// Live MCP reconciliation: without these, add/remove_mcp_server
 		// only persist config — the server never actually connects and its tools never
 		// reach the central/per-agent registries until the next hot reload or process restart.
-		ReconcileMCP: agentLoop.ReconcileMCP,
-		MCPStatus:    agentLoop.MCPServerStatus,
+		ReconcileMCP: rc.agentLoop.ReconcileMCP,
+		MCPStatus:    rc.agentLoop.MCPServerStatus,
 	}
-	agentLoop.WireSysagentDeps(sysAgentDeps)
+	rc.agentLoop.WireSysagentDeps(sysAgentDeps)
 
 	// M16: update the central BuiltinRegistry with fully-wired deps now that
 	// sysAgentDeps is available. Re-populate with real deps so Execute paths
@@ -1237,10 +1348,11 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// (constructed inside setupAndStartServices) would retain the pre-sysAgentDeps
 	// registry. The restAPIRef field was stored by setupAndStartServices exactly
 	// for this late-wire step.
-	centralBuiltinReg, centralBuiltinCounts := buildCentralBuiltinRegistry(sysAgentDeps)
+	var centralBuiltinCounts centralBuiltinCounts
+	rc.centralBuiltinReg, centralBuiltinCounts = buildCentralBuiltinRegistry(sysAgentDeps)
 	// Propagate the updated registry to the already-constructed restAPI (SC-108 fix).
-	if runningServices.restAPIRef != nil {
-		runningServices.restAPIRef.builtinRegistry = centralBuiltinReg
+	if rc.runningServices.restAPIRef != nil {
+		rc.runningServices.restAPIRef.builtinRegistry = rc.centralBuiltinReg
 	}
 	slog.Info("gateway: central BuiltinRegistry re-populated with live deps",
 		"system_tools", centralBuiltinCounts.system,
@@ -1254,37 +1366,41 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// agent loop so MCP name-collision admission (ValidateMCPName) checks
 	// against the live-deps builtin instance, not the pre-deps one the earlier
 	// SetCentralMCPRegistries call saw.
-	agentLoop.SetCentralMCPRegistries(centralMCPReg, centralBuiltinReg)
+	rc.agentLoop.SetCentralMCPRegistries(rc.centralMCPReg, rc.centralBuiltinReg)
+}
 
-	fmt.Printf("✓ Gateway started on %s:%d\n", cfg.Gateway.Host, cfg.Gateway.Port)
+// announceStartup announces startup and creates the agent-loop cancellation context.
+func (rc *runContextWithOptions) announceStartup() {
+	fmt.Printf("✓ Gateway started on %s:%d\n", rc.cfg.Gateway.Host, rc.cfg.Gateway.Port)
 	fmt.Println("Press Ctrl+C to stop")
 
 	// agentLoopCtx is canceled if the agent loop exits unexpectedly (e.g. panic
 	// recovery). The outer select below treats this the same as ctx cancellation.
-	agentLoopCtx, agentLoopCancel := context.WithCancel(ctx)
-	defer agentLoopCancel()
+	rc.agentLoopCtx, rc.agentLoopCancel = context.WithCancel(rc.ctx)
+}
 
+// startBackgroundServices starts the agent loop and retention, recap, and session-message background services.
+func (rc *runContextWithOptions) startBackgroundServices() {
 	// agentLoopDead is set when the agent loop exits (normally or via panic).
 	// The /health endpoint returns 503 when this flag is set, signaling to
 	// load-balancers and monitors that the gateway is no longer functional.
-	var agentLoopDead atomic.Bool
 
 	go func() {
-		defer agentLoopCancel()
+		defer rc.agentLoopCancel()
 		defer func() {
 			if r := recover(); r != nil {
 				stack := runtimedebug.Stack()
 				slog.Error("agent loop panicked — gateway is now non-functional",
 					"panic", r, "stack", string(stack))
 				// Append to the panic log file so ops can find the crash.
-				if f, openErr := os.OpenFile(panicPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600); openErr == nil {
+				if f, openErr := os.OpenFile(rc.panicPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600); openErr == nil {
 					fmt.Fprintf(f, "\n\nagent loop panic: %v\n%s\n", r, stack)
 					f.Close()
 				}
-				agentLoopDead.Store(true)
+				rc.agentLoopDead.Store(true)
 			}
 		}()
-		agentLoop.Run(agentLoopCtx)
+		rc.agentLoop.Run(rc.agentLoopCtx)
 	}()
 
 	// Launch the nightly retention sweep goroutine. Uses ctx (not agentLoopCtx)
@@ -1324,30 +1440,30 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// the race detector only makes an existing ordering bug loud, it doesn't
 	// create the bug. Moved up alongside the tool-result wiring so both
 	// hooks are fully wired before the sweep goroutine can ever read them.
-	if runningServices.toolStore != nil {
-		retentionToolResultSweepFn = runningServices.toolStore.retentionSweep
+	if rc.runningServices.toolStore != nil {
+		retentionToolResultSweepFn = rc.runningServices.toolStore.retentionSweep
 	}
 	// Per-task run-history prune + stuck-run reaper (ADR-050 RD9/RD10) runs
 	// alongside the transcript sweep on the same retention window/cadence —
 	// see pkg/gateway/retention_task_runs.go. GetTaskStore returns nil only
 	// when the task store failed to initialize; the tick no-ops via the nil
 	// check in executeSweepTick when that happens.
-	if tStore := agent.GetTaskStore(agentLoop); tStore != nil {
+	if tStore := agent.GetTaskStore(rc.agentLoop); tStore != nil {
 		retentionTaskRunSweepFn = func(cutoff time.Time) (int, error) {
 			return pruneAllTaskRuns(tStore, cutoff)
 		}
 	}
-	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
-		startRetentionSweepLoop(ctx, sharedStore, agentLoop.GetConfig, 24*time.Hour)
+	if sharedStore := rc.agentLoop.GetSessionStore(); sharedStore != nil {
+		startRetentionSweepLoop(rc.ctx, sharedStore, rc.agentLoop.GetConfig, 24*time.Hour)
 	}
 
 	// FR-031: Launch the nightly retro sweep goroutine alongside the session sweep.
 	// Iterates all agents and calls SweepRetros per MemoryStore.
-	startRetentionRetroSweepLoop(ctx, agentLoop, agentLoop.GetConfig, 24*time.Hour)
+	startRetentionRetroSweepLoop(rc.ctx, rc.agentLoop, rc.agentLoop.GetConfig, 24*time.Hour)
 
 	// FR-032/FR-032a: Bootstrap recap pass — on gateway start, re-cap sessions
 	// that lack LAST_SESSION.md. Runs once in a goroutine.
-	go agentLoop.BootstrapRecapPass(ctx)
+	go rc.agentLoop.BootstrapRecapPass(rc.ctx)
 
 	// ADR-053 Phase 2 on-ramp: start the SessionMessageChan kind-router
 	// consumer. This is the MISSING consumer for the bus's 4th channel — until
@@ -1357,25 +1473,27 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// engine kinds → WS frame. Bound to ctx so it shuts down with the gateway.
 	// Honors session_messaging.enabled live (read per event) — when false the
 	// consumer drains-and-discards (channel stays unblocked) but no-ops.
-	smConsumerCancel := agentLoop.StartSessionMessageConsumer(ctx)
-	defer smConsumerCancel()
+	rc.smConsumerCancel = rc.agentLoop.StartSessionMessageConsumer(rc.ctx)
+}
 
+// configureHealthAndWatcher configures health reporting and starts the configuration watcher.
+func (rc *runContextWithOptions) configureHealthAndWatcher() {
 	// Wire a second degraded check: report 503 when the agent loop has died.
-	runningServices.HealthServer.SetDegradedFunc(func() (bool, string) {
-		if agentLoopDead.Load() {
+	rc.runningServices.HealthServer.SetDegradedFunc(func() (bool, string) {
+		if rc.agentLoopDead.Load() {
 			return true, "agent loop exited unexpectedly — gateway requires restart"
 		}
-		runningServices.reloadMu.Lock()
-		defer runningServices.reloadMu.Unlock()
-		if runningServices.reloadDegraded {
-			return true, fmt.Sprintf("config reload failed: %v", runningServices.reloadError)
+		rc.runningServices.reloadMu.Lock()
+		defer rc.runningServices.reloadMu.Unlock()
+		if rc.runningServices.reloadDegraded {
+			return true, fmt.Sprintf("config reload failed: %v", rc.runningServices.reloadError)
 		}
 		// ADR-054 §0 R3: the configured default agent naming an entity record
 		// that failed to load is a degraded state, not a silent fallback —
 		// EvaluateDefaultAgentHealth (called from NewAgentRegistry) records it.
 		// SetDegradedFunc is a single-slot hook, so this COMPOSES with the
 		// checks above rather than replacing them.
-		if registry := agentLoop.GetRegistry(); registry != nil {
+		if registry := rc.agentLoop.GetRegistry(); registry != nil {
 			if degraded, reason := registry.DefaultAgentDegraded(); degraded {
 				return true, reason
 			}
@@ -1386,13 +1504,13 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// B1.2(f): /health surfaces audit-degraded mode. The closure reports
 	// whether the agent loop currently has a non-nil audit logger so /health
 	// can flag "audit_logger: unavailable" without exposing the pointer.
-	runningServices.HealthServer.SetAuditLoggerAvailableFunc(func() bool {
-		return agentLoop.AuditLogger() != nil
+	rc.runningServices.HealthServer.SetAuditLoggerAvailableFunc(func() bool {
+		return rc.agentLoop.AuditLogger() != nil
 	})
 	// audit_degraded should only fire when the operator asked for audit AND
 	// it isn't working. cfg.Sandbox.AuditLog=false is a deliberate off-state.
-	runningServices.HealthServer.SetAuditLoggerConfiguredFunc(func() bool {
-		return agentLoop.GetConfig().Sandbox.AuditLog
+	rc.runningServices.HealthServer.SetAuditLoggerConfiguredFunc(func() bool {
+		return rc.agentLoop.GetConfig().Sandbox.AuditLog
 	})
 	// ADR-067 FR-037 (T067-10): /health reports the provider catalog
 	// degraded — with the last refresh error — whenever no document is
@@ -1400,25 +1518,26 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// (updated_at older than 14 days). Like audit_degraded it is a FIELD,
 	// not a 503: an out-of-date registry snapshot makes the model picker
 	// less accurate, it does not stop the gateway serving turns.
-	runningServices.HealthServer.SetCatalogStateFunc(func() (bool, string) {
-		return catalogHealthState(providerCatalog)
+	rc.runningServices.HealthServer.SetCatalogStateFunc(func() (bool, string) {
+		return catalogHealthState(rc.providerCatalog)
 	})
 
-	var configReloadChan <-chan *config.Config
-	stopWatch := func() {}
-	if cfg.Gateway.HotReload {
-		configReloadChan, stopWatch = setupConfigWatcherPolling(
-			configPath,
-			homePath,
-			debug,
-			credStore,
-			runningServices.selfWriteReg,
-			runningServices.markReloadDegraded,
+	rc.stopWatch = func() {}
+	if rc.cfg.Gateway.HotReload {
+		rc.configReloadChan, rc.stopWatch = setupConfigWatcherPolling(
+			rc.configPath,
+			rc.homePath,
+			rc.debug,
+			rc.credStore,
+			rc.runningServices.selfWriteReg,
+			rc.runningServices.markReloadDegraded,
 		)
 		logger.Info("Config hot reload enabled")
 	}
-	defer stopWatch()
+}
 
+// serveReloadLoop loads reload configuration and serves shutdown and reload events.
+func (rc *runContextWithOptions) serveReloadLoop() error {
 	// loadReloadConfig re-reads config.json for a reload. It backs the /reload
 	// path AND every coalesced follow-up reload — the latter MUST re-read from
 	// disk, since the whole reason a request was coalesced is that its write
@@ -1431,7 +1550,7 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// it as an external edit.
 	loadReloadConfig := func() (*config.Config, error) {
 		newCfg, err := config.LoadConfigWithStoreAndSelfHealHook(
-			configPath, credStore, selfHealWriteHook(runningServices.selfWriteReg),
+			rc.configPath, rc.credStore, selfHealWriteHook(rc.runningServices.selfWriteReg),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("loading config for reload: %w", err)
@@ -1445,8 +1564,8 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 		// failures around it, not silently proceed with an empty/stale roster
 		// (see populateAgentsListFromEntityStoreStrict's doc for why) — and mark
 		// the service degraded so /health surfaces it.
-		if err = populateAgentsListFromEntityStoreStrict(newCfg, homePath); err != nil {
-			runningServices.markReloadDegraded(
+		if err = populateAgentsListFromEntityStoreStrict(newCfg, rc.homePath); err != nil {
+			rc.runningServices.markReloadDegraded(
 				fmt.Errorf("reload rejected: agent roster population failed: %w", err),
 			)
 			return nil, fmt.Errorf("agent roster population failed: %w", err)
@@ -1460,30 +1579,30 @@ func RunContextWithOptions(ctx context.Context, opts RunOptions) error {
 	// runOneReload is the production executor handed to runReloadCycle. provider
 	// is captured by address because executeReload swaps it in place on success.
 	runOneReload := func(c *config.Config) error {
-		return executeReload(ctx, agentLoop, c, &provider, runningServices, msgBus, allowEmptyStartup)
+		return executeReload(rc.ctx, rc.agentLoop, c, &rc.provider, rc.runningServices, rc.msgBus, rc.allowEmptyStartup)
 	}
 
 	for {
 		select {
-		case <-agentLoopCtx.Done():
+		case <-rc.agentLoopCtx.Done():
 			logger.Info("Shutting down...")
-			omnipusGracefulShutdown(runningServices, agentLoop, provider, cfg)
+			omnipusGracefulShutdown(rc.runningServices, rc.agentLoop, rc.provider, rc.cfg)
 			return nil
-		case newCfg := <-configReloadChan:
-			if !runningServices.beginReload(agentLoop.MarkReloadPending) {
+		case newCfg := <-rc.configReloadChan:
+			if !rc.runningServices.beginReload(rc.agentLoop.MarkReloadPending) {
 				// NOT a drop: beginReload recorded the request, and the cycle
 				// that owns the in-flight reload will run a follow-up reload
 				// that re-reads this file change from disk before it finishes.
 				logger.Info("Config reload coalesced into the in-flight reload")
 				continue
 			}
-			runReloadCycle(agentLoop, runningServices, newCfg, runOneReload, loadReloadConfig)
-		case <-manualReloadChan:
+			runReloadCycle(rc.agentLoop, rc.runningServices, newCfg, runOneReload, loadReloadConfig)
+		case <-rc.manualReloadChan:
 			// The slot was already claimed by reloadTrigger before it signalled
 			// this channel, so do NOT call beginReload here — runReloadCycle
 			// takes ownership of the release directly.
 			logger.Info("Manual reload triggered via /reload endpoint")
-			runReloadCycle(agentLoop, runningServices, nil, runOneReload, loadReloadConfig)
+			runReloadCycle(rc.agentLoop, rc.runningServices, nil, runOneReload, loadReloadConfig)
 		}
 	}
 }
