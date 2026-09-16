@@ -96,11 +96,11 @@ src/store/chat.test.ts	(arg of describe)	255
 src/store/chat.test.ts	(arg of describe)	329
 src/store/chat.test.ts	(arg of describe)	392
 src/store/chat.tool-call-offset.test.ts	(arg of describe)	857
-src/store/chat.ts	(arg of create)	4568
-src/store/chat.ts	(arg of produce)	335
-src/store/chat.ts	(arg of withBucket)	337
-src/store/chat.ts	handleFrame	2775
-src/store/chat.ts	sendMessage	428
+src/store/chat/store.ts	(arg of create)	4568
+src/store/chat/store.ts	(arg of produce)	335
+src/store/chat/store.ts	(arg of withBucket)	337
+src/store/chat/store.ts	handleFrame	2775
+src/store/chat/store.ts	sendMessage	428
 src/store/session.ts	(arg of create)	397
 src/test/contract.test.ts	(arg of describe)	276
 tests/perf/load_2000_sessions_test.go	TestLoad2000Sessions	264
