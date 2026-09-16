@@ -249,6 +249,36 @@ const (
 	catalogStartupSkipWindow = time.Hour
 )
 
+// setupAndStartServicesState carries the shared state of setupAndStartServices across its stages.
+type setupAndStartServicesState struct {
+	ctx                    context.Context
+	cfg                    *config.Config
+	bundle                 credentials.SecretBundle
+	agentLoop              *agent.AgentLoop
+	msgBus                 *bus.MessageBus
+	homePath               string
+	credStore              *credentials.Store
+	sandboxResult          *SandboxApplyResult
+	builtinReg             *tools.BuiltinRegistry
+	mcpReg                 *tools.MCPRegistry
+	allowGodMode           bool
+	runningServices        *services
+	err                    error
+	allowedOrigin          string
+	wsHandler              *WSHandler
+	approvalReg            *approvalRegistryV2
+	onboardingStateUnknown bool
+	onboardingMgr          *onboarding.Manager
+	tStore                 *task.Store
+	tExecutor              *agent.TaskExecutor
+	planStore              *plan.Store
+	lifecycleStore         *session.LifecycleStore
+	intentLog              *plan.IntentLog
+	bootSweepCfg           config.PlanningConfig
+	providerCatalog        *catalog.Catalog
+	api                    *restAPI
+}
+
 func setupAndStartServices(
 	ctx context.Context, // gateway's own shutdown-aware context (RunContextWithOptions' ctx) — threaded through so background loops started here (e.g. runCatalogRefreshLoop) can observe cancellation instead of running untethered for the life of the process.
 	cfg *config.Config,
@@ -262,25 +292,82 @@ func setupAndStartServices(
 	mcpReg *tools.MCPRegistry, // M16: central MCP registry (FR-001)
 	allowGodMode bool,
 ) (rs *services, retErr error) {
-	runningServices := &services{credStore: credStore, bundle: bundle, sandboxResult: sandboxResult, homePath: homePath}
+	stg := &setupAndStartServicesState{ctx: ctx, cfg: cfg, bundle: bundle, agentLoop: agentLoop, msgBus: msgBus, homePath: homePath, credStore: credStore, sandboxResult: sandboxResult, builtinReg: builtinReg, mcpReg: mcpReg, allowGodMode: allowGodMode}
+
+	if r0, r1, stop := stg.startSchedulers(); stop {
+		rs, retErr = r0, r1
+		return
+	}
+
+	if r0, r1, stop := stg.setupMediaAndChannels(); stop {
+		rs, retErr = r0, r1
+		return
+	}
+
+	if r0, r1, stop := stg.wireInteractiveServices(); stop {
+		rs, retErr = r0, r1
+		return
+	}
+
+	if r0, r1, stop := stg.setupPlans(); stop {
+		rs, retErr = r0, r1
+		return
+	}
+
+	if r0, r1, stop := stg.startPlanEngine(); stop {
+		rs, retErr = r0, r1
+		return
+	}
+
+	stg.buildRESTAPI()
+
+	if r0, r1, stop := stg.prepareListener(); stop {
+		rs, retErr = r0, r1
+		return
+	}
+
+	// The HTTP listener is now accepting connections. If any later boot step
+	// fails and this function returns an error, tear the started services down
+	// first — otherwise the caller aborts boot on the error and the accepting
+	// listener goroutine (plus device service / drains) leaks. Registered only
+	// after StartAll so it never fires when the listener was not started, and
+	// gated on retErr so the success path leaves the services running.
+	// stopAndCleanupServices nil-checks each subsystem, so it is safe on a
+	// partially-started state.
+	defer func() {
+		if retErr != nil {
+			stopAndCleanupServices(stg.runningServices, 5*time.Second, false)
+		}
+	}()
+
+	if r0, r1, stop := stg.registerProcess(); stop {
+		rs, retErr = r0, r1
+		return
+	}
+
+	return stg.startBackgroundServices()
+}
+
+// startSchedulers constructs and starts the gateway's cron-backed scheduling and drain services in boot order.
+func (stg *setupAndStartServicesState) startSchedulers() (*services, error, bool) {
+	stg.runningServices = &services{credStore: stg.credStore, bundle: stg.bundle, sandboxResult: stg.sandboxResult, homePath: stg.homePath}
 
 	// Per-user notification store (#264). Backs schedule-failure notifications and
 	// the header notification center.
-	runningServices.notifStore = notifications.NewStore(filepath.Join(homePath, "notifications"))
+	stg.runningServices.notifStore = notifications.NewStore(filepath.Join(stg.homePath, "notifications"))
 
-	var err error
-	runningServices.CronService, err = setupCronTool(
-		agentLoop,
-		msgBus,
-		cfg.AgentHomeBasePath(),
-		cfg,
-		runningServices.notifStore,
+	stg.runningServices.CronService, stg.err = setupCronTool(
+		stg.agentLoop,
+		stg.msgBus,
+		stg.cfg.AgentHomeBasePath(),
+		stg.cfg,
+		stg.runningServices.notifStore,
 	)
-	if err != nil {
-		return nil, fmt.Errorf("error setting up cron service: %w", err)
+	if stg.err != nil {
+		return nil, fmt.Errorf("error setting up cron service: %w", stg.err), true
 	}
-	if err = runningServices.CronService.Start(); err != nil {
-		return nil, fmt.Errorf("error starting cron service: %w", err)
+	if stg.err = stg.runningServices.CronService.Start(); stg.err != nil {
+		return nil, fmt.Errorf("error starting cron service: %w", stg.err), true
 	}
 	fmt.Println("✓ Cron service started")
 
@@ -289,13 +376,13 @@ func setupAndStartServices(
 	// gets a recurring job. Best-effort: a reconcile failure is logged but does not
 	// abort boot — the next hot-path write (workspace PUT) will re-converge.
 	{
-		wsFiles, wsErr := listWorkspaceFiles(homePath)
+		wsFiles, wsErr := listWorkspaceFiles(stg.homePath)
 		if wsErr != nil {
 			slog.Warn("gateway: heartbeat schedule reconcile: list workspaces failed", "error", wsErr)
 		} else if hbErr := ReconcileHeartbeatSchedules(
-			runningServices.CronService,
+			stg.runningServices.CronService,
 			wsFiles,
-			configOnlyIsWorker(cfg),
+			configOnlyIsWorker(stg.cfg),
 		); hbErr != nil {
 			slog.Warn("gateway: heartbeat schedule reconcile failed", "error", hbErr)
 		}
@@ -304,9 +391,9 @@ func setupAndStartServices(
 
 	// Queued-task draining (dispatch of `next` tasks) is owned UNCONDITIONALLY by
 	// the dedicated TaskDrainService — never by the heartbeat path.
-	if te := agent.GetTaskExecutor(agentLoop); te != nil {
-		runningServices.TaskDrain = heartbeat.NewTaskDrainService(te, 0)
-		runningServices.TaskDrain.Start()
+	if te := agent.GetTaskExecutor(stg.agentLoop); te != nil {
+		stg.runningServices.TaskDrain = heartbeat.NewTaskDrainService(te, 0)
+		stg.runningServices.TaskDrain.Start()
 		fmt.Println("✓ Queued-task drain owned by: TaskDrainService (dedicated poll)")
 	} else {
 		fmt.Println("⚠ Queued-task drain disabled: no task executor available")
@@ -324,13 +411,13 @@ func setupAndStartServices(
 	// changing, or removing a mailbox via the Connectors API is picked up without
 	// a restart. Started unconditionally; the scanner is a no-op when no mailbox
 	// is configured.
-	if tStore := agent.GetTaskStore(agentLoop); tStore != nil {
+	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
 		provider := email.MailboxProviderFunc(func() []email.Mailbox {
-			return buildMailboxes(agentLoop.GetConfig(), credStore)
+			return buildMailboxes(stg.agentLoop.GetConfig(), stg.credStore)
 		})
 		drainer := email.NewDrainer(tStore, provider, 0)
-		runningServices.MailboxDrain = heartbeat.NewMailboxDrainService(drainer, 0)
-		runningServices.MailboxDrain.Start()
+		stg.runningServices.MailboxDrain = heartbeat.NewMailboxDrainService(drainer, 0)
+		stg.runningServices.MailboxDrain.Start()
 		fmt.Println("✓ Mailbox drain owned by: MailboxDrainService (unhandled mail → Board)")
 	}
 
@@ -339,16 +426,16 @@ func setupAndStartServices(
 	// scheduler). Boot-reconciles existing tasks' triggers, then the create/
 	// update/delete REST + tool paths (re)register/remove jobs via
 	// AgentLoop.NotifyTaskUpserted / NotifyTaskDeleted.
-	if tStore := agent.GetTaskStore(agentLoop); tStore != nil {
-		triggerStorePath := filepath.Join(homePath, "tasks_triggers", "jobs.json")
-		runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
-			triggerStorePath, tStore, agent.GetTaskExecutor(agentLoop),
+	if tStore := agent.GetTaskStore(stg.agentLoop); tStore != nil {
+		triggerStorePath := filepath.Join(stg.homePath, "tasks_triggers", "jobs.json")
+		stg.runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
+			triggerStorePath, tStore, agent.GetTaskExecutor(stg.agentLoop),
 		)
-		if startErr := runningServices.TaskTrigger.Start(); startErr != nil {
-			return nil, fmt.Errorf("error starting task trigger scheduler: %w", startErr)
+		if startErr := stg.runningServices.TaskTrigger.Start(); startErr != nil {
+			return nil, fmt.Errorf("error starting task trigger scheduler: %w", startErr), true
 		}
-		agentLoop.SetTaskTriggerScheduler(runningServices.TaskTrigger)
-		if recErr := runningServices.TaskTrigger.Reconcile(); recErr != nil {
+		stg.agentLoop.SetTaskTriggerScheduler(stg.runningServices.TaskTrigger)
+		if recErr := stg.runningServices.TaskTrigger.Reconcile(); recErr != nil {
 			slog.Error("gateway: task trigger boot reconcile failed", "error", recErr)
 		}
 		fmt.Println("✓ Task trigger scheduler started")
@@ -362,20 +449,24 @@ func setupAndStartServices(
 	// their session-side UnifiedMeta state independently; a job whose
 	// session lost its loop state self-removes on next fire
 	// (LoopScheduler.RunScheduled).
-	loopSchedStorePath := filepath.Join(homePath, "loops", "jobs.json")
-	runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, agentLoop)
-	if startErr := runningServices.LoopScheduler.Start(); startErr != nil {
-		return nil, fmt.Errorf("error starting loop scheduler: %w", startErr)
+	loopSchedStorePath := filepath.Join(stg.homePath, "loops", "jobs.json")
+	stg.runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, stg.agentLoop)
+	if startErr := stg.runningServices.LoopScheduler.Start(); startErr != nil {
+		return nil, fmt.Errorf("error starting loop scheduler: %w", startErr), true
 	}
-	agentLoop.SetLoopScheduler(runningServices.LoopScheduler)
+	stg.agentLoop.SetLoopScheduler(stg.runningServices.LoopScheduler)
 	fmt.Println("✓ Loop scheduler started")
+	return nil, nil, false
+}
 
-	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
-		Enabled:  cfg.Tools.MediaCleanup.Enabled,
-		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+// setupMediaAndChannels constructs the media and channel services, wires them into the agent loop, and emits boot warnings.
+func (stg *setupAndStartServicesState) setupMediaAndChannels() (*services, error, bool) {
+	stg.runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
+		Enabled:  stg.cfg.Tools.MediaCleanup.Enabled,
+		MaxAge:   time.Duration(stg.cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
+		Interval: time.Duration(stg.cfg.Tools.MediaCleanup.Interval) * time.Minute,
 	})
-	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
+	if fms, ok := stg.runningServices.MediaStore.(*media.FileMediaStore); ok {
 		// Reload refs persisted by a previous gateway instance so
 		// /api/v1/media/<ref> URLs in old session transcripts still resolve.
 		// Best-effort — a load failure should not block boot.
@@ -391,9 +482,9 @@ func setupAndStartServices(
 	// library cache — a separate cache here caused live UAT failures
 	// where uploads (via GetWorkspaceLibrary) updated one in-memory
 	// manifest while resolve (via this provider) read a stale sibling.
-	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
+	if fms, ok := stg.runningServices.MediaStore.(*media.FileMediaStore); ok {
 		fms.SetWorkspaceLibraryProvider(func(workspaceID string) (media.WorkspaceLibraryResolver, error) {
-			lib := agentLoop.GetWorkspaceLibrary(workspaceID)
+			lib := stg.agentLoop.GetWorkspaceLibrary(workspaceID)
 			if lib == nil {
 				return nil, fmt.Errorf("workspace library unavailable for %q", workspaceID)
 			}
@@ -401,33 +492,33 @@ func setupAndStartServices(
 		})
 	}
 
-	runningServices.ChannelManager, err = channels.NewManager(
-		cfg,
-		runningServices.bundle,
-		msgBus,
-		runningServices.MediaStore,
+	stg.runningServices.ChannelManager, stg.err = channels.NewManager(
+		stg.cfg,
+		stg.runningServices.bundle,
+		stg.msgBus,
+		stg.runningServices.MediaStore,
 	)
-	if err != nil {
-		if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
+	if stg.err != nil {
+		if fms, ok := stg.runningServices.MediaStore.(*media.FileMediaStore); ok {
 			fms.Stop()
 		}
-		return nil, fmt.Errorf("error creating channel manager: %w", err)
+		return nil, fmt.Errorf("error creating channel manager: %w", stg.err), true
 	}
 
-	agentLoop.SetChannelManager(runningServices.ChannelManager)
-	agentLoop.SetMediaStore(runningServices.MediaStore)
+	stg.agentLoop.SetChannelManager(stg.runningServices.ChannelManager)
+	stg.agentLoop.SetMediaStore(stg.runningServices.MediaStore)
 	// Wire all observer callbacks (CancelInterceptor, PairingObserver, …) via
 	// the shared helper so this path stays in sync with restartServices.
 	// Must happen after SetChannelManager so the Manager's channels map is
 	// already populated when SetCancelInterceptor is called.
-	wireChannelManager(runningServices.ChannelManager, agentLoop)
+	wireChannelManager(stg.runningServices.ChannelManager, stg.agentLoop)
 
-	if transcriber := voice.DetectTranscriber(cfg, runningServices.bundle); transcriber != nil {
-		agentLoop.SetTranscriber(transcriber)
+	if transcriber := voice.DetectTranscriber(stg.cfg, stg.runningServices.bundle); transcriber != nil {
+		stg.agentLoop.SetTranscriber(transcriber)
 		logger.InfoCF("voice", "Transcription enabled (agent-level)", map[string]any{"provider": transcriber.Name()})
 	}
 
-	enabledChannels := runningServices.ChannelManager.GetEnabledChannels()
+	enabledChannels := stg.runningServices.ChannelManager.GetEnabledChannels()
 	if len(enabledChannels) > 0 {
 		fmt.Printf("✓ Channels enabled: %s\n", enabledChannels)
 	} else {
@@ -439,18 +530,18 @@ func setupAndStartServices(
 	}
 
 	// Apply warmup timeout default (FR-013 / CR-04).
-	cfg.Tools.ApplyWarmupTimeoutDefault()
+	stg.cfg.Tools.ApplyWarmupTimeoutDefault()
 
-	addr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
-	runningServices.HealthServer = health.NewServer(cfg.Gateway.Host, cfg.Gateway.Port)
-	runningServices.ChannelManager.SetupHTTPServer(addr, runningServices.HealthServer)
+	addr := fmt.Sprintf("%s:%d", stg.cfg.Gateway.Host, stg.cfg.Gateway.Port)
+	stg.runningServices.HealthServer = health.NewServer(stg.cfg.Gateway.Host, stg.cfg.Gateway.Port)
+	stg.runningServices.ChannelManager.SetupHTTPServer(addr, stg.runningServices.HealthServer)
 
 	// Compute the main gateway origin for CORS and CSP frame-ancestors.
 	// Use PublicURL when set (reverse-proxy deployment); otherwise derive from host:port.
 	// When host is a wildcard (0.0.0.0, ::), allowedOrigin is empty and the WARN
 	// is emitted below (FR-007e / MR-03).
-	allowedOrigin := middleware.CanonicalGatewayOrigin(cfg)
-	if allowedOrigin == "" {
+	stg.allowedOrigin = middleware.CanonicalGatewayOrigin(stg.cfg)
+	if stg.allowedOrigin == "" {
 		// Wildcard bind host and no public_url → frame-ancestors must fall back to *.
 		// Log once at WARN so operators know to set gateway.public_url for strict control.
 		//
@@ -459,7 +550,7 @@ func setupAndStartServices(
 		// runtime must restart the gateway for the WARN to re-fire on the new
 		// value and for the new origin to take effect in CSP headers.
 		slog.Warn("frame-ancestors fallback to '*' — set gateway.public_url for strict embedding control",
-			"host", cfg.Gateway.Host)
+			"host", stg.cfg.Gateway.Host)
 	}
 
 	// Fix-5: warn when bash's hardened path is running on a non-Linux host
@@ -482,8 +573,12 @@ func setupAndStartServices(
 	// Fix-6: warn when any agent with remote channels has a non-deny bash policy.
 	// The GHSA-pv8c-p6jf-3fpp channel block was removed; operators must now
 	// configure per-agent ToolPolicyCfg to restrict bash.
-	emitGHSARemovalWarn(cfg)
+	emitGHSARemovalWarn(stg.cfg)
+	return nil, nil, false
+}
 
+// wireInteractiveServices constructs preview, chat, browser, approval, and interactive-question services and wires their callbacks.
+func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, error, bool) {
 	// Construct the web_serve static-mode (Tier 1) and dev-mode (Tier 3)
 	// shared registries. These are always created; gateway.preview_enabled
 	// (ADR-044) gates /preview/ and serve_web live, per-request — it does not
@@ -491,8 +586,8 @@ func setupAndStartServices(
 	// Dev mode requires the DevServerRegistry; the tool itself gates to Linux.
 	servedSubdirs := agent.NewServedSubdirs()
 	devServers := sandbox.NewDevServerRegistry()
-	runningServices.servedSubdirs = servedSubdirs
-	runningServices.devServers = devServers
+	stg.runningServices.servedSubdirs = servedSubdirs
+	stg.runningServices.devServers = devServers
 
 	// F-9: wire audit-set cleanup so evicted tokens don't re-emit serve.served
 	// / dev.proxied on the rare cap-reset path. The callbacks are injected here
@@ -512,7 +607,7 @@ func setupAndStartServices(
 	// never silently swallowed. The B1.2(a) nil-receiver guard makes this
 	// safe even if the logger reference is nil at the moment of call.
 	egressAuditFn := func(entry *audit.Entry) {
-		al := agentLoop // captured by reference — may be wired up by reload
+		al := stg.agentLoop // captured by reference — may be wired up by reload
 		if al == nil {
 			slog.Warn("egress_proxy: audit fired before agent loop ready",
 				"event", entry.Event, "decision", entry.Decision)
@@ -537,12 +632,12 @@ func setupAndStartServices(
 		}
 	}
 
-	egressProxy, epErr := buildEgressProxyOrAbort(cfg.Sandbox.EgressAllowList, egressAuditFn, sandbox.NewEgressProxy)
+	egressProxy, epErr := buildEgressProxyOrAbort(stg.cfg.Sandbox.EgressAllowList, egressAuditFn, sandbox.NewEgressProxy)
 	if epErr != nil && !errors.Is(epErr, errEgressProxyDisabled) {
-		return nil, epErr
+		return nil, epErr, true
 	}
 	if egressProxy != nil {
-		runningServices.egressProxy = egressProxy
+		stg.runningServices.egressProxy = egressProxy
 	}
 
 	// Build and wire Tier13Deps into every agent via the agent loop.
@@ -555,26 +650,26 @@ func setupAndStartServices(
 		DevServerRegistry: devServers,
 		EgressProxy:       egressProxy,
 	}
-	agentLoop.WireTier13Deps(tier13)
+	stg.agentLoop.WireTier13Deps(tier13)
 
 	// SSE chat endpoint — kept for backward compatibility; streaming tokens now route through WebSocket.
-	sseHandler := newSSEHandler(msgBus, nil, allowedOrigin, func() *config.Config { return cfg })
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/chat", sseHandler)
+	sseHandler := newSSEHandler(stg.msgBus, nil, stg.allowedOrigin, func() *config.Config { return stg.cfg })
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/chat", sseHandler)
 
 	// WebSocket chat endpoint — primary transport for bi-directional chat streaming.
-	wsHandler := newWSHandler(msgBus, agentLoop, allowedOrigin)
-	wsHandler.home = homePath
-	toolStore := newToolResultStore(homePath)
-	wsHandler.toolStore = toolStore
-	runningServices.toolStore = toolStore
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/chat/ws", wsHandler)
+	stg.wsHandler = newWSHandler(stg.msgBus, stg.agentLoop, stg.allowedOrigin)
+	stg.wsHandler.home = stg.homePath
+	toolStore := newToolResultStore(stg.homePath)
+	stg.wsHandler.toolStore = toolStore
+	stg.runningServices.toolStore = toolStore
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/chat/ws", stg.wsHandler)
 	// Register WebSocket handler as stream fallback so streaming tokens route back for webchat.
-	runningServices.ChannelManager.SetStreamFallback(wsHandler)
+	stg.runningServices.ChannelManager.SetStreamFallback(stg.wsHandler)
 	// Register webchat as a channel so outbound messages (non-streaming) also route back.
 	// The webchatChannel and wsHandler share a reference so streaming can suppress duplicate Send().
-	wch := newWebchatChannel(wsHandler)
-	wsHandler.webchatCh = wch
-	runningServices.ChannelManager.RegisterChannel("webchat", wch)
+	wch := newWebchatChannel(stg.wsHandler)
+	stg.wsHandler.webchatCh = wch
+	stg.runningServices.ChannelManager.RegisterChannel("webchat", wch)
 
 	// Live interactive browser panel WebSocket (ADR-038 D1) — a dedicated
 	// socket, separate from chat, on this SAME gateway listener (there is no
@@ -588,9 +683,9 @@ func setupAndStartServices(
 	// the route or the listener. See config.go's LiveViewEnabled doc for why
 	// (a raw HTTP-level rejection would surface to browser JS as an opaque,
 	// unparseable WebSocket error).
-	browserWSHandler := newBrowserWSHandler(agentLoop, allowedOrigin)
-	runningServices.browserWS = browserWSHandler
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/ws", browserWSHandler)
+	browserWSHandler := newBrowserWSHandler(stg.agentLoop, stg.allowedOrigin)
+	stg.runningServices.browserWS = browserWSHandler
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/ws", browserWSHandler)
 
 	// Capture-ingest WS (ADR-047 D6, wave-plan W2-A) — the gateway-owned
 	// WebRTC capture extension's ingest leg. Loopback-only (RemoteAddr
@@ -599,39 +694,39 @@ func setupAndStartServices(
 	// browser client), authorized by a per-stream token (BindIngest/
 	// findByToken), sharing browserWSHandler's captureRegistry so a
 	// browser_webrtc_offer's session can be found by its ingest hello.
-	captureIngestHandler := newCaptureIngestWSHandler(agentLoop, browserWSHandler.captures)
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/capture-ingest", captureIngestHandler)
+	captureIngestHandler := newCaptureIngestWSHandler(stg.agentLoop, browserWSHandler.captures)
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/browser/capture-ingest", captureIngestHandler)
 
 	// Build the in-process tool-approval registry (FR-016, FR-070, M10).
 	// policy.ValidateSaturationCap enforces FR-016 semantics:
 	//   cap < 0 → fatal (emit HIGH audit + abort)
 	//   cap == 0 → unlimited (emit WARN audit, ShouldSaturate always false)
 	//   cap > 0 → use as-is
-	approvalMaxPending := cfg.Gateway.ToolApprovalMaxPending
+	approvalMaxPending := stg.cfg.Gateway.ToolApprovalMaxPending
 	effectiveCap, capOK := policy.ValidateSaturationCap(context.Background(), nil, approvalMaxPending)
 	if !capOK {
 		return nil, fmt.Errorf(
 			"gateway: invalid tool_approval_max_pending=%d — boot aborted (FR-016)",
 			approvalMaxPending,
-		)
+		), true
 	}
-	approvalTimeout := cfg.Gateway.ToolApprovalTimeout
+	approvalTimeout := stg.cfg.Gateway.ToolApprovalTimeout
 	var approvalTimeoutDur time.Duration
 	if approvalTimeout > 0 {
 		approvalTimeoutDur = time.Duration(approvalTimeout) * time.Second
 	} else {
 		approvalTimeoutDur = defaultToolApprovalTimeout
 	}
-	approvalReg := newApprovalRegistryV2(effectiveCap, approvalTimeoutDur)
-	wsHandler.approvalRegV2 = approvalReg
+	stg.approvalReg = newApprovalRegistryV2(effectiveCap, approvalTimeoutDur)
+	stg.wsHandler.approvalRegV2 = stg.approvalReg
 	// Broadcast every pending→terminal transition, whatever caused it (a
 	// decision from any tab, timeout, Stop, agent deletion, shutdown), so no
 	// open tab keeps a dialog for an approval the server has already closed.
-	approvalReg.setResolutionListener(wsHandler.broadcastToolApprovalResolved)
+	stg.approvalReg.setResolutionListener(stg.wsHandler.broadcastToolApprovalResolved)
 
 	// Wire the policy approver into the agent loop (FR-011, C3).
 	// The adapter bridges agent.PolicyApprover → approvalRegistryV2 + WSHandler.
-	agentLoop.SetToolApprover(newPolicyApproverAdapter(approvalReg, wsHandler))
+	stg.agentLoop.SetToolApprover(newPolicyApproverAdapter(stg.approvalReg, stg.wsHandler))
 
 	// AskUserQuestion pending registry (askuserquestion-tool-spec v3, ADR-074
 	// D4b; W9b wiring): durable state lives in each owner session's
@@ -639,27 +734,27 @@ func setupAndStartServices(
 	// global cap + default-safe timers, the card sink broadcasts
 	// ask_user_question WS frames, and the resume dispatcher publishes the
 	// §0.2 answers message back into the owner session's turn machinery.
-	if sharedStore := agentLoop.GetSessionStore(); sharedStore != nil {
-		askSink := &askUserCardSink{h: wsHandler}
+	if sharedStore := stg.agentLoop.GetSessionStore(); sharedStore != nil {
+		askSink := &askUserCardSink{h: stg.wsHandler}
 		askReg := askuser.NewRegistry(
 			sharedStore,
-			&askUserResumeDispatcher{msgBus: msgBus},
+			&askUserResumeDispatcher{msgBus: stg.msgBus},
 			askuser.Options{
 				Sink:  askSink,
-				Audit: &askUserAuditSink{al: agentLoop},
+				Audit: &askUserAuditSink{al: stg.agentLoop},
 			},
 		)
 		askSink.delayFn = askReg.EffectiveDefaultSafeDelay
-		wsHandler.askUserReg = askReg
-		agentLoop.SetAskUserRegistry(askReg)
+		stg.wsHandler.askUserReg = askReg
+		stg.agentLoop.SetAskUserRegistry(askReg)
 		// ADR-088 FR-031: wire the goal-routing store resolver at boot so a
 		// cold-start channel record echo / keeper action can rehydrate the
 		// persisted GoalRoute* fields before any /goal command runs.
-		agentLoop.SetGoalRouteSessionStore()
+		stg.agentLoop.SetGoalRouteSessionStore()
 		// Goal outcome line: a task-owned goal that ends with its task leaves
 		// the same lasting outcome line in the task's run session as a chat
 		// goal does (pkg/agent/goal_outcome.go).
-		agentLoop.InstallTaskGoalOutcomeRecorder()
+		stg.agentLoop.InstallTaskGoalOutcomeRecorder()
 		// Boot rearm sweep (US-6 S1/FR-9): re-hydrate every persisted pending
 		// set so its default-safe timers re-arm from the durable CreatedAt
 		// (already-elapsed timers fire near-immediately) and the reconnect
@@ -685,7 +780,7 @@ func setupAndStartServices(
 		// gateway's shutdown-aware ctx — a defer here would fire when
 		// setupAndStartServices RETURNS (still at boot), not at shutdown.
 		go func() {
-			<-ctx.Done()
+			<-stg.ctx.Done()
 			askReg.Quiesce()
 		}()
 	} else {
@@ -709,7 +804,11 @@ func setupAndStartServices(
 		slog.Warn("gateway: message_parent: failed to wake parent session",
 			"kind", kind, "error", err)
 	})
+	return nil, nil, false
+}
 
+// setupPlans constructs the plan and session-messaging stores and installs them on the agent loop.
+func (stg *setupAndStartServicesState) setupPlans() (*services, error, bool) {
 	// REST API endpoints for frontend data.
 	//
 	// M3: sample the onboarding state file's READABILITY before constructing
@@ -718,10 +817,10 @@ func setupAndStartServices(
 	// moment at which "corrupt/unreadable" is distinguishable from "genuinely
 	// never onboarded". The FR-050 pre-auth provider routes fail closed on
 	// the unknown case — see preAuthOnboardingWindowOpen (rest_auth.go).
-	onboardingStateUnknown := onboardingStateUnreadable(homePath)
-	onboardingMgr := onboarding.NewManager(homePath)
-	tStore := agent.GetTaskStore(agentLoop)
-	tExecutor := agent.GetTaskExecutor(agentLoop)
+	stg.onboardingStateUnknown = onboardingStateUnreadable(stg.homePath)
+	stg.onboardingMgr = onboarding.NewManager(stg.homePath)
+	stg.tStore = agent.GetTaskStore(stg.agentLoop)
+	stg.tExecutor = agent.GetTaskExecutor(stg.agentLoop)
 
 	// ADR-049 D1/D4 (Wave 2-C1): construct the Plan store + the single hybrid
 	// plan-engine instance. planStore is shared with restAPI (Plans REST
@@ -729,11 +828,11 @@ func setupAndStartServices(
 	// the SAME *plan.Store, so planStore.OnChange (wired here) is the single
 	// choke point that emits a plan_status WS frame for every plan mutation,
 	// regardless of whether the engine or a REST handler made it.
-	planStore := plan.New(filepath.Join(homePath, "plans"))
-	planStore.OnChange = func(p *plan.Plan) {
+	stg.planStore = plan.New(filepath.Join(stg.homePath, "plans"))
+	stg.planStore.OnChange = func(p *plan.Plan) {
 		progress := p.Progress
-		if tStore != nil {
-			if _, _, computed, cerr := plan.ComputeProgress(p.ID, tStore); cerr == nil {
+		if stg.tStore != nil {
+			if _, _, computed, cerr := plan.ComputeProgress(p.ID, stg.tStore); cerr == nil {
 				progress = computed
 			} else {
 				slog.Warn("gateway: plan_status: compute progress failed", "plan_id", p.ID, "error", cerr)
@@ -748,7 +847,7 @@ func setupAndStartServices(
 		if p.PausedReason != "" {
 			payload.PausedReason = p.PausedReason
 		}
-		agentLoop.EmitPlanStatusChanged(payload)
+		stg.agentLoop.EmitPlanStatusChanged(payload)
 	}
 
 	// ADR-052 Wave 2 (caller-int): install the real plan store into the
@@ -763,15 +862,15 @@ func setupAndStartServices(
 	// non-nil here too: planStore is a concrete value from plan.New just
 	// above, so this guards against a future refactor silently routing a
 	// nil store through, not today's happy path.
-	agentLoop.SetPlanStore(planStore)
+	stg.agentLoop.SetPlanStore(stg.planStore)
 
 	// Channel ownership for send_message (ADR-065). Injected here, next to the
 	// plan store, for the same reason: it reads live config, so pkg/agent
 	// cannot construct it without importing pkg/gateway. Until this runs
 	// send_message refuses every target except the turn's own conversation.
-	agentLoop.SetChannelOwnership(newChannelOwnershipResolver(agentLoop.GetConfig))
-	if agentLoop.GetPlanStore() == nil {
-		return nil, fmt.Errorf("gateway: plan store wiring failed — SetPlanStore did not install a non-nil store")
+	stg.agentLoop.SetChannelOwnership(newChannelOwnershipResolver(stg.agentLoop.GetConfig))
+	if stg.agentLoop.GetPlanStore() == nil {
+		return nil, fmt.Errorf("gateway: plan store wiring failed — SetPlanStore did not install a non-nil store"), true
 	}
 	fmt.Println("✓ Plan tool surface wired (create_plan/execute_plan/run_task/inspect_session)")
 
@@ -783,8 +882,8 @@ func setupAndStartServices(
 	// degrade-not-abort convention used for tExecutor just below (a minimal
 	// test harness's AgentLoop may have no task executor at all); a nil
 	// tExecutor here just means there is no heartbeat drain to gate.
-	if tExecutor != nil {
-		tExecutor.SetPlanStore(planStore)
+	if stg.tExecutor != nil {
+		stg.tExecutor.SetPlanStore(stg.planStore)
 	}
 
 	// ADR-053 §5 boot sweep (FR-118/G-13) + intent-log (FR-148/M4): construct
@@ -818,16 +917,17 @@ func setupAndStartServices(
 	// empty key outside tests; this check does not depend on that landing —
 	// it stops the bad key from ever reaching NewIntentLog in the first
 	// place, against the constructor's current dir-only-error signature.)
-	intentLogChainKey, ilKeyErr := credStore.DeriveSubkey(plan.IntentLogChainKeyInfo)
+	intentLogChainKey, ilKeyErr := stg.credStore.DeriveSubkey(plan.IntentLogChainKeyInfo)
 	if ilKeyErr != nil {
-		return nil, fmt.Errorf("gateway: failed to derive intent log HMAC chain key: %w", ilKeyErr)
+		return nil, fmt.Errorf("gateway: failed to derive intent log HMAC chain key: %w", ilKeyErr), true
 	}
-	lifecycleStore := session.NewLifecycleStore(filepath.Join(homePath, "session_lifecycle"))
-	intentLog, ilDirErr := plan.NewIntentLog(filepath.Join(homePath, "plan_intents"), intentLogChainKey)
+	stg.lifecycleStore = session.NewLifecycleStore(filepath.Join(stg.homePath, "session_lifecycle"))
+	var ilDirErr error
+	stg.intentLog, ilDirErr = plan.NewIntentLog(filepath.Join(stg.homePath, "plan_intents"), intentLogChainKey)
 	if ilDirErr != nil {
-		return nil, fmt.Errorf("gateway: failed to create intent log dir: %w", ilDirErr)
+		return nil, fmt.Errorf("gateway: failed to create intent log dir: %w", ilDirErr), true
 	}
-	bootSweepCfg := agentLoop.GetConfig().Planning
+	stg.bootSweepCfg = stg.agentLoop.GetConfig().Planning
 
 	// ADR-053 Phase 2 on-ramp: construct the durable S3 child->parent message
 	// inbox and inject it + the S2 lifecycle store into the delegate +
@@ -840,7 +940,7 @@ func setupAndStartServices(
 	// NewAgentLoop returned, and re-wires the tool surface for every agent).
 	// session.NewMessageInboxStore's doc specifies "<OMNIPUS_HOME>/session_messages"
 	// as the conventional dir every consumer agrees on.
-	messageInboxStore := session.NewMessageInboxStore(filepath.Join(homePath, "session_messages"))
+	messageInboxStore := session.NewMessageInboxStore(filepath.Join(stg.homePath, "session_messages"))
 	// Apply the live config's caps to the store (the store's own caps are
 	// plain fields, re-read per call). This boot-time application alone does
 	// NOT make a session_messaging edit hot-reload — restartServices
@@ -848,26 +948,30 @@ func setupAndStartServices(
 	// al.GetMessageInboxStore() on every config reload; that is what actually
 	// keeps a live edit in effect. See restartServices' own comment at that
 	// call site for the incident this split (boot-only vs boot+reload) fixed.
-	smCfg := agentLoop.GetConfig().SessionMessaging
+	smCfg := stg.agentLoop.GetConfig().SessionMessaging
 	messageInboxStore.ChildSendRatePerMinute = smCfg.EffectiveChildSendRatePerMinute()
 	messageInboxStore.ChildSendBodyBytes = smCfg.EffectiveChildSendBodyBytes()
 	messageInboxStore.ChildSendMaxDepth = smCfg.EffectiveChildSendMaxDepth()
 	messageInboxStore.InboxUnackedMax = smCfg.EffectiveInboxUnackedMax()
 	messageInboxStore.InboxPerTypeCeiling = smCfg.EffectiveInboxPerTypeCeiling()
-	agentLoop.SetSessionMessagingStores(messageInboxStore, lifecycleStore)
-	if agentLoop.GetMessageInboxStore() == nil {
-		return nil, fmt.Errorf("gateway: session-messaging store wiring failed — SetSessionMessagingStores did not install a non-nil inbox")
+	stg.agentLoop.SetSessionMessagingStores(messageInboxStore, stg.lifecycleStore)
+	if stg.agentLoop.GetMessageInboxStore() == nil {
+		return nil, fmt.Errorf("gateway: session-messaging store wiring failed — SetSessionMessagingStores did not install a non-nil inbox"), true
 	}
 	fmt.Println("✓ Session-messaging plane wired (delegate + message_parent stores injected)")
+	return nil, nil, false
+}
 
+// startPlanEngine configures and starts the plan engine when its task dependencies are available.
+func (stg *setupAndStartServicesState) startPlanEngine() (*services, error, bool) {
 	// Mirrors the TaskDrain/TaskTrigger/MailboxDrain degrade-not-abort
 	// convention immediately below/above for a missing task store/executor
 	// (e.g. a minimal test harness's AgentLoop) — the plan engine needs both.
-	if tStore != nil && tExecutor != nil {
-		planEngine := agent.NewPlanEngine(agentLoop, planStore, tStore, tExecutor)
+	if stg.tStore != nil && stg.tExecutor != nil {
+		planEngine := agent.NewPlanEngine(stg.agentLoop, stg.planStore, stg.tStore, stg.tExecutor)
 		// Boot-sweep + intent-log wiring (must precede Start so the first boot
 		// pass runs synchronously inside Start).
-		planEngine.SetLifecycleStore(lifecycleStore)
+		planEngine.SetLifecycleStore(stg.lifecycleStore)
 		// FR-118/G-13: install the SAME lifecycleStore instance onto the
 		// TaskExecutor so it can mint/transition the durable S2 record for
 		// every task/plan-member dispatch session (mintTaskLifecycleRecord,
@@ -882,8 +986,8 @@ func setupAndStartServices(
 		// (lifecycle_store_wiring_test.go) dispatches a real task through this
 		// boot path and asserts the durable record was persisted; deleting
 		// this line makes that test fail.
-		tExecutor.SetLifecycleStore(lifecycleStore)
-		planEngine.SetIntentLog(intentLog)
+		stg.tExecutor.SetLifecycleStore(stg.lifecycleStore)
+		planEngine.SetIntentLog(stg.intentLog)
 		// D13/G-12 Play-from-commit: install the gitevidence-backed resume
 		// resolver so Play resumes a failed/cancelled member from its last
 		// boundary commit (FR-144). The resolver degrades PER WORKSPACE
@@ -892,7 +996,7 @@ func setupAndStartServices(
 		// mask a valid evidence repo on one workspace with a nested-repo
 		// degrade on another. It resolves the workspace lazily from the task
 		// record at Play time, so no workspace needs to be open at boot.
-		planEngine.SetCommitResolver(agent.NewLastMemberCommitResolver(tStore, homePath))
+		planEngine.SetCommitResolver(agent.NewLastMemberCommitResolver(stg.tStore, stg.homePath))
 		// D13/G-12 PRODUCER half (E.4): the resolver above only READS boundary
 		// commits. Without a producer it resolves "" forever and Play silently
 		// degrades to a fresh attempt — indistinguishable from a successful
@@ -905,19 +1009,19 @@ func setupAndStartServices(
 		// no evidence would be recorded at all — logged loudly rather than left
 		// to look like "no commits happened to be needed".
 		// tExecutor is already non-nil here — the enclosing block is gated on it.
-		scanner, scanErr := audit.NewSecretScanner(cfg.SensitiveDataReplacer(), nil)
+		scanner, scanErr := audit.NewSecretScanner(stg.cfg.SensitiveDataReplacer(), nil)
 		switch {
 		case scanErr != nil:
 			slog.Error("evidence committer: secret scanner construction failed — "+
 				"boundary commits disabled, Play will always take the fresh-attempt path",
 				"error", scanErr)
 		default:
-			tExecutor.SetEvidenceCommitter(agent.NewWorkspaceEvidenceCommitter(homePath, scanner))
+			stg.tExecutor.SetEvidenceCommitter(agent.NewWorkspaceEvidenceCommitter(stg.homePath, scanner))
 		}
-		if bsec := bootSweepCfg.EffectiveBootSweepBudgetSeconds(); bsec > 0 {
+		if bsec := stg.bootSweepCfg.EffectiveBootSweepBudgetSeconds(); bsec > 0 {
 			planEngine.SetBootSweepBudget(time.Duration(bsec) * time.Second)
 		}
-		if smb := bootSweepCfg.EffectiveSnapshotMaxBytes(); smb > 0 {
+		if smb := stg.bootSweepCfg.EffectiveSnapshotMaxBytes(); smb > 0 {
 			planEngine.SetSnapshotMaxBytes(smb)
 		}
 		// session.failed hook: best-effort recovery signal. The plan engine's
@@ -950,7 +1054,7 @@ func setupAndStartServices(
 		// every Store[T] instance rooted at the same directory, exactly the
 		// precedent pkg/gateway/rest_tasks.go's goalStoreForTasks documents.
 		planEngine.RegisterActiveCounter("goal", func() (int, error) {
-			goalStore := goal.NewStore(homePath)
+			goalStore := goal.NewStore(stg.homePath)
 			active, listErr := goalStore.ListActiveByOwnerKind(gen.GoalOwnerKindSession)
 			if listErr != nil {
 				return 0, fmt.Errorf("active-goal counter: list active session-owned goals: %w", listErr)
@@ -958,23 +1062,27 @@ func setupAndStartServices(
 			return len(active), nil
 		})
 		planEngine.RegisterActiveCounter("loop", func() (int, error) {
-			if runningServices.LoopScheduler == nil {
+			if stg.runningServices.LoopScheduler == nil {
 				return 0, nil
 			}
-			return len(runningServices.LoopScheduler.ListEnabledJobs()), nil
+			return len(stg.runningServices.LoopScheduler.ListEnabledJobs()), nil
 		})
 		if startErr := planEngine.Start(context.Background()); startErr != nil {
-			return nil, fmt.Errorf("error starting plan engine: %w", startErr)
+			return nil, fmt.Errorf("error starting plan engine: %w", startErr), true
 		}
-		agentLoop.SetPlanEngine(planEngine)
-		runningServices.PlanEngine = planEngine
+		stg.agentLoop.SetPlanEngine(planEngine)
+		stg.runningServices.PlanEngine = planEngine
 		fmt.Println("✓ Plan engine started")
 	} else {
 		fmt.Println("⚠ Plan engine disabled: task store/executor unavailable")
 	}
+	return nil, nil, false
+}
 
+// buildRESTAPI constructs the REST API, registers its core routes, and performs pre-listener reconciliation.
+func (stg *setupAndStartServicesState) buildRESTAPI() {
 	// Wire god-mode opt-in into the agent loop for runtime coercion.
-	agentLoop.SetAllowGodMode(allowGodMode)
+	stg.agentLoop.SetAllowGodMode(stg.allowGodMode)
 
 	// selfWriteReg is shared between safeUpdateConfigJSON (registers hashes of
 	// app-initiated writes) and setupConfigWatcherPolling (suppresses reload for
@@ -982,7 +1090,7 @@ func setupAndStartServices(
 	selfWriteReg := &configSelfWriteRegistry{
 		hashes: make(map[[32]byte]struct{}),
 	}
-	runningServices.selfWriteReg = selfWriteReg
+	stg.runningServices.selfWriteReg = selfWriteReg
 
 	// ClawHub marketplace registry backing GET /api/v1/skills/search and
 	// install-by-slug. Built from the unified Marketplaces list (FR-10.1) with
@@ -990,11 +1098,11 @@ func setupAndStartServices(
 	// the SSRF policy. The client defaults BaseURL to https://clawhub.ai when
 	// unset. Auth token (optional) is resolved from the credential bundle.
 	var restSSRFClient *http.Client
-	if restSSRF := agent.GetSSRFChecker(agentLoop); restSSRF != nil {
+	if restSSRF := agent.GetSSRFChecker(stg.agentLoop); restSSRF != nil {
 		restSSRFClient = restSSRF.SafeClient()
 	}
 	var skillRegistry skills.SkillRegistry
-	if chEntry, ok := skills.ClawHubMarketplaceFromConfig(cfg, bundle.GetString, restSSRFClient); ok {
+	if chEntry, ok := skills.ClawHubMarketplaceFromConfig(stg.cfg, stg.bundle.GetString, restSSRFClient); ok {
 		skillRegistry = skills.NewClawHubRegistry(skills.ClawHubConfig{
 			Enabled:         chEntry.Enabled,
 			BaseURL:         chEntry.BaseURL,
@@ -1016,77 +1124,77 @@ func setupAndStartServices(
 	// twice would double both boot cost and resident memory for no gain.
 	// nil only in tests that construct services without the boot path; every
 	// consumer below treats nil as "no catalog", never a 500.
-	providerCatalog := agentLoop.GetCapabilityCatalog()
+	stg.providerCatalog = stg.agentLoop.GetCapabilityCatalog()
 
-	api := &restAPI{
-		agentLoop:       agentLoop,
-		providerCatalog: providerCatalog, // ADR-067: the booted catalog (nil in non-boot tests)
-		allowedOrigin:   allowedOrigin,
-		onboardingMgr:   onboardingMgr,
+	stg.api = &restAPI{
+		agentLoop:       stg.agentLoop,
+		providerCatalog: stg.providerCatalog, // ADR-067: the booted catalog (nil in non-boot tests)
+		allowedOrigin:   stg.allowedOrigin,
+		onboardingMgr:   stg.onboardingMgr,
 		// M3: "unknown" is not "fresh install" — see the field's doc comment.
-		onboardingStateUnknown: onboardingStateUnknown,
-		homePath:               homePath,
-		taskStore:              tStore,
-		taskExecutor:           tExecutor,
-		liveTaskActivity:       tExecutor, // founder decision 2026-09-14: Task.last_activity_at
-		planStore:              planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
-		credStore:              credStore,
-		mediaStore:             runningServices.MediaStore,
-		ssrfChecker:            agent.GetSSRFChecker(agentLoop), // SEC-24: nil when SSRF disabled
-		sandboxResult:          sandboxResult,                   // immutable post-boot snapshot
-		appliedConfig:          mustDeepCopyConfig(cfg),         // boot-time snapshot for pending-restart diff
-		servedSubdirs:          runningServices.servedSubdirs,   // web_serve static-mode token registry
-		devServers:             runningServices.devServers,      // web_serve dev-mode process registry
-		approvalReg:            approvalReg,                     // in-process tool-approval registry (FR-016)
-		builtinRegistry:        builtinReg,                      // M16: central builtin registry (FR-001)
-		mcpRegistry:            mcpReg,                          // M16: central MCP registry (FR-001)
-		skillRegistry:          skillRegistry,                   // ClawHub marketplace (search + install-by-slug)
-		allowGodMode:           allowGodMode,                    // god-mode latch (2)
-		notifStore:             runningServices.notifStore,      // #264: notification center
-		auditor:                agentLoop.AuditLogger(),         // shared audit logger for REST mutations
-		selfWriteReg:           selfWriteReg,                    // suppress watcher reload on app-initiated writes
-		taskLock:               task.TaskFileLock,               // shared striped lock for board task RMW
+		onboardingStateUnknown: stg.onboardingStateUnknown,
+		homePath:               stg.homePath,
+		taskStore:              stg.tStore,
+		taskExecutor:           stg.tExecutor,
+		liveTaskActivity:       stg.tExecutor, // founder decision 2026-09-14: Task.last_activity_at
+		planStore:              stg.planStore, // ADR-049 D1: Plans REST surface (rest_plans.go) + plan_id FK check
+		credStore:              stg.credStore,
+		mediaStore:             stg.runningServices.MediaStore,
+		ssrfChecker:            agent.GetSSRFChecker(stg.agentLoop), // SEC-24: nil when SSRF disabled
+		sandboxResult:          stg.sandboxResult,                   // immutable post-boot snapshot
+		appliedConfig:          mustDeepCopyConfig(stg.cfg),         // boot-time snapshot for pending-restart diff
+		servedSubdirs:          stg.runningServices.servedSubdirs,   // web_serve static-mode token registry
+		devServers:             stg.runningServices.devServers,      // web_serve dev-mode process registry
+		approvalReg:            stg.approvalReg,                     // in-process tool-approval registry (FR-016)
+		builtinRegistry:        stg.builtinReg,                      // M16: central builtin registry (FR-001)
+		mcpRegistry:            stg.mcpReg,                          // M16: central MCP registry (FR-001)
+		skillRegistry:          skillRegistry,                       // ClawHub marketplace (search + install-by-slug)
+		allowGodMode:           stg.allowGodMode,                    // god-mode latch (2)
+		notifStore:             stg.runningServices.notifStore,      // #264: notification center
+		auditor:                stg.agentLoop.AuditLogger(),         // shared audit logger for REST mutations
+		selfWriteReg:           selfWriteReg,                        // suppress watcher reload on app-initiated writes
+		taskLock:               task.TaskFileLock,                   // shared striped lock for board task RMW
 	}
-	api.cronService.Store(runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
+	stg.api.cronService.Store(stg.runningServices.CronService) // #264: schedules CRUD (atomic.Pointer)
 	// D-107: the Library REST write handlers broadcast a library_changed WS
 	// frame after every landed mutation, so a second tab's folder listing
 	// reconciles without a reload. wsHandler was built earlier in boot; store
 	// its broadcast method behind the restAPI's nil-safe hook
 	// (library_change_broadcast.go) — nil until here, no-op after shutdownless
 	// tests that never wire it.
-	libraryChangeFn := func(f gen.LibraryChangedFrame) { wsHandler.broadcastLibraryChange(f) }
-	api.libraryChangeBroadcast.Store(&libraryChangeFn)
+	libraryChangeFn := func(f gen.LibraryChangedFrame) { stg.wsHandler.broadcastLibraryChange(f) }
+	stg.api.libraryChangeBroadcast.Store(&libraryChangeFn)
 	// ADR-067 FR-037 (T067-11): a catalog refresh invalidates the
 	// entitlement cache — the intersection behind every cached answer was
 	// computed against a document that is no longer the served one.
-	registerEntitlementCacheInvalidation(providerCatalog, api)
+	registerEntitlementCacheInvalidation(stg.providerCatalog, stg.api)
 	// Stash the api ref so RunContextWithOptions can update builtinRegistry
 	// after the M16 live-deps re-population (which creates a fresh *BuiltinRegistry
 	// that would otherwise not reach the already-constructed api).
-	runningServices.restAPIRef = api
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions", api.withAuth(api.HandleSessions))
+	stg.runningServices.restAPIRef = stg.api
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions", stg.api.withAuth(stg.api.HandleSessions))
 	// /api/v1/sessions/ handles: sessions CRUD AND the tool-results sub-resource
 	// GET /api/v1/sessions/{session_id}/tool-results/{ref} (dispatched inside HandleSessions).
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions/", api.withAuth(api.HandleSessions))
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/agents", api.withAuth(api.HandleAgents))
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/agents/", api.withAuth(api.HandleAgents))
-	runningServices.ChannelManager.RegisterHTTPHandler(
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/sessions/", stg.api.withAuth(stg.api.HandleSessions))
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/agents", stg.api.withAuth(stg.api.HandleAgents))
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/agents/", stg.api.withAuth(stg.api.HandleAgents))
+	stg.runningServices.ChannelManager.RegisterHTTPHandler(
 		"/api/v1/config",
-		api.withAuth(withRateLimit(configLimiter, api.HandleConfig)),
+		stg.api.withAuth(withRateLimit(configLimiter, stg.api.HandleConfig)),
 	)
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/skills", api.withAuth(api.HandleSkills))
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/skills/", api.withAuth(api.HandleSkills))
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/commands", api.withAuth(api.HandleListCommands))
-	runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/doctor", api.withAuth(api.HandleDoctor))
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/skills", stg.api.withAuth(stg.api.HandleSkills))
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/skills/", stg.api.withAuth(stg.api.HandleSkills))
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/commands", stg.api.withAuth(stg.api.HandleListCommands))
+	stg.runningServices.ChannelManager.RegisterHTTPHandler("/api/v1/doctor", stg.api.withAuth(stg.api.HandleDoctor))
 
 	// Ensure the default workspace exists (FR-1.6). Best-effort: a failure
 	// is logged but does not abort gateway startup.
 	// ownerUsername is taken from the first configured user (empty on fresh install — that is fine).
 	ownerUsername := ""
-	if len(cfg.Gateway.Users) > 0 {
-		ownerUsername = cfg.Gateway.Users[0].Username
+	if len(stg.cfg.Gateway.Users) > 0 {
+		ownerUsername = stg.cfg.Gateway.Users[0].Username
 	}
-	if wsErr := ensureDefaultWorkspace(homePath, ownerUsername, cfg); wsErr != nil {
+	if wsErr := ensureDefaultWorkspace(stg.homePath, ownerUsername, stg.cfg); wsErr != nil {
 		slog.Error("gateway: default workspace auto-creation failed", "error", wsErr)
 	}
 
@@ -1099,7 +1207,7 @@ func setupAndStartServices(
 	// all until manually added via a workspace's Team tab — previously only
 	// discoverable one per-turn refusal at a time. Surface the full list ONCE
 	// at boot, after workspaces are ensured, so it's visible up front instead.
-	logWorkspacelessAgents(homePath, cfg)
+	logWorkspacelessAgents(stg.homePath, stg.cfg)
 
 	// ADR-067 W3 (FR-030..FR-034a, FR-038a, FR-039, FR-080): open the index for
 	// every already-mounted knowledge base, push indexing progress over the
@@ -1108,24 +1216,27 @@ func setupAndStartServices(
 	// listener accepts connections. Interval 0 means FR-038a's six-hour default:
 	// there is no config key for it yet, and KnowledgeLifecycleOptions.DriftInterval
 	// is where one would be passed in.
-	startKnowledgeLifecycle(homePath, wsHandler, 0,
-		knowledgeDriftNotifier(runningServices.notifStore, agentLoop, agentLoop.GetConfig))
+	startKnowledgeLifecycle(stg.homePath, stg.wsHandler, 0,
+		knowledgeDriftNotifier(stg.runningServices.notifStore, stg.agentLoop, stg.agentLoop.GetConfig))
 
 	// Recover tasks left "in_progress" by a crashed/abandoned previous process.
 	// Runs before the HTTP listener accepts connections (StartAll, below), so no
 	// handler can race reconciliation.
-	api.reconcileStuckTasks()
+	stg.api.reconcileStuckTasks()
 
 	// Drop blocked_by edges pointing at task files that no longer exist, so the
 	// dependency graph self-heals on boot (a waiting task gated only on an orphan
 	// would otherwise never advance). Same pre-listener safety window as above.
-	api.reconcileOrphanBlockedByEdges()
+	stg.api.reconcileOrphanBlockedByEdges()
 
 	// Register additional endpoints for frontend features.
 	// These return proper JSON responses instead of letting the SPA catch-all
 	// serve HTML (which causes "Unexpected token '<'" JSON parse errors).
-	api.registerAdditionalEndpoints(runningServices.ChannelManager)
+	stg.api.registerAdditionalEndpoints(stg.runningServices.ChannelManager)
+}
 
+// prepareListener registers the remaining HTTP routes and middleware, then starts the channel listener.
+func (stg *setupAndStartServicesState) prepareListener() (*services, error, bool) {
 	// Register /preview/ (canonical web_serve URL) on the MAIN mux (ADR-044,
 	// FR-001/FR-002/FR-003). There is no separate preview listener anymore —
 	// /preview/ shares gateway.port with the SPA and /api/v1/*. It is
@@ -1135,18 +1246,18 @@ func setupAndStartServices(
 	// reads). HandlePreview itself checks cfg.IsPreviewEnabled() live on every
 	// request and 404s when disabled (FR-006) — no restart required to flip it.
 	// All handlers live in rest_preview.go.
-	api.registerPreviewEndpoints(runningServices.ChannelManager)
+	stg.api.registerPreviewEndpoints(stg.runningServices.ChannelManager)
 
 	// Omnipus start page — what a fresh browser tab opens instead of
 	// about:blank. Registered bare (no auth) for the same structural reason as
 	// /preview/: the client is the managed headless Chrome, which carries no
 	// session cookie, and the page is static and non-sensitive. See
 	// browser_start_page.go.
-	api.registerBrowserStartPage(runningServices.ChannelManager)
+	stg.api.registerBrowserStartPage(stg.runningServices.ChannelManager)
 
 	// Catch-all for any /api/ path not registered — returns JSON 404 instead of SPA HTML.
 	// Do not echo r.URL.Path in the response; that leaks internal routing details.
-	runningServices.ChannelManager.RegisterHTTPHandler(
+	stg.runningServices.ChannelManager.RegisterHTTPHandler(
 		"/api/",
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
@@ -1168,17 +1279,17 @@ func setupAndStartServices(
 	// feeds GET /api/v1/state, which is what keeps the browser's list and the
 	// browser's policy equal (EMB-080).
 	if spaHandler := newSPAHandler(func() []string {
-		return ResolveVideoEmbedHosts(agentLoop.GetConfig())
+		return ResolveVideoEmbedHosts(stg.agentLoop.GetConfig())
 	}); spaHandler != nil {
-		runningServices.ChannelManager.RegisterHTTPHandler("/", spaHandler)
+		stg.runningServices.ChannelManager.RegisterHTTPHandler("/", spaHandler)
 	} else {
 		fmt.Println("Note: No embedded SPA (run 'pnpm build' in web/frontend to enable UI)")
 	}
 
 	// Wrap the HTTP server handler with config snapshot middleware so all
 	// request handlers see a consistent config even during hot-reload.
-	if err = runningServices.ChannelManager.WrapHTTPHandler(api.configSnapshotMiddleware); err != nil {
-		return nil, fmt.Errorf("wrapping HTTP handler: %w", err)
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(stg.api.configSnapshotMiddleware); stg.err != nil {
+		return nil, fmt.Errorf("wrapping HTTP handler: %w", stg.err), true
 	}
 	// F-13 / ADR-044: /preview/ is registered on this SAME main mux (see
 	// registerPreviewEndpoints above), so the WrapHTTPHandler(configSnapshotMiddleware)
@@ -1207,11 +1318,11 @@ func setupAndStartServices(
 		// honor an operator's real gateway.trust_xff setting in its audit log
 		// instead of silently defaulting to false. See clientIPWithLiveFallback's
 		// doc comment (rest_auth.go) for the full trace.
-		middleware.WithClientIPFunc(api.clientIPWithLiveFallback),
+		middleware.WithClientIPFunc(stg.api.clientIPWithLiveFallback),
 		middleware.WithReporter(func(r *http.Request, sourceIP, route string) {
 			// Best-effort audit log of CSRF mismatches (SEC-15). Never blocks
 			// or crashes the request path — the middleware already returns 403.
-			logger := api.agentLoop.AuditLogger()
+			logger := stg.api.agentLoop.AuditLogger()
 			if logger == nil {
 				slog.Warn("csrf: token mismatch (no audit logger)",
 					"source_ip", sourceIP, "route", redactRequestPath(route), "method", r.Method)
@@ -1234,8 +1345,8 @@ func setupAndStartServices(
 			}
 		}),
 	)
-	if err = runningServices.ChannelManager.WrapHTTPHandler(csrfMW); err != nil {
-		return nil, fmt.Errorf("wrapping HTTP handler with CSRF: %w", err)
+	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(csrfMW); stg.err != nil {
+		return nil, fmt.Errorf("wrapping HTTP handler with CSRF: %w", stg.err), true
 	}
 
 	// Wire the /reload trigger BEFORE StartAll launches the HTTP listener.
@@ -1247,32 +1358,22 @@ func setupAndStartServices(
 	// caller reuses runningServices.reloadTrigger / .manualReloadChan (it does
 	// NOT re-create them). restartServices reuses this same HealthServer, so
 	// reloadFunc is never reset to nil after this point.
-	runningServices.manualReloadChan = make(chan struct{}, 1)
-	runningServices.reloadTrigger = newReloadTrigger(runningServices, agentLoop)
-	runningServices.HealthServer.SetReloadFunc(runningServices.reloadTrigger)
+	stg.runningServices.manualReloadChan = make(chan struct{}, 1)
+	stg.runningServices.reloadTrigger = newReloadTrigger(stg.runningServices, stg.agentLoop)
+	stg.runningServices.HealthServer.SetReloadFunc(stg.runningServices.reloadTrigger)
 
-	if err = runningServices.ChannelManager.StartAll(context.Background()); err != nil {
-		return nil, fmt.Errorf("error starting channels: %w", err)
+	if stg.err = stg.runningServices.ChannelManager.StartAll(context.Background()); stg.err != nil {
+		return nil, fmt.Errorf("error starting channels: %w", stg.err), true
 	}
+	return nil, nil, false
+}
 
-	// The HTTP listener is now accepting connections. If any later boot step
-	// fails and this function returns an error, tear the started services down
-	// first — otherwise the caller aborts boot on the error and the accepting
-	// listener goroutine (plus device service / drains) leaks. Registered only
-	// after StartAll so it never fires when the listener was not started, and
-	// gated on retErr so the success path leaves the services running.
-	// stopAndCleanupServices nil-checks each subsystem, so it is safe on a
-	// partially-started state.
-	defer func() {
-		if retErr != nil {
-			stopAndCleanupServices(runningServices, 5*time.Second, false)
-		}
-	}()
-
+// registerProcess starts post-listener catalog work, writes process discovery files, and starts the device service.
+func (stg *setupAndStartServicesState) registerProcess() (*services, error, bool) {
 	// Boot logging: main listener (ADR-044: /preview/ shares this same listener,
 	// no separate preview port/address to log). preview_enabled is read live
 	// (not restart-gated), so this line only reflects the value at boot time.
-	mainAddr := fmt.Sprintf("%s:%d", cfg.Gateway.Host, cfg.Gateway.Port)
+	mainAddr := fmt.Sprintf("%s:%d", stg.cfg.Gateway.Host, stg.cfg.Gateway.Port)
 	slog.Info("gateway listening on " + mainAddr)
 
 	// ADR-067 FR-008: the catalog refresh loop starts HERE — after StartAll
@@ -1300,25 +1401,25 @@ func setupAndStartServices(
 	// RunContext must not return while a refresh is still between "pull
 	// completed" and "file written". startCatalogRefreshLoop hands shutdown
 	// a cancel plus a done channel it waits on (step 1, shutdown.go).
-	runningServices.catalogRefreshCancel, runningServices.catalogRefreshDone = startCatalogRefreshLoop(
-		ctx,
-		providerCatalog,
-		catalog.NewFileStore(homePath),
+	stg.runningServices.catalogRefreshCancel, stg.runningServices.catalogRefreshDone = startCatalogRefreshLoop(
+		stg.ctx,
+		stg.providerCatalog,
+		catalog.NewFileStore(stg.homePath),
 		catalogRefreshInterval,
 		catalogRefreshTimeout,
 		catalogStartupSkipWindow,
 	)
-	if cfg.IsPreviewEnabled() {
+	if stg.cfg.IsPreviewEnabled() {
 		slog.Info("preview enabled: /preview/ served on the main listener")
 	} else {
 		slog.Info("preview disabled by config (gateway.preview_enabled=false)")
 	}
 
 	// Write port file so external callers (e.g. eval-runner) can discover the bound port.
-	portFile := filepath.Join(cfg.AgentHomeBasePath(), "gateway.port")
-	portData := strconv.Itoa(cfg.Gateway.Port)
+	portFile := filepath.Join(stg.cfg.AgentHomeBasePath(), "gateway.port")
+	portData := strconv.Itoa(stg.cfg.Gateway.Port)
 	if writeErr := os.WriteFile(portFile, []byte(portData+"\n"), 0o600); writeErr != nil {
-		return nil, fmt.Errorf("write gateway.port: %w", writeErr)
+		return nil, fmt.Errorf("write gateway.port: %w", writeErr), true
 	}
 
 	// Self-register this process's PID so that `omnipus stop` and Status work
@@ -1326,46 +1427,50 @@ func setupAndStartServices(
 	// via `omnipus start`). WritePID uses an atomic rename so a concurrent Status
 	// call never reads a partial write. MAJOR-2: without this, a hand-started
 	// gateway leaves no PID file and `omnipus stop` reports "not running".
-	if pidErr := daemon.WritePID(homePath, os.Getpid()); pidErr != nil {
+	if pidErr := daemon.WritePID(stg.homePath, os.Getpid()); pidErr != nil {
 		// Non-fatal: the gateway is already serving traffic. Log prominently so
 		// the operator knows that `omnipus stop` will not find this process.
 		slog.Warn("gateway: failed to write self PID file — `omnipus stop` will not track this process",
-			"pid", os.Getpid(), "home", homePath, "error", pidErr)
+			"pid", os.Getpid(), "home", stg.homePath, "error", pidErr)
 	} else {
-		slog.Info("gateway: registered self PID", "pid", os.Getpid(), "home", homePath)
+		slog.Info("gateway: registered self PID", "pid", os.Getpid(), "home", stg.homePath)
 	}
 
 	fmt.Printf(
 		"✓ Health endpoints available at http://%s:%d/health, /ready and /reload (POST)\n",
-		cfg.Gateway.Host,
-		cfg.Gateway.Port,
+		stg.cfg.Gateway.Host,
+		stg.cfg.Gateway.Port,
 	)
 
-	stateManager := state.NewManager(cfg.AgentHomeBasePath())
-	runningServices.DeviceService = devices.NewService(devices.Config{
-		Enabled:    cfg.Devices.Enabled,
-		MonitorUSB: cfg.Devices.MonitorUSB,
+	stateManager := state.NewManager(stg.cfg.AgentHomeBasePath())
+	stg.runningServices.DeviceService = devices.NewService(devices.Config{
+		Enabled:    stg.cfg.Devices.Enabled,
+		MonitorUSB: stg.cfg.Devices.MonitorUSB,
 	}, stateManager)
-	runningServices.DeviceService.SetBus(msgBus)
+	stg.runningServices.DeviceService.SetBus(stg.msgBus)
 	// Invariant: when cfg.Devices.Enabled==true, a Start failure is fatal and
 	// propagated to the caller (Run returns the error). When disabled, Start
 	// failures are only warnings. A unit test for this path is not included
 	// because devices.Service is a concrete struct (not an interface) and
 	// mocking it would require invasive refactoring; the behavior is exercised
 	// by integration tests that configure a real USB monitor on supported hosts.
-	if err = runningServices.DeviceService.Start(context.Background()); err != nil {
-		if cfg.Devices.Enabled {
-			return nil, fmt.Errorf("device service: %w", err)
+	if stg.err = stg.runningServices.DeviceService.Start(context.Background()); stg.err != nil {
+		if stg.cfg.Devices.Enabled {
+			return nil, fmt.Errorf("device service: %w", stg.err), true
 		}
 		logger.WarnCF(
 			"device",
 			"device service start failed (devices disabled, continuing)",
-			map[string]any{"error": err.Error()},
+			map[string]any{"error": stg.err.Error()},
 		)
-	} else if cfg.Devices.Enabled {
+	} else if stg.cfg.Devices.Enabled {
 		fmt.Println("✓ Device event service started")
 	}
+	return nil, nil, false
+}
 
+// startBackgroundServices starts the shutdown-aware orphan and browser cleanup loops and returns the running services.
+func (stg *setupAndStartServicesState) startBackgroundServices() (*services, error) {
 	// Start the orphan GC scheduler: runs Library.OrphanGC across every
 	// workspace media library every hour (best-effort). A single failure
 	// (e.g. corrupted manifest) does not abort the loop — the error is
@@ -1385,21 +1490,21 @@ func setupAndStartServices(
 		// t.TempDir() cleanup of homePath.
 		for {
 			select {
-			case <-ctx.Done():
+			case <-stg.ctx.Done():
 				return
 			case <-ticker.C:
 			}
-			a := agentLoop
+			a := stg.agentLoop
 			if a == nil {
 				continue
 			}
-			wsFiles, wsErr := listWorkspaceFiles(homePath)
+			wsFiles, wsErr := listWorkspaceFiles(stg.homePath)
 			if wsErr != nil {
 				slog.Warn("orphan-gc: list workspaces failed", "error", wsErr)
 				continue
 			}
 			for _, ws := range wsFiles {
-				lib, libErr := library.New(homePath, ws.ID)
+				lib, libErr := library.New(stg.homePath, ws.ID)
 				if libErr != nil {
 					slog.Warn("orphan-gc: open library", "workspace_id", ws.ID, "error", libErr)
 					continue
@@ -1460,7 +1565,7 @@ func setupAndStartServices(
 						"panic", fmt.Sprintf("%v", r))
 				}
 			}()
-			a := agentLoop
+			a := stg.agentLoop
 			if a == nil {
 				return
 			}
@@ -1497,7 +1602,7 @@ func setupAndStartServices(
 		}
 		for {
 			select {
-			case <-ctx.Done():
+			case <-stg.ctx.Done():
 				return
 			case <-ticker.C:
 				sweep()
@@ -1505,7 +1610,7 @@ func setupAndStartServices(
 		}
 	}()
 
-	return runningServices, nil
+	return stg.runningServices, nil
 }
 
 func (catalogLogAdapter) Info(msg string, args ...any) {
