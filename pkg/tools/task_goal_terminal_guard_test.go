@@ -73,10 +73,10 @@ var knownStatusWriters = []statusWriter{
 	{where: "pkg/agent.TaskExecutor.completeTaskWithResult", mustHook: true},
 	{where: "pkg/agent.TaskExecutor.failTask", mustHook: true},
 	{where: "pkg/agent.PlanEngine.cancelMemberLocked", mustHook: true},
-	{where: "pkg/gateway.restAPI.handleTaskPatch", mustHook: true},
+	{where: "pkg/gateway.taskPatch.buildPatch", mustHook: true},
 	{where: "pkg/gateway.restAPI.reconcileStuckTasks", mustHook: true},
-	{where: "pkg/tools.TaskUpdateTool.Execute", mustHook: true},
-	{where: "pkg/sysagent/tools.TaskUpdateTool.Execute", mustHook: true},
+	{where: "pkg/tools.taskUpdateToolExecute.buildPatchFields", mustHook: true},
+	{where: "pkg/sysagent/tools.taskUpdateToolExecute.buildPatch", mustHook: true},
 
 	// ---- non-terminal writers: each states why it cannot reach done/failed --
 	{
@@ -96,6 +96,11 @@ var knownStatusWriters = []statusWriter{
 		why: "writes task.StatusInbox only — detaching a member from a deleted plan. " +
 			"Its illegal-transition fallback drops the Status field entirely and " +
 			"patches plan_id alone, so a terminal member is never re-written here.",
+	},
+	{
+		where: "pkg/gateway.taskPatch.launchIfStarted",
+		why: "writes only a launch-failure rollback to the task's prior non-terminal status. " +
+			"The path is entered only after a transition into in_progress, so the prior status cannot be terminal.",
 	},
 	{
 		where: "pkg/tools.TaskRunTool.Execute",
@@ -228,13 +233,23 @@ func scanTaskStatusWriters(t *testing.T) map[string]bool {
 		if pErr != nil {
 			return pErr
 		}
+		patchStateTypes := taskPatchStateTypes(file)
+		receiverHooks := map[string]bool{}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if ok && fn.Body != nil && callsGoalHook(fn) {
+				receiverHooks[receiverTypeName(fn)] = true
+			}
+		}
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Body == nil {
 				continue
 			}
-			if writesPatchStatus(fn) {
-				out[pkgDir+"."+funcKey(fn)] = callsGoalHook(fn)
+			directWrite := writesPatchStatus(fn)
+			stateWrite := writesReceiverPatchStatus(fn, patchStateTypes)
+			if directWrite || stateWrite {
+				out[pkgDir+"."+funcKey(fn)] = callsGoalHook(fn) || (stateWrite && receiverHooks[receiverTypeName(fn)])
 			}
 		}
 		return nil
@@ -247,6 +262,92 @@ func scanTaskStatusWriters(t *testing.T) map[string]bool {
 			"and a guard that guards nothing passes forever")
 	}
 	return out
+}
+
+// taskPatchStateTypes returns state structs that carry a task.Patch field.
+// Extracted stage methods write receiver.patch.Status rather than a local
+// task.Patch, so the guard must follow that typed field across the pipeline.
+func taskPatchStateTypes(file *ast.File) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			typeSpec, ok := spec.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			st, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			for _, field := range st.Fields.List {
+				if !isTaskPatchType(field.Type) {
+					continue
+				}
+				if out[typeSpec.Name.Name] == nil {
+					out[typeSpec.Name.Name] = map[string]bool{}
+				}
+				for _, name := range field.Names {
+					out[typeSpec.Name.Name][name.Name] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+func receiverTypeName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	typ := fn.Recv.List[0].Type
+	if star, ok := typ.(*ast.StarExpr); ok {
+		typ = star.X
+	}
+	if ident, ok := typ.(*ast.Ident); ok {
+		return ident.Name
+	}
+	return ""
+}
+
+func writesReceiverPatchStatus(fn *ast.FuncDecl, patchStateTypes map[string]map[string]bool) bool {
+	fields := patchStateTypes[receiverTypeName(fn)]
+	if len(fields) == 0 || fn.Recv == nil || len(fn.Recv.List[0].Names) == 0 {
+		return false
+	}
+	receiverName := fn.Recv.List[0].Names[0].Name
+	written := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for i, lhs := range assign.Lhs {
+			status, ok := lhs.(*ast.SelectorExpr)
+			if !ok || status.Sel.Name != "Status" {
+				continue
+			}
+			if i < len(assign.Rhs) {
+				if ident, ok := assign.Rhs[i].(*ast.Ident); ok && ident.Name == "nil" {
+					continue // clearing Status prevents a write; it cannot transition the task
+				}
+			}
+			patchField, ok := status.X.(*ast.SelectorExpr)
+			if !ok || !fields[patchField.Sel.Name] {
+				continue
+			}
+			base, ok := patchField.X.(*ast.Ident)
+			if ok && base.Name == receiverName {
+				written = true
+				return false
+			}
+		}
+		return true
+	})
+	return written
 }
 
 // funcKey renders a FuncDecl as "Receiver.Name" (or just "Name"), pointer

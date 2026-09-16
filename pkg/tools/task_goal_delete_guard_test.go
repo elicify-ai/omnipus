@@ -87,7 +87,7 @@ var knownTaskDeleters = []taskDeleter{
 			"entry owns no goal record.",
 	},
 	{
-		where: "pkg/gateway.restAPI.HandleUpload",
+		where: "pkg/gateway.restAPIHandleUpload.finishWorkspaceUpload",
 		why: "rolls back already-staged media-library entries when a later file in the " +
 			"same multi-file upload fails. Media entries, not tasks.",
 	},
