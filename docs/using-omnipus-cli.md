@@ -1,77 +1,77 @@
-# Using Omnipus from the command line
+# Using the Omnipus command line
 
-Omnipus ships as a single binary called `omnipus`. This guide covers everything you
-need to run Omnipus from a terminal: set it up, talk to your agents, manage secrets,
-and run it as a persistent server.
+Omnipus ships as a single binary called `omnipus`. This page covers the terminal half: install, setup, one-shot tasks, secrets, and running it as a server. Prefer a graphical interface? Start with [Using Omnipus from the web UI](using-omnipus-ui.md).
 
-> Prefer a graphical app? See [Using Omnipus from the web UI](using-omnipus-ui.md).
+## What it is
 
-Every block below is copy-paste ready.
+One binary, a small set of commands. `omnipus <agent> "<prompt>"` runs a one-shot task. The named commands: `onboard` (first-time setup), `start` and `stop` (the server), `credentials` (secrets), `doctor` and `audit` (health and the security log), `records import-obsidian` (import notes — see [the knowledge base](knowledge.md)), and `version`.
 
----
+## How to install the binary
 
-## 1. Install the binary
+1. Run the installer:
 
-```bash
-curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh
-```
+   ```bash
+   curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh
+   ```
 
-No sudo? Send it somewhere in your home directory instead:
+   The script downloads the binary into `/usr/local/bin`.
 
-```bash
-OMNIPUS_INSTALL_DIR="$HOME/.local/bin" curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh
-```
+2. No write access there? Install into your home directory instead:
 
-For the full platform matrix (macOS, Linux, ARM, manual downloads, Docker), see the
-[install section of the project README](../README.md#install).
+   ```bash
+   OMNIPUS_INSTALL_DIR="$HOME/.local/bin" curl -sSL https://raw.githubusercontent.com/elicify-ai/omnipus/main/scripts/install.sh | sh
+   ```
 
-Confirm it worked:
+3. Confirm with `omnipus version`, which prints the build version.
 
-```bash
-omnipus version
-# omnipus v1.x.x  (commit abc1234, built 2026-05-30)
-```
+Other platforms: see the [project README](../README.md#install).
 
----
+## How to set up without the web wizard
 
-## 2. Set up without the web wizard
+The first run needs an AI provider, an API key, a default model, and an admin account. The wizard collects all four:
 
-The first time you run Omnipus, it needs an AI provider, an API key, a default model,
-and an admin account. The terminal wizard handles all of that:
+1. Start it:
 
-```bash
-omnipus onboard
-```
+   ```bash
+   omnipus onboard
+   ```
 
-It walks you through, step by step:
+2. Pick a provider from the menu:
 
-```text
-Welcome to Omnipus.
-? Pick a provider (1-4):  1) OpenRouter  2) OpenAI  3) Anthropic  4) Other
-> 1
-? Paste your API key:     ********************
-  Testing connection...   OK
-? Default model:          openrouter/google/gemini-2.5-flash
-? Admin username:         daniel
-? Admin password:         ******** (min 8 characters)
-Setup complete. You can now start Omnipus.
-Access your dashboard at: http://localhost:5000
-```
+   ```text
+   Select your LLM provider:
+     1) OpenRouter
+     2) Anthropic
+     3) OpenAI
+     4) Google Gemini
+     5) Groq
+     6) DeepSeek
+     7) Other (enter provider id)
+   Choice [1]:
+   ```
 
-### Headless setup (no prompts) — for servers and scripts
+3. Enter your API key. Input is hidden, and the wizard checks the key against the provider, asking again if it is rejected.
 
-On an unattended box (Docker entrypoint, CI, a remote VPS) pass all answers as flags:
+4. Enter a model, or press Enter to accept the provider's default: the first model in its catalog that can use tools.
+
+5. Enter an admin username and a password of at least 8 characters. When the wizard prints `Onboarding complete.`, you are done.
+
+On an already-configured system it prints `Onboarding is already complete; nothing to do.` A fresh install can also be set up from the browser, which runs the same wizard.
+
+### Headless setup — no prompts
+
+Pass every answer as a flag:
 
 ```bash
 omnipus onboard --non-interactive \
   --provider openrouter \
   --api-key 'sk-or-v1-...' \
-  --model 'openrouter/google/gemini-2.5-flash' \
+  --model 'z-ai/glm-5v-turbo' \
   --admin-username admin \
   --admin-password 'choose-a-strong-one'
 ```
 
-To keep secrets out of your shell history:
+To keep secrets out of your shell history, feed them through stdin instead:
 
 ```bash
 printf 'sk-or-v1-...\nchoose-a-strong-one\n' | omnipus onboard --non-interactive \
@@ -81,192 +81,128 @@ printf 'sk-or-v1-...\nchoose-a-strong-one\n' | omnipus onboard --non-interactive
   --admin-password-stdin
 ```
 
----
+## How to start and stop the server
 
-## 3. Start the server
+1. Start Omnipus:
 
-This starts Omnipus: the web app, the API, and all your chat channels.
+   ```bash
+   omnipus start
+   ```
 
-```bash
-omnipus start
-# http://localhost:5000        (web UI + API)
-# http://192.168.1.10:5000    (LAN — shown when bound to 0.0.0.0)
-# http://localhost:5001        (agent iframe previews)
-```
+   The web app, the API, and agent previews all load from **one port, 5000 by default**. There is no second port. Before the server comes up, it prints where to connect:
 
-> The old command `omnipus gateway` is kept as an alias and continues to work, but
-> `omnipus start` is the preferred name going forward.
+   ```text
+   Open the dashboard / log in as admin:
+     This machine:   http://localhost:5000
+     Hint: bound to localhost — set gateway.host=0.0.0.0 to allow other devices
+   ```
+
+2. To reach Omnipus from other devices, set `gateway.host` to `0.0.0.0`; the banner then lists them too.
+
+3. Stop it from another terminal:
+
+   ```bash
+   omnipus stop
+   ```
+
+   You see `Omnipus gateway stopped.` — or `No Omnipus gateway is running.`
+
+`omnipus start` runs in the foreground, which suits a systemd service. The older spelling `omnipus gateway` still works as an alias. For HTTPS behind nginx or Caddy, see [Reverse proxy setup](operations/reverse-proxy.md); for containers, [Running with Docker](docker.md).
 
 Useful flags:
 
 | Flag | What it does |
-|------|--------------|
+|---|---|
 | `-d`, `--debug` | Verbose logs |
-| `-T`, `--no-truncate` | Don't shorten long log lines |
-| `--allow-empty` | Boot even if no provider is configured yet (first-run) |
+| `-T`, `--no-truncate` | Stop long values being cut in debug logs; requires `-d` |
+| `--sandbox <mode>` | Override the sandbox mode for this run: `enforce`, `permissive`, or `off` |
 
-```bash
-# With debug logging
-omnipus start -d
-```
+## How to run a one-shot task from the terminal
 
-To expose Omnipus on a real domain (HTTPS, behind nginx or Caddy), follow
-[Reverse proxy setup](operations/reverse-proxy.md).
+One-shot tasks need the server running.
 
----
+1. Send a task to a named agent:
 
-## 4. Run a one-shot task from the terminal
+   ```bash
+   omnipus jim "Summarize the open GitHub issues in elicify-ai/omnipus"
+   ```
 
-With the server running, you can send a task directly to a named agent and get
-the answer back in your terminal — no browser required:
+2. To use a different model for this one turn, add `--model`:
 
-```bash
-# Talk to a specific agent
-omnipus jim "Summarise the open GitHub issues in elicify-ai/omnipus"
+   ```bash
+   omnipus mia --model openrouter/glm-5.2 "Draft a welcome email"
+   ```
 
-# Override the model for this turn
-omnipus mia --model openrouter/google/gemini-2.5-flash "Draft a welcome email"
-```
-
-The agent's reply streams to **stdout**; tool activity and progress go to **stderr**,
-so you can pipe or redirect cleanly:
+The reply streams to stdout; tool activity and progress go to stderr, so you can redirect cleanly:
 
 ```bash
 omnipus jim "List the top 5 files by size" > files.txt
 ```
 
-Run `omnipus` (no arguments) to see the available agents:
+Run `omnipus` with no arguments to list the agents you can address, by ID and name — on a fresh install that is `mia`, `jim`, `ava`, and `ray`.
+
+Some tools, such as an agent's shell, require approval. Without `--yes` they are denied and the run continues; with it, approvals are granted for this run only:
 
 ```bash
-omnipus
-# Available agents:
-#   mia    Mia — your primary assistant
-#   jim    Jim — coding and file tasks
-#   ray    Ray — research and web search
-#   ava    Ava — builder and orchestrator
-#
-# Usage: omnipus <agent> "<prompt>" [--model <slug>]
-```
-
-### Ask-policy tools in one-shot mode
-
-Some tools (like Jim's shell) require explicit approval. Without `--yes` the tool
-is auto-denied and the run continues:
-
-```bash
-# Deny any approval-required tools and continue
-omnipus jim "Fix the bug in main.go"
-
-# Auto-approve approval-required tools for this run
 omnipus jim --yes "Run the test suite and fix failures"
 ```
 
----
+## How to manage API keys and secrets
 
-## 5. Manage API keys and secrets safely
-
-Omnipus keeps your API keys and other secrets in an encrypted vault — they are never
-written in plain text and never printed back to you.
+Secrets live in an encrypted credential vault. Values are never written in plain text and never printed back.
 
 ```bash
-# Add or update a secret
 omnipus credentials set OPENAI_API_KEY sk-...
-omnipus credentials set ANTHROPIC_API_KEY sk-ant-...
 omnipus credentials set TELEGRAM_BOT_TOKEN 123456:ABC...
-
-# See which secrets exist (names only — values are never shown)
-omnipus credentials list
-# OPENAI_API_KEY      (set)
-# TELEGRAM_BOT_TOKEN  (set)
-
-# Remove one (asks you to confirm)
-omnipus credentials delete OPENAI_API_KEY
-
-# Re-encrypt every stored secret under a new passphrase
-omnipus credentials rotate
+omnipus credentials list          # names only
+omnipus credentials delete OPENAI_API_KEY   # asks to confirm
+omnipus credentials rotate        # new passphrase
 ```
 
-The vault is locked with a master key. Keep a backup of it somewhere safe — without
-it, the encrypted secrets cannot be recovered. For details, see
-[Credential encryption](credential_encryption.md).
-
----
-
-## 6. Health and safety checks
-
-```bash
-# Check your configuration for common security and safety problems
-omnipus doctor
-
-# Review the security and activity log
-omnipus audit
-
-# Walk the audit log and verify the HMAC chain
-omnipus audit verify
-```
-
-Run `omnipus doctor` after any big config change, and especially before exposing
-the gateway to the internet — it flags risky settings in plain language.
-
----
-
-## 7. Headless and server tips
-
-### Run it under systemd
-
-Create a service that runs `omnipus start` and keeps it alive across reboots. Point
-your reverse proxy at it for HTTPS — see [Reverse proxy setup](operations/reverse-proxy.md).
-
-### Or run it in Docker
-
-See [Running with Docker](docker.md).
-
-### Pre-provision the master key for unattended starts
-
-On a headless box you can supply the master key through an environment variable:
+The vault is locked with a master key. Keep a backup of it — without it, the secrets cannot be recovered. See [Credential encryption](credential_encryption.md). On unattended servers, supply the master key as an environment variable instead of a passphrase:
 
 ```bash
 export OMNIPUS_MASTER_KEY=<64-hex-char-key>
 omnipus start
 ```
 
-See [Credential encryption](credential_encryption.md) for details.
-
-### Watch the logs while you set things up
+## How to check configuration health
 
 ```bash
-omnipus start -d --no-truncate
+omnipus doctor        # common security and safety issues, in plain language
+omnipus audit         # the security and activity log
+omnipus audit verify  # verify the log has not been tampered with
 ```
 
----
+Run `omnipus doctor` after any big configuration change, and before exposing the server to the internet.
 
-## 8. What the CLI can do
+## CLI or web app?
 
-| Want to… | CLI | Web app |
+Most jobs can be done from either place.
+
+| Want to… | Command line | Web app |
 |---|---|---|
-| Set up Omnipus for the first time | ✅ `omnipus onboard` | ✅ web wizard |
-| Start the server | ✅ `omnipus start` | — |
-| Run a one-shot task | ✅ `omnipus <agent> "<prompt>"` | ✅ chat UI |
-| Override the model for one turn | ✅ `--model <slug>` | ✅ model picker |
-| Manage API keys securely | ✅ `omnipus credentials set/list/delete/rotate` | ✅ Settings → Providers |
-| Check configuration health | ✅ `omnipus doctor` | — |
-| Review the audit log | ✅ `omnipus audit [verify]` | — |
-| Chat in the browser | — | ✅ |
-| Create / edit custom agents | — | ✅ (a form, or ask Ava) |
-| Connect channels (Telegram, Discord, Slack…) | — | ✅ Connectors → Configure |
-| Browse past sessions | — | ✅ history panel |
-| Task board (Command Center) | — | ✅ |
-| Add MCP servers | — | ✅ Settings → MCP |
-| Set your preferences | — | ✅ Settings → Profile |
+| Start or stop the server | `omnipus start` / `omnipus stop` | — |
+| Run a one-off task | `omnipus <agent> "<prompt>"` | Chat |
+| Pick a model for one run | `--model <slug>` | The model picker in chat |
+| Manage API keys | `omnipus credentials …` | Settings → Providers |
+| Review the audit log | `omnipus audit` | Settings → Security |
+| Create and edit agents | — | The Agents screen |
+| Connect Telegram, Discord, Slack and more | — | The Connectors screen, Configure |
+| Add MCP servers | — | The Skills screen |
+| Follow task work | — | A workspace's Board and Calendar |
+| Set your preferences | — | Settings → Profile |
 
----
+## Limits and things to watch
 
-## 9. Where to go next
+- **One-shot tasks need a running server.** If it is down, the command prints `Omnipus isn't running — start it with: omnipus start`. Runs also time out after five minutes by default; change it with `--timeout <duration>`.
+- **Talking to a remote server is not supported yet.** The `--url` flag exists but is reserved.
+- **Command names shadow agent names, and worker agents cannot be addressed directly.** An agent named `start` cannot be run from the terminal; rename it or use the web app. `omnipus` with no arguments lists the agents you can run.
 
-[Getting started](getting-started.md) is the quickest path from zero to your first chat.
+## Related pages
 
-[Using Omnipus from the web UI](using-omnipus-ui.md) covers the graphical half of this guide.
-
-[Concepts](concepts.md) explains the agents, sessions, tools, and how routing works.
-
-[Troubleshooting](troubleshooting.md) is the place to start when something doesn't behave.
+- [Getting started](getting-started.md) — zero to your first chat.
+- [Using Omnipus from the web UI](using-omnipus-ui.md) — the graphical half of this guide.
+- [Concepts](concepts.md) — the agents, sessions, tools, and how routing works.
+- [Troubleshooting](troubleshooting.md) — for when something misbehaves.
+- [The knowledge base](knowledge.md) — where imported notes and records live.
