@@ -73,28 +73,67 @@ func (a *restAPI) HandleMCPTools(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, servers)
 }
 
+// restAPIUpdateAgentTools carries the shared state of updateAgentTools across its stages.
+type restAPIUpdateAgentTools struct {
+	a               *restAPI
+	w               http.ResponseWriter
+	r               *http.Request
+	agentID         string
+	cfg             *config.Config
+	req             gen.AgentToolsUpdateRequest
+	roundTrip       bool
+	builtinPolicies map[string]string
+	mcpServers      []struct {
+		ID    string
+		Tools []string
+	}
+}
+
 // updateAgentTools handles PUT /api/v1/agents/{id}/tools — replaces the
 // agent's tool visibility config.
 func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agentID string) {
-	cfg := a.agentLoop.GetConfig()
+	rau := &restAPIUpdateAgentTools{a: a, w: w, r: r, agentID: agentID}
+
+	if rau.validateRequest() {
+		return
+	}
+
+	if rau.normalizeBuiltinPolicies() {
+		return
+	}
+
+	if rau.validateMCPBindings() {
+		return
+	}
+
+	if rau.persistPolicy() {
+		return
+	}
+
+	rau.reloadAndRespond()
+}
+
+// validateRequest checks the target agent, authorization, and request body before any policy changes.
+func (rau *restAPIUpdateAgentTools) validateRequest() bool {
+	rau.cfg = rau.a.agentLoop.GetConfig()
 	found := false
 	var foundAgent config.AgentConfig
-	for _, ac := range cfg.Agents.List {
-		if ac.ID == agentID {
+	for _, ac := range rau.cfg.Agents.List {
+		if ac.ID == rau.agentID {
 			found = true
 			foundAgent = ac
 			break
 		}
 	}
 	if !found {
-		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
-		return
+		jsonErr(rau.w, http.StatusNotFound, fmt.Sprintf("agent %q not found", rau.agentID))
+		return true
 	}
 	// Locked (core/system) agents cannot have their tool policy overwritten via the API.
 	// Use coreagent.IsCoreAgent or check the Locked flag.
 	if foundAgent.Locked {
-		jsonErr(w, http.StatusForbidden, fmt.Sprintf("agent %q is locked and cannot be modified", agentID))
-		return
+		jsonErr(rau.w, http.StatusForbidden, fmt.Sprintf("agent %q is locked and cannot be modified", rau.agentID))
+		return true
 	}
 	// subagent_3p (External CLI) agents have no tools_cfg on the wire at all
 	// (W1 discriminated union — AgentCreateRequestSubagent3p has no tools_cfg
@@ -104,8 +143,8 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// endpoint (a caller could otherwise bypass the PUT /agents/{id} guard by
 	// hitting PUT /agents/{id}/tools directly).
 	if isExternalSubagent(foundAgent) {
-		jsonErr(w, http.StatusBadRequest, "external subagents run their own tools — tools_cfg is not configurable")
-		return
+		jsonErr(rau.w, http.StatusBadRequest, "external subagents run their own tools — tools_cfg is not configurable")
+		return true
 	}
 
 	// The step-up re-auth gate (requireReAuth) was INTENTIONALLY REMOVED here for
@@ -115,17 +154,20 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// enforced: this handler runs behind withAuth, so the caller must hold a valid
 	// session; only the password re-prompt is removed. The same gate remains in
 	// force on Integrations/Providers/Sandbox/Credentials/Performance PUTs.
-	if user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig); !ok || user == nil {
-		jsonErr(w, http.StatusUnauthorized, "not authenticated")
-		return
+	if user, ok := rau.r.Context().Value(UserContextKey{}).(*config.UserConfig); !ok || user == nil {
+		jsonErr(rau.w, http.StatusUnauthorized, "not authenticated")
+		return true
 	}
 
-	var req gen.AgentToolsUpdateRequest
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "AgentToolsUpdateRequest", &req, validateEnabled) {
-		return
+	validateEnabled := rau.a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(rau.w, rau.r, "AgentToolsUpdateRequest", &rau.req, validateEnabled) {
+		return true
 	}
+	return false
+}
 
+// normalizeBuiltinPolicies normalizes and validates the complete built-in tool policy map.
+func (rau *restAPIUpdateAgentTools) normalizeBuiltinPolicies() bool {
 	// CLAUDE.md hard constraint 6 — a body carrying no `builtin` object at all
 	// is REJECTED, never treated as "replace the agent's policy map with
 	// nothing".
@@ -159,29 +201,29 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// policy map (and MCP bindings, from `config.mcp`) are read from there;
 	// `tools` and `agent_type` are read-only echoes and are ignored. A body
 	// carrying NEITHER `builtin` nor `config.builtin` is still rejected.
-	roundTrip := req.Builtin == nil && req.Config != nil && req.Config.Builtin != nil
-	if req.Builtin == nil && !roundTrip {
-		jsonErr(w, http.StatusBadRequest,
+	rau.roundTrip = rau.req.Builtin == nil && rau.req.Config != nil && rau.req.Config.Builtin != nil
+	if rau.req.Builtin == nil && !rau.roundTrip {
+		jsonErr(rau.w, http.StatusBadRequest,
 			"builtin.policies is required: this endpoint replaces the agent's complete tool-policy map, "+
 				"so a body with no \"builtin\" object (and no \"config.builtin\" object, the GET response shape) "+
 				"is rejected rather than persisted as an empty policy")
-		return
+		return true
 	}
 	// Extract builtin fields. There is no default_policy field on the wire
 	// any more (CLAUDE.md hard constraint 6).
-	var builtinPolicies map[string]string
+
 	switch {
-	case roundTrip:
-		if req.Config.Builtin.Policies != nil {
-			builtinPolicies = make(map[string]string, len(req.Config.Builtin.Policies))
-			for k, v := range req.Config.Builtin.Policies {
-				builtinPolicies[k] = string(v)
+	case rau.roundTrip:
+		if rau.req.Config.Builtin.Policies != nil {
+			rau.builtinPolicies = make(map[string]string, len(rau.req.Config.Builtin.Policies))
+			for k, v := range rau.req.Config.Builtin.Policies {
+				rau.builtinPolicies[k] = string(v)
 			}
 		}
-	case req.Builtin.Policies != nil:
-		builtinPolicies = make(map[string]string, len(req.Builtin.Policies))
-		for k, v := range req.Builtin.Policies {
-			builtinPolicies[k] = string(v)
+	case rau.req.Builtin.Policies != nil:
+		rau.builtinPolicies = make(map[string]string, len(rau.req.Builtin.Policies))
+		for k, v := range rau.req.Builtin.Policies {
+			rau.builtinPolicies[k] = string(v)
 		}
 	}
 	// Legacy mode/visible compatibility (one release): only mode="explicit"
@@ -199,20 +241,20 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// no-op now that there is no default-policy fallback to inherit from
 	// (CLAUDE.md hard constraint 6) — an incomplete map is rejected by the
 	// coverage check below regardless.
-	if req.Builtin != nil && req.Builtin.Policies == nil && req.Builtin.Mode != nil &&
-		string(*req.Builtin.Mode) == "explicit" && req.Builtin.Visible != nil {
-		builtinPolicies = make(map[string]string, len(*req.Builtin.Visible))
-		for _, name := range *req.Builtin.Visible {
-			builtinPolicies[name] = "allow"
+	if rau.req.Builtin != nil && rau.req.Builtin.Policies == nil && rau.req.Builtin.Mode != nil &&
+		string(*rau.req.Builtin.Mode) == "explicit" && rau.req.Builtin.Visible != nil {
+		rau.builtinPolicies = make(map[string]string, len(*rau.req.Builtin.Visible))
+		for _, name := range *rau.req.Builtin.Visible {
+			rau.builtinPolicies[name] = "allow"
 		}
 	}
 
 	// Validate per-tool policy values sent in the request.
 	validPolicies := map[string]bool{"allow": true, "ask": true, "deny": true}
-	for name, p := range builtinPolicies {
+	for name, p := range rau.builtinPolicies {
 		if !validPolicies[p] {
-			jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid policy %q for tool %q", p, name))
-			return
+			jsonErr(rau.w, http.StatusUnprocessableEntity, fmt.Sprintf("invalid policy %q for tool %q", p, name))
+			return true
 		}
 	}
 
@@ -227,20 +269,21 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// visible[] shape sent alone, exactly as
 	// contracts/components/schemas/AgentToolsUpdateRequest.yaml describes.
 	if defects := config.ValidateSubmittedToolPolicyMap(
-		builtinPolicies, buildKnownBuiltinToolNames(),
+		rau.builtinPolicies, buildKnownBuiltinToolNames(),
 	); !defects.Empty() {
-		jsonErr(w, http.StatusBadRequest, "builtin.policies "+defects.String())
-		return
+		jsonErr(rau.w, http.StatusBadRequest, "builtin.policies "+defects.String())
+		return true
 	}
+	return false
+}
 
+// validateMCPBindings normalizes MCP bindings and rejects references to unconfigured servers.
+func (rau *restAPIUpdateAgentTools) validateMCPBindings() bool {
 	// Validate MCP server IDs reference configured servers. Computed before
 	// the locked validate+persist IIFE below (it does not feed
 	// config.ValidateToolPolicyCoverage, only the MCP section of the persist
 	// payload), then captured by that IIFE's persist closure.
-	var mcpServers []struct {
-		ID    string
-		Tools []string
-	}
+
 	// The MCP binding list comes from the top-level `mcp` when present, or
 	// from `config.mcp` on a D-86 round-trip body; the two are the same
 	// shape on the wire but distinct generated types, so they are normalised
@@ -251,37 +294,41 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	}
 	var mcpBindings []mcpBindingWire
 	switch {
-	case req.Mcp != nil && req.Mcp.Servers != nil:
-		for _, s := range *req.Mcp.Servers {
+	case rau.req.Mcp != nil && rau.req.Mcp.Servers != nil:
+		for _, s := range *rau.req.Mcp.Servers {
 			mcpBindings = append(mcpBindings, mcpBindingWire{Id: s.Id, Tools: s.Tools})
 		}
-	case roundTrip && req.Config.Mcp != nil && req.Config.Mcp.Servers != nil:
-		for _, s := range *req.Config.Mcp.Servers {
+	case rau.roundTrip && rau.req.Config.Mcp != nil && rau.req.Config.Mcp.Servers != nil:
+		for _, s := range *rau.req.Config.Mcp.Servers {
 			mcpBindings = append(mcpBindings, mcpBindingWire{Id: s.Id, Tools: s.Tools})
 		}
 	}
 	if mcpBindings != nil {
-		configuredServers := cfg.Tools.MCP.Servers
+		configuredServers := rau.cfg.Tools.MCP.Servers
 		for _, s := range mcpBindings {
 			if s.Id == "" {
-				jsonErr(w, http.StatusUnprocessableEntity, "mcp.servers[].id must not be empty")
-				return
+				jsonErr(rau.w, http.StatusUnprocessableEntity, "mcp.servers[].id must not be empty")
+				return true
 			}
 			if _, exists := configuredServers[s.Id]; !exists {
-				jsonErr(w, http.StatusUnprocessableEntity, fmt.Sprintf("MCP server %q is not configured", s.Id))
-				return
+				jsonErr(rau.w, http.StatusUnprocessableEntity, fmt.Sprintf("MCP server %q is not configured", s.Id))
+				return true
 			}
 			toolList := []string{}
 			if s.Tools != nil {
 				toolList = *s.Tools
 			}
-			mcpServers = append(mcpServers, struct {
+			rau.mcpServers = append(rau.mcpServers, struct {
 				ID    string
 				Tools []string
 			}{ID: s.Id, Tools: toolList})
 		}
 	}
+	return false
+}
 
+// persistPolicy validates policy coverage and persists the agent tool configuration atomically.
+func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 	// CLAUDE.md hard constraint 6 / config.ValidateToolPolicyCoverage: this
 	// endpoint fully replaces the agent's builtin tools config on persist
 	// (see the updateConfigJSONLocked closure below), so builtinPolicies IS
@@ -301,11 +348,11 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// either the coverage check or the persist step. Returns false once it
 	// has already written the HTTP response (error case), so the caller just
 	// returns.
-	if ok := a.withToolPolicyCoverageGuard(
-		w,
+	if ok := rau.a.withToolPolicyCoverageGuard(
+		rau.w,
 		func(c *config.Config) {
-			candidatePolicies := make(map[string]config.ToolPolicy, len(builtinPolicies))
-			for k, v := range builtinPolicies {
+			candidatePolicies := make(map[string]config.ToolPolicy, len(rau.builtinPolicies))
+			for k, v := range rau.builtinPolicies {
 				candidatePolicies[k] = config.ToolPolicy(v)
 			}
 			// Base the candidate on the FRESHLY-fetched agent copy (from c,
@@ -313,7 +360,7 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 			// Tools is overridden below, so any other field a concurrent
 			// write changed in the meantime stays correctly reflected.
 			for i := range c.Agents.List {
-				if c.Agents.List[i].ID != agentID {
+				if c.Agents.List[i].ID != rau.agentID {
 					continue
 				}
 				candidateAgent := c.Agents.List[i]
@@ -327,7 +374,7 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		func(gaps []config.CoverageGap) string {
 			return fmt.Sprintf(
 				"tool policy coverage incomplete for agent %q (%d gap(s)): %s",
-				agentID, len(gaps), joinCoverageGapMessages(gaps),
+				rau.agentID, len(gaps), joinCoverageGapMessages(gaps),
 			)
 		},
 		// ADR-054 D2/§11 checklist item 4 ("tools/policies"): agents are
@@ -335,15 +382,15 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 		// agents.list — persist via the agent store instead of splicing the
 		// raw config map. `m` is deliberately left untouched.
 		func(m map[string]any) error {
-			_, updateErr := agentstore.New(a.homePath).Update(agentID, func(agentRec *config.AgentConfig) error {
+			_, updateErr := agentstore.New(rau.a.homePath).Update(rau.agentID, func(agentRec *config.AgentConfig) error {
 				builtinCfg := config.AgentBuiltinToolsCfg{}
-				if len(builtinPolicies) > 0 {
-					builtinCfg.Policies = agentToolPolicyMapFromWire(builtinPolicies)
+				if len(rau.builtinPolicies) > 0 {
+					builtinCfg.Policies = agentToolPolicyMapFromWire(rau.builtinPolicies)
 				}
 				newTools := &config.AgentToolsCfg{Builtin: builtinCfg}
-				if len(mcpServers) > 0 {
-					servers := make([]config.AgentMCPServerBinding, 0, len(mcpServers))
-					for _, s := range mcpServers {
+				if len(rau.mcpServers) > 0 {
+					servers := make([]config.AgentMCPServerBinding, 0, len(rau.mcpServers))
+					for _, s := range rau.mcpServers {
 						servers = append(servers, config.AgentMCPServerBinding{ID: s.ID, Tools: s.Tools})
 					}
 					newTools.MCP = config.AgentMCPToolsCfg{Servers: servers}
@@ -368,17 +415,21 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 			})
 			if updateErr != nil {
 				if errors.Is(updateErr, entity.ErrNotFound) {
-					return fmt.Errorf("agent %q not found in agent store", agentID)
+					return fmt.Errorf("agent %q not found in agent store", rau.agentID)
 				}
 				return fmt.Errorf("update agent tools entity record: %w", updateErr)
 			}
 			return nil
 		},
-		fmt.Sprintf("rest: update agent tools entity record (agent_id=%s)", agentID),
+		fmt.Sprintf("rest: update agent tools entity record (agent_id=%s)", rau.agentID),
 	); !ok {
-		return
+		return true
 	}
+	return false
+}
 
+// reloadAndRespond waits for the runtime reload and returns the updated tool registry response.
+func (rau *restAPIUpdateAgentTools) reloadAndRespond() {
 	// Trigger a reload AND WAIT for it (triggerReloadAndWaitOutcome, not a bare
 	// TriggerReload — mirrors createAgent/updateAgent/deleteAgent) so the
 	// agent's atomic toolPolicy pointer (pkg/agent/instance.go:290 —
@@ -411,34 +462,34 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// distinguish the two cases, then silently discarded the distinction.
 	// Now both variants agree: an unconfirmed reload is never reported as a
 	// plain, unqualified success.
-	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
+	if confirmed, err := rau.a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error("agent tools update: reload failed — in-memory policy not updated",
-			"agent_id", agentID, "error", err)
-		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+			"agent_id", rau.agentID, "error", err)
+		if auditLogger := rau.a.agentLoop.AuditLogger(); auditLogger != nil {
 			if auditErr := audit.EmitSecuritySettingChange(
-				r.Context(), auditLogger, "agent.tools_policy",
-				map[string]any{"agent_id": agentID, "saved": true},
-				map[string]any{"agent_id": agentID, "reload_error": err.Error()},
+				rau.r.Context(), auditLogger, "agent.tools_policy",
+				map[string]any{"agent_id": rau.agentID, "saved": true},
+				map[string]any{"agent_id": rau.agentID, "reload_error": err.Error()},
 			); auditErr != nil {
 				slog.Error("rest: audit emit agent tools reload failure", "error", auditErr)
 			}
 		}
-		jsonErr(w, http.StatusServiceUnavailable,
+		jsonErr(rau.w, http.StatusServiceUnavailable,
 			"config saved but in-memory reload failed; restart the gateway or retry")
 		return
 	} else if !confirmed {
 		slog.Error("rest: agent tools update: reload did not confirm within the poll window; "+
-			"in-memory tool policy may not yet reflect the new config", "agent_id", agentID)
-		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
+			"in-memory tool policy may not yet reflect the new config", "agent_id", rau.agentID)
+		if auditLogger := rau.a.agentLoop.AuditLogger(); auditLogger != nil {
 			if auditErr := audit.EmitSecuritySettingChange(
-				r.Context(), auditLogger, "agent.tools_policy",
-				map[string]any{"agent_id": agentID, "saved": true},
-				map[string]any{"agent_id": agentID, "reload_error": "reload did not confirm within the poll window"},
+				rau.r.Context(), auditLogger, "agent.tools_policy",
+				map[string]any{"agent_id": rau.agentID, "saved": true},
+				map[string]any{"agent_id": rau.agentID, "reload_error": "reload did not confirm within the poll window"},
 			); auditErr != nil {
 				slog.Error("rest: audit emit agent tools reload unconfirmed", "error", auditErr)
 			}
 		}
-		jsonErr(w, http.StatusServiceUnavailable,
+		jsonErr(rau.w, http.StatusServiceUnavailable,
 			"config saved but the in-memory reload did not confirm within the wait window; "+
 				"the new tool policy may not be enforced yet — retry or restart the gateway")
 		return
@@ -446,5 +497,5 @@ func (a *restAPI) updateAgentTools(w http.ResponseWriter, r *http.Request, agent
 	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not
 	// `effective_tools`) — both paths must share the same wire shape to match
 	// the AgentToolsResponse spec and the SPA Zod schema (_agentToolsSchema).
-	a.HandleAgentToolsRegistry(w, r, agentID)
+	rau.a.HandleAgentToolsRegistry(rau.w, rau.r, rau.agentID)
 }
