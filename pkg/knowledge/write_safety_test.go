@@ -92,13 +92,11 @@ func (f *wsFixture) lock() NoteLockConfig {
 }
 
 // discardAudit satisfies AuthorAudit without keeping anything. Used only where
-// the assertion is about concurrency rather than about the record.
-type discardAudit struct{ mu sync.Mutex }
+// the assertion is about concurrency rather than about the record. The method
+// body is empty: there is no state to keep race-free, so there is no lock.
+type discardAudit struct{}
 
-func (d *discardAudit) RecordKnowledgeWrite(AuthorAuditRecord) {
-	d.mu.Lock()
-	d.mu.Unlock() //nolint:staticcheck // the lock exists to make the sink race-free under -race
-}
+func (d *discardAudit) RecordKnowledgeWrite(AuthorAuditRecord) {}
 
 // ---------------------------------------------------------------------------
 // AC-14.1 / US-14 AS-2, in one process, on EditNote
@@ -379,6 +377,38 @@ func TestAuthoringTools_EveryMutationIsRefusedWithoutAnAuditSink(t *testing.T) {
 // D14 tier 1 across the rename path
 // ---------------------------------------------------------------------------
 
+// inboundNoteNameShardDisjointFrom returns an inbound-note file name whose
+// lock key cannot share a striped-pool shard with the renamed note's key.
+//
+// noteWriteLocks is a 64-shard striped pool (task.StripedLock): two DIFFERENT
+// keys land on the same mutex one roll in 64 — the same hazard
+// record_identity.go's lock-ordering note documents for minting. This test
+// holds the inbound note's lock across the whole rename, and the rename's
+// first lock is the source note's own (journal Recover's move step). When the
+// two keys share a shard, that nominally uncontended acquisition blocks on the
+// mutex this test holds and exhausts the bound, so the rename fails with a
+// bare LockTimeoutError naming the SOURCE note instead of the blocked inbound
+// step — one random temp root in 64, which is the CI-only flake this test
+// showed. Comparing the mutex pointers the production pool itself hands back
+// (rather than re-deriving its hash) picks a name that cannot collide. The
+// property under test is untouched: the holder and the rewrite step still
+// contend for the identical key.
+func inboundNoteNameShardDisjointFrom(t *testing.T, holderRoot, moveRoot, from string) string {
+	t.Helper()
+	moveMu := noteWriteLocks.Get(noteLockKey(moveRoot, from))
+	for i := range 512 {
+		name := "inbound.md"
+		if i > 0 {
+			name = fmt.Sprintf("inbound-%d.md", i)
+		}
+		if noteWriteLocks.Get(noteLockKey(holderRoot, name)) != moveMu {
+			return name
+		}
+	}
+	t.Fatalf("no inbound name in 512 candidates maps off %q's lock shard", from)
+	return ""
+}
+
 // TestRenameLinkRewrite_TakesTheNotesWriteLock proves the rename's per-file
 // rewrite runs inside the SAME lock a note edit takes.
 //
@@ -392,15 +422,23 @@ func TestAuthoringTools_EveryMutationIsRefusedWithoutAnAuditSink(t *testing.T) {
 // this holds the note's lock and asserts the rewrite BLOCKS on it: a step that
 // cannot get the lock within the bound reports a bounded failure (FR-108)
 // instead of writing. A rewrite that takes no lock sails straight through.
+//
+// The inbound note's name is chosen so its lock key cannot share a
+// striped-pool shard with the source note's — see
+// inboundNoteNameShardDisjointFrom for why that is load-bearing.
 func TestRenameLinkRewrite_TakesTheNotesWriteLock(t *testing.T) {
-	const inbound = "inbound.md"
-	f := newWriteSafetyFixture(t, map[string]string{
-		"Old Note.md": "# Old\n",
-		inbound:       "Refers to [[Old Note]].\n",
-	})
+	f := newWriteSafetyFixture(t, map[string]string{"Old Note.md": "# Old\n"})
 	cr, err := NewCollectionRoot(OSLinkFS(), f.root)
 	if err != nil {
 		t.Fatal(err)
+	}
+	// The name can only be chosen once the collection root exists, because the
+	// lock keys embed it. Writing the note after OpenCollection is sound: Plan
+	// re-walks the collection (BuildLinkGraph runs at plan time), so no
+	// open-time state goes stale.
+	inbound := inboundNoteNameShardDisjointFrom(t, f.root, cr.Path(), "Old Note.md")
+	if werr := os.WriteFile(filepath.Join(f.root, inbound), []byte("Refers to [[Old Note]].\n"), 0o600); werr != nil {
+		t.Fatal(werr)
 	}
 	before := f.read(inbound)
 
@@ -431,17 +469,17 @@ func TestRenameLinkRewrite_TakesTheNotesWriteLock(t *testing.T) {
 			// The bound must separate two different waits, and 150ms did not.
 			// The rename takes UNCONTENDED locks of its own (the source note
 			// among them) before it ever reaches the link rewrite whose lock
-			// this test deliberately holds. Under -race the uncontended work
-			// alone can exceed 150ms, so the rename failed with a bare
-			// LockTimeoutError naming "Old Note.md" instead of the blocked
-			// inbound step — the assertion below then read as a product defect
-			// when it was the instrument being too tight to tell the two waits
-			// apart. CI caught it (twice, through its flake filter) where a
-			// local run without -race never did.
+			// this test deliberately holds. Those 150ms CI failures were a
+			// bare LockTimeoutError naming "Old Note.md" — read at the time as
+			// -race slowness, which uncontended acquisitions cannot be. The
+			// real mechanism was the striped lock pool mapping the source key
+			// and the held inbound key onto the same mutex, which the random
+			// temp root rolls one run in 64; the name choice above now excludes
+			// that coincidence by construction.
 			//
-			// A generous bound costs this test that much wall-clock ONLY on the
-			// contended path, which is the path under test and always exhausts
-			// it; the uncontended acquisitions still return immediately.
+			// A generous bound still costs wall-clock ONLY on the contended
+			// path, which is the path under test and always exhausts it; the
+			// uncontended acquisitions return immediately.
 			Lock: NoteLockConfig{LockDir: f.lockDir, Bound: 3 * time.Second},
 		}
 		res, renameErr = r.Rename(RenameRequest{From: "Old Note.md", To: "Renamed.md"})
