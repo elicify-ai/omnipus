@@ -1,6 +1,6 @@
-> Back to [Channels](../channels.md)
+> Back to [Connectors](../connectors.md)
 
-# Discord
+# Discord connector
 
 Omnipus connects to Discord as a bot using the [discordgo](https://github.com/bwmarrin/discordgo) library. The bot receives messages over a persistent WebSocket gateway connection and sends replies via the Discord REST API.
 

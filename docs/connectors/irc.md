@@ -1,6 +1,6 @@
-> Back to [Channels](../channels.md)
+> Back to [Connectors](../connectors.md)
 
-# IRC
+# IRC connector
 
 Omnipus connects to any IRC server via a persistent TCP connection (optionally TLS) using the [ergochat/irc-go](https://github.com/ergochat/irc-go) library. The client joins one or more channels at connect time, handles reconnection internally via `ircevent.Connection.Loop()`, and delivers and receives plain-text PRIVMSG lines.
 

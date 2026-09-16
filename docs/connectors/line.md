@@ -1,6 +1,6 @@
-> Back to [Channels](../channels.md)
+> Back to [Connectors](../connectors.md)
 
-# LINE
+# LINE connector
 
 Omnipus connects to LINE Official Accounts via the [LINE Messaging API](https://developers.line.biz/en/docs/messaging-api/). Incoming messages arrive over an HTTPS webhook registered on the shared Omnipus gateway; replies are sent via the LINE REST API.
 

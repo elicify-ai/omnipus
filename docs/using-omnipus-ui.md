@@ -89,7 +89,7 @@ Agents can also send files **back** to you. Ask Jim to write something to a file
 
 The web app is **text-first** — you type, the agent replies in text.
 
-If you'd rather talk, connect a chat channel that supports voice. On channels like **Telegram**, you can send a voice message and Omnipus will transcribe it to text for the agent automatically. That's a great option from your phone when typing is awkward. See [Connecting chat apps](channels.md) to set one up.
+If you'd rather talk, connect a chat channel that supports voice. On channels like **Telegram**, you can send a voice message and Omnipus will transcribe it to text for the agent automatically. That's a great option from your phone when typing is awkward. See [Connecting chat apps](connectors.md) to set one up.
 
 ---
 
@@ -177,7 +177,7 @@ The **Connectors** page connects Omnipus to chat apps — Telegram, Discord, Sla
 ![The Connectors page listing Telegram, Discord, Slack, WhatsApp and more](marketing/screenshots/channels-screen.png)
 *One card per channel — Configure to connect it and choose which agent answers. (Screenshot predates the **Channels → Connectors** rename.)*
 
-→ Full step-by-step, with per-platform credentials, routing, and screenshots: **[Channels](channels.md)**.
+→ Full step-by-step, with per-platform credentials, routing, and screenshots: **[Connectors](connectors.md)**.
 
 ---
 
@@ -255,6 +255,6 @@ In **Settings → Profile** there's a box labelled **"What should the agents kno
 
 **[Using Omnipus from the command line](using-omnipus-cli.md)** — the terminal half of this guide.
 
-**[Connecting chat apps](channels.md)** — use your agents from Telegram, Discord, Slack, and more.
+**[Connecting chat apps](connectors.md)** — use your agents from Telegram, Discord, Slack, and more.
 
 **[Skills](skills.md)** — find, install, and get the most out of skills.

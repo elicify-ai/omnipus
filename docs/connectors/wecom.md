@@ -1,13 +1,13 @@
-> Back to [Channels](../channels.md)
+> Back to [Connectors](../connectors.md)
 
-# WeCom
+# WeCom connector
 
 Omnipus exposes WeCom as a single `channels.wecom` channel built on the official WeCom AI Bot WebSocket API.
 This replaces the legacy `wecom`, `wecom_app`, and `wecom_aibot` split with one unified configuration model.
 
 > No public webhook callback URL is required. Omnipus opens an outbound WebSocket connection to WeCom.
 
-## What This Channel Supports
+## What this connector supports
 
 - Direct chat and group chat delivery
 - Channel-side streaming replies over WeCom's AI Bot protocol

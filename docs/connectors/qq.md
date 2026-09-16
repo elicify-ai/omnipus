@@ -1,6 +1,6 @@
-> Back to [Channels](../channels.md)
+> Back to [Connectors](../connectors.md)
 
-# QQ
+# QQ connector
 
 Omnipus connects to QQ via the official QQ Bot Open Platform API using a persistent WebSocket session (botgo library). It handles both direct (C2C) messages and group @-mention messages.
 

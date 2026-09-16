@@ -39,7 +39,7 @@ New to Omnipus? Read these in order.
 | Channel-to-agent routing & handoff | [routing.md](routing.md) |
 | Session history & event stream | [observability.md](observability.md) |
 | Skills (ClawHub installs, SKILL.md format) | [skills.md](skills.md) |
-| Channels — set up chat platforms & route them to agents | [channels.md](channels.md) |
+| Channels — set up chat platforms & route them to agents | [connectors.md](connectors.md) |
 | Hooks (subprocess + in-process) | [hooks/README.md](hooks/README.md) |
 
 ## Configure & operate

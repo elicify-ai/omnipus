@@ -1,6 +1,6 @@
-> Back to [Channels](../channels.md)
+> Back to [Connectors](../connectors.md)
 
-# Slack
+# Slack connector
 
 Omnipus connects to Slack using [Socket Mode](https://api.slack.com/apis/socket-mode) via the [slack-go](https://github.com/slack-go/slack) library. Socket Mode maintains a persistent WebSocket connection — no public inbound endpoint or webhook URL is required.
 

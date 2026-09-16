@@ -1,6 +1,6 @@
-> Back to [Channels](../channels.md)
+> Back to [Connectors](../connectors.md)
 
-# Matrix
+# Matrix connector
 
 Matrix channel for Omnipus. Uses the `mautrix-go` library with the `goolm` pure-Go OLM implementation for end-to-end encryption. Supports full bidirectional messaging, media send/receive, typing indicators, and placeholder messages.
 

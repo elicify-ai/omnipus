@@ -1,6 +1,6 @@
-> Back to [Channels](../channels.md)
+> Back to [Connectors](../connectors.md)
 
-# DingTalk
+# DingTalk connector
 
 DingTalk (钉钉) is Alibaba's enterprise communication platform. Omnipus connects via the [DingTalk Stream SDK](https://github.com/open-dingtalk/dingtalk-stream-sdk-go), which maintains a persistent WebSocket connection — no public webhook endpoint required.
 

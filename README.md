@@ -72,7 +72,7 @@ Tell them once in Settings → Profile ("be concise", "I use Python", your timez
 
 Use the web app, the terminal, or wire your agents into Telegram, Discord, Slack, WhatsApp, and 9 other chat platforms — voice notes and images included.
 
-→ [Channels](docs/channels.md)
+→ [Connectors](docs/connectors.md)
 
 ### You stay in control
 
@@ -107,7 +107,7 @@ Pick from 35+ AI providers — including fully-local options like Ollama.
 
 **Full audit trail** — every tool call, LLM request, and agent event lands in a replayable on-disk transcript that feeds the UI, subprocess hooks, and a tamper-evident audit log. → [Session transcript](docs/observability.md#session-transcript)
 
-**13 in-process chat channels and 35+ LLM providers** — with fallback chains, multi-key rotation, streaming, and vision. → [Channels](docs/channels.md) · [Providers](docs/providers.md#providers)
+**13 in-process chat channels and 35+ LLM providers** — with fallback chains, multi-key rotation, streaming, and vision. → [Connectors](docs/connectors.md) · [Providers](docs/providers.md#providers)
 
 **Channel-to-agent routing** — binds inbound messages to specific agents by channel, account, guild, team, or peer. → [Inbound bindings](docs/routing.md#inbound-bindings)
 
@@ -323,7 +323,7 @@ New here? Start with:
 - [Your first 10 minutes](docs/getting-started.md) — install → first chat → handoff → build an agent
 - [How Omnipus works](docs/concepts.md) — agents, sessions, memory, channels, skills (plain English)
 - [Using the web app](docs/using-omnipus-ui.md) · [Using the terminal](docs/using-omnipus-cli.md)
-- [Channels](docs/channels.md) — connect Telegram / Discord / Slack / … and choose which agent answers each
+- [Connectors](docs/connectors.md) — connect Telegram / Discord / Slack / … and choose which agent answers each
 
 ---
 
