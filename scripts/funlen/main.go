@@ -21,6 +21,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
@@ -71,7 +72,14 @@ func scanRepo(root string, skips []string) (rows []funcRow, totalProd, totalTest
 	fset := token.NewFileSet()
 	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return ignoreWalkError(err)
+			// A path that vanished mid-walk, or one we may not read, is not this
+			// scanner's business. ANY other error is a real I/O failure and must
+			// stop the scan: silently skipping it would under-report function
+			// sizes and let the budget gates pass on an incomplete measurement.
+			if errors.Is(err, fs.ErrNotExist) || errors.Is(err, fs.ErrPermission) {
+				return nil
+			}
+			return err
 		}
 		rel, relErr := filepath.Rel(root, p)
 		if relErr != nil {
@@ -102,10 +110,6 @@ func scanRepo(root string, skips []string) (rows []funcRow, totalProd, totalTest
 }
 
 // ignoreWalkError keeps scanRepo best-effort when WalkDir encounters an unreadable entry.
-func ignoreWalkError(_ error) error {
-	return nil
-}
-
 // shouldSkip reports whether rel (a root-relative path) falls under one of
 // the skip fragments, matching a path component boundary rather than a bare
 // substring so e.g. "dist" does not also skip "distillery/".
