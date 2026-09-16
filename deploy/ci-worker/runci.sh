@@ -65,7 +65,7 @@ mkdir -p "$TMPDIR"
 # E2E SHARD STATE LIVES ON /cache, NOT /tmp.
 #
 # /tmp shares the 7.8G ROOT OVERLAY; /cache is the 40G volume. Each shard's
-# OMNIPUS_HOME is ~400MB and there are 15 shards, so the matrix needs ~6G and
+# OMNIPUS_HOME is ~400MB and there are 24 shards, so the matrix needs ~10G and
 # the root overlay cannot hold it. Measured 2026-09-11: the run filled / to 96%
 # and shards began failing with "ENOSPC: no space left on device", which reads
 # as a test failure and is not one. TMPDIR above already redirects anything
@@ -653,10 +653,15 @@ run_contracts(){ make verify-contracts; }
 #   E2E_SPECS      space-separated spec subset → runs the OLD single-gateway path (fast
 #                  targeted re-verify; keeps the HTML report). Non-empty ⇒ no sharding.
 #   E2E_SHARDED=0  force the single-gateway path for the full matrix (debugging).
-#   E2E_MAX_PARALLEL  max shards in flight at once (default 2). The 8-core worker
-#                  is oversubscribed by 5 concurrent gateways+browsers, which
-#                  starves CPU and flakes timing-sensitive specs; 2 keeps each
-#                  shard's headroom while staying well under the serial runtime.
+#   E2E_MAX_PARALLEL_RENDER  max RENDER-bound shards in flight (default 2 — the
+#                  proven-safe number: a 5-wide run failed 17 specs that a
+#                  1-wide re-run passed 16/17; render shards compete for the
+#                  cores Chromium needs, so this cap is a finding, not caution).
+#   E2E_MAX_PARALLEL_LLM     max llm-* shards in flight (default 4 — those are
+#                  mostly I/O-bound, parked on OpenRouter HTTP, and do not
+#                  compete for the cores Chromium needs).
+#   E2E_MAX_PARALLEL         legacy override: caps BOTH of the above at once,
+#                  so pre-existing invocations keep their meaning.
 #
 # Pre-conditions (Fly secrets on the worker): GIT_REMOTE, OPENROUTER_API_KEY.
 
@@ -1024,17 +1029,27 @@ run_e2e() {
   # test-results/soft-skips.json; clear it so a stale entry can't taint a shard's teardown.
   rm -f test-results/soft-skips.json 2>/dev/null || true
 
-  # Bounded concurrency. Running all 5 shards at once (5 gateways + 5 chromium)
-  # oversubscribes the 8-core worker; the resulting CPU starvation makes
-  # timing-sensitive specs flake (proven: a single-gateway re-run passed 16/17
-  # specs that the 5-wide run failed). Cap the in-flight shards so each gets
-  # real CPU headroom. LLM shards are mostly I/O-bound (waiting on OpenRouter),
-  # so 2 concurrent keeps wall-clock well under the old serial run while giving
-  # the render-bound shards (ui, stubs) room. Override with E2E_MAX_PARALLEL.
-  local MAX_PARALLEL="${E2E_MAX_PARALLEL:-2}"
+  # Bounded concurrency, SPLIT BY SHARD KIND. The render-bound cap is a
+  # FINDING, not caution: running 5 shards at once (5 gateways + 5 chromium)
+  # oversubscribed the 8-core worker, and the resulting CPU starvation failed
+  # 17 specs that a single-gateway re-run passed 16/17 — timing-sensitive
+  # specs flaking under render contention. That evidence was about RENDER-
+  # bound shards, so their cap stays at the proven-safe 2 and must not be
+  # raised on this evidence's behalf. LLM shards (llm-*) are a different
+  # resource profile: mostly I/O-bound, parked on OpenRouter HTTP while their
+  # gateway and browser idle — they are not competing for the cores Chromium
+  # needs — so they fly at a higher cap without touching the render finding.
+  # (If an LLM co-tenant ever flakes a render shard, lower
+  # E2E_MAX_PARALLEL_LLM; do not raise E2E_MAX_PARALLEL_RENDER.) The legacy
+  # E2E_MAX_PARALLEL caps BOTH, so pre-existing invocations keep their meaning.
+  local RENDER_CAP="${E2E_MAX_PARALLEL_RENDER:-2}"
+  local LLM_CAP="${E2E_MAX_PARALLEL_LLM:-4}"
+  if [ -n "${E2E_MAX_PARALLEL:-}" ]; then
+    RENDER_CAP="$E2E_MAX_PARALLEL"; LLM_CAP="$E2E_MAX_PARALLEL"
+  fi
   local -a NAMES=() FAILED=()
   local -A PID2NAME=()
-  local group slot port specs key
+  local group slot port specs key kind cap
   local running=0 shard_rc=0
 
   # Reap exactly one finished shard: wait for ANY tracked background shard,
@@ -1065,6 +1080,24 @@ run_e2e() {
     fi
   }
 
+  # Shard kind for the two caps above. Derived from the GROUP NAME because
+  # that is the only kind signal `scripts/e2e-shards.sh list` emits — a
+  # shards.json field would be invisible to this consumer without touching
+  # that shared script. llm-* groups are exactly the shards that consume an
+  # OpenRouter key (see key_slot in shards.json); everything else is
+  # render-bound and defaults to the safe render cap.
+  _e2e_shard_kind() { [[ "$1" == llm-* ]] && printf llm || printf render; }
+  # In-flight count of one kind. Read-only over run_e2e's PID2NAME (dynamic
+  # scope), so it is safe to call inside $( ) — unlike _e2e_reap_one, which
+  # mutates and must never run in a subshell.
+  _e2e_in_flight() {
+    local want="$1" pid n=0
+    for pid in "${!PID2NAME[@]}"; do
+      [ "$(_e2e_shard_kind "${PID2NAME[$pid]}")" = "$want" ] && n=$((n + 1))
+    done
+    printf '%s\n' "$n"
+  }
+
   # Reap surviving gateways if the whole run is interrupted (exact pids only).
   trap '_e2e_reap_pidfiles' INT TERM
 
@@ -1093,9 +1126,13 @@ run_e2e() {
       fi
       continue
     fi
-    # Concurrency gate: block until a slot frees up.
-    while [ "$running" -ge "$MAX_PARALLEL" ]; do _e2e_reap_one; done
-    log "e2e: launch shard $group (port $port, key slot $slot; $((running + 1))/$MAX_PARALLEL in flight)"
+    # Concurrency gate: block until a slot of THIS shard's kind frees up. A
+    # finishing LLM shard opens an LLM slot only — a render shard waiting on
+    # the render cap must not slip in on an LLM exit, and vice versa.
+    kind="$(_e2e_shard_kind "$group")"
+    if [ "$kind" = llm ]; then cap="$LLM_CAP"; else cap="$RENDER_CAP"; fi
+    while [ "$(_e2e_in_flight "$kind")" -ge "$cap" ]; do _e2e_reap_one; done
+    log "e2e: launch shard $group (port $port, key slot $slot; $(($(_e2e_in_flight "$kind") + 1))/$cap $kind shards in flight)"
     ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=$E2E_DIR/e2e-$group-results --reporter=list" ) \
       > "$E2E_DIR/e2e-shard-$group.log" 2>&1 &
     PID2NAME[$!]="$group"; NAMES+=("$group"); running=$((running + 1))

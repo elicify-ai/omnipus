@@ -1,5 +1,5 @@
 {
-  "_comment": "SINGLE SOURCE OF TRUTH for the E2E shard plan. Consumed by BOTH .github/workflows/pr.yml (scripts/e2e-shards.sh matrix -> strategy.matrix via fromJSON) and deploy/ci-worker/runci.sh (scripts/e2e-shards.sh list). Every tests/e2e/*.spec.ts MUST be assigned to exactly one shard -- scripts/e2e-shards.sh check enforces this and FAILS CI on drift (an unassigned spec would silently never run; a dead reference would error). key_slot selects the OpenRouter key: a=primary (OPENROUTER_API_KEY / secrets.OPENROUTER_API_KEY_CI, always present), b/c=optional extra keys that fall back to a when unset, so concurrent LLM shards never share one rate-limit window. port is used ONLY by runci.sh (all shards share one worker machine, so they need distinct ports); each GitHub Actions shard runs on its own runner and always uses 6060. solo=true (optional, runci.sh-only, default false) makes runci.sh drain all in-flight shards and run this one ALONE in the foreground -- for timing-sensitive specs (WS-idle, live-vs-replay DOM fidelity, real-recap latency) that flake under any CPU contention on the shared worker; on GitHub Actions each shard already has its own runner so solo is a no-op there. To add a spec: drop it in tests/e2e/ and add its path to exactly one shard here -- nothing else to touch. The conformance suite is deliberately spread over FOUR shards (llm-conformance-chat/-plan/-replan/-exec): it is real-LLM, multi-minute-per-test work and as ONE shard it took ~1343s, 4.5x the next-longest E2E shard, single-handedly setting the pipeline's floor. playwright.config.ts pins workers:1/fullyParallel:false (a shared gateway's config/credentials cannot tolerate concurrent writes), so a spec FILE is the smallest unit of parallelism -- hence four files, one per shard, each on its own gateway. They are budget-balanced by summed per-test test.setTimeout (1140/1200/1080/1020s), NOT by line count, and spread across all three key_slots so four concurrent real-LLM shards do not share one rate-limit window. Every conformance test is self-contained (own workspace, own Date.now()-suffixed agent, own chat session), so regrouping them across shards is safe -- but keep any one test whole and do not split a test's file without re-checking that.",
+  "_comment": "SINGLE SOURCE OF TRUTH for the E2E shard plan. Consumed by BOTH .github/workflows/pr.yml (scripts/e2e-shards.sh matrix -> strategy.matrix via fromJSON) and deploy/ci-worker/runci.sh (scripts/e2e-shards.sh list). Every tests/e2e/*.spec.ts MUST be assigned to exactly one shard -- scripts/e2e-shards.sh check enforces this and FAILS CI on drift (an unassigned spec would silently never run; a dead reference would error). key_slot selects the OpenRouter key: a=primary (OPENROUTER_API_KEY / secrets.OPENROUTER_API_KEY_CI, always present), b/c=optional extra keys that fall back to a when unset, so concurrent LLM shards never share one rate-limit window. port is used ONLY by runci.sh (all shards share one worker machine, so they need distinct ports); each GitHub Actions shard runs on its own runner and always uses 6060. solo=true (optional, runci.sh-only, default false) makes runci.sh drain all in-flight shards and run this one ALONE in the foreground -- for timing-sensitive specs (WS-idle, live-vs-replay DOM fidelity, real-recap latency) that flake under any CPU contention on the shared worker; on GitHub Actions each shard already has its own runner so solo is a no-op there. Render-bound shards are deliberately kept at ~4 specs each: playwright.config.ts pins workers:1/fullyParallel:false inside a shard, so a 15-spec render shard is strictly serial, and with the worker's render cap of 2 in flight, three such shards set the wall clock (43 of 72 specs sat in ui/stubs/ui-heavy before the 2026-09-16 rebalance) -- when adding render specs, top up the smallest same-character shard instead of growing one past ~6. SOLO SHARDS ARE LISTED LAST, and keep it that way: runci.sh walks this plan top-to-bottom and a solo shard blocks the launcher while it drains and runs alone, so a solo listed early idles every concurrent slot; last-placed solos let the render/LLM caps pack first (order is irrelevant on GitHub Actions, where every shard gets its own runner). To add a spec: drop it in tests/e2e/ and add its path to exactly one shard here -- nothing else to touch. The conformance suite is deliberately spread over FOUR shards (llm-conformance-chat/-plan/-replan/-exec): it is real-LLM, multi-minute-per-test work and as ONE shard it took ~1343s, 4.5x the next-longest E2E shard, single-handedly setting the pipeline's floor. playwright.config.ts pins workers:1/fullyParallel:false (a shared gateway's config/credentials cannot tolerate concurrent writes), so a spec FILE is the smallest unit of parallelism -- hence four files, one per shard, each on its own gateway. They are budget-balanced by summed per-test test.setTimeout (1140/1200/1080/1020s), NOT by line count, and spread across all three key_slots so four concurrent real-LLM shards do not share one rate-limit window. Every conformance test is self-contained (own workspace, own Date.now()-suffixed agent, own chat session), so regrouping them across shards is safe -- but keep any one test whole and do not split a test's file without re-checking that.",
   "shards": [
     {
       "group": "llm-chat",
@@ -24,15 +24,6 @@
       ]
     },
     {
-      "group": "llm-hot-reload",
-      "key_slot": "b",
-      "port": 6068,
-      "solo": true,
-      "specs": [
-        "tests/e2e/hot-reload.spec.ts"
-      ]
-    },
-    {
       "group": "llm-light",
       "key_slot": "c",
       "port": 6062,
@@ -48,7 +39,7 @@
     },
     {
       "group": "llm-verifier-eval",
-      "key_slot": "b",
+      "key_slot": "c",
       "port": 6066,
       "specs": [
         "tests/e2e/verifier-eval.spec.ts"
@@ -61,6 +52,145 @@
       "specs": [
         "tests/e2e/goal-work-first.spec.ts",
         "tests/e2e/goal-card-position.spec.ts"
+      ]
+    },
+    {
+      "group": "ui-1",
+      "key_slot": "a",
+      "port": 6063,
+      "specs": [
+        "tests/e2e/accessibility.spec.ts",
+        "tests/e2e/agents.spec.ts",
+        "tests/e2e/auth.spec.ts",
+        "tests/e2e/burst-resilience.spec.ts"
+      ]
+    },
+    {
+      "group": "ui-2",
+      "key_slot": "b",
+      "port": 6074,
+      "specs": [
+        "tests/e2e/calendar-recurrence.spec.ts",
+        "tests/e2e/calendar.spec.ts",
+        "tests/e2e/contract-counters.spec.ts",
+        "tests/e2e/create-agent.spec.ts"
+      ]
+    },
+    {
+      "group": "ui-3",
+      "key_slot": "c",
+      "port": 6075,
+      "specs": [
+        "tests/e2e/security-tools.spec.ts",
+        "tests/e2e/sidebar.spec.ts",
+        "tests/e2e/skills.spec.ts",
+        "tests/e2e/uat-audit-and-settings.spec.ts"
+      ]
+    },
+    {
+      "group": "ui-4",
+      "key_slot": "a",
+      "port": 6076,
+      "specs": [
+        "tests/e2e/uat-shell-and-screens.spec.ts",
+        "tests/e2e/ws-reconnect.spec.ts",
+        "tests/e2e/xss.spec.ts"
+      ]
+    },
+    {
+      "_comment": "Concurrent half of the old 13-spec ui-heavy shard: the specs that joined ui-heavy for SURFACE affinity (real-browser panel; PDF/CSP surface), not for timing sensitivity -- see the solo ui-heavy shard below for which five ARE timing-sensitive and why.",
+      "group": "ui-browser",
+      "key_slot": "b",
+      "port": 6080,
+      "specs": [
+        "tests/e2e/browser-control-handover.spec.ts",
+        "tests/e2e/browser-live-video.spec.ts",
+        "tests/e2e/uat-browser-panel.spec.ts",
+        "tests/e2e/uat-ownership-api.spec.ts"
+      ]
+    },
+    {
+      "group": "ui-render",
+      "key_slot": "a",
+      "port": 6081,
+      "specs": [
+        "tests/e2e/tool-order.spec.ts",
+        "tests/e2e/csp-assumptions.spec.ts",
+        "tests/e2e/preview-pdf.spec.ts",
+        "tests/e2e/truncation-notice.spec.ts"
+      ]
+    },
+    {
+      "group": "stubs-1",
+      "key_slot": "b",
+      "port": 6064,
+      "specs": [
+        "tests/e2e/about.spec.ts",
+        "tests/e2e/api-errors.spec.ts",
+        "tests/e2e/fresh-install.spec.ts",
+        "tests/e2e/iframe-preview-warmup.spec.ts"
+      ]
+    },
+    {
+      "group": "stubs-2",
+      "key_slot": "c",
+      "port": 6077,
+      "specs": [
+        "tests/e2e/mcp-add.spec.ts",
+        "tests/e2e/onboarding.spec.ts",
+        "tests/e2e/profile-fontsize.spec.ts",
+        "tests/e2e/providers.spec.ts"
+      ]
+    },
+    {
+      "group": "stubs-3",
+      "key_slot": "a",
+      "port": 6078,
+      "specs": [
+        "tests/e2e/settings-gateway.spec.ts",
+        "tests/e2e/version-drift.spec.ts",
+        "tests/e2e/web-serve-canonical.spec.ts",
+        "tests/e2e/web-serve-malformed.spec.ts"
+      ]
+    },
+    {
+      "group": "stubs-4",
+      "key_slot": "b",
+      "port": 6079,
+      "specs": [
+        "tests/e2e/whatsapp-qr.spec.ts",
+        "tests/e2e/channel-instance-crud.spec.ts",
+        "tests/e2e/channel-routing.spec.ts"
+      ]
+    },
+    {
+      "_comment": "ADR-067 §13.4 isolation matrix. These specs are the ONLY files the isolation-chromium/firefox/webkit projects match, and each runs on all three engines, so this shard needs `playwright install firefox webkit` in addition to chromium -- a chromium-only runner cannot execute it. Its own shard for exactly that reason: the extra engine install is confined here instead of slowing every other shard. Nothing here calls an LLM, so the key_slot is irrelevant.",
+      "group": "preview-isolation",
+      "key_slot": "c",
+      "port": 6083,
+      "specs": [
+        "tests/e2e/preview-isolation.spec.ts",
+        "tests/e2e/preview-bundle.spec.ts",
+        "tests/e2e/preview-svg.spec.ts"
+      ]
+    },
+    {
+      "_comment": "ADR-067 §13.4 item 4 / §0. The only two headed cases -- the browser's OWN PDF handling, which headless Chromium does not have. Needs a display (xvfb-run, or GitHub Actions' bundled X server) because playwright.config.ts sets headless:false on the `preview-headed` project. Separate shard so that requirement lands on one job rather than all of them.",
+      "group": "preview-headed",
+      "key_slot": "c",
+      "port": 6073,
+      "specs": [
+        "tests/e2e/preview-pdf-toplevel.spec.ts",
+        "tests/e2e/preview-pdf-viewer-control.spec.ts"
+      ]
+    },
+    {
+      "group": "llm-hot-reload",
+      "key_slot": "b",
+      "port": 6068,
+      "solo": true,
+      "specs": [
+        "tests/e2e/hot-reload.spec.ts"
       ]
     },
     {
@@ -100,98 +230,26 @@
       ]
     },
     {
-      "group": "ui",
-      "key_slot": "c",
-      "port": 6063,
-      "specs": [
-        "tests/e2e/accessibility.spec.ts",
-        "tests/e2e/agents.spec.ts",
-        "tests/e2e/auth.spec.ts",
-        "tests/e2e/burst-resilience.spec.ts",
-        "tests/e2e/calendar-recurrence.spec.ts",
-        "tests/e2e/calendar.spec.ts",
-        "tests/e2e/contract-counters.spec.ts",
-        "tests/e2e/create-agent.spec.ts",
-        "tests/e2e/security-tools.spec.ts",
-        "tests/e2e/sidebar.spec.ts",
-        "tests/e2e/skills.spec.ts",
-        "tests/e2e/uat-audit-and-settings.spec.ts",
-        "tests/e2e/uat-shell-and-screens.spec.ts",
-        "tests/e2e/ws-reconnect.spec.ts",
-        "tests/e2e/xss.spec.ts"
-      ]
-    },
-    {
+      "_comment": "SOLO, and deliberately exactly these five specs: the timing-sensitive set measured to flake under ANY co-tenant CPU contention (commit 4b4948e2b, 2026-07-16: at 2-wide, idle-no-reconnect saw 9 WS reconnects in 90 s with pings unanswered, and multi-turn-render/replay-fidelity/settings-memory saw the chat input disabled >30 s while a CPU-heavy co-tenant shard starved the gateway). They need the whole worker. The eight specs that later joined the old ui-heavy shard were placed there for surface affinity, not timing sensitivity -- the 2026-09-16 rebalance moved them to the concurrent ui-browser/ui-render shards so only the measured-sensitive five pay the serial solo cost. Note: retention.spec.ts re-logins without refreshing storageState (sanctioned in scripts/check-e2e-login-crosstalk.sh); settings-memory runs after it here exactly as before the split and tolerates the stale cookie via MemorySection's free-text fallback.",
       "group": "ui-heavy",
       "key_slot": "c",
       "port": 6065,
       "solo": true,
       "specs": [
-        "tests/e2e/browser-control-handover.spec.ts",
-        "tests/e2e/browser-live-video.spec.ts",
         "tests/e2e/idle-no-reconnect.spec.ts",
         "tests/e2e/multi-turn-render.spec.ts",
         "tests/e2e/replay-fidelity.spec.ts",
         "tests/e2e/retention.spec.ts",
-        "tests/e2e/settings-memory.spec.ts",
-        "tests/e2e/tool-order.spec.ts",
-        "tests/e2e/uat-browser-panel.spec.ts",
-        "tests/e2e/uat-ownership-api.spec.ts",
-        "tests/e2e/csp-assumptions.spec.ts",
-        "tests/e2e/preview-pdf.spec.ts",
-        "tests/e2e/truncation-notice.spec.ts"
+        "tests/e2e/settings-memory.spec.ts"
       ]
     },
     {
       "group": "auth-posture",
-      "key_slot": "a",
-      "port": 6069,
+      "key_slot": "b",
+      "port": 6082,
       "solo": true,
       "specs": [
         "tests/e2e/fr050-preauth-window.spec.ts"
-      ]
-    },
-    {
-      "group": "stubs",
-      "key_slot": "a",
-      "port": 6064,
-      "specs": [
-        "tests/e2e/about.spec.ts",
-        "tests/e2e/api-errors.spec.ts",
-        "tests/e2e/fresh-install.spec.ts",
-        "tests/e2e/iframe-preview-warmup.spec.ts",
-        "tests/e2e/mcp-add.spec.ts",
-        "tests/e2e/onboarding.spec.ts",
-        "tests/e2e/profile-fontsize.spec.ts",
-        "tests/e2e/providers.spec.ts",
-        "tests/e2e/settings-gateway.spec.ts",
-        "tests/e2e/version-drift.spec.ts",
-        "tests/e2e/web-serve-canonical.spec.ts",
-        "tests/e2e/web-serve-malformed.spec.ts",
-        "tests/e2e/whatsapp-qr.spec.ts",
-        "tests/e2e/channel-instance-crud.spec.ts",
-        "tests/e2e/channel-routing.spec.ts"
-      ]
-    },
-    {
-      "_comment": "ADR-067 \u00a713.4 isolation matrix. These specs are the ONLY files the isolation-chromium/firefox/webkit projects match, and each runs on all three engines, so this shard needs `playwright install firefox webkit` in addition to chromium -- a chromium-only runner cannot execute it. Its own shard for exactly that reason: the extra engine install is confined here instead of slowing every other shard. key_slot a because nothing here calls an LLM.",
-      "group": "preview-isolation",
-      "key_slot": "a",
-      "port": 6072,
-      "specs": [
-        "tests/e2e/preview-isolation.spec.ts",
-        "tests/e2e/preview-bundle.spec.ts",
-        "tests/e2e/preview-svg.spec.ts"
-      ]
-    },
-    {
-      "_comment": "ADR-067 \u00a713.4 item 4 / \u00a70. The only two headed cases -- the browser's OWN PDF handling, which headless Chromium does not have. Needs a display (xvfb-run, or GitHub Actions' bundled X server) because playwright.config.ts sets headless:false on the `preview-headed` project. Separate shard so that requirement lands on one job rather than all of them.",
-      "group": "preview-headed",
-      "key_slot": "a",
-      "port": 6073,
-      "specs": [
-        "tests/e2e/preview-pdf-toplevel.spec.ts",
-        "tests/e2e/preview-pdf-viewer-control.spec.ts"
       ]
     }
   ]
