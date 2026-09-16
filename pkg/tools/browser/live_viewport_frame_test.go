@@ -39,6 +39,14 @@ func newViewportFrameFixture(t *testing.T) *viewportFrameFixture {
 	tabCtx, err := m.Session(testSessionID)
 	require.NoError(t, err)
 	lv := &LiveView{mgr: m, sessionID: testSessionID, tabCtx: tabCtx, viewers: make(map[string]struct{})}
+	// newTestManagerWithFakeTabs wires a real registry, and every real registry
+	// owns an FR-031a sweeper goroutine that only ITS Shutdown stops. Swapping
+	// m.live to the hand-built one below would orphan the original sweeper —
+	// m.Shutdown then stops the replacement (a nil-stop-channel no-op) while
+	// the real one stays parked in its select, which synctest reports as a
+	// bubble deadlock at teardown. Shut the original down too.
+	prev := m.live
+	t.Cleanup(prev.Shutdown)
 	reg := &LiveViewRegistry{views: map[string]*LiveView{testSessionID: lv}}
 	m.live = reg
 	cs, _ := adapterFixture(t)
