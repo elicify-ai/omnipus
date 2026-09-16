@@ -149,96 +149,33 @@ func (a *restAPI) getSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// restAPIPutSandboxConfig carries the shared state of putSandboxConfig across its stages.
+type restAPIPutSandboxConfig struct {
+	a                           *restAPI
+	w                           http.ResponseWriter
+	r                           *http.Request
+	body                        gen.SandboxConfigUpdate
+	changedMode                 bool
+	changedAllowNetworkOutbound bool
+	changedAllowedPaths         bool
+	changedSSRFEnabled          bool
+	resolvedAllowInternal       *[]string
+	changedAllowInternal        bool
+	changedShellDenyPatterns    bool
+	changedFilesystemModel      bool
+	changedWorkspacePathGuard   bool
+	ssrfWarnings                []string
+}
+
 func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
-	// Re-auth gate (Spec-6 FR-12.2): a sandbox-config mutation is a sensitive
-	// HTTP-layer security change and requires the single-use re-auth consent
-	// token — the same gate the Integrations PUT enforces. RequireNotBypass
-	// (already in adminWrap) is a 503 dev-mode guard, NOT this consent check; the
-	// two are layered. The user is guaranteed in context here (admin-wrapped).
-	user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)
-	if !ok || user == nil {
-		jsonErr(w, http.StatusUnauthorized, "not authenticated")
-		return
-	}
-	if !a.requireReAuth(w, r, user.Username) {
+	ps := &restAPIPutSandboxConfig{a: a, w: w, r: r}
+
+	if ps.authenticateAndDecode() {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var body gen.SandboxConfigUpdate
-	validateEnabled := a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(w, r, "SandboxConfigUpdate", &body, validateEnabled) {
+	if ps.resolveAndValidate() {
 		return
-	}
-
-	// Resolve which fields are being updated. Flat ssrf_allow_internal takes
-	// precedence over nested ssrf.allow_internal when both are present.
-	changedMode := body.Mode != nil
-	changedAllowNetworkOutbound := body.AllowNetworkOutbound != nil
-	changedAllowedPaths := body.AllowedPaths != nil
-	changedSSRFEnabled := body.SsrfEnabled != nil
-
-	// Resolve allow_internal source: flat field takes precedence over nested.
-	var resolvedAllowInternal *[]string
-	if body.SsrfAllowInternal != nil {
-		resolvedAllowInternal = body.SsrfAllowInternal
-	} else if body.Ssrf != nil && body.Ssrf.AllowInternal != nil {
-		resolvedAllowInternal = body.Ssrf.AllowInternal
-	}
-	changedAllowInternal := resolvedAllowInternal != nil
-	changedShellDenyPatterns := body.ShellDenyPatterns != nil
-	changedFilesystemModel := body.FilesystemModel != nil
-	changedWorkspacePathGuard := body.WorkspacePathGuard != nil
-
-	if !changedMode && !changedAllowNetworkOutbound && !changedAllowedPaths &&
-		!changedSSRFEnabled && !changedAllowInternal && !changedShellDenyPatterns &&
-		!changedFilesystemModel && !changedWorkspacePathGuard {
-		jsonErr(
-			w,
-			http.StatusBadRequest,
-			"at least one field required — expected mode, filesystem_model, allowed_paths, ssrf.allow_internal, shell_deny_patterns, or workspace_path_guard",
-		)
-		return
-	}
-
-	// Validate mode value before any disk writes.
-	if changedMode {
-		if !validSandboxModes[string(*body.Mode)] {
-			jsonErr(w, http.StatusBadRequest, `invalid sandbox mode — must be one of "off", "permissive", "enforce"`)
-			return
-		}
-	}
-
-	if changedFilesystemModel {
-		if !validFilesystemModels[string(*body.FilesystemModel)] {
-			jsonErr(w, http.StatusBadRequest,
-				`invalid filesystem_model — must be "confined" or "open"`)
-			return
-		}
-	}
-
-	// Strict validation — one bad entry fails the whole PUT, nothing persists.
-	if changedAllowedPaths {
-		if err := validateAllowedPaths(*body.AllowedPaths); err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-	}
-	var ssrfWarnings []string
-	if changedAllowInternal {
-		warnings, err := validateSSRFAllowInternal(*resolvedAllowInternal)
-		if err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		ssrfWarnings = warnings
-	}
-	if changedShellDenyPatterns {
-		if err := validateShellDenyPatterns(*body.ShellDenyPatterns); err != nil {
-			jsonErr(w, http.StatusBadRequest, err.Error())
-			return
-		}
 	}
 
 	// Capture old values for auditing inside the safeUpdateConfigJSON callback
@@ -255,31 +192,31 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		oldWorkspacePathGuard = true
 	)
 
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
+	if err := ps.a.safeUpdateConfigJSON(func(m map[string]any) error {
 		sandbox := ensureMap(m, "sandbox")
 
 		// Snapshot old values from the just-read map so the audit diff is
 		// consistent with the actual atomic state, not a pre-lock race copy.
-		if changedMode {
+		if ps.changedMode {
 			if s, ok := sandbox["mode"].(string); ok {
 				oldMode = s
 			}
-			sandbox["mode"] = string(*body.Mode)
+			sandbox["mode"] = string(*ps.body.Mode)
 			// Strip any stale legacy "enabled" bool from older configs so
 			// the on-disk shape matches the current schema.
 			delete(sandbox, "enabled")
 		}
-		if changedFilesystemModel {
+		if ps.changedFilesystemModel {
 			// Restart-gated for the same reason as mode: the kernel profile was
 			// built from this value at boot and is not rebuilt in place, so
 			// applying it live would leave config and enforcement disagreeing —
 			// the precise condition the restart gate exists to prevent.
-			sandbox["filesystem_model"] = string(*body.FilesystemModel)
+			sandbox["filesystem_model"] = string(*ps.body.FilesystemModel)
 		}
-		if changedAllowNetworkOutbound {
-			sandbox["allow_network_outbound"] = *body.AllowNetworkOutbound
+		if ps.changedAllowNetworkOutbound {
+			sandbox["allow_network_outbound"] = *ps.body.AllowNetworkOutbound
 		}
-		if changedAllowedPaths {
+		if ps.changedAllowedPaths {
 			if raw, ok := sandbox["allowed_paths"].([]any); ok {
 				for _, v := range raw {
 					if s, ok := v.(string); ok {
@@ -287,14 +224,14 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			sandbox["allowed_paths"] = toAnySlice(*body.AllowedPaths)
+			sandbox["allowed_paths"] = toAnySlice(*ps.body.AllowedPaths)
 		}
-		if changedSSRFEnabled || changedAllowInternal {
+		if ps.changedSSRFEnabled || ps.changedAllowInternal {
 			ssrf := ensureMap(m, "sandbox", "ssrf")
-			if changedSSRFEnabled {
-				ssrf["enabled"] = *body.SsrfEnabled
+			if ps.changedSSRFEnabled {
+				ssrf["enabled"] = *ps.body.SsrfEnabled
 			}
-			if changedAllowInternal {
+			if ps.changedAllowInternal {
 				if raw, ok := ssrf["allow_internal"].([]any); ok {
 					for _, v := range raw {
 						if s, ok := v.(string); ok {
@@ -302,10 +239,10 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
-				ssrf["allow_internal"] = toAnySlice(*resolvedAllowInternal)
+				ssrf["allow_internal"] = toAnySlice(*ps.resolvedAllowInternal)
 			}
 		}
-		if changedShellDenyPatterns {
+		if ps.changedShellDenyPatterns {
 			if raw, ok := sandbox["shell_deny_patterns"].([]any); ok {
 				for _, v := range raw {
 					if s, ok := v.(string); ok {
@@ -313,7 +250,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			sandbox["shell_deny_patterns"] = toAnySlice(*body.ShellDenyPatterns)
+			sandbox["shell_deny_patterns"] = toAnySlice(*ps.body.ShellDenyPatterns)
 		}
 		// ADR-068 §6. Restart-gated: applyWorkspacePathGuard resolves this into
 		// AgentDefaults.RestrictToWorkspace at boot, and the guard reads that
@@ -321,65 +258,65 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		// restarted. Persisted as an explicit bool, never removed on false —
 		// the tri-state nil means "unset, use the default", which is NOT the
 		// same as an operator deliberately choosing false.
-		if changedWorkspacePathGuard {
+		if ps.changedWorkspacePathGuard {
 			if prev, ok := sandbox["workspace_path_guard"].(bool); ok {
 				oldWorkspacePathGuard = prev
 			}
-			sandbox["workspace_path_guard"] = *body.WorkspacePathGuard
+			sandbox["workspace_path_guard"] = *ps.body.WorkspacePathGuard
 		}
 		return nil
 	}); err != nil {
 		slog.Error("rest: update sandbox config", "error", err)
-		jsonErr(w, http.StatusInternalServerError, "could not save config")
+		jsonErr(ps.w, http.StatusInternalServerError, "could not save config")
 		return
 	}
 
 	// FR-053 invalidation fires inside safeUpdateConfigJSON above.
 	// Audit each changed field. Errors are logged, never surface to the
 	// caller — the mutation has already been persisted atomically.
-	if a.agentLoop != nil {
-		if auditLogger := a.agentLoop.AuditLogger(); auditLogger != nil {
-			if changedMode {
+	if ps.a.agentLoop != nil {
+		if auditLogger := ps.a.agentLoop.AuditLogger(); auditLogger != nil {
+			if ps.changedMode {
 				if err := audit.EmitSecuritySettingChange(
-					r.Context(), auditLogger,
+					ps.r.Context(), auditLogger,
 					"sandbox.mode",
-					oldMode, string(*body.Mode),
+					oldMode, string(*ps.body.Mode),
 				); err != nil {
 					slog.Error("rest: audit emit sandbox.mode change", "error", err)
 				}
 			}
-			if changedAllowedPaths {
+			if ps.changedAllowedPaths {
 				if err := audit.EmitSecuritySettingChange(
-					r.Context(), auditLogger,
+					ps.r.Context(), auditLogger,
 					"sandbox.allowed_paths",
-					oldAllowedPaths, *body.AllowedPaths,
+					oldAllowedPaths, *ps.body.AllowedPaths,
 				); err != nil {
 					slog.Error("rest: audit emit allowed_paths change", "error", err)
 				}
 			}
-			if changedAllowInternal {
+			if ps.changedAllowInternal {
 				if err := audit.EmitSecuritySettingChange(
-					r.Context(), auditLogger,
+					ps.r.Context(), auditLogger,
 					"sandbox.ssrf.allow_internal",
-					oldAllowInternal, *resolvedAllowInternal,
+					oldAllowInternal, *ps.resolvedAllowInternal,
 				); err != nil {
 					slog.Error("rest: audit emit ssrf.allow_internal change", "error", err)
 				}
 			}
-			if changedShellDenyPatterns {
+			if ps.changedShellDenyPatterns {
 				if err := audit.EmitSecuritySettingChange(
-					r.Context(), auditLogger,
+					ps.r.Context(), auditLogger,
 					"sandbox.shell_deny_patterns",
-					oldShellDenyPatterns, *body.ShellDenyPatterns,
+					oldShellDenyPatterns, *ps.body.ShellDenyPatterns,
 				); err != nil {
 					slog.Error("rest: audit emit shell_deny_patterns change", "error", err)
 				}
 			}
-			if changedWorkspacePathGuard {
+			if ps.changedWorkspacePathGuard {
 				if err := audit.EmitSecuritySettingChange(
-					r.Context(), auditLogger,
+					ps.r.Context(), auditLogger,
 					"sandbox.workspace_path_guard",
-					oldWorkspacePathGuard, *body.WorkspacePathGuard,
+					oldWorkspacePathGuard, *ps.body.WorkspacePathGuard,
 				); err != nil {
 					slog.Error("rest: audit emit workspace_path_guard change", "error", err)
 				}
@@ -390,9 +327,9 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	// Wildcard SSRF entries (0.0.0.0/0, ::/0) validate successfully but
 	// effectively disable internal-block protection. Log each one with
 	// the actor username so security review catches the divergence.
-	if len(ssrfWarnings) > 0 {
-		actor := actorUsername(r)
-		for _, warn := range ssrfWarnings {
+	if len(ps.ssrfWarnings) > 0 {
+		actor := actorUsername(ps.r)
+		for _, warn := range ps.ssrfWarnings {
 			slog.Warn("ssrf: wildcard allow_internal accepted",
 				"event", "ssrf_wildcard_accepted",
 				"entry", warn,
@@ -400,16 +337,119 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	ps.respond()
+}
+
+// authenticateAndDecode authenticates the caller and decodes the bounded sandbox configuration request.
+func (ps *restAPIPutSandboxConfig) authenticateAndDecode() bool {
+	// Re-auth gate (Spec-6 FR-12.2): a sandbox-config mutation is a sensitive
+	// HTTP-layer security change and requires the single-use re-auth consent
+	// token — the same gate the Integrations PUT enforces. RequireNotBypass
+	// (already in adminWrap) is a 503 dev-mode guard, NOT this consent check; the
+	// two are layered. The user is guaranteed in context here (admin-wrapped).
+	user, ok := ps.r.Context().Value(UserContextKey{}).(*config.UserConfig)
+	if !ok || user == nil {
+		jsonErr(ps.w, http.StatusUnauthorized, "not authenticated")
+		return true
+	}
+	if !ps.a.requireReAuth(ps.w, ps.r, user.Username) {
+		return true
+	}
+
+	ps.r.Body = http.MaxBytesReader(ps.w, ps.r.Body, 1<<20)
+
+	validateEnabled := ps.a.agentLoop.GetConfig().Gateway.ValidateInbound
+	if !decodeAndValidate(ps.w, ps.r, "SandboxConfigUpdate", &ps.body, validateEnabled) {
+		return true
+	}
+	return false
+}
+
+// resolveAndValidate resolves the requested fields and validates the complete change before persistence.
+func (ps *restAPIPutSandboxConfig) resolveAndValidate() bool {
+	// Resolve which fields are being updated. Flat ssrf_allow_internal takes
+	// precedence over nested ssrf.allow_internal when both are present.
+	ps.changedMode = ps.body.Mode != nil
+	ps.changedAllowNetworkOutbound = ps.body.AllowNetworkOutbound != nil
+	ps.changedAllowedPaths = ps.body.AllowedPaths != nil
+	ps.changedSSRFEnabled = ps.body.SsrfEnabled != nil
+
+	// Resolve allow_internal source: flat field takes precedence over nested.
+
+	if ps.body.SsrfAllowInternal != nil {
+		ps.resolvedAllowInternal = ps.body.SsrfAllowInternal
+	} else if ps.body.Ssrf != nil && ps.body.Ssrf.AllowInternal != nil {
+		ps.resolvedAllowInternal = ps.body.Ssrf.AllowInternal
+	}
+	ps.changedAllowInternal = ps.resolvedAllowInternal != nil
+	ps.changedShellDenyPatterns = ps.body.ShellDenyPatterns != nil
+	ps.changedFilesystemModel = ps.body.FilesystemModel != nil
+	ps.changedWorkspacePathGuard = ps.body.WorkspacePathGuard != nil
+
+	if !ps.changedMode && !ps.changedAllowNetworkOutbound && !ps.changedAllowedPaths &&
+		!ps.changedSSRFEnabled && !ps.changedAllowInternal && !ps.changedShellDenyPatterns &&
+		!ps.changedFilesystemModel && !ps.changedWorkspacePathGuard {
+		jsonErr(
+			ps.w,
+			http.StatusBadRequest,
+			"at least one field required — expected mode, filesystem_model, allowed_paths, ssrf.allow_internal, shell_deny_patterns, or workspace_path_guard",
+		)
+		return true
+	}
+
+	// Validate mode value before any disk writes.
+	if ps.changedMode {
+		if !validSandboxModes[string(*ps.body.Mode)] {
+			jsonErr(ps.w, http.StatusBadRequest, `invalid sandbox mode — must be one of "off", "permissive", "enforce"`)
+			return true
+		}
+	}
+
+	if ps.changedFilesystemModel {
+		if !validFilesystemModels[string(*ps.body.FilesystemModel)] {
+			jsonErr(ps.w, http.StatusBadRequest,
+				`invalid filesystem_model — must be "confined" or "open"`)
+			return true
+		}
+	}
+
+	// Strict validation — one bad entry fails the whole PUT, nothing persists.
+	if ps.changedAllowedPaths {
+		if err := validateAllowedPaths(*ps.body.AllowedPaths); err != nil {
+			jsonErr(ps.w, http.StatusBadRequest, err.Error())
+			return true
+		}
+	}
+
+	if ps.changedAllowInternal {
+		warnings, err := validateSSRFAllowInternal(*ps.resolvedAllowInternal)
+		if err != nil {
+			jsonErr(ps.w, http.StatusBadRequest, err.Error())
+			return true
+		}
+		ps.ssrfWarnings = warnings
+	}
+	if ps.changedShellDenyPatterns {
+		if err := validateShellDenyPatterns(*ps.body.ShellDenyPatterns); err != nil {
+			jsonErr(ps.w, http.StatusBadRequest, err.Error())
+			return true
+		}
+	}
+	return false
+}
+
+// respond returns the saved configuration and whether the changes require a restart.
+func (ps *restAPIPutSandboxConfig) respond() {
 	// mode and allowed_paths are restart-gated (each is consumed at boot or
 	// agent-wiring time). ssrf.allow_internal and shell_deny_patterns are
 	// hot-reload via the config-poll loop.
-	partialRestartRequired := changedMode || changedAllowedPaths || changedWorkspacePathGuard
+	partialRestartRequired := ps.changedMode || ps.changedAllowedPaths || ps.changedWorkspacePathGuard
 
 	// Return the updated config so the UI can cache-update without a follow-up GET.
 	// Include both flat fields and nested ssrf object for backward-compatible clients.
 	saved := true
-	if a.agentLoop != nil {
-		updatedCfg := a.agentLoop.GetConfig()
+	if ps.a.agentLoop != nil {
+		updatedCfg := ps.a.agentLoop.GetConfig()
 		updatedAllowedPaths := append([]string(nil), updatedCfg.Sandbox.AllowedPaths...)
 		if updatedAllowedPaths == nil {
 			updatedAllowedPaths = []string{}
@@ -419,8 +459,8 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 			updatedAllowInternal = []string{}
 		}
 		updatedApplied := ""
-		if a.sandboxResult != nil {
-			updatedApplied = string(a.sandboxResult.ApplyState.Mode)
+		if ps.a.sandboxResult != nil {
+			updatedApplied = string(ps.a.sandboxResult.ApplyState.Mode)
 		}
 		updatedShellDenyPatterns := append([]string(nil), updatedCfg.Sandbox.ShellDenyPatterns...)
 		if updatedShellDenyPatterns == nil {
@@ -429,7 +469,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 		updatedMode := gen.SandboxConfigMode(updatedCfg.Sandbox.ResolvedMode())
 		updatedAllowNetOut := updatedCfg.Sandbox.AllowNetworkOutbound
 		updatedSsrfEnabled := updatedCfg.Sandbox.SSRF.Enabled
-		jsonOK(w, gen.SandboxConfig{
+		jsonOK(ps.w, gen.SandboxConfig{
 			Saved:                &saved,
 			Mode:                 &updatedMode,
 			AllowNetworkOutbound: &updatedAllowNetOut,
@@ -451,7 +491,7 @@ func (a *restAPI) putSandboxConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fallback when agentLoop is nil (test harness or startup race).
-	jsonOK(w, gen.SandboxConfig{
+	jsonOK(ps.w, gen.SandboxConfig{
 		Saved:           &saved,
 		RequiresRestart: &partialRestartRequired,
 	})
