@@ -10,14 +10,12 @@ name: Cross-Platform
 # pointed at a file that does not exist, which reads as coverage and is not.
 #
 # What actually exists today, named so it can be checked:
-#   * pr.yml → job `windows-pathsafe` — runs on windows-latest. Builds
-#     ./pkg/pathsafe/... and ./pkg/library/..., and RUNS ./pkg/pathsafe/...
-#     tests. That is the whole of the Windows runtime coverage (ADR-067
-#     Stage 0).
-#   * pr.yml → job `cgo-gate`, step "GOOS=windows vet" — type-checks every
-#     package and every _test.go for windows/amd64 on the Linux runner.
-#   * Makefile → `make build-all` and `make vet-windows` — cross-compilation
-#     only; proves the code compiles, asserts nothing about behaviour.
+#   * This workflow's `windows-compile` job cross-compiles production code for
+#     windows/amd64 on Linux. It does not compile or run Windows test files.
+#   * This workflow's `windows-daemon-tests` job runs pkg/daemon tests on a
+#     windows-latest runner, including daemon_windows_test.go.
+#   * Makefile → `make vet-windows` can type-check the full module and its test
+#     files for windows/amd64, but no workflow calls it today.
 #
 # The full suite still does not run on Windows: ~15+ POSIX-specific test
 # assumptions block a fully-green Windows leg (#113). When #113 closes, add a
@@ -200,3 +198,19 @@ jobs:
             echo "otherwise report green while covering nothing." >&2
             exit 1
           fi
+
+  windows-daemon-tests:
+    name: Windows daemon tests
+    runs-on: windows-latest
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run pkg/daemon tests
+        run: go test -tags goolm,stdjson -count=1 -p 1 ./pkg/daemon/
