@@ -71,7 +71,7 @@ func scanRepo(root string, skips []string) (rows []funcRow, totalProd, totalTest
 	fset := token.NewFileSet()
 	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // best-effort: an unreadable entry does not abort the scan
+			return nil //nolint:nilerr // This diagnostic scan is best-effort; an unreadable entry must not abort it.
 		}
 		rel, relErr := filepath.Rel(root, p)
 		if relErr != nil {

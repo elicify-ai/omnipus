@@ -473,7 +473,7 @@ func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, error, bool) {
 	if err := applySupervisionPatch(su.p, su.patch); err != nil {
 		return nil, err, true
 	}
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // A false stop flag means the caller ignores both payloads and continues to the next update stage.
 }
 
 // applyTransition validates and applies the requested lifecycle transition and its reset semantics.
@@ -633,7 +633,7 @@ func (su *storeUpdateLocked) applyTransition() (*Plan, error, bool) {
 			}
 		}
 	}
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // A false stop flag means the caller ignores both payloads and continues to persistence.
 }
 
 // persist applies the final override, normalizes, persists, and publishes the updated plan.

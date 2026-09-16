@@ -1312,7 +1312,7 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, error, bool) {
 		}
 		su.t.CancelReason = *su.patch.CancelReason
 	}
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // A false stop flag means the caller ignores both payloads and continues to the next update stage.
 }
 
 // applyRemainingFields validates and applies the remaining independent patch fields.
@@ -1453,7 +1453,7 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, error, bool) {
 	if su.patch.SourceChatID != nil {
 		su.t.SourceChatID = *su.patch.SourceChatID
 	}
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // A false stop flag means the caller ignores both payloads and continues to persistence.
 }
 
 // validateAndPersist checks merged invariants, derives blocked state, and persists the task.

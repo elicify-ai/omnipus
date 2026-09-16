@@ -406,7 +406,7 @@ func (rwo *runWithOptions) scanAndInfer() (*Report, error, bool) {
 	// print is a guess the operator cannot correct, which is the whole reason
 	// the inference pass records it.
 	rwo.nameEvidenced = CollectNameEvidencedInferences(rwo.inferred)
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // A false stop flag means the orchestrator ignores both payloads and continues the import.
 }
 
 // enrichSchemas infers note types and uses base-file evidence to refine the schemas.
@@ -533,7 +533,7 @@ func (rwo *runWithOptions) reloadAndStamp() (*Report, error, bool) {
 	// records.Validate below, so validation sees the `id:` the run just wrote
 	// and the report cannot contradict the files on disk.
 	rwo.identityStamps = StampIdentities(rwo.inv.Root, rwo.notes, rwo.schemaSet, rwo.opts.LockDir, rwo.write)
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // A false stop flag means the orchestrator ignores both payloads and continues the import.
 }
 
 // translateBases translates every parsed base into produced views.
@@ -567,7 +567,7 @@ func (rwo *runWithOptions) writeAndReloadViews() (*Report, error, bool) {
 	if rwo.err != nil {
 		return nil, fmt.Errorf("vaultimport: reloading views: %w", rwo.err), true
 	}
-	return nil, nil, false
+	return nil, nil, false //nolint:nilnil // A false stop flag means the orchestrator ignores both payloads and continues the import.
 }
 
 // validateAndReport validates the imported records and assembles the final report.
