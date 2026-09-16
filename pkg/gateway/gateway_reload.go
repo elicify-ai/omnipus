@@ -573,12 +573,47 @@ func handleConfigReload(
 	return nil
 }
 
+// restartServicesState carries the shared state of restartServices across its stages.
+type restartServicesState struct {
+	al              *agent.AgentLoop
+	runningServices *services
+	msgBus          *bus.MessageBus
+	cfg             *config.Config
+	homePath        string
+	err             error
+}
+
 func restartServices(
 	al *agent.AgentLoop,
 	runningServices *services,
 	msgBus *bus.MessageBus,
 ) error {
-	cfg := al.GetConfig()
+	rs := &restartServicesState{al: al, runningServices: runningServices, msgBus: msgBus}
+
+	if r0, stop := rs.restartCron(); stop {
+		return r0
+	}
+
+	if r0, stop := rs.restartSchedulersAndDrains(); stop {
+		return r0
+	}
+
+	rs.replaceMediaStore()
+
+	if r0, stop := rs.reloadChannels(); stop {
+		return r0
+	}
+
+	if r0, stop := rs.restartDevicesAndVoice(); stop {
+		return r0
+	}
+
+	return rs.applyMessagingCaps()
+}
+
+// restartCron recreates and starts the cron service, then refreshes its REST API reference.
+func (rs *restartServicesState) restartCron() (error, bool) {
+	rs.cfg = rs.al.GetConfig()
 
 	// FIX (14-reviewer sign-off, MEDIUM): this used to derive the home dir as
 	// filepath.Dir(cfg.AgentHomeBasePath()) — i.e. assuming
@@ -595,27 +630,27 @@ func restartServices(
 	// the operator's existing notifications/triggers/loop jobs would appear
 	// to vanish. Use the SAME field boot used, not a re-derivation, so the
 	// two paths are equal by construction rather than by convention.
-	homePath := runningServices.homePath
+	rs.homePath = rs.runningServices.homePath
 
-	if runningServices.notifStore == nil {
+	if rs.runningServices.notifStore == nil {
 		// Derive the home dir from the workspace path (workspace == <home>/workspace).
-		runningServices.notifStore = notifications.NewStore(
-			filepath.Join(homePath, "notifications"),
+		rs.runningServices.notifStore = notifications.NewStore(
+			filepath.Join(rs.homePath, "notifications"),
 		)
 	}
-	var err error
-	runningServices.CronService, err = setupCronTool(
-		al,
-		msgBus,
-		cfg.AgentHomeBasePath(),
-		cfg,
-		runningServices.notifStore,
+
+	rs.runningServices.CronService, rs.err = setupCronTool(
+		rs.al,
+		rs.msgBus,
+		rs.cfg.AgentHomeBasePath(),
+		rs.cfg,
+		rs.runningServices.notifStore,
 	)
-	if err != nil {
-		return fmt.Errorf("error restarting cron service: %w", err)
+	if rs.err != nil {
+		return fmt.Errorf("error restarting cron service: %w", rs.err), true
 	}
-	if err = runningServices.CronService.Start(); err != nil {
-		return fmt.Errorf("error restarting cron service: %w", err)
+	if rs.err = rs.runningServices.CronService.Start(); rs.err != nil {
+		return fmt.Errorf("error restarting cron service: %w", rs.err), true
 	}
 	// Re-point the restAPI's cronService field to the newly started instance.
 	// restAPI.cronService is assigned once at construction time
@@ -624,11 +659,15 @@ func restartServices(
 	// without this update the restAPI holds a stale pointer whose laneCtx was
 	// canceled by the previous Stop(), causing "turn not started: context
 	// canceled" on every RunNow call (#412).
-	if runningServices.restAPIRef != nil {
-		runningServices.restAPIRef.cronService.Store(runningServices.CronService)
+	if rs.runningServices.restAPIRef != nil {
+		rs.runningServices.restAPIRef.cronService.Store(rs.runningServices.CronService)
 	}
 	fmt.Println("  ✓ Cron service restarted")
+	return nil, false
+}
 
+// restartSchedulersAndDrains restarts the plan engine, schedulers, and background task and mailbox drains.
+func (rs *restartServicesState) restartSchedulersAndDrains() (error, bool) {
 	// Restart the SAME plan-engine instance (ADR-049 D4) — unlike CronService,
 	// the engine is not reconstructed on reload: it was Stop()'d in
 	// stopAndCleanupServices(isReload=true) above, and Start() on an
@@ -636,25 +675,25 @@ func restartServices(
 	// re-subscribes to the event bus, re-runs boot reconciliation). taskStore/
 	// taskExecutor are themselves stable across a reload (owned by the SAME
 	// al, never recreated), so there is nothing to re-wire.
-	if runningServices.PlanEngine != nil {
-		if startErr := runningServices.PlanEngine.Start(context.Background()); startErr != nil {
-			return fmt.Errorf("error restarting plan engine: %w", startErr)
+	if rs.runningServices.PlanEngine != nil {
+		if startErr := rs.runningServices.PlanEngine.Start(context.Background()); startErr != nil {
+			return fmt.Errorf("error restarting plan engine: %w", startErr), true
 		}
 		fmt.Println("  ✓ Plan engine restarted")
 	}
 
 	// Restart the task time-trigger scheduler on its dedicated CronService. The
 	// previous instance was already Stop()'d in stopAndCleanupServices(isReload).
-	if tStore := agent.GetTaskStore(al); tStore != nil {
-		triggerStorePath := filepath.Join(homePath, "tasks_triggers", "jobs.json")
-		runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
-			triggerStorePath, tStore, agent.GetTaskExecutor(al),
+	if tStore := agent.GetTaskStore(rs.al); tStore != nil {
+		triggerStorePath := filepath.Join(rs.homePath, "tasks_triggers", "jobs.json")
+		rs.runningServices.TaskTrigger = agent.NewTaskTriggerScheduler(
+			triggerStorePath, tStore, agent.GetTaskExecutor(rs.al),
 		)
-		if startErr := runningServices.TaskTrigger.Start(); startErr != nil {
-			return fmt.Errorf("error restarting task trigger scheduler: %w", startErr)
+		if startErr := rs.runningServices.TaskTrigger.Start(); startErr != nil {
+			return fmt.Errorf("error restarting task trigger scheduler: %w", startErr), true
 		}
-		al.SetTaskTriggerScheduler(runningServices.TaskTrigger)
-		if recErr := runningServices.TaskTrigger.Reconcile(); recErr != nil {
+		rs.al.SetTaskTriggerScheduler(rs.runningServices.TaskTrigger)
+		if recErr := rs.runningServices.TaskTrigger.Reconcile(); recErr != nil {
 			slog.Error("gateway: task trigger reconcile failed on reload", "error", recErr)
 		}
 		fmt.Println("  ✓ Task trigger scheduler restarted")
@@ -665,21 +704,21 @@ func restartServices(
 	// stopAndCleanupServices(isReload) — mirrors the task trigger restart
 	// immediately above.
 	{
-		loopSchedStorePath := filepath.Join(homePath, "loops", "jobs.json")
-		runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, al)
-		if startErr := runningServices.LoopScheduler.Start(); startErr != nil {
-			return fmt.Errorf("error restarting loop scheduler: %w", startErr)
+		loopSchedStorePath := filepath.Join(rs.homePath, "loops", "jobs.json")
+		rs.runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, rs.al)
+		if startErr := rs.runningServices.LoopScheduler.Start(); startErr != nil {
+			return fmt.Errorf("error restarting loop scheduler: %w", startErr), true
 		}
-		al.SetLoopScheduler(runningServices.LoopScheduler)
+		rs.al.SetLoopScheduler(rs.runningServices.LoopScheduler)
 		fmt.Println("  ✓ Loop scheduler restarted")
 	}
 
 	// Queued-task draining is owned by the dedicated TaskDrainService, never the
 	// heartbeat path — restart it here so dispatch survives a reload regardless of
 	// the heartbeat configuration.
-	if te := agent.GetTaskExecutor(al); te != nil {
-		runningServices.TaskDrain = heartbeat.NewTaskDrainService(te, 0)
-		runningServices.TaskDrain.Start()
+	if te := agent.GetTaskExecutor(rs.al); te != nil {
+		rs.runningServices.TaskDrain = heartbeat.NewTaskDrainService(te, 0)
+		rs.runningServices.TaskDrain.Start()
 		fmt.Println("  ✓ Queued-task drain restarted (TaskDrainService)")
 	}
 
@@ -687,17 +726,21 @@ func restartServices(
 	// instance was Stop()'d in stopAndCleanupServices(isReload). The provider reads
 	// live config + the credential store on each tick, so a mailbox added/removed
 	// before this reload is reflected immediately.
-	if tStore := agent.GetTaskStore(al); tStore != nil {
-		credStore := runningServices.credStore
+	if tStore := agent.GetTaskStore(rs.al); tStore != nil {
+		credStore := rs.runningServices.credStore
 		provider := email.MailboxProviderFunc(func() []email.Mailbox {
-			return buildMailboxes(al.GetConfig(), credStore)
+			return buildMailboxes(rs.al.GetConfig(), credStore)
 		})
 		drainer := email.NewDrainer(tStore, provider, 0)
-		runningServices.MailboxDrain = heartbeat.NewMailboxDrainService(drainer, 0)
-		runningServices.MailboxDrain.Start()
+		rs.runningServices.MailboxDrain = heartbeat.NewMailboxDrainService(drainer, 0)
+		rs.runningServices.MailboxDrain.Start()
 		fmt.Println("  ✓ Mailbox drain restarted (MailboxDrainService)")
 	}
+	return nil, false
+}
 
+// replaceMediaStore installs a fresh media store before flushing and stopping the previous store.
+func (rs *restartServicesState) replaceMediaStore() {
 	// N-D fix: build and wire the NEW store BEFORE stopping the old one so that
 	// any upload whose scheduleSave fires in the narrow window between the Stop
 	// and the SetMediaStore calls writes into the new (live) store rather than
@@ -711,13 +754,13 @@ func restartServices(
 	// The old store is retained via oldStore until after Stop() completes so the
 	// GC does not reclaim it while the debounced save goroutine may still be
 	// running.
-	oldStore := runningServices.MediaStore
-	runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
-		Enabled:  cfg.Tools.MediaCleanup.Enabled,
-		MaxAge:   time.Duration(cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
-		Interval: time.Duration(cfg.Tools.MediaCleanup.Interval) * time.Minute,
+	oldStore := rs.runningServices.MediaStore
+	rs.runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
+		Enabled:  rs.cfg.Tools.MediaCleanup.Enabled,
+		MaxAge:   time.Duration(rs.cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
+		Interval: time.Duration(rs.cfg.Tools.MediaCleanup.Interval) * time.Minute,
 	})
-	if fms, ok := runningServices.MediaStore.(*media.FileMediaStore); ok {
+	if fms, ok := rs.runningServices.MediaStore.(*media.FileMediaStore); ok {
 		// Reload refs persisted by a previous gateway instance so
 		// /api/v1/media/<ref> URLs in old session transcripts still resolve.
 		// Best-effort — a load failure should not block boot.
@@ -729,7 +772,7 @@ func restartServices(
 		// AgentLoop cache as boot) so media://workspace/ refs keep resolving
 		// after hot reload.
 		fms.SetWorkspaceLibraryProvider(func(workspaceID string) (media.WorkspaceLibraryResolver, error) {
-			lib := al.GetWorkspaceLibrary(workspaceID)
+			lib := rs.al.GetWorkspaceLibrary(workspaceID)
 			if lib == nil {
 				return nil, fmt.Errorf("workspace library unavailable for %q", workspaceID)
 			}
@@ -738,30 +781,33 @@ func restartServices(
 	}
 	// Swap the live pointer first so uploads arriving after this point use the
 	// new store (closes the N-D reload-swap window).
-	al.SetMediaStore(runningServices.MediaStore)
+	rs.al.SetMediaStore(rs.runningServices.MediaStore)
 	// Now flush and stop the old store. Stop() is idempotent and safe to call
 	// even if the cleanup goroutine was never started (N3 lifecycle fix).
 	if oldFMS, ok := oldStore.(*media.FileMediaStore); ok {
 		oldFMS.Stop()
 	}
+}
 
-	al.SetChannelManager(runningServices.ChannelManager)
+// reloadChannels rewires and reloads channels, then reports the enabled channel set.
+func (rs *restartServicesState) reloadChannels() (error, bool) {
+	rs.al.SetChannelManager(rs.runningServices.ChannelManager)
 	// Pre-Reload wire: set observers before Reload() so that channels whose
 	// Start() runs *inside* Reload() already have the CancelInterceptor and
 	// PairingObserver set when they first emit events.
-	wireChannelManager(runningServices.ChannelManager, al)
+	wireChannelManager(rs.runningServices.ChannelManager, rs.al)
 
-	if err = runningServices.ChannelManager.Reload(context.Background(), cfg, runningServices.bundle); err != nil {
-		return fmt.Errorf("error reload channels: %w", err)
+	if rs.err = rs.runningServices.ChannelManager.Reload(context.Background(), rs.cfg, rs.runningServices.bundle); rs.err != nil {
+		return fmt.Errorf("error reload channels: %w", rs.err), true
 	}
 	// Post-Reload re-wire: Reload() may have recreated channel instances (new
 	// struct value with nil fields), which clears the observer pointer set
 	// above.  Re-wiring here ensures the observers are always live once the
 	// reload completes, regardless of whether instances were recreated.
-	wireChannelManager(runningServices.ChannelManager, al)
+	wireChannelManager(rs.runningServices.ChannelManager, rs.al)
 	fmt.Println("  ✓ Channels restarted.")
 
-	enabledChannels := runningServices.ChannelManager.GetEnabledChannels()
+	enabledChannels := rs.runningServices.ChannelManager.GetEnabledChannels()
 	if len(enabledChannels) > 0 {
 		fmt.Printf("  ✓ Channels enabled: %s\n", enabledChannels)
 	} else {
@@ -772,40 +818,48 @@ func restartServices(
 		// disabled, which is exactly when an operator most needs to notice).
 		logger.WarnCF("gateway", "no channels enabled after reload — gateway has no reachable channel", nil)
 	}
+	return nil, false
+}
 
+// restartDevicesAndVoice restarts device handling and refreshes the configured transcriber.
+func (rs *restartServicesState) restartDevicesAndVoice() (error, bool) {
 	// Stop the previous DeviceService before replacing it to avoid goroutine
 	// leaks: the old service's goroutine would keep running with a dangling
 	// pointer if we only overwrite the field.
-	if oldDS := runningServices.DeviceService; oldDS != nil {
+	if oldDS := rs.runningServices.DeviceService; oldDS != nil {
 		oldDS.Stop()
 	}
-	stateManager := state.NewManager(cfg.AgentHomeBasePath())
-	runningServices.DeviceService = devices.NewService(devices.Config{
-		Enabled:    cfg.Devices.Enabled,
-		MonitorUSB: cfg.Devices.MonitorUSB,
+	stateManager := state.NewManager(rs.cfg.AgentHomeBasePath())
+	rs.runningServices.DeviceService = devices.NewService(devices.Config{
+		Enabled:    rs.cfg.Devices.Enabled,
+		MonitorUSB: rs.cfg.Devices.MonitorUSB,
 	}, stateManager)
-	runningServices.DeviceService.SetBus(msgBus)
-	if err := runningServices.DeviceService.Start(context.Background()); err != nil {
-		if cfg.Devices.Enabled {
-			return fmt.Errorf("device service: %w", err)
+	rs.runningServices.DeviceService.SetBus(rs.msgBus)
+	if err := rs.runningServices.DeviceService.Start(context.Background()); err != nil {
+		if rs.cfg.Devices.Enabled {
+			return fmt.Errorf("device service: %w", err), true
 		}
 		logger.WarnCF(
 			"device",
 			"device service start failed (devices disabled, continuing)",
 			map[string]any{"error": err.Error()},
 		)
-	} else if cfg.Devices.Enabled {
+	} else if rs.cfg.Devices.Enabled {
 		fmt.Println("  ✓ Device event service restarted")
 	}
 
-	transcriber := voice.DetectTranscriber(cfg, runningServices.bundle)
-	al.SetTranscriber(transcriber)
+	transcriber := voice.DetectTranscriber(rs.cfg, rs.runningServices.bundle)
+	rs.al.SetTranscriber(transcriber)
 	if transcriber != nil {
 		logger.InfoCF("voice", "Transcription re-enabled (agent-level)", map[string]any{"provider": transcriber.Name()})
 	} else {
 		logger.InfoCF("voice", "Transcription disabled", nil)
 	}
+	return nil, false
+}
 
+// applyMessagingCaps reapplies live session-messaging limits to the durable inbox store.
+func (rs *restartServicesState) applyMessagingCaps() error {
 	// FIX (14-reviewer sign-off, MEDIUM): re-apply the live session_messaging
 	// caps to the durable inbox store on every reload. setupAndStartServices'
 	// own comment at the boot call site ("Apply the live config's caps to the
@@ -821,8 +875,8 @@ func restartServices(
 	// on these fields (pkg/session/message_inbox.go) already documents them
 	// as "re-read per call", so this is safe to do without touching the
 	// store's other state.
-	if inbox := al.GetMessageInboxStore(); inbox != nil {
-		smCfg := cfg.SessionMessaging
+	if inbox := rs.al.GetMessageInboxStore(); inbox != nil {
+		smCfg := rs.cfg.SessionMessaging
 		inbox.ChildSendRatePerMinute = smCfg.EffectiveChildSendRatePerMinute()
 		inbox.ChildSendBodyBytes = smCfg.EffectiveChildSendBodyBytes()
 		inbox.ChildSendMaxDepth = smCfg.EffectiveChildSendMaxDepth()
