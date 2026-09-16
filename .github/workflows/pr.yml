@@ -858,7 +858,16 @@ jobs:
     # not guard invocations: the single guards.sh call stays the only guard
     # step (C-92).
     needs: [changes, setup]
-    if: success() && needs.changes.outputs.code == 'true'
+    # NOT gated on `code`. The guard set discovered here now includes two
+    # DOCUMENTATION guards — check-no-stale-user-docs.sh (retired product
+    # surfaces reappearing in docs/) and check-docs-reference.sh (drift
+    # between the generated reference tables and their committed copies).
+    # `code` is 'false' exactly when every changed file is a doc, so gating
+    # on it skipped those two guards on the only changes they can catch: a
+    # docs-only PR reintroducing "Command Center" would have gone green.
+    # This also makes the `changes` job's "no job in this workflow reads
+    # docs/**" rationale obsolete for this job specifically.
+    if: success()
     steps:
       - name: Checkout
         uses: actions/checkout@v7
