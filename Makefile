@@ -24,7 +24,7 @@
 #   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
-.PHONY: all build install uninstall clean help test vet vet-windows gen-contracts verify-contracts lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-duplicate-renderer lint-no-removed-providers lint-no-orphan-turn-watchdog lint-guards spa-embed release-snapshot release-build golangci-lint-version-check
+.PHONY: all build install uninstall clean help test vet vet-windows gen-contracts verify-contracts docs-reference lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-duplicate-renderer lint-no-removed-providers lint-no-orphan-turn-watchdog lint-guards spa-embed release-snapshot release-build golangci-lint-version-check
 
 # Build variables
 BINARY_NAME=omnipus
@@ -526,6 +526,10 @@ lint-guards:
 verify-contracts: gen-contracts lint-wire-types
 	npx tsc -b --noEmit
 	git diff --exit-code -- contracts/ pkg/api/generated/ src/lib/api/generated/ pkg/gateway/inboundschemas/
+
+## docs-reference: Regenerate provider, model, and built-in tool reference tables
+docs-reference:
+	go run ./cmd/docsref
 
 ## verify-asyncapi-drift: Run the AsyncAPI Go generator and fail if the output differs from the committed file
 # Standalone drift gate for pkg/api/generated/asyncapi_types.gen.go. The
