@@ -339,21 +339,21 @@ type storeUpdateLocked struct {
 func (s *Store) updateLocked(id string, patch Patch) (*Plan, error) {
 	su := &storeUpdateLocked{s: s, id: id, patch: patch}
 
-	if r0, r1, stop := su.loadAndApplyFields(); stop {
-		return r0, r1
+	if result, stop, err := su.loadAndApplyFields(); stop {
+		return result, err
 	}
-	if r0, r1, stop := su.applyTransition(); stop {
-		return r0, r1
+	if result, stop, err := su.applyTransition(); stop {
+		return result, err
 	}
 	return su.persist()
 }
 
 // loadAndApplyFields loads the plan, captures persisted restart state, then validates and applies every non-lifecycle patch field.
-func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, error, bool) {
+func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, bool, error) {
 	var err error
 	su.p, err = su.s.load(su.id)
 	if err != nil {
-		return nil, err, true
+		return nil, true, err
 	}
 
 	// Fix-wave finding #4 (restart-guard ordering / crafted-patch attack):
@@ -382,28 +382,28 @@ func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, error, bool) {
 		// rejected the same as "".
 		trimmedTitle := strings.TrimSpace(*su.patch.Title)
 		if trimmedTitle == "" || !task.HasVisibleContent(trimmedTitle) {
-			return nil, verr("title must not be empty"), true
+			return nil, true, verr("title must not be empty")
 		}
 		if len([]rune(trimmedTitle)) > maxPlanTitleRunes {
-			return nil, verr("title must be %d characters or fewer", maxPlanTitleRunes), true
+			return nil, true, verr("title must be %d characters or fewer", maxPlanTitleRunes)
 		}
 		su.p.Title = trimmedTitle
 	}
 	if su.patch.Goal != nil {
 		if len([]rune(*su.patch.Goal)) > maxPlanGoalRunes {
-			return nil, verr("goal must be %d characters or fewer", maxPlanGoalRunes), true
+			return nil, true, verr("goal must be %d characters or fewer", maxPlanGoalRunes)
 		}
 		su.p.Goal = *su.patch.Goal
 	}
 	if su.patch.Description != nil {
 		if len([]rune(*su.patch.Description)) > maxPlanDescriptionRunes {
-			return nil, verr("description must be %d characters or fewer", maxPlanDescriptionRunes), true
+			return nil, true, verr("description must be %d characters or fewer", maxPlanDescriptionRunes)
 		}
 		su.p.Description = *su.patch.Description
 	}
 	if su.patch.OwnerAgentID != nil {
 		if *su.patch.OwnerAgentID == "" {
-			return nil, verr("owner_agent_id must not be empty"), true
+			return nil, true, verr("owner_agent_id must not be empty")
 		}
 		su.p.OwnerAgentID = *su.patch.OwnerAgentID
 	}
@@ -413,7 +413,7 @@ func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, error, bool) {
 			// See plan.go's normalize() comment: wrap ErrValidation on top of
 			// task.NormalizeCriteria's task.ErrValidation so both sentinels
 			// are satisfiable via errors.Is.
-			return nil, fmt.Errorf("%w: %w", ErrValidation, err), true
+			return nil, true, fmt.Errorf("%w: %w", ErrValidation, err)
 		}
 		su.p.DoD = normalized
 		if len(su.p.DoD) == 0 {
@@ -423,13 +423,13 @@ func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, error, bool) {
 	if su.patch.Bounds != nil {
 		newBounds := *su.patch.Bounds
 		if err := validatePlanBounds(newBounds); err != nil {
-			return nil, err, true
+			return nil, true, err
 		}
 		su.p.Bounds = newBounds
 	}
 	if su.patch.JudgeRounds != nil {
 		if *su.patch.JudgeRounds < 0 {
-			return nil, verr("judge_rounds must not be negative"), true
+			return nil, true, verr("judge_rounds must not be negative")
 		}
 		su.p.JudgeRounds = *su.patch.JudgeRounds
 	}
@@ -437,7 +437,7 @@ func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, error, bool) {
 		// Fix-wave finding 6(b): closed-set validation, mirroring the
 		// PlanPhase/FailedReason checks immediately below.
 		if *su.patch.PausedReason != "" && !IsValidPausedReason(*su.patch.PausedReason) {
-			return nil, verr("invalid paused_reason %q", *su.patch.PausedReason), true
+			return nil, true, verr("invalid paused_reason %q", *su.patch.PausedReason)
 		}
 		su.p.PausedReason = *su.patch.PausedReason
 	}
@@ -446,13 +446,13 @@ func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, error, bool) {
 	}
 	if su.patch.PlanPhase != nil {
 		if *su.patch.PlanPhase != "" && !IsValidPlanPhase(*su.patch.PlanPhase) {
-			return nil, verr("invalid plan_phase %q", *su.patch.PlanPhase), true
+			return nil, true, verr("invalid plan_phase %q", *su.patch.PlanPhase)
 		}
 		su.p.PlanPhase = *su.patch.PlanPhase
 	}
 	if su.patch.FailedReason != nil {
 		if *su.patch.FailedReason != "" && !IsValidFailedReason(*su.patch.FailedReason) {
-			return nil, verr("invalid failed_reason %q", *su.patch.FailedReason), true
+			return nil, true, verr("invalid failed_reason %q", *su.patch.FailedReason)
 		}
 		su.p.FailedReason = *su.patch.FailedReason
 	}
@@ -471,16 +471,16 @@ func (su *storeUpdateLocked) loadAndApplyFields() (*Plan, error, bool) {
 		su.p.OwnerSessionID = *su.patch.OwnerSessionID
 	}
 	if err := applySupervisionPatch(su.p, su.patch); err != nil {
-		return nil, err, true
+		return nil, true, err
 	}
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // applyTransition validates and applies the requested lifecycle transition and its reset semantics.
-func (su *storeUpdateLocked) applyTransition() (*Plan, error, bool) {
+func (su *storeUpdateLocked) applyTransition() (*Plan, bool, error) {
 	if su.patch.State != nil {
 		if !IsValidState(*su.patch.State) {
-			return nil, verr("invalid state %q", *su.patch.State), true
+			return nil, true, verr("invalid state %q", *su.patch.State)
 		}
 		from, to := su.p.State, *su.patch.State
 
@@ -505,10 +505,10 @@ func (su *storeUpdateLocked) applyTransition() (*Plan, error, bool) {
 			// is exactly the shape of the crafted-patch attack this guard
 			// closes (see onDiskFailedReason's doc comment above).
 			if su.patch.FailedReason != nil {
-				return nil, verr("failed_reason must not be set alongside a restart (failed[stopped_by_user] -> approved) transition"), true
+				return nil, true, verr("failed_reason must not be set alongside a restart (failed[stopped_by_user] -> approved) transition")
 			}
 			if su.patch.JudgeRounds != nil {
-				return nil, verr("judge_rounds must not be set alongside a restart (failed[stopped_by_user] -> approved) transition"), true
+				return nil, true, verr("judge_rounds must not be set alongside a restart (failed[stopped_by_user] -> approved) transition")
 			}
 			// Validate against the CAPTURED on-disk reason — never
 			// p.FailedReason at this point, which (for a legitimate
@@ -516,10 +516,10 @@ func (su *storeUpdateLocked) applyTransition() (*Plan, error, bool) {
 			// patch, e.g. running->failed) may already reflect THIS same
 			// patch's own FailedReason field.
 			if err := ValidateRestartTransition(from, su.onDiskFailedReason); err != nil {
-				return nil, err, true
+				return nil, true, err
 			}
 		} else if err := ValidateStateTransition(from, to); err != nil {
-			return nil, err, true
+			return nil, true, err
 		}
 
 		if from != to {
@@ -633,7 +633,7 @@ func (su *storeUpdateLocked) applyTransition() (*Plan, error, bool) {
 			}
 		}
 	}
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // persist applies the final override, normalizes, persists, and publishes the updated plan.

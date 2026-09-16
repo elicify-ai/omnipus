@@ -304,8 +304,8 @@ type runWithOptions struct {
 func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 	rwo := &runWithOptions{vaultRoot: vaultRoot, opts: opts}
 
-	if r0, r1, stop := rwo.scanAndInfer(); stop {
-		return r0, r1
+	if result, stop, err := rwo.scanAndInfer(); stop {
+		return result, err
 	}
 
 	// FR-104b (founder ruling): untyped notes are not left stranded. This
@@ -316,8 +316,8 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 	// same run that typed it.
 	rwo.enrichSchemas()
 
-	if r0, r1, stop := rwo.reloadAndStamp(); stop {
-		return r0, r1
+	if result, stop, err := rwo.reloadAndStamp(); stop {
+		return result, err
 	}
 
 	rwo.translateBases()
@@ -329,24 +329,24 @@ func RunWithOptions(vaultRoot string, opts Options) (*Report, error) {
 		defer os.RemoveAll(stage)
 		rwo.viewRoot = stage
 	}
-	if r0, r1, stop := rwo.writeAndReloadViews(); stop {
-		return r0, r1
+	if result, stop, err := rwo.writeAndReloadViews(); stop {
+		return result, err
 	}
 
 	return rwo.validateAndReport()
 }
 
 // scanAndInfer scans the vault and infers schemas from its contents.
-func (rwo *runWithOptions) scanAndInfer() (*Report, error, bool) {
+func (rwo *runWithOptions) scanAndInfer() (*Report, bool, error) {
 	rwo.write = rwo.opts.Write
 	rwo.inv, rwo.err = ScanVault(rwo.vaultRoot)
 	if rwo.err != nil {
-		return nil, rwo.err, true
+		return nil, true, rwo.err
 	}
 
 	rwo.notes, rwo.loadProblems, rwo.err = LoadNotes(rwo.inv)
 	if rwo.err != nil {
-		return nil, rwo.err, true
+		return nil, true, rwo.err
 	}
 
 	rwo.disc = CheckTypeDiscriminator(rwo.notes)
@@ -406,7 +406,7 @@ func (rwo *runWithOptions) scanAndInfer() (*Report, error, bool) {
 	// print is a guess the operator cannot correct, which is the whole reason
 	// the inference pass records it.
 	rwo.nameEvidenced = CollectNameEvidencedInferences(rwo.inferred)
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // enrichSchemas infers note types and uses base-file evidence to refine the schemas.
@@ -501,10 +501,10 @@ func (rwo *runWithOptions) enrichSchemas() {
 }
 
 // reloadAndStamp writes or stages schemas, reloads them, and stamps record identities.
-func (rwo *runWithOptions) reloadAndStamp() (*Report, error, bool) {
+func (rwo *runWithOptions) reloadAndStamp() (*Report, bool, error) {
 	if rwo.write {
 		if writeErr := writeSchemas(rwo.inv.Root, rwo.inferred, rwo.provisionedByType); writeErr != nil {
-			return nil, writeErr, true
+			return nil, true, writeErr
 		}
 	}
 
@@ -520,7 +520,7 @@ func (rwo *runWithOptions) reloadAndStamp() (*Report, error, bool) {
 		rwo.schemaSet, rwo.schemaReload, rwo.err = schemaSetFromRendered(rwo.inferred, rwo.provisionedByType)
 	}
 	if rwo.err != nil {
-		return nil, fmt.Errorf("vaultimport: reloading schemas: %w", rwo.err), true
+		return nil, true, fmt.Errorf("vaultimport: reloading schemas: %w", rwo.err)
 	}
 
 	// IDENTIFIER STAMPING, HERE AND NOT EARLIER OR LATER.
@@ -533,7 +533,7 @@ func (rwo *runWithOptions) reloadAndStamp() (*Report, error, bool) {
 	// records.Validate below, so validation sees the `id:` the run just wrote
 	// and the report cannot contradict the files on disk.
 	rwo.identityStamps = StampIdentities(rwo.inv.Root, rwo.notes, rwo.schemaSet, rwo.opts.LockDir, rwo.write)
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // translateBases translates every parsed base into produced views.
@@ -555,19 +555,19 @@ func (rwo *runWithOptions) translateBases() {
 }
 
 // writeAndReloadViews writes the produced views and reloads the resulting view set.
-func (rwo *runWithOptions) writeAndReloadViews() (*Report, error, bool) {
+func (rwo *runWithOptions) writeAndReloadViews() (*Report, bool, error) {
 	viewsDir := records.ViewsDir(rwo.viewRoot)
 	for _, pv := range rwo.allProduced {
 		path := filepath.Join(viewsDir, filepath.Base(pv.RelPath))
 		if writeErr := fileutil.WriteFileAtomic(path, pv.Bytes, generatedFilePerm); writeErr != nil {
-			return nil, fmt.Errorf("vaultimport: writing view %q: %w", path, writeErr), true
+			return nil, true, fmt.Errorf("vaultimport: writing view %q: %w", path, writeErr)
 		}
 	}
 	_, rwo.viewReload, rwo.err = records.LoadViews(rwo.viewRoot, rwo.schemaSet)
 	if rwo.err != nil {
-		return nil, fmt.Errorf("vaultimport: reloading views: %w", rwo.err), true
+		return nil, true, fmt.Errorf("vaultimport: reloading views: %w", rwo.err)
 	}
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // validateAndReport validates the imported records and assembles the final report.
