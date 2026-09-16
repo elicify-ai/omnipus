@@ -164,20 +164,22 @@ func TestBrowserToolConfig_HasNoEvaluateEnabledField(t *testing.T) {
 func TestDocs_BrowserEvaluateDefaultIsAccurate(t *testing.T) {
 	root := repoRoot(t)
 
-	sandboxDoc := readRepoFile(t, filepath.Join(root, "docs", "operations", "sandbox-config.md"))
+	sandboxPage := readHandbookPageContaining(t, root, "hand-edit `config.json`")
+	sandboxDoc := sandboxPage.body
 	if strings.Contains(sandboxDoc, `"browser_evaluate_enabled": false`) {
-		t.Error(`docs/operations/sandbox-config.md's worked config.json still contains "browser_evaluate_enabled": false — an operator copying that example silently reverts the seeded default`)
+		t.Errorf(`%s's worked config.json still contains "browser_evaluate_enabled": false — an operator copying that example silently reverts the seeded default`, sandboxPage.name)
 	}
 	if !strings.Contains(sandboxDoc, "hand-edit `config.json`") {
-		t.Error("docs/operations/sandbox-config.md does not tell an operator that hand-editing config.json plus a restart is the ONLY way to turn this off — neither Settings nor the sandbox-config API can express this key, so an operator who looks in the UI finds nothing and concludes the switch does not exist")
+		t.Errorf("%s does not tell an operator that hand-editing config.json plus a restart is the ONLY way to turn this off — neither Settings nor the sandbox-config API can express this key, so an operator who looks in the UI finds nothing and concludes the switch does not exist", sandboxPage.name)
 	}
 
-	toolsDoc := readRepoFile(t, filepath.Join(root, "docs", "tools-reference.md"))
+	toolsPage := readHandbookPageContaining(t, root, "the tool stays registered and visible to the model")
+	toolsDoc := toolsPage.body
 	if strings.Contains(toolsDoc, "registration is skipped when the flag is off") {
-		t.Error("docs/tools-reference.md still claims registration is skipped when sandbox.browser_evaluate_enabled is off. That has never been true — registration is unconditional and the gate is at EvaluateTool.Execute.")
+		t.Errorf("%s still claims registration is skipped when sandbox.browser_evaluate_enabled is off. That has never been true — registration is unconditional and the gate is at EvaluateTool.Execute.", toolsPage.name)
 	}
-	if !strings.Contains(toolsDoc, "Registration is NOT skipped") {
-		t.Error("docs/tools-reference.md does not state that registration is unconditional. The old claim was wrong for long enough to be worth contradicting explicitly rather than merely deleting.")
+	if !strings.Contains(toolsDoc, "the tool stays registered and visible to the model") {
+		t.Errorf("%s does not state that registration is unconditional. The old claim was wrong for long enough to be worth contradicting explicitly rather than merely deleting.", toolsPage.name)
 	}
 }
 
