@@ -1,0 +1,114 @@
+# Nestif grandfather list (shrink-only) — companion to functions.txt.
+# Generated 2026-09-17 (lane fn-repin) by enabling nestif in .golangci.yaml at
+# min-complexity 10 and measuring the whole repo with golangci-lint 2.12.2
+# (--build-tags=goolm,stdjson, ./pkg/...). Every finding at or above 10 was
+# pinned per FILE at that file`s largest current complexity: 55 findings in
+# 44 files. Findings below 10 (204 of 259 at threshold 5) were left
+# unpinned — the adopted threshold intentionally permits them.
+#
+# Enforcement lives in .golangci.yaml, not in a gate script: each pinned file
+# has an exclusion rule whose text regex matches "complexity: N" only for
+# N <= the pin. A pinned finding may shrink (rule still matches, row goes
+# stale — lower it or delete it when the file is clean) but any growth past
+# the pin stops matching and goes RED, exactly like functions.txt`s
+# "FAIL ... > listed <n>". Files not listed here are never excluded, so new
+# deeply-nested code fails from the start. When a file drops below 10,
+# delete its row here AND its exclusion rule there.
+#
+# Per-file pin means the largest finding in the file: a smaller sibling
+# finding in the same file can grow up to the pin undetected (the
+# name-collision caveat of functions.txt, at file granularity). Each row`s
+# comment records the finding inventory at pin time so a shrink is visible.
+#
+# Counts measured at migration tip (min-complexity -> findings):
+#   5 -> 259   6 -> 179   7 -> 132   8 -> 91   9 -> 74  10 -> 55
+#  12 -> 36   15 -> 21   20 -> 14   25 -> 9
+# file	max nestif complexity
+# 1 finding at migration tip: 10@520
+pkg/agent/judge.go	10
+# 2 findings at migration tip: 15@323 11@627
+pkg/agent/loop_inbound.go	15
+# 1 finding at migration tip: 10@193
+pkg/agent/loop_media.go	10
+# 2 findings at migration tip: 14@226 28@348
+pkg/agent/loop_run_turn_response.go	28
+# 2 findings at migration tip: 13@797 11@1657
+pkg/agent/loop_run_turn_tools.go	13
+# 1 finding at migration tip: 22@1405
+pkg/agent/loop_run_turn.go	22
+# 3 findings at migration tip: 19@1067 25@1378 11@1594
+pkg/agent/loop_wire.go	25
+# 3 findings at migration tip: 11@965 10@1822 23@1946
+pkg/agent/loop.go	23
+# 1 finding at migration tip: 19@787
+pkg/agent/registry.go	19
+# 1 finding at migration tip: 12@337
+pkg/channels/base.go	12
+# 2 findings at migration tip: 12@431 11@472
+pkg/channels/line/line.go	12
+# 1 finding at migration tip: 10@129
+pkg/channels/matrix/init.go	10
+# 1 finding at migration tip: 31@56
+pkg/channels/split.go	31
+# 1 finding at migration tip: 10@1081
+pkg/docextract/extract.go	10
+# 2 findings at migration tip: 13@953 30@1304
+pkg/filegrep/filegrep.go	30
+# 1 finding at migration tip: 10@922
+pkg/gateway/gateway_reload.go	10
+# 1 finding at migration tip: 10@421
+pkg/gateway/rest_agents_create.go	10
+# 1 finding at migration tip: 19@345
+pkg/gateway/rest_agents_update.go	19
+# 1 finding at migration tip: 21@559
+pkg/gateway/rest_channels.go	21
+# 1 finding at migration tip: 10@228
+pkg/gateway/rest_knowledge_relation.go	10
+# 1 finding at migration tip: 11@1673
+pkg/gateway/rest_knowledge_view.go	11
+# 1 finding at migration tip: 13@1015
+pkg/gateway/rest_plans.go	13
+# 1 finding at migration tip: 12@211
+pkg/gateway/rest_preview.go	12
+# 2 findings at migration tip: 11@625 12@1071
+pkg/gateway/rest_providers.go	12
+# 1 finding at migration tip: 26@277
+pkg/gateway/rest_sandbox_config.go	26
+# 2 findings at migration tip: 27@923 20@1212
+pkg/gateway/rest_workspaces.go	27
+# 1 finding at migration tip: 38@510
+pkg/gateway/websocket_chat.go	38
+# 1 finding at migration tip: 10@968
+pkg/gateway/websocket_forward.go	10
+# 1 finding at migration tip: 15@225
+pkg/gateway/websocket_pump.go	15
+# 1 finding at migration tip: 15@129
+pkg/gitevidence/repo.go	15
+# 1 finding at migration tip: 14@805
+pkg/knowledge/knowledge_describe.go	14
+# 1 finding at migration tip: 13@481
+pkg/plan/store.go	13
+# 1 finding at migration tip: 12@193
+pkg/providers/fallback.go	12
+# 1 finding at migration tip: 10@1013
+pkg/records/formula_eval.go	10
+# 1 finding at migration tip: 17@553
+pkg/records/knowledgefind/find.go	17
+# 1 finding at migration tip: 11@1458
+pkg/records/view.go	11
+# 1 finding at migration tip: 13@128
+pkg/routing/route.go	13
+# 1 finding at migration tip: 14@583
+pkg/sysagent/tools/task.go	14
+# 1 finding at migration tip: 14@455
+pkg/tools/browser/actionable.go	14
+# 1 finding at migration tip: 10@857
+pkg/tools/browser/live_viewport_frame.go	10
+# 1 finding at migration tip: 26@103
+pkg/tools/browser/webrtc/dedicated_input_peer_test.go	26
+# 1 finding at migration tip: 22@348
+pkg/tools/browser/webrtc/dedicated_input_queue.go	22
+# 1 finding at migration tip: 14@393
+pkg/tools/grep.go	14
+# 1 finding at migration tip: 27@977
+pkg/tools/web.go	27

@@ -69,7 +69,6 @@ linters:
     - maintidx
     - mnd
     - modernize
-    - nestif
     - paralleltest
     - perfsprint
     - revive
@@ -136,6 +135,17 @@ linters:
         - condition
         - operation
         - return
+    nestif:
+      # Enabled 2026-09-17 (lane fn-repin), founder decision: nestif only,
+      # no other complexity linter. min-complexity 10 picked from the measured
+      # distribution over ./pkg/... (golangci-lint 2.12.2, goolm,stdjson):
+      # 5 -> 259 findings, 6 -> 179, 7 -> 132, 8 -> 91, 9 -> 74, 10 -> 55,
+      # 12 -> 36, 15 -> 21. No threshold reaches zero. 10 is the knee: below
+      # it sits ordinary 3-4-level validation nesting (204 findings), above it
+      # the deep pyramids (17-38). The 55 findings at >= 10 are grandfathered
+      # shrink-only per file — see scripts/budgets/nestif.txt and the nestif
+      # exclusion rules below, whose text regexes pin each file's ceiling.
+      min-complexity: 10
     nakedret:
       max-func-lines: 3
     revive:
@@ -370,6 +380,190 @@ linters:
       - linters:
           - errcheck
         path-except: ^pkg/(security|sandbox|audit|policy|credentials|auth)/
+      # nestif grandfather pins (shrink-only) — the enforcement half of
+      # scripts/budgets/nestif.txt (the ledger, with per-file finding
+      # inventories and the threshold evidence). Each rule's text regex
+      # matches the finding only while its complexity stays at or below the
+      # pinned value: growth past the pin stops matching and fails the run;
+      # a shrink keeps matching (then lower or delete the pin in both
+      # places). Files absent here are never excluded. Generated 2026-09-17;
+      # keep in sync with scripts/budgets/nestif.txt by hand, both directions.
+      - linters:
+          - nestif
+        path: ^pkg/agent/judge\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|10)\)$'
+      - linters:
+          - nestif
+        path: ^pkg/agent/loop_inbound\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-5])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/agent/loop_media\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|10)\)$'
+      - linters:
+          - nestif
+        path: ^pkg/agent/loop_run_turn_response\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-8])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/agent/loop_run_turn_tools\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-3])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/agent/loop_run_turn\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-2])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/agent/loop_wire\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-5])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/agent/loop\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-3])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/agent/registry\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/channels/base\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-2])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/channels/line/line\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-2])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/channels/matrix/init\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|10)\)$'
+      - linters:
+          - nestif
+        path: ^pkg/channels/split\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-9]|3[0-1])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/docextract/extract\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|10)\)$'
+      - linters:
+          - nestif
+        path: ^pkg/filegrep/filegrep\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-9]|30)\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/gateway_reload\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|10)\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/rest_agents_create\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|10)\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/rest_agents_update\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/rest_channels\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-1])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/rest_knowledge_relation\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|10)\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/rest_knowledge_view\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-1])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/rest_plans\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-3])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/rest_preview\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-2])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/rest_providers\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-2])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/rest_sandbox_config\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-6])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/rest_workspaces\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-7])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/websocket_chat\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-9]|3[0-8])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/websocket_forward\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|10)\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gateway/websocket_pump\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-5])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/gitevidence/repo\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-5])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/knowledge/knowledge_describe\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-4])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/plan/store\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-3])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/providers/fallback\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-2])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/records/formula_eval\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|10)\)$'
+      - linters:
+          - nestif
+        path: ^pkg/records/knowledgefind/find\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-7])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/records/view\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-1])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/routing/route\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-3])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/sysagent/tools/task\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-4])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/tools/browser/actionable\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-4])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/tools/browser/live_viewport_frame\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|10)\)$'
+      - linters:
+          - nestif
+        path: ^pkg/tools/browser/webrtc/dedicated_input_peer_test\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-6])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/tools/browser/webrtc/dedicated_input_queue\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-2])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/tools/grep\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-4])\)$'
+      - linters:
+          - nestif
+        path: ^pkg/tools/web\.go$
+        text: 'has complex nested blocks \(complexity: ([0-9]|1[0-9]|2[0-7])\)$'
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0
