@@ -9,9 +9,9 @@ pkg/agent/goal_triggers.go	AgentLoop.runGoalAdjudication	367
 pkg/agent/instance.go	NewAgentInstance	354
 pkg/agent/judge.go	AgentLoop.JudgeCriteria	262
 pkg/agent/loop.go	AgentLoop.processMessage	341
+pkg/agent/loop.go	AgentLoop.runTurn	4364
 pkg/agent/loop_window.go	AgentLoop.windowTrimForce	243
 pkg/agent/loop_wire.go	registerSharedToolsWire3.registerBrowserTools	263
-pkg/agent/loop.go	AgentLoop.runTurn	4364
 pkg/agent/recall_conversation.go	RecallConversationTool.Execute	299
 pkg/agent/session_end.go	AgentLoop.runRecap	383
 pkg/agent/subturn.go	spawnSubTurn	1489
@@ -27,8 +27,8 @@ pkg/gateway/gateway_boot.go	setupAndStartServices	1258
 pkg/gateway/replay.go	streamReplay	687
 pkg/gateway/rest_channels.go	restAPI.setChannelRouting	375
 pkg/gateway/rest_executor_smoketest.go	restAPI.runExecutorSmokeTest	271
-pkg/gateway/rest_onboarding_probe_test.go	TestProbeProvider_SignIn	283
 pkg/gateway/rest_onboarding_probe_test.go	TestProbeProviderID_Validation	268
+pkg/gateway/rest_onboarding_probe_test.go	TestProbeProvider_SignIn	283
 pkg/gateway/rest_tasks_occurrences_test.go	TestRestTasks_OccurrencesEndpoint	384
 pkg/gateway/rest_uploads.go	restAPI.HandleUpload	389
 pkg/gateway/sandbox_apply.go	applySandbox	504
@@ -65,17 +65,17 @@ src/components/chat/ChatScreen.virtualization.test.tsx	(arg of describe)	344
 src/components/chat/GoalEchoCard.test.tsx	(arg of describe)	285
 src/components/chat/mermaid-renderer.test.tsx	(arg of describe)	458
 src/components/connectors/EmailMailboxPanel.test.tsx	(arg of describe)	304
-src/components/library/knowledge/KnowledgeBacklinks.test.tsx	(arg of describe)	360
-src/components/library/knowledge/KnowledgeNoteView.test.tsx	(arg of describe)	413
 src/components/library/LibraryExplorer.test.tsx	(arg of describe)	257
 src/components/library/LibraryPanel.test.tsx	(arg of describe)	256
+src/components/library/knowledge/KnowledgeBacklinks.test.tsx	(arg of describe)	360
+src/components/library/knowledge/KnowledgeNoteView.test.tsx	(arg of describe)	413
 src/components/library/preview/BasePreview.test.tsx	(arg of describe)	415
-src/components/library/preview/knowledgeMarkdown.test.tsx	(arg of describe)	245
 src/components/library/preview/LibraryPdfPreview.tsx	(anonymous)	411
 src/components/library/preview/LibraryPdfPreview.tsx	(arg of useEffect)	594
+src/components/library/preview/knowledgeMarkdown.test.tsx	(arg of describe)	245
 src/components/library/preview/useLibraryFileEditor.ts	useLibraryFileEditor	355
-src/components/providers/provider-picker-model.test.ts	(arg of describe)	376
 src/components/providers/SignInDialog.test.tsx	(arg of describe)	274
+src/components/providers/provider-picker-model.test.ts	(arg of describe)	376
 src/components/screens/UsageScreen.test.tsx	(arg of describe)	285
 src/components/settings/MemorySection.test.tsx	(arg of describe)	316
 src/components/settings/PerformanceSection.goal.test.tsx	(arg of describe)	321
@@ -96,11 +96,14 @@ src/store/chat.test.ts	(arg of describe)	255
 src/store/chat.test.ts	(arg of describe)	329
 src/store/chat.test.ts	(arg of describe)	392
 src/store/chat.tool-call-offset.test.ts	(arg of describe)	857
-src/store/chat.ts	(arg of create)	4568
-src/store/chat.ts	(arg of produce)	335
-src/store/chat.ts	(arg of withBucket)	337
-src/store/chat.ts	handleFrame	2775
-src/store/chat.ts	sendMessage	428
+src/store/chat/slices/frames.ts	createFrameSlice	1777
+src/store/chat/slices/frames.ts	handleFrame	1773
+src/store/chat/slices/outbound-lifecycle.ts	createOutboundLifecycleSlice	875
+src/store/chat/slices/outbound-lifecycle.ts	sendMessage	428
+src/store/chat/slices/replay-and-status-frames.ts	(arg of produce)	335
+src/store/chat/slices/replay-and-status-frames.ts	(arg of withBucket)	337
+src/store/chat/slices/replay-and-status-frames.ts	handleReplayAndStatusFrame	1013
+src/store/chat/store.ts	(arg of create)	901
 src/store/session.ts	(arg of create)	397
 src/test/contract.test.ts	(arg of describe)	276
 tests/perf/load_2000_sessions_test.go	TestLoad2000Sessions	264
