@@ -321,26 +321,26 @@ func writesReceiverPatchStatus(fn *ast.FuncDecl, patchStateTypes map[string]map[
 	receiverName := fn.Recv.List[0].Names[0].Name
 	written := false
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		assign, ok := n.(*ast.AssignStmt)
-		if !ok {
+		assign, isAssign := n.(*ast.AssignStmt)
+		if !isAssign {
 			return true
 		}
 		for i, lhs := range assign.Lhs {
-			status, ok := lhs.(*ast.SelectorExpr)
-			if !ok || status.Sel.Name != "Status" {
+			status, isSelector := lhs.(*ast.SelectorExpr)
+			if !isSelector || status.Sel.Name != "Status" {
 				continue
 			}
 			if i < len(assign.Rhs) {
-				if ident, ok := assign.Rhs[i].(*ast.Ident); ok && ident.Name == "nil" {
+				if ident, isIdent := assign.Rhs[i].(*ast.Ident); isIdent && ident.Name == "nil" {
 					continue // clearing Status prevents a write; it cannot transition the task
 				}
 			}
-			patchField, ok := status.X.(*ast.SelectorExpr)
-			if !ok || !fields[patchField.Sel.Name] {
+			patchField, isPatchField := status.X.(*ast.SelectorExpr)
+			if !isPatchField || !fields[patchField.Sel.Name] {
 				continue
 			}
-			base, ok := patchField.X.(*ast.Ident)
-			if ok && base.Name == receiverName {
+			base, isBase := patchField.X.(*ast.Ident)
+			if isBase && base.Name == receiverName {
 				written = true
 				return false
 			}

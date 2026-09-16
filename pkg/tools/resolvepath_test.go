@@ -547,6 +547,48 @@ func TestResolvePath_ZeroValuePolicyRefused(t *testing.T) {
 	}
 }
 
+// TestResolvePath_ValidationOutcomeIsUnambiguous pins the contract of
+// validateInputs' single-error return (the nilnil fix): the caller must be
+// able to tell "validation passed, resolution proceeded" (nil error plus a
+// usable handle) apart from "validation refused the call" (non-nil error
+// wrapping ErrPathInvalid, no handle) from the error alone. The old
+// (*PathHandle, error, bool) shape returned a dead nil handle on every path
+// and needed the trailing bool to say which of the two (nil, nil) meant.
+func TestResolvePath_ValidationOutcomeIsUnambiguous(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("seed file: %v", err)
+	}
+	policy := confinedPolicy(t, workDir)
+
+	// Failure: the zero-value FSOp is refused before any resolution happens.
+	failed, err := ResolvePath(context.Background(), policy, "read_file", "", FSOp(""), "a.txt")
+	if err == nil {
+		t.Fatalf("zero-value FSOp: expected a validation refusal, got nil error")
+	}
+	if !errors.Is(err, ErrPathInvalid) {
+		t.Errorf("zero-value FSOp: err = %v, want wrapped ErrPathInvalid", err)
+	}
+	if failed != nil {
+		t.Errorf("zero-value FSOp: refused call returned a handle, want nil")
+	}
+
+	// Nothing wrong: the same call shape with a valid FSOp resolves and
+	// returns a handle that actually reads the file.
+	handle, err := ResolvePath(context.Background(), policy, "read_file", "call-1", FSOpRead, "a.txt")
+	if err != nil {
+		t.Fatalf("valid FSOp: ResolvePath: %v", err)
+	}
+	defer handle.Close()
+	data, err := handle.ReadFile()
+	if err != nil {
+		t.Fatalf("valid FSOp: ReadFile: %v", err)
+	}
+	if string(data) != "hello" {
+		t.Errorf("valid FSOp: content = %q, want %q", data, "hello")
+	}
+}
+
 // TestResolvePath_UnrestrictedScope_CarveOutHoldsUnderRace is the HIGH #3
 // regression (ADR-046 P1 review): under FSScopeUnrestricted, ResolvePath
 // returns a host-mode (root==nil) PathHandle whose I/O methods do raw os.*
