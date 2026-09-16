@@ -1414,8 +1414,6 @@ const recordWriteAuditEvent = "knowledge.note.write"
 
 // logRecordAuditorMissingOnce bounds the nil-auditor ERROR below to one line
 // per process.
-//
-//nolint:gochecknoglobals // a warn-once latch has to outlive the request.
 var logRecordAuditorMissingOnce sync.Once
 
 // logRecordWriteAudit records a record write that landed on disk.

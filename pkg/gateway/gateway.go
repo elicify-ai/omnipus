@@ -1348,18 +1348,18 @@ func (rc *runContextWithOptions) wireSystemTools() {
 	// (constructed inside setupAndStartServices) would retain the pre-sysAgentDeps
 	// registry. The restAPIRef field was stored by setupAndStartServices exactly
 	// for this late-wire step.
-	var centralBuiltinCounts centralBuiltinCounts
-	rc.centralBuiltinReg, centralBuiltinCounts = buildCentralBuiltinRegistry(sysAgentDeps)
+	var builtinCounts centralBuiltinCounts
+	rc.centralBuiltinReg, builtinCounts = buildCentralBuiltinRegistry(sysAgentDeps)
 	// Propagate the updated registry to the already-constructed restAPI (SC-108 fix).
 	if rc.runningServices.restAPIRef != nil {
 		rc.runningServices.restAPIRef.builtinRegistry = rc.centralBuiltinReg
 	}
 	slog.Info("gateway: central BuiltinRegistry re-populated with live deps",
-		"system_tools", centralBuiltinCounts.system,
-		"general_builtins", centralBuiltinCounts.general,
-		"browser_builtins", centralBuiltinCounts.browser,
-		"knowledge_builtins", centralBuiltinCounts.knowledge,
-		"total", centralBuiltinCounts.total())
+		"system_tools", builtinCounts.system,
+		"general_builtins", builtinCounts.general,
+		"browser_builtins", builtinCounts.browser,
+		"knowledge_builtins", builtinCounts.knowledge,
+		"total", builtinCounts.total())
 
 	// centralBuiltinReg was just reassigned to a fresh instance above — re-wire
 	// it (and centralMCPReg, unchanged but re-asserted for clarity) into the

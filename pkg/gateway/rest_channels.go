@@ -528,7 +528,6 @@ func (a *restAPI) setChannelRouting(w http.ResponseWriter, r *http.Request, chan
 
 // decodeRequest decodes the routing request, validates the channel instance, and determines whether the request is bound.
 func (scr *restAPISetChannelRouting) decodeRequest() bool {
-
 	validateEnabled := scr.a.agentLoop.GetConfig().Gateway.ValidateInbound
 	if !decodeAndValidate(scr.w, scr.r, "ChannelRouting", &scr.req, validateEnabled) {
 		return true

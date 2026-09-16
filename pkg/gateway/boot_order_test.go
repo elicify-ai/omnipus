@@ -87,6 +87,14 @@ func writeBootTestFile(t *testing.T, path, content string) {
 	}
 }
 
+func bootCredentialsError(homePath, configPath string) error {
+	cfg, bundle, store, err := bootCredentials(homePath, configPath)
+	_ = cfg
+	_ = bundle
+	_ = store
+	return err
+}
+
 // TestGatewayBoot_UnsupportedConfigVersionFailsFast verifies that a config.json
 // predating the current schema (no v0 migration path exists any more) fails
 // boot with a clear "unsupported config version" error rather than silently
@@ -107,7 +115,7 @@ func TestGatewayBoot_UnsupportedConfigVersionFailsFast(t *testing.T) {
 		"gateway": { "host": "127.0.0.1", "port": 19999 }
 	}`)
 
-	_, _, _, err := bootCredentials(tmpDir, configPath) //nolint:dogsled
+	err := bootCredentialsError(tmpDir, configPath)
 	if err == nil {
 		t.Fatal("bootCredentials must fail for a version:0 config.json (no v0 migration path)")
 	}
@@ -143,7 +151,7 @@ func TestGatewayBoot_MissingCredentialRefFailsFast(t *testing.T) {
 		"gateway": { "host": "127.0.0.1", "port": 19998 }
 	}`)
 
-	_, _, _, enabledErr := bootCredentials(tmpDir, enabledConfigPath) //nolint:dogsled
+	enabledErr := bootCredentialsError(tmpDir, enabledConfigPath)
 	if enabledErr == nil {
 		t.Fatal("bootCredentials must fail when an enabled channel's credential ref is missing from the store")
 	}
@@ -239,7 +247,7 @@ func TestGatewayBoot_CorruptedCredentialForEnabledChannelFailsFast(t *testing.T)
 		"gateway": { "host": "127.0.0.1", "port": 19996 }
 	}`)
 
-	_, _, _, err := bootCredentials(tmpDir, configPath) //nolint:dogsled
+	err := bootCredentialsError(tmpDir, configPath)
 	if err == nil {
 		t.Fatal(
 			"bootCredentials must fail when an enabled channel's credential ref fails to decrypt (corrupted store entry)",
@@ -296,7 +304,7 @@ func TestGatewayBoot_LockedStoreFailsBeforeConfig(t *testing.T) {
 
 	// bootCredentials must fail — Unlock returns an error when OMNIPUS_MASTER_KEY
 	// is unset and auto-generate cannot fire because credentials.json exists.
-	_, _, _, bootErr := bootCredentials(tmpDir, configPath) //nolint:dogsled
+	bootErr := bootCredentialsError(tmpDir, configPath)
 	if bootErr == nil {
 		t.Fatal("bootCredentials must fail when OMNIPUS_MASTER_KEY is unset and credentials.json exists")
 	}

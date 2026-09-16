@@ -1185,7 +1185,6 @@ wsHandlerReadLoopLoop1:
 		case wsHandlerReadLoopContinue:
 			continue wsHandlerReadLoopLoop1
 		}
-
 	}
 }
 

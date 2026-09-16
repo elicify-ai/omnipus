@@ -17,7 +17,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
-	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/clidetect"
@@ -621,7 +620,7 @@ func TestDeleteAgent_EndsTheDeletedAgentsActiveGoals(t *testing.T) {
 
 	gs := goal.NewStore(config.OmnipusHomeDir())
 	now := time.Now().UTC()
-	g, err := goal.New(generated.GoalOwnerKindSession, meta.ID, generated.GoalSourceChatCompiled,
+	g, err := goal.New(gen.GoalOwnerKindSession, meta.ID, gen.GoalSourceChatCompiled,
 		"write e3-marker.txt with three made-up octopus facts", "", nil,
 		[]task.AcceptanceCriterion{{
 			Kind: task.KindProse, Judgment: task.JudgmentBoolean, Provenance: task.ProvenanceFloor,
@@ -638,7 +637,7 @@ func TestDeleteAgent_EndsTheDeletedAgentsActiveGoals(t *testing.T) {
 
 	after, err := gs.Get(g.GoalID)
 	require.NoError(t, err, "the goal record must be retained, not erased")
-	assert.Equal(t, generated.GoalStateCleared, after.State, "the deleted agent's goal must not stay active")
+	assert.Equal(t, gen.GoalStateCleared, after.State, "the deleted agent's goal must not stay active")
 	assert.True(t, strings.Contains(after.TerminalReason, "test-agent") && strings.Contains(after.TerminalReason, "deleted"),
 		"terminal reason %q must name the deleted agent", after.TerminalReason)
 }

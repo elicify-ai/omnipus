@@ -32,8 +32,7 @@ import (
 // location so the test works regardless of the cwd a test runner uses.
 func loadMessageSchema(t *testing.T) *jsonschema.Schema {
 	t.Helper()
-	//nolint:dogsled // runtime.Caller returns 4 values; only the file path is needed.
-	_, thisFile, _, _ := runtime.Caller(0)
+	thisFile := gatewayTestCallerFile(t)
 	contractsDir := filepath.Join(filepath.Dir(thisFile), "..", "..", "contracts", "components", "schemas")
 	loader := newYAMLSchemaLoader(t)
 	compiler := jsonschema.NewCompiler()
@@ -44,6 +43,13 @@ func loadMessageSchema(t *testing.T) *jsonschema.Schema {
 	schema, err := compiler.Compile(schemaURL)
 	require.NoError(t, err, "must be able to compile Message.yaml")
 	return schema
+}
+
+func gatewayTestCallerFile(t *testing.T) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(1)
+	require.True(t, ok, "runtime.Caller must resolve the calling test file")
+	return file
 }
 
 // newYAMLSchemaLoader returns a jsonschema.URLLoader that resolves file://

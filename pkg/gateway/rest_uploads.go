@@ -296,7 +296,6 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		case restAPIHandleUploadReturn:
 			return
 		}
-
 	}
 
 	if len(ru.resp.Files) == 0 {

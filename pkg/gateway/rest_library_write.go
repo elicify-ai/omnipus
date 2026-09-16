@@ -388,8 +388,6 @@ func (a *restAPI) handleLibraryEntryDelete(w http.ResponseWriter, r *http.Reques
 // pkg/knowledge/version.go's hookBeforeApplyWrite (same reasoning, same
 // shape); that one is unexported to its package and specific to
 // Writer.WriteNote, so it cannot be reused from here.
-//
-//nolint:gochecknoglobals // a test seam, nil in production.
 var libraryWriteRaceHook func()
 
 func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request, workspaceID string) {

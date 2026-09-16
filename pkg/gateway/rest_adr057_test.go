@@ -40,7 +40,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -63,8 +62,7 @@ import (
 // runner uses (mirrors the loadMessageSchema precedent, sessions_wire_test.go).
 func u18RepoRoot(t *testing.T) string {
 	t.Helper()
-	//nolint:dogsled // runtime.Caller returns 4 values; only the file path is needed.
-	_, thisFile, _, _ := runtime.Caller(0)
+	thisFile := gatewayTestCallerFile(t)
 	// this file is pkg/gateway/rest_adr057_test.go — repo root is two levels up.
 	return filepath.Join(filepath.Dir(thisFile), "..", "..")
 }
