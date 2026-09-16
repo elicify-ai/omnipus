@@ -118,6 +118,30 @@ func TestDedicatedInputCounterBoundaries(t *testing.T) {
 	}
 }
 
+// The control epoch rides the same safe-integer contract: the boundary
+// value is a valid successor, one past it is not.
+func TestDedicatedInputPauseSafeIntegerBound(t *testing.T) {
+	const wireMax = 9007199254740991
+	t.Run("boundary successor", func(t *testing.T) {
+		q := newDedicatedInputQueue(context.Background(), 1, wireMax-1, func(context.Context, generated.BrowserInputFrame) {
+			t.Error("queue dispatched input that was never submitted")
+		}, func(reason string) { t.Errorf("valid pause failed: %s", reason) })
+		t.Cleanup(q.close)
+		_, done, err := q.pause(wireMax)
+		if err != nil {
+			t.Fatal(err)
+		}
+		awaitInputSignal(t, done, "paused worker retirement")
+	})
+	t.Run("overflow", func(t *testing.T) {
+		q := newDedicatedInputQueue(context.Background(), 1, wireMax, func(context.Context, generated.BrowserInputFrame) {}, func(string) {})
+		t.Cleanup(q.close)
+		if _, _, err := q.pause(wireMax + 1); err == nil {
+			t.Fatal("pause accepted a control epoch above the safe-integer bound")
+		}
+	})
+}
+
 func TestDedicatedInputInvalidCountersCancelBeforeDispatch(t *testing.T) {
 	for _, field := range []string{"peer", "control", "barrier", "reliable", "hover"} {
 		for _, bad := range []*int{nil, boundaryInt(-1), boundaryInt(9007199254740992)} {

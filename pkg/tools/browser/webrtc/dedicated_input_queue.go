@@ -11,7 +11,14 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 )
 
-const maxInputSequence = 1<<53 - 1
+// maxInputSequence is JavaScript's Number.MAX_SAFE_INTEGER: the largest
+// sequence value a browser can emit exactly. Typed int64 so the constant
+// also compiles where int is 32 bits; there the comparison is vacuously
+// satisfied, which loses nothing — the binary input decoder caps integral
+// fields at math.MaxInt32 on those platforms before a frame reaches this
+// queue, and no legitimate epoch comes near 2^31 counters because every
+// control-epoch pause resets reliable, hover, and barrier to zero.
+const maxInputSequence int64 = 1<<53 - 1
 
 // Bound waiting work independently of the active browser operation deadline.
 const reliableInputMaxWait = time.Second
@@ -307,7 +314,7 @@ func mergePendingWheel(tail *queuedDedicatedInput, next generated.BrowserInputFr
 	return true
 }
 func validInputCounter(v *int, minimum int) bool {
-	return v != nil && *v >= minimum && *v <= maxInputSequence
+	return v != nil && *v >= minimum && int64(*v) <= maxInputSequence
 }
 func inputTransition(kind string) bool {
 	return kind == "mouse_down" || kind == "mouse_up" || kind == "key_down" || kind == "key_up"
@@ -366,7 +373,7 @@ func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInput
 		if inputTransition(f.Kind) {
 			nextBarrier++
 		}
-		if nextBarrier > maxInputSequence || *f.GestureBarrier != nextBarrier {
+		if int64(nextBarrier) > maxInputSequence || *f.GestureBarrier != nextBarrier {
 			return "invalid gesture barrier"
 		}
 		// A compatible pending wheel adds no waiting work, even at capacity.
@@ -423,7 +430,7 @@ func (q *dedicatedInputQueue) close() {
 func (q *dedicatedInputQueue) pause(next int) (context.Context, <-chan struct{}, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.closed || q.parent.Err() != nil || next != q.control+1 || next > maxInputSequence {
+	if q.closed || q.parent.Err() != nil || next != q.control+1 || int64(next) > maxInputSequence {
 		return nil, nil, errors.New("invalid control epoch")
 	}
 	q.control = next
