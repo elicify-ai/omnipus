@@ -11,6 +11,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strings"
 	"testing"
 
@@ -1555,12 +1556,41 @@ func TestVisibility_SearchOnlyToolFoundByDescriptionBecomesUsable(t *testing.T) 
 
 	queryResult := tt.Execute(ctx, map[string]any{"query": "take a screenshot of the current browser tab"})
 	require.False(t, queryResult.IsError, "ToolSearch{query:...} must not error; got: %s", queryResult.ForLLM)
-	require.Contains(t, queryResult.ForLLM, "Loaded the best match",
-		"the query must auto-load a match against jim's real tool set; got: %s", queryResult.ForLLM)
 
-	// After the query: buildCompressedToolDefs must contain EXACTLY ONE new
-	// name relative to the baseline (the auto-loaded match), proving the
-	// query-path promotion reached the manifest builder end to end.
+	// ADR-071 D2 (ambiguity band, landed 2026-08-28 — BEFORE this test was
+	// written) auto-loads EITHER the single best match ("Loaded the best
+	// match") OR, when a runner-up scores within the confident band, every
+	// plausible match up to searchMaxAutoLoad=3 ("plausible matches were
+	// loaded"). This test's original assertion demanded the single-match
+	// branch, which was stale at birth: D2 was already merged and this
+	// tab/browser-heavy query legitimately promotes browser_open_tab alongside
+	// browser_screenshot. The branch itself is D2's decision, so the oracle
+	// here pins D2's invariants instead of one branch:
+	//   (a) the query must PROMOTE something (a query-path promotion is the
+	//       whole subject of FR-031a),
+	//   (b) browser_screenshot — the semantically correct tool for a
+	//       screenshot query — must be among the promoted; if the ranking
+	//       breaks and it is not, this goes red,
+	//   (c) at most 3 tools promoted (searchMaxAutoLoad, written as a design
+	//       literal so a silent cap change fails this test).
+	jsonStart := strings.Index(queryResult.ForLLM, "{")
+	require.GreaterOrEqual(t, jsonStart, 0,
+		"ToolSearch(query) result must carry its JSON payload; got: %s", queryResult.ForLLM)
+	var searchResp struct {
+		Loaded []string `json:"loaded"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(queryResult.ForLLM[jsonStart:]), &searchResp),
+		"the JSON payload after the message line must decode; got: %s", queryResult.ForLLM)
+	require.NotEmpty(t, searchResp.Loaded, "the query must auto-load at least one tool")
+	require.LessOrEqual(t, len(searchResp.Loaded), 3,
+		"ADR-071 D2 caps one query's auto-load at 3; got %v", searchResp.Loaded)
+	require.Contains(t, searchResp.Loaded, "browser_screenshot",
+		"a screenshot query must promote browser_screenshot — if not, the ranking is broken; loaded %v", searchResp.Loaded)
+
+	// After the query: buildCompressedToolDefs must contain EXACTLY the
+	// promoted names relative to the baseline — no more (over-promotion or
+	// stray loads) and no fewer (a promotion that never reached the manifest
+	// builder) — proving the query-path promotion is usable end to end.
 	tsAfter := fakeTurnState(jimAgent, transcriptID)
 	defsAfter := al.buildCompressedToolDefs(tsAfter, policyFiltered)
 
@@ -1570,12 +1600,16 @@ func TestVisibility_SearchOnlyToolFoundByDescriptionBecomesUsable(t *testing.T) 
 			newlyCallable = append(newlyCallable, d.Function.Name)
 		}
 	}
-	require.Len(t, newlyCallable, 1,
-		"exactly one new tool must become callable after the query-path promotion; got %v", newlyCallable)
+	sort.Strings(newlyCallable)
+	loadedSorted := append([]string(nil), searchResp.Loaded...)
+	sort.Strings(loadedSorted)
+	require.Equal(t, loadedSorted, newlyCallable,
+		"exactly the tools the result says were loaded must become callable; result said %v, manifest gained %v", loadedSorted, newlyCallable)
 
-	promoted := newlyCallable[0]
-	assert.Equal(t, tools.ManifestLazy, tools.ToolManifestTier(promoted),
-		"the auto-loaded tool %q must have been ManifestLazy before promotion (that is the whole point of the discovery path)", promoted)
+	for _, promoted := range newlyCallable {
+		assert.Equal(t, tools.ManifestLazy, tools.ToolManifestTier(promoted),
+			"the auto-loaded tool %q must have been ManifestLazy before promotion (that is the whole point of the discovery path)", promoted)
+	}
 }
 
 // ─── Part A §5a — Manifest determinism under load churn ───────────────────
