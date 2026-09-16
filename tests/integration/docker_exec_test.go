@@ -279,33 +279,6 @@ func TestIsRunningInDocker_NeitherSignal(t *testing.T) {
 		"Track B should add testutil.WithNoSandboxConfig() to enable full integration coverage here.")
 }
 
-// TestIsRunningInDocker_KubernetesNoDockerenv documents the KNOWN GAP:
-// rootless Docker, Podman, and BuildKit containers often lack /.dockerenv.
-// Those environments are currently NOT auto-detected by isRunningInDocker,
-// so they default to enforce mode and exec tool calls fail with permission denied.
-//
-// This test records the gap for the v0.2 follow-up. It intentionally passes.
-//
-// Traces to: review-pr-test-analyzer.md — "/.dockerenv absent inside Docker (rootless, Podman)"
-func TestIsRunningInDocker_KubernetesNoDockerenv(t *testing.T) {
-	// KNOWN GAP: isRunningInDocker does not detect:
-	//   - Rootless Docker (no /.dockerenv in some configurations)
-	//   - Podman containers (/run/.containerenv, NOT /.dockerenv)
-	//   - BuildKit containers
-	//   - Kubernetes pods running OCI runtimes without /.dockerenv
-	//
-	// Operators on those platforms must set OMNIPUS_IN_DOCKER=1 manually
-	// or configure sandbox.mode=permissive in their config.json.
-	//
-	// v0.2 follow-up: extend isRunningInDocker to check:
-	//   - /run/.containerenv (Podman)
-	//   - /proc/1/cgroup for "docker"/"kubepods" membership
-	//   - KUBERNETES_SERVICE_HOST env var (Kubernetes)
-	t.Log("KNOWN GAP documented: Podman/rootless/BuildKit containers without /.dockerenv " +
-		"fall through to enforce mode. Operators must set OMNIPUS_IN_DOCKER=1 manually " +
-		"until v0.2 adds broader container runtime detection.")
-}
-
 // dockerenvExists reports whether /.dockerenv exists on the current host.
 // Used to skip tests that only make sense outside a Docker container.
 func dockerenvExists() bool {

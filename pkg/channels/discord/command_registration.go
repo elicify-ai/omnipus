@@ -5,9 +5,12 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
+	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/commands"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
+
+var _ channels.CommandRegistrarCapable = (*DiscordChannel)(nil)
 
 // RegisterCommands implements channels.CommandRegistrarCapable for Discord.
 // It converts the given definitions to Discord ApplicationCommands and registers

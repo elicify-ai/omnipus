@@ -33,6 +33,8 @@ type MCPTool struct {
 	mediaStore media.MediaStore
 }
 
+var _ Tool = (*MCPTool)(nil)
+
 // NewMCPTool creates a new MCP tool wrapper
 func NewMCPTool(manager MCPManager, serverName string, tool *mcp.Tool) *MCPTool {
 	return &MCPTool{

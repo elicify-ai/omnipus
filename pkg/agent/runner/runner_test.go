@@ -265,33 +265,9 @@ func TestRunner_Resume(t *testing.T) {
 	}
 }
 
-// TestFakeRunner_ImplementsInterface is a compile-time and runtime assertion that
-// FakeRunner fully satisfies ExternalAgentRunner.
-func TestFakeRunner_ImplementsInterface(t *testing.T) {
-	var _ runner.ExternalAgentRunner = (*runner.FakeRunner)(nil)
-}
-
 // ──────────────────────────────────────────────────────────────────────────────
 // U2 tests — streaming drivers + consent routing
 // ──────────────────────────────────────────────────────────────────────────────
-
-// TestClaudeDriver_ImplementsInterface is a compile-time assertion that
-// ClaudeDriver satisfies ExternalAgentRunner.
-func TestClaudeDriver_ImplementsInterface(t *testing.T) {
-	var _ runner.ExternalAgentRunner = (*runner.ClaudeDriver)(nil)
-}
-
-// TestCodexDriver_ImplementsInterface is a compile-time assertion that
-// CodexDriver satisfies ExternalAgentRunner.
-func TestCodexDriver_ImplementsInterface(t *testing.T) {
-	var _ runner.ExternalAgentRunner = (*runner.CodexDriver)(nil)
-}
-
-// TestOpencodeDriver_ImplementsInterface is a compile-time assertion that
-// OpencodeDriver satisfies ExternalAgentRunner.
-func TestOpencodeDriver_ImplementsInterface(t *testing.T) {
-	var _ runner.ExternalAgentRunner = (*runner.OpencodeDriver)(nil)
-}
 
 // TestOpencodeDriver_Test_DelegatesToTestConnection verifies the opencode
 // driver's Test() runs the full 3-step health check (binary → handshake → auth)

@@ -122,16 +122,6 @@ func TestReader_AnswersTheTwoQuestionsOverARealStore(t *testing.T) {
 	})
 }
 
-// TestReader_SatisfiesThePropertyIndexReaderInterface — a compile-time
-// assertion, stated rather than implied.
-//
-// The whole cycle break rests on this being structurally true; if the
-// interface gains a method and this adapter does not, the failure should be
-// here rather than at a wiring site in another package.
-func TestReader_SatisfiesThePropertyIndexReaderInterface(t *testing.T) {
-	var _ knowledge.PropertyIndexReader = (*Reader)(nil)
-}
-
 // TestOpen_RefusesOnSQLiteLessBuild — FR-020h at the wiring seam.
 //
 // Open is what knowledge_describe calls, and on a build with no SQLite it must

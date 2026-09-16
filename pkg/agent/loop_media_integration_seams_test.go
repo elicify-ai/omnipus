@@ -19,7 +19,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/media/library"
 	"github.com/elicify-ai/omnipus/pkg/providers"
-	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 )
 
 // ---- Fix 1: SHA-256-on-read (verifyFileIntegrity) ----
@@ -50,14 +49,6 @@ func TestVerifyFileIntegrity_Mismatch(t *testing.T) {
 func TestVerifyFileIntegrity_MissingFile(t *testing.T) {
 	err := verifyFileIntegrity("/nonexistent/path.bin", "abc")
 	assert.Error(t, err)
-}
-
-// ---- Fix 2/3: catalog budget + PDF gate ----
-// Covered end-to-end by loop_media_present_test.go (mustCatalog fixtures).
-// Keep a thin compile/link smoke that the catalog package is reachable.
-
-func TestCatalogPackage_Linked(t *testing.T) {
-	_ = catalog.ModalityImage
 }
 
 // ---- Fix 4: MediaClass on TryMediaDowngrade ----

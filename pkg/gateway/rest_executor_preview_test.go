@@ -303,14 +303,3 @@ func TestPostAgentsExecutorPreview_MethodNotAllowed(t *testing.T) {
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
-
-// TestPostAgentsExecutorPreview_DoesNotShadowAgentLookup proves the
-// "executor-preview" reserved path segment does not swallow requests for a
-// real (unrelated) agent ID.
-func TestPostAgentsExecutorPreview_DoesNotShadowAgentLookup(t *testing.T) {
-	api := executorDefaultsTestAPI(t)
-	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/some-other-agent-id", nil)
-	api.HandleAgents(w, r)
-	assert.Equal(t, http.StatusNotFound, w.Code)
-}

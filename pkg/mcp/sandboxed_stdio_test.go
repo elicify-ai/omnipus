@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
 
@@ -145,10 +143,4 @@ func TestSandboxedCommandTransport_CatEcho(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("echo mismatch: wrote %q, read %q", want, got)
 	}
-}
-
-// TestSandboxedCommandTransport_ImplementsTransport is a compile-time guard:
-// if the SDK's Transport interface changes, this fails to compile.
-func TestSandboxedCommandTransport_ImplementsTransport(t *testing.T) {
-	var _ mcp.Transport = (*sandboxedCommandTransport)(nil)
 }

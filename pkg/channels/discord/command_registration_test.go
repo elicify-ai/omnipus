@@ -10,15 +10,8 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 
-	"github.com/elicify-ai/omnipus/pkg/channels"
 	"github.com/elicify-ai/omnipus/pkg/commands"
 )
-
-// TestDiscordChannel_ImplementsCommandRegistrarCapable verifies the interface
-// is satisfied at compile time.
-func TestDiscordChannel_ImplementsCommandRegistrarCapable(t *testing.T) {
-	var _ channels.CommandRegistrarCapable = (*DiscordChannel)(nil)
-}
 
 // TestDiscordRegisterCommands_NoSession verifies graceful no-op when the
 // session is nil (channel not yet started).

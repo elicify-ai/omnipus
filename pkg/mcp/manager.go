@@ -54,6 +54,8 @@ type sandboxedCommandTransport struct {
 	terminateDuration time.Duration
 }
 
+var _ mcp.Transport = (*sandboxedCommandTransport)(nil)
+
 // newSandboxedCommandTransport wraps an *exec.Cmd (already populated with Env,
 // Dir, etc. by the caller) in a sandboxedCommandTransport. The cmd must NOT
 // have been Start()ed — Connect does that via StartLocked.
