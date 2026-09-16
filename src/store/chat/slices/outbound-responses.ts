@@ -1,13 +1,11 @@
-import type { StoreApi } from 'zustand'
 import { useConnectionStore } from '@/store/connection'
 import type { ChatStore } from '../types'
 
 type OutboundResponseSlice = Pick<ChatStore, 'sendAskUserAnswer' | 'respondToPairing'>
 
-export function createOutboundResponseSlice(
-  _set: StoreApi<ChatStore>['setState'],
-  _get: StoreApi<ChatStore>['getState'],
-): OutboundResponseSlice {
+// This slice reads the connection from its own store and never touches chat state,
+// so it takes no set/get. Every other slice does; that asymmetry is deliberate.
+export function createOutboundResponseSlice(): OutboundResponseSlice {
   return {
     sendAskUserAnswer: (answer) => {
       const { connection } = useConnectionStore.getState()

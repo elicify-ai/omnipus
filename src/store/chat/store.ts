@@ -926,7 +926,7 @@ export const useChatStore = create<ChatStore>((set, get) => {
     // ── Outbound queue actions ────────────────────────────────────────────────
 
     ...createOutboundLifecycleSlice({ set, get, getActiveSid, withBucket, bucketToForeground, abandonPendingKickoffInternal, maybeDrainNext, runtime: chatRuntime }),
-    ...createOutboundResponseSlice(set, get),
+    ...createOutboundResponseSlice(),
 
     ...createFrameSlice({ set, get, getActiveSid, bucketToForeground, withBucket, deleteBucket, resolveKickoffAttempt, abandonPendingKickoffInternal, syncForeground, armRateLimitClear, maybeDrainNext, runtime: chatRuntime }),
   }

@@ -188,6 +188,29 @@ GENERIC_EXEMPT_LINES = {
         'migrateCLITokenOutOfUsers(cfg, path, onSelfHeal)',
         'func (c *Config) migrateChannelConfigs() {',
     },
+    # The 2026-09-15 split of config.go moved these EXACT lines into per-area
+    # files. Same lines, same count, new paths — re-keyed, not widened. The
+    # guard passed before the split and failed after it purely because the
+    # allow-list is keyed by file path.
+    'pkg/config/config_agents.go': {
+        'var legacy []string',
+        'if err := json.Unmarshal(data, &legacy); err == nil {',
+        'out := make(FallbackModelSlice, len(legacy))',
+        'for i, s := range legacy {',
+    },
+    'pkg/config/config_channels_instance.go': {
+        'slog.Warn("config: unknown channel type in channels map — ignoring legacy or unsupported section",',
+    },
+    'pkg/config/config_gateway.go': {
+        'func VerifyTokenAgainst(tokens []TokenEntry, legacyHash BcryptHash, raw string) error {',
+        'if len(tokens) == 0 && legacyHash.IsZero() {',
+        'if !legacyHash.IsZero() && legacyHash.Verify(raw) == nil {',
+    },
+    'pkg/config/config_unmarshal.go': {
+        'return fmt.Errorf("mailboxes: legacy entry for agent %q: %w", agentID, err)',
+        'slog.Warn("config: dropping legacy mailbox without workspace_id (unreachable)",',
+        'return fmt.Errorf("mailboxes: agent %q entry is malformed (mixed legacy/nested shape)", agentID)',
+    },
     'pkg/config/legacy_agents_list.go': {
         'func stripLegacyAgentsList(cfg *Config, cfgPath string, onSelfHeal SelfHealWriteHook) {',
         'logger.WarnF("failed to strip legacy agents.list from config.json on disk; runtime "+',

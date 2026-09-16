@@ -100,6 +100,10 @@ export default tseslint.config(
   // the linter. This declares the real runtime; it relaxes no rule.
   {
     files: ['**/*.mjs', '**/*.cjs', 'scripts/**/*.js'],
+    // A .cjs file is CommonJS by definition, so require() is its import syntax,
+    // not a style violation. The TypeScript rule that forbids require() is aimed
+    // at ES modules; leaving it on here reports the file for being what it is.
+    rules: { '@typescript-eslint/no-require-imports': 'off' },
     languageOptions: {
       globals: {
         process: 'readonly',

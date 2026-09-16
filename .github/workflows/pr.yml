@@ -346,7 +346,12 @@ jobs:
           # (an exec.Command with the binary and verb as separate arguments), in
           # directories this guard scans — and it reported clean. Both are fixed;
           # the pattern is widened so the next one cannot hide the same way.
-          PATTERN='(omnipus|[A-Za-z0-9_./-]*omnipus|\$[A-Z_]+)["'"'"']?[[:space:],]+["'"'"']?(agent|auth|status|cron|migrate|model|skills)\b'
+          # The variable alternative must be the COMMAND being run, not any argument:
+          # `git -C "$WT" status` is git's status, not omnipus's, and it was the only
+          # line the old pattern matched anywhere in these directories - a pure false
+          # positive that failed this gate on every run. So the variable form is anchored
+          # to the start of a command (line start, or after ; && || | or an opening paren).
+          PATTERN='((omnipus|[A-Za-z0-9_./-]*omnipus)|(^|[;&|(]|&&|\|\|)[[:space:]]*["'"'"']?\$\{?[A-Z_]+\}?)["'"'"']?[[:space:],]+["'"'"']?(agent|auth|status|cron|migrate|model|skills)\b'
           DIRS=(docker .github deploy scripts cmd/omnipus-launcher-tui)
           FOUND=$(grep -rE "$PATTERN" --include="*.sh" --include="*.yml" --include="*.yaml" \
             --include="Dockerfile*" --include="*.go" \

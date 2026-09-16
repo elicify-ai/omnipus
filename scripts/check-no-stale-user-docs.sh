@@ -16,6 +16,35 @@
 #
 # Exit: 0 clean, 1 a retired surface is present, 2 the check itself could not run.
 set -uo pipefail
+
+# ── self-test ───────────────────────────────────────────────────────────────
+# The guard runner requires every guard to prove it can both PASS and FAIL.
+# Run: scripts/check-no-stale-user-docs.sh --self-test
+if [ "${1:-}" = "--self-test" ]; then
+  me="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+  fails=0
+  run_case() { # <name> <expected-exit> <file> <content>
+    local name="$1" want="$2" file="$3" body="$4"
+    local t; t="$(mktemp -d)"
+    mkdir -p "$t/scripts" "$t/docs/internal" "$t/$(dirname "$file")" 2>/dev/null
+    cp "$me" "$t/scripts/$(basename "$me")"
+    printf '# Page\n\nOrdinary text.\n' > "$t/docs/agents.md"
+    printf '%b\n' "$body" >> "$t/$file"
+    ( cd "$t" && bash "scripts/$(basename "$me")" >/dev/null 2>&1 ); local got=$?
+    if [ "$got" = "$want" ]; then echo "  ok  $name (exit $got)"; else echo "  FAIL $name: expected exit $want, got $got"; fails=$((fails+1)); fi
+    rm -rf "$t"
+  }
+  run_case "a clean handbook passes"                     0 docs/tasks.md  "Create a task on the board."
+  run_case "the deleted Command Center is caught"        1 docs/tasks.md  "Open the Command Center to schedule work."
+  run_case "'five teammates' is caught"                  1 docs/concepts.md "You get five teammates."
+  run_case "Max in the roster is caught"                 1 docs/agents.md "Your roster is Mia, Jim, Ava, Ray and Max."
+  run_case "Max introduced as an agent is caught"        1 docs/tools.md  "Delegate it to the agent Max."
+  run_case "'Max tokens' is NOT a false positive"        0 docs/settings.md "| Max tokens | 4096 | Max cached results | Max concurrent searches |"
+  run_case "internal documents are out of scope"         0 docs/internal/history.md "The Command Center was deleted and Max was retired."
+  if [ "$fails" -eq 0 ]; then echo "check-no-stale-user-docs: self-test passed"; exit 0; fi
+  echo "check-no-stale-user-docs: self-test FAILED ($fails)"; exit 1
+fi
+
 cd "$(dirname "$0")/.." || exit 2
 hits=$(mktemp) || exit 2
 trap 'rm -f "$hits"' EXIT
