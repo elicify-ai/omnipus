@@ -8,11 +8,14 @@
 package bedrock
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
-	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -407,37 +410,80 @@ func TestParseResponse_StopReasons(t *testing.T) {
 	}
 }
 
-func TestParseResponse_WithToolCalls(t *testing.T) {
-	// Note: document.NewLazyDocument has limitations with UnmarshalSmithyDocument in tests,
-	// so we test the structure extraction and verify Arguments gets populated (even if empty
-	// due to SDK limitations). The actual unmarshal works correctly at runtime.
-	toolInput := document.NewLazyDocument(map[string]any{
-		"location": "San Francisco",
-		"unit":     "celsius",
+// testCredentials supplies constant SigV4 credentials for
+// converseViaTestServer. They must be NON-anonymous: the SDK's
+// ignoreAnonymousAuth step strips aws.AnonymousCredentials from the client
+// options, scheme selection then falls through to httpBearerAuth, whose
+// identity resolver wraps a nil bearer provider and panics. With these
+// credentials the SigV4 scheme is selected instead and signs with values
+// the test server never checks.
+type testCredentials struct{}
+
+func (testCredentials) Retrieve(context.Context) (aws.Credentials, error) {
+	return aws.Credentials{AccessKeyID: "TESTKEY", SecretAccessKey: "TESTSECRET"}, nil
+}
+
+// converseViaTestServer drives a real bedrockruntime.Client at an
+// httptest.Server that replies with the given Converse response body and
+// returns the SDK-deserialized output.
+//
+// The HTTP round-trip is not decoration: ToolUseBlock.Input is a
+// document.Interface, whose unexported isSmithyDocument marker no type
+// outside the SDK's internal/document package can implement, so the only
+// way to obtain the document production actually receives is to let the
+// SDK's own response deserializer build it. The public alternative,
+// document.NewLazyDocument, is the REQUEST-side constructor and is broken
+// for unmarshaling in this SDK version (aws/aws-sdk-go-v2#2751 transposes
+// the decode source and target), which is exactly why the previous
+// hand-built fixtures failed inside parseResponse.
+func converseViaTestServer(t *testing.T, responseBody string) *bedrockruntime.ConverseOutput {
+	t.Helper()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(responseBody))
+	}))
+	t.Cleanup(server.Close)
+
+	client := bedrockruntime.NewFromConfig(aws.Config{
+		Region:      "us-east-1",
+		Credentials: testCredentials{},
+	}, func(o *bedrockruntime.Options) {
+		o.BaseEndpoint = aws.String(server.URL)
+		// The canned body must not be retried against.
+		o.Retryer = aws.NopRetryer{}
 	})
 
-	output := &bedrockruntime.ConverseOutput{
-		Output: &types.ConverseOutputMemberMessage{
-			Value: types.Message{
-				Role: types.ConversationRoleAssistant,
-				Content: []types.ContentBlock{
-					&types.ContentBlockMemberText{Value: "Let me check the weather."},
-					&types.ContentBlockMemberToolUse{
-						Value: types.ToolUseBlock{
-							ToolUseId: aws.String("call_weather_123"),
-							Name:      aws.String("get_weather"),
-							Input:     toolInput,
-						},
-					},
-				},
-			},
+	output, err := client.Converse(context.Background(), &bedrockruntime.ConverseInput{
+		ModelId: aws.String("test-model"),
+	})
+	require.NoError(t, err, "SDK must deserialize the canned Converse response")
+	return output
+}
+
+func TestParseResponse_WithToolCalls(t *testing.T) {
+	// A realistic Converse reply carrying one tool_use block, deserialized by
+	// the SDK's real response path (see converseViaTestServer).
+	output := converseViaTestServer(t, `{
+		"output": {
+			"message": {
+				"role": "assistant",
+				"content": [
+					{"text": "Let me check the weather."},
+					{
+						"toolUse": {
+							"toolUseId": "call_weather_123",
+							"name": "get_weather",
+							"input": {"location": "San Francisco", "unit": "celsius"}
+						}
+					}
+				]
+			}
 		},
-		StopReason: types.StopReasonToolUse,
-		Usage: &types.TokenUsage{
-			InputTokens:  aws.Int32(20),
-			OutputTokens: aws.Int32(15),
-		},
-	}
+		"stopReason": "tool_use",
+		"usage": {"inputTokens": 20, "outputTokens": 15}
+	}`)
 
 	resp, err := parseResponse(output)
 
@@ -446,17 +492,19 @@ func TestParseResponse_WithToolCalls(t *testing.T) {
 	assert.Equal(t, "tool_calls", resp.FinishReason)
 	assert.Len(t, resp.ToolCalls, 1)
 
-	// Verify tool call ID and Name are extracted correctly
 	tc := resp.ToolCalls[0]
 	assert.Equal(t, "call_weather_123", tc.ID)
 	assert.Equal(t, "get_weather", tc.Name)
 
-	// Verify Function fields are also populated
+	// The decoded arguments themselves, not just a non-nil map.
+	assert.Equal(t, map[string]any{"location": "San Francisco", "unit": "celsius"}, tc.Arguments)
+
+	// Function mirrors the same arguments as a JSON string.
 	require.NotNil(t, tc.Function)
 	assert.Equal(t, "get_weather", tc.Function.Name)
-
-	// Verify Arguments is not nil (content may vary due to SDK limitations in tests)
-	assert.NotNil(t, tc.Arguments)
+	var fnArgs map[string]any
+	require.NoError(t, json.Unmarshal([]byte(tc.Function.Arguments), &fnArgs))
+	assert.Equal(t, map[string]any{"location": "San Francisco", "unit": "celsius"}, fnArgs)
 
 	// Verify usage
 	assert.Equal(t, 20, resp.Usage.PromptTokens)
@@ -465,48 +513,51 @@ func TestParseResponse_WithToolCalls(t *testing.T) {
 }
 
 func TestParseResponse_MultipleToolCalls(t *testing.T) {
-	output := &bedrockruntime.ConverseOutput{
-		Output: &types.ConverseOutputMemberMessage{
-			Value: types.Message{
-				Role: types.ConversationRoleAssistant,
-				Content: []types.ContentBlock{
-					&types.ContentBlockMemberToolUse{
-						Value: types.ToolUseBlock{
-							ToolUseId: aws.String("call_1"),
-							Name:      aws.String("tool_a"),
-							Input:     document.NewLazyDocument(map[string]any{"arg": "value1"}),
-						},
+	// A realistic Converse reply with two tool_use blocks and no text block,
+	// deserialized by the SDK's real response path.
+	output := converseViaTestServer(t, `{
+		"output": {
+			"message": {
+				"role": "assistant",
+				"content": [
+					{
+						"toolUse": {
+							"toolUseId": "call_1",
+							"name": "tool_a",
+							"input": {"arg": "value1"}
+						}
 					},
-					&types.ContentBlockMemberToolUse{
-						Value: types.ToolUseBlock{
-							ToolUseId: aws.String("call_2"),
-							Name:      aws.String("tool_b"),
-							Input:     document.NewLazyDocument(map[string]any{"arg": "value2"}),
-						},
-					},
-				},
-			},
+					{
+						"toolUse": {
+							"toolUseId": "call_2",
+							"name": "tool_b",
+							"input": {"arg": "value2"}
+						}
+					}
+				]
+			}
 		},
-		StopReason: types.StopReasonToolUse,
-	}
+		"stopReason": "tool_use"
+	}`)
 
 	resp, err := parseResponse(output)
 
 	require.NoError(t, err)
 	assert.Equal(t, "tool_calls", resp.FinishReason)
+	assert.Empty(t, resp.Content) // no text block in this reply
 	assert.Len(t, resp.ToolCalls, 2)
 
-	// Verify tool call structure
+	// Each tool call keeps its own id, name, and decoded arguments.
 	assert.Equal(t, "call_1", resp.ToolCalls[0].ID)
 	assert.Equal(t, "tool_a", resp.ToolCalls[0].Name)
-	assert.NotNil(t, resp.ToolCalls[0].Arguments)
-	assert.NotNil(t, resp.ToolCalls[0].Function)
+	assert.Equal(t, map[string]any{"arg": "value1"}, resp.ToolCalls[0].Arguments)
+	require.NotNil(t, resp.ToolCalls[0].Function)
 	assert.Equal(t, "tool_a", resp.ToolCalls[0].Function.Name)
 
 	assert.Equal(t, "call_2", resp.ToolCalls[1].ID)
 	assert.Equal(t, "tool_b", resp.ToolCalls[1].Name)
-	assert.NotNil(t, resp.ToolCalls[1].Arguments)
-	assert.NotNil(t, resp.ToolCalls[1].Function)
+	assert.Equal(t, map[string]any{"arg": "value2"}, resp.ToolCalls[1].Arguments)
+	require.NotNil(t, resp.ToolCalls[1].Function)
 	assert.Equal(t, "tool_b", resp.ToolCalls[1].Function.Name)
 }
 
