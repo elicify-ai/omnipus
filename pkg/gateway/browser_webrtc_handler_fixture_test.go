@@ -144,7 +144,7 @@ func (r *requestFixtureRelay) pendingCount() int {
 // manager/live-view state and measured capture refresh remain real.
 func newMeasuredBrowserWSTestHandler(t *testing.T, mutate func(*config.Config)) (*BrowserWSHandler, *agent.AgentLoop) {
 	t.Helper()
-	endpoint, _, _ := newViewportCDPEndpoint(t, false)
+	endpoint, _, _, _ := newViewportCDPEndpoint(t, false)
 	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 8 << 30, true }))
 	return newBrowserWSTestHandler(t, func(cfg *config.Config) {
 		if mutate != nil {
@@ -162,7 +162,7 @@ func newMeasuredFixWaveHandlerWithAudit(t *testing.T, mutate func(*config.Config
 
 func newMeasuredFixWaveHandlerWithDiscovery(t *testing.T, mutate func(*config.Config)) (*BrowserWSHandler, *agent.AgentLoop, string, <-chan struct{}) {
 	t.Helper()
-	endpoint, _, discovered := newViewportCDPEndpoint(t, false)
+	endpoint, _, discovered, _ := newViewportCDPEndpoint(t, false)
 	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 8 << 30, true }))
 	handler, loop, auditDir := newFixWaveHandlerWithAudit(t, func(cfg *config.Config) {
 		if mutate != nil {
@@ -174,13 +174,33 @@ func newMeasuredFixWaveHandlerWithDiscovery(t *testing.T, mutate func(*config.Co
 	return handler, loop, auditDir, discovered
 }
 
-// Wait for the real watcher's initial frame query while no panel capture exists.
-// The later manually seeded frame then cannot be retired by late initialization.
+// awaitViewportDocumentDiscovery waits for the endpoint's FIRST frame-tree
+// query. That query is chromedp's own session handshake, sent during manager
+// bootstrap — it proves the endpoint is up, and nothing more; it does NOT
+// order anything against the live document watch (see
+// awaitViewportWatchInitialization for that barrier).
 func awaitViewportDocumentDiscovery(t *testing.T, discovered <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-discovered:
 	case <-time.After(5 * time.Second):
-		t.Fatal("live document watcher did not discover the fixture target")
+		t.Fatal("fixture endpoint did not observe a frame-tree query")
+	}
+}
+
+// awaitViewportWatchInitialization waits for the attach-time live document
+// watch's own frame-tree query. The watch's initialize goroutine looks the
+// panel capture up BEFORE querying the frame tree, so once this query is
+// observed that lookup has provably already run — and if no capture was
+// registered yet, the lookup consumed itself finding nothing, permanently.
+// A fixture that registers its capture only after this barrier can never have
+// the watch's picture-initialization transition race the registration and
+// shift frame generations under a test that asserts exact generations.
+func awaitViewportWatchInitialization(t *testing.T, watchQueried <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-watchQueried:
+	case <-time.After(5 * time.Second):
+		t.Fatal("live document watcher did not run its frame-tree probe")
 	}
 }

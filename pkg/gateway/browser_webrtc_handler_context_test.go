@@ -104,7 +104,7 @@ type handlerContextFixture struct {
 func newHandlerContextFixture(t *testing.T, pending bool, metricsHooks ...func(int, int, float64)) handlerContextFixture {
 	t.Helper()
 	t.Cleanup(config.SetMemoryProviderForTest(func() (bool, bool) { return false, true }, func() (uint64, bool) { return 8 << 30, true }))
-	cdpURL, observeViewport, discovered := newViewportCDPEndpoint(t, pending, metricsHooks...)
+	cdpURL, observeViewport, discovered, watchQueried := newViewportCDPEndpoint(t, pending, metricsHooks...)
 	dir := t.TempDir()
 	h, al := newBrowserWSTestHandler(t, func(c *config.Config) {
 		c.Tools.Browser.WebRTCEnabled = true
@@ -126,6 +126,12 @@ func newHandlerContextFixture(t *testing.T, pending bool, metricsHooks ...func(i
 	}
 	t.Cleanup(func() { mgr.Live().Detach("panel", "fixture-viewer"); mgr.Shutdown() })
 	awaitViewportDocumentDiscovery(t, discovered)
+	// The attach above installed a live document watch whose asynchronous
+	// initialize goroutine begins a picture transition whenever it finds a
+	// registered capture. Its capture lookup must have run (and found nothing)
+	// before the capture is registered below, or its forced transition shifts
+	// every frame generation under tests that assert exact generations.
+	awaitViewportWatchInitialization(t, watchQueried)
 	relay := &handlerContextRelay{}
 	var starts int32
 	cs, err := browser.NewCaptureSessionWithDeps(nil, agentID, relay, fakeEncoderStarter(&starts, nil), nil)
