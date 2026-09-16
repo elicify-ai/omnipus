@@ -1,4 +1,4 @@
-# CLAUDE.md — CI workers (`ci-omnipus`, `ci-omnipus-3`)
+# CLAUDE.md — CI worker cluster (app `ci-omnipus-1`)
 
 Scoped guidance for the `deploy/ci-worker/` directory. Loaded automatically by Claude Code
 whenever a file in this directory (or a descendant) is read. See the root `CLAUDE.md`'s
@@ -73,17 +73,18 @@ as if it were a full pass):
 **Bottom line:** treat this worker as a fast pre-merge smoke gate, not as the authority on
 concurrency. For race coverage, push and read GitHub CI.
 
-## Local PR-runner (ci-omnipus Fly worker)
+## Local PR-runner (the `ci-omnipus-1` Fly cluster)
 
-The Go test/build suite is run on a dedicated Fly worker, **never in the dev pod** (linking the full `pkg/gateway` test binary with the pure-Go OLM crypto via the `goolm` tag OOMs the pod — see the root CLAUDE.md's "Testing & building — CI is the authority" section). The worker is a sized, on-demand box with persistent caches, driven via `flyctl ssh console`.
+The Go test/build suite is run on a dedicated Fly worker cluster, **never in the dev pod** (linking the full `pkg/gateway` test binary with the pure-Go OLM crypto via the `goolm` tag OOMs the pod — see the root CLAUDE.md's "Testing & building — CI is the authority" section). The cluster is sized, on-demand boxes with persistent caches, driven via `flyctl ssh console`.
 
-- **App**: `ci-omnipus` (`sin` region, `performance-8x/16GB`, persistent `/cache` volume for go-build/mod cache, npm cache, and the cloned repo).
-- **Source of truth**: `deploy/ci-worker/runci.sh` (in this repo) **and** the deployed copy at `/cache/runci.sh` on the worker. **Editing the repo file does NOT update the executing copy** — see "Redeploying runci.sh" below.
-- **Trigger** (one gate at a time):
+- **App**: `ci-omnipus-1` (`sin` region) — **ONE app, several machines**. Each machine is a tier with its own `performance-8x/16GB` VM, its own persistent `/cache` volume (go-build/mod cache, npm cache, the cloned repo), and its own `/tmp/runci.lock`. The former standalone worker apps were **destroyed** by founder decision (2026-09-16) — do not reference or recreate them. Machines are addressed **by id**, and machine ids are provisioned by the harness, so they are DATA in `ci-cluster.sh` / its env vars, never hardcoded.
+- **Source of truth**: `deploy/ci-worker/runci.sh` (in this repo) **and** the deployed copy at `/cache/runci.sh` on **every** machine. **Editing the repo file does NOT update any executing copy** — see "Redeploying runci.sh" below.
+- **Trigger — full cluster (preferred)**: `deploy/ci-worker/ci-cluster.sh <ref>` fans the gates out one tier per machine, concurrently, and stops every machine it started on the way out (see "CI cluster dispatcher" below and `docs/internal/architecture/ci-cluster-design.md`).
+- **Trigger — one gate on one machine**:
   ```bash
-  fly ssh console --app ci-omnipus -C "/cache/runci.sh <ref> <gate>"
+  fly ssh console --app ci-omnipus-1 --machine <id> -C "/cache/runci.sh <ref> <gate>"
   ```
-- **Gates**: `all | all-no-e2e | go-build | go-vet | go-test | go-race | records-no-sqlite | contracts | spa | gofmt | quick | embed-build | e2e`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE"). `records-no-sqlite` (added for review finding F7) runs `pkg/gateway/rest_knowledge_find_propindexless_test.go`'s two tests under `-tags goolm,stdjson,records_no_sqlite` — the `records_no_sqlite` build tag otherwise appears nowhere in CI, so this is the only gate (here or in `.github/workflows/pr.yml`'s mirrored step) that ever exercises that honesty-contract carve-out. `e2e` runs the full Playwright matrix (72 specs across 24 shards) — see "E2E gate" below.
+- **Gates** (verified against `runci.sh`'s `case` block 2026-09-16): `all | all-no-e2e | gofmt | go-build | go-vet | lint | go-test | go-race | records-no-sqlite | contracts | spa | quick | embed-build | e2e | cli-verb-guard`. `go-test` includes a flake filter (a package failing the contended `-p4` full run is re-run isolated `-p 1`; "failed twice = REAL FAILURE"). `records-no-sqlite` (added for review finding F7) runs `pkg/gateway/rest_knowledge_find_propindexless_test.go`'s two tests under `-tags goolm,stdjson,records_no_sqlite` — the `records_no_sqlite` build tag otherwise appears nowhere in CI, so this is the only gate (here or in `.github/workflows/pr.yml`'s mirrored step) that ever exercises that honesty-contract carve-out. `e2e` runs the full Playwright matrix (72 specs across 24 shards) — see "E2E gate" below.
 - **When to use it**:
   - Pre-push verification on a feature branch **before** opening a PR (when you want a signal without burning a PR slot).
   - Pre-merge gate on a hotfix / release branch (faster turnaround than the public PR workflow).
@@ -171,26 +172,26 @@ The `~400 MB` session data is not copied. Read `last-failed` before re-running: 
 
   **Env knobs:** `E2E_SPECS="<space-separated specs>"` runs the OLD single-gateway path for a fast targeted re-verify (keeps the HTML report); `E2E_SHARDED=0` forces the single-gateway path for the full matrix; `E2E_MAX_PARALLEL_RENDER` (default 2) and `E2E_MAX_PARALLEL_LLM` (default 4) set the per-kind caps independently — raise `E2E_MAX_PARALLEL_LLM`, never `E2E_MAX_PARALLEL_RENDER`, when chasing wall clock — and the legacy `E2E_MAX_PARALLEL` still overrides BOTH at once (so old invocations keep their meaning).
 
-  **Fly secrets** (set as `fly secrets set … --app ci-omnipus`, never commit the value):
+  **Fly secrets** (set as `fly secrets set … --app ci-omnipus-1`, never commit the value; secrets are **per app**, so one set applies to every machine in it):
   - `OPENROUTER_API_KEY` — **required**; preflight-checked by `runci.sh` (`${OPENROUTER_API_KEY:?…}`); the gate fails fast with a clear error if it's missing. Every shard uses it (key slot `a`) unless a slot-specific key is set.
   - `OPENROUTER_API_KEY_B`, `OPENROUTER_API_KEY_C` — **optional**; give the concurrent LLM shards (`llm-agents`→B, `llm-light`→C) their own OpenRouter rate-limit windows, removing cross-shard 429 contention. Unset ⇒ those shards fall back to `OPENROUTER_API_KEY`, so the gate still runs (at single-key parallelism).
 
-**Redeploying runci.sh** (after editing the repo file — the worker keeps using its cached copy):
+**Redeploying runci.sh** (after editing the repo file — every machine keeps using its cached copy, and `/cache/runci.sh` is deployed **per machine**, so a redeploy must reach each one; `ci-cluster.sh` md5-checks every machine it uses and refuses to dispatch on a mismatch):
 ```bash
-# 1. base64 the local file and pipe it through SSH
-base64 deploy/ci-worker/runci.sh | fly ssh console --app ci-omnipus -C 'cat > /tmp/runci.sh.b64'
-# 2. decode + install on the worker
-fly ssh console --app ci-omnipus -C 'base64 -d /tmp/runci.sh.b64 > /cache/runci.sh && chmod +x /cache/runci.sh && md5sum /cache/runci.sh'
-# 3. confirm md5 matches `md5sum deploy/ci-worker/runci.sh` locally
+# per machine — sftp, NOT a base64 pipe through the console (the console does not forward stdin):
+fly ssh sftp put deploy/ci-worker/runci.sh /cache/runci.sh --app ci-omnipus-1 --machine <id>
+fly ssh console --app ci-omnipus-1 --machine <id> -C 'chmod +x /cache/runci.sh && md5sum /cache/runci.sh'
+# confirm each machine's md5 matches `md5 -q deploy/ci-worker/runci.sh` locally (or md5sum on Linux)
 # NB: redeploying runci.sh alone is enough for a script-only change. For a Dockerfile change
-# (e.g. new Playwright browser, new system dep), you must `fly deploy --app ci-omnipus` to
+# (e.g. new Playwright browser, new system dep), you must `fly deploy --app ci-omnipus-1` to
 # rebuild the image — `runci.sh` lives at /usr/local/bin/runci.sh inside the image.
 ```
 
-**⚠️ The worker is SHARED — runs are now serialised by a mutex (`/tmp/runci.lock`).**
-Every session drives the same machine, and run state is keyed by shard NAME, not by run,
-so two overlapping runs corrupt each other three ways (all observed 2026-07-26, when a
-`/home/dev/omnipus3` `e2e` run overlapped a `/home/dev/omnipus` `all` run on `sendfile-fix`):
+**⚠️ Each MACHINE is SHARED — runs on one machine are serialised by its mutex (`/tmp/runci.lock`).**
+Every session can drive any machine in the app, and run state on a machine is keyed by shard
+NAME, not by run, so two overlapping runs on the SAME machine corrupt each other three ways
+(all observed 2026-07-26, when a `/home/dev/omnipus3` `e2e` run overlapped a
+`/home/dev/omnipus` `all` run on `sendfile-fix`):
 
 1. **`/cache/omnipus`** — both hard-reset the same checkout to different SHAs; the loser
    builds and tests the other run's code. The `HEAD:` line proves what was checked out **at
@@ -211,39 +212,39 @@ pattern-kill (self-kill risk, above). **Redeploying `/cache/runci.sh` while a ru
 flight still mutates the script underneath it** — the lock does not protect against that,
 so hold redeploys until the worker is idle.
 
-**Second worker: `ci-omnipus-3` (added 2026-09-12).** When `ci-omnipus` is held by another
-session's run (the flock above can queue you for up to 90 minutes), use the clone instead of
-waiting or killing anything. It is the same image, same `fly.toml` shape (`sin`,
-`performance-8x/16GB`, its own `ci_cache` volume at `/cache`), same secrets slot `a`
-(`OPENROUTER_API_KEY`), and its own independent `/tmp/runci.lock`, so a run there never
-touches the first worker's checkout, binary, or shard homes. Everything in this file applies
-verbatim with `--app ci-omnipus-3`:
+**CI cluster dispatcher (`ci-cluster.sh`).** `deploy/ci-worker/ci-cluster.sh <ref>` fans the
+gates out across the app's machines — one tier per machine, concurrently — and owns the whole
+scale-to-zero lifecycle: it starts only the machines the active tiers need, waits until each
+is actually SSH-reachable, md5-verifies `/cache/runci.sh` against the repo copy on **every**
+machine before dispatching anything (refuses on mismatch — tiers must not run different
+script versions), dispatches one tier per machine with each gate's output captured to its own
+log file, parses every log for the `RESULT` markers (never the SSH wrapper's exit code),
+asserts every machine's `HEAD:` sha matches the requested ref, and **stops every machine it
+started on every exit path — success, failure, pre-flight refusal, and Ctrl-C** (machines
+that were already running when it arrived are used but never stopped — another session may
+own them). Tier→machine→gates is data at the top of the script (env: `CI_CLUSTER_APP`,
+`CI_CLUSTER_GO_MACHINE`/`_NODE_`/`_XPLAT_`, or a whole-map `CI_CLUSTER_TIERS` override); the
+dispatcher works with one, two, or three machines present. Full rationale, tier map, and the
+performance-vs-shared-cpu sizing question: `docs/internal/architecture/ci-cluster-design.md`.
 
-```bash
-fly ssh console --app ci-omnipus-3 -C "/cache/runci.sh <ref> <gate>"
-```
+Two things to know before trusting a cluster run:
 
-Three things to know before trusting it:
-
-1. **`/cache/runci.sh` is deployed PER WORKER.** A redeploy to one does not reach the other;
-   compare `md5sum /cache/runci.sh` on each against the repo file before reading a verdict,
-   or you will run an older script on one box and a newer one on the other.
-2. **`fly ssh console -C` does not forward stdin**, so the base64-pipe recipe above echoes the
-   payload instead of writing it. Use `fly ssh sftp put deploy/ci-worker/runci.sh
-   /cache/runci.sh --app <app>` then `chmod +x` over the console. (Found when first provisioning
-   this worker.)
-3. **Key slots.** All three (`OPENROUTER_API_KEY`, `_B`, `_C`) are set since 2026-09-13,
-   distinct keys, so the shard plan's `key_slot` spread works here as on `ci-omnipus`. For the
-   first day it ran on slot `a` alone, and all nine LLM shards shared one key. What that
-   looks like is NOT 429s (zero were logged on 2026-09-12) but
-   **slow completions**: judge calls of ~80 s, a supervisor re-plan turn of 3 min, a
-   goal test taking 5+ min in the matrix and 2 min when run alone. The tests with the
-   tightest real-time windows lose the race first — `Conformance_t3b_TargetedRetryOnlyE2E`
-   (4 judge rounds inside a 7-min window) failed in the matrix and passed in 8.8 min in
-   isolation on the same commit, and the judge's own 120 s call timeout tripped three times
-   in one conformance-chat shard. Before reading such a failure as a regression, re-run the
-   ONE spec with `E2E_SPECS=…` (no contention) and compare durations; then set the extra
-   keys with `fly secrets set --app ci-omnipus-3` so the matrix stops sharing one window.
+1. **`/cache/runci.sh` is deployed PER MACHINE.** A redeploy to one machine does not reach
+   the others; the dispatcher's md5 pre-flight makes a stale machine a hard refusal (exit 2)
+   rather than a silent mixed-version run. Use the sftp recipe in "Redeploying runci.sh"
+   above — `fly ssh console -C` does not forward stdin, so piping a file through the console
+   echoes the payload instead of writing it.
+2. **Key slots.** All three OpenRouter keys (`OPENROUTER_API_KEY`, `_B`, `_C`) are set at
+   app level (distinct since 2026-09-13), so every machine sees them and the e2e shard
+   plan's `key_slot` spread works anywhere in the cluster. What key contention looks like is
+   NOT 429s (zero logged on 2026-09-12) but **slow completions**: judge calls of ~80 s, a
+   supervisor re-plan turn of 3 min, a goal test taking 5+ min in the matrix and 2 min when
+   run alone. The tests with the tightest real-time windows lose the race first —
+   `Conformance_t3b_TargetedRetryOnlyE2E` (4 judge rounds inside a 7-min window) failed in
+   the matrix and passed in 8.8 min in isolation on the same commit, and the judge's own
+   120 s call timeout tripped three times in one conformance-chat shard. Before reading such
+   a failure as a regression, re-run the ONE spec with `E2E_SPECS=…` (no contention) and
+   compare durations.
 
 Detached runs (`nohup … > /tmp/ci-run.log &` over the console) survive an SSH drop and a
 session restart; resume by reading `/tmp/ci-run.log` and `ps -eo pid,etime,cmd | grep
@@ -260,6 +261,6 @@ occasionally the write lands mid-`RemoveAll` and fails an otherwise green test w
 `find /cache/tmp/Test*/ -type f` names the file, hence the subsystem. On 2026-09-12 it was
 130 dirs, all `cache/model_limits.json` (ADR-066 rung 4's fetch on a background context).
 
-**Cost / lifecycle**: the worker is stopped when idle (no public service). If `fly status` shows the machine `stopped`, run `fly machines start <id> --app ci-omnipus` once before invoking `runci.sh`; the SSH console will auto-start it otherwise. Watch the persistent `/cache` volume for disk pressure — `fly ssh console --app ci-omnipus -C 'df -h /cache'`.
+**Cost / lifecycle**: machines are stopped when idle (no public service; a stopped machine's `/cache` volume still bills — stopping saves compute, not storage). Prefer `deploy/ci-worker/ci-cluster.sh <ref>`, which starts and stops the machines it needs itself. For a manual single-machine run, if `fly machine status <id> --app ci-omnipus-1` shows `stopped`, run `fly machine start <id> --app ci-omnipus-1` once before invoking `runci.sh` — and remember to stop it again; the SSH console may auto-start a stopped machine, which leaves it running unattended. Watch each machine's persistent `/cache` volume for disk pressure — `fly ssh console --app ci-omnipus-1 --machine <id> -C 'df -h /cache'`.
 
-**Trap 7 — stopping a run: kill the exact pid, never a process group.** `ps -o pgid` can print `0` for a nohup'd `runci.sh`; `kill -TERM -0` then signals every process on the VM, including init, and the Fly machine stops (2026-09-14, `ci-omnipus-3`, recovered with `fly machines start <id>`; `/cache` survived). Stop a superseded run with `kill -TERM <runci pid>` and, if its children linger, `pkill -TERM -P <runci pid>`. Note also that a GATE FAILURE in `go-build` does not end the run: the remaining gates still execute, so a superseded run holds the lock for the full duration unless stopped.
+**Trap 7 — stopping a run: kill the exact pid, never a process group.** `ps -o pgid` can print `0` for a nohup'd `runci.sh`; `kill -TERM -0` then signals every process on the VM, including init, and the Fly machine stops (2026-09-14, observed on a since-destroyed worker app, recovered with `fly machine start <id> --app ci-omnipus-1`; `/cache` survived). Stop a superseded run with `kill -TERM <runci pid>` and, if its children linger, `pkill -TERM -P <runci pid>`. Note also that a GATE FAILURE in `go-build` does not end the run: the remaining gates still execute, so a superseded run holds the machine's lock for the full duration unless stopped.
