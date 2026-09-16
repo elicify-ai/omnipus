@@ -8,7 +8,7 @@ Each [workspace](workspaces.md) has one browser. When an agent browses, it drive
 
 The panel streams that browser to your screen as live video, with sound when the page has any. You can drive it too: your mouse, keyboard and scrolling reach the same pages the agent sees.
 
-The browser belongs to the workspace whose chat you opened it from. Chats with that workspace's team share its tabs and its signed-in sessions, so a login you perform yourself stays available to the agent.
+The browser belongs to the workspace whose chat opened it. That workspace's team shares its tabs and signed-in sessions.
 
 If the video cannot connect, you get an error with a reason and a Retry button — never a blank frame, never a quieter stand-in picture.
 
@@ -23,8 +23,8 @@ On a fresh install, Jim and Ray have browser tools; Mia and Ava do not. Operator
 
 ## How to open and watch
 
-1. In a chat, click **Open browser** next to the message composer. A panel docks on the right side of the screen. If the agent has not browsed yet, you get a ready blank tab.
-2. Click **Watch live** on any browser action in the thread instead, if you want the panel for that exact step.
+1. In a chat, click **Open browser** next to the message composer. The panel docks on the right with a blank tab if browsing has not started.
+2. Alternatively, click **Watch live** on a browser action in the thread.
 3. Wait for the picture. A spinner shows until the first frame arrives.
 4. Read the status chip in the toolbar: "<Agent> is browsing…" while the agent drives, "Click to drive" when idle, "Also viewing" when someone else has the panel open.
 5. Click **Pop out** for a window of its own, or **Close** to dismiss it. Closing the panel does not stop the agent's run.
@@ -32,8 +32,8 @@ On a fresh install, Jim and Ray have browser tools; Mia and Ava do not. Operator
 ## How to take over from the agent
 
 1. Click anywhere in the picture, or click the **Take over** button while the agent is working.
-2. Drive as you would in any browser: click, type, scroll. Input works even while the agent works — the wheel decides who the agent yields to, not whether your clicks land.
-3. Taking over does not stop the agent's run. On its next browser action it is told a person holds the browser, so it stops browsing and keeps doing other work. A line appears in the chat: "A person has taken control of the browser. The agent has stopped driving it — send a message to give it back."
+2. Click, type, and scroll as in any browser.
+3. Taking over does not stop the run. At its next browser action, the agent stops browsing and continues other work. The chat tells you to send a message when you want to return control.
 4. Send a chat message to hand the browser back. Pressing **Esc** stops your driving but does not restart the agent; it still waits for your message.
 5. If you walk away, your hold ends after 15 minutes of no activity — the default; an operator can change or disable the timer.
 
@@ -47,7 +47,7 @@ flowchart LR
 
 Taking over stops the agent's browsing, not its run; your next message hands the browser back.
 
-An agent can also hand the browser to you, for example at a sign-in. The chat shows: "The agent handed the browser over to you. It has stopped driving — send a message when you are done and it will pick it back up."
+An agent can also hand you the browser, for example at a sign-in. Send a message when you are done to return control.
 
 ## What the panel shows
 
@@ -66,7 +66,7 @@ The panel has two rows of controls above the live picture.
 | Take over | Shown while the agent works; click to hold the browser |
 | Retry | Shown with an error; starts a fresh video connection |
 
-To annotate, click the annotate button, drag a box (or click a spot), write your comment, click **Send**. A cropped picture and your comment land in the chat as a normal message. Annotate works in the docked panel, not in the pop-out window.
+To annotate, click the button, mark a region, write your comment, and click **Send**. The crop and comment enter the chat. Annotation works only in the docked panel.
 
 ## Limits and things to watch
 
@@ -84,6 +84,8 @@ Every failure is shown as an error with its reason and a Retry button.
 Other things to watch:
 
 - Live video needs a server that supports it. Linux servers do; on other server platforms the agent can still browse, but the panel cannot show video.
+- On Windows, available memory cannot be measured, so Omnipus permits one browser for the whole host regardless of its physical RAM. Browser support on Windows is degraded and unsupported; there is no setting that raises this browser floor.
+- The operator setting `tools.browser.cache_trim_interval` controls how often closed browser profiles are swept. It does not bound a profile's size. A workspace driven continuously, with no idle gap, keeps growing its cache because Omnipus never trims a live browser.
 - Locked-down networks can block the live media stream. You get the error above, not a lower-quality fallback.
 - Sound starts muted. Click the mute button to hear the page.
 - Your input pauses while the picture is not safe to click on — while the panel reconnects, resizes, or waits for the page to settle. A notice at the bottom says so, and input has its own Retry button when its connection drops.
