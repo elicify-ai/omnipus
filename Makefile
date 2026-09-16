@@ -24,7 +24,7 @@
 #   bedrock    compiles in the real AWS Bedrock provider (stub without it)
 # =============================================================================
 
-.PHONY: all build install uninstall clean help test vet vet-windows gen-contracts verify-contracts docs-reference lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-duplicate-renderer lint-no-removed-providers lint-no-orphan-turn-watchdog lint-guards spa-embed release-snapshot release-build golangci-lint-version-check
+.PHONY: all build install uninstall clean help test vet vet-windows gen-contracts verify-contracts docs-reference lint-wire-types lint-tool-error-status lint-no-jpeg-screencast lint-no-duplicate-renderer lint-no-removed-providers lint-no-orphan-turn-watchdog lint-guards sync-agents-md spa-embed release-snapshot release-build golangci-lint-version-check
 
 # Build variables
 BINARY_NAME=omnipus
@@ -521,9 +521,20 @@ lint-budgets:
 ## The eight targets above remain as thin delegates to their own guard for muscle memory and
 ## direct references; this is the aggregate that `lint` actually depends on. Adding a guard to
 ## the delivery is adding a scripts/check-*.sh file plus its companion — this target discovers
-## it automatically, with no Makefile edit (C-19, C-44, C-45, C-92, C-93).
+## it automatically, with no Makefile edit (C-19, C-44, C-45, C-92, C-93). That discovery is
+## also how the CLAUDE.md/AGENTS.md twin guard (scripts/check-agents-md-sync.sh + its .test.sh
+## companion) runs under `lint` — it has no separate wiring and must never get any (C-92).
 lint-guards:
 	bash scripts/guards.sh
+
+## sync-agents-md: Make every AGENTS.md a byte-identical twin of its CLAUDE.md
+## (and vice versa), using git to decide which side is the source — whichever
+## file differs from HEAD is the one a harness just wrote. Both-changed conflicts
+## and committed-inconsistent pairs are reported, never silently resolved; run
+## scripts/sync-agents-md.sh --dry-run to preview. Enforcement is the discovered
+## guard above, not this fixer.
+sync-agents-md:
+	bash scripts/sync-agents-md.sh
 
 ## verify-contracts: Regenerate contracts, run wire-type lint, typecheck TS, fail if anything has drifted
 # Note: `tsc --noEmit` (without -b) is a silent no-op on a project-references
