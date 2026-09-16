@@ -783,6 +783,53 @@ The one-job rule; "a file warns at 2,000 and fails at 4,000, a function warns at
 
 The splitter at `/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/cmd/splitfile` is the mechanical *how* for a file cut, not the gate. The gate is CI.
 
+## Migration complete — final state, 2026-09-16
+
+**Go functions over 240 lines: 42 -> 3.** The three that remain are at a structural floor or a
+deliberate choice, not a backlog:
+
+| Function | Lines | Why it stops here |
+|---|---:|---|
+| `spawnSubTurn` | 607 (was 1,489) | Its top-level cleanup `defer` is a ~318-line literal that ASSIGNS the named result `err`. No tool may move it without changing when and to what the cleanup writes. |
+| `streamReplay` | 428 (was 687) | Its local `emitFrame` literal assigns the named result `framesEmitted`. Same reason. |
+| `registerSharedToolsWire3.registerBrowserTools` | 263 | A generated stage left 23 lines over rather than reverting the 1,297 -> 227 reduction of `registerSharedTools`. |
+
+**Files over 4,000 lines: 2 -> 0.** `pkg/agent/loop.go` 7,825 -> 3,156 as `runTurn` (4,364 lines)
+became a 195-line conductor whose own stages were then split again. `src/store/chat.ts` 6,695 -> a
+35-line barrel plus slices, largest file 947. The file grandfather list is EMPTY.
+
+**Test functions: 20 over 240, grandfathered by founder ruling** — 14 are subtest containers and 3
+are table-driven, shapes where the length IS the list of cases; the mechanical extractor would move
+a scenario's name away from its assertions. Three linear ones are named in the ruling for conversion
+to subtests whenever someone next touches them.
+
+**TypeScript:** components warn and never fail (founder ruling); everything else fails over 240
+unless grandfathered. The gate already implemented exactly this.
+
+**Documentation:** 22 pages written or rewritten, every legacy page folded or moved, an operator area
+with its own index, a generated provider/model and built-in-tool reference with a drift check, and a
+guard that fails the build if a retired surface returns. An independent audit found 8 defects across
+the 22 pages; all 8 are corrected.
+
+### The three rules that cost the most, and what replaced them
+
+1. **"A partial function refactor is never committed"** was written for a half-finished function and
+   read as "nothing may exceed 240". Two lanes threw away large verified reductions because of it —
+   `registerSharedTools` at 1,297 -> 227 and `spawnSubTurn` at 1,489 -> 591. Hard rules 9 and 10 now
+   say: commit a verified reduction, lower the budget number, and name what could not move. **State
+   what a rule means, not only what it forbids.**
+2. **"The code wins when sources disagree"** was replaced by the founder with escalation: a lane
+   leaves the disputed claim out and records the conflict, because a lane cannot ask mid-run.
+3. **Gates written for one shape get applied to another.** The handbook's prose rules failed a
+   2,516-word operator settings table; the merge gate judged pages a lane had only re-linked; the
+   string audit held a lane for the import paths a file split always adds. Each needed the gate
+   fixed, not the work reverted.
+
+**Still open:** the single end-of-migration CI run, with the pre-existing failures recorded in
+`/Users/danielpiatkowski/AI-Agent-Workspace/loop-split-bench/results/known-failures.md` so nothing in
+it is mistaken for migration damage — including an unnamed package-level failure in `pkg/gateway`
+that is present in the baseline.
+
 ## Out of scope until a later draft
 
 Enabling gopls/TypeScript LSP plugins; Read-deny on generated trees; PostToolUse format hooks. Those are harness work, not the module map.
