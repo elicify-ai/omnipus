@@ -93,9 +93,8 @@ var legacyModeDirect = map[string]bool{
 // directly on composite-literal edges — a pattern used throughout the
 // gateway handlers and tests (e.g. storedDelegationEdge{...}.Validate(team,
 // ceiling)), which would stop compiling if Validate required an addressable
-// value.
-//
-//nolint:recvcheck // see comment above
+// value. (recvcheck is disabled repo-wide for this forced pattern — see
+// .golangci.yaml.)
 type DelegationEdge struct {
 	FromAgent string           `json:"from_agent"`
 	ToAgent   string           `json:"to_agent"`

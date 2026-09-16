@@ -114,3 +114,108 @@ func TestSecureString_MarshalYAML_InStruct(t *testing.T) {
 	require.NotContains(t, string(jsonOut), "plaintext-webhook-secret")
 	require.Contains(t, string(jsonOut), "[NOT_HERE]")
 }
+
+// ---------------------------------------------------------------------------
+// Non-addressable values — the property the tests above do NOT guard
+// ---------------------------------------------------------------------------
+//
+// MarshalJSON/MarshalYAML are deliberately VALUE receivers. That is what makes
+// redaction apply however the caller happens to hold the value: a value
+// receiver puts the method in both SecureString's and *SecureString's method
+// sets, so encoding/json and yaml.v3 find the marshaler even on a value that
+// is NOT addressable. A pointer receiver would make both marshalers callable
+// only through *SecureString; for a non-addressable value both encoders then
+// silently fall back to plain struct encoding (encoding/json builds a
+// conditional-addressability encoder — newCondAddrEncoder — whose fallback
+// is the ordinary struct path), emitting `{}` instead of "[NOT_HERE]": the
+// unexported field leaks nothing, but the redaction marker disappears and
+// any [NOT_HERE]-aware round-trip breaks.
+//
+// The tests above all marshal through values that stay copyable-but-typed;
+// the two shapes below are the ones a pointer receiver breaks outright.
+// They are the guard: change either marshaler to a pointer receiver and
+// these go red.
+
+// TestSecureString_MarshalJSON_NonAddressable_MapValue proves redaction for
+// a SecureString held as a map value. Map values are never addressable in
+// Go, so a pointer-receiver MarshalJSON would not be found by the encoder.
+func TestSecureString_MarshalJSON_NonAddressable_MapValue(t *testing.T) {
+	m := map[string]SecureString{"webhook": *NewSecureString("map-value-secret")}
+
+	out, err := json.Marshal(m)
+	require.NoError(t, err)
+	require.Equal(t, `{"webhook":"[NOT_HERE]"}`, string(out))
+	require.NotContains(t, string(out), "map-value-secret")
+}
+
+// TestSecureString_MarshalYAML_NonAddressable_MapValue is the YAML twin of
+// the map-value case above.
+func TestSecureString_MarshalYAML_NonAddressable_MapValue(t *testing.T) {
+	m := map[string]SecureString{"webhook": *NewSecureString("map-value-secret")}
+
+	out, err := yaml.Marshal(m)
+	require.NoError(t, err)
+	require.NotContains(t, string(out), "map-value-secret")
+
+	// Decode before comparing: the yaml encoder chooses quoting per scalar
+	// ([NOT_HERE] starts with a flow indicator, so it is single-quoted), but
+	// the decoded value must be exactly the redaction marker.
+	var decoded map[string]string
+	require.NoError(t, yaml.Unmarshal(out, &decoded))
+	require.Equal(t, map[string]string{"webhook": "[NOT_HERE]"}, decoded)
+}
+
+// TestSecureString_MarshalJSON_NonAddressable_BareValue proves redaction for
+// a bare SecureString passed by value — the value is copied into json.Marshal's
+// interface parameter, so it is non-addressable from the encoder's point of
+// view and only a value-receiver MarshalJSON can fire.
+func TestSecureString_MarshalJSON_NonAddressable_BareValue(t *testing.T) {
+	s := SecureString{resolved: "bare-value-secret"}
+
+	out, err := json.Marshal(s)
+	require.NoError(t, err)
+	require.Equal(t, `"[NOT_HERE]"`, string(out))
+	require.NotContains(t, string(out), "bare-value-secret")
+}
+
+// TestSecureString_MarshalYAML_NonAddressable_BareValue is the YAML twin of
+// the bare-value case above.
+func TestSecureString_MarshalYAML_NonAddressable_BareValue(t *testing.T) {
+	s := SecureString{resolved: "bare-yaml-secret"}
+
+	out, err := yaml.Marshal(s)
+	require.NoError(t, err)
+	require.NotContains(t, string(out), "bare-yaml-secret")
+
+	var decoded string
+	require.NoError(t, yaml.Unmarshal(out, &decoded))
+	require.Equal(t, "[NOT_HERE]", decoded)
+}
+
+// TestSecureString_Marshal_AddressableStructViaPointer is the control case:
+// a struct reached through a POINTER has addressable fields, so even a
+// pointer-receiver marshaler would still be found here by encoding/json
+// (its condAddr encoder takes the field's address). Under a MarshalJSON
+// receiver flip this test stays green while the map/bare tests above go red
+// — that asymmetry is why those tests, not this one, are the guard. yaml.v3
+// has no such addressability fallback (verified by the same flip), so the
+// YAML half of this test DOES depend on the value receiver.
+func TestSecureString_Marshal_AddressableStructViaPointer(t *testing.T) {
+	type holder struct {
+		Token SecureString `json:"token" yaml:"token"`
+	}
+	h := holder{Token: *NewSecureString("addressable-secret")}
+
+	jsonOut, err := json.Marshal(&h)
+	require.NoError(t, err)
+	require.Equal(t, `{"token":"[NOT_HERE]"}`, string(jsonOut))
+	require.NotContains(t, string(jsonOut), "addressable-secret")
+
+	yamlOut, err := yaml.Marshal(&h)
+	require.NoError(t, err)
+	require.NotContains(t, string(yamlOut), "addressable-secret")
+
+	var decoded map[string]string
+	require.NoError(t, yaml.Unmarshal(yamlOut, &decoded))
+	require.Equal(t, map[string]string{"token": "[NOT_HERE]"}, decoded)
+}
