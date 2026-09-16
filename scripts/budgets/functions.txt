@@ -16,7 +16,6 @@ pkg/agent/recall_conversation.go	RecallConversationTool.Execute	299
 pkg/agent/session_end.go	AgentLoop.runRecap	383
 pkg/agent/subturn.go	spawnSubTurn	1489
 pkg/agent/task_trigger_rrule_test.go	TestTriggerScheduler_RruleRearmAllPaths	386
-pkg/agent/verifier_adjudication.go	AgentLoop.runVerifierAdjudication	378
 pkg/agent/verifier_antipatterns_adr052_qa_test.go	TestVerifierAntiPatterns	293
 pkg/audit/logger_test.go	TestAuditLogger_WriteAndRotate	270
 pkg/audit/rotation_test.go	TestRotationBySizeAndDaily	309

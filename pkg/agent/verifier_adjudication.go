@@ -1288,6 +1288,49 @@ const diffTotalCap = 128 * 1024
 
 // --- The verifier turn itself (ADR-052 FR-011) ------------------------------
 
+// agentLoopRunVerifierAdjudication carries the shared state of runVerifierAdjudication across its stages.
+type agentLoopRunVerifierAdjudication struct {
+	al             *AgentLoop
+	ctx            context.Context
+	in             JudgeCriteriaInput
+	proseCriteria  []task.AcceptanceCriterion
+	evidence       []task.EvidenceRecord
+	diffText       string
+	unitID         string
+	sessionKey     string
+	adjudicationID string
+	chatID         string
+	windowText     string
+	judgeInst      *AgentInstance
+	prompt         string
+	content        string
+	toolCalls      int
+	callErr        error
+	ret0           []task.CriterionVerdict
+	ret1           string
+	ret2           string
+	ret3           bool
+	ret4           string
+	ret5           []string
+	ret6           []string
+}
+
+// agentLoopRunVerifierAdjudicationFlow reports how a block stage of agentLoopRunVerifierAdjudication wants the conductor to proceed.
+type agentLoopRunVerifierAdjudicationFlow int
+
+const (
+	agentLoopRunVerifierAdjudicationNext agentLoopRunVerifierAdjudicationFlow = iota
+	agentLoopRunVerifierAdjudicationReturn
+	agentLoopRunVerifierAdjudicationContinue
+	agentLoopRunVerifierAdjudicationBreak
+)
+
+// agentLoopRunVerifierAdjudicationSetup carries the shared state of runVerifierAdjudication across its stages.
+type agentLoopRunVerifierAdjudicationSetup struct {
+	va       *agentLoopRunVerifierAdjudication
+	registry VerifierSessionPublisher
+}
+
 // runVerifierAdjudication adjudicates proseCriteria by running ONE real
 // agent turn, synchronously, in a FRESH verifier session under the seeded
 // Judge System Agent's identity — replacing the old judgeProseCriteria raw
@@ -1332,26 +1375,20 @@ func (al *AgentLoop) runVerifierAdjudication(
 	evidence []task.EvidenceRecord,
 	diffText string,
 ) (verdicts []task.CriterionVerdict, model, judgeAgentID string, unavailable bool, reason string, unjudgeableIDs []string, unableToVerifyIDs []string) {
-	unitID := verifierUnitID(in)
-	registry := currentVerifierSessionRegistry()
-	sessionKey := fmt.Sprintf("agent:%s:verify:%s", string(coreagent.IDJudge), uuid.New().String())
-	// adjudicationID names THIS adjudication for the whole of its life: it is
-	// stamped on the verifier turn's ctx (JUDGE-FR-084, so every audit entry
-	// the Judge's tool calls produce carries the correlation) and reused as
-	// the investigation-log id below, so "what did the verifier open" is
-	// answerable by joining the audit log to the investigation log on one
-	// value rather than on timestamps.
-	adjudicationID := uuid.New().String()
+	vs := &agentLoopRunVerifierAdjudicationSetup{}
+
+	vs.va = &agentLoopRunVerifierAdjudication{al: al, ctx: ctx, in: in, proseCriteria: proseCriteria, evidence: evidence, diffText: diffText}
+
+	vs.initializeAdjudication()
 	// chatID is created lazily, immediately before its first use below (item
 	// 3, 7-reviewer gate) — NOT here — so a bail on ctx.Err()/Judge-not-
 	// registered/SEC-26-denied never pre-creates an on-disk verifier session
 	// that is then abandoned.
-	var chatID string
 
 	registered := false
 	defer func() {
 		if registered {
-			registry.Unregister(unitID)
+			vs.registry.Unregister(vs.va.unitID)
 		}
 	}()
 	// Sign-off finding 1: record this call's outcome against unitID's
@@ -1359,7 +1396,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 	// AFTER it has been set by whichever return statement below fires — a
 	// defer over a named return always observes the final value.
 	defer func() {
-		recordVerifierAvailabilityOutcome(unitID, unavailable)
+		recordVerifierAvailabilityOutcome(vs.va.unitID, unavailable)
 	}()
 
 	// Fix GX-E-4 (observability): the verifier attempt's wall-clock duration
@@ -1375,7 +1412,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 	defer func() {
 		logger.InfoCF("agent", "verifier: adjudication attempt finished",
 			map[string]any{
-				"unit_id": unitID, "scope": in.Scope, "iterations": iterations,
+				"unit_id": vs.va.unitID, "scope": vs.va.in.Scope, "iterations": iterations,
 				"duration_ms": time.Since(startedAt).Milliseconds(),
 				"unavailable": unavailable,
 			})
@@ -1394,20 +1431,21 @@ func (al *AgentLoop) runVerifierAdjudication(
 	// burn the goal's rounds for a posture problem. Deliberately NOT retried
 	// on the backoff schedule: god mode clears by operator action, not by
 	// waiting, and a retry loop would only spin.
-	if godModeReason, refuse := VerifierGodModeRefusalReason(GodModeActive(al.GetConfig())); refuse {
+	if godModeReason, refuse := VerifierGodModeRefusalReason(GodModeActive(vs.va.al.GetConfig())); refuse {
 		logger.ErrorCF("agent",
 			"verifier: adjudication refused — god mode is active (JUDGE-FR-057); "+
 				"no verifier session was created and no Judge turn ran",
-			map[string]any{"unit_id": unitID, "scope": in.Scope, "reason": godModeReason})
+			map[string]any{"unit_id": vs.va.unitID, "scope": vs.va.in.Scope, "reason": godModeReason})
 		return nil, "", "", true, godModeReason, nil, nil
 	}
 
-	windowText := al.resolveVerifierWindowText(in)
+	vs.va.windowText = vs.va.al.resolveVerifierWindowText(vs.va.in)
 
+agentLoopRunVerifierAdjudicationLoop1:
 	for attempt := 0; ; attempt++ {
 		iterations = attempt + 1
-		if ctx.Err() != nil {
-			return nil, "", "", true, ctx.Err().Error(), nil, nil
+		if vs.va.ctx.Err() != nil {
+			return nil, "", "", true, vs.va.ctx.Err().Error(), nil, nil
 		}
 		// JUDGE-FR-082/FR-103 (UAT E-14): the registered verifier session is this
 		// adjudication's cancel handle, and every cancel surface (`/goal clear`,
@@ -1416,45 +1454,22 @@ func (al *AgentLoop) runVerifierAdjudication(
 		// registered for a cancel to claim — means the adjudication was stopped.
 		// Discard it whole instead of dispatching another Judge turn whose verdict
 		// would land on a goal the user already cleared.
-		if registered && verifierHandleReleased(registry, unitID, chatID) {
+		if registered && verifierHandleReleased(vs.registry, vs.va.unitID, vs.va.chatID) {
 			registered = false // never evict a successor adjudication's entry for this unit
 			logger.InfoCF("agent",
 				"verifier: adjudication discarded — its verifier session was released by a cancel while it waited to retry (JUDGE-FR-082)",
-				map[string]any{"unit_id": unitID, "scope": in.Scope, "attempt": attempt})
+				map[string]any{"unit_id": vs.va.unitID, "scope": vs.va.in.Scope, "attempt": attempt})
 			return nil, "", "", true, VerifierAdjudicationCancelledReason, nil, nil
 		}
 		if attempt > 0 {
-			al.noteGoalJudgeRetrying(in, attempt)
+			vs.va.al.noteGoalJudgeRetrying(vs.va.in, attempt)
 		}
 
-		judgeInst, ok := al.GetRegistry().GetAgent(string(coreagent.IDJudge))
-		if !ok || judgeInst == nil || judgeInst.Provider == nil {
-			const notConfiguredReason = "judge_not_configured: Judge System Agent is not registered"
-			logger.WarnCF("agent", "verifier: Judge System Agent not resolvable; pausing (D7 unavailability)", nil)
-			al.noteGoalJudgeRetryWait(in, attempt, "the Judge agent is not available")
-			if waitErr := al.judgeBackoffWait(ctx, attempt, notConfiguredReason); waitErr != nil {
-				return nil, "", "", true, notConfiguredReason, nil, nil
-			}
-			continue
-		}
-
-		allowed, retryAfter, denyReason := al.checkJudgeSEC26(judgeInst.AgentType, judgeInst.ID)
-		if !allowed {
-			logger.WarnCF("agent", "verifier: SEC-26 gate denied verifier LLM call; pausing (D7 unavailability)",
-				map[string]any{"reason": denyReason, "retry_after_s": retryAfter.Seconds()})
-			al.noteGoalJudgeRetryWait(in, attempt, "the Judge reached its rate limit")
-			if waitErr := al.judgeBackoffWait(ctx, attempt, denyReason); waitErr != nil {
-				return nil, "", "", true, denyReason, nil, nil
-			}
-			continue
-		}
-
-		ensureVerifierSoul(judgeInst)
-
-		prompt, buildErr := buildJudgeUserContent(proseCriteria, evidence, in.ClaimText, in.ExtraContext, windowText, diffText)
-		if buildErr != nil {
-			return failClosedProseVerdicts(proseCriteria, "internal error building verifier prompt: "+buildErr.Error()),
-				"", "", false, "build_error", nil, nil
+		switch vs.va.resolveJudge(attempt) {
+		case agentLoopRunVerifierAdjudicationReturn:
+			return vs.va.ret0, vs.va.ret1, vs.va.ret2, vs.va.ret3, vs.va.ret4, vs.va.ret5, vs.va.ret6
+		case agentLoopRunVerifierAdjudicationContinue:
+			continue agentLoopRunVerifierAdjudicationLoop1
 		}
 
 		if !registered {
@@ -1469,8 +1484,8 @@ func (al *AgentLoop) runVerifierAdjudication(
 			// *verifierSessionRegistry) always satisfies it; a minimal spy that
 			// does not skips the pre-check and relies on the CAS alone (the
 			// spy's Register returns nil, so the CAS never rejects in tests).
-			if richer, ok := registry.(VerifierSessionRegistry); ok {
-				if existing, held := richer.Lookup(unitID); held && existing != "" {
+			if richer, ok := vs.registry.(VerifierSessionRegistry); ok {
+				if existing, held := richer.Lookup(vs.va.unitID); held && existing != "" {
 					reason = "concurrent adjudication in flight for unit"
 					unavailable = true
 					return nil, "", "", true, reason, nil, nil
@@ -1482,8 +1497,8 @@ func (al *AgentLoop) runVerifierAdjudication(
 			// activeTurnStates map storage key; chatID becomes
 			// ts.transcriptSessionID, the value Stop/`/goal clear`'s
 			// RequestCancelForSession actually matches turns on.
-			chatID = al.newVerifierSessionChatID(sessionKey, unitID)
-			if regErr := registry.Register(unitID, chatID); regErr != nil {
+			vs.va.chatID = vs.va.al.newVerifierSessionChatID(vs.va.sessionKey, vs.va.unitID)
+			if regErr := vs.registry.Register(vs.va.unitID, vs.va.chatID); regErr != nil {
 				// CAS guard (corr-MAJOR-3, G-1): lost the race between the
 				// Lookup pre-check above and this atomic Register — another
 				// adjudication registered a live session in the gap. Back off
@@ -1500,58 +1515,7 @@ func (al *AgentLoop) runVerifierAdjudication(
 			registered = true
 		}
 
-		callCtx, cancel := context.WithTimeout(ctx, al.judgeTurnTimeout())
-		// FR-033/R3-10/R3-11 (F2 half): plumb the engine-set inspect_session
-		// target scope onto the verifier's own turn ctx BEFORE dispatch — the
-		// ctx propagates through processTaskDirect's own derivation
-		// (tools.WithAgentID(ctx, ...) etc.) into every tool call the
-		// verifier's turn makes, so inspect_session's
-		// VerifierSessionScopeAllows check (pkg/tools/inspect_session.go)
-		// sees it. A scope that resolves to nil leaves ctx untouched
-		// (WithVerifierSessionScope's own "empty is unset" contract), which
-		// correctly fails inspect_session closed for every session id.
-		callCtx = tools.WithVerifierSessionScope(callCtx, al.resolveVerifierSessionScope(in))
-		// JUDGE-FR-060/FR-060b (review finding 4): the two ctx seams whose own
-		// doc comments say "the engine sets this where it sets
-		// WithSystemAgentWorkspaceOverride" — and which nothing in production
-		// set, so every Judge turn resolved ReadConfined=false and the
-		// read-confinement ADR-084 exists to impose was never applied (a Judge
-		// turn could read_file any other session's transcript.jsonl), while
-		// the adjudication_id audit correlation was always empty. Set HERE,
-		// at the dispatch, never by a tool.
-		callCtx = tools.WithReadConfined(callCtx, true)
-		callCtx = tools.WithVerifierAdjudicationID(callCtx, adjudicationID)
-		// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1, operator
-		// decision "make the judge a member of every workspace"): the Judge
-		// is an IMPLICIT member of every workspace (pkg/workspace's
-		// isImplicitMember), so this is never needed to AVOID a refusal —
-		// it is the "preferring" selector that picks WHICH of those implicit
-		// memberships the verifier's turn roots in (the work-under-review's
-		// own workspace), so its read-only escalation tools (FR-012(c)) can
-		// actually reach the artifacts they exist to inspect, rather than
-		// an arbitrary sorted-first workspace.
-		// Sign-off 14 MINOR-1 / architect F4: an UNBOUND /goal (Scope==goal
-		// with no WorkspaceID) has no work-under-review workspace to prefer
-		// at all — there is nothing for optWorkspaceID to select AMONG, so
-		// falling through to FindForAgentPreferring's ordinary sorted-first
-		// pick would root the turn in an arbitrary one of the Judge's
-		// (every) implicit memberships. That is benign today only because
-		// real deployments happen to be single-tenant; it is still the
-		// wrong THING to pick, not merely a low-risk one. Root at the
-		// Judge's own agent home instead — exactly the rooting
-		// resolveTurnWorkDirOrRefuse's pre-onboarding "no workspace exists
-		// yet" branch already expresses for the "nothing to prefer" case,
-		// requested here via WithSystemAgentAgentHomeOverride (one small,
-		// explicit branch — never a bypass of the ordinary selector for any
-		// other scope/WorkspaceID combination).
-		if in.Scope == task.VerdictScopeGoal && strings.TrimSpace(in.WorkspaceID) == "" {
-			callCtx = WithSystemAgentAgentHomeOverride(callCtx)
-		} else {
-			callCtx = WithSystemAgentWorkspaceOverride(callCtx, in.WorkspaceID)
-		}
-		content, flagged, toolCalls, callErr := al.dispatchVerifierTurn(callCtx, judgeInst, prompt, sessionKey, chatID)
-		cancel()
-		reportVerifierInjectionFlags(unitID, adjudicationID, flagged)
+		vs.va.dispatchTurn()
 
 		// UAT E-7: a verdict cut off at the Judge's output-token limit was never
 		// delivered. Before this branch the partial text went straight to
@@ -1562,44 +1526,44 @@ func (al *AgentLoop) runVerifierAdjudication(
 		// "Judge-unavailable classification" section below), unless the partial
 		// still carries a complete verdict and only text after it was cut.
 		var truncated *verifierTruncatedTurnError
-		if errors.As(callErr, &truncated) {
-			if !truncatedVerdictIsComplete(truncated.partial, proseCriteria) {
+		if errors.As(vs.va.callErr, &truncated) {
+			if !truncatedVerdictIsComplete(truncated.partial, vs.va.proseCriteria) {
 				reason = JudgeOutputTruncatedReasonPrefix + "the Judge's verdict was cut off at its output-token limit " +
 					"before it was complete, so no verdict was recorded; raise the Judge's max tokens or narrow the criteria"
 				logger.ErrorCF("agent",
 					"verifier: adjudication withheld — the Judge's verdict was truncated at its output-token limit",
-					map[string]any{"unit_id": unitID, "scope": in.Scope, "partial_chars": len(truncated.partial)})
+					map[string]any{"unit_id": vs.va.unitID, "scope": vs.va.in.Scope, "partial_chars": len(truncated.partial)})
 				return nil, "", "", true, reason, nil, nil
 			}
-			content, callErr = truncated.partial, nil
+			vs.va.content, vs.va.callErr = truncated.partial, nil
 		}
 
-		if callErr != nil {
+		if vs.va.callErr != nil {
 			// JUDGE-FR-082 (UAT E-14): a cancelled turn is the user or an operator
 			// stopping this adjudication — discarded whole, never retried. Retrying
 			// it on judgeRetryBackoff re-ran the Judge the user had just stopped and
 			// recorded its verdict on the goal they had cleared.
-			if errors.Is(callErr, errVerifierTurnCancelled) {
-				if verifierHandleReleased(registry, unitID, chatID) {
+			if errors.Is(vs.va.callErr, errVerifierTurnCancelled) {
+				if verifierHandleReleased(vs.registry, vs.va.unitID, vs.va.chatID) {
 					registered = false // the cancel surface already released it; never evict a successor's entry
 				}
 				logger.InfoCF("agent", "verifier: adjudication discarded — its turn was cancelled (JUDGE-FR-082)",
-					map[string]any{"unit_id": unitID, "scope": in.Scope, "attempt": attempt})
+					map[string]any{"unit_id": vs.va.unitID, "scope": vs.va.in.Scope, "attempt": attempt})
 				return nil, "", "", true, VerifierAdjudicationCancelledReason, nil, nil
 			}
 			// UAT E-7: a refusal only an operator can clear is withheld at once,
 			// never retried on judgeRetryBackoff — waiting cannot fix it, and the
 			// retry loop only held the goal card on "judging" until the round
 			// timeout (the god-mode refusal above is the precedent).
-			if code, message, needsOperator := judgeDispatchNeedsOperator(callErr); needsOperator {
+			if code, message, needsOperator := judgeDispatchNeedsOperator(vs.va.callErr); needsOperator {
 				reason = JudgeMisconfiguredReasonPrefix + string(code) + ": " + message
 				logger.ErrorCF("agent",
 					"verifier: adjudication withheld — the Judge cannot run until an operator fixes its configuration",
-					map[string]any{"unit_id": unitID, "scope": in.Scope, "code": string(code), "error": callErr.Error()})
+					map[string]any{"unit_id": vs.va.unitID, "scope": vs.va.in.Scope, "code": string(code), "error": vs.va.callErr.Error()})
 				return nil, "", "", true, reason, nil, nil
 			}
 			logger.WarnCF("agent", "verifier: turn failed; pausing (D7 unavailability)",
-				map[string]any{"error": callErr.Error()})
+				map[string]any{"error": vs.va.callErr.Error()})
 			// ADR-084 D9 prerequisite 3 / R3-c, FR-053/FR-054/FR-054a: a turn
 			// that already recorded at least one completed tool call MADE
 			// PROGRESS — a full tool-using LLM turn was spent. Retrying it on
@@ -1614,94 +1578,250 @@ func (al *AgentLoop) runVerifierAdjudication(
 			// takes this exit — timeout, mid-turn SEC-26 denial, provider
 			// error, window-guard exit — per FR-054a; a zero-progress failure
 			// keeps the D7 backoff below (FR-055).
-			if toolCalls > 0 {
-				cause := judgeRetryCause(callErr)
+			if vs.va.toolCalls > 0 {
+				cause := judgeRetryCause(vs.va.callErr)
 				reason = judgeUnfinishedReason(cause)
 				logger.ErrorCF("agent",
 					"verifier: adjudication failed AFTER progress — not retrying (FR-054); criteria resolve unable_to_verify",
-					map[string]any{"unit_id": unitID, "scope": in.Scope, "attempt": attempt,
-						"tool_calls": toolCalls, "cause": cause})
-				return failClosedProseVerdicts(proseCriteria, reason),
-					judgeInst.Model, judgeInst.ID, false, reason, nil, allProseCriterionIDs(proseCriteria)
+					map[string]any{"unit_id": vs.va.unitID, "scope": vs.va.in.Scope, "attempt": attempt,
+						"tool_calls": vs.va.toolCalls, "cause": cause})
+				return failClosedProseVerdicts(vs.va.proseCriteria, reason),
+					vs.va.judgeInst.Model, vs.va.judgeInst.ID, false, reason, nil, allProseCriterionIDs(vs.va.proseCriteria)
 			}
-			al.noteGoalJudgeRetryWait(in, attempt, judgeRetryCause(callErr))
-			if waitErr := al.judgeBackoffWait(ctx, attempt, callErr.Error()); waitErr != nil {
-				return nil, "", "", true, judgeTransientFailureReason(callErr), nil, nil
+			vs.va.al.noteGoalJudgeRetryWait(vs.va.in, attempt, judgeRetryCause(vs.va.callErr))
+			if waitErr := vs.va.al.judgeBackoffWait(vs.va.ctx, attempt, vs.va.callErr.Error()); waitErr != nil {
+				return nil, "", "", true, judgeTransientFailureReason(vs.va.callErr), nil, nil
 			}
 			continue
 		}
 
-		if strings.TrimSpace(content) == "" {
-			// R§8.1/FR-138: the verifier turn RAN to completion but formed no
-			// judgment → criterion_unjudgeable (NOT unavailable — the turn did
-			// complete; NOT a clean verdict either). The criteria resolve unmet
-			// for this adjudication AND each is flagged unjudgeable so
-			// JudgeCriteria emits the escalate-once (M1 predicate: mechanism
-			// ran, no judgment). Old path fail-closed silently (the bug).
-			return failClosedProseVerdicts(proseCriteria,
-					"criterion_unjudgeable: verifier turn ran but produced no content"),
-				judgeInst.Model, judgeInst.ID, false, "", allProseCriterionIDs(proseCriteria), nil
+		switch vs.va.finalizeVerdicts() {
+		case agentLoopRunVerifierAdjudicationReturn:
+			return vs.va.ret0, vs.va.ret1, vs.va.ret2, vs.va.ret3, vs.va.ret4, vs.va.ret5, vs.va.ret6
 		}
 
-		parsed, parseErr := parseJudgeResponse(content)
-		if parseErr != nil {
-			// R§8.1/FR-138: ran but returned no parseable judgment →
-			// criterion_unjudgeable for every criterion (same M1 predicate).
-			return failClosedProseVerdicts(
-				proseCriteria, "criterion_unjudgeable: verifier response could not be parsed: "+parseErr.Error(),
-			), judgeInst.Model, judgeInst.ID, false, "", allProseCriterionIDs(proseCriteria), nil
-		}
-
-		byID := dedupeJudgeCriteriaAnyUnmetWins(parsed.Criteria)
-		out := make([]task.CriterionVerdict, 0, len(proseCriteria))
-		var missing []string // criteria the verifier RAN on but omitted → unjudgeable
-		// JUDGE-FR-067/FR-069a: one investigation-log id per adjudication —
-		// shared by the structured log line below and every
-		// noteAdjudicationReproducibility call this loop makes, so FR-069a's
-		// "both investigation-log ids" names THIS adjudication and the
-		// PREVIOUS one that produced the memoized outcome it is compared
-		// against. It IS adjudicationID (minted once at the top of this
-		// function, review finding 4) rather than a second uuid minted here,
-		// so the audit entries the Judge's own tool calls carry
-		// (WithVerifierAdjudicationID, JUDGE-FR-084) and this investigation
-		// log join on one shared value.
-		logID := adjudicationID
-		for _, c := range proseCriteria {
-			if pc, found := byID[c.ID]; found {
-				v := verdictFromJudgeResponse(c.ID, pc)
-				// E10: real grounding-based provenance refinement (JUDGE-
-				// FR-065/FR-066) and the D-B-compliant grounding/attribution
-				// REPORTS (FR-006, FR-007a, FR-014a, FR-028, FR-029,
-				// FR-063a) — both layered around verdictFromJudgeResponse's
-				// UNCHANGED body (verifier_provenance.go's own doc comment
-				// explains why it could not be layered inside it), and both
-				// strictly reporting: v.Met/v.Reason are never touched below
-				// this point.
-				v = refineVerdictProvenance(v, c.Text, diffText, evidence)
-				reportGroundingIssues(c, pc, v)
-				noteAdjudicationReproducibility(unitID, c.ID, v.Met, logID)
-				out = append(out, v)
-			} else {
-				// The verifier turn ran and judged OTHER criteria but returned
-				// no verdict for THIS one → criterion_unjudgeable (ran, no
-				// judgment for this criterion), FR-138.
-				missing = append(missing, c.ID)
-				out = append(out, task.CriterionVerdict{
-					CriterionID: c.ID, Met: false,
-					Reason: "criterion_unjudgeable: verifier did not return a verdict for this criterion",
-				})
-			}
-		}
-		// JUDGE-FR-067/FR-069 (D7): one structured investigation-log line
-		// per adjudication — see this file's own doc comment and
-		// verifier_provenance.go's for the reported FR-068 capture-source
-		// scope boundary.
-		emitInvestigationLog(
-			unitID, logID, judgeInst.Model, al.judgeTurnTimeout(),
-			al.buildInvestigationLogFromJudgeTranscript(judgeInst.ID, chatID),
-		)
-		return out, judgeInst.Model, judgeInst.ID, false, "", missing, nil
 	}
+}
+
+// initializeAdjudication initializes the verifier unit, registry, session key, and adjudication correlation id.
+func (vs *agentLoopRunVerifierAdjudicationSetup) initializeAdjudication() {
+	vs.va.unitID = verifierUnitID(vs.va.in)
+	vs.registry = currentVerifierSessionRegistry()
+	vs.va.sessionKey = fmt.Sprintf("agent:%s:verify:%s", string(coreagent.IDJudge), uuid.New().String())
+	// adjudicationID names THIS adjudication for the whole of its life: it is
+	// stamped on the verifier turn's ctx (JUDGE-FR-084, so every audit entry
+	// the Judge's tool calls produce carries the correlation) and reused as
+	// the investigation-log id below, so "what did the verifier open" is
+	// answerable by joining the audit log to the investigation log on one
+	// value rather than on timestamps.
+	vs.va.adjudicationID = uuid.New().String()
+}
+
+// resolveJudge resolves the Judge, applies its availability gates, and builds the verifier prompt.
+func (va *agentLoopRunVerifierAdjudication) resolveJudge(attempt int) agentLoopRunVerifierAdjudicationFlow {
+	var ok bool
+	va.judgeInst, ok = va.al.GetRegistry().GetAgent(string(coreagent.IDJudge))
+	if !ok || va.judgeInst == nil || va.judgeInst.Provider == nil {
+		const notConfiguredReason = "judge_not_configured: Judge System Agent is not registered"
+		logger.WarnCF("agent", "verifier: Judge System Agent not resolvable; pausing (D7 unavailability)", nil)
+		va.al.noteGoalJudgeRetryWait(va.in, attempt, "the Judge agent is not available")
+		if waitErr := va.al.judgeBackoffWait(va.ctx, attempt, notConfiguredReason); waitErr != nil {
+			va.ret0 = nil
+			va.ret1 = ""
+			va.ret2 = ""
+			va.ret3 = true
+			va.ret4 = notConfiguredReason
+			va.ret5 = nil
+			va.ret6 = nil
+			return agentLoopRunVerifierAdjudicationReturn
+		}
+		return agentLoopRunVerifierAdjudicationContinue
+	}
+
+	allowed, retryAfter, denyReason := va.al.checkJudgeSEC26(va.judgeInst.AgentType, va.judgeInst.ID)
+	if !allowed {
+		logger.WarnCF("agent", "verifier: SEC-26 gate denied verifier LLM call; pausing (D7 unavailability)",
+			map[string]any{"reason": denyReason, "retry_after_s": retryAfter.Seconds()})
+		va.al.noteGoalJudgeRetryWait(va.in, attempt, "the Judge reached its rate limit")
+		if waitErr := va.al.judgeBackoffWait(va.ctx, attempt, denyReason); waitErr != nil {
+			va.ret0 = nil
+			va.ret1 = ""
+			va.ret2 = ""
+			va.ret3 = true
+			va.ret4 = denyReason
+			va.ret5 = nil
+			va.ret6 = nil
+			return agentLoopRunVerifierAdjudicationReturn
+		}
+		return agentLoopRunVerifierAdjudicationContinue
+	}
+
+	ensureVerifierSoul(va.judgeInst)
+
+	var buildErr error
+	va.prompt, buildErr = buildJudgeUserContent(va.proseCriteria, va.evidence, va.in.ClaimText, va.in.ExtraContext, va.windowText, va.diffText)
+	if buildErr != nil {
+		va.ret0 = failClosedProseVerdicts(va.proseCriteria, "internal error building verifier prompt: "+buildErr.Error())
+		va.ret1 = ""
+		va.ret2 = ""
+		va.ret3 = false
+		va.ret4 = "build_error"
+		va.ret5 = nil
+		va.ret6 = nil
+		return agentLoopRunVerifierAdjudicationReturn
+	}
+	return agentLoopRunVerifierAdjudicationNext
+}
+
+// dispatchTurn configures and dispatches one confined verifier turn.
+func (va *agentLoopRunVerifierAdjudication) dispatchTurn() {
+	callCtx, cancel := context.WithTimeout(va.ctx, va.al.judgeTurnTimeout())
+	// FR-033/R3-10/R3-11 (F2 half): plumb the engine-set inspect_session
+	// target scope onto the verifier's own turn ctx BEFORE dispatch — the
+	// ctx propagates through processTaskDirect's own derivation
+	// (tools.WithAgentID(ctx, ...) etc.) into every tool call the
+	// verifier's turn makes, so inspect_session's
+	// VerifierSessionScopeAllows check (pkg/tools/inspect_session.go)
+	// sees it. A scope that resolves to nil leaves ctx untouched
+	// (WithVerifierSessionScope's own "empty is unset" contract), which
+	// correctly fails inspect_session closed for every session id.
+	callCtx = tools.WithVerifierSessionScope(callCtx, va.al.resolveVerifierSessionScope(va.in))
+	// JUDGE-FR-060/FR-060b (review finding 4): the two ctx seams whose own
+	// doc comments say "the engine sets this where it sets
+	// WithSystemAgentWorkspaceOverride" — and which nothing in production
+	// set, so every Judge turn resolved ReadConfined=false and the
+	// read-confinement ADR-084 exists to impose was never applied (a Judge
+	// turn could read_file any other session's transcript.jsonl), while
+	// the adjudication_id audit correlation was always empty. Set HERE,
+	// at the dispatch, never by a tool.
+	callCtx = tools.WithReadConfined(callCtx, true)
+	callCtx = tools.WithVerifierAdjudicationID(callCtx, va.adjudicationID)
+	// Product-blocker fix (ADR-052 FR-011/012 x ADR-046 P1, operator
+	// decision "make the judge a member of every workspace"): the Judge
+	// is an IMPLICIT member of every workspace (pkg/workspace's
+	// isImplicitMember), so this is never needed to AVOID a refusal —
+	// it is the "preferring" selector that picks WHICH of those implicit
+	// memberships the verifier's turn roots in (the work-under-review's
+	// own workspace), so its read-only escalation tools (FR-012(c)) can
+	// actually reach the artifacts they exist to inspect, rather than
+	// an arbitrary sorted-first workspace.
+	// Sign-off 14 MINOR-1 / architect F4: an UNBOUND /goal (Scope==goal
+	// with no WorkspaceID) has no work-under-review workspace to prefer
+	// at all — there is nothing for optWorkspaceID to select AMONG, so
+	// falling through to FindForAgentPreferring's ordinary sorted-first
+	// pick would root the turn in an arbitrary one of the Judge's
+	// (every) implicit memberships. That is benign today only because
+	// real deployments happen to be single-tenant; it is still the
+	// wrong THING to pick, not merely a low-risk one. Root at the
+	// Judge's own agent home instead — exactly the rooting
+	// resolveTurnWorkDirOrRefuse's pre-onboarding "no workspace exists
+	// yet" branch already expresses for the "nothing to prefer" case,
+	// requested here via WithSystemAgentAgentHomeOverride (one small,
+	// explicit branch — never a bypass of the ordinary selector for any
+	// other scope/WorkspaceID combination).
+	if va.in.Scope == task.VerdictScopeGoal && strings.TrimSpace(va.in.WorkspaceID) == "" {
+		callCtx = WithSystemAgentAgentHomeOverride(callCtx)
+	} else {
+		callCtx = WithSystemAgentWorkspaceOverride(callCtx, va.in.WorkspaceID)
+	}
+	var flagged map[string]string
+	va.content, flagged, va.toolCalls, va.callErr = va.al.dispatchVerifierTurn(callCtx, va.judgeInst, va.prompt, va.sessionKey, va.chatID)
+	cancel()
+	reportVerifierInjectionFlags(va.unitID, va.adjudicationID, flagged)
+}
+
+// finalizeVerdicts parses a completed verifier response and records its criterion verdicts.
+func (va *agentLoopRunVerifierAdjudication) finalizeVerdicts() agentLoopRunVerifierAdjudicationFlow {
+	if strings.TrimSpace(va.content) == "" {
+		// R§8.1/FR-138: the verifier turn RAN to completion but formed no
+		// judgment → criterion_unjudgeable (NOT unavailable — the turn did
+		// complete; NOT a clean verdict either). The criteria resolve unmet
+		// for this adjudication AND each is flagged unjudgeable so
+		// JudgeCriteria emits the escalate-once (M1 predicate: mechanism
+		// ran, no judgment). Old path fail-closed silently (the bug).
+		va.ret0 = failClosedProseVerdicts(va.proseCriteria,
+			"criterion_unjudgeable: verifier turn ran but produced no content")
+		va.ret1 = va.judgeInst.Model
+		va.ret2 = va.judgeInst.ID
+		va.ret3 = false
+		va.ret4 = ""
+		va.ret5 = allProseCriterionIDs(va.proseCriteria)
+		va.ret6 = nil
+		return agentLoopRunVerifierAdjudicationReturn
+	}
+
+	parsed, parseErr := parseJudgeResponse(va.content)
+	if parseErr != nil {
+		// R§8.1/FR-138: ran but returned no parseable judgment →
+		// criterion_unjudgeable for every criterion (same M1 predicate).
+		va.ret0 = failClosedProseVerdicts(
+			va.proseCriteria, "criterion_unjudgeable: verifier response could not be parsed: "+parseErr.Error(),
+		)
+		va.ret1 = va.judgeInst.Model
+		va.ret2 = va.judgeInst.ID
+		va.ret3 = false
+		va.ret4 = ""
+		va.ret5 = allProseCriterionIDs(va.proseCriteria)
+		va.ret6 = nil
+		return agentLoopRunVerifierAdjudicationReturn
+	}
+
+	byID := dedupeJudgeCriteriaAnyUnmetWins(parsed.Criteria)
+	out := make([]task.CriterionVerdict, 0, len(va.proseCriteria))
+	var missing []string // criteria the verifier RAN on but omitted → unjudgeable
+	// JUDGE-FR-067/FR-069a: one investigation-log id per adjudication —
+	// shared by the structured log line below and every
+	// noteAdjudicationReproducibility call this loop makes, so FR-069a's
+	// "both investigation-log ids" names THIS adjudication and the
+	// PREVIOUS one that produced the memoized outcome it is compared
+	// against. It IS adjudicationID (minted once at the top of this
+	// function, review finding 4) rather than a second uuid minted here,
+	// so the audit entries the Judge's own tool calls carry
+	// (WithVerifierAdjudicationID, JUDGE-FR-084) and this investigation
+	// log join on one shared value.
+	logID := va.adjudicationID
+	for _, c := range va.proseCriteria {
+		if pc, found := byID[c.ID]; found {
+			v := verdictFromJudgeResponse(c.ID, pc)
+			// E10: real grounding-based provenance refinement (JUDGE-
+			// FR-065/FR-066) and the D-B-compliant grounding/attribution
+			// REPORTS (FR-006, FR-007a, FR-014a, FR-028, FR-029,
+			// FR-063a) — both layered around verdictFromJudgeResponse's
+			// UNCHANGED body (verifier_provenance.go's own doc comment
+			// explains why it could not be layered inside it), and both
+			// strictly reporting: v.Met/v.Reason are never touched below
+			// this point.
+			v = refineVerdictProvenance(v, c.Text, va.diffText, va.evidence)
+			reportGroundingIssues(c, pc, v)
+			noteAdjudicationReproducibility(va.unitID, c.ID, v.Met, logID)
+			out = append(out, v)
+		} else {
+			// The verifier turn ran and judged OTHER criteria but returned
+			// no verdict for THIS one → criterion_unjudgeable (ran, no
+			// judgment for this criterion), FR-138.
+			missing = append(missing, c.ID)
+			out = append(out, task.CriterionVerdict{
+				CriterionID: c.ID, Met: false,
+				Reason: "criterion_unjudgeable: verifier did not return a verdict for this criterion",
+			})
+		}
+	}
+	// JUDGE-FR-067/FR-069 (D7): one structured investigation-log line
+	// per adjudication — see this file's own doc comment and
+	// verifier_provenance.go's for the reported FR-068 capture-source
+	// scope boundary.
+	emitInvestigationLog(
+		va.unitID, logID, va.judgeInst.Model, va.al.judgeTurnTimeout(),
+		va.al.buildInvestigationLogFromJudgeTranscript(va.judgeInst.ID, va.chatID),
+	)
+	va.ret0 = out
+	va.ret1 = va.judgeInst.Model
+	va.ret2 = va.judgeInst.ID
+	va.ret3 = false
+	va.ret4 = ""
+	va.ret5 = missing
+	va.ret6 = nil
+	return agentLoopRunVerifierAdjudicationReturn
 }
 
 // --- Judge-unavailable classification (UAT E-7) -----------------------------
