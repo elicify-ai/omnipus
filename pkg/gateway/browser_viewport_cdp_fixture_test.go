@@ -15,7 +15,19 @@ import (
 
 // newViewportCDPEndpoint supplies browser-protocol observations, leaving the
 // manager, live view, measured refresh and capture frame machinery real.
-func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int, int, float64)) (string, func(int, int, float64), <-chan struct{}) {
+//
+// It reports two discovery signals. The first, `discovered`, closes on the
+// endpoint's FIRST Page.getFrameTree — which chromedp's own session handshake
+// sends during manager bootstrap, before any document watch exists; it proves
+// the endpoint is up, nothing more. The second, `watchQueried`, closes on the
+// SECOND Page.getFrameTree of a session: the attach-time live document watch's
+// initialize goroutine queries the frame tree immediately AFTER it has looked
+// the panel capture up (program order in initialize), so once this query is
+// observed, that lookup has provably run. A fixture that registers its capture
+// only after `watchQueried` makes the watch's picture-initialization lookup
+// deterministically see no capture, instead of racing the registration by
+// microseconds.
+func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int, int, float64)) (string, func(int, int, float64), <-chan struct{}, <-chan struct{}) {
 	t.Helper()
 	lifetime, cancel := context.WithCancel(context.Background())
 	var observationMu sync.Mutex
@@ -24,6 +36,9 @@ func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int
 	var readyOnce sync.Once
 	discovered := make(chan struct{})
 	var discoveryOnce sync.Once
+	watchQueried := make(chan struct{})
+	var watchOnce sync.Once
+	frameTreeQueries := make(map[string]int)
 	if !pending {
 		readyOnce.Do(func() { close(ready) })
 	}
@@ -69,9 +84,18 @@ func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int
 			case "Page.addScriptToEvaluateOnNewDocument":
 				result["identifier"] = "fixture-script"
 			case "Page.getFrameTree":
-				// Fresh fixture targets need no attach-time frame query. This query
-				// comes from the live watcher after it has checked for a capture.
+				// Fresh fixture targets need no attach-time frame query. The first
+				// query per session is chromedp's own attach handshake; a SECOND
+				// query on the same session is the live document watch's initialize
+				// probe, which ran its capture lookup right before sending it.
 				discoveryOnce.Do(func() { close(discovered) })
+				mu.Lock()
+				frameTreeQueries[command.Session]++
+				second := frameTreeQueries[command.Session] == 2
+				mu.Unlock()
+				if second {
+					watchOnce.Do(func() { close(watchQueried) })
+				}
 				result["frameTree"] = map[string]any{"frame": map[string]any{"id": "fixture-frame", "loaderId": "fixture-loader", "url": "about:blank", "securityOrigin": "://", "mimeType": "text/html"}}
 			case "DOM.getDocument":
 				result["root"] = map[string]any{"nodeId": 1, "backendNodeId": 1, "nodeType": 9, "nodeName": "#document", "localName": "", "nodeValue": ""}
@@ -163,5 +187,5 @@ func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int
 		mu.Unlock()
 		server.Close()
 	})
-	return "ws" + strings.TrimPrefix(server.URL, "http") + "/devtools/browser/viewport-fixture", observe, discovered
+	return "ws" + strings.TrimPrefix(server.URL, "http") + "/devtools/browser/viewport-fixture", observe, discovered, watchQueried
 }
