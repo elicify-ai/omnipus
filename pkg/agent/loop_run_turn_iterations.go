@@ -44,15 +44,56 @@ const (
 	truncationActionEnd
 )
 
+// agentLoopRunTurnConductorRunIterations carries the shared state of runIterations across its stages.
+type agentLoopRunTurnConductorRunIterations struct {
+	rc                      *agentLoopRunTurnConductor
+	orphanToolMarkupRepairs int
+	responseContent         string
+	ret0                    agentLoopRunTurnConductorFlow
+}
+
+// agentLoopRunTurnConductorRunIterationsFlow reports how a block stage of agentLoopRunTurnConductorRunIterations wants the conductor to proceed.
+type agentLoopRunTurnConductorRunIterationsFlow int
+
+const (
+	agentLoopRunTurnConductorRunIterationsNext agentLoopRunTurnConductorRunIterationsFlow = iota
+	agentLoopRunTurnConductorRunIterationsReturn
+	agentLoopRunTurnConductorRunIterationsContinue
+	agentLoopRunTurnConductorRunIterationsBreak
+	agentLoopRunTurnConductorRunIterationsContinueL1
+	agentLoopRunTurnConductorRunIterationsBreakL1
+)
+
+// agentLoopRunTurnConductorRunIterationsRetryResponse carries the shared state of runIterations across its stages.
+type agentLoopRunTurnConductorRunIterationsRetryResponse struct {
+	cn *agentLoopRunTurnConductorRunIterations
+}
+
+// agentLoopRunTurnConductorRunIterationsRetryResponseFlow reports how a block stage of agentLoopRunTurnConductorRunIterationsRetryResponse wants the conductor to proceed.
+type agentLoopRunTurnConductorRunIterationsRetryResponseFlow int
+
+const (
+	agentLoopRunTurnConductorRunIterationsRetryResponseNext agentLoopRunTurnConductorRunIterationsRetryResponseFlow = iota
+	agentLoopRunTurnConductorRunIterationsRetryResponseReturn
+	agentLoopRunTurnConductorRunIterationsRetryResponseContinue
+	agentLoopRunTurnConductorRunIterationsRetryResponseBreak
+	agentLoopRunTurnConductorRunIterationsRetryResponseContinueL2
+	agentLoopRunTurnConductorRunIterationsRetryResponseBreakL2
+)
+
 // runIterations runs provider and tool iterations and incorporates late steering before finalization.
 func (rc *agentLoopRunTurnConductor) runIterations() agentLoopRunTurnConductorFlow {
+	er := &agentLoopRunTurnConductorRunIterationsRetryResponse{}
+
+	er.cn = &agentLoopRunTurnConductorRunIterations{rc: rc}
+
 	emptyResponseRetries := 0
 	const maxEmptyResponseRetries = 1
 	// orphanToolMarkupRepairs counts how many times this turn has re-prompted
 	// a model that emitted its tool call as unparseable text (see the strip
 	// choke point below). Bounded so a model that cannot comply ends the turn
 	// with a visible error instead of looping on the user's budget.
-	orphanToolMarkupRepairs := 0
+	er.cn.orphanToolMarkupRepairs = 0
 	// continuationChain (ADR-087 D6.7) holds the exact {assistant, user} pair
 	// a previous round appended to `messages` as the D6 continuation chain,
 	// so the next round REPLACES it — by identity, via stripContinuationChain
@@ -61,256 +102,50 @@ func (rc *agentLoopRunTurnConductor) runIterations() agentLoopRunTurnConductorFl
 	// turnLoop so it survives both `continue turnLoop` and `goto turnLoop`.
 
 turnLoop:
-	for rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() < rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations || len(rc.rx.rr.rq.ri.pendingMessages) > 0 || func() bool {
-		graceful, _ := rc.rx.rr.rq.ri.rf.rt.ts.gracefulInterruptRequested()
+	for er.cn.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() < er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations || len(er.cn.rc.rx.rr.rq.ri.pendingMessages) > 0 || func() bool {
+		graceful, _ := er.cn.rc.rx.rr.rq.ri.rf.rt.ts.gracefulInterruptRequested()
 		return graceful
 	}() {
 
-		switch rc.rx.rr.rq.ri.beginIteration() {
-		case agentLoopRunTurnIterationReturn:
-			rc.ret0 = rc.rx.rr.rq.ri.ret0
-			rc.ret1 = rc.rx.rr.rq.ri.ret1
-			return agentLoopRunTurnConductorReturn
-		case agentLoopRunTurnIterationBreak:
-			break turnLoop
-		case agentLoopRunTurnIterationBreakL1:
+		switch er.cn.prepareIteration() {
+		case agentLoopRunTurnConductorRunIterationsReturn:
+			return er.cn.ret0
+		case agentLoopRunTurnConductorRunIterationsContinueL1:
+			continue turnLoop
+		case agentLoopRunTurnConductorRunIterationsBreakL1:
 			break turnLoop
 		}
 
-		// FR-003, FR-041: Apply per-agent tool policy at LLM-call assembly time.
-		// FilterToolsByPolicy enforces global × agent deny>ask>allow resolution and
-		// the ScopeCore-on-custom-agent gate before the tool list reaches the LLM.
-		// Tools with effective policy "ask" are included — the mid-turn policy snapshot
-		// (FR-041) handles human-in-the-loop confirmation; see the ADR-058
-		// quarantine gate and recordToolDenial (tool_denial.go).
+		if len(er.cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 || er.cn.rc.rx.rr.rq.ri.gracefulTerminal {
 
-		switch rc.rx.rr.rq.prepareToolSurface() {
-		case agentLoopRunTurnRequestReturn:
-			rc.ret0 = rc.rx.rr.rq.ret0
-			rc.ret1 = rc.rx.rr.rq.ret1
-			return agentLoopRunTurnConductorReturn
-		}
-
-		// Transparent repair of orphan tool_use / tool_result pairs in the
-		// outbound history. OpenRouter's mid-stream provider rotation can leave
-		// the context jsonl desynced with its own transcript; we reconcile from
-		// the transcript before every LLM call so Anthropic never sees a broken
-		// pair. No-op fast path when there are no orphans (the common case).
-
-		rc.rx.rr.rq.prepareCallMessages()
-
-		// ADR-088 D3 Layer 1 narrowing is active for THIS request exactly
-		// when goalForce.layer1 holds and gracefulTerminal hasn't nilled the
-		// tool surface. review-round-1 finding #6 (kept under the D3
-		// amendment, 2026-09-07): native_search must never ride alongside
-		// the narrowed pair — it would silently add a THIRD callable "tool"
-		// (the provider's own built-in search) outside {set_goal[,
-		// AskUserQuestion]}, undermining the narrowed surface's "exactly the
-		// pair" promise even though nothing forces the model to touch it
-		// anymore (provider tool-choice forcing is deleted — determinism now
-		// comes from the immediate post-turn correction, goal_loop.go, not
-		// the request shape). Suppress native search for this one request
-		// while narrowing is active; the client-side search_web tool is not
-		// offered here either (it's excluded from goalForce.narrowed, same
-		// as every other non-goal tool). No tool-choice option is ever set —
-		// see evaluateGoalForcing's doc comment for why.
-
-		switch rc.rx.rr.rq.prepareLLMRequest() {
-		case agentLoopRunTurnRequestReturn:
-			rc.ret0 = rc.rx.rr.rq.ret0
-			rc.ret1 = rc.rx.rr.rq.ret1
-			return agentLoopRunTurnConductorReturn
-		}
-
-		switch rc.rx.rr.callLLMWithRetries() {
-		case agentLoopRunTurnResponseReturn:
-			rc.ret0 = rc.rx.rr.ret0
-			rc.ret1 = rc.rx.rr.ret1
-			return agentLoopRunTurnConductorReturn
-		}
-
-		switch rc.rx.rr.handleProviderResponse() {
-		case agentLoopRunTurnResponseReturn:
-			rc.ret0 = rc.rx.rr.ret0
-			rc.ret1 = rc.rx.rr.ret1
-			return agentLoopRunTurnConductorReturn
-		}
-
-		// Record the provider-reported usage on the turn. debitLLMUsage also
-		// records ts.lastUsage — the write that used to sit ~90 lines above
-		// this block, guarded by its own
-		// turnStateFromContext(turnCtx) lookup that resolves to this very same
-		// ts (withTurnState(turnCtx, ts) is how turnCtx was built). Two copies
-		// of one accounting step is how the ADR-087 D3.9 refused-attempt debit
-		// came to omit SetLastUsage; there is now exactly one.
-		//
-		// ADR-087 D8: the old lastUsage site also called the now-deleted
-		// SetLastFinishReason("for SubTurn truncation detection") — that
-		// consumer was never built (GetLastFinishReason had zero callers); see
-		// §5.1 of the ADR for the recorded gap.
-		if rc.rx.rr.rq.ri.rf.response != nil {
-			rc.rx.rr.rq.ri.rf.rt.al.debitLLMUsage(rc.rx.rr.rq.ri.rf.rt.ts, rc.rx.rr.rq.ri.rf.rt.llmModel, rc.rx.rr.rq.ri.rf.response.Usage)
-		}
-
-		if len(rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 || rc.rx.rr.rq.ri.gracefulTerminal {
-			responseContent := rc.rx.rr.rq.ri.rf.response.Content
-			if responseContent == "" && rc.rx.rr.rq.ri.rf.response.ReasoningContent != "" {
-				responseContent = rc.rx.rr.rq.ri.rf.response.ReasoningContent
+			switch er.cn.handleInitialResponse() {
+			case agentLoopRunTurnConductorRunIterationsReturn:
+				return er.cn.ret0
+			case agentLoopRunTurnConductorRunIterationsContinue:
+				continue turnLoop
+			case agentLoopRunTurnConductorRunIterationsContinueL1:
+				continue turnLoop
+			case agentLoopRunTurnConductorRunIterationsBreakL1:
+				break turnLoop
 			}
 
-			// ── Orphan tool-call markup with NO tool call: repair, or fail loudly ──
-			//
-			// The model tried to call a tool and nothing came back as a
-			// structured call, so this round did no work at all. Ending the
-			// turn here — which is what happened before this branch existed —
-			// presents whatever prose survived the strip as a finished answer
-			// and, when the whole response was markup, presents nothing at
-			// all: a spinner that resolves into silence, with the goal record
-			// left untouched and no error anywhere. That is the defect.
-			//
-			// Repair first: re-prompt with an explicit instruction to use the
-			// tool-calling API, bounded by maxOrphanToolMarkupRepairs so a
-			// model that cannot comply does not burn the turn. The repair note
-			// is appended to the in-flight request only — never to session
-			// history — so a transient protocol fault leaves no residue in the
-			// durable archive, and the residue itself is never echoed back
-			// (that would invite the model to repeat it verbatim).
-			//
-			// A graceful interrupt is the one case that does not repair: the
-			// user asked the turn to wind down, so the stripped response
-			// stands and the empty-response fallback below covers it.
-			if rc.rx.rr.hasOrphanMarkup && len(rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 {
-				switch {
-				case rc.rx.rr.rq.ri.gracefulTerminal:
-					// Fall through: honour the interrupt, do not re-prompt.
-				case orphanToolMarkupRepairs < maxOrphanToolMarkupRepairs:
-					orphanToolMarkupRepairs++
-					logger.WarnCF("agent", "Tool call arrived as unparseable text; re-prompting the model",
-						map[string]any{
-							"agent_id":      rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-							"iteration":     rc.rx.rr.rq.ri.rf.rt.iteration,
-							"model":         rc.rx.rr.rq.ri.rf.rt.llmModel,
-							"marker":        rc.rx.rr.orphanMarkup.Marker,
-							"finish_reason": rc.rx.rr.rq.ri.rf.response.FinishReason,
-							"attempt":       orphanToolMarkupRepairs,
-							"max_attempts":  maxOrphanToolMarkupRepairs,
-						})
-					rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
-						EventKindLLMRetry,
-						rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),
-						LLMRetryPayload{
-							Attempt:    orphanToolMarkupRepairs,
-							MaxRetries: maxOrphanToolMarkupRepairs,
-							Reason:     orphanToolMarkupRetryReason,
-						},
-					)
-					rc.rx.rr.rq.ri.messages = append(rc.rx.rr.rq.ri.messages, orphanToolMarkupRepairMessage(rc.rx.rr.rq.ri.rf.response.FinishReason))
-					continue
-				default:
-					// Repair budget spent. Fail LOUDLY — a typed error event
-					// for the live client and a typed transcript entry for
-					// replay. CodeToolArgs is the contract's existing
-					// "tool-call argument format error"; the vocabulary is
-					// contract data (contracts/components/schemas/LLMError.yaml),
-					// so this path reuses it rather than inventing a code the
-					// SPA has no catalogue entry for.
-					rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
-					llm := LLMError{
-						Code:      CodeToolArgs,
-						Message:   UserMessageForCode(CodeToolArgs),
-						Retryable: isRetryable(CodeToolArgs),
-					}
-					logger.WarnCF("agent", "Tool call kept arriving as unparseable text; ending turn with an error",
-						map[string]any{
-							"agent_id":      rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-							"iteration":     rc.rx.rr.rq.ri.rf.rt.iteration,
-							"model":         rc.rx.rr.rq.ri.rf.rt.llmModel,
-							"marker":        rc.rx.rr.orphanMarkup.Marker,
-							"finish_reason": rc.rx.rr.rq.ri.rf.response.FinishReason,
-							"attempts":      orphanToolMarkupRepairs,
-						})
-					rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
-						EventKindError,
-						rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.error"),
-						ErrorPayload{
-							Stage:     orphanToolMarkupStage,
-							Code:      string(llm.Code),
-							Message:   llm.Message,
-							ChatID:    rc.rx.rr.rq.ri.rf.rt.ts.opts.ChatID,
-							SessionID: string(rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID),
-						},
-					)
-					rc.rx.rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
-					// UAT A-12: wrap the TYPED refusal a provider raises for an
-					// undecodable tool call. A task attempt's turn error is
-					// classified by type only (task_attempt_turn_error.go's
-					// attemptRecoverableTurnErrorCode — errors.As for
-					// *common.ToolArgumentsError, then TranslateTurnError ->
-					// CodeToolArgs, the same code this exit already reports to
-					// the client). Untyped, this exhaustion failed the task on
-					// the spot instead of consuming one attempt.
-					rc.ret0 = turnResult{}
-					rc.ret1 = fmt.Errorf(
-						"model emitted unparseable tool-call markup (marker %q, finish_reason %q) after %d repair attempts: %w",
-						rc.rx.rr.orphanMarkup.Marker, rc.rx.rr.rq.ri.rf.response.FinishReason, orphanToolMarkupRepairs,
-						common.NewToolArgumentsError("", common.ErrToolArgumentsUndecodable, false))
-					return agentLoopRunTurnConductorReturn
-				}
-			}
-
-			// FR-7.5/NFR-1: scan the assistant's final answer for references to
-			// memories recalled earlier this turn and emit op:cited events.
-			if rc.rx.rr.citationTracker != nil {
-				rc.rx.rr.citationTracker.EmitCitations(responseContent)
-			}
-			if steerMsgs := rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
-				logger.InfoCF("agent", "Steering arrived after direct LLM response; continuing turn",
-					map[string]any{
-						"agent_id":       rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-						"iteration":      rc.rx.rr.rq.ri.rf.rt.iteration,
-						"steering_count": len(steerMsgs),
-					})
-				rc.rx.rr.rq.ri.pendingMessages = append(rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
-				continue
-			}
-			// ADR-087 D4/D6/D9: the one success-arm truncation handler,
-			// ahead of the legacy empty-response retry loop below. Guarded
-			// internally on isTruncatedFinishReason(FinishReason) &&
-			// len(ToolCalls)==0 — when that guard does not match, the
-			// verdict is truncationActionNone and every line below runs
-			// completely unchanged (§7.10: a normal empty response with a
-			// non-truncated finish reason still falls through to the
-			// legacy loop). This single insertion covers both the main and
-			// media-downgrade-retry call sites, since both `break` into
-			// this shared downstream code on success; the empty-response
-			// retry's own successful attempt (site 3) reaches the
-			// identical branch again below, inside that loop.
-			if verdict := rc.rx.rr.rq.ri.rf.rt.al.evaluateTruncatedSuccess(rc.rx.rr.rq.ri.rf.rt.ts, rc.rx.rr.rq.ri.rf.response, rc.rx.rr.rq.ri.messages, rc.rx.rr.rq.ri.rf.providerToolDefs, rc.rx.rr.rq.ri.gracefulTerminal, rc.rx.rr.rq.ri.rf.rt.iteration, rc.rx.rr.rq.ri.rf.rt.llmModel, &rc.rx.rr.continuationChain); verdict.action != truncationActionNone {
-				switch verdict.action {
-				case truncationActionContinue:
-					rc.rx.rr.rq.ri.messages = verdict.messages
-					continue turnLoop
-				case truncationActionEnd:
-					rc.rx.finalContent = verdict.finalContent
-					break turnLoop
-				}
-			}
 			// Empty response recovery (FR-006): if LLM returned empty content with no
 			// reasoning and no tool calls, retry once before surfacing a fallback message.
 			//
 			// H3: perform the retry in an inner loop that calls callLLM directly, so we
 			// do NOT increment the outer iteration counter (which would consume the agent's
 			// MaxIterations budget for what is purely a provider-level retry).
-			for strings.TrimSpace(responseContent) == "" && emptyResponseRetries < maxEmptyResponseRetries {
+		agentLoopRunTurnConductorRunIterationsRetryResponseLoop1:
+			for strings.TrimSpace(er.cn.responseContent) == "" && emptyResponseRetries < maxEmptyResponseRetries {
 				emptyResponseRetries++
 				logger.WarnCF("agent", "Empty response from LLM, retrying", map[string]any{
-					"agent_id":  rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-					"iteration": rc.rx.rr.rq.ri.rf.rt.iteration,
+					"agent_id":  er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+					"iteration": er.cn.rc.rx.rr.rq.ri.rf.rt.iteration,
 					"attempt":   emptyResponseRetries,
 				})
-				rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
+				er.cn.rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
 					EventKindLLMRetry,
-					rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),
+					er.cn.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),
 					LLMRetryPayload{
 						Attempt:    emptyResponseRetries,
 						MaxRetries: maxEmptyResponseRetries,
@@ -319,114 +154,33 @@ turnLoop:
 				)
 				// I1: also emit the dedicated EventKindEmptyResponseRetry for subscribers
 				// that specifically track empty-response retry behavior.
-				rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
+				er.cn.rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
 					EventKindEmptyResponseRetry,
-					rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.empty_response_retry"),
+					er.cn.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.empty_response_retry"),
 					EmptyResponseRetryPayload{
 						Attempt:    emptyResponseRetries,
 						MaxRetries: maxEmptyResponseRetries,
 					},
 				)
 				// Re-call the LLM directly without advancing the outer turn iteration.
-				retryResp, retryErr := rc.rx.rr.rq.ri.rf.callLLM(rc.rx.rr.rq.ri.rf.callMessages, rc.rx.rr.rq.ri.rf.providerToolDefs)
-				if retryErr != nil {
-					// ADR-087 D3/D9 (empty-response retry call site): same
-					// bounded repair as the other two call sites — issue the
-					// repaired call directly rather than looping, since this
-					// mini-loop's own iteration budget is about EMPTY
-					// content, a different concern from a truncated tool
-					// call.
-					if repaired, ok := rc.rx.rr.rq.ri.rf.rt.al.evaluateTruncatedToolCallError(rc.rx.rr.rq.ri.rf.rt.ts, retryErr, rc.rx.rr.rq.ri.rf.callMessages, 0, 1, &rc.rx.rr.rq.ri.toolCallTruncationRepairUsed, rc.rx.rr.rq.ri.rf.rt.llmModel, rc.rx.rr.rq.ri.rf.rt.iteration); ok {
-						rc.rx.rr.rq.ri.rf.callMessages = repaired
-						retryResp, retryErr = rc.rx.rr.rq.ri.rf.callLLM(rc.rx.rr.rq.ri.rf.callMessages, rc.rx.rr.rq.ri.rf.providerToolDefs)
-					}
-					if retryErr != nil {
-						// Propagate the error back to the outer error-handling block by
-						// overwriting response/err and breaking out of both loops.
-						rc.rx.rr.rq.ri.rf.response = nil
-						rc.rx.rr.rq.ri.rf.err = retryErr
-						break
-					}
+
+				switch er.callAndApplyRetry() {
+				case agentLoopRunTurnConductorRunIterationsRetryResponseBreak:
+					break agentLoopRunTurnConductorRunIterationsRetryResponseLoop1
+				case agentLoopRunTurnConductorRunIterationsRetryResponseContinueL2:
+					continue turnLoop
+				case agentLoopRunTurnConductorRunIterationsRetryResponseBreakL2:
+					break turnLoop
 				}
-				rc.rx.rr.rq.ri.rf.response = retryResp
-				responseContent = rc.rx.rr.rq.ri.rf.response.Content
-				if responseContent == "" && rc.rx.rr.rq.ri.rf.response.ReasoningContent != "" {
-					responseContent = rc.rx.rr.rq.ri.rf.response.ReasoningContent
-				}
-				// ADR-087 D4/D6/D9: the empty-response retry's own
-				// successful attempt goes through the SAME success-arm
-				// handler as the other two call sites (§7.9).
-				if verdict := rc.rx.rr.rq.ri.rf.rt.al.evaluateTruncatedSuccess(rc.rx.rr.rq.ri.rf.rt.ts, rc.rx.rr.rq.ri.rf.response, rc.rx.rr.rq.ri.messages, rc.rx.rr.rq.ri.rf.providerToolDefs, rc.rx.rr.rq.ri.gracefulTerminal, rc.rx.rr.rq.ri.rf.rt.iteration, rc.rx.rr.rq.ri.rf.rt.llmModel, &rc.rx.rr.continuationChain); verdict.action != truncationActionNone {
-					switch verdict.action {
-					case truncationActionContinue:
-						rc.rx.rr.rq.ri.messages = verdict.messages
-						continue turnLoop
-					case truncationActionEnd:
-						rc.rx.finalContent = verdict.finalContent
-						break turnLoop
-					}
-				}
-				// ADR-087 D3/D9: a repaired call can come back carrying a
-				// (smaller, complete) TOOL CALL — the whole point of the D3
-				// repair note is to solicit one. This mini-loop lives inside
-				// the direct-answer branch, which was entered because the
-				// ORIGINAL response had none, so nothing below inspects
-				// response.ToolCalls: the repaired call would be discarded and
-				// the turn would end on the defaultResponse fallback with
-				// markTurnFailed, as if the model had stayed silent. Stop
-				// retrying and let the fall-through below hand it to the
-				// normal tool-dispatch path — which is what the main call site
-				// would have done with the identical response (D9's "identical
-				// at all three sites").
-				if len(rc.rx.rr.rq.ri.rf.response.ToolCalls) > 0 && !rc.rx.rr.rq.ri.gracefulTerminal {
-					break
-				}
+
 			}
 			// If the inner retry loop set an error, surface it via the outer error path.
-			if rc.rx.rr.rq.ri.rf.err != nil {
-				// ADR-066 D7: typed, never silent — see typedTurnExit.
-				if errors.Is(rc.rx.rr.rq.ri.rf.err, context.Canceled) || errors.Is(rc.rx.rr.rq.ri.rf.err, context.DeadlineExceeded) {
-					var res turnResult
-					var exitErr error
-					res, rc.rx.rr.rq.ri.turnStatus, exitErr = rc.rx.rr.rq.ri.rf.rt.al.typedTurnExit(rc.rx.rr.rq.ri.rf.rt.ts, rc.rx.rr.rq.ri.rf.rt.iteration, rc.rx.rr.rq.ri.rf.rt.llmModel, rc.rx.rr.rq.ri.rf.err)
-					rc.ret0 = res
-					rc.ret1 = exitErr
-					return agentLoopRunTurnConductorReturn
-				}
-				rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
-				// Wave 1 (error-provenance hardening): translate via the
-				// shared classifier (CRIT-001). Never surface raw err.Error()
-				// to the assistant / bus / transcript. ADR-087 D5/D9: this
-				// empty-response retry's own error path is subsumed into the
-				// same TranslateTurnError classification the main terminal
-				// path uses, so a truncated tool call refused here reports
-				// CodeToolCallTruncated identically to every other site.
-				pe := errorToProviderError(rc.rx.rr.rq.ri.rf.err)
-				llm := TranslateTurnError(rc.rx.rr.rq.ri.rf.err)
 
-				// FR-017a: label an inconclusive residual 4xx after a
-				// successful strip-retry. A later distinct classified
-				// failure keeps its own code so live and persist agree.
-				if outcomeRelabelApplies(llm.Code, rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel) {
-					llm.Code = rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel
-					llm.Message = UserMessageForCode(rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel)
-				}
-
-				rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
-					EventKindError,
-					rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.error"),
-					ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, ProviderError: pe, ChatID: rc.rx.rr.rq.ri.rf.rt.ts.opts.ChatID, SessionID: string(rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID)},
-				)
-				// FR-002: persist this provider error to the transcript (write
-				// choke point).
-				rc.rx.rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
-				// ADR-087 D6.8: no further provider call follows this error
-				// either — runTurn's deferred preserveTruncatedAccumulator
-				// keeps a D6 continuation left unresolved by a prior round.
-				rc.ret0 = turnResult{}
-				rc.ret1 = fmt.Errorf("LLM call failed during empty-response retry: %w", rc.rx.rr.rq.ri.rf.err)
-				return agentLoopRunTurnConductorReturn
+			switch er.cn.surfaceEmptyRetryOutcome() {
+			case agentLoopRunTurnConductorRunIterationsReturn:
+				return er.cn.ret0
 			}
+
 			// ADR-087 D3/D9: re-test the CURRENT response. This branch was
 			// entered on the ORIGINAL response's len(ToolCalls) == 0, but the
 			// empty-response retry above may since have replaced `response`
@@ -436,42 +190,14 @@ turnLoop:
 			// winding-down turn must never start executing tools — and
 			// everything else falls out of this block into the ordinary
 			// tool-dispatch path below.
-			if len(rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 || rc.rx.rr.rq.ri.gracefulTerminal {
-				if strings.TrimSpace(responseContent) == "" {
-					responseContent = defaultResponse
-					rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
-					logger.WarnCF("agent", "LLM returned empty response after retry; using fallback message",
-						map[string]any{"agent_id": rc.rx.rr.rq.ri.rf.rt.ts.agent.ID, "iteration": rc.rx.rr.rq.ri.rf.rt.iteration})
-				}
-				// ADR-087 D6.10: this round did not go through
-				// evaluateTruncatedSuccess (it was not itself truncated, or it
-				// carried tool calls on an earlier pass through this loop) —
-				// but if an EARLIER round in this same turn dispatched a D6
-				// continuation, the accumulator holds that earlier content and
-				// must be prefixed here, or the prior round's answer is
-				// silently dropped and only this round's own text survives.
-				// (What the accumulator holds at this point is only what has
-				// NOT already been settled into the record by
-				// flushContinuationAccumulator — see its doc comment.)
-				if rc.rx.rr.rq.ri.rf.rt.ts.hadContinuation() {
-					responseContent = rc.rx.rr.rq.ri.rf.rt.ts.appendToAccumulator(responseContent)
-					rc.rx.rr.rq.ri.rf.rt.ts.resolveContinuation()
-				}
-				rc.rx.finalContent = responseContent
-				logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
-					map[string]any{
-						"agent_id":      rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-						"iteration":     rc.rx.rr.rq.ri.rf.rt.iteration,
-						"content_chars": len(rc.rx.finalContent),
-					})
+
+			switch er.cn.finishTextResponse() {
+			case agentLoopRunTurnConductorRunIterationsContinueL1:
+				continue turnLoop
+			case agentLoopRunTurnConductorRunIterationsBreakL1:
 				break turnLoop
 			}
-			logger.InfoCF("agent", "empty-response retry returned a repaired tool call; dispatching it",
-				map[string]any{
-					"agent_id":   rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
-					"iteration":  rc.rx.rr.rq.ri.rf.rt.iteration,
-					"tool_calls": len(rc.rx.rr.rq.ri.rf.response.ToolCalls),
-				})
+
 		}
 
 		// ADR-087 D6.10 / D4 (last paragraph, "truncated and has complete
@@ -508,26 +234,12 @@ turnLoop:
 		//     re-executed because of a continuation: nothing here re-dispatches
 		//     these tool calls.
 
-		rc.rx.rr.recordToolCalls()
-
-		// setGoalSucceededThisRound tracks whether a set_goal call in THIS
-		// model response already registered (or updated) the goal record — the
-		// gate a few branches down uses to refuse a trailing AskUserQuestion
-		// from the same response (UAT B-9 run 4: set_goal plus an invented
-		// "Placeholder question - not used" ask in one response both ran; the
-		// ask parked a turn whose goal record was already registered, freezing
-		// the session for 18 minutes). A successful set_goal only ever happens
-		// on a goal turn, so no separate goal-turn predicate is needed.
-
-		switch rc.rx.executeToolCalls() {
-		case agentLoopRunTurnToolsReturn:
-			rc.ret0 = rc.rx.ret0
-			rc.ret1 = rc.rx.ret1
-			return agentLoopRunTurnConductorReturn
-		}
-
-		switch rc.rx.finishToolIteration() {
-		case agentLoopRunTurnToolsBreakL1:
+		switch er.cn.dispatchToolCalls() {
+		case agentLoopRunTurnConductorRunIterationsReturn:
+			return er.cn.ret0
+		case agentLoopRunTurnConductorRunIterationsContinueL1:
+			continue turnLoop
+		case agentLoopRunTurnConductorRunIterationsBreakL1:
 			break turnLoop
 		}
 
@@ -559,23 +271,444 @@ turnLoop:
 	// deliberate: neither is a completed conversational round from the
 	// user's perspective, and a parked turn is expected to resume later
 	// rather than count as elapsed time against the horizon.
-	rc.rx.rr.rq.ri.rf.rt.al.tickSearchPromotionHorizon(rc.rx.rr.rq.ri.rf.rt.ts.manifestBucket())
+	er.cn.rc.rx.rr.rq.ri.rf.rt.al.tickSearchPromotionHorizon(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.manifestBucket())
 
-	if steerMsgs := rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+	if steerMsgs := er.cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(er.cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
 		logger.InfoCF("agent", "Steering arrived after turn completion; continuing turn before finalizing",
 			map[string]any{
-				"agent_id":       rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+				"agent_id":       er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
 				"steering_count": len(steerMsgs),
-				"session_key":    rc.rx.rr.rq.ri.rf.rt.ts.sessionKey,
+				"session_key":    er.cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey,
 			})
-		rc.rx.rr.rq.ri.pendingMessages = append(rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
-		rc.rx.finalContent = ""
+		er.cn.rc.rx.rr.rq.ri.pendingMessages = append(er.cn.rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
+		er.cn.rc.rx.finalContent = ""
 		// I2: guard against bypassing the hard iteration ceiling via goto.
 		// If the ceiling is exceeded, fall through to finalization rather than
 		// re-entering turnLoop, which would be invalid at this point anyway.
-		if rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() < 2*rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations {
+		if er.cn.rc.rx.rr.rq.ri.rf.rt.ts.currentIteration() < 2*er.cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.MaxIterations {
 			goto turnLoop
 		}
 	}
 	return agentLoopRunTurnConductorNext
+}
+
+// callAndApplyRetry calls the provider for an empty-response retry and applies its outcome.
+func (er *agentLoopRunTurnConductorRunIterationsRetryResponse) callAndApplyRetry() agentLoopRunTurnConductorRunIterationsRetryResponseFlow {
+	retryResp, retryErr := er.cn.rc.rx.rr.rq.ri.rf.callLLM(er.cn.rc.rx.rr.rq.ri.rf.callMessages, er.cn.rc.rx.rr.rq.ri.rf.providerToolDefs)
+	if retryErr != nil {
+		// ADR-087 D3/D9 (empty-response retry call site): same
+		// bounded repair as the other two call sites — issue the
+		// repaired call directly rather than looping, since this
+		// mini-loop's own iteration budget is about EMPTY
+		// content, a different concern from a truncated tool
+		// call.
+		if repaired, ok := er.cn.rc.rx.rr.rq.ri.rf.rt.al.evaluateTruncatedToolCallError(er.cn.rc.rx.rr.rq.ri.rf.rt.ts, retryErr, er.cn.rc.rx.rr.rq.ri.rf.callMessages, 0, 1, &er.cn.rc.rx.rr.rq.ri.toolCallTruncationRepairUsed, er.cn.rc.rx.rr.rq.ri.rf.rt.llmModel, er.cn.rc.rx.rr.rq.ri.rf.rt.iteration); ok {
+			er.cn.rc.rx.rr.rq.ri.rf.callMessages = repaired
+			retryResp, retryErr = er.cn.rc.rx.rr.rq.ri.rf.callLLM(er.cn.rc.rx.rr.rq.ri.rf.callMessages, er.cn.rc.rx.rr.rq.ri.rf.providerToolDefs)
+		}
+		if retryErr != nil {
+			// Propagate the error back to the outer error-handling block by
+			// overwriting response/err and breaking out of both loops.
+			er.cn.rc.rx.rr.rq.ri.rf.response = nil
+			er.cn.rc.rx.rr.rq.ri.rf.err = retryErr
+			return agentLoopRunTurnConductorRunIterationsRetryResponseBreak
+		}
+	}
+	er.cn.rc.rx.rr.rq.ri.rf.response = retryResp
+	er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.Content
+	if er.cn.responseContent == "" && er.cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent != "" {
+		er.cn.responseContent = er.cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent
+	}
+	// ADR-087 D4/D6/D9: the empty-response retry's own
+	// successful attempt goes through the SAME success-arm
+	// handler as the other two call sites (§7.9).
+	if verdict := er.cn.rc.rx.rr.rq.ri.rf.rt.al.evaluateTruncatedSuccess(er.cn.rc.rx.rr.rq.ri.rf.rt.ts, er.cn.rc.rx.rr.rq.ri.rf.response, er.cn.rc.rx.rr.rq.ri.messages, er.cn.rc.rx.rr.rq.ri.rf.providerToolDefs, er.cn.rc.rx.rr.rq.ri.gracefulTerminal, er.cn.rc.rx.rr.rq.ri.rf.rt.iteration, er.cn.rc.rx.rr.rq.ri.rf.rt.llmModel, &er.cn.rc.rx.rr.continuationChain); verdict.action != truncationActionNone {
+		switch verdict.action {
+		case truncationActionContinue:
+			er.cn.rc.rx.rr.rq.ri.messages = verdict.messages
+			return agentLoopRunTurnConductorRunIterationsRetryResponseContinueL2
+		case truncationActionEnd:
+			er.cn.rc.rx.finalContent = verdict.finalContent
+			return agentLoopRunTurnConductorRunIterationsRetryResponseBreakL2
+		}
+	}
+	// ADR-087 D3/D9: a repaired call can come back carrying a
+	// (smaller, complete) TOOL CALL — the whole point of the D3
+	// repair note is to solicit one. This mini-loop lives inside
+	// the direct-answer branch, which was entered because the
+	// ORIGINAL response had none, so nothing below inspects
+	// response.ToolCalls: the repaired call would be discarded and
+	// the turn would end on the defaultResponse fallback with
+	// markTurnFailed, as if the model had stayed silent. Stop
+	// retrying and let the fall-through below hand it to the
+	// normal tool-dispatch path — which is what the main call site
+	// would have done with the identical response (D9's "identical
+	// at all three sites").
+	if len(er.cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) > 0 && !er.cn.rc.rx.rr.rq.ri.gracefulTerminal {
+		return agentLoopRunTurnConductorRunIterationsRetryResponseBreak
+	}
+	return agentLoopRunTurnConductorRunIterationsRetryResponseNext
+}
+
+// prepareIteration prepares one provider iteration and records its usage.
+func (cn *agentLoopRunTurnConductorRunIterations) prepareIteration() agentLoopRunTurnConductorRunIterationsFlow {
+	switch cn.rc.rx.rr.rq.ri.beginIteration() {
+	case agentLoopRunTurnIterationReturn:
+		cn.rc.ret0 = cn.rc.rx.rr.rq.ri.ret0
+		cn.rc.ret1 = cn.rc.rx.rr.rq.ri.ret1
+		cn.ret0 = agentLoopRunTurnConductorReturn
+		return agentLoopRunTurnConductorRunIterationsReturn
+	case agentLoopRunTurnIterationBreak:
+		return agentLoopRunTurnConductorRunIterationsBreakL1
+	case agentLoopRunTurnIterationBreakL1:
+		return agentLoopRunTurnConductorRunIterationsBreakL1
+	}
+
+	// FR-003, FR-041: Apply per-agent tool policy at LLM-call assembly time.
+	// FilterToolsByPolicy enforces global × agent deny>ask>allow resolution and
+	// the ScopeCore-on-custom-agent gate before the tool list reaches the LLM.
+	// Tools with effective policy "ask" are included — the mid-turn policy snapshot
+	// (FR-041) handles human-in-the-loop confirmation; see the ADR-058
+	// quarantine gate and recordToolDenial (tool_denial.go).
+
+	switch cn.rc.rx.rr.rq.prepareToolSurface() {
+	case agentLoopRunTurnRequestReturn:
+		cn.rc.ret0 = cn.rc.rx.rr.rq.ret0
+		cn.rc.ret1 = cn.rc.rx.rr.rq.ret1
+		cn.ret0 = agentLoopRunTurnConductorReturn
+		return agentLoopRunTurnConductorRunIterationsReturn
+	}
+
+	// Transparent repair of orphan tool_use / tool_result pairs in the
+	// outbound history. OpenRouter's mid-stream provider rotation can leave
+	// the context jsonl desynced with its own transcript; we reconcile from
+	// the transcript before every LLM call so Anthropic never sees a broken
+	// pair. No-op fast path when there are no orphans (the common case).
+
+	cn.rc.rx.rr.rq.prepareCallMessages()
+
+	// ADR-088 D3 Layer 1 narrowing is active for THIS request exactly
+	// when goalForce.layer1 holds and gracefulTerminal hasn't nilled the
+	// tool surface. review-round-1 finding #6 (kept under the D3
+	// amendment, 2026-09-07): native_search must never ride alongside
+	// the narrowed pair — it would silently add a THIRD callable "tool"
+	// (the provider's own built-in search) outside {set_goal[,
+	// AskUserQuestion]}, undermining the narrowed surface's "exactly the
+	// pair" promise even though nothing forces the model to touch it
+	// anymore (provider tool-choice forcing is deleted — determinism now
+	// comes from the immediate post-turn correction, goal_loop.go, not
+	// the request shape). Suppress native search for this one request
+	// while narrowing is active; the client-side search_web tool is not
+	// offered here either (it's excluded from goalForce.narrowed, same
+	// as every other non-goal tool). No tool-choice option is ever set —
+	// see evaluateGoalForcing's doc comment for why.
+
+	switch cn.rc.rx.rr.rq.prepareLLMRequest() {
+	case agentLoopRunTurnRequestReturn:
+		cn.rc.ret0 = cn.rc.rx.rr.rq.ret0
+		cn.rc.ret1 = cn.rc.rx.rr.rq.ret1
+		cn.ret0 = agentLoopRunTurnConductorReturn
+		return agentLoopRunTurnConductorRunIterationsReturn
+	}
+
+	switch cn.rc.rx.rr.callLLMWithRetries() {
+	case agentLoopRunTurnResponseReturn:
+		cn.rc.ret0 = cn.rc.rx.rr.ret0
+		cn.rc.ret1 = cn.rc.rx.rr.ret1
+		cn.ret0 = agentLoopRunTurnConductorReturn
+		return agentLoopRunTurnConductorRunIterationsReturn
+	}
+
+	switch cn.rc.rx.rr.handleProviderResponse() {
+	case agentLoopRunTurnResponseReturn:
+		cn.rc.ret0 = cn.rc.rx.rr.ret0
+		cn.rc.ret1 = cn.rc.rx.rr.ret1
+		cn.ret0 = agentLoopRunTurnConductorReturn
+		return agentLoopRunTurnConductorRunIterationsReturn
+	}
+
+	// Record the provider-reported usage on the turn. debitLLMUsage also
+	// records ts.lastUsage — the write that used to sit ~90 lines above
+	// this block, guarded by its own
+	// turnStateFromContext(turnCtx) lookup that resolves to this very same
+	// ts (withTurnState(turnCtx, ts) is how turnCtx was built). Two copies
+	// of one accounting step is how the ADR-087 D3.9 refused-attempt debit
+	// came to omit SetLastUsage; there is now exactly one.
+	//
+	// ADR-087 D8: the old lastUsage site also called the now-deleted
+	// SetLastFinishReason("for SubTurn truncation detection") — that
+	// consumer was never built (GetLastFinishReason had zero callers); see
+	// §5.1 of the ADR for the recorded gap.
+	if cn.rc.rx.rr.rq.ri.rf.response != nil {
+		cn.rc.rx.rr.rq.ri.rf.rt.al.debitLLMUsage(cn.rc.rx.rr.rq.ri.rf.rt.ts, cn.rc.rx.rr.rq.ri.rf.rt.llmModel, cn.rc.rx.rr.rq.ri.rf.response.Usage)
+	}
+	return agentLoopRunTurnConductorRunIterationsNext
+}
+
+// handleInitialResponse handles orphan markup, steering, and truncated success.
+func (cn *agentLoopRunTurnConductorRunIterations) handleInitialResponse() agentLoopRunTurnConductorRunIterationsFlow {
+	cn.responseContent = cn.rc.rx.rr.rq.ri.rf.response.Content
+	if cn.responseContent == "" && cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent != "" {
+		cn.responseContent = cn.rc.rx.rr.rq.ri.rf.response.ReasoningContent
+	}
+
+	// ── Orphan tool-call markup with NO tool call: repair, or fail loudly ──
+	//
+	// The model tried to call a tool and nothing came back as a
+	// structured call, so this round did no work at all. Ending the
+	// turn here — which is what happened before this branch existed —
+	// presents whatever prose survived the strip as a finished answer
+	// and, when the whole response was markup, presents nothing at
+	// all: a spinner that resolves into silence, with the goal record
+	// left untouched and no error anywhere. That is the defect.
+	//
+	// Repair first: re-prompt with an explicit instruction to use the
+	// tool-calling API, bounded by maxOrphanToolMarkupRepairs so a
+	// model that cannot comply does not burn the turn. The repair note
+	// is appended to the in-flight request only — never to session
+	// history — so a transient protocol fault leaves no residue in the
+	// durable archive, and the residue itself is never echoed back
+	// (that would invite the model to repeat it verbatim).
+	//
+	// A graceful interrupt is the one case that does not repair: the
+	// user asked the turn to wind down, so the stripped response
+	// stands and the empty-response fallback below covers it.
+	if cn.rc.rx.rr.hasOrphanMarkup && len(cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 {
+		switch {
+		case cn.rc.rx.rr.rq.ri.gracefulTerminal:
+			// Fall through: honour the interrupt, do not re-prompt.
+		case cn.orphanToolMarkupRepairs < maxOrphanToolMarkupRepairs:
+			cn.orphanToolMarkupRepairs++
+			logger.WarnCF("agent", "Tool call arrived as unparseable text; re-prompting the model",
+				map[string]any{
+					"agent_id":      cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+					"iteration":     cn.rc.rx.rr.rq.ri.rf.rt.iteration,
+					"model":         cn.rc.rx.rr.rq.ri.rf.rt.llmModel,
+					"marker":        cn.rc.rx.rr.orphanMarkup.Marker,
+					"finish_reason": cn.rc.rx.rr.rq.ri.rf.response.FinishReason,
+					"attempt":       cn.orphanToolMarkupRepairs,
+					"max_attempts":  maxOrphanToolMarkupRepairs,
+				})
+			cn.rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
+				EventKindLLMRetry,
+				cn.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.llm.retry"),
+				LLMRetryPayload{
+					Attempt:    cn.orphanToolMarkupRepairs,
+					MaxRetries: maxOrphanToolMarkupRepairs,
+					Reason:     orphanToolMarkupRetryReason,
+				},
+			)
+			cn.rc.rx.rr.rq.ri.messages = append(cn.rc.rx.rr.rq.ri.messages, orphanToolMarkupRepairMessage(cn.rc.rx.rr.rq.ri.rf.response.FinishReason))
+			return agentLoopRunTurnConductorRunIterationsContinue
+		default:
+			// Repair budget spent. Fail LOUDLY — a typed error event
+			// for the live client and a typed transcript entry for
+			// replay. CodeToolArgs is the contract's existing
+			// "tool-call argument format error"; the vocabulary is
+			// contract data (contracts/components/schemas/LLMError.yaml),
+			// so this path reuses it rather than inventing a code the
+			// SPA has no catalogue entry for.
+			cn.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+			llm := LLMError{
+				Code:      CodeToolArgs,
+				Message:   UserMessageForCode(CodeToolArgs),
+				Retryable: isRetryable(CodeToolArgs),
+			}
+			logger.WarnCF("agent", "Tool call kept arriving as unparseable text; ending turn with an error",
+				map[string]any{
+					"agent_id":      cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+					"iteration":     cn.rc.rx.rr.rq.ri.rf.rt.iteration,
+					"model":         cn.rc.rx.rr.rq.ri.rf.rt.llmModel,
+					"marker":        cn.rc.rx.rr.orphanMarkup.Marker,
+					"finish_reason": cn.rc.rx.rr.rq.ri.rf.response.FinishReason,
+					"attempts":      cn.orphanToolMarkupRepairs,
+				})
+			cn.rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
+				EventKindError,
+				cn.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.error"),
+				ErrorPayload{
+					Stage:     orphanToolMarkupStage,
+					Code:      string(llm.Code),
+					Message:   llm.Message,
+					ChatID:    cn.rc.rx.rr.rq.ri.rf.rt.ts.opts.ChatID,
+					SessionID: string(cn.rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID),
+				},
+			)
+			cn.rc.rx.rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+			// UAT A-12: wrap the TYPED refusal a provider raises for an
+			// undecodable tool call. A task attempt's turn error is
+			// classified by type only (task_attempt_turn_error.go's
+			// attemptRecoverableTurnErrorCode — errors.As for
+			// *common.ToolArgumentsError, then TranslateTurnError ->
+			// CodeToolArgs, the same code this exit already reports to
+			// the client). Untyped, this exhaustion failed the task on
+			// the spot instead of consuming one attempt.
+			cn.rc.ret0 = turnResult{}
+			cn.rc.ret1 = fmt.Errorf(
+				"model emitted unparseable tool-call markup (marker %q, finish_reason %q) after %d repair attempts: %w",
+				cn.rc.rx.rr.orphanMarkup.Marker, cn.rc.rx.rr.rq.ri.rf.response.FinishReason, cn.orphanToolMarkupRepairs,
+				common.NewToolArgumentsError("", common.ErrToolArgumentsUndecodable, false))
+			cn.ret0 = agentLoopRunTurnConductorReturn
+			return agentLoopRunTurnConductorRunIterationsReturn
+		}
+	}
+
+	// FR-7.5/NFR-1: scan the assistant's final answer for references to
+	// memories recalled earlier this turn and emit op:cited events.
+	if cn.rc.rx.rr.citationTracker != nil {
+		cn.rc.rx.rr.citationTracker.EmitCitations(cn.responseContent)
+	}
+	if steerMsgs := cn.rc.rx.rr.rq.ri.rf.rt.al.dequeueSteeringMessagesForScope(cn.rc.rx.rr.rq.ri.rf.rt.ts.sessionKey); len(steerMsgs) > 0 {
+		logger.InfoCF("agent", "Steering arrived after direct LLM response; continuing turn",
+			map[string]any{
+				"agent_id":       cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+				"iteration":      cn.rc.rx.rr.rq.ri.rf.rt.iteration,
+				"steering_count": len(steerMsgs),
+			})
+		cn.rc.rx.rr.rq.ri.pendingMessages = append(cn.rc.rx.rr.rq.ri.pendingMessages, steerMsgs...)
+		return agentLoopRunTurnConductorRunIterationsContinue
+	}
+	// ADR-087 D4/D6/D9: the one success-arm truncation handler,
+	// ahead of the legacy empty-response retry loop below. Guarded
+	// internally on isTruncatedFinishReason(FinishReason) &&
+	// len(ToolCalls)==0 — when that guard does not match, the
+	// verdict is truncationActionNone and every line below runs
+	// completely unchanged (§7.10: a normal empty response with a
+	// non-truncated finish reason still falls through to the
+	// legacy loop). This single insertion covers both the main and
+	// media-downgrade-retry call sites, since both `break` into
+	// this shared downstream code on success; the empty-response
+	// retry's own successful attempt (site 3) reaches the
+	// identical branch again below, inside that loop.
+	if verdict := cn.rc.rx.rr.rq.ri.rf.rt.al.evaluateTruncatedSuccess(cn.rc.rx.rr.rq.ri.rf.rt.ts, cn.rc.rx.rr.rq.ri.rf.response, cn.rc.rx.rr.rq.ri.messages, cn.rc.rx.rr.rq.ri.rf.providerToolDefs, cn.rc.rx.rr.rq.ri.gracefulTerminal, cn.rc.rx.rr.rq.ri.rf.rt.iteration, cn.rc.rx.rr.rq.ri.rf.rt.llmModel, &cn.rc.rx.rr.continuationChain); verdict.action != truncationActionNone {
+		switch verdict.action {
+		case truncationActionContinue:
+			cn.rc.rx.rr.rq.ri.messages = verdict.messages
+			return agentLoopRunTurnConductorRunIterationsContinueL1
+		case truncationActionEnd:
+			cn.rc.rx.finalContent = verdict.finalContent
+			return agentLoopRunTurnConductorRunIterationsBreakL1
+		}
+	}
+	return agentLoopRunTurnConductorRunIterationsNext
+}
+
+// surfaceEmptyRetryOutcome surfaces the terminal outcome of empty-response recovery.
+func (cn *agentLoopRunTurnConductorRunIterations) surfaceEmptyRetryOutcome() agentLoopRunTurnConductorRunIterationsFlow {
+	if cn.rc.rx.rr.rq.ri.rf.err != nil {
+		// ADR-066 D7: typed, never silent — see typedTurnExit.
+		if errors.Is(cn.rc.rx.rr.rq.ri.rf.err, context.Canceled) || errors.Is(cn.rc.rx.rr.rq.ri.rf.err, context.DeadlineExceeded) {
+			var res turnResult
+			var exitErr error
+			res, cn.rc.rx.rr.rq.ri.turnStatus, exitErr = cn.rc.rx.rr.rq.ri.rf.rt.al.typedTurnExit(cn.rc.rx.rr.rq.ri.rf.rt.ts, cn.rc.rx.rr.rq.ri.rf.rt.iteration, cn.rc.rx.rr.rq.ri.rf.rt.llmModel, cn.rc.rx.rr.rq.ri.rf.err)
+			cn.rc.ret0 = res
+			cn.rc.ret1 = exitErr
+			cn.ret0 = agentLoopRunTurnConductorReturn
+			return agentLoopRunTurnConductorRunIterationsReturn
+		}
+		cn.rc.rx.rr.rq.ri.turnStatus = TurnEndStatusError
+		// Wave 1 (error-provenance hardening): translate via the
+		// shared classifier (CRIT-001). Never surface raw err.Error()
+		// to the assistant / bus / transcript. ADR-087 D5/D9: this
+		// empty-response retry's own error path is subsumed into the
+		// same TranslateTurnError classification the main terminal
+		// path uses, so a truncated tool call refused here reports
+		// CodeToolCallTruncated identically to every other site.
+		pe := errorToProviderError(cn.rc.rx.rr.rq.ri.rf.err)
+		llm := TranslateTurnError(cn.rc.rx.rr.rq.ri.rf.err)
+
+		// FR-017a: label an inconclusive residual 4xx after a
+		// successful strip-retry. A later distinct classified
+		// failure keeps its own code so live and persist agree.
+		if outcomeRelabelApplies(llm.Code, cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel) {
+			llm.Code = cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel
+			llm.Message = UserMessageForCode(cn.rc.rx.rr.rq.ri.rf.rt.ts.outcomeRelabel)
+		}
+
+		cn.rc.rx.rr.rq.ri.rf.rt.al.emitEvent(
+			EventKindError,
+			cn.rc.rx.rr.rq.ri.rf.rt.ts.eventMeta("runTurn", "turn.error"),
+			ErrorPayload{Stage: "llm_empty_retry", Code: string(llm.Code), Message: llm.Message, ProviderError: pe, ChatID: cn.rc.rx.rr.rq.ri.rf.rt.ts.opts.ChatID, SessionID: string(cn.rc.rx.rr.rq.ri.rf.rt.ts.routingSessionID)},
+		)
+		// FR-002: persist this provider error to the transcript (write
+		// choke point).
+		cn.rc.rx.rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "runTurn", llm)
+		// ADR-087 D6.8: no further provider call follows this error
+		// either — runTurn's deferred preserveTruncatedAccumulator
+		// keeps a D6 continuation left unresolved by a prior round.
+		cn.rc.ret0 = turnResult{}
+		cn.rc.ret1 = fmt.Errorf("LLM call failed during empty-response retry: %w", cn.rc.rx.rr.rq.ri.rf.err)
+		cn.ret0 = agentLoopRunTurnConductorReturn
+		return agentLoopRunTurnConductorRunIterationsReturn
+	}
+	return agentLoopRunTurnConductorRunIterationsNext
+}
+
+// finishTextResponse finishes a text response or releases a repaired tool call for dispatch.
+func (cn *agentLoopRunTurnConductorRunIterations) finishTextResponse() agentLoopRunTurnConductorRunIterationsFlow {
+	if len(cn.rc.rx.rr.rq.ri.rf.response.ToolCalls) == 0 || cn.rc.rx.rr.rq.ri.gracefulTerminal {
+		if strings.TrimSpace(cn.responseContent) == "" {
+			cn.responseContent = defaultResponse
+			cn.rc.rx.rr.rq.ri.rf.rt.ts.markTurnFailed()
+			logger.WarnCF("agent", "LLM returned empty response after retry; using fallback message",
+				map[string]any{"agent_id": cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID, "iteration": cn.rc.rx.rr.rq.ri.rf.rt.iteration})
+		}
+		// ADR-087 D6.10: this round did not go through
+		// evaluateTruncatedSuccess (it was not itself truncated, or it
+		// carried tool calls on an earlier pass through this loop) —
+		// but if an EARLIER round in this same turn dispatched a D6
+		// continuation, the accumulator holds that earlier content and
+		// must be prefixed here, or the prior round's answer is
+		// silently dropped and only this round's own text survives.
+		// (What the accumulator holds at this point is only what has
+		// NOT already been settled into the record by
+		// flushContinuationAccumulator — see its doc comment.)
+		if cn.rc.rx.rr.rq.ri.rf.rt.ts.hadContinuation() {
+			cn.responseContent = cn.rc.rx.rr.rq.ri.rf.rt.ts.appendToAccumulator(cn.responseContent)
+			cn.rc.rx.rr.rq.ri.rf.rt.ts.resolveContinuation()
+		}
+		cn.rc.rx.finalContent = cn.responseContent
+		logger.InfoCF("agent", "LLM response without tool calls (direct answer)",
+			map[string]any{
+				"agent_id":      cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+				"iteration":     cn.rc.rx.rr.rq.ri.rf.rt.iteration,
+				"content_chars": len(cn.rc.rx.finalContent),
+			})
+		return agentLoopRunTurnConductorRunIterationsBreakL1
+	}
+	logger.InfoCF("agent", "empty-response retry returned a repaired tool call; dispatching it",
+		map[string]any{
+			"agent_id":   cn.rc.rx.rr.rq.ri.rf.rt.ts.agent.ID,
+			"iteration":  cn.rc.rx.rr.rq.ri.rf.rt.iteration,
+			"tool_calls": len(cn.rc.rx.rr.rq.ri.rf.response.ToolCalls),
+		})
+	return agentLoopRunTurnConductorRunIterationsNext
+}
+
+// dispatchToolCalls records and dispatches the iteration's tool calls.
+func (cn *agentLoopRunTurnConductorRunIterations) dispatchToolCalls() agentLoopRunTurnConductorRunIterationsFlow {
+	cn.rc.rx.rr.recordToolCalls()
+
+	// setGoalSucceededThisRound tracks whether a set_goal call in THIS
+	// model response already registered (or updated) the goal record — the
+	// gate a few branches down uses to refuse a trailing AskUserQuestion
+	// from the same response (UAT B-9 run 4: set_goal plus an invented
+	// "Placeholder question - not used" ask in one response both ran; the
+	// ask parked a turn whose goal record was already registered, freezing
+	// the session for 18 minutes). A successful set_goal only ever happens
+	// on a goal turn, so no separate goal-turn predicate is needed.
+
+	switch cn.rc.rx.executeToolCalls() {
+	case agentLoopRunTurnToolsReturn:
+		cn.rc.ret0 = cn.rc.rx.ret0
+		cn.rc.ret1 = cn.rc.rx.ret1
+		cn.ret0 = agentLoopRunTurnConductorReturn
+		return agentLoopRunTurnConductorRunIterationsReturn
+	}
+
+	switch cn.rc.rx.finishToolIteration() {
+	case agentLoopRunTurnToolsBreakL1:
+		return agentLoopRunTurnConductorRunIterationsBreakL1
+	}
+	return agentLoopRunTurnConductorRunIterationsNext
 }
