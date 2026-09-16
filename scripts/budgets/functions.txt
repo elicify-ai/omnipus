@@ -30,7 +30,6 @@ pkg/gateway/rest_channels.go	restAPI.setChannelRouting	375
 pkg/gateway/rest_executor_smoketest.go	restAPI.runExecutorSmokeTest	271
 pkg/gateway/rest_onboarding_probe_test.go	TestProbeProvider_SignIn	283
 pkg/gateway/rest_onboarding_probe_test.go	TestProbeProviderID_Validation	268
-pkg/gateway/rest_providers_delete.go	restAPI.runProviderDelete	260
 pkg/gateway/rest_tasks_occurrences_test.go	TestRestTasks_OccurrencesEndpoint	384
 pkg/gateway/rest_uploads.go	restAPI.HandleUpload	389
 pkg/gateway/sandbox_apply.go	applySandbox	504
