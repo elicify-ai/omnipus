@@ -253,7 +253,7 @@ func TestGatewayBoot_WrongMasterKeyProviderCredentialIsFatal(t *testing.T) {
 
 	logBuf := captureSlogJSON(t)
 
-	_, _, _, err := bootCredentials(tmpDir, configPath) //nolint:dogsled
+	err := bootCredentialsError(tmpDir, configPath)
 	if err == nil {
 		t.Fatal(
 			"bootCredentials must FAIL when a provider's credential ref is present in the store but " +
@@ -318,7 +318,7 @@ func TestGatewayBoot_CorruptCredentialsFileProviderInjectionIsFatal(t *testing.T
 		"gateway": { "host": "127.0.0.1", "port": 19984 }
 	}`)
 
-	_, _, _, err := bootCredentials(tmpDir, configPath) //nolint:dogsled
+	err := bootCredentialsError(tmpDir, configPath)
 	if err == nil {
 		t.Fatal("bootCredentials must FAIL when credentials.json itself cannot be parsed — store-wide, not scoped")
 	}

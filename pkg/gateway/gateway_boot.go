@@ -294,30 +294,30 @@ func setupAndStartServices(
 ) (rs *services, retErr error) {
 	stg := &setupAndStartServicesState{ctx: ctx, cfg: cfg, bundle: bundle, agentLoop: agentLoop, msgBus: msgBus, homePath: homePath, credStore: credStore, sandboxResult: sandboxResult, builtinReg: builtinReg, mcpReg: mcpReg, allowGodMode: allowGodMode}
 
-	if r0, r1, stop := stg.startSchedulers(); stop {
-		return r0, r1
+	if runningServices, stop, err := stg.startSchedulers(); stop {
+		return runningServices, err
 	}
 
-	if r0, r1, stop := stg.setupMediaAndChannels(); stop {
-		return r0, r1
+	if runningServices, stop, err := stg.setupMediaAndChannels(); stop {
+		return runningServices, err
 	}
 
-	if r0, r1, stop := stg.wireInteractiveServices(); stop {
-		return r0, r1
+	if runningServices, stop, err := stg.wireInteractiveServices(); stop {
+		return runningServices, err
 	}
 
-	if r0, r1, stop := stg.setupPlans(); stop {
-		return r0, r1
+	if runningServices, stop, err := stg.setupPlans(); stop {
+		return runningServices, err
 	}
 
-	if r0, r1, stop := stg.startPlanEngine(); stop {
-		return r0, r1
+	if runningServices, stop, err := stg.startPlanEngine(); stop {
+		return runningServices, err
 	}
 
 	stg.buildRESTAPI()
 
-	if r0, r1, stop := stg.prepareListener(); stop {
-		return r0, r1
+	if runningServices, stop, err := stg.prepareListener(); stop {
+		return runningServices, err
 	}
 
 	// The HTTP listener is now accepting connections. If any later boot step
@@ -334,15 +334,15 @@ func setupAndStartServices(
 		}
 	}()
 
-	if r0, r1, stop := stg.registerProcess(); stop {
-		return r0, r1
+	if runningServices, stop, err := stg.registerProcess(); stop {
+		return runningServices, err
 	}
 
 	return stg.startBackgroundServices()
 }
 
 // startSchedulers constructs and starts the gateway's cron-backed scheduling and drain services in boot order.
-func (stg *setupAndStartServicesState) startSchedulers() (*services, error, bool) {
+func (stg *setupAndStartServicesState) startSchedulers() (*services, bool, error) {
 	stg.runningServices = &services{credStore: stg.credStore, bundle: stg.bundle, sandboxResult: stg.sandboxResult, homePath: stg.homePath}
 
 	// Per-user notification store (#264). Backs schedule-failure notifications and
@@ -357,10 +357,10 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, error, bool
 		stg.runningServices.notifStore,
 	)
 	if stg.err != nil {
-		return nil, fmt.Errorf("error setting up cron service: %w", stg.err), true
+		return nil, true, fmt.Errorf("error setting up cron service: %w", stg.err)
 	}
 	if stg.err = stg.runningServices.CronService.Start(); stg.err != nil {
-		return nil, fmt.Errorf("error starting cron service: %w", stg.err), true
+		return nil, true, fmt.Errorf("error starting cron service: %w", stg.err)
 	}
 	fmt.Println("✓ Cron service started")
 
@@ -425,7 +425,7 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, error, bool
 			triggerStorePath, tStore, agent.GetTaskExecutor(stg.agentLoop),
 		)
 		if startErr := stg.runningServices.TaskTrigger.Start(); startErr != nil {
-			return nil, fmt.Errorf("error starting task trigger scheduler: %w", startErr), true
+			return nil, true, fmt.Errorf("error starting task trigger scheduler: %w", startErr)
 		}
 		stg.agentLoop.SetTaskTriggerScheduler(stg.runningServices.TaskTrigger)
 		if recErr := stg.runningServices.TaskTrigger.Reconcile(); recErr != nil {
@@ -445,15 +445,15 @@ func (stg *setupAndStartServicesState) startSchedulers() (*services, error, bool
 	loopSchedStorePath := filepath.Join(stg.homePath, "loops", "jobs.json")
 	stg.runningServices.LoopScheduler = agent.NewLoopScheduler(loopSchedStorePath, stg.agentLoop)
 	if startErr := stg.runningServices.LoopScheduler.Start(); startErr != nil {
-		return nil, fmt.Errorf("error starting loop scheduler: %w", startErr), true
+		return nil, true, fmt.Errorf("error starting loop scheduler: %w", startErr)
 	}
 	stg.agentLoop.SetLoopScheduler(stg.runningServices.LoopScheduler)
 	fmt.Println("✓ Loop scheduler started")
-	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
+	return nil, false, nil
 }
 
 // setupMediaAndChannels constructs the media and channel services, wires them into the agent loop, and emits boot warnings.
-func (stg *setupAndStartServicesState) setupMediaAndChannels() (*services, error, bool) {
+func (stg *setupAndStartServicesState) setupMediaAndChannels() (*services, bool, error) {
 	stg.runningServices.MediaStore = media.NewFileMediaStoreWithCleanup(media.MediaCleanerConfig{
 		Enabled:  stg.cfg.Tools.MediaCleanup.Enabled,
 		MaxAge:   time.Duration(stg.cfg.Tools.MediaCleanup.MaxAge) * time.Minute,
@@ -495,7 +495,7 @@ func (stg *setupAndStartServicesState) setupMediaAndChannels() (*services, error
 		if fms, ok := stg.runningServices.MediaStore.(*media.FileMediaStore); ok {
 			fms.Stop()
 		}
-		return nil, fmt.Errorf("error creating channel manager: %w", stg.err), true
+		return nil, true, fmt.Errorf("error creating channel manager: %w", stg.err)
 	}
 
 	stg.agentLoop.SetChannelManager(stg.runningServices.ChannelManager)
@@ -567,11 +567,11 @@ func (stg *setupAndStartServicesState) setupMediaAndChannels() (*services, error
 	// The GHSA-pv8c-p6jf-3fpp channel block was removed; operators must now
 	// configure per-agent ToolPolicyCfg to restrict bash.
 	emitGHSARemovalWarn(stg.cfg)
-	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
+	return nil, false, nil
 }
 
 // wireInteractiveServices constructs preview, chat, browser, approval, and interactive-question services and wires their callbacks.
-func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, error, bool) {
+func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, bool, error) {
 	// Construct the web_serve static-mode (Tier 1) and dev-mode (Tier 3)
 	// shared registries. These are always created; gateway.preview_enabled
 	// (ADR-044) gates /preview/ and serve_web live, per-request — it does not
@@ -627,7 +627,7 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, err
 
 	egressProxy, epErr := buildEgressProxyOrAbort(stg.cfg.Sandbox.EgressAllowList, egressAuditFn, sandbox.NewEgressProxy)
 	if epErr != nil && !errors.Is(epErr, errEgressProxyDisabled) {
-		return nil, epErr, true
+		return nil, true, epErr
 	}
 	if egressProxy != nil {
 		stg.runningServices.egressProxy = egressProxy
@@ -698,10 +698,10 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, err
 	approvalMaxPending := stg.cfg.Gateway.ToolApprovalMaxPending
 	effectiveCap, capOK := policy.ValidateSaturationCap(context.Background(), nil, approvalMaxPending)
 	if !capOK {
-		return nil, fmt.Errorf(
+		return nil, true, fmt.Errorf(
 			"gateway: invalid tool_approval_max_pending=%d — boot aborted (FR-016)",
 			approvalMaxPending,
-		), true
+		)
 	}
 	approvalTimeout := stg.cfg.Gateway.ToolApprovalTimeout
 	var approvalTimeoutDur time.Duration
@@ -797,11 +797,11 @@ func (stg *setupAndStartServicesState) wireInteractiveServices() (*services, err
 		slog.Warn("gateway: message_parent: failed to wake parent session",
 			"kind", kind, "error", err)
 	})
-	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
+	return nil, false, nil
 }
 
 // setupPlans constructs the plan and session-messaging stores and installs them on the agent loop.
-func (stg *setupAndStartServicesState) setupPlans() (*services, error, bool) {
+func (stg *setupAndStartServicesState) setupPlans() (*services, bool, error) {
 	// REST API endpoints for frontend data.
 	//
 	// M3: sample the onboarding state file's READABILITY before constructing
@@ -863,7 +863,7 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, error, bool) {
 	// send_message refuses every target except the turn's own conversation.
 	stg.agentLoop.SetChannelOwnership(newChannelOwnershipResolver(stg.agentLoop.GetConfig))
 	if stg.agentLoop.GetPlanStore() == nil {
-		return nil, fmt.Errorf("gateway: plan store wiring failed — SetPlanStore did not install a non-nil store"), true
+		return nil, true, fmt.Errorf("gateway: plan store wiring failed — SetPlanStore did not install a non-nil store")
 	}
 	fmt.Println("✓ Plan tool surface wired (create_plan/execute_plan/run_task/inspect_session)")
 
@@ -912,13 +912,13 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, error, bool) {
 	// place, against the constructor's current dir-only-error signature.)
 	intentLogChainKey, ilKeyErr := stg.credStore.DeriveSubkey(plan.IntentLogChainKeyInfo)
 	if ilKeyErr != nil {
-		return nil, fmt.Errorf("gateway: failed to derive intent log HMAC chain key: %w", ilKeyErr), true
+		return nil, true, fmt.Errorf("gateway: failed to derive intent log HMAC chain key: %w", ilKeyErr)
 	}
 	stg.lifecycleStore = session.NewLifecycleStore(filepath.Join(stg.homePath, "session_lifecycle"))
 	var ilDirErr error
 	stg.intentLog, ilDirErr = plan.NewIntentLog(filepath.Join(stg.homePath, "plan_intents"), intentLogChainKey)
 	if ilDirErr != nil {
-		return nil, fmt.Errorf("gateway: failed to create intent log dir: %w", ilDirErr), true
+		return nil, true, fmt.Errorf("gateway: failed to create intent log dir: %w", ilDirErr)
 	}
 	stg.bootSweepCfg = stg.agentLoop.GetConfig().Planning
 
@@ -949,14 +949,14 @@ func (stg *setupAndStartServicesState) setupPlans() (*services, error, bool) {
 	messageInboxStore.InboxPerTypeCeiling = smCfg.EffectiveInboxPerTypeCeiling()
 	stg.agentLoop.SetSessionMessagingStores(messageInboxStore, stg.lifecycleStore)
 	if stg.agentLoop.GetMessageInboxStore() == nil {
-		return nil, fmt.Errorf("gateway: session-messaging store wiring failed — SetSessionMessagingStores did not install a non-nil inbox"), true
+		return nil, true, fmt.Errorf("gateway: session-messaging store wiring failed — SetSessionMessagingStores did not install a non-nil inbox")
 	}
 	fmt.Println("✓ Session-messaging plane wired (delegate + message_parent stores injected)")
-	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
+	return nil, false, nil
 }
 
 // startPlanEngine configures and starts the plan engine when its task dependencies are available.
-func (stg *setupAndStartServicesState) startPlanEngine() (*services, error, bool) {
+func (stg *setupAndStartServicesState) startPlanEngine() (*services, bool, error) {
 	// Mirrors the TaskDrain/TaskTrigger/MailboxDrain degrade-not-abort
 	// convention immediately below/above for a missing task store/executor
 	// (e.g. a minimal test harness's AgentLoop) — the plan engine needs both.
@@ -1061,7 +1061,7 @@ func (stg *setupAndStartServicesState) startPlanEngine() (*services, error, bool
 			return len(stg.runningServices.LoopScheduler.ListEnabledJobs()), nil
 		})
 		if startErr := planEngine.Start(context.Background()); startErr != nil {
-			return nil, fmt.Errorf("error starting plan engine: %w", startErr), true
+			return nil, true, fmt.Errorf("error starting plan engine: %w", startErr)
 		}
 		stg.agentLoop.SetPlanEngine(planEngine)
 		stg.runningServices.PlanEngine = planEngine
@@ -1069,7 +1069,7 @@ func (stg *setupAndStartServicesState) startPlanEngine() (*services, error, bool
 	} else {
 		fmt.Println("⚠ Plan engine disabled: task store/executor unavailable")
 	}
-	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
+	return nil, false, nil
 }
 
 // buildRESTAPI constructs the REST API, registers its core routes, and performs pre-listener reconciliation.
@@ -1229,7 +1229,7 @@ func (stg *setupAndStartServicesState) buildRESTAPI() {
 }
 
 // prepareListener registers the remaining HTTP routes and middleware, then starts the channel listener.
-func (stg *setupAndStartServicesState) prepareListener() (*services, error, bool) {
+func (stg *setupAndStartServicesState) prepareListener() (*services, bool, error) {
 	// Register /preview/ (canonical web_serve URL) on the MAIN mux (ADR-044,
 	// FR-001/FR-002/FR-003). There is no separate preview listener anymore —
 	// /preview/ shares gateway.port with the SPA and /api/v1/*. It is
@@ -1282,7 +1282,7 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, error, bool
 	// Wrap the HTTP server handler with config snapshot middleware so all
 	// request handlers see a consistent config even during hot-reload.
 	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(stg.api.configSnapshotMiddleware); stg.err != nil {
-		return nil, fmt.Errorf("wrapping HTTP handler: %w", stg.err), true
+		return nil, true, fmt.Errorf("wrapping HTTP handler: %w", stg.err)
 	}
 	// F-13 / ADR-044: /preview/ is registered on this SAME main mux (see
 	// registerPreviewEndpoints above), so the WrapHTTPHandler(configSnapshotMiddleware)
@@ -1339,7 +1339,7 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, error, bool
 		}),
 	)
 	if stg.err = stg.runningServices.ChannelManager.WrapHTTPHandler(csrfMW); stg.err != nil {
-		return nil, fmt.Errorf("wrapping HTTP handler with CSRF: %w", stg.err), true
+		return nil, true, fmt.Errorf("wrapping HTTP handler with CSRF: %w", stg.err)
 	}
 
 	// Wire the /reload trigger BEFORE StartAll launches the HTTP listener.
@@ -1356,13 +1356,13 @@ func (stg *setupAndStartServicesState) prepareListener() (*services, error, bool
 	stg.runningServices.HealthServer.SetReloadFunc(stg.runningServices.reloadTrigger)
 
 	if stg.err = stg.runningServices.ChannelManager.StartAll(context.Background()); stg.err != nil {
-		return nil, fmt.Errorf("error starting channels: %w", stg.err), true
+		return nil, true, fmt.Errorf("error starting channels: %w", stg.err)
 	}
-	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
+	return nil, false, nil
 }
 
 // registerProcess starts post-listener catalog work, writes process discovery files, and starts the device service.
-func (stg *setupAndStartServicesState) registerProcess() (*services, error, bool) {
+func (stg *setupAndStartServicesState) registerProcess() (*services, bool, error) {
 	// Boot logging: main listener (ADR-044: /preview/ shares this same listener,
 	// no separate preview port/address to log). preview_enabled is read live
 	// (not restart-gated), so this line only reflects the value at boot time.
@@ -1412,7 +1412,7 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, error, bool
 	portFile := filepath.Join(stg.cfg.AgentHomeBasePath(), "gateway.port")
 	portData := strconv.Itoa(stg.cfg.Gateway.Port)
 	if writeErr := os.WriteFile(portFile, []byte(portData+"\n"), 0o600); writeErr != nil {
-		return nil, fmt.Errorf("write gateway.port: %w", writeErr), true
+		return nil, true, fmt.Errorf("write gateway.port: %w", writeErr)
 	}
 
 	// Self-register this process's PID so that `omnipus stop` and Status work
@@ -1449,7 +1449,7 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, error, bool
 	// by integration tests that configure a real USB monitor on supported hosts.
 	if stg.err = stg.runningServices.DeviceService.Start(context.Background()); stg.err != nil {
 		if stg.cfg.Devices.Enabled {
-			return nil, fmt.Errorf("device service: %w", stg.err), true
+			return nil, true, fmt.Errorf("device service: %w", stg.err)
 		}
 		logger.WarnCF(
 			"device",
@@ -1459,7 +1459,7 @@ func (stg *setupAndStartServicesState) registerProcess() (*services, error, bool
 	} else if stg.cfg.Devices.Enabled {
 		fmt.Println("✓ Device event service started")
 	}
-	return nil, nil, false //nolint:nilnil // nil services and nil error mean this stage completed and boot should continue.
+	return nil, false, nil
 }
 
 // startBackgroundServices starts the shutdown-aware orphan and browser cleanup loops and returns the running services.

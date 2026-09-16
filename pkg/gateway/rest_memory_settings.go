@@ -107,7 +107,7 @@ func (a *restAPI) putMemorySettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := a.safeUpdateConfigJSON(func(m map[string]any) error { //nolint:gocritic
+	if err := a.safeUpdateConfigJSON(func(m map[string]any) error {
 		// agents.defaults section.
 		agents, _ := m["agents"].(map[string]any)
 		if agents == nil {

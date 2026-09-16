@@ -239,7 +239,6 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 			// cannot fire until after our send completes.
 			targetCh := wc.replayDivertCh
 			defer wc.replayMu.RUnlock()
-			//nolint:dupl // Mirrors the sendCh path below; differs by target channel + lock-holding context.
 			switch {
 			case isCritical:
 				select {
@@ -328,7 +327,6 @@ func sendRawFrameBytes(wc *wsConn, frameType string, data []byte) {
 
 	targetCh := wc.sendCh
 
-	//nolint:dupl // Mirrors the replayDivertCh path above; differs by target channel + lock-holding context.
 	switch {
 	case isCritical:
 		// Critical frames must not be dropped. Block briefly; force-close on timeout.

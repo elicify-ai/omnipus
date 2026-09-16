@@ -263,8 +263,8 @@ type applySandboxState struct {
 func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err error) {
 	as := &applySandboxState{opts: opts}
 
-	if r0, r1, stop := as.resolveFilesystemModel(); stop {
-		return r0, r1
+	if result, stop, err := as.resolveFilesystemModel(); stop {
+		return result, err
 	}
 	// Stamped once here rather than at each of the several `return result, nil`
 	// sites: a new early return added later would otherwise silently report an
@@ -275,23 +275,23 @@ func applySandbox(opts SandboxApplyOptions) (result *SandboxApplyResult, err err
 		}
 	}()
 
-	if r0, r1, stop := as.resolveModeAndBackend(); stop {
-		return r0, r1
+	if result, stop, err := as.resolveModeAndBackend(); stop {
+		return result, err
 	}
 
 	as.buildPolicy()
 
 	as.publishTurnPolicyBase()
 
-	if r0, r1, stop := as.applyNonLinuxSandbox(); stop {
-		return r0, r1
+	if result, stop, err := as.applyNonLinuxSandbox(); stop {
+		return result, err
 	}
 
 	return as.applyLinuxSandbox()
 }
 
 // resolveFilesystemModel normalizes output streams and validates the configured filesystem model.
-func (as *applySandboxState) resolveFilesystemModel() (*SandboxApplyResult, error, bool) {
+func (as *applySandboxState) resolveFilesystemModel() (*SandboxApplyResult, bool, error) {
 	if as.opts.GetEnv == nil {
 		as.opts.GetEnv = os.Getenv
 	}
@@ -313,15 +313,15 @@ func (as *applySandboxState) resolveFilesystemModel() (*SandboxApplyResult, erro
 		parsed, perr := sandbox.ParseFilesystemModel(
 			as.opts.Cfg.Sandbox.FilesystemModel, sandbox.FilesystemModelConfined)
 		if perr != nil {
-			return nil, fmt.Errorf("sandbox config: %w", perr), true
+			return nil, true, fmt.Errorf("sandbox config: %w", perr)
 		}
 		as.filesystemModel = parsed
 	}
-	return nil, nil, false //nolint:nilnil // nil result and nil error mean this stage completed and sandbox setup should continue.
+	return nil, false, nil
 }
 
 // resolveModeAndBackend resolves sandbox mode, selects the backend, and handles an explicitly disabled sandbox.
-func (as *applySandboxState) resolveModeAndBackend() (*SandboxApplyResult, error, bool) {
+func (as *applySandboxState) resolveModeAndBackend() (*SandboxApplyResult, bool, error) {
 	// Step 1 — Resolve mode from CLI + config. CLI > config > default.
 	// Validation of the CLI flag string was already done by cobra (see
 	// cmd/omnipus/internal/gateway/command.go) with exit code 2, so any
@@ -337,7 +337,7 @@ func (as *applySandboxState) resolveModeAndBackend() (*SandboxApplyResult, error
 	}
 	as.mode, as.disabledBy, as.err = resolveMode(as.opts.CLIMode, cfgMode, configTouched, as.opts.GetEnv)
 	if as.err != nil {
-		return nil, as.err, true
+		return nil, true, as.err
 	}
 
 	// Step 2 — Select or reuse backend. SelectBackend never fails; on
@@ -390,9 +390,9 @@ func (as *applySandboxState) resolveModeAndBackend() (*SandboxApplyResult, error
 				"banner_repeat_interval_seconds", 60)
 			as.result.NagReason = "production_off"
 		}
-		return as.result, nil, true
+		return as.result, true, nil
 	}
-	return nil, nil, false //nolint:nilnil // nil result and nil error mean this stage completed and sandbox setup should continue.
+	return nil, false, nil
 }
 
 // buildPolicy computes the ordered filesystem and network policy and records how secrets are protected.
@@ -613,7 +613,7 @@ func (as *applySandboxState) publishTurnPolicyBase() {
 }
 
 // applyNonLinuxSandbox applies Seatbelt when available or records the ordered non-Linux degradation path.
-func (as *applySandboxState) applyNonLinuxSandbox() (*SandboxApplyResult, error, bool) {
+func (as *applySandboxState) applyNonLinuxSandbox() (*SandboxApplyResult, bool, error) {
 	// Step 5.4 — non-Linux apply. Reached for every backend that is not the
 	// LinuxBackend; see the NOTE at the linuxApplier type assertion above for
 	// why this is not an early return any more.
@@ -650,7 +650,7 @@ func (as *applySandboxState) applyNonLinuxSandbox() (*SandboxApplyResult, error,
 							"Use mode=enforce for kernel confinement, or mode=off to disable it explicitly.",
 					},
 				}
-				return as.result, nil, true
+				return as.result, true, nil
 			}
 
 			// macOS kernel sandbox (ADR-052 Phase-3 AC-6). Apply installs the
@@ -664,7 +664,7 @@ func (as *applySandboxState) applyNonLinuxSandbox() (*SandboxApplyResult, error,
 				// Fail closed, matching the Linux contract: if the operator
 				// asked for enforcement and the backend cannot deliver it,
 				// booting unconfined would silently downgrade the boundary.
-				return as.result, fmt.Errorf("sandbox: Seatbelt Apply failed: %w", err), true
+				return as.result, true, fmt.Errorf("sandbox: Seatbelt Apply failed: %w", err)
 			}
 			// The boot profile is installed and every hardened-exec child is
 			// now wrapped, so per-turn policies are enforceable from here on.
@@ -685,7 +685,7 @@ func (as *applySandboxState) applyNonLinuxSandbox() (*SandboxApplyResult, error,
 				"filesystem_rules", len(as.policy.FilesystemRules),
 				"connect_ports", len(as.policy.ConnectPortRules),
 				"bind_ports", len(as.policy.BindPortRules))
-			return as.result, nil, true
+			return as.result, true, nil
 		}
 
 		// Graceful degradation path. Not an error; operator asked for
@@ -713,9 +713,9 @@ func (as *applySandboxState) applyNonLinuxSandbox() (*SandboxApplyResult, error,
 			Mode:       as.mode,
 			ExtraNotes: []string{degradedNote},
 		}
-		return as.result, nil, true
+		return as.result, true, nil
 	}
-	return nil, nil, false //nolint:nilnil // nil result and nil error mean this stage completed and sandbox setup should continue.
+	return nil, false, nil
 }
 
 // applyLinuxSandbox hardens the gateway, applies Landlock before seccomp, and records the final Linux state.
