@@ -50,6 +50,17 @@ const (
 	goalAnchorNarrationFallback       = "The agent did not register this goal's record itself, so the engine compiled one from the goal statement after repeated nudges. The record below is now the working assumption."
 )
 
+// agentLoopApplyGoalCommandPrompt carries the shared state of applyGoalCommandPrompt across its stages.
+type agentLoopApplyGoalCommandPrompt struct {
+	al        *AgentLoop
+	agentInst *AgentInstance
+	opts      *processOptions
+	store     *session.UnifiedStore
+	sessionID string
+	args      string
+	fc        FeasibilityContext
+}
+
 // applyGoalCommandPrompt is handleCommand's rewrite hook for `/goal`
 // (mirrors applyMemoryCommandPrompt/applyExplicitSkillCommand's shape).
 // Rewritten by ADR-088 D1 (instant activation): `/goal` (bare status),
@@ -66,6 +77,8 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	agentInst *AgentInstance,
 	opts *processOptions,
 ) (matched bool, handled bool, reply string) {
+	gl := &agentLoopApplyGoalCommandPrompt{al: al, agentInst: agentInst, opts: opts}
+
 	cmdName, ok := commands.CommandName(msg.Content)
 	if !ok || cmdName != "goal" {
 		return false, false, ""
@@ -87,29 +100,29 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	// nothing, and its presence invited exactly the wrong reading (that
 	// task-owned goals are excluded from `/goal` HERE, rather than by
 	// architecture: a task session never sends a `/goal` command at all).
-	if opts == nil || !opts.UserInitiated {
+	if gl.opts == nil || !gl.opts.UserInitiated {
 		return false, false, ""
 	}
 
-	if opts.TranscriptStore == nil || opts.TranscriptSessionID == "" {
+	if gl.opts.TranscriptStore == nil || gl.opts.TranscriptSessionID == "" {
 		return true, true, "`/goal` requires an active session — start a chat first."
 	}
 
-	store := opts.TranscriptStore
-	sessionID := opts.TranscriptSessionID
-	args := commands.CommandArgs(msg.Content)
+	gl.store = gl.opts.TranscriptStore
+	gl.sessionID = gl.opts.TranscriptSessionID
+	gl.args = commands.CommandArgs(msg.Content)
 
-	if args == "" {
-		return true, true, al.goalStatusReply(sessionID, store)
+	if gl.args == "" {
+		return true, true, gl.al.goalStatusReply(gl.sessionID, gl.store)
 	}
-	if isGoalClearVerb(args) {
+	if isGoalClearVerb(gl.args) {
 		clearAgentID := ""
-		if agentInst != nil {
-			clearAgentID = agentInst.ID
+		if gl.agentInst != nil {
+			clearAgentID = gl.agentInst.ID
 		}
-		return true, true, al.clearGoalByUser(sessionID, store, clearAgentID)
+		return true, true, gl.al.clearGoalByUser(gl.sessionID, gl.store, clearAgentID)
 	}
-	if strings.EqualFold(strings.TrimSpace(args), goalConfirmNoOpArg) {
+	if strings.EqualFold(strings.TrimSpace(gl.args), goalConfirmNoOpArg) {
 		// ADR-088 D1/FR-022: goals activate immediately now — there is no
 		// pending state left to confirm. Without this recognizer, "confirm"
 		// would fall through to the prose path below and activate a goal
@@ -123,18 +136,18 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	// criteria). This is engine-invoked, NOT a skill (ADR-053 §4.5/BOM). A nil
 	// agentInst skips the reachability vetoes (tests); production always supplies
 	// one so the gate is exhaustive.
-	var fc FeasibilityContext
-	if agentInst != nil {
-		fc = agentFeasibilityContext{agentInst: agentInst}
+
+	if gl.agentInst != nil {
+		gl.fc = agentFeasibilityContext{agentInst: gl.agentInst}
 	}
 
-	if activeGoal := activeGoalForSession(sessionID); activeGoal != nil {
+	if activeGoal := activeGoalForSession(gl.sessionID); activeGoal != nil {
 		// ADR-088 D1/D5 (US-5): an active goal's restate is STEERING, never a
 		// pending amendment awaiting confirm. The GoalID NEVER changes on a
 		// restate (FR-001) — only a fresh activation on a goalless session
 		// mints one (this keeps the FR-010 question budget and the FR-014b
 		// push counter attached to the SAME goal generation).
-		if goalIntentNeedsLLMCompile(args) {
+		if goalIntentNeedsLLMCompile(gl.args) {
 			// review-round-1 finding #9: patch the durable goal statement to
 			// the new intent BEFORE rewriting the turn prompt — mirrors
 			// applyGoalMarkerRestate's own patch exactly (same GoalID, no
@@ -159,7 +172,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 			// the NEW intent (the post-turn registration nudge fires if it
 			// does not) and, until it does, the Judge judges the new prompt
 			// itself — never the old criteria.
-			newCondition := strings.TrimSpace(args)
+			newCondition := strings.TrimSpace(gl.args)
 			now := time.Now().UTC()
 			var superseded bool
 			restated, err := resolveGoalRecordStore().Update(activeGoal.GoalID, func(cur *goal.Goal) error {
@@ -169,7 +182,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 			})
 			if err != nil {
 				logger.WarnCF("agent", "goal: could not persist prose-restated condition",
-					map[string]any{"session_id": sessionID, "goal_id": activeGoal.GoalID, "error": err.Error()})
+					map[string]any{"session_id": gl.sessionID, "goal_id": activeGoal.GoalID, "error": err.Error()})
 				return true, true, "Could not update the goal (internal error persisting the goal record)."
 			}
 			if superseded {
@@ -177,8 +190,8 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 				// under adjudication; its verdict judged the old ladder and
 				// must not land on the restated record (runGoalAdjudication
 				// also discards such a verdict if the cancel loses the race).
-				if pe := GetPlanEngine(al); pe != nil {
-					al.cancelGoalVerifierIfAny(pe, sessionID)
+				if pe := GetPlanEngine(gl.al); pe != nil {
+					gl.al.cancelGoalVerifierIfAny(pe, gl.sessionID)
 				}
 				// No goal-status frame here: a prose restate emits none (every
 				// frame reads PlanEngine.Admit for its snapshot, and a restate
@@ -186,31 +199,31 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 				// restate turn's own after-turn hook emits the active frame
 				// carrying the new prompt.
 				logger.InfoCF("agent", "goal: prose restate superseded the compiled record; the agent must register one for the new intent",
-					map[string]any{"component": "goal", "session_id": sessionID, "goal_id": restated.GoalID,
+					map[string]any{"component": "goal", "session_id": gl.sessionID, "goal_id": restated.GoalID,
 						"superseded_revisions": len(restated.SupersededCriteria)})
 			}
 			// Rewrite the turn's working prompt exactly like a fresh
 			// activation does — the working agent updates the record itself
 			// via set_goal(mode: update) once it runs (wave 2). No LLM call
 			// here, no pending state.
-			opts.UserMessage = newCondition
+			gl.opts.UserMessage = newCondition
 			return true, false, ""
 		}
 		// Marker-only restate: deterministic, zero LLM calls, the feasibility
 		// veto still applies — the update lands on the SAME goal generation.
-		res := compileGoalIntent(args, fc, sessionID)
+		res := compileGoalIntent(gl.args, gl.fc, gl.sessionID)
 		if res.Rejection != nil {
 			return true, true, formatCompileRejection(res.Rejection)
 		}
-		return true, true, al.applyGoalMarkerRestate(sessionID, store, activeGoal, res.Goal)
+		return true, true, gl.al.applyGoalMarkerRestate(gl.sessionID, gl.store, activeGoal, res.Goal)
 	}
 
 	// No active goal: a fresh `/goal <intent>` supersedes any AskUserQuestion
 	// card still parked from an earlier attempt (E1/S-32) — cancelled WITHOUT
 	// dispatching a resume turn (FR-028; the re-homed cancelOrphanedClarifyCard).
-	al.cancelOrphanedClarifyCard(al.getAskUserRegistry(), sessionID)
+	gl.al.cancelOrphanedClarifyCard(gl.al.getAskUserRegistry(), gl.sessionID)
 
-	if goalIntentNeedsLLMCompile(args) {
+	if goalIntentNeedsLLMCompile(gl.args) {
 		// ADR-088 D1 (US-1): instant activation. Admit ONCE (FR-003), mint the
 		// goal id, write the ACTIVE record up front with GoalCriteriaJSON
 		// EMPTY — the working agent authors the record itself via `set_goal`
@@ -218,7 +231,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 		// forcing predicate's legal transient state) — and continue the turn
 		// into round 1 in THIS SAME turn. No compile call, no clarify, no
 		// confirm gate (C-1: zero LLM calls before the first working request).
-		if pe := GetPlanEngine(al); pe != nil {
+		if pe := GetPlanEngine(gl.al); pe != nil {
 			if admitted, active, capN := pe.Admit("goal"); !admitted {
 				return true, true, fmt.Sprintf(
 					"Cannot start a new goal: active loops %d/%d (cap reached). "+
@@ -227,9 +240,9 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 				)
 			}
 		}
-		if err := al.activateInstantGoal(sessionID, opts, agentInst, args); err != nil {
+		if err := gl.al.activateInstantGoal(gl.sessionID, gl.opts, gl.agentInst, gl.args); err != nil {
 			logger.WarnCF("agent", "goal: failed to persist instant goal activation",
-				map[string]any{"session_id": sessionID, "error": err.Error()})
+				map[string]any{"session_id": gl.sessionID, "error": err.Error()})
 			return true, true, "Could not start the goal loop (internal error persisting session state)."
 		}
 		return true, false, ""
@@ -240,7 +253,12 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	// compile, immediate activation, same-turn round 1, zero LLM calls. The
 	// compiled goal is echoed via the goal_status frame and the persisted
 	// GoalCriteriaJSON (the S1 unified record). Admit to the R5 cap first.
-	res := compileGoalIntent(args, fc, sessionID)
+	return gl.activateMarkerGoal()
+}
+
+// activateMarkerGoal compiles and activates a fresh goal defined by explicit markers.
+func (gl *agentLoopApplyGoalCommandPrompt) activateMarkerGoal() (bool, bool, string) {
+	res := compileGoalIntent(gl.args, gl.fc, gl.sessionID)
 	if res.Rejection != nil {
 		// Fail-closed: no rejected criterion persists (FR-111). Surface the
 		// reason in chat so the owner can re-state.
@@ -248,7 +266,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	}
 	compiled := res.Goal
 
-	if pe := GetPlanEngine(al); pe != nil {
+	if pe := GetPlanEngine(gl.al); pe != nil {
 		if admitted, active, capN := pe.Admit("goal"); !admitted {
 			return true, true, fmt.Sprintf(
 				"Cannot start a new goal: active loops %d/%d (cap reached). "+
@@ -259,7 +277,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	}
 
 	maxRounds := config.DefaultGoalMaxRounds
-	if cfg := al.GetConfig(); cfg != nil {
+	if cfg := gl.al.GetConfig(); cfg != nil {
 		maxRounds = cfg.Planning.EffectiveGoalMaxRounds()
 	}
 	condition := compiled.Prompt
@@ -269,7 +287,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	criteriaJSON, merr := marshalCompiledGoal(compiled)
 	if merr != nil {
 		logger.WarnCF("agent", "goal: could not marshal compiled criteria",
-			map[string]any{"session_id": sessionID, "error": merr.Error()})
+			map[string]any{"session_id": gl.sessionID, "error": merr.Error()})
 	}
 	// UAT S3 fix: a fresh goal (no active goal record, checked above) always
 	// mints a NEW goal-id generation — this is what gives the second `/goal`
@@ -296,9 +314,9 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	if len(dod) == 0 {
 		dod = newFloorDoD()
 	}
-	if err := al.createAndActivateSessionGoalRecord(goalID, sessionID, condition, compiled.Criteria, dod, maxRounds); err != nil {
+	if err := gl.al.createAndActivateSessionGoalRecord(goalID, gl.sessionID, condition, compiled.Criteria, dod, maxRounds); err != nil {
 		logger.WarnCF("agent", "goal: failed to persist goal set",
-			map[string]any{"session_id": sessionID, "goal_id": goalID, "error": err.Error()})
+			map[string]any{"session_id": gl.sessionID, "goal_id": goalID, "error": err.Error()})
 		return true, true, "Could not start the goal loop (internal error persisting the goal record)."
 	}
 
@@ -310,10 +328,10 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	// turn via the async-notifier — the idle path has no turnResult to
 	// attach a followUp to).
 	routeAgentID := ""
-	if agentInst != nil {
-		routeAgentID = agentInst.ID
+	if gl.agentInst != nil {
+		routeAgentID = gl.agentInst.ID
 	}
-	al.recordGoalRouting(sessionID, goalID, opts.Channel, opts.ChatID, opts.SessionKey, routeAgentID)
+	gl.al.recordGoalRouting(gl.sessionID, goalID, gl.opts.Channel, gl.opts.ChatID, gl.opts.SessionKey, routeAgentID)
 
 	// review-round-1 finding #8: route the marker-path activation frame
 	// through the SAME post-write path set_goal uses (afterGoalRecordWrite)
@@ -322,7 +340,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	// path's legitimately-empty transient record), so the frame should
 	// carry it (FR-113/FR-019), and a channel-routed marker goal gets its
 	// FR-020 echo exactly like a set_goal-authored one.
-	al.afterGoalRecordWrite(sessionID, criteriaJSON, "")
+	gl.al.afterGoalRecordWrite(gl.sessionID, criteriaJSON, "")
 
 	// ADR-082 D9 (review CR8): this write never ran the set_goal tool, and
 	// under D9 the record card renders ONLY from a set_goal call's own
@@ -332,8 +350,8 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 	// activated goal gets its card exactly like a set_goal-authored one.
 	// Non-fatal: the record is already durable; a failed anchor is logged
 	// inside anchorGoalRecordInTranscript.
-	_, _ = al.anchorGoalRecordInTranscript(goalRecordAnchor{
-		store: store, sessionID: sessionID, goalID: goalID, agentID: routeAgentID, chatID: opts.ChatID,
+	_, _ = gl.al.anchorGoalRecordInTranscript(goalRecordAnchor{
+		store: gl.store, sessionID: gl.sessionID, goalID: goalID, agentID: routeAgentID, chatID: gl.opts.ChatID,
 		mode:      tools.SetGoalModeRegister,
 		narration: goalAnchorNarrationMarkerRegister,
 		record:    compiled,
@@ -342,7 +360,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 		},
 	})
 
-	opts.UserMessage = condition
+	gl.opts.UserMessage = condition
 	return true, false, ""
 }
 
