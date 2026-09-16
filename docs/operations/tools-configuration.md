@@ -153,6 +153,20 @@ If `range` is omitted, Omnipus performs an unrestricted search.
 }
 ```
 
+## Browser Tools
+
+Each workspace has its own browser: a separate Chrome process with its own profile directory on disk, holding its own cookies and its own logins. A workspace cannot see or use another workspace's. Agents on one workspace share that workspace's browser.
+
+All keys below are **whole seconds, written as a plain number** — a duration string such as `"15m"` is a config file that will not load at all.
+
+| Config | Type | Default | Description |
+|--------|------|---------|-------------|
+| `tools.browser.idle_ttl` | int (seconds) | `300` (5 minutes) | How long one TAB may sit with nobody watching it and no tool touching it before it is closed. A negative value turns per-tab reaping off. |
+| `tools.browser.idle_close_ttl` | int (seconds) | `900` (15 minutes) | How long a whole BROWSER may sit with no tabs, nobody watching and nothing running before the Chrome process itself is closed. The profile stays on disk, so the workspace is still signed in next time. There is no way to switch this off: `0` and any negative value both mean "use the default", never "never close". |
+| `tools.browser.cache_trim_interval` | int (seconds) | `3600` (1 hour) | How often closed profiles are swept for disposable browser cache. This is a sweep frequency, not a size limit — see [browser](../browser.md). |
+
+Both `tools.browser.idle_close_ttl` and `tools.browser.cache_trim_interval` take effect when you save settings; the gateway does not need a restart. Changing `tools.browser.idle_close_ttl` does not disturb a browser that is already open — it changes how long the next idle one is given. A change to `tools.browser.cache_trim_interval` is picked up by the running sweep within about fifteen seconds, including when you shorten it below the time already elapsed since the last sweep — in that case the next sweep runs almost immediately rather than waiting out the old, longer interval.
+
 ## Bash tool
 
 `bash` is the shell-command tool. It has no `tools.exec` feature switch: it is registered for every agent and governed by the global and per-agent Allow, Ask, or Deny policies. Set its policy to Deny to block shell commands, or Ask to require approval. See [sandbox configuration](sandbox-config.md) for the process boundary and [tools](../tools.md) for policy behavior.

@@ -3,11 +3,12 @@ package browser
 // pool_ttl_config_reachability_test.go — the test tools.browser.idle_close_ttl
 // and tools.browser.cache_trim_interval did not have.
 //
-// Both keys shipped documented (CHANGELOG.md, docs/configuration.md) and both
-// were UNREACHABLE: config.BrowserToolConfig had no field for either, so an
-// operator's `"idle_close_ttl": 120` in config.json was parsed into nothing and
-// discarded, and pkg/agent/loop.go never copied a value into the BrowserConfig
-// the pool is built from. The pool's own `<= 0 means default` fallback then
+// Both keys shipped documented (CHANGELOG.md, the configuration reference)
+// and both were UNREACHABLE: config.BrowserToolConfig had no field for either,
+// so an operator's `"idle_close_ttl": 120` in config.json was parsed into
+// nothing and discarded, and pkg/agent never copied a value into the
+// BrowserConfig the pool is built from. The pool's own `<= 0 means default`
+// fallback then
 // made the failure invisible — every install silently ran the 15m/1h
 // constants, and an operator who changed the number saw exactly the same
 // behaviour as one who had not. That is the ADR-037 anti-pattern (a setting
@@ -22,15 +23,19 @@ package browser
 // actually closes at the operator's number and not at the built-in one.
 //
 // The one hop that cannot be executed from here is the assignment inside
-// pkg/agent/loop.go, because pkg/agent imports this package and not the other
-// way round. TestBrowserTTLConfigKeys_HaveAWriter covers that hop at the
-// source level — the same compromise, for the same reason, as the precedent.
+// pkg/agent, because pkg/agent imports this package and not the other way
+// round. TestBrowserTTLConfigKeys_HaveAWriter covers that hop at the source
+// level — the same compromise, for the same reason, as the precedent.
 
 import (
 	"context"
 	"fmt"
+	"go/scanner"
+	"go/token"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -54,7 +59,7 @@ func (f *ttlConfigFixture) advance(d time.Duration) { *f.now = f.now.Add(d) }
 // newPoolFromOperatorConfig writes browserJSON as the tools.browser block of a
 // real config.json, loads it with config.LoadConfig (the production loader,
 // env parsing and removed-key validation included), applies the SAME two
-// expressions pkg/agent/loop.go applies, and builds a pool from the result.
+// expressions pkg/agent applies, and builds a pool from the result.
 //
 // Chrome is never launched: the pipe launcher and the memory reader are
 // replaced by the package's ordinary test seams.
@@ -77,7 +82,7 @@ func newPoolFromOperatorConfig(t *testing.T, browserJSON string) *ttlConfigFixtu
 		ExecPath:    fakeChromeBinary(t),
 		IdleTTL:     DefaultIdleTTL,
 	}
-	// ---- the production wiring, verbatim (see TestBrowserTTLConfigKeys_HaveAWriter) ----
+	// ---- the production wiring (see TestBrowserTTLConfigKeys_HaveAWriter) ----
 	cfg.IdleCloseTTL = loaded.Tools.Browser.EffectiveIdleCloseTTL()
 	cfg.CacheTrimInterval = loaded.Tools.Browser.EffectiveCacheTrimInterval()
 	// -----------------------------------------------------------------------------------
@@ -179,25 +184,131 @@ func TestBrowserIdleCloseTTL_ZeroOrNegativeMeansDefaultNotDisabled(t *testing.T)
 	}
 }
 
+// codeOnlySource blanks every comment in src to spaces, using the real lexer
+// (never a regex — `//` inside a string literal is not a comment, and this
+// codebase is full of URLs). A comment is whitespace-equivalent in Go's
+// grammar, so this cannot change what the code says; what it removes is
+// commented-out CODE satisfying a source assertion. The twin of this helper
+// in pkg/gateway/browser_workspace_drift_test.go carries the fuller story;
+// the two are one approach, duplicated only because Go test helpers do not
+// cross package boundaries.
+func codeOnlySource(t *testing.T, path string, src []byte) []byte {
+	t.Helper()
+	fset := token.NewFileSet()
+	file := fset.AddFile(path, fset.Base(), len(src))
+	var s scanner.Scanner
+	var scanErr error
+	s.Init(file, src, func(pos token.Position, msg string) {
+		if scanErr == nil {
+			scanErr = fmt.Errorf("%s: %s", pos, msg)
+		}
+	}, scanner.ScanComments)
+	out := make([]byte, len(src))
+	copy(out, src)
+	for {
+		pos, tok, lit := s.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok == token.COMMENT {
+			start := file.Offset(pos)
+			for i := start; i < start+len(lit) && i < len(out); i++ {
+				out[i] = ' '
+			}
+		}
+	}
+	require.NoError(t, scanErr, "%s must scan cleanly — it compiles, so a scan error means the "+
+		"tripwire is misreading what it guards", path)
+	return out
+}
+
+// agentPackageSource concatenates every non-test .go file under pkg/agent,
+// skipping testdata (Go never compiles those into a package), with comments
+// blanked (see codeOnlySource). The tripwire below asserts against the
+// concatenation rather than one hardcoded file because loop.go has already
+// been split into siblings once — the TTL assignments live in loop_wire.go
+// today — and a tripwire pinned to a filename breaks on the next split while
+// the wiring it guards is intact, which trains the next reader to assume
+// "stale" and weaken it. Same shape as pkg/gateway's agentPackageSource, for
+// the same reason.
+func agentPackageSource(t *testing.T) string {
+	t.Helper()
+	var src strings.Builder
+	files := 0
+	err := filepath.WalkDir(filepath.Join("..", "..", "agent"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if d.Name() == "testdata" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		src.Write(codeOnlySource(t, path, b))
+		src.WriteByte('\n')
+		files++
+		return nil
+	})
+	require.NoError(t, err,
+		"pkg/agent must be walkable — a tripwire that cannot read what it guards proves nothing")
+	require.NotZero(t, files,
+		"the walk found no Go sources under pkg/agent — the path is wrong and every assertion "+
+			"below would pass vacuously")
+	require.Contains(t, src.String(), "package agent",
+		"the concatenation must contain pkg/agent's own sources, not only its subpackages")
+	return src.String()
+}
+
+// The two assignment matchers. Either side may hide behind an arbitrarily
+// deep receiver chain — the loop.go split rewrote the plain `cfg` of the
+// original lines into `bw.rw.cfg` — so the receivers are matched as
+// identifier chains and only the load-bearing names are pinned: the
+// destination FIELD on the BrowserConfig being assigned, and the loaded
+// config's full `.Tools.Browser.Effective…()` chain. Those names are what
+// keep this from being a "symbol name appears somewhere" check: the field
+// assignment and the effective-value source must both be present, as one
+// expression, for the operator's number to arrive at the pool.
+var (
+	browserIdleCloseTTLWriteRe = regexp.MustCompile(
+		`[\w.]*\.IdleCloseTTL\s*=\s*[\w.]+\.Tools\.Browser\.EffectiveIdleCloseTTL\(\)`)
+	browserCacheTrimWriteRe = regexp.MustCompile(
+		`[\w.]*\.CacheTrimInterval\s*=\s*[\w.]+\.Tools\.Browser\.EffectiveCacheTrimInterval\(\)`)
+)
+
 // TestBrowserTTLConfigKeys_HaveAWriter covers the one hop the tests above
-// cannot execute: pkg/agent/loop.go is where the loaded config meets the
+// cannot execute: pkg/agent is where the loaded config meets the
 // BrowserConfig the pool is built from, and pkg/agent imports this package, so
 // nothing here can call it.
 //
 // It asserts on the source for the same reason the actionability-gate
 // precedent does. Delete either assignment and every other test in this file
 // still passes while the operator's number stops arriving — which is precisely
-// the state this whole file exists to make impossible.
+// the state this whole file exists to make impossible. The scan covers the
+// whole package rather than one file, so the assertion survives the code being
+// split across siblings again.
 func TestBrowserTTLConfigKeys_HaveAWriter(t *testing.T) {
-	loopSrc := readSourceForTest(t, "../../agent/loop.go")
+	agentSrc := agentPackageSource(t)
 
-	for _, want := range []string{
-		"browserCfg.IdleCloseTTL = cfg.Tools.Browser.EffectiveIdleCloseTTL()",
-		"browserCfg.CacheTrimInterval = cfg.Tools.Browser.EffectiveCacheTrimInterval()",
+	for _, tc := range []struct {
+		re   *regexp.Regexp
+		want string
+	}{
+		{browserIdleCloseTTLWriteRe,
+			"browserCfg.IdleCloseTTL = cfg.Tools.Browser.EffectiveIdleCloseTTL()"},
+		{browserCacheTrimWriteRe,
+			"browserCfg.CacheTrimInterval = cfg.Tools.Browser.EffectiveCacheTrimInterval()"},
 	} {
-		assert.Contains(t, loopSrc, want,
-			"%q is missing from pkg/agent/loop.go — the key would be documented, parsed and then "+
-				"dropped on the floor, which is the failure mode this project has shipped before", want)
+		assert.Regexp(t, tc.re, agentSrc,
+			"%q is missing from pkg/agent — the key would be documented, parsed and then "+
+				"dropped on the floor, which is the failure mode this project has shipped before", tc.want)
 	}
 }
 
@@ -206,8 +317,16 @@ func TestBrowserTTLConfigKeys_HaveAWriter(t *testing.T) {
 // them; an operator who copies a `15m` out of the documentation gets a config
 // file that will not load at all. Documented defaults must also be the real
 // ones, so the numbers are checked against the constants rather than trusted.
+//
+// The page is FOUND, not pinned: the handbook has been reorganised once
+// already and carried these keys from docs/configuration.md into
+// docs/operations/tools-configuration.md, so the test asks for whichever
+// operator-facing page documents the key — the same shape
+// readHandbookDocContaining's other callers use. A reorganisation that drops
+// the keys from every page is a documentation regression this reports loudly,
+// not a stale path to repoint.
 func TestBrowserTTLDocs_StateTheUnit(t *testing.T) {
-	doc := readRepoDoc(t, "docs/configuration.md")
+	_, doc := readHandbookDocContaining(t, "tools.browser.idle_close_ttl")
 
 	require.Contains(t, doc, "tools.browser.idle_close_ttl")
 	require.Contains(t, doc, "tools.browser.cache_trim_interval")
@@ -220,6 +339,21 @@ func TestBrowserTTLDocs_StateTheUnit(t *testing.T) {
 		assert.Contains(t, doc, want,
 			"the documented default for %s must be the real one (%s = %s seconds) and must be "+
 				"written in the unit the config file actually takes", key, def, want)
+		// The page-level Contains above is not enough on its own: a number
+		// or the word "seconds" anywhere on the page satisfied it while the
+		// key's own row carried a different (or no) default or unit. Two
+		// such collisions were found by mutation — a `900` used as the unit
+		// EXAMPLE in the warning prose, and "fifteen seconds" in a sentence
+		// that happened to name the key — so both row assertions are
+		// anchored to the key's actual table row: a line starting with the
+		// backticked key as its first cell.
+		rowPrefix := "(?m)^\\| `" + regexp.QuoteMeta(key) + "`"
+		assert.Regexp(t, regexp.MustCompile(rowPrefix+`[^\n]*`+want), doc,
+			"the default for %s must be documented on the key's own row — a number that appears "+
+				"elsewhere on the page is not this key's default", key)
+		assert.Regexp(t, regexp.MustCompile(rowPrefix+`[^\n]*seconds`), doc,
+			"%s's own row must state the unit — an operator who copies a `15m` out of the "+
+				"documentation gets a config file that will not load at all", key)
 	}
 	assert.True(t,
 		strings.Contains(strings.ToLower(doc), "seconds"),
