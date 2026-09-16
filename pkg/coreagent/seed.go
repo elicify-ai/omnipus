@@ -1773,8 +1773,6 @@ func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
 // protect against two separate OS processes racing the same config.json —
 // that is the cross-process pidfile/lockfile concern D3/D4 assign elsewhere
 // (pkg/entity, out of this package's scope).
-//
-//nolint:gochecknoglobals
 var seedMu sync.Mutex
 
 // seedConfig carries the shared state of SeedConfig across its stages.

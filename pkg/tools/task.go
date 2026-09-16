@@ -443,8 +443,6 @@ func TerminateTaskGoalRecord(
 // Process-wide, like every seam of its kind: one agent loop per process.
 var taskGoalEndedHook atomic.Pointer[func(ended goal.Goal, taskStatus task.Status)]
 
-//nolint:gochecknoglobals
-
 // SetTaskGoalEndedHook installs fn as TerminateTaskGoalRecord's
 // after-transition observer (nil removes it) and returns a func that restores
 // the previous observer — for tests; production installs once at boot.

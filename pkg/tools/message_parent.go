@@ -113,7 +113,7 @@ type ContentEgressFilter func(text string) string
 // claim was false. Kept as a local copy so this package does not need to
 // import pkg/agent, and so a caller wiring a DIFFERENT MessageParentWaker
 // still gets the same kind-gating at the call site.
-var messageParentWakeableKinds = map[string]bool{ //nolint:gochecknoglobals
+var messageParentWakeableKinds = map[string]bool{
 	"blocker":  true,
 	"question": true,
 	"handback": true,
@@ -847,7 +847,7 @@ func toIntArg(v any) (int, error) {
 // so tests can assert a wake failure never propagates to the tool result
 // without needing a real logger — they can override the package-level
 // variable for the duration of the test.
-var logMessageParentWakeFailure = func(kind string, err error) { //nolint:gochecknoglobals
+var logMessageParentWakeFailure = func(kind string, err error) {
 	// Intentionally best-effort by default; see the WakeParent call site's
 	// comment. Production callers should install a real slog handler via
 	// SetMessageParentWakeFailureLogger at boot so a wake failure is

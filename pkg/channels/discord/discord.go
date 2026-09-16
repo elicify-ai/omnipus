@@ -56,7 +56,7 @@ func NewDiscordChannel(
 			discordgo.LogWarning:       logger.WARN,
 			discordgo.LogInformational: logger.INFO,
 			discordgo.LogDebug:         logger.DEBUG,
-		}).Log
+		}).Logf
 
 	token := secrets.GetString(cfg.TokenRef)
 	if token == "" {

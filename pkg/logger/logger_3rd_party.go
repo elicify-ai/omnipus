@@ -73,15 +73,16 @@ func (b *Logger) Fatalf(format string, v ...any) {
 	logMessage(FATAL, b.component, maskSecrets(fmt.Sprintf(format, v...)), nil)
 }
 
-// Log logs a message at a given level with caller information
-// the func name must be this because 3rd party loggers expect this
+// Logf logs a formatted message at a given level with caller information.
+// The signature (msgL, caller int, format string, a ...any) is fixed by
+// discordgo's package-level Logger func var, which this is assigned to as a
+// method value; none of the other 3rd-party logger interfaces consumed here
+// (telego, dingtalk, botgo) bind this method by name.
 // msgL: message level (DEBUG, INFO, WARN, ERROR, FATAL)
 // caller: unused parameter reserved for compatibility
 // format: format string
 // a: format arguments
-//
-//nolint:goprintffuncname
-func (b *Logger) Log(msgL, caller int, format string, a ...any) {
+func (b *Logger) Logf(msgL, caller int, format string, a ...any) {
 	level := LogLevel(msgL)
 	if b.levels != nil {
 		if lvl, ok := b.levels[msgL]; ok {

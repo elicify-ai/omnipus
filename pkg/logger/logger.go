@@ -260,22 +260,40 @@ func getCallerSkip() int {
 	return 3
 }
 
-//nolint:zerologlint
-func getEvent(logger zerolog.Logger, level LogLevel) *zerolog.Event {
+// writeEvent creates the event for level on l, decorates it exactly as
+// logMessage's two sinks expect (component first, then fields, then the
+// caller-skip frame), and dispatches it. The event is created and dispatched
+// in this one function on purpose: zerolog events that escape their creating
+// function undispatched are exactly the dropped-log-line bug zerologlint
+// exists to catch.
+func writeEvent(l zerolog.Logger, level LogLevel, component string, fields map[string]any, skip int, message string) {
+	var event *zerolog.Event
 	switch level {
 	case zerolog.DebugLevel:
-		return logger.Debug()
+		event = l.Debug()
 	case zerolog.InfoLevel:
-		return logger.Info()
+		event = l.Info()
 	case zerolog.WarnLevel:
-		return logger.Warn()
+		event = l.Warn()
 	case zerolog.ErrorLevel:
-		return logger.Error()
+		event = l.Error()
 	case zerolog.FatalLevel:
-		return logger.Fatal()
+		event = l.Fatal()
 	default:
-		return logger.Info()
+		event = l.Info()
 	}
+
+	if component != "" {
+		event.Str("component", component)
+	}
+
+	appendFields(event, fields)
+	// Split off the Msg call so the dispatch's receiver is the event
+	// variable itself, not an intervening chain step: zerologlint's
+	// dataflow only clears the creating call when Msg/Send is applied
+	// straight to the (branch-merged) event value.
+	event.CallerSkipFrame(skip)
+	event.Msg(message)
 }
 
 func logMessage(level LogLevel, component string, message string, fields map[string]any) {
@@ -307,26 +325,11 @@ func logMessage(level LogLevel, component string, message string, fields map[str
 	activeFileLogger := fileLogger
 	mu.RUnlock()
 
-	event := getEvent(consoleLogger, level)
-
-	if component != "" {
-		event.Str("component", component)
-	}
-
-	appendFields(event, fields)
-	event.CallerSkipFrame(skip).Msg(message)
+	writeEvent(consoleLogger, level, component, fields, skip, message)
 
 	// Also log to file if enabled
 	if activeFileLogger.GetLevel() != zerolog.NoLevel {
-		fileEvent := getEvent(activeFileLogger, level)
-
-		if component != "" {
-			fileEvent.Str("component", component)
-		}
-		// fileEvent.Str("caller", fmt.Sprintf("%s:%d (%s)", callerFile, callerLine, callerFunc))
-
-		appendFields(fileEvent, fields)
-		fileEvent.CallerSkipFrame(skip).Msg(message)
+		writeEvent(activeFileLogger, level, component, fields, skip, message)
 	}
 
 	if level == FATAL {

@@ -38,6 +38,4 @@ func (s *StripedLock) Get(key string) *sync.Mutex {
 // read-modify-write on a plan file (Create/Update/Delete) acquires this lock
 // keyed by plan ID before touching the file, mirroring task.TaskFileLock's
 // role for task files.
-//
-//nolint:gochecknoglobals
 var PlanFileLock = &StripedLock{}

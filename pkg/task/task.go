@@ -57,7 +57,7 @@ const (
 )
 
 // validStatuses is the set of allowed Status values.
-var validStatuses = map[Status]bool{ //nolint:gochecknoglobals
+var validStatuses = map[Status]bool{
 	StatusInbox:      true,
 	StatusNext:       true,
 	StatusInProgress: true,
@@ -87,7 +87,7 @@ type CancelReason string
 const CancelReasonStoppedByUser CancelReason = "stopped_by_user"
 
 // validCancelReasons is the set of allowed non-empty CancelReason values.
-var validCancelReasons = map[CancelReason]bool{ //nolint:gochecknoglobals
+var validCancelReasons = map[CancelReason]bool{
 	CancelReasonStoppedByUser: true,
 }
 
@@ -195,7 +195,7 @@ const (
 )
 
 // validTodoStatuses is the set of allowed TodoStatus values.
-var validTodoStatuses = map[TodoStatus]bool{ //nolint:gochecknoglobals
+var validTodoStatuses = map[TodoStatus]bool{
 	TodoPending:    true,
 	TodoInProgress: true,
 	TodoCompleted:  true,

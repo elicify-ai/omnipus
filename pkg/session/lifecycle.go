@@ -76,7 +76,7 @@ const (
 )
 
 // validLifecycleStates is the set of allowed LifecycleState values.
-var validLifecycleStates = map[LifecycleState]bool{ //nolint:gochecknoglobals
+var validLifecycleStates = map[LifecycleState]bool{
 	LifecycleQueued:     true,
 	LifecycleRunning:    true,
 	LifecycleNeedsInput: true,
@@ -93,7 +93,7 @@ func IsValidLifecycleState(s LifecycleState) bool { return validLifecycleStates[
 
 // terminalLifecycleStates is the set of states after which a record is
 // frozen (immutable-terminal invariant, L-3).
-var terminalLifecycleStates = map[LifecycleState]bool{ //nolint:gochecknoglobals
+var terminalLifecycleStates = map[LifecycleState]bool{
 	LifecycleCompleted: true,
 	LifecycleFailed:    true,
 	LifecycleCancelled: true,
