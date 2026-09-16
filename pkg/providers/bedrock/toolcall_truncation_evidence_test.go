@@ -26,10 +26,11 @@ import (
 // any struct convertible to time.Time with "unsupported type", so
 // MarshalSmithyDocument — which UnmarshalSmithyDocument calls first — errors
 // before it ever gets to decode. document.NewLazyDocument(map[string]any{...})
-// (used by the package's other parseResponse tests) instead silently decodes
-// to an empty map in this SDK's test-mode marshaler, which is exactly the old
-// silent-degrade this fix replaces — this helper is what actually reaches the
-// UnmarshalSmithyDocument error branch parseResponse guards.
+// also fails UnmarshalSmithyDocument in this SDK version, but only through the
+// marshaler's own defect (aws/aws-sdk-go-v2#2751 transposes the decode source
+// and target), not a genuinely undecodable payload — this helper is what
+// actually reaches the UnmarshalSmithyDocument error branch parseResponse
+// guards.
 func undecodableSmithyInput() document.Interface {
 	return document.NewLazyDocument(time.Now())
 }
