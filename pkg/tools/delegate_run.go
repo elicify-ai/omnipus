@@ -156,109 +156,27 @@ func ValidateContextSnapshot(snap *ContextSnapshot, maxBytes, maxRefs int) error
 	return nil
 }
 
+// delegateToolExecuteRun carries the shared state of executeRun across its stages.
+type delegateToolExecuteRun struct {
+	t                 *DelegateTool
+	ctx               context.Context
+	args              map[string]any
+	task              string
+	label             string
+	agentID           string
+	async             bool
+	timeout           time.Duration
+	requestedSkill    string
+	snap              *ContextSnapshot
+	resolvedMaxDepth  *int
+	delegateSessionID string
+}
+
 func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb AsyncCallback) *ToolResult {
-	task, ok := args["task"].(string)
-	if !ok || strings.TrimSpace(task) == "" {
-		return ErrorResult("task is required and must be a non-empty string")
-	}
+	dt := &delegateToolExecuteRun{t: t, ctx: ctx, args: args}
 
-	label, _ := args["label"].(string)
-
-	// agent_id is OPTIONAL (omit it to run a generic subagent under the
-	// caller's own agent), but when the caller DOES supply the key, it must
-	// not be blank — an empty string used to be silently accepted and
-	// treated identically to "omitted", spawning a generic/default subagent
-	// instead of the (presumably named) target the caller intended. Mirrors
-	// the "task is required and must be a non-empty string" / shell.go's
-	// "command is required and must be a non-empty string" validation style,
-	// adapted for an optional field: only PRESENT-but-blank is rejected.
-	var agentID string
-	if rawAgentID, present := args["agent_id"]; present && rawAgentID != nil {
-		s, ok := rawAgentID.(string)
-		if !ok {
-			return ErrorResult("agent_id must be a string")
-		}
-		if strings.TrimSpace(s) == "" {
-			return ErrorResult("agent_id must be a non-empty string when provided; omit it to run a generic subagent")
-		}
-		agentID = s
-	}
-
-	async := true
-	if rawAsync, present := args["async"]; present && rawAsync != nil {
-		b, ok := rawAsync.(bool)
-		if !ok {
-			return ErrorResult("async must be a boolean")
-		}
-		async = b
-	}
-
-	// timeout_seconds was documented in the schema but never actually read
-	// anywhere — every delegated sub-turn silently used the hardcoded
-	// defaultSubTurnTimeout (5 minutes, pkg/agent/subturn.go) regardless of
-	// what the caller requested. 0/absent means "no override — use the
-	// spawner's own default", matching the schema's "0 = default (5 min)"
-	// wording; a nonzero value is bounds-checked and threaded into
-	// SubTurnConfig.Timeout below.
-	timeout, timeoutErr := resolveDelegateTimeoutSeconds(args)
-	if timeoutErr != nil {
-		return ErrorResult(timeoutErr.Error())
-	}
-
-	// ADR-072 D9 / FR-050: requested_skill is OPTIONAL, but — mirroring
-	// agent_id's own "present-but-blank is rejected, absent is fine" rule
-	// just above — a caller that supplies the key must not supply an empty
-	// string, which would silently mean the same thing as omitting it while
-	// looking like a deliberate request. The actual grant/existence
-	// resolution happens against the CHILD's own ContextBuilder inside
-	// spawnSubTurn (pkg/agent/subturn.go) — this file never resolves or
-	// gates the slug itself (D9: "the receiver's grant is the real gate,
-	// structurally, not by convention").
-	var requestedSkill string
-	if raw, present := args["requested_skill"]; present && raw != nil {
-		s, ok := raw.(string)
-		if !ok {
-			return ErrorResult("requested_skill must be a string")
-		}
-		if strings.TrimSpace(s) == "" {
-			return ErrorResult("requested_skill must be a non-empty string when provided; omit it to request no skill")
-		}
-		requestedSkill = s
-	}
-
-	// R§8.5 curated context snapshot — deny-by-default, hard-capped
-	// discretionary portion. Rejected here (never silently truncated) if
-	// over cap.
-	var snap *ContextSnapshot
-	if raw, present := args["snapshot"]; present && raw != nil {
-		rawMap, ok := raw.(map[string]any)
-		if !ok {
-			return ErrorResult("snapshot must be an object")
-		}
-		snap = &ContextSnapshot{}
-		if refsRaw, present := rawMap["references"]; present && refsRaw != nil {
-			refsAny, ok := refsRaw.([]any)
-			if !ok {
-				return ErrorResult("snapshot.references must be an array of strings")
-			}
-			for _, r := range refsAny {
-				s, ok := r.(string)
-				if !ok {
-					return ErrorResult("snapshot.references must be an array of strings")
-				}
-				snap.References = append(snap.References, s)
-			}
-		}
-		if notesRaw, present := rawMap["notes"]; present && notesRaw != nil {
-			s, ok := notesRaw.(string)
-			if !ok {
-				return ErrorResult("snapshot.notes must be a string")
-			}
-			snap.Notes = s
-		}
-	}
-	if err := ValidateContextSnapshot(snap, t.snapshotMaxBytes, t.snapshotMaxRefs); err != nil {
-		return ErrorResult(err.Error()).WithError(err)
+	if r0, stop := dt.validateRequest(); stop {
+		return r0
 	}
 
 	// Delegation policy gate (FR-6.2): trust set + mode + depth, mode selected
@@ -279,42 +197,8 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 	// point, or a refactor slip that forgets to call the setter. Do NOT
 	// "simplify" this back to fail-open — CLAUDE.md Hard Constraint #6 exists
 	// precisely to forbid a silent runtime default here.
-	if async {
-		if t.delegationDenyBackground != nil {
-			if denial := t.delegationDenyBackground(ctx, agentID); denial != nil {
-				return DelegationDeniedResult("delegate", denial)
-			}
-		} else {
-			slog.Error("delegate: no background delegation-deny checker installed — denying by default",
-				"agent_id", agentID)
-			return DelegationDeniedResult("delegate", &DelegationDenial{
-				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
-				Policy:        DenyTrustSet,
-				TargetAgentID: agentID,
-			})
-		}
-	} else {
-		if t.delegationDenyAwait != nil {
-			if denial := t.delegationDenyAwait(ctx, agentID); denial != nil {
-				return DelegationDeniedResult("delegate", denial)
-			}
-		} else {
-			slog.Error("delegate: no await delegation-deny checker installed — denying by default",
-				"agent_id", agentID)
-			return DelegationDeniedResult("delegate", &DelegationDenial{
-				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
-				Policy:        DenyTrustSet,
-				TargetAgentID: agentID,
-			})
-		}
-	}
-
-	// #477: resolve the effective depth cap the gate above just authorized
-	// this call against, so the spawner's own depth check does not
-	// independently re-derive a different (possibly stricter) default.
-	var resolvedMaxDepth *int
-	if t.delegationDepthResolver != nil {
-		resolvedMaxDepth = t.delegationDepthResolver(ctx, agentID)
+	if r0, stop := dt.authorizeDelegation(); stop {
+		return r0
 	}
 
 	// ADR-053 S2 — mint the child's own durable session_id (distinct from
@@ -322,21 +206,189 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 	// `queued` lifecycle record BEFORE dispatch, so a crash between here and
 	// the goroutine/spawn call below still leaves a queryable record (the
 	// boot sweep — another wave — will reconcile it to failed(interrupted)).
-	delegateSessionID := uuid.NewString()
-	parentDurableKey := strings.TrimSpace(ToolTranscriptSessionID(ctx))
+	if r0, stop := dt.persistLifecycle(); stop {
+		return r0
+	}
+
+	if dt.async {
+		// isResume: false — executeRun always mints a BRAND-NEW
+		// delegateSessionID (generation 0) just above; this is a genuine
+		// create, never a resume. Native `follow_up`'s warm resume goes
+		// through spawnCorrectiveFollowUp's own executeAsync call instead.
+		return dt.t.executeAsync(dt.ctx, dt.task, dt.label, dt.agentID, dt.resolvedMaxDepth, dt.delegateSessionID, dt.timeout, dt.snap, dt.requestedSkill, false, cb)
+	}
+	return dt.t.executeSync(dt.ctx, dt.task, dt.label, dt.agentID, dt.resolvedMaxDepth, dt.delegateSessionID, dt.timeout, dt.snap, dt.requestedSkill)
+}
+
+// validateRequest validates and resolves the delegation request arguments.
+func (dt *delegateToolExecuteRun) validateRequest() (*ToolResult, bool) {
+	var ok bool
+	dt.task, ok = dt.args["task"].(string)
+	if !ok || strings.TrimSpace(dt.task) == "" {
+		return ErrorResult("task is required and must be a non-empty string"), true
+	}
+
+	dt.label, _ = dt.args["label"].(string)
+
+	// agent_id is OPTIONAL (omit it to run a generic subagent under the
+	// caller's own agent), but when the caller DOES supply the key, it must
+	// not be blank — an empty string used to be silently accepted and
+	// treated identically to "omitted", spawning a generic/default subagent
+	// instead of the (presumably named) target the caller intended. Mirrors
+	// the "task is required and must be a non-empty string" / shell.go's
+	// "command is required and must be a non-empty string" validation style,
+	// adapted for an optional field: only PRESENT-but-blank is rejected.
+
+	if rawAgentID, present := dt.args["agent_id"]; present && rawAgentID != nil {
+		s, ok := rawAgentID.(string)
+		if !ok {
+			return ErrorResult("agent_id must be a string"), true
+		}
+		if strings.TrimSpace(s) == "" {
+			return ErrorResult("agent_id must be a non-empty string when provided; omit it to run a generic subagent"), true
+		}
+		dt.agentID = s
+	}
+
+	dt.async = true
+	if rawAsync, present := dt.args["async"]; present && rawAsync != nil {
+		b, ok := rawAsync.(bool)
+		if !ok {
+			return ErrorResult("async must be a boolean"), true
+		}
+		dt.async = b
+	}
+
+	// timeout_seconds was documented in the schema but never actually read
+	// anywhere — every delegated sub-turn silently used the hardcoded
+	// defaultSubTurnTimeout (5 minutes, pkg/agent/subturn.go) regardless of
+	// what the caller requested. 0/absent means "no override — use the
+	// spawner's own default", matching the schema's "0 = default (5 min)"
+	// wording; a nonzero value is bounds-checked and threaded into
+	// SubTurnConfig.Timeout below.
+	var timeoutErr error
+	dt.timeout, timeoutErr = resolveDelegateTimeoutSeconds(dt.args)
+	if timeoutErr != nil {
+		return ErrorResult(timeoutErr.Error()), true
+	}
+
+	// ADR-072 D9 / FR-050: requested_skill is OPTIONAL, but — mirroring
+	// agent_id's own "present-but-blank is rejected, absent is fine" rule
+	// just above — a caller that supplies the key must not supply an empty
+	// string, which would silently mean the same thing as omitting it while
+	// looking like a deliberate request. The actual grant/existence
+	// resolution happens against the CHILD's own ContextBuilder inside
+	// spawnSubTurn (pkg/agent/subturn.go) — this file never resolves or
+	// gates the slug itself (D9: "the receiver's grant is the real gate,
+	// structurally, not by convention").
+
+	if raw, present := dt.args["requested_skill"]; present && raw != nil {
+		s, ok := raw.(string)
+		if !ok {
+			return ErrorResult("requested_skill must be a string"), true
+		}
+		if strings.TrimSpace(s) == "" {
+			return ErrorResult("requested_skill must be a non-empty string when provided; omit it to request no skill"), true
+		}
+		dt.requestedSkill = s
+	}
+
+	// R§8.5 curated context snapshot — deny-by-default, hard-capped
+	// discretionary portion. Rejected here (never silently truncated) if
+	// over cap.
+
+	if raw, present := dt.args["snapshot"]; present && raw != nil {
+		rawMap, ok := raw.(map[string]any)
+		if !ok {
+			return ErrorResult("snapshot must be an object"), true
+		}
+		dt.snap = &ContextSnapshot{}
+		if refsRaw, present := rawMap["references"]; present && refsRaw != nil {
+			refsAny, ok := refsRaw.([]any)
+			if !ok {
+				return ErrorResult("snapshot.references must be an array of strings"), true
+			}
+			for _, r := range refsAny {
+				s, ok := r.(string)
+				if !ok {
+					return ErrorResult("snapshot.references must be an array of strings"), true
+				}
+				dt.snap.References = append(dt.snap.References, s)
+			}
+		}
+		if notesRaw, present := rawMap["notes"]; present && notesRaw != nil {
+			s, ok := notesRaw.(string)
+			if !ok {
+				return ErrorResult("snapshot.notes must be a string"), true
+			}
+			dt.snap.Notes = s
+		}
+	}
+	if err := ValidateContextSnapshot(dt.snap, dt.t.snapshotMaxBytes, dt.t.snapshotMaxRefs); err != nil {
+		return ErrorResult(err.Error()).WithError(err), true
+	}
+	return nil, false
+}
+
+// authorizeDelegation applies the delegation policy and resolves the authorized depth.
+func (dt *delegateToolExecuteRun) authorizeDelegation() (*ToolResult, bool) {
+	if dt.async {
+		if dt.t.delegationDenyBackground != nil {
+			if denial := dt.t.delegationDenyBackground(dt.ctx, dt.agentID); denial != nil {
+				return DelegationDeniedResult("delegate", denial), true
+			}
+		} else {
+			slog.Error("delegate: no background delegation-deny checker installed — denying by default",
+				"agent_id", dt.agentID)
+			return DelegationDeniedResult("delegate", &DelegationDenial{
+				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
+				Policy:        DenyTrustSet,
+				TargetAgentID: dt.agentID,
+			}), true
+		}
+	} else {
+		if dt.t.delegationDenyAwait != nil {
+			if denial := dt.t.delegationDenyAwait(dt.ctx, dt.agentID); denial != nil {
+				return DelegationDeniedResult("delegate", denial), true
+			}
+		} else {
+			slog.Error("delegate: no await delegation-deny checker installed — denying by default",
+				"agent_id", dt.agentID)
+			return DelegationDeniedResult("delegate", &DelegationDenial{
+				Reason:        "delegation is not configured for this agent (no policy gate installed) — denying by default",
+				Policy:        DenyTrustSet,
+				TargetAgentID: dt.agentID,
+			}), true
+		}
+	}
+
+	// #477: resolve the effective depth cap the gate above just authorized
+	// this call against, so the spawner's own depth check does not
+	// independently re-derive a different (possibly stricter) default.
+
+	if dt.t.delegationDepthResolver != nil {
+		dt.resolvedMaxDepth = dt.t.delegationDepthResolver(dt.ctx, dt.agentID)
+	}
+	return nil, false
+}
+
+// persistLifecycle creates and persists the delegated session lifecycle record.
+func (dt *delegateToolExecuteRun) persistLifecycle() (*ToolResult, bool) {
+	dt.delegateSessionID = uuid.NewString()
+	parentDurableKey := strings.TrimSpace(ToolTranscriptSessionID(dt.ctx))
 	is3P := false
-	if agentID != "" && t.getAgentRegistry != nil {
-		if reg := t.getAgentRegistry(); reg != nil {
-			is3P = reg.IsExternalCLI(agentID)
+	if dt.agentID != "" && dt.t.getAgentRegistry != nil {
+		if reg := dt.t.getAgentRegistry(); reg != nil {
+			is3P = reg.IsExternalCLI(dt.agentID)
 		}
 	}
 	ownerScopeKind := session.OwnerScopeHuman
 	ownerScopeID := ""
-	if parentDelegateID := strings.TrimSpace(ToolDelegateSessionID(ctx)); parentDelegateID != "" {
+	if parentDelegateID := strings.TrimSpace(ToolDelegateSessionID(dt.ctx)); parentDelegateID != "" {
 		ownerScopeKind = session.OwnerScopeParentSession
 		ownerScopeID = parentDelegateID
 	}
-	if t.lifecycle != nil {
+	if dt.t.lifecycle != nil {
 		// FR-015 — fail closed on an unresolvable parent. ToolAgentID returns
 		// "" for BOTH a missing context key AND a wrong-typed value (it is a
 		// comma-ok type assertion with the error discarded), so an empty
@@ -366,39 +418,39 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		// true) and never silent: the Error line below fires on EVERY such
 		// mint, not once, so a forgotten kill switch keeps announcing the
 		// orphan records it is creating.
-		parentAgentID := strings.TrimSpace(ToolAgentID(ctx))
+		parentAgentID := strings.TrimSpace(ToolAgentID(dt.ctx))
 		if parentAgentID == "" {
-			if t.parentAgentIDRequired() {
+			if dt.t.parentAgentIDRequired() {
 				slog.Error("delegate: refusing to mint an unattributable lifecycle record — no parent agent id in context",
-					"delegate_session_id", delegateSessionID,
-					"target_agent_id", agentID,
+					"delegate_session_id", dt.delegateSessionID,
+					"target_agent_id", dt.agentID,
 					"parent_durable_key", parentDurableKey)
 				return ErrorResult("delegate: cannot resolve the delegating agent's identity — " +
-					"refusing to start a delegated session that could never be traced back to its parent")
+					"refusing to start a delegated session that could never be traced back to its parent"), true
 			}
 			slog.Error("delegate: minting an unattributable lifecycle record with an empty parent agent id — "+
 				"the FR-015 guard is disabled by tools.delegate.require_parent_agent_id=false; "+
 				"this session cannot be traced back to its parent and will never be returned to it by list_jobs",
-				"delegate_session_id", delegateSessionID,
-				"target_agent_id", agentID,
+				"delegate_session_id", dt.delegateSessionID,
+				"target_agent_id", dt.agentID,
 				"parent_durable_key", parentDurableKey)
 		}
 		rec := &session.LifecycleRecord{
-			SessionID:        delegateSessionID,
+			SessionID:        dt.delegateSessionID,
 			Generation:       0,
 			State:            session.LifecycleQueued,
 			OwnerScopeKind:   ownerScopeKind,
 			OwnerScopeID:     ownerScopeID,
 			ParentAgentID:    parentAgentID,
 			ParentDurableKey: parentDurableKey,
-			OriginChannel:    ToolChannel(ctx),
-			OriginChatID:     ToolChatID(ctx),
-			WorkspaceID:      ToolWorkspaceID(ctx),
-			AgentID:          agentID,
+			OriginChannel:    ToolChannel(dt.ctx),
+			OriginChatID:     ToolChatID(dt.ctx),
+			WorkspaceID:      ToolWorkspaceID(dt.ctx),
+			AgentID:          dt.agentID,
 			Is3P:             is3P,
 		}
-		if err := t.lifecycle.Persist(rec); err != nil {
-			return ErrorResult(fmt.Sprintf("delegate: failed to persist durable session record: %v", err)).WithError(err)
+		if err := dt.t.lifecycle.Persist(rec); err != nil {
+			return ErrorResult(fmt.Sprintf("delegate: failed to persist durable session record: %v", err)).WithError(err), true
 		}
 	} else {
 		// FR-021/BDD-20 (W7a) — fail CLOSED, not silently degraded, when no
@@ -416,22 +468,14 @@ func (t *DelegateTool) executeRun(ctx context.Context, args map[string]any, cb A
 		// Mirrors the FR-015 refusal's shape (slog.Error + ErrorResult)
 		// immediately above rather than introducing a second error style.
 		slog.Error("delegate: refusing delegation — no durable lifecycle store configured",
-			"delegate_session_id", delegateSessionID,
-			"target_agent_id", agentID,
+			"delegate_session_id", dt.delegateSessionID,
+			"target_agent_id", dt.agentID,
 			"parent_durable_key", parentDurableKey)
 		return ErrorResult("delegate: cannot start a delegated session — no durable lifecycle store is " +
 			"configured (operator misconfiguration); refusing rather than spawning an untracked, " +
-			"unrecoverable session")
+			"unrecoverable session"), true
 	}
-
-	if async {
-		// isResume: false — executeRun always mints a BRAND-NEW
-		// delegateSessionID (generation 0) just above; this is a genuine
-		// create, never a resume. Native `follow_up`'s warm resume goes
-		// through spawnCorrectiveFollowUp's own executeAsync call instead.
-		return t.executeAsync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, timeout, snap, requestedSkill, false, cb)
-	}
-	return t.executeSync(ctx, task, label, agentID, resolvedMaxDepth, delegateSessionID, timeout, snap, requestedSkill)
+	return nil, false
 }
 
 // minDelegateTimeoutSeconds/maxDelegateTimeoutSeconds bound a caller-supplied
@@ -651,6 +695,23 @@ var ErrDelegationTimedOut = errors.New("delegation timed out")
 // action:"status" and list_jobs agree on what happened.
 const delegateTaskStatusTimedOut = "timed_out"
 
+// delegateToolExecuteAsync carries the shared state of executeAsync across its stages.
+type delegateToolExecuteAsync struct {
+	t                 *DelegateTool
+	ctx               context.Context
+	task              string
+	label             string
+	agentID           string
+	resolvedMaxDepth  *int
+	delegateSessionID string
+	timeout           time.Duration
+	snap              *ContextSnapshot
+	requestedSkill    string
+	isResume          bool
+	cb                AsyncCallback
+	taskID            string
+}
+
 // executeAsync runs the background (async=true) delegation path. It records
 // the task's state in t.tasks BEFORE launching the sub-turn goroutine and
 // updates that SAME record on completion — the fix for FR-D2: action:"status"
@@ -666,12 +727,14 @@ func (t *DelegateTool) executeAsync(
 	isResume bool,
 	cb AsyncCallback,
 ) *ToolResult {
-	if t.spawner == nil {
+	dt := &delegateToolExecuteAsync{t: t, ctx: ctx, task: task, label: label, agentID: agentID, resolvedMaxDepth: resolvedMaxDepth, delegateSessionID: delegateSessionID, timeout: timeout, snap: snap, requestedSkill: requestedSkill, isResume: isResume, cb: cb}
+
+	if dt.t.spawner == nil {
 		return ErrorResult("delegate: no sub-turn spawner configured")
 	}
 
-	channel := ToolChannel(ctx)
-	chatID := ToolChatID(ctx)
+	channel := ToolChannel(dt.ctx)
+	chatID := ToolChatID(dt.ctx)
 	// W2: capture, at task-creation time, the exact correlation anchors a
 	// spawned child sub-turn's transcript entries will carry back —
 	// SessionID mirrors TranscriptSessionID: parentTS.transcriptSessionID
@@ -680,26 +743,26 @@ func (t *DelegateTool) executeAsync(
 	// agent-package side to set childTS.parentSpawnCallID). Reading both
 	// from THIS SAME ctx guarantees they match what the child will actually
 	// use, without any agent-package coupling.
-	sessionID := ToolTranscriptSessionID(ctx)
-	spawnCallID := ToolCallID(ctx)
+	sessionID := ToolTranscriptSessionID(dt.ctx)
+	spawnCallID := ToolCallID(dt.ctx)
 	is3P := false
-	if agentID != "" && t.getAgentRegistry != nil {
-		if reg := t.getAgentRegistry(); reg != nil {
-			is3P = reg.IsExternalCLI(agentID)
+	if dt.agentID != "" && dt.t.getAgentRegistry != nil {
+		if reg := dt.t.getAgentRegistry(); reg != nil {
+			is3P = reg.IsExternalCLI(dt.agentID)
 		}
 	}
 
-	t.mu.Lock()
+	dt.t.mu.Lock()
 	// FR-045: eviction runs as part of the tool's own bookkeeping — every
 	// new task registration — never a separate goroutine/ticker.
-	t.evictStaleTasksLocked()
-	taskID := fmt.Sprintf("delegate-%d", t.nextID)
-	t.nextID++
-	t.tasks[taskID] = &DelegateTaskState{
-		ID:                taskID,
-		Task:              task,
-		Label:             label,
-		AgentID:           agentID,
+	dt.t.evictStaleTasksLocked()
+	dt.taskID = fmt.Sprintf("delegate-%d", dt.t.nextID)
+	dt.t.nextID++
+	dt.t.tasks[dt.taskID] = &DelegateTaskState{
+		ID:                dt.taskID,
+		Task:              dt.task,
+		Label:             dt.label,
+		AgentID:           dt.agentID,
 		OriginChannel:     channel,
 		OriginChatID:      chatID,
 		Status:            "running",
@@ -707,15 +770,15 @@ func (t *DelegateTool) executeAsync(
 		SessionID:         sessionID,
 		SpawnCallID:       spawnCallID,
 		Is3P:              is3P,
-		DelegateSessionID: delegateSessionID,
-		LastStatusRead:    t.now().UnixMilli(),
+		DelegateSessionID: dt.delegateSessionID,
+		LastStatusRead:    dt.t.now().UnixMilli(),
 	}
-	if delegateSessionID != "" {
-		t.sessionIndex[delegateSessionID] = taskID
+	if dt.delegateSessionID != "" {
+		dt.t.sessionIndex[dt.delegateSessionID] = dt.taskID
 	}
-	t.mu.Unlock()
+	dt.t.mu.Unlock()
 
-	t.transitionLifecycle(delegateSessionID, session.LifecycleRunning, "")
+	dt.t.transitionLifecycle(dt.delegateSessionID, session.LifecycleRunning, "")
 
 	// The task is the first USER message; the delegate's soul (worker /
 	// configured agent) is resolved inside spawnSubTurn and used as the
@@ -775,209 +838,12 @@ func (t *DelegateTool) executeAsync(
 	// t.spawnMarker (SetSpawner was never called with a marker-capable
 	// spawner — e.g. this package's own unit tests) makes this call a
 	// silent no-op, unchanged from before this fix.
-	if t.spawnMarker != nil {
-		t.spawnMarker.MarkPendingDelegateSpawn(sessionID, channel, chatID)
+	if dt.t.spawnMarker != nil {
+		dt.t.spawnMarker.MarkPendingDelegateSpawn(sessionID, channel, chatID)
 	}
-	t.asyncWG.Add(1)
+	dt.t.asyncWG.Add(1)
 	go func() {
-		defer t.asyncWG.Done()
-		result, err := t.spawner.SpawnSubTurn(ctx, SubTurnConfig{
-			Model:             t.defaultModel,
-			Tools:             nil, // Will inherit from parent via context
-			SystemPrompt:      task,
-			TargetAgentID:     agentID,
-			MaxTokens:         t.maxTokens,
-			Temperature:       t.temperature,
-			Async:             true,
-			Critical:          true,
-			Timeout:           timeout,
-			TaskLabel:         label,
-			ResolvedMaxDepth:  resolvedMaxDepth,
-			ContextSnapshot:   snap,
-			DelegateSessionID: delegateSessionID,
-			IsResume:          isResume,
-			RequestedSkill:    requestedSkill,
-		})
-
-		// ADR-072 D9 / FR-053/054: a requested_skill dispatch failure (the
-		// receiver denied it, or the slug does not resolve at all) is a
-		// distinct, structured outcome — never the generic "Delegate failed"
-		// wrap below, which would flatten DelegationDeniedCode/SkillNotFoundCode
-		// down to opaque prose. Built once, up front, so both the bookkeeping
-		// switch (state.Result) and the result-rebuild switch below use the
-		// SAME structured payload.
-		requestedSkillFailure := errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound)
-		var requestedSkillFailureResult *ToolResult
-		if requestedSkillFailure {
-			requestedSkillFailureResult = requestedSkillDispatchFailureResult(agentID, requestedSkill, err)
-		}
-
-		var lifecycleState session.LifecycleState
-		var lifecycleFailedReason string
-		// parked: the child called message_parent(wait=true) and is waiting on
-		// the parent's respond(), NOT finished. Its turn stopped deliberately,
-		// so err is nil and the result is neither Interrupted nor IsError —
-		// exactly the shape that otherwise falls into `default` below and gets
-		// stamped LifecycleCompleted, overwriting the needs_input state
-		// parkNeedsInput just wrote. That overwrite is what made respond()
-		// fail closed with "session is not parked" in the ADR-057 UAT even
-		// once the turn loop itself was fixed to stop.
-		parked := false
-
-		// UAT A-17: a delegation that reached its time limit was
-		// force-cancelled (pkg/agent/subturn.go). Built BEFORE t.mu is taken:
-		// timedOutDelegationResult kills the child's background shells, which
-		// walks the lifecycle store and must never run under this tool's
-		// mutex. Its case below is checked ahead of `ctx.Err() != nil` on
-		// purpose — ctx is the delegating PARENT's tool context, which is
-		// routinely already cancelled by the time a background child times
-		// out (the parent turn moved on), so that case would otherwise report
-		// a timeout as "Task canceled during execution".
-		timedOut := !requestedSkillFailure && errors.Is(err, ErrDelegationTimedOut)
-		var timedOutResult *ToolResult
-		if timedOut {
-			timedOutResult = t.timedOutDelegationResult(delegateSessionID, label, err)
-		}
-
-		t.mu.Lock()
-		if state, ok := t.tasks[taskID]; ok {
-			switch {
-			case requestedSkillFailure:
-				state.Status = "failed"
-				state.Result = requestedSkillFailureResult.ForLLM
-				lifecycleState, lifecycleFailedReason = session.LifecycleFailed, "error"
-			case timedOut:
-				state.Status = delegateTaskStatusTimedOut
-				state.Result = timedOutResult.ForLLM
-				lifecycleState, lifecycleFailedReason = session.LifecycleTimedOut, ""
-			case err != nil && ctx.Err() != nil:
-				state.Status = "canceled"
-				state.Result = "Task canceled during execution"
-				lifecycleState, lifecycleFailedReason = session.LifecycleCancelled, "stopped_by_user"
-			case err != nil:
-				state.Status = "failed"
-				state.Result = fmt.Sprintf("Error: %v", err)
-				lifecycleState, lifecycleFailedReason = session.LifecycleFailed, "error"
-			case result != nil && result.ParksTurn:
-				parked = true
-				state.Status = "needs_input"
-				state.Result = result.ForLLM
-			default:
-				state.Status = "completed"
-				if result != nil {
-					state.Result = result.ForLLM
-				}
-				lifecycleState = session.LifecycleCompleted
-			}
-		}
-		t.mu.Unlock()
-
-		// Skip the transition entirely when parked — parkNeedsInput already
-		// owns this record's state, and any write here would clobber it.
-		if !parked {
-			t.transitionLifecycle(delegateSessionID, lifecycleState, lifecycleFailedReason)
-		}
-
-		switch {
-		case requestedSkillFailure:
-			result = requestedSkillFailureResult
-		case timedOut:
-			// Not "spawn failed": the child ran and was force-cancelled at its
-			// time limit. Warn (an expected, bounded outcome), not Error, and
-			// with its own grep-able message.
-			slog.Warn("delegate: async subagent reached its time limit and was force-cancelled",
-				"session_id", delegateSessionID,
-				"task_id", taskID,
-				"agent_id", agentID,
-				"is_resume", isResume,
-				"error", err)
-			result = timedOutResult
-		case err != nil:
-			// Kill the silent swallow: a spawn that dies before starting
-			// (e.g. a `follow_up` resume whose target session vanished, or
-			// any other SpawnSubTurn failure) must be operator-visible on
-			// its OWN, unconditionally — never dependent on whatever `cb`
-			// happens to do with the result downstream (a live channel that
-			// may already be gone, an AsyncNotifier publish that lands
-			// somewhere other than where an operator is watching, etc.).
-			// This is the ONE line that fires every single time this
-			// goroutine's spawn attempt fails, regardless of whether cb is
-			// nil, so `grep -i "async subturn spawn failed" gateway.log`
-			// always finds it.
-			slog.Error("delegate: async subturn spawn failed",
-				"session_id", delegateSessionID,
-				"task_id", taskID,
-				"agent_id", agentID,
-				"is_resume", isResume,
-				"error", err)
-			result = ErrorResult(fmt.Sprintf("Delegate failed: %v", err)).WithError(err)
-		case result != nil:
-			// Finding B (A-I4 round 4, live-verified): mirror executeSync's
-			// own wrapping below — the raw spawner result's ForUser field
-			// (spawnSubTurn / pkg/agent/subturn.go sets it to
-			// turnRes.finalContent, the CHILD's own unwrapped, first-person
-			// final text) must never reach pkg/agent/loop.go's asyncCallback
-			// unmodified. asyncCallback unconditionally does
-			// `if !result.Silent && result.ForUser != "" { PublishOutbound(...
-			// Content: result.ForUser ...) }` — a DIRECT, immediate publish
-			// with no relation to the wsStreamer/shadow-stream machinery at
-			// all (confirmed via a live background delegation: the leaked
-			// bubble appeared even with no cancellation involved, the moment
-			// the child's own final answer happened to require no wrapping —
-			// e.g. a policy-denied task explaining itself in its own voice).
-			// That silently turns the delegate's own raw narration into a
-			// second, unattributed top-level chat bubble the instant the
-			// parent's own turn has already ended — the common case for
-			// background delegation (Critical:true's own doc comment above:
-			// "the parent turn routinely finishes ... in well under the time
-			// it takes the delegate to run even one tool call"). This is
-			// exactly the content class the design intends to keep hidden,
-			// matching the already-correct sync/await case (executeSync
-			// below never independently publishes anything — its result only
-			// ever becomes a normal tool_call_result) and
-			// pkg/gateway/replay.go's ParentSpawnCallID skip. The LLM-facing
-			// AsyncNotifier continuation turn (still fed the wrapped ForLLM
-			// content below) already informs the user, in the DELEGATOR's
-			// own voice, that the delegation finished and what it found —
-			// clearing ForUser here removes the duplicate, unattributed raw
-			// dump without losing any user-facing information.
-			labelStr := label
-			if labelStr == "" {
-				labelStr = "(unnamed)"
-			}
-			// A parked child is NOT finished — it is waiting on this
-			// delegator's own respond(). Saying "completed" would tell the
-			// delegator's next turn the opposite of what the lifecycle
-			// record says (needs_input), which is how an orchestrator ends
-			// up believing work is done and never answering the question.
-			// ParksTurn must also survive this rebuild: dropping it here
-			// would silently kill the signal for every downstream reader.
-			headline := "Subagent task completed"
-			if result.ParksTurn {
-				headline = "Subagent task is PAUSED awaiting your answer (respond to it to continue)"
-			}
-			// ADR-072 D9 / FR-056: report the loaded skill in the delegation
-			// result. Reaching this branch at all (requestedSkillFailure was
-			// false above) means the receiver's own grant permitted it, so a
-			// non-empty requestedSkill here was necessarily granted and
-			// appended to the child's ForcedSkills by spawnSubTurn.
-			if requestedSkill != "" {
-				headline += fmt.Sprintf(" (requested_skill %q was loaded into the child's first turn)", requestedSkill)
-			}
-			result = &ToolResult{
-				ForLLM:    fmt.Sprintf("%s:\nLabel: %s\nResult: %s", headline, labelStr, result.ForLLM),
-				IsError:   result.IsError,
-				ParksTurn: result.ParksTurn,
-				Async:     true,
-			}
-		}
-
-		// Call callback if provided
-		if cb != nil {
-			cb(ctx, result)
-		} else if err != nil {
-			slog.Error("delegate: subturn failed with no callback", "error", err)
-		}
+		dt.runSubturn()
 	}()
 
 	// NOTE: "(task_id: %s)" must stay its own parenthesized clause, ending in
@@ -985,16 +851,218 @@ func (t *DelegateTool) executeAsync(
 	// helper scans for "task_id: " and stops at the next ")"/"\n", so a
 	// session_id appended INSIDE the same parens would corrupt every test
 	// using that helper (regression: existing one-shot delegate.run compat).
-	msg := fmt.Sprintf("Delegated task for: %s (task_id: %s)", task, taskID)
-	if label != "" {
-		msg = fmt.Sprintf("Delegated task '%s' for: %s (task_id: %s)", label, task, taskID)
+	msg := fmt.Sprintf("Delegated task for: %s (task_id: %s)", dt.task, dt.taskID)
+	if dt.label != "" {
+		msg = fmt.Sprintf("Delegated task '%s' for: %s (task_id: %s)", dt.label, dt.task, dt.taskID)
 	}
-	msg += fmt.Sprintf(" (session_id: %s)", delegateSessionID)
+	msg += fmt.Sprintf(" (session_id: %s)", dt.delegateSessionID)
 	msg += fmt.Sprintf(
 		" — running in background; check progress with delegate(action=\"status\", session_id=%q), "+
-			"or inbox/steer/respond/cancel/follow_up/peek using the same session_id.", delegateSessionID,
+			"or inbox/steer/respond/cancel/follow_up/peek using the same session_id.", dt.delegateSessionID,
 	)
 	return AsyncResult(msg)
+}
+
+// runSubturn runs the delegated sub-turn and records and reports its outcome.
+func (dt *delegateToolExecuteAsync) runSubturn() {
+	defer dt.t.asyncWG.Done()
+	result, err := dt.t.spawner.SpawnSubTurn(dt.ctx, SubTurnConfig{
+		Model:             dt.t.defaultModel,
+		Tools:             nil, // Will inherit from parent via context
+		SystemPrompt:      dt.task,
+		TargetAgentID:     dt.agentID,
+		MaxTokens:         dt.t.maxTokens,
+		Temperature:       dt.t.temperature,
+		Async:             true,
+		Critical:          true,
+		Timeout:           dt.timeout,
+		TaskLabel:         dt.label,
+		ResolvedMaxDepth:  dt.resolvedMaxDepth,
+		ContextSnapshot:   dt.snap,
+		DelegateSessionID: dt.delegateSessionID,
+		IsResume:          dt.isResume,
+		RequestedSkill:    dt.requestedSkill,
+	})
+
+	// ADR-072 D9 / FR-053/054: a requested_skill dispatch failure (the
+	// receiver denied it, or the slug does not resolve at all) is a
+	// distinct, structured outcome — never the generic "Delegate failed"
+	// wrap below, which would flatten DelegationDeniedCode/SkillNotFoundCode
+	// down to opaque prose. Built once, up front, so both the bookkeeping
+	// switch (state.Result) and the result-rebuild switch below use the
+	// SAME structured payload.
+	requestedSkillFailure := errors.Is(err, ErrRequestedSkillDenied) || errors.Is(err, ErrRequestedSkillNotFound)
+	var requestedSkillFailureResult *ToolResult
+	if requestedSkillFailure {
+		requestedSkillFailureResult = requestedSkillDispatchFailureResult(dt.agentID, dt.requestedSkill, err)
+	}
+
+	var lifecycleState session.LifecycleState
+	var lifecycleFailedReason string
+	// parked: the child called message_parent(wait=true) and is waiting on
+	// the parent's respond(), NOT finished. Its turn stopped deliberately,
+	// so err is nil and the result is neither Interrupted nor IsError —
+	// exactly the shape that otherwise falls into `default` below and gets
+	// stamped LifecycleCompleted, overwriting the needs_input state
+	// parkNeedsInput just wrote. That overwrite is what made respond()
+	// fail closed with "session is not parked" in the ADR-057 UAT even
+	// once the turn loop itself was fixed to stop.
+	parked := false
+
+	// UAT A-17: a delegation that reached its time limit was
+	// force-cancelled (pkg/agent/subturn.go). Built BEFORE t.mu is taken:
+	// timedOutDelegationResult kills the child's background shells, which
+	// walks the lifecycle store and must never run under this tool's
+	// mutex. Its case below is checked ahead of `ctx.Err() != nil` on
+	// purpose — ctx is the delegating PARENT's tool context, which is
+	// routinely already cancelled by the time a background child times
+	// out (the parent turn moved on), so that case would otherwise report
+	// a timeout as "Task canceled during execution".
+	timedOut := !requestedSkillFailure && errors.Is(err, ErrDelegationTimedOut)
+	var timedOutResult *ToolResult
+	if timedOut {
+		timedOutResult = dt.t.timedOutDelegationResult(dt.delegateSessionID, dt.label, err)
+	}
+
+	dt.t.mu.Lock()
+	if state, ok := dt.t.tasks[dt.taskID]; ok {
+		switch {
+		case requestedSkillFailure:
+			state.Status = "failed"
+			state.Result = requestedSkillFailureResult.ForLLM
+			lifecycleState, lifecycleFailedReason = session.LifecycleFailed, "error"
+		case timedOut:
+			state.Status = delegateTaskStatusTimedOut
+			state.Result = timedOutResult.ForLLM
+			lifecycleState, lifecycleFailedReason = session.LifecycleTimedOut, ""
+		case err != nil && dt.ctx.Err() != nil:
+			state.Status = "canceled"
+			state.Result = "Task canceled during execution"
+			lifecycleState, lifecycleFailedReason = session.LifecycleCancelled, "stopped_by_user"
+		case err != nil:
+			state.Status = "failed"
+			state.Result = fmt.Sprintf("Error: %v", err)
+			lifecycleState, lifecycleFailedReason = session.LifecycleFailed, "error"
+		case result != nil && result.ParksTurn:
+			parked = true
+			state.Status = "needs_input"
+			state.Result = result.ForLLM
+		default:
+			state.Status = "completed"
+			if result != nil {
+				state.Result = result.ForLLM
+			}
+			lifecycleState = session.LifecycleCompleted
+		}
+	}
+	dt.t.mu.Unlock()
+
+	// Skip the transition entirely when parked — parkNeedsInput already
+	// owns this record's state, and any write here would clobber it.
+	if !parked {
+		dt.t.transitionLifecycle(dt.delegateSessionID, lifecycleState, lifecycleFailedReason)
+	}
+
+	switch {
+	case requestedSkillFailure:
+		result = requestedSkillFailureResult
+	case timedOut:
+		// Not "spawn failed": the child ran and was force-cancelled at its
+		// time limit. Warn (an expected, bounded outcome), not Error, and
+		// with its own grep-able message.
+		slog.Warn("delegate: async subagent reached its time limit and was force-cancelled",
+			"session_id", dt.delegateSessionID,
+			"task_id", dt.taskID,
+			"agent_id", dt.agentID,
+			"is_resume", dt.isResume,
+			"error", err)
+		result = timedOutResult
+	case err != nil:
+		// Kill the silent swallow: a spawn that dies before starting
+		// (e.g. a `follow_up` resume whose target session vanished, or
+		// any other SpawnSubTurn failure) must be operator-visible on
+		// its OWN, unconditionally — never dependent on whatever `cb`
+		// happens to do with the result downstream (a live channel that
+		// may already be gone, an AsyncNotifier publish that lands
+		// somewhere other than where an operator is watching, etc.).
+		// This is the ONE line that fires every single time this
+		// goroutine's spawn attempt fails, regardless of whether cb is
+		// nil, so `grep -i "async subturn spawn failed" gateway.log`
+		// always finds it.
+		slog.Error("delegate: async subturn spawn failed",
+			"session_id", dt.delegateSessionID,
+			"task_id", dt.taskID,
+			"agent_id", dt.agentID,
+			"is_resume", dt.isResume,
+			"error", err)
+		result = ErrorResult(fmt.Sprintf("Delegate failed: %v", err)).WithError(err)
+	case result != nil:
+		// Finding B (A-I4 round 4, live-verified): mirror executeSync's
+		// own wrapping below — the raw spawner result's ForUser field
+		// (spawnSubTurn / pkg/agent/subturn.go sets it to
+		// turnRes.finalContent, the CHILD's own unwrapped, first-person
+		// final text) must never reach pkg/agent/loop.go's asyncCallback
+		// unmodified. asyncCallback unconditionally does
+		// `if !result.Silent && result.ForUser != "" { PublishOutbound(...
+		// Content: result.ForUser ...) }` — a DIRECT, immediate publish
+		// with no relation to the wsStreamer/shadow-stream machinery at
+		// all (confirmed via a live background delegation: the leaked
+		// bubble appeared even with no cancellation involved, the moment
+		// the child's own final answer happened to require no wrapping —
+		// e.g. a policy-denied task explaining itself in its own voice).
+		// That silently turns the delegate's own raw narration into a
+		// second, unattributed top-level chat bubble the instant the
+		// parent's own turn has already ended — the common case for
+		// background delegation (Critical:true's own doc comment above:
+		// "the parent turn routinely finishes ... in well under the time
+		// it takes the delegate to run even one tool call"). This is
+		// exactly the content class the design intends to keep hidden,
+		// matching the already-correct sync/await case (executeSync
+		// below never independently publishes anything — its result only
+		// ever becomes a normal tool_call_result) and
+		// pkg/gateway/replay.go's ParentSpawnCallID skip. The LLM-facing
+		// AsyncNotifier continuation turn (still fed the wrapped ForLLM
+		// content below) already informs the user, in the DELEGATOR's
+		// own voice, that the delegation finished and what it found —
+		// clearing ForUser here removes the duplicate, unattributed raw
+		// dump without losing any user-facing information.
+		labelStr := dt.label
+		if labelStr == "" {
+			labelStr = "(unnamed)"
+		}
+		// A parked child is NOT finished — it is waiting on this
+		// delegator's own respond(). Saying "completed" would tell the
+		// delegator's next turn the opposite of what the lifecycle
+		// record says (needs_input), which is how an orchestrator ends
+		// up believing work is done and never answering the question.
+		// ParksTurn must also survive this rebuild: dropping it here
+		// would silently kill the signal for every downstream reader.
+		headline := "Subagent task completed"
+		if result.ParksTurn {
+			headline = "Subagent task is PAUSED awaiting your answer (respond to it to continue)"
+		}
+		// ADR-072 D9 / FR-056: report the loaded skill in the delegation
+		// result. Reaching this branch at all (requestedSkillFailure was
+		// false above) means the receiver's own grant permitted it, so a
+		// non-empty requestedSkill here was necessarily granted and
+		// appended to the child's ForcedSkills by spawnSubTurn.
+		if dt.requestedSkill != "" {
+			headline += fmt.Sprintf(" (requested_skill %q was loaded into the child's first turn)", dt.requestedSkill)
+		}
+		result = &ToolResult{
+			ForLLM:    fmt.Sprintf("%s:\nLabel: %s\nResult: %s", headline, labelStr, result.ForLLM),
+			IsError:   result.IsError,
+			ParksTurn: result.ParksTurn,
+			Async:     true,
+		}
+	}
+
+	// Call callback if provided
+	if dt.cb != nil {
+		dt.cb(dt.ctx, result)
+	} else if err != nil {
+		slog.Error("delegate: subturn failed with no callback", "error", err)
+	}
 }
 
 // executeSync runs the await (async=false) delegation path: it blocks until
