@@ -2,7 +2,7 @@
 
 Every inbound message — Telegram, Slack, Discord, WhatsApp, Matrix, anything compiled in — is routed to a specific agent before the agent loop runs. The routing decision is operator-controlled, evaluated in priority order, and falls back to a configurable default. Once an agent has the message, **mid-conversation hand-off** can switch to a different agent inside the same transcript without losing context.
 
-This page describes the inbound routing layer (channel → agent). For mid-session agent switching, see [memory.md](memory.md) for the handoff tool, or the `handoff` row in [tools-reference.md](tools-reference.md).
+This page describes the inbound routing layer (channel → agent). For tool access, see [tools](tools.md).
 
 ## The two routing layers
 
@@ -142,7 +142,7 @@ The receiving agent's first turn sees a tool-call entry naming the handoff and t
 
 Hand-off is reversible: any agent in the chain can call `switch_agent(target: "default")` to send control back to the default routing agent (typically Mia).
 
-For the full agent-tools API including handoff arguments, see [tools-reference.md](tools-reference.md).
+For the current tool list and access controls, see [tools](tools.md).
 
 ## Why this matters
 
@@ -152,7 +152,7 @@ A typical multi-channel deployment has one Omnipus binary fielding messages from
 
 [pkg/channels/README.md](../pkg/channels/README.md) covers per-channel config (`allow_from`, `dm_policy`, `group_policy`).
 
-[tools-reference.md](tools-reference.md) documents `switch_agent` and the rest of the agent-tools API.
+[Tools](tools.md) explains the current tool list and access controls.
 
 [memory.md](memory.md) explains what survives a hand-off (the transcript) and what doesn't (per-agent memory).
 
