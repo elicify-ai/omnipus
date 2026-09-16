@@ -71,7 +71,7 @@ func scanRepo(root string, skips []string) (rows []funcRow, totalProd, totalTest
 	fset := token.NewFileSet()
 	walkErr := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // best-effort: an unreadable entry does not abort the scan
+			return ignoreWalkError(err)
 		}
 		rel, relErr := filepath.Rel(root, p)
 		if relErr != nil {
@@ -99,6 +99,11 @@ func scanRepo(root string, skips []string) (rows []funcRow, totalProd, totalTest
 		fmt.Fprintln(os.Stderr, "funlen: walk error:", walkErr)
 	}
 	return rows, totalProd, totalTest
+}
+
+// ignoreWalkError keeps scanRepo best-effort when WalkDir encounters an unreadable entry.
+func ignoreWalkError(_ error) error {
+	return nil
 }
 
 // shouldSkip reports whether rel (a root-relative path) falls under one of

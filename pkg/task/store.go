@@ -1172,22 +1172,22 @@ type storeUpdateLocked struct {
 func (s *Store) updateLocked(id string, patch Patch) (*Task, error) {
 	su := &storeUpdateLocked{s: s, id: id, patch: patch}
 
-	if r0, r1, stop := su.applyLifecycleFields(); stop {
-		return r0, r1
+	if result, stop, err := su.applyLifecycleFields(); stop {
+		return result, err
 	}
-	if r0, r1, stop := su.applyRemainingFields(); stop {
-		return r0, r1
+	if result, stop, err := su.applyRemainingFields(); stop {
+		return result, err
 	}
 
 	return su.validateAndPersist()
 }
 
 // applyLifecycleFields loads the task and applies lifecycle-sensitive patch fields.
-func (su *storeUpdateLocked) applyLifecycleFields() (*Task, error, bool) {
+func (su *storeUpdateLocked) applyLifecycleFields() (*Task, bool, error) {
 	var err error
 	su.t, err = su.s.load(su.id)
 	if err != nil {
-		return nil, err, true
+		return nil, true, err
 	}
 
 	if su.patch.Title != nil {
@@ -1201,35 +1201,35 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, error, bool) {
 		// as "".
 		trimmedTitle := strings.TrimSpace(*su.patch.Title)
 		if trimmedTitle == "" || !HasVisibleContent(trimmedTitle) {
-			return nil, verr("title must not be empty"), true
+			return nil, true, verr("title must not be empty")
 		}
 		if len([]rune(trimmedTitle)) > 200 {
-			return nil, verr("title must be 200 characters or fewer"), true
+			return nil, true, verr("title must be 200 characters or fewer")
 		}
 		su.t.Title = trimmedTitle
 	}
 	if su.patch.Description != nil {
 		if len(*su.patch.Description) > 2000 {
-			return nil, verr("description must be 2000 characters or fewer"), true
+			return nil, true, verr("description must be 2000 characters or fewer")
 		}
 		su.t.Description = *su.patch.Description
 	}
 	if su.patch.Prompt != nil {
 		if len(*su.patch.Prompt) > 10000 {
-			return nil, verr("prompt must be 10000 characters or fewer"), true
+			return nil, true, verr("prompt must be 10000 characters or fewer")
 		}
 		su.t.Prompt = *su.patch.Prompt
 	}
 	if su.patch.Status != nil {
 		if !IsValidStatus(*su.patch.Status) {
-			return nil, verr("invalid status %q", *su.patch.Status), true
+			return nil, true, verr("invalid status %q", *su.patch.Status)
 		}
 		// `blocked` is a derived side-state — it is never settable through the
 		// public update path. The store sets it when a dependency is unmet and
 		// clears it to `next` when every blocker reaches done. allowBlockedSet is
 		// the internal escape hatch used by the dependency-recompute paths only.
 		if *su.patch.Status == StatusBlocked && !su.patch.allowBlockedSet {
-			return nil, ErrBlockedNotSettable, true
+			return nil, true, ErrBlockedNotSettable
 		}
 		// Reject illegal lifecycle transitions (N1). A no-op (same status) and any
 		// transition out of the derived `blocked` state via the internal hatch are
@@ -1237,7 +1237,7 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, error, bool) {
 		// trigger repeats (see validateTransition's doc comment).
 		repeatingTrigger := su.t.Trigger.IsRepeating()
 		if err := validateTransition(su.t.Status, *su.patch.Status, su.patch.allowBlockedSet, repeatingTrigger); err != nil {
-			return nil, err, true
+			return nil, true, err
 		}
 		// ADR-052 FR-014/§6.4(b) Stop guarantee backstop: reject
 		// failed[stopped_by_user] -> done unconditionally, even though
@@ -1245,7 +1245,7 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, error, bool) {
 		// genuine failure must stay retryable). See validateStopGuard's doc
 		// comment for the full TOCTOU rationale this closes.
 		if err := validateStopGuard(su.t, *su.patch.Status); err != nil {
-			return nil, err, true
+			return nil, true, err
 		}
 		// A genuine transition INTO in_progress (not a same-status no-op) stamps
 		// the task's real execution start, unless the caller already supplied an
@@ -1308,15 +1308,15 @@ func (su *storeUpdateLocked) applyLifecycleFields() (*Task, error, bool) {
 	// see TestAttemptCount_NotResetOnRunRoute for the pinned regression.
 	if su.patch.CancelReason != nil {
 		if *su.patch.CancelReason != "" && !IsValidCancelReason(*su.patch.CancelReason) {
-			return nil, verr("invalid cancel_reason %q", *su.patch.CancelReason), true
+			return nil, true, verr("invalid cancel_reason %q", *su.patch.CancelReason)
 		}
 		su.t.CancelReason = *su.patch.CancelReason
 	}
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // applyRemainingFields validates and applies the remaining independent patch fields.
-func (su *storeUpdateLocked) applyRemainingFields() (*Task, error, bool) {
+func (su *storeUpdateLocked) applyRemainingFields() (*Task, bool, error) {
 	if su.patch.AgentID != nil {
 		su.t.AgentID = *su.patch.AgentID
 	}
@@ -1326,7 +1326,7 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, error, bool) {
 		// unlike normalize()'s Create-time check above (which operates on a bare
 		// int with no such signal). See ValidatePriority's doc comment.
 		if err := ValidatePriority(*su.patch.Priority); err != nil {
-			return nil, err, true
+			return nil, true, err
 		}
 		su.t.Priority = *su.patch.Priority
 	}
@@ -1334,7 +1334,7 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, error, bool) {
 		newDeps := *su.patch.BlockedBy
 		if len(newDeps) > 0 {
 			if err := su.s.validateBlockedByLocked(su.t.ID, newDeps); err != nil {
-				return nil, err, true
+				return nil, true, err
 			}
 		}
 		su.t.BlockedBy = newDeps
@@ -1348,7 +1348,7 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, error, bool) {
 	}
 	if su.patch.Todos != nil {
 		if err := validateTodos(*su.patch.Todos); err != nil {
-			return nil, err, true
+			return nil, true, err
 		}
 		su.t.Todos = *su.patch.Todos
 		if len(su.t.Todos) == 0 {
@@ -1359,7 +1359,7 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, error, bool) {
 		newTrigger := *su.patch.Trigger
 		if newTrigger != nil {
 			if err := ValidateTrigger(newTrigger); err != nil {
-				return nil, err, true
+				return nil, true, err
 			}
 		}
 		su.t.Trigger = newTrigger
@@ -1373,14 +1373,14 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, error, bool) {
 	if su.patch.Tags != nil {
 		normalizedTags, err := normalizeTags(*su.patch.Tags)
 		if err != nil {
-			return nil, err, true
+			return nil, true, err
 		}
 		su.t.Tags = normalizedTags
 	}
 	if su.patch.Criteria != nil {
 		normalizedCriteria, err := normalizeCriteria(*su.patch.Criteria)
 		if err != nil {
-			return nil, err, true
+			return nil, true, err
 		}
 		su.t.Criteria = normalizedCriteria
 		if len(su.t.Criteria) == 0 {
@@ -1404,13 +1404,13 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, error, bool) {
 	if su.patch.MaxAttempts != nil {
 		newMax := *su.patch.MaxAttempts
 		if newMax != nil && *newMax < 1 {
-			return nil, verr("max_attempts must be at least 1"), true
+			return nil, true, verr("max_attempts must be at least 1")
 		}
 		su.t.MaxAttempts = newMax
 	}
 	if su.patch.AttemptCount != nil {
 		if *su.patch.AttemptCount < 0 {
-			return nil, verr("attempt_count must not be negative"), true
+			return nil, true, verr("attempt_count must not be negative")
 		}
 		su.t.AttemptCount = *su.patch.AttemptCount
 	}
@@ -1419,13 +1419,13 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, error, bool) {
 	}
 	if su.patch.Surface != nil {
 		if !IsValidSurface(*su.patch.Surface) {
-			return nil, verr("invalid surface %q", *su.patch.Surface), true
+			return nil, true, verr("invalid surface %q", *su.patch.Surface)
 		}
 		su.t.Surface = *su.patch.Surface
 	}
 	if su.patch.Result != nil {
 		if len(*su.patch.Result) > 50000 {
-			return nil, verr("result must be 50000 characters or fewer"), true
+			return nil, true, verr("result must be 50000 characters or fewer")
 		}
 		su.t.Result = *su.patch.Result
 	}
@@ -1453,7 +1453,7 @@ func (su *storeUpdateLocked) applyRemainingFields() (*Task, error, bool) {
 	if su.patch.SourceChatID != nil {
 		su.t.SourceChatID = *su.patch.SourceChatID
 	}
-	return nil, nil, false
+	return nil, false, nil
 }
 
 // validateAndPersist checks merged invariants, derives blocked state, and persists the task.
