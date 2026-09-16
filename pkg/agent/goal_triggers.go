@@ -741,6 +741,53 @@ func (al *AgentLoop) goalAdjudicationInFlight(sessionID string) bool {
 	return ok
 }
 
+// agentLoopRunGoalAdjudication carries the shared state of runGoalAdjudication across its stages.
+type agentLoopRunGoalAdjudication struct {
+	al                *AgentLoop
+	agentInst         *AgentInstance
+	sessionID         string
+	store             *session.UnifiedStore
+	rec               *goal.Goal
+	met               bool
+	gstore            *goal.Store
+	attempt           int
+	verdict           *task.JudgeVerdict
+	projectedCriteria []task.AcceptanceCriterion
+	projectedDoD      []task.AcceptanceCriterion
+	goalDefinition    string
+	maxRounds         int
+	reasonText        string
+	ret0              bool
+}
+
+// agentLoopRunGoalAdjudicationFlow reports how a block stage of agentLoopRunGoalAdjudication wants the conductor to proceed.
+type agentLoopRunGoalAdjudicationFlow int
+
+const (
+	agentLoopRunGoalAdjudicationNext agentLoopRunGoalAdjudicationFlow = iota
+	agentLoopRunGoalAdjudicationReturn
+	agentLoopRunGoalAdjudicationContinue
+	agentLoopRunGoalAdjudicationBreak
+)
+
+// agentLoopRunGoalAdjudicationAdvance carries the shared state of runGoalAdjudication across its stages.
+type agentLoopRunGoalAdjudicationAdvance struct {
+	deliverSteer func(steer string)
+	met          bool
+	ag           *agentLoopRunGoalAdjudication
+	ret0         bool
+}
+
+// agentLoopRunGoalAdjudicationAdvanceFlow reports how a block stage of agentLoopRunGoalAdjudicationAdvance wants the conductor to proceed.
+type agentLoopRunGoalAdjudicationAdvanceFlow int
+
+const (
+	agentLoopRunGoalAdjudicationAdvanceNext agentLoopRunGoalAdjudicationAdvanceFlow = iota
+	agentLoopRunGoalAdjudicationAdvanceReturn
+	agentLoopRunGoalAdjudicationAdvanceContinue
+	agentLoopRunGoalAdjudicationAdvanceBreak
+)
+
 // runGoalAdjudication is the SINGLE shared adjudication body (INV-1: one
 // adjudication invokes the Judge EXACTLY once and consumes EXACTLY one round)
 // called by both the claim path (checkGoalLoopAfterTurn) and the idle path
@@ -771,10 +818,14 @@ func (al *AgentLoop) runGoalAdjudication(
 	claimText string,
 	deliverSteer func(steer string),
 ) (met bool) {
-	if agentInst == nil || rec == nil || store == nil || sessionID == "" {
+	aa := &agentLoopRunGoalAdjudicationAdvance{deliverSteer: deliverSteer}
+
+	aa.ag = &agentLoopRunGoalAdjudication{al: al, agentInst: agentInst, sessionID: sessionID, store: store, rec: rec}
+
+	if aa.ag.agentInst == nil || aa.ag.rec == nil || aa.ag.store == nil || aa.ag.sessionID == "" {
 		return false
 	}
-	gstore := resolveGoalRecordStore()
+	aa.ag.gstore = resolveGoalRecordStore()
 	// JUDGE-FR-095 (D13, this wave): the claimless-adjudication contract is
 	// retired — every remaining call site is claim-triggered, so an empty
 	// claimText is refused rather than silently adjudicated against
@@ -784,30 +835,30 @@ func (al *AgentLoop) runGoalAdjudication(
 	// ever reintroduced by a future merge.
 	if strings.TrimSpace(claimText) == "" {
 		logger.WarnCF("agent", "goal: refusing a claimless adjudication (JUDGE-FR-095 retires the claimless contract)",
-			map[string]any{"session_id": sessionID, "goal_id": rec.GoalID})
+			map[string]any{"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID})
 		return false
 	}
 	// Emit the ephemeral judging pill BEFORE dispatch (D14 crosswalk: judging
 	// ← ephemeral engine-phase signal, pill-only).
-	al.emitGoalStatusFrame(sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds, rec.LatestReason, goalPillJudging)
+	aa.ag.al.emitGoalStatusFrame(aa.ag.sessionID, aa.ag.rec.GoalID, aa.ag.rec.Prompt, aa.ag.rec.Round, aa.ag.rec.MaxRounds, aa.ag.rec.LatestReason, goalPillJudging)
 
 	// ADR-086: the judged set comes from the record's own typed Criteria/DoD
 	// lists (GOAL-FR-003) rather than the retired GoalCriteriaJSON string.
 	// compiledGoalCriteriaFor still owns the union + condition-fallback rule,
 	// so the shape fed to the Judge is byte-identical to before.
-	criteria := compiledGoalCriteriaFor(goalRecordCompiledJSON(rec), rec.Prompt, sessionID)
-	attempt := rec.Round + 1
+	criteria := compiledGoalCriteriaFor(goalRecordCompiledJSON(aa.ag.rec), aa.ag.rec.Prompt, aa.ag.sessionID)
+	aa.ag.attempt = aa.ag.rec.Round + 1
 
 	judgeCtx, cancel := context.WithTimeout(ctx, goalJudgeRoundTimeout)
 	defer cancel()
 
-	jr := al.JudgeCriteria(judgeCtx, JudgeCriteriaInput{
+	jr := aa.ag.al.JudgeCriteria(judgeCtx, JudgeCriteriaInput{
 		Scope:           task.VerdictScopeGoal,
-		AssigneeAgentID: agentInst.ID,
+		AssigneeAgentID: aa.ag.agentInst.ID,
 		Criteria:        criteria,
-		Attempt:         attempt,
+		Attempt:         aa.ag.attempt,
 		ClaimText:       claimText, // empty for the claimless idle path (G-3)
-		GoalSessionID:   sessionID,
+		GoalSessionID:   aa.ag.sessionID,
 		WorkspaceID:     workspaceID,
 	})
 
@@ -822,10 +873,10 @@ func (al *AgentLoop) runGoalAdjudication(
 	// Composes with the restate guard further down: this one covers a record
 	// that is no longer ACTIVE at all, that one an ACTIVE record whose prompt
 	// changed while the Judge ran. The two conditions are disjoint.
-	if cur, gerr := gstore.Get(rec.GoalID); gerr == nil && cur != nil && !goal.IsActiveState(cur.State) {
-		al.goalMarkIdleSettling(rec.GoalID, false)
+	if cur, gerr := aa.ag.gstore.Get(aa.ag.rec.GoalID); gerr == nil && cur != nil && !goal.IsActiveState(cur.State) {
+		aa.ag.al.goalMarkIdleSettling(aa.ag.rec.GoalID, false)
 		logger.InfoCF("agent", "goal: adjudication outcome discarded — the goal ended while the Judge was running",
-			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID,
+			map[string]any{"component": "goal", "session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID,
 				"state": string(cur.State), "unavailable": jr.Unavailable})
 		return false
 	}
@@ -845,10 +896,10 @@ func (al *AgentLoop) runGoalAdjudication(
 		// ONCE the Judge recovers (re-arm, not wedge). This is a no-op on the
 		// CLAIM path (including its D13 deferred dispatch), which never sets
 		// the marker.
-		al.goalMarkIdleSettling(rec.GoalID, false)
+		aa.ag.al.goalMarkIdleSettling(aa.ag.rec.GoalID, false)
 		logger.WarnCF("agent", "goal trigger: judge unavailable, round not consumed",
-			map[string]any{"session_id": sessionID, "reason": jr.Reason, "claim_text_len": len(claimText)})
-		al.emitGoalStatusFrame(sessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds, jr.Reason, goalPillJudgeUnavailable)
+			map[string]any{"session_id": aa.ag.sessionID, "reason": jr.Reason, "claim_text_len": len(claimText)})
+		aa.ag.al.emitGoalStatusFrame(aa.ag.sessionID, aa.ag.rec.GoalID, aa.ag.rec.Prompt, aa.ag.rec.Round, aa.ag.rec.MaxRounds, jr.Reason, goalPillJudgeUnavailable)
 		return false
 	}
 
@@ -872,23 +923,23 @@ func (al *AgentLoop) runGoalAdjudication(
 	// no round consumed, no verdict recorded, the goal stays active for a claim
 	// against its current definition. A re-read failure falls through to the
 	// existing handling below, which already copes with it.
-	if cur, gerr := gstore.Get(rec.GoalID); gerr == nil && cur != nil && goal.IsActiveState(cur.State) &&
-		strings.TrimSpace(cur.Prompt) != strings.TrimSpace(rec.Prompt) {
+	if cur, gerr := aa.ag.gstore.Get(aa.ag.rec.GoalID); gerr == nil && cur != nil && goal.IsActiveState(cur.State) &&
+		strings.TrimSpace(cur.Prompt) != strings.TrimSpace(aa.ag.rec.Prompt) {
 		logger.InfoCF("agent", "goal: verdict discarded — the goal was restated while the Judge was running, so it judged a superseded definition",
-			map[string]any{"component": "goal", "session_id": sessionID, "goal_id": rec.GoalID, "attempt": attempt})
-		al.emitGoalStatusFrame(sessionID, cur.GoalID, cur.Prompt, cur.Round, cur.MaxRounds, cur.LatestReason, goalPillActive)
+			map[string]any{"component": "goal", "session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID, "attempt": aa.ag.attempt})
+		aa.ag.al.emitGoalStatusFrame(aa.ag.sessionID, cur.GoalID, cur.Prompt, cur.Round, cur.MaxRounds, cur.LatestReason, goalPillActive)
 		return false
 	}
-	bumpGoalRecordActivity(rec.GoalID, time.Now().UTC())
+	bumpGoalRecordActivity(aa.ag.rec.GoalID, time.Now().UTC())
 
-	verdict := jr.Verdict
-	al.writeGoalVerdictTranscript(store, sessionID, verdict)
+	aa.ag.verdict = jr.Verdict
+	aa.ag.al.writeGoalVerdictTranscript(aa.ag.store, aa.ag.sessionID, aa.ag.verdict)
 	// ADR-088 D8: the verdict summary — the event D8 names that this file
 	// previously had no INFO line for at all.
 	logger.InfoCF("agent", "goal: verdict computed",
 		map[string]any{
-			"session_id": sessionID, "goal_id": rec.GoalID,
-			"met": verdict != nil && verdict.Met, "attempt": attempt,
+			"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID,
+			"met": aa.ag.verdict != nil && aa.ag.verdict.Met, "attempt": aa.ag.attempt,
 		})
 
 	// GOAL-FR-036/FR-040/FR-041 (E14, verdict_projection.go): project the
@@ -916,56 +967,21 @@ func (al *AgentLoop) runGoalAdjudication(
 	// to do would find nothing at all for a task-owned goal (GOAL-FR-013).
 	// It is re-read rather than reused so a `set_goal` write landing during
 	// the judge call is not silently overwritten by a stale in-memory copy.
-	var projectedCriteria, projectedDoD []task.AcceptanceCriterion
-	var goalDefinition string
-	if fresh, gerr := gstore.Get(rec.GoalID); gerr != nil || fresh == nil {
-		logger.WarnCF("agent", "goal trigger: could not re-read the goal record for verdict projection",
-			map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "error": errString(gerr)})
-	} else {
-		goalDefinition = fresh.Definition
-		uc, ud, pstats := projectGoalVerdict(fresh.Criteria, fresh.DoD, verdict)
-		// silent-SF-5 (review): the projection is EMITTED TO THE UI further
-		// down, and it used to be emitted whether or not the store accepted
-		// it. The user watched the criterion ticks flip to met while the
-		// durable record still said pending, and on the next reload they
-		// reverted — a persistence fault rendered as a success, which is the
-		// one failure shape a user can neither see nor report accurately.
-		// The frame now carries the DURABLE truth: on a rejected Update the
-		// emitted lists fall back to the record's own re-read (unprojected)
-		// state, so the ticks that flip are exactly the ticks that landed.
-		// projectVerdictOntoCriteria copies its input (verdict_projection.go),
-		// so fresh.Criteria/fresh.DoD are still the pre-projection values here
-		// and are safe to fall back to.
-		projectedCriteria, projectedDoD = fresh.Criteria, fresh.DoD
-		if pstats.Applied > 0 {
-			if _, uerr := gstore.Update(fresh.GoalID, func(cur *goal.Goal) error {
-				cur.Criteria = uc
-				cur.DoD = ud
-				return nil
-			}); uerr != nil {
-				logger.WarnCF("agent",
-					"goal trigger: could not persist the verdict projection onto the goal record (GOAL-FR-036) — emitting the durable (unprojected) criterion statuses instead",
-					map[string]any{"session_id": sessionID, "goal_id": fresh.GoalID, "error": uerr.Error()})
-			} else {
-				projectedCriteria, projectedDoD = uc, ud
-			}
-		} else {
-			projectedCriteria, projectedDoD = uc, ud
-		}
-	}
+
+	aa.ag.projectVerdict()
 
 	// maxRounds and reasonText are computed BEFORE the met branch (they used
 	// to sit after it) because the met path now needs reasonText for its own
 	// RecordVerdict call and maxRounds for the frame it emits when the
 	// terminal transition cannot be completed. Neither depends on the
 	// verdict's met-ness.
-	maxRounds := rec.MaxRounds
-	if maxRounds < 1 {
-		maxRounds = config.DefaultGoalMaxRounds
+	aa.ag.maxRounds = aa.ag.rec.MaxRounds
+	if aa.ag.maxRounds < 1 {
+		aa.ag.maxRounds = config.DefaultGoalMaxRounds
 	}
-	reasonText := goalVerdictReasonText(verdict)
+	aa.ag.reasonText = goalVerdictReasonText(aa.ag.verdict)
 
-	if verdict != nil && verdict.Met {
+	if aa.ag.verdict != nil && aa.ag.verdict.Met {
 		// Review finding 9: a SUCCESSFUL goal used to terminate having
 		// persisted NOTHING. RecordVerdict was reached only on the unmet path
 		// below, so a met goal ended with LatestVerdict == nil, Round still at
@@ -981,61 +997,15 @@ func (al *AgentLoop) runGoalAdjudication(
 		// The round is pinned to `attempt` after RecordVerdict's own Round++,
 		// exactly as the unmet branch below does, so both outcomes leave the
 		// same counter arithmetic behind.
-		if _, perr := gstore.Update(rec.GoalID, func(cur *goal.Goal) error {
-			if rerr := cur.RecordVerdict(verdict, reasonText, time.Now().UTC()); rerr != nil {
-				return rerr
-			}
-			cur.Round = attempt
-			return nil
-		}); perr != nil {
-			// Same discipline as the unmet branch's silent-M3 abort: do NOT
-			// terminate a goal whose winning verdict the store refused, or the
-			// record is frozen `met` with no evidence of why, permanently.
-			// The goal stays ACTIVE and a later claim re-adjudicates.
-			logger.ErrorCF("agent", "goal trigger: could not persist the winning verdict; NOT terminating the goal",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "attempt": attempt, "error": perr.Error()})
-			al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, fmt.Sprintf(
-				"Goal %q reached a MET verdict but it could not be persisted (%v). The goal is still active — investigate storage and claim completion again.",
-				rec.Prompt, perr))
-			al.emitGoalStatusFrameWithCriteriaAndDoD(sessionID, rec.GoalID, rec.Prompt, rec.Round, maxRounds,
-				"met verdict could not be persisted (goal still active)", goalPillActive,
-				goalDefinition, projectedCriteria, projectedDoD)
-			return false
+
+		switch aa.ag.finishMetGoal() {
+		case agentLoopRunGoalAdjudicationReturn:
+			return aa.ag.ret0
 		}
-		// Use the constant, not a bare literal. clearGoal switches on this note
-		// to decide the terminal pill state, so a literal here means editing
-		// goalClearNoteMet would silently stop matching and reclassify a MET
-		// goal as `failed` — the exact drift the constant was introduced to
-		// prevent. (Its doc comment claimed both call sites were converted;
-		// this one was missed.)
-		//
-		// silent-SF-8 (review): the return value used to be DISCARDED. When
-		// the terminal transition failed, clearGoal skipped every terminal
-		// side effect — including the terminal pill — and this function
-		// returned true anyway, so the goal card sat on `judging` forever with
-		// nothing in the UI ever correcting it. Honour the result: on a failed
-		// transition re-paint the card as active with the real reason, so the
-		// user sees a live goal rather than a frozen spinner.
-		if _, ok := al.clearGoalWithOutcome(sessionID, store, goalClearNoteMet, goalOutcomeInput{
-			ending:     generated.GoalOutcomeEndingMet,
-			roundsUsed: attempt,
-			maxRounds:  maxRounds,
-			verdict:    verdict,
-			agentID:    agentInst.ID,
-			content: fmt.Sprintf("Goal %q met: the Judge confirmed all %d criteria.",
-				rec.Prompt, len(verdict.PerCriterion)),
-		}); !ok {
-			logger.ErrorCF("agent", "goal trigger: met verdict persisted but the terminal transition failed; leaving the goal active",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "attempt": attempt})
-			al.emitGoalStatusFrameWithCriteriaAndDoD(sessionID, rec.GoalID, rec.Prompt, attempt, maxRounds,
-				"met, but the terminal transition could not be persisted — will retry", goalPillActive,
-				goalDefinition, projectedCriteria, projectedDoD)
-			return false
-		}
-		return true
+
 	}
 
-	if attempt >= maxRounds {
+	if aa.ag.attempt >= aa.ag.maxRounds {
 		// silent-SF-7 (review): the handover used to be written to the user's
 		// OWN transcript BEFORE the transition was attempted. On a store
 		// failure the user read "Goal X did not reach a MET verdict" while the
@@ -1046,28 +1016,38 @@ func (al *AgentLoop) runGoalAdjudication(
 		//
 		// The handover is the outcome entry's own content (goal_outcome.go):
 		// one line, written only after the transition landed.
-		note := fmt.Sprintf("round bound reached (%d/%d)", attempt, maxRounds)
+		note := fmt.Sprintf("round bound reached (%d/%d)", aa.ag.attempt, aa.ag.maxRounds)
 		handover := fmt.Sprintf(
 			"Goal %q did not reach a MET verdict within %d round(s). Latest judge feedback:\n%s",
-			rec.Prompt, maxRounds, reasonText,
+			aa.ag.rec.Prompt, aa.ag.maxRounds, aa.ag.reasonText,
 		)
-		if _, ok := al.clearGoalWithOutcome(sessionID, store, note, goalOutcomeInput{
+		if _, ok := aa.ag.al.clearGoalWithOutcome(aa.ag.sessionID, aa.ag.store, note, goalOutcomeInput{
 			ending:      generated.GoalOutcomeEndingRoundsExhausted,
-			roundsUsed:  attempt,
-			maxRounds:   maxRounds,
-			verdict:     verdict,
-			judgeReason: reasonText,
-			agentID:     agentInst.ID,
+			roundsUsed:  aa.ag.attempt,
+			maxRounds:   aa.ag.maxRounds,
+			verdict:     aa.ag.verdict,
+			judgeReason: aa.ag.reasonText,
+			agentID:     aa.ag.agentInst.ID,
 			content:     handover,
 		}); !ok {
 			logger.ErrorCF("agent", "goal trigger: round-bound termination failed; no handover written (the goal is still active)",
-				map[string]any{"session_id": sessionID, "goal_id": rec.GoalID, "attempt": attempt, "max_rounds": maxRounds})
+				map[string]any{"session_id": aa.ag.sessionID, "goal_id": aa.ag.rec.GoalID, "attempt": aa.ag.attempt, "max_rounds": aa.ag.maxRounds})
 			return false
 		}
 		return false
 	}
 
-	newRound := attempt
+	switch aa.advanceUnmetGoal() {
+	case agentLoopRunGoalAdjudicationAdvanceReturn:
+		return aa.ret0
+	}
+
+	return false
+}
+
+// advanceUnmetGoal persists an unmet adjudication round and delivers its follow-up steer.
+func (aa *agentLoopRunGoalAdjudicationAdvance) advanceUnmetGoal() agentLoopRunGoalAdjudicationAdvanceFlow {
+	newRound := aa.ag.attempt
 	// ADR-086: the round counter and the steering reason live on the goal
 	// record (Round / LatestReason), not on the retired session-meta
 	// GoalRoundsUsed / GoalLatestReason fields. RecordVerdict is used when a
@@ -1075,16 +1055,16 @@ func (al *AgentLoop) runGoalAdjudication(
 	// the record too (GOAL-FR-006); its Round++ is then pinned back to
 	// `newRound`, which is exactly the value the old SetMeta wrote, so the
 	// exhaustion gate's arithmetic is unchanged.
-	if _, perr := gstore.Update(rec.GoalID, func(cur *goal.Goal) error {
-		if verdict != nil {
-			if rerr := cur.RecordVerdict(verdict, reasonText, time.Now().UTC()); rerr != nil {
+	if _, perr := aa.ag.gstore.Update(aa.ag.rec.GoalID, func(cur *goal.Goal) error {
+		if aa.ag.verdict != nil {
+			if rerr := cur.RecordVerdict(aa.ag.verdict, aa.ag.reasonText, time.Now().UTC()); rerr != nil {
 				return rerr
 			}
 			cur.Round = newRound
 			return nil
 		}
 		cur.Round = newRound
-		cur.LatestReason = reasonText
+		cur.LatestReason = aa.ag.reasonText
 		cur.LastActivityAt = time.Now().UTC()
 		return nil
 	}); perr != nil {
@@ -1106,10 +1086,10 @@ func (al *AgentLoop) runGoalAdjudication(
 		// budget brake. This is the "don't consume the round" minimal option
 		// from the review direction.
 		logger.ErrorCF("agent", "goal trigger: round-advance persist failed; aborting adjudication to keep round gate honest",
-			map[string]any{"session_id": sessionID, "attempt": attempt, "max_rounds": maxRounds, "error": perr.Error()})
-		al.writeGoalSystemTranscript(store, sessionID, agentInst.ID, fmt.Sprintf(
+			map[string]any{"session_id": aa.ag.sessionID, "attempt": aa.ag.attempt, "max_rounds": aa.ag.maxRounds, "error": perr.Error()})
+		aa.ag.al.writeGoalSystemTranscript(aa.ag.store, aa.ag.sessionID, aa.ag.agentInst.ID, fmt.Sprintf(
 			"Goal %q: could not persist the adjudication round counter (%v). The round was not counted and no follow-up was dispatched — investigate storage and retry the goal.",
-			rec.Prompt, perr))
+			aa.ag.rec.Prompt, perr))
 		// C-22 (criteria-carrying frame swap, E14): this and the follow-up
 		// active-path emission below are the two call sites in this
 		// function that must swap from the criteria-less emitGoalStatusFrame
@@ -1118,16 +1098,116 @@ func (al *AgentLoop) runGoalAdjudication(
 		// branch's own frame (E8's region, untouched by this wave) both stay
 		// criteria-less by design; only a call site downstream of a REAL
 		// verdict has anything new to carry.
-		al.emitGoalStatusFrameWithCriteriaAndDoD(sessionID, rec.GoalID, rec.Prompt, rec.Round, maxRounds,
-			"round-advance persist failed (goal paused)", goalPillActive, goalDefinition, projectedCriteria, projectedDoD)
-		return false
+		aa.ag.al.emitGoalStatusFrameWithCriteriaAndDoD(aa.ag.sessionID, aa.ag.rec.GoalID, aa.ag.rec.Prompt, aa.ag.rec.Round, aa.ag.maxRounds,
+			"round-advance persist failed (goal paused)", goalPillActive, aa.ag.goalDefinition, aa.ag.projectedCriteria, aa.ag.projectedDoD)
+		aa.ret0 = false
+		return agentLoopRunGoalAdjudicationAdvanceReturn
 	}
-	al.emitGoalStatusFrameWithCriteriaAndDoD(sessionID, rec.GoalID, rec.Prompt, newRound, maxRounds, reasonText, goalPillActive,
-		goalDefinition, projectedCriteria, projectedDoD)
-	if deliverSteer != nil {
-		deliverSteer(goalSteeringPrompt(rec.Prompt, reasonText))
+	aa.ag.al.emitGoalStatusFrameWithCriteriaAndDoD(aa.ag.sessionID, aa.ag.rec.GoalID, aa.ag.rec.Prompt, newRound, aa.ag.maxRounds, aa.ag.reasonText, goalPillActive,
+		aa.ag.goalDefinition, aa.ag.projectedCriteria, aa.ag.projectedDoD)
+	if aa.deliverSteer != nil {
+		aa.deliverSteer(goalSteeringPrompt(aa.ag.rec.Prompt, aa.ag.reasonText))
 	}
-	return false
+	return agentLoopRunGoalAdjudicationAdvanceNext
+}
+
+// projectVerdict projects the Judge verdict onto the goal record's criteria and definition.
+func (ag *agentLoopRunGoalAdjudication) projectVerdict() {
+
+	if fresh, gerr := ag.gstore.Get(ag.rec.GoalID); gerr != nil || fresh == nil {
+		logger.WarnCF("agent", "goal trigger: could not re-read the goal record for verdict projection",
+			map[string]any{"session_id": ag.sessionID, "goal_id": ag.rec.GoalID, "error": errString(gerr)})
+	} else {
+		ag.goalDefinition = fresh.Definition
+		uc, ud, pstats := projectGoalVerdict(fresh.Criteria, fresh.DoD, ag.verdict)
+		// silent-SF-5 (review): the projection is EMITTED TO THE UI further
+		// down, and it used to be emitted whether or not the store accepted
+		// it. The user watched the criterion ticks flip to met while the
+		// durable record still said pending, and on the next reload they
+		// reverted — a persistence fault rendered as a success, which is the
+		// one failure shape a user can neither see nor report accurately.
+		// The frame now carries the DURABLE truth: on a rejected Update the
+		// emitted lists fall back to the record's own re-read (unprojected)
+		// state, so the ticks that flip are exactly the ticks that landed.
+		// projectVerdictOntoCriteria copies its input (verdict_projection.go),
+		// so fresh.Criteria/fresh.DoD are still the pre-projection values here
+		// and are safe to fall back to.
+		ag.projectedCriteria, ag.projectedDoD = fresh.Criteria, fresh.DoD
+		if pstats.Applied > 0 {
+			if _, uerr := ag.gstore.Update(fresh.GoalID, func(cur *goal.Goal) error {
+				cur.Criteria = uc
+				cur.DoD = ud
+				return nil
+			}); uerr != nil {
+				logger.WarnCF("agent",
+					"goal trigger: could not persist the verdict projection onto the goal record (GOAL-FR-036) — emitting the durable (unprojected) criterion statuses instead",
+					map[string]any{"session_id": ag.sessionID, "goal_id": fresh.GoalID, "error": uerr.Error()})
+			} else {
+				ag.projectedCriteria, ag.projectedDoD = uc, ud
+			}
+		} else {
+			ag.projectedCriteria, ag.projectedDoD = uc, ud
+		}
+	}
+}
+
+// finishMetGoal persists a met verdict and completes the goal's terminal transition.
+func (ag *agentLoopRunGoalAdjudication) finishMetGoal() agentLoopRunGoalAdjudicationFlow {
+	if _, perr := ag.gstore.Update(ag.rec.GoalID, func(cur *goal.Goal) error {
+		if rerr := cur.RecordVerdict(ag.verdict, ag.reasonText, time.Now().UTC()); rerr != nil {
+			return rerr
+		}
+		cur.Round = ag.attempt
+		return nil
+	}); perr != nil {
+		// Same discipline as the unmet branch's silent-M3 abort: do NOT
+		// terminate a goal whose winning verdict the store refused, or the
+		// record is frozen `met` with no evidence of why, permanently.
+		// The goal stays ACTIVE and a later claim re-adjudicates.
+		logger.ErrorCF("agent", "goal trigger: could not persist the winning verdict; NOT terminating the goal",
+			map[string]any{"session_id": ag.sessionID, "goal_id": ag.rec.GoalID, "attempt": ag.attempt, "error": perr.Error()})
+		ag.al.writeGoalSystemTranscript(ag.store, ag.sessionID, ag.agentInst.ID, fmt.Sprintf(
+			"Goal %q reached a MET verdict but it could not be persisted (%v). The goal is still active — investigate storage and claim completion again.",
+			ag.rec.Prompt, perr))
+		ag.al.emitGoalStatusFrameWithCriteriaAndDoD(ag.sessionID, ag.rec.GoalID, ag.rec.Prompt, ag.rec.Round, ag.maxRounds,
+			"met verdict could not be persisted (goal still active)", goalPillActive,
+			ag.goalDefinition, ag.projectedCriteria, ag.projectedDoD)
+		ag.ret0 = false
+		return agentLoopRunGoalAdjudicationReturn
+	}
+	// Use the constant, not a bare literal. clearGoal switches on this note
+	// to decide the terminal pill state, so a literal here means editing
+	// goalClearNoteMet would silently stop matching and reclassify a MET
+	// goal as `failed` — the exact drift the constant was introduced to
+	// prevent. (Its doc comment claimed both call sites were converted;
+	// this one was missed.)
+	//
+	// silent-SF-8 (review): the return value used to be DISCARDED. When
+	// the terminal transition failed, clearGoal skipped every terminal
+	// side effect — including the terminal pill — and this function
+	// returned true anyway, so the goal card sat on `judging` forever with
+	// nothing in the UI ever correcting it. Honour the result: on a failed
+	// transition re-paint the card as active with the real reason, so the
+	// user sees a live goal rather than a frozen spinner.
+	if _, ok := ag.al.clearGoalWithOutcome(ag.sessionID, ag.store, goalClearNoteMet, goalOutcomeInput{
+		ending:     generated.GoalOutcomeEndingMet,
+		roundsUsed: ag.attempt,
+		maxRounds:  ag.maxRounds,
+		verdict:    ag.verdict,
+		agentID:    ag.agentInst.ID,
+		content: fmt.Sprintf("Goal %q met: the Judge confirmed all %d criteria.",
+			ag.rec.Prompt, len(ag.verdict.PerCriterion)),
+	}); !ok {
+		logger.ErrorCF("agent", "goal trigger: met verdict persisted but the terminal transition failed; leaving the goal active",
+			map[string]any{"session_id": ag.sessionID, "goal_id": ag.rec.GoalID, "attempt": ag.attempt})
+		ag.al.emitGoalStatusFrameWithCriteriaAndDoD(ag.sessionID, ag.rec.GoalID, ag.rec.Prompt, ag.attempt, ag.maxRounds,
+			"met, but the terminal transition could not be persisted — will retry", goalPillActive,
+			ag.goalDefinition, ag.projectedCriteria, ag.projectedDoD)
+		ag.ret0 = false
+		return agentLoopRunGoalAdjudicationReturn
+	}
+	ag.ret0 = true
+	return agentLoopRunGoalAdjudicationReturn
 }
 
 // --- Idle quiet-window settlement (FR-102/G-2/G-3) ------------------------
