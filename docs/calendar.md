@@ -58,15 +58,7 @@ Each kind of chip on the grid carries a specific meaning. The toolbar also has a
 | More not shown | The server capped how many runs it expanded for that task; the days beyond the marker are not empty |
 | Due chip | The deadline of an unscheduled task, shown on its due date |
 
-## Heartbeats, the one agent-level schedule
-
-A heartbeat is the only schedule that belongs to an agent rather than a task. It runs the agent on a fixed interval with a prompt you write, and it is configured per workspace: the same agent can have a different heartbeat, or none, in each workspace it belongs to.
-
-1. Open the workspace Team tab and click the agent. The profile panel opens.
-2. Open the Heartbeat tab.
-3. Switch Enable heartbeat on, set the Interval in minutes, and write the Heartbeat body, which is the prompt the agent runs each beat. Five minutes is the shortest interval, and the body is required while the heartbeat is enabled.
-
-Heartbeat runs do not appear on the calendar; each heartbeat keeps its own session, listed at the top of the sidebar's sessions list and marked with an HB badge.
+An agent heartbeat is separate from scheduled task work and does not appear on the calendar. See [agents](agents.md) to configure one.
 
 ## Limits and things to watch
 
