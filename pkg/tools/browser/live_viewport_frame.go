@@ -528,11 +528,48 @@ type windowBoundsAction struct {
 	width, height int
 }
 
+// liveViewApplyViewportAdmitted carries the shared state of applyViewportAdmitted across its stages.
+type liveViewApplyViewportAdmitted struct {
+	lv                      *LiveView
+	caller                  context.Context
+	tabCtx                  context.Context
+	operationCtx            context.Context
+	width                   int
+	height                  int
+	deviceScaleFactor       float64
+	applied                 bool
+	initialLayoutUnverified bool
+	err                     error
+	run                     func(timeout time.Duration, actions ...chromedp.Action) error
+	startActiveCtx          context.Context
+	scaleApplied            bool
+	actualW                 int64
+	actualH                 int64
+	compensated             bool
+	compensatedAskW         int
+	compensatedAskH         int
+	ret0                    bool
+	ret1                    bool
+	ret2                    error
+}
+
+// liveViewApplyViewportAdmittedFlow reports how a block stage of liveViewApplyViewportAdmitted wants the conductor to proceed.
+type liveViewApplyViewportAdmittedFlow int
+
+const (
+	liveViewApplyViewportAdmittedNext liveViewApplyViewportAdmittedFlow = iota
+	liveViewApplyViewportAdmittedReturn
+	liveViewApplyViewportAdmittedContinue
+	liveViewApplyViewportAdmittedBreak
+)
+
 // applyViewportAdmitted keeps the original target identity for cache validation;
 // only operationCtx is passed to browser work so caller cancellation reaches it.
 // initialLayoutUnverified reports that the initial read failed before compensation.
 func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.Context, width, height int, deviceScaleFactor float64) (applied bool, initialLayoutUnverified bool, err error) {
-	if tabCtx == nil {
+	av := &liveViewApplyViewportAdmitted{lv: lv, caller: caller, tabCtx: tabCtx, operationCtx: operationCtx, width: width, height: height, deviceScaleFactor: deviceScaleFactor}
+
+	if av.tabCtx == nil {
 		return false, false, nil
 	}
 	// Serialize the whole apply→compensate→settle→cache sequence per LiveView
@@ -546,42 +583,108 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 	// genuinely wrong tab). NOT lv.mu — this holds across several CDP round
 	// trips, and lv.mu must never be held across a CDP call (ADR-038
 	// discipline).
-	lv.viewportMu.Lock()
-	defer lv.viewportMu.Unlock()
+	av.lv.viewportMu.Lock()
+	defer av.lv.viewportMu.Unlock()
 	// The input gate excludes all other viewport applies before this mutex.
 	// Keep browser executor values from tabCtx while limiting each stage to
 	// both its existing timeout and the caller's remaining lifetime.
-	run := func(timeout time.Duration, actions ...chromedp.Action) error {
-		if err := viewportContextError(caller, operationCtx); err != nil {
+	av.run = func(timeout time.Duration, actions ...chromedp.Action) error {
+		if err := viewportContextError(av.caller, av.operationCtx); err != nil {
 			return err
 		}
-		return lv.runCDP(operationCtx, timeout, actions...)
+		return av.lv.runCDP(av.operationCtx, timeout, actions...)
 	}
 	// Bounds are also enforced by the wire schema (BrowserViewportFrame), but
 	// re-checked here because this is reachable from a public registry method
 	// and a future non-WS caller must not be able to hand Chromium a degenerate
 	// or enormous allocation.
-	if width < 1 || height < 1 || width > maxViewportDimension || height > maxViewportDimension {
-		return false, false, fmt.Errorf("browser live: viewport %dx%d out of range", width, height)
+
+	switch av.validateAndRemember() {
+	case liveViewApplyViewportAdmittedReturn:
+		return av.ret0, av.ret1, av.ret2
 	}
-	if deviceScaleFactor < 1 || deviceScaleFactor > maxViewportScaleFactor {
+
+	// Step 1: reshape the OS-level browser window (Fault 1 fix — see the
+	// mechanism section above). windowBoundsAction folds
+	// Browser.getWindowForTarget (which resolves the current tab's own window
+	// with no explicit target ID, because it is called "as a part of the
+	// session" — tabCtx IS that session) and Browser.setWindowBounds into one
+	// chromedp.Action. Routed through lv.runCDP, not the package-level
+	// runCDPWithTimeout, like every other CDP call site in this file.
+
+	switch av.resizeWindow() {
+	case liveViewApplyViewportAdmittedReturn:
+		return av.ret0, av.ret1, av.ret2
+	}
+
+	// Step 2: deviceScaleFactor only, on its OWN budget. A stage failure is
+	// cosmetic while the caller remains active — the
+	// window above is already the size the user asked for, and refusing that
+	// because the renderer was slow to answer a sharpness request is the exact
+	// bug viewportScaleTimeout's doc comment documents. dsf==1 clears any stale
+	// override rather than setting a no-op one.
+
+	switch av.applyScale() {
+	case liveViewApplyViewportAdmittedReturn:
+		return av.ret0, av.ret1, av.ret2
+	}
+
+	// Step 3: settle-poll the tab's ACTUAL CSS layout viewport (see the
+	// mechanism section, and settleCSSViewport's own doc comment).
+
+	switch av.measureInitialLayout() {
+	case liveViewApplyViewportAdmittedReturn:
+		return av.ret0, av.ret1, av.ret2
+	}
+
+	// Chrome-delta compensation, shortfall only, single pass — see the
+	// mechanism section above for the measurement and for why this must not be
+	// deleted, iterated, or allowed to run on an overshoot.
+
+	switch av.compensateLayout() {
+	case liveViewApplyViewportAdmittedReturn:
+		return av.ret0, av.ret1, av.ret2
+	}
+
+	av.logOutcome()
+
+	// The FINAL settled read is always sane/non-degenerate by this point — both
+	// failure paths above already returned early via invalidateCSSViewportCache.
+	return av.cacheMeasurement()
+}
+
+// validateAndRemember validates the requested viewport and records it with the active target at admission.
+func (av *liveViewApplyViewportAdmitted) validateAndRemember() liveViewApplyViewportAdmittedFlow {
+	if av.width < 1 || av.height < 1 || av.width > maxViewportDimension || av.height > maxViewportDimension {
+		av.ret0 = false
+		av.ret1 = false
+		av.ret2 = fmt.Errorf("browser live: viewport %dx%d out of range", av.width, av.height)
+		return liveViewApplyViewportAdmittedReturn
+	}
+	if av.deviceScaleFactor < 1 || av.deviceScaleFactor > maxViewportScaleFactor {
 		// Reject rather than silently clamp (review finding): a caller asking
 		// for dsf 50 got no feedback at all under the old clamp, while an
 		// out-of-range width got an explicit error. Same input class, same
 		// treatment.
-		return false, false, fmt.Errorf("browser live: device scale factor %.2f out of range (1..%.0f)",
-			deviceScaleFactor, maxViewportScaleFactor)
+		av.ret0 = false
+		av.ret1 = false
+		av.ret2 = fmt.Errorf("browser live: device scale factor %.2f out of range (1..%.0f)",
+			av.deviceScaleFactor, maxViewportScaleFactor)
+		return liveViewApplyViewportAdmittedReturn
 	}
 	// Combined ceiling. Each dimension and the scale factor are individually
 	// bounded above, but nothing bounded their PRODUCT: 8192x8192 at dsf 3 is
 	// inside every per-field limit and asks Chromium for a ~24576x24576
 	// physical surface — on the order of gigabytes of framebuffer, against the
 	// single shared Chrome backing the agent's browsing.
-	physicalPixels := float64(width) * float64(height) * deviceScaleFactor * deviceScaleFactor
+	physicalPixels := float64(av.width) * float64(av.height) * av.deviceScaleFactor * av.deviceScaleFactor
 	if physicalPixels > maxViewportPhysicalPixels {
-		return false, false, fmt.Errorf(
+		av.ret0 = false
+		av.ret1 = false
+		av.ret2 = fmt.Errorf(
 			"browser live: viewport %dx%d @%.1fx = %.0f physical pixels, over the %.0f ceiling",
-			width, height, deviceScaleFactor, physicalPixels, maxViewportPhysicalPixels)
+			av.width, av.height, av.deviceScaleFactor, physicalPixels, maxViewportPhysicalPixels)
+		return liveViewApplyViewportAdmittedReturn
 	}
 
 	// Remember what was asked for, BEFORE any CDP call. onTabsChanged replays
@@ -591,37 +694,40 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 	// innerWidth/innerHeight), so without a replay every newly-opened tab
 	// renders at 1x while the encoder is still capturing at 2x, which is blur
 	// on every single tab open.
-	lv.mu.Lock()
-	lv.lastRequestedW, lv.lastRequestedH = width, height
-	lv.lastRequestedScale = deviceScaleFactor
+	av.lv.mu.Lock()
+	av.lv.lastRequestedW, av.lv.lastRequestedH = av.width, av.height
+	av.lv.lastRequestedScale = av.deviceScaleFactor
 	// The active tab as it stood when this apply STARTED — half of the
 	// stale-write guard on the cache write at the very end (see
 	// viewportMeasurementIsStaleLocked). Everything between here and there is
 	// several CDP round trips plus a settle poll, and the user can switch tabs
 	// throughout.
-	startActiveCtx := lv.lastKnownActiveCtx
-	lv.mu.Unlock()
+	av.startActiveCtx = av.lv.lastKnownActiveCtx
+	av.lv.mu.Unlock()
+	return liveViewApplyViewportAdmittedNext
+}
 
-	// Step 1: reshape the OS-level browser window (Fault 1 fix — see the
-	// mechanism section above). windowBoundsAction folds
-	// Browser.getWindowForTarget (which resolves the current tab's own window
-	// with no explicit target ID, because it is called "as a part of the
-	// session" — tabCtx IS that session) and Browser.setWindowBounds into one
-	// chromedp.Action. Routed through lv.runCDP, not the package-level
-	// runCDPWithTimeout, like every other CDP call site in this file.
-	if lv.mgr != nil {
-		if cs := lv.mgr.CaptureSessionForPanel(lv.sessionID); cs != nil {
-			_, target, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
+// resizeWindow starts the frame transition and resizes the browser window, retrying a transient timeout once.
+func (av *liveViewApplyViewportAdmitted) resizeWindow() liveViewApplyViewportAdmittedFlow {
+	if av.lv.mgr != nil {
+		if cs := av.lv.mgr.CaptureSessionForPanel(av.lv.sessionID); cs != nil {
+			_, target, err := av.lv.mgr.activeTargetSnapshot(av.lv.sessionID)
 			if err != nil {
-				return false, false, err
+				av.ret0 = false
+				av.ret1 = false
+				av.ret2 = err
+				return liveViewApplyViewportAdmittedReturn
 			}
-			if _, err := cs.BeginFrameTransition(string(target), 0, 0, deviceScaleFactor); err != nil {
-				return false, false, err
+			if _, err := cs.BeginFrameTransition(string(target), 0, 0, av.deviceScaleFactor); err != nil {
+				av.ret0 = false
+				av.ret1 = false
+				av.ret2 = err
+				return liveViewApplyViewportAdmittedReturn
 			}
 		}
 	}
-	boundsAction := windowBoundsAction{width: width, height: height}
-	if err := run(viewportSetTimeout, boundsAction); err != nil {
+	boundsAction := windowBoundsAction{width: av.width, height: av.height}
+	if err := av.run(viewportSetTimeout, boundsAction); err != nil {
 		// One retry, and ONLY for a deadline timeout (2026-08-13 UAT: "could
 		// not resize the browser viewport" toast mid-session). A
 		// GetWindowForTarget that cannot answer within viewportSetTimeout means
@@ -629,48 +735,58 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 		// backlog), not that the resize is invalid — by the second attempt the
 		// stall has typically cleared. Any other error is a real failure and
 		// still surfaces immediately.
-		if viewportContextError(caller, operationCtx) != nil || !errors.Is(err, context.DeadlineExceeded) {
-			return false, false, fmt.Errorf("browser live: resize viewport: %w", err)
+		if viewportContextError(av.caller, av.operationCtx) != nil || !errors.Is(err, context.DeadlineExceeded) {
+			av.ret0 = false
+			av.ret1 = false
+			av.ret2 = fmt.Errorf("browser live: resize viewport: %w", err)
+			return liveViewApplyViewportAdmittedReturn
 		}
 		logger.WarnCF(
 			"browser",
 			"live view: set viewport timed out; retrying once (browser process momentarily starved)",
-			map[string]any{"session_id": lv.sessionID},
+			map[string]any{"session_id": av.lv.sessionID},
 		)
-		if err := run(viewportSetTimeout, boundsAction); err != nil {
-			return false, false, fmt.Errorf("browser live: resize viewport (after retry): %w", err)
+		if err := av.run(viewportSetTimeout, boundsAction); err != nil {
+			av.ret0 = false
+			av.ret1 = false
+			av.ret2 = fmt.Errorf("browser live: resize viewport (after retry): %w", err)
+			return liveViewApplyViewportAdmittedReturn
 		}
 	}
 
-	if err := viewportContextError(caller, operationCtx); err != nil {
-		return true, false, err
+	if err := viewportContextError(av.caller, av.operationCtx); err != nil {
+		av.ret0 = true
+		av.ret1 = false
+		av.ret2 = err
+		return liveViewApplyViewportAdmittedReturn
 	}
+	return liveViewApplyViewportAdmittedNext
+}
 
-	// Step 2: deviceScaleFactor only, on its OWN budget. A stage failure is
-	// cosmetic while the caller remains active — the
-	// window above is already the size the user asked for, and refusing that
-	// because the renderer was slow to answer a sharpness request is the exact
-	// bug viewportScaleTimeout's doc comment documents. dsf==1 clears any stale
-	// override rather than setting a no-op one.
+// applyScale applies the requested device scale factor and reports a non-fatal degradation.
+func (av *liveViewApplyViewportAdmitted) applyScale() liveViewApplyViewportAdmittedFlow {
 	var scaleAction chromedp.Action = emulation.ClearDeviceMetricsOverride()
-	if deviceScaleFactor > 1 {
-		scaleAction = emulation.SetDeviceMetricsOverride(0, 0, deviceScaleFactor, false)
+	if av.deviceScaleFactor > 1 {
+		scaleAction = emulation.SetDeviceMetricsOverride(0, 0, av.deviceScaleFactor, false)
 	}
-	scaleApplied := true
-	if err := run(viewportScaleTimeout, scaleAction); err != nil {
-		if ended := viewportContextError(caller, operationCtx); ended != nil {
-			return true, false, ended
+	av.scaleApplied = true
+	if err := av.run(viewportScaleTimeout, scaleAction); err != nil {
+		if ended := viewportContextError(av.caller, av.operationCtx); ended != nil {
+			av.ret0 = true
+			av.ret1 = false
+			av.ret2 = ended
+			return liveViewApplyViewportAdmittedReturn
 		}
-		scaleApplied = false
+		av.scaleApplied = false
 		logger.WarnCF(
 			"browser",
 			"live view: the browser window was resized successfully, but the display-sharpness setting did not take — the picture may look soft until the next resize",
 			map[string]any{
 				"error":               err.Error(),
-				"session_id":          lv.sessionID,
-				"requested_width":     width,
-				"requested_height":    height,
-				"device_scale_factor": deviceScaleFactor,
+				"session_id":          av.lv.sessionID,
+				"requested_width":     av.width,
+				"requested_height":    av.height,
+				"device_scale_factor": av.deviceScaleFactor,
 			},
 		)
 		// ...and TELL THE PERSON WATCHING (round-2 finding F5, ADR-061
@@ -683,23 +799,32 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 		// control and no stated recovery, while the macOS user never saw the
 		// branch at all. Same behaviour, same message, same recovery on both
 		// is the point.
-		lv.notifyScaleDegraded()
+		av.lv.notifyScaleDegraded()
 	} else {
 		// Re-arm the notice: the next degradation after a recovery is a new
 		// event and must be reported, not swallowed by the previous one's
 		// throttle window.
-		lv.clearScaleDegraded()
+		av.lv.clearScaleDegraded()
 	}
 
-	if err := viewportContextError(caller, operationCtx); err != nil {
-		return true, false, err
+	if err := viewportContextError(av.caller, av.operationCtx); err != nil {
+		av.ret0 = true
+		av.ret1 = false
+		av.ret2 = err
+		return liveViewApplyViewportAdmittedReturn
 	}
+	return liveViewApplyViewportAdmittedNext
+}
 
-	// Step 3: settle-poll the tab's ACTUAL CSS layout viewport (see the
-	// mechanism section, and settleCSSViewport's own doc comment).
-	actualW, actualH, readErr := lv.settleCSSViewport(operationCtx, width, height)
-	if err := viewportContextError(caller, operationCtx); err != nil {
-		return true, false, err
+// measureInitialLayout settles and validates the initial CSS viewport measurement.
+func (av *liveViewApplyViewportAdmitted) measureInitialLayout() liveViewApplyViewportAdmittedFlow {
+	var readErr error
+	av.actualW, av.actualH, readErr = av.lv.settleCSSViewport(av.operationCtx, av.width, av.height)
+	if err := viewportContextError(av.caller, av.operationCtx); err != nil {
+		av.ret0 = true
+		av.ret1 = false
+		av.ret2 = err
+		return liveViewApplyViewportAdmittedReturn
 	}
 	if readErr != nil {
 		// A failed read-back does not undo the resize above (best-effort: the
@@ -707,68 +832,84 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 		// rather than turned into an error return — but it DOES invalidate the
 		// cache rather than leaving a stale value in place; see
 		// invalidateCSSViewportCache's doc comment for why that matters.
-		lv.invalidateCSSViewportCache()
+		av.lv.invalidateCSSViewportCache()
 		logger.WarnCF(
 			"browser",
 			"live view: set viewport applied but could not read back the actual CSS viewport to verify it — cache invalidated, input coordinates will re-fetch it on the next event",
 			map[string]any{
 				"error":            readErr.Error(),
-				"session_id":       lv.sessionID,
-				"requested_width":  width,
-				"requested_height": height,
+				"session_id":       av.lv.sessionID,
+				"requested_width":  av.width,
+				"requested_height": av.height,
 			},
 		)
-		return true, true, nil
+		av.ret0 = true
+		av.ret1 = true
+		av.ret2 = nil
+		return liveViewApplyViewportAdmittedReturn
 	}
+	return liveViewApplyViewportAdmittedNext
+}
 
-	// Chrome-delta compensation, shortfall only, single pass — see the
-	// mechanism section above for the measurement and for why this must not be
-	// deleted, iterated, or allowed to run on an overshoot.
-	compensated := false
-	var compensatedAskW, compensatedAskH int
-	shortW := width - int(actualW)
-	shortH := height - int(actualH)
+// compensateLayout performs one shortfall compensation pass and records its settled measurement.
+func (av *liveViewApplyViewportAdmitted) compensateLayout() liveViewApplyViewportAdmittedFlow {
+	av.compensated = false
+
+	shortW := av.width - int(av.actualW)
+	shortH := av.height - int(av.actualH)
 	if shortW > viewportDriftTolerancePx || shortH > viewportDriftTolerancePx {
-		compW := clampViewportDim(width + max(shortW, 0))
-		compH := clampViewportDim(height + max(shortH, 0))
-		compensatedAskW, compensatedAskH = compW, compH
-		if err := run(viewportSetTimeout, windowBoundsAction{width: compW, height: compH}); err != nil {
-			if ended := viewportContextError(caller, operationCtx); ended != nil {
-				return true, false, ended
+		compW := clampViewportDim(av.width + max(shortW, 0))
+		compH := clampViewportDim(av.height + max(shortH, 0))
+		av.compensatedAskW, av.compensatedAskH = compW, compH
+		if err := av.run(viewportSetTimeout, windowBoundsAction{width: compW, height: compH}); err != nil {
+			if ended := viewportContextError(av.caller, av.operationCtx); ended != nil {
+				av.ret0 = true
+				av.ret1 = false
+				av.ret2 = ended
+				return liveViewApplyViewportAdmittedReturn
 			}
 			logger.WarnCF(
 				"browser",
 				"live view: set viewport — chrome-delta compensation re-apply failed, keeping the pre-compensation read-back",
 				map[string]any{
 					"error":              err.Error(),
-					"session_id":         lv.sessionID,
+					"session_id":         av.lv.sessionID,
 					"compensated_width":  compW,
 					"compensated_height": compH,
 				},
 			)
 		} else {
-			if err := viewportContextError(caller, operationCtx); err != nil {
-				return true, false, err
+			if err := viewportContextError(av.caller, av.operationCtx); err != nil {
+				av.ret0 = true
+				av.ret1 = false
+				av.ret2 = err
+				return liveViewApplyViewportAdmittedReturn
 			}
-			compW2, compH2, compErr := lv.settleCSSViewport(operationCtx, width, height)
-			if err := viewportContextError(caller, operationCtx); err != nil {
-				return true, false, err
+			compW2, compH2, compErr := av.lv.settleCSSViewport(av.operationCtx, av.width, av.height)
+			if err := viewportContextError(av.caller, av.operationCtx); err != nil {
+				av.ret0 = true
+				av.ret1 = false
+				av.ret2 = err
+				return liveViewApplyViewportAdmittedReturn
 			}
 			if compErr != nil {
-				lv.invalidateCSSViewportCache()
+				av.lv.invalidateCSSViewportCache()
 				logger.WarnCF("browser",
 					"live view: set viewport — could not read back the CSS viewport after "+
 						"chrome-delta compensation — cache invalidated, input coordinates will "+
 						"re-fetch it on the next event",
 					map[string]any{
 						"error":              compErr.Error(),
-						"session_id":         lv.sessionID,
-						"requested_width":    width,
-						"requested_height":   height,
+						"session_id":         av.lv.sessionID,
+						"requested_width":    av.width,
+						"requested_height":   av.height,
 						"compensated_width":  compW,
 						"compensated_height": compH,
 					})
-				return true, false, nil
+				av.ret0 = true
+				av.ret1 = false
+				av.ret2 = nil
+				return liveViewApplyViewportAdmittedReturn
 			}
 			// The settled post-compensation read is authoritative, full stop.
 			// This used to "keep the closest" of the two read-backs, a
@@ -780,32 +921,39 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 			// up further from the request than it started (it can, e.g. a
 			// window clamped at the screen edge) must be recorded as it IS, not
 			// replaced by a stale earlier number that flatters the request.
-			actualW, actualH = compW2, compH2
-			compensated = true
+			av.actualW, av.actualH = compW2, compH2
+			av.compensated = true
 		}
 	}
 
-	if err := viewportContextError(caller, operationCtx); err != nil {
-		return true, false, err
+	if err := viewportContextError(av.caller, av.operationCtx); err != nil {
+		av.ret0 = true
+		av.ret1 = false
+		av.ret2 = err
+		return liveViewApplyViewportAdmittedReturn
 	}
+	return liveViewApplyViewportAdmittedNext
+}
 
+// logOutcome logs whether the final measured viewport matches the request.
+func (av *liveViewApplyViewportAdmitted) logOutcome() {
 	fields := map[string]any{
-		"session_id":          lv.sessionID,
-		"requested_width":     width,
-		"requested_height":    height,
-		"actual_width":        actualW,
-		"actual_height":       actualH,
-		"device_scale_factor": deviceScaleFactor,
-		"scale_applied":       scaleApplied,
-		"compensated":         compensated,
+		"session_id":          av.lv.sessionID,
+		"requested_width":     av.width,
+		"requested_height":    av.height,
+		"actual_width":        av.actualW,
+		"actual_height":       av.actualH,
+		"device_scale_factor": av.deviceScaleFactor,
+		"scale_applied":       av.scaleApplied,
+		"compensated":         av.compensated,
 		// What compensation actually asked Chrome for (0 when it never ran).
 		// Present so a recurrence of the DSF-2 shrink is diagnosable from the
 		// log alone — reconstructing it by hand produced two wrong models.
-		"compensated_ask_width":  compensatedAskW,
-		"compensated_ask_height": compensatedAskH,
+		"compensated_ask_width":  av.compensatedAskW,
+		"compensated_ask_height": av.compensatedAskH,
 	}
-	if viewportDeltaPx(width, actualW) > viewportDriftTolerancePx ||
-		viewportDeltaPx(height, actualH) > viewportDriftTolerancePx {
+	if viewportDeltaPx(av.width, av.actualW) > viewportDriftTolerancePx ||
+		viewportDeltaPx(av.height, av.actualH) > viewportDriftTolerancePx {
 		// The silent-success failure mode the root-cause doc documents: every
 		// prior layer reported success while the capture never actually
 		// reshaped. Loud enough here that it can't be missed the way it was
@@ -818,11 +966,12 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 	} else {
 		logger.InfoCF("browser", "live view: viewport applied", fields)
 	}
+}
 
-	// The FINAL settled read is always sane/non-degenerate by this point — both
-	// failure paths above already returned early via invalidateCSSViewportCache.
-	lv.mu.Lock()
-	if lv.viewportMeasurementIsStaleLocked(tabCtx, startActiveCtx) {
+// cacheMeasurement caches the final measurement unless the active target changed during the apply.
+func (av *liveViewApplyViewportAdmitted) cacheMeasurement() (bool, bool, error) {
+	av.lv.mu.Lock()
+	if av.lv.viewportMeasurementIsStaleLocked(av.tabCtx, av.startActiveCtx) {
 		// The measurement is real, but it describes a tab that is no longer
 		// the one being watched and clicked. Writing it would be WORSE than
 		// writing nothing: a positive value passes rescaleToCSSViewport's
@@ -830,41 +979,41 @@ func (lv *LiveView) applyViewportAdmitted(caller, tabCtx, operationCtx context.C
 		// the geometry of a tab the user has already left — silently, and with
 		// no way for anything downstream to notice. Zeroing instead makes the
 		// next input event re-fetch from the tab that is actually live.
-		lv.cssViewportW, lv.cssViewportH = 0, 0
-		lv.cssViewportScale = 0
-		lv.mu.Unlock()
+		av.lv.cssViewportW, av.lv.cssViewportH = 0, 0
+		av.lv.cssViewportScale = 0
+		av.lv.mu.Unlock()
 		logger.WarnCF(
 			"browser",
 			"live view: the active tab changed while its viewport was being applied — "+
 				"discarding the measurement rather than caching another tab's geometry",
 			map[string]any{
-				"session_id":       lv.sessionID,
-				"requested_width":  width,
-				"requested_height": height,
-				"actual_width":     actualW,
-				"actual_height":    actualH,
+				"session_id":       av.lv.sessionID,
+				"requested_width":  av.width,
+				"requested_height": av.height,
+				"actual_width":     av.actualW,
+				"actual_height":    av.actualH,
 			},
 		)
 		return true, false, nil
 	}
-	lv.cssViewportW = int(actualW)
-	lv.cssViewportH = int(actualH)
-	if scaleApplied {
-		lv.cssViewportScale = deviceScaleFactor
+	av.lv.cssViewportW = int(av.actualW)
+	av.lv.cssViewportH = int(av.actualH)
+	if av.scaleApplied {
+		av.lv.cssViewportScale = av.deviceScaleFactor
 		// lastAppliedScale survives cache invalidation on purpose: the CDP
 		// override stays in force on the target until something clears it, so
 		// a later cache refill (rescaleToCSSViewport's cache-miss fetch, which
 		// can read the layout viewport but has no way to measure the scale)
 		// can restore it instead of leaving the scale at zero forever.
-		lv.lastAppliedScale = deviceScaleFactor
+		av.lv.lastAppliedScale = av.deviceScaleFactor
 	} else {
 		// The override did not land, so the tab is rendering at some scale we
 		// did not choose and cannot name. Recording the requested one would be
 		// a confident lie to viewportBasisForCapture; zero means "unknown",
 		// which is what it actually is.
-		lv.cssViewportScale = 0
+		av.lv.cssViewportScale = 0
 	}
-	lv.mu.Unlock()
+	av.lv.mu.Unlock()
 
 	return true, false, nil
 }
