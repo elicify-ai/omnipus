@@ -167,13 +167,29 @@ Checked in code: create already requires Title, Goal, at least one acceptance cr
 
 **Done when.** Opening New Event shows no red errors. Every field above is still visible. DoD and criteria each have one heading.
 
+### 15. Knowledge views — folders first; search only when there are many
+
+**Context.** Empty Library is already item 2. An empty vault with **no** saved views currently shows no views list — that stays (silence is correct). This item is only a **filled** vault, where many saved views can sit above the folder tree as one flat stream. The list is already height-capped so it cannot push folders off the screen; it is still hard to scan. Clicking a view opens a centred dialog that clips wide tables. Opening a `.base` file shows every view as equal tabs in one scrolling row.
+
+**Requirement.**
+
+- **Folders first.** The vault’s folder tree is the main map. Saved views sit in a compact block after (or beside) the folders, not a long wall before them.
+- **10 or fewer views:** a simple list, no search field.
+- **More than 10 views:** group by Base / source (Tasks, Decisions, CRM, authored in this vault, …) and show a search field. Same threshold idea as agents and models.
+- **Open a data view in the main Library pane**, using the existing Library chrome. Keep a small dialog only for a short summary or an empty result. Wide tables must be readable (horizontal scroll visible, not clipped with no way to move).
+- **Base tab strip:** a handful of visible views, the rest in a labeled Views control — not 19 equal tabs. Current view stays obvious.
+- Do not invent pinning in this round unless it already exists. Do not change empty-Library or empty-views silence.
+
+**Done when.** Opening a large vault shows folders without scrolling past every view. More than 10 views are grouped and searchable. A wide Decisions/CRM view reads in the Library pane. A `.base` file does not present 19 peer tabs.
+
 ---
 
 ## Parked — do not invent requirements yet
 
 | Topic | Why it is parked | Next step |
 |---|---|---|
-| Knowledge views | A filled vault is not an empty vault. Do not overload users, but do not guess. | Dedicated interview next. |
+| Knowledge search “20 of 39” | Search already reports complete index coverage; continuation/pagination was not decided. | Later, if it still hurts after views land. |
+| Knowledge dashboard embed errors | Founder Cockpit showing parser/loader strings was not in this round. | Later, with a live dashboard. |
 
 ---
 
@@ -198,7 +214,7 @@ Checked in code: create already requires Title, Goal, at least one acceptance cr
 4. Live browser failure + Activity stop / open / return / details.
 5. Model picker + agent-list search (items 11–12).
 6. Task detail first view + autosave Goal (item 13); New Event headings (item 14).
-7. Then the parked interview: Knowledge views.
+7. Knowledge views on a filled vault (item 15).
 
 Internal batches are fine. These remain product requirements until each row’s **Done when** is true.
 
