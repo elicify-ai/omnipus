@@ -490,7 +490,18 @@ export function BrowserLiveView({
     const capture = captureRef.current
     if (handoff && !handoff.failed && handoff.target && inputRef.current?.state === 'ready' && state.status === 'ready' &&
       (capture.id !== handoff.previousId || state.generation > handoff.previousGeneration) &&
-      handoff.completed?.id === capture.id && handoff.completed.generation === state.generation &&
+      // >=, not ===: the ACK pins the generation the gateway had committed
+      // when the resize was admitted, but any later transition — a navigate
+      // landing before the resized picture presents, a tab switch, a second
+      // recapture — legitimately advances the capture PAST it. That newer
+      // picture also postdates the resize, so it is equally valid proof the
+      // new picture is on screen. Demanding the exact acked generation meant
+      // one such transition wedged the handoff permanently: completion could
+      // never fire, the 15s timer reported "Browser resize did not finish",
+      // and every gesture stayed gated off behind a live, healthy video.
+      // (ui-browser shard UAT-13/14/15, 2026-09-18: ACK said gen 4, the
+      // navigate's document transition presented gen 5, input never moved.)
+      handoff.completed?.id === capture.id && state.generation >= handoff.completed.generation &&
       capture.css && capture.css.width > 0 && capture.css.height > 0) finishViewportHandoff()
     if (framePresentationTimerRef.current !== null) clearTimeout(framePresentationTimerRef.current)
     framePresentationTimerRef.current = null

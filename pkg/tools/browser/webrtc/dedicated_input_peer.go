@@ -196,8 +196,15 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 	if applications != 1 {
 		return "", errors.New("input offer must have one application section")
 	}
+	// Warn, not Info: the gateway's default log level is "warn"
+	// (pkg/config/defaults.go's LogLevel), so an Info line here is invisible in
+	// every default deployment — which is exactly how this peer's ICE
+	// instrumentation sat merged, tested, and silent while three lanes argued
+	// its defect from absence. The lines are one-shot per negotiation (offer
+	// summary, one line per candidate, state transitions), so Warn-level noise
+	// is bounded the way pion's own ICE warnings already are.
 	logf := func(format string, args ...any) {
-		slog.Info(fmt.Sprintf("browser dedicated input: "+format, args...))
+		slog.Warn(fmt.Sprintf("browser dedicated input: "+format, args...))
 	}
 	session := NewSession(p.cfg, nil, logf)
 	pc, err := session.buildPeerConnection(session.apiViewer, true)
