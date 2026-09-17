@@ -1,6 +1,17 @@
 import { makeApi, Zodios, type ZodiosOptions } from "@zodios/core";
 import { z } from "zod";
 
+type ConfigurationMutationState = {
+  revision: ConfigurationRevision;
+  persistence_status: ConfigurationPersistenceStatus;
+  activation_status: ConfigurationActivationStatus;
+  changed_fields: Array<string>;
+  error_stage?: string | undefined;
+  message?: string | undefined;
+};
+type ConfigurationRevision = string;
+type ConfigurationPersistenceStatus = "complete" | "partial" | "none";
+type ConfigurationActivationStatus = "active" | "failed" | "not_attempted";
 type LoginResponse = {
   token: BearerToken;
   username: string;
@@ -1047,6 +1058,13 @@ type ValidationReport = {
   types?: Array<string> | undefined;
 };
 type Agent = {
+  revision: ConfigurationRevision;
+  persistence_status?: ConfigurationPersistenceStatus | undefined;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  changed_fields?: Array<string> | undefined;
+  error_stage?: string | undefined;
+  message?: string | undefined;
+  editable_fields?: Array<AgentFieldDescriptor> | undefined;
   id: string;
   name: string;
   type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
@@ -1079,6 +1097,11 @@ type Agent = {
   context_window_clamped?: boolean | undefined;
   context_window_override?: number | undefined;
   memory_enabled?: boolean | undefined;
+};
+type AgentFieldDescriptor = {
+  name: string;
+  editable: boolean;
+  reason?: string | undefined;
 };
 type AgentToolsCfg = Partial<{
   builtin: {
@@ -1124,22 +1147,28 @@ type ExecutorConfig = Partial<{
 }>;
 type ExternalCliTool = "claude-code" | "codex" | "opencode";
 type ContextWindowSource = "operator" | "live" | "catalog" | "floor";
-type AgentToolsUpdateRequest = Partial<{
-  config: AgentToolsCfg;
-  tools: Array<AgentToolEntry>;
-  agent_type: string;
-  builtin: {
-    policies: {};
-    mode?: ("explicit" | "inherit") | undefined;
-    visible?: Array<string> | undefined;
-  };
-  mcp: Partial<{
-    servers: Array<{
-      id: string;
-      tools?: Array<string> | undefined;
-    }>;
-  }>;
-}>;
+type AgentToolsUpdateRequest = {
+  revision: ConfigurationRevision;
+  override_names: Array<string>;
+  config?: AgentToolsCfg | undefined;
+  tools?: Array<AgentToolEntry> | undefined;
+  agent_type?: string | undefined;
+  builtin?:
+    | {
+        policies: {};
+        mode?: ("explicit" | "inherit") | undefined;
+        visible?: Array<string> | undefined;
+      }
+    | undefined;
+  mcp?:
+    | Partial<{
+        servers: Array<{
+          id: string;
+          tools?: Array<string> | undefined;
+        }>;
+      }>
+    | undefined;
+};
 type AgentToolEntry = {
   name: string;
   configured_policy: "allow" | "ask" | "deny";
@@ -1151,6 +1180,8 @@ type AgentCreateRequest =
   | AgentCreateRequestSubagent
   | AgentCreateRequestSubagent3p;
 type AgentCreateRequestMain = {
+  mcp_servers?: Array<AgentMCPBinding> | undefined;
+  tool_policy_changes?: ToolPolicyChanges | undefined;
   type: "Main";
   name: string;
   description?: string | undefined;
@@ -1166,22 +1197,23 @@ type AgentCreateRequestMain = {
         max_tokens: number;
       }>
     | undefined;
-  rate_limits?:
-    | Partial<{
-        use_global_defaults: boolean;
-        max_llm_calls_per_hour: number;
-        max_tool_calls_per_minute: number;
-        max_cost_per_day: number;
-      }>
-    | undefined;
   skills?: Array<string> | undefined;
   soul: string;
   voice?: (string | null) | undefined;
   shell_policy?: AgentShellPolicy | undefined;
-  timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
 };
+type AgentMCPBinding = {
+  id: string;
+  tools?: Array<string> | undefined;
+};
+type ToolPolicyChanges = Partial<{
+  set: {};
+  remove: Array<string>;
+}>;
 type AgentCreateRequestSubagent = {
+  mcp_servers?: Array<AgentMCPBinding> | undefined;
+  tool_policy_changes?: ToolPolicyChanges | undefined;
   type: "Subagent";
   name: string;
   description?: string | undefined;
@@ -1197,18 +1229,9 @@ type AgentCreateRequestSubagent = {
         max_tokens: number;
       }>
     | undefined;
-  rate_limits?:
-    | Partial<{
-        use_global_defaults: boolean;
-        max_llm_calls_per_hour: number;
-        max_tool_calls_per_minute: number;
-        max_cost_per_day: number;
-      }>
-    | undefined;
   skills?: Array<string> | undefined;
   soul: string;
   shell_policy?: AgentShellPolicy | undefined;
-  timeout_seconds?: number | undefined;
   max_tool_iterations?: number | undefined;
 };
 type AgentCreateRequestSubagent3p = {
@@ -1231,43 +1254,39 @@ type AgentCreateRequestSubagent3p = {
   executor: ExecutorConfig;
   timeout_seconds?: number | undefined;
 };
-type AgentUpdateRequest = Partial<{
-  updated_at: string;
-  name: string;
-  description: string;
-  model: string;
-  provider: string;
-  context_window_override: number | null;
-  soul: string;
-  heartbeat: string;
-  timeout_seconds: number;
-  max_tool_iterations: number;
-  heartbeat_enabled: boolean;
-  heartbeat_interval: number;
-  shell_policy: Partial<{
-    enable_deny_patterns: boolean;
-    custom_deny_patterns: Array<string>;
-  }>;
-  color: string;
-  icon: string;
-  fallback_models: Array<FallbackModel>;
-  model_params: Partial<{
-    temperature: number;
-    max_tokens: number;
-  }>;
-  rate_limits: Partial<{
-    use_global_defaults: boolean;
-    max_llm_calls_per_hour: number;
-    max_tool_calls_per_minute: number;
-    max_cost_per_day: number;
-  }>;
-  tools_cfg: AgentToolsCfg;
-  default: boolean;
-  skills: Array<string>;
-  voice: string | null;
-  executor: ExecutorConfig;
-  memory_enabled: boolean;
-}>;
+type AgentUpdateRequest = {
+  revision: ConfigurationRevision;
+  mcp_servers?: Array<AgentMCPBinding> | undefined;
+  tool_policy_changes?: ToolPolicyChanges | undefined;
+  name?: string | undefined;
+  description?: string | undefined;
+  model?: string | undefined;
+  provider?: string | undefined;
+  context_window_override?: (number | null) | undefined;
+  soul?: string | undefined;
+  max_tool_iterations?: number | undefined;
+  shell_policy?:
+    | Partial<{
+        enable_deny_patterns: boolean;
+        custom_deny_patterns: Array<string>;
+      }>
+    | undefined;
+  color?: string | undefined;
+  icon?: string | undefined;
+  fallback_models?: Array<FallbackModel> | undefined;
+  model_params?:
+    | Partial<{
+        temperature: number;
+        max_tokens: number;
+      }>
+    | undefined;
+  tools_cfg?: AgentToolsCfg | undefined;
+  default?: boolean | undefined;
+  skills?: Array<string> | undefined;
+  voice?: (string | null) | undefined;
+  executor?: ExecutorConfig | undefined;
+  memory_enabled?: boolean | undefined;
+};
 type ExecutorDefaults = {
   cli: ExternalCliTool;
   auto_applied_flags: Array<string>;
@@ -1634,6 +1653,13 @@ type DevicePaired = {
   status: "active" | "revoked";
 };
 type AgentToolsResponse = {
+  revision: ConfigurationRevision;
+  persistence_status?: ConfigurationPersistenceStatus | undefined;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  changed_fields?: Array<string> | undefined;
+  error_stage?: string | undefined;
+  message?: string | undefined;
+  override_names: Array<string>;
   config: AgentToolsCfg;
   tools: Array<AgentToolEntry>;
   agent_type?:
@@ -2877,6 +2903,22 @@ export const SessionDetail: z.ZodType<SessionDetail> = z.object({
 export const SessionRenameRequest = z.object({
   title: z.string().min(1).max(256),
 });
+export const ConfigurationRevision = z.string();
+export const ConfigurationPersistenceStatus = z.enum([
+  "complete",
+  "partial",
+  "none",
+]);
+export const ConfigurationActivationStatus = z.enum([
+  "active",
+  "failed",
+  "not_attempted",
+]);
+export const AgentFieldDescriptor: z.ZodType<AgentFieldDescriptor> = z.object({
+  name: z.string(),
+  editable: z.boolean(),
+  reason: z.string().optional(),
+});
 export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
   .object({
     builtin: z
@@ -2948,6 +2990,13 @@ export const ContextWindowSource = z.enum([
 ]);
 export const Agent: z.ZodType<Agent> = z
   .object({
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    persistence_status: ConfigurationPersistenceStatus.optional(),
+    activation_status: ConfigurationActivationStatus.optional(),
+    changed_fields: z.array(z.string()).optional(),
+    error_stage: z.string().optional(),
+    message: z.string().optional(),
+    editable_fields: z.array(AgentFieldDescriptor).optional(),
     id: z.string(),
     name: z.string().min(1).max(100),
     type: z.enum(["core", "system", "Main", "Subagent", "subagent_3p"]),
@@ -2985,8 +3034,20 @@ export const Agent: z.ZodType<Agent> = z
     memory_enabled: z.boolean().optional().default(true),
   })
   .passthrough();
+export const AgentMCPBinding: z.ZodType<AgentMCPBinding> = z.object({
+  id: z.string().min(1),
+  tools: z.array(z.string().min(1)).optional(),
+});
+export const ToolPolicyChanges: z.ZodType<ToolPolicyChanges> = z
+  .object({
+    set: z.record(z.enum(["allow", "ask", "deny"])),
+    remove: z.array(z.string().min(1)),
+  })
+  .partial();
 export const AgentCreateRequestMain =
   z.object({
+    mcp_servers: z.array(AgentMCPBinding).optional(),
+    tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Main"),
     name: z.string().min(1),
     description: z.string().optional(),
@@ -3004,25 +3065,16 @@ export const AgentCreateRequestMain =
       .partial()
       .passthrough()
       .optional(),
-    rate_limits: z
-      .object({
-        use_global_defaults: z.boolean(),
-        max_llm_calls_per_hour: z.number().int(),
-        max_tool_calls_per_minute: z.number().int(),
-        max_cost_per_day: z.number(),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
     voice: z.string().nullish(),
     shell_policy: AgentShellPolicy.optional(),
-    timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestMain>;
 export const AgentCreateRequestSubagent =
   z.object({
+    mcp_servers: z.array(AgentMCPBinding).optional(),
+    tool_policy_changes: ToolPolicyChanges.optional(),
     type: z.literal("Subagent"),
     name: z.string().min(1),
     description: z.string().optional(),
@@ -3040,20 +3092,9 @@ export const AgentCreateRequestSubagent =
       .partial()
       .passthrough()
       .optional(),
-    rate_limits: z
-      .object({
-        use_global_defaults: z.boolean(),
-        max_llm_calls_per_hour: z.number().int(),
-        max_tool_calls_per_minute: z.number().int(),
-        max_cost_per_day: z.number(),
-      })
-      .partial()
-      .passthrough()
-      .optional(),
     skills: z.array(z.string()).optional(),
     soul: z.string().min(1),
     shell_policy: AgentShellPolicy.optional(),
-    timeout_seconds: z.number().int().gte(0).optional(),
     max_tool_iterations: z.number().int().gte(0).optional(),
   }).strict() satisfies z.ZodType<AgentCreateRequestSubagent>;
 export const AgentCreateRequestSubagent3p =
@@ -3088,51 +3129,52 @@ export const AgentCreateRequest =
     AgentCreateRequestSubagent,
     AgentCreateRequestSubagent3p,
   ]) satisfies z.ZodType<AgentCreateRequest>;
-export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z
-  .object({
-    updated_at: z.string().datetime({ offset: true }),
-    name: z.string().min(1),
-    description: z.string(),
-    model: z.string(),
-    provider: z.string().max(64),
-    context_window_override: z.number().int().gte(1).nullable(),
-    soul: z.string().min(1),
-    heartbeat: z.string(),
-    timeout_seconds: z.number().int(),
-    max_tool_iterations: z.number().int(),
-    heartbeat_enabled: z.boolean(),
-    heartbeat_interval: z.number().int(),
-    shell_policy: z
-      .object({
-        enable_deny_patterns: z.boolean(),
-        custom_deny_patterns: z.array(z.string()),
-      })
-      .partial()
-      .passthrough(),
-    color: z.string().regex(/^#[0-9A-Fa-f]{6}$/),
-    icon: z.string().max(50),
-    fallback_models: z.array(FallbackModel).max(2),
-    model_params: z
-      .object({ temperature: z.number(), max_tokens: z.number().int() })
-      .partial()
-      .passthrough(),
-    rate_limits: z
-      .object({
-        use_global_defaults: z.boolean(),
-        max_llm_calls_per_hour: z.number().int(),
-        max_tool_calls_per_minute: z.number().int(),
-        max_cost_per_day: z.number(),
-      })
-      .partial()
-      .passthrough(),
-    tools_cfg: AgentToolsCfg,
-    default: z.boolean(),
-    skills: z.array(z.string()),
-    voice: z.string().nullable(),
-    executor: ExecutorConfig,
-    memory_enabled: z.boolean(),
-  })
-  .partial();
+export const AgentUpdateRequest: z.ZodType<AgentUpdateRequest> = z.object({
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  mcp_servers: z.array(AgentMCPBinding).optional(),
+  tool_policy_changes: ToolPolicyChanges.optional(),
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  model: z.string().optional(),
+  provider: z.string().max(64).optional(),
+  context_window_override: z.number().int().gte(1).nullish(),
+  soul: z.string().min(1).optional(),
+  max_tool_iterations: z.number().int().optional(),
+  shell_policy: z
+    .object({
+      enable_deny_patterns: z.boolean(),
+      custom_deny_patterns: z.array(z.string()),
+    })
+    .partial()
+    .passthrough()
+    .optional(),
+  color: z
+    .string()
+    .regex(/^#[0-9A-Fa-f]{6}$/)
+    .optional(),
+  icon: z.string().max(50).optional(),
+  fallback_models: z.array(FallbackModel).max(2).optional(),
+  model_params: z
+    .object({ temperature: z.number(), max_tokens: z.number().int() })
+    .partial()
+    .passthrough()
+    .optional(),
+  tools_cfg: AgentToolsCfg.optional(),
+  default: z.boolean().optional(),
+  skills: z.array(z.string()).optional(),
+  voice: z.string().nullish(),
+  executor: ExecutorConfig.optional(),
+  memory_enabled: z.boolean().optional(),
+});
+export const ConfigurationMutationState: z.ZodType<ConfigurationMutationState> =
+  z.object({
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    persistence_status: ConfigurationPersistenceStatus,
+    activation_status: ConfigurationActivationStatus,
+    changed_fields: z.array(z.string()),
+    error_stage: z.string().optional(),
+    message: z.string().optional(),
+  });
 export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
   .object({
     name: z.string(),
@@ -3142,24 +3184,34 @@ export const AgentToolEntry: z.ZodType<AgentToolEntry> = z
   })
   .passthrough();
 export const AgentToolsResponse: z.ZodType<AgentToolsResponse> = z.object({
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  persistence_status: ConfigurationPersistenceStatus.optional(),
+  activation_status: ConfigurationActivationStatus.optional(),
+  changed_fields: z.array(z.string()).optional(),
+  error_stage: z.string().optional(),
+  message: z.string().optional(),
+  override_names: z.array(z.string()),
   config: AgentToolsCfg,
   tools: z.array(AgentToolEntry),
   agent_type: z
     .enum(["core", "system", "Main", "Subagent", "subagent_3p"])
     .optional(),
 });
-export const AgentToolsUpdateRequest: z.ZodType<AgentToolsUpdateRequest> = z
-  .object({
-    config: AgentToolsCfg,
-    tools: z.array(AgentToolEntry),
-    agent_type: z.string(),
+export const AgentToolsUpdateRequest: z.ZodType<AgentToolsUpdateRequest> =
+  z.object({
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    override_names: z.array(z.string()),
+    config: AgentToolsCfg.optional(),
+    tools: z.array(AgentToolEntry).optional(),
+    agent_type: z.string().optional(),
     builtin: z
       .object({
         policies: z.record(z.enum(["allow", "ask", "deny"])),
         mode: z.enum(["explicit", "inherit"]).optional(),
         visible: z.array(z.string()).optional(),
       })
-      .passthrough(),
+      .passthrough()
+      .optional(),
     mcp: z
       .object({
         servers: z.array(
@@ -3169,9 +3221,9 @@ export const AgentToolsUpdateRequest: z.ZodType<AgentToolsUpdateRequest> = z
         ),
       })
       .partial()
-      .passthrough(),
-  })
-  .partial();
+      .passthrough()
+      .optional(),
+  });
 export const RunnerTestResponse = z.object({
   ok: z.boolean(),
   reason: z.enum([
@@ -6406,7 +6458,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/agents/:id",
     alias: "updateAgent",
-    description: `Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+    description: `Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state.
 `,
     requestFormat: "json",
     parameters: [
@@ -6444,9 +6496,14 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Revision or inherited global policy changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
         status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationState,
       },
     ],
   },
@@ -6462,6 +6519,11 @@ Includes session_start events from all agent stores and task lifecycle events.
         name: "id",
         type: "Path",
         schema: z.string(),
+      },
+      {
+        name: "revision",
+        type: "Query",
+        schema: z.string().regex(/^[a-f0-9]{64}$/),
       },
     ],
     response: z.void(),
@@ -6487,9 +6549,14 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Revision or inherited global policy changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
         status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationState,
       },
     ],
   },
@@ -6730,7 +6797,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/agents/:id/tools",
     alias: "updateAgentTools",
-    description: `Replaces the agent&#x27;s tools_cfg in config.json. Locked (core/system) agents cannot have their tool policy overwritten via this endpoint (403). Triggers a config reload on success.
+    description: `Replaces capability settings with explicit sparse override intent and a required revision. Ordinary built-ins are editable; hidden capabilities remain fixed. Reports persistence and live activation separately.
 `,
     requestFormat: "json",
     parameters: [
@@ -6768,9 +6835,14 @@ Includes session_start events from all agent stores and task lifecycle events.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Revision or inherited global policy changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
         status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationState,
       },
     ],
   },

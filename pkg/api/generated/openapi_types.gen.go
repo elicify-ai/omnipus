@@ -305,6 +305,27 @@ func (e ActivityEventsResponseEventsType) Valid() bool {
 	}
 }
 
+// Defines values for AgentActivationStatus.
+const (
+	AgentActivationStatusActive       AgentActivationStatus = "active"
+	AgentActivationStatusFailed       AgentActivationStatus = "failed"
+	AgentActivationStatusNotAttempted AgentActivationStatus = "not_attempted"
+)
+
+// Valid indicates whether the value is a known member of the AgentActivationStatus enum.
+func (e AgentActivationStatus) Valid() bool {
+	switch e {
+	case AgentActivationStatusActive:
+		return true
+	case AgentActivationStatusFailed:
+		return true
+	case AgentActivationStatusNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentContextWindowSource.
 const (
 	AgentContextWindowSourceCatalog  AgentContextWindowSource = "catalog"
@@ -359,6 +380,27 @@ func (e AgentExecutorKind) Valid() bool {
 	case AgentExecutorKindNative:
 		return true
 	case AgentExecutorKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentPersistenceStatus.
+const (
+	AgentPersistenceStatusComplete AgentPersistenceStatus = "complete"
+	AgentPersistenceStatusNone     AgentPersistenceStatus = "none"
+	AgentPersistenceStatusPartial  AgentPersistenceStatus = "partial"
+)
+
+// Valid indicates whether the value is a known member of the AgentPersistenceStatus enum.
+func (e AgentPersistenceStatus) Valid() bool {
+	switch e {
+	case AgentPersistenceStatusComplete:
+		return true
+	case AgentPersistenceStatusNone:
+		return true
+	case AgentPersistenceStatusPartial:
 		return true
 	default:
 		return false
@@ -437,6 +479,27 @@ func (e AgentType) Valid() bool {
 	}
 }
 
+// Defines values for AgentCreateRequestMainToolPolicyChangesSet.
+const (
+	AgentCreateRequestMainToolPolicyChangesSetAllow AgentCreateRequestMainToolPolicyChangesSet = "allow"
+	AgentCreateRequestMainToolPolicyChangesSetAsk   AgentCreateRequestMainToolPolicyChangesSet = "ask"
+	AgentCreateRequestMainToolPolicyChangesSetDeny  AgentCreateRequestMainToolPolicyChangesSet = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestMainToolPolicyChangesSet enum.
+func (e AgentCreateRequestMainToolPolicyChangesSet) Valid() bool {
+	switch e {
+	case AgentCreateRequestMainToolPolicyChangesSetAllow:
+		return true
+	case AgentCreateRequestMainToolPolicyChangesSetAsk:
+		return true
+	case AgentCreateRequestMainToolPolicyChangesSetDeny:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentCreateRequestMainToolsCfgBuiltinPolicies.
 const (
 	AgentCreateRequestMainToolsCfgBuiltinPoliciesAllow AgentCreateRequestMainToolsCfgBuiltinPolicies = "allow"
@@ -467,6 +530,27 @@ const (
 func (e AgentCreateRequestMainType) Valid() bool {
 	switch e {
 	case AgentCreateRequestMainTypeMain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentCreateRequestSubagentToolPolicyChangesSet.
+const (
+	AgentCreateRequestSubagentToolPolicyChangesSetAllow AgentCreateRequestSubagentToolPolicyChangesSet = "allow"
+	AgentCreateRequestSubagentToolPolicyChangesSetAsk   AgentCreateRequestSubagentToolPolicyChangesSet = "ask"
+	AgentCreateRequestSubagentToolPolicyChangesSetDeny  AgentCreateRequestSubagentToolPolicyChangesSet = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentCreateRequestSubagentToolPolicyChangesSet enum.
+func (e AgentCreateRequestSubagentToolPolicyChangesSet) Valid() bool {
+	switch e {
+	case AgentCreateRequestSubagentToolPolicyChangesSetAllow:
+		return true
+	case AgentCreateRequestSubagentToolPolicyChangesSetAsk:
+		return true
+	case AgentCreateRequestSubagentToolPolicyChangesSetDeny:
 		return true
 	default:
 		return false
@@ -608,6 +692,27 @@ func (e AgentToolEntryManifestTier) Valid() bool {
 	}
 }
 
+// Defines values for AgentToolsResponseActivationStatus.
+const (
+	AgentToolsResponseActivationStatusActive       AgentToolsResponseActivationStatus = "active"
+	AgentToolsResponseActivationStatusFailed       AgentToolsResponseActivationStatus = "failed"
+	AgentToolsResponseActivationStatusNotAttempted AgentToolsResponseActivationStatus = "not_attempted"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsResponseActivationStatus enum.
+func (e AgentToolsResponseActivationStatus) Valid() bool {
+	switch e {
+	case AgentToolsResponseActivationStatusActive:
+		return true
+	case AgentToolsResponseActivationStatusFailed:
+		return true
+	case AgentToolsResponseActivationStatusNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AgentToolsResponseAgentType.
 const (
 	AgentToolsResponseAgentTypeCore       AgentToolsResponseAgentType = "core"
@@ -650,6 +755,27 @@ func (e AgentToolsResponseConfigBuiltinPolicies) Valid() bool {
 	case AgentToolsResponseConfigBuiltinPoliciesAsk:
 		return true
 	case AgentToolsResponseConfigBuiltinPoliciesDeny:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentToolsResponsePersistenceStatus.
+const (
+	AgentToolsResponsePersistenceStatusComplete AgentToolsResponsePersistenceStatus = "complete"
+	AgentToolsResponsePersistenceStatusNone     AgentToolsResponsePersistenceStatus = "none"
+	AgentToolsResponsePersistenceStatusPartial  AgentToolsResponsePersistenceStatus = "partial"
+)
+
+// Valid indicates whether the value is a known member of the AgentToolsResponsePersistenceStatus enum.
+func (e AgentToolsResponsePersistenceStatus) Valid() bool {
+	switch e {
+	case AgentToolsResponsePersistenceStatusComplete:
+		return true
+	case AgentToolsResponsePersistenceStatusNone:
+		return true
+	case AgentToolsResponsePersistenceStatusPartial:
 		return true
 	default:
 		return false
@@ -857,6 +983,27 @@ func (e AgentUpdateRequestExecutorKind) Valid() bool {
 	case AgentUpdateRequestExecutorKindNative:
 		return true
 	case AgentUpdateRequestExecutorKindRemoteA2a:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AgentUpdateRequestToolPolicyChangesSet.
+const (
+	AgentUpdateRequestToolPolicyChangesSetAllow AgentUpdateRequestToolPolicyChangesSet = "allow"
+	AgentUpdateRequestToolPolicyChangesSetAsk   AgentUpdateRequestToolPolicyChangesSet = "ask"
+	AgentUpdateRequestToolPolicyChangesSetDeny  AgentUpdateRequestToolPolicyChangesSet = "deny"
+)
+
+// Valid indicates whether the value is a known member of the AgentUpdateRequestToolPolicyChangesSet enum.
+func (e AgentUpdateRequestToolPolicyChangesSet) Valid() bool {
+	switch e {
+	case AgentUpdateRequestToolPolicyChangesSetAllow:
+		return true
+	case AgentUpdateRequestToolPolicyChangesSetAsk:
+		return true
+	case AgentUpdateRequestToolPolicyChangesSetDeny:
 		return true
 	default:
 		return false
@@ -1484,6 +1631,90 @@ func (e CliValidateResponseReason) Valid() bool {
 	case CliValidateResponseReasonUnauthenticated:
 		return true
 	case CliValidateResponseReasonUnknownCli:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigurationActivationStatus.
+const (
+	ConfigurationActivationStatusActive       ConfigurationActivationStatus = "active"
+	ConfigurationActivationStatusFailed       ConfigurationActivationStatus = "failed"
+	ConfigurationActivationStatusNotAttempted ConfigurationActivationStatus = "not_attempted"
+)
+
+// Valid indicates whether the value is a known member of the ConfigurationActivationStatus enum.
+func (e ConfigurationActivationStatus) Valid() bool {
+	switch e {
+	case ConfigurationActivationStatusActive:
+		return true
+	case ConfigurationActivationStatusFailed:
+		return true
+	case ConfigurationActivationStatusNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigurationMutationStateActivationStatus.
+const (
+	ConfigurationMutationStateActivationStatusActive       ConfigurationMutationStateActivationStatus = "active"
+	ConfigurationMutationStateActivationStatusFailed       ConfigurationMutationStateActivationStatus = "failed"
+	ConfigurationMutationStateActivationStatusNotAttempted ConfigurationMutationStateActivationStatus = "not_attempted"
+)
+
+// Valid indicates whether the value is a known member of the ConfigurationMutationStateActivationStatus enum.
+func (e ConfigurationMutationStateActivationStatus) Valid() bool {
+	switch e {
+	case ConfigurationMutationStateActivationStatusActive:
+		return true
+	case ConfigurationMutationStateActivationStatusFailed:
+		return true
+	case ConfigurationMutationStateActivationStatusNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigurationMutationStatePersistenceStatus.
+const (
+	ConfigurationMutationStatePersistenceStatusComplete ConfigurationMutationStatePersistenceStatus = "complete"
+	ConfigurationMutationStatePersistenceStatusNone     ConfigurationMutationStatePersistenceStatus = "none"
+	ConfigurationMutationStatePersistenceStatusPartial  ConfigurationMutationStatePersistenceStatus = "partial"
+)
+
+// Valid indicates whether the value is a known member of the ConfigurationMutationStatePersistenceStatus enum.
+func (e ConfigurationMutationStatePersistenceStatus) Valid() bool {
+	switch e {
+	case ConfigurationMutationStatePersistenceStatusComplete:
+		return true
+	case ConfigurationMutationStatePersistenceStatusNone:
+		return true
+	case ConfigurationMutationStatePersistenceStatusPartial:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigurationPersistenceStatus.
+const (
+	ConfigurationPersistenceStatusComplete ConfigurationPersistenceStatus = "complete"
+	ConfigurationPersistenceStatusNone     ConfigurationPersistenceStatus = "none"
+	ConfigurationPersistenceStatusPartial  ConfigurationPersistenceStatus = "partial"
+)
+
+// Valid indicates whether the value is a known member of the ConfigurationPersistenceStatus enum.
+func (e ConfigurationPersistenceStatus) Valid() bool {
+	switch e {
+	case ConfigurationPersistenceStatusComplete:
+		return true
+	case ConfigurationPersistenceStatusNone:
+		return true
+	case ConfigurationPersistenceStatusPartial:
 		return true
 	default:
 		return false
@@ -9179,6 +9410,27 @@ func (e ToolPolicy) Valid() bool {
 	}
 }
 
+// Defines values for ToolPolicyChangesSet.
+const (
+	ToolPolicyChangesSetAllow ToolPolicyChangesSet = "allow"
+	ToolPolicyChangesSetAsk   ToolPolicyChangesSet = "ask"
+	ToolPolicyChangesSetDeny  ToolPolicyChangesSet = "deny"
+)
+
+// Valid indicates whether the value is a known member of the ToolPolicyChangesSet enum.
+func (e ToolPolicyChangesSet) Valid() bool {
+	switch e {
+	case ToolPolicyChangesSetAllow:
+		return true
+	case ToolPolicyChangesSetAsk:
+		return true
+	case ToolPolicyChangesSetDeny:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ToolRegistryEntryScope.
 const (
 	ToolRegistryEntryScopeCore    ToolRegistryEntryScope = "core"
@@ -10348,6 +10600,10 @@ type ActivityEventsResponseEventsType string
 
 // Agent An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT.
 type Agent struct {
+	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+	ActivationStatus *AgentActivationStatus `json:"activation_status,omitempty"`
+	ChangedFields    *[]string              `json:"changed_fields,omitempty"`
+
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
 
@@ -10370,7 +10626,15 @@ type Agent struct {
 	DegradedReason *AgentDegradedReason `json:"degraded_reason,omitempty"`
 
 	// Description Short description of the agent's purpose.
-	Description *string `json:"description,omitempty"`
+	Description    *string `json:"description,omitempty"`
+	EditableFields *[]struct {
+		Editable bool   `json:"editable"`
+		Name     string `json:"name"`
+
+		// Reason Explanation when the field is protected or unsupported by this runtime.
+		Reason *string `json:"reason,omitempty"`
+	} `json:"editable_fields,omitempty"`
+	ErrorStage *string `json:"error_stage,omitempty"`
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
@@ -10406,14 +10670,15 @@ type Agent struct {
 	// Id Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
 	Id string `json:"id"`
 
-	// Locked When true, name, description, and soul are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
+	// Locked Identity is fixed on built-ins. Ordinary built-in souls are fixed; hidden Judge/Supervisor souls are editable. Use editable_fields for capability and runtime-specific editability.
 	Locked bool `json:"locked"`
 
 	// MaxToolIterations Maximum number of tool calls allowed per turn. Inherited from agents.defaults.max_tool_iterations when not overridden.
 	MaxToolIterations int `json:"max_tool_iterations"`
 
 	// MemoryEnabled Gates ContextBuilder memory injection for this agent (ADR-052 FR-039). Defaults to true for ordinary agents. The seeded Judge (and, by extension, any verifier-role agent) is seeded false — memory OFF produces reproducible, impartial verdicts (same evidence -> same verdict) since injected memory would otherwise vary the outcome between runs.
-	MemoryEnabled *bool `json:"memory_enabled,omitempty"`
+	MemoryEnabled *bool   `json:"memory_enabled,omitempty"`
+	Message       *string `json:"message,omitempty"`
 
 	// Model Model slug used for LLM calls (resolved from defaults when not explicitly set on the agent). With the O3 two-field model, this is the bare model slug (e.g. "google/gemini-2.5-flash"); routing is keyed by the explicit `provider` field. A legacy combined slug ("openrouter/google/gemini-2.5-flash") is split into {model, provider} by the config-load migration. Never inferred at call time once `provider` is set.
 	Model *string `json:"model,omitempty"`
@@ -10433,6 +10698,9 @@ type Agent struct {
 	// NeedsModel Always present, derived (ADR-068 FR-014): true when the agent's primary model is empty or its provider is not configured. The agent list renders "needs a model"; a turn to such an agent is refused with LLMError code model_unassigned and no provider call. Precedence: degraded_reason needs_provider wins in copy.
 	NeedsModel bool `json:"needs_model"`
 
+	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
+	PersistenceStatus *AgentPersistenceStatus `json:"persistence_status,omitempty"`
+
 	// Provider Explicit routing key for the agent's primary model (O3 two-field model), mirroring fallback_models[].provider. Distinct from any "provider/" prefix embedded in `model`. When set, model resolution uses this provider directly and never infers one. Empty/absent for agents that predate the migration or whose model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
@@ -10450,6 +10718,9 @@ type Agent struct {
 		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
 		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
 	} `json:"rate_limits,omitempty"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
 	ShellPolicy *struct {
@@ -10491,7 +10762,7 @@ type Agent struct {
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -10502,13 +10773,13 @@ type Agent struct {
 				// Id MCP server identifier as registered in config.json.
 				Id string `json:"id"`
 
-				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
 				Tools *[]string `json:"tools,omitempty"`
 			} `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that run as real agents in a verifier role: same agent loop and ContextBuilder as any agent, own session, but with memory injection off and a narrow read-only tool set (read_file, list_directory, and a scoped inspect_session — no writes, mutations, commits, task-state changes, or delegation) (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Admin). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that run as real agents in a verifier role: same agent loop and ContextBuilder as any agent, own session, but with memory injection off and a narrow read-only tool set (read_file, list_directory, and a scoped inspect_session — no writes, mutations, commits, task-state changes, or delegation) (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
 	Type AgentType `json:"type"`
 
 	// UpdatedAt ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in list and detail responses.
@@ -10521,6 +10792,9 @@ type Agent struct {
 	Warning *string `json:"warning,omitempty"`
 }
 
+// AgentActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+type AgentActivationStatus string
+
 // AgentContextWindowSource Which rung of the ADR-066 D2 resolution ladder produced an effective context window. Owned by ADR-066; $ref'd by Agent.context_window_source, DefaultModel.window_source and CatalogModel.window_source — never an inline enum anywhere else (cross-spec X-06). "operator" = a per-agent, per-(provider, model) or global operator override (ContextSettings); "live" = the provider's own limits endpoint (cached 24 h); "catalog" = the registry-fed providers catalog (ADR-067); "floor" = the conservative cloud floor applied when nothing else knew the window (WARN logged). There is no "learned" value (ADR-066 D8 was not adopted).
 type AgentContextWindowSource string
 
@@ -10530,13 +10804,16 @@ type AgentDegradedReason string
 // AgentExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentExecutorKind string
 
+// AgentPersistenceStatus Whether all, some, or none of the requested resource components were saved.
+type AgentPersistenceStatus string
+
 // AgentStatus Current runtime status. "active" = agent is processing a turn. "idle" = ready and waiting. "draft" = SOUL.md is empty (no prompt written yet). "error" is a frontend-added possibility not emitted by the backend today.
 type AgentStatus string
 
 // AgentToolsCfgBuiltinPolicies defines model for Agent.ToolsCfg.Builtin.Policies.
 type AgentToolsCfgBuiltinPolicies string
 
-// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that run as real agents in a verifier role: same agent loop and ContextBuilder as any agent, own session, but with memory injection off and a narrow read-only tool set (read_file, list_directory, and a scoped inspect_session — no writes, mutations, commits, task-state changes, or delegation) (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Admin). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that run as real agents in a verifier role: same agent loop and ContextBuilder as any agent, own session, but with memory injection off and a narrow read-only tool set (read_file, list_directory, and a scoped inspect_session — no writes, mutations, commits, task-state changes, or delegation) (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
 type AgentType string
 
 // AgentCreateRequest Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired).
@@ -10562,6 +10839,14 @@ type AgentCreateRequestMain struct {
 	// MaxToolIterations Maximum number of tool calls allowed per turn.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
+	// McpServers Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected.
+	McpServers *[]struct {
+		Id string `json:"id"`
+
+		// Tools Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
+		Tools *[]string `json:"tools,omitempty"`
+	} `json:"mcp_servers,omitempty"`
+
 	// Model Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
 	Model *string `json:"model,omitempty"`
 
@@ -10580,21 +10865,6 @@ type AgentCreateRequestMain struct {
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-	RateLimits *struct {
-		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
-
-		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
-
-		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
-
-		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
-	} `json:"rate_limits,omitempty"`
-
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
 	ShellPolicy *struct {
 		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
@@ -10610,14 +10880,17 @@ type AgentCreateRequestMain struct {
 	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
 	Soul string `json:"soul"`
 
-	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted.
-	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	// ToolPolicyChanges Sparse override changes. A tool cannot occur in both set and remove. Tool names are validated against the live static catalog. Null members are rejected.
+	ToolPolicyChanges *struct {
+		Remove *[]string                                              `json:"remove,omitempty"`
+		Set    *map[string]AgentCreateRequestMainToolPolicyChangesSet `json:"set,omitempty"`
+	} `json:"tool_policy_changes,omitempty"`
 
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -10628,7 +10901,7 @@ type AgentCreateRequestMain struct {
 				// Id MCP server identifier as registered in config.json.
 				Id string `json:"id"`
 
-				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
 				Tools *[]string `json:"tools,omitempty"`
 			} `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
@@ -10640,6 +10913,9 @@ type AgentCreateRequestMain struct {
 	// Voice Per-agent persona voice identifier (Main only). Schema-pinned; not active until v0.2.0 TTS.
 	Voice *string `json:"voice,omitempty"`
 }
+
+// AgentCreateRequestMainToolPolicyChangesSet defines model for AgentCreateRequestMain.ToolPolicyChanges.Set.
+type AgentCreateRequestMainToolPolicyChangesSet string
 
 // AgentCreateRequestMainToolsCfgBuiltinPolicies defines model for AgentCreateRequestMain.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestMainToolsCfgBuiltinPolicies string
@@ -10665,6 +10941,14 @@ type AgentCreateRequestSubagent struct {
 	// MaxToolIterations Maximum number of tool calls allowed per turn.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
 
+	// McpServers Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected.
+	McpServers *[]struct {
+		Id string `json:"id"`
+
+		// Tools Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
+		Tools *[]string `json:"tools,omitempty"`
+	} `json:"mcp_servers,omitempty"`
+
 	// Model Model slug for LLM calls. When omitted, the global agents.defaults.model_name is used. With the O3 two-field model this is the bare slug; pair it with `provider` for explicit routing.
 	Model *string `json:"model,omitempty"`
 
@@ -10683,21 +10967,6 @@ type AgentCreateRequestSubagent struct {
 	// Provider Explicit routing key for the primary model (O3 two-field model), mirroring fallback_models[].provider. When set, resolution uses it directly and never infers a provider. Optional; when omitted the model resolves via the default provider.
 	Provider *string `json:"provider,omitempty"`
 
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-	RateLimits *struct {
-		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
-
-		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
-
-		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
-
-		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
-	} `json:"rate_limits,omitempty"`
-
 	// ShellPolicy Per-agent shell command deny-pattern configuration.
 	ShellPolicy *struct {
 		// CustomDenyPatterns Additional Go regexp patterns to block in shell commands.
@@ -10713,14 +10982,17 @@ type AgentCreateRequestSubagent struct {
 	// Soul Initial SOUL.md content. Required for every user-creatable type — including Subagent (External), where it is passed as part of the CLI prompt at runtime. The CLI never reads a file from disk. Backend trims before length-validation, so whitespace-only is rejected as minLength violation.
 	Soul string `json:"soul"`
 
-	// TimeoutSeconds Maximum seconds a single agent turn may run before being interrupted.
-	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	// ToolPolicyChanges Sparse override changes. A tool cannot occur in both set and remove. Tool names are validated against the live static catalog. Null members are rejected.
+	ToolPolicyChanges *struct {
+		Remove *[]string                                                  `json:"remove,omitempty"`
+		Set    *map[string]AgentCreateRequestSubagentToolPolicyChangesSet `json:"set,omitempty"`
+	} `json:"tool_policy_changes,omitempty"`
 
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -10731,7 +11003,7 @@ type AgentCreateRequestSubagent struct {
 				// Id MCP server identifier as registered in config.json.
 				Id string `json:"id"`
 
-				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
 				Tools *[]string `json:"tools,omitempty"`
 			} `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
@@ -10740,6 +11012,9 @@ type AgentCreateRequestSubagent struct {
 	// Type Discriminator. Must be exactly "Subagent" for this variant.
 	Type AgentCreateRequestSubagentType `json:"type"`
 }
+
+// AgentCreateRequestSubagentToolPolicyChangesSet defines model for AgentCreateRequestSubagent.ToolPolicyChanges.Set.
+type AgentCreateRequestSubagentToolPolicyChangesSet string
 
 // AgentCreateRequestSubagentToolsCfgBuiltinPolicies defines model for AgentCreateRequestSubagent.ToolsCfg.Builtin.Policies.
 type AgentCreateRequestSubagentToolsCfgBuiltinPolicies string
@@ -10821,6 +11096,23 @@ type AgentCreateRequestSubagent3pExecutorKind string
 
 // AgentCreateRequestSubagent3pType Discriminator. Must be exactly "subagent_3p" for this variant.
 type AgentCreateRequestSubagent3pType string
+
+// AgentFieldDescriptor defines model for AgentFieldDescriptor.
+type AgentFieldDescriptor struct {
+	Editable bool   `json:"editable"`
+	Name     string `json:"name"`
+
+	// Reason Explanation when the field is protected or unsupported by this runtime.
+	Reason *string `json:"reason,omitempty"`
+}
+
+// AgentMCPBinding defines model for AgentMCPBinding.
+type AgentMCPBinding struct {
+	Id string `json:"id"`
+
+	// Tools Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
+	Tools *[]string `json:"tools,omitempty"`
+}
 
 // AgentModelParams LLM sampling parameters applied to an agent's requests. When absent, the provider defaults are used.
 type AgentModelParams struct {
@@ -10946,7 +11238,7 @@ type AgentToolEntryManifestTier string
 type AgentToolsCfg struct {
 	// Builtin Controls builtin tool visibility for this agent.
 	Builtin *struct {
-		// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+		// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 		Policies map[string]AgentToolsCfgBuiltinPolicies `json:"policies"`
 	} `json:"builtin,omitempty"`
 
@@ -10957,7 +11249,7 @@ type AgentToolsCfg struct {
 			// Id MCP server identifier as registered in config.json.
 			Id string `json:"id"`
 
-			// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+			// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
 			Tools *[]string `json:"tools,omitempty"`
 		} `json:"servers,omitempty"`
 	} `json:"mcp,omitempty"`
@@ -10965,14 +11257,18 @@ type AgentToolsCfg struct {
 
 // AgentToolsResponse Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools. Returns the agent's tool policy configuration plus the effective per-tool policy list.
 type AgentToolsResponse struct {
-	// AgentType Agent classification. Built-in roster (Mia / Jim / Ava / Ray) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
-	AgentType *AgentToolsResponseAgentType `json:"agent_type,omitempty"`
+	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+	ActivationStatus *AgentToolsResponseActivationStatus `json:"activation_status,omitempty"`
+
+	// AgentType Agent classification. Built-in roster (Mia / Jim / Ava / Admin) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
+	AgentType     *AgentToolsResponseAgentType `json:"agent_type,omitempty"`
+	ChangedFields *[]string                    `json:"changed_fields,omitempty"`
 
 	// Config Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	Config struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -10983,11 +11279,20 @@ type AgentToolsResponse struct {
 				// Id MCP server identifier as registered in config.json.
 				Id string `json:"id"`
 
-				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
 				Tools *[]string `json:"tools,omitempty"`
 			} `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"config"`
+	ErrorStage    *string  `json:"error_stage,omitempty"`
+	Message       *string  `json:"message,omitempty"`
+	OverrideNames []string `json:"override_names"`
+
+	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
+	PersistenceStatus *AgentToolsResponsePersistenceStatus `json:"persistence_status,omitempty"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 
 	// Tools Per-tool effective policy entries.
 	Tools []struct {
@@ -11005,11 +11310,17 @@ type AgentToolsResponse struct {
 	} `json:"tools"`
 }
 
-// AgentToolsResponseAgentType Agent classification. Built-in roster (Mia / Jim / Ava / Ray) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
+// AgentToolsResponseActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+type AgentToolsResponseActivationStatus string
+
+// AgentToolsResponseAgentType Agent classification. Built-in roster (Mia / Jim / Ava / Admin) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
 type AgentToolsResponseAgentType string
 
 // AgentToolsResponseConfigBuiltinPolicies defines model for AgentToolsResponse.Config.Builtin.Policies.
 type AgentToolsResponseConfigBuiltinPolicies string
+
+// AgentToolsResponsePersistenceStatus Whether all, some, or none of the requested resource components were saved.
+type AgentToolsResponsePersistenceStatus string
 
 // AgentToolsResponseToolsConfiguredPolicy The policy as written in the agent's config.
 type AgentToolsResponseToolsConfiguredPolicy string
@@ -11020,8 +11331,7 @@ type AgentToolsResponseToolsEffectivePolicy string
 // AgentToolsResponseToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 type AgentToolsResponseToolsManifestTier string
 
-// AgentToolsUpdateRequest Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.policies, a complete map) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
-// ROUND-TRIP SHAPE (UAT 2026-09-13 D-86): the body of a GET /api/v1/agents/{id}/tools response (AgentToolsResponse — config + tools + agent_type) is ALSO accepted as-is. When the top-level `builtin` is absent and `config.builtin` is present, the server reads the policy map from `config.builtin` (and MCP bindings from `config.mcp`); `tools` and `agent_type` are read-only echoes and are ignored on write. A body carrying neither `builtin` nor `config.builtin` is rejected with 400, never persisted as an empty policy map.
+// AgentToolsUpdateRequest Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. Only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
 type AgentToolsUpdateRequest struct {
 	// AgentType Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); an agent's type is not editable here. Deliberately NOT an enum: a second copy of the agent-type enum changes oapi-codegen's collision-avoidance constant naming for the whole file and breaks the hand-written pkg/api/generated/fixtures.go.
 	AgentType *string `json:"agent_type,omitempty"`
@@ -11042,7 +11352,7 @@ type AgentToolsUpdateRequest struct {
 	Config *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentToolsUpdateRequestConfigBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -11053,7 +11363,7 @@ type AgentToolsUpdateRequest struct {
 				// Id MCP server identifier as registered in config.json.
 				Id string `json:"id"`
 
-				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
 				Tools *[]string `json:"tools,omitempty"`
 			} `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
@@ -11070,6 +11380,12 @@ type AgentToolsUpdateRequest struct {
 			Tools *[]string `json:"tools,omitempty"`
 		} `json:"servers,omitempty"`
 	} `json:"mcp,omitempty"`
+
+	// OverrideNames Stored local override keys; an empty list removes all local overrides.
+	OverrideNames []string `json:"override_names"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 
 	// Tools Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); the effective per-tool list is always recomputed by the server.
 	Tools *[]struct {
@@ -11105,7 +11421,7 @@ type AgentToolsUpdateRequestToolsEffectivePolicy string
 // AgentToolsUpdateRequestToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
 type AgentToolsUpdateRequestToolsManifestTier string
 
-// AgentUpdateRequest Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. Exception (ADR-052 FR-038): locked `type: system` agents (e.g. the Judge) DO accept `soul` mutations — soul/rubric unification means the Judge's soul is its judging rubric, editable while the agent stays otherwise locked. model, timeout_seconds, and max_tool_iterations may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type.
+// AgentUpdateRequest Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected.
 type AgentUpdateRequest struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
 	Color *string `json:"color,omitempty"`
@@ -11147,20 +11463,19 @@ type AgentUpdateRequest struct {
 	// Wire format is always the object form `[{model, provider}]`. Legacy `[string]` payloads are normalized at config-load time (FR-006).
 	FallbackModels *[]FallbackModel `json:"fallback_models,omitempty"`
 
-	// Heartbeat Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-	Heartbeat *string `json:"heartbeat,omitempty"`
-
-	// HeartbeatEnabled Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-	HeartbeatEnabled *bool `json:"heartbeat_enabled,omitempty"`
-
-	// HeartbeatInterval Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-	HeartbeatInterval *int `json:"heartbeat_interval,omitempty"`
-
 	// Icon Phosphor icon name for agent avatar (e.g. "Robot", "Octopus").
 	Icon *string `json:"icon,omitempty"`
 
 	// MaxToolIterations New maximum tool calls per turn. Allowed on all agents.
 	MaxToolIterations *int `json:"max_tool_iterations,omitempty"`
+
+	// McpServers Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected.
+	McpServers *[]struct {
+		Id string `json:"id"`
+
+		// Tools Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
+		Tools *[]string `json:"tools,omitempty"`
+	} `json:"mcp_servers,omitempty"`
 
 	// MemoryEnabled New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Allowed on all agents.
 	MemoryEnabled *bool `json:"memory_enabled,omitempty"`
@@ -11183,20 +11498,8 @@ type AgentUpdateRequest struct {
 	// Provider New explicit routing key for the primary model (O3 two-field model). When set, resolution uses it directly and never infers a provider. Allowed on all agents. Send an empty string to clear it (fall back to default-provider resolution).
 	Provider *string `json:"provider,omitempty"`
 
-	// RateLimits Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-	RateLimits *struct {
-		// MaxCostPerDay Maximum USD cost per day for this agent. Absent = no per-agent cap.
-		MaxCostPerDay *float64 `json:"max_cost_per_day,omitempty"`
-
-		// MaxLlmCallsPerHour Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-		MaxLlmCallsPerHour *int `json:"max_llm_calls_per_hour,omitempty"`
-
-		// MaxToolCallsPerMinute Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-		MaxToolCallsPerMinute *int `json:"max_tool_calls_per_minute,omitempty"`
-
-		// UseGlobalDefaults When true, global rate limits are used and per-agent overrides are ignored.
-		UseGlobalDefaults *bool `json:"use_global_defaults,omitempty"`
-	} `json:"rate_limits,omitempty"`
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 
 	// ShellPolicy Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents.
 	ShellPolicy *struct {
@@ -11211,14 +11514,17 @@ type AgentUpdateRequest struct {
 	// Soul New SOUL.md content (agent system prompt). Rejected on locked core agents. Exception (ADR-052 FR-038, soul/rubric unification): accepted for locked `type: system` agents (e.g. the Judge) — for those, this field IS the judging rubric, the only prompt-equivalent field a locked System Agent accepts. Writing this triggers a config reload. Whitespace-only is rejected as minLength violation.
 	Soul *string `json:"soul,omitempty"`
 
-	// TimeoutSeconds New timeout in seconds per turn. Allowed on all agents.
-	TimeoutSeconds *int `json:"timeout_seconds,omitempty"`
+	// ToolPolicyChanges Sparse override changes. A tool cannot occur in both set and remove. Tool names are validated against the live static catalog. Null members are rejected.
+	ToolPolicyChanges *struct {
+		Remove *[]string                                          `json:"remove,omitempty"`
+		Set    *map[string]AgentUpdateRequestToolPolicyChangesSet `json:"set,omitempty"`
+	} `json:"tool_policy_changes,omitempty"`
 
 	// ToolsCfg Per-agent tool configuration governing which builtin tools are accessible and which MCP servers are bound (config.AgentToolsCfg on the Go side, AgentToolsCfg interface in src/lib/api.ts).
 	ToolsCfg *struct {
 		// Builtin Controls builtin tool visibility for this agent.
 		Builtin *struct {
-			// Policies Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+			// Policies Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
 			Policies map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies"`
 		} `json:"builtin,omitempty"`
 
@@ -11229,14 +11535,11 @@ type AgentUpdateRequest struct {
 				// Id MCP server identifier as registered in config.json.
 				Id string `json:"id"`
 
-				// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
+				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
 				Tools *[]string `json:"tools,omitempty"`
 			} `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
-
-	// UpdatedAt ISO 8601 timestamp from the last GET /agents/{id} response. When provided, the request is rejected with 409 Conflict if it does not match the current server value.
-	UpdatedAt *time.Time `json:"updated_at,omitempty"`
 
 	// Voice Per-agent persona voice identifier. Schema-pinned; not active until v0.2.0 TTS. Send null to clear. Main only.
 	Voice *string `json:"voice,omitempty"`
@@ -11244,6 +11547,9 @@ type AgentUpdateRequest struct {
 
 // AgentUpdateRequestExecutorKind Execution runtime selector. Derived from the agent's type: Main -> native, Subagent -> native, subagent_3p -> external-cli. Clients cannot set this directly on create/update; the server overrides any client-supplied value. "remote-a2a" is reserved for future A2A protocol resolution.
 type AgentUpdateRequestExecutorKind string
+
+// AgentUpdateRequestToolPolicyChangesSet defines model for AgentUpdateRequest.ToolPolicyChanges.Set.
+type AgentUpdateRequestToolPolicyChangesSet string
 
 // AgentUpdateRequestToolsCfgBuiltinPolicies defines model for AgentUpdateRequest.ToolsCfg.Builtin.Policies.
 type AgentUpdateRequestToolsCfgBuiltinPolicies string
@@ -11921,6 +12227,36 @@ type CliValidateResponse struct {
 // CliValidateResponseReason Classification of the validation result. "ok": binary runs and reports a version, believed authenticated. "missing-binary": cli_path is empty, absent, or not a regular executable file — blocks Create/Save. "handshake-failed": the target ran but did not return a valid version-shaped response within the timeout — blocks Create/Save. "unauthenticated": the binary runs and reports a version but has no usable credentials — non-blocking warning, Create/Save allowed. "unknown-cli": the `cli` value is not one of the supported executors; no subprocess is spawned. Maps runner.ReasonOK (empty string) to "ok".
 type CliValidateResponseReason string
 
+// ConfigurationActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+type ConfigurationActivationStatus string
+
+// ConfigurationMutationState defines model for ConfigurationMutationState.
+type ConfigurationMutationState struct {
+	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+	ActivationStatus ConfigurationMutationStateActivationStatus `json:"activation_status"`
+	ChangedFields    []string                                   `json:"changed_fields"`
+	ErrorStage       *string                                    `json:"error_stage,omitempty"`
+	Message          *string                                    `json:"message,omitempty"`
+
+	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
+	PersistenceStatus ConfigurationMutationStatePersistenceStatus `json:"persistence_status"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
+}
+
+// ConfigurationMutationStateActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+type ConfigurationMutationStateActivationStatus string
+
+// ConfigurationMutationStatePersistenceStatus Whether all, some, or none of the requested resource components were saved.
+type ConfigurationMutationStatePersistenceStatus string
+
+// ConfigurationPersistenceStatus Whether all, some, or none of the requested resource components were saved.
+type ConfigurationPersistenceStatus string
+
+// ConfigurationRevision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+type ConfigurationRevision = string
+
 // ContextModelOverride One per-(provider, model) operator override of the context window (ADR-066 D2 rung 2). Keyed on the exact catalog pair; the override can only lower the effective window (min(override, capability)), never raise it. Rows whose provider no longer exists are ignored by the resolver and pruned on the next settings write; DELETE /providers/{id} removes the provider's rows (ADR-068 FR-010 step 2b).
 type ContextModelOverride struct {
 	// ContextWindow Context window in tokens. 400 when below 1.
@@ -11959,12 +12295,12 @@ type ContextSettings struct {
 
 // ContextSettingsUpdate Partial update body for PUT /api/v1/settings/context (ADR-066 D9). Every field is optional; an omitted field is unchanged. Validation (400 naming the field and the limit): any cap > 150,000 or < 1; absolute_trigger_chars < 1; ingest_bound_bytes ≥ 8,388,608 or < 1; model_overrides[].context_window < 1. Set default_context_window to null to clear it. model_overrides, when present, replaces the whole list.
 type ContextSettingsUpdate struct {
-	AbsoluteTriggerChars *int                    `json:"absolute_trigger_chars,omitempty"`
-	BuiltinFailureCap    *int                    `json:"builtin_failure_cap,omitempty"`
-	BuiltinSuccessCap    *int                    `json:"builtin_success_cap,omitempty"`
-	DefaultContextWindow *int                    `json:"default_context_window,omitempty"`
-	IngestBoundBytes     *int                    `json:"ingest_bound_bytes,omitempty"`
-	McpResultCap         *int                    `json:"mcp_result_cap,omitempty"`
+	AbsoluteTriggerChars *int `json:"absolute_trigger_chars,omitempty"`
+	BuiltinFailureCap    *int `json:"builtin_failure_cap,omitempty"`
+	BuiltinSuccessCap    *int `json:"builtin_success_cap,omitempty"`
+	DefaultContextWindow *int `json:"default_context_window,omitempty"`
+	IngestBoundBytes     *int `json:"ingest_bound_bytes,omitempty"`
+	McpResultCap         *int `json:"mcp_result_cap,omitempty"`
 	ModelOverrides       *[]ContextModelOverride `json:"model_overrides,omitempty"`
 }
 
@@ -12606,7 +12942,7 @@ type EntitlementResponse struct {
 	Cached bool `json:"cached"`
 
 	// CheckedAt When the live listing call was made (the cached result keeps the original time).
-	CheckedAt time.Time          `json:"checked_at"`
+	CheckedAt time.Time `json:"checked_at"`
 	Models    []EntitlementModel `json:"models"`
 }
 
@@ -16628,8 +16964,8 @@ type ProviderDeleteRequest struct {
 // ProviderDeleteResponse Response of DELETE /api/v1/providers/{id} (ADR-068 FR-010). deleted is true on success (HTTP 200); on a failed step the server responds 500 with deleted false and a retryable state. dependents lists every reference that was cleared (agent primaries cleared, fallback entries removed) — nothing is re-pointed silently. There is no Undo: the stored key is gone.
 type ProviderDeleteResponse struct {
 	// DefaultChanged True when new_default was applied before the removal.
-	DefaultChanged bool                `json:"default_changed"`
-	Deleted        bool                `json:"deleted"`
+	DefaultChanged bool `json:"default_changed"`
+	Deleted        bool `json:"deleted"`
 	Dependents     []ProviderDependent `json:"dependents"`
 
 	// NewDefault Body for PUT /api/v1/providers/default-model (ADR-068 FR-018): exactly the (provider, model) pair. The provider must be configured and connected or signed_in (400 naming the field otherwise); the model must be in the served catalog for that provider, except rows with custom: true or locality: local, where any non-empty model is accepted with no live call. Persisted as agents.defaults.default_model under the config lock; takes effect on the next turn after a reload.
@@ -16692,7 +17028,7 @@ type ProviderValidation struct {
 type ProvidersCatalog struct {
 	// DefaultResizeLimits Image resize limits applied by the media pipeline before an attachment is sent to a provider (ADR-067 [A-10]). The document carries one default and an optional per-provider value.
 	DefaultResizeLimits CatalogResizeLimits `json:"default_resize_limits"`
-	Providers           []CatalogProvider   `json:"providers"`
+	Providers []CatalogProvider `json:"providers"`
 
 	// SchemaVersion Document schema version. Only "2.0.0" is accepted on load (FR-001).
 	SchemaVersion ProvidersCatalogSchemaVersion `json:"schema_version"`
@@ -20514,6 +20850,15 @@ type ToolCallStatus string
 // ToolPolicy A policy value governing whether a tool call is allowed, requires approval, or is denied.
 type ToolPolicy string
 
+// ToolPolicyChanges Sparse override changes. A tool cannot occur in both set and remove. Tool names are validated against the live static catalog. Null members are rejected.
+type ToolPolicyChanges struct {
+	Remove *[]string                        `json:"remove,omitempty"`
+	Set    *map[string]ToolPolicyChangesSet `json:"set,omitempty"`
+}
+
+// ToolPolicyChangesSet defines model for ToolPolicyChanges.Set.
+type ToolPolicyChangesSet string
+
 // ToolRegistryEntry A single entry in the central tool registry snapshot returned by GET /api/v1/tools (FR-027).
 type ToolRegistryEntry struct {
 	// Category Tool domain category (e.g. "filesystem", "shell", "web", "browser", "communication", "delegation", "memory", "tasks", "skills", "tool_discovery", "agents", "workspaces", "channels", "providers", "platform", "mcp"). Legacy values "core" and "system" may appear for un-recategorized tools.
@@ -21955,9 +22300,9 @@ type WorkspaceUpdateRequest struct {
 
 	// MemberConfigs Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
-	Name          *string                           `json:"name,omitempty"`
-	PinOrder      *int                              `json:"pin_order,omitempty"`
-	Pinned        *bool                             `json:"pinned,omitempty"`
+	Name     *string `json:"name,omitempty"`
+	PinOrder *int    `json:"pin_order,omitempty"`
+	Pinned   *bool   `json:"pinned,omitempty"`
 
 	// Status Archive or restore a workspace.
 	Status *WorkspaceUpdateRequestStatus `json:"status,omitempty"`
@@ -22001,6 +22346,11 @@ type N503ServiceUnavailable = ErrorResponse
 
 // bearerAuthContextKey is the context key for BearerAuth security scheme
 type bearerAuthContextKey string
+
+// DeleteAgentParams defines parameters for DeleteAgent.
+type DeleteAgentParams struct {
+	Revision ConfigurationRevision `form:"revision" json:"revision"`
+}
 
 // ConfigureChannelJSONBody defines parameters for ConfigureChannel.
 type ConfigureChannelJSONBody map[string]interface{}

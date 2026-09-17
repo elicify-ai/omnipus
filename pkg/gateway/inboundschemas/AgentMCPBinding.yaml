@@ -1,0 +1,14 @@
+type: object
+additionalProperties: false
+required: [id]
+properties:
+  id:
+    type: string
+    minLength: 1
+  tools:
+    type: array
+    uniqueItems: true
+    description: Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation.
+    items:
+      type: string
+      minLength: 1

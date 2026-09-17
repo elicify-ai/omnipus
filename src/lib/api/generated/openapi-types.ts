@@ -374,7 +374,7 @@ export interface paths {
         get: operations["getAgent"];
         /**
          * Update agent configuration
-         * @description Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
+         * @description Applies changed editable fields with a required revision. Protected or invalid fields and stale revisions reject without writes. Successful saves report live activation separately; partial storage failures report actual state.
          */
         put: operations["updateAgent"];
         post?: never;
@@ -422,7 +422,7 @@ export interface paths {
         get: operations["getAgentTools"];
         /**
          * Replace per-agent tool policy configuration
-         * @description Replaces the agent's tools_cfg in config.json. Locked (core/system) agents cannot have their tool policy overwritten via this endpoint (403). Triggers a config reload on success.
+         * @description Replaces capability settings with explicit sparse override intent and a required revision. Ordinary built-ins are editable; hidden capabilities remain fixed. Reports persistence and live activation separately.
          */
         put: operations["updateAgentTools"];
         post?: never;
@@ -3527,6 +3527,44 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** @description Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes. */
+        ConfigurationRevision: string;
+        /**
+         * @description Whether all, some, or none of the requested resource components were saved.
+         * @enum {string}
+         */
+        ConfigurationPersistenceStatus: "complete" | "partial" | "none";
+        /**
+         * @description Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+         * @enum {string}
+         */
+        ConfigurationActivationStatus: "active" | "failed" | "not_attempted";
+        ConfigurationMutationState: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields: string[];
+            error_stage?: string;
+            message?: string;
+        };
+        AgentFieldDescriptor: {
+            name: string;
+            editable: boolean;
+            /** @description Explanation when the field is protected or unsupported by this runtime. */
+            reason?: string;
+        };
+        AgentMCPBinding: {
+            id: string;
+            /** @description Omitted means all tools on this explicitly assigned server; [] means no tools. Null is rejected. A lone wildcard means all, but mixing wildcard with exact names is rejected by runtime validation. */
+            tools?: string[];
+        };
+        /** @description Sparse override changes. A tool cannot occur in both set and remove. Tool names are validated against the live static catalog. Null members are rejected. */
+        ToolPolicyChanges: {
+            set?: {
+                [key: string]: "allow" | "ask" | "deny";
+            };
+            remove?: string[];
+        };
         /** @description Standard error envelope returned by all non-2xx responses. */
         ErrorResponse: {
             /**
@@ -7734,6 +7772,13 @@ export interface components {
         };
         /** @description An agent configuration object as returned by GET /agents and GET /agents/{id}. Maps to the generated Agent wire type (pkg/api/generated/openapi_types.gen.go and src/lib/api/generated/openapi-types.ts). The generated type is the single source of truth. Core (locked) agents suppress soul in list responses and forbid identity mutations via PUT. */
         Agent: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields?: string[];
+            error_stage?: string;
+            message?: string;
+            editable_fields?: components["schemas"]["AgentFieldDescriptor"][];
             /**
              * @description Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
              * @example 550e8400-e29b-41d4-a716-446655440000
@@ -7745,13 +7790,13 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that run as real agents in a verifier role: same agent loop and ContextBuilder as any agent, own session, but with memory injection off and a narrow read-only tool set (read_file, list_directory, and a scoped inspect_session — no writes, mutations, commits, task-state changes, or delegation) (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Admin). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that run as real agents in a verifier role: same agent loop and ContextBuilder as any agent, own session, but with memory injection off and a narrow read-only tool set (read_file, list_directory, and a scoped inspect_session — no writes, mutations, commits, task-state changes, or delegation) (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
              * @example core
              * @enum {string}
              */
             type: "core" | "system" | "Main" | "Subagent" | "subagent_3p";
             /**
-             * @description When true, name, description, and soul are immutable via the PUT /agents/{id} endpoint. Core agents are always locked.
+             * @description Identity is fixed on built-ins. Ordinary built-in souls are fixed; hidden Judge/Supervisor souls are editable. Use editable_fields for capability and runtime-specific editability.
              * @example false
              */
             locked: boolean;
@@ -7976,7 +8021,7 @@ export interface components {
             /** @description Controls builtin tool visibility for this agent. */
             builtin?: {
                 /**
-                 * @description Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
+                 * @description Policy map. GET tools returns the complete effective catalog while persisted ordinary built-in maps contain sparse overrides. Dedicated replacement requests require every static tool as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — wildcard keys are not valid for the static builtin catalog. There is no default_policy field; every new custom agent is seeded fully deny-by-default (every static tool explicitly "deny"), with only a narrow, deliberately conservative allow-list for its actual needs.
                  * @example {
                  *       "bash": "deny",
                  *       "remember": "allow"
@@ -7996,7 +8041,7 @@ export interface components {
                      */
                     id: string;
                     /**
-                     * @description Specific tool names to expose from this server. When absent, all tools from the server are available.
+                     * @description Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
                      * @example [
                      *       "search",
                      *       "fetch"
@@ -8008,10 +8053,12 @@ export interface components {
         };
         /**
          * AgentToolsUpdateRequest
-         * @description Request body for PUT /api/v1/agents/{id}/tools. Replaces the agent's tool policy configuration. Supports both the current policy format (builtin.policies, a complete map) and the legacy explicit/inherit mode format (builtin.mode + builtin.visible) for backward compatibility. Legacy fields are converted to policy format server-side before persisting.
-         *     ROUND-TRIP SHAPE (UAT 2026-09-13 D-86): the body of a GET /api/v1/agents/{id}/tools response (AgentToolsResponse — config + tools + agent_type) is ALSO accepted as-is. When the top-level `builtin` is absent and `config.builtin` is present, the server reads the policy map from `config.builtin` (and MCP bindings from `config.mcp`); `tools` and `agent_type` are read-only echoes and are ignored on write. A body carrying neither `builtin` nor `config.builtin` is rejected with 400, never persisted as an empty policy map.
+         * @description Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. Only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
          */
         AgentToolsUpdateRequest: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            /** @description Stored local override keys; an empty list removes all local overrides. */
+            override_names: string[];
             config?: components["schemas"]["AgentToolsCfg"];
             /** @description Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); the effective per-tool list is always recomputed by the server. */
             tools?: components["schemas"]["AgentToolEntry"][];
@@ -8049,6 +8096,9 @@ export interface components {
          * @description Create a Main agent — a user-defined chat colleague on the Omnipus engine. Field set per docs/internal/architecture/agent-types-field-matrix.md: voice is Main-only; executor is absent (Main never has one).
          */
         AgentCreateRequestMain: {
+            /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
+            mcp_servers?: components["schemas"]["AgentMCPBinding"][];
+            tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
              * @description Discriminator. Must be exactly "Main" for this variant.
              *      (enum property replaced by openapi-typescript)
@@ -8111,30 +8161,6 @@ export interface components {
                  */
                 max_tokens?: number;
             };
-            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
-            rate_limits?: {
-                /**
-                 * @description When true, global rate limits are used and per-agent overrides are ignored.
-                 * @example true
-                 */
-                use_global_defaults?: boolean;
-                /**
-                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-                 * @example 100
-                 */
-                max_llm_calls_per_hour?: number;
-                /**
-                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-                 * @example 60
-                 */
-                max_tool_calls_per_minute?: number;
-                /**
-                 * Format: double
-                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-                 * @example 5
-                 */
-                max_cost_per_day?: number;
-            };
             /**
              * @description Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
              * @example [
@@ -8154,11 +8180,6 @@ export interface components {
             voice?: string | null;
             shell_policy?: components["schemas"]["AgentShellPolicy"];
             /**
-             * @description Maximum seconds a single agent turn may run before being interrupted.
-             * @example 300
-             */
-            timeout_seconds?: number;
-            /**
              * @description Maximum number of tool calls allowed per turn.
              * @example 50
              */
@@ -8169,6 +8190,9 @@ export interface components {
          * @description Create a Subagent — a user-defined delegation-only worker on the Omnipus engine. Field set per the agent-types field matrix: no voice (no chat/TTS surface), no executor (native is derived server-side — never sent by the client). Description is enforced non-empty-after-trim by the handler (the orchestrator delegates based on it).
          */
         AgentCreateRequestSubagent: {
+            /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
+            mcp_servers?: components["schemas"]["AgentMCPBinding"][];
+            tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
              * @description Discriminator. Must be exactly "Subagent" for this variant.
              *      (enum property replaced by openapi-typescript)
@@ -8231,30 +8255,6 @@ export interface components {
                  */
                 max_tokens?: number;
             };
-            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
-            rate_limits?: {
-                /**
-                 * @description When true, global rate limits are used and per-agent overrides are ignored.
-                 * @example true
-                 */
-                use_global_defaults?: boolean;
-                /**
-                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-                 * @example 100
-                 */
-                max_llm_calls_per_hour?: number;
-                /**
-                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-                 * @example 60
-                 */
-                max_tool_calls_per_minute?: number;
-                /**
-                 * Format: double
-                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-                 * @example 5
-                 */
-                max_cost_per_day?: number;
-            };
             /**
              * @description Initial list of skill IDs granted to this agent. An empty list (or absent field) means no skills are granted (opt-in, default none).
              * @example [
@@ -8268,11 +8268,6 @@ export interface components {
              */
             soul: string;
             shell_policy?: components["schemas"]["AgentShellPolicy"];
-            /**
-             * @description Maximum seconds a single agent turn may run before being interrupted.
-             * @example 300
-             */
-            timeout_seconds?: number;
             /**
              * @description Maximum number of tool calls allowed per turn.
              * @example 50
@@ -8356,14 +8351,12 @@ export interface components {
              */
             timeout_seconds?: number;
         };
-        /** @description Body for PUT /agents/{id}. All fields are optional — only provided fields are updated. Locked (core) agents reject mutations to name, description, and soul. Exception (ADR-052 FR-038): locked `type: system` agents (e.g. the Judge) DO accept `soul` mutations — soul/rubric unification means the Judge's soul is its judging rubric, editable while the agent stays otherwise locked. model, timeout_seconds, and max_tool_iterations may be updated on locked agents. heartbeat, heartbeat_enabled, and heartbeat_interval are accepted but ignored on all agents (heartbeat is workspace-scoped, ADR-027). At least one field must be present (minProperties: 1) — empty patches are rejected 400. Fields not applicable to the agent's type (e.g. tools_cfg on subagent_3p) are rejected 400 with code field_not_applicable_to_type. */
+        /** @description Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected. */
         AgentUpdateRequest: {
-            /**
-             * Format: date-time
-             * @description ISO 8601 timestamp from the last GET /agents/{id} response. When provided, the request is rejected with 409 Conflict if it does not match the current server value.
-             * @example 2026-06-19T12:34:56Z
-             */
-            updated_at?: string;
+            revision: components["schemas"]["ConfigurationRevision"];
+            /** @description Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected. */
+            mcp_servers?: components["schemas"]["AgentMCPBinding"][];
+            tool_policy_changes?: components["schemas"]["ToolPolicyChanges"];
             /**
              * @description New display name. Rejected on locked agents.
              * @example My Renamed Agent
@@ -8395,30 +8388,10 @@ export interface components {
              */
             soul?: string;
             /**
-             * @description Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-             * @example Check queue every hour.
-             */
-            heartbeat?: string;
-            /**
-             * @description New timeout in seconds per turn. Allowed on all agents.
-             * @example 600
-             */
-            timeout_seconds?: number;
-            /**
              * @description New maximum tool calls per turn. Allowed on all agents.
              * @example 100
              */
             max_tool_iterations?: number;
-            /**
-             * @description Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-             * @example false
-             */
-            heartbeat_enabled?: boolean;
-            /**
-             * @description Accepted for backward compatibility but IGNORED — heartbeat is workspace-scoped (ADR-027).
-             * @example 1800
-             */
-            heartbeat_interval?: number;
             /** @description Per-agent shell command deny-pattern configuration. Rejected 400 on subagent_3p agents. */
             shell_policy?: {
                 /** @example true */
@@ -8465,30 +8438,6 @@ export interface components {
                  * @example 4096
                  */
                 max_tokens?: number;
-            };
-            /** @description Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies. */
-            rate_limits?: {
-                /**
-                 * @description When true, global rate limits are used and per-agent overrides are ignored.
-                 * @example true
-                 */
-                use_global_defaults?: boolean;
-                /**
-                 * @description Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-                 * @example 100
-                 */
-                max_llm_calls_per_hour?: number;
-                /**
-                 * @description Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-                 * @example 60
-                 */
-                max_tool_calls_per_minute?: number;
-                /**
-                 * Format: double
-                 * @description Maximum USD cost per day for this agent. Absent = no per-agent cap.
-                 * @example 5
-                 */
-                max_cost_per_day?: number;
             };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
@@ -11450,11 +11399,18 @@ export interface components {
          * @description Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools. Returns the agent's tool policy configuration plus the effective per-tool policy list.
          */
         AgentToolsResponse: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields?: string[];
+            error_stage?: string;
+            message?: string;
+            override_names: string[];
             config: components["schemas"]["AgentToolsCfg"];
             /** @description Per-tool effective policy entries. */
             tools: components["schemas"]["AgentToolEntry"][];
             /**
-             * @description Agent classification. Built-in roster (Mia / Jim / Ava / Ray) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
+             * @description Agent classification. Built-in roster (Mia / Jim / Ava / Admin) returns "core" with locked=true; legacy operator-supplied "system" entries remain for backward compatibility. User-created chat colleagues are "Main", native workers are "Subagent", and external-CLI workers are "subagent_3p" (distinguished from Subagent by executor.kind=external-cli). Informs the UI whether policy editing is allowed.
              * @example Main
              * @enum {string}
              */
@@ -16545,12 +16501,29 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            500: components["responses"]["500InternalServerError"];
+            /** @description Revision or inherited global policy changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     deleteAgent: {
         parameters: {
-            query?: never;
+            query: {
+                revision: components["schemas"]["ConfigurationRevision"];
+            };
             header?: never;
             path: {
                 /**
@@ -16574,7 +16547,22 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            500: components["responses"]["500InternalServerError"];
+            /** @description Revision or inherited global policy changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     listAgentSessions: {
@@ -16668,7 +16656,22 @@ export interface operations {
             401: components["responses"]["401Unauthorized"];
             403: components["responses"]["403Forbidden"];
             404: components["responses"]["404NotFound"];
-            500: components["responses"]["500InternalServerError"];
+            /** @description Revision or inherited global policy changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     testAgentRunner: {
@@ -22889,6 +22892,13 @@ export interface operations {
 // Convenience exports so consumers can write `import type { Agent } from "./openapi-types"`
 // rather than `components["schemas"]["Agent"]`.
 
+export type ConfigurationRevision = components["schemas"]["ConfigurationRevision"];
+export type ConfigurationPersistenceStatus = components["schemas"]["ConfigurationPersistenceStatus"];
+export type ConfigurationActivationStatus = components["schemas"]["ConfigurationActivationStatus"];
+export type ConfigurationMutationState = components["schemas"]["ConfigurationMutationState"];
+export type AgentFieldDescriptor = components["schemas"]["AgentFieldDescriptor"];
+export type AgentMCPBinding = components["schemas"]["AgentMCPBinding"];
+export type ToolPolicyChanges = components["schemas"]["ToolPolicyChanges"];
 export type ErrorResponse = components["schemas"]["ErrorResponse"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
 export type LoginResponse = components["schemas"]["LoginResponse"];

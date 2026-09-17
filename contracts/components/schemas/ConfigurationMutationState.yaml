@@ -1,0 +1,18 @@
+type: object
+additionalProperties: false
+required: [persistence_status, activation_status, revision, changed_fields]
+properties:
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+  persistence_status:
+    $ref: './ConfigurationPersistenceStatus.yaml'
+  activation_status:
+    $ref: './ConfigurationActivationStatus.yaml'
+  changed_fields:
+    type: array
+    items:
+      type: string
+  error_stage:
+    type: string
+  message:
+    type: string

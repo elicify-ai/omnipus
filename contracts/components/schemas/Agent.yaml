@@ -7,6 +7,7 @@ description: >
   Core (locked) agents suppress soul in list responses and forbid
   identity mutations via PUT.
 required:
+  - revision
   - id
   - name
   - type
@@ -17,6 +18,24 @@ required:
   - max_tool_iterations
   - needs_model
 properties:
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+  persistence_status:
+    $ref: './ConfigurationPersistenceStatus.yaml'
+  activation_status:
+    $ref: './ConfigurationActivationStatus.yaml'
+  changed_fields:
+    type: array
+    items:
+      type: string
+  error_stage:
+    type: string
+  message:
+    type: string
+  editable_fields:
+    type: array
+    items:
+      $ref: './AgentFieldDescriptor.yaml'
   id:
     type: string
     description: Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").
@@ -37,7 +56,7 @@ properties:
       - subagent_3p
     description: >
       Agent lifecycle classification.
-      "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Ray).
+      "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Admin).
       "system" = the System Agents category (ADR-049 D3) — seeded, locked,
       non-privileged internal-LLM agents that run as real agents in a
       verifier role: same agent loop and ContextBuilder as any agent, own
@@ -66,8 +85,9 @@ properties:
   locked:
     type: boolean
     description: >
-      When true, name, description, and soul are immutable
-      via the PUT /agents/{id} endpoint. Core agents are always locked.
+      Identity is fixed on built-ins. Ordinary built-in souls are fixed; hidden
+      Judge/Supervisor souls are editable. Use editable_fields for capability
+      and runtime-specific editability.
     example: false
   color:
     type: string

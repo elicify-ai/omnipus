@@ -3390,13 +3390,13 @@ func TestContract_AgentUpdateRequest_EmptyObjectRejected(t *testing.T) {
 		"empty AgentUpdateRequest {} must fail — minProperties: 1 requires at least one field")
 }
 
-func TestContract_AgentUpdateRequest_SingleFieldAccepted(t *testing.T) {
-	// One field is the minimum that satisfies minProperties:1.
-	doc := map[string]any{"model": "gpt-4o"}
+func TestContract_AgentUpdateRequest_SingleChangeWithRevisionAccepted(t *testing.T) {
+	// ADR-090 requires the revision plus at least one changed field.
+	doc := map[string]any{"revision": strings.Repeat("a", 64), "model": "gpt-4o"}
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
 	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "AgentUpdateRequest", raw),
-		"AgentUpdateRequest with one field (model) must pass — satisfies minProperties:1")
+		"AgentUpdateRequest with revision and one change must pass")
 }
 
 // ── Concurrent compile race test ──────────────────────────────────────────────
@@ -4024,10 +4024,9 @@ func TestContract_AgentUpdateRequest_Populated(t *testing.T) {
 	mustPassComponent(t, "AgentUpdateRequest", FixtureAgentUpdateRequest_Populated())
 }
 
-func TestContract_AgentUpdateRequest_UpdatedAt(t *testing.T) {
-	// A patch body with only a valid updated_at timestamp satisfies minProperties:1
-	// and the date-time format constraint.
-	mustPassComponent(t, "AgentUpdateRequest", FixtureAgentUpdateRequest_UpdatedAt())
+func TestContract_AgentUpdateRequest_Revision(t *testing.T) {
+	// ADR-090 replaces the timestamp precondition with an opaque state revision.
+	mustPassComponent(t, "AgentUpdateRequest", FixtureAgentUpdateRequest_Revision())
 }
 
 // ── ChannelRouting ────────────────────────────────────────────────────────────
