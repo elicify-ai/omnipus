@@ -49,11 +49,31 @@ import {
   watchLiveButton,
   browserLivePanel,
   browserLiveFrame,
+  browserLiveVideo,
 } from './fixtures/selectors';
 
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]');
 
 const handoverNotice = (page: Page) => page.locator('[data-testid="browser-handover-notice"]');
+
+/** Click empty space inside the rendered video, never its object-contain letterbox. */
+async function takeControlFromRenderedVideo(page: Page): Promise<void> {
+  const frame = browserLiveFrame(page);
+  const video = browserLiveVideo(page);
+  const box = await frame.boundingBox();
+  if (!box) throw new Error('the live frame has no bounding box');
+  const media = await video.evaluate((el) => {
+    const element = el as HTMLVideoElement;
+    return { width: element.videoWidth, height: element.videoHeight };
+  });
+  if (media.width === 0 || media.height === 0) {
+    throw new Error('the live video has no decoded frame dimensions');
+  }
+  const scale = Math.min(box.width / media.width, box.height / media.height);
+  const left = box.x + (box.width - media.width * scale) / 2;
+  const top = box.y + (box.height - media.height * scale) / 2;
+  await page.mouse.click(left + media.width * scale * 0.5, top + media.height * scale * 0.9);
+}
 
 /**
  * Ends the current turn without racing a live model's wall-clock — copies
@@ -122,11 +142,10 @@ test(
     await test.step('take the wheel by clicking into the live frame', async () => {
       const frame = browserLiveFrame(page);
       await expect(frame).toBeVisible({ timeout: 90_000 });
-      const box = await frame.boundingBox();
-      if (!box) throw new Error('the live frame has no bounding box');
       // Click empty space away from any link the agent's own navigation
-      // might have landed on (mirrors UAT-14's "well below the link list").
-      await page.mouse.click(box.x + box.width / 2, box.y + box.height * 0.9);
+      // might have landed on, but inside the rendered video rather than an
+      // object-contain letterbox where production deliberately rejects input.
+      await takeControlFromRenderedVideo(page);
     });
 
     await test.step(
