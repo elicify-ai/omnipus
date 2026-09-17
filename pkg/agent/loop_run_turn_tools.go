@@ -1565,6 +1565,12 @@ func (ex *agentLoopRunTurnToolsExecute) recordToolResult(tc providers.ToolCall) 
 	// for Verbose chat); the window form is toolResultMsg.
 	ex.contentForLLM = ex.admitted.Archived.Content
 	ex.toolResultMsg = ex.admitted.Message
+	if len(ex.toolResult.InspectionImages) > 0 {
+		if ex.rx.rr.rq.ri.rf.rt.inspectionImages == nil {
+			ex.rx.rr.rq.ri.rf.rt.inspectionImages = make(map[string][]tools.InspectionImage)
+		}
+		ex.rx.rr.rq.ri.rf.rt.inspectionImages[ex.toolCallID] = ex.toolResult.InspectionImages
+	}
 	endSID, endProducingSID := u9ToolExecSessionIDs(ex.rx.rr.rq.ri.rf.rt.ts)
 	ex.rx.rr.rq.ri.rf.rt.al.emitEvent(
 		EventKindToolExecEnd,

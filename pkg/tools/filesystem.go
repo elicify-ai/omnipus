@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"math"
 	"os"
@@ -546,17 +547,18 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	if offset < 0 {
-		return ErrorResult("offset must be >= 0")
-	}
 
 	// length (optional, capped at MaxReadFileSize)
 	length, err := getInt64Arg(args, "length", t.maxSize)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	if length <= 0 {
-		return ErrorResult("length must be > 0")
+	paginationSupplied := false
+	if _, ok := args["offset"]; ok {
+		paginationSupplied = true
+	}
+	if _, ok := args["length"]; ok {
+		paginationSupplied = true
 	}
 	if length > t.maxSize {
 		length = t.maxSize
@@ -571,9 +573,26 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return PermissionDeniedResult(t.Name(), err, err.Error())
 	}
 	defer handle.Close()
+	if _, imageNamed, _ := imageFormat(nil, path); imageNamed {
+		info, statErr := handle.Stat()
+		if statErr == nil && !info.Mode().IsRegular() {
+			return ErrorResult("image source must be a regular file")
+		}
+		if statErr == nil && info.Size() > MaxInspectionImageBytes {
+			return ErrorResult("image exceeds byte limit")
+		}
+	}
 
-	file, err := handle.Open()
+	var file fs.File
+	if _, imageNamed, _ := imageFormat(nil, path); imageNamed {
+		file, err = handle.OpenRegularNonBlocking()
+	} else {
+		file, err = handle.Open()
+	}
 	if err != nil {
+		if errors.Is(err, ErrImageSourceNotRegular) {
+			return ErrorResult(err.Error())
+		}
 		// Emit a path.access_denied audit entry on workspace-guard rejections.
 		// The emitter is a no-op when t.auditLogger is nil (best-effort).
 		emitPathAccessDeniedCorrelated(ctx, t.auditLogger, t.Name(), path, err, t.allowPathsLen)
@@ -610,6 +629,22 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	sniffN, sniffErr := file.Read(sniff)
 	if sniffErr != nil && !errors.Is(sniffErr, io.EOF) {
 		return ErrorResult(fmt.Sprintf("failed to sniff file content: %v", sniffErr))
+	}
+	reauthorize := func(checkCtx context.Context) error {
+		fresh, checkErr := ResolvePathAllowingPatterns(checkCtx, policy, t.Name(), "", FSOpRead, path, t.patterns)
+		if checkErr != nil {
+			return checkErr
+		}
+		return fresh.Close()
+	}
+	if result, handled := inspectionImageResult(ctx, file, path, sniff[:sniffN], paginationSupplied, reauthorize); handled {
+		return result
+	}
+	if offset < 0 {
+		return ErrorResult("offset must be >= 0")
+	}
+	if length <= 0 {
+		return ErrorResult("length must be > 0")
 	}
 
 	// Reject binary files: null bytes are a reliable binary indicator.

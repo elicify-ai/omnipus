@@ -30,6 +30,7 @@ type agentLoopRunTurn struct {
 	llmOpts            map[string]any
 	llmModel           string
 	onToolCallProgress protocoltypes.OnToolCallProgress
+	inspectionImages   map[string][]tools.InspectionImage
 }
 
 // agentLoopRunTurnFallbacks carries the shared state of runTurn across its stages.

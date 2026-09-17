@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -47,6 +48,12 @@ type ToolResult struct {
 	// Media contains media store refs produced by this tool.
 	// When non-empty, the agent will publish these as OutboundMediaMessage.
 	Media []string `json:"media,omitempty"`
+
+	// InspectionImages contains private, live-turn visual evidence produced by
+	// read tools. It is never serialized or published as user-facing media.
+	// Agent presentation may copy it into the current provider request, while
+	// durable history retains only ForLLM's re-read marker.
+	InspectionImages []InspectionImage `json:"-"`
 
 	// Messages holds the ephemeral session history after execution.
 	// Only populated by SubTurn executions; used by evaluator_optimizer
@@ -155,6 +162,21 @@ type ToolResult struct {
 	// notifier round-trip) has crossed a serialisation boundary that
 	// json:"-" deliberately strips.
 	Deferred *ToolDeferral `json:"-"`
+}
+
+// InspectionImage is a bounded snapshot captured from an already-authorized
+// regular-file handle. Source identifies the path for a fresh authorization
+// check before a retry/fallback; it must never be used to reopen image bytes.
+type InspectionImage struct {
+	Bytes          []byte
+	MIMEType       string
+	Source         string
+	SHA256         string
+	OriginalWidth  int
+	OriginalHeight int
+	// Reauthorize checks current access before an actual provider attempt.
+	// It never supplies or reopens the captured image bytes.
+	Reauthorize func(context.Context) error
 }
 
 // ToolDeferral is the structural discriminator a control-gated tool result
