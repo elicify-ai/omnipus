@@ -516,6 +516,12 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 		Verified: result != nil && result.Verified,
 		Revision: revision,
 	}
+	persistence := gen.SkillPersistenceStatusComplete
+	activation := gen.SkillActivationStatusActive
+	changed := []string{"installed"}
+	skill.PersistenceStatus = &persistence
+	skill.ActivationStatus = &activation
+	skill.ChangedFields = &changed
 	if result != nil && result.Summary != "" {
 		summary := result.Summary
 		skill.Description = &summary
@@ -577,5 +583,6 @@ func (a *restAPI) deleteSkill(w http.ResponseWriter, r *http.Request, name strin
 		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not remove skill: %v", err))
 		return
 	}
-	jsonOK(w, map[string]string{"status": "removed", "name": name})
+	jsonOK(w, map[string]any{"status": "removed", "name": name, "revision": revision,
+		"persistence_status": "complete", "activation_status": "active", "changed_fields": []string{"installed"}})
 }

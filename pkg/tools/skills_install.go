@@ -328,7 +328,19 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	output += "\nThe skill is now available and can be loaded in the current session."
 	output += fmt.Sprintf("\nRevision: %s\nPersistence: complete\nActivation: active", nextRevision)
 
-	return SilentResult(output)
+	payload, marshalErr := json.Marshal(map[string]any{
+		"success":            true,
+		"name":               slug,
+		"revision":           nextRevision,
+		"persistence_status": "complete",
+		"activation_status":  "active",
+		"changed_fields":     []string{"installed"},
+		"message":            output,
+	})
+	if marshalErr != nil {
+		return ErrorResult(fmt.Sprintf("installed skill but failed to encode mutation state: %v", marshalErr))
+	}
+	return SilentResult(string(payload))
 }
 
 // originMeta tracks which registry a skill was installed from.
