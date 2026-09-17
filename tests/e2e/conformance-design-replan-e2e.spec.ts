@@ -276,7 +276,19 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // into Step 2's own 420s observation budget (see test.setTimeout's comment
   // above for the combined worst case).
   let reachedHoldOnce = false
-  const firstHoldDeadline = Date.now() + 300_000
+  // WIDENED AGAIN 300s -> 600s (2026-09-17). The 300s above was set from a
+  // measured ~282s on a shard running largely alone - 6% headroom over a real
+  // observation, which is not a budget, it is a coin flip. The e2e plan now
+  // runs LLM shards 4-wide by default (E2E_MAX_PARALLEL_LLM), and every one of
+  // them is waiting on the same OpenRouter capacity, so the same work takes
+  // materially longer than it did when 300s was chosen. This shard failed three
+  // consecutive retries on 2026-09-16 with three different plan ids, each
+  // "must reach plan_phase=awaiting_supervision" - the hold never arrived in
+  // time, not a wrong state. The transition itself is correct:
+  // pkg/agent/plan_engine_supervise.go writes JudgeRounds,
+  // PlanPhaseAwaitingSupervision, handover text and the terminal signature
+  // atomically after an UNMET verdict.
+  const firstHoldDeadline = Date.now() + 600_000
   while (Date.now() < firstHoldDeadline) {
     const poll = await apiFetch<{ plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
     if (!poll.ok) throw new Error(`t3: GET /plans/{id} poll (first hold) failed ${poll.status}: ${poll.raw}`)
