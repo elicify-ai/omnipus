@@ -229,7 +229,7 @@ func (s *Store) write(t *Task) error {
 	if err := fileutil.WithFlock(fileutil.SidecarLockPath(p), func() error {
 		return writeFileAtomicFn(p, data, 0o600)
 	}); err != nil {
-		return fmt.Errorf("Store.write: %w", err)
+		return fmt.Errorf("write task: %w", err)
 	}
 	return nil
 }

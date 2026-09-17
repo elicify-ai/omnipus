@@ -613,11 +613,11 @@ func (r *Registry) persist(set *PendingSet) error {
 	}
 	data, err := json.Marshal(set)
 	if err != nil {
-		return fmt.Errorf("Registry.persist: %w", err)
+		return fmt.Errorf("persist pending ask: %w", err)
 	}
 	s := string(data)
 	if err := r.meta.SetMeta(set.TranscriptSessionID, session.MetaPatch{PendingAskJSON: &s}); err != nil {
-		return fmt.Errorf("Registry.persist: %w", err)
+		return fmt.Errorf("persist pending ask: %w", err)
 	}
 	return nil
 }

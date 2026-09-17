@@ -288,10 +288,7 @@ func parseResponse(apiResp *responses.Response) (*protocoltypes.LLMResponse, err
 				json.RawMessage(item.Arguments.OfString), item.Name,
 			)
 			if err != nil {
-				if err := common.AttachToolArgumentsEvidence(err, truncationEvidenceReason, usage); err != nil {
-					return nil, fmt.Errorf("parseResponse: %w", err)
-				}
-				return nil, nil
+				return nil, fmt.Errorf("parseResponse: %w", common.AttachToolArgumentsEvidence(err, truncationEvidenceReason, usage))
 			}
 			toolCalls = append(toolCalls, protocoltypes.ToolCall{
 				ID:        item.CallID,

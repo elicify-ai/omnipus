@@ -1868,12 +1868,12 @@ func upsertPropertiesNote(ctx context.Context, store propindex.Store, collection
 		return err
 	}
 	if entry.Kind == ScanKindAttachment {
-		if err := store.UpsertNote(ctx, propindex.NoteRows{
+		if upErr := store.UpsertNote(ctx, propindex.NoteRows{
 			Path: relPath, Kind: propindex.KindAttachment,
 			Size: entry.Size, MtimeNanos: entry.ModTimeNanos,
 			CtimeNanos: entry.CtimeNanos, HasCtime: entry.HasCtime,
-		}); err != nil {
-			return fmt.Errorf("upsertPropertiesNote: %w", err)
+		}); upErr != nil {
+			return fmt.Errorf("upsert attachment properties: %w", upErr)
 		}
 	}
 

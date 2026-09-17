@@ -7,6 +7,7 @@
 package fileutil
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 // signalNthOpen installs flockOpenedHook so that the nth open of a lock file
@@ -185,4 +187,26 @@ func TestRemoveLocked_MissingFile_ReportsNotExistAndCreatesNoSidecar(t *testing.
 
 	missingDir := filepath.Join(t.TempDir(), "no-such-dir", "gone.json")
 	require.ErrorIs(t, RemoveLocked(missingDir), fs.ErrNotExist)
+}
+
+// flockExclusive/flockUnlock wrap unix.Flock. Wrapping the call inline
+// (`return fmt.Errorf("x: %w", unix.Flock(...))`) turns a successful
+// lock into a non-nil error because fmt.Errorf("%w", nil) is not nil —
+// that bug shipped in an earlier wrapfix pass. These two assertions are
+// the proof the rewrite must keep: success stays nil, and a real errno
+// is still matchable with errors.Is through the wrap.
+func TestFlockExclusive_SuccessStaysNilAndErrnoIsPreserved(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "flock")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = f.Close() })
+
+	require.NoError(t, flockExclusive(f),
+		"a successful flock must stay a nil error; wrapping nil manufactures a failure")
+	require.NoError(t, flockUnlock(f))
+	require.NoError(t, f.Close())
+
+	err = flockExclusive(f)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, unix.EBADF),
+		"wrap must preserve the unix errno via errors.Is; got %v", err)
 }

@@ -19,9 +19,10 @@
 // never pair them incorrectly again: every transition funnels through here.
 package session
 
-import "fmt"
-
-import "log/slog"
+import (
+	"fmt"
+	"log/slog"
+)
 
 // LifecycleMutator is the minimal lifecycle-store surface TransitionSession
 // needs: just the atomic Mutate RMW. *LifecycleStore satisfies it directly,

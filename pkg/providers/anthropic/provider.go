@@ -656,10 +656,7 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 				// string spelling ("max_tokens") already matches the
 				// normalised spelling AttachToolArgumentsEvidence looks
 				// for, so it is passed through unmapped.
-				if err := common.AttachToolArgumentsEvidence(err, string(resp.StopReason), usage); err != nil {
-					return nil, fmt.Errorf("parseResponse: %w", err)
-				}
-				return nil, nil
+				return nil, fmt.Errorf("parseResponse: %w", common.AttachToolArgumentsEvidence(err, string(resp.StopReason), usage))
 			}
 			toolCalls = append(toolCalls, ToolCall{
 				ID:        tu.ID,

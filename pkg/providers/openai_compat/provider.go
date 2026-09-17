@@ -215,10 +215,7 @@ func (p *Provider) Chat(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		if err := common.HandleErrorResponse(resp, p.apiBase); err != nil {
-			return nil, fmt.Errorf("Provider.Chat: %w", err)
-		}
-		return nil, nil
+		return nil, fmt.Errorf("Provider.Chat: %w", common.HandleErrorResponse(resp, p.apiBase))
 	}
 
 	parsed, err := common.ReadAndParseResponse(resp, p.apiBase)
@@ -275,10 +272,7 @@ func (p *Provider) ChatStream(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		if err := common.HandleErrorResponse(resp, p.apiBase); err != nil {
-			return nil, fmt.Errorf("Provider.ChatStream: %w", err)
-		}
-		return nil, nil
+		return nil, fmt.Errorf("Provider.ChatStream: %w", common.HandleErrorResponse(resp, p.apiBase))
 	}
 
 	// Intentional concurrent close: net/http response bodies are safe to Close() concurrently with reads, unblocking any blocked scanner.Scan().
@@ -507,10 +501,7 @@ func parseStreamResponse(
 			// well-formed wrong-shaped payload, and so the refused
 			// attempt's billed usage isn't silently discarded (ADR-087
 			// D3.9 / D5).
-			if err := common.AttachToolArgumentsEvidence(err, finishReason, usage); err != nil {
-				return nil, fmt.Errorf("parseStreamResponse: %w", err)
-			}
-			return nil, nil
+			return nil, fmt.Errorf("parseStreamResponse: %w", common.AttachToolArgumentsEvidence(err, finishReason, usage))
 		}
 		toolCalls = append(toolCalls, ToolCall{
 			ID:        acc.id,

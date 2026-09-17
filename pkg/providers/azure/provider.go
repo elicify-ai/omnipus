@@ -152,10 +152,7 @@ func (p *Provider) Chat(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		if err := common.HandleErrorResponse(resp, p.apiBase); err != nil {
-			return nil, fmt.Errorf("Provider.Chat: %w", err)
-		}
-		return nil, nil
+		return nil, fmt.Errorf("Provider.Chat: %w", common.HandleErrorResponse(resp, p.apiBase))
 	}
 
 	body, err := orc.ParseResponseBody(resp.Body)

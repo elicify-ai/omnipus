@@ -139,11 +139,12 @@ linters:
       max-func-lines: 3
     # wrapcheck: context errors are the one sanctioned bare passthrough.
     # Cancellation/deadline signals are sentinel values that this codebase
-    # compares with == at ~17 production sites (e.g. `ctx.Err() ==
+    # compares with == at 10 production sites (e.g. `ctx.Err() ==
     # context.DeadlineExceeded` in pkg/agent/loop.go, pkg/sandbox/
-    # hardened_exec.go); wrapping them would break those comparisons and
-    # prepend noise ("Foo: context canceled") to a message whose whole point
-    # is which sentinel it is. errors.Is stays correct for everything else.
+    # hardened_exec.go); wrapping a returned ctx.Err() would break those
+    # comparisons and prepend noise ("Foo: context canceled") to a message
+    # whose whole point is which sentinel it is. errors.Is stays correct
+    # for everything else.
     wrapcheck:
       ignore-interface-regexps:
         - ^context\.Context$

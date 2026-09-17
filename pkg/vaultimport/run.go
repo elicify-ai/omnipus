@@ -134,8 +134,8 @@ func schemaSetFromRendered(inferred map[string][]InferredProperty, provisioned m
 	}
 	defer os.RemoveAll(stage)
 
-	if err := writeSchemas(stage, inferred, provisioned); err != nil {
-		return nil, nil, err
+	if wErr := writeSchemas(stage, inferred, provisioned); wErr != nil {
+		return nil, nil, wErr
 	}
 	schemas, report, err := records.LoadSchemas(stage)
 	if err != nil {

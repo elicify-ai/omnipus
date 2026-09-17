@@ -261,7 +261,7 @@ func (q Query) prepare() ([]records.PreparedFilter, Selector, error) {
 	for _, f := range q.Filters {
 		pf, err := f.Prepare(q.Schema)
 		if err != nil {
-			return nil, sel, fmt.Errorf("Query.prepare: %w", err)
+			return nil, sel, fmt.Errorf("prepare query: %w", err)
 		}
 		prepared = append(prepared, pf)
 	}

@@ -378,10 +378,7 @@ func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messag
 	}
 	mid, err := strconv.Atoi(messageID)
 	if err != nil {
-		if err != nil {
-			return fmt.Errorf("TelegramChannel.EditMessage: %w", err)
-		}
-		return nil
+		return fmt.Errorf("edit telegram message: %w", err)
 	}
 	parsedContent := parseContent(content, useMarkdownV2)
 	editMsg := tu.EditMessageText(tu.ID(cid), mid, parsedContent)
@@ -506,12 +503,10 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 			if err != nil && strings.Contains(err.Error(), "PHOTO_INVALID_DIMENSIONS") {
 				if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
 					file.Close()
-					if err := channels.ClassifyMediaSendError(
+					return fmt.Errorf("TelegramChannel.SendMedia: %w", channels.ClassifyMediaSendError(
 						"telegram", sentCount,
 						fmt.Errorf("rewind media after photo failure: %w", seekErr),
-					); err != nil {
-						return fmt.Errorf("TelegramChannel.SendMedia: %w", err)
-					}
+					))
 				}
 
 				docParams := &telego.SendDocumentParams{
@@ -580,10 +575,7 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 			// failure keep its normal ErrTemporary retry classification.
 			// The real API error is preserved in the chain either way, so
 			// it no longer gets flattened to an opaque "temporary failure".
-			if err := channels.ClassifyMediaSendError("telegram", sentCount, err); err != nil {
-				return fmt.Errorf("TelegramChannel.SendMedia: %w", err)
-			}
-			return nil
+			return fmt.Errorf("TelegramChannel.SendMedia: %w", channels.ClassifyMediaSendError("telegram", sentCount, err))
 		}
 		sentCount++
 	}

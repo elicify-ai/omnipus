@@ -2,8 +2,8 @@ package providers
 
 import (
 	"context"
-
 	"fmt"
+
 	anthropicprovider "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
 )
 

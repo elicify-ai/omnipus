@@ -363,10 +363,7 @@ func (c *QQChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage)
 			// classification. The real API error stays in the chain either
 			// way, instead of being flattened to an opaque "temporary
 			// failure".
-			if err := channels.ClassifyMediaSendError("qq", sentCount, err); err != nil {
-				return fmt.Errorf("QQChannel.SendMedia: %w", err)
-			}
-			return nil
+			return fmt.Errorf("QQChannel.SendMedia: %w", channels.ClassifyMediaSendError("qq", sentCount, err))
 		}
 
 		if err := c.sendUploadedMedia(ctx, chatKind, msg.ChatID, part, fileInfo); err != nil {
@@ -380,10 +377,7 @@ func (c *QQChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage)
 			// the follow-up post failed), so if an earlier part also fully
 			// sent (sentCount > 0), a bare retry of the whole message would
 			// duplicate it.
-			if err := channels.ClassifyMediaSendError("qq", sentCount, err); err != nil {
-				return fmt.Errorf("QQChannel.SendMedia: %w", err)
-			}
-			return nil
+			return fmt.Errorf("QQChannel.SendMedia: %w", channels.ClassifyMediaSendError("qq", sentCount, err))
 		}
 		sentCount++
 	}

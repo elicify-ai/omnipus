@@ -226,11 +226,8 @@ func (a *restAPI) syncTaskGoalRecord(
 		if nErr != nil {
 			return fmt.Errorf("build goal record: %w", nErr)
 		}
-		if err := gs.Create(g); err != nil {
-			if err != nil {
-				return fmt.Errorf("restAPI.syncTaskGoalRecord: %w", err)
-			}
-			return nil
+		if cErr := gs.Create(g); cErr != nil {
+			return fmt.Errorf("create task goal record: %w", cErr)
 		}
 		return nil
 	}

@@ -541,10 +541,7 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 			// retrying the whole message would re-upload/re-send it,
 			// duplicating it for the user, so the failure is classified
 			// permanent instead. The real API error stays in the chain.
-			if err := channels.ClassifyMediaSendError("matrix", sentCount, err); err != nil {
-				return fmt.Errorf("MatrixChannel.SendMedia: %w", err)
-			}
-			return nil
+			return fmt.Errorf("MatrixChannel.SendMedia: %w", channels.ClassifyMediaSendError("matrix", sentCount, err))
 		}
 
 		msgType := matrixOutboundMsgType(part.Type, filename, contentType)
@@ -569,10 +566,7 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 			// parts, sentCount could be > 0 here; ClassifyMediaSendError
 			// makes that permanent so sendMediaWithRetry does not re-send
 			// the whole message and duplicate what already landed.
-			if err := channels.ClassifyMediaSendError("matrix", sentCount, err); err != nil {
-				return fmt.Errorf("MatrixChannel.SendMedia: %w", err)
-			}
-			return nil
+			return fmt.Errorf("MatrixChannel.SendMedia: %w", channels.ClassifyMediaSendError("matrix", sentCount, err))
 		}
 		sentCount++
 	}

@@ -20,8 +20,10 @@
 //   - no deferred func literal in the enclosing function may reassign the
 //     error variable: the deferred write would wrap around (or clobber)
 //     the rewrite
-//   - only bare identifiers and call expressions are rewritten; anything
-//     else (selectors, type assertions, ...) is left for manual review
+//   - only a bare error identifier already inside `if err != nil` is rewritten
+//   - a returned call is skipped: wrapping `call()` inline would turn a nil
+//     success into a non-nil error (observed live on flockExclusive)
+//   - selectors, type assertions, named results, and closures are skipped
 //
 // Idempotence: a rewritten return ends in a fmt.Errorf call, never a bare
 // identifier, and wrapcheck does not flag wrapped returns — so a second
@@ -29,9 +31,9 @@
 //
 // Usage:
 //
-//	go run ./scripts/wrapfix.go -dry-run     print the planned diff and skips
-//	go run ./scripts/wrapfix.go              apply (re-runs golangci-lint)
-//	go run ./scripts/wrapfix.go -findings f  reuse a saved findings JSON
+//	go run ./scripts/wrapfix -dry-run     print the planned diff and skips
+//	go run ./scripts/wrapfix              apply (re-runs golangci-lint)
+//	go run ./scripts/wrapfix -findings f  reuse a saved findings JSON
 package main
 
 import (
@@ -48,6 +50,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // lintIssue is one entry of golangci-lint's JSON report.
@@ -289,7 +293,7 @@ func planFile(path string, issues []lintIssue) fileOutcome {
 		out.edits = append(out.edits, edit{
 			start: start,
 			end:   end,
-			text:  fmt.Sprintf("fmt.Errorf(%q, %s)", funcLabel(enclosingDecl(site, funcs))+": %w", src[start:end]),
+			text:  fmt.Sprintf("fmt.Errorf(%q, %s)", wrapVerb(funcLabel(enclosingDecl(site, funcs))), src[start:end]),
 			line:  fset.Position(expr.Pos()).Line,
 		})
 		out.rewrites++
@@ -391,7 +395,7 @@ func classifySkip(expr ast.Expr, site retSite, status string, funcs []funcRange)
 		if deferReassigns(enclosing, e.Name) {
 			return "deferred func literal reassigns the error variable"
 		}
-		if !guardedByNilCheck(site, e.Name) {
+		if !guardedByNilCheck(enclosing, site.ret, e.Name) {
 			return "tail return of a possibly-nil error — wrap by hand under a nil check"
 		}
 	case *ast.CallExpr:
@@ -407,35 +411,73 @@ func classifySkip(expr ast.Expr, site retSite, status string, funcs []funcRange)
 	return ""
 }
 
-// guardedByNilCheck reports whether the return sits inside a block whose
-// condition proves the named error non-nil (`if err != nil { ... return err }`).
-// A tail `return err` outside such a block carries nil on success and must
-// not be wrapped.
-func guardedByNilCheck(src []byte, line int, name string) bool {
-	lines := strings.Split(string(src), "\n")
-	ln := line - 1
-	if ln < 0 || ln >= len(lines) {
+// guardedByNilCheck reports whether ret sits inside an `if name != nil`
+// body. A tail `return err` outside that block carries nil on success and
+// must not be wrapped: fmt.Errorf("x: %w", nil) manufactures a failure.
+func guardedByNilCheck(fd *ast.FuncDecl, ret *ast.ReturnStmt, name string) bool {
+	if fd == nil || fd.Body == nil || ret == nil {
 		return false
 	}
-	mine := len(lines[ln]) - len(strings.TrimLeft(lines[ln], "\t"))
-	for k := ln - 1; k >= 0; k-- {
-		t := strings.TrimRight(lines[k], " \t")
-		ind := len(lines[k]) - len(strings.TrimLeft(lines[k], "\t"))
-		if ind >= mine {
-			continue
+	found := false
+	ast.Inspect(fd.Body, func(n ast.Node) bool {
+		if found {
+			return false
 		}
-		if !strings.HasSuffix(t, "{") {
-			continue
-		}
-		cond := strings.TrimSpace(t)
-		if strings.Contains(cond, name+" != nil") {
+		ifStmt, ok := n.(*ast.IfStmt)
+		if !ok {
 			return true
 		}
-		if strings.HasPrefix(cond, "func ") || strings.HasPrefix(cond, "for ") || strings.HasPrefix(cond, "switch ") {
+		if containsNode(ifStmt.Body, ret) && condProvesNonNil(ifStmt.Cond, name) {
+			found = true
 			return false
+		}
+		return true
+	})
+	return found
+}
+
+func containsNode(root, target ast.Node) bool {
+	if root == nil || target == nil {
+		return false
+	}
+	found := false
+	ast.Inspect(root, func(n ast.Node) bool {
+		if n == target {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// condProvesNonNil reports whether cond implies name != nil. AND is enough
+// (either side proving it is sufficient); OR is not (the other disjunct
+// could be true while the error is still nil).
+func condProvesNonNil(cond ast.Expr, name string) bool {
+	switch c := cond.(type) {
+	case *ast.ParenExpr:
+		return condProvesNonNil(c.X, name)
+	case *ast.BinaryExpr:
+		switch c.Op {
+		case token.NEQ:
+			return (isIdentName(c.X, name) && isNilIdent(c.Y)) ||
+				(isIdentName(c.Y, name) && isNilIdent(c.X))
+		case token.LAND:
+			return condProvesNonNil(c.X, name) || condProvesNonNil(c.Y, name)
 		}
 	}
 	return false
+}
+
+func isIdentName(e ast.Expr, name string) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+func isNilIdent(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == "nil"
 }
 
 // funcRange is the byte range of one FuncDecl or FuncLit.
@@ -578,6 +620,18 @@ func funcLabel(fd *ast.FuncDecl) string {
 		return recvTypeName(fd.Recv.List[0].Type) + "." + fd.Name.Name
 	}
 	return fd.Name.Name
+}
+
+// wrapVerb is the fmt.Errorf format string for a rewrite. The first letter is
+// lowercased so staticcheck ST1005 ("error strings should not be capitalized")
+// does not fire on exported function names; "%w" is required so errors.Is
+// still matches the wrapped sentinel.
+func wrapVerb(label string) string {
+	if label == "" {
+		return "error: %w"
+	}
+	r, n := utf8.DecodeRuneInString(label)
+	return string(unicode.ToLower(r)) + label[n:] + ": %w"
 }
 
 // recvTypeName reduces a receiver type expression to its type name.

@@ -1176,10 +1176,7 @@ func (c *WeixinChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 			// ErrTemporary retry classification. The real API error stays
 			// in the chain either way (was previously flattened away
 			// entirely).
-			if err := basechannels.ClassifyMediaSendError("weixin", sentCount, err); err != nil {
-				return fmt.Errorf("WeixinChannel.SendMedia: %w", err)
-			}
-			return nil
+			return fmt.Errorf("WeixinChannel.SendMedia: %w", basechannels.ClassifyMediaSendError("weixin", sentCount, err))
 		}
 		sentCount++
 	}

@@ -7,6 +7,7 @@ package agent
 
 import (
 	"fmt"
+
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 )

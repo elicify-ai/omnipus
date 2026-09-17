@@ -590,10 +590,7 @@ func classifyLINEMediaFailure(sentCount int, err error) error {
 	if errors.Is(err, channels.ErrSendFailed) {
 		return err
 	}
-	if err := channels.ClassifyMediaSendError("line", sentCount, errors.New(err.Error())); err != nil {
-		return fmt.Errorf("classifyLINEMediaFailure: %w", err)
-	}
-	return nil
+	return fmt.Errorf("classifyLINEMediaFailure: %w", channels.ClassifyMediaSendError("line", sentCount, errors.New(err.Error())))
 }
 
 // SendMedia implements the channels.MediaSender interface.
@@ -744,24 +741,16 @@ func (c *LINEChannel) callAPI(ctx context.Context, endpoint string, payload any)
 
 	resp, err := c.apiClient.Do(req)
 	if err != nil {
-		if err := channels.ClassifyNetError(err); err != nil {
-			return fmt.Errorf("LINEChannel.callAPI: %w", err)
-		}
-		return nil
+		return fmt.Errorf("LINEChannel.callAPI: %w", channels.ClassifyNetError(err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			if err := channels.ClassifySendError(resp.StatusCode, fmt.Errorf("reading LINE API error response: %w", err)); err != nil {
-				return fmt.Errorf("LINEChannel.callAPI: %w", err)
-			}
+			return fmt.Errorf("LINEChannel.callAPI: %w", channels.ClassifySendError(resp.StatusCode, fmt.Errorf("reading LINE API error response: %w", err)))
 		}
-		if err := channels.ClassifySendError(resp.StatusCode, fmt.Errorf("LINE API error: %s", string(respBody))); err != nil {
-			return fmt.Errorf("LINEChannel.callAPI: %w", err)
-		}
-		return nil
+		return fmt.Errorf("LINEChannel.callAPI: %w", channels.ClassifySendError(resp.StatusCode, fmt.Errorf("LINE API error: %s", string(respBody))))
 	}
 
 	return nil

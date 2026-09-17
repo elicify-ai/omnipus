@@ -107,7 +107,7 @@ func (s *Store[T]) write(id string, t *T) error {
 		return fmt.Errorf("entity: marshal %q: %w", id, err)
 	}
 	if err := fileutil.WriteFileAtomic(s.path(id), data, 0o600); err != nil {
-		return fmt.Errorf("Store.write: %w", err)
+		return fmt.Errorf("write entity: %w", err)
 	}
 	return nil
 }

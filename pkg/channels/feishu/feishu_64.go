@@ -376,10 +376,7 @@ func (c *FeishuChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 			// makes the failure permanent in that case instead of the bare
 			// ErrTemporary this used to return unconditionally. The real
 			// API error is preserved in the chain either way.
-			if err := channels.ClassifyMediaSendError("feishu", sentCount, err); err != nil {
-				return fmt.Errorf("FeishuChannel.SendMedia: %w", err)
-			}
-			return nil
+			return fmt.Errorf("FeishuChannel.SendMedia: %w", channels.ClassifyMediaSendError("feishu", sentCount, err))
 		}
 		if sent {
 			sentCount++

@@ -135,10 +135,7 @@ func (p *Provider) Chat(
 	// and reports that distinctly, which the provider's previous hand-rolled
 	// per-status switch did not.
 	if resp.StatusCode != http.StatusOK {
-		if err := common.HandleErrorResponse(resp, p.apiBase); err != nil {
-			return nil, fmt.Errorf("Provider.Chat: %w", err)
-		}
-		return nil, nil
+		return nil, fmt.Errorf("Provider.Chat: %w", common.HandleErrorResponse(resp, p.apiBase))
 	}
 
 	// Read response body

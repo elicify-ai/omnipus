@@ -749,8 +749,8 @@ func (ix *Index) deleteNoteDirect(ctx context.Context, path string) (err error) 
 	if !found {
 		// Deleting a note the index never held is not an error: the vault is the
 		// source of truth and the index is allowed to be behind it.
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("Index.deleteNoteDirect: %w", err)
+		if cErr := tx.Commit(); cErr != nil {
+			return fmt.Errorf("commit delete of missing note: %w", cErr)
 		}
 		return nil
 	}

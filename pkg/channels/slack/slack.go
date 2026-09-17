@@ -262,10 +262,7 @@ func (c *SlackChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessa
 			// re-upload it, duplicating it for the user, so the failure is
 			// classified permanent instead. The real API error stays in
 			// the chain (was previously flattened away entirely).
-			if err := channels.ClassifyMediaSendError("slack", sentCount, err); err != nil {
-				return fmt.Errorf("SlackChannel.SendMedia: %w", err)
-			}
-			return nil
+			return fmt.Errorf("SlackChannel.SendMedia: %w", channels.ClassifyMediaSendError("slack", sentCount, err))
 		}
 		sentCount++
 	}

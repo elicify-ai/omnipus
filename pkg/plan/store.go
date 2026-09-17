@@ -115,7 +115,7 @@ func (s *Store) write(p *Plan) error {
 	if err := fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
 		return writeFileAtomicFn(path, data, 0o600)
 	}); err != nil {
-		return fmt.Errorf("Store.write: %w", err)
+		return fmt.Errorf("write plan: %w", err)
 	}
 	return nil
 }
