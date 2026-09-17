@@ -2157,29 +2157,52 @@ func verifierHandleReleased(registry VerifierSessionPublisher, unitID, chatID st
 // transient retry now repaints the pill: `judge_unavailable` with a
 // plain-language reason naming the cause, the wait and the next try (the
 // pill's expanded panel renders latest_reason), then `judging` again when that
-// try starts. Existing wire states and fields only — no contract change. Task
-// and plan adjudications have no goal pill and are untouched.
+// try starts. Existing wire states and fields only — no contract change.
+// Plan-scope adjudications have no goal pill; they stamp Plan.PausedReason
+// so the board does not look like ordinary Judging during a D7 wait.
 
 // noteGoalJudgeRetryWait paints the wait before a Judge retry.
 func (al *AgentLoop) noteGoalJudgeRetryWait(in JudgeCriteriaInput, attempt int, cause string) {
-	rec := goalForJudgeRetryNotice(in)
-	if rec == nil {
-		return
-	}
 	wait := judgeBackoffDuration(attempt)
-	reason := fmt.Sprintf("The Judge could not finish checking this goal: %s. Trying again in %d s (try %d).",
-		cause, int(wait.Round(time.Second)/time.Second), attempt+2)
-	al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds, reason, goalPillJudgeUnavailable)
+	if rec := goalForJudgeRetryNotice(in); rec != nil {
+		reason := fmt.Sprintf("The Judge could not finish checking this goal: %s. Trying again in %d s (try %d).",
+			cause, int(wait.Round(time.Second)/time.Second), attempt+2)
+		al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds, reason, goalPillJudgeUnavailable)
+	}
+	al.notePlanJudgeRetryWait(in, cause, wait)
 }
 
 // noteGoalJudgeRetrying paints the Judge retry itself starting.
 func (al *AgentLoop) noteGoalJudgeRetrying(in JudgeCriteriaInput, attempt int) {
-	rec := goalForJudgeRetryNotice(in)
-	if rec == nil {
+	if rec := goalForJudgeRetryNotice(in); rec != nil {
+		al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
+			fmt.Sprintf("Checking this goal again (try %d).", attempt+1), goalPillJudging)
+	}
+	al.notePlanJudgeRetrying(in)
+}
+
+// notePlanJudgeRetryWait stamps a plan-scope D7 wait onto Plan.PausedReason.
+func (al *AgentLoop) notePlanJudgeRetryWait(in JudgeCriteriaInput, cause string, wait time.Duration) {
+	if in.Scope != task.VerdictScopePlan || in.PlanID == "" {
 		return
 	}
-	al.emitGoalStatusFrame(in.GoalSessionID, rec.GoalID, rec.Prompt, rec.Round, rec.MaxRounds,
-		fmt.Sprintf("Checking this goal again (try %d).", attempt+1), goalPillJudging)
+	pe := GetPlanEngine(al)
+	if pe == nil {
+		return
+	}
+	pe.noteJudgeUnavailable(in.PlanID, cause, wait)
+}
+
+// notePlanJudgeRetrying retracts the in-round pause as the next Judge turn starts.
+func (al *AgentLoop) notePlanJudgeRetrying(in JudgeCriteriaInput) {
+	if in.Scope != task.VerdictScopePlan || in.PlanID == "" {
+		return
+	}
+	pe := GetPlanEngine(al)
+	if pe == nil {
+		return
+	}
+	pe.clearJudgeUnavailablePause(in.PlanID)
 }
 
 // goalForJudgeRetryNotice returns the ACTIVE chat goal a retry notice belongs

@@ -309,3 +309,39 @@ func TestJudgeUnavailableE7_GoalClaim_PillNoRoundNoUnmet(t *testing.T) {
 		t.Errorf("the Judge's provider was called %d time(s), want 0", n)
 	}
 }
+
+// TestJudgeBackoffWait_SkipsWhenRemainingCtxCannotFitAFullTurn pins the
+// llm-conformance-replan arithmetic: a 420 s judge turn inside a 600 s round
+// leaves ~180 s, which cannot host another full turn. Sleeping on D7 then
+// starting a doomed short turn burns the rest of the round, so the plan
+// engine's own retry never sees a full-budget attempt. The wait must error
+// without sleeping so the caller can return Unavailable immediately.
+func TestJudgeBackoffWait_SkipsWhenRemainingCtxCannotFitAFullTurn(t *testing.T) {
+	waits := e7RecordJudgeBackoffWaits(t)
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := al.judgeBackoffWait(ctx, 0, "timeout")
+	if err == nil {
+		t.Fatal("want an error so JudgeCriteria treats this as Unavailable and the plan engine can start a fresh round")
+	}
+	if n := waits.count(); n != 0 {
+		t.Errorf("backoff sleeps = %d, want 0 — remaining ctx cannot fit a full turn, so we must not wait", n)
+	}
+}
+
+// TestJudgeBackoffWait_UnboundedCtxStillBacksOff is the control: a caller with
+// no deadline (interactive goal turns that wrap with their own round timeout
+// only at the plan/goal engine layer, or tests) must keep the D7 schedule.
+func TestJudgeBackoffWait_UnboundedCtxStillBacksOff(t *testing.T) {
+	waits := e7RecordJudgeBackoffWaits(t)
+	al, _ := newGoalLoopTestLoop(t, &mockProvider{}, nil)
+
+	if err := al.judgeBackoffWait(context.Background(), 0, "timeout"); err != nil {
+		t.Fatalf("unbounded ctx should sleep, got %v", err)
+	}
+	if n := waits.count(); n != 1 {
+		t.Errorf("backoff sleeps = %d, want 1", n)
+	}
+}
