@@ -62,12 +62,15 @@ fatal.
 
 ## DeriveSubkey — the sanctioned key-material path
 
-`store.go::DeriveSubkey`: HKDF-Expand over the master key (no Extract),
-never returns the master key itself, and rejects empty `info` even when
-locked. The audit-chain HMAC key comes from here
-(`DeriveSubkey(audit.AuditChainKeyInfo)`). Also note:
-`RegisterSensitiveValues` has replace-not-append semantics — every call
-must pass the complete set or rotated secrets stop being scrubbed; and
+`store.go::DeriveSubkey` uses `hkdf.New` (RFC 5869 Extract-then-Expand
+with a nil salt), never returns the master key itself, and rejects empty
+`info` even when locked. The nearby comment says Extract is skipped; the
+call is still `hkdf.New`, not `hkdf.Expand`. Do not "fix" it — that would
+rotate every derived subkey (audit-chain HMAC included) and brick existing
+installs. The audit-chain HMAC key comes from here
+(`DeriveSubkey(audit.AuditChainKeyInfo)`).
+
 OAuth entries follow `<lowercase provider>_OAUTH`
-(`oauth_entry.go::OAuthEntryName`) and are subject to a destructive boot
-sweep of orphaned provider credentials.
+(`oauth_entry.go::OAuthEntryName`). Gateway boot sweeps orphaned ones
+(`gateway_boot_credentials.go`); renaming the suffix here silently strands
+them. `RegisterSensitiveValues` is on `config.Config`, not this package.

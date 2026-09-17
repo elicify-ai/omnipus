@@ -27,7 +27,9 @@ wider order (ADR-086) is goalLock(goalID) → sessionLock(sessionID) →
 cacheMu. `unified.go::GetMeta`'s fast path takes `cacheMu` and the shard
 sequentially, not nested — that does not invert the rule.
 
-## The exactly-two two-shard exceptions
+## One all-shard hold, one sequential parent-then-child protocol
+
+Nothing else may hold two session shards at once.
 
 - `unified_lock.go::lockAllSessionShards` — ClearAll and RetentionSweep
   hold EVERY shard at once, in ascending INDEX (not hash) order; an
@@ -35,9 +37,9 @@ sequentially, not nested — that does not invert the rule.
   into a goal store, in either direction.
 - `unified_api.go::CreateSessionWithID`'s parent-Owner copy (FR-082) —
   reads parent meta under lockSession(parentID), releases COMPLETELY, then
-  locks the child shard: a sequential protocol that never holds two shards
-  at once. Enforced by caller discipline, not the type system.
-  Regression: `TestCreateSessionWithID_NeverHoldsTwoSessionShards`.
+  locks the child shard. Sequential, never nested. Enforced by caller
+  discipline, not the type system. Regression:
+  `TestCreateSessionWithID_NeverHoldsTwoSessionShards`.
 
 ## Durability — Save is a no-op; the sweep is the sole deleter
 

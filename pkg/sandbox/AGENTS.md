@@ -72,6 +72,8 @@ memory cap + KILL_ON_JOB_CLOSE. RLIMIT_CPU is deliberately never used
 `turn_policy.go::RegisterTurnPolicyBase`: the gateway registers the boot
 half once after an ENFORCING Apply; spawn sites supply the per-turn half;
 `DeriveKernelPolicy` stays the single construction site. A nil registered
-base means "no per-turn policy" (fall back to the boot profile) — it has
-never meant "unconfined". The `nogodmode` build tag compiles the sandbox
-"off" profile out of hosted builds (`godmode_on.go::GodModeAvailable`).
+base means no per-turn overlay — spawn inherits the boot profile, including
+when that profile is the degraded/off path. Do not treat nil as a switch
+that unconfines an already-restricted process. The `nogodmode` build tag
+compiles the sandbox "off" profile out of hosted builds
+(`godmode_on.go::GodModeAvailable`).

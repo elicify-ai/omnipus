@@ -36,15 +36,19 @@ site: `ExecToolDeps.GodMode` in shell.go skips ApplyChildHardening/
 sandbox.Run entirely (and the egress proxy), resolved ONCE at wiring time.
 `compositor.go::BuildFallbackPolicyCfg` deliberately never sets GodMode.
 
-## Wildcards are MCP-only
+## Wildcards: rejected at write time, still parsed at resolution
 
-Wildcard keys (`._*` and `_.*`) exist because MCP tool names —
-`mcp_<server>_<tool>`, composed at runtime in mcp_tool.go — are not
-knowable until an operator connects the server. Exact match always wins;
-among wildcards, longest prefix first. `pkg/config`'s
-`ValidateSubmittedToolPolicyMap` rejects any wildcard key for the static
-builtin catalog ("wildcards are not valid for the static builtin
-catalog"); `MCPToolPolicyKeyPrefix = "mcp_"` is the one carve-out.
+Write-time, `pkg/config`'s `ValidateSubmittedToolPolicyMap` rejects any
+wildcard key for the static builtin catalog; the one carve-out is keys
+prefixed `mcp_` (`config.MCPToolPolicyKeyPrefix`). MCP tool names
+(`mcp_<server>_<tool>`, composed at runtime in mcp_tool.go) are not
+knowable until an operator connects the server.
+
+Resolution-time, `compositor.go::buildWildcardIndex` still honours
+trailing `.*` (dot-namespaced builtins, e.g. a leftover `system.*`) and
+trailing `_*` (MCP). Exact match always wins; among wildcards,
+most-specific prefix first. Do not delete the `.*` resolver as "dead
+MCP-only code" — a hand-edited config.json can still carry one.
 
 ## The registry is global and boot-frozen
 

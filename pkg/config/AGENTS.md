@@ -29,8 +29,12 @@ key (retired names are absent from knownTools by definition).
 ToolSearch, hand_off/return_to_default → switch_agent, ADR-071), or a
 renamed key gets reconciled as "missing" under its stale name.
 `validate.go::ValidateToolPolicyCoverage` is a never-firing correctness
-tripwire on the boot/reload path (Reconcile just filled every gap) — it
-still fires as a 400 gate on REST agent writes.
+tripwire after Reconcile (OR-based: a global ceiling entry covers every
+agent). It cannot 400 a sparse per-agent map — UAT 2026-09-02, a PUT
+omitting `stop_plan` returned 200. The live REST 400 is
+`ValidateSubmittedToolPolicyMap` (complete literal keys, no
+static-catalog wildcards). Do not delete that check because Coverage
+"already gates writes".
 
 ## The removed fail-closed backfill stays removed
 
@@ -49,7 +53,7 @@ in pkg/config.
 (including `"bash": "allow"` in defaultToolPoliciesGeneral). The values
 resolve strictest-wins at runtime (see pkg/tools' compositor), so a
 global "allow" can never loosen an agent's own policy. The map mirrors
-`pkg/coreagent/core.go`'s allStaticToolNames literal-for-literal — a
+`pkg/coreagent/seed.go`'s `allStaticToolNames` literal-for-literal — a
 second hardcoded literal that config cannot import (cycle); drift is
 caught loudly at boot by the coverage validator.
 
@@ -65,7 +69,7 @@ legacy/nested mailbox entry is a hard error, never silently folded.
 raw-JSON-map patch — not SaveConfig, which drops explicit zero values
 under omitempty).
 
-## Env and container detection
+## Env, container detection, and the scrubber
 
 `envkeys.go` declares only five runtime knobs (HOME, CONFIG,
 BUILTIN_SKILLS, BINARY, GATEWAY_HOST); most env binding is via caarlos0/env
@@ -73,3 +77,7 @@ tags, and `env_prefix_guard_test.go` guards the double-prefix bug that
 once shipped ~20 dead env vars. `container_detect.go::RunningInContainer`
 deliberately never consults memory limits, treats bare `0::/` as NOT
 containerized, and honours the `OMNIPUS_CONTAINERIZED` override.
+
+`security.go::RegisterSensitiveValues` is replace-not-append: every call
+must pass the complete current set, or rotated secrets stop being
+scrubbed. It lives on `config.Config`, not in pkg/credentials.
