@@ -8,19 +8,19 @@ The founder authorized the agreed parallel implementation on 2026-09-17, using S
 
 | Work package | Requirements | Status |
 |---|---|---|
-| Public contracts and generated clients | Configuration FR-002/003/007/012 | Agent/workspace/skill contracts committed; full generated API package green; TypeScript consumers still being updated |
-| Agent persistence and management | Configuration FR-001–005/007/012 agent portions | Sol worker implementing in isolated agents branch |
-| Visual reader and private lifecycle | Visual FR-001–015 reader/lifecycle portions | Reader/lifecycle first slice integrated; Sol implementing provider adapters and correcting parent review findings |
-| Roster, effective policies and global visibility | Configuration FR-001/008/009 | First slice integrated; Sol correcting affected full-suite failures |
-| Role prompts and packaged procedures | Configuration FR-009/013 | Roles worker; Prometheus review pending |
-| Workspace graph, skill mutation and Ava routing | Configuration FR-006/007 | Workspace worker active; skill mutation checkout prepared for next available worker |
-| Connector assignment at discovery and dispatch | Configuration FR-003/004/005 | Implemented locally; focused tests pass, four mutations caught and restored; integration/review pending |
-| Settings and all configuration callers | Configuration FR-002/003/007 | Client save-state/revision wrappers tested; Settings Sol worker active |
-| Provider image request matrix and candidate checks | Visual provider requirements and BDD-10/11/12 | Provider and transport commits integrated; full provider suites pass locally; live-model/document acceptance pending |
-| Elicify document packages and actual runtime setup | Configuration FR-010/011; visual document acceptance | Four source-pinned packages imported; full skills package tests green, three package mutations caught; actual runtime setup and document acceptance pending |
-| Local end-to-end verification | All BDD and acceptance requirements | Pending implementation |
-| Full code review and seven reviewer lenses | Complete implementation diff | Pending; all findings must be corrected and rechecked |
-| Prometheus review | All changed prompts, tool descriptions and skills | Definition located; review and corrections pending |
+| Public contracts and generated clients | Configuration FR-002/003/007/012 | Integrated; full generator and TypeScript compilation pass; final upload client correction underway |
+| Agent persistence and management | Configuration FR-001–005/007/012 agent portions | Integrated; combined agentmutation and focused agent tests pass; independent review underway |
+| Visual reader and private lifecycle | Visual FR-001–015 reader/lifecycle portions | Integrated; focused live-image lifecycle tests pass; real model acceptance remains pending |
+| Roster, effective policies and global visibility | Configuration FR-001/008/009 | Integrated; combined coreagent tests pass; final mutation proofs and review remain |
+| Role prompts and packaged procedures | Configuration FR-009/013 | First Prometheus review found seven issues; six assigned for correction, management inventory gap separate |
+| Workspace graph, skill mutation and Ava routing | Configuration FR-006/007 | Integrated; combined workspace and skills tests pass; system-tool fixture corrections under verification |
+| Connector assignment at discovery and dispatch | Configuration FR-003/004/005 | Integrated; combined focused agent tests pass; four earlier mutations caught and restored; review pending |
+| Settings and all configuration callers | Configuration FR-002/003/007 | Settings integrated; worker final frontend suite 4,093 passed, two expected failures; upload client and integrated browser acceptance pending |
+| Provider image request matrix and candidate checks | Visual provider requirements and BDD-10/11/12 | Provider and transport commits integrated; local provider suites passed; live-model/document acceptance pending |
+| Elicify document packages and actual runtime setup | Configuration FR-010/011; visual document acceptance | Packages, runtime and application wiring integrated; combined runtime tests pass; actual four-format/two-role visual workflow and platform certification pending |
+| Local end-to-end verification | All BDD and acceptance requirements | Pending final integrated execution |
+| Full code review and seven reviewer lenses | Complete implementation diff | Holistic grill review underway; native full review and remaining independent lenses pending |
+| Prometheus review | All changed prompts, tool descriptions and skills | First review complete at 5940635c4: two critical, four high, one medium; correction and independent recheck required |
 
 The requirements and BDD identifiers refer to the accepted companion specifications. This ledger does not replace them or mark omitted requirements complete. The advanced document-skill maturity/competitive campaign remains deferred under Elicify Skills #2 and Omnipus #730; baseline runtime document integration remains required here.
 
@@ -32,7 +32,17 @@ The installed `codex review` command supplies the full code-review pass; the rep
 
 Record exact tree/commit, commands, collected tests, failures, mutation checks and runtime evidence before marking any row complete. A helper test, generated schema or prompt snapshot alone is not evidence that a user or agent can reach the feature. No CI result is claimed for this implementation.
 
-## Integration evidence, 2026-09-17
+## Current integration checkpoint, 2026-09-17
+
+All completed workspace, skill mutation, document runtime/wiring and Settings packages are integrated through `5940635c4`. Commit `32bca9cfe` synchronizes generated artifacts and updates repository runtime guidance. Earlier entries below are historical checkpoints, not the current outstanding-work list.
+
+- Full `scripts/gen-contracts.sh` completed with exit 0, including TypeScript compilation. Its generated differences were reviewed and committed.
+- Combined focused agent check completed with exit 0 (21.758 seconds), covering MCP assignment, current dispatch, private image attachment, compressed tool availability, document runtime wiring and General Purpose self-delegation checks.
+- Combined backend run passed coreagent, agentmutation, workspace, skills and documentruntime. Config failed on seven unrelated workspace-record selectors in its agent-home rename guard; reviewed exact exceptions were added and the focused guard passed. System tools exposed an outdated global connector-denial expectation and two cascade-delete callers missing revisions; corrections are being tested. This is not a full backend green claim.
+- Prometheus report: /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/worktrees/adr090-review/.local/adr090/prometheus-review.md. Six guidance findings are assigned to a Sol fixer. PROM-090-005 requires the missing authorized management scope/content view for list_skills; it remains open.
+- Holistic code review and local upload-client integration are running independently. Native full review, remaining reviewer lenses, final browser checks and live document acceptance are still required. CI has not run.
+
+## Historical integration evidence, 2026-09-17
 
 - Shared contracts: local commits `54635e24e` and `7b9209472`; generated API package test exits zero. Agent and workspace contract mutation checks caught three deliberate defects each. Full generator is not green yet: TypeScript callers and fixtures still lack required revision fields.
 - Visual slice integrated as `67da3a886`; roles slice as `2e7f18513`. These are implementation checkpoints, not completion claims. Parent review identified configured byte-budget, sniff accounting and actual resized-dimension issues; visual worker is correcting them with provider integration.
