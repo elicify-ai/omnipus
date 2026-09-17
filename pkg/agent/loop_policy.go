@@ -212,8 +212,18 @@ func (al *AgentLoop) resolveToolPolicyAtExec(
 // it resolves correctly through the same FilterToolsByPolicy call as every
 // other tool below; the force-allow shortcut has been removed.
 func (al *AgentLoop) resolveSingleToolPolicy(ts *turnState, toolName string) string {
+	registry := al.GetRegistry()
+	if registry == nil {
+		return "deny"
+	}
+	current, exists := registry.GetAgent(ts.agent.ID)
+	if !exists {
+		return "deny"
+	}
+	// A running turn retains its loaded definitions across fast publication.
+	// Resolve their authority against the current instance, never the old snapshot.
 	allTools := ts.agent.Tools.GetAll()
-	_, pmap := tools.FilterToolsByPolicy(allTools, ts.agent.AgentType, ts.agent.LoadToolPolicy())
+	_, pmap := tools.FilterToolsByPolicy(allTools, current.AgentType, current.LoadToolPolicy())
 	p, ok := pmap[toolName]
 	if !ok {
 		return "deny"

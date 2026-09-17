@@ -132,7 +132,7 @@ type AgentInstance struct {
 	// this instance via TriggerReload → NewAgentRegistry (not an in-place swap),
 	// so the fresh snapshot carries the new GlobalPolicies. The turn assembly
 	// Load()s the pointer on each tool call so a stale policy is never seen
-	// mid-turn. The zero value (nil pointer) defaults to allow-all.
+	// mid-turn. A nil policy snapshot denies tools.
 	toolPolicy atomic.Pointer[tools.ToolPolicyCfg]
 
 	// Router is non-nil when model routing is configured and the light model
@@ -1013,6 +1013,9 @@ func GodModeActive(globalCfg *config.Config) bool {
 // a hardcoded "allow" here.
 func agentToolsCfgToPolicy(globalCfg *config.Config, cfg *config.AgentToolsCfg) *tools.ToolPolicyCfg {
 	out := &tools.ToolPolicyCfg{}
+	if cfg != nil {
+		out.MCPServers = tools.CloneMCPBindings(cfg.MCP.Servers)
+	}
 	// O14 god-mode: when the global switch is active, floor every tool's
 	// effective policy at "allow" (no prompts, no deny) and skip the admin-ask
 	// fence. Set the flag and return early — the per-agent and global policy
