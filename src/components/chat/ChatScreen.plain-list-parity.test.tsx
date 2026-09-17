@@ -231,8 +231,7 @@ describe('VirtualAssistantMessageRow (PlainMessageList fallback)', () => {
     // Force the PlainMessageList fallback so every message — including a
     // still-streaming last message — renders through VirtualAssistantMessageRow.
     vi.unstubAllGlobals()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).ResizeObserver = undefined
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = undefined
   })
 
   afterEach(() => {

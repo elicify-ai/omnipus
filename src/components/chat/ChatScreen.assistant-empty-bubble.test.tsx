@@ -432,8 +432,7 @@ describe('D2 (2026-08-26 live UAT): terminal-empty assistant bubble — the unco
   // would virtualize into view.
   const originalResizeObserver = globalThis.ResizeObserver
   beforeEach(() => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test-only global deletion to trigger ChatScreen's documented feature-detection fallback
-    delete (globalThis as any).ResizeObserver
+    delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver
   })
   afterEach(() => {
     globalThis.ResizeObserver = originalResizeObserver

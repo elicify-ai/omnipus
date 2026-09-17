@@ -31,7 +31,6 @@ vi.mock('@/store/ui', () => ({
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type LooseProps = Record<string, any>
 
 function makeReadyProps(overrides: LooseProps = {}): IframePreviewProps {

@@ -100,7 +100,6 @@ export function CalendarPart({
       lastInitialMonthKey.current = initialMonthKey
       setVisible(initialMonth)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the primitive so an equal-value new object doesn't re-trigger
   }, [initialMonthKey])
 
   const cells = useMemo(() => {

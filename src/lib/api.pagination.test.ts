@@ -20,8 +20,7 @@ function stubCookie(value: string) {
   })
 }
 function restoreCookie() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  delete (document as any).cookie
+  delete (document as { cookie?: string }).cookie
 }
 
 // Minimal, schema-valid wire RawSession (contracts/components/schemas/Session.yaml

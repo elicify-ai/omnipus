@@ -332,7 +332,6 @@ describe('BrowserWebRTCSession — _beginOffer defensive "at most one PC" guard 
     // invariant ("at most one live RTCPeerConnection at a time") is enforced
     // even against a future caller this fix wave didn't anticipate, per the
     // reviewer finding ("makes 'at most one PC' structural").
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (machine as any)._beginOffer()
 
     expect(pcs[0].close).toHaveBeenCalledTimes(1) // leftover pc cleaned up, not leaked

@@ -236,8 +236,7 @@ describe('ChatScreen — goal outcome line (Verbose chat OFF)', () => {
     })
     useChatPreferencesStore.setState({ verboseChatEnabled: false })
     vi.unstubAllGlobals()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).ResizeObserver = undefined
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = undefined
   })
 
   afterEach(() => {

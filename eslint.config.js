@@ -65,6 +65,11 @@ export default tseslint.config(
       'deploy/**',
       'docker/**',
       'src/lib/api/generated/**',
+      // TanStack Router codegen output (its own header says "exclude this
+      // file from your linter"). Same class as src/lib/api/generated/**:
+      // committed build product, not application source — any `any`s in it
+      // are rewritten by the generator on the next route regeneration.
+      'src/routeTree.gen.ts',
       'node_modules/**',
       '*.config.*',
       'coverage/**',
@@ -90,6 +95,15 @@ export default tseslint.config(
     // deliberately expanding scope.
     plugins: {
       'react-hooks': reactHooks,
+    },
+  },
+  {
+    // Founder ruling (2026-09-17, fix/ts-no-any): explicit `any` is banned.
+    // The tseslint recommended preset already sets this to error; restating
+    // it here pins the policy in this file so a future preset reshuffle
+    // cannot silently soften it, and records where the decision lives.
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'error',
     },
   },
   // Node-run scripts and harnesses execute under Node, not in a browser, so

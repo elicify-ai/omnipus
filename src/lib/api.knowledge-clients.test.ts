@@ -39,8 +39,7 @@ function stubCookie(value: string) {
   Object.defineProperty(document, 'cookie', { configurable: true, get: () => value })
 }
 function restoreCookie() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  delete (document as any).cookie
+  delete (document as { cookie?: string }).cookie
 }
 
 function ok(body: unknown) {

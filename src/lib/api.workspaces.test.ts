@@ -13,8 +13,7 @@ function stubCookie(value: string) {
 }
 
 function restoreCookie() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  delete (document as any).cookie
+  delete (document as { cookie?: string }).cookie
 }
 
 function makeJsonResponse(body: unknown, status = 200): Response {

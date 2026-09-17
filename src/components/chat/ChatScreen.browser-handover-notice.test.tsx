@@ -220,8 +220,7 @@ describe('VirtualSystemMessageRow — browser-handover notice (ADR-085 BROWSER-F
     // every message — including the last — renders through
     // VirtualSystemMessageRow, mirroring ChatScreen.plain-list-parity.test.tsx.
     vi.unstubAllGlobals()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).ResizeObserver = undefined
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = undefined
   })
 
   afterEach(() => {

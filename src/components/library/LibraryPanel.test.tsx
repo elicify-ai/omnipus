@@ -41,7 +41,6 @@ vi.mock('./LibraryExplorer', () => ({
     useEffect(() => {
       props.onWorkspaceChange?.((mockLiveWorkspaceId ?? props.initialWorkspaceId) ?? null)
       props.onSelectionChange?.(mockLiveSelection)
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [])
     return (
       <div data-testid="mock-library-explorer">

@@ -358,8 +358,7 @@ describe('VirtualizedMessageList', () => {
     vi.unstubAllGlobals()
     // Remove ResizeObserver to simulate the unsupported environment.
     const originalResizeObserver = globalThis.ResizeObserver
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).ResizeObserver = undefined
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = undefined
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
@@ -384,8 +383,7 @@ describe('VirtualizedMessageList', () => {
     expect(rows.length).toBeGreaterThan(0)
 
     // Restore
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).ResizeObserver = originalResizeObserver
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = originalResizeObserver
     warnSpy.mockRestore()
 
     // Re-stub ResizeObserver for subsequent tests.
@@ -577,8 +575,7 @@ describe('VirtualizedMessageList', () => {
     // separate "live anchor" region, which is exactly what a direct
     // DOM-order assertion needs.
     vi.unstubAllGlobals()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).ResizeObserver = undefined
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = undefined
 
     seedSteeredStreamingStore()
 
@@ -624,8 +621,7 @@ describe('VirtualUserMessageRow media rendering', () => {
   // DOM rendering without needing virtualizer layout tricks.
   beforeEach(() => {
     vi.unstubAllGlobals()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).ResizeObserver = undefined
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = undefined
   })
 
   afterEach(() => {

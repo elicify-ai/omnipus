@@ -69,7 +69,6 @@ function connectMock() {
   const mockSend = vi.fn().mockReturnValue(true)
   act(() => {
     useConnectionStore.setState({
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
       isConnected: true,
     })

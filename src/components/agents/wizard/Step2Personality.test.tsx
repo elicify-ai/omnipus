@@ -140,8 +140,7 @@ describe('Step2Personality — soul markdown upload (FR-026 / US-10)', () => {
 
     // Replace FileReader with a class that resolves readAsText synchronously.
     const OriginalFileReader = globalThis.FileReader
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).FileReader = class MockFileReader {
+    ;(globalThis as { FileReader?: unknown }).FileReader = class MockFileReader {
       result: string | null = null
       onload: ((e: ProgressEvent<FileReader>) => void) | null = null
       onerror: ((e: ProgressEvent<FileReader>) => void) | null = null
@@ -190,8 +189,7 @@ describe('Step2Personality — soul markdown upload (FR-026 / US-10)', () => {
     })
 
     createElementSpy.mockRestore()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).FileReader = OriginalFileReader
+    ;(globalThis as { FileReader?: unknown }).FileReader = OriginalFileReader
   })
 
   it('Upload .md accepts .md, .markdown, .txt extensions', () => {

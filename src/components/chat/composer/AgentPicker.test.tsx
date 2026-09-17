@@ -186,7 +186,6 @@ describe('AgentPicker — workspace core_team scoping', () => {
         name: 'Test WS',
         status: 'active',
         core_team: ['mia'],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } as any,
     ])
     act(() => {
@@ -229,7 +228,6 @@ describe('AgentPicker — workspace core_team scoping', () => {
         status: 'active',
         description: 'Labour agent',
       },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
     renderPicker()
     await vi.waitFor(() => {
@@ -270,7 +268,6 @@ describe('AgentPicker — workspace core_team scoping', () => {
         model: 'z-ai/glm-5.2',
         description: 'Assistant',
       },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
     act(() => {
       useSessionStore.setState({ activeAgentId: null, activeSessionId: null })
@@ -360,7 +357,6 @@ describe('AgentPicker — error and empty states', () => {
 
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
       { id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
     fireEvent.click(screen.getByRole('button', { name: /retry/i }))
 
@@ -374,7 +370,6 @@ describe('AgentPicker — error and empty states', () => {
     const client = makeClient()
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
       { id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
     render(
       <QueryClientProvider client={client}>
@@ -407,7 +402,6 @@ describe('AgentPicker — error and empty states', () => {
         model: 'z-ai/glm-5.2',
         description: 'Assistant',
       },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
     renderPicker()
     await vi.waitFor(() => {
@@ -436,7 +430,6 @@ describe('AgentPicker — agentSelectorOpen latch reset', () => {
   it('resets agentSelectorOpen to false when the all-draft branch is active', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
       { id: 'mia', name: 'Mia', type: 'core', status: 'draft', model: 'z-ai/glm-5.2', description: 'Assistant' },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
     act(() => {
       useUiStore.setState({ agentSelectorOpen: true })

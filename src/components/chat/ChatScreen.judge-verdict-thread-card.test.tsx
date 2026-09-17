@@ -262,8 +262,7 @@ describe('ChatScreen — judge verdict thread card (ADR-049 D2/D4/SD-C10)', () =
       connection: null,
     })
     vi.unstubAllGlobals()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(globalThis as any).ResizeObserver = undefined
+    ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = undefined
   })
 
   afterEach(() => {

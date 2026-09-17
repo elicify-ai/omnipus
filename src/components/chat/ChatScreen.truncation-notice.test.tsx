@@ -210,8 +210,7 @@ beforeEach(() => {
   // Forces PlainMessageList (ResizeObserver-unavailable fallback), which
   // renders every message through VirtualAssistantMessageRow directly, with
   // no jsdom-geometry patching needed. See file header.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(globalThis as any).ResizeObserver = undefined
+  ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = undefined
 
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
   act(() => {

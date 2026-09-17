@@ -39,8 +39,7 @@ type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: interna
  * function can use them.
  */
 function pushHistoryParts(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  parts: any[],
+  parts: ThreadMessageLike["content"],
   text: string,
   historyToolCalls: NonNullable<ChatMessage["tool_calls"]>,
   toolCalls: Record<string, StoreToolCall>,
@@ -123,8 +122,7 @@ function buildContentParts(
   isLastAssistant: boolean
 ): ThreadMessageLike["content"] {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const parts = [] as any;
+    const parts: ThreadMessageLike["content"] = [];
     const historyTCs = msg.tool_calls ?? [];
 
     // Non-last or non-assistant messages: interleave history tool calls with text

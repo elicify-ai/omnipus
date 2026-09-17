@@ -20,6 +20,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type {
   SkillTrustLevel,
   PromptInjectionLevel,
+  AboutInfo,
 } from './api'
 import {
   ApiSchemaError,
@@ -48,8 +49,7 @@ function stubCookie(value: string) {
 function restoreCookie() {
   // Remove our override so subsequent tests start clean.
   // jsdom reinstates its own descriptor when we delete the override.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  delete (document as any).cookie
+  delete (document as { cookie?: string }).cookie
 }
 
 // Inline reimplementation of readCSRFCookie so we can test the logic directly
@@ -688,6 +688,18 @@ describe('Security API helpers', () => {
 // Traces to: docs/internal/specs/preview-on-main-listener-spec.md — US-8, FR-015
 
 describe('isPreviewEnabled', () => {
+  /** Full-shape AboutInfo fixture; only preview_enabled varies (the field the
+   *  function under test reads). Inert required fields stand in for what a
+   *  real gateway response carries. */
+  const aboutInfoFixture = (preview_enabled?: boolean): AboutInfo => ({
+    version: 'v0.0.0-test',
+    go_version: 'go1.0-test',
+    os: 'linux',
+    arch: 'amd64',
+    uptime_seconds: 1,
+    preview_enabled,
+  })
+
   it('returns true when info is undefined (old gateway — no field present)', async () => {
     const { isPreviewEnabled } = await import('./api')
     expect(isPreviewEnabled(undefined)).toBe(true)
@@ -695,31 +707,27 @@ describe('isPreviewEnabled', () => {
 
   it('returns true when preview_enabled is undefined (field absent on new gateway)', async () => {
     const { isPreviewEnabled } = await import('./api')
-    // Cast: AboutInfo requires version/go_version/os/arch/uptime_seconds in type,
-    // but the function only reads preview_enabled — partial is safe here.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(isPreviewEnabled({ preview_enabled: undefined } as any)).toBe(true)
+    // Full AboutInfo fixture: the function only reads preview_enabled, but the
+    // honest type requires every field — inert fields keep the tested behavior
+    // identical without a cast.
+    expect(isPreviewEnabled(aboutInfoFixture(undefined))).toBe(true)
   })
 
   it('returns true when preview_enabled is explicitly true', async () => {
     const { isPreviewEnabled } = await import('./api')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(isPreviewEnabled({ preview_enabled: true } as any)).toBe(true)
+    expect(isPreviewEnabled(aboutInfoFixture(true))).toBe(true)
   })
 
   it('returns false when preview_enabled is explicitly false', async () => {
     const { isPreviewEnabled } = await import('./api')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(isPreviewEnabled({ preview_enabled: false } as any)).toBe(false)
+    expect(isPreviewEnabled(aboutInfoFixture(false))).toBe(false)
   })
 
   it('differentiation: true and false inputs produce different outputs', async () => {
     // Anti-shortcut: proves the function is not always returning true or false.
     const { isPreviewEnabled } = await import('./api')
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const whenEnabled = isPreviewEnabled({ preview_enabled: true } as any)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const whenDisabled = isPreviewEnabled({ preview_enabled: false } as any)
+    const whenEnabled = isPreviewEnabled(aboutInfoFixture(true))
+    const whenDisabled = isPreviewEnabled(aboutInfoFixture(false))
     expect(whenEnabled).toBe(true)
     expect(whenDisabled).toBe(false)
     expect(whenEnabled).not.toBe(whenDisabled)
@@ -899,8 +907,7 @@ describe('request() with Zod schema — validation errors', () => {
   }
 
   function restoreCookie2() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (document as any).cookie
+    delete (document as { cookie?: string }).cookie
   }
 
   beforeEach(() => {
@@ -1013,8 +1020,7 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
   }
 
   function restoreCookieLocal() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (document as any).cookie
+    delete (document as { cookie?: string }).cookie
   }
 
   beforeEach(() => {
@@ -1069,8 +1075,7 @@ describe('fetchSessionMessages: wire parameters → SPA params transform', () =>
     // params must equal the wire `parameters` value — NOT undefined.
     expect(messages[0].tool_calls![0].params).toEqual({ x: 1, y: 'hello' })
     // The raw `parameters` key must NOT appear on the SPA type.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect((messages[0].tool_calls![0] as any).parameters).toBeUndefined()
+    expect((messages[0].tool_calls![0] as { parameters?: unknown }).parameters).toBeUndefined()
   })
 
   it('returns empty params ({}) when wire parameters field is absent', async () => {
@@ -1477,8 +1482,7 @@ describe('fetchSessionDetail: per-item message resilience', () => {
   }
 
   function restoreCookieLocal() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (document as any).cookie
+    delete (document as { cookie?: string }).cookie
   }
 
   const validSession = {
@@ -1594,8 +1598,7 @@ describe('updateConfig: sends wire shape to backend', () => {
   }
 
   function restoreCookieLocal2() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (document as any).cookie
+    delete (document as { cookie?: string }).cookie
   }
 
   beforeEach(() => {
@@ -1872,8 +1875,7 @@ describe('rawToFrontendConfig: preserves agents.defaults.default_model', () => {
   }
 
   function restoreCookieLocal3() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (document as any).cookie
+    delete (document as { cookie?: string }).cookie
   }
 
   beforeEach(() => {
@@ -1983,8 +1985,7 @@ describe('rotateGatewayToken: schema validation', () => {
   }
 
   function restoreCookieLocal4() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (document as any).cookie
+    delete (document as { cookie?: string }).cookie
   }
 
   beforeEach(() => {
@@ -2618,8 +2619,7 @@ describe('fetchWorkspaceInstructions / updateWorkspaceInstructions', () => {
   }
 
   function restoreCookieLocal5() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (document as any).cookie
+    delete (document as { cookie?: string }).cookie
   }
 
   beforeEach(() => {
@@ -2752,8 +2752,7 @@ describe('fetchAuditLog: per-entry resilience', () => {
   }
 
   function restoreCookieLocal() {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    delete (document as any).cookie
+    delete (document as { cookie?: string }).cookie
   }
 
   const goodEntry = {

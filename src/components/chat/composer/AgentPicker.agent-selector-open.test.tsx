@@ -147,7 +147,6 @@ describe('AgentPicker — agentSelectorOpen controlled DropdownMenu', () => {
   it('agent list is not changed by the controlled open flag', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
       { id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ] as any[])
 
     renderPicker()
@@ -226,7 +225,6 @@ describe('AgentPicker — an explicit pick survives a later session attach', () 
     act(() => {
       useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: null })
       useConnectionStore.setState({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
         isConnected: true,
       })
@@ -251,7 +249,6 @@ describe('AgentPicker — an explicit pick survives a later session attach', () 
     act(() => {
       useSessionStore.setState({ activeAgentId: 'jim', activeSessionId: null })
       useConnectionStore.setState({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
         isConnected: true,
       })

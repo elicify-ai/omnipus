@@ -223,8 +223,7 @@ beforeEach(() => {
     connection: null,
   })
   vi.unstubAllGlobals()
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ;(globalThis as any).ResizeObserver = undefined
+  ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = undefined
 
   useSessionStore.setState({ activeSessionId: SID, activeAgentId: 'agent-1' })
   act(() => {
