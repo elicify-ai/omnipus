@@ -949,6 +949,27 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	// mutate (nothing is written). The caller maps errConflict to
 	// HTTP 409.
 	storedModelBefore, storedFallbacksBefore := agentModelIdentity(agentRec)
+	rp.updateIdentityAndModel(agentRec)
+	rp.updatePresentationAndFallbacks(agentRec)
+	rp.updateToolsConfig(agentRec)
+	if err := rp.updateMCPServers(agentRec); err != nil {
+		return err
+	}
+	if err := rp.updateToolPolicies(agentRec); err != nil {
+		return err
+	}
+	rp.updateExecutorAndSkills(agentRec)
+
+	// Refresh the optimistic-concurrency timestamp with sub-second precision;
+	// the frontend compares it as an ordinal when incorporating autosaves.
+	storedModelAfter, storedFallbacksAfter := agentModelIdentity(agentRec)
+	rp.ru.modelIdentityChanged = !sameAgentModelIdentity(
+		storedModelBefore, storedFallbacksBefore, storedModelAfter, storedFallbacksAfter)
+	agentRec.UpdatedAt = &rp.ru.now
+	return nil
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updateIdentityAndModel(agentRec *config.AgentConfig) {
 	if rp.ru.req.Name != nil {
 		agentRec.Name = rp.ru.newName
 	}
@@ -1015,6 +1036,9 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	} else if rp.ru.clearsContextWindowOverride {
 		agentRec.ContextWindowOverride = nil
 	}
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRec *config.AgentConfig) {
 	// tool_feedback was removed from the wire in W1 (it's now per-channel
 	// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
 	// global config-level agents.defaults.tool_feedback stays.
@@ -1086,6 +1110,9 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	if rp.ru.req.Default != nil {
 		agentRec.Default = *rp.ru.req.Default
 	}
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updateToolsConfig(agentRec *config.AgentConfig) {
 	if rp.ru.req.ToolsCfg != nil {
 		newTools := &config.AgentToolsCfg{}
 		if rp.ru.req.ToolsCfg.Builtin != nil {
@@ -1117,50 +1144,63 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 		}
 		agentRec.Tools = newTools
 	}
-	if rp.ru.req.McpServers != nil {
-		if agentRec.Tools == nil {
-			agentRec.Tools = &config.AgentToolsCfg{}
-		}
-		servers := make([]config.AgentMCPServerBinding, 0, len(*rp.ru.req.McpServers))
-		for _, s := range *rp.ru.req.McpServers {
-			binding := config.AgentMCPServerBinding{ID: s.Id, ToolsSpecified: s.Tools != nil}
-			if s.Tools != nil {
-				binding.Tools = *s.Tools
-			}
-			if err := config.ValidateAgentMCPServerBinding(binding); err != nil {
-				return err
-			}
-			if _, ok := rp.ru.a.agentLoop.GetConfig().Tools.MCP.Servers[s.Id]; !ok {
-				return fmt.Errorf("MCP server %q is not configured", s.Id)
-			}
-			servers = append(servers, binding)
-		}
-		agentRec.Tools.MCP.Servers = servers
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updateMCPServers(agentRec *config.AgentConfig) error {
+	if rp.ru.req.McpServers == nil {
+		return nil
 	}
-	if rp.ru.req.ToolPolicyChanges != nil {
-		if agentRec.Tools == nil {
-			agentRec.Tools = &config.AgentToolsCfg{}
+	if agentRec.Tools == nil {
+		agentRec.Tools = &config.AgentToolsCfg{}
+	}
+	servers := make([]config.AgentMCPServerBinding, 0, len(*rp.ru.req.McpServers))
+	for _, s := range *rp.ru.req.McpServers {
+		binding := config.AgentMCPServerBinding{ID: s.Id, ToolsSpecified: s.Tools != nil}
+		if s.Tools != nil {
+			binding.Tools = *s.Tools
 		}
-		patch := agentmutation.ToolPolicyChanges{}
-		if rp.ru.req.ToolPolicyChanges.Set != nil {
-			patch.Set = make(map[string]config.ToolPolicy, len(*rp.ru.req.ToolPolicyChanges.Set))
-			for name, policy := range *rp.ru.req.ToolPolicyChanges.Set {
-				patch.Set[name] = config.ToolPolicy(policy)
-			}
-		}
-		if rp.ru.req.ToolPolicyChanges.Remove != nil {
-			patch.Remove = *rp.ru.req.ToolPolicyChanges.Remove
-		}
-		known := make(map[string]struct{})
-		for name := range buildKnownBuiltinToolNames() {
-			known[name] = struct{}{}
-		}
-		next, err := agentmutation.ApplyToolPolicyChanges(agentRec.Tools.Builtin.Policies, patch, known)
-		if err != nil {
+		if err := config.ValidateAgentMCPServerBinding(binding); err != nil {
 			return err
 		}
-		agentRec.Tools.Builtin.Policies = next
+		if _, ok := rp.ru.a.agentLoop.GetConfig().Tools.MCP.Servers[s.Id]; !ok {
+			return fmt.Errorf("MCP server %q is not configured", s.Id)
+		}
+		servers = append(servers, binding)
 	}
+	agentRec.Tools.MCP.Servers = servers
+	return nil
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updateToolPolicies(agentRec *config.AgentConfig) error {
+	if rp.ru.req.ToolPolicyChanges == nil {
+		return nil
+	}
+	if agentRec.Tools == nil {
+		agentRec.Tools = &config.AgentToolsCfg{}
+	}
+	patch := agentmutation.ToolPolicyChanges{}
+	if rp.ru.req.ToolPolicyChanges.Set != nil {
+		patch.Set = make(map[string]config.ToolPolicy, len(*rp.ru.req.ToolPolicyChanges.Set))
+		for name, policy := range *rp.ru.req.ToolPolicyChanges.Set {
+			patch.Set[name] = config.ToolPolicy(policy)
+		}
+	}
+	if rp.ru.req.ToolPolicyChanges.Remove != nil {
+		patch.Remove = *rp.ru.req.ToolPolicyChanges.Remove
+	}
+	known := make(map[string]struct{})
+	for name := range buildKnownBuiltinToolNames() {
+		known[name] = struct{}{}
+	}
+	next, err := agentmutation.ApplyToolPolicyChanges(agentRec.Tools.Builtin.Policies, patch, known)
+	if err != nil {
+		return err
+	}
+	agentRec.Tools.Builtin.Policies = next
+	return nil
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updateExecutorAndSkills(agentRec *config.AgentConfig) {
 	// Executor: write the sub-agent executor under Subagents.Executor
 	// when the caller sends it. kind="native" with no cli clears any
 	// prior external-cli config (updatedExecutor == nil → clear).
@@ -1185,20 +1225,4 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 			agentRec.Skills = nil
 		}
 	}
-	// ADR-037: delegation_policy is retired — no longer written here.
-	// Heartbeat is workspace-scoped (ADR-027); per-agent heartbeat fields
-	// are ignored on PUT. Workspace handler manages member_configs.
-	// Optimistic concurrency timestamp: refresh on every successful save.
-	// Sub-second precision (time.Time, not truncated) — the frontend uses
-	// this field as an ordinal "is this newer" comparator
-	// (lastIncorporatedUpdatedAtRef in AgentProfile.tsx); whole-second
-	// precision let two distinct autosave writes within the same
-	// wall-clock second collide on an identical truncated timestamp,
-	// defeating the ordinal comparison (reopening the P-F2
-	// fallback_models data-loss class this fix wave closed).
-	storedModelAfter, storedFallbacksAfter := agentModelIdentity(agentRec)
-	rp.ru.modelIdentityChanged = !sameAgentModelIdentity(
-		storedModelBefore, storedFallbacksBefore, storedModelAfter, storedFallbacksAfter)
-	agentRec.UpdatedAt = &rp.ru.now
-	return nil
 }

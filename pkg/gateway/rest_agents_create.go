@@ -279,23 +279,96 @@ type restAPICreateAgentPrepareAgent struct {
 // prepareAgent decodes and validates the request and builds the persistent agent config.
 func (cra *restAPICreateAgent) prepareAgent() bool {
 	pap := &restAPICreateAgentPrepareAgent{cra: cra}
+	raw, wireType, variantName, stop := pap.decodeAndValidateRequest()
+	if stop {
+		return true
+	}
+	executorIn, stop := pap.normalizeVariant(raw, wireType, variantName)
+	if stop {
+		return true
+	}
 
-	validateEnabled := pap.cra.a.agentLoop.GetConfig().Gateway.ValidateInbound
+	// Trim before the empty check so a whitespace-only name ("   ") is rejected
+	// rather than silently accepted (UAT fix). Persist the trimmed value.
+	pap.name = strings.TrimSpace(pap.name)
+	if pap.name == "" {
+		jsonErr(pap.cra.w, http.StatusUnprocessableEntity, "name is required")
+		return true
+	}
+	if strings.EqualFold(pap.name, tools.SwitchAgentDefaultTarget) {
+		jsonErr(pap.cra.w, http.StatusBadRequest,
+			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", pap.name, tools.SwitchAgentDefaultTarget))
+		return true
+	}
+	if pap.createType == config.AgentTypeWorker && wireType == string(gen.AgentTypeSubagent3p) {
+		if executorIn == nil || executorIn.CliPath == nil || strings.TrimSpace(*executorIn.CliPath) == "" {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "executor.cli_path is required for subagent_3p agents")
+			return true
+		}
+	}
+	if r0, stop := pap.validateAndBuildConfig(); stop {
+		return r0
+	}
+	return pap.buildExecutor(wireType, executorIn)
+}
 
+func (pap *restAPICreateAgentPrepareAgent) decodeAndValidateRequest() ([]byte, string, string, bool) {
 	raw, err := io.ReadAll(io.LimitReader(pap.cra.r.Body, 1<<20))
 	if err != nil {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "could not read request body")
-		return true
+		return nil, "", "", true
 	}
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "request body is required")
-		return true
+		return nil, "", "", true
 	}
 	var presence map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &presence); err != nil {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
-		return true
+		return nil, "", "", true
 	}
+	if pap.rejectNullCreateMembers(presence) {
+		return nil, "", "", true
+	}
+
+	var typePeek struct {
+		Type *string `json:"type"`
+	}
+	if err := json.Unmarshal(raw, &typePeek); err != nil {
+		jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
+		return nil, "", "", true
+	}
+	const typeErrMsg = "type is required and must be one of Main, Subagent, subagent_3p"
+	if typePeek.Type == nil {
+		jsonErr(pap.cra.w, http.StatusBadRequest, typeErrMsg)
+		return nil, "", "", true
+	}
+	if *typePeek.Type == "system" {
+		jsonErr(pap.cra.w, http.StatusBadRequest, "system agents are not creatable")
+		return nil, "", "", true
+	}
+	variantName := agentCreateVariantName(*typePeek.Type)
+	if variantName == "" {
+		jsonErr(pap.cra.w, http.StatusBadRequest, typeErrMsg)
+		return nil, "", "", true
+	}
+	pap.createType = coreagent.ResolveType(gen.AgentType(*typePeek.Type))
+
+	if pap.cra.a.agentLoop.GetConfig().Gateway.ValidateInbound {
+		if errMsg, serverErr := validateBodyAgainstSchema(variantName, raw); errMsg != "" {
+			if serverErr {
+				jsonErr(pap.cra.w, http.StatusInternalServerError, "inbound schema unavailable")
+			} else {
+				jsonErr(pap.cra.w, http.StatusBadRequest,
+					fmt.Sprintf("request body does not match schema %s: %s", variantName, errMsg))
+			}
+			return nil, "", "", true
+		}
+	}
+	return raw, *typePeek.Type, variantName, false
+}
+
+func (pap *restAPICreateAgentPrepareAgent) rejectNullCreateMembers(presence map[string]json.RawMessage) bool {
 	for _, field := range []string{"skills", "mcp_servers", "tool_policy_changes"} {
 		if value, supplied := presence[field]; supplied && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			jsonErr(pap.cra.w, http.StatusBadRequest, field+" must not be null")
@@ -324,59 +397,24 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 			}
 		}
 	}
+	return false
+}
 
-	var typePeek struct {
-		Type *string `json:"type"`
-	}
-	if err := json.Unmarshal(raw, &typePeek); err != nil {
-		jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
-		return true
-	}
-	const typeErrMsg = "type is required and must be one of Main, Subagent, subagent_3p"
-	if typePeek.Type == nil {
-		jsonErr(pap.cra.w, http.StatusBadRequest, typeErrMsg)
-		return true
-	}
-	// ADR-049 D3: System Agents (the Judge category) are seed-only. The ONLY
-	// creation path is coreagent.SeedConfig — never the REST create path nor the
-	// create_agent tool. Reject with a precise message before the generic
-	// variant switch so a client sending {"type":"system"} gets a clear 400.
-	if *typePeek.Type == "system" {
-		jsonErr(pap.cra.w, http.StatusBadRequest, "system agents are not creatable")
-		return true
-	}
-	var variantName string
-	switch *typePeek.Type {
+func agentCreateVariantName(wireType string) string {
+	switch wireType {
 	case "Main":
-		variantName = "AgentCreateRequestMain"
+		return "AgentCreateRequestMain"
 	case "Subagent":
-		variantName = "AgentCreateRequestSubagent"
+		return "AgentCreateRequestSubagent"
 	case "subagent_3p":
-		variantName = "AgentCreateRequestSubagent3p"
+		return "AgentCreateRequestSubagent3p"
 	default:
-		// Covers "core" / "system" (seeded-only classifications — the only way
-		// to obtain one is via SeedConfig, never the REST create path) and any
-		// other unrecognized value.
-		jsonErr(pap.cra.w, http.StatusBadRequest, typeErrMsg)
-		return true
+		return ""
 	}
-	// Boundary translation between wire (Main/Subagent/subagent_3p) and
-	// persisted config (custom/worker) — single source of truth in
-	// coreagent.ResolveType.
-	pap.createType = coreagent.ResolveType(gen.AgentType(*typePeek.Type))
+}
 
-	if validateEnabled {
-		if errMsg, serverErr := validateBodyAgainstSchema(variantName, raw); errMsg != "" {
-			if serverErr {
-				jsonErr(pap.cra.w, http.StatusInternalServerError, "inbound schema unavailable")
-			} else {
-				jsonErr(pap.cra.w, http.StatusBadRequest,
-					fmt.Sprintf("request body does not match schema %s: %s", variantName, errMsg))
-			}
-			return true
-		}
-	}
-
+// normalizeVariant decodes the selected wire variant into shared create fields.
+func (pap *restAPICreateAgentPrepareAgent) normalizeVariant(raw []byte, wireType, variantName string) (*executorRequestInput, bool) {
 	// Normalize the chosen variant into variant-agnostic locals. Each branch
 	// strictly decodes raw into the NAMED generated struct via
 	// decodeAgentCreateVariant (unknown fields — including fields that ARE
@@ -390,13 +428,11 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 	// decode time, both because the Go type has no matching field and
 	// because the strict decoder refuses to silently drop it.
 
-	var executorIn *executorRequestInput
-
-	switch *typePeek.Type {
+	switch wireType {
 	case "Main":
 		var vreq gen.AgentCreateRequestMain
-		if !decodeAgentCreateVariant(pap.cra.w, raw, *typePeek.Type, variantName, &vreq) {
-			return true
+		if !decodeAgentCreateVariant(pap.cra.w, raw, wireType, variantName, &vreq) {
+			return nil, true
 		}
 		pap.name = vreq.Name
 		pap.description = vreq.Description
@@ -412,10 +448,11 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 		pap.shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
 		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
+		return nil, false
 	case "Subagent":
 		var vreq gen.AgentCreateRequestSubagent
-		if !decodeAgentCreateVariant(pap.cra.w, raw, *typePeek.Type, variantName, &vreq) {
-			return true
+		if !decodeAgentCreateVariant(pap.cra.w, raw, wireType, variantName, &vreq) {
+			return nil, true
 		}
 		pap.name = vreq.Name
 		pap.description = vreq.Description
@@ -431,10 +468,11 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 		pap.shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
 		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
 		pap.modelParamsIn = agentModelParamsFromWire(vreq.ModelParams)
+		return nil, false
 	case "subagent_3p":
 		var vreq gen.AgentCreateRequestSubagent3p
-		if !decodeAgentCreateVariant(pap.cra.w, raw, *typePeek.Type, variantName, &vreq) {
-			return true
+		if !decodeAgentCreateVariant(pap.cra.w, raw, wireType, variantName, &vreq) {
+			return nil, true
 		}
 		pap.name = vreq.Name
 		pap.description = vreq.Description
@@ -443,52 +481,17 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 		pap.color = vreq.Color
 		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
-		executorIn = &executorRequestInput{
+		return &executorRequestInput{
 			Cli:          executorCliStr(vreq.Executor.Cli),
 			CliPath:      vreq.Executor.CliPath,
 			EnvOverrides: vreq.Executor.EnvOverrides,
 			CliArgs:      vreq.Executor.CliArgs,
-		}
+		}, false
 	}
+	return nil, true
+}
 
-	// Trim before the empty check so a whitespace-only name ("   ") is rejected
-	// rather than silently accepted (UAT fix). Persist the trimmed value.
-	pap.name = strings.TrimSpace(pap.name)
-	if pap.name == "" {
-		jsonErr(pap.cra.w, http.StatusUnprocessableEntity, "name is required")
-		return true
-	}
-	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — it is
-	// the switch_agent target sentinel that always means "the configured
-	// default agent". Rejecting it at the create boundary makes the id/name
-	// collision impossible going forward, rather than merely documented (the
-	// part 3 upgrade-time WARN below covers agents that predate this check).
-	// Create's id is always a fresh uuid.New().String() (never operator-
-	// chosen), so only the name half of this rule is reachable here.
-	if strings.EqualFold(pap.name, tools.SwitchAgentDefaultTarget) {
-		jsonErr(pap.cra.w, http.StatusBadRequest,
-			fmt.Sprintf("agent name %q is reserved — it collides with switch_agent's target:%q sentinel", pap.name, tools.SwitchAgentDefaultTarget))
-		return true
-	}
-	// subagent_3p executor.cli_path: required (spec §9.2), whitespace-only
-	// rejected. The schema requires the `executor` object itself to be
-	// present for this variant, but its nested cli/cli_path properties are
-	// optional strings — JSON Schema has no "non-whitespace" constraint, so
-	// this stays a runtime check even with ValidateInbound enabled.
-	// executor.kind is intentionally NOT checked here: it is always
-	// server-derived to external-cli for subagent_3p below, regardless of
-	// what (if anything) the client sent — kind "is exposed in responses but
-	// is NOT a writable field on create/update — clients cannot choose kind
-	// directly" (contracts/components/schemas/ExecutorConfig.yaml).
-	if pap.createType == config.AgentTypeWorker && *typePeek.Type == string(gen.AgentTypeSubagent3p) {
-		if executorIn == nil || executorIn.CliPath == nil || strings.TrimSpace(*executorIn.CliPath) == "" {
-			jsonErr(pap.cra.w, http.StatusBadRequest, "executor.cli_path is required for subagent_3p agents")
-			return true
-		}
-	}
-	if r0, stop := pap.validateAndBuildConfig(); stop {
-		return r0
-	}
+func (pap *restAPICreateAgentPrepareAgent) buildExecutor(wireType string, executorIn *executorRequestInput) bool {
 	// Sub-agent executor. Mapped into AgentConfig.Subagents.Executor so it is
 	// actually persisted. A native Subagent (no Executor property on the wire
 	// at all) always gets a native runtime here. A subagent_3p always gets
@@ -496,7 +499,7 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 	// for that variant and, per the field matrix, kind is server-derived
 	// (never client-writable) rather than read from the request.
 	if pap.createType == config.AgentTypeWorker {
-		if *typePeek.Type == string(gen.AgentTypeSubagent3p) {
+		if wireType == string(gen.AgentTypeSubagent3p) {
 			execCfg, errMsg := executorConfigFromRequest(string(config.ExecutorKindExternalCLI), executorIn.Cli)
 			if errMsg != "" {
 				jsonErr(pap.cra.w, http.StatusBadRequest, errMsg)

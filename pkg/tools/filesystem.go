@@ -18,6 +18,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/docextract"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
@@ -619,7 +620,19 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if resolved, realErr := handle.RealPath(); realErr == nil {
 		emitFileReadAudit(ctx, t.auditLogger, t.Name(), resolved, "read")
 	}
+	return t.readOpenFile(ctx, policy, handle, file, path, offset, length, paginationSupplied)
+}
 
+func (t *ReadFileTool) readOpenFile(
+	ctx context.Context,
+	policy fspolicy.FSPolicy,
+	handle *PathHandle,
+	file fs.File,
+	path string,
+	offset, length int64,
+	paginationSupplied bool,
+) *ToolResult {
+	var err error
 	// measure total size
 	totalSize := int64(-1) // -1 means unknown
 	if info, statErr := file.Stat(); statErr == nil {
