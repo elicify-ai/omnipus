@@ -487,7 +487,7 @@ func TestUpdateAgent_AllowsNullVoiceOnWorker(t *testing.T) {
 }
 
 // TestUpdateAgent_Worker_AcceptsValidPatch is the worker-PUT-400 regression: a
-// PUT carrying only fields that ARE valid for a worker (model, timeout_seconds,
+// PUT carrying only fields that ARE valid for a worker (model,
 // color, icon, description — plus max_tool_iterations for a NATIVE Subagent
 // only) must succeed (200), not 400. Covers both a native Subagent and a
 // subagent_3p.
@@ -495,7 +495,7 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 	t.Run("native Subagent", func(t *testing.T) {
 		api := buildExecutorTestAPI(t)
 		id := createNativeSubagent(t, api)
-		validPatch := `{"model":"test-model","timeout_seconds":120,"max_tool_iterations":8,"color":"#d4af37","icon":"robot","description":"updated worker"}`
+		validPatch := `{"model":"test-model","max_tool_iterations":8,"color":"#d4af37","icon":"robot","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
@@ -510,7 +510,7 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		// forbidden on a subagent_3p PUT (agent_field_rules.go
 		// subagent3pForbiddenUpdateFields, extended in W2a). See
 		// TestUpdateAgent_Subagent3p_ForbiddenFields for the 400 case.
-		validPatch := `{"model":"test-model","timeout_seconds":120,"color":"#d4af37","icon":"robot","description":"updated worker"}`
+		validPatch := `{"model":"test-model","color":"#d4af37","icon":"robot","description":"updated worker"}`
 		w := httptest.NewRecorder()
 		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
@@ -519,12 +519,8 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 	})
 }
 
-// Note: TestUpdateAgent_Worker_RejectsHeartbeat was removed in the
-// workspace-heartbeat decommission (US-4 / FR-027). heartbeat_enabled,
-// heartbeat_interval, and heartbeat (HEARTBEAT.md) are still accepted on the
-// wire (AgentUpdateRequest retains them for backward compatibility) but are
-// silently ignored — heartbeat is workspace-scoped (ADR-027). Worker-heartbeat
-// rejection now lives in workspace.ValidateMemberConfigs.
+// Retired heartbeat and timeout fields are rejected by the update shape guard.
+// See TestADR090UpdateAgentUnknownFieldsAreZeroWrite for zero-write coverage.
 
 // TestUpdateAgent_Subagent3p_RejectsDelegationPolicy proves ADR-037's wire
 // retirement of delegation_policy: a subagent_3p PUT carrying it is now
@@ -571,7 +567,7 @@ func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 		name string
 		body string
 	}{
-		{"tools_cfg", `{"tools_cfg":{"builtin":{"default_policy":"deny"}}}`},
+		{"tools_cfg", `{"tools_cfg":{"builtin":{"policies":{"read_file":"deny"}}}}`},
 		{"skills", `{"skills":["web-research"]}`},
 		{"fallback_models", `{"fallback_models":[{"model":"m","provider":"p"}]}`},
 		{"model_params", `{"model_params":{"temperature":0.5}}`},
@@ -1178,7 +1174,9 @@ func TestUpdateAgent_SoulChange_RegistryReloadCompletesBeforeResponse(t *testing
 	wireAsyncReload(t, api, 30*time.Millisecond)
 
 	newSoul := "updated soul content"
-	body, err := json.Marshal(gen.AgentUpdateRequest{Soul: &newSoul})
+	state, err := agentstore.New(api.homePath).ReadState("test-agent")
+	require.NoError(t, err)
+	body, err := json.Marshal(gen.AgentUpdateRequest{Revision: state.Revision, Soul: &newSoul})
 	require.NoError(t, err)
 	w := httptest.NewRecorder()
 	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", bytes.NewReader(body))
@@ -2099,7 +2097,6 @@ func TestUpdateAgent_LockedRejectsIdentityChange(t *testing.T) {
 		},
 	}
 	coreagent.SeedConfig(cfg)
-	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))

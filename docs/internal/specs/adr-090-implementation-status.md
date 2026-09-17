@@ -4,6 +4,18 @@ Status: in progress. Baseline: `12d97e7e70a869b72a246c9385776e71e9bdaa22`.
 
 The founder authorized the agreed parallel implementation on 2026-09-17, using Sol workers, full code review, Prometheus review of every changed prompt/skill, correction of all findings, and green local tests. CI is explicitly deferred: do not push implementation branches, open implementation PRs or dispatch workflows during this phase.
 
+## Active integration checkpoint — GLM parallel recovery
+
+Current committed parent: `fa08814a0`. This entry supersedes worker-activity and unresolved-fix statements in older checkpoints below; completion remains unproven.
+
+- The founder explicitly switched parallel work to `claudez` with `glm-5.3`. Three CLI workers are active in separate worktrees: image-reader boundary coverage/fixes, Windows contract-test portability, and an independent Prometheus review of changed prompts, skills and descriptions. Their initialization and assistant response events report `glm-5.3`. Sol quota exhaustion is no longer preventing parallel implementation, although the native Codex review gate still requires completion.
+- Gateway revision fixtures and omission-preserve/workspace partial-state assertions were integrated in `b79704e05`. Valid MCP policy overrides were corrected in `37f56048a`. Read-only `updated_at` rejection and unconditional unsupported-field rejection were corrected in `0f9ef18b6` and `fa08814a0`; each production correction has three caught/restored semantic mutations and focused green evidence.
+- The latest combined affected gateway run failed five top-level tests. Inspection identified obsolete/malformed positive fixtures (unconfigured MCP server, retired timeout/default-policy keys, an explicitly empty revision, and duplicate core-agent entity seeding). All five corrected top-level cases passed in the focused rerun (exit 0); no combined gateway green is claimed.
+- Frontend budget refactoring is integrated in `4b8b3610e`: 203 affected tests, TypeScript compilation, targeted lint, and file/function budget checks passed. Backend budget refactoring is integrated in `7249f0025` with focused reader verification after integration.
+- Image-reader JPEG/configured-byte/pagination coverage is integrated in `cf2ccd9a3`. Actual-turn private image coverage is integrated in `52a7c2e87`. Additional visual tests recovered from the stopped worker now exercise forced context-window trimming, durable session reload, interruption, unknown-model attempts, provider rejection and timeout fallback; three mutations were caught and the restored focused run passed in 6.485 seconds. These additional tests are integrated in `517917d8f`; independent re-review remains open.
+- Roster constructor cleanup remains unintegrated. The knowledge-base tool defaults require resolution: the current new role policy denies knowledge tools for every built-in, while older tests expected broader permissions. A founder question proposes read access for working roles and confirmed edits for Mia/General Purpose; no answer has been recorded.
+- Remaining gates include integrated regression checks, reader/provider transport gaps, roster and manifest verification, final independent reviewer lenses, final Prometheus findings/fixes, rebuilt browser acceptance, and actual agent/document workflows. No CI, push, PR or release has run.
+
 ## Latest checkpoint: integrated review fixes
 
 Current code snapshot: `281b55712` (2026-09-17). This checkpoint supersedes outstanding-work statements in the historical entries below; the full feature remains in progress.

@@ -1472,6 +1472,10 @@ func TestCreateAgent_WithToolsCfg(t *testing.T) {
 			},
 		},
 	}
+	cfg.Tools.MCP.Servers = map[string]config.MCPServerConfig{
+		"my-server": {Enabled: true, Command: "test-mcp-server"},
+	}
+
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
