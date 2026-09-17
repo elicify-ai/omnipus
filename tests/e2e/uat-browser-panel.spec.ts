@@ -495,6 +495,14 @@ async function clickRemotePoint(page: Page, remote: { x: number; y: number }): P
   await page.mouse.click(offX + remote.x * scale, offY + remote.y * scale);
 }
 
+/** Wait until the panel's explicit viewport handoff says input has resumed. */
+async function waitForViewportInput(page: Page): Promise<void> {
+  await expect(
+    page.getByText('Resizing browser. Input will resume when the new picture is ready.'),
+    'the viewport handoff never finished, so measuring remote input would only measure rejected input',
+  ).toBeHidden({ timeout: 45_000 });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('UAT Group C — the live browser panel', () => {
@@ -583,7 +591,7 @@ test.describe('UAT Group C — the live browser panel', () => {
     // capture, so "scrolling changed nothing" was the TEST being wrong, not the
     // product. /large is the plan's own host and is several screens deep.
     await navigateLiveBrowser(page, `${HEROKU}/large`);
-    await page.waitForTimeout(4_000);
+    await waitForViewportInput(page);
     const loaded = await sampleFrame(video);
     await saveFrame(testInfo, 'frame-loaded.png', loaded);
     const lum = meanLuminance(loaded);
@@ -681,9 +689,7 @@ test.describe('UAT Group C — the live browser panel', () => {
     // after opening may be spent taking the wheel rather than reaching the
     // page. Take it deliberately, on empty space well below the link list, and
     // confirm the panel agrees before measuring anything.
-    const frameBox = await browserLiveFrame(page).boundingBox();
-    if (!frameBox) throw new Error('the live frame has no bounding box');
-    await page.mouse.click(frameBox.x + frameBox.width / 2, frameBox.y + frameBox.height * 0.92);
+    await clickRemotePoint(page, { x: media.width / 2, y: media.height * 0.92 });
     await expect(
       statusChip(page),
       'clicking into the frame did not put the panel into "You\'re driving" — the case cannot ' +
