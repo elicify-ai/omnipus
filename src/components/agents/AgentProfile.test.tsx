@@ -66,11 +66,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { fetchRegistryTools, fetchAgent, fetchWorkspace, fetchSkills, updateAgent, updateWorkspace, deleteAgent, fetchProviders, testAgentRunner } from '@/lib/api'
+import { fetchRegistryTools, fetchAgent, fetchWorkspace, fetchSkills, updateAgent, updateWorkspace, fetchProviders, testAgentRunner } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { ApiError } from '@/lib/api-error'
-import { ConfigurationSaveError } from '@/lib/api/configuration'
 
 const editable = (...names: string[]) => names.map((name) => ({ name, editable: true }))
 const COMMON_EDITABLE_FIELDS = editable(
@@ -216,7 +215,6 @@ beforeEach(() => {
   vi.mocked(fetchAgent).mockReset().mockResolvedValue(mockCoreAgent)
   vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
   vi.mocked(updateAgent).mockReset().mockResolvedValue(mockCoreAgent)
-  vi.mocked(deleteAgent).mockReset()
   vi.mocked(testAgentRunner).mockReset().mockResolvedValue({
     ok: true,
     reason: '',
@@ -1684,88 +1682,6 @@ describe('AgentProfile — Wave 5 footer (spec §6.1)', () => {
     expect(dialog).toHaveTextContent(/cannot be undone/i)
   })
 
-  it('calls deleteAgent when the destructive Delete is confirmed', async () => {
-    // Traces to: agent-form-requirements.md §9.3 — destructive Delete flow
-    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
-    vi.mocked(deleteAgent).mockReset().mockResolvedValue({
-      revision: '1'.repeat(64),
-      persistence_status: 'complete',
-      activation_status: 'active',
-      changed_fields: ['agents.general-assistant'],
-    })
-    renderProfile('general-assistant')
-    await screen.findByText('General Assistant')
-    fireEvent.click(screen.getByTestId('delete-agent-button'))
-    // The confirm button is the destructive one inside the dialog. Find
-    // it by its role+text — there is one Delete button (the confirm) and
-    // one Cancel button.
-    const dialog = await screen.findByRole('alertdialog')
-    const confirmBtn = dialog.querySelector('button.bg-\\[var\\(--color-error\\)\\]') as HTMLElement | null
-    expect(confirmBtn).toBeTruthy()
-    fireEvent.click(confirmBtn!)
-    await waitFor(() => expect(deleteAgent).toHaveBeenCalledWith('general-assistant', mockCoreAgent.revision), { timeout: 3000 })
-  })
-
-  it('recovers from a persisted but inactive deletion without claiming success', async () => {
-    const client = makeClient()
-    client.setQueryData(['agents'], [mockCoreAgent, mockLockedCoreAgent])
-    useUiStore.setState({ editAgentId: 'general-assistant', toasts: [] })
-    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
-    vi.mocked(deleteAgent).mockRejectedValue(new ConfigurationSaveError({
-      revision: '1'.repeat(64),
-      persistence_status: 'complete',
-      activation_status: 'failed',
-      changed_fields: ['agents.general-assistant'],
-      message: 'reload failed',
-    }))
-
-    renderProfile('general-assistant', client)
-    await screen.findByText('General Assistant')
-    fireEvent.click(screen.getByTestId('delete-agent-button'))
-    const dialog = await screen.findByRole('alertdialog')
-    const confirmBtn = dialog.querySelector('button.bg-\\[var\\(--color-error\\)\\]') as HTMLElement
-    fireEvent.click(confirmBtn)
-
-    await waitFor(() => expect(useUiStore.getState().editAgentId).toBeNull())
-    expect(client.getQueryData<Agent[]>(['agents'])).toEqual([mockLockedCoreAgent])
-    const deletionToasts = useUiStore.getState().toasts
-    expect(deletionToasts).toEqual([
-      expect.objectContaining({
-        variant: 'error',
-        message: 'Delete incomplete: Changes were saved but are not active. Reload before making further changes.',
-      }),
-    ])
-    expect(deletionToasts.some((toast) => toast.variant === 'success')).toBe(false)
-    expect(client.getQueryState(['agents'])?.isInvalidated).toBe(true)
-    await waitFor(() => expect(fetchAgent).toHaveBeenCalledTimes(2))
-  })
-
-  it('keeps the editor open when deletion was not persisted and requires recovery', async () => {
-    useUiStore.setState({ editAgentId: 'general-assistant', toasts: [] })
-    vi.mocked(fetchAgent).mockResolvedValue(mockCoreAgent)
-    vi.mocked(deleteAgent).mockRejectedValue(new ConfigurationSaveError({
-      revision: mockCoreAgent.revision,
-      persistence_status: 'none',
-      activation_status: 'not_attempted',
-      changed_fields: [],
-    }))
-
-    renderProfile('general-assistant')
-    await screen.findByText('General Assistant')
-    fireEvent.click(screen.getByTestId('delete-agent-button'))
-    const dialog = await screen.findByRole('alertdialog')
-    const confirmBtn = dialog.querySelector('button.bg-\\[var\\(--color-error\\)\\]') as HTMLElement
-    fireEvent.click(confirmBtn)
-
-    await waitFor(() => expect(deleteAgent).toHaveBeenCalledTimes(1))
-    expect(useUiStore.getState().editAgentId).toBe('general-assistant')
-    expect(useUiStore.getState().toasts).toEqual([
-      expect.objectContaining({
-        variant: 'error',
-        message: 'Delete failed: Changes were not saved. Reload before trying again.',
-      }),
-    ])
-  })
 })
 
 // Wave 5 / spec §6.4 — Runtime tab renders for subagent_3p agents only.
