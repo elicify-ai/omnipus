@@ -1,0 +1,3 @@
+⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY or another auth source is set and takes precedence over your claude.ai login · Unset it to load your organization's connectors
+[claude-code:unrecognized_model] {"model":"grok-4.6","query_source":"sdk"}
+[claude-code:unrecognized_model] {"model":"grok-build-0.1","query_source":"web_fetch_apply"}
