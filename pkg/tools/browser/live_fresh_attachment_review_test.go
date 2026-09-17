@@ -124,7 +124,7 @@ func (c *reviewDeathContext) Err() error {
 }
 
 func TestLiveDeathWatcherRetainsOriginalSource(t *testing.T) {
-	for _, scenario := range []string{"current_death", "replacement_watch_and_capture", "pending_capture_same_watch", "new_generation_same_capture", "pending_capture_before_death"} {
+	for _, scenario := range []string{"current_death", "current_death_pending_document", "replacement_watch_and_capture", "pending_capture_same_watch", "new_generation_same_capture", "pending_capture_before_death"} {
 		t.Run(scenario, func(t *testing.T) {
 			m := newTestManagerWithFakeTabs(t)
 			m.memoryPressureFn = func(int) (bool, bool) { return false, true }
@@ -164,6 +164,10 @@ func TestLiveDeathWatcherRetainsOriginalSource(t *testing.T) {
 			}
 			lv.mu.Unlock()
 			previousCancel() // Its goroutine sees a different installed listen context and exits.
+			if scenario == "current_death_pending_document" {
+				_, err = original.beginDocumentTransition(string(targetID))
+				require.NoError(t, err)
+			}
 			observed := &reviewDeathContext{Context: context.Background(), entered: make(chan struct{}), resume: make(chan struct{})}
 			m.mu.Lock()
 			previousBrowserCtx := m.sessions[testSessionID].browserCtx
@@ -213,7 +217,7 @@ func TestLiveDeathWatcherRetainsOriginalSource(t *testing.T) {
 			case <-time.After(time.Second):
 				t.Fatal("watcher did not complete")
 			}
-			if scenario == "current_death" {
+			if scenario == "current_death" || scenario == "current_death_pending_document" {
 				select {
 				case <-original.Done():
 				default:
