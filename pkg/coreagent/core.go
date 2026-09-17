@@ -308,8 +308,8 @@ func Ava() *CoreAgent {
 		ID:       IDAva,
 		Name:     "Ava",
 		Subtitle: "Builder",
-		Description: "Your agent architect — interviews you about what you need, " +
-			"then creates a custom agent with a tailored personality and tools.",
+		Description: "Configures agents, teams and skills, including models, tool permissions and connector assignments. " +
+			"Reviews one combined proposal with you before applying changes and checking the result.",
 		Color: "#D4AF37",
 		Icon:  "wrench",
 		DefaultTools: []string{
@@ -404,9 +404,8 @@ func Planner() *CoreAgent {
 		ID:       IDPlanner,
 		Name:     "Planner",
 		Subtitle: "Planning Specialist",
-		Description: "Decomposes a goal into a structured task DAG. Gathers context by " +
-			"delegating to Explorer (internal) and Researcher (external) before planning. " +
-			"Invoked via delegation; not a chat persona.",
+		Description: "Builds a structured plan from the goal and available context. " +
+			"Uses permitted delegation to gather additional evidence when needed. Invoked via delegation; not a chat persona.",
 		Color: "#0EA5E9",
 		Icon:  "tree-structure",
 		DefaultTools: []string{

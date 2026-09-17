@@ -1858,7 +1858,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 agentId={agentId}
                 agentType={agent.type}
                 isLocked={isLocked}
-                isEditable={isFieldEditable('tools_cfg')}
+                isEditable={isFieldEditable('tool_policy_changes')}
                 tools={toolsCfg}
                 onChange={setToolsCfg}
                 onRevisionChange={(revision) => {
@@ -2506,7 +2506,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         </Badge>
         {agent.locked && (
           <Badge variant="outline" className="text-[var(--color-muted)] border-[var(--color-border)]">
-            read-only
+            built-in
           </Badge>
         )}
         {agent.description && (
@@ -2520,18 +2520,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           amber/warning visual language as the executor-external-cli
           callout (sibling concept — "this agent is special, read the
           caveat before editing"). Hidden for non-locked agents.
-          ADR-049 SD-C18 / ADR-052 FR-038: extended to System agents (the
-          Judge) too, with copy naming what IS still editable (model,
-          provider, soul) rather than the core banner's blanket "most
-          fields are read-only". Soul/rubric unification (FR-038) means
-          there is no longer a separate "rubric" field — the Judge's soul
-          IS its judging rubric, and the wire contract describes it as
-          "editable while locked". Verified against the live backend
-          (pkg/gateway/rest.go's updateAgent, Fix-Wave-2): the
-          locked-identity reject-set now carves soul out for
-          `IsSystem()` agents specifically — identity
-          (name/description/color/icon/skills) stays locked, soul does
-          not — so this copy states the true, current behaviour. */}
+          ADR-090: ordinary built-ins protect identity and base instructions;
+          system agents protect capabilities and allow instruction edits. */}
       {agent.type === 'core' && agent.locked && (
         <div
           role="alert"
@@ -2542,7 +2532,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <div className="text-sm">
             <div className="font-semibold text-[var(--color-error)]">This is a built-in core agent</div>
             <div className="text-[var(--color-muted)] mt-1">
-              Most fields are read-only. To create your own chat colleague, use the + Add Main button.
+              Identity and base instructions are protected. You can change the model, tool permissions, connectors and assigned skills.
             </div>
           </div>
         </div>
@@ -2557,10 +2547,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <div className="text-sm">
             <div className="font-semibold text-[var(--color-error)]">System agent</div>
             <div className="text-[var(--color-muted)] mt-1">
-              Identity (name, description, color, icon, skills) is locked.
-              Model, provider, and its soul (below, in Personality) are
-              editable — the soul defines this agent&apos;s verification
-              standards and drives the next verification it runs.
+              Identity and capabilities are fixed. Edit the instructions in Personality to change how this agent plans or reviews work.
             </div>
           </div>
         </div>

@@ -55,6 +55,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgent: vi.fn(),
+    fetchRegistryTools: vi.fn(),
     fetchWorkspace: vi.fn(),
     updateAgent: vi.fn(),
     updateWorkspace: vi.fn(),
@@ -65,7 +66,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { fetchAgent, fetchWorkspace, fetchSkills, updateAgent, updateWorkspace, deleteAgent, fetchProviders, testAgentRunner } from '@/lib/api'
+import { fetchRegistryTools, fetchAgent, fetchWorkspace, fetchSkills, updateAgent, updateWorkspace, deleteAgent, fetchProviders, testAgentRunner } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { ApiError } from '@/lib/api-error'
@@ -75,7 +76,7 @@ const COMMON_EDITABLE_FIELDS = editable(
   'name', 'description', 'color', 'icon', 'default', 'model', 'provider',
   'fallback_models', 'model_params', 'soul', 'memory_enabled', 'voice',
   'max_tool_iterations', 'context_window_override', 'shell_policy', 'skills',
-  'tools_cfg', 'executor',
+  'tool_policy_changes', 'executor',
 )
 const BUILTIN_EDITABLE_FIELDS = COMMON_EDITABLE_FIELDS.map((field) =>
   ['name', 'description', 'color', 'icon', 'soul', 'executor'].includes(field.name)
@@ -1508,7 +1509,7 @@ describe('AgentProfile — locked banner (spec §6 BDD #13)', () => {
     const banner = screen.getByTestId('locked-banner')
     expect(banner).toHaveAttribute('role', 'alert')
     expect(banner).toHaveTextContent(/built-in core agent/i)
-    expect(banner).toHaveTextContent(/most fields are read-only/i)
+    expect(banner).toHaveTextContent(/identity and base instructions are protected/i)
   })
 
   it('does NOT render the locked-banner for a non-locked agent', async () => {
@@ -1541,9 +1542,8 @@ describe('AgentProfile — ADR-052 soul unification + memory toggle (FR-038/FR-0
     const banner = screen.getByTestId('locked-banner')
     expect(banner).toHaveTextContent(/system agent/i)
     expect(banner).toHaveTextContent(/identity/i)
-    expect(banner).toHaveTextContent(/is locked/i)
-    expect(banner).toHaveTextContent(/soul/i)
-    expect(banner).toHaveTextContent(/editable/i)
+    expect(banner).toHaveTextContent(/identity and capabilities are fixed/i)
+    expect(banner).toHaveTextContent(/edit the instructions in personality/i)
     expect(banner).not.toHaveTextContent(/rubric/i)
     // The old "soul editing isn't available yet" copy must be gone — the
     // backend now genuinely accepts it (updateAgent's IsSystem() carve-out).
@@ -2866,6 +2866,28 @@ describe('AgentProfile — skills visibility by agent kind (field matrix, W2c)',
 // subagent_3p hides it entirely (the external runner has its own tools; the
 // old read-only-collapse path for zero-override native workers is retired —
 // a fresh native Subagent now gets the LIVE editor, not a summary box).
+describe('AgentProfile — ADR090 tool policy descriptor', () => {
+  it.each([
+    { label: 'allows the declared capability', fields: [{ name: 'tool_policy_changes', editable: true }], allowed: true },
+    { label: 'honors an explicit refusal', fields: [{ name: 'tool_policy_changes', editable: false }], allowed: false },
+    { label: 'does not infer missing capability', fields: [], allowed: false },
+    { label: 'does not substitute the storage field name', fields: [{ name: 'tools_cfg', editable: true }], allowed: false },
+  ])('$label', async ({ fields, allowed }) => {
+    vi.mocked(fetchRegistryTools).mockResolvedValue([])
+    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, editable_fields: fields })
+    renderProfile('mia')
+    await screen.findByText('Mia')
+    switchTab('tab-tools')
+    for (const name of ['Cautious', 'Balanced', 'Full access']) {
+      const button = await screen.findByRole('button', { name })
+      expect(button).toHaveProperty('disabled', !allowed)
+    }
+    const warning = screen.queryByText('Tool policies are read-only for this agent: the backend marks this capability as fixed.')
+    if (allowed) expect(warning).toBeNull()
+    else expect(warning).toBeInTheDocument()
+  })
+})
+
 describe('AgentProfile — Tools & Permissions visibility by agent kind (field matrix, W2c)', () => {
   it('hides Tools & Permissions for a subagent_3p agent', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)

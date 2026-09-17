@@ -47,7 +47,7 @@ interface ToolsAndPermissionsProps {
   agentType: AgentKind
   /** Whether the agent is locked (core/identity-locked). Read-only when true. */
   isLocked?: boolean
-  /** Backend field descriptor result for tools_cfg. Overrides blanket lock UI. */
+  /** Backend field descriptor result for tool_policy_changes. Overrides blanket lock UI. */
   isEditable?: boolean
   tools: AgentToolsCfg
   /**
