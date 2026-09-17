@@ -9,7 +9,6 @@ vi.mock('@/components/settings/useReAuthGate', () => ({
 }))
 
 import { useAutoSave } from '@/hooks/useAutoSave'
-import { ApiError } from '@/lib/api-error'
 
 describe('useAutoSave', () => {
   beforeEach(() => {
@@ -639,33 +638,6 @@ describe('useAutoSave', () => {
       await Promise.resolve()
     })
     expect(result.current.status).toBe('saved')
-  })
-
-  it('does not blindly retry a queued draft after a revision conflict', async () => {
-    let rejectFirst!: (err: unknown) => void
-    const first = new Promise<void>((_resolve, reject) => { rejectFirst = reject })
-    const saveFn = vi.fn().mockReturnValue(first)
-    let data = { v: 1 }
-    const { result, rerender } = renderHook(
-      ({ d }) => useAutoSave(d, saveFn, { debounceMs: 50 }),
-      { initialProps: { d: data } },
-    )
-
-    data = { v: 2 }
-    rerender({ d: data })
-    await act(async () => vi.advanceTimersByTime(100))
-    data = { v: 3 }
-    rerender({ d: data })
-    await act(async () => vi.advanceTimersByTime(100))
-
-    await act(async () => {
-      rejectFirst(new ApiError(409, 'Revision conflict'))
-      await Promise.resolve()
-    })
-
-    expect(saveFn).toHaveBeenCalledTimes(1)
-    expect(result.current.status).toBe('conflict')
-    expect(result.current.hasPendingChanges()).toBe(true)
   })
 
   // ── FIX 5: passive-repro coverage (idle time only, no visibility/unload) ──

@@ -53,6 +53,9 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
     expect(mock.online).toBe(false)
   })
 
+})
+
+describe('API contract: agent and supporting resource shapes', () => {
   // ── Agent ─────────────────────────────────────────────────────────────────
 
   it('Agent (locked core type) mock shape satisfies interface', () => {
