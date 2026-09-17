@@ -2393,8 +2393,6 @@ export function BrowserLiveView({
   }, [])
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!canDispatchInput()) { e.preventDefault(); return }
-    if (textComposition.nativeKey(e)) return
     // WCAG 2.1.2 "No Keyboard Trap" — Escape is the advertised, always
     // available way to stop driving (see the hand-back hint below, which now
     // advertises it too). This panel used to be hosted in a Radix Sheet,
@@ -2411,10 +2409,13 @@ export function BrowserLiveView({
     // advertised exit that satisfies 2.1.2 on its own, independent of
     // whatever container happens to host this component.
     if (e.key === 'Escape') {
+      if (textComposition.nativeKey(e)) return
       e.preventDefault()
       releaseWheel()
       return
     }
+    if (!canDispatchInput()) { e.preventDefault(); return }
+    if (textComposition.nativeKey(e)) return
     e.preventDefault()
     const modifiers = computeModifiers(e)
     // Keep physical transitions for page shortcuts/games and provide the

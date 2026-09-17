@@ -151,6 +151,35 @@ beforeEach(() => {
   callbacksRef.current = null
 })
 
+describe('BrowserLiveView — control hand-back survives input failure', () => {
+  it('releases control on Escape even after the dedicated input connection fails', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectFrameAndDrive()
+    const frame = screen.getByTestId('browser-live-frame')
+    act(() => inputStateCallback.current?.('failed', 'Input connection failed. Retry input.'))
+    mockSendControl.mockClear()
+
+    act(() => fireEvent.keyDown(frame, { key: 'Escape' }))
+
+    expect(mockSendControl).toHaveBeenCalledExactlyOnceWith('release')
+    expect(screen.getByLabelText('Address bar')).toHaveFocus()
+  })
+
+  it('keeps IME cancellation local after the dedicated input connection fails', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" mediaStream={fakeMediaStream()} />)
+    connectFrameAndDrive()
+    const sink = screen.getByRole('textbox', { name: 'Remote browser text input' })
+    act(() => sink.focus())
+    fireEvent.compositionStart(sink)
+    act(() => inputStateCallback.current?.('failed', 'Input connection failed. Retry input.'))
+    mockSendControl.mockClear()
+
+    fireEvent.keyDown(sink, { key: 'Escape', code: 'Escape', keyCode: 27, isComposing: true })
+
+    expect(mockSendControl).not.toHaveBeenCalled()
+  })
+})
+
 describe('BrowserLiveView — fillContainer sizing (BUG 1)', () => {
   // NOTE: this covers the component DEFAULT, not the docked panel. As of
   // 2026-07-31 BrowserLivePanel passes `fillContainer` explicitly — an
