@@ -90,6 +90,33 @@ func TestSelectOverridesRejectsDuplicateUnknownAndIncompleteNames(t *testing.T) 
 	}
 }
 
+func TestSelectOverridesPreservesMCPExactAndWildcardOverrides(t *testing.T) {
+	ceiling := map[string]config.ToolPolicy{"read_file": config.ToolPolicyAllow, "bash": config.ToolPolicyAllow}
+	complete := map[string]config.ToolPolicy{
+		"read_file":          config.ToolPolicyAllow,
+		"bash":               config.ToolPolicyDeny,
+		"mcp_context7_*":     config.ToolPolicyAsk,
+		"mcp_context7_query": config.ToolPolicyAllow,
+	}
+	got, err := SelectOverrides(complete, []string{"bash", "mcp_context7_*", "mcp_context7_query"}, ceiling)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPolicyMap(t, got, map[string]config.ToolPolicy{
+		"bash":               config.ToolPolicyDeny,
+		"mcp_context7_*":     config.ToolPolicyAsk,
+		"mcp_context7_query": config.ToolPolicyAllow,
+	})
+}
+
+func TestSelectOverridesRejectsUnknownNonMCPExtra(t *testing.T) {
+	ceiling := map[string]config.ToolPolicy{"bash": config.ToolPolicyAllow}
+	complete := map[string]config.ToolPolicy{"bash": config.ToolPolicyAllow, "browser_*": config.ToolPolicyDeny}
+	if _, err := SelectOverrides(complete, []string{"browser_*"}, ceiling); err == nil {
+		t.Fatal("expected unknown non-MCP policy key to be rejected")
+	}
+}
+
 func assertPolicyMap(t *testing.T, got, want map[string]config.ToolPolicy) {
 	t.Helper()
 	if len(got) != len(want) {

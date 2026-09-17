@@ -80,7 +80,7 @@ func TestGetAgent_FallbackModels_ReflectsPersistedValue(t *testing.T) {
 
 	putBody := `{"fallback_models":[{"model":"claude-haiku-4.5","provider":"anthropic"}]}`
 	putW := httptest.NewRecorder()
-	putR := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(putBody))
+	putR := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(putBody))
 	putR.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(putW, putR)
 	require.Equal(t, http.StatusOK, putW.Code, "put body: %s", putW.Body.String())
@@ -106,7 +106,7 @@ func TestListAgents_FallbackModels_ReflectsPersistedValue(t *testing.T) {
 
 	putBody := `{"fallback_models":[{"model":"gemini-2.5-flash","provider":"google"}]}`
 	putW := httptest.NewRecorder()
-	putR := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(putBody))
+	putR := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(putBody))
 	putR.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(putW, putR)
 	require.Equal(t, http.StatusOK, putW.Code, "put body: %s", putW.Body.String())
@@ -1493,6 +1493,9 @@ func TestHandleAgentsCreateWithExplicitID_Rejected(t *testing.T) {
 func TestGetAgentTools_SystemAgent(t *testing.T) {
 	api, cleanup := newTestRestAPI(t)
 	defer cleanup()
+	api.homePath = t.TempDir()
+	seedGlobalCeiling(t, api)
+	seedAgentEntities(t, api.homePath, api.agentLoop.GetConfig().Agents.List)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/omnipus-system/tools", nil)
@@ -1543,9 +1546,11 @@ func TestGetAgentTools_CustomAgent(t *testing.T) {
 			},
 		},
 	}
+	cfg.Sandbox.ToolPolicies = fullBuiltinPolicyMap("allow")
 	msgBus := bus.NewMessageBus()
 	al := mustAgentLoop(t, cfg, msgBus, &restMockProvider{})
-	api := &restAPI{agentLoop: al}
+	api := &restAPI{agentLoop: al, homePath: tmpDir}
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/tool-agent/tools", nil)

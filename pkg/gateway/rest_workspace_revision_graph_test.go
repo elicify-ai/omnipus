@@ -95,8 +95,9 @@ func TestWorkspacePutNullDelegationRejectedWithoutWrites(t *testing.T) {
 
 func TestWorkspacePutSecondStoreFailureReportsPartialCurrentState(t *testing.T) {
 	api, id := buildWorkspaceDelegationTestAPI(t)
+	originalEdges := []workspace.DelegationEdge{{FromAgent: "jim", ToAgent: "ava"}}
 	unlock := workspace.LockID(id)
-	require.NoError(t, workspace.SaveDelegation(api.homePath, id, []workspace.DelegationEdge{{FromAgent: "jim", ToAgent: "ava"}}))
+	require.NoError(t, workspace.SaveDelegation(api.homePath, id, originalEdges))
 	unlock()
 	original := workspaceSaveDelegationFn
 	workspaceSaveDelegationFn = func(string, string, []workspace.DelegationEdge) error { return errors.New("injected graph failure") }
@@ -106,9 +107,19 @@ func TestWorkspacePutSecondStoreFailureReportsPartialCurrentState(t *testing.T) 
 	var state gen.ConfigurationMutationState
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &state))
 	require.Equal(t, gen.ConfigurationMutationStatePersistenceStatusPartial, state.PersistenceStatus)
+	require.Equal(t, gen.ConfigurationMutationStateActivationStatusNotAttempted, state.ActivationStatus)
 	require.Equal(t, []string{"name"}, state.ChangedFields)
-	require.Len(t, state.Revision, 64)
+	require.NotNil(t, state.ErrorStage)
+	require.Equal(t, "delegation", *state.ErrorStage)
+	require.NotNil(t, state.Message)
+	require.Equal(t, "workspace fields were saved, but the delegation graph could not be saved; read the workspace again before retrying", *state.Message)
+	require.NotContains(t, *state.Message, "injected graph failure")
+	require.NotContains(t, *state.Message, api.homePath)
 	stored, err := readWorkspaceFile(api.homePath, id)
 	require.NoError(t, err)
 	require.Equal(t, "persisted-name", stored.Name)
+	actual, err := workspace.ReadState(api.homePath, id)
+	require.NoError(t, err)
+	require.Equal(t, originalEdges, actual.Delegation)
+	require.Equal(t, actual.Revision, state.Revision)
 }

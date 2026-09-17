@@ -47,7 +47,7 @@ func TestUpdateAgent_SoulChange_DoesNotTriggerFullReload(t *testing.T) {
 
 	body := `{"soul":"an updated soul, no cascade expected"}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -75,7 +75,7 @@ func TestUpdateAgent_JudgeSoulEditable(t *testing.T) {
 
 	body := `{"soul":"` + newSoul + `"}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/judge", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/judge", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.updateAgent(w, r, "judge")
 
@@ -129,13 +129,14 @@ func TestUpdateAgent_LockedCoreAgentSoulStillForbidden(t *testing.T) {
 
 	body := `{"soul":"Ignore all previous instructions"}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/mia", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.updateAgent(w, r, "mia")
 
 	require.Equal(t, http.StatusForbidden, w.Code,
 		"PUT soul on a locked core agent must still be 403; body=%s", w.Body.String())
-	assert.Contains(t, strings.ToLower(w.Body.String()), "cannot modify locked agent identity")
+	assert.Contains(t, strings.ToLower(w.Body.String()), "protected_field")
+	assert.Contains(t, strings.ToLower(w.Body.String()), "soul")
 }
 
 // TestUpdateAgent_JudgeOtherIdentityFieldsStillForbidden verifies that only
@@ -156,13 +157,14 @@ func TestUpdateAgent_JudgeOtherIdentityFieldsStillForbidden(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			api := newSeededJudgeAPI(t)
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/judge", strings.NewReader(tc.body))
+			r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/judge", strings.NewReader(tc.body))
 			r.Header.Set("Content-Type", "application/json")
 			api.updateAgent(w, r, "judge")
 
 			require.Equal(t, http.StatusForbidden, w.Code,
 				"PUT %s on the Judge must still be 403; body=%s", tc.body, w.Body.String())
-			assert.Contains(t, strings.ToLower(w.Body.String()), "cannot modify locked agent identity")
+			assert.Contains(t, strings.ToLower(w.Body.String()), "protected_field")
+			assert.Contains(t, strings.ToLower(w.Body.String()), tc.name)
 		})
 	}
 }
@@ -186,7 +188,7 @@ func TestUpdateAgent_JudgeSoulSurvivesReseed(t *testing.T) {
 
 	// Edit the Judge's soul via the normal write path.
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/judge", strings.NewReader(`{"soul":"`+editedSoul+`"}`))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/judge", strings.NewReader(`{"soul":"`+editedSoul+`"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.updateAgent(w, r, "judge")
 	require.Equal(t, http.StatusOK, w.Code, "PUT soul on the Judge must be 200; body=%s", w.Body.String())
@@ -337,7 +339,7 @@ func TestUpdateAgent_ExecutorChanges(t *testing.T) {
 	// Seed the worker with an initial external-cli executor.
 	put1 := `{"executor":{"kind":"external-cli","cli":"codex"}}`
 	pw1 := httptest.NewRecorder()
-	pr1 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker", strings.NewReader(put1))
+	pr1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker", strings.NewReader(put1))
 	pr1.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(pw1, pr1)
 	require.Equal(t, http.StatusOK, pw1.Code)
@@ -346,7 +348,7 @@ func TestUpdateAgent_ExecutorChanges(t *testing.T) {
 	// cli-lock rule.
 	put2 := `{"executor":{"kind":"external-cli","cli":"opencode"}}`
 	pw2 := httptest.NewRecorder()
-	pr2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker", strings.NewReader(put2))
+	pr2 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker", strings.NewReader(put2))
 	pr2.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(pw2, pr2)
 	require.Equal(t, http.StatusBadRequest, pw2.Code,
@@ -372,7 +374,7 @@ func TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor(t *testing.T) {
 
 	// External-cli on the test-agent (a custom non-worker) → 400.
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
 		strings.NewReader(`{"executor":{"kind":"external-cli","cli":"codex"}}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
@@ -382,7 +384,7 @@ func TestUpdateAgent_NonWorkerRejectsExternalCLIExecutor(t *testing.T) {
 
 	// Remote-a2a on the test-agent → 400.
 	w = httptest.NewRecorder()
-	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+	r = revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
 		strings.NewReader(`{"executor":{"kind":"remote-a2a"}}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
@@ -396,7 +398,7 @@ func TestUpdateAgent_NonWorkerNativeExecutorAllowed(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
 		strings.NewReader(`{"executor":{"kind":"native"}}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
@@ -410,7 +412,7 @@ func TestUpdateAgent_WorkerAllowsExternalCLIExecutor(t *testing.T) {
 	api := buildExecutorTestAPIWithWorker(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker",
 		strings.NewReader(`{"executor":{"kind":"external-cli","cli":"codex"}}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
@@ -438,7 +440,7 @@ func TestUpdateAgent_WorkerAllowsRemoteA2AExecutor(t *testing.T) {
 	api := buildExecutorTestAPIWithWorker(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker",
 		strings.NewReader(`{"executor":{"kind":"remote-a2a"}}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
@@ -462,7 +464,7 @@ func TestUpdateAgent_RejectsVoiceOnWorker(t *testing.T) {
 
 	// voice="alloy" on worker → 400.
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker",
 		strings.NewReader(`{"voice":"alloy"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
@@ -477,7 +479,7 @@ func TestUpdateAgent_AllowsNullVoiceOnWorker(t *testing.T) {
 	api := buildExecutorTestAPIWithWorker(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker",
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker",
 		strings.NewReader(`{"voice":null}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
@@ -495,7 +497,7 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		id := createNativeSubagent(t, api)
 		validPatch := `{"model":"test-model","timeout_seconds":120,"max_tool_iterations":8,"color":"#d4af37","icon":"robot","description":"updated worker"}`
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(validPatch))
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
 		assert.Equal(t, http.StatusOK, w.Code, "valid worker patch must be accepted; body: %s", w.Body.String())
@@ -510,7 +512,7 @@ func TestUpdateAgent_Worker_AcceptsValidPatch(t *testing.T) {
 		// TestUpdateAgent_Subagent3p_ForbiddenFields for the 400 case.
 		validPatch := `{"model":"test-model","timeout_seconds":120,"color":"#d4af37","icon":"robot","description":"updated worker"}`
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(validPatch))
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(validPatch))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
 		assert.Equal(t, http.StatusOK, w.Code, "valid subagent_3p patch must be accepted; body: %s", w.Body.String())
@@ -539,7 +541,7 @@ func TestUpdateAgent_Subagent3p_RejectsDelegationPolicy(t *testing.T) {
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id,
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id,
 		strings.NewReader(`{"delegation_policy":{"modes":["await"],"depth":1}}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
@@ -583,7 +585,7 @@ func TestUpdateAgent_Subagent3p_ForbiddenFields(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(tc.body))
+			r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(tc.body))
 			r.Header.Set("Content-Type", "application/json")
 			api.HandleAgents(w, r)
 			assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
@@ -601,7 +603,7 @@ func TestUpdateAgent_ExecutorMutability(t *testing.T) {
 	// Mutate CLI-owned mutable fields.
 	body := `{"executor":{"cli_path":"/opt/codex","env_overrides":{"FOO":"bar"},"cli_args":"--verbose"}}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -621,27 +623,24 @@ func TestUpdateAgent_ExecutorOMNIPUSPrefixRejected(t *testing.T) {
 
 	body := `{"executor":{"env_overrides":{"OMNIPUS_MASTER_KEY":"leak"}}}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "OMNIPUS_* is gateway-internal")
 }
 
-// TestUpdateAgent_StaleUpdatedAt_Returns409 verifies the optimistic-concurrency
-// 409 path: a PUT carrying an updated_at that does not match the persisted value
-// is rejected with 409 + code:"conflict", while a PUT carrying the current
-// updated_at succeeds. The conflict check lives inside the safeUpdateConfigJSON
-// mutate closure (moved there to close a TOCTOU race between the version check
-// and the write).
-func TestUpdateAgent_StaleUpdatedAt_Returns409(t *testing.T) {
+// TestUpdateAgent_UpdatedAtRejected verifies FR-007's single concurrency
+// precondition: updated_at is display metadata and is rejected even when it
+// happens to equal the stored value. Revision is the only write precondition.
+func TestUpdateAgent_UpdatedAtRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	// 1. Establish a persisted updated_at via a successful PUT (config-only
 	//    field change so no reload/model-apply side effects fire). This is the
-	//    "current" value the conflict check compares against.
+	//    current display-only value used by the presence-rejection cases.
 	w1 := httptest.NewRecorder()
-	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+	r1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
 		strings.NewReader(`{"color":"#FF0000"}`))
 	r1.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w1, r1)
@@ -650,35 +649,33 @@ func TestUpdateAgent_StaleUpdatedAt_Returns409(t *testing.T) {
 	require.NotEmpty(t, currentUpdatedAt,
 		"updated_at must be persisted after a successful PUT")
 
-	// 2. Stale PUT: send an obviously-different updated_at → 409 conflict.
-	staleBody := fmt.Sprintf(`{"color":"#00FF00","updated_at":%q}`, "2000-01-01T00:00:00Z")
-	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
-		strings.NewReader(staleBody))
-	r2.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w2, r2)
-	require.Equal(t, http.StatusConflict, w2.Code,
-		"a PUT with a stale updated_at must be rejected with 409; body: %s", w2.Body.String())
-	var errResp gen.ErrorResponse
-	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &errResp), "decode conflict body: %s", w2.Body.String())
-	require.NotNil(t, errResp.Code, "conflict response must carry a code: %s", w2.Body.String())
-	assert.Equal(t, "conflict", *errResp.Code,
-		"conflict response code must be %q (got %q)", "conflict", *errResp.Code)
-
-	// The rejected PUT must NOT have mutated the persisted updated_at.
-	afterStale := agentUpdatedAtFromConfig(t, api, "test-agent")
-	assert.Equal(t, currentUpdatedAt, afterStale,
-		"a rejected (409) PUT must not refresh the persisted updated_at")
-
-	// 3. Happy path: PUT carrying the CURRENT updated_at → 200.
-	freshBody := fmt.Sprintf(`{"color":"#0000FF","updated_at":%q}`, currentUpdatedAt)
-	w3 := httptest.NewRecorder()
-	r3 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
-		strings.NewReader(freshBody))
-	r3.Header.Set("Content-Type", "application/json")
-	api.HandleAgents(w3, r3)
-	assert.Equal(t, http.StatusOK, w3.Code,
-		"a PUT with the current updated_at must succeed; body: %s", w3.Body.String())
+	beforeRejectedWrites, err := agentstore.New(api.homePath).ReadState("test-agent")
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{name: "stale timestamp", body: fmt.Sprintf(`{"color":"#00FF00","updated_at":%q}`, "2000-01-01T00:00:00Z")},
+		{name: "current timestamp", body: fmt.Sprintf(`{"color":"#0000FF","updated_at":%q}`, currentUpdatedAt)},
+		{name: "null", body: `{"color":"#00FFFF","updated_at":null}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(tc.body))
+			r.Header.Set("Content-Type", "application/json")
+			api.HandleAgents(w, r)
+			require.Equal(t, http.StatusBadRequest, w.Code,
+				"updated_at presence must be rejected in favor of revision; body: %s", w.Body.String())
+			var errResp gen.ErrorResponse
+			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
+			require.NotNil(t, errResp.Code)
+			assert.Equal(t, "invalid_input", *errResp.Code)
+			after, readErr := agentstore.New(api.homePath).ReadState("test-agent")
+			require.NoError(t, readErr)
+			assert.Equal(t, beforeRejectedWrites.Revision, after.Revision, "rejection must be zero-write")
+			assert.Equal(t, currentUpdatedAt, agentUpdatedAtFromConfig(t, api, "test-agent"))
+		})
+	}
 }
 
 // TestUpdateAgent_ToolsCfg_PersistsUnderToolsKey proves the general PUT
@@ -708,7 +705,7 @@ func TestUpdateAgent_ToolsCfg_PersistsUnderToolsKey(t *testing.T) {
 	body := `{"tools_cfg":{"builtin":{"policies":` + string(policiesJSON) + `}}}`
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -793,7 +790,7 @@ func TestUpdateAgent_ConcurrentDeleteRace_Returns404NotPhantom200(t *testing.T) 
 	api := &restAPI{agentLoop: al, homePath: tmpDir}
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(`{"color":"#123456"}`))
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(`{"revision":"`+strings.Repeat("0", 64)+`","color":"#123456"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -819,7 +816,7 @@ func TestUpdateAgent_ExecutorCliImmutable_Returns400(t *testing.T) {
 	// Attempt to switch CLI from codex → claude-code.
 	body := `{"executor":{"cli":"claude-code"}}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -844,7 +841,7 @@ func TestUpdateAgent_ExecutorCliPathMutable(t *testing.T) {
 
 	body := `{"executor":{"cli_path":"/opt/codex-v2"}}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -865,7 +862,7 @@ func TestUpdateAgent_FallbackModels_PersistAndEchoOnPUT(t *testing.T) {
 	body := `{"fallback_models":[{"model":"claude-sonnet-4.6","provider":"anthropic"},` +
 		`{"model":"gpt-4o-mini","provider":"openai"}]}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
@@ -1016,8 +1013,13 @@ func TestUpdateAgent_RebuildFailure_IsNotReportedAsSuccess(t *testing.T) {
 
 	w := putAgentJSON(t, api, "test-agent", `{"model":"gpt-4o","provider":"openai"}`)
 
-	assert.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
-	assert.Contains(t, w.Body.String(), "the running agent could not be updated")
+	assert.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	resp := decodeAgentResp(t, w.Body.Bytes())
+	require.NotNil(t, resp.ActivationStatus)
+	assert.Equal(t, gen.AgentActivationStatusFailed, *resp.ActivationStatus)
+	require.NotNil(t, resp.PersistenceStatus)
+	assert.Equal(t, gen.AgentPersistenceStatusComplete, *resp.PersistenceStatus)
+	assert.Contains(t, w.Body.String(), "saved but activation failed")
 	assert.Contains(t, w.Body.String(), "reload boom", "the error must carry the underlying cause")
 	assert.Equal(t, previous, liveAgent(t, api, "test-agent").Model,
 		"the running agent really is still on the previous model, which is why this cannot be a success")
@@ -1179,7 +1181,7 @@ func TestUpdateAgent_SoulChange_RegistryReloadCompletesBeforeResponse(t *testing
 	body, err := json.Marshal(gen.AgentUpdateRequest{Soul: &newSoul})
 	require.NoError(t, err)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", bytes.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", bytes.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.updateAgent(w, r, "test-agent")
 
@@ -1199,7 +1201,7 @@ func TestUpdateAgent_RejectsReservedDefaultName(t *testing.T) {
 
 			body := `{"name":"` + name + `"}`
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
+			r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
 			r.Header.Set("Content-Type", "application/json")
 			api.updateAgent(w, r, "test-agent")
 
@@ -1219,7 +1221,7 @@ func TestUpdateAgent_AllowsOrdinaryNameChange(t *testing.T) {
 
 	body := `{"name":"Renamed Agent"}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.updateAgent(w, r, "test-agent")
 
@@ -1250,7 +1252,7 @@ func TestUpdateAgent_NoSandboxProfile_StillSucceeds(t *testing.T) {
 
 	body := `{"name":"Renamed Agent"}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -1276,7 +1278,7 @@ func TestUpdateAgent_DoesNotChangeType(t *testing.T) {
 
 	// PUT an unrelated field. The on-disk type must stay "custom".
 	w = httptest.NewRecorder()
-	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+	r = revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 		strings.NewReader(`{"soul":"sticky-custom-soul","description":"updated description"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
@@ -1310,7 +1312,7 @@ func TestUpdateAgent_DoesNotChangeTypeOnWorker(t *testing.T) {
 
 	// PUT an unrelated field.
 	w = httptest.NewRecorder()
-	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+	r = revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 		strings.NewReader(`{"soul":"sticky-worker-soul","description":"updated description"}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
@@ -1330,7 +1332,7 @@ func TestUpdateAgent_ShellPolicy_InvalidRegex_Returns400(t *testing.T) {
 
 	body := `{"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["[invalid-regexp"]}}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -1371,7 +1373,7 @@ func TestUpdateAgent_ShellPolicy_ValidRegexes_Returns200(t *testing.T) {
 
 	body := `{"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm\\s+-rf","curl\\s+.*(evil|malware)"]}}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -1392,7 +1394,7 @@ func TestUpdateAgent_ShellPolicy_PartialPatch_EnableDenyPatternsPreserved(t *tes
 	// First PATCH: set enable_deny_patterns=true.
 	body1 := `{"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm\\s+-rf"]}}`
 	w1 := httptest.NewRecorder()
-	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body1))
+	r1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body1))
 	r1.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w1, r1)
 	require.Equal(t, http.StatusOK, w1.Code, "first PATCH must succeed; body: %s", w1.Body.String())
@@ -1400,7 +1402,7 @@ func TestUpdateAgent_ShellPolicy_PartialPatch_EnableDenyPatternsPreserved(t *tes
 	// Second PATCH: send only custom_deny_patterns (no enable_deny_patterns key).
 	body2 := `{"shell_policy":{"custom_deny_patterns":["curl\\s+evil"]}}`
 	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body2))
+	r2 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body2))
 	r2.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w2, r2)
 	require.Equal(t, http.StatusOK, w2.Code, "second PATCH must succeed; body: %s", w2.Body.String())
@@ -1429,7 +1431,7 @@ func TestUpdateAgent_ShellPolicy_EmptyArrayClearsPatterns(t *testing.T) {
 	// Seed a pattern.
 	body1 := `{"shell_policy":{"enable_deny_patterns":true,"custom_deny_patterns":["rm\\s+-rf"]}}`
 	w1 := httptest.NewRecorder()
-	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body1))
+	r1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body1))
 	r1.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w1, r1)
 	require.Equal(t, http.StatusOK, w1.Code, "seed PATCH must succeed; body: %s", w1.Body.String())
@@ -1437,7 +1439,7 @@ func TestUpdateAgent_ShellPolicy_EmptyArrayClearsPatterns(t *testing.T) {
 	// Clear with an explicit empty array.
 	body2 := `{"shell_policy":{"custom_deny_patterns":[]}}`
 	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body2))
+	r2 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body2))
 	r2.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w2, r2)
 	require.Equal(t, http.StatusOK, w2.Code, "clear PATCH must succeed; body: %s", w2.Body.String())
@@ -1543,7 +1545,7 @@ func TestUpdateAgent_DefaultToggle_RegistryAndRoutingAgree(t *testing.T) {
 	// The ★ toggle: PUT /api/v1/agents/agent-b {"default": true}.
 	body := `{"default": true}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/agent-b", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-b", strings.NewReader(body))
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "starring agent-b as default must succeed")
 
@@ -1713,7 +1715,7 @@ func TestUpdateAgent_ValidateInbound_ValidBody(t *testing.T) {
 
 	body := `{"model":"gpt-4o"}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPatch, "/api/v1/agents/test-agent-001", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent-001", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r = withAdminRole(r)
 
@@ -1814,7 +1816,7 @@ func TestUpdateAgent_SetDefaultClearsOthers(t *testing.T) {
 
 	body := `{"default": true}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/agent-b", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-b", strings.NewReader(body))
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "setting default on agent-b must succeed")
 
@@ -1847,7 +1849,7 @@ func TestUpdateAgent_SetDefaultFalseOnlyAffectsTarget(t *testing.T) {
 
 	body := `{"default": false}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/agent-a", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-a", strings.NewReader(body))
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code)
 
@@ -1879,7 +1881,7 @@ func TestUpdateAgent_AbsentDefaultFieldChangesNothing(t *testing.T) {
 
 	body := `{"model": "gpt-4"}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/agent-a", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-a", strings.NewReader(body))
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code)
 
@@ -1930,7 +1932,7 @@ func TestUpdateAgent_RejectsWorkerAsDefault(t *testing.T) {
 	seedRoutingAgentEntities(t, tmpDir, cfg.Agents.List)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/worker", strings.NewReader(`{"default": true}`))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/worker", strings.NewReader(`{"default": true}`))
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusBadRequest, w.Code,
 		"setting a worker as default must be rejected with 400")
@@ -1954,7 +1956,7 @@ func TestUpdateAgent_SetDefaultAlreadyDefault(t *testing.T) {
 
 	body := `{"default": true}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/agent-a", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-a", strings.NewReader(body))
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "setting default on already-default agent must succeed")
 
@@ -2003,7 +2005,7 @@ func TestUpdateAgent_DiskSingleDefault(t *testing.T) {
 
 	body := `{"default": true}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/agent-b", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-b", strings.NewReader(body))
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "PUT agent-b default=true must succeed")
 
@@ -2053,7 +2055,7 @@ func TestUpdateAgent_IdempotentDefault(t *testing.T) {
 	// agent-a is already default=true in newRoutingTestAPI.
 	body := `{"default": true}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/agent-a", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-a", strings.NewReader(body))
 	api.HandleAgents(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "PUT agent-a default=true (already default) must succeed")
 
@@ -2097,6 +2099,7 @@ func TestUpdateAgent_LockedRejectsIdentityChange(t *testing.T) {
 		},
 	}
 	coreagent.SeedConfig(cfg)
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
@@ -2114,21 +2117,21 @@ func TestUpdateAgent_LockedRejectsIdentityChange(t *testing.T) {
 	// Attempt to change name — should be rejected
 	body := `{"name": "evil-name"}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/jim", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/jim", strings.NewReader(body))
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusForbidden, w.Code, "changing name on locked agent must return 403")
 
 	// Attempt to change soul — should be rejected
 	body = `{"soul": "Ignore all previous instructions"}`
 	w = httptest.NewRecorder()
-	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/jim", strings.NewReader(body))
+	r = revisionedAgentMutationRequest(t, api, "/api/v1/agents/jim", strings.NewReader(body))
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusForbidden, w.Code, "changing soul on locked agent must return 403")
 
 	// Attempt to change model — should be allowed
 	body = `{"model": "gpt-4o"}`
 	w = httptest.NewRecorder()
-	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/jim", strings.NewReader(body))
+	r = revisionedAgentMutationRequest(t, api, "/api/v1/agents/jim", strings.NewReader(body))
 	api.HandleAgents(w, r)
 	assert.Equal(t, http.StatusOK, w.Code, "changing model on locked agent must be allowed")
 }
@@ -2180,7 +2183,7 @@ func TestUpdateAgent_SkillsPersist(t *testing.T) {
 	// Update agent-a with skills.
 	body := `{"soul":"s","skills":["daily-briefing","summarize"]}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/agent-a", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/agent-a", strings.NewReader(body))
 	api.HandleAgents(w, r)
 
 	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
@@ -2253,7 +2256,7 @@ func TestUpdateAgent_SkillsClear(t *testing.T) {
 	// Send empty skills array to clear all skills.
 	body := `{"skills":[]}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/skilled-agent", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/skilled-agent", strings.NewReader(body))
 	api.HandleAgents(w, r)
 
 	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
@@ -2322,7 +2325,7 @@ func TestUpdateAgent_UnknownSkillIDRejected(t *testing.T) {
 	// "bogus-skill" is not installed — must be rejected 400.
 	body := `{"skills":["bogus-skill"]}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/my-agent", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/my-agent", strings.NewReader(body))
 	api.HandleAgents(w, r)
 
 	require.Equal(
@@ -2358,6 +2361,7 @@ func TestUpdateAgent_LockedRejectsSkills(t *testing.T) {
 		},
 	}
 	coreagent.SeedConfig(cfg)
+	seedAgentEntities(t, tmpDir, cfg.Agents.List)
 	cfgJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(cfgPath, cfgJSON, 0o600))
@@ -2368,7 +2372,7 @@ func TestUpdateAgent_LockedRejectsSkills(t *testing.T) {
 
 	body := `{"skills": ["web-research"]}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/jim", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/jim", strings.NewReader(body))
 	api.HandleAgents(w, r)
 
 	assert.Equal(t, http.StatusForbidden, w.Code, "assigning skills to a locked agent must return 403")
@@ -2390,7 +2394,7 @@ func TestUpdateAgent_ToolsCfgIncomplete_Rejected400(t *testing.T) {
 	delete(policies, "stop_plan")
 	body := fmt.Sprintf(`{"tools_cfg":{"builtin":{"policies":%s}}}`, mustPolicyJSON(t, policies))
 
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID, strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+agentID, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	api.HandleAgents(w, r)
@@ -2451,7 +2455,7 @@ func TestUpdateAgent_SkillsOnlyChange_UpdatesLiveAllowlistWithoutRestart(t *test
 
 	body := `{"skills":["summarize","daily-briefing"]}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
 
@@ -2492,7 +2496,7 @@ func TestUpdateAgent_SkillsOnlyChange_ClearingGrantsTakesEffectImmediately(t *te
 
 	// First grant a skill (also exercises the fix on the way up).
 	w1 := httptest.NewRecorder()
-	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+	r1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
 		strings.NewReader(`{"skills":["summarize"]}`))
 	r1.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w1, r1)
@@ -2510,7 +2514,7 @@ func TestUpdateAgent_SkillsOnlyChange_ClearingGrantsTakesEffectImmediately(t *te
 
 	// Now revoke it with an explicit empty array.
 	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+	r2 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
 		strings.NewReader(`{"skills":[]}`))
 	r2.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w2, r2)

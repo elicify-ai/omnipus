@@ -51,15 +51,51 @@ func TestADR090UpdateAgentExplicitEmptySkillsClearsAndOmissionPreserves(t *testi
 	store := agentstore.New(api.homePath)
 	state, err := store.ReadState("test-agent")
 	require.NoError(t, err)
-	raw, _ := json.Marshal(map[string]any{"revision": state.Revision, "skills": []string{}})
+	_, err = store.MutateState("test-agent", state.Revision, func(agent *config.AgentConfig) error {
+		agent.Skills = []string{"web-research"}
+		return nil
+	}, nil)
+	require.NoError(t, err)
+	require.NoError(t, api.refreshConfigAndRewireServices(api.configPath()))
+
+	seeded, err := store.ReadState("test-agent")
+	require.NoError(t, err)
+	omissionRaw, err := json.Marshal(map[string]any{"revision": seeded.Revision, "description": "skills must survive omission"})
+	require.NoError(t, err)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", bytes.NewReader(raw))
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", bytes.NewReader(omissionRaw))
 	r.Header.Set("Content-Type", "application/json")
 	api.updateAgent(w, r, "test-agent")
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
-	after, err := store.ReadState("test-agent")
+	afterOmission, err := store.ReadState("test-agent")
 	require.NoError(t, err)
-	require.Empty(t, after.Agent.Skills)
+	require.Equal(t, []string{"web-research"}, afterOmission.Agent.Skills)
+	require.NoError(t, api.refreshConfigAndRewireServices(api.configPath()))
+	require.Equal(t, []string{"web-research"}, configuredAgent(t, api, "test-agent").Skills)
+
+	clearRaw, err := json.Marshal(map[string]any{"revision": afterOmission.Revision, "skills": []string{}})
+	require.NoError(t, err)
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", bytes.NewReader(clearRaw))
+	r.Header.Set("Content-Type", "application/json")
+	api.updateAgent(w, r, "test-agent")
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
+	afterClear, err := store.ReadState("test-agent")
+	require.NoError(t, err)
+	require.Empty(t, afterClear.Agent.Skills)
+	require.NoError(t, api.refreshConfigAndRewireServices(api.configPath()))
+	require.Empty(t, configuredAgent(t, api, "test-agent").Skills)
+}
+
+func configuredAgent(t *testing.T, api *restAPI, id string) config.AgentConfig {
+	t.Helper()
+	for _, candidate := range api.agentLoop.GetConfig().Agents.List {
+		if candidate.ID == id {
+			return candidate
+		}
+	}
+	t.Fatalf("configured agent %q not found", id)
+	return config.AgentConfig{}
 }
 
 func TestADR090UpdateAgentToolsPersistsOnlyOverrideNames(t *testing.T) {
