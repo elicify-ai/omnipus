@@ -57,6 +57,7 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
 
   it('Agent (locked core type) mock shape satisfies interface', () => {
     const mock = {
+      revision: '0'.repeat(64),
       id: 'mia',
       name: 'Mia',
       description: 'Built-in core agent with compiled prompt',
@@ -80,6 +81,7 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
 
   it('Agent (custom type) mock shape satisfies interface', () => {
     const mock = {
+      revision: '0'.repeat(64),
       id: 'my-agent',
       name: 'My Agent',
       description: '',
@@ -178,6 +180,7 @@ describe('API contract: mock shapes satisfy TypeScript interfaces', () => {
 
   it('Skill mock shape satisfies interface', () => {
     const mock = {
+      revision: '0'.repeat(64),
       id: 'my-skill',
       name: 'My Skill',
       version: '1.0.0',

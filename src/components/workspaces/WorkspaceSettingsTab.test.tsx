@@ -75,6 +75,7 @@ import * as api from '@/lib/api'
 const WORKSPACE_ID = 'ws-test-001'
 
 const mockWorkspace: Workspace = {
+  revision: '0'.repeat(64),
   id: WORKSPACE_ID,
   name: 'Test Workspace',
   description: 'A test workspace',

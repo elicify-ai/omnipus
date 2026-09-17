@@ -39,5 +39,11 @@ export function makeAgent(overrides: Partial<Agent> = {}): Agent {
     // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
     memory_enabled: true,
     ...overrides,
+    revision: overrides.revision ?? '0'.repeat(64),
+    editable_fields: overrides.editable_fields ?? [
+      'name', 'description', 'model', 'provider', 'fallback_models', 'model_params',
+      'soul', 'memory_enabled', 'voice', 'max_tool_iterations',
+      'context_window_override', 'shell_policy', 'skills', 'tools_cfg', 'executor', 'default',
+    ].map((name) => ({ name, editable: true })),
   }
 }

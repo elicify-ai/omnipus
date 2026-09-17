@@ -110,6 +110,19 @@ describe('useChatAgents — status + worker scoping (no workspace set)', () => {
     await waitFor(() => { expect(result.current.chatAgents).toHaveLength(2) })
     expect(result.current.chatAgents.map((a) => a.id).sort()).toEqual(['jim', 'mia'])
   })
+
+  it('includes Admin but excludes a retired locked Ray record by built-in identity', async () => {
+    vi.mocked(fetchAgents).mockResolvedValue([
+      makeAgent({ id: 'admin', name: 'Admin', type: 'core', locked: true, status: 'idle' }),
+      makeAgent({ id: 'ray', name: 'Ray', type: 'core', locked: true, status: 'idle' }),
+    ])
+    vi.mocked(fetchWorkspaces).mockResolvedValue([])
+
+    const { result } = renderHook(() => useChatAgents(), { wrapper: makeWrapper(makeClient()) })
+
+    await waitFor(() => expect(result.current.agents).toHaveLength(2))
+    expect(result.current.chatAgents.map((agent) => agent.id)).toEqual(['admin'])
+  })
 })
 
 describe('useChatAgents — core_team scoping', () => {

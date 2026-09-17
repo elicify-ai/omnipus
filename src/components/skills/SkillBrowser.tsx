@@ -40,6 +40,7 @@ import {
   installSkillBySlug,
   searchSkills,
   fetchSkillMarketplaceStatus,
+  fetchSkills,
   isApiError,
 } from '@/lib/api'
 import type { SkillSearchResult, SkillMarketplaceStatus } from '@/lib/api'
@@ -144,6 +145,11 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
   // Track which slugs have been installed in this session so the row flips to
   // "Installed" even before the search list is re-fetched.
   const [installedSlugs, setInstalledSlugs] = useState<Set<string>>(new Set())
+  const { data: installedSkills = [] } = useQuery({
+    queryKey: ['skills'],
+    queryFn: fetchSkills,
+    enabled: open,
+  })
 
   // If a search/install returns 409 mid-session (the marketplace was disabled
   // after the dialog opened), flip to file-only locally so we stop offering a
@@ -218,7 +224,11 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
   const { mutate: doInstallBySlug, variables: installingSlug, isPending: isSlugInstalling } =
     useMutation({
       mutationFn: ({ slug, version }: { slug: string; version?: string }) =>
-        installSkillBySlug(slug, version),
+        installSkillBySlug(
+          slug,
+          version,
+          installedSkills.find((skill) => skill.id === slug)?.revision,
+        ),
       onSuccess: (_skill, { slug }) => {
         setInstalledSlugs((prev) => new Set(prev).add(slug))
         queryClient.invalidateQueries({ queryKey: ['skills'] })

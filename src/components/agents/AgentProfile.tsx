@@ -61,8 +61,11 @@ import {
   fetchSkills,
   testAgentRunner,
   workspacesQueryKeys,
+  getCsrfCookie,
+  CSRF_HEADER_NAME,
   type ActivityEvent,
   type AgentToolsCfg,
+  type Agent,
   type Skill,
   type ExecutorConfig,
   type ExecutorCommandPreviewRequest,
@@ -81,6 +84,7 @@ import { useCliDetect } from '@/hooks/useCliDetect'
 import { buildExecutorPreviewRequest } from '@/hooks/useCommandPreview'
 import { detectEntryFor, resolveCliDetectHint } from '@/lib/cliDetect'
 import { CONTEXT_WINDOW_SOURCE_LABEL } from '@/components/settings/ContextSection'
+import { buildAgentUpdate } from './agentDraft'
 
 /** Editor's fallback entry — `FallbackModel` from the contract with `provider` narrowed to required (the editor always populates it at hydration). */
 type FallbackEntry = FallbackModel & { provider: string }
@@ -144,6 +148,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     queryFn: () => fetchAgent(agentId as string),
     enabled: agentId !== null,
   })
+  const editableFields = useMemo(
+    () => new Set((agent?.editable_fields ?? []).filter((field) => field.editable).map((field) => field.name)),
+    [agent?.editable_fields],
+  )
+  const isFieldEditable = (field: string) => editableFields.has(field)
+  const reviewedAgentRef = useRef(agent)
 
   const { data: providers = [], isError: providersError } = useQuery({
     queryKey: ['providers'],
@@ -343,10 +353,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const [temperature, setTemperature] = useState(1.0)
   const [maxTokens, setMaxTokens] = useState(4096)
   const [advancedOpen, setAdvancedOpen] = useState(false)
-  const [useGlobalRateLimits, setUseGlobalRateLimits] = useState(true)
-  const [maxLlmCallsPerHour, setMaxLlmCallsPerHour] = useState<number | ''>('')
-  const [maxToolCallsPerMinute, setMaxToolCallsPerMinute] = useState<number | ''>('')
-  const [maxCostPerDay, setMaxCostPerDay] = useState<number | ''>('')
   const [soul, setSoul] = useState('')
   // ADR-052 FR-039: per-agent memory-injection gate. Defaults to true (the
   // wire default for ordinary agents); the seeded Judge (and any future
@@ -360,7 +366,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // Schema-pinned on Agent.voice; not active until v0.2.0 TTS. Empty string
   // means "not configured" — the wire payload omits the field entirely.
   const [voice, setVoice] = useState('')
-  const [timeoutSeconds, setTimeoutSeconds] = useState(0)
   const [maxToolIterations, setMaxToolIterations] = useState(200)
   // Draft strings for the two number inputs. A controlled number input backed
   // directly by the committed number turns "clear the field to type" into
@@ -369,7 +374,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // default were zero-clobbered on a live install). The draft absorbs
   // in-progress typing; only a VALID value commits (and autosaves); blur with
   // an invalid/empty draft restores the last committed value.
-  const [timeoutDraft, setTimeoutDraft] = useState('0')
   const [maxToolIterationsDraft, setMaxToolIterationsDraft] = useState('200')
   // ADR-066 D9 (T068-30): per-agent context-window override (D2 rung 1,
   // lower-only — the backend clamps to the model's capability). Three-valued
@@ -593,10 +597,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     )
     setTemperature(agent.model_params?.temperature ?? 1.0)
     setMaxTokens(agent.model_params?.max_tokens ?? 4096)
-    setUseGlobalRateLimits(agent.rate_limits?.use_global_defaults ?? true)
-    setMaxLlmCallsPerHour(agent.rate_limits?.max_llm_calls_per_hour ?? '')
-    setMaxToolCallsPerMinute(agent.rate_limits?.max_tool_calls_per_minute ?? '')
-    setMaxCostPerDay(agent.rate_limits?.max_cost_per_day ?? '')
     setSoul(agent.soul ?? '')
     // ADR-052 FR-039: the wire field is required (non-nullable) on GET, but
     // hydrate defensively for any test double / legacy snapshot that omits it.
@@ -607,8 +607,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     // renders 3 spaces and the wire round-trip is clean (whitespace was
     // silently reaching the server).
     setVoice((agent.voice ?? '').trim())
-    setTimeoutSeconds(agent.timeout_seconds ?? 0)
-    setTimeoutDraft(String(agent.timeout_seconds ?? 0))
     setMaxToolIterations(agent.max_tool_iterations ?? 200)
     setMaxToolIterationsDraft(String(agent.max_tool_iterations ?? 200))
     setContextWindowOverride(agent.context_window_override ?? undefined)
@@ -622,6 +620,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     }))
     // US-E6: hydrate agent skills from the API response (default none).
     setAgentSkills(agent.skills ?? [])
+    reviewedAgentRef.current = agent
     hasHydrated.current = true
     // D3 fix: flip the reactive readiness flag as the LAST line of this
     // effect, after every setState call above — React batches all of these
@@ -660,7 +659,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     ? buildExecutorPreviewRequest(executor.cli, model, executor.cli_path, executor.cli_args)
     : undefined
 
-  const timeoutPayload = timeoutSeconds > 0 ? timeoutSeconds : undefined
   const formData = useMemo(() => {
     // Spec-4 FR-4.1: subagent_3p agents run inside an external CLI, so many
     // Omnipus-native fields are irrelevant or explicitly rejected by the
@@ -669,12 +667,6 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     const identity = isSubagent3p
       ? { name, description, color: selectedColor, icon: selectedIcon }
       : { name, description, color: selectedColor, icon: selectedIcon, default: isDefault }
-    const rateLimits = {
-      use_global_defaults: useGlobalRateLimits,
-      max_llm_calls_per_hour: maxLlmCallsPerHour !== '' ? maxLlmCallsPerHour : undefined,
-      max_tool_calls_per_minute: maxToolCallsPerMinute !== '' ? maxToolCallsPerMinute : undefined,
-      max_cost_per_day: maxCostPerDay !== '' ? maxCostPerDay : undefined,
-    }
     if (isSubagent3p) {
       // agent-types-field-matrix.md, Decisions #1 (resolved 2026-07-03):
       // excluded — subagent_3p EXCLUDES max_tool_iterations — the external
@@ -685,14 +677,12 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         ...identity,
         model,
         // O3 two-field: include provider only when non-empty.
-        provider: primaryProvider.trim() !== '' ? primaryProvider.trim() : undefined,
+        provider: primaryProvider.trim(),
         soul,
         // ADR-052 FR-039: allowed on all agents, including subagent_3p — not
         // one of firstForbiddenSubagent3pField's rejected fields
         // (pkg/gateway/agent_field_rules.go).
         memory_enabled: memoryEnabled,
-        rate_limits: rateLimits,
-        timeout_seconds: timeoutPayload,
         executor,
       }
     }
@@ -700,12 +690,11 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       ...identity,
       model,
       // O3 two-field: include provider only when non-empty.
-      provider: primaryProvider.trim() !== '' ? primaryProvider.trim() : undefined,
+      provider: primaryProvider.trim(),
       // Editor state matches the wire shape 1:1; emit `undefined` for
       // empty (treated as "no fallbacks" by the backend).
-      fallback_models: fallbackModels.length > 0 ? fallbackModels : undefined,
+      fallback_models: fallbackModels,
       model_params: { temperature, max_tokens: maxTokens },
-      rate_limits: rateLimits,
       soul,
       // ADR-052 FR-039: "Allowed on all agents" per AgentUpdateRequest.yaml —
       // including locked/system agents (the Judge). Always sent (not
@@ -738,8 +727,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // would also require branching the trim by tier inside saveFn (this
       // form's `data` shape differs for subagent_3p vs. not) for marginal
       // benefit given the existing shield — not done.
-      voice: voice.trim() !== '' ? voice.trim() : undefined,
-      timeout_seconds: timeoutPayload,
+      voice: voice.trim() !== '' ? voice.trim() : null,
       max_tool_iterations: maxToolIterations,
       // ADR-066 D9 / FR-037: omitted when untouched-and-absent (undefined is
       // dropped by JSON.stringify), null to clear, number to set. Not sent
@@ -768,9 +756,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
     }
   }, [
     agent?.type, name, description, model, primaryProvider, selectedColor, selectedIcon, isDefault, fallbackModels,
-    temperature, maxTokens, useGlobalRateLimits, maxLlmCallsPerHour,
-    maxToolCallsPerMinute, maxCostPerDay, soul, memoryEnabled, voice,
-    timeoutPayload, timeoutSeconds, maxToolIterations, contextWindowOverride,
+    temperature, maxTokens, soul, memoryEnabled, voice,
+    maxToolIterations, contextWindowOverride,
     shellDenyPatterns,
     agentSkills, executor,
   ])
@@ -862,53 +849,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           testedExecutorSig.current = sig
         }
       }
-      // Locked agents: strip every field the backend actually treats as
-      // immutable for the locked roster (`pkg/gateway/rest.go`'s locked
-      // reject-set, ~2458: Name / Description / Soul / Color / Icon /
-      // Skills only — "cannot modify locked agent identity or prompt").
-      // Sending one of THOSE yields a 403, and the autosave indicator would
-      // surface a spurious error. Skills are stripped here (B-2
-      // defense-in-depth on the frontend side): the Skills picker is
-      // rendered disabled for locked agents, so this strip is the
-      // belt-and-suspenders path for any state that may survive hydration.
-      // shell_policy is NOT stripped (live bug fix, 2026-07-03):
-      // it was never in the backend's reject-set either, so stripping it
-      // here silently discarded every locked-agent shell-deny-pattern edit
-      // before it reached the wire — the editor rendered interactive but
-      // nothing ever persisted.
-      // Note: tools_cfg is no longer in formData (it has its own re-auth-gated
-      // endpoint via ToolsAndPermissions) so it does not need stripping here.
-      //
-      // ADR-052 FR-038 (soul/rubric unification): `soul` is EXEMPT from this
-      // strip for a System Agent (the Judge) — the backend's updateAgent
-      // carve-out (`foundAgent.IsSystem()`, pkg/gateway/rest.go) now accepts
-      // `soul` for a locked System Agent while every other identity field
-      // stays rejected. Stripping it here unconditionally for every locked
-      // agent (the pre-Fix-Wave-2 behaviour) would silently drop the exact
-      // edit the now-editable soul textarea invites the operator to make —
-      // the same "dead interaction" class this strip exists to prevent in
-      // the other direction.
-      const stripSoulToo = !(agent && agentKindFlags(agent).isSystem)
-      const stripLockedIdentityFields = (raw: Record<string, unknown>): Record<string, unknown> => {
-        const rest = { ...raw }
-        const soulField = rest.soul
-        delete rest.name
-        delete rest.description
-        delete rest.soul
-        delete rest.color
-        delete rest.icon
-        delete rest.skills
-        delete rest.executor
-        return stripSoulToo ? rest : { ...rest, soul: soulField }
-      }
-      const stripped = agent?.locked
-        ? stripLockedIdentityFields(data as Record<string, unknown>)
-        : data
-      // W6-contracts: include updated_at from the last GET response so the
-      // backend can reject stale writes with 409 Conflict.
-      const payload = { ...stripped, updated_at: agent?.updated_at }
+      const reviewedAgent = reviewedAgentRef.current
+      if (!reviewedAgent) return
+      const payload = buildAgentUpdate(reviewedAgent, data as Record<string, unknown>)
+      if (!payload) return
       try {
         const resp = await updateAgent(agentId, payload)
+        queryClient.invalidateQueries({ queryKey: ['agent-tools', agentId] })
         // I2 / UAT data-loss fix (passive fallback_models repro): seed the
         // query cache with the FULL PUT response — `PUT /agents/{id}`
         // contractually "returns the complete updated agent object"
@@ -949,6 +896,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         // no gap between "we know what we just saved" and "the hydration
         // effect is willing to trust it."
         if (resp) {
+          reviewedAgentRef.current = resp
           queryClient.setQueryData(['agent', agentId], resp)
           if (resp.updated_at) lastIncorporatedUpdatedAtRef.current = resp.updated_at
         }
@@ -1043,7 +991,28 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       // credentials:'include' + echoes the CSRF cookie on this PUT) —
       // sendBeacon can't carry either, which is why useAutoSave uses fetch
       // keepalive instead. No client-side token to pass through anymore.
-      flushUrl: agentId !== null ? `/api/v1/agents/${agentId}` : undefined,
+      beaconFlush: () => {
+        const reviewedAgent = reviewedAgentRef.current
+        if (!reviewedAgent || agentId === null) return
+        let payload
+        try {
+          payload = buildAgentUpdate(reviewedAgent, formData as Record<string, unknown>)
+        } catch (error) {
+          console.error('AgentProfile: pagehide flush refused an invalid draft', error)
+          return
+        }
+        if (!payload) return
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+        const csrf = getCsrfCookie()
+        if (csrf) headers[CSRF_HEADER_NAME] = csrf
+        void fetch(`/api/v1/agents/${encodeURIComponent(agentId)}`, {
+          method: 'PUT',
+          keepalive: true,
+          credentials: 'include',
+          headers,
+          body: JSON.stringify(payload),
+        }).catch((error) => console.error('AgentProfile: pagehide flush failed', error))
+      },
       // Finding A (7-reviewer-gate, fix/uat-v0.1.1-defects):
       // `openEditAgentSlideOver` (the raw Zustand setter behind
       // `editAgentId`) has THREE call sites — the deep-link route
@@ -1218,7 +1187,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   // the operator on the same page). The button itself is hidden for
   // locked agents (see SheetFooter below).
   const deleteAgentMutation = useMutation({
-    mutationFn: (id: string) => deleteAgent(id),
+    mutationFn: (id: string) => {
+      if (!agent?.revision) throw new Error('Agent has no reviewed revision. Reload before deleting.')
+      return deleteAgent(id, agent.revision)
+    },
     onSuccess: () => {
       // Drop the deleted agent from the list cache immediately so no
       // per-id GET refetch fires for a resource that no longer exists.
@@ -1266,6 +1238,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
         } satisfies WorkspaceMemberConfig,
       }
       return updateWorkspace(editAgentWorkspaceId, {
+        revision: workspaceData.revision,
         member_configs: updatedMemberConfigs as Record<string, WorkspaceMemberConfig>,
       } as Parameters<typeof updateWorkspace>[1])
     },
@@ -1393,9 +1366,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 <Input
                   data-testid="agent-name-input"
                   value={name}
-                  disabled={isLocked}
-                  readOnly={isLocked}
-                  onChange={isLocked ? undefined : (e) => { markDirty(); setName(e.target.value) }}
+                  disabled={!isFieldEditable('name')}
+                  readOnly={!isFieldEditable('name')}
+                  onChange={!isFieldEditable('name') ? undefined : (e) => { markDirty(); setName(e.target.value) }}
                   placeholder="Agent name"
                   className="text-sm"
                 />
@@ -1406,9 +1379,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 <Textarea
                   data-testid="agent-description-input"
                   value={description}
-                  disabled={isLocked}
-                  readOnly={isLocked}
-                  onChange={isLocked ? undefined : (e) => { markDirty(); setDescription(e.target.value) }}
+                  disabled={!isFieldEditable('description')}
+                  readOnly={!isFieldEditable('description')}
+                  onChange={!isFieldEditable('description') ? undefined : (e) => { markDirty(); setDescription(e.target.value) }}
                   placeholder="Short description of this agent's purpose"
                   rows={2}
                   className="text-sm resize-none"
@@ -1443,6 +1416,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   <Switch
                     data-testid="default-toggle"
                     checked={isDefault}
+                    disabled={!isFieldEditable('default')}
                     onCheckedChange={(v) => {
                       markDirty()
                       setIsDefault(v)
@@ -1461,7 +1435,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                   interactive picker (which has no readOnly mode). */}
               <div className="space-y-1.5">
                 <p className="text-xs text-[var(--color-muted)]">Avatar color</p>
-                {isLocked ? (
+                {!isFieldEditable('color') ? (
                   <div className="flex items-center gap-2" data-testid="avatar-color-readonly">
                     <span
                       className="w-7 h-7 rounded-full shrink-0 border border-[var(--color-border)]"
@@ -1482,7 +1456,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               </div>
               <div className="space-y-1.5">
                 <p className="text-xs text-[var(--color-muted)]">Avatar icon</p>
-                {isLocked ? (
+                {!isFieldEditable('icon') ? (
                   <div className="flex items-center gap-2" data-testid="avatar-icon-readonly">
                     {(() => {
                       const ReadOnlyIcon = getIconComponent(selectedIcon)
@@ -1521,6 +1495,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 <Input
                   data-testid="external-model-input"
                   value={model}
+                  disabled={!isFieldEditable('model')}
                   onChange={(e) => { markDirty(); setModel(e.target.value) }}
                   placeholder="claude-sonnet-4-6"
                   className="text-sm font-mono"
@@ -1551,6 +1526,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               // instead of being hidden behind a disabled placeholder).
               allowFreeTextWhenEmpty={providersError}
               emptyCatalogHint="Connect a provider in Settings to pick a model"
+              disabled={!isFieldEditable('model')}
             />
             )}
             {/* Sampling parameters — collapsed disclosure. Operator decision
@@ -1585,6 +1561,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     step={0.05}
                     onChange={(v) => { markDirty(); setTemperature(v) }}
                     format={(v) => v.toFixed(2)}
+                    disabled={!isFieldEditable('model_params')}
                   />
                   <RangeField
                     label="Max tokens"
@@ -1595,6 +1572,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     step={256}
                     onChange={(v) => { markDirty(); setMaxTokens(v) }}
                     format={(v) => v.toLocaleString()}
+                    disabled={!isFieldEditable('model_params')}
                   />
                 </div>
               )}
@@ -1614,7 +1592,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
           <section className="space-y-3">
             <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Fallback models</p>
             <p className="text-xs text-[var(--color-muted)]">Tried in order if the primary model fails.</p>
-            {isLocked ? (
+            {!isFieldEditable('fallback_models') ? (
               <div
                 data-testid="fallback-summary-locked-basics"
                 className="space-y-2 p-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)]"
@@ -1683,6 +1661,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                           data-testid={`fallback-provider-select-${entry.model}`}
                           aria-label={`Provider for fallback ${entry.model}`}
                           value={entry.provider}
+                          disabled={!isFieldEditable('fallback_models')}
                           onChange={(e) => { markDirty(); setFallbackProvider(entry.model, e.target.value) }}
                           className="appearance-none bg-transparent text-[var(--color-muted)] hover:text-[var(--color-secondary)] pl-1 pr-3 py-0 text-[9px] focus-visible:border-[var(--color-accent)] rounded cursor-pointer"
                         >
@@ -1708,7 +1687,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         type="button"
                         data-testid={`fallback-chip-up-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} up`}
-                        disabled={idx === 0}
+                        disabled={!isFieldEditable('fallback_models') || idx === 0}
                         onClick={() => { markDirty(); moveFallback(entry.model, -1) }}
                         className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
@@ -1718,7 +1697,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         type="button"
                         data-testid={`fallback-chip-down-${entry.model}`}
                         aria-label={`Move fallback ${entry.model} down`}
-                        disabled={idx === fallbackModels.length - 1}
+                        disabled={!isFieldEditable('fallback_models') || idx === fallbackModels.length - 1}
                         onClick={() => { markDirty(); moveFallback(entry.model, 1) }}
                         className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-[var(--color-muted)] pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
@@ -1728,6 +1707,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                         type="button"
                         data-testid={`fallback-chip-remove-${entry.model}`}
                         aria-label={`Remove fallback ${entry.model}`}
+                        disabled={!isFieldEditable('fallback_models')}
                         onClick={() => { markDirty(); removeFallback(entry.model) }}
                         className="inline-flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-error)] transition-colors pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]"
                       >
@@ -1760,6 +1740,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     itemTestIdPrefix="fallback-add-item-"
                     constrainToCatalog
                     emptyCatalogHint="Connect a provider to add fallbacks"
+                    disabled={!isFieldEditable('fallback_models')}
                   />
                 </div>
               </div>
@@ -1808,8 +1789,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             <Switch
               data-testid="memory-toggle"
               checked={memoryEnabled}
-              disabled={isSystemAgent}
-              onCheckedChange={isSystemAgent ? undefined : (v) => { markDirty(); setMemoryEnabled(v) }}
+              disabled={!isFieldEditable('memory_enabled')}
+              onCheckedChange={!isFieldEditable('memory_enabled') ? undefined : (v) => { markDirty(); setMemoryEnabled(v) }}
               aria-label={
                 isSystemAgent
                   // Static, truthful label: this switch is permanently
@@ -1841,7 +1822,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             // Judge's soul IS its operator-editable verification rubric —
             // identity (name/description/color/icon/skills) stays locked,
             // soul does not. See the System-agent banner below.
-            soulReadOnly={isLocked && !isSystemAgent}
+            soulReadOnly={!isFieldEditable('soul')}
           />
 
           {/* Heartbeat — moved to per-workspace Heartbeat tab (spec A1/F-10).
@@ -1877,8 +1858,17 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 agentId={agentId}
                 agentType={agent.type}
                 isLocked={isLocked}
+                isEditable={isFieldEditable('tools_cfg')}
                 tools={toolsCfg}
                 onChange={setToolsCfg}
+                onRevisionChange={(revision) => {
+                  if (reviewedAgentRef.current) {
+                    reviewedAgentRef.current = { ...reviewedAgentRef.current, revision }
+                  }
+                  queryClient.setQueryData<Agent>(['agent', agentId], (current) =>
+                    current ? { ...current, revision } : current,
+                  )
+                }}
               />
             </section>
           )}
@@ -1908,7 +1898,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 )}
               </div>
               <div className="space-y-3">
-                {isLocked ? (
+                {!isFieldEditable('skills') ? (
                   <p className="text-xs text-[var(--color-muted)]">
                     Skill assignment is read-only for locked core agents.
                   </p>
@@ -1933,13 +1923,13 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       return (
                         <label
                           key={skill.id}
-                          className={`flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 transition-colors ${isLocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-3)]'}`}
+                          className={`flex items-start gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 transition-colors ${!isFieldEditable('skills') ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-[var(--color-surface-3)]'}`}
                         >
                           <input tabIndex={0}
                             type="checkbox"
                             checked={granted}
-                            disabled={isLocked}
-                            onChange={isLocked ? undefined : (e) => {
+                            disabled={!isFieldEditable('skills')}
+                            onChange={!isFieldEditable('skills') ? undefined : (e) => {
                               markDirty()
                               if (e.target.checked) {
                                 setAgentSkills((prev) => [...prev, skill.id])
@@ -2036,7 +2026,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     }}
                     placeholder="/usr/local/bin/claude"
                     className="text-xs h-8 font-mono"
-                    disabled={isLocked}
+                    disabled={!isFieldEditable('executor')}
                   />
                 </div>
                 <CliPathValidationHint
@@ -2059,7 +2049,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       env_overrides: next,
                     }))
                   }}
-                  disabled={isLocked}
+                  disabled={!isFieldEditable('executor')}
                 />
               </div>
               <div data-testid="profile-cli-args" className="space-y-1.5">
@@ -2074,7 +2064,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     }}
                     placeholder="e.g. --add-dir /extra/path"
                     className="text-xs h-8 font-mono"
-                    disabled={isLocked}
+                    disabled={!isFieldEditable('executor')}
                   />
                 </div>
                 <p className="text-[11px] text-[var(--color-muted)] leading-snug">
@@ -2091,112 +2081,10 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
   const advancedPanel = (
     <div className="space-y-6">
 
-          {/* Rate Limits — editable for ALL agents including locked core
-              agents (operator decision 2026-07-03: rate_limits is mutable on
-              the backend for locked agents — only identity/soul/skills are
-              403'd). */}
-          <section className="space-y-3">
-              <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Rate Limits</p>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between py-1">
-                  <div>
-                    <p className="text-sm text-[var(--color-secondary)]">Use global defaults</p>
-                    <p className="text-xs text-[var(--color-muted)]">Inherit rate limits from global settings</p>
-                  </div>
-                  <Switch
-                    checked={useGlobalRateLimits}
-                    onCheckedChange={(v) => { markDirty(); setUseGlobalRateLimits(v) }}
-                    aria-label={useGlobalRateLimits ? 'Stop using global rate-limit defaults' : 'Use global rate-limit defaults'}
-                  />
-                </div>
-                {!useGlobalRateLimits && (
-                  <div className="space-y-2">
-                    <div className="flex items-center gap-3">
-                      <label htmlFor="profile-rate-limit-llm-calls" className="text-xs text-[var(--color-muted)] w-44 shrink-0">LLM calls / hour</label>
-                      <Input
-                        id="profile-rate-limit-llm-calls"
-                        type="number"
-                        min={0}
-                        value={maxLlmCallsPerHour}
-                        onChange={(e) => { markDirty(); setMaxLlmCallsPerHour(e.target.value === '' ? '' : Number(e.target.value)) }}
-                        placeholder="Unlimited"
-                        className="text-xs h-8"
-                      />
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <label htmlFor="profile-rate-limit-tool-calls" className="text-xs text-[var(--color-muted)] w-44 shrink-0">Tool calls / minute</label>
-                      <Input
-                        id="profile-rate-limit-tool-calls"
-                        type="number"
-                        min={0}
-                        value={maxToolCallsPerMinute}
-                        onChange={(e) => { markDirty(); setMaxToolCallsPerMinute(e.target.value === '' ? '' : Number(e.target.value)) }}
-                        placeholder="Unlimited"
-                        className="text-xs h-8"
-                      />
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <label htmlFor="profile-rate-limit-max-cost" className="text-xs text-[var(--color-muted)] w-44 shrink-0">Max cost / day ($)</label>
-                      <Input
-                        id="profile-rate-limit-max-cost"
-                        type="number"
-                        min={0}
-                        step={0.01}
-                        value={maxCostPerDay}
-                        onChange={(e) => { markDirty(); setMaxCostPerDay(e.target.value === '' ? '' : Number(e.target.value)) }}
-                        placeholder="Unlimited"
-                        className="text-xs h-8"
-                      />
-                    </div>
-                  </div>
-                )}
-              </div>
-          </section>
-
-          {/* Execution — ALL agents including locked core agents (operator
-              decision 2026-07-03: timeout/max-tool-iterations are
-              mutable on the backend for locked agents). Max tool calls
-              is further hidden for subagent_3p (see below). */}
+          {/* Execution tuning supported by the backend field descriptors. */}
           <section className="space-y-3">
               <p className="font-headline font-semibold text-[14px] text-[var(--color-secondary)]">Execution</p>
               <div className="space-y-3 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-4">
-                <div className="flex items-center gap-3">
-                  <label htmlFor="agent-timeout-input" className="text-xs text-[var(--color-muted)] w-44 shrink-0">
-                    Turn timeout
-                    <span className="block text-[10px] text-[var(--color-muted)]/70">
-                      Max seconds per turn. 0 = no limit.
-                    </span>
-                  </label>
-                  <Input
-                    id="agent-timeout-input"
-                    type="number"
-                    min={0}
-                    data-testid="agent-timeout-input"
-                    value={timeoutDraft}
-                    onChange={(e) => {
-                      const raw = e.target.value
-                      // Item 5 (draft-field dirty gap): mark dirty on EVERY
-                      // keystroke, not only once the draft commits to a
-                      // valid value. `markDirty()` only gates hydration —
-                      // it triggers no save on its own — so this is safe;
-                      // without it, an external hydration mid-edit (while
-                      // the draft holds an invalid/partial value that
-                      // hasn't committed to `timeoutSeconds` yet) could
-                      // silently reset the field the operator is still
-                      // typing into.
-                      markDirty()
-                      setTimeoutDraft(raw)
-                      const parsed = Number(raw)
-                      // Commit (and autosave) only a real value; in-progress
-                      // typing (empty/partial input) never persists.
-                      if (raw !== '' && Number.isInteger(parsed) && parsed >= 0) {
-                        setTimeoutSeconds(parsed)
-                      }
-                    }}
-                    onBlur={() => setTimeoutDraft(String(timeoutSeconds))}
-                    className="text-xs h-8"
-                  />
-                </div>
                 {/* Max tool calls per turn — excluded for subagent_3p
                     (agent-types-field-matrix.md, Decisions #1 (resolved
                     2026-07-03): excluded): the external CLI runs its own
@@ -2233,6 +2121,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                       }}
                       onBlur={() => setMaxToolIterationsDraft(String(maxToolIterations))}
                       className="text-xs h-8"
+                      disabled={!isFieldEditable('max_tool_iterations')}
                     />
                   </div>
                 )}
@@ -2280,6 +2169,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                           contextWindowOverride != null ? String(contextWindowOverride) : '',
                         )}
                         className="text-xs h-8"
+                        disabled={!isFieldEditable('context_window_override')}
                       />
                     </div>
                     {agent?.context_window_effective !== undefined && (
@@ -2335,6 +2225,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                     <ShellDenyPatternsEditor
                       value={shellDenyPatterns}
                       onChange={(patterns) => { markDirty(); setShellDenyPatterns(patterns) }}
+                      disabled={!isFieldEditable('shell_policy')}
                     />
                   </div>
                 )}
@@ -2370,7 +2261,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <ExecutorSelector
                 value={executor}
                 agentId={resolvedAgentId}
-                disabled={isLocked}
+                disabled={!isFieldEditable('executor')}
                 onChange={(next) => { markDirty(); setExecutor(next) }}
               />
             </section>
@@ -2989,9 +2880,10 @@ interface RangeFieldProps {
   step: number
   onChange: (v: number) => void
   format: (v: number) => string
+  disabled?: boolean
 }
 
-function RangeField({ label, caption, value, min, max, step, onChange, format }: RangeFieldProps) {
+function RangeField({ label, caption, value, min, max, step, onChange, format, disabled }: RangeFieldProps) {
   return (
     <div className="space-y-1 pt-3">
       <div className="flex items-center justify-between">
@@ -3011,6 +2903,7 @@ function RangeField({ label, caption, value, min, max, step, onChange, format }:
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
+        disabled={disabled}
         className="w-full h-1.5 rounded-full appearance-none cursor-pointer"
         style={{
           background: `linear-gradient(to right, var(--color-accent) 0%, var(--color-accent) ${((value - min) / (max - min)) * 100}%, var(--color-border) ${((value - min) / (max - min)) * 100}%, var(--color-border) 100%)`,

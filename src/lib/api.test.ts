@@ -540,7 +540,7 @@ describe('Security API helpers', () => {
       fetchSpy.mockResolvedValueOnce(make204Response())
 
       const { deleteSkill } = await import('./api')
-      await expect(deleteSkill('my-skill')).resolves.toBeUndefined()
+      await expect(deleteSkill('my-skill', 'a'.repeat(64))).resolves.toBeUndefined()
     })
 
     it('deleteMcpServer resolves successfully on a real 204', async () => {
@@ -2452,7 +2452,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
   describe('fetchSkills (tolerant installed-skills list)', () => {
     it('keeps valid skills and drops a malformed one (one bad skill must not hide the whole list)', async () => {
       const payload = [
-        { id: 'good', name: 'Good', version: '2.1.0', verified: false, status: 'active', source: 'global' },
+        { revision: '0'.repeat(64), id: 'good', name: 'Good', version: '2.1.0', verified: false, status: 'active', source: 'global' },
         // Structurally invalid: missing required version/verified/status.
         { id: 'bad', name: 'Bad' },
       ]
@@ -2467,7 +2467,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
 
     it('accepts a non-semver version like "1.0" (ClawHub versions are arbitrary)', async () => {
       const payload = [
-        { id: 'cw', name: 'ClawHub Skill', version: '1.0', verified: false, status: 'active', source: 'global' },
+        { revision: '0'.repeat(64), id: 'cw', name: 'ClawHub Skill', version: '1.0', verified: false, status: 'active', source: 'global' },
       ]
       fetchSpy.mockResolvedValueOnce(makeOkResponse(payload))
 
@@ -2488,6 +2488,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
     it('merges last_invoked from the raw response even though the Skill schema does not declare it', async () => {
       const payload = [
         {
+          revision: '0'.repeat(64),
           id: 'release-notes',
           name: 'Release Notes',
           version: '1.0.0',
@@ -2497,6 +2498,7 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
           last_invoked: '2026-08-15T10:00:00Z',
         },
         {
+          revision: '0'.repeat(64),
           id: 'never-called',
           name: 'Never Called',
           version: '1.0.0',
@@ -2560,6 +2562,10 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
 
   describe('installSkillBySlug', () => {
     const okSkill = {
+      revision: 'b'.repeat(64),
+      persistence_status: 'complete',
+      activation_status: 'active',
+      changed_fields: ['skill'],
       id: 'web-search',
       name: 'web-search',
       version: '1.4.0',
@@ -2587,6 +2593,16 @@ describe('Skill registry helpers (ClawHub search + install-by-slug)', () => {
       await installSkillBySlug('web-search', '1.4.0')
       const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
       expect(JSON.parse(init.body as string)).toEqual({ slug: 'web-search', version: '1.4.0' })
+    })
+
+    it('includes the reviewed revision when replacing an installed skill', async () => {
+      fetchSpy.mockResolvedValueOnce(makeOkResponse(okSkill))
+      const { installSkillBySlug } = await import('./api')
+      await installSkillBySlug('web-search', '1.4.0', 'a'.repeat(64))
+      const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+      expect(JSON.parse(init.body as string)).toEqual({
+        slug: 'web-search', version: '1.4.0', revision: 'a'.repeat(64),
+      })
     })
 
     it('propagates a 409 (already installed) as a typed ApiError', async () => {

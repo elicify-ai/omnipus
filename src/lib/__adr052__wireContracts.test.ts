@@ -89,6 +89,7 @@ function baseSession(overrides: Record<string, unknown> = {}) {
 
 function baseAgent(overrides: Record<string, unknown> = {}) {
   return {
+    revision: '0'.repeat(64),
     id: 'judge',
     name: 'Judge',
     type: 'system',
@@ -97,6 +98,7 @@ function baseAgent(overrides: Record<string, unknown> = {}) {
     soul: 'You are a skeptical, evidence-first verifier.',
     timeout_seconds: 120,
     max_tool_iterations: 10,
+    memory_enabled: true,
     // A-CONTRACT (ADR-068 FR-038): needs_model is required on every Agent.
     needs_model: false,
     ...overrides,
@@ -265,9 +267,10 @@ describe('ADR-052 FR-039 — Agent.memory_enabled wire contract', () => {
   })
 
   it('AgentUpdateRequest also carries memory_enabled as a plain optional boolean', () => {
-    const okTrue = AgentUpdateRequestSchema.safeParse({ memory_enabled: true })
-    const okFalse = AgentUpdateRequestSchema.safeParse({ memory_enabled: false })
-    const bad = AgentUpdateRequestSchema.safeParse({ memory_enabled: 'nope' })
+    const revision = '0'.repeat(64)
+    const okTrue = AgentUpdateRequestSchema.safeParse({ revision, memory_enabled: true })
+    const okFalse = AgentUpdateRequestSchema.safeParse({ revision, memory_enabled: false })
+    const bad = AgentUpdateRequestSchema.safeParse({ revision, memory_enabled: 'nope' })
     expect(okTrue.success).toBe(true)
     expect(okFalse.success).toBe(true)
     expect(bad.success).toBe(false)

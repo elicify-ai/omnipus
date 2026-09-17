@@ -82,7 +82,11 @@ export function SkillsScreen() {
   })
 
   const { mutate: doDeleteSkill } = useMutation({
-    mutationFn: (name: string) => deleteSkill(name),
+    mutationFn: (name: string) => {
+      const skill = skills.find((candidate) => candidate.id === name || candidate.name === name)
+      if (!skill) throw new Error('Skill changed or disappeared. Reload before removing it.')
+      return deleteSkill(name, skill.revision)
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['skills'] })
       addToast({ message: 'Skill removed', variant: 'success' })

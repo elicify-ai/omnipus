@@ -47,6 +47,8 @@ interface ToolsAndPermissionsProps {
   agentType: AgentKind
   /** Whether the agent is locked (core/identity-locked). Read-only when true. */
   isLocked?: boolean
+  /** Backend field descriptor result for tools_cfg. Overrides blanket lock UI. */
+  isEditable?: boolean
   tools: AgentToolsCfg
   /**
    * Called when the server-hydrated config has been loaded (to keep parent
@@ -55,6 +57,7 @@ interface ToolsAndPermissionsProps {
    * every user edit. Real saves go through the re-auth-gated mutation below.
    */
   onChange: (tools: AgentToolsCfg) => void
+  onRevisionChange?: (revision: string) => void
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -83,8 +86,10 @@ export function ToolsAndPermissions({
   agentId,
   agentType,
   isLocked = false,
+  isEditable,
   tools,
   onChange,
+  onRevisionChange,
 }: ToolsAndPermissionsProps) {
   const queryClient = useQueryClient()
   const addToast = useUiStore((s) => s.addToast)
@@ -95,6 +100,7 @@ export function ToolsAndPermissions({
   // the whole Tools & Permissions section for external agents; this is the
   // defense-in-depth guard for any other caller of this component.
   const isExternal = isExternalType(agentType)
+  const toolsEditable = isEditable ?? !isLocked
 
   // Re-auth gate — mirrors GlobalToolPoliciesSection (SecuritySection.tsx).
   // The gate opens a consent dialog if the server returns a re-auth 403.
@@ -144,6 +150,8 @@ export function ToolsAndPermissions({
   // the current id even if the agent changes between debounce and fire.
   const agentIdRef = useRef(agentId)
   agentIdRef.current = agentId
+  const revisionRef = useRef<string | null>(null)
+  const overrideNamesRef = useRef<string[]>([])
 
   // Hydrate editorValue from the dedicated GET /agents/{id}/tools response.
   // This fires once when agentToolsData arrives (and again if the agent id
@@ -165,6 +173,8 @@ export function ToolsAndPermissions({
     if (!agentToolsData || !agentId) return
     if (isDraftReady) return // user has edited — do NOT snap back
     const incomingValue = cfgToValue(agentToolsData.config)
+    revisionRef.current = agentToolsData.revision
+    overrideNamesRef.current = agentToolsData.override_names
     setEditorValue(incomingValue)
     setIsDraftReady(true)
      
@@ -201,7 +211,21 @@ export function ToolsAndPermissions({
       const id = agentIdRef.current
       if (!id) return
       const cfg = valueToCfg(value, toolsRef.current)
-      const result = await runGated((token) => updateAgentTools(id, cfg, token))
+      const revision = revisionRef.current
+      if (!revision) throw new Error('Tool settings have no reviewed revision. Reload before saving.')
+      const previousPolicies = agentToolsData?.config.builtin?.policies ?? {}
+      const nextOverrideNames = new Set(overrideNamesRef.current)
+      for (const [name, policy] of Object.entries(value.policies)) {
+        if (previousPolicies[name] !== policy) nextOverrideNames.add(name)
+      }
+      const result = await runGated((token) => updateAgentTools(id, {
+        revision,
+        override_names: [...nextOverrideNames].sort(),
+        config: cfg,
+      }, token))
+      revisionRef.current = result.revision
+      onRevisionChange?.(result.revision)
+      overrideNamesRef.current = result.override_names
       // Propagate to parent and invalidate the cache after a successful save.
       onChange(result.config)
       queryClient.invalidateQueries({ queryKey: ['agent-tools', id] })
@@ -249,7 +273,7 @@ export function ToolsAndPermissions({
     // "not hydrated" (safe to re-arm) and a separate `readOnly` for
     // isLocked/isExternal that hides/disables the UI WITHOUT going through
     // useAutoSave's `disabled` re-arm path at all.
-    { disabled: isLocked || isExternal || !isDraftReady },
+    { disabled: !toolsEditable || isExternal || !isDraftReady },
   )
 
   // Surface runGated cancellation and API errors as toasts. useAutoSave catches
@@ -271,7 +295,7 @@ export function ToolsAndPermissions({
   // observe the change and fire the debounced gated PUT with the latest value.
   // It never skips or drops an edit regardless of in-flight saves.
   function handleEditorChange(next: ToolPolicyValue) {
-    if (isLocked || isExternal || !agentId) return
+    if (!toolsEditable || isExternal || !agentId) return
     setEditorValue(next)
   }
 
@@ -320,15 +344,14 @@ export function ToolsAndPermissions({
   return (
     <div className="space-y-5">
       {/* B-2 (US-D5 / #332): locked agent read-only notice */}
-      {isLocked && (
+      {!toolsEditable && (
         <div
           data-testid="locked-agent-readonly-notice"
           className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-2)] px-3 py-2"
         >
           <Lock size={13} className="text-[var(--color-muted)] shrink-0 mt-0.5" />
           <p className="text-[11px] text-[var(--color-muted)] leading-relaxed">
-            Tool policies for locked core agents are read-only. To change tool access,
-            create a custom agent.
+            Tool policies are read-only for this agent: the backend marks this capability as fixed.
           </p>
         </div>
       )}
@@ -372,7 +395,7 @@ export function ToolsAndPermissions({
       )}
 
       {/* Save status — hidden for locked/external agents (no writes ever fire) */}
-      {!isLocked && !isExternal && (
+      {toolsEditable && !isExternal && (
         <div className="flex items-center gap-3">
           <AutoSaveIndicator status={saveStatus} error={saveError} />
           <span className="text-[10px] text-[var(--color-muted)]">
@@ -392,7 +415,7 @@ export function ToolsAndPermissions({
         tools={registryTools}
         value={editorValue}
         onChange={handleEditorChange}
-        disabled={isLocked || isExternal}
+        disabled={!toolsEditable || isExternal}
         globalPolicies={globalPolicyValue}
       />
 

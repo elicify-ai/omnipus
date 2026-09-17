@@ -12,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 interface Props {
   value: string[]
   onChange: (next: string[]) => void
+  disabled?: boolean
 }
 
 interface LineState {
@@ -29,7 +30,7 @@ function validateLine(line: string): string | null {
   }
 }
 
-export function ShellDenyPatternsEditor({ value, onChange }: Props) {
+export function ShellDenyPatternsEditor({ value, onChange, disabled }: Props) {
   // Local textarea text so the user can type freely; we parse on change.
   const text = value.join('\n')
 
@@ -78,6 +79,7 @@ export function ShellDenyPatternsEditor({ value, onChange }: Props) {
         aria-label="Shell deny patterns, one regex per line"
         aria-invalid={hasErrors}
         aria-describedby={hasErrors ? 'shell-deny-errors' : undefined}
+        disabled={disabled}
       />
 
       {/* Per-line error messages */}

@@ -61,6 +61,8 @@ import { useUiStore } from '@/store/ui'
 import type { CliDetect, CliValidateResponse } from '@/lib/api'
 
 const mockExternalAgent: Agent = {
+  revision: '0'.repeat(64),
+  editable_fields: [{ name: 'executor', editable: true }, { name: 'model', editable: true }, { name: 'name', editable: true }],
   id: 'external-worker',
   name: 'External Worker',
   type: 'subagent_3p',

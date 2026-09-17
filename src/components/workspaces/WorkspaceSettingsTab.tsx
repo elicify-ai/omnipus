@@ -334,6 +334,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
         throw new Error('Workspace name is required')
       }
       await updateWorkspace(workspace.id, {
+        revision: workspace.revision,
         name: trimmedName,
         description: data.description.trim(),
       })
@@ -367,7 +368,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
 
   const archiveMutation = useMutation({
     mutationFn: () =>
-      updateWorkspace(workspace.id, { status: isArchived ? 'active' : 'archived' }),
+      updateWorkspace(workspace.id, { revision: workspace.revision, status: isArchived ? 'active' : 'archived' }),
     onSuccess: async () => {
       // Item 6: see the identity saveFn's comment above — `.list()` with no
       // args matches zero queries; `['workspaces']` prefix-matches all of them.
@@ -385,7 +386,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
   })
 
   const deleteMutation = useMutation({
-    mutationFn: () => deleteWorkspace(workspace.id),
+    mutationFn: () => deleteWorkspace(workspace.id, workspace.revision),
     onSuccess: async () => {
       // Item 6: see the identity saveFn's comment above.
       await queryClient.invalidateQueries({ queryKey: ['workspaces'] })

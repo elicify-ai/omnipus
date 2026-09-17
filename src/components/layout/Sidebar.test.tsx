@@ -427,6 +427,7 @@ describe('Sidebar — Archive section (F7-F06)', () => {
       if (params?.status === 'archived') {
         return Promise.resolve([
           {
+            revision: '0'.repeat(64),
             id: 'p-archived',
             name: 'Old Project',
             status: 'archived',

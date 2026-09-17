@@ -112,6 +112,8 @@ beforeEach(() => {
   vi.mocked(api.fetchRegistryTools).mockResolvedValue([SYSTEM_TOOL, FILESYSTEM_TOOL, MCP_TOOL])
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([SYSTEM_TOOL, FILESYSTEM_TOOL, MCP_TOOL])
   vi.mocked(api.fetchAgentTools).mockResolvedValue({
+    revision: '0'.repeat(64),
+    override_names: [],
     config: DEFAULT_TOOLS_CFG,
     tools: [],
   })
@@ -152,7 +154,7 @@ describe('US-1: system.* tools appear in the flat category grid, not a separate 
       FILESYSTEM_TOOL,
       { name: 'system.exec.run', scope: 'core', category: 'system', description: 'Run exec', source: 'builtin' as const },
     ])
-    vi.mocked(api.fetchAgentTools).mockResolvedValue({ config: DEFAULT_TOOLS_CFG, tools: [] })
+    vi.mocked(api.fetchAgentTools).mockResolvedValue({ revision: '0'.repeat(64), override_names: [], config: DEFAULT_TOOLS_CFG, tools: [] })
 
     render(
       <ToolsAndPermissions

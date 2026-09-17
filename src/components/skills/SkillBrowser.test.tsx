@@ -36,6 +36,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     installSkillBySlug: vi.fn(),
     searchSkills: vi.fn(),
     fetchSkillMarketplaceStatus: vi.fn(),
+    fetchSkills: vi.fn(),
   }
 })
 
@@ -44,6 +45,7 @@ import {
   installSkillBySlug,
   searchSkills,
   fetchSkillMarketplaceStatus,
+  fetchSkills,
   ApiError,
 } from '@/lib/api'
 import type { SkillSearchResult, SkillMarketplaceStatus } from '@/lib/api'
@@ -128,12 +130,17 @@ beforeEach(() => {
   queryClient = makeQueryClient()
   vi.mocked(installSkillFromFile).mockResolvedValue(undefined as never)
   vi.mocked(installSkillBySlug).mockResolvedValue({
+    revision: 'b'.repeat(64),
+    persistence_status: 'complete',
+    activation_status: 'active',
+    changed_fields: ['skill'],
     id: 'web-search',
     name: 'web-search',
     version: '1.4.0',
     status: 'active',
     verified: false,
-  } as never)
+  })
+  vi.mocked(fetchSkills).mockResolvedValue([])
   vi.mocked(searchSkills).mockResolvedValue(RESULTS)
   // Default: a marketplace is enabled so the existing search tests render the
   // browse UI. Gating tests override this per-case.
@@ -174,7 +181,7 @@ describe('SkillBrowser — ClawHub search', () => {
     await userEvent.click(screen.getByTestId('skill-install-web-search'))
 
     await waitFor(() => {
-      expect(vi.mocked(installSkillBySlug)).toHaveBeenCalledWith('web-search', '1.4.0')
+      expect(vi.mocked(installSkillBySlug)).toHaveBeenCalledWith('web-search', '1.4.0', undefined)
     })
     await waitFor(() => {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['skills'] })
@@ -182,6 +189,22 @@ describe('SkillBrowser — ClawHub search', () => {
     // success toast + row marked Installed
     expect(addToast).toHaveBeenCalledWith(expect.objectContaining({ variant: 'success' }))
     expect(await screen.findByText('Installed')).toBeInTheDocument()
+  })
+
+  it('carries the reviewed revision when replacing an installed skill', async () => {
+    vi.mocked(fetchSkills).mockResolvedValue([{
+      revision: 'a'.repeat(64), id: 'web-search', name: 'Web Search', version: '1.3.0',
+      status: 'active', verified: true,
+    }])
+    renderBrowser()
+    await userEvent.type(await screen.findByTestId('skill-search-input'), 'web')
+    await screen.findByText('Web Search')
+    await userEvent.click(screen.getByTestId('skill-install-web-search'))
+    await waitFor(() => {
+      expect(vi.mocked(installSkillBySlug)).toHaveBeenCalledWith(
+        'web-search', '1.4.0', 'a'.repeat(64),
+      )
+    })
   })
 
   it('shows the "registry unavailable" message on a 502 search error (no crash)', async () => {

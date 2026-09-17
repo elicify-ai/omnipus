@@ -99,8 +99,8 @@ export function normalizeDepth(raw: unknown): number | undefined {
 // ITS team view as `core_team ∪ {every edge endpoint}` — an edgeless member
 // wouldn't show up there. But the editor's autosave (WorkspaceTeamTab's
 // `saveFn`) also fires a SEPARATE `updateWorkspace({ core_team: <full
-// current member list> })` PUT, unconditionally, before the edges PUT — that
-// one persists every current member directly, edge or no edge. So an
+// current member list>, delegation: ... })` update when membership changes —
+// that atomically persists every member and edge. So an
 // edgeless member IS durably kept on the team once autosave lands; the only
 // window it can appear to "vanish" in is the transient gap between adding it
 // and the debounced save completing (see `isMemberPersisted` / the
@@ -381,11 +381,11 @@ export function buildTeamGraphModel(
 
 // ── Mutations (immutable) ────────────────────────────────────────────────────
 
-export type ConnectionRejection = 'self-edge' | 'duplicate' | 'not-member' | 'system-target'
+export type ConnectionRejection = 'self-edge' | 'duplicate' | 'not-member' | 'system-target' | 'cycle'
 
 /**
  * Validate a candidate edge from → to against the current edit state.
- *   - no self-edges (A → A)
+ *   - self-edges only for the two bounded helper identities (jim, worker)
  *   - both endpoints must be team members
  *   - target must not be a System agent (ADR-049 D3/SD-C17)
  *   - no duplicate (from, to) pair
@@ -414,19 +414,36 @@ export function validateConnection(
   _workerIds?: ReadonlySet<string>,
   isSystemTarget?: boolean,
 ): ConnectionRejection | null {
-  if (from === to) return 'self-edge'
+  if (from === to && from !== 'jim' && from !== 'worker') return 'self-edge'
   if (!state.members.includes(from) || !state.members.includes(to)) return 'not-member'
   if (isSystemTarget) return 'system-target'
   if (state.edges.some((e) => e.from === from && e.to === to)) return 'duplicate'
+  if (from !== to && hasPath(state.edges, to, from)) return 'cycle'
   return null
+}
+
+function hasPath(edges: TeamEdgeEdit[], start: string, target: string): boolean {
+  const pending = [start]
+  const visited = new Set<string>()
+  while (pending.length > 0) {
+    const current = pending.pop() as string
+    if (current === target) return true
+    if (visited.has(current)) continue
+    visited.add(current)
+    for (const edge of edges) {
+      if (edge.from === current && !visited.has(edge.to)) pending.push(edge.to)
+    }
+  }
+  return false
 }
 
 /** Plain-language, per-repo-copywriting-convention message for each rejection reason. */
 export const REJECTION_MESSAGE: Record<ConnectionRejection, string> = {
-  'self-edge': 'An agent cannot delegate to itself.',
+  'self-edge': 'Only Jim and General Purpose can delegate to themselves.',
   duplicate: 'That delegation edge already exists.',
   'not-member': 'Both agents must be on the team first.',
   'system-target': 'System agents cannot be a delegation target.',
+  cycle: 'That delegation would create a cycle.',
 }
 
 /**

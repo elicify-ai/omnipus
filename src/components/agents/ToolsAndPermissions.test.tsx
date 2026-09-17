@@ -129,6 +129,13 @@ const DEFAULT_TOOLS_CFG: AgentToolsCfg = {
     policies: {},
   },
 }
+const TOOLS_REVISION = '1'.repeat(64)
+const toolsResponse = (config: AgentToolsCfg = DEFAULT_TOOLS_CFG, revision = TOOLS_REVISION) => ({
+  revision,
+  override_names: [],
+  config,
+  tools: [],
+})
 
 const NOOP_CHANGE = () => {}
 
@@ -139,19 +146,13 @@ beforeEach(() => {
 
   vi.mocked(api.fetchRegistryTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL])
   vi.mocked(api.fetchBuiltinTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL])
-  vi.mocked(api.fetchAgentTools).mockResolvedValue({
-    config: DEFAULT_TOOLS_CFG,
-    tools: [],
-  })
+  vi.mocked(api.fetchAgentTools).mockResolvedValue(toolsResponse())
   vi.mocked(api.fetchMcpServersForAgent).mockResolvedValue([])
   vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({
     policies: {},
   })
   // Default: updateAgentTools succeeds and returns the same config
-  vi.mocked(api.updateAgentTools).mockResolvedValue({
-    config: DEFAULT_TOOLS_CFG,
-    tools: [],
-  })
+  vi.mocked(api.updateAgentTools).mockResolvedValue(toolsResponse())
 })
 
 afterEach(() => {
@@ -232,12 +233,9 @@ describe('ToolsAndPermissions — system.* in flat category grid (US-1 / AC5 / F
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([
       { ...ADMIN_TOOL, scope: 'core' },
     ])
-    vi.mocked(api.fetchAgentTools).mockResolvedValue({
-      config: {
-        builtin: { policies: { 'system.config.set': 'allow' } },
-      },
-      tools: [],
-    })
+    vi.mocked(api.fetchAgentTools).mockResolvedValue(toolsResponse({
+      builtin: { policies: { 'system.config.set': 'allow' } },
+    }))
   })
 
   it('system.* tool (category=system) appears in the flat category grid, NOT a separate disclosure', async () => {
@@ -306,7 +304,7 @@ describe('ToolsAndPermissions — shell/fs conflict banner', () => {
 
   beforeEach(() => {
     vi.mocked(api.fetchRegistryTools).mockResolvedValue([SHELL_TOOL, ...FS_TOOLS])
-    vi.mocked(api.fetchAgentTools).mockResolvedValue({ config: DEFAULT_TOOLS_CFG, tools: [] })
+    vi.mocked(api.fetchAgentTools).mockResolvedValue(toolsResponse())
     vi.mocked(api.fetchGlobalToolPolicies).mockResolvedValue({ policies: {} })
   })
 
@@ -424,8 +422,12 @@ describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
       expect(api.updateAgentTools).toHaveBeenCalledWith(
         'agent-1',
         expect.objectContaining({
-          builtin: expect.objectContaining({
-            policies: { read_file: 'ask', mcp_search: 'ask' },
+          revision: TOOLS_REVISION,
+          override_names: ['mcp_search', 'read_file'],
+          config: expect.objectContaining({
+            builtin: expect.objectContaining({
+              policies: { read_file: 'ask', mcp_search: 'ask' },
+            }),
           }),
         }),
         '', // empty reAuthToken on first attempt (runGated optimistic call)
@@ -568,7 +570,7 @@ describe('ToolsAndPermissions — no spurious PUT on tab open (bug fix)', () => 
         policies: {},
       },
     }
-    vi.mocked(api.fetchAgentTools).mockResolvedValue({ config: serverConfig, tools: [] })
+    vi.mocked(api.fetchAgentTools).mockResolvedValue(toolsResponse(serverConfig))
 
     // Parent starts with a slightly different config (simulates the gap between
     // agent.tools_cfg from the main GET and the dedicated tools GET result).
@@ -607,7 +609,7 @@ describe('ToolsAndPermissions — no spurious PUT on tab open (bug fix)', () => 
         policies: { read_file: 'allow', write_file: 'deny' },
       },
     }
-    vi.mocked(api.fetchAgentTools).mockResolvedValue({ config: serverConfig, tools: [] })
+    vi.mocked(api.fetchAgentTools).mockResolvedValue(toolsResponse(serverConfig))
 
     const parentConfig: AgentToolsCfg = {
       builtin: { policies: {} },
@@ -639,7 +641,7 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
     // When the user clicks a preset (a real policy change), the save must flow
     // through runGated → updateAgentTools(agentId, cfg, token). The mock
     // runGated passes '' as the token on the optimistic first attempt.
-    vi.mocked(api.updateAgentTools).mockResolvedValue({ config: DEFAULT_TOOLS_CFG, tools: [] })
+    vi.mocked(api.updateAgentTools).mockResolvedValue(toolsResponse())
 
     renderWithQuery(
       <ToolsAndPermissions
@@ -672,7 +674,11 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
       expect(api.updateAgentTools).toHaveBeenCalledWith(
         'agent-1',
         expect.objectContaining({
-          builtin: expect.objectContaining({ policies: { read_file: 'ask', mcp_search: 'ask' } }),
+          revision: TOOLS_REVISION,
+          override_names: ['mcp_search', 'read_file'],
+          config: expect.objectContaining({
+            builtin: expect.objectContaining({ policies: { read_file: 'ask', mcp_search: 'ask' } }),
+          }),
         }),
         '', // token from runGated's optimistic pass
       )
@@ -680,7 +686,7 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
   })
 
   it('calls runGated then updateAgentTools when switching to Balanced preset', async () => {
-    vi.mocked(api.updateAgentTools).mockResolvedValue({ config: DEFAULT_TOOLS_CFG, tools: [] })
+    vi.mocked(api.updateAgentTools).mockResolvedValue(toolsResponse())
 
     renderWithQuery(
       <ToolsAndPermissions
@@ -725,7 +731,7 @@ describe('ToolsAndPermissions — 403 re-auth path (Spec-6 FR-12.2)', () => {
     // First call (token='') throws the re-auth 403; second call (token='reauth_tok') succeeds.
     vi.mocked(api.updateAgentTools)
       .mockRejectedValueOnce(reAuth403())
-      .mockResolvedValueOnce({ config: DEFAULT_TOOLS_CFG, tools: [] })
+      .mockResolvedValueOnce(toolsResponse())
 
     // Override mockRunGated to simulate the 2-phase gate: detect re-auth 403,
     // then retry fn with the minted token — mirroring what the real useReAuthGate
@@ -855,8 +861,8 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     vi.mocked(api.fetchBuiltinTools).mockResolvedValue([BUILTIN_TOOL, MCP_TOOL, WRITE_FILE_TOOL])
 
     // Deferred promise to block the FIRST updateAgentTools call (A's save).
-    let resolveFirstSave!: (v: { config: typeof DEFAULT_TOOLS_CFG; tools: [] }) => void
-    const firstSavePromise = new Promise<{ config: typeof DEFAULT_TOOLS_CFG; tools: [] }>(
+    let resolveFirstSave!: (v: ReturnType<typeof toolsResponse>) => void
+    const firstSavePromise = new Promise<ReturnType<typeof toolsResponse>>(
       (resolve) => { resolveFirstSave = resolve },
     )
 
@@ -867,7 +873,7 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
 
     vi.mocked(api.updateAgentTools)
       .mockReturnValueOnce(firstSavePromise) // A: blocked
-      .mockResolvedValue({ config: fullAccessCfg as typeof DEFAULT_TOOLS_CFG, tools: [] }) // C and beyond
+      .mockResolvedValue(toolsResponse(fullAccessCfg as typeof DEFAULT_TOOLS_CFG)) // C and beyond
 
     renderWithQuery(
       <ToolsAndPermissions
@@ -900,9 +906,8 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     // A's save is now in-flight (blocked by firstSavePromise).
     expect(api.updateAgentTools).toHaveBeenCalledTimes(1)
     expect(vi.mocked(api.updateAgentTools).mock.calls[0][1]).toMatchObject({
-      builtin: expect.objectContaining({
-        policies: { read_file: 'ask', mcp_search: 'ask', write_file: 'ask' },
-      }),
+      revision: TOOLS_REVISION,
+      config: { builtin: { policies: { read_file: 'ask', mcp_search: 'ask', write_file: 'ask' } } },
     })
 
     // Edit B while A is in-flight: Balanced (write_file → 'ask' per §2.1;
@@ -930,7 +935,7 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
 
     // Now resolve A — the queued save for C fires immediately afterward,
     // as the second call, strictly AFTER A settled (never concurrently).
-    resolveFirstSave({ config: DEFAULT_TOOLS_CFG, tools: [] })
+    resolveFirstSave(toolsResponse(DEFAULT_TOOLS_CFG, '2'.repeat(64)))
     // Allow Promise microtasks to flush.
     await act(async () => { vi.advanceTimersByTime(100) })
 
@@ -940,9 +945,8 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     // write_file:'allow' distinguishes it from Balanced's write_file:'ask'.
     const secondCallCfg = vi.mocked(api.updateAgentTools).mock.calls[1][1]
     expect(secondCallCfg).toMatchObject({
-      builtin: expect.objectContaining({
-        policies: { read_file: 'allow', mcp_search: 'allow', write_file: 'allow' },
-      }),
+      revision: '2'.repeat(64),
+      config: { builtin: { policies: { read_file: 'allow', mcp_search: 'allow', write_file: 'allow' } } },
     })
 
     // No further save fires — resolving A's queued follow-up did not
@@ -962,13 +966,10 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     // fetchAgentTools: first call returns DEFAULT, re-fetch after A saves returns
     // Cautious (the value A persisted). This simulates the stale snap-back scenario.
     vi.mocked(api.fetchAgentTools)
-      .mockResolvedValueOnce({ config: DEFAULT_TOOLS_CFG, tools: [] })
-      .mockResolvedValue({ config: cautionsCfg as typeof DEFAULT_TOOLS_CFG, tools: [] })
+      .mockResolvedValueOnce(toolsResponse())
+      .mockResolvedValue(toolsResponse(cautionsCfg as typeof DEFAULT_TOOLS_CFG))
 
-    vi.mocked(api.updateAgentTools).mockResolvedValue({
-      config: cautionsCfg as typeof DEFAULT_TOOLS_CFG,
-      tools: [],
-    })
+    vi.mocked(api.updateAgentTools).mockResolvedValue(toolsResponse(cautionsCfg as typeof DEFAULT_TOOLS_CFG))
 
     renderWithQuery(
       <ToolsAndPermissions

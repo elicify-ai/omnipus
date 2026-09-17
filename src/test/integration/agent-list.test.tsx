@@ -35,6 +35,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 import { fetchAgents } from '@/lib/api'
 
 const agentDefaults = {
+  revision: '0'.repeat(64),
   soul: '',
   needs_model: false,
   heartbeat: '',

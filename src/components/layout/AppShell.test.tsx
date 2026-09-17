@@ -523,6 +523,7 @@ describe('AppShell — cross-workspace approval banner coexists with other banne
     vi.mocked(api.fetchNotifications).mockResolvedValue(NOTIFICATIONS_EMPTY)
     vi.mocked(api.fetchWorkspaces).mockResolvedValue([
       {
+        revision: '0'.repeat(64),
         id: 'ws-other',
         name: 'UAT-T2',
         status: 'active',

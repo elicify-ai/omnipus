@@ -35,6 +35,7 @@ if (typeof Element !== 'undefined' && !Element.prototype.scrollIntoView) {
 
 const SKILLS: Skill[] = [
   {
+    revision: '0'.repeat(64),
     id: 'web-research',
     name: 'Web Research',
     version: '1.0',
@@ -43,6 +44,7 @@ const SKILLS: Skill[] = [
     status: 'active',
   },
   {
+    revision: '0'.repeat(64),
     id: 'summarize',
     name: 'Summarize',
     version: '1.0',
@@ -156,7 +158,7 @@ describe('renderSkillAwareContent — builtin precedence (F7)', () => {
     // "clear" CAN produce a chip. This is acceptable — the gate only applies
     // when commands are known.
     const skillsWithClear: Skill[] = [
-      { id: 'clear', name: 'Clear Skill', version: '1.0', verified: true, status: 'active' },
+      { revision: '0'.repeat(64), id: 'clear', name: 'Clear Skill', version: '1.0', verified: true, status: 'active' },
     ]
     renderContent('/clear', skillsWithClear, [])
     expect(screen.getByText('Clear Skill')).toBeInTheDocument()
@@ -192,7 +194,7 @@ describe('commandLabelsWithAliases — expands hidden aliases into the flat gate
     // Reproduces the exact post-rename shape: /clear is NOT a commandLabel on
     // its own — it only appears via alias expansion.
     const skillsWithClear: Skill[] = [
-      { id: 'clear', name: 'Clear Skill', version: '1.0', verified: true, status: 'active' },
+      { revision: '0'.repeat(64), id: 'clear', name: 'Clear Skill', version: '1.0', verified: true, status: 'active' },
     ]
     const fallback = () => <p data-testid="plain-text">clear</p>
     const el = renderSkillAwareContent('/clear', skillsWithClear, commandLabelsWithAliases(COMMANDS), fallback)

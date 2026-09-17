@@ -32,6 +32,12 @@ import type { Agent, Workspace } from '@/lib/api'
 // once both queries have resolved.
 const EMPTY_AGENTS: Agent[] = []
 const EMPTY_WORKSPACES: Workspace[] = []
+const CHAT_BUILTIN_IDS = new Set(['mia', 'jim', 'ava', 'admin'])
+
+export function isChatEligibleAgent(agent: Agent): boolean {
+  if (agent.type === 'core') return CHAT_BUILTIN_IDS.has(agent.id)
+  return agent.type === 'Main'
+}
 
 export interface UseChatAgentsResult {
   /** Unfiltered agent list straight from the `['agents']` query — needed by callers that must distinguish "no agents at all" (hard error) from "no chat-eligible agents" (all-draft), e.g. AgentPicker's error/draft branches. */
@@ -81,7 +87,11 @@ export function useChatAgents(): UseChatAgentsResult {
         // ADR-049 D3: type:system (the locked Judge) is never a chat target —
         // it must not appear in the AgentPicker dropdown or the "@" mention
         // menu, both of which consume this hook.
-        .filter((a) => (a.status === 'active' || a.status === 'idle') && !isWorker(a) && a.type !== 'system')
+        .filter((a) =>
+          (a.status === 'active' || a.status === 'idle')
+          && !isWorker(a)
+          && isChatEligibleAgent(a),
+        )
         .filter((a) => !teamIds || teamIds.length === 0 || teamIds.includes(a.id)),
     [agents, teamIds],
   )

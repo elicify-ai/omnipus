@@ -70,7 +70,21 @@ import type { Workspace } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { ApiError } from '@/lib/api-error'
 
+const editable = (...names: string[]) => names.map((name) => ({ name, editable: true }))
+const COMMON_EDITABLE_FIELDS = editable(
+  'name', 'description', 'color', 'icon', 'default', 'model', 'provider',
+  'fallback_models', 'model_params', 'soul', 'memory_enabled', 'voice',
+  'max_tool_iterations', 'context_window_override', 'shell_policy', 'skills',
+  'tools_cfg', 'executor',
+)
+const BUILTIN_EDITABLE_FIELDS = COMMON_EDITABLE_FIELDS.map((field) =>
+  ['name', 'description', 'color', 'icon', 'soul', 'executor'].includes(field.name)
+    ? { ...field, editable: false, reason: 'Built-in identity and runtime are fixed.' }
+    : field,
+)
+
 const mockCoreAgent: Agent = {
+  revision: '0'.repeat(64),
   id: 'general-assistant',
   name: 'General Assistant',
   type: 'core',
@@ -86,9 +100,11 @@ const mockCoreAgent: Agent = {
   stats: { total_sessions: 5, total_tokens: 12000, total_cost: 0.05 },
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
+  editable_fields: COMMON_EDITABLE_FIELDS,
 }
 
 const mockLockedCoreAgent: Agent = {
+  revision: '0'.repeat(64),
   id: 'mia',
   name: 'Mia',
   type: 'core',
@@ -102,6 +118,7 @@ const mockLockedCoreAgent: Agent = {
   max_tool_iterations: 20,
   // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
   memory_enabled: true,
+  editable_fields: BUILTIN_EDITABLE_FIELDS,
 }
 
 // Tier-branched form fixtures (Spec-4 FR-4.1 + locked concept in
@@ -125,6 +142,7 @@ const mockLockedWorkerAgent: Agent = {
   id: 'marketplace-pack-worker',
   name: 'Marketplace Worker',
   locked: true,
+  editable_fields: BUILTIN_EDITABLE_FIELDS,
 }
 
 // W2c / field matrix (docs/internal/architecture/agent-types-field-matrix.md):
@@ -148,6 +166,7 @@ const mockSubagent3pAgent: Agent = {
 // `AgentConfig.Rubric` was deleted) and memory_enabled is seeded false
 // (impartial, reproducible verdicts).
 const mockJudgeAgent: Agent = {
+  revision: '0'.repeat(64),
   id: 'judge',
   name: 'Judge',
   type: 'system',
@@ -160,6 +179,10 @@ const mockJudgeAgent: Agent = {
   timeout_seconds: 60,
   max_tool_iterations: 20,
   memory_enabled: false,
+  editable_fields: COMMON_EDITABLE_FIELDS.map((field) => ({
+    ...field,
+    editable: field.name === 'soul' || ['model', 'provider', 'fallback_models', 'model_params', 'max_tool_iterations', 'context_window_override'].includes(field.name),
+  })),
 }
 
 function makeClient() {
@@ -254,14 +277,11 @@ describe('AgentProfile — core agent sections (test #13)', () => {
     expect(screen.getAllByText(/Model/).length).toBeGreaterThanOrEqual(1)
   })
 
-  it('shows Rate Limits section with "Use global defaults" for core agent', async () => {
-    // Traces to: wave5a-wire-ui-spec.md — US-7 AC5: rate limits defaults toggle
-    // Wave 5 / spec §6.2: Rate Limits is now inside the Advanced tab; click
-    // the tab to open the panel and assert on the "Use global defaults" copy.
+  it('does not expose unsupported per-agent rate-limit controls', async () => {
     renderProfile('general-assistant')
     await screen.findByText('General Assistant')
     switchTab('tab-advanced')
-    expect(await screen.findByText(/Use global defaults/i)).toBeInTheDocument()
+    expect(screen.queryByText(/Use global defaults/i)).toBeNull()
   })
 
   it('shows Stats section when stats are present', async () => {
@@ -310,21 +330,11 @@ describe('AgentProfile — locked core agent sections (test #13)', () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
   })
 
-  it('shows Rate Limits for locked core agents, editable (operator decision 2026-07-03)', async () => {
-    // Traces to: agent-types-field-matrix.md — rate_limits is mutable on the
-    // backend for locked agents; the UI now exposes it (superseding the old
-    // "locked agents hide rate limits" behavior — only identity/soul/skills
-    // stay 403'd for locked core agents).
+  it('does not expose unsupported per-agent rate limits for built-ins', async () => {
     renderProfile('mia')
     await screen.findByText('Mia')
     switchTab('tab-advanced')
-    const toggle = await screen.findByText(/Use global defaults/i)
-    expect(toggle).toBeInTheDocument()
-    // The "Use global defaults" switch is interactive (not disabled).
-    const section = toggle.closest('section') as HTMLElement
-    const globalDefaultsSwitch = section.querySelector('button[role="switch"]') as HTMLButtonElement
-    expect(globalDefaultsSwitch).not.toBeNull()
-    expect(globalDefaultsSwitch.disabled).toBe(false)
+    expect(screen.queryByText(/Use global defaults/i)).toBeNull()
   })
 
   it('does NOT show Save button for locked core agent', async () => {
@@ -627,11 +637,9 @@ describe('AgentProfile — Skills picker (US-E6)', () => {
   })
 })
 
-// B-2 extension — locked agent skills picker read-only
-// Traces to: B-2 (#332 / US-D5) extended to Skills field, nontech-ux-hardening-spec §6.5
-describe('AgentProfile — B-2: Skills picker read-only for locked agents', () => {
+describe('AgentProfile — ordinary built-in skill assignments', () => {
   const mockSkills: Skill[] = [
-    { id: 'web-research', name: 'Web Research', version: '1.0.0', verified: true, status: 'active' },
+    { revision: '0'.repeat(64), id: 'web-research', name: 'Web Research', version: '1.0.0', verified: true, status: 'active' },
   ]
 
   beforeEach(() => {
@@ -639,23 +647,23 @@ describe('AgentProfile — B-2: Skills picker read-only for locked agents', () =
     vi.mocked(fetchSkills).mockResolvedValue(mockSkills)
   })
 
-  it('shows "Skill assignment is read-only" notice for locked agents when tab is open', async () => {
+  it('does not show a read-only notice when the descriptor permits skills', async () => {
     renderProfile('mia')
     await screen.findByText('Mia')
     // Open the Skills tab (item 2 reorg — split from the former Tools tab)
     switchTab('tab-skills')
-    // The read-only notice must be visible
-    expect(await screen.findByText(/skill assignment is read-only/i)).toBeInTheDocument()
+    await screen.findByTestId('skill-checkbox-web-research')
+    expect(screen.queryByText(/skill assignment is read-only/i)).toBeNull()
   })
 
-  it('renders skill checkboxes as disabled for locked agents', async () => {
+  it('renders skill checkboxes enabled when the descriptor permits skills', async () => {
     renderProfile('mia')
     await screen.findByText('Mia')
     // Open the Skills tab (item 2 reorg — split from the former Tools tab)
     switchTab('tab-skills')
     // Wait for skill to appear
     const checkbox = await screen.findByTestId('skill-checkbox-web-research')
-    expect((checkbox as HTMLInputElement).disabled).toBe(true)
+    expect((checkbox as HTMLInputElement).disabled).toBe(false)
   })
 })
 
@@ -1124,7 +1132,7 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     expect(vi.mocked(updateAgent).mock.calls.length).toBe(firstCallCount)
   })
 
-  it('locked core agents: read-only fallback summary, no add-trigger, no provider picker (G6)', async () => {
+  it('ordinary built-ins retain editable fallback models through the descriptor', async () => {
     // W6-C2 / G6: `fallback_models` is wire-allowed for locked core
     // agents but the editor strips it via `canEdit`. Pre-C2 operators
     // had no way to see what the locked core compiled with; now we
@@ -1140,29 +1148,18 @@ describe('AgentProfile — provider-aware fallback editor', () => {
     })
     renderProfile('mia')
     await screen.findByText('Mia')
-    // The summary panel is present (G6), the locked note is visible.
-    // With desktop Tabs and mobile Accordion both in the DOM, the Basics
-    // panel duplicates the summary; assert at least one is visible.
-    expect(screen.getAllByTestId('fallback-summary-locked-basics').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText(/inherited from the locked core config/i).length).toBeGreaterThanOrEqual(1)
-    // The summary lists the configured fallback (model + provider).
-    expect(screen.getAllByTestId('fallback-summary-model-claude-opus-4-6')[0]).toHaveTextContent(/claude-opus-4-6/)
-    expect(screen.getAllByTestId('fallback-summary-provider-claude-opus-4-6')[0]).toHaveTextContent(/anthropic/i)
-    // The EDITOR affordances (chip, add-trigger, provider select) must
-    // NOT render for locked agents — the summary is read-only.
-    expect(screen.queryByTestId('fallback-chip-model-claude-opus-4-6')).toBeNull()
-    expect(screen.queryByTestId('fallback-add-trigger')).toBeNull()
-    expect(screen.queryByTestId('fallback-provider-select-claude-opus-4-6')).toBeNull()
+    expect(screen.getAllByTestId('fallback-chip-model-claude-opus-4-6').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByTestId('fallback-add-trigger').length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByTestId('fallback-provider-select-claude-opus-4-6').length).toBeGreaterThanOrEqual(1)
   })
 
-  it('locked core agents with no fallback_models show an "empty" summary line', async () => {
+  it('ordinary built-ins with no fallback models show the empty editor', async () => {
     // The summary must not crash when `fallback_models` is absent on a
     // locked agent — surface the empty-chain copy instead.
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
     renderProfile('mia')
     await screen.findByText('Mia')
-    expect(screen.getAllByTestId('fallback-summary-locked-basics').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getAllByText(/no fallback chain configured/i).length).toBeGreaterThanOrEqual(1)
+    expect(screen.getAllByTestId('fallback-add-trigger').length).toBeGreaterThanOrEqual(1)
   })
 
   // W6-C2 / I9: per-chip provider picker. The fallback can route through
@@ -1699,7 +1696,7 @@ describe('AgentProfile — Wave 5 footer (spec §6.1)', () => {
     const confirmBtn = dialog.querySelector('button.bg-\\[var\\(--color-error\\)\\]') as HTMLElement | null
     expect(confirmBtn).toBeTruthy()
     fireEvent.click(confirmBtn!)
-    await waitFor(() => expect(deleteAgent).toHaveBeenCalledWith('general-assistant'), { timeout: 3000 })
+    await waitFor(() => expect(deleteAgent).toHaveBeenCalledWith('general-assistant', mockCoreAgent.revision), { timeout: 3000 })
   })
 })
 
@@ -2529,11 +2526,12 @@ describe('AgentProfile — subagent_3p payload restriction', () => {
     // excluded — max_tool_iterations is excluded for subagent_3p.
     expect(payload).not.toHaveProperty('max_tool_iterations')
 
-    // Allowed fields SHOULD be present
+    // Only the changed editable field and reviewed revision are present.
     expect(payload).toHaveProperty('name')
-    expect(payload).toHaveProperty('executor')
-    expect(payload).toHaveProperty('updated_at')
-    // timeout_seconds STAYS for subagent_3p (operator decision: keep).
+    expect(payload).toHaveProperty('revision', mockSubagent3pAgent.revision)
+    expect(payload).not.toHaveProperty('executor')
+    expect(payload).not.toHaveProperty('updated_at')
+    expect(payload).not.toHaveProperty('timeout_seconds')
   })
 })
 
@@ -2547,6 +2545,7 @@ describe('AgentProfile — subagent_3p payload restriction', () => {
 //   - Save goes to the workspace mutation, NOT agent autosave (A2/F-09)
 
 const mockWorkspace: Workspace = {
+  revision: '0'.repeat(64),
   id: 'ws-1',
   name: 'Test Workspace',
   status: 'active',
@@ -2932,8 +2931,7 @@ describe('AgentProfile — Max tool calls per turn visibility by agent kind (fie
     await waitFor(() => {
       expect(screen.queryByTestId('agent-max-tool-calls-input')).toBeNull()
     })
-    // Turn timeout STAYS for subagent_3p (operator decision: keep).
-    expect(screen.getByTestId('agent-timeout-input')).toBeInTheDocument()
+    expect(screen.queryByTestId('agent-timeout-input')).toBeNull()
   })
 
   it('shows the Max tool calls input for a native Subagent', async () => {
@@ -3009,13 +3007,12 @@ describe('AgentProfile — locked core agent Sampling/Execution: editable (W2c)'
     expect(tempLabels.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('shows an interactive Execution section (timeout + max tool calls) for a locked core agent', async () => {
+  it('shows only supported max-tool-call execution tuning for a locked core agent', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockLockedCoreAgent)
     renderProfile('mia')
     await screen.findByText('Mia')
     switchTab('tab-advanced')
-    const timeoutInput = await screen.findByTestId('agent-timeout-input')
-    expect((timeoutInput as HTMLInputElement).disabled).toBe(false)
+    expect(screen.queryByTestId('agent-timeout-input')).toBeNull()
     const maxToolCallsInput = await screen.findByTestId('agent-max-tool-calls-input')
     expect((maxToolCallsInput as HTMLInputElement).disabled).toBe(false)
   })

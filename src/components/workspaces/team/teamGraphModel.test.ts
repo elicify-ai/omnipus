@@ -301,8 +301,13 @@ describe('validateConnection', () => {
     edges: [{ from: 'mia', to: 'jim', modes: ['direct'] }],
   })
 
-  it('rejects self-edges', () => {
+  it('rejects self-edges for roles other than Jim and General Purpose', () => {
     expect(validateConnection('mia', 'mia', s, WORKER_IDS)).toBe('self-edge')
+  })
+  it('allows explicit Jim and General Purpose self-edges', () => {
+    const eligible = { ...s, members: [...s.members, 'worker'] }
+    expect(validateConnection('jim', 'jim', eligible, WORKER_IDS)).toBeNull()
+    expect(validateConnection('worker', 'worker', eligible, WORKER_IDS)).toBeNull()
   })
   it('ALLOWS a worker as a delegation source (bounded delegation, not tier-gated)', () => {
     // The backend unlocked onward delegation for any agent and bounds depth
@@ -319,6 +324,16 @@ describe('validateConnection', () => {
   })
   it('rejects duplicate edges', () => {
     expect(validateConnection('mia', 'jim', s, WORKER_IDS)).toBe('duplicate')
+  })
+  it('rejects a connection that would close a delegation cycle', () => {
+    const cyclicCandidate = state({
+      members: ['mia', 'jim', 'planner'],
+      edges: [
+        { from: 'mia', to: 'jim', modes: ['direct'] },
+        { from: 'jim', to: 'planner', modes: ['direct'] },
+      ],
+    })
+    expect(validateConnection('planner', 'mia', cyclicCandidate, WORKER_IDS)).toBe('cycle')
   })
   it('rejects an endpoint that is not a team member', () => {
     expect(validateConnection('mia', 'ray', s, WORKER_IDS)).toBe('not-member')
@@ -340,10 +355,10 @@ describe('rejectionMessageForFailedConnection', () => {
     edges: [{ from: 'mia', to: 'jim', modes: ['direct'] }],
   })
 
-  it('surfaces the self-edge message for a rejected self-drag (jim -> jim)', () => {
+  it('surfaces the self-edge message for a rejected self-drag (mia -> mia)', () => {
     // This is the exact drag the bug report reproduces: a handle dragged back
     // onto its own node.
-    expect(rejectionMessageForFailedConnection('jim', 'jim', false, s, WORKER_IDS)).toBe(
+    expect(rejectionMessageForFailedConnection('mia', 'mia', false, s, WORKER_IDS)).toBe(
       REJECTION_MESSAGE['self-edge'],
     )
   })

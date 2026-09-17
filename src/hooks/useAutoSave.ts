@@ -271,6 +271,7 @@ export function useAutoSave<T>(
     // queued re-run could have already moved past 'saved' by the time we
     // get there).
     let savedSuccessfully = false
+    let revisionConflict = false
     try {
       await saveFnRef.current(inFlightData)
       // Only NOW is the data durable — advance the saved marker so
@@ -306,7 +307,8 @@ export function useAutoSave<T>(
         setError(undefined)
         return
       }
-      setStatus('error')
+      revisionConflict = isApiError(err) && err.status === 409
+      setStatus(revisionConflict ? 'conflict' : 'error')
       setError(isApiError(err) ? err.userMessage : err instanceof Error ? err.message : String(err))
     } finally {
       // FIX 3: release the guard, then honor any re-run queued while this
@@ -315,6 +317,7 @@ export function useAutoSave<T>(
       // so a queued re-run that this save's own outcome already covers
       // doesn't fire a redundant no-op PUT.
       isSavingRef.current = false
+      if (revisionConflict) rerunPendingRef.current = false
       if (rerunPendingRef.current) {
         rerunPendingRef.current = false
         if (JSON.stringify(latestDataRef.current) !== lastSavedJsonRef.current) {

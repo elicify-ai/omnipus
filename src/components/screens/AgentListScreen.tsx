@@ -613,7 +613,7 @@ export function AgentListScreen() {
 
   const { mutate: doSetDefault } = useMutation({
     mutationFn: (agent: Agent) =>
-      updateAgent(agent.id, { default: true, updated_at: agent.updated_at }),
+      updateAgent(agent.id, { revision: agent.revision, default: true }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
       addToast({ message: 'Default agent updated', variant: 'success' })
@@ -621,7 +621,7 @@ export function AgentListScreen() {
     onError: (err: unknown) => {
       if (isApiError(err) && err.status === 409) {
         addToast({
-          message: 'Agent was changed elsewhere. Retrying…',
+          message: 'Agent was changed elsewhere. Reload and review before trying again.',
           variant: 'error',
         })
         queryClient.invalidateQueries({ queryKey: ['agents'] })

@@ -51,8 +51,8 @@ export async function searchSkills(q: string, limit = 20): Promise<SkillSearchRe
  * The backend returns 409 when the skill is already installed and 502 when
  * the registry is unreachable.
  */
-export async function installSkillBySlug(slug: string, version?: string): Promise<Skill> {
-  const body: SkillInstallRequest = version ? { slug, version } : { slug }
+export async function installSkillBySlug(slug: string, version?: string, revision?: string): Promise<Skill> {
+  const body: SkillInstallRequest = { slug, ...(version ? { version } : {}), ...(revision ? { revision } : {}) }
   return requestConfiguration<Skill>(
     '/skills/install',
     {
