@@ -66,7 +66,7 @@ func OpenFindEnv(ctx context.Context, home string, col knowledge.ScopedCollectio
 
 	root, err := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), col.Root)
 	if err != nil {
-		return FindEnv{}, closeAll, err
+		return FindEnv{}, closeAll, fmt.Errorf("OpenFindEnv: %w", err)
 	}
 
 	schemas, schemaReport, err := records.LoadSchemas(root.Path())

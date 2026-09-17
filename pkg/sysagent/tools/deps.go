@@ -400,9 +400,12 @@ func writeEntity(dir, id string, v any) error {
 	// (see fileutil.SidecarLockPath). The task and workspace files written here
 	// are the same files pkg/task and pkg/workspace write under that same
 	// sidecar lock, so the system agent and those stores exclude each other.
-	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+	if err := fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
 		return writeFileAtomicFn(path, data, 0o600)
-	})
+	}); err != nil {
+		return fmt.Errorf("writeEntity: %w", err)
+	}
+	return nil
 }
 
 // writeFileAtomicFn is fileutil.WriteFileAtomic, held in a package variable so

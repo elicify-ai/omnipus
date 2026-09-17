@@ -357,11 +357,11 @@ func seedProviderConfig(t *testing.T, api *restAPI, entries ...map[string]any) {
 		defer api.agentLoop.ClearReloadPending()
 		raw, rErr := os.ReadFile(api.configPath())
 		if rErr != nil {
-			return rErr
+			return fmt.Errorf("read config: %w", rErr)
 		}
 		var m map[string]any
 		if uErr := json.Unmarshal(raw, &m); uErr != nil {
-			return uErr
+			return fmt.Errorf("unmarshal config: %w", uErr)
 		}
 		list, _ := m["providers"].([]any)
 		cfg := api.agentLoop.GetConfig()
@@ -382,11 +382,11 @@ func seedProviderConfig(t *testing.T, api *restAPI, entries ...map[string]any) {
 			// since the production loader unmarshals every ModelConfig field.
 			raw, mErr := json.Marshal(e)
 			if mErr != nil {
-				return mErr
+				return fmt.Errorf("marshal model config: %w", mErr)
 			}
 			mc := &config.ModelConfig{}
 			if uErr := json.Unmarshal(raw, mc); uErr != nil {
-				return uErr
+				return fmt.Errorf("unmarshal model config: %w", uErr)
 			}
 			cfg.Providers = append(cfg.Providers, mc)
 		}

@@ -22,11 +22,11 @@ func (a documentPaintAction) Do(ctx context.Context) error {
 	}
 	world, err := page.CreateIsolatedWorld(a.frameID).WithWorldName("omnipus-document-frame").Do(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("documentPaintAction.Do: %w", err)
 	}
 	_, exception, err := runtime.Evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))").WithContextID(world).WithAwaitPromise(true).Do(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("documentPaintAction.Do: %w", err)
 	}
 	if exception != nil {
 		return fmt.Errorf("browser live: document paint evaluation failed: %s", exception.Text)
@@ -37,7 +37,7 @@ func (a documentPaintAction) Do(ctx context.Context) error {
 func (a documentPaintAction) checkDocument(ctx context.Context) error {
 	tree, err := page.GetFrameTree().Do(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("documentPaintAction.checkDocument: %w", err)
 	}
 	if tree == nil || tree.Frame == nil || tree.Frame.ID != a.frameID || tree.Frame.LoaderID != a.loaderID {
 		return ErrStaleCaptureFrame

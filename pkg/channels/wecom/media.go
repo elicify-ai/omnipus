@@ -365,7 +365,7 @@ func (c *WeComChannel) storeRemoteMedia(
 	}, scope)
 	if err != nil {
 		_ = os.Remove(tmpPath)
-		return "", err
+		return "", fmt.Errorf("WeComChannel.storeRemoteMedia: %w", err)
 	}
 	return ref, nil
 }
@@ -512,7 +512,7 @@ func (c *WeComChannel) resolveOutboundPart(
 					"error":            err.Error(),
 				})
 			}
-			return "", "", "", cleanup, err
+			return "", "", "", cleanup, fmt.Errorf("WeComChannel.resolveOutboundPart: %w", err)
 		}
 		if filename == "" {
 			filename = sanitizeWeComFilename(meta.Filename)
@@ -528,7 +528,7 @@ func (c *WeComChannel) resolveOutboundPart(
 			return tmpPath, name, ct, func() { _ = os.Remove(tmpPath) }, nil
 		}
 		if _, err := os.Stat(localPath); err != nil {
-			return "", "", "", cleanup, err
+			return "", "", "", cleanup, fmt.Errorf("WeComChannel.resolveOutboundPart: %w", err)
 		}
 		if filename == "" {
 			filename = sanitizeWeComFilename(filepath.Base(localPath))
@@ -541,11 +541,11 @@ func (c *WeComChannel) resolveOutboundPart(
 	case strings.HasPrefix(ref, "file://"):
 		u, err := url.Parse(ref)
 		if err != nil {
-			return "", "", "", cleanup, err
+			return "", "", "", cleanup, fmt.Errorf("WeComChannel.resolveOutboundPart: %w", err)
 		}
 		localPath := u.Path
 		if _, err := os.Stat(localPath); err != nil {
-			return "", "", "", cleanup, err
+			return "", "", "", cleanup, fmt.Errorf("WeComChannel.resolveOutboundPart: %w", err)
 		}
 		if filename == "" {
 			filename = sanitizeWeComFilename(filepath.Base(localPath))
@@ -557,7 +557,7 @@ func (c *WeComChannel) resolveOutboundPart(
 
 	default:
 		if _, err := os.Stat(ref); err != nil {
-			return "", "", "", cleanup, err
+			return "", "", "", cleanup, fmt.Errorf("WeComChannel.resolveOutboundPart: %w", err)
 		}
 		if filename == "" {
 			filename = sanitizeWeComFilename(filepath.Base(ref))

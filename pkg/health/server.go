@@ -95,7 +95,10 @@ func (s *Server) Start() error {
 	s.mu.Lock()
 	s.ready = true
 	s.mu.Unlock()
-	return s.server.ListenAndServe()
+	if err := s.server.ListenAndServe(); err != nil {
+		return fmt.Errorf("Server.Start: %w", err)
+	}
+	return nil
 }
 
 func (s *Server) StartContext(ctx context.Context) error {
@@ -112,7 +115,10 @@ func (s *Server) StartContext(ctx context.Context) error {
 	case err := <-errCh:
 		return err
 	case <-ctx.Done():
-		return s.server.Shutdown(context.Background())
+		if err := s.server.Shutdown(context.Background()); err != nil {
+			return fmt.Errorf("Server.StartContext: %w", err)
+		}
+		return nil
 	}
 }
 
@@ -120,7 +126,10 @@ func (s *Server) Stop(ctx context.Context) error {
 	s.mu.Lock()
 	s.ready = false
 	s.mu.Unlock()
-	return s.server.Shutdown(ctx)
+	if err := s.server.Shutdown(ctx); err != nil {
+		return fmt.Errorf("Server.Stop: %w", err)
+	}
+	return nil
 }
 
 func (s *Server) SetReady(ready bool) {

@@ -6,6 +6,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -46,5 +47,8 @@ func (h BcryptHash) Verify(plaintext string) error {
 	if h == "" {
 		return ErrNoHashSet
 	}
-	return bcrypt.CompareHashAndPassword([]byte(h), []byte(plaintext))
+	if err := bcrypt.CompareHashAndPassword([]byte(h), []byte(plaintext)); err != nil {
+		return fmt.Errorf("BcryptHash.Verify: %w", err)
+	}
+	return nil
 }

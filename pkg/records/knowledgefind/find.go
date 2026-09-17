@@ -1633,7 +1633,7 @@ func fetchWordHits(ctx context.Context, text TextSearcher, q *query, fanout int)
 	want := fanout + 1
 	raw, err := text.Search(ctx, q.words, want)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("fetchWordHits: %w", err)
 	}
 
 	if !wordKindFilterActive(q.kind) {
@@ -1668,12 +1668,12 @@ func fetchWordHits(ctx context.Context, text TextSearcher, q *query, fanout int)
 		if ds, ok := text.(TextDeepSearcher); ok {
 			raw, exhausted, err = ds.SearchDeep(ctx, q.words, propindex.BoundSurvivors)
 			if err != nil {
-				return nil, false, err
+				return nil, false, fmt.Errorf("fetchWordHits: %w", err)
 			}
 		} else {
 			raw, err = text.Search(ctx, q.words, propindex.BoundSurvivors)
 			if err != nil {
-				return nil, false, err
+				return nil, false, fmt.Errorf("fetchWordHits: %w", err)
 			}
 			exhausted = false
 		}

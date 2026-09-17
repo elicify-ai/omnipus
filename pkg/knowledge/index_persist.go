@@ -451,7 +451,7 @@ func enforceEntryPermissions(path string, d fs.DirEntry, walkErr error) error {
 		if errors.Is(statErr, fs.ErrNotExist) {
 			return nil
 		}
-		return statErr
+		return fmt.Errorf("enforceEntryPermissions: %w", statErr)
 	}
 	if info.Mode().Perm() == want {
 		return nil
@@ -460,7 +460,7 @@ func enforceEntryPermissions(path string, d fs.DirEntry, walkErr error) error {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
-		return err
+		return fmt.Errorf("enforceEntryPermissions: %w", err)
 	}
 	return nil
 }

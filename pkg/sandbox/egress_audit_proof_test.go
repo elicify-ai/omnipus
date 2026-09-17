@@ -6,6 +6,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -113,7 +114,7 @@ func TestEgressProxy_AuditEntryShape(t *testing.T) {
 func readAuditFile(dir string) (string, error) {
 	matches, err := filepath.Glob(filepath.Join(dir, "audit*.jsonl"))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("readAuditFile: %w", err)
 	}
 	if len(matches) == 0 {
 		return "", nil
@@ -122,7 +123,7 @@ func readAuditFile(dir string) (string, error) {
 	for _, m := range matches {
 		f, err := os.Open(m)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("readAuditFile: %w", err)
 		}
 		b, err := io.ReadAll(f)
 		// Read-only handle; a Close error has no effect on the bytes
@@ -131,7 +132,7 @@ func readAuditFile(dir string) (string, error) {
 			_ = closeErr
 		}
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("readAuditFile: %w", err)
 		}
 		contents += string(b)
 	}

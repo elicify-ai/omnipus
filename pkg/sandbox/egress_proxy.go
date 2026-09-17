@@ -227,7 +227,10 @@ func (p *EgressProxy) Close() error {
 			slog.Warn("egress_proxy: CONNECT tunnels still active after Close timeout")
 		}
 	})
-	return err
+	if err != nil {
+		return fmt.Errorf("EgressProxy.Close: %w", err)
+	}
+	return nil
 }
 
 // ServeHTTP dispatches between CONNECT (HTTPS tunneling) and plain HTTP

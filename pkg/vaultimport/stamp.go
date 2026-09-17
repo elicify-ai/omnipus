@@ -428,7 +428,7 @@ func writeRecordIdentity(absPath, id string) error {
 	}
 	out, err := knowledge.SpliceRecordIdentity(src, id)
 	if err != nil {
-		return err
+		return fmt.Errorf("writeRecordIdentity: %w", err)
 	}
 
 	mode := os.FileMode(0o644)

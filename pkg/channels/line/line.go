@@ -124,13 +124,13 @@ func (c *LINEChannel) Start(ctx context.Context) error {
 func (c *LINEChannel) fetchBotInfo() error {
 	req, err := http.NewRequest(http.MethodGet, lineBotInfoEndpoint, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("LINEChannel.fetchBotInfo: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.accessToken)
 
 	resp, err := c.infoClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("LINEChannel.fetchBotInfo: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -144,7 +144,7 @@ func (c *LINEChannel) fetchBotInfo() error {
 		DisplayName string `json:"displayName"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return err
+		return fmt.Errorf("LINEChannel.fetchBotInfo: %w", err)
 	}
 
 	c.botUserID = info.UserID
@@ -590,7 +590,7 @@ func classifyLINEMediaFailure(sentCount int, err error) error {
 	if errors.Is(err, channels.ErrSendFailed) {
 		return err
 	}
-	return channels.ClassifyMediaSendError("line", sentCount, errors.New(err.Error()))
+	return fmt.Errorf("classifyLINEMediaFailure: %w", channels.ClassifyMediaSendError("line", sentCount, errors.New(err.Error())))
 }
 
 // SendMedia implements the channels.MediaSender interface.
@@ -741,16 +741,16 @@ func (c *LINEChannel) callAPI(ctx context.Context, endpoint string, payload any)
 
 	resp, err := c.apiClient.Do(req)
 	if err != nil {
-		return channels.ClassifyNetError(err)
+		return fmt.Errorf("LINEChannel.callAPI: %w", channels.ClassifyNetError(err))
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return channels.ClassifySendError(resp.StatusCode, fmt.Errorf("reading LINE API error response: %w", err))
+			return fmt.Errorf("LINEChannel.callAPI: %w", channels.ClassifySendError(resp.StatusCode, fmt.Errorf("reading LINE API error response: %w", err)))
 		}
-		return channels.ClassifySendError(resp.StatusCode, fmt.Errorf("LINE API error: %s", string(respBody)))
+		return fmt.Errorf("LINEChannel.callAPI: %w", channels.ClassifySendError(resp.StatusCode, fmt.Errorf("LINE API error: %s", string(respBody))))
 	}
 
 	return nil

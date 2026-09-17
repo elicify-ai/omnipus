@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"github.com/elicify-ai/omnipus/pkg/memory"
@@ -23,7 +24,11 @@ func NewJSONLBackend(store memory.Store) *JSONLBackend {
 // ReadArchive implements SessionStore — returns the full archived log including
 // evicted (skipped) turns (FR-016). TS==0 on legacy lines is not an error.
 func (b *JSONLBackend) ReadArchive(ctx context.Context, key string) ([]memory.ArchivedMessage, error) {
-	return b.store.ReadArchive(ctx, key)
+	archived, err := b.store.ReadArchive(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("JSONLBackend.ReadArchive: %w", err)
+	}
+	return archived, nil
 }
 
 // ScanArchive streams the archive for key line by line, stopping when fn
@@ -37,11 +42,14 @@ func (b *JSONLBackend) ScanArchive(
 	if sc, ok := b.store.(interface {
 		ScanArchive(ctx context.Context, sessionKey string, fn func(idx int, msg memory.ArchivedMessage) bool) error
 	}); ok {
-		return sc.ScanArchive(ctx, key, fn)
+		if err := sc.ScanArchive(ctx, key, fn); err != nil {
+			return fmt.Errorf("JSONLBackend.ScanArchive: %w", err)
+		}
+		return nil
 	}
 	msgs, err := b.store.ReadArchive(ctx, key)
 	if err != nil {
-		return err
+		return fmt.Errorf("JSONLBackend.ScanArchive: %w", err)
 	}
 	for i, m := range msgs {
 		if !fn(i, m) {
@@ -134,5 +142,8 @@ func (b *JSONLBackend) Save(key string) error {
 
 // Close releases resources held by the underlying store.
 func (b *JSONLBackend) Close() error {
-	return b.store.Close()
+	if err := b.store.Close(); err != nil {
+		return fmt.Errorf("JSONLBackend.Close: %w", err)
+	}
+	return nil
 }

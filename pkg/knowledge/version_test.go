@@ -821,13 +821,13 @@ func waitAtBarrier(dir string, peers int) error {
 	}
 	self := filepath.Join(dir, strconv.Itoa(os.Getpid()))
 	if err := os.WriteFile(self, []byte("ready"), 0o600); err != nil {
-		return err
+		return fmt.Errorf("waitAtBarrier: %w", err)
 	}
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			return err
+			return fmt.Errorf("waitAtBarrier: %w", err)
 		}
 		if len(entries) >= peers {
 			return nil

@@ -60,7 +60,7 @@ const resumeDirName = "resume"
 func memberResumeDir(home, wsID, taskID string) (string, error) {
 	wsDir, err := workspace.SafeWorkspaceDir(home, wsID)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("memberResumeDir: %w", err)
 	}
 	if taskID == "" || strings.ContainsAny(taskID, "/\\") || strings.Contains(taskID, "..") {
 		return "", fmt.Errorf("gitevidence resume checkout: unsafe task id %q", taskID)
@@ -94,11 +94,11 @@ func (r *LastMemberCommitResolver) LastMemberCommit(planID, taskID string) (stri
 				map[string]any{"plan_id": planID, "task_id": taskID, "dir": dir})
 			return "", nil
 		}
-		return "", err
+		return "", fmt.Errorf("LastMemberCommitResolver.LastMemberCommit: %w", err)
 	}
 	hash, err := repo.LastCommitForTask(taskID)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("LastMemberCommitResolver.LastMemberCommit: %w", err)
 	}
 	return hash, nil
 }
@@ -289,7 +289,7 @@ func (c *WorkspaceEvidenceCommitter) CommitTaskBoundary(t *task.Task) (result *g
 		AgentID:   t.AgentID,
 	}, t.WriteSet)
 	if commitErr != nil {
-		return nil, false, commitErr
+		return nil, false, fmt.Errorf("WorkspaceEvidenceCommitter.CommitTaskBoundary: %w", commitErr)
 	}
 	return res, true, nil
 }

@@ -837,7 +837,7 @@ const (
 func marshalWithinBudget(v any, shrinkable ...*string) ([]byte, error) {
 	encoded, err := json.Marshal(v)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshalWithinBudget: %w", err)
 	}
 	for _, f := range shrinkable {
 		if f == nil {
@@ -851,7 +851,7 @@ func marshalWithinBudget(v any, shrinkable ...*string) ([]byte, error) {
 			*f = clampRefusalField(*f, max(1, n/2))
 			encoded, err = json.Marshal(v)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("marshalWithinBudget: %w", err)
 			}
 		}
 		if len([]rune(string(encoded))) <= maxRefusalPayloadRunes {
@@ -927,11 +927,15 @@ func MediaResult(forLLM string, mediaRefs []string) *ToolResult {
 // The Err field is excluded from JSON output via the json:"-" tag.
 func (tr *ToolResult) MarshalJSON() ([]byte, error) {
 	type Alias ToolResult
-	return json.Marshal(&struct {
+	b, err := json.Marshal(&struct {
 		*Alias
 	}{
 		Alias: (*Alias)(tr),
 	})
+	if err != nil {
+		return nil, fmt.Errorf("ToolResult.MarshalJSON: %w", err)
+	}
+	return b, nil
 }
 
 // WithError sets the Err field and returns the result for chaining.

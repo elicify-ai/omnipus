@@ -183,7 +183,7 @@ func NewTaskTriggerScheduler(storePath string, store *task.Store, executor *Task
 func (s *TaskTriggerScheduler) Start() error {
 	s.cs.SetRunner(s)
 	if err := s.cs.Start(); err != nil {
-		return err
+		return fmt.Errorf("TaskTriggerScheduler.Start: %w", err)
 	}
 	s.startSweep()
 	return nil
@@ -540,7 +540,7 @@ func (s *TaskTriggerScheduler) replaceJobLocked(
 	}
 	job, err := s.cs.AddJobFull(spec)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("TaskTriggerScheduler.replaceJobLocked: %w", err)
 	}
 	s.taskToJob[taskID] = trackedTrigger{jobID: job.ID, generation: generation}
 	return job, nil

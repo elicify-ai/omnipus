@@ -17,6 +17,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -131,7 +132,13 @@ func TestSweepAfterRun_WarnsOncePerPartialRun(t *testing.T) {
 
 type nopFlushWriter struct{ b *strings.Builder }
 
-func (w *nopFlushWriter) Write(p []byte) (int, error) { return w.b.Write(p) }
+func (w *nopFlushWriter) Write(p []byte) (int, error) {
+	n, err := w.b.Write(p)
+	if err != nil {
+		return 0, fmt.Errorf("write: %w", err)
+	}
+	return n, nil
+}
 
 // TestEscapeSweepMountsUnresolvedNote pins the honesty note appended when
 // findings are reported but the turn's mount list could not be resolved

@@ -38,6 +38,7 @@
 package tools
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -195,7 +196,7 @@ func scanTwoValueDeleters(t *testing.T) map[string]bool {
 		}
 		rel, rErr := filepath.Rel(filepath.Dir(root), path)
 		if rErr != nil {
-			return rErr
+			return fmt.Errorf("relative path %s: %w", path, rErr)
 		}
 		pkgDir := filepath.ToSlash(filepath.Dir(rel))
 		// pkg/task declares Delete; it cannot import pkg/goal and is the store
@@ -205,7 +206,7 @@ func scanTwoValueDeleters(t *testing.T) map[string]bool {
 		}
 		file, pErr := parser.ParseFile(fset, path, nil, 0)
 		if pErr != nil {
-			return pErr
+			return fmt.Errorf("parse %s: %w", path, pErr)
 		}
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)

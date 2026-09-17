@@ -30,6 +30,7 @@
 package agent
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -90,7 +91,7 @@ func registerRealGoalCounter(pe *PlanEngine, s *goal.Store) {
 	pe.RegisterActiveCounter("goal", func() (int, error) {
 		active, err := s.ListActiveByOwnerKind(generated.GoalOwnerKindSession)
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("list active goals: %w", err)
 		}
 		return len(active), nil
 	})

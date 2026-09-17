@@ -7,6 +7,7 @@ package vaultprops
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -153,7 +154,7 @@ func TestRelationResolver_ResolvingInsideACandidateStreamDoesNotDeadlock(t *test
 				return propindex.Accepted, nil
 			})
 		if err != nil {
-			return err
+			return fmt.Errorf("reconcile: %w", err)
 		}
 		if resolved != 2 {
 			t.Errorf("expected both deals' `company` relations to resolve to a record, resolved %d", resolved)
@@ -187,7 +188,7 @@ func TestRelationResolver_ResolvingInsideARelationStreamDoesNotDeadlock(t *testi
 			return nil
 		})
 		if err != nil {
-			return err
+			return fmt.Errorf("reconcile: %w", err)
 		}
 		if edges == 0 {
 			t.Error("the fixture produced no relation edges; nothing above would mean anything")

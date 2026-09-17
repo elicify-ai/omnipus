@@ -1104,11 +1104,14 @@ func (t *RecallConversationTool) scanForToolResult(
 		return true
 	}
 	if sc, ok := t.archive.(ConversationArchiveScanner); ok {
-		return hit, sc.ScanArchive(ctx, sessionKey, visit)
+		if err := sc.ScanArchive(ctx, sessionKey, visit); err != nil {
+			return hit, fmt.Errorf("RecallConversationTool.scanForToolResult: %w", err)
+		}
+		return hit, nil
 	}
 	archived, err := t.archive.ReadArchive(ctx, sessionKey)
 	if err != nil {
-		return hit, err
+		return hit, fmt.Errorf("RecallConversationTool.scanForToolResult: %w", err)
 	}
 	for i, m := range archived {
 		if !visit(i, m) {

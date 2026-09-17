@@ -50,7 +50,11 @@ import (
 // parseTestURL parses a raw URL string and returns a *url.URL.
 // Used in tests to construct httputil.ReverseProxy targets.
 func parseTestURL(rawURL string) (*url.URL, error) {
-	return url.Parse(rawURL)
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("parseTestURL %s: %w", rawURL, err)
+	}
+	return u, nil
 }
 
 // ---------------------------------------------------------------------------

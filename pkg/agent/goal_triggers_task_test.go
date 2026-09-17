@@ -47,6 +47,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -156,7 +157,7 @@ func mintTaskRunGoal(
 	if _, uerr := gs.Update(rec.GoalID, func(cur *goal.Goal) error {
 		cur.Round = roundsUsed
 		if serr := cur.SetCriteria(criteria, past); serr != nil {
-			return serr
+			return fmt.Errorf("Goal.SetCriteria: %w", serr)
 		}
 		started := past
 		cur.StartedAt = &started
@@ -209,7 +210,7 @@ func armTaskGoalRecord(
 	if _, uerr := gs.Update(gid, func(cur *goal.Goal) error {
 		cur.Round = roundsUsed
 		if serr := cur.SetCriteria(criteria, past); serr != nil {
-			return serr
+			return fmt.Errorf("Goal.SetCriteria: %w", serr)
 		}
 		started := past
 		cur.StartedAt = &started

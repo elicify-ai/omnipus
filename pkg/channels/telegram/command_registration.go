@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"slices"
 	"time"
@@ -52,9 +53,12 @@ func (c *TelegramChannel) RegisterCommands(ctx context.Context, defs []commands.
 		return nil
 	}
 
-	return c.bot.SetMyCommands(ctx, &telego.SetMyCommandsParams{
+	if err := c.bot.SetMyCommands(ctx, &telego.SetMyCommandsParams{
 		Commands: botCommands,
-	})
+	}); err != nil {
+		return fmt.Errorf("TelegramChannel.RegisterCommands: %w", err)
+	}
+	return nil
 }
 
 func (c *TelegramChannel) startCommandRegistration(ctx context.Context, defs []commands.Definition) {

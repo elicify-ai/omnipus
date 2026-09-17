@@ -2,6 +2,7 @@ package feishu
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -35,7 +36,7 @@ func buildMarkdownCard(content string) (string, error) {
 	}
 	data, err := json.Marshal(card)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("buildMarkdownCard: %w", err)
 	}
 	return string(data), nil
 }

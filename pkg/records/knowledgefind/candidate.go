@@ -5,6 +5,7 @@
 package knowledgefind
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/records"
@@ -147,7 +148,7 @@ func (c *candidate) storedValue(prop *records.Property) (records.PropertyValue, 
 	}
 	v, err := sp.Typed(prop)
 	if err != nil {
-		return records.PropertyValue{}, err
+		return records.PropertyValue{}, fmt.Errorf("candidate.storedValue: %w", err)
 	}
 	v.Property = prop
 	c.memo[prop.Name] = v
@@ -210,7 +211,7 @@ func (c *candidate) rawValue(prop *records.Property, sp propindex.StoredProp) (r
 func (c *candidate) fileValue(prop *records.Property) (records.PropertyValue, error) {
 	v, err := records.ResolveFileProperty(prop.Name, c.file)
 	if err != nil {
-		return records.PropertyValue{}, err
+		return records.PropertyValue{}, fmt.Errorf("candidate.fileValue: %w", err)
 	}
 	v.Property = prop
 	c.memo[prop.Name] = v

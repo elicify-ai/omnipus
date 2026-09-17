@@ -1300,7 +1300,7 @@ func allocateRecordID(home string, col *knowledge.Collection, sc *records.Schema
 			sc.Type, maxIdentityMintAttempts)
 	})
 	if lockErr != nil {
-		return "", 0, lockErr
+		return "", 0, fmt.Errorf("allocateRecordID: %w", lockErr)
 	}
 	return id, minted, nil
 }
@@ -1366,11 +1366,11 @@ func liveRecordIDs(col *knowledge.Collection, sc *records.Schema) (map[string]st
 	fsys := knowledge.OSLinkFS()
 	root, err := knowledge.NewCollectionRoot(fsys, col.Root())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("liveRecordIDs: %w", err)
 	}
 	wr, err := knowledge.WalkContained(fsys, root)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("liveRecordIDs: %w", err)
 	}
 	out := make(map[string]string, len(wr.Files))
 	for _, rel := range wr.Files {

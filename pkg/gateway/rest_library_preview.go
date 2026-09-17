@@ -65,6 +65,7 @@ package gateway
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -791,19 +792,19 @@ func openWithinPreviewScope(home string, g PreviewGrant, rel string) (*os.File, 
 
 	scopeRoot, scopeErr := base.OpenRoot(baseSub)
 	if scopeErr != nil {
-		return nil, nil, scopeErr
+		return nil, nil, fmt.Errorf("openWithinPreviewScope: %w", scopeErr)
 	}
 	// Closing the root does not invalidate a file already opened through it.
 	defer scopeRoot.Close()
 
 	f, openErr := scopeRoot.Open(within)
 	if openErr != nil {
-		return nil, nil, openErr
+		return nil, nil, fmt.Errorf("openWithinPreviewScope: %w", openErr)
 	}
 	fi, statErr := f.Stat()
 	if statErr != nil {
 		_ = f.Close()
-		return nil, nil, statErr
+		return nil, nil, fmt.Errorf("openWithinPreviewScope: %w", statErr)
 	}
 	return f, fi, nil
 }
@@ -849,7 +850,7 @@ func previewScopeSplit(g PreviewGrant, rel string) (scopeDir, within string, err
 func openPreviewScopeBase(home, workspaceID, scopeDir string) (*os.Root, string, error) {
 	lib, libErr := library.OpenRoot(home, workspaceID)
 	if libErr != nil {
-		return nil, "", libErr
+		return nil, "", fmt.Errorf("openPreviewScopeBase: %w", libErr)
 	}
 	defer lib.Close()
 
@@ -860,18 +861,18 @@ func openPreviewScopeBase(home, workspaceID, scopeDir string) (*os.Root, string,
 		}
 		root, err := os.OpenRoot(target)
 		if err != nil {
-			return nil, "", err
+			return nil, "", fmt.Errorf("openPreviewScopeBase: %w", err)
 		}
 		return root, rest, nil
 	}
 
 	workDir, wdErr := workspace.SafeWorkDir(home, workspaceID)
 	if wdErr != nil {
-		return nil, "", wdErr
+		return nil, "", fmt.Errorf("openPreviewScopeBase: %w", wdErr)
 	}
 	root, err := os.OpenRoot(workDir)
 	if err != nil {
-		return nil, "", err
+		return nil, "", fmt.Errorf("openPreviewScopeBase: %w", err)
 	}
 	sub := scopeDir
 	if sub == "" {

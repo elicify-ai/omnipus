@@ -16,6 +16,7 @@
 package gateway
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -68,11 +69,11 @@ func (l *yamlURLLoader) Load(url string) (any, error) {
 	path := strings.TrimPrefix(url, "file://")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("yamlURLLoader.Load: %w", err)
 	}
 	var v any
 	if err := yaml.Unmarshal(data, &v); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("yamlURLLoader.Load: %w", err)
 	}
 	return jsonifyYAML(v), nil
 }

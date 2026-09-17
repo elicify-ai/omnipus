@@ -655,14 +655,14 @@ func (t *HoverTool) Execute(ctx context.Context, args map[string]any) *tools.Too
 		chromedp.ActionFunc(func(c context.Context) error {
 			var nodes []*cdp.Node
 			if nerr := chromedp.Nodes(target, &nodes, chromedp.ByQuery).Do(c); nerr != nil {
-				return nerr
+				return fmt.Errorf("locate element: %w", nerr)
 			}
 			if len(nodes) == 0 {
 				return fmt.Errorf("element vanished after the actionability check")
 			}
 			box, berr := dom.GetBoxModel().WithNodeID(nodes[0].NodeID).Do(c)
 			if berr != nil {
-				return berr
+				return fmt.Errorf("get element box: %w", berr)
 			}
 			// Content quad is x1,y1,x2,y2,x3,y3,x4,y4. The centre of the box
 			// is the average of the two opposite corners — correct for a

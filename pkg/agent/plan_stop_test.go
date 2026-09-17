@@ -302,7 +302,7 @@ func TestPlanEngine_StopPlan_NoEscapeUnderConcurrentDispatch(t *testing.T) {
 			inProgress := task.StatusInProgress
 			sess := "sess-" + taskID
 			_, err := h.tasks.Update(taskID, task.Patch{Status: &inProgress, SessionID: &sess})
-			return err
+			return fmt.Errorf("update task %s: %w", taskID, err)
 		}
 
 		var wg sync.WaitGroup

@@ -124,7 +124,7 @@ func copyEmbeddedSkill(name, destSkillDir string) error {
 		}
 		rel, relErr := filepath.Rel(srcRoot, p)
 		if relErr != nil {
-			return relErr
+			return fmt.Errorf("relative path %s: %w", p, relErr)
 		}
 		target := filepath.Join(tmpDir, rel)
 		if d.IsDir() {
@@ -135,12 +135,12 @@ func copyEmbeddedSkill(name, destSkillDir string) error {
 			return fmt.Errorf("read embedded file %q: %w", p, readErr)
 		}
 		if mkErr := os.MkdirAll(filepath.Dir(target), 0o755); mkErr != nil {
-			return mkErr
+			return fmt.Errorf("make target dir %q: %w", target, mkErr)
 		}
 		return os.WriteFile(target, data, 0o644)
 	})
 	if walkErr != nil {
-		return walkErr
+		return fmt.Errorf("copyEmbeddedSkill: %w", walkErr)
 	}
 
 	// UAT batch3 S68 (see authoring.go's builtinMarkerFile doc comment): stamp

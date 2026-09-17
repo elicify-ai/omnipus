@@ -2,6 +2,7 @@ package sandbox_test
 
 import (
 	"errors"
+	"fmt"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -258,5 +259,9 @@ func TestSpawnBackgroundChild_LogAccumulates(t *testing.T) {
 // file written by a child process.
 func readFile(t *testing.T, path string) ([]byte, error) {
 	t.Helper()
-	return exec.Command("cat", path).Output()
+	out, err := exec.Command("cat", path).Output()
+	if err != nil {
+		return nil, fmt.Errorf("readFile %s: %w", path, err)
+	}
+	return out, nil
 }

@@ -174,7 +174,7 @@ func Seed(destRoot string) (dir string, err error) {
 		}
 		rel, relErr := filepath.Rel(embeddedRoot, p)
 		if relErr != nil {
-			return relErr
+			return fmt.Errorf("relative path %s: %w", p, relErr)
 		}
 		target := filepath.Join(tmpDir, rel)
 		if d.IsDir() {
@@ -185,7 +185,7 @@ func Seed(destRoot string) (dir string, err error) {
 			return fmt.Errorf("read embedded file %q: %w", p, readErr)
 		}
 		if mkErr := os.MkdirAll(filepath.Dir(target), 0o755); mkErr != nil {
-			return mkErr
+			return fmt.Errorf("make target dir %q: %w", target, mkErr)
 		}
 		return os.WriteFile(target, data, 0o644)
 	})
@@ -234,7 +234,7 @@ func seededContentMatches(destDir string) (bool, error) {
 		}
 		rel, relErr := filepath.Rel(embeddedRoot, p)
 		if relErr != nil {
-			return relErr
+			return fmt.Errorf("relative path %s: %w", p, relErr)
 		}
 		want, readErr := embeddedExt.ReadFile(p)
 		if readErr != nil {
@@ -263,5 +263,8 @@ func seededContentMatches(destDir string) (bool, error) {
 		}
 		return nil
 	})
-	return match, err
+	if err != nil {
+		return match, fmt.Errorf("seededContentMatches: %w", err)
+	}
+	return match, nil
 }

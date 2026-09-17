@@ -277,7 +277,10 @@ func (c *DiscordChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMes
 // EditMessage implements channels.MessageEditor.
 func (c *DiscordChannel) EditMessage(ctx context.Context, chatID string, messageID string, content string) error {
 	_, err := c.session.ChannelMessageEdit(chatID, messageID, content)
-	return err
+	if err != nil {
+		return fmt.Errorf("DiscordChannel.EditMessage: %w", err)
+	}
+	return nil
 }
 
 // SendPlaceholder implements channels.PlaceholderCapable.
@@ -292,7 +295,7 @@ func (c *DiscordChannel) SendPlaceholder(ctx context.Context, chatID string) (st
 
 	msg, err := c.session.ChannelMessageSend(chatID, text)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("DiscordChannel.SendPlaceholder: %w", err)
 	}
 
 	return msg.ID, nil

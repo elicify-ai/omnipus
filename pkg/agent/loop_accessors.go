@@ -462,7 +462,10 @@ func (al *AgentLoop) RecordLastChannel(channel string) error {
 	if al.state == nil {
 		return nil
 	}
-	return al.state.SetLastChannel(channel)
+	if err := al.state.SetLastChannel(channel); err != nil {
+		return fmt.Errorf("AgentLoop.RecordLastChannel: %w", err)
+	}
+	return nil
 }
 
 // RecordLastChatID records the last active chat ID for this workspace.
@@ -471,7 +474,10 @@ func (al *AgentLoop) RecordLastChatID(chatID string) error {
 	if al.state == nil {
 		return nil
 	}
-	return al.state.SetLastChatID(chatID)
+	if err := al.state.SetLastChatID(chatID); err != nil {
+		return fmt.Errorf("AgentLoop.RecordLastChatID: %w", err)
+	}
+	return nil
 }
 
 // GetStartupInfo returns information about loaded tools and skills for logging.

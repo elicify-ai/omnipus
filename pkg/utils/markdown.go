@@ -2,6 +2,7 @@ package utils
 
 import (
 	"bytes"
+	"fmt"
 	"net/url"
 	"regexp"
 	"strconv"
@@ -373,7 +374,7 @@ func (c *converter) walk(n *html.Node) {
 func HtmlToMarkdown(htmlStr string) (string, error) {
 	doc, err := html.Parse(strings.NewReader(htmlStr))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("HtmlToMarkdown: %w", err)
 	}
 
 	c := newConverter()

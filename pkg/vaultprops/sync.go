@@ -323,7 +323,7 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 		// able to tell the difference between "nothing needed indexing" and
 		// "this platform cannot index it at all", which a nil error here
 		// would erase.
-		return stats, err
+		return stats, fmt.Errorf("Sync: %w", err)
 	}
 
 	realRoot, err := knowledge.ResolveCollectionRoot(collectionRoot)
@@ -395,7 +395,7 @@ func Sync(ctx context.Context, home, collectionRoot string, opts SyncOptions) (S
 		return syncReconcileBody(ctx, s, root, fsys, &stats)
 	})
 	if rerr != nil {
-		return stats, rerr
+		return stats, fmt.Errorf("Sync: %w", rerr)
 	}
 
 	// FR-032 is enforced at the TOP of this function and inside

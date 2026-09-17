@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -296,7 +297,10 @@ func (r *LiveViewRegistry) handleTabsChanged(sessionID string, tabs []Tab, activ
 func runCDPWithTimeout(ctx context.Context, timeout time.Duration, actions ...chromedp.Action) error {
 	boundedCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	return chromedp.Run(boundedCtx, actions...)
+	if err := chromedp.Run(boundedCtx, actions...); err != nil {
+		return fmt.Errorf("runCDPWithTimeout: %w", err)
+	}
+	return nil
 }
 
 // resolveSessionID resolves an omitted session id to the WORKSPACE-OWNED tab

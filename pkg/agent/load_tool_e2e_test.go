@@ -27,6 +27,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -70,7 +71,11 @@ func (r *perCallRecorder) Chat(
 	r.mu.Lock()
 	r.callMsgs = append(r.callMsgs, snapshot)
 	r.mu.Unlock()
-	return r.inner.Chat(ctx, messages, tools, model, options)
+	resp, err := r.inner.Chat(ctx, messages, tools, model, options)
+	if err != nil {
+		return nil, fmt.Errorf("Chat: %w", err)
+	}
+	return resp, nil
 }
 
 // GetDefaultModel delegates to the inner provider.

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -258,7 +259,13 @@ func (rw *testResponseWriter) Header() http.Header { return rw.header }
 
 func (rw *testResponseWriter) WriteHeader(code int) { rw.code = code }
 
-func (rw *testResponseWriter) Write(b []byte) (int, error) { return rw.body.Write(b) }
+func (rw *testResponseWriter) Write(b []byte) (int, error) {
+	n, err := rw.body.Write(b)
+	if err != nil {
+		return 0, fmt.Errorf("write: %w", err)
+	}
+	return n, nil
+}
 
 func newTestReq(t *testing.T, method, path string, _ any) *http.Request {
 	t.Helper()

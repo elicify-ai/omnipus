@@ -154,7 +154,7 @@ func (pe *PlanEngine) bootSweep(ctx context.Context, ls *session.LifecycleStore,
 
 	records, err := ls.List(session.LifecycleFilter{NonTerminalOnly: true})
 	if err != nil {
-		return result, err
+		return result, fmt.Errorf("PlanEngine.bootSweep: %w", err)
 	}
 	result.Scanned = len(records)
 
@@ -239,7 +239,7 @@ func (pe *PlanEngine) sweepToFailedInterrupted(ls *session.LifecycleStore, rec *
 	// awaiting input — it was interrupted).
 	failed.NeedsInput = nil
 	if err := ls.Persist(&failed); err != nil {
-		return err
+		return fmt.Errorf("PlanEngine.sweepToFailedInterrupted: %w", err)
 	}
 	pe.reconcileUnifiedMetaStatus(&failed)
 	// Fire the session.failed hook best-effort (FR-118 deliverable 3): a hook
@@ -575,7 +575,7 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 		if err := pe.taskStore.Create(&clone); err != nil {
 			// A collision that isn't "exists" is a real error — surface it so
 			// ReplayAtBoot marks the intent not-done and retries next boot.
-			return err
+			return fmt.Errorf("PlanEngine.applyIntentRecord: %w", err)
 		}
 	}
 
@@ -645,7 +645,7 @@ func (pe *PlanEngine) applyIntentRecord(rec plan.IntentRecord) error {
 		// replay-blocking error — the correction's target vanished, so the
 		// intent is effectively done. Anything else surfaces.
 		if !errors.Is(err, plan.ErrNotFound) {
-			return err
+			return fmt.Errorf("PlanEngine.applyIntentRecord: %w", err)
 		}
 	}
 	return nil

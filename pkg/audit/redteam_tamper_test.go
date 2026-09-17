@@ -30,6 +30,7 @@ package audit_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -250,7 +251,7 @@ func dropLastLine(in []byte) []byte {
 func rewriteDecision(path string, lineIdx int, from, to string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("rewriteDecision: %w", err)
 	}
 
 	lines := splitJSONLines(data)
@@ -260,7 +261,7 @@ func rewriteDecision(path string, lineIdx int, from, to string) error {
 
 	var entry map[string]any
 	if unmarshalErr := json.Unmarshal(lines[lineIdx], &entry); unmarshalErr != nil {
-		return unmarshalErr
+		return fmt.Errorf("rewriteDecision: %w", unmarshalErr)
 	}
 	got, ok := entry["decision"].(string)
 	if !ok || got != from {
@@ -270,7 +271,7 @@ func rewriteDecision(path string, lineIdx int, from, to string) error {
 
 	rewritten, err := json.Marshal(entry)
 	if err != nil {
-		return err
+		return fmt.Errorf("rewriteDecision: %w", err)
 	}
 	lines[lineIdx] = rewritten
 
@@ -280,7 +281,10 @@ func rewriteDecision(path string, lineIdx int, from, to string) error {
 		out = append(out, l...)
 		out = append(out, '\n')
 	}
-	return os.WriteFile(path, out, 0o600)
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		return fmt.Errorf("rewriteDecision: %w", err)
+	}
+	return nil
 }
 
 // splitJSONLines splits a JSONL byte slice into per-line slices, dropping

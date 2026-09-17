@@ -144,7 +144,10 @@ func (s *JSONLStore) writeMeta(key string, meta sessionMeta) error {
 	if err != nil {
 		return fmt.Errorf("memory: encode meta: %w", err)
 	}
-	return fileutil.WriteFileAtomic(s.metaPath(key), data, 0o644)
+	if err := fileutil.WriteFileAtomic(s.metaPath(key), data, 0o644); err != nil {
+		return fmt.Errorf("JSONLStore.writeMeta: %w", err)
+	}
+	return nil
 }
 
 // readMessages reads valid JSON lines from a .jsonl file, skipping
@@ -228,7 +231,10 @@ func countLines(path string) (int, error) {
 			n++
 		}
 	}
-	return n, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return n, fmt.Errorf("countLines: %w", err)
+	}
+	return n, nil
 }
 
 func (s *JSONLStore) AddMessage(
@@ -767,7 +773,10 @@ func (s *JSONLStore) rewriteJSONL(
 		buf.Write(line)
 		buf.WriteByte('\n')
 	}
-	return fileutil.WriteFileAtomic(s.jsonlPath(sessionKey), buf.Bytes(), 0o644)
+	if err := fileutil.WriteFileAtomic(s.jsonlPath(sessionKey), buf.Bytes(), 0o644); err != nil {
+		return fmt.Errorf("JSONLStore.rewriteJSONL: %w", err)
+	}
+	return nil
 }
 
 func (s *JSONLStore) Close() error {

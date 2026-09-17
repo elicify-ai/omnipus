@@ -4,6 +4,7 @@ package openai_responses_common
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 
@@ -218,7 +219,7 @@ func TranslateTools(tools []protocoltypes.ToolDefinition, enableWebSearch bool) 
 func ParseResponseBody(body io.Reader) (*protocoltypes.LLMResponse, error) {
 	var apiResp responses.Response
 	if err := json.NewDecoder(body).Decode(&apiResp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ParseResponseBody: %w", err)
 	}
 
 	return parseResponse(&apiResp)
@@ -287,7 +288,7 @@ func parseResponse(apiResp *responses.Response) (*protocoltypes.LLMResponse, err
 				json.RawMessage(item.Arguments.OfString), item.Name,
 			)
 			if err != nil {
-				return nil, common.AttachToolArgumentsEvidence(err, truncationEvidenceReason, usage)
+				return nil, fmt.Errorf("parseResponse: %w", common.AttachToolArgumentsEvidence(err, truncationEvidenceReason, usage))
 			}
 			toolCalls = append(toolCalls, protocoltypes.ToolCall{
 				ID:        item.CallID,

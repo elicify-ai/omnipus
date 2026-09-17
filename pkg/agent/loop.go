@@ -2933,7 +2933,10 @@ func formatToolsForLog(toolDefs []providers.ToolDefinition) string {
 // projection entries below the new Skip are pruned in the same meta write.
 func clearSessionWindow(sessions session.SessionStore, sessionKey string) error {
 	sessions.TruncateHistory(sessionKey, 0)
-	return sessions.Save(sessionKey)
+	if err := sessions.Save(sessionKey); err != nil {
+		return fmt.Errorf("clearSessionWindow: %w", err)
+	}
+	return nil
 }
 
 // isNativeSearchProvider reports whether the given LLM provider implements

@@ -13,6 +13,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -451,7 +452,7 @@ func TestEmitGoalStatusRehydrate_RegisteredGoal_DeliversRecordCarryingFrame(t *t
 			Text:   "it renders and accepts input",
 			Author: task.CriterionAuthor{Kind: task.AuthorKindAgent, ID: "tester"},
 		}}, time.Now().UTC()); serr != nil {
-			return serr
+			return fmt.Errorf("Goal.SetCriteria: %w", serr)
 		}
 		return cur.SetDoD([]task.AcceptanceCriterion{{
 			ID: "d1", Kind: task.KindProse, Judgment: task.JudgmentBoolean,

@@ -112,7 +112,7 @@ func (us *UnifiedStore) u5WritePendingAskLocked(sessionID string, meta *UnifiedM
 	if err := fileutil.WithFlock(sessionFileLockPath(pendingAskPath), func() error {
 		return writeFileAtomicFn(pendingAskPath, data, 0o600)
 	}); err != nil {
-		return err
+		return fmt.Errorf("UnifiedStore.u5WritePendingAskLocked: %w", err)
 	}
 
 	us.cacheMu.Lock()

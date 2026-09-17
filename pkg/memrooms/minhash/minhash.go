@@ -24,6 +24,7 @@ package minhash
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/fnv"
 	"math"
 	"strings"
@@ -144,7 +145,10 @@ func IsNearDup(a, b Signature, threshold float64) bool {
 // AppendNearDupRecord appends a NearDupRecord to minhashJSONLPath.
 // Non-destructive: the new memory is NOT deleted — this record is a link only.
 func AppendNearDupRecord(minhashJSONLPath string, rec NearDupRecord) error {
-	return fileutil.AppendJSONL(minhashJSONLPath, rec)
+	if err := fileutil.AppendJSONL(minhashJSONLPath, rec); err != nil {
+		return fmt.Errorf("AppendNearDupRecord: %w", err)
+	}
+	return nil
 }
 
 // --- internal helpers -------------------------------------------------------

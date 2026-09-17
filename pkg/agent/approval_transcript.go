@@ -312,7 +312,7 @@ func mutateToolCallInTranscript(
 					return fmt.Errorf("transcript mutate: stat session dir: %w", dirErr)
 				}
 			}
-			return err
+			return fmt.Errorf("transcript mutate: read transcript: %w", err)
 		}
 
 		// Preserve malformed lines verbatim so the file layout is unchanged on
@@ -364,7 +364,7 @@ func mutateToolCallInTranscript(
 
 		rewritten, mErr := json.Marshal(updatedEntry)
 		if mErr != nil {
-			return mErr
+			return fmt.Errorf("transcript mutate: marshal updated entry: %w", mErr)
 		}
 		rawLines[targetIdx] = rewritten
 
@@ -379,7 +379,7 @@ func mutateToolCallInTranscript(
 			buf.WriteByte('\n')
 		}
 		if wErr := fileutil.WriteFileAtomic(transcriptPath, buf.Bytes(), 0o600); wErr != nil {
-			return wErr
+			return fmt.Errorf("transcript mutate: write transcript: %w", wErr)
 		}
 		found = true
 		return nil

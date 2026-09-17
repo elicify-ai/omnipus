@@ -818,7 +818,10 @@ func (l *Logger) Close() error {
 	if flushErr != nil {
 		return fmt.Errorf("audit: flush on close failed: %w", flushErr)
 	}
-	return closeErr
+	if closeErr != nil {
+		return fmt.Errorf("Logger.Close: %w", closeErr)
+	}
+	return nil
 }
 
 // RunRetentionCleanup deletes rotated audit files older than the retention period.

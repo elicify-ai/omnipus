@@ -375,7 +375,10 @@ func (r *armReader) Read(p []byte) (int, error) {
 	if n > 0 && r.onByte != nil {
 		r.onByte()
 	}
-	return n, err
+	if err != nil {
+		return n, fmt.Errorf("armReader.Read: %w", err)
+	}
+	return n, nil
 }
 
 func (p *Provider) GetDefaultModel() string {
@@ -653,7 +656,7 @@ func parseResponse(resp *anthropic.Message) (*LLMResponse, error) {
 				// string spelling ("max_tokens") already matches the
 				// normalised spelling AttachToolArgumentsEvidence looks
 				// for, so it is passed through unmapped.
-				return nil, common.AttachToolArgumentsEvidence(err, string(resp.StopReason), usage)
+				return nil, fmt.Errorf("parseResponse: %w", common.AttachToolArgumentsEvidence(err, string(resp.StopReason), usage))
 			}
 			toolCalls = append(toolCalls, ToolCall{
 				ID:        tu.ID,

@@ -147,7 +147,10 @@ func (w *liveDocumentWatch) initialize(initializePicture bool) {
 	err := w.lv.runCDP(ctx, documentPaintTimeout, chromedp.ActionFunc(func(ctx context.Context) error {
 		var err error
 		tree, err = page.GetFrameTree().Do(ctx)
-		return err
+		if err != nil {
+			return fmt.Errorf("get frame tree: %w", err)
+		}
+		return nil
 	}))
 	if err != nil {
 		if work != nil || w.lv.mgr.CaptureSessionForPanel(w.lv.sessionID) == nil {
@@ -398,7 +401,10 @@ func (w *liveDocumentWatch) resumeUnchangedWithoutFrame(work *liveDocumentWork) 
 	err := w.lv.runCDP(ctx, documentPaintTimeout, chromedp.ActionFunc(func(ctx context.Context) error {
 		var err error
 		tree, err = page.GetFrameTree().Do(ctx)
-		return err
+		if err != nil {
+			return fmt.Errorf("get frame tree: %w", err)
+		}
+		return nil
 	}))
 	if err != nil {
 		w.reportFailure(work, err)
@@ -517,7 +523,10 @@ func (w *liveDocumentWatch) reconcileDocument(ctx context.Context, work *liveDoc
 	err := w.lv.runCDP(ctx, time.Until(work.deadline), chromedp.ActionFunc(func(ctx context.Context) error {
 		var err error
 		tree, err = page.GetFrameTree().Do(ctx)
-		return err
+		if err != nil {
+			return fmt.Errorf("get frame tree: %w", err)
+		}
+		return nil
 	}))
 	w.mu.Lock()
 	defer w.mu.Unlock()

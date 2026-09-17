@@ -112,9 +112,12 @@ func (s *Store) write(p *Plan) error {
 	path := s.path(p.ID)
 	// Lock the plan file's sidecar, never the file this write renames over
 	// (see fileutil.SidecarLockPath).
-	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+	if err := fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
 		return writeFileAtomicFn(path, data, 0o600)
-	})
+	}); err != nil {
+		return fmt.Errorf("write plan: %w", err)
+	}
+	return nil
 }
 
 // writeFileAtomicFn is fileutil.WriteFileAtomic, held in a package variable so
@@ -149,7 +152,7 @@ func (f Filter) matches(p *Plan) bool {
 func (s *Store) scanPlanIDs() ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Store.scanPlanIDs: %w", err)
 	}
 	ids := make([]string, 0, len(entries))
 	for _, e := range entries {

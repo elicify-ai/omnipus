@@ -22,6 +22,7 @@ package agent
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -413,7 +414,7 @@ func TestRecovery_RecoverOrphaned_DifferentInputsDifferentOutputs(t *testing.T) 
 func readAuditFileRecovery(path string) ([]map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("readAuditFileRecovery: %w", err)
 	}
 	var records []map[string]any
 	for _, line := range strings.Split(strings.TrimRight(string(data), "\n"), "\n") {

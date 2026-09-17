@@ -225,7 +225,7 @@ func runProcessHookHelper() error {
 	for scanner.Scan() {
 		var msg processHookRPCMessage
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
-			return err
+			return fmt.Errorf("runProcessHookHelper: %w", err)
 		}
 
 		if msg.ID == 0 {
@@ -252,7 +252,7 @@ func runProcessHookHelper() error {
 		} else if result != nil {
 			body, err := json.Marshal(result)
 			if err != nil {
-				return err
+				return fmt.Errorf("runProcessHookHelper: %w", err)
 			}
 			resp.Result = body
 		} else {
@@ -260,11 +260,14 @@ func runProcessHookHelper() error {
 		}
 
 		if err := encoder.Encode(resp); err != nil {
-			return err
+			return fmt.Errorf("runProcessHookHelper: %w", err)
 		}
 	}
 
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("runProcessHookHelper: %w", err)
+	}
+	return nil
 }
 
 func handleProcessHookRequest(mode string, msg processHookRPCMessage) (any, *processHookRPCError) {

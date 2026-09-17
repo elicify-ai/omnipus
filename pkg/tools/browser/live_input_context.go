@@ -636,7 +636,7 @@ func (a navigationInputAction) Do(ctx context.Context) error {
 	_ = loaderID
 	_ = download
 	if err != nil {
-		return err
+		return fmt.Errorf("navigationInputAction.Do: %w", err)
 	}
 	if destinationError != "" {
 		return fmt.Errorf("page load error %s", destinationError)
@@ -649,7 +649,7 @@ type historyBackInputAction struct{ didNavigate *bool }
 func (a historyBackInputAction) Do(ctx context.Context) error {
 	index, entries, err := page.GetNavigationHistory().Do(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("historyBackInputAction.Do: %w", err)
 	}
 	if index <= 0 || index > int64(len(entries)) {
 		return nil
@@ -657,7 +657,10 @@ func (a historyBackInputAction) Do(ctx context.Context) error {
 	if a.didNavigate != nil {
 		*a.didNavigate = true
 	}
-	return page.NavigateToHistoryEntry(entries[index-1].ID).Do(ctx)
+	if err := page.NavigateToHistoryEntry(entries[index-1].ID).Do(ctx); err != nil {
+		return fmt.Errorf("historyBackInputAction.Do: %w", err)
+	}
+	return nil
 }
 
 func (in *LiveInput) observeTiming(stage string) {

@@ -1,6 +1,7 @@
 package webrtc_test
 
 import (
+	"fmt"
 	"net"
 	"sync/atomic"
 	"testing"
@@ -25,7 +26,11 @@ type observedPacketConn struct {
 
 func (c *observedPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	c.entered <- struct{}{}
-	return c.PacketConn.ReadFrom(b)
+	n, addr, err := c.PacketConn.ReadFrom(b)
+	if err != nil {
+		return 0, nil, fmt.Errorf("ReadFrom: %w", err)
+	}
+	return n, addr, nil
 }
 
 type observedListener struct {
@@ -35,7 +40,11 @@ type observedListener struct {
 
 func (l *observedListener) Accept() (net.Conn, error) {
 	l.entered <- struct{}{}
-	return l.Listener.Accept()
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, fmt.Errorf("Accept: %w", err)
+	}
+	return conn, nil
 }
 
 func TestSession_SharedMediaHasOneReaderAcrossCaptures(t *testing.T) {

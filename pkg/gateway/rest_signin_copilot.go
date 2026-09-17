@@ -322,7 +322,7 @@ func (a *restAPI) copilotCheckWorkspace() (dir string, cleanup func(), err error
 	}
 	private, err := os.MkdirTemp("", "omnipus-copilot-check-")
 	if err != nil {
-		return "", func() {}, err
+		return "", func() {}, fmt.Errorf("restAPI.copilotCheckWorkspace: %w", err)
 	}
 	return private, func() { _ = os.RemoveAll(private) }, nil
 }

@@ -328,7 +328,11 @@ func (s *FileMediaStore) resolveWorkspaceRef(ref string, opts ResolveOpts) (stri
 	if resolver == nil {
 		return "", MediaMeta{}, fmt.Errorf("%w: %s", ErrNotFound, ref)
 	}
-	return resolver.ResolvePathWithCaller(ref, opts.CallerWorkspace)
+	localPath, meta, err := resolver.ResolvePathWithCaller(ref, opts.CallerWorkspace)
+	if err != nil {
+		return "", MediaMeta{}, fmt.Errorf("media store: resolve %q: %w", ref, err)
+	}
+	return localPath, meta, nil
 }
 
 // resolveLegacyWithMeta is the pre-Rev4 global-registry lookup. It performs

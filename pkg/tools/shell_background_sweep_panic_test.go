@@ -12,7 +12,9 @@ package tools
 // Run: CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestExecTool_BackgroundSweepPanic' -p 1 ./pkg/tools/
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -38,7 +40,11 @@ type lockedLogBuffer struct {
 func (w *lockedLogBuffer) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.b.Write(p)
+	n, err := w.b.Write(p)
+	if err != nil {
+		return 0, fmt.Errorf("write: %w", err)
+	}
+	return n, nil
 }
 
 func (w *lockedLogBuffer) String() string {
@@ -125,13 +131,18 @@ func TestExecTool_BackgroundSweepPanicIsRecovered(t *testing.T) {
 	require.NoError(t, auditLog.Close())
 	files, err := filepath.Glob(filepath.Join(auditDir, "*.jsonl"))
 	require.NoError(t, err)
-	var all []byte // size depends on the audit logger's rotation, not on anything this test controls
+	// bytes.Buffer, not a preallocated slice: the total size depends on the
+	// audit logger's rotation, not on anything this test controls, so there is
+	// no honest capacity to pass to make(). Buffer grows amortized and gives
+	// prealloc no `var x []T` + append-in-range shape to flag — the cause is
+	// gone rather than the report silenced.
+	var all bytes.Buffer
 	for _, f := range files {
 		b, rerr := os.ReadFile(f)
 		require.NoError(t, rerr)
-		all = append(all, b...)
+		all.Write(b)
 	}
-	assert.Contains(t, string(all), `"warning":"escaping_symlink_sweep_failed"`)
-	assert.Contains(t, string(all), panicMsg)
-	assert.Contains(t, string(all), "echo BG_SWEEP_PANIC_RUN", "the audit entry must name the command whose run went unchecked")
+	assert.Contains(t, all.String(), `"warning":"escaping_symlink_sweep_failed"`)
+	assert.Contains(t, all.String(), panicMsg)
+	assert.Contains(t, all.String(), "echo BG_SWEEP_PANIC_RUN", "the audit entry must name the command whose run went unchecked")
 }

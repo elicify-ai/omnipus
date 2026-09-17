@@ -489,7 +489,7 @@ func (s *LifecycleStore) persistLocked(rec *LifecycleRecord) error {
 	rec.UpdatedAt = now
 
 	if err := fileutil.AppendJSONL(s.path(rec.SessionID), rec); err != nil {
-		return err
+		return fmt.Errorf("LifecycleStore.persistLocked: %w", err)
 	}
 	// FR-020 — maintain the secondary parent index inside Persist, under the
 	// per-session striped lock persistLocked's caller (Persist/Mutate)

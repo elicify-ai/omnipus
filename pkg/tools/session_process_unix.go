@@ -4,6 +4,7 @@ package tools
 
 import (
 	"errors"
+	"fmt"
 	"syscall"
 )
 
@@ -38,7 +39,7 @@ func killProcessGroup(pid int) error {
 		// CALLER via errors.Is(err, ErrSessionDone) before ever reaching
 		// here, so any error returned by this function is by construction a
 		// real syscall failure, never a masked double-cancel.
-		return err
+		return fmt.Errorf("killProcessGroup: %w", err)
 	}
 	// Group signal succeeded; also signal the individual PID as a fallback for
 	// processes that are not group leaders (intentional belt-and-suspenders).

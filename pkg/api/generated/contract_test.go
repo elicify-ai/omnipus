@@ -174,7 +174,10 @@ func validateAgainstAsyncAPISchema(t *testing.T, schemaName string, v any) error
 	sharedCompilerMu.Unlock()
 	require.NoError(t, err, "could not compile asyncapi schema %q", schemaName)
 
-	return sch.Validate(doc)
+	if err := sch.Validate(doc); err != nil {
+		return fmt.Errorf("validateAgainstAsyncAPISchema: %w", err)
+	}
+	return nil
 }
 
 // validateAgainstComponentSchema validates v against a named component schema file.
@@ -198,7 +201,10 @@ func validateAgainstComponentSchema(t *testing.T, schemaName string, v any) erro
 	sharedCompilerMu.Unlock()
 	require.NoError(t, err, "could not compile component schema %q from %s", schemaName, schemaPath)
 
-	return sch.Validate(doc)
+	if err := sch.Validate(doc); err != nil {
+		return fmt.Errorf("validateAgainstComponentSchema: %w", err)
+	}
+	return nil
 }
 
 // validateAgainstComponentSchemaRawJSON validates pre-marshaled JSON bytes against a component schema.
@@ -217,7 +223,10 @@ func validateAgainstComponentSchemaRawJSON(t *testing.T, schemaName string, raw 
 	sharedCompilerMu.Unlock()
 	require.NoError(t, err, "could not compile component schema %q", schemaName)
 
-	return sch.Validate(doc)
+	if err := sch.Validate(doc); err != nil {
+		return fmt.Errorf("validateAgainstComponentSchemaRawJSON: %w", err)
+	}
+	return nil
 }
 
 // ── Helper assertions ────────────────────────────────────────────────────────

@@ -315,7 +315,7 @@ func (ph *ProcessHook) notify(ctx context.Context, method string, params any) er
 	if params != nil {
 		body, err := json.Marshal(params)
 		if err != nil {
-			return err
+			return fmt.Errorf("ProcessHook.notify: %w", err)
 		}
 		msg.Params = body
 	}
@@ -342,7 +342,7 @@ func (ph *ProcessHook) call(ctx context.Context, method string, params any, out 
 		body, err := json.Marshal(params)
 		if err != nil {
 			ph.removePending(id)
-			return err
+			return fmt.Errorf("ProcessHook.call: %w", err)
 		}
 		msg.Params = body
 	}
@@ -375,7 +375,7 @@ func (ph *ProcessHook) call(ctx context.Context, method string, params any, out 
 func (ph *ProcessHook) send(ctx context.Context, msg processHookRPCMessage) error {
 	body, err := json.Marshal(msg)
 	if err != nil {
-		return err
+		return fmt.Errorf("ProcessHook.send: %w", err)
 	}
 	body = append(body, '\n')
 

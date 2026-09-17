@@ -846,7 +846,7 @@ func (a *restAPI) validateCandidateToolPolicyCoverage(
 ) ([]config.CoverageGap, error) {
 	candidateCfg, err := cfg.Clone()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("restAPI.validateCandidateToolPolicyCoverage: %w", err)
 	}
 	mutate(candidateCfg)
 	return config.ValidateToolPolicyCoverage(candidateCfg, buildKnownBuiltinToolNames()), nil

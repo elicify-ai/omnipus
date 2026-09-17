@@ -832,7 +832,7 @@ type scanJob struct {
 func (s *state) walkRoot(ctx context.Context, root Root) error {
 	// Verify the root opens at all — a dead mount is root_lost, not 0 matches.
 	if _, err := fs.Stat(root.FS, "."); err != nil {
-		return err
+		return fmt.Errorf("state.walkRoot: %w", err)
 	}
 
 	scanCtx, cancel := context.WithCancel(ctx)
@@ -927,7 +927,7 @@ func (s *state) walkDir(ctx, scanCtx context.Context, root Root, dir string, dep
 	entries, err := fs.ReadDir(root.FS, pathOrDot(dir))
 	if err != nil {
 		if dir == "" {
-			return err // the walk root's own listing is gone: root_lost
+			return fmt.Errorf("state.walkDir: %w", err) // the walk root's own listing is gone: root_lost
 		}
 		// FR-021: distinguish an isolated per-directory hiccup from the
 		// whole mount having died mid-walk. If the ROOT itself no longer
@@ -935,7 +935,7 @@ func (s *state) walkDir(ctx, scanCtx context.Context, root Root, dir string, dep
 		// per-item skips while the mount is actually gone; if the root is
 		// still healthy, this is exactly the reference's isolated skip.
 		if _, rootErr := fs.Stat(root.FS, "."); rootErr != nil {
-			return rootErr
+			return fmt.Errorf("state.walkDir: %w", rootErr)
 		}
 		s.countSkippedProblem()
 		return nil
@@ -1173,8 +1173,9 @@ func readBoundedLine(br *bufio.Reader, maxLineBytes int) (line []byte, consumed 
 			continue
 		default:
 			// io.EOF (file ends mid-line, no trailing '\n') or a genuine
-			// read error: whatever was accumulated is final.
-			return line, consumed, tooLong, e
+			// read error: whatever was accumulated is final. The wrap keeps
+			// io.EOF reachable — the caller matches it with errors.Is.
+			return line, consumed, tooLong, fmt.Errorf("readBoundedLine: %w", e)
 		}
 	}
 }
@@ -1205,7 +1206,7 @@ func (s *state) scanFile(ctx, scanCtx context.Context, job scanJob) error {
 		// could get "(no hits)" and truncated:false for a root that died
 		// between the Stat and the Open.
 		if _, rootErr := fs.Stat(job.root.FS, "."); rootErr != nil {
-			return rootErr
+			return fmt.Errorf("state.scanFile: %w", rootErr)
 		}
 		s.countSkippedProblem()
 		return nil

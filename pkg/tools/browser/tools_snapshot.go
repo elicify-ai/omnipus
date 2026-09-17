@@ -306,7 +306,10 @@ func (t *SnapshotTool) Execute(ctx context.Context, args map[string]any) *tools.
 	err = chromedp.Run(tabCtx, chromedp.ActionFunc(func(c context.Context) error {
 		var ferr error
 		nodes, ferr = accessibility.GetFullAXTree().Do(c)
-		return ferr
+		if ferr != nil {
+			return fmt.Errorf("get accessibility tree: %w", ferr)
+		}
+		return nil
 	}))
 	if err != nil {
 		return tools.ErrorResult(fmt.Sprintf("%s: could not read the page's accessibility tree: %s",

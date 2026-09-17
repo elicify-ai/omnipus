@@ -130,7 +130,7 @@ func NewGatewayCommand() *cobra.Command {
 				fmt.Fprintln(os.Stderr, "Error:", runErr)
 				os.Exit(gateway.ExitSandboxConfig)
 			}
-			return runErr
+			return fmt.Errorf("gateway run: %w", runErr)
 		},
 	}
 

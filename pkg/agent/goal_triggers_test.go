@@ -100,7 +100,7 @@ func armGoalRecord(
 		cur.MaxRounds = armedGoalMaxRounds
 		cur.Round = roundsUsed
 		if serr := cur.SetCriteria(criteria, past); serr != nil {
-			return serr
+			return fmt.Errorf("Goal.SetCriteria: %w", serr)
 		}
 		// SetCriteria stamps LastActivityAt with `past` already; StartedAt is
 		// stamped here because Activate set it to "now", not to the past

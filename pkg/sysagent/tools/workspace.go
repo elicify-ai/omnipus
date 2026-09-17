@@ -54,7 +54,7 @@ func sanitizeCoreTeam(raw []any) []string {
 func workspaceFromFile(data []byte) (workspace, error) {
 	var w workspace
 	if err := json.Unmarshal(data, &w); err != nil {
-		return w, err
+		return w, fmt.Errorf("workspaceFromFile: %w", err)
 	}
 	// Legacy files without status field default to active.
 	if w.Status == "" {

@@ -1270,7 +1270,7 @@ var embedBlockAnchorPattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 func embedTargetHeadings(fsys LinkFS, resolvedPath string) ([]Heading, error) {
 	f, err := fsys.Open(resolvedPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("embedTargetHeadings: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 	scan, err := ScanNote(f)

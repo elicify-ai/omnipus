@@ -26,6 +26,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -319,5 +320,8 @@ func TestReadFileToolConfig_EnvTagsWired(t *testing.T) {
 // perturbing any shared test helper naming elsewhere in the package).
 func writeTestConfigFile(t *testing.T, path, contents string) error {
 	t.Helper()
-	return os.WriteFile(path, []byte(contents), 0o600)
+	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+		return fmt.Errorf("writeTestConfigFile: %w", err)
+	}
+	return nil
 }

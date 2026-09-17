@@ -363,7 +363,7 @@ const gateProbeJS = `(function(){
 func buildGateProbeJS(target string, afterFrame bool) (string, error) {
 	selJSON, err := json.Marshal(target)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("buildGateProbeJS: %w", err)
 	}
 	raf := "false"
 	if afterFrame {
@@ -383,7 +383,10 @@ func runGateProbe(ctx context.Context, target string, afterFrame bool) (gateProb
 	err = chromedp.Run(ctx, chromedp.Evaluate(script, &out, func(p *runtime.EvaluateParams) *runtime.EvaluateParams {
 		return p.WithAwaitPromise(true)
 	}))
-	return out, err
+	if err != nil {
+		return out, fmt.Errorf("runGateProbe: %w", err)
+	}
+	return out, nil
 }
 
 // gateOutcome is what a PASSING gate reports back to its caller.
@@ -423,7 +426,7 @@ func waitActionableOutcome(
 			if gateVisibilityLoss(err) {
 				return gateOutcome{}, visibleOnlyErr(toolName, display)
 			}
-			return gateOutcome{}, err
+			return gateOutcome{}, fmt.Errorf("waitActionableOutcome: %w", err)
 		}
 		// NOT "self". The hit test is not merely unperformed in this mode, it
 		// does not exist in this mode — chromedp.WaitVisible is the whole

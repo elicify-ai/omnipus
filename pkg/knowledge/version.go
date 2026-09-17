@@ -337,7 +337,7 @@ func computeVersionTokenFrom(r io.Reader) (VersionToken, int64, error) {
 	h := sha256.New()
 	n, err := io.Copy(h, r)
 	if err != nil {
-		return "", 0, err
+		return "", 0, fmt.Errorf("computeVersionTokenFrom: %w", err)
 	}
 	return finishVersionToken(h, n), n, nil
 }

@@ -19,7 +19,10 @@
 // never pair them incorrectly again: every transition funnels through here.
 package session
 
-import "log/slog"
+import (
+	"fmt"
+	"log/slog"
+)
 
 // LifecycleMutator is the minimal lifecycle-store surface TransitionSession
 // needs: just the atomic Mutate RMW. *LifecycleStore satisfies it directly,
@@ -131,12 +134,18 @@ func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to Lif
 
 	// 2. UnifiedMeta mirror (best-effort, terminal states only).
 	if us == nil {
-		return lifecycleErr
+		if lifecycleErr != nil {
+			return fmt.Errorf("TransitionSession: %w", lifecycleErr)
+		}
+		return nil
 	}
 	mapped, ok := lifecycleToUnifiedStatus(to)
 	if !ok {
 		// Non-terminal state: chat stays Active — no SetMeta needed.
-		return lifecycleErr
+		if lifecycleErr != nil {
+			return fmt.Errorf("TransitionSession: %w", lifecycleErr)
+		}
+		return nil
 	}
 	if err := us.SetMeta(sid, MetaPatch{Status: &mapped}); err != nil {
 		// Log at Warn; do NOT roll back the lifecycle write — the durable
@@ -147,5 +156,8 @@ func TransitionSession(ls LifecycleMutator, us *UnifiedStore, sid string, to Lif
 			"target_status", string(mapped),
 			"error", err)
 	}
-	return lifecycleErr
+	if lifecycleErr != nil {
+		return fmt.Errorf("TransitionSession: %w", lifecycleErr)
+	}
+	return nil
 }

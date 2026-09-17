@@ -966,7 +966,11 @@ func makeSearchClient(ssrf *security.SSRFChecker, proxy string, timeout time.Dur
 		// the OS/network level.
 		return ssrf.SafeClient(), nil
 	}
-	return utils.CreateHTTPClient(proxy, timeout)
+	client, err := utils.CreateHTTPClient(proxy, timeout)
+	if err != nil {
+		return nil, fmt.Errorf("makeSearchClient: %w", err)
+	}
+	return client, nil
 }
 
 func NewWebSearchTool(opts WebSearchToolOptions) (*WebSearchTool, error) {
@@ -1381,7 +1385,10 @@ func (t *WebFetchTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		resp.Body = http.MaxBytesReader(nil, resp.Body, t.fetchLimitBytes)
 
 		b, readErr := io.ReadAll(resp.Body)
-		return resp, b, readErr
+		if readErr != nil {
+			return resp, b, fmt.Errorf("read response body: %w", readErr)
+		}
+		return resp, b, nil
 	}
 
 	resp, body, err := doFetch(userAgent)

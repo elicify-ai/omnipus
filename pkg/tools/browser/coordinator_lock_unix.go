@@ -10,6 +10,7 @@ package browser
 // crashed prior gateway never leaves a stale lock that wedges the next launch.
 
 import (
+	"fmt"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -26,7 +27,7 @@ const launchLockReleasedOnExit = true
 func acquireLaunchLock(path string) (*os.File, bool, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, false, err
+		return nil, false, fmt.Errorf("acquireLaunchLock: %w", err)
 	}
 	// flock locks bind to the open file description, so two separate open() calls
 	// contend even within one process — the coordinator's in-process single-flight
@@ -36,7 +37,7 @@ func acquireLaunchLock(path string) (*os.File, bool, error) {
 		if err == unix.EWOULDBLOCK {
 			return nil, false, nil
 		}
-		return nil, false, err
+		return nil, false, fmt.Errorf("acquireLaunchLock: %w", err)
 	}
 	return f, true, nil
 }

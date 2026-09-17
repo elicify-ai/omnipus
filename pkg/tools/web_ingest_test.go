@@ -36,7 +36,11 @@ func (r rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	req = req.Clone(req.Context())
 	req.URL.Scheme = r.target.Scheme
 	req.URL.Host = r.target.Host
-	return http.DefaultTransport.RoundTrip(req)
+	resp, err := http.DefaultTransport.RoundTrip(req)
+	if err != nil {
+		return nil, fmt.Errorf("RoundTrip: %w", err)
+	}
+	return resp, nil
 }
 
 // exactBody builds a response body of exactly want bytes from the given

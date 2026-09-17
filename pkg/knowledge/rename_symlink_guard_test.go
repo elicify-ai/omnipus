@@ -32,6 +32,7 @@ package knowledge
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -77,7 +78,7 @@ func g4Snapshot(t *testing.T, dir string) map[string]string {
 		}
 		rel, relErr := filepath.Rel(dir, p)
 		if relErr != nil {
-			return relErr
+			return fmt.Errorf("relative path %s: %w", p, relErr)
 		}
 		if rel == "." {
 			return nil
@@ -87,7 +88,7 @@ func g4Snapshot(t *testing.T, dir string) map[string]string {
 		case info.Mode()&os.ModeSymlink != 0:
 			target, lErr := os.Readlink(p)
 			if lErr != nil {
-				return lErr
+				return fmt.Errorf("readlink %s: %w", p, lErr)
 			}
 			out[key+" ->"] = target
 		case info.IsDir():
@@ -95,7 +96,7 @@ func g4Snapshot(t *testing.T, dir string) map[string]string {
 		default:
 			b, readErr := os.ReadFile(p)
 			if readErr != nil {
-				return readErr
+				return fmt.Errorf("read %s: %w", p, readErr)
 			}
 			out[key] = string(b)
 		}
@@ -287,9 +288,29 @@ type g4EvictingFS struct {
 	opens  int
 }
 
-func (e *g4EvictingFS) Lstat(n string) (fs.FileInfo, error)     { return e.inner.Lstat(n) }
-func (e *g4EvictingFS) ReadDir(n string) ([]fs.DirEntry, error) { return e.inner.ReadDir(n) }
-func (e *g4EvictingFS) EvalSymlinks(n string) (string, error)   { return e.inner.EvalSymlinks(n) }
+func (e *g4EvictingFS) Lstat(n string) (fs.FileInfo, error) {
+	info, err := e.inner.Lstat(n)
+	if err != nil {
+		return nil, fmt.Errorf("g4EvictingFS.Lstat: %w", err)
+	}
+	return info, nil
+}
+
+func (e *g4EvictingFS) ReadDir(n string) ([]fs.DirEntry, error) {
+	entries, err := e.inner.ReadDir(n)
+	if err != nil {
+		return nil, fmt.Errorf("g4EvictingFS.ReadDir: %w", err)
+	}
+	return entries, nil
+}
+
+func (e *g4EvictingFS) EvalSymlinks(n string) (string, error) {
+	resolved, err := e.inner.EvalSymlinks(n)
+	if err != nil {
+		return "", fmt.Errorf("g4EvictingFS.EvalSymlinks: %w", err)
+	}
+	return resolved, nil
+}
 
 func (e *g4EvictingFS) Open(n string) (fs.File, error) {
 	if n == e.victim {
@@ -297,12 +318,16 @@ func (e *g4EvictingFS) Open(n string) (fs.File, error) {
 		if e.opens >= e.from {
 			fi, err := e.inner.Lstat(n)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("g4EvictingFS.Open: %w", err)
 			}
 			return g4EmptyFile{fi}, nil
 		}
 	}
-	return e.inner.Open(n)
+	v, err := e.inner.Open(n)
+	if err != nil {
+		return nil, fmt.Errorf("g4EvictingFS.Open: %w", err)
+	}
+	return v, nil
 }
 
 type g4EmptyFile struct{ fi fs.FileInfo }

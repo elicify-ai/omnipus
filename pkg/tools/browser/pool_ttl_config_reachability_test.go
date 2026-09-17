@@ -250,7 +250,7 @@ func agentPackageSource(t *testing.T) string {
 		}
 		b, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("read %s: %w", path, err)
 		}
 		src.Write(codeOnlySource(t, path, b))
 		src.WriteByte('\n')

@@ -73,7 +73,11 @@ func (s *sessionRefcounter) IncrementRefcount(mediaID string) (int, error) {
 	if _, loaded := s.seen.LoadOrStore(mediaID, struct{}{}); loaded {
 		return 0, nil // already incremented for this session
 	}
-	return s.lib.IncrementRefcount(mediaID)
+	n, err := s.lib.IncrementRefcount(mediaID)
+	if err != nil {
+		return 0, fmt.Errorf("sessionRefcounter.IncrementRefcount: %w", err)
+	}
+	return n, nil
 }
 
 // DecrementRefcount is not used on the session wrapper — the decrement

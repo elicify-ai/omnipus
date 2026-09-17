@@ -1327,7 +1327,7 @@ func (rw *registerSharedToolsWire3) registerBrowserTools(agentID string, agent *
 func (bw *registerSharedToolsWire3RegisterBrowserTools) createBrowserManager(key browser.BrowsingKey) (*browser.BrowserManager, error) {
 	m, err := browser.NewBrowserManager(bw.cfgSnapshot, bw.ssrfSnapshot)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("registerSharedToolsWire3RegisterBrowserTools.createBrowserManager: %w", err)
 	}
 	m.AttachPool(bw.pool, key)
 	return m, nil
@@ -1940,7 +1940,11 @@ func (s agentLoopInspectSessionStore) GetMeta(sessionID string) (*session.Unifie
 	if store == nil {
 		return nil, fmt.Errorf("session %q not found in any known session store", sessionID)
 	}
-	return store.GetMeta(sessionID)
+	meta, err := store.GetMeta(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("agentLoopInspectSessionStore.GetMeta: %w", err)
+	}
+	return meta, nil
 }
 
 func (s agentLoopInspectSessionStore) ReadTranscript(sessionID string) ([]session.TranscriptEntry, error) {
@@ -1948,7 +1952,11 @@ func (s agentLoopInspectSessionStore) ReadTranscript(sessionID string) ([]sessio
 	if store == nil {
 		return nil, fmt.Errorf("session %q not found in any known session store", sessionID)
 	}
-	return store.ReadTranscript(sessionID)
+	entries, err := store.ReadTranscript(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("agentLoopInspectSessionStore.ReadTranscript: %w", err)
+	}
+	return entries, nil
 }
 
 func (l agentLoopJobPlanLister) List(filter plan.Filter) ([]plan.Plan, error) {
@@ -1956,7 +1964,11 @@ func (l agentLoopJobPlanLister) List(filter plan.Filter) ([]plan.Plan, error) {
 	if store == nil {
 		return nil, errors.New("plan store is not installed")
 	}
-	return store.List(filter)
+	plans, err := store.List(filter)
+	if err != nil {
+		return nil, fmt.Errorf("agentLoopPlanLister.List: %w", err)
+	}
+	return plans, nil
 }
 
 func (l agentLoopJobTaskLister) List(filter task.Filter) ([]task.Task, error) {
@@ -1964,7 +1976,11 @@ func (l agentLoopJobTaskLister) List(filter task.Filter) ([]task.Task, error) {
 	if store == nil {
 		return nil, errors.New("task store is not installed")
 	}
-	return store.List(filter)
+	tasks, err := store.List(filter)
+	if err != nil {
+		return nil, fmt.Errorf("agentLoopJobTaskLister.List: %w", err)
+	}
+	return tasks, nil
 }
 
 func (l agentLoopJobLifecycleLister) List(
@@ -1974,7 +1990,11 @@ func (l agentLoopJobLifecycleLister) List(
 	if store == nil {
 		return nil, errors.New("session lifecycle store is not installed")
 	}
-	return store.List(filter)
+	records, err := store.List(filter)
+	if err != nil {
+		return nil, fmt.Errorf("agentLoopJobLifecycleLister.List: %w", err)
+	}
+	return records, nil
 }
 
 func (n agentLoopJobAgentNamer) AgentDisplayName(agentID string) (string, bool) {

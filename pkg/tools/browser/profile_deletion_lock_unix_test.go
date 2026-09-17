@@ -5,6 +5,7 @@ package browser
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -70,7 +71,10 @@ func TestProfileDeletionExcludesLaunchAfterDirectoryRemoval(t *testing.T) {
 		err := os.RemoveAll(path)
 		removed <- err
 		<-unblock
-		return err
+		if err != nil {
+			return fmt.Errorf("remove profile dir: %w", err)
+		}
+		return nil
 	}
 	done := make(chan error, 1)
 	go func() { done <- f.pool.DeleteProfile(key) }()

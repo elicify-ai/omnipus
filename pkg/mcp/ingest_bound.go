@@ -84,7 +84,10 @@ func (b *boundedMessageReader) Read(p []byte) (int, error) {
 			return 0, b.guard.trip()
 		}
 	}
-	return n, err
+	if err != nil {
+		return n, fmt.Errorf("boundedMessageReader.Read: %w", err)
+	}
+	return n, nil
 }
 
 // ingestBoundTransport bounds POST response bodies with http.MaxBytesReader.
@@ -96,7 +99,7 @@ type ingestBoundTransport struct {
 func (t *ingestBoundTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.base.RoundTrip(req)
 	if err != nil || resp == nil || resp.Body == nil || req.Method != http.MethodPost {
-		return resp, err
+		return resp, fmt.Errorf("ingestBoundTransport.RoundTrip: %w", err)
 	}
 	resp.Body = &boundedBody{
 		ReadCloser: http.MaxBytesReader(nil, resp.Body, t.guard.bound),
@@ -118,5 +121,5 @@ func (b *boundedBody) Read(p []byte) (int, error) {
 	if err != nil && errors.As(err, &mbe) {
 		return n, b.guard.trip()
 	}
-	return n, err
+	return n, fmt.Errorf("boundedBody.Read: %w", err)
 }

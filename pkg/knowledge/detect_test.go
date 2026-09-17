@@ -38,7 +38,11 @@ type detectRecordingFS struct {
 
 func (f *detectRecordingFS) ReadDir(name string) ([]os.DirEntry, error) {
 	f.dirsListed = append(f.dirsListed, filepath.Clean(name))
-	return os.ReadDir(name)
+	v, err := os.ReadDir(name)
+	if err != nil {
+		return nil, fmt.Errorf("detectRecordingFS.ReadDir: %w", err)
+	}
+	return v, nil
 }
 
 func (f *detectRecordingFS) ReadFile(name string) ([]byte, error) {
@@ -72,7 +76,7 @@ func treeOf(t *testing.T, root string) []string {
 		}
 		rel, relErr := filepath.Rel(root, p)
 		if relErr != nil {
-			return relErr
+			return fmt.Errorf("relative path %s: %w", p, relErr)
 		}
 		out = append(out, rel)
 		return nil

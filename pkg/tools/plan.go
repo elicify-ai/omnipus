@@ -90,7 +90,7 @@ func ValidateTaskPlanMembership(planStore *plan.Store, planID, workspaceID strin
 		return fmt.Errorf("cannot verify plan_id %q: plan store is not configured", planID)
 	}
 	if err := planStore.ValidatePlanWorkspace(planID, workspaceID); err != nil {
-		return err
+		return fmt.Errorf("ValidateTaskPlanMembership: %w", err)
 	}
 	p, err := planStore.Get(planID)
 	if err != nil {

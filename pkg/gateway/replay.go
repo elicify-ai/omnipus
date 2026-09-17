@@ -1613,7 +1613,7 @@ func wsEmitFunc(ctx context.Context, wc *wsConn) func(any) error {
 		}
 		data, err := json.Marshal(f)
 		if err != nil {
-			return err
+			return fmt.Errorf("marshal frame: %w", err)
 		}
 		select {
 		case wc.sendCh <- data:

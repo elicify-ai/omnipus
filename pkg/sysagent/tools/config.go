@@ -1462,11 +1462,11 @@ func dotSet(cfg *config.Config, key string, value any) error {
 func configToMap(cfg *config.Config) (map[string]any, error) {
 	data, err := json.Marshal(cfg)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("configToMap: %w", err)
 	}
 	var m map[string]any
 	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("configToMap: %w", err)
 	}
 	return m, nil
 }

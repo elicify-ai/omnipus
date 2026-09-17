@@ -8,6 +8,7 @@
 package filegrep
 
 import (
+	"fmt"
 	"io/fs"
 	"strings"
 	"sync"
@@ -112,7 +113,13 @@ type f7RootLostFS struct {
 	fs.FS
 }
 
-func (f f7RootLostFS) Open(name string) (fs.File, error) { return f.FS.Open(name) }
+func (f f7RootLostFS) Open(name string) (fs.File, error) {
+	file, err := f.FS.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("f7RootLostFS.Open: %w", err)
+	}
+	return file, nil
+}
 
 func (f f7RootLostFS) ReadDir(string) ([]fs.DirEntry, error) {
 	return nil, &fs.PathError{Op: "readdir", Path: ".", Err: errMountGone}
@@ -120,9 +127,17 @@ func (f f7RootLostFS) ReadDir(string) ([]fs.DirEntry, error) {
 
 func (f f7RootLostFS) Stat(name string) (fs.FileInfo, error) {
 	if sf, ok := f.FS.(fs.StatFS); ok {
-		return sf.Stat(name)
+		info, err := sf.Stat(name)
+		if err != nil {
+			return nil, fmt.Errorf("f7RootLostFS.Stat: %w", err)
+		}
+		return info, nil
 	}
-	return fs.Stat(f.FS, name)
+	info, err := fs.Stat(f.FS, name)
+	if err != nil {
+		return nil, fmt.Errorf("f7RootLostFS.Stat: %w", err)
+	}
+	return info, nil
 }
 
 // TestFileGrep_MultiRoot_OneLostRootDoesNotSilenceHealthyOnes pins finding
@@ -230,7 +245,11 @@ func (f f7UnreadableIgnoreFS) Open(name string) (fs.File, error) {
 	if name == f.unreadable {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
 	}
-	return f.FS.Open(name)
+	file, err := f.FS.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("f7UnreadableIgnoreFS.Open: %w", err)
+	}
+	return file, nil
 }
 
 // TestFileGrep_UnreadableIgnoreFile_CountedNotConflatedWithMissing pins
@@ -311,9 +330,17 @@ func (f *f7DyingMountFS) Open(name string) (fs.File, error) {
 
 func (f *f7DyingMountFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	if rd, ok := f.FS.(fs.ReadDirFS); ok {
-		return rd.ReadDir(name)
+		entries, err := rd.ReadDir(name)
+		if err != nil {
+			return nil, fmt.Errorf("f7DyingMountFS.ReadDir: %w", err)
+		}
+		return entries, nil
 	}
-	return fs.ReadDir(f.FS, name)
+	entries, err := fs.ReadDir(f.FS, name)
+	if err != nil {
+		return nil, fmt.Errorf("f7DyingMountFS.ReadDir: %w", err)
+	}
+	return entries, nil
 }
 
 func (f *f7DyingMountFS) Stat(name string) (fs.FileInfo, error) {
@@ -324,9 +351,17 @@ func (f *f7DyingMountFS) Stat(name string) (fs.FileInfo, error) {
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: errMountGone}
 	}
 	if sf, ok := f.FS.(fs.StatFS); ok {
-		return sf.Stat(name)
+		info, err := sf.Stat(name)
+		if err != nil {
+			return nil, fmt.Errorf("f7DyingMountFS.Stat: %w", err)
+		}
+		return info, nil
 	}
-	return fs.Stat(f.FS, name)
+	info, err := fs.Stat(f.FS, name)
+	if err != nil {
+		return nil, fmt.Errorf("f7DyingMountFS.Stat: %w", err)
+	}
+	return info, nil
 }
 
 // TestFileGrep_MountDiesBetweenListingAndReading_ReportsRootLost pins

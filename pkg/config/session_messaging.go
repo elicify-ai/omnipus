@@ -6,6 +6,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -24,9 +25,17 @@ type duration time.Duration
 // in practice, so the receiver kind is invisible to callers.
 func (d *duration) MarshalJSON() ([]byte, error) {
 	if d == nil {
-		return json.Marshal("0s")
+		b, err := json.Marshal("0s")
+		if err != nil {
+			return nil, fmt.Errorf("duration.MarshalJSON: %w", err)
+		}
+		return b, nil
 	}
-	return json.Marshal(time.Duration(*d).String())
+	b, err := json.Marshal(time.Duration(*d).String())
+	if err != nil {
+		return nil, fmt.Errorf("duration.MarshalJSON: %w", err)
+	}
+	return b, nil
 }
 
 // UnmarshalJSON accepts either a JSON string ("24h", "5s", "500ms") parsed via
@@ -36,7 +45,7 @@ func (d *duration) UnmarshalJSON(b []byte) error {
 	if len(b) > 0 && b[0] == '"' {
 		var s string
 		if err := json.Unmarshal(b, &s); err != nil {
-			return err
+			return fmt.Errorf("duration.UnmarshalJSON: %w", err)
 		}
 		if s == "" {
 			*d = 0
@@ -44,7 +53,7 @@ func (d *duration) UnmarshalJSON(b []byte) error {
 		}
 		parsed, err := time.ParseDuration(s)
 		if err != nil {
-			return err
+			return fmt.Errorf("duration.UnmarshalJSON: %w", err)
 		}
 		*d = duration(parsed)
 		return nil
@@ -52,7 +61,7 @@ func (d *duration) UnmarshalJSON(b []byte) error {
 	// Bare number → seconds (PlanningConfig convention).
 	var secs float64
 	if err := json.Unmarshal(b, &secs); err != nil {
-		return err
+		return fmt.Errorf("duration.UnmarshalJSON: %w", err)
 	}
 	*d = duration(time.Duration(secs * float64(time.Second)))
 	return nil

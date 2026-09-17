@@ -18,6 +18,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -372,7 +373,7 @@ func TestProcessScheduled_CancelledRunReturnsPromptly(t *testing.T) {
 func readScheduledAuditRecords(path string) ([]map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("readScheduledAuditRecords: %w", err)
 	}
 	var out []map[string]any
 	sc := bufio.NewScanner(strings.NewReader(string(data)))
@@ -386,7 +387,10 @@ func readScheduledAuditRecords(path string) ([]map[string]any, error) {
 			out = append(out, r)
 		}
 	}
-	return out, sc.Err()
+	if err := sc.Err(); err != nil {
+		return out, fmt.Errorf("readScheduledAuditRecords: %w", err)
+	}
+	return out, nil
 }
 
 // schedTestLoopWithAudit is like schedTestLoop but enables audit logging so

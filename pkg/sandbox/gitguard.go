@@ -55,6 +55,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -230,7 +231,7 @@ func (g *GitGuard) Protect(workDir string) error {
 		// keeps protection active for a not-yet-materialized work dir.
 		abs, aerr := filepath.Abs(workDir)
 		if aerr != nil {
-			return aerr
+			return fmt.Errorf("GitGuard.Protect: %w", aerr)
 		}
 		canon = filepath.Clean(abs)
 	}

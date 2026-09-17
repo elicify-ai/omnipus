@@ -6,6 +6,7 @@ package filegrep
 
 import (
 	"bytes"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"unicode"
@@ -123,7 +124,7 @@ func compile(o Options) (*matcher, error) {
 		}
 		re, err := regexp.Compile(pat)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("compile: %w", err)
 		}
 		m.re = re
 		if lit := requiredLiteral(pat); lit != "" {
@@ -142,7 +143,7 @@ func compile(o Options) (*matcher, error) {
 		} else {
 			foldRe, err := regexp.Compile("(?i)" + regexp.QuoteMeta(o.Query))
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("compile: %w", err)
 			}
 			m.foldRe = foldRe
 		}

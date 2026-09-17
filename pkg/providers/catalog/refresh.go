@@ -99,7 +99,7 @@ func (c *Catalog) refreshLocked(ctx context.Context) error {
 			c.logWarn("catalog refresh: pull failed; retaining current document", "error", err)
 			c.setRefreshErr(err)
 		}
-		return err
+		return fmt.Errorf("Catalog.refreshLocked: %w", err)
 	}
 	degraded, releaseErr := c.puller.LastPullDegraded()
 

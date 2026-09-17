@@ -817,7 +817,11 @@ func (t *ExecTool) turnKernelPolicy(ctx context.Context) (*sandbox.SandboxPolicy
 	if err != nil {
 		return nil, fmt.Errorf("resolve turn filesystem policy: %w", err)
 	}
-	return sandbox.KernelPolicyForTurn(authored)
+	policy, err := sandbox.KernelPolicyForTurn(authored)
+	if err != nil {
+		return nil, fmt.Errorf("ExecTool.turnKernelPolicy: %w", err)
+	}
+	return policy, nil
 }
 
 // --- cwd resolution (FR-B2/FR-B13) -----------------------------------------

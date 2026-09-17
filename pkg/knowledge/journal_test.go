@@ -14,6 +14,7 @@ package knowledge
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -53,7 +54,7 @@ func a2Snapshot(t *testing.T, dir string) map[string]string {
 		}
 		rel, relErr := filepath.Rel(dir, p)
 		if relErr != nil {
-			return relErr
+			return fmt.Errorf("relative path %s: %w", p, relErr)
 		}
 		if rel == "." {
 			return nil
@@ -65,7 +66,7 @@ func a2Snapshot(t *testing.T, dir string) map[string]string {
 		}
 		b, readErr := os.ReadFile(p)
 		if readErr != nil {
-			return readErr
+			return fmt.Errorf("read %s: %w", p, readErr)
 		}
 		out[key] = string(b)
 		return nil

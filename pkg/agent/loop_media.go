@@ -1028,11 +1028,11 @@ func deriveSafeOffloadName(srcPath, originalFilename string) (string, error) {
 	h := sha256.New()
 	f, err := os.Open(srcPath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("deriveSafeOffloadName: %w", err)
 	}
 	defer f.Close()
 	if _, err := io.Copy(h, f); err != nil {
-		return "", err
+		return "", fmt.Errorf("deriveSafeOffloadName: %w", err)
 	}
 	prefix := hex.EncodeToString(h.Sum(nil)[:sha256PrefixBytes])
 	return prefix + sanitizeExtension(filepath.Ext(originalFilename)), nil
@@ -1078,16 +1078,16 @@ func copyToWorkDir(srcPath, workDir, safeName string) (dest string, err error) {
 		return "", fmt.Errorf("offload copy escapes work dir: %q", safeName)
 	}
 	if err = os.MkdirAll(cleanDir, 0o700); err != nil {
-		return "", err
+		return "", fmt.Errorf("copyToWorkDir: %w", err)
 	}
 	in, err := os.Open(srcPath)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("copyToWorkDir: %w", err)
 	}
 	defer in.Close()
 	out, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("copyToWorkDir: %w", err)
 	}
 	// Named-return + deferred Close so a failed flush on a writable handle is
 	// never silently dropped (github-code-quality: writable file handle closed
@@ -1099,7 +1099,7 @@ func copyToWorkDir(srcPath, workDir, safeName string) (dest string, err error) {
 		}
 	}()
 	if _, err = io.Copy(out, in); err != nil {
-		return "", err
+		return "", fmt.Errorf("copyToWorkDir: %w", err)
 	}
 	return dest, nil
 }
