@@ -321,7 +321,7 @@ func (s *Store) DeleteState(id, expectedRevision string) (result MutationResult,
 	}
 	err = s.inner.WithLock(id, func(entityPath string) error {
 		soulPath := s.soulPath(id)
-		current, _, oldSoul, err := readStateFiles(entityPath, soulPath)
+		current, _, _, err := readStateFiles(entityPath, soulPath)
 		if err != nil {
 			return err
 		}
@@ -344,8 +344,10 @@ func (s *Store) DeleteState(id, expectedRevision string) (result MutationResult,
 			if err := s.removeFile(soulPath); err != nil {
 				result.PersistenceStatus = PersistencePartial
 				result.ErrorStage = "remove_soul"
-				result.Revision = revisionFor(nil, oldSoul)
-				return fmt.Errorf("delete soul: %w", err)
+				// Entity is gone: ReadState/get_agent return not-found, so a
+				// digest over leftover soul is not a readable revision (SE-C).
+				result.Revision = ""
+				return fmt.Errorf("delete soul: %w; entity is gone so reads report not-found and no readable revision exists", err)
 			}
 			result.ChangedFields = append(result.ChangedFields, "soul")
 		}

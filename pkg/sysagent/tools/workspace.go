@@ -25,13 +25,20 @@ import (
 )
 
 func workspaceRevisionError(id string, err error) *tools.ToolResult {
-	if errors.Is(err, workspacepkg.ErrInvalidRevision) {
+	if errors.Is(err, workspacepkg.ErrInvalidRevision) || errors.Is(err, workspacepkg.ErrInvalidWorkspaceID) {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Use the revision returned by get_workspace"))
 	}
 	if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "NOT_FOUND") {
 		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id), "Use list_workspaces to see available workspaces"))
 	}
-	return tools.ErrorResult(errorJSON("REVISION_CONFLICT", err.Error(), "Call get_workspace and retry with its current revision"))
+	if errors.Is(err, workspacepkg.ErrRevisionConflict) {
+		return tools.ErrorResult(errorJSON("REVISION_CONFLICT", err.Error(), "Call get_workspace and retry with its current revision"))
+	}
+	if errors.Is(err, workspacepkg.ErrDelegationUnreadable) {
+		return tools.ErrorResult(errorJSON("DELEGATION_STORE_UNREADABLE", err.Error(),
+			"Inspect (or remove) $OMNIPUS_HOME/entities/delegation/"+id+".json, then re-save the graph from the Team tab"))
+	}
+	return tools.ErrorResult(errorJSON("READ_FAILED", err.Error(), "Inspect workspace storage; a revision retry cannot repair unreadable storage"))
 }
 
 // workspace is the canonical on-disk workspace type shared with pkg/gateway.
@@ -810,7 +817,9 @@ func edgeModeCategory(mode config.DelegationMode) workspacepkg.DelegationMode {
 // Mirrors pkg/gateway's defaultWorkspaceDelegationEdges: for every agent in
 // newTeam with a compiled-in coreagent.SeedDelegationEdges seed, each seeded
 // target becomes a candidate edge, with modes collapsed/deduped via the
-// local edgeModeCategory and depth copied verbatim.
+// local edgeModeCategory. Non-self depth is copied from the seed policy;
+// permitted self-edges are pinned by coreagent.SeededEdgeDepth to min(3,
+// ceiling) (ADR-090 FR-006).
 //
 // A candidate edge is included iff ALL of:
 //   - both endpoints are members of newTeam (an edge never reaches outside
@@ -906,11 +915,6 @@ func seedDelegationEdgesForNewMembers(
 			seenMode[wm] = true
 			modes = append(modes, wm)
 		}
-		var depth *int
-		if dp.Depth != nil {
-			d := *dp.Depth
-			depth = &d
-		}
 		for _, ref := range dp.To {
 			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == from && !workspacepkg.PermittedSelfDelegationID(from)) {
 				continue
@@ -934,7 +938,7 @@ func seedDelegationEdgesForNewMembers(
 				FromAgent: from,
 				ToAgent:   to,
 				Modes:     append([]workspacepkg.DelegationMode(nil), modes...),
-				Depth:     depth,
+				Depth:     coreagent.SeededEdgeDepth(from, to, dp.Depth, ceiling),
 			}
 			if err := edge.Validate(teamSet, ceiling); err != nil {
 				slog.Warn("sysagent: update_workspace: dropping invalid auto-seeded delegation edge",

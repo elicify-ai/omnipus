@@ -31,10 +31,9 @@ import (
 // this helper is not delegation-*policy*-specific, it is a shared depth-ceiling
 // lookup consumed by handleWorkspaceDelegationPut (this file, validating an
 // operator-submitted edge's depth) and by workspace create/team validation
-// (rest_workspaces.go, x2). NOT consumed by defaultWorkspaceDelegationEdges
-// below — that function seeds edges from the fixed coreagent matrix and
-// copies each seeded Depth verbatim, with no ceiling clamp (the coreagent
-// seed data is trusted, hardcoded Go, not operator input).
+// (rest_workspaces.go, x2). Also consumed by defaultWorkspaceDelegationEdges
+// for the ADR-090 FR-006 self-edge pin: a lowered ceiling must clamp a
+// fresh jim→jim / worker→worker depth so Validate cannot drop the edge.
 const delegationDepthCeilingFallback = 3
 
 var workspaceSaveDelegationFn = workspace.SaveDelegation
@@ -268,9 +267,11 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 // defaultWorkspaceDelegationEdges derives the seed delegation graph for a new
 // workspace directly from coreagent's seeded trust graph (ADR-037, Wave 2).
 // Each core agent ID's coreagent.SeedDelegationEdges result becomes one edge
-// per target, carrying that policy's modes and depth. This keeps a single
-// source of truth: coreagent's seeded trust graph (Jim→Ava/Ray/worker,
-// Mia/Ray/Ava→worker, the Planner→Explorer/Researcher specialist edges) is
+// per target, carrying that policy's modes and (for non-self edges) depth.
+// Fresh Jim→Jim and Worker→Worker edges get an explicit max_depth of 3 or
+// the lower configured global ceiling (ADR-090 FR-006) rather than inheriting
+// a raised cap. This keeps a single source of truth: coreagent's seeded trust
+// graph) is
 // replayed onto the workspace graph so a fresh workspace works out of the box.
 // Remote-a2a refs and wildcard ("*") refs are skipped — they have no concrete
 // in-roster node to draw an edge to.
@@ -303,6 +304,7 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 	if cfg == nil {
 		return nil
 	}
+	ceiling := delegationDepthCeiling(cfg)
 	var edges []storedDelegationEdge
 	// TestDefaultWorkspaceDelegationEdges_MatchesCoreagentSeed deliberately replays
 	// this exact loop independently (not via a shared helper) so it can catch a
@@ -331,11 +333,6 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 			seenMode[wm] = true
 			modes = append(modes, wm)
 		}
-		var depth *int
-		if dp.Depth != nil {
-			d := *dp.Depth
-			depth = &d
-		}
 		for _, ref := range dp.To {
 			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == ac.ID && !workspace.PermittedSelfDelegationID(ac.ID)) {
 				continue
@@ -344,7 +341,7 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 				FromAgent: ac.ID,
 				ToAgent:   ref.ID,
 				Modes:     append([]workspace.DelegationMode(nil), modes...),
-				Depth:     depth,
+				Depth:     coreagent.SeededEdgeDepth(ac.ID, ref.ID, dp.Depth, ceiling),
 			})
 		}
 	}

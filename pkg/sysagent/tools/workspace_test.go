@@ -511,8 +511,8 @@ func TestWorkspaceCreate_LargeCoreTeamAccepted(t *testing.T) {
 // for newly added members — otherwise, per ADR-037's fail-closed rule (no
 // edge ⇒ deny), no member of a freshly-created team could delegate to any
 // other. Mirrors TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers: team
-// [ava, jim, worker] should seed exactly jim→ava, jim→worker, ava→worker
-// (jim→ray is dropped — ray is not on the team).
+// [ava, jim, worker] seeds Jim→Ava, Jim→Worker, Jim→Jim and Worker→Worker.
+// No retired role may enter the graph.
 func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 	deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim", "worker")
 	tool := systools.NewWorkspaceCreateTool(deps)
@@ -537,8 +537,16 @@ func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 
 	id := workspaceID(t, result.ForLLM)
 	edges := delegationEdgesFromDisk(t, home, id)
-	if len(edges) != 3 {
-		t.Fatalf("expected exactly 3 seeded edges, got %d: %v", len(edges), edges)
+	// Ratified Jim→Ava delegation joins Jim→Worker and both self-edges.
+	if len(edges) != 4 {
+		t.Fatalf("expected exactly 4 seeded edges, got %d: %v", len(edges), edges)
+	}
+	jimAva := findEdge(edges, "jim", "ava")
+	if jimAva == nil {
+		t.Fatal("Jim must be able to delegate team configuration to Ava")
+	}
+	if _, pinned := jimAva["depth"]; pinned {
+		t.Fatal("Jim→Ava must inherit the global depth ceiling, not the self-edge cap")
 	}
 	if findEdge(edges, "jim", "ray") != nil {
 		t.Error("jim→ray must be dropped — ray is not on the team")
@@ -551,6 +559,17 @@ func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 	}
 	if findEdge(edges, "worker", "worker") == nil {
 		t.Error("expected General Purpose self edge")
+	}
+	if d, ok := edgeDepthInt(findEdge(edges, "jim", "jim")); !ok || d != 3 {
+		t.Errorf("jim→jim: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	}
+	if d, ok := edgeDepthInt(findEdge(edges, "worker", "worker")); !ok || d != 3 {
+		t.Errorf("worker→worker: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	}
+	if e := findEdge(edges, "jim", "worker"); e != nil {
+		if _, hasDepth := e["depth"]; hasDepth {
+			t.Errorf("jim→worker: depth should be absent (non-self seed inherits the global cap), got %v", e["depth"])
+		}
 	}
 
 	// The edge list must never be copied into the child-writable workspace
@@ -589,6 +608,145 @@ func TestWorkspaceCreate_NoCoreTeam_NoDelegationSeeded(t *testing.T) {
 	delegPath := filepath.Join(home, "entities", "delegation", id+".json")
 	if _, err := os.Stat(delegPath); err == nil {
 		t.Errorf("delegation store file should not exist for a core_team-less create: %s", delegPath)
+	}
+}
+
+// TestWorkspaceCreate_SelfEdgesPinDepthAtCeilingOr3 is the tool-path FR-006
+// matrix: create_workspace seeds jim→jim and worker→worker at min(3,
+// effective ceiling). Non-self Jim edges stay unpinned. Expected depths
+// come from the spec sentence, not from observed output.
+func TestWorkspaceCreate_SelfEdgesPinDepthAtCeilingOr3(t *testing.T) {
+	cases := []struct {
+		name     string
+		maxDepth int
+		want     int
+	}{
+		{"unset ceiling pins 3", 0, 3},
+		{"ceiling 2 clamps to 2", 2, 2},
+		{"ceiling 5 still pins 3", 5, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, home := newTestDepsWithHomeAndAgents(t, "ava", "jim", "worker")
+			deps.GetCfg().Agents.Defaults.SubTurn.MaxDepth = tc.maxDepth
+			result := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
+				"name":      "Self Depth",
+				"core_team": []any{"ava", "jim", "worker"},
+			})
+			if result.IsError {
+				t.Fatalf("create_workspace failed: %s", result.ForLLM)
+			}
+			id := workspaceID(t, result.ForLLM)
+			edges := delegationEdgesFromDisk(t, home, id)
+			for _, pair := range [][2]string{{"jim", "jim"}, {"worker", "worker"}} {
+				e := findEdge(edges, pair[0], pair[1])
+				if e == nil {
+					t.Fatalf("expected self-edge %s→%s", pair[0], pair[1])
+				}
+				d, ok := edgeDepthInt(e)
+				if !ok || d != tc.want {
+					t.Errorf("%s→%s depth present=%v value=%d, want %d", pair[0], pair[1], ok, d, tc.want)
+				}
+			}
+			for _, pair := range [][2]string{{"jim", "ava"}, {"jim", "worker"}} {
+				e := findEdge(edges, pair[0], pair[1])
+				if e == nil {
+					t.Fatalf("expected non-self edge %s→%s", pair[0], pair[1])
+				}
+				if _, has := e["depth"]; has {
+					t.Errorf("%s→%s must not carry the self-edge pin, got %v", pair[0], pair[1], e["depth"])
+				}
+			}
+		})
+	}
+}
+
+// TestWorkspaceCreate_ExplicitSelfEdgeIsNotDepthPinned proves an explicit
+// user-authored graph on create_workspace is not rewritten by the fresh-seed
+// pin (FR-006 applies to seeded edges, not supplied ones; no migration).
+func TestWorkspaceCreate_ExplicitSelfEdgeIsNotDepthPinned(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "jim")
+	deps.GetCfg().Agents.Defaults.SubTurn.MaxDepth = 5
+	result := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
+		"name":      "Explicit Self",
+		"core_team": []any{"jim"},
+		"delegation": []any{map[string]any{
+			"from_agent": "jim", "to_agent": "jim",
+			"modes": []any{"direct", "task"},
+		}},
+	})
+	if result.IsError {
+		t.Fatalf("create_workspace failed: %s", result.ForLLM)
+	}
+	id := workspaceID(t, result.ForLLM)
+	e := findEdge(delegationEdgesFromDisk(t, home, id), "jim", "jim")
+	if e == nil {
+		t.Fatal("expected explicit jim→jim edge")
+	}
+	if _, has := e["depth"]; has {
+		t.Errorf("explicit user-authored self-edge must not receive the fresh-seed pin, got %v", e["depth"])
+	}
+}
+
+// TestWorkspaceUpdate_SelfEdgesPinDepthAndPreserveUserAuthored covers the
+// update_workspace seed path: a newly added Worker self-edge is pinned at
+// min(3, ceiling), while a user-authored Jim self-edge already on disk
+// keeps its written depth (no migration).
+func TestWorkspaceUpdate_SelfEdgesPinDepthAndPreserveUserAuthored(t *testing.T) {
+	cases := []struct {
+		name      string
+		maxDepth  int
+		wantFresh int
+		id        string
+	}{
+		{"ceiling 2 clamps a newly seeded worker self-edge to 2", 2, 2, "01KW60SELFDEPTH00000000002"},
+		{"ceiling 5 still pins a newly seeded worker self-edge to 3", 5, 3, "01KW60SELFDEPTH00000000005"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, home := newTestDepsWithHomeAndAgents(t, "jim", "worker")
+			deps.GetCfg().Agents.Defaults.SubTurn.MaxDepth = tc.maxDepth
+			wsPath := filepath.Join(home, "workspaces", tc.id+".json")
+			if err := os.MkdirAll(filepath.Dir(wsPath), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			original := `{
+			"id": "` + tc.id + `",
+			"name": "Preserve Self Depth",
+			"status": "active",
+			"core_team": ["jim"],
+			"created_at": "2026-01-01T00:00:00Z",
+			"updated_at": "2026-01-01T00:00:00Z"
+		}`
+			if err := os.WriteFile(wsPath, []byte(original), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			seedDelegationStoreForTest(t, home, tc.id, `[
+			{"from_agent":"jim","to_agent":"jim","modes":["direct","task"],"depth":1}
+		]`)
+			res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+				"id":        tc.id,
+				"revision":  currentWorkspaceRevision(t, home, tc.id),
+				"core_team": []any{"jim", "worker"},
+			})
+			if res.IsError {
+				t.Fatalf("update_workspace failed: %s", res.ForLLM)
+			}
+			edges := delegationEdgesFromDisk(t, home, tc.id)
+			jimSelf := findEdge(edges, "jim", "jim")
+			if d, ok := edgeDepthInt(jimSelf); !ok || d != 1 {
+				t.Errorf("user-authored jim→jim depth must stay 1, present=%v value=%d", ok, d)
+			}
+			workerSelf := findEdge(edges, "worker", "worker")
+			if d, ok := edgeDepthInt(workerSelf); !ok || d != tc.wantFresh {
+				t.Errorf("fresh worker→worker depth present=%v value=%d, want %d", ok, d, tc.wantFresh)
+			}
+			if e := findEdge(edges, "jim", "worker"); e == nil {
+				t.Error("expected jim→worker to be seeded for the newly added worker")
+			} else if _, has := e["depth"]; has {
+				t.Errorf("jim→worker must not carry the self-edge pin, got %v", e["depth"])
+			}
+		})
 	}
 }
 
@@ -950,6 +1108,26 @@ func findEdge(edges []map[string]any, from, to string) map[string]any {
 	return nil
 }
 
+// edgeDepthInt reads a persisted edge's depth. encoding/json decodes JSON
+// numbers into float64 when the target is map[string]any.
+func edgeDepthInt(edge map[string]any) (int, bool) {
+	if edge == nil {
+		return 0, false
+	}
+	raw, ok := edge["depth"]
+	if !ok || raw == nil {
+		return 0, false
+	}
+	switch v := raw.(type) {
+	case float64:
+		return int(v), true
+	case int:
+		return v, true
+	default:
+		return 0, false
+	}
+}
+
 // modesOf extracts an edge's "modes" field as []string (nil if absent).
 func modesOf(edge map[string]any) []string {
 	raw, _ := edge["modes"].([]any)
@@ -1012,29 +1190,37 @@ func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 	}
 
 	edges := delegationEdgesFromDisk(t, home, id)
-	if len(edges) != 3 {
-		t.Fatalf("expected exactly 3 seeded edges, got %d: %v", len(edges), edges)
+	// Ratified Jim→Ava delegation joins Jim→Worker and both self-edges.
+	if len(edges) != 4 {
+		t.Fatalf("expected exactly 4 seeded edges, got %d: %v", len(edges), edges)
+	}
+	jimAva := findEdge(edges, "jim", "ava")
+	if jimAva == nil {
+		t.Fatal("Jim must be able to delegate team configuration to Ava")
+	}
+	if _, pinned := jimAva["depth"]; pinned {
+		t.Fatal("Jim→Ava must inherit the global depth ceiling, not the self-edge cap")
 	}
 	if findEdge(edges, "jim", "ray") != nil {
 		t.Error("jim→ray must be dropped — ray is not on the team")
 	}
 
-	jimAva := findEdge(edges, "jim", "jim")
-	if jimAva == nil {
+	jimSelf := findEdge(edges, "jim", "jim")
+	if jimSelf == nil {
 		t.Fatal("expected Jim self edge")
 	}
 	jimWorker := findEdge(edges, "jim", "worker")
 	if jimWorker == nil {
 		t.Fatal("expected jim→worker edge")
 	}
-	avaWorker := findEdge(edges, "worker", "worker")
-	if avaWorker == nil {
+	workerSelf := findEdge(edges, "worker", "worker")
+	if workerSelf == nil {
 		t.Fatal("expected General Purpose self edge")
 	}
 
 	// Jim's seed [task, background, await] must collapse+dedupe to [task, direct].
 	wantModes := map[string]bool{"task": true, "direct": true}
-	for name, edge := range map[string]map[string]any{"jim→ava": jimAva, "jim→worker": jimWorker} {
+	for name, edge := range map[string]map[string]any{"jim→jim": jimSelf, "jim→worker": jimWorker} {
 		modes := modesOf(edge)
 		if len(modes) != 2 {
 			t.Errorf("%s modes = %v, want exactly 2 (task, direct)", name, modes)
@@ -1044,9 +1230,17 @@ func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 				t.Errorf("%s modes = %v contains unexpected mode %q", name, modes, mo)
 			}
 		}
-		if _, hasDepth := edge["depth"]; hasDepth {
-			t.Errorf("%s: depth should be absent (Jim's seed has no depth), got %v", name, edge["depth"])
-		}
+	}
+	// FR-006: fresh self-edges pin 3 when the ceiling is unset
+	// (DefaultConfig leaves SubTurn.MaxDepth at 0 → fallback 3).
+	if d, ok := edgeDepthInt(jimSelf); !ok || d != 3 {
+		t.Errorf("jim→jim: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	}
+	if d, ok := edgeDepthInt(workerSelf); !ok || d != 3 {
+		t.Errorf("worker→worker: FR-006 requires explicit depth 3 on a fresh self-edge, present=%v value=%d", ok, d)
+	}
+	if _, hasDepth := jimWorker["depth"]; hasDepth {
+		t.Errorf("jim→worker: depth should be absent (non-self seed inherits the global cap), got %v", jimWorker["depth"])
 	}
 }
 

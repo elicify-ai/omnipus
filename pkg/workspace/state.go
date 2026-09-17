@@ -12,6 +12,7 @@ import (
 var (
 	ErrInvalidRevision       = errors.New("workspace: invalid revision")
 	ErrRevisionConflict      = errors.New("workspace: revision conflict")
+	ErrDelegationUnreadable  = errors.New("workspace: delegation state is unreadable")
 	workspaceRevisionPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 )
 
@@ -50,7 +51,7 @@ func ReadStateLocked(home, id string) (State, error) {
 	}
 	edges, ok := LoadDelegation(home, id)
 	if !ok {
-		return State{}, errors.New("workspace: delegation state is unreadable")
+		return State{}, ErrDelegationUnreadable
 	}
 	revision, err := RevisionForState(w, edges)
 	return State{Workspace: w, Delegation: edges, Revision: revision}, err

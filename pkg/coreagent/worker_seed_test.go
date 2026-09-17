@@ -172,6 +172,37 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 	assert.True(t, hasTarget(workerDP, string(coreagent.IDWorker)), "General Purpose may create only same-role helpers")
 }
 
+// TestSeedDelegationPolicies_SelfRolesDoNotPinRoleWideDepth guards the SHAPE
+// of the ADR-090 FR-006 fix: "Fresh self-edges explicitly set max_depth 3 (or
+// the lower configured ceiling)" is a PER-EDGE statement about the workspace
+// graph, and config.DelegationPolicy.Depth is POLICY-WIDE — one value covering
+// every target the role seeds. Setting Depth on Jim's or Worker's seed policy
+// here would clamp their NON-self edges (jim→ava, jim→worker, jim→planner,
+// jim→researcher) to the same 3, which FR-006 does not ask for and the
+// founder's task explicitly forbids. The pin is applied where policies become
+// edges: defaultWorkspaceDelegationEdges (pkg/gateway) and
+// seedDelegationEdgesForNewMembers (pkg/sysagent/tools).
+//
+// This test PASSES against the pre-fix code by design — it is not the F3
+// reproduction (the gateway/tools tests are); it is the regression guard
+// against fixing F3 the wrong way, so it must stay green across the fix.
+func TestSeedDelegationPolicies_SelfRolesDoNotPinRoleWideDepth(t *testing.T) {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDJim, coreagent.IDWorker} {
+		dp := coreagent.SeedDelegationEdges(id)
+		require.NotNil(t, dp, "%s must keep a seeded delegation policy", id)
+		assert.Nil(t, dp.Depth,
+			"%s: the seed policy must NOT pin a role-wide depth — it would clamp non-self edges too (FR-006 pins depth per self-edge at translation time)", id)
+	}
+
+	// Contrast: Planner's bounded sub-delegation legitimately carries a
+	// policy-wide depth (2) because ALL of its seeded edges are non-self and
+	// share the same bound. The translation must keep copying it verbatim.
+	plannerDP := coreagent.SeedDelegationEdges(coreagent.IDPlanner)
+	require.NotNil(t, plannerDP, "planner must keep a seeded delegation policy")
+	require.NotNil(t, plannerDP.Depth, "planner's seed depth is the documented bounded-subdelegation cap")
+	assert.Equal(t, 2, *plannerDP.Depth, "planner's seeded depth cap is 2")
+}
+
 // TestWorkerToolPolicyTightensGlobalCeiling verifies the worker's own policy
 // map is SPARSE: channels, providers, platform, most of agents (list_agents
 // excepted), most of tasks (update_task/set_todos/list_tasks excepted), and

@@ -355,8 +355,13 @@ func TestDeleteStateReportsActualPartialStateWhenSoulRemovalFails(t *testing.T) 
 	if result.PersistenceStatus != PersistencePartial || result.ErrorStage != "remove_soul" || !reflect.DeepEqual(result.ChangedFields, []string{"entity"}) {
 		t.Fatalf("result=%+v", result)
 	}
-	if result.Revision != revisionFor(nil, []byte("soul")) {
-		t.Fatalf("revision=%q want partial-state revision %q", result.Revision, revisionFor(nil, []byte("soul")))
+	// Entity is gone, so ReadState/get_agent report not-found. A digest over
+	// (nil, leftover soul) is not a readable revision (ADR-090 SE-C / FR-007).
+	if result.Revision != "" {
+		t.Fatalf("revision=%q want empty; get_agent cannot echo a revision after the entity is gone", result.Revision)
+	}
+	if !strings.Contains(err.Error(), "not-found") || !strings.Contains(err.Error(), "no readable revision") {
+		t.Fatalf("error must state that reads now report not-found: %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(home, "entities", "agents", "agent-1.json")); !os.IsNotExist(statErr) {
 		t.Fatalf("entity stat error=%v want not exist", statErr)

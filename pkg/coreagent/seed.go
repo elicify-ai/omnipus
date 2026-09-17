@@ -472,6 +472,35 @@ func SeedDelegationEdges(id CoreAgentID) *config.DelegationPolicy {
 	return coreAgentDelegation(id)
 }
 
+// FreshSelfDelegationMaxDepth is the ADR-090 FR-006 pin for a freshly seeded
+// Jim→Jim or Worker→Worker workspace edge: 3, or the lower configured global
+// ceiling. Applied per-edge by SeededEdgeDepth — never as a role-wide
+// DelegationPolicy.Depth, which would also clamp Jim's staff edges.
+const FreshSelfDelegationMaxDepth = 3
+
+// SeededEdgeDepth returns the depth pointer a freshly seeded workspace edge
+// should carry. Permitted self-edges (Jim, General Purpose) get an explicit
+// min(FreshSelfDelegationMaxDepth, ceiling) so a raised global cap cannot
+// deepen a fresh self-chain beyond 3, and a lowered cap cannot cause
+// Validate to drop the edge. Every other pair copies policyDepth (nil stays
+// inherit). ceiling is the already-resolved effective global cap
+// (delegationDepthCeiling / workspaceDelegationDepthCeiling); non-positive
+// is treated as unset and the pin stays 3.
+func SeededEdgeDepth(from, to string, policyDepth *int, ceiling int) *int {
+	if from == to && (from == string(IDJim) || from == string(IDWorker)) {
+		d := FreshSelfDelegationMaxDepth
+		if ceiling > 0 && ceiling < d {
+			d = ceiling
+		}
+		return &d
+	}
+	if policyDepth == nil {
+		return nil
+	}
+	d := *policyDepth
+	return &d
+}
+
 // seedMu owns SeedConfig's read-all-then-append sequence (ADR-054 D6 rule 4,
 // M-7). SeedConfig builds an `existing` set from the current roster, then
 // appends any missing core agent — with no lock, two concurrent callers (e.g.
