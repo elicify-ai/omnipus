@@ -69,7 +69,10 @@ func (t *SkillCreateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *SkillCreateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	if err := ValidateConfigurationWriteContext(ctx); err != nil {
+		return tools.ErrorResult(errorJSON("DELEGATED_WRITE_FORBIDDEN", err.Error(), "Use switch_agent to enter Ava's owner session"))
+	}
 	name, _ := args["name"].(string)
 	content, _ := args["content"].(string)
 	if name == "" {
@@ -138,6 +141,9 @@ func (t *SkillEditTool) Parameters() map[string]any {
 }
 
 func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	if err := ValidateConfigurationWriteContext(ctx); err != nil {
+		return tools.ErrorResult(errorJSON("DELEGATED_WRITE_FORBIDDEN", err.Error(), "Use switch_agent to enter Ava's owner session"))
+	}
 	name, _ := args["name"].(string)
 	content, _ := args["content"].(string)
 	if name == "" {
