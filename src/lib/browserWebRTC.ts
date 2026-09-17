@@ -140,7 +140,7 @@ interface BrowserWebRTCStateSignal { // not-wire-format: locally widened view of
   active?: boolean
 }
 
-const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
+export const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
 const DEFAULT_ANSWER_TIMEOUT_MS = 5000
 // Exported (external review F6, 2026-08-13): BrowserLiveView.tsx's own
 // FIRST_FRAME_TIMEOUT_MS — how long it waits for a decoded VIDEO FRAME,
@@ -211,16 +211,17 @@ export interface BrowserICEServer { // not-wire-format: local view of the genera
   credential?: string
 }
 
+export function iceServersWithDefaults(servers: readonly RTCIceServer[]): RTCIceServer[] {
+  return [
+    { urls: DEFAULT_STUN_SERVER },
+    ...servers
+      .filter((server) => server.urls.length > 0)
+      .map((server) => ({ ...server })),
+  ]
+}
+
 export function pcFactoryWithICEServers(servers: readonly BrowserICEServer[]): () => RTCPeerConnection {
-  return () =>
-    new RTCPeerConnection({
-      iceServers: [
-        { urls: DEFAULT_STUN_SERVER },
-        ...servers
-          .filter((s) => s.urls.length > 0)
-          .map((s) => ({ urls: s.urls, username: s.username, credential: s.credential })),
-      ],
-    })
+  return () => new RTCPeerConnection({ iceServers: iceServersWithDefaults(servers) })
 }
 
 /**
