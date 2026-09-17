@@ -5,6 +5,7 @@ import { z } from 'zod'
 import {
   Agent as AgentSchema,
   AgentSession as AgentSessionSchema,
+  ConfigurationMutationState as ConfigurationMutationStateSchema,
   // Spec-4 — external-CLI runner connection test (contract-first #8):
   RunnerTestResponse as RunnerTestResponseSchema,
 } from '@/lib/api/generated/schemas'
@@ -14,6 +15,7 @@ import type {
   Agent,
   AgentUpdateRequest,
   AgentCreateRequest,
+  ConfigurationMutationState,
   RunnerTestResponse,
 } from '@/lib/api/generated/openapi-types'
 import { request } from './http'
@@ -128,8 +130,12 @@ export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent
 
 // Delete uses the revision the user reviewed. A stale revision conflicts;
 // built-in identities remain protected from deletion.
-export function deleteAgent(id: string, revision: string): Promise<void> {
-  return request<void>(`/agents/${encodeURIComponent(id)}?${new URLSearchParams({ revision })}`, { method: 'DELETE' })
+export function deleteAgent(id: string, revision: string): Promise<ConfigurationMutationState> {
+  return requestConfiguration<ConfigurationMutationState>(
+    `/agents/${encodeURIComponent(id)}?${new URLSearchParams({ revision })}`,
+    { method: 'DELETE' },
+    ConfigurationMutationStateSchema as ZodType<ConfigurationMutationState>,
+  )
 }
 
 // Spec-4 FR-4.2 — external-CLI runner connection test.

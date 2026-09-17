@@ -72,6 +72,7 @@ import {
   type WorkspaceMemberConfig,
 } from '@/lib/api'
 import { isApiError } from '@/lib/api-error'
+import { ConfigurationSaveError } from '@/lib/api/configuration'
 import { formatTokens } from '@/lib/formatTokens'
 import { logDiagnostic } from '@/lib/telemetry'
 import { useUiStore } from '@/store/ui'
@@ -1205,6 +1206,21 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
       addToast({ message: 'Agent deleted', variant: 'success' })
     },
     onError: (err: unknown) => {
+      if (err instanceof ConfigurationSaveError && err.state.persistence_status === 'complete') {
+        // Persistence is authoritative for what the next read will return.
+        // Discard the stale deleted resource even though live activation
+        // failed, then force both views to reconcile with stored state.
+        queryClient.setQueryData(['agents'], (prev: unknown) => {
+          if (!Array.isArray(prev)) return prev
+          return prev.filter((a) => (a as { id?: string }).id !== agentId)
+        })
+        queryClient.invalidateQueries({ queryKey: ['agents'] })
+        queryClient.invalidateQueries({ queryKey: ['agent', agentId] })
+        setDeleteOpen(false)
+        closeEditAgentSlideOver()
+        addToast({ message: `Delete incomplete: ${err.message}`, variant: 'error' })
+        return
+      }
       const msg = isApiError(err)
         ? err.userMessage
         : err instanceof Error

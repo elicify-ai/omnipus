@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { updateAgent, fetchAgent, createAgent } from './agents'
+import { updateAgent, fetchAgent, createAgent, deleteAgent } from './agents'
 import { createWorkspace, updateWorkspace, updateWorkspaceDelegation } from './workspaces'
 import { updateAgentTools } from './tools'
 import { installSkillBySlug } from './skills'
@@ -26,6 +26,25 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('ADR090 configuration save outcomes', () => {
+  it('returns the generated deletion state only after complete active deletion', async () => {
+    const deletionState = { ...state, changed_fields: ['agents.general-assistant'] }
+    response(deletionState)
+    await expect(deleteAgent('general-assistant', revision)).resolves.toEqual(deletionState)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it('cannot report a persisted but inactive deletion as successful', async () => {
+    const deletionState = { ...state, activation_status: 'failed', changed_fields: ['agents.general-assistant'] }
+    response(deletionState)
+    await expect(deleteAgent('general-assistant', revision)).rejects.toMatchObject({
+      name: 'ConfigurationSaveError', state: deletionState,
+      message: 'Changes were saved but are not active. Reload before making further changes.',
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it('does not certify deletion success when the HTTP 200 state is malformed', async () => {
+    response({ persistence_status: 'complete', activation_status: 'active' })
+    await expect(deleteAgent('general-assistant', revision)).rejects.toBeInstanceOf(ApiSchemaError)
+  })
   it('returns the resource only after a complete active save', async () => {
     response({ ...agent, ...state })
     await expect(updateAgent('mia', { revision, model: 'test-model' })).resolves.toEqual({ ...agent, ...state })
