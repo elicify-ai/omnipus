@@ -182,7 +182,7 @@ func TestHandleWorkspaceMediaDelete_Success_AuditsLogsAndReturns200(t *testing.T
 
 	logFile := filepath.Join(t.TempDir(), "media-delete-success.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.INFO)
 	require.NoError(t, logger.EnableFileLogging(logFile))
 	t.Cleanup(func() {

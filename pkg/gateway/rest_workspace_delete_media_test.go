@@ -117,7 +117,7 @@ func TestHandleWorkspaceDelete_MediaCascadeFailure_Returns500AndAudits(t *testin
 	// straggler case.
 	logFile := filepath.Join(t.TempDir(), "workspace-delete-cascade.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	require.NoError(t, logger.EnableFileLogging(logFile))
 	t.Cleanup(func() {

@@ -699,7 +699,7 @@ func TestChannelTypeForRateLimit_ConfigEntryWithEmptyType_LogsAtWarn(t *testing.
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "ratelimit-desync.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)

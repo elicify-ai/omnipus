@@ -246,7 +246,7 @@ func TestMigrateLegacyMatrixCryptoStore_InterruptedMigration_DestinationAlreadyE
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "matrix-migration.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)
@@ -340,7 +340,7 @@ func TestMigrateLegacyMatrixCryptoStore_InterruptedMigration_MultipleInstances_N
 	tmpDir := t.TempDir()
 	logFile := filepath.Join(tmpDir, "matrix-migration-multi.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	if err := logger.EnableFileLogging(logFile); err != nil {
 		t.Fatalf("EnableFileLogging: %v", err)
