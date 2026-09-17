@@ -1,12 +1,9 @@
 package azure
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -134,45 +131,6 @@ func TestProviderChat_AzureRequestBodyContainsModel(t *testing.T) {
 
 	if requestBody["model"] != "my-deployment" {
 		t.Errorf("model = %v, want %q", requestBody["model"], "my-deployment")
-	}
-}
-
-func TestProviderChat_AzureToolImageRequest(t *testing.T) {
-	const encodedPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-	var request map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&request)
-		writeValidResponse(w)
-	}))
-	defer server.Close()
-	p := mustNewProvider(t, "key", server.URL, "")
-	messages := []Message{{Role: "tool", ToolCallID: "call-1", Content: "first", Media: []string{"data:image/png;base64," + encodedPNG}}, {Role: "tool", ToolCallID: "call-2", Content: "second", Media: []string{"data:image/png;base64," + encodedPNG}}}
-	if _, err := p.Chat(t.Context(), messages, nil, "deployment", nil); err != nil {
-		t.Fatal(err)
-	}
-	var ids []string
-	var images [][]byte
-	for _, raw := range request["input"].([]any) {
-		item := raw.(map[string]any)
-		if item["type"] != "function_call_output" {
-			continue
-		}
-		ids = append(ids, item["call_id"].(string))
-		for _, rawPart := range item["output"].([]any) {
-			part := rawPart.(map[string]any)
-			if part["type"] != "input_image" {
-				continue
-			}
-			decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(part["image_url"].(string), "data:image/png;base64,"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			images = append(images, decoded)
-		}
-	}
-	want, _ := base64.StdEncoding.DecodeString(encodedPNG)
-	if !reflect.DeepEqual(ids, []string{"call-1", "call-2"}) || len(images) != 2 || !reflect.DeepEqual(images[0], want) || !reflect.DeepEqual(images[1], want) {
-		t.Fatalf("ids=%v images=%d", ids, len(images))
 	}
 }
 

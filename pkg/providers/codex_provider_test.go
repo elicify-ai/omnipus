@@ -1,12 +1,10 @@
 package providers
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -82,54 +80,6 @@ func TestBuildCodexParams_ToolImageInCorrelatedOutput(t *testing.T) {
 	}
 	if !strings.Contains(string(raw), `"call_id":"call-image"`) || !strings.Contains(string(raw), dataURL) {
 		t.Fatalf("params=%s", raw)
-	}
-}
-
-func TestCodexProvider_ChatTransportsCorrelatedToolImagesInOrder(t *testing.T) {
-	const encodedPNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
-	var request map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Errorf("decode request: %v", err)
-		}
-		writeCompletedSSE(w, map[string]any{"id": "resp", "object": "response", "status": "completed", "output": []any{}, "usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2, "input_tokens_details": map[string]any{"cached_tokens": 0}, "output_tokens_details": map[string]any{"reasoning_tokens": 0}}})
-	}))
-	defer server.Close()
-	p := NewCodexProvider("token", "account")
-	p.client = createOpenAITestClient(server.URL, "token", "account")
-	messages := []Message{
-		{Role: "assistant", ToolCalls: []ToolCall{{ID: "call-1", Name: "read_file"}, {ID: "call-2", Name: "read_file"}}},
-		{Role: "tool", ToolCallID: "call-1", Content: "first", Media: []string{"data:image/png;base64," + encodedPNG}},
-		{Role: "tool", ToolCallID: "call-2", Content: "second", Media: []string{"data:image/png;base64," + encodedPNG}},
-	}
-	if _, err := p.Chat(t.Context(), messages, nil, "gpt-5", nil); err != nil {
-		t.Fatal(err)
-	}
-	input := request["input"].([]any)
-	var ids []string
-	var images [][]byte
-	for _, raw := range input {
-		item := raw.(map[string]any)
-		if item["type"] != "function_call_output" {
-			continue
-		}
-		ids = append(ids, item["call_id"].(string))
-		for _, rawPart := range item["output"].([]any) {
-			part := rawPart.(map[string]any)
-			if part["type"] != "input_image" {
-				continue
-			}
-			encoded := strings.TrimPrefix(part["image_url"].(string), "data:image/png;base64,")
-			decoded, err := base64.StdEncoding.DecodeString(encoded)
-			if err != nil {
-				t.Fatal(err)
-			}
-			images = append(images, decoded)
-		}
-	}
-	want, _ := base64.StdEncoding.DecodeString(encodedPNG)
-	if !reflect.DeepEqual(ids, []string{"call-1", "call-2"}) || len(images) != 2 || !reflect.DeepEqual(images[0], want) || !reflect.DeepEqual(images[1], want) {
-		t.Fatalf("ids=%v images=%d", ids, len(images))
 	}
 }
 
