@@ -142,6 +142,31 @@ Two jobs, one gold button. Do not compete with two gold buttons.
 
 **Done when.** A workspace with 8 chat agents has no agent search. A workspace with 12 has search in chat and in every other agent list. No new picker visual language.
 
+### 13. Task detail panel — one heading each, autosave, shorter first view
+
+**Context.** The panel is a long scroll. Title and Goal have Save / Cancel while everything else autosaves. Acceptance criteria and Definition of Done are **two different required lists**, not duplicates. The review saw DoD three times because the panel, the editor, and the results block each print the same heading.
+
+Checked in code: create already requires Title, Goal, at least one acceptance criterion, and at least one Definition of Done item. Agent instruction fields elsewhere already autosave.
+
+**Requirement.**
+
+- **Autosave Title and Goal.** Click to edit, it saves. Escape cancels. No Save button. Same pattern as other instruction fields and Settings.
+- **Keep both lists, both required.** Acceptance criteria = checks while work runs. Definition of Done = standing gates before we call it finished.
+- **One heading each.** Pass/fail (when judged) sits on the row. Do not render a second “Definition of Done” results section or a second editor label.
+- **First view, in this order:** Title; Goal *; Agent; Status and Due; Acceptance criteria * (compact list); Definition of Done * (compact list); then **More** for Priority, Plan, Tags, Trigger, Depends on, Artifacts, Sub-tasks, and run history.
+- Start / Stop / Delete stay at the bottom. Delete stays a quiet danger action.
+- Creating a **new task** still requires the same four: Title, Goal, at least one criterion, at least one DoD item. Errors wait until the user tries (same Field rule as New Event). The create form may keep those fields visible; we are not hiding required lists on create.
+
+**Done when.** Opening a task shows the first view above without duplicate headings. Title and Goal have no Save button and still persist. Both lists are editable and required. More reveals the rest. Start still refuses an incomplete task.
+
+### 14. New Event form — keep the fields; delay errors
+
+**Context.** New Event already has its own requirement (item 7) for no red errors on a blank form. The form today is Title, Agent, Instruction, Acceptance criteria, Definition of Done, date and time, repeat — more than a simple calendar dialog. Founder: keep all those fields visible; only delay the errors. Do not force the task-panel first-view / More pattern onto events.
+
+**Requirement.** All current New Event / Edit event fields stay on one scroll. Red errors appear only after the user tries (submit or leaving a filled field). Apply the same one-heading-each rule for the two lists (no stacked “Definition of Done” labels). Repeat stays a UI control, never raw cron.
+
+**Done when.** Opening New Event shows no red errors. Every field above is still visible. DoD and criteria each have one heading.
+
 ---
 
 ## Parked — do not invent requirements yet
@@ -149,7 +174,6 @@ Two jobs, one gold button. Do not compete with two gold buttons.
 | Topic | Why it is parked | Next step |
 |---|---|---|
 | Knowledge views | A filled vault is not an empty vault. Do not overload users, but do not guess. | Dedicated interview next. |
-| Task / event side panel | Duplicates, “advanced”, and density are not yet listed field by field. | Walk the real panel together before writing rules. |
 
 ---
 
@@ -173,7 +197,8 @@ Two jobs, one gold button. Do not compete with two gold buttons.
 3. Login-only signed-out route; session must not drop.
 4. Live browser failure + Activity stop / open / return / details.
 5. Model picker + agent-list search (items 11–12).
-6. Then the parked interviews: Knowledge, then the task panel.
+6. Task detail first view + autosave Goal (item 13); New Event headings (item 14).
+7. Then the parked interview: Knowledge views.
 
 Internal batches are fine. These remain product requirements until each row’s **Done when** is true.
 
