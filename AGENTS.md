@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code when working in this repository. This root file holds only the rules that apply everywhere; module detail lives in the `CLAUDE.md` next to the code it describes (design: `docs/internal/architecture/draft-module-map.md`, "CLAUDE.md — one per module"). Text cut from this file awaits placement in `docs/internal/architecture/claude-md-module-extracts.md`, keyed by destination path.
+Guidance for Claude Code when working in this repository. This root file holds only the rules that apply everywhere; module detail lives in the `CLAUDE.md` next to the code it describes (design: `docs/internal/architecture/draft-module-map.md`, "CLAUDE.md — one per module").
 
 **Cite `file::symbol`, not `file:line`** — line numbers in churn-heavy files go stale within days; a symbol citation survives every file split.
 
@@ -66,7 +66,7 @@ Write for a technically literate non-engineer. Plain words over jargon — a tec
 1. **Single Go binary** — all backend features compile into one binary. No new runtime deps. SPA embedded via `go:embed`.
 2. **Pure Go** — no CGo, no external C libs, no shelling out for security-critical paths. Use `golang.org/x/sys/unix` for kernel interfaces.
 3. **Minimal footprint** — security-feature RAM overhead < 10MB beyond baseline.
-4. **Graceful degradation** — Linux 5.13+ features (Landlock, seccomp) fall back to app-level enforcement on older kernels, non-Linux, Android/Termux.
+4. **Graceful degradation** — Linux 5.13+ features (Landlock, seccomp) fall back to app-level enforcement on older kernels and non-Linux.
 5. **Ecosystem compatibility** — follow Omnipus/OpenClaw conventions (SKILL.md, HEARTBEAT.md, SOUL.md, AGENTS.md, JSON config).
 6. **Two layers, no third — the reconciled global ceiling IS the default; per-agent overrides only tighten (ADR-077).** Layer 1: the global ceiling (`cfg.Sandbox.ToolPolicies`), kept complete for the whole static catalog (general + browser + `system.*`-legacy-named sysagent tools) by `config.ReconcileToolPolicyCeiling` (ADR-076) on every load; an old install's ceiling self-heals forward additively — a static builtin tool added to `defaults.go` after an install's `config.json` was last written gets its shipped default added to `sandbox.tool_policies` on the next load — and Reconcile never overwrites an operator-set value or re-adds a retired key; reconciling to the shipped default (including `bash = allow`) is intended, not a gap (ADR-077 D2). Layer 2: deliberately sparse per-agent overrides (`AgentConfig.Tools.Builtin.Policies`) that under strictest-wins (`pkg/tools/compositor.go::resolveEffectivePolicyWith`) only ever *tighten* below the ceiling — an agent with no entry riding the ceiling is the normal, intended state, not a gap. There is no hardcoded allow/deny/ask fallback anywhere in the Go code, no `DefaultPolicy`/`GlobalDefaultPolicy` field, and no fail-closed per-agent `deny` backfill or own-coverage boot log — removed by operator decision, do not reintroduce (guard: `scripts/check-no-fail-closed-backfill.sh`). To lock a tool down, set an explicit `deny`, per-agent (tighten one agent) or global (tighten the ceiling for everyone). `bash` is registered for every agent regardless of sandbox mode — the kernel sandbox is the protective layer — and resolves `allow` from the ceiling for an agent with no explicit entry (accepted risk, ADR-077 R1; Jim's seed grants `bash: allow` so he has shell on a fresh install). `config.ValidateToolPolicyCoverage` still runs but is a never-firing correctness tripwire after Reconcile. Exception — MCP tools: MCP-server tool names aren't known until an operator connects the server at runtime, so per-server `mcp_<server>_*` wildcard bulk policies remain the mechanism there; the no-wildcard rule applies to the static builtin catalog only.
 7. **Release responsibility — fix everything, no excuses.** Every branch fully green before shipping. Pre-existing failures (lint, vuln, Go test, race, vitest, tsc, Playwright — anything CI runs) are ours to fix regardless of origin. "Pre-existing"/"not mine"/"broken on main too" are NEVER acceptable closure paths. Fix now, or get explicit user approval to defer with a tracked issue + target date.
@@ -81,6 +81,12 @@ Write for a technically literate non-engineer. Plain words over jargon — a tec
 ## Build, test, and quality gates
 
 **Build tags are always `goolm,stdjson`; `CGO_ENABLED=0`.** The Matrix channel (`pkg/channels/matrix`) is gated behind `//go:build goolm` and the gateway imports it, so without the tags the package will not even compile — `build constraints exclude all Go files in .../pkg/channels/matrix → [setup failed]` is a missing build tag, not a flake, an OOM, or a real bug. Prefer `make test` / `make build`, which inject the tags.
+
+**SPA embed stub trap:** a fresh clone or new worktree fails to compile `pkg/gateway` with an error that looks like a code defect and is not — `pkg/gateway/spa/` (what `//go:embed all:spa` embeds) is gitignored and absent until the first SPA build. Stub it:
+
+```bash
+mkdir -p pkg/gateway/spa/assets && echo '<!doctype html>' > pkg/gateway/spa/index.html && touch pkg/gateway/spa/assets/.keep
+```
 
 **Never run the full Go test suite locally — CI is the authority for Go test/build results.** `go test ./...` OOM-kills this environment; push and read the checks instead. At most one narrowly-scoped local test when you must (`CGO_ENABLED=0 go test -tags goolm,stdjson -run '^TestName$' -p 1 ./pkg/<one>/`); never run multiple Go test suites in parallel.
 
@@ -101,7 +107,7 @@ A merge from a branch cut before a removal can resurrect deleted files/surfaces 
 - **Fail-closed per-agent tool-policy backfill** (ADR-077) — see Hard Constraint #6. Guard: `scripts/check-no-fail-closed-backfill.sh`.
 - **Goal-ending-on-lost-UI watchdog** (ADR-082) — a turn never depends on a UI connection; only an explicit Stop/cancel (`RequestCancel`, `InterruptSessionHard`) ends a turn early. Guard: `scripts/check-no-orphan-turn-watchdog.sh`.
 
-Guards are wired into CI via `scripts/guards.sh` (`make lint-guards`), each with a Makefile target; full deletion inventories (every symbol, file and wire type) live in the module extracts file.
+Guards are wired into CI via `scripts/guards.sh` (`make lint-guards`), each with a Makefile target; every guard's full deletion inventory (each symbol, file and wire type it bans) is enumerated inside the guard script itself.
 
 ## Spec-Driven Workflow
 

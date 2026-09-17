@@ -1,8 +1,7 @@
 # CLAUDE.md — CI worker cluster (app `ci-omnipus-1`)
 
 Scoped guidance for the `deploy/ci-worker/` directory. Loaded automatically by Claude Code
-whenever a file in this directory (or a descendant) is read. See the root `CLAUDE.md`'s
-"Local PR-runner" pointer for the short version.
+whenever a file in this directory (or a descendant) is read.
 
 ## ⚠️ "ALL GATES GREEN" from this worker does NOT mean races were checked
 
@@ -75,7 +74,7 @@ concurrency. For race coverage, push and read GitHub CI.
 
 ## Local PR-runner (the `ci-omnipus-1` Fly cluster)
 
-The Go test/build suite is run on a dedicated Fly worker cluster, **never in the dev pod** (linking the full `pkg/gateway` test binary with the pure-Go OLM crypto via the `goolm` tag OOMs the pod — see the root CLAUDE.md's "Testing & building — CI is the authority" section). The cluster is sized, on-demand boxes with persistent caches, driven via `flyctl ssh console`.
+The Go test/build suite is run on a dedicated Fly worker cluster, **never in the dev pod** (linking the full `pkg/gateway` test binary with the pure-Go OLM crypto via the `goolm` tag OOMs the pod — see the root CLAUDE.md's "Build, test, and quality gates" section). The cluster is sized, on-demand boxes with persistent caches, driven via `flyctl ssh console`.
 
 - **App**: `ci-omnipus-1` (`sin` region) — **ONE app, several machines**. Each machine is a tier with its own `performance-8x/16GB` VM, its own persistent `/cache` volume (go-build/mod cache, npm cache, the cloned repo), and its own `/tmp/runci.lock`. The former standalone worker apps were **destroyed** by founder decision (2026-09-16) — do not reference or recreate them. Machines are addressed **by id**, and machine ids are provisioned by the harness, so they are DATA in `ci-cluster.sh` / its env vars, never hardcoded.
 - **Source of truth**: `deploy/ci-worker/runci.sh` (in this repo) **and** the deployed copy at `/cache/runci.sh` on **every** machine. **Editing the repo file does NOT update any executing copy** — see "Redeploying runci.sh" below.
