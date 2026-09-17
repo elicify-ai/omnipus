@@ -23,7 +23,12 @@ import { ApiSchemaError, BASE_URL, CSRF_HEADER_NAME, _recordApiSchemaError, read
 // UploadedFile — re-exported from generated openapi-types (contract-first #8).
 // See contracts/components/schemas/UploadedFile.yaml.
 
-export async function uploadFiles(sessionId: string, files: File[], workspaceId?: string): Promise<UploadFilesResponse> {
+export async function uploadFiles(
+  sessionId: string,
+  files: File[],
+  workspaceId?: string,
+  signal?: AbortSignal,
+): Promise<UploadFilesResponse> {
   const formData = new FormData()
   formData.append('session_id', sessionId)
   if (workspaceId) {
@@ -44,10 +49,10 @@ export async function uploadFiles(sessionId: string, files: File[], workspaceId?
   // FormData holds File/Blob references (not a consumed stream), so retrying
   // with the same formData on a CSRF-recovery pass (withCsrfRetry) re-sends
   // the same bytes safely.
-  return withCsrfRetry(() => doUploadFiles(formData))
+  return withCsrfRetry(() => doUploadFiles(formData, signal))
 }
 
-async function doUploadFiles(formData: FormData): Promise<UploadFilesResponse> {
+async function doUploadFiles(formData: FormData, signal?: AbortSignal): Promise<UploadFilesResponse> {
   // Read fresh — never cache (see readCSRFCookie).
   const csrf = readCSRFCookie()
   // Build headers by hand because FormData must NOT have a Content-Type
@@ -62,6 +67,7 @@ async function doUploadFiles(formData: FormData): Promise<UploadFilesResponse> {
       credentials: 'include',
       headers,
       body: formData,
+      signal,
     })
   } catch (cause) {
     throw new ApiError(0, 'Network unavailable. Check your connection.', { cause })

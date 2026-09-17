@@ -20,12 +20,28 @@ import type {
 } from '@/lib/api/generated/openapi-types'
 import { request } from './http'
 import { requestConfiguration } from './configuration'
+import { uploadFiles } from './uploads'
 
-export async function installSkillFromFile(content: string, filename: string): Promise<void> {
-  await request<void>('/skills/install', {
-    method: 'POST',
-    body: JSON.stringify({ content, filename }),
-  })
+export async function installSkillFromFile(
+  file: File,
+  uploadContextId: string,
+  revision?: string,
+  signal?: AbortSignal,
+): Promise<Skill> {
+  const uploaded = await uploadFiles(uploadContextId, [file], undefined, signal)
+  const uploadRef = uploaded.files[0]?.ref
+  if (!uploadRef) {
+    throw new Error('Upload completed without an installable media reference.')
+  }
+  const body: SkillInstallRequest = {
+    upload_id: uploadRef,
+    ...(revision ? { revision } : {}),
+  }
+  return requestConfiguration<Skill>(
+    '/skills/install',
+    { method: 'POST', body: JSON.stringify(body), signal },
+    SkillSchema as ZodType<Skill>,
+  )
 }
 
 /**

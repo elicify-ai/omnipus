@@ -9,8 +9,7 @@
  *
  * Secondary flow: drag-drop / file picker install of a local SKILL.md package
  * via `installSkillFromFile`, gated behind a capabilities + "unverified" confirm
- * step (US-E4 / #340). Hash-mismatch (409 with {expected,got} body) shows a
- * dedicated dialog; other errors surface as toasts.
+ * step (US-E4 / #340). Revision conflicts and other errors surface as toasts.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -45,22 +44,20 @@ import {
 } from '@/lib/api'
 import type { SkillSearchResult, SkillMarketplaceStatus } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useSessionStore } from '@/store/session'
+import { generateId } from '@/lib/constants'
 
 interface SkillBrowserProps {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
-interface HashMismatchError {
-  expected?: string
-  got?: string
-}
-
 interface PendingInstall {
   file: File
-  text: string
+  /** Revision of the installed skill shown when this file was selected. */
+  revision?: string
   /** Detected capabilities extracted from SKILL.md frontmatter (best-effort). */
-  capabilities: string[]
+  capabilities: string[] | null
 }
 
 /**
@@ -132,10 +129,12 @@ function FeaturedSkillSuggestions({ onSelect }: { onSelect: (query: string) => v
 
 export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const fileSelectionRef = useRef(0)
+  const installAbortRef = useRef<AbortController | null>(null)
   const { addToast } = useUiStore()
+  const activeSessionId = useSessionStore((state) => state.activeSessionId)
   const queryClient = useQueryClient()
 
-  const [hashMismatch, setHashMismatch] = useState<HashMismatchError | null>(null)
   const [isInstalling, setIsInstalling] = useState(false)
   const [pendingInstall, setPendingInstall] = useState<PendingInstall | null>(null)
 
@@ -159,6 +158,11 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
   // Reset transient state when the dialog closes so a re-open starts clean.
   useEffect(() => {
     if (!open) {
+      fileSelectionRef.current += 1
+      installAbortRef.current?.abort()
+      installAbortRef.current = null
+      setPendingInstall(null)
+      setIsInstalling(false)
       setQuery('')
       setInstalledSlugs(new Set())
       setMarketplaceDisabledLocal(false)
@@ -261,51 +265,57 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
 
   // ── File install ──────────────────────────────────────────────────────────
   async function handleFileSelected(file: File) {
-    // Read the file content first, then show the confirm step
-    let text: string
-    try {
-      text = await file.text()
-    } catch {
-      addToast({ message: 'Could not read the selected file.', variant: 'error' })
+    const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase()
+    if (extension !== '.md' && extension !== '.zip') {
+      addToast({
+        message: 'Unsupported skill file. Choose a Markdown (.md) or ZIP (.zip) package.',
+        variant: 'error',
+      })
       if (fileInputRef.current) fileInputRef.current.value = ''
       return
     }
-    const capabilities = extractCapabilities(text)
-    setPendingInstall({ file, text, capabilities })
+    const selection = ++fileSelectionRef.current
+    let capabilities: string[] | null = null
+    if (extension === '.md') {
+      try {
+        capabilities = extractCapabilities(await file.text())
+      } catch {
+        addToast({ message: 'Could not read the selected file.', variant: 'error' })
+        if (fileInputRef.current) fileInputRef.current.value = ''
+        return
+      }
+    }
+    if (selection !== fileSelectionRef.current || !open) return
+    const skillId = file.name.slice(0, file.name.lastIndexOf('.'))
+    const revision = installedSkills.find((skill) => skill.id === skillId)?.revision
+    setPendingInstall({ file, capabilities, revision })
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   async function handleConfirmInstall() {
-    if (!pendingInstall) return
-    const { text, file } = pendingInstall
-    setPendingInstall(null)
+    if (!pendingInstall || isInstalling) return
+    const { file, revision } = pendingInstall
+    const controller = new AbortController()
+    installAbortRef.current = controller
     setIsInstalling(true)
     try {
-      await installSkillFromFile(text, file.name)
+      await installSkillFromFile(
+        file,
+        activeSessionId ?? generateId(),
+        revision,
+        controller.signal,
+      )
+      if (controller.signal.aborted) return
+      setPendingInstall(null)
       queryClient.invalidateQueries({ queryKey: ['skills'] })
       addToast({ message: `Skill "${file.name}" installed successfully.`, variant: 'success' })
     } catch (err: unknown) {
-      // Hash-mismatch: the backend returns a 409 whose body carries
-      // {"expected": "<sha>", "got": "<sha>"}. Branch on the ApiError type
-      // (status === 409) and parse err.body — NOT err.message, which only
-      // contains the generic userMessage ("This conflicts…").
+      if (controller.signal.aborted) return
       if (isApiError(err) && err.status === 409) {
-        let expected: string | undefined
-        let got: string | undefined
-        try {
-          if (err.body) {
-            const parsed = JSON.parse(err.body) as {
-              expected?: string
-              got?: string
-            }
-            expected = parsed.expected
-            got = parsed.got
-          }
-        } catch {
-          // Body wasn't JSON — show the dialog with blank hashes rather than
-          // misclassifying as a generic error.
-        }
-        setHashMismatch({ expected, got })
+        addToast({
+          message: 'This installed skill changed after you reviewed it. Close and reopen the browser before replacing it.',
+          variant: 'error',
+        })
       } else {
         // Surface all other errors as a toast (no more silent swallow)
         const msg = isApiError(err)
@@ -319,8 +329,19 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
         })
       }
     } finally {
-      setIsInstalling(false)
+      if (installAbortRef.current === controller) {
+        installAbortRef.current = null
+        setIsInstalling(false)
+      }
     }
+  }
+
+  function cancelPendingInstall() {
+    fileSelectionRef.current += 1
+    installAbortRef.current?.abort()
+    installAbortRef.current = null
+    setIsInstalling(false)
+    setPendingInstall(null)
   }
 
   return (
@@ -505,7 +526,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
               <input tabIndex={0}
                 ref={fileInputRef}
                 type="file"
-                accept=".zip,.json,.md"
+                accept=".md,.zip,text/markdown,application/zip"
                 className="hidden"
                 onChange={(e) => {
                   const file = e.target.files?.[0]
@@ -521,7 +542,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
       <Dialog
         open={pendingInstall !== null}
         onOpenChange={(o) => {
-          if (!o) setPendingInstall(null)
+          if (!o) cancelPendingInstall()
         }}
       >
         <DialogContent data-testid="skill-install-confirm-dialog" className="max-w-md">
@@ -555,7 +576,11 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
             </div>
 
             {/* Capabilities */}
-            {pendingInstall && pendingInstall.capabilities.length > 0 ? (
+            {pendingInstall?.capabilities === null ? (
+              <p className="text-xs text-[var(--color-muted)]">
+                Capabilities will be inspected by the server from the ZIP package during installation.
+              </p>
+            ) : pendingInstall && pendingInstall.capabilities.length > 0 ? (
               <div className="space-y-1">
                 <p className="text-xs font-medium text-[var(--color-secondary)]">
                   Declared capabilities
@@ -583,8 +608,7 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setPendingInstall(null)}
-              disabled={isInstalling}
+              onClick={cancelPendingInstall}
             >
               Cancel
             </Button>
@@ -600,38 +624,6 @@ export function SkillBrowser({ open, onOpenChange }: SkillBrowserProps) {
         </DialogContent>
       </Dialog>
 
-      {/* Hash mismatch dialog (#109) */}
-      <Dialog open={hashMismatch !== null} onOpenChange={() => setHashMismatch(null)}>
-        <DialogContent data-testid="skill-hash-mismatch-dialog" className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Integrity check failed</DialogTitle>
-            <DialogDescription>
-              The skill file could not be installed because its hash does not match the expected
-              value.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2 text-sm">
-            <p className="text-[var(--color-error)]">
-              Hash mismatch — the skill file may have been tampered with or corrupted.
-            </p>
-            {hashMismatch?.expected && (
-              <p className="text-xs text-[var(--color-muted)]">
-                Expected: <span className="font-mono">{hashMismatch.expected}</span>
-              </p>
-            )}
-            {hashMismatch?.got && (
-              <p className="text-xs text-[var(--color-muted)]">
-                Got: <span className="font-mono">{hashMismatch.got}</span>
-              </p>
-            )}
-          </div>
-          <div className="flex justify-end">
-            <Button size="sm" variant="outline" onClick={() => setHashMismatch(null)}>
-              Dismiss
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
     </>
   )
 }
