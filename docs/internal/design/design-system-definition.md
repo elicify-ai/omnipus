@@ -10,6 +10,17 @@
 
 This constitution defines the finished system, not rollout order. Where product code and this document disagree, the code is non-conforming. Each decision separates measured facts from interpretation and names enforcement that can observe the rule it claims to enforce.
 
+## The rules in plain language
+
+1. **One system, one look.** There is not an old unofficial version and a new official version of spacing, type, colour, or buttons.
+2. **No text smaller than 12px.** Dense labels use 12px, not 10px or 11px.
+3. **Same meaning, same colour.** “In progress” on the board and on the calendar use the same colour. The map is in D4. Forge Gold is the live-work colour; other states use green, amber, red, blue, or grey — not silver and gold for everything.
+4. **Gaps follow an 8px scale.** Today’s 7 / 14 / 21px steps become 8 / 16 / 24px. One scale, everywhere.
+5. **Screens use the shared parts.** Buttons, confirms, switches, empty, error, and loading come from the named components. Those replacements keep today’s look.
+6. **Inventing a one-off fails the build.** A new colour, a 10px label, a homemade button, or a one-off gap does not ship unless it is on the exception ledger.
+
+Screen-by-screen first-run problems (empty Board, empty Library, the model list) are not these rules. They are product findings and are handled separately.
+
 ## Operating model
 
 | Class | Owns | May depend on |
@@ -51,6 +62,25 @@ Existing rendered values take precedence over illustrative brand scales or newly
 
 Anything not in this table is Invisible by default, or Redesign Risk. Two versions of a foundation (old spacing and new spacing, old type and new type) are not an accepted end state.
 
+### E1. The build enforces this rulebook
+
+**Decision.** These rules are not guidance. CI fails a change that introduces, in application or primitive code:
+
+- a colour that is not a token or a registered exception (documents, QR, syntax, charts, user-authored);
+- computed UI text below 12px, or an arbitrary text-size utility;
+- a spacing value off the 4px / 8px scale, except hairlines and 1px borders;
+- a raw `<button>`, `<dialog>`, `window.confirm`, or checkbox-as-switch in feature code;
+- a second status palette (a hex for inbox / next / in progress / blocked / done / failed / cancelled that is not the D4 map);
+- a public primitive without its coverage manifest, once Phase 2 has enabled that gate.
+
+Temporary exceptions use the migration ledger and expire. Permanent exceptions use the constitutional registries. A green lint count that does not cover the rule does not count as enforcement.
+
+**Visual delta: Invisible.** Locks do not change rendering. They stop new drift.
+
+**Evidence (facts only).** Lanes A–D found raw colours, sub-12 text, homemade buttons, and two status palettes while the product still built.
+
+**Enforcement.** Stylelint, AST-aware ESLint, token-graph parsing, and seeded self-tests. Each rule has a fixture that must fail when the violation is present and pass when it is not.
+
 ## Part 1 — Core decisions
 
 ### D1. Product type density is user-adjustable, with a 14px default
@@ -86,7 +116,28 @@ Anything not in this table is Invisible by default, or Redesign Risk. Two versio
 
 Every component token has an owner, purpose, supported states, and consumers. Mechanical aliases such as `card-border → border` are forbidden.
 
-**Visual delta: Invisible.** The graph must reproduce current computed values exactly. Repairing an undefined or invalid token that changes rendering is a separate declared delta, not part of token extraction.
+Primitive colour values for this program are today’s rendered hexes. Extra ramp steps may exist for future use; they must not be substituted into current surfaces without a declared delta.
+
+| Primitive | Hex | Used as |
+|---|---|---|
+| surface-0 / primary | `#0A0A0B` | Page shell |
+| surface-1 | `#111113` | Raised panel |
+| surface-2 | `#141416` | Card / composer fill |
+| surface-3 | `#222228` | Higher fill |
+| secondary / text | `#E2E8F0` | Primary text (Liquid Silver) |
+| muted | `#9CA3AF` | Secondary text |
+| border | `#2D3748` | Default border |
+| accent | `#D4AF37` | Forge Gold actions and live work |
+| accent-hover | `#C49E2F` | Gold hover |
+| success | `#10B981` | Done / success |
+| warning | `#EAB308` | Cancelled (stopped by user) and warning |
+| error | `#EF4444` | Failed / danger |
+| error-hover | `#DC2626` | Danger hover |
+| info | `#3B82F6` | Next / information |
+| blocked / orange | `#F97316` | Blocked |
+| mount | `#8EA3BD` | Library mount icon |
+
+**Visual delta: Invisible.** The graph must reproduce these computed values exactly. Repairing an undefined or invalid token that changes rendering is a separate declared delta, not part of token extraction.
 
 **Evidence (facts only).** Lane A found one flat CSS token list, no primitive ramps, no component layer, duplicated hexadecimal values in TypeScript maps, 125 hard-coded color values across 12 audited files, and token names referenced without definitions. The audit did not establish that every component needs component tokens.
 
@@ -96,7 +147,21 @@ Every component token has an owner, purpose, supported states, and consumers. Me
 
 **Decision.** Success, warning, danger, information, and workflow states use recognizable semantic hue families—green, amber, red, blue, and others where needed—tuned to Sovereign Deep. They are not forced into silver and gold. Each status defines foreground, background, border, icon, label, hover/focus treatment, contrast ratios, and a non-color cue. Equivalent states look and read the same across surfaces. Status sets pass pairwise-distinction and common color-vision-deficiency checks.
 
-**Visual delta: Normalization — approved.** Calendar and task status presentations are unified so equivalent states use the same approved semantic colors and non-color cues. The recoloring is noticeable; the final mapping and affected surfaces must be recorded before implementation.
+There is one map. The task palette is the winner. Calendar chips, list cells, graph nodes, and any other status chrome use these hexes. Filled calendar chips may stay filled, and tinted task pills may stay tinted; the hue and the label must match.
+
+| State | Colour | Hex | Non-colour cue |
+|---|---|---|---|
+| Inbox | Grey | `#9CA3AF` | Quiet circle |
+| Next | Blue | `#3B82F6` | Ready / info |
+| In progress | Forge Gold | `#D4AF37` | Live work (the one gold status) |
+| Blocked | Orange | `#F97316` | Prohibit |
+| Done | Green | `#10B981` | Check |
+| Failed | Red | `#EF4444` | X |
+| Cancelled (stopped by user) | Amber | `#EAB308` | Distinct from Failed; not a separate board column |
+
+Forge Gold is reserved for live work and primary actions. It is not the colour for Next, Blocked, Done, or Failed.
+
+**Visual delta: Normalization — approved.** Calendar chips that today use different hexes (in progress blue `#60A5FA`, blocked yellow `#FBBF24`, and the other calendar-only values) move onto this map. The change is noticeable on the calendar; the board already matches.
 
 **Evidence (facts only).** Lane A found calendar “in progress” rendered blue while the board rendered the same state in Forge Gold. It also found default Tailwind hue utilities in 32 files alongside semantic colors. The brand already defines green success and red error; it does not require every status to use silver or gold.
 
@@ -116,7 +181,7 @@ Every component token has an owner, purpose, supported states, and consumers. Me
 | Loading, empty, query error, long-running status | The owner named in D6 |
 | Boolean preference | `Switch`; never a checkbox styled as a switch |
 
-Raw elements remain legal inside named low-level primitive directories, documented wrappers, and approved third-party integration boundaries. They are not legal shortcuts in feature code. Each exception records exact surface, reason, owner, and expiry.
+A feature screen may not ship its own button, confirm box, or switch. Raw elements remain legal inside named low-level primitive directories, documented wrappers, and approved third-party integration boundaries. They are not legal shortcuts in feature code. Each exception records exact surface, reason, owner, and expiry.
 
 Destination components must preserve the current presentation of what they replace unless a visual delta is declared and approved. The default is “same look, one implementation,” not “new look, one implementation.” Required contracts may include presentation-preserving variants or wrappers for text actions, disclosures, inline controls, contextual sheet widths, and other established forms.
 
@@ -171,6 +236,17 @@ Visual size and hit area are separate. Interactive hit regions are at least 24×
 **Decision.** Components are classified before publication. `ModelSelector`, `RestartConfirmDialog`, `AutoSaveIndicator`, `BrandIcon`, and other domain widgets do not live in the primitive namespace. `@omnipus/ui` exports a curated foundations/primitives/composites API through an explicit export map.
 
 Every public component has a coverage manifest naming variants, sizes, applicable states, themes, keyboard interactions, and accessibility assertions. Static components are not forced into irrelevant states. Storybook is development-only and never enters the production dependency graph or embedded SPA assets.
+
+What already exists vs what this program must finish:
+
+| Already in the product | Must be built or completed |
+|---|---|
+| `Button`, `Badge`, `Dialog`, `Sheet`, `Switch`, `Checkbox`, `Progress` | `IconButton` as a distinct contract; `Button` loading/success/error states |
+| `SkeletonList`, `EmptyState`, `ErrorState`, `QueryErrorState` | Shared `Skeleton`, `CollectionState`, `JobStatus`, `ConfirmDialog`, `Field` |
+| `@omnipus/ui` stub that re-exports part of the catalog | Curated export map; domain widgets moved out of `ui/` |
+| No Storybook | Storybook as the verification front door |
+
+Existing parts keep their current look. New parts are added to fill the holes; they are not a restyle of what is already on screen.
 
 **Visual delta: Invisible.** Catalog, ownership, documentation, exports, and development-only verification do not change production rendering.
 

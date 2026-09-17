@@ -16,6 +16,8 @@ The current rendered application is the accepted visual baseline. Every work pac
 
 The definition's **Approved normalizations for this program** table is the explicit approval for this cutover. Those small unifications — including the 12px type floor, status-colour unification, and the 4px / 8px spacing snap — are required work, not optional polish and not a redesign. Anything outside that table still fails the gate.
 
+The definition's **E1** locks are part of the deliverable, not a later cleanup. A change that invents a colour, a sub-12px label, a homemade button, a one-off gap, or a second status palette must fail CI once that lock is enabled. Each lock ships with a seeded fixture that proves it can fail.
+
 ## 2. Baseline before work starts
 
 Capture a reproducible baseline and distinguish measured facts from review hypotheses.
@@ -40,8 +42,8 @@ The order is mandatory: converting screens before destination contracts stabiliz
 
 Deliver:
 
-- the primitive → semantic → conditional component → CSS graph;
-- status contracts and explicit color exception registry;
+- the primitive → semantic → conditional component → CSS graph, seeded with the hex table in D3 (today’s rendered values);
+- status contracts using the D4 map only (task palette wins; calendar and graph consume the same hexes); colour exception registry;
 - complete typography with 12px floor and adjustable 12–20px root;
 - one 4px / 8px spacing scale (mapping today's 14px-root rem steps), breakpoints, optional density modes, and touch adaptation;
 - radius, border, elevation, shadow, z-index and overlay order;
@@ -50,7 +52,7 @@ Deliver:
 - generated typed tokens for TypeScript;
 - PostCSS/Stylelint graph parsing, AST-aware color checks, and seeded self-tests.
 
-**Exit gate.** No token cycles, undefined references, or forbidden edges; typed output matches CSS; status contracts pass contrast/distinction checks; browser tests pass at root minimum/default/maximum, 200% zoom, and 320px. Token work reproduces current computed values except for the approved normalizations, proven by before/after computed-style comparison across the reference screen set. Spacing steps on that set must be on the 4px / 8px scale; leftover 7 / 14 / 21px default-root values fail the gate.
+**Exit gate.** No token cycles, undefined references, or forbidden edges; typed output matches CSS; status contracts pass contrast/distinction checks; browser tests pass at root minimum/default/maximum, 200% zoom, and 320px. Token work reproduces current computed values except for the approved normalizations, proven by before/after computed-style comparison across the reference screen set. Spacing steps on that set must be on the 4px / 8px scale; leftover 7 / 14 / 21px default-root values fail the gate. Calendar, board, list, and graph status chrome use the D4 hexes; a second palette fails the gate. E1 colour, type-floor, and spacing locks are on, with seeded fixtures.
 
 ### Phase 2 — Primitive and composite contracts
 
@@ -60,10 +62,11 @@ Classify the catalog and move domain widgets out of the primitive namespace. Com
 - accessible names, button types, hit regions, focus, scroll/focus restoration, form wiring, applicable states, and reduced motion;
 - named Sheet sizes and one confirmation dismissal contract;
 - curated `@omnipus/ui` export map;
-- AST-aware syntax and import-boundary rules with explicit low-level directories;
-- characterization tests for behaviors at risk during replacement.
+- AST-aware syntax and import-boundary rules with explicit low-level directories (E1 raw-control lock);
+- characterization tests for behaviors at risk during replacement;
+- the exists-vs-build catalog in D8 completed: new contracts (`IconButton`, `ConfirmDialog`, `Field`, `CollectionState`, `JobStatus`, shared `Skeleton`) green before any screen conversion.
 
-**Exit gate.** Each destination component passes its manifest, unit, axe, keyboard, interaction, pointer, reduced-motion, and applicable browser tests. Export tests keep domain widgets private. No source pattern is replaced before its destination contract is green. Each destination component also passes presentation-equivalence checks against what it replaces, with before/after screenshots from representative consumers and every difference matched to an approved declared delta.
+**Exit gate.** Each destination component passes its manifest, unit, axe, keyboard, interaction, pointer, reduced-motion, and applicable browser tests. Export tests keep domain widgets private. No source pattern is replaced before its destination contract is green. Each destination component also passes presentation-equivalence checks against what it replaces, with before/after screenshots from representative consumers and every difference matched to an approved declared delta. E1 raw-button / confirm / switch lock is on, with seeded fixtures.
 
 ### Phase 3 — Storybook as verification front door
 
@@ -175,9 +178,12 @@ The baseline records numerator, denominator, exclusions, command, and artifact f
 | Route coverage | 100% of inventoried routes and major modal/tab states receive their verification matrix |
 | Adoption by category | 100% of in-scope foundations, primitives, composites, domain components, layouts, and feature surfaces conform |
 | Duplicate patterns | Zero unregistered duplicate confirm, empty, error, skeleton, save, switch, sheet-width, or state implementations |
-| Token integrity | Zero undefined tokens, cycles, forbidden edges, or unregistered raw system colors; typed output matches CSS |
+| Token integrity | Zero undefined tokens, cycles, forbidden edges, or unregistered raw system colors; typed output matches CSS; D3 hex table is the primitive source |
 | Typography | Zero computed UI text below 12px and zero unregistered arbitrary type values |
+| Spacing | Zero default-root 7 / 14 / 21px application gaps; values on the 4px / 8px scale or registered hairlines |
+| Status | Zero second palette; calendar/board/list/graph match the D4 map |
 | Library boundary | Zero unregistered raw named-job elements or forbidden low-level imports in feature code |
+| E1 locks | Each lock has a seeded failing fixture and is enabled before Phase 4 |
 | Contrast/status | 100% of status combinations pass required contrast and distinction checks |
 | Axe | Zero serious/critical violations; lesser findings resolved or explicitly accepted through permanent governance |
 | Keyboard flows | 100% pass for the representative route/component matrix |
