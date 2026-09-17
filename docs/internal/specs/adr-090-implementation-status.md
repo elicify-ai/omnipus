@@ -4,6 +4,17 @@ Status: in progress. Baseline: `12d97e7e70a869b72a246c9385776e71e9bdaa22`.
 
 The founder authorized the agreed parallel implementation on 2026-09-17, using Sol workers, full code review, Prometheus review of every changed prompt/skill, correction of all findings, and green local tests. CI is explicitly deferred: do not push implementation branches, open implementation PRs or dispatch workflows during this phase.
 
+## Latest checkpoint: integrated review fixes
+
+Current code snapshot: `f94d14d3f` (2026-09-17). This checkpoint supersedes outstanding-work statements in the historical entries below; the full feature remains in progress.
+
+- Integrated canonical fallback configuration (`09b2b8b5f`), safe agent-save errors (`5b9eb0926`), authorized document finalizer reads (`0f5c12e81`), management skill inventory (`7f21eca43`), upload client (`527fa9841`), corrected SVG/tool descriptions (`52b158de7`), bounded ZIP extraction (`9d24e3700`), truthful skill publication outcomes (`b55bbf62c`), and composite agent deletion (`f94d14d3f`).
+- The full native `codex review --base 12d97e7e70a869b72a246c9385776e71e9bdaa22` completed on snapshot `7f21eca43`. It found archive bounds and SVG description issues, subsequently corrected, and confirmed then-open deletion/publication issues. Completion of the review command does not mean a clean verdict. Report: /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/worktrees/adr090-native-review/.local/adr090/native-review-assessment.md.
+- Combined full system-tool, tool, document-runtime, agent-mutation and agent-store packages passed before the latest archive/publication/deletion changes. Focused agent tests and the frontend build also passed. The integrated full skills, utils, agent-store and tools suites passed; focused gateway deletion/list/install checks passed. System-tools found a reverted rejection-message string during integration; the string was restored and the focused regression passed, with the full system-tools rerun pending.
+- Fresh security review on `f94d14d3f` is complete with no actionable findings after confirming the explicitly prompt-governed confirmation design. Prometheus resolved its first six findings and found two remaining install/delete descriptions; corrections are awaiting its independent recheck. The silent-failure lens found skill restore and workspace split-store outcome gaps; those and the deletion UI remain open. Remaining independent reviewer lenses and final native delta review are still required.
+- A new integration finding remains open: the deletion client ignores the returned mutation state and can show success after failed runtime activation. A separate Sol fixer owns the client and regression tests.
+- Real browser verification has started against an isolated local profile and the built application. It has no provider credentials, so this cannot prove live agent or document/model acceptance. Actual workflow and supported-platform acceptance remain open. No CI, push or PR has run.
+
 ## Scope and ownership
 
 | Work package | Requirements | Status |

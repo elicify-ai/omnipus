@@ -123,9 +123,9 @@ func (t *InstallSkillTool) Name() string {
 }
 
 func (t *InstallSkillTool) Description() string {
-	return "Install a skill from a registry by slug. Downloads and extracts the skill into the global skills directory, where it becomes available to every agent. Use find_skills first to discover available skills. " +
-		"force=true replaces an already-installed skill of the same slug: the replacement is downloaded to a staging area and swapped in only once it fully succeeds, so an ordinary failure (unknown registry, slug, or version; " +
-		"network error; a skill flagged malicious and refused) leaves the existing install untouched. A skill flagged as malicious is refused and removed rather than installed."
+	return "Install a skill from a registry by slug into the global skills directory. Installation does not assign it to agents; execution still requires an applicable skill assignment. Use find_skills for registry discovery and list_skills with scope=management to inspect installed packages and their revisions. " +
+		"Replacing an installed package requires force=true and its exact reviewed revision. Replacement affects every agent assigned that shared package. The verified replacement is staged before publication; validation or download failures preserve the existing install. " +
+		"Malicious packages are refused. Read persistence, activation and warning fields in the result; after publication or cleanup errors, inspect installed state before retrying. A revision conflict requires a fresh read and renewed confirmation for material changes."
 }
 
 func (t *InstallSkillTool) Scope() ToolScope       { return ScopeGeneral }

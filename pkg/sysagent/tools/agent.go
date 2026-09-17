@@ -595,8 +595,7 @@ func NewAgentDeleteTool(d *Deps) *AgentDeleteTool { return &AgentDeleteTool{deps
 func (t *AgentDeleteTool) Name() string           { return "delete_agent" }
 func (t *AgentDeleteTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentDeleteTool) Description() string {
-	return "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and its home directory " +
-		"($OMNIPUS_HOME/agents/<id>/ — SOUL.md, HEARTBEAT.md, MEMORY.md, its skills folder). Also cascades: " +
+	return "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and applicable SOUL.md instructions. Preserves unrelated files in its home, including HEARTBEAT.md, MEMORY.md and local skills. Also cascades: " +
 		"every chat session in the shared session store that belongs SOLELY to this agent is deleted, together " +
 		"with its uploaded files — a session another agent also participated in (e.g. via a mid-conversation " +
 		"agent switch) is left untouched to avoid destroying that agent's history, and is reported separately " +
@@ -763,7 +762,7 @@ func (ad *agentDeleteToolExecute) validateAndLoad() (*tools.ToolResult, bool) {
 		// for this exact refusal — a UAT run observed the tool and REST
 		// paths disagreeing on the error code for the identical condition.
 		return tools.ErrorResult(errorJSON("AGENT_LOCKED",
-			fmt.Sprintf("agent %q is a locked core agent and cannot be deleted", ad.id),
+			fmt.Sprintf("agent %q is a locked seeded agent and cannot be deleted", ad.id),
 			"seeded built-in agents cannot be deleted")), true
 	}
 	// Guard (ADR-049 D4/FR-065), ported from the REST deleteAgent handler
