@@ -6,30 +6,29 @@
 
 import { BrowserInputWebRTCSession, type BrowserInputState } from '@/lib/browserInputWebRTC'
 import { useBrowserTextComposition } from './useBrowserTextComposition'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { BrowserLiveAnnotatePopover } from './BrowserLiveAnnotatePopover'
+import { BrowserLiveRetryStatus } from './BrowserLiveRetryStatus'
+import { BrowserLiveTabStrip } from './BrowserLiveTabStrip'
+import { BrowserLiveToolbar } from './BrowserLiveToolbar'
+import { drawCropToPngFile, type PendingAnnotation } from './browserLiveViewAnnotate'
 import {
-  ArrowSquareOut,
-  ArrowsClockwise,
-  CaretLeft,
-  ChatCircleDots,
-  Cursor,
-  Eye,
-  Globe,
-  HandGrabbing,
-  Plus,
-  Robot,
-  SpeakerHigh,
-  SpeakerSlash,
-  SpinnerGap,
-  WarningCircle,
-  X,
-} from '@phosphor-icons/react'
-import { cn, initialOf } from '@/lib/utils'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { IconRenderer } from '@/components/shared/IconRenderer'
+  BLANK_TAB_URL,
+  FIRST_FRAME_TIMEOUT_MS,
+  MOVE_FLUSH_MS,
+  VIEWPORT_SETTLE_MS,
+  computeDriveMode,
+  resolveDriveChip,
+  textFieldHasFocus,
+  type BrowserTabStripState,
+  type DriveMode,
+  type LiveStatus,
+  type VisualState,
+} from './browserLiveViewModel'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { HandGrabbing } from '@phosphor-icons/react'
+import { cn } from '@/lib/utils'
 import { BrowserLiveWsConnection, describeVideoHealth, translateBrowserErrorMessage } from '@/lib/browserLiveWs'
-import { BrowserWebRTCSession, translateWebRTCFallbackReason, DEFAULT_FIRST_ANSWER_TIMEOUT_MS, type BrowserPeerIdentity } from '@/lib/browserWebRTC'
+import { BrowserWebRTCSession, translateWebRTCFallbackReason, type BrowserPeerIdentity } from '@/lib/browserWebRTC'
 import {
   computeCropRect,
   computeModifiers,
@@ -37,7 +36,6 @@ import {
   isPrintableKey,
   mapClientToFramePixels,
   mapMouseButton,
-  scaleCropToImagePixels,
   type DeviceCoords,
   type FrameCropRect,
   type RectLike,
@@ -53,8 +51,6 @@ import { queryClient } from '@/lib/queryClient'
 import type { Agent } from '@/lib/api'
 import type {
   BrowserInputFrame,
-  BrowserStatusFrame,
-  BrowserTabsFrame,
   BrowserVideoHealthFrame,
 } from '@/lib/api/generated/asyncapi-types'
 
@@ -149,51 +145,10 @@ export interface BrowserLiveViewProps {
   fillContainer?: boolean
 }
 
-/** ADR-040 D2/D6 — the three (+ one) mutually-exclusive visual/control states. */
-type VisualState = 'agent-working' | 'you-driving' | 'annotating' | 'error' | 'idle'
-
-/** Presentation state; only annotation and connectivity gate input. */
-type DriveMode = 'annotating' | 'agent-working' | 'you-driving' | 'disconnected' | 'other-driving' | 'idle'
-
-function computeDriveMode(state: {
-  annotateMode: boolean
-  agentWorking: boolean
-  isControlling: boolean
-  connected: boolean
-  controlledByOther: boolean
-}): DriveMode {
-  if (state.annotateMode) return 'annotating'
-  if (!state.connected) return 'disconnected'
-  if (state.isControlling) return 'you-driving'
-  if (state.agentWorking) return 'agent-working'
-  if (state.controlledByOther) return 'other-driving'
-  return 'idle'
-}
-
-// Toolbar icon buttons share ONE shape (operator direction, 2026-08-04: "the
-// buttons should be icons ... it needs to be flatter"). Back, refresh, annotate,
-// mute and the degraded-retry all render as a bare 32px glyph with no border and
-// no fill — the frames and pill backgrounds made a row of five controls read as
-// five competing objects. Hover is the only chrome; active state is carried by
-// COLOUR PLUS `aria-pressed`, never colour alone. The coarse-pointer floor keeps
-// the WCAG 2.5.8 target even though the visual box shrank.
-const TOOLBAR_ICON_BTN =
-  'shrink-0 flex h-8 w-8 items-center justify-center rounded-md transition-colors ' +
-  'text-[var(--color-muted)] hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] ' +
-  'disabled:cursor-not-allowed disabled:opacity-40 ' +
-  'pointer-coarse:min-h-[44px] pointer-coarse:min-w-[44px]'
-
-
 // The visible border/frame around the browser panel is REMOVED per operator
 // direction. The header chip (agent identity + drive-status) is the sole
 // driving-state signal. The data-visual-state attribute on the (invisible)
 // overlay is kept for tests + potential future use.
-
-// Local-only pill states layered on top of the wire `BrowserStatusFrame.state`
-// enum: 'connecting' (never attached yet) and 'disconnected' (was attached,
-// the WS transport dropped, a reconnect is in flight) both describe SPA
-// connection lifecycle, not anything the backend ever sends as a status.
-type LiveStatus = BrowserStatusFrame['state'] | 'connecting' | 'disconnected'
 
 // UAT finding FE-7 / D5: the backend surfaces raw Go error strings verbatim
 // on a terminal browser_status{state:'error'} frame — e.g. `browser input
@@ -219,143 +174,6 @@ type LiveStatus = BrowserStatusFrame['state'] | 'connecting' | 'disconnected'
 // `webrtcError` and never swallows a reason silently.
 // translateWebRTCFallbackReason (browserWebRTC.ts) turns the raw reason
 // string into the honest, actionable message actually shown.
-
-// FIRST_FRAME_TIMEOUT_MS bounds how long the panel shows "Waiting for the first
-// frame…" before admitting failure. Generous on purpose: a cold Chrome launch
-// plus WebRTC negotiation can legitimately take several seconds on a small box,
-// and a premature error on a session that was about to work is worse than a few
-// extra seconds of spinner. What is NOT acceptable is waiting forever — see
-// firstFrameTimedOut for the silent-failure this bounds.
-//
-// Bugfix (MED, external review F6, 2026-08-13): this used to be a fixed
-// 15_000, defined with no relationship to browserWebRTC.ts's own cold-start
-// answer budget (DEFAULT_FIRST_ANSWER_TIMEOUT_MS, 30s — the gateway's
-// capture-start + bringToFront + tracks-wait sequence can legitimately run
-// past 25s worst case, per that file's own header doc). This timer is armed
-// against `videoReady` — a DECODED FRAME, which can only happen AFTER that
-// answer round trip completes, AND ICE connects, AND the first video RTP
-// packets arrive — so it must never be shorter than the answer budget it
-// sits downstream of, or a perfectly healthy cold start shows the red "No
-// video received…" error and then connects seconds later anyway (exactly
-// what was reported live). Derived from the SAME constant the machine uses
-// for its own cold-start timeout, plus a margin for the post-answer
-// ICE-connect + first-frame-decode gap, so the two can never silently drift
-// apart again the way they just did.
-const FIRST_FRAME_TIMEOUT_MS = DEFAULT_FIRST_ANSWER_TIMEOUT_MS + 15_000
-
-// VIEWPORT_SETTLE_MS is how long a new panel size must hold still before it is
-// committed to the server. Each commit REBUILDS the capture stream (tabCapture
-// constraints are pinned per stream), so an intermediate size captured
-// mid-drag or mid-animation costs a visible stall for a geometry that is
-// already obsolete. Short enough to feel immediate after a deliberate resize,
-// long enough to swallow an animation's intermediate frames.
-const VIEWPORT_SETTLE_MS = 250
-
-// MOVE_FLUSH_MS paces coalesced pointer-move sends. Chosen to sit under the
-// server's maxInputEventsPerSecond (50/s, pkg/tools/browser/live.go) with
-// headroom for the down/up/wheel events that share that budget: at ~16ms a
-// sustained drag alone would ride the cap and start losing events to the
-// limiter. Not requestAnimationFrame — see scheduleInputFlush.
-const MOVE_FLUSH_MS = 25
-
-// Defer capture resizing only while an editable field coincides with a
-// keyboard-sized visual viewport occlusion. Desktop focus alone is harmless.
-function textFieldHasFocus(frameEl: Element | null): boolean {
-  const active = document.activeElement
-  if (!active || active === frameEl) return false
-  const tag = active.tagName
-  const editable = tag === 'INPUT' || tag === 'TEXTAREA' || (active as HTMLElement).isContentEditable === true
-  const viewport = window.visualViewport
-  return editable && !!viewport && viewport.scale === 1 && viewport.height + viewport.offsetTop < window.innerHeight - 1
-}
-
-// BLANK_TAB_URL is the placeholder a not-yet-navigated tab reports. The address
-// bar must not display it: showing "about:blank" to a user who is looking at the
-// Omnipus start page is noise, and it would also overwrite a url the user is
-// about to submit on a fresh tab. Kept in sync with pkg/tools/browser's
-// BlankPageURL.
-const BLANK_TAB_URL = 'about:blank'
-
-/**
- * ADR-041 D4 — a tab's display label: prefer `title`, fall back to the
- * hostname parsed from `url`, fall back to "New tab". The wire type carries
- * no favicon URL (BrowserTabsFrame.tabs[] has no such field) — the strip
- * uses a plain Phosphor globe glyph per tab instead of attempting to fetch
- * one, so there is no missing-favicon broken-image state to handle.
- */
-function tabLabel(tab: BrowserTabsFrame['tabs'][number]): string {
-  if (tab.title && tab.title.trim().length > 0) return tab.title
-  if (tab.url) {
-    try {
-      const hostname = new URL(tab.url).hostname
-      return hostname || tab.url
-    } catch {
-      return tab.url
-    }
-  }
-  return 'New tab'
-}
-
-/** A finalized region selection, cropped to a File and ready to send (ADR-039 D-B1/B2). */
-interface PendingAnnotation { // not-wire-format: local annotate-popover state, never serialized across the gateway/SPA boundary
-  file: File
-  previewUrl: string
-  /** Device (CSS) pixel point — center of the crop — for the D-B3 inspect call. */
-  point: { x: number; y: number } | null
-  frame: BrowserAnnotationFrame | null
-}
-
-/**
- * Shared canvas-crop implementation for annotate-a-region (ADR-039 D-B1/B2),
- * used by BOTH the JPEG `<img>` sink and the WebRTC build's `<video>` sink
- * (W1-F) — draws `source` (already confirmed by the caller to have a live
- * decoded frame available: `img.complete`/`naturalWidth` or a video's
- * `readyState`/`videoWidth`) into an offscreen canvas and returns a cropped
- * PNG File with the exact same output contract regardless of sink.
- *
- * Reuses `scaleCropToImagePixels` (browserLiveCoords.ts) for the
- * frame-space→natural-pixel-space scale correction in BOTH cases rather than
- * duplicating it: for the img sink this corrects for the screencast JPEG's
- * fixed downscale cap (see cropFrameToFile's own doc comment); for the video
- * sink there is no such cap, but the SAME correction still guards against a
- * recapture-driven resolution change landing between when the crop rect was
- * computed (drag-start `frameWidth`/`frameHeight`) and when this draw
- * actually runs (the video's CURRENT `naturalWidth`/`naturalHeight`) — see
- * browserLiveCoords.test.ts's "video-mode reuse" coverage. A no-drift call
- * (the common case for both sinks) is a scale-1 no-op either way.
- *
- * Exceptions from drawImage/getContext (e.g. IndexSizeError on a degenerate
- * zero-width/height rect, or a tainted canvas) are swallowed to null — this
- * is awaited from finalizeSelection, itself invoked fire-and-forget (`void
- * finalizeSelection(...)` from the pointerup handler), so an uncaught
- * rejection here would surface as an unhandled promise rejection with no
- * toast and a frozen selection box; returning null instead routes through
- * finalizeSelection's existing `if (!file) return fail()` path.
- */
-async function drawCropToPngFile(
-  source: CanvasImageSource,
-  naturalWidth: number,
-  naturalHeight: number,
-  rect: FrameCropRect,
-  frameWidth: number,
-  frameHeight: number,
-): Promise<File | null> {
-  const src = scaleCropToImagePixels(rect, frameWidth, frameHeight, naturalWidth, naturalHeight)
-  const { x: sx, y: sy, width: sw, height: sh } = src
-  try {
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.round(sw)
-    canvas.height = Math.round(sh)
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return null
-    ctx.drawImage(source, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height)
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/png'))
-    if (!blob) return null
-    return new File([blob], 'annotation.png', { type: 'image/png' })
-  } catch {
-    return null
-  }
-}
 
 export function BrowserLiveView({
   sessionId,
@@ -573,7 +391,7 @@ export function BrowserLiveView({
   // would also be acceptable — this "reconcile from the next frame" choice
   // is a local implementation decision, not something the ADR mandates.)
   const activeTabIdentityRef = useRef('')
-  const [tabState, setTabState] = useState<{ tabs: BrowserTabsFrame['tabs']; activeIndex: number } | null>(null)
+  const [tabState, setTabState] = useState<BrowserTabStripState | null>(null)
   // Keep the address bar in sync with the ACTIVE TAB's real url.
   //
   // Before this, setUrlInput was called in exactly one place: the omnibox's own
@@ -2439,49 +2257,7 @@ export function BrowserLiveView({
     }
   }, [canDispatchInput, dispatchInput, textComposition])
 
-  // ── ADR-040 D6 — header chip config (icon + text label + colour), derived
-  // from `visualState`. Words + icon back up the colour for accessibility
-  // (never colour alone). The 'idle' bucket further distinguishes connection
-  // lifecycle (connecting/reconnecting) from a genuinely idle, ready-to-drive
-  // frame — the old corner pill's connecting/disconnected states still need
-  // SOME visible home now that the pill itself is gone.
-  const driveChip = (() => {
-    if (visualState === 'agent-working') {
-      return { label: `${agentDisplayName} is browsing…`, Icon: Robot, textClass: 'text-[var(--color-info)]', dotClass: 'bg-[var(--color-info)]', pulse: true }
-    }
-    if (visualState === 'you-driving') {
-      return { label: "You're driving", Icon: Cursor, textClass: 'text-[var(--color-accent)]', dotClass: 'bg-[var(--color-accent)]', pulse: true }
-    }
-    if (visualState === 'annotating') {
-      return { label: "You're annotating", Icon: ChatCircleDots, textClass: 'text-[var(--color-accent)]', dotClass: 'bg-[var(--color-accent)]', pulse: false }
-    }
-    if (visualState === 'error') {
-      return { label: 'Error', Icon: WarningCircle, textClass: 'text-[var(--color-error)]', dotClass: 'bg-[var(--color-error)]', pulse: false }
-    }
-    // 'idle' visualState — visualDriveMode further distinguishes
-    // disconnected/other-driving/genuinely-idle, reading the SAME display
-    // source of truth `visualState` itself derives from, instead of
-    // re-deriving `!connected`/`controlledByOther` here too.
-    if (visualDriveMode === 'disconnected') {
-      return {
-        label: statusState === 'disconnected' ? 'Reconnecting…' : 'Connecting…',
-        Icon: SpinnerGap,
-        textClass: 'text-[var(--color-muted)]',
-        dotClass: 'bg-[var(--color-muted)]',
-        pulse: false,
-      }
-    }
-    if (visualDriveMode === 'other-driving') {
-      // Informational, NOT a lock-out. Control is shared — this viewer's mouse,
-      // keyboard and omnibox all still work while someone else is also active
-      // (operator directive, 2026-08-03). The old label read "Someone else is
-      // driving", which told the user their input would be ignored — and it
-      // was, because the client and server both gated on the lock. Both gates
-      // are gone; the chip now just says who else is here.
-      return { label: 'Also viewing', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
-    }
-    return { label: 'Click to drive', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
-  })()
+  const driveChip = resolveDriveChip({ visualState, visualDriveMode, agentDisplayName, statusState })
 
   // ADR-040 D2/D6 — "Take over" affordance's aria-label/title (reviewer
   // finding: this exact ternary was duplicated across both attributes — the
@@ -2559,242 +2335,35 @@ export function BrowserLiveView({
           {viewportHandoffState === 'failed' ? <>Browser resize did not finish. <button type="button" tabIndex={0} onClick={() => setConnectionAttempt(attempt => attempt + 1)}>Retry browser</button></> : 'Resizing browser. Input will resume when the new picture is ready.'}
         </div>
       )}
-      {/* == Row A: tabs + window controls =============================
-          Header consolidation (operator direction, 2026-08-04): the panel used
-          to spend FOUR rows on chrome -- identity/controls, handback hint,
-          tabs, omnibox -- measured at 156px of a 900px panel (17.3 percent),
-          all of it taken from the remote page. It is now two, the way Chrome
-          and Safari do it: tabs share the top strip with the window controls,
-          everything else rides the toolbar below.
+      <BrowserLiveTabStrip
+        tabState={tabState}
+        connected={connected}
+        onTabSwitch={handleTabSwitch}
+        onTabClose={handleTabClose}
+        onTabOpen={handleTabOpen}
+        onPopOut={onPopOut}
+        onClose={onClose}
+      />
 
-          This row is UNCONDITIONAL even though the tab strip inside it is not.
-          Close and Pop-out live here now, and gating the row on
-          `tabs.length > 0` would take the only way to close the panel with it
-          the moment the tab list arrived empty.
-
-          FIXED height (h-browser-tabs), like the toolbar below: this panel
-          pushes its own box as the remote viewport, so a header row that
-          changes height forces a full capture rebuild. That is the same
-          measured regression the handback hint was made always-mounted for. */}
-      <div className="flex h-browser-tabs min-h-browser-tabs shrink-0 items-center gap-1 px-2">
-        {tabState && tabState.tabs.length > 0 ? (
-          <div
-            role="group"
-            aria-label="Browser tabs"
-            data-testid="browser-tab-strip"
-            className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto"
-            style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' } as React.CSSProperties}
-          >
-            {tabState.tabs.map((tab) => {
-              const active = tab.index === tabState.activeIndex
-              const label = tabLabel(tab)
-              return (
-                <div
-                  key={tab.index}
-                  className={cn(
-                    'flex shrink-0 max-w-[180px] items-center gap-1.5 rounded-t-md border-b-2 py-1 pl-2.5 pr-1 text-xs transition-colors',
-                    // Active tab: Forge-Gold underline + full opacity + a
-                    // heavier label weight — colour is never the only signal
-                    // (WCAG). Inactive: dimmed, transparent underline.
-                    active
-                      ? 'border-[var(--color-accent)] bg-[var(--color-surface-2)] text-[var(--color-secondary)] opacity-100'
-                      : 'border-transparent text-[var(--color-muted)] opacity-70 hover:bg-[var(--color-surface-1)] hover:opacity-100',
-                  )}
-                >
-                  <button tabIndex={0}
-                    type="button"
-                    aria-pressed={active}
-                    disabled={!connected}
-                    onClick={() => handleTabSwitch(tab.index)}
-                    title={tab.title || tab.url || 'New tab'}
-                    data-testid={`browser-tab-${tab.index}`}
-                    className={cn(
-                      'flex min-w-0 flex-1 items-center gap-1.5',
-                      connected ? 'cursor-pointer' : 'cursor-not-allowed',
-                      'disabled:cursor-not-allowed',
-                    )}
-                  >
-                    <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
-                    <span className={cn('min-w-0 flex-1 truncate', active && 'font-medium')}>{label}</span>
-                  </button>
-                  <button tabIndex={0}
-                    type="button"
-                    onClick={() => handleTabClose(tab.index)}
-                    disabled={!connected}
-                    aria-label={`Close tab: ${label}`}
-                    title="Close tab"
-                    data-testid={`browser-tab-close-${tab.index}`}
-                    className="shrink-0 rounded p-0.5 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-1)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    <X size={10} weight="bold" />
-                  </button>
-                </div>
-              )
-            })}
-            <button tabIndex={0}
-              type="button"
-              onClick={handleTabOpen}
-              disabled={!connected}
-              aria-label="Open new tab"
-              title="Open a new tab"
-              data-testid="browser-tab-new"
-              className="shrink-0 rounded p-1 text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] hover:text-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              <Plus size={13} />
-            </button>
-          </div>
-        ) : (
-          <div className="min-w-0 flex-1" />
-        )}
-        {onPopOut && (
-          <button tabIndex={0}
-            type="button"
-            onClick={onPopOut}
-            aria-label="Pop out"
-            title="Pop out into its own window"
-            className={TOOLBAR_ICON_BTN}
-          >
-            <ArrowSquareOut size={16} />
-          </button>
-        )}
-        {onClose && (
-          <button tabIndex={0}
-            type="button"
-            onClick={onClose}
-            aria-label="Close live browser panel"
-            title="Close"
-            className={TOOLBAR_ICON_BTN}
-          >
-            <X size={16} />
-          </button>
-        )}
-      </div>
-
-      {/* == Row B: toolbar ============================================
-          [back] [refresh] [address] then the status/identity chips and the
-          mode toggles that used to occupy their own row above the tabs. The
-          address field is deliberately no longer the full width of the panel;
-          it gives that space to the controls, which is what removes the row.
-
-          Only the address input is wrapped in the <form>. Enter-to-submit is
-          all the form was ever for, and keeping the toggles outside it avoids
-          implying they take part in submission. */}
-      <div className="flex h-chrome-header min-h-chrome-header shrink-0 items-center gap-1 px-2">
-        <button tabIndex={0}
-          type="button"
-          onClick={() => handleToolbarNav('navigate_back')}
-          disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
-          aria-label="Go back"
-          title="Back"
-          className={TOOLBAR_ICON_BTN}
-        >
-          <CaretLeft size={16} weight="bold" />
-        </button>
-        <button tabIndex={0}
-          type="button"
-          onClick={() => handleToolbarNav('reload')}
-          disabled={!connected} /* not gated on controlledByOther: control is shared (2026-08-03) */
-          aria-label="Refresh page"
-          title="Refresh"
-          className={TOOLBAR_ICON_BTN}
-        >
-          <ArrowsClockwise size={15} />
-        </button>
-        <button
-          type="button"
-          tabIndex={0}
-          onClick={() => handleToolbarNav('stop_loading')}
-          disabled={!connected || annotateMode}
-          aria-label="Stop loading"
-          title="Stop loading"
-          className={TOOLBAR_ICON_BTN}
-        >
-          <X size={15} />
-        </button>
-        {/* min-w floor is load-bearing, not cosmetic: with `min-w-0 flex-1`
-            alone the field collapsed to 23px on a 575px row (measured on UAT
-            v59) once the chips and toggles were added beside it — flex happily
-            takes a min-content:0 item to zero. The floor makes "the address bar
-            stays usable" a guarantee instead of an arithmetic coincidence that
-            holds only until the next control is added. */}
-        <form onSubmit={handleOmniboxSubmit} className="flex min-w-[120px] flex-1 items-center">
-        <Input
-          ref={addressBarRef}
-          type="text"
-          value={urlInput}
-          onChange={(e) => setUrlInput(e.target.value)}
-          onFocus={() => {
-            urlBarEditingRef.current = true
-          }}
-          onBlur={() => {
-            urlBarEditingRef.current = false
-          }}
-          placeholder="Search or enter a URL…"
-          aria-label="Address bar"
-          className="h-8 flex-1 text-xs"
-        />
-        </form>
-        <span
-          data-testid="browser-live-agent-chip"
-          title={`Driving ${agentDisplayName}'s browser context`}
-          className="flex shrink-0 items-center gap-1.5 px-1 text-[11px] font-medium text-[var(--color-secondary)] whitespace-nowrap"
-        >
-          <span
-            aria-hidden="true"
-            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[8px] font-bold text-[var(--color-primary)]"
-            style={{ backgroundColor: resolvedAgent?.color ?? 'var(--color-surface-3)' }}
-          >
-            {resolvedAgent?.icon ? (
-              <IconRenderer icon={resolvedAgent.icon} size={9} />
-            ) : resolvedAgent && resolvedAgent.name ? (
-              initialOf(resolvedAgent.name)
-            ) : (
-              <Robot size={9} />
-            )}
-          </span>
-          {/* Avatar always; the NAME yields first when the row is tight —
-              identity survives as the coloured avatar, and the full name is in
-              this chip's own `title`. */}
-          <span className="hidden max-w-[140px] truncate xl:inline">{agentDisplayName}</span>
-        </span>
-        <span
-          data-testid="browser-live-status-chip"
-          className={cn('flex shrink-0 items-center gap-1.5 px-1 text-[11px] font-medium whitespace-nowrap', driveChip.textClass)}
-        >
-          <span
-            aria-hidden="true"
-            className={cn('h-1.5 w-1.5 shrink-0 rounded-full', driveChip.dotClass, driveChip.pulse && 'motion-safe:animate-pulse')}
-          />
-          <driveChip.Icon size={12} weight={driveChip.pulse ? 'fill' : 'regular'} />
-          {driveChip.label}
-        </span>
-        {canAnnotate && (
-          <button tabIndex={0}
-            type="button"
-            onClick={handleToggleAnnotate}
-            disabled={!connected}
-            aria-label={annotateMode ? 'Exit annotate mode' : 'Annotate a region'}
-            title={annotateMode ? 'Exit annotate mode' : 'Drag a region (or click a spot) to comment on it'}
-            aria-pressed={annotateMode}
-            className={cn(TOOLBAR_ICON_BTN, annotateMode && 'text-[var(--color-accent)]')}
-          >
-            <ChatCircleDots size={16} weight={annotateMode ? 'fill' : 'regular'} />
-          </button>
-        )}
-        {mediaStream && hasAudio && (
-          <button tabIndex={0}
-            type="button"
-            onClick={() => setVideoMuted((m) => !m)}
-            aria-label={videoMuted ? 'Unmute audio' : 'Mute audio'}
-            title={videoMuted ? 'Unmute audio' : 'Mute audio'}
-            aria-pressed={!videoMuted}
-            data-testid="browser-live-mute-toggle"
-            className={TOOLBAR_ICON_BTN}
-          >
-            {videoMuted ? <SpeakerSlash size={16} /> : <SpeakerHigh size={16} />}
-          </button>
-        )}
-      </div>
+      <BrowserLiveToolbar
+        connected={connected}
+        annotateMode={annotateMode}
+        urlInput={urlInput}
+        onUrlChange={setUrlInput}
+        onUrlFocus={() => { urlBarEditingRef.current = true }}
+        onUrlBlur={() => { urlBarEditingRef.current = false }}
+        onOmniboxSubmit={handleOmniboxSubmit}
+        onToolbarNav={handleToolbarNav}
+        addressBarRef={addressBarRef}
+        resolvedAgent={resolvedAgent}
+        agentDisplayName={agentDisplayName}
+        driveChip={driveChip}
+        canAnnotate={canAnnotate}
+        onToggleAnnotate={handleToggleAnnotate}
+        showMute={!!mediaStream && hasAudio}
+        videoMuted={videoMuted}
+        onToggleMute={() => setVideoMuted((m) => !m)}
+      />
 
 
       {/* Body */}
@@ -2833,26 +2402,12 @@ export function BrowserLiveView({
         </p>
         {!attached && (
           <div className="flex min-w-0 max-w-full flex-col items-center gap-2 p-6 text-center text-sm text-[var(--color-muted)]">
-            {displayError ? (
-              <>
-                <WarningCircle size={22} className="text-[var(--color-error)]" />
-                <p className="max-w-full [overflow-wrap:anywhere] text-[var(--color-error)]">{displayError}</p>
-                <button
-                  type="button"
-                  tabIndex={0}
-                  onClick={retryWebRTC}
-                  data-testid="browser-live-retry"
-                  className="mt-1 rounded-full border border-[var(--color-border)] px-3 py-1 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
-                >
-                  Retry
-                </button>
-              </>
-            ) : (
-              <>
-                <SpinnerGap size={20} className="animate-spin" />
-                <p>{connected ? 'Starting live video…' : 'Connecting to the live browser…'}</p>
-              </>
-            )}
+            <BrowserLiveRetryStatus
+              displayError={displayError}
+              idleMessage={connected ? 'Starting live video…' : 'Connecting to the live browser…'}
+              onRetry={retryWebRTC}
+              retryTestId="browser-live-retry"
+            />
           </div>
         )}
 
@@ -2957,26 +2512,13 @@ export function BrowserLiveView({
                 data-testid="browser-live-waiting-overlay"
                 className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-center gap-2 bg-black/70 p-6 text-center text-sm text-[var(--color-muted)]"
               >
-                {displayError ? (
-                  <>
-                    <WarningCircle size={22} className="text-[var(--color-error)]" />
-                    <p className="max-w-full [overflow-wrap:anywhere] text-[var(--color-error)]">{displayError}</p>
-                    <button
-                      type="button"
-                      tabIndex={0}
-                      onClick={retryWebRTC}
-                      data-testid="browser-live-retry-overlay"
-                      className="pointer-events-auto mt-1 rounded-full border border-[var(--color-border)] px-3 py-1 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
-                    >
-                      Retry
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <SpinnerGap size={20} className="animate-spin" />
-                    <p>Waiting for the first frame…</p>
-                  </>
-                )}
+                <BrowserLiveRetryStatus
+                  displayError={displayError}
+                  idleMessage="Waiting for the first frame…"
+                  onRetry={retryWebRTC}
+                  retryTestId="browser-live-retry-overlay"
+                  retryButtonClassName="pointer-events-auto mt-1 rounded-full border border-[var(--color-border)] px-3 py-1 text-xs font-medium text-[var(--color-secondary)] transition-colors hover:bg-[var(--color-surface-2)]"
+                />
               </div>
             )}
             {/* Synthetic cursor removed — the native cursor is used directly
@@ -3030,71 +2572,15 @@ export function BrowserLiveView({
             the frozen selection-box overlay above stays visible so the
             connection to what's being discussed is still clear. */}
         {annotateMode && pendingAnnotation && (
-          <div
-            data-testid="annotate-popover"
-            className="absolute inset-x-0 bottom-0 z-20 border-t border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 shadow-lg"
-          >
-            <div className="flex items-start gap-3">
-              <img
-                src={pendingAnnotation.previewUrl}
-                alt="Selected region"
-                className="h-16 w-16 shrink-0 rounded border border-[var(--color-border)] object-cover"
-              />
-              <div className="min-w-0 flex-1">
-                <Textarea
-                  value={annotateComment}
-                  onChange={(e) => setAnnotateComment(e.target.value)}
-                  onKeyDown={(e) => {
-                    // Cancel the pending annotation on Escape. Historical
-                    // note (now stale): this used to also matter for
-                    // outrunning Radix's Sheet, which listened for Escape
-                    // via a capture-phase document listener that would
-                    // otherwise close the whole panel and discard the
-                    // drafted comment first. The Sheet was retired
-                    // 2026-07-16 (panel is now always a plain docked
-                    // `<aside>` — no Sheet, no capture-phase listener
-                    // anywhere above this element), so that race no longer
-                    // exists; Escape here is just the ordinary "cancel this
-                    // popover" affordance. stopPropagation is kept as
-                    // defense in depth against any future wrapping
-                    // dialog/modal reintroducing the same race.
-                    if (e.key === 'Escape') {
-                      e.stopPropagation()
-                      handleCancelAnnotation()
-                    }
-                  }}
-                  placeholder="What would you like to discuss about this?"
-                  aria-label="Annotation comment"
-                  className="min-h-[60px] text-xs"
-                  disabled={annotateSubmitting}
-                  autoFocus
-                />
-                {annotateError && (
-                  <p role="alert" className="mt-1 text-[11px] text-[var(--color-error)]">
-                    {annotateError}
-                  </p>
-                )}
-                <div className="mt-2 flex justify-end gap-2">
-                  <button tabIndex={0}
-                    type="button"
-                    onClick={handleCancelAnnotation}
-                    disabled={annotateSubmitting}
-                    className="rounded px-2.5 py-1 text-xs text-[var(--color-muted)] transition-colors hover:bg-[var(--color-surface-2)] disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    Cancel
-                  </button>
-                  <button tabIndex={0}
-                    type="button"
-                    onClick={handleSendAnnotation}
-                    disabled={annotateSubmitting || annotateComment.trim().length === 0}
-                    className="rounded bg-[var(--color-accent)] px-3 py-1 text-xs font-medium text-[var(--color-primary)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                  >
-                    {annotateSubmitting ? 'Sending…' : 'Send'}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
+          <BrowserLiveAnnotatePopover
+            previewUrl={pendingAnnotation.previewUrl}
+            comment={annotateComment}
+            onCommentChange={setAnnotateComment}
+            submitting={annotateSubmitting}
+            error={annotateError}
+            onCancel={handleCancelAnnotation}
+            onSend={handleSendAnnotation}
+          />
         )}
       </div>
 
