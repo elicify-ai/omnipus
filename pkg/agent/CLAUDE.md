@@ -13,6 +13,13 @@ Cite `file::symbol` in notes and reviews, never `file:line` — `loop.go`,
 `turn.go` and `subturn.go` churn daily; every line number in older notes here
 was stale within weeks.
 
+## Size ceiling
+
+`loop.go` and `loop_test.go` are pinned at their exact line counts in
+`scripts/budgets/files.txt` — one appended line fails `make lint-budgets`.
+New code belongs in a sibling file, not appended; a split re-keys the row
+by hand (see that file's header).
+
 ## Delegation identity — never inherit agent-level settings from the parent
 
 `subturn.go::spawnSubTurn` sources every agent-level setting (ID, Name,
