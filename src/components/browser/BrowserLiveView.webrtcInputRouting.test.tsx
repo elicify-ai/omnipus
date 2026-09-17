@@ -1093,6 +1093,39 @@ describe('BrowserLiveView fresh viewer fallback for missing received timestamps'
     expect(mockSendInput.mock.calls).toEqual([[{ kind: 'key_down', key: 'a', code: '', key_code: 0, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
   })
 
+  // The satisfied fresh-viewer requirement must not linger. requiresFreshViewerRef
+  // used to stay true forever after one needs-fresh-viewer, so every recovered
+  // boundary with a new rtp_timestamp rebuilt the media peer via
+  // requestFreshViewerRef — one stop()/start() cycle per recovery event, each
+  // re-locking input and leaving a dead stream bound mid-renegotiation. Once
+  // the demanded fresh viewer has been authorized, a later boundary that the
+  // CURRENT stream can prove by RTP timestamp must keep that stream: no
+  // rebuild, input stays dispatchable. (Timestamp-free streams re-arm the
+  // requirement on their own — the previous test pins that path.)
+  it('keeps the satisfied fresh viewer for a later boundary its own RTP timestamps prove', () => {
+    render(<BrowserLiveView sessionId="s1" agentId="a1" />)
+    connectAndFrame()
+    const original = incoming(1)
+    boundary(1, 100)
+    presentWithoutRtp(original)
+    expect(mockMachineStop).toHaveBeenCalledTimes(1)
+    expect(mockMachineStart).toHaveBeenCalledTimes(1)
+    const fresh = incoming(2)
+    presentWithoutRtp(fresh)
+    typeA()
+    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'key_down', key: 'a', code: '', key_code: 0, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
+    mockSendInput.mockClear()
+    // The fresh viewer now carries real RTP timestamps: a newer boundary on
+    // the same generation is provable in place, without another peer.
+    act(() => emitBrowserFrame(fresh, { rtpTimestamp: 150, expectedDisplayTime: performance.now() - 1 }))
+    boundary(1, 200)
+    act(() => emitBrowserFrame(fresh, { rtpTimestamp: 200, expectedDisplayTime: performance.now() - 1 }))
+    typeA()
+    expect(mockSendInput.mock.calls).toEqual([[{ kind: 'key_down', key: 'a', code: '', key_code: 0, text: 'a', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 }]])
+    expect(mockMachineStop).toHaveBeenCalledTimes(1)
+    expect(mockMachineStart).toHaveBeenCalledTimes(1)
+  })
+
   it('cannot authorize an old fallback peer when another generation commits during negotiation', () => {
     render(<BrowserLiveView sessionId="s1" agentId="a1" />)
     connectAndFrame()

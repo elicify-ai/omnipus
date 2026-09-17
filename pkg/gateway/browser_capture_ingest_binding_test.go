@@ -309,3 +309,37 @@ func TestCaptureIngestWireRejectsMalformedIdentity(t *testing.T) {
 	default:
 	}
 }
+
+// A stale offer must not be answered with silence. The encoder's only
+// response to silence is its 10s offer-answer timeout, whose escape is a WS
+// reconnect — and every reconnect re-issues a recapture, so a stale window
+// became a teardown loop restarting the whole capture (ui-browser shard,
+// 2026-09-18: two-to-five encoder re-inits per test). The committed frame
+// must go out on the SAME socket so the encoder re-offers for the right
+// generation without a reconnect cycle.
+func TestCaptureIngestWireStaleOfferReceivesCommittedFrameRecapture(t *testing.T) {
+	cs, relay, url := ingestWireFixture(t)
+	conn := ingestWireConnect(t, cs, url)
+	// Consume the connect-path resync recapture so the assertion below
+	// observes only the stale offer's own correction.
+	require.Equal(t, "recapture", ingestWireRead(t, conn, "browser_capture_control")["action"])
+	// Generation 2 is committed while the encoder still offers generation 1.
+	_, err := cs.BeginFrameTransition("page-b", 756, 413, 1.25)
+	require.NoError(t, err)
+	ingestWireSendOffer(t, conn, 3, 1, "page-a")
+	// The stale offer is rejected by admission before any negotiation; give
+	// the handler a moment to process it, then prove it never got through.
+	// (Waiting for the corrective recapture below is what synchronizes the
+	// assertion — the stale offer's fate is decided before it is sent.)
+	select {
+	case <-relay.entered:
+		t.Fatal("stale offer reached negotiation")
+	default:
+	}
+	want := map[string]any{"type": "browser_capture_control", "action": "recapture", "capture_generation": float64(2), "target_id": "page-b", "expected_width": float64(756), "expected_height": float64(413), "capture_scale": 1.25}
+	require.Equal(t, want, ingestWireRead(t, conn, "browser_capture_control"))
+	// The socket stays open for the corrective offer the recapture elicits;
+	// a close here would resurrect the reconnect loop this test pins down.
+	ingestWireSendOffer(t, conn, 4, 2, "page-b")
+	require.Equal(t, map[string]any{"type": "browser_capture_answer", "sdp": "qualified-answer", "offer_id": float64(4), "capture_generation": float64(2), "target_id": "page-b"}, ingestWireRead(t, conn, "browser_capture_answer"))
+}
