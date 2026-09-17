@@ -82,6 +82,17 @@ func TestWorkspacePutExplicitEmptyDelegationClearsWithoutReseeding(t *testing.T)
 	require.Empty(t, edges)
 }
 
+func TestWorkspacePutNullDelegationRejectedWithoutWrites(t *testing.T) {
+	api, id := buildWorkspaceDelegationTestAPI(t)
+	before, err := readWorkspaceFile(api.homePath, id)
+	require.NoError(t, err)
+	w := putWorkspaceGraph(t, api, id, `,"name":"must-not-write","delegation":null`)
+	require.Equal(t, http.StatusBadRequest, w.Code, w.Body.String())
+	after, err := readWorkspaceFile(api.homePath, id)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+}
+
 func TestWorkspacePutSecondStoreFailureReportsPartialCurrentState(t *testing.T) {
 	api, id := buildWorkspaceDelegationTestAPI(t)
 	unlock := workspace.LockID(id)

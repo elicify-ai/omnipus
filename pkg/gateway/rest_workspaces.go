@@ -129,6 +129,24 @@ func rejectMountsWriteField(w http.ResponseWriter, r *http.Request) bool {
 	return rejectTopLevelField(w, r, "mounts", mountsNotWritableHereMsg)
 }
 
+func rejectNullTopLevelField(w http.ResponseWriter, r *http.Request, field string) bool {
+	rawBody, err := io.ReadAll(io.LimitReader(r.Body, maxWorkspaceBodyBytes+1))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+	var top map[string]json.RawMessage
+	if json.Unmarshal(rawBody, &top) != nil {
+		return true
+	}
+	if raw, present := top[field]; present && string(raw) == "null" {
+		jsonErr(w, http.StatusBadRequest, field+" must be an array; null is not allowed")
+		return false
+	}
+	return true
+}
+
 // rejectTopLevelField 400s when the request body carries `field` as a TOP-LEVEL
 // KEY, and restores r.Body either way so the caller's normal decode is
 // unaffected.
@@ -1131,6 +1149,9 @@ func (rw *restAPIHandleWorkspacePut) validateRequest() bool {
 	// FR-5: mounts have their own dedicated lifecycle (workspace.CreateMount/
 	// DeleteMount) — see mountsNotWritableHereMsg's doc comment.
 	if !rejectMountsWriteField(rw.w, rw.r) {
+		return true
+	}
+	if !rejectNullTopLevelField(rw.w, rw.r, "delegation") {
 		return true
 	}
 
