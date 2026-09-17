@@ -20,7 +20,7 @@ import (
 // plus destructive-op confirmation — not a role-based fence. The role-based
 // admin-ask fence is retired (there is no admin role).
 //
-// BDD: Given all 33 tools returned by AllTools(),
+// BDD: Given all 35 tools returned by AllTools(),
 //
 //	When Category() is called on each,
 //	Then it returns a domain category (NOT CategorySystem) for every tool (FR-059).
@@ -31,8 +31,8 @@ import (
 func TestRegistry_AllSysagentToolsCategory(t *testing.T) {
 	all := AllTools(nil)
 
-	if len(all) != 33 {
-		t.Errorf("expected exactly 33 system tools, got %d", len(all))
+	if len(all) != 35 {
+		t.Errorf("expected exactly 35 system tools, got %d", len(all))
 	}
 
 	for _, tool := range all {
@@ -128,8 +128,8 @@ func TestRegistry_AllSysagentToolsCategory_CentralRegistry(t *testing.T) {
 	reg := BuildRegistry(nil)
 	allTools := reg.GetAll()
 
-	if len(allTools) != 33 {
-		t.Errorf("central BuiltinRegistry has %d tools; want == 33 (FR-001)", len(allTools))
+	if len(allTools) != 35 {
+		t.Errorf("central BuiltinRegistry has %d tools; want == 35 (FR-001)", len(allTools))
 	}
 
 	for _, tool := range allTools {

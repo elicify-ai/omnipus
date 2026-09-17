@@ -362,7 +362,7 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 		}
 		return true
 	}
-	_, updateErr := agentstore.New(rau.a.homePath).MutateState(rau.agentID, rau.req.Revision, func(agentRec *config.AgentConfig) error {
+	mutation, updateErr := agentstore.New(rau.a.homePath).MutateState(rau.agentID, rau.req.Revision, func(agentRec *config.AgentConfig) error {
 		if err := agentmutation.ValidateFields(*agentRec, []string{"tools_cfg"}); err != nil {
 			return err
 		}
@@ -391,7 +391,7 @@ func (rau *restAPIUpdateAgentTools) persistPolicy() bool {
 		case errors.Is(updateErr, entity.ErrNotFound):
 			jsonErr(rau.w, http.StatusNotFound, updateErr.Error())
 		default:
-			jsonErr(rau.w, http.StatusInternalServerError, updateErr.Error())
+			writeConfigurationMutationFailure(rau.w, mutation)
 		}
 		return true
 	}
@@ -444,8 +444,8 @@ func (rau *restAPIUpdateAgentTools) reloadAndRespond() {
 				slog.Error("rest: audit emit agent tools reload failure", "error", auditErr)
 			}
 		}
-		jsonErr(rau.w, http.StatusServiceUnavailable,
-			"config saved but in-memory reload failed; restart the gateway or retry")
+		rau.r.Header.Set("X-Omnipus-Activation-Failed", "config saved but in-memory reload failed; restart the gateway or retry")
+		rau.a.HandleAgentToolsRegistry(rau.w, rau.r, rau.agentID)
 		return
 	} else if !confirmed {
 		slog.Error("rest: agent tools update: reload did not confirm within the poll window; "+
@@ -459,9 +459,8 @@ func (rau *restAPIUpdateAgentTools) reloadAndRespond() {
 				slog.Error("rest: audit emit agent tools reload unconfirmed", "error", auditErr)
 			}
 		}
-		jsonErr(rau.w, http.StatusServiceUnavailable,
-			"config saved but the in-memory reload did not confirm within the wait window; "+
-				"the new tool policy may not be enforced yet — retry or restart the gateway")
+		rau.r.Header.Set("X-Omnipus-Activation-Failed", "config saved but the in-memory reload did not confirm; retry or restart the gateway")
+		rau.a.HandleAgentToolsRegistry(rau.w, rau.r, rau.agentID)
 		return
 	}
 	// Use HandleAgentToolsRegistry so the PUT response emits `tools` (not

@@ -840,6 +840,7 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 		ag.MaxToolIterations = *uf.ru.req.MaxToolIterations
 	}
 	ag.Revision = uf.ru.mutationResult.Revision
+	applyAgentEditableFields(&ag, uf.foundAgent)
 	persistence := gen.AgentPersistenceStatusComplete
 	ag.PersistenceStatus = &persistence
 	activation := gen.AgentActivationStatusActive
@@ -888,7 +889,7 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 		if errors.Is(updateErr, agentstore.ErrInvalidRevision) {
 			return fmt.Errorf("invalid revision: %w", updateErr)
 		}
-		return fmt.Errorf("update agent entity record: %w", updateErr)
+		return &configurationMutationError{Result: result, Err: fmt.Errorf("update agent entity record: %w", updateErr)}
 	}
 	// Single-default invariant, for real this time: the settings
 	// singleton (agents.defaults.default_agent_id) is the ONLY thing

@@ -88,3 +88,48 @@ func TestADR090UpdateAgentToolsPersistsOnlyOverrideNames(t *testing.T) {
 	require.Equal(t, 1, len(after.Agent.Tools.Builtin.Policies))
 	require.Equal(t, "deny", string(after.Agent.Tools.Builtin.Policies["bash"]))
 }
+
+func TestADR090CreateAgentAcceptsSparsePolicyAndMCPPresence(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	if api.agentLoop.GetConfig().Tools.MCP.Servers == nil {
+		api.agentLoop.GetConfig().Tools.MCP.Servers = map[string]config.MCPServerConfig{}
+	}
+	if api.agentLoop.GetConfig().Sandbox.ToolPolicies == nil {
+		api.agentLoop.GetConfig().Sandbox.ToolPolicies = map[string]string{}
+	}
+	api.agentLoop.GetConfig().Tools.MCP.Servers["docs"] = config.MCPServerConfig{Enabled: true, Command: "test"}
+	api.agentLoop.GetConfig().Sandbox.ToolPolicies["get_agent"] = string(config.ToolPolicyDeny)
+	api.agentLoop.GetConfig().Sandbox.ToolPolicies["get_agent_tools"] = string(config.ToolPolicyDeny)
+	body := `{"name":"Configured","type":"Main","soul":"persona","mcp_servers":[{"id":"docs","tools":[]}],"tool_policy_changes":{"set":{"bash":"deny"}}}`
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
+	r.Header.Set("Content-Type", "application/json")
+	api.createAgent(w, r)
+	require.Equal(t, http.StatusCreated, w.Code, "body=%s", w.Body.String())
+	var response struct {
+		Id string `json:"id"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	state, err := agentstore.New(api.homePath).ReadState(response.Id)
+	require.NoError(t, err)
+	require.Equal(t, "deny", string(state.Agent.Tools.Builtin.Policies["bash"]))
+	require.Len(t, state.Agent.Tools.MCP.Servers, 1)
+	require.True(t, state.Agent.Tools.MCP.Servers[0].ToolsSpecified)
+	require.Empty(t, state.Agent.Tools.MCP.Servers[0].Tools)
+	require.Equal(t, "persona", state.Soul)
+}
+
+func TestADR090CreateAgentRejectsNullAliasMembers(t *testing.T) {
+	api := buildExecutorTestAPI(t)
+	for _, body := range []string{
+		`{"name":"Bad","type":"Main","soul":"persona","mcp_servers":null}`,
+		`{"name":"Bad","type":"Main","soul":"persona","mcp_servers":[{"id":"docs","tools":null}]}`,
+		`{"name":"Bad","type":"Main","soul":"persona","tool_policy_changes":{"set":null}}`,
+	} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/agents", bytes.NewBufferString(body))
+		r.Header.Set("Content-Type", "application/json")
+		api.createAgent(w, r)
+		require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
+	}
+}

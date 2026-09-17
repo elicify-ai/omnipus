@@ -200,3 +200,38 @@ func TestDeleteStateRejectsStaleRevisionWithoutDeleting(t *testing.T) {
 		t.Fatalf("name=%q", got.Name)
 	}
 }
+
+func TestCreateStateStagesEntityAndSoulBeforePublishing(t *testing.T) {
+	home := t.TempDir()
+	s := New(home)
+	soulPath := filepath.Join(home, "agents", "new-agent", "SOUL.md")
+	realReplace := s.replaceFile
+	s.replaceFile = func(staged, target string) error {
+		if target == soulPath {
+			return errors.New("injected soul replace failure")
+		}
+		return realReplace(staged, target)
+	}
+	result, err := s.CreateState("new-agent", &config.AgentConfig{Name: "New"}, "soul")
+	if err == nil || result.PersistenceStatus != PersistencePartial || result.ErrorStage != "replace_soul" {
+		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(home, "entities", "agents", "new-agent.json")); statErr != nil {
+		t.Fatalf("entity not published before partial failure: %v", statErr)
+	}
+}
+
+func TestCreateStatePersistsReadableCompositeState(t *testing.T) {
+	s := New(t.TempDir())
+	result, err := s.CreateState("new-agent", &config.AgentConfig{Name: "New"}, "soul")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PersistenceStatus != PersistenceComplete || result.Revision == "" {
+		t.Fatalf("result=%+v", result)
+	}
+	state, err := s.ReadState("new-agent")
+	if err != nil || state.Soul != "soul" || state.Revision != result.Revision {
+		t.Fatalf("state=%+v err=%v", state, err)
+	}
+}

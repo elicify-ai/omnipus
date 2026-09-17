@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/entity"
@@ -160,6 +161,7 @@ func (s *Store) MutateState(id, expectedRevision string, mutate func(*config.Age
 		if current.Revision != expectedRevision {
 			return fmt.Errorf("%w: expected %s, current %s", ErrRevisionConflict, expectedRevision, current.Revision)
 		}
+		result.Revision = current.Revision
 		if mutate != nil {
 			if mutateErr := mutate(current.Agent); mutateErr != nil {
 				return mutateErr
@@ -227,14 +229,83 @@ func (s *Store) MutateState(id, expectedRevision string, mutate func(*config.Age
 		result.PersistenceStatus = PersistenceComplete
 		result.Revision = actual.Revision
 		updated = actual.Agent
+		if s.notifier != nil {
+			s.notifier.AgentUpserted(id, updated)
+		}
 		return nil
 	})
 	if err != nil {
 		result.Message = err.Error()
 		return result, fmt.Errorf("agentstore: mutate state %q: %w", id, err)
 	}
-	if s.notifier != nil {
-		s.notifier.AgentUpserted(id, updated)
+	return result, nil
+}
+
+// CreateState stages the entity and SOUL before publishing either component.
+// If the second replacement fails, the returned state explicitly reports the
+// durable partial write and its resulting revision.
+func (s *Store) CreateState(id string, agent *config.AgentConfig, soul string) (result MutationResult, err error) {
+	result.ActivationStatus = ActivationNotAttempted
+	if id == "" || agent == nil {
+		return result, fmt.Errorf("agentstore: create state: id and agent are required")
+	}
+	if agent.ID != "" && agent.ID != id {
+		return result, fmt.Errorf("agentstore: create state %q: cfg.ID %q does not match", id, agent.ID)
+	}
+	err = s.inner.WithLock(id, func(entityPath string) error {
+		if _, statErr := os.Stat(entityPath); statErr == nil {
+			return entity.ErrAlreadyExists
+		} else if !os.IsNotExist(statErr) {
+			return statErr
+		}
+		agent.ID = id
+		if agent.CreatedAt == nil {
+			now := time.Now().UTC()
+			agent.CreatedAt = &now
+		}
+		entityBytes, marshalErr := json.MarshalIndent(agent, "", "  ")
+		if marshalErr != nil {
+			return marshalErr
+		}
+		entityStage, stageErr := s.stageFile(entityPath, entityBytes, 0o600)
+		if stageErr != nil {
+			result.PersistenceStatus, result.ErrorStage = PersistenceNone, "stage_entity"
+			return stageErr
+		}
+		defer os.Remove(entityStage)
+		soulStage, stageErr := s.stageFile(s.soulPath(id), []byte(soul), 0o600)
+		if stageErr != nil {
+			result.PersistenceStatus, result.ErrorStage = PersistenceNone, "stage_soul"
+			return stageErr
+		}
+		defer os.Remove(soulStage)
+		if replaceErr := s.replaceFile(entityStage, entityPath); replaceErr != nil {
+			result.PersistenceStatus, result.ErrorStage = PersistenceNone, "replace_entity"
+			return replaceErr
+		}
+		result.ChangedFields = append(result.ChangedFields, "entity")
+		if replaceErr := s.replaceFile(soulStage, s.soulPath(id)); replaceErr != nil {
+			result.PersistenceStatus, result.ErrorStage = PersistencePartial, "replace_soul"
+			if actual, _, _, readErr := readStateFiles(entityPath, s.soulPath(id)); readErr == nil {
+				result.Revision = actual.Revision
+			}
+			return replaceErr
+		}
+		result.ChangedFields = append(result.ChangedFields, "soul")
+		actual, _, _, readErr := readStateFiles(entityPath, s.soulPath(id))
+		if readErr != nil {
+			result.PersistenceStatus, result.ErrorStage = PersistencePartial, "verify"
+			return readErr
+		}
+		result.PersistenceStatus, result.Revision = PersistenceComplete, actual.Revision
+		if s.notifier != nil {
+			s.notifier.AgentUpserted(id, agent)
+		}
+		return nil
+	})
+	if err != nil {
+		result.Message = err.Error()
+		return result, fmt.Errorf("agentstore: create state %q: %w", id, err)
 	}
 	return result, nil
 }

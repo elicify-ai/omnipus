@@ -163,13 +163,12 @@ func wireAgentType(a config.AgentConfig) string {
 }
 
 func editableDescriptors(a config.AgentConfig) []map[string]any {
-	fields := []string{"name", "description", "color", "icon", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "default", "voice", "shell_policy", "type"}
-	out := make([]map[string]any, 0, len(fields))
-	for _, field := range fields {
-		err := agentmutation.ValidateFields(a, []string{field})
-		d := map[string]any{"name": field, "editable": err == nil}
-		if err != nil {
-			d["reason"] = err.Error()
+	descriptors := agentmutation.FieldDescriptors(a)
+	out := make([]map[string]any, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		d := map[string]any{"name": descriptor.Name, "editable": descriptor.Editable}
+		if descriptor.Reason != "" {
+			d["reason"] = descriptor.Reason
 		}
 		out = append(out, d)
 	}

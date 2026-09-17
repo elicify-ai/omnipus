@@ -357,6 +357,19 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		},
 		Tools: toolEntries,
 	}
+	persistence := gen.AgentToolsResponsePersistenceStatusComplete
+	activation := gen.AgentToolsResponseActivationStatusActive
+	changed := []string{"tools_cfg"}
+	resp.PersistenceStatus = &persistence
+	resp.ActivationStatus = &activation
+	resp.ChangedFields = &changed
+	if r.Method == http.MethodPut {
+		if message := r.Header.Get("X-Omnipus-Activation-Failed"); message != "" {
+			activation = gen.AgentToolsResponseActivationStatusFailed
+			resp.ActivationStatus = &activation
+			resp.Message = &message
+		}
+	}
 	jsonOK(w, resp)
 }
 

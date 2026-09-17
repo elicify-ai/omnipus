@@ -15,6 +15,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	"github.com/elicify-ai/omnipus/pkg/agent/runner"
+	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -666,6 +667,28 @@ func buildAgentDefaults(cfg *config.Config) gen.Agent {
 	}
 }
 
+func applyAgentEditableFields(agent *gen.Agent, cfg config.AgentConfig) {
+	descriptors := agentmutation.FieldDescriptors(cfg)
+	wire := make([]struct {
+		Editable bool    `json:"editable"`
+		Name     string  `json:"name"`
+		Reason   *string `json:"reason,omitempty"`
+	}, 0, len(descriptors))
+	for _, descriptor := range descriptors {
+		row := struct {
+			Editable bool    `json:"editable"`
+			Name     string  `json:"name"`
+			Reason   *string `json:"reason,omitempty"`
+		}{Editable: descriptor.Editable, Name: descriptor.Name}
+		if descriptor.Reason != "" {
+			reason := descriptor.Reason
+			row.Reason = &reason
+		}
+		wire = append(wire, row)
+	}
+	agent.EditableFields = &wire
+}
+
 func (a *restAPI) listAgents(w http.ResponseWriter) {
 	cfg := a.agentLoop.GetConfig()
 	agents := make([]gen.Agent, 0, len(cfg.Agents.List))
@@ -706,6 +729,7 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		}
 		ag.Type = coreagent.ToWireType(ac)
 		ag.Locked = ac.Locked
+		applyAgentEditableFields(&ag, ac)
 		applyAgentOverrides(&ag, &ac)
 		// ADR-066 D2/D9: the persisted rung-1 override plus the three derived
 		// read-only window fields the Advanced panel renders.
@@ -785,6 +809,7 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			}
 			ag.Type = coreagent.ToWireType(ac)
 			ag.Locked = ac.Locked
+			applyAgentEditableFields(&ag, ac)
 			applyAgentOverrides(&ag, &ac)
 			// ADR-066 D2/D9 — see listAgents.
 			applyAgentContextWindow(&ag, cfg, &ac)
@@ -922,6 +947,11 @@ func (a *restAPI) withToolPolicyCoverageGuard(
 		}
 	}
 	if err := a.updateConfigJSONLocked(persist); err != nil {
+		var mutationErr *configurationMutationError
+		if errors.As(err, &mutationErr) {
+			writeConfigurationMutationFailure(w, mutationErr.Result)
+			return false
+		}
 		if errors.Is(err, errConflict) {
 			writeJSON(w, http.StatusConflict, gen.ErrorResponse{
 				Error: "conflict",
@@ -938,6 +968,28 @@ func (a *restAPI) withToolPolicyCoverageGuard(
 		return false
 	}
 	return true
+}
+
+type configurationMutationError struct {
+	Result agentstore.MutationResult
+	Err    error
+}
+
+func (e *configurationMutationError) Error() string { return e.Err.Error() }
+func (e *configurationMutationError) Unwrap() error { return e.Err }
+
+func writeConfigurationMutationFailure(w http.ResponseWriter, result agentstore.MutationResult) {
+	slog.Error("configuration mutation persistence failed", "stage", result.ErrorStage, "error", result.Message)
+	stage := result.ErrorStage
+	message := "configuration storage failed before completion; read the resource again before retrying"
+	writeJSON(w, http.StatusInternalServerError, gen.ConfigurationMutationState{
+		PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatus(result.PersistenceStatus),
+		ActivationStatus:  gen.ConfigurationMutationStateActivationStatus(agentstore.ActivationNotAttempted),
+		Revision:          result.Revision,
+		ChangedFields:     result.ChangedFields,
+		ErrorStage:        &stage,
+		Message:           &message,
+	})
 }
 
 // fastAgentUpsert is createAgent/updateAgent's ADR-054-completing fast path

@@ -7,17 +7,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
-	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	"github.com/google/uuid"
 )
@@ -105,8 +103,9 @@ func agentCreateShellPolicyFromWire(wp *struct {
 
 // agentCreateMCPServerInput is one entry of agentCreateToolsCfgInput.MCPServers.
 type agentCreateMCPServerInput struct {
-	ID    string
-	Tools []string
+	ID             string
+	Tools          []string
+	ToolsSpecified bool
 }
 
 // agentCreateToolsCfgInput is a request-shape-agnostic normalization of the
@@ -120,6 +119,7 @@ type agentCreateMCPServerInput struct {
 type agentCreateToolsCfgInput struct {
 	BuiltinPolicies map[string]string
 	MCPServers      []agentCreateMCPServerInput
+	MCPSpecified    bool
 }
 
 // agentCreateToolsCfgFromWire converts either variant's tools_cfg wire object
@@ -159,12 +159,52 @@ func agentCreateToolsCfgFromWire[P ~string](tc *struct {
 		out.BuiltinPolicies = wireStringMap(tc.Builtin.Policies)
 	}
 	if tc.Mcp != nil && tc.Mcp.Servers != nil {
+		out.MCPSpecified = true
 		for _, s := range *tc.Mcp.Servers {
 			var t []string
 			if s.Tools != nil {
 				t = *s.Tools
 			}
-			out.MCPServers = append(out.MCPServers, agentCreateMCPServerInput{ID: s.Id, Tools: t})
+			out.MCPServers = append(out.MCPServers, agentCreateMCPServerInput{ID: s.Id, Tools: t, ToolsSpecified: s.Tools != nil})
+		}
+	}
+	return out
+}
+
+func agentCreateMCPServersFromWire(servers *[]struct {
+	Id    string    `json:"id"`
+	Tools *[]string `json:"tools,omitempty"`
+}) *[]agentCreateMCPServerInput {
+	if servers == nil {
+		return nil
+	}
+	out := make([]agentCreateMCPServerInput, 0, len(*servers))
+	for _, server := range *servers {
+		var names []string
+		if server.Tools != nil {
+			names = make([]string, len(*server.Tools))
+			copy(names, *server.Tools)
+		}
+		out = append(out, agentCreateMCPServerInput{ID: server.Id, Tools: names, ToolsSpecified: server.Tools != nil})
+	}
+	return &out
+}
+
+func agentCreatePolicyChangesFromWire[P ~string](changes *struct {
+	Remove *[]string     `json:"remove,omitempty"`
+	Set    *map[string]P `json:"set,omitempty"`
+}) *agentmutation.ToolPolicyChanges {
+	if changes == nil {
+		return nil
+	}
+	out := &agentmutation.ToolPolicyChanges{}
+	if changes.Remove != nil {
+		out.Remove = append(out.Remove, (*changes.Remove)...)
+	}
+	if changes.Set != nil {
+		out.Set = make(map[string]config.ToolPolicy, len(*changes.Set))
+		for name, policy := range *changes.Set {
+			out.Set[name] = config.ToolPolicy(policy)
 		}
 	}
 	return out
@@ -180,6 +220,8 @@ type restAPICreateAgent struct {
 	ac                config.AgentConfig
 	createSoulContent string
 	defaultModelName  string
+	mutationResult    agentstore.MutationResult
+	policyChanges     *agentmutation.ToolPolicyChanges
 }
 
 // createAgent handles POST /api/v1/agents.
@@ -213,10 +255,6 @@ func (a *restAPI) createAgent(w http.ResponseWriter, r *http.Request) {
 	if cra.persistAgent() {
 		return
 	}
-	if cra.writeSoul() {
-		return
-	}
-
 	cra.publishResponse()
 }
 
@@ -234,6 +272,8 @@ type restAPICreateAgentPrepareAgent struct {
 	fallbackModels *[]gen.FallbackModel
 	shellPolicyIn  *agentCreateShellPolicyInput
 	modelParamsIn  *agentModelParamsInput
+	mcpServers     *[]agentCreateMCPServerInput
+	policyChanges  *agentmutation.ToolPolicyChanges
 }
 
 // prepareAgent decodes and validates the request and builds the persistent agent config.
@@ -250,6 +290,39 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		jsonErr(pap.cra.w, http.StatusBadRequest, "request body is required")
 		return true
+	}
+	var presence map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &presence); err != nil {
+		jsonErr(pap.cra.w, http.StatusBadRequest, "invalid JSON body")
+		return true
+	}
+	for _, field := range []string{"skills", "mcp_servers", "tool_policy_changes"} {
+		if value, supplied := presence[field]; supplied && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			jsonErr(pap.cra.w, http.StatusBadRequest, field+" must not be null")
+			return true
+		}
+	}
+	if rawChanges, supplied := presence["tool_policy_changes"]; supplied {
+		var members map[string]json.RawMessage
+		if json.Unmarshal(rawChanges, &members) == nil {
+			for _, field := range []string{"set", "remove"} {
+				if value, exists := members[field]; exists && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+					jsonErr(pap.cra.w, http.StatusBadRequest, "tool_policy_changes."+field+" must not be null")
+					return true
+				}
+			}
+		}
+	}
+	if rawServers, supplied := presence["mcp_servers"]; supplied {
+		var servers []map[string]json.RawMessage
+		if json.Unmarshal(rawServers, &servers) == nil {
+			for _, server := range servers {
+				if value, exists := server["tools"]; exists && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+					jsonErr(pap.cra.w, http.StatusBadRequest, "mcp_servers[].tools must not be null")
+					return true
+				}
+			}
+		}
 	}
 
 	var typePeek struct {
@@ -333,6 +406,8 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
 		pap.skills = vreq.Skills
+		pap.mcpServers = agentCreateMCPServersFromWire(vreq.McpServers)
+		pap.policyChanges = agentCreatePolicyChangesFromWire(vreq.ToolPolicyChanges)
 		pap.fallbackModels = vreq.FallbackModels
 		pap.shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
 		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
@@ -350,6 +425,8 @@ func (cra *restAPICreateAgent) prepareAgent() bool {
 		pap.icon = vreq.Icon
 		pap.cra.soul = vreq.Soul
 		pap.skills = vreq.Skills
+		pap.mcpServers = agentCreateMCPServersFromWire(vreq.McpServers)
+		pap.policyChanges = agentCreatePolicyChangesFromWire(vreq.ToolPolicyChanges)
 		pap.fallbackModels = vreq.FallbackModels
 		pap.shellPolicyIn = agentCreateShellPolicyFromWire(vreq.ShellPolicy)
 		pap.cra.toolsCfgIn = agentCreateToolsCfgFromWire(vreq.ToolsCfg)
@@ -560,11 +637,46 @@ func (pap *restAPICreateAgentPrepareAgent) validateAndBuildConfig() (bool, bool)
 		pap.cra.ac.Skills = make([]string, len(*pap.skills))
 		copy(pap.cra.ac.Skills, *pap.skills)
 	}
+	if pap.mcpServers != nil || pap.policyChanges != nil {
+		if pap.cra.toolsCfgIn == nil {
+			pap.cra.toolsCfgIn = &agentCreateToolsCfgInput{}
+		}
+		if pap.mcpServers != nil {
+			if pap.cra.toolsCfgIn.MCPSpecified {
+				jsonErr(pap.cra.w, http.StatusBadRequest, "mcp_servers and tools_cfg.mcp cannot both be supplied")
+				return false, true
+			}
+			pap.cra.toolsCfgIn.MCPServers = *pap.mcpServers
+			pap.cra.toolsCfgIn.MCPSpecified = true
+		}
+	}
+	pap.cra.createSoulContent = strings.TrimSpace(pap.cra.soul)
+	if pap.policyChanges != nil {
+		if pap.cra.toolsCfgIn != nil && pap.cra.toolsCfgIn.BuiltinPolicies != nil {
+			jsonErr(pap.cra.w, http.StatusBadRequest, "tool_policy_changes and tools_cfg.builtin cannot both be supplied")
+			return false, true
+		}
+		pap.cra.ac.Tools = nil // applied after the server seed is constructed
+		pap.cra.policyChanges = pap.policyChanges
+	}
 	return false, false
 }
 
 // buildToolConfig validates and builds the agent's builtin and MCP tool configuration.
 func (cra *restAPICreateAgent) buildToolConfig() bool {
+	if cra.toolsCfgIn != nil {
+		configured := cra.a.agentLoop.GetConfig().Tools.MCP.Servers
+		for _, server := range cra.toolsCfgIn.MCPServers {
+			if _, ok := configured[server.ID]; !ok || server.ID == "" {
+				jsonErr(cra.w, http.StatusUnprocessableEntity, fmt.Sprintf("MCP server %q is not configured", server.ID))
+				return true
+			}
+			if err := config.ValidateAgentMCPServerBinding(config.AgentMCPServerBinding{ID: server.ID, Tools: server.Tools, ToolsSpecified: server.ToolsSpecified}); err != nil {
+				jsonErr(cra.w, http.StatusUnprocessableEntity, err.Error())
+				return true
+			}
+		}
+	}
 	// ADR-037: delegation_policy is retired from the wire entirely — the
 	// per-workspace delegation graph (Team tab) is the sole delegation
 	// mechanism. There is nothing left to map/validate/persist here.
@@ -626,16 +738,29 @@ func (cra *restAPICreateAgent) buildToolConfig() bool {
 			builtin.Policies[k] = config.ToolPolicy(v)
 		}
 		cra.ac.Tools = &config.AgentToolsCfg{Builtin: builtin}
-		if len(cra.toolsCfgIn.MCPServers) > 0 {
+		if cra.toolsCfgIn.MCPSpecified {
 			servers := make([]config.AgentMCPServerBinding, 0, len(cra.toolsCfgIn.MCPServers))
 			for _, s := range cra.toolsCfgIn.MCPServers {
-				servers = append(servers, config.AgentMCPServerBinding{ID: s.ID, Tools: s.Tools})
+				servers = append(servers, config.AgentMCPServerBinding{ID: s.ID, Tools: s.Tools, ToolsSpecified: s.ToolsSpecified})
 			}
 			cra.ac.Tools.MCP = config.AgentMCPToolsCfg{Servers: servers}
 		}
 	} else {
 		// No caller-supplied tools config: use the full base config.
 		cra.ac.Tools = baseCfg
+	}
+	if cra.policyChanges != nil {
+		updated, err := agentmutation.ApplyToolPolicyChanges(cra.ac.Tools.Builtin.Policies, *cra.policyChanges, buildKnownBuiltinToolNames())
+		if err != nil {
+			jsonErr(cra.w, http.StatusBadRequest, err.Error())
+			return true
+		}
+		cra.ac.Tools.Builtin.Policies = updated
+	}
+	for name := range buildKnownBuiltinToolNames() {
+		if _, exists := cra.ac.Tools.Builtin.Policies[name]; !exists {
+			cra.ac.Tools.Builtin.Policies[name] = config.ToolPolicyDeny
+		}
 	}
 	return false
 }
@@ -680,8 +805,10 @@ func (cra *restAPICreateAgent) persistAgent() bool {
 		// a nil error here means ac is durably confirmed on disk before this
 		// handler ever reports success to the caller.
 		func(m map[string]any) error {
-			if err := agentstore.New(cra.a.homePath).Create(cra.ac.ID, &cra.ac); err != nil {
-				return fmt.Errorf("create agent entity record: %w", err)
+			result, err := agentstore.New(cra.a.homePath).CreateState(cra.ac.ID, &cra.ac, cra.createSoulContent)
+			cra.mutationResult = result
+			if err != nil {
+				return &configurationMutationError{Result: result, Err: fmt.Errorf("create agent state: %w", err)}
 			}
 			return nil
 		},
@@ -689,39 +816,6 @@ func (cra *restAPICreateAgent) persistAgent() bool {
 	); !ok {
 		return true
 	}
-	return false
-}
-
-// writeSoul writes the agent soul and captures the default model for the response.
-func (cra *restAPICreateAgent) writeSoul() bool {
-	// Persist the create-time soul to SOUL.md. createAgent previously
-	// write-dropped req.Soul: the contract accepted it, the FE sent it, but
-	// nothing ever landed on disk — and a "draft" agent created without a
-	// soul stayed in the draft state forever on the soul-empty path. Write
-	// it here, mirroring the workspace-resolution + WriteFileAtomic pattern
-	// used by updateAgent. Trimming is fine; this overwrites any prior
-	// SOUL.md (create is the only write gate at this point, so a re-run is
-	// idempotent against itself). soul is required on every variant (schema
-	// minLength:1, enforced again above), so this is always non-empty in
-	// practice — the guard stays as defense-in-depth.
-
-	if cra.soul != "" {
-		cra.createSoulContent = strings.TrimSpace(cra.soul)
-		workspace, wsErr := agentWorkspacePath(cra.a.agentLoop.GetConfig(), cra.ac.ID, cra.ac.Home, cra.a.homePath)
-		if wsErr != nil {
-			slog.Error("rest: agentWorkspacePath for create", "agent_id", cra.ac.ID, "error", wsErr)
-			jsonErr(cra.w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
-			return true
-		}
-		soulPath := filepath.Join(workspace, "SOUL.md")
-		if err := fileutil.WriteFileAtomic(soulPath, []byte(cra.createSoulContent), 0o600); err != nil {
-			slog.Error("rest: write SOUL.md for new agent", "agent_id", cra.ac.ID, "error", err)
-			jsonErr(cra.w, http.StatusInternalServerError, fmt.Sprintf("could not write SOUL.md: %v", err))
-			return true
-		}
-	}
-	// Capture the default model name BEFORE the fast upsert to avoid a race
-	// between it (which may swap the live config) and the read below.
 	cra.defaultModelName = cra.a.agentLoop.GetConfig().Agents.Defaults.DefaultModel.Model
 	return false
 }
@@ -769,6 +863,7 @@ func (cra *restAPICreateAgent) publishResponse() {
 	// agent kind the caller actually created (Main/Subagent/subagent_3p on the wire).
 	ag.Type = coreagent.ToWireType(cra.ac)
 	ag.Locked = cra.ac.Locked
+	applyAgentEditableFields(&ag, cra.ac)
 	applyAgentOverrides(&ag, &cra.ac)
 	ag.Model = &respModel
 	setAgentModelProvider(&ag, cra.ac.Model)
@@ -782,8 +877,17 @@ func (cra *restAPICreateAgent) publishResponse() {
 		ag.Skills = &skillsResp
 	}
 	setAgentExecutorResponse(&ag, cra.ac.Subagents)
+	ag.Revision = cra.mutationResult.Revision
+	persistence := gen.AgentPersistenceStatusComplete
+	ag.PersistenceStatus = &persistence
+	activation := gen.AgentActivationStatusActive
 	if createReloadWarning != "" {
 		ag.Warning = &createReloadWarning
+		activation = gen.AgentActivationStatusFailed
+		ag.Message = &createReloadWarning
 	}
+	ag.ActivationStatus = &activation
+	changed := []string{"name", "type", "soul"}
+	ag.ChangedFields = &changed
 	jsonCreated(cra.w, ag)
 }

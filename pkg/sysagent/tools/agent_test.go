@@ -219,8 +219,9 @@ func TestAgentDelete_RequiresConfirm(t *testing.T) {
 
 	// With confirm=true — must succeed and remove agent.
 	resultConfirmed := tool.Execute(context.Background(), map[string]any{
-		"id":      "my-agent",
-		"confirm": true,
+		"id":       "my-agent",
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, "my-agent"),
 	})
 	if resultConfirmed.IsError {
 		t.Fatalf("expected success with confirm=true, got error: %s", resultConfirmed.ForLLM)
@@ -351,8 +352,9 @@ func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 		t.Fatalf("test setup: create agent entity record: %v", err)
 	}
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "locked-core",
-		"confirm": true,
+		"id":       "locked-core",
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, "locked-core"),
 	})
 	if !result.IsError {
 		t.Fatal("expected error when deleting locked agent, got success")
@@ -1196,8 +1198,9 @@ func TestAgentDelete_ImmediatelyUnroutableAndUnlisted_NoRestart(t *testing.T) {
 
 	// Delete the agent — the fix under test.
 	deleteResult := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      agentID,
-		"confirm": true,
+		"id":       agentID,
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, agentID),
 	})
 	if deleteResult.IsError {
 		t.Fatalf("delete_agent failed: %s", deleteResult.ForLLM)

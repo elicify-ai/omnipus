@@ -34,8 +34,9 @@ func TestAgentDelete_RefusesDefaultAgent(t *testing.T) {
 	deps.GetCfg().Agents.Defaults.DefaultAgentID = "default-agent"
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "default-agent",
-		"confirm": true,
+		"id":       "default-agent",
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, "default-agent"),
 	})
 	if !result.IsError {
 		t.Fatal("expected error when deleting the configured default agent, got success")
@@ -83,8 +84,9 @@ func TestAgentDelete_CascadeDeletesSoleOwnedSessionAndUploads(t *testing.T) {
 	}
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "victim",
-		"confirm": true,
+		"id":       "victim",
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, "victim"),
 	})
 	if result.IsError {
 		t.Fatalf("delete failed: %s", result.ForLLM)
@@ -140,8 +142,9 @@ func TestAgentDelete_PreservesSharedSession(t *testing.T) {
 	}
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "victim",
-		"confirm": true,
+		"id":       "victim",
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, "victim"),
 	})
 	if result.IsError {
 		t.Fatalf("delete failed: %s", result.ForLLM)
@@ -202,8 +205,9 @@ func TestAgentDelete_UnassignsTasksButPreservesCreatedByAttribution(t *testing.T
 	writeTask(createdTaskID, map[string]any{"created_by_agent_id": "victim"})
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "victim",
-		"confirm": true,
+		"id":       "victim",
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, "victim"),
 	})
 	if result.IsError {
 		t.Fatalf("delete failed: %s", result.ForLLM)
@@ -273,8 +277,9 @@ func TestAgentDelete_CleansWorkspaceCoreTeamAndDelegationEdges(t *testing.T) {
 	]`)
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "victim",
-		"confirm": true,
+		"id":       "victim",
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, "victim"),
 	})
 	if result.IsError {
 		t.Fatalf("delete failed: %s", result.ForLLM)
@@ -375,6 +380,7 @@ func TestAgentDelete_StoreDeleteFailure_NoDestructiveCascade(t *testing.T) {
 	// Force store.Delete("victim") to fail: replace the entity's data file
 	// with a non-empty directory so the underlying os.Remove fails with
 	// ENOTEMPTY regardless of the running user's uid.
+	revision := currentAgentRevision(t, deps, "victim")
 	entityPath := filepath.Join(home, "entities", "agents", "victim.json")
 	if err := os.Remove(entityPath); err != nil {
 		t.Fatalf("test setup: remove entity file: %v", err)
@@ -387,8 +393,9 @@ func TestAgentDelete_StoreDeleteFailure_NoDestructiveCascade(t *testing.T) {
 	}
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "victim",
-		"confirm": true,
+		"id":       "victim",
+		"confirm":  true,
+		"revision": revision,
 	})
 	if !result.IsError {
 		t.Fatalf("expected error when store.Delete fails, got success: %s", result.ForLLM)
@@ -447,8 +454,9 @@ func TestAgentDelete_RefusesAgentOwningActivePlan(t *testing.T) {
 	deps.PlanStore = planStore
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "plan-owner",
-		"confirm": true,
+		"id":       "plan-owner",
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, "plan-owner"),
 	})
 	if !result.IsError {
 		t.Fatalf("expected error when deleting an agent that owns an active plan, got success: %s", result.ForLLM)
@@ -495,8 +503,9 @@ func TestAgentDelete_UnassignsWorkflowStatusTaskReference(t *testing.T) {
 	}
 
 	result := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "victim",
-		"confirm": true,
+		"id":       "victim",
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, "victim"),
 	})
 	if result.IsError {
 		t.Fatalf("delete failed: %s", result.ForLLM)

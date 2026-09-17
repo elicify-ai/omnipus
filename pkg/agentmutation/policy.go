@@ -46,6 +46,27 @@ var ordinaryBuiltins = map[string]struct{}{
 	"mia": {}, "jim": {}, "ava": {}, "admin": {}, "planner": {}, "researcher": {}, "worker": {},
 }
 
+type FieldDescriptor struct {
+	Name     string
+	Editable bool
+	Reason   string
+}
+
+var describedFields = []string{"name", "description", "color", "icon", "soul", "skills", "mcp_servers", "tool_policy_changes", "model", "provider", "fallback_models", "context_window_override", "model_params", "max_tool_iterations", "memory_enabled", "default", "voice", "shell_policy", "type"}
+
+func FieldDescriptors(agent config.AgentConfig) []FieldDescriptor {
+	out := make([]FieldDescriptor, 0, len(describedFields))
+	for _, field := range describedFields {
+		err := ValidateFields(agent, []string{field})
+		descriptor := FieldDescriptor{Name: field, Editable: err == nil}
+		if err != nil {
+			descriptor.Reason = err.Error()
+		}
+		out = append(out, descriptor)
+	}
+	return out
+}
+
 func ValidateFields(agent config.AgentConfig, supplied []string) error {
 	var invalid []string
 	for _, field := range supplied {

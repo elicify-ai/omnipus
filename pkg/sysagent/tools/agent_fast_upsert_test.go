@@ -321,8 +321,9 @@ func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
 	reloadCalls.Store(0)
 
 	deleteResult := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      agentID,
-		"confirm": true,
+		"id":       agentID,
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, agentID),
 	})
 	if deleteResult.IsError {
 		t.Fatalf("delete_agent failed: %s", deleteResult.ForLLM)

@@ -390,7 +390,8 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 	}
 
 	ac.finalID = ac.id
-	if err := agentstore.New(omnipusHome).Create(ac.id, &ac.newAgent); err != nil {
+	mutation, err := agentstore.New(omnipusHome).CreateState(ac.id, &ac.newAgent, ac.soul)
+	if err != nil {
 		if errors.Is(err, entity.ErrAlreadyExists) {
 			return tools.ErrorResult(errorJSON(
 				"AGENT_ALREADY_EXISTS",
@@ -398,7 +399,7 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 				"Use update_agent to modify the existing agent or choose a different name",
 			)), true
 		}
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), "Check disk space and permissions")), true
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", fmt.Sprintf("persistence=%s stage=%s revision=%s", mutation.PersistenceStatus, mutation.ErrorStage, mutation.Revision), "Read the agent state before retrying")), true
 	}
 
 	// Create agent workspace and write personality files.
@@ -409,12 +410,6 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 			"Check disk space and permissions")), true
 	}
 
-	// Write SOUL.md — this is the agent's personality and is mandatory.
-	if err := os.WriteFile(wsPath+"/SOUL.md", []byte(ac.soul), 0o644); err != nil {
-		return tools.ErrorResult(errorJSON("WRITE_ERROR",
-			"could not write SOUL.md: "+err.Error(),
-			"Check disk space and permissions")), true
-	}
 	// Write HEARTBEAT.md if provided.
 	if hb, ok := ac.args["heartbeat"].(string); ok && strings.TrimSpace(hb) != "" {
 		if err := os.WriteFile(wsPath+"/HEARTBEAT.md", []byte(hb), 0o644); err != nil {

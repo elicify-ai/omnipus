@@ -216,8 +216,9 @@ func TestAgentDelete_ReloadFuncFailure_StillSucceeds_WithPublishWarning(t *testi
 	deleteDeps.Home = createDeps.Home
 
 	result := systools.NewAgentDeleteTool(deleteDeps).Execute(context.Background(), map[string]any{
-		"id":      id,
-		"confirm": true,
+		"id":       id,
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deleteDeps, id),
 	})
 	if result.IsError {
 		t.Fatalf("expected success (entity deleted) even though hot-reload failed, got error: %s", result.ForLLM)

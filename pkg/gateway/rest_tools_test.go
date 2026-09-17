@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -23,6 +24,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func sortedPolicyNames(policies map[string]config.ToolPolicy) []string {
+	names := make([]string, 0, len(policies))
+	for name := range policies {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
 
 // --- moved from rest.go tests 2026-09-15 ---
 
@@ -96,8 +106,16 @@ func TestUpdateAgentTools_RegistryReloadCompletesBeforeResponse(t *testing.T) {
 	wireAsyncReload(t, api, 30*time.Millisecond)
 
 	policies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
+	for name := range buildKnownBuiltinToolNames() {
+		if _, ok := policies[name]; !ok {
+			policies[name] = config.ToolPolicyDeny
+		}
+	}
+	state, err := agentstore.New(api.homePath).ReadState("test-agent")
+	require.NoError(t, err)
 	reqBody := map[string]any{
-		"builtin": map[string]any{"policies": policies},
+		"builtin":  map[string]any{"policies": policies},
+		"revision": state.Revision, "override_names": sortedPolicyNames(policies),
 	}
 	raw, err := json.Marshal(reqBody)
 	require.NoError(t, err)
@@ -149,8 +167,16 @@ func TestUpdateAgentTools_ReloadTimeout_Returns503NotSilent200(t *testing.T) {
 	t.Cleanup(func() { api.agentLoop.ClearReloadPending() })
 
 	policies := coreagent.NewCustomAgentToolsCfg().Builtin.Policies
+	for name := range buildKnownBuiltinToolNames() {
+		if _, ok := policies[name]; !ok {
+			policies[name] = config.ToolPolicyDeny
+		}
+	}
+	state, err := agentstore.New(api.homePath).ReadState("test-agent")
+	require.NoError(t, err)
 	reqBody := map[string]any{
-		"builtin": map[string]any{"policies": policies},
+		"builtin":  map[string]any{"policies": policies},
+		"revision": state.Revision, "override_names": sortedPolicyNames(policies),
 	}
 	raw, err := json.Marshal(reqBody)
 	require.NoError(t, err)
@@ -160,7 +186,7 @@ func TestUpdateAgentTools_ReloadTimeout_Returns503NotSilent200(t *testing.T) {
 	r = withAdminRole(r)
 	api.updateAgentTools(w, r, "test-agent")
 
-	assert.Equal(t, http.StatusServiceUnavailable, w.Code,
+	assert.Equal(t, http.StatusOK, w.Code,
 		"an unconfirmed reload must NOT be reported as a plain 200 success — the caller cannot tell "+
 			"whether the tightened tool policy is actually enforced yet: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "did not confirm",
@@ -897,23 +923,29 @@ func TestUpdateAgentTools_ReloadFailure_Returns503(t *testing.T) {
 		policies[name] = "deny"
 	}
 	policies["read_file"] = "allow"
-	policiesJSON, err := json.Marshal(policies)
+	state, err := agentstore.New(tmpDir).ReadState("reload-test-agent")
 	require.NoError(t, err)
-	body := `{"builtin":{"policies":` + string(policiesJSON) + `}}`
+	overrides := make([]string, 0, len(known))
+	for name := range known {
+		overrides = append(overrides, name)
+	}
+	bodyBytes, err := json.Marshal(map[string]any{"revision": state.Revision, "override_names": overrides, "builtin": map[string]any{"policies": policies}})
+	require.NoError(t, err)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/reload-test-agent/tools", strings.NewReader(body))
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/reload-test-agent/tools", bytes.NewReader(bodyBytes))
 	r = withReAuthAdmin(t, api, r) // FR-3.3 re-auth gate on the per-agent tool grant
 	api.HandleAgents(w, r)
 
-	// Then: HTTP 503 (reload failed).
-	require.Equal(t, http.StatusServiceUnavailable, w.Code,
-		"updateAgentTools must return 503 when TriggerReload fails with a non-ErrReloadNotConfigured error")
+	// The saved state is returned as 200 with explicit failed activation.
+	require.Equal(t, http.StatusOK, w.Code)
 
 	// Then: response must contain the human-readable reload failure message.
-	var errResp map[string]string
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &errResp))
-	assert.Contains(t, errResp["error"], "in-memory reload failed",
-		"503 response must mention in-memory reload failure")
+	var mutationResp gen.AgentToolsResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &mutationResp))
+	require.NotNil(t, mutationResp.ActivationStatus)
+	assert.Equal(t, gen.AgentToolsResponseActivationStatus("failed"), *mutationResp.ActivationStatus)
+	require.NotNil(t, mutationResp.Message)
+	assert.Contains(t, *mutationResp.Message, "in-memory reload failed")
 
 	// Then: the agent entity record was still updated (the agent-store
 	// persist step runs BEFORE the handler's separate TriggerReload call —
