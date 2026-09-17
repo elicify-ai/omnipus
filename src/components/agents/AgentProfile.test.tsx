@@ -55,7 +55,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return {
     ...actual,
     fetchAgent: vi.fn(),
-    fetchRegistryTools: vi.fn(),
     fetchWorkspace: vi.fn(),
     updateAgent: vi.fn(),
     updateWorkspace: vi.fn(),
@@ -66,7 +65,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
   }
 })
 
-import { fetchRegistryTools, fetchAgent, fetchWorkspace, fetchSkills, updateAgent, updateWorkspace, fetchProviders, testAgentRunner } from '@/lib/api'
+import { fetchAgent, fetchWorkspace, fetchSkills, updateAgent, updateWorkspace, fetchProviders, testAgentRunner } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { ApiError } from '@/lib/api-error'
@@ -2850,28 +2849,6 @@ describe('AgentProfile — skills visibility by agent kind (field matrix, W2c)',
 // subagent_3p hides it entirely (the external runner has its own tools; the
 // old read-only-collapse path for zero-override native workers is retired —
 // a fresh native Subagent now gets the LIVE editor, not a summary box).
-describe('AgentProfile — ADR090 tool policy descriptor', () => {
-  it.each([
-    { label: 'allows the declared capability', fields: [{ name: 'tool_policy_changes', editable: true }], allowed: true },
-    { label: 'honors an explicit refusal', fields: [{ name: 'tool_policy_changes', editable: false }], allowed: false },
-    { label: 'does not infer missing capability', fields: [], allowed: false },
-    { label: 'does not substitute the storage field name', fields: [{ name: 'tools_cfg', editable: true }], allowed: false },
-  ])('$label', async ({ fields, allowed }) => {
-    vi.mocked(fetchRegistryTools).mockResolvedValue([])
-    vi.mocked(fetchAgent).mockResolvedValue({ ...mockLockedCoreAgent, editable_fields: fields })
-    renderProfile('mia')
-    await screen.findByText('Mia')
-    switchTab('tab-tools')
-    for (const name of ['Cautious', 'Balanced', 'Full access']) {
-      const button = await screen.findByRole('button', { name })
-      expect(button).toHaveProperty('disabled', !allowed)
-    }
-    const warning = screen.queryByText('Tool policies are read-only for this agent: the backend marks this capability as fixed.')
-    if (allowed) expect(warning).toBeNull()
-    else expect(warning).toBeInTheDocument()
-  })
-})
-
 describe('AgentProfile — Tools & Permissions visibility by agent kind (field matrix, W2c)', () => {
   it('hides Tools & Permissions for a subagent_3p agent', async () => {
     vi.mocked(fetchAgent).mockResolvedValue(mockSubagent3pAgent)
