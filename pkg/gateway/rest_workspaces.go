@@ -914,6 +914,7 @@ type restAPIHandleWorkspacePut struct {
 	delegationChanged       bool
 	rollbackCreatedSessions func()
 	changed                 bool
+	changedFields           []string
 	coreTeamChanged         bool
 }
 
@@ -1290,35 +1291,42 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 	if rw.req.Name != nil && *rw.req.Name != rw.ws.Name {
 		rw.ws.Name = *rw.req.Name
 		rw.changed = true
+		rw.changedFields = append(rw.changedFields, "name")
 	}
 	if rw.req.Description != nil && *rw.req.Description != rw.ws.Description {
 		rw.ws.Description = *rw.req.Description
 		rw.changed = true
+		rw.changedFields = append(rw.changedFields, "description")
 	}
 	if rw.req.CoreTeam != nil {
 		deduped := deduplicateStrings(*rw.req.CoreTeam)
 		if !slices.Equal(deduped, rw.ws.CoreTeam) {
 			rw.ws.CoreTeam = deduped
 			rw.changed = true
+			rw.changedFields = append(rw.changedFields, "core_team")
 		}
 	}
 	if rw.req.Status != nil && string(*rw.req.Status) != rw.ws.Status {
 		rw.ws.Status = string(*rw.req.Status)
 		rw.changed = true
+		rw.changedFields = append(rw.changedFields, "status")
 	}
 	if rw.req.Pinned != nil && *rw.req.Pinned != rw.ws.Pinned {
 		rw.ws.Pinned = *rw.req.Pinned
 		rw.changed = true
+		rw.changedFields = append(rw.changedFields, "pinned")
 	}
 	if rw.req.PinOrder != nil && *rw.req.PinOrder != rw.ws.PinOrder {
 		rw.ws.PinOrder = *rw.req.PinOrder
 		rw.changed = true
+		rw.changedFields = append(rw.changedFields, "pin_order")
 	}
 
 	// FR-022: merge incoming member_configs (when present) and GC stale entries
 	// (agents removed from CoreTeam) so the stored map stays consistent.
 	rw.coreTeamChanged = rw.req.CoreTeam != nil
 	if rw.mcPresent {
+		rw.changedFields = append(rw.changedFields, "member_configs")
 		if rw.ws.MemberConfigs == nil {
 			rw.ws.MemberConfigs = make(map[string]workspace.MemberConfig)
 		}
@@ -1398,6 +1406,7 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 		return
 	}
 	if rw.delegationChanged {
+		rw.changedFields = append(rw.changedFields, "delegation")
 		if err := workspace.SaveDelegation(rw.a.homePath, rw.id, rw.delegation); err != nil {
 			slog.Error("rest: update workspace: delegation write", "id", rw.id, "error", err)
 			revision, _ := workspace.RevisionForState(rw.ws, rw.state.Delegation)
@@ -1406,7 +1415,7 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 			writeJSON(rw.w, http.StatusInternalServerError, gen.ConfigurationMutationState{
 				PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatusPartial,
 				ActivationStatus:  gen.ConfigurationMutationStateActivationStatusNotAttempted,
-				Revision:          revision, ChangedFields: []string{"workspace"}, ErrorStage: &stage, Message: &message,
+				Revision:          revision, ChangedFields: append([]string(nil), rw.changedFields[:len(rw.changedFields)-1]...), ErrorStage: &stage, Message: &message,
 			})
 			return
 		}
@@ -1430,7 +1439,9 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 			slog.Warn("audit write failed", "event", "workspace.update", "id", rw.id, "error", err)
 		}
 	}
-	jsonOK(rw.w, workspaceToWire(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id)))
+	wire := workspaceToWire(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id))
+	wire.ChangedFields = &rw.changedFields
+	jsonOK(rw.w, wire)
 }
 
 // restAPIHandleWorkspaceDelete carries the shared state of handleWorkspaceDelete across its stages.
