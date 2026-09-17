@@ -208,11 +208,16 @@ func InstallEmbeddedSkills(layout Layout) error {
 }
 
 func VerifyAssets(prefix string, assets []Asset) error {
+	root, err := os.OpenRoot(prefix)
+	if err != nil {
+		return fmt.Errorf("open managed document prefix: %w", err)
+	}
+	defer root.Close()
 	for _, asset := range assets {
 		if filepath.IsAbs(asset.Path) || strings.HasPrefix(filepath.Clean(asset.Path), "..") {
 			return fmt.Errorf("asset path escapes prefix: %s", asset.Path)
 		}
-		data, err := os.ReadFile(filepath.Join(prefix, asset.Path))
+		data, err := root.ReadFile(filepath.Clean(asset.Path))
 		if err != nil {
 			return fmt.Errorf("asset %s: %w", asset.Path, err)
 		}

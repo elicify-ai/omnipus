@@ -41,6 +41,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -606,7 +607,7 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		if auditResult := t.emitAuditOrDeny(ctx, command, t.workingDir); auditResult != nil {
 			return auditResult
 		}
-		return t.finalizeDocumentRuntime()
+		return t.finalizeDocumentRuntime(ctx)
 	}
 
 	runInBackground := getBoolArg(args, "run_in_background")
@@ -707,16 +708,21 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	return t.sweepAfterRun(ctx, command, cwd, baseDir, started, result)
 }
 
-func (t *ExecTool) finalizeDocumentRuntime() *ToolResult {
+const maxDocumentRuntimeManifestBytes = 1 << 20
+
+func (t *ExecTool) finalizeDocumentRuntime(ctx context.Context) *ToolResult {
 	if t.documentRuntime == nil {
 		return ErrorResult("document runtime is not configured")
 	}
 	if !t.documentAdmin {
 		return ErrorResult("document runtime setup is restricted to Admin")
 	}
-	data, err := os.ReadFile(t.documentRuntime.Manifest)
+	data, err := t.readDocumentRuntimeManifest(ctx)
 	if err != nil {
-		return ErrorResult(fmt.Sprintf("document runtime manifest unavailable: %v", err))
+		if strings.Contains(err.Error(), "exceeds") {
+			return ErrorResult(fmt.Sprintf("document runtime manifest unavailable: %v", err))
+		}
+		return ErrorResult("document runtime manifest unavailable: access denied or invalid managed manifest")
 	}
 	var manifest documentruntime.Manifest
 	if err := json.Unmarshal(data, &manifest); err != nil {
@@ -726,6 +732,42 @@ func (t *ExecTool) finalizeDocumentRuntime() *ToolResult {
 		return ErrorResult(fmt.Sprintf("document runtime setup incomplete: %v", err))
 	}
 	return SilentResult(`{"ok":true,"component":"document_runtime","status":"ready"}`)
+}
+
+func (t *ExecTool) readDocumentRuntimeManifest(ctx context.Context) ([]byte, error) {
+	layout := *t.documentRuntime
+	wantManifest := filepath.Join(layout.Prefix, "manifest.json")
+	if !filepath.IsAbs(layout.Prefix) || filepath.Clean(layout.Manifest) != filepath.Clean(wantManifest) {
+		return nil, errors.New("document runtime manifest is outside the managed prefix")
+	}
+	policy, err := ResolveTurnFSPolicy(ctx, t.workingDir, t.restrictToWorkspace)
+	if err != nil {
+		return nil, err
+	}
+	// The versioned runtime prefix is a first-party Admin-managed root. Scope
+	// this one read to that root while retaining the turn's carve-outs and
+	// identity facts; the anchored handle rejects symlink substitution.
+	policy.WorkDir = layout.Prefix
+	policy.Scope = fspolicy.FSScopeConfined
+	policy.ReadConfined = true
+	handle, err := ResolvePath(ctx, policy, t.Name(), "", FSOpRead, layout.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	defer handle.Close()
+	file, err := handle.OpenRegularNonBlocking()
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxDocumentRuntimeManifestBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxDocumentRuntimeManifestBytes {
+		return nil, fmt.Errorf("document runtime manifest exceeds %d bytes", maxDocumentRuntimeManifestBytes)
+	}
+	return data, nil
 }
 
 // sweepAfterRun runs the post-command escaping-symlink sweep (D-14, see

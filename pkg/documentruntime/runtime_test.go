@@ -95,6 +95,26 @@ func TestInstallProbeSkillsAssetsAndSandboxRoles(t *testing.T) {
 	}
 }
 
+func TestVerifyAssetsRejectsSymlinkOutsideManagedPrefix(t *testing.T) {
+	prefix := t.TempDir()
+	external := filepath.Join(t.TempDir(), "secret.txt")
+	secret := []byte("outside managed runtime")
+	if err := os.WriteFile(external, secret, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, filepath.Join(prefix, "asset.txt")); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(secret)
+	err := VerifyAssets(prefix, []Asset{{Path: "asset.txt", SHA256: hex.EncodeToString(sum[:])}})
+	if err == nil {
+		t.Fatal("outside-prefix symlink was accepted as a managed asset")
+	}
+	if strings.Contains(err.Error(), external) {
+		t.Fatalf("error leaked outside asset path: %v", err)
+	}
+}
+
 func TestProvisionFirstPartyIsProbeableBeforeAdminDependencies(t *testing.T) {
 	layout, _ := ResolveLayout(t.TempDir(), ManifestRevision, "mia")
 	manifest, err := ProvisionFirstParty(layout)

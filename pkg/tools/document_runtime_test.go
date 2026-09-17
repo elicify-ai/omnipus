@@ -115,6 +115,67 @@ func TestBashDocumentRuntimeFinalizeCommandIsAdminOnlyAndReportsIncompleteSetup(
 	}
 }
 
+func TestBashDocumentRuntimeFinalizeRejectsManifestSymlinkOutsideManagedPrefix(t *testing.T) {
+	workspace := t.TempDir()
+	layout, err := documentruntime.ResolveLayout(filepath.Join(workspace, "data"), documentruntime.ManifestRevision, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = documentruntime.ProvisionFirstParty(layout); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(t.TempDir(), "manifest.json")
+	manifestBytes, err := os.ReadFile(layout.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(external, manifestBytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(layout.Manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(external, layout.Manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	admin, err := NewExecToolWithDeps(workspace, true, nil, ExecToolDeps{GodMode: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin.SetDocumentRuntime(layout, true)
+	result := admin.Execute(bashCtx(t), map[string]any{"command": documentruntime.FinalizeCommand})
+	if !result.IsError || !strings.Contains(result.ForLLM, "manifest unavailable") {
+		t.Fatalf("external manifest symlink result=%+v", result)
+	}
+	if strings.Contains(result.ForLLM, external) {
+		t.Fatalf("error leaked outside manifest path: %q", result.ForLLM)
+	}
+}
+
+func TestBashDocumentRuntimeFinalizeRejectsOversizedManifest(t *testing.T) {
+	workspace := t.TempDir()
+	layout, err := documentruntime.ResolveLayout(filepath.Join(workspace, "data"), documentruntime.ManifestRevision, "admin")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(filepath.Dir(layout.Manifest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(layout.Manifest, []byte(`{"revision":"`+strings.Repeat("a", 2<<20)+`"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	admin, err := NewExecToolWithDeps(workspace, true, nil, ExecToolDeps{GodMode: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin.SetDocumentRuntime(layout, true)
+	result := admin.Execute(bashCtx(t), map[string]any{"command": documentruntime.FinalizeCommand})
+	if !result.IsError || !strings.Contains(result.ForLLM, "exceeds") {
+		t.Fatalf("oversized manifest result=%+v", result)
+	}
+}
+
 func TestBashDescriptionPublishesExactAdminFinalizeCommand(t *testing.T) {
 	tool, err := NewExecToolWithDeps(t.TempDir(), true, nil, ExecToolDeps{})
 	if err != nil {
