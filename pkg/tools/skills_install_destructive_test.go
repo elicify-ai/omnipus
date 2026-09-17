@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,4 +154,36 @@ func TestInstallSkillToolReportsSavedStateWhenBackupCleanupIsIncomplete(t *testi
 	require.Equal(t, "complete", payload["persistence_status"])
 	require.Equal(t, "active", payload["activation_status"])
 	require.Contains(t, payload["warning"], "cleanup is incomplete")
+}
+
+func TestInstallSkillToolReportsPartialStateWhenPreviousPackageCannotBeRestored(t *testing.T) {
+	globalSkills := t.TempDir()
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(fakeSkillRegistry{})
+	tool := NewInstallSkillTool(registryMgr, globalSkills)
+	original := publishInstalledSkill
+	publishInstalledSkill = func(string, string, string, string) (skills.PublishOutcome, error) {
+		return skills.PublishOutcome{
+			PersistenceStatus: skills.PersistencePartial,
+			ActivationStatus:  skills.ActivationNotAttempted,
+			ChangedFields:     []string{"installed"},
+			ErrorStage:        skills.PublicationErrorStageRestorePrevious,
+			Message:           "replacement publication failed and the previous package could not be restored; no live package is available",
+		}, errors.New("private publish cause; private restore cause")
+	}
+	t.Cleanup(func() { publishInstalledSkill = original })
+
+	result := tool.Execute(context.Background(), map[string]any{"slug": "new-skill", "registry": "fake"})
+	require.True(t, result.IsError, "partial publication must remain an error")
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &payload), "result=%s", result.ForLLM)
+	require.Equal(t, map[string]any{
+		"activation_status":  "not_attempted",
+		"changed_fields":     []any{"installed"},
+		"error_stage":        "restore_previous",
+		"message":            "replacement publication failed and the previous package could not be restored; no live package is available",
+		"persistence_status": "partial",
+	}, payload)
+	require.NotContains(t, result.ForLLM, "private publish cause")
+	require.NotContains(t, result.ForLLM, "private restore cause")
 }

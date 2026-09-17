@@ -314,6 +314,23 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 			return ErrorResult(fmt.Sprintf("CONFLICT: skill %q changed after review; read it again before replacing it", slug))
 		}
 		logger.ErrorCF("tool", "Failed to publish downloaded skill", map[string]any{"tool": t.Name(), "skill": slug, "error": err.Error()})
+		if publish.PersistenceStatus.Valid() && publish.ActivationStatus.Valid() {
+			payload := map[string]any{
+				"persistence_status": publish.PersistenceStatus,
+				"activation_status":  publish.ActivationStatus,
+				"changed_fields":     publish.ChangedFields,
+				"error_stage":        publish.ErrorStage,
+				"message":            publish.Message,
+			}
+			if publish.Revision != "" {
+				payload["revision"] = publish.Revision
+			}
+			encoded, marshalErr := json.Marshal(payload)
+			if marshalErr != nil {
+				return ErrorResult("skill publication state could not be encoded; inspect installed skill state before retrying")
+			}
+			return ErrorResult(string(encoded))
+		}
 		return ErrorResult(fmt.Sprintf("downloaded %q but could not publish it; read installed skill state before retrying", slug))
 	}
 

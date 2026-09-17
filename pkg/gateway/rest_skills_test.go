@@ -523,6 +523,40 @@ func TestInstallSkillReturnsSavedStateWhenBackupCleanupIsIncomplete(t *testing.T
 	require.Contains(t, *skill.Message, "cleanup is incomplete")
 }
 
+func TestInstallSkillReturnsPartialStateWhenPreviousPackageCannotBeRestored(t *testing.T) {
+	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
+	api.skillRegistry = &fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0"}}
+	original := publishRESTSkill
+	publishRESTSkill = func(string, string, string, string) (skills.PublishOutcome, error) {
+		return skills.PublishOutcome{
+			PersistenceStatus: skills.PersistencePartial,
+			ActivationStatus:  skills.ActivationNotAttempted,
+			ChangedFields:     []string{"installed"},
+			ErrorStage:        skills.PublicationErrorStageRestorePrevious,
+			Message:           "replacement publication failed and the previous package could not be restored; no live package is available",
+		}, errors.New("private publish cause; private restore cause")
+	}
+	t.Cleanup(func() { publishRESTSkill = original })
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/skills/install", strings.NewReader(`{"slug":"cool-skill"}`))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	require.Equal(t, map[string]any{
+		"activation_status":  "not_attempted",
+		"changed_fields":     []any{"installed"},
+		"error_stage":        "restore_previous",
+		"message":            "replacement publication failed and the previous package could not be restored; no live package is available",
+		"persistence_status": "partial",
+	}, payload)
+	require.NotContains(t, w.Body.String(), "private publish cause")
+	require.NotContains(t, w.Body.String(), "private restore cause")
+}
+
 func TestInstallSkillFromAuthorizedMarkdownUpload(t *testing.T) {
 	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
 	uploadDir := filepath.Join(api.homePath, "uploads", "owner-session")

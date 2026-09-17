@@ -3547,6 +3547,15 @@ export interface components {
             error_stage?: string;
             message?: string;
         };
+        ConfigurationMutationFailureState: {
+            /** @description Present only when the current resource state has an addressable revision. Omitted when a failed publication left no live resource to read or revise. */
+            revision?: components["schemas"]["ConfigurationRevision"];
+            persistence_status: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields: string[];
+            error_stage: string;
+            message: string;
+        };
         AgentFieldDescriptor: {
             name: string;
             editable: boolean;
@@ -19716,6 +19725,15 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             409: components["responses"]["409Conflict"];
+            /** @description Publication failed after storage changed; reports the actual persisted state. Revision is omitted when no live package remains. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
             502: components["responses"]["502BadGateway"];
         };
     };
@@ -22958,6 +22976,7 @@ export type ConfigurationRevision = components["schemas"]["ConfigurationRevision
 export type ConfigurationPersistenceStatus = components["schemas"]["ConfigurationPersistenceStatus"];
 export type ConfigurationActivationStatus = components["schemas"]["ConfigurationActivationStatus"];
 export type ConfigurationMutationState = components["schemas"]["ConfigurationMutationState"];
+export type ConfigurationMutationFailureState = components["schemas"]["ConfigurationMutationFailureState"];
 export type AgentFieldDescriptor = components["schemas"]["AgentFieldDescriptor"];
 export type AgentMCPBinding = components["schemas"]["AgentMCPBinding"];
 export type ToolPolicyChanges = components["schemas"]["ToolPolicyChanges"];

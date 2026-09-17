@@ -186,21 +186,38 @@ func TestPublishStagedSkillReportsFailedRestoreWithoutClaimingPublication(t *tes
 	}
 	originalRename := renamePublishedSkill
 	renames := 0
+	publishErr := errors.New("publish rename refused")
+	restoreErr := errors.New("restore rename refused")
 	renamePublishedSkill = func(oldPath, newPath string) error {
 		renames++
 		if renames == 1 {
 			return os.Rename(oldPath, newPath)
 		}
-		return errors.New("rename refused")
+		if renames == 2 {
+			return publishErr
+		}
+		return restoreErr
 	}
 	t.Cleanup(func() { renamePublishedSkill = originalRename })
 
 	outcome, err := PublishStagedSkill(root, "package", stage, reviewed)
-	if err == nil || !strings.Contains(err.Error(), "restore failed") {
+	if err == nil || !errors.Is(err, publishErr) || !errors.Is(err, restoreErr) {
 		t.Fatalf("err=%v", err)
 	}
-	if outcome.Revision != "" || outcome.PersistenceStatus != "" || outcome.ActivationStatus != "" {
-		t.Fatalf("failed publication claimed saved state: %+v", outcome)
+	if outcome.Revision != "" {
+		t.Fatalf("unavailable live revision must be omitted: %+v", outcome)
+	}
+	if outcome.PersistenceStatus != "partial" || outcome.ActivationStatus != "not_attempted" {
+		t.Fatalf("failed restore must report partial/not_attempted: %+v", outcome)
+	}
+	if len(outcome.ChangedFields) != 1 || outcome.ChangedFields[0] != "installed" {
+		t.Fatalf("failed restore must identify the changed live package: %+v", outcome)
+	}
+	if outcome.ErrorStage != PublicationErrorStageRestorePrevious {
+		t.Fatalf("error stage=%q, want %q", outcome.ErrorStage, PublicationErrorStageRestorePrevious)
+	}
+	if outcome.Message != "replacement publication failed and the previous package could not be restored; no live package is available" {
+		t.Fatalf("unexpected safe message: %q", outcome.Message)
 	}
 }
 

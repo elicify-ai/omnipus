@@ -1595,6 +1595,48 @@ func (e ConfigurationActivationStatus) Valid() bool {
 	}
 }
 
+// Defines values for ConfigurationMutationFailureStateActivationStatus.
+const (
+	ConfigurationMutationFailureStateActivationStatusActive       ConfigurationMutationFailureStateActivationStatus = "active"
+	ConfigurationMutationFailureStateActivationStatusFailed       ConfigurationMutationFailureStateActivationStatus = "failed"
+	ConfigurationMutationFailureStateActivationStatusNotAttempted ConfigurationMutationFailureStateActivationStatus = "not_attempted"
+)
+
+// Valid indicates whether the value is a known member of the ConfigurationMutationFailureStateActivationStatus enum.
+func (e ConfigurationMutationFailureStateActivationStatus) Valid() bool {
+	switch e {
+	case ConfigurationMutationFailureStateActivationStatusActive:
+		return true
+	case ConfigurationMutationFailureStateActivationStatusFailed:
+		return true
+	case ConfigurationMutationFailureStateActivationStatusNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConfigurationMutationFailureStatePersistenceStatus.
+const (
+	ConfigurationMutationFailureStatePersistenceStatusComplete ConfigurationMutationFailureStatePersistenceStatus = "complete"
+	ConfigurationMutationFailureStatePersistenceStatusNone     ConfigurationMutationFailureStatePersistenceStatus = "none"
+	ConfigurationMutationFailureStatePersistenceStatusPartial  ConfigurationMutationFailureStatePersistenceStatus = "partial"
+)
+
+// Valid indicates whether the value is a known member of the ConfigurationMutationFailureStatePersistenceStatus enum.
+func (e ConfigurationMutationFailureStatePersistenceStatus) Valid() bool {
+	switch e {
+	case ConfigurationMutationFailureStatePersistenceStatusComplete:
+		return true
+	case ConfigurationMutationFailureStatePersistenceStatusNone:
+		return true
+	case ConfigurationMutationFailureStatePersistenceStatusPartial:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ConfigurationMutationStateActivationStatus.
 const (
 	ConfigurationMutationStateActivationStatusActive       ConfigurationMutationStateActivationStatus = "active"
@@ -12295,6 +12337,27 @@ type CliValidateResponseReason string
 
 // ConfigurationActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 type ConfigurationActivationStatus string
+
+// ConfigurationMutationFailureState defines model for ConfigurationMutationFailureState.
+type ConfigurationMutationFailureState struct {
+	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+	ActivationStatus ConfigurationMutationFailureStateActivationStatus `json:"activation_status"`
+	ChangedFields    []string                                          `json:"changed_fields"`
+	ErrorStage       string                                            `json:"error_stage"`
+	Message          string                                            `json:"message"`
+
+	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
+	PersistenceStatus ConfigurationMutationFailureStatePersistenceStatus `json:"persistence_status"`
+
+	// Revision Present only when the current resource state has an addressable revision. Omitted when a failed publication left no live resource to read or revise.
+	Revision *string `json:"revision,omitempty"`
+}
+
+// ConfigurationMutationFailureStateActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+type ConfigurationMutationFailureStateActivationStatus string
+
+// ConfigurationMutationFailureStatePersistenceStatus Whether all, some, or none of the requested resource components were saved.
+type ConfigurationMutationFailureStatePersistenceStatus string
 
 // ConfigurationMutationState defines model for ConfigurationMutationState.
 type ConfigurationMutationState struct {

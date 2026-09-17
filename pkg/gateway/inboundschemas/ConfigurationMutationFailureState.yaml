@@ -1,0 +1,20 @@
+type: object
+additionalProperties: false
+required: [persistence_status, activation_status, changed_fields, error_stage, message]
+properties:
+  revision:
+    allOf:
+      - $ref: './ConfigurationRevision.yaml'
+    description: Present only when the current resource state has an addressable revision. Omitted when a failed publication left no live resource to read or revise.
+  persistence_status:
+    $ref: './ConfigurationPersistenceStatus.yaml'
+  activation_status:
+    $ref: './ConfigurationActivationStatus.yaml'
+  changed_fields:
+    type: array
+    items:
+      type: string
+  error_stage:
+    type: string
+  message:
+    type: string

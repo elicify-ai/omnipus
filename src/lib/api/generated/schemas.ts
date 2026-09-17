@@ -12,6 +12,14 @@ type ConfigurationMutationState = {
 type ConfigurationRevision = string;
 type ConfigurationPersistenceStatus = "complete" | "partial" | "none";
 type ConfigurationActivationStatus = "active" | "failed" | "not_attempted";
+type ConfigurationMutationFailureState = {
+  revision?: ConfigurationRevision | undefined;
+  persistence_status: ConfigurationPersistenceStatus;
+  activation_status: ConfigurationActivationStatus;
+  changed_fields: Array<string>;
+  error_stage: string;
+  message: string;
+};
 type LoginResponse = {
   token: BearerToken;
   username: string;
@@ -3979,6 +3987,15 @@ export const SkillSearchResult = z.object({
   registry_name: z.string().optional(),
   owner_handle: z.string().optional(),
 });
+export const ConfigurationMutationFailureState: z.ZodType<ConfigurationMutationFailureState> =
+  z.object({
+    revision: ConfigurationRevision.optional(),
+    persistence_status: ConfigurationPersistenceStatus,
+    activation_status: ConfigurationActivationStatus,
+    changed_fields: z.array(z.string()),
+    error_stage: z.string(),
+    message: z.string(),
+  });
 export const SkillMarketplaceStatus = z.object({
   enabled: z.boolean(),
   registries: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
@@ -11895,6 +11912,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         status: 409,
         description: `Conflict — e.g. resource already exists.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Publication failed after storage changed; reports the actual persisted state. Revision is omitted when no live package remains.`,
+        schema: ConfigurationMutationFailureState,
       },
       {
         status: 502,

@@ -104,6 +104,8 @@ components:
       $ref: ./components/schemas/ConfigurationActivationStatus.yaml
     ConfigurationMutationState:
       $ref: ./components/schemas/ConfigurationMutationState.yaml
+    ConfigurationMutationFailureState:
+      $ref: ./components/schemas/ConfigurationMutationFailureState.yaml
     AgentFieldDescriptor:
       $ref: ./components/schemas/AgentFieldDescriptor.yaml
     AgentMCPBinding:
@@ -6130,6 +6132,12 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '500':
+          description: Publication failed after storage changed; reports the actual persisted state. Revision is omitted when no live package remains.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationFailureState'
         '502':
           $ref: '#/components/responses/502BadGateway'
   /skills/marketplace:

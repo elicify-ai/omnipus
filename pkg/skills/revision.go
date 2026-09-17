@@ -15,11 +15,37 @@ import (
 
 var ErrRevisionConflict = errors.New("skill revision conflict")
 
+type PersistenceStatus string
+type ActivationStatus string
+type PublicationErrorStage string
+
+const (
+	PersistenceComplete PersistenceStatus = "complete"
+	PersistenceNone     PersistenceStatus = "none"
+	PersistencePartial  PersistenceStatus = "partial"
+
+	ActivationActive       ActivationStatus = "active"
+	ActivationFailed       ActivationStatus = "failed"
+	ActivationNotAttempted ActivationStatus = "not_attempted"
+
+	PublicationErrorStageRestorePrevious PublicationErrorStage = "restore_previous"
+)
+
+func (s PersistenceStatus) Valid() bool {
+	return s == PersistenceComplete || s == PersistenceNone || s == PersistencePartial
+}
+
+func (s ActivationStatus) Valid() bool {
+	return s == ActivationActive || s == ActivationFailed || s == ActivationNotAttempted
+}
+
 type PublishOutcome struct {
 	Revision          string
-	PersistenceStatus string
-	ActivationStatus  string
+	PersistenceStatus PersistenceStatus
+	ActivationStatus  ActivationStatus
 	ChangedFields     []string
+	ErrorStage        PublicationErrorStage
+	Message           string
 	Warning           string
 }
 
@@ -236,18 +262,28 @@ func PublishStagedSkill(root, name, stagedDir, expectedRevision string) (Publish
 		if err := renamePublishedSkill(stagedDir, target); err != nil {
 			if exists {
 				if restoreErr := renamePublishedSkill(backup, target); restoreErr != nil {
-					return errors.New("publish failed and previous package restore failed")
+					outcome = PublishOutcome{
+						PersistenceStatus: PersistencePartial,
+						ActivationStatus:  ActivationNotAttempted,
+						ChangedFields:     []string{"installed"},
+						ErrorStage:        PublicationErrorStageRestorePrevious,
+						Message:           "replacement publication failed and the previous package could not be restored; no live package is available",
+					}
+					return errors.Join(
+						fmt.Errorf("publish staged skill: %w", err),
+						fmt.Errorf("restore previous skill: %w", restoreErr),
+					)
 				}
 			}
 			return fmt.Errorf("publish staged skill: %w", err)
 		}
 		if exists {
 			if err := removePublishedBackup(backup); err != nil {
-				outcome = PublishOutcome{Revision: next, PersistenceStatus: "complete", ActivationStatus: "active", ChangedFields: []string{"installed"}, Warning: "previous package cleanup is incomplete"}
+				outcome = PublishOutcome{Revision: next, PersistenceStatus: PersistenceComplete, ActivationStatus: ActivationActive, ChangedFields: []string{"installed"}, Warning: "previous package cleanup is incomplete"}
 				return nil
 			}
 		}
-		outcome = PublishOutcome{Revision: next, PersistenceStatus: "complete", ActivationStatus: "active", ChangedFields: []string{"installed"}}
+		outcome = PublishOutcome{Revision: next, PersistenceStatus: PersistenceComplete, ActivationStatus: ActivationActive, ChangedFields: []string{"installed"}}
 		return nil
 	})
 	return outcome, err

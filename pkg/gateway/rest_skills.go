@@ -501,7 +501,21 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 			jsonErr(w, http.StatusConflict, err.Error())
 		} else {
 			slog.Error("rest: publish skill", "skill", slug, "error", err)
-			jsonErr(w, http.StatusInternalServerError, "could not publish skill; inspect installed skill state before retrying")
+			if publish.PersistenceStatus.Valid() && publish.ActivationStatus.Valid() {
+				payload := gen.ConfigurationMutationFailureState{
+					PersistenceStatus: gen.ConfigurationMutationFailureStatePersistenceStatus(publish.PersistenceStatus),
+					ActivationStatus:  gen.ConfigurationMutationFailureStateActivationStatus(publish.ActivationStatus),
+					ChangedFields:     publish.ChangedFields,
+					ErrorStage:        string(publish.ErrorStage),
+					Message:           publish.Message,
+				}
+				if publish.Revision != "" {
+					payload.Revision = &publish.Revision
+				}
+				writeJSON(w, http.StatusInternalServerError, payload)
+			} else {
+				jsonErr(w, http.StatusInternalServerError, "could not publish skill; inspect installed skill state before retrying")
+			}
 		}
 		return
 	}
