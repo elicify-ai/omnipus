@@ -120,3 +120,28 @@ func TestCaptureFrameGenerationExhaustionDoesNotWrap(t *testing.T) {
 		t.Fatalf("exhaustion revived a stale identity: %+v", got)
 	}
 }
+
+func TestCaptureFrameClaimSurvivesUnpublishedDocumentLayout(t *testing.T) {
+	var frames captureFrameTracker
+	if frames.hasClaimed() {
+		t.Fatal("empty tracker claimed a picture")
+	}
+	if _, err := frames.beginForced(captureFrameGeometry{TargetID: "page-a", Scale: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if frames.hasClaimed() {
+		t.Fatal("unmeasured document transition claimed a picture")
+	}
+	if _, err := frames.begin(captureFrameGeometry{TargetID: "page-a", Width: 800, Height: 600, Scale: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if !frames.hasClaimed() {
+		t.Fatal("measured layout did not claim a picture")
+	}
+	if _, err := frames.beginForced(captureFrameGeometry{TargetID: "page-a", Scale: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if !frames.hasClaimed() || frames.snapshot().Geometry.Width != 0 {
+		t.Fatal("unpublished document layout dropped the claim or kept measured size")
+	}
+}
