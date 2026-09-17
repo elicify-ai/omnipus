@@ -129,6 +129,35 @@ func sanitizeCoreTeam(raw []any) []string {
 	return out
 }
 
+// firstExcludedTeamMember returns the first team entry whose roster identity
+// is barred from workspace-team membership (coreagent.
+// ExcludedFromWorkspaceTeams — the Admin standalone operator and the hidden
+// System Agents), or "" when the team is clean. ADR-090 FR-006: "Admin and
+// hidden agents cannot be added as ordinary teammates to bypass role
+// boundaries." These tool write paths bypass the REST validator
+// (gateway's validateCoreTeamMembers), so without this check an agent-driven
+// update_workspace could land exactly the membership the API refuses —
+// sanitizeCoreTeam above only dedupes.
+func firstExcludedTeamMember(team []string) string {
+	if i := slices.IndexFunc(team, func(id string) bool {
+		return coreagent.ExcludedFromWorkspaceTeams(coreagent.CoreAgentID(id))
+	}); i >= 0 {
+		return team[i]
+	}
+	return ""
+}
+
+// excludedTeamMemberMessage says WHY the excluded id cannot join a team, in
+// the same vocabulary the REST validator (gateway's validateCoreTeamMembers)
+// already uses, so an operator moving between the Team tab and an
+// agent-driven tool call sees one consistent rejection instead of two.
+func excludedTeamMemberMessage(id string) string {
+	if coreagent.CoreAgentID(id) == coreagent.IDAdmin {
+		return fmt.Sprintf("core_team member %q is the Admin standalone operator and cannot be added to a workspace team roster (ADR-090)", id)
+	}
+	return fmt.Sprintf("core_team member %q is a hidden System Agent and cannot be added to a workspace team roster", id)
+}
+
 // workspaceFromFile reads a workspace JSON into the workspace struct.
 // Greenfield: no legacy agent_ids→core_team migration (FR-1.10).
 func workspaceFromFile(data []byte) (workspace, error) {
@@ -263,6 +292,15 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	}
 	if raw, ok := args["core_team"].([]any); ok {
 		w.CoreTeam = sanitizeCoreTeam(raw)
+	}
+	// ADR-090 FR-006 — reject an excluded roster identity (Admin, hidden
+	// System Agents) BEFORE any write. At create time the whole core_team is
+	// newly introduced, so every entry is checked; this mirrors the REST
+	// POST's whole-list validateCoreTeamMembers and closes the tool-side
+	// bypass of it (sanitizeCoreTeam only dedupes).
+	if excluded := firstExcludedTeamMember(w.CoreTeam); excluded != "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", excludedTeamMemberMessage(excluded),
+			"Remove the excluded role from core_team — ADR-090 bars it from workspace teams"))
 	}
 	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
 	if delegationErr != nil {
@@ -438,6 +476,19 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 	if raw, ok := args["core_team"].([]any); ok {
 		w.CoreTeam = sanitizeCoreTeam(raw)
 		coreTeamChanged = true
+	}
+	// ADR-090 FR-006 — reject INTRODUCING an excluded roster identity (Admin,
+	// hidden System Agents) before any write. Deliberately the DELTA rule the
+	// REST PUT applies (loadAndValidateTeam / ADR-054 D6 rule 1): only
+	// newly added members are validated, so an update whose team merely
+	// still contains a (forged, pre-existing) excluded entry is not wedged —
+	// it can heal the record by omitting it, which a whole-list check here
+	// would have made impossible without hand-editing the JSON.
+	if coreTeamChanged {
+		if excluded := firstExcludedTeamMember(teamDiffAdded(oldTeam, w.CoreTeam)); excluded != "" {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", excludedTeamMemberMessage(excluded),
+				"Remove the excluded role from core_team — ADR-090 bars it from workspace teams"))
+		}
 	}
 	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
 	if delegationErr != nil {

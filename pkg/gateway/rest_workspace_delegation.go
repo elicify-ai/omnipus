@@ -369,6 +369,12 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 // Ava/Ray could not delegate to Worker on a pristine default workspace even
 // though coreagent.SeedDelegationEdges defines those edges. That was UAT
 // DEF-001 (2026-07-13).
+//
+// Admin and the hidden System Agents are intentionally EXCLUDED
+// (coreagent.ExcludedFromWorkspaceTeams, ADR-090 FR-001): Admin is the
+// standalone operator — chat-able core, "no team membership" — so blindly
+// iterating coreagent.All() (which includes Admin) used to seed exactly the
+// membership every write path now refuses.
 func defaultWorkspaceTeam(cfg *config.Config) []string {
 	if cfg == nil {
 		return nil
@@ -384,7 +390,7 @@ func defaultWorkspaceTeam(cfg *config.Config) []string {
 	team := make([]string, 0, len(all))
 	for _, a := range all {
 		id := string(a.ID)
-		if present[id] {
+		if present[id] && !coreagent.ExcludedFromWorkspaceTeams(a.ID) {
 			team = append(team, id)
 		}
 	}

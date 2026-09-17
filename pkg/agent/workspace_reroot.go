@@ -55,6 +55,9 @@ import (
 // independently of it either way.
 //
 // Return contract:
+//   - Admin (the ADR-090 standalone operator) -> the agent's own home
+//     directory (created 0700), nil — BEFORE any workspace resolution, so a
+//     forged core_team entry cannot re-root the operator's turns
 //   - not a member of any workspace, and not a System Agent -> "", error wrapping ErrAgentNotWorkspaceMember
 //   - not a member of any workspace, but a System Agent (only possible when
 //     genuinely NO workspace exists yet at all — see the branch below) -> the
@@ -86,6 +89,32 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 	// one producer, runVerifierAdjudication, which only ever dispatches
 	// System Agent turns).
 	if systemAgentAgentHomeOverrideFromContext(ctx) && coreagent.IsSystemAgentID(coreagent.CoreAgentID(agentID)) {
+		return systemAgentHomeDir(agentID, agentHome)
+	}
+
+	// ADR-090 §2.2 / FR-001: the Admin standalone operator. Admin is a
+	// chat-able CORE agent that is deliberately a member of NO workspace —
+	// its turns root at its own agent home (the same safe rooting
+	// systemAgentHomeDir already gives System Agents), so Admin chat keeps
+	// working once every membership write path excludes it.
+	//
+	// This branch is UNCONDITIONAL and runs BEFORE FindForAgentPreferring on
+	// purpose. The workspace record (workspaces/<id>.json) is writable by the
+	// sandboxed child (the reason the delegation store lives in entities/ —
+	// see pkg/workspace/delegationstore.go), so a membership-driven Admin
+	// branch (e.g. "admin home only when no workspace claims admin") would
+	// let a forged core_team entry re-root the operator's turns into a
+	// child-writable workspace. Rooting is decided by ROLE here, never by
+	// file state.
+	//
+	// Standalone grants NO permissions beyond it: TurnWorkspaceDir simply
+	// roots the turn at Admin's home (ordinary tool policies, fspolicy, and
+	// the os.Root confinement apply unchanged); FindForAgentPreferring-based
+	// mounts and knowledge scoping resolve nothing for a member-of-nothing
+	// agent, so no implicit workspace or knowledge access appears. Ordinary
+	// unassigned agents keep the hard refusal below — standalone is Admin's
+	// role property, not a general relaxation.
+	if coreagent.CoreAgentID(agentID) == coreagent.IDAdmin {
 		return systemAgentHomeDir(agentID, agentHome)
 	}
 
@@ -176,12 +205,14 @@ func resolveTurnWorkDirOrRefuse(ctx context.Context, agentID, agentHome, optWork
 }
 
 // systemAgentHomeDir materializes and returns a System Agent's own private
-// home directory as its turn's work dir — the shared body behind BOTH
-// agent-home fallback branches in resolveTurnWorkDirOrRefuse: the explicit
+// home directory as its turn's work dir — the shared body behind all THREE
+// agent-home rooting branches in resolveTurnWorkDirOrRefuse: the explicit
 // WithSystemAgentAgentHomeOverride request (sign-off 14 MINOR-1 / architect
-// F4) and the pre-existing "genuinely no workspace resolvable" branch. A
-// single body keeps the two call sites from silently drifting apart (e.g. one
-// gaining a permissions fix the other misses).
+// F4), the pre-existing "genuinely no workspace resolvable" branch, and the
+// ADR-090 Admin standalone-operator branch (Admin is not a System Agent, but
+// its standalone rooting is the same safe agent-home answer this helper
+// gives). A single body keeps the call sites from silently drifting apart
+// (e.g. one gaining a permissions fix the others miss).
 func systemAgentHomeDir(agentID, agentHome string) (string, error) {
 	agentHome = strings.TrimSpace(agentHome)
 	if agentHome == "" {
