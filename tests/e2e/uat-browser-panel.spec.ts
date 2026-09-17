@@ -652,9 +652,10 @@ test.describe('UAT Group C — the live browser panel', () => {
     expect(
       scrollFps,
       `the decoder produced ${scrollFps.toFixed(2)} fps while the page was scrolling continuously. ` +
-        'Below ~15 fps the panel is recognisably a sequence of stills rather than video — the P0 ' +
+        'The input-pressure policy deliberately limits capture to 15 fps; below that boundary the panel is ' +
+        'recognisably a sequence of stills rather than video — the P0 ' +
         'silent failure this case exists to catch (ADR-061).',
-    ).toBeGreaterThan(15);
+    ).toBeGreaterThanOrEqual(15);
   });
 
   test('UAT-14 — a click lands where you clicked, and the page responds', async ({ page }, testInfo) => {

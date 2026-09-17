@@ -25,6 +25,64 @@ function setup(onFailure?: () => boolean, automatic: { automaticRecoveryIdentity
   return { machine, pc, channels, offer, changed, connect, input, sent }
 }
 
+it('uses the same default STUN path as video without a gateway relay', async () => {
+  const seen: RTCConfiguration[] = []
+  const pc = {
+    iceGatheringState: 'complete',
+    connectionState: 'new',
+    localDescription: { sdp: 'offer-sdp' },
+    createDataChannel: vi.fn(() => ({ readyState: 'connecting', bufferedAmount: 0, send: vi.fn(), close: vi.fn() })),
+    createOffer: vi.fn(async () => ({ type: 'offer', sdp: 'offer-sdp' })),
+    setLocalDescription: vi.fn(async () => {}),
+    close: vi.fn(),
+  }
+  const machine = new BrowserInputWebRTCSession({
+    pcFactory: (config) => {
+      seen.push(config)
+      return pc as unknown as RTCPeerConnection
+    },
+    sendOffer: () => true,
+    onState: () => {},
+  })
+  machine.start()
+  await vi.waitFor(() => expect(seen).toHaveLength(1))
+
+  expect(seen[0].iceServers).toEqual([{ urls: 'stun:stun.l.google.com:19302' }])
+  machine.stop()
+})
+
+it('keeps default STUN while replacing gateway relays and ignoring empty URLs', async () => {
+  const seen: RTCConfiguration[] = []
+  const pc = {
+    iceGatheringState: 'complete', connectionState: 'new', localDescription: { sdp: 'offer-sdp' },
+    createDataChannel: vi.fn(() => ({ readyState: 'connecting', bufferedAmount: 0, send: vi.fn(), close: vi.fn() })),
+    createOffer: vi.fn(async () => ({ type: 'offer', sdp: 'offer-sdp' })),
+    setLocalDescription: vi.fn(async () => {}), close: vi.fn(),
+  }
+  const machine = new BrowserInputWebRTCSession({
+    pcFactory: (config) => {
+      seen.push(config)
+      return pc as unknown as RTCPeerConnection
+    },
+    sendOffer: () => true,
+    onState: () => {},
+  })
+  machine.setICEServers([{ urls: ['turn:stale.example:30000'], username: 'old', credential: 'old' }])
+  machine.setICEServers([
+    { urls: [] },
+    { urls: ['turn:203.0.113.9:30000'], username: 'u', credential: 'c' },
+  ])
+
+  machine.start()
+  await vi.waitFor(() => expect(seen).toHaveLength(1))
+
+  expect(seen[0].iceServers).toEqual([
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: ['turn:203.0.113.9:30000'], username: 'u', credential: 'c' },
+  ])
+  machine.stop()
+})
+
 describe('dedicated input contract', () => {
   it('negotiates only the two specified data channels and applies an exact answer', async () => {
     const s = setup(); await s.connect()

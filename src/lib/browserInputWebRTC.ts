@@ -1,4 +1,5 @@
 import { browserInputProtocol, encodeBrowserInput } from './browserInputCodec'
+import { iceServersWithDefaults } from './browserWebRTC'
 import type { BrowserInputFrame, BrowserInputOfferFrame, BrowserInputAnswerFrame, BrowserInputStateFrame, BrowserInputControlAckFrame } from '@/lib/api/generated/asyncapi-types'
 
 type Input = Omit<BrowserInputFrame, 'type'>
@@ -20,7 +21,7 @@ export class BrowserInputWebRTCSession {
   private pc: RTCPeerConnection | null = null
   private reliable: RTCDataChannel | null = null
   private hover: RTCDataChannel | null = null
-  private iceServers: RTCIceServer[] = []
+  private iceServers: RTCIceServer[] = iceServersWithDefaults([])
   private epoch = 0
   private signaledEpoch = 0
   private retiredEpoch = 0
@@ -57,7 +58,7 @@ export class BrowserInputWebRTCSession {
     this.retirementRejected = false
   }
   get state(): BrowserInputState { return this.currentState }
-  setICEServers(servers: RTCIceServer[]): void { this.iceServers = servers }
+  setICEServers(servers: RTCIceServer[]): void { this.iceServers = iceServersWithDefaults(servers) }
 
   start(): void {
     if (this.pressurePaused) return
