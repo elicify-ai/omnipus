@@ -861,6 +861,14 @@ export function BrowserLiveView({
       currentStreamRef.current = stream
       if (freshViewerRef.current === `${identity.captureId}:${identity.generation}`) {
         if (!current.gate.bindFreshViewer(stream, identity.generation)) return
+        // The demanded fresh viewer has arrived and been authorized for this
+        // boundary — the requirement is satisfied. Leaving the flag set kept
+        // every later recovered boundary (a new rtp_timestamp is enough)
+        // rebuilding the peer via requestFreshViewerRef: one rebuild per
+        // recovery event, forever, each cycle re-locking input and leaving a
+        // dead stream bound to the <video>. It re-arms on its own if a later
+        // bound stream genuinely cannot prove boundaries again.
+        requiresFreshViewerRef.current = false
       } else {
         current.gate.bindStream(stream)
       }
