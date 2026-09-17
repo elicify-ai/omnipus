@@ -76,14 +76,14 @@ expect_exit() { # expect_exit <label> <want-exit>
   return 0
 }
 
-# (a) 3,156-line unlisted file must FAIL (one line over the 3,155 limit).
+# (a) 3,001-line unlisted file must FAIL (one line over the 3,155 limit).
 reset_tree
-make_file "pkg/a.go" 3156
+make_file "pkg/a.go" 3001
 write_budget
 run_gate
-if expect_exit "3,156-line unlisted file fails" 1; then
-  if ! printf '%s\n' "$OUT" | grep -qE '^FAIL pkg/a\.go 3156 > 3155 \(not grandfathered\)$'; then
-    echo "selfcheck FAIL: 3,156-line unlisted file — expected FAIL line not found" >&2
+if expect_exit "3,001-line unlisted file fails" 1; then
+  if ! printf '%s\n' "$OUT" | grep -qE '^FAIL pkg/a\.go 3001 > 3000 \(not grandfathered\)$'; then
+    echo "selfcheck FAIL: 3,001-line unlisted file — expected FAIL line not found" >&2
     printf '%s\n' "$OUT" | sed 's/^/    | /' >&2
     FAIL=1
   fi
@@ -144,11 +144,11 @@ fi
 # (f) a file at exactly the 3,155 FAIL limit warns only — the gate fails
 # OVER the limit, never AT it.
 reset_tree
-make_file "pkg/f.go" 3155
+make_file "pkg/f.go" 3000
 write_budget
 run_gate
 if expect_exit "file at exactly the FAIL limit warns only" 0; then
-  if ! printf '%s\n' "$OUT" | grep -qE '^WARN pkg/f\.go 3155 > 2000$'; then
+  if ! printf '%s\n' "$OUT" | grep -qE '^WARN pkg/f\.go 3000 > 2000$'; then
     echo "selfcheck FAIL: at-limit file — expected WARN line not found" >&2
     printf '%s\n' "$OUT" | sed 's/^/    | /' >&2
     FAIL=1

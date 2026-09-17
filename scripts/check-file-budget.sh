@@ -94,7 +94,7 @@ fi
 
 WARN_LIMIT=2000
 # See the header for why this is 3,155 and not a round 3,000.
-FAIL_LIMIT=3155
+FAIL_LIMIT=3000
 
 cd "$ROOT"
 
