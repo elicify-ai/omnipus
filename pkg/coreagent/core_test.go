@@ -252,19 +252,6 @@ func TestGetPromptUnknownID(t *testing.T) {
 		"GetPrompt must return empty string for unknown IDs — caller falls back to SOUL.md")
 }
 
-// TestCoreAgentDefaultTools verifies each core agent has a defined default tool set.
-//
-// Traces to: wave5b-system-agent-spec.md — FR-012 (default tool sets per BRD D.9)
-func TestCoreAgentDefaultTools(t *testing.T) {
-	// Traces to: wave5b-system-agent-spec.md line 664
-	for _, agent := range coreagent.All() {
-		t.Run(string(agent.ID)+" has default tools", func(t *testing.T) {
-			assert.NotEmpty(t, agent.DefaultTools,
-				"core agent %s must have at least one default tool", agent.ID)
-		})
-	}
-}
-
 // TestStaticCatalog_ContainsRenamedDiscoveryTool pins ADR-071 D1 / spec
 // FR-010 (W-D1 test 10): the boot-time tool-policy coverage validator
 // resolves the renamed discovery capability against the static catalog, and

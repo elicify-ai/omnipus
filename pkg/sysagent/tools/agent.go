@@ -199,9 +199,6 @@ type agentCreateToolExecute struct {
 }
 
 func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	if err := ValidateConfigurationWriteContext(ctx); err != nil {
-		return tools.ErrorResult(errorJSON("DELEGATED_WRITE_FORBIDDEN", err.Error(), "Use switch_agent to enter Ava's owner session"))
-	}
 	ac := &agentCreateToolExecute{t: t, ctx: ctx, args: args}
 
 	if r0, stop := ac.validate(); stop {
@@ -579,9 +576,6 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 }
 
 func (t *AgentUpdateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	if err := ValidateConfigurationWriteContext(ctx); err != nil {
-		return tools.ErrorResult(errorJSON("DELEGATED_WRITE_FORBIDDEN", err.Error(), "Use switch_agent to enter Ava's owner session"))
-	}
 	return t.executeADR090(args)
 }
 
@@ -669,9 +663,6 @@ type agentDeleteToolExecute struct {
 }
 
 func (t *AgentDeleteTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	if err := ValidateConfigurationWriteContext(ctx); err != nil {
-		return tools.ErrorResult(errorJSON("DELEGATED_WRITE_FORBIDDEN", err.Error(), "Use switch_agent to enter Ava's owner session"))
-	}
 	ad := &agentDeleteToolExecute{t: t, args: args}
 
 	if r0, stop := ad.validateAndLoad(); stop {

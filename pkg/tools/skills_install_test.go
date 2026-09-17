@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -56,24 +55,17 @@ func TestInstallSkillToolMissingSlug(t *testing.T) {
 	assert.Contains(t, result.ForLLM, "identifier is required and must be a non-empty string")
 }
 
-func TestInstallSkillToolAvaDelegatedContextWritesNothing(t *testing.T) {
+func TestInstallSkillToolAvaDelegatedContextCanInstall(t *testing.T) {
 	root := t.TempDir()
 	mgr := skills.NewRegistryManager()
 	mgr.AddRegistry(fakeSkillRegistry{})
 	tool := NewInstallSkillTool(mgr, root)
-	ctx := WithAgentID(WithTranscriptSessionID(context.Background(), "owner-session"), "ava")
-	ctx = WithDelegationDepth(ctx, 1)
-	result := tool.Execute(ctx, map[string]any{"slug": "guarded", "registry": "fake"})
-	if !result.IsError || !strings.Contains(result.ForLLM, "DELEGATED_WRITE_FORBIDDEN") {
-		t.Fatalf("result=%+v", result)
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("delegated Ava wrote files: %v", entries)
-	}
+	ctx := WithDelegationDepth(WithAgentID(context.Background(), "ava"), 1)
+	result := tool.Execute(ctx, map[string]any{"slug": "delegated-skill", "registry": "fake"})
+	require.False(t, result.IsError, result.ForLLM)
+	content, err := os.ReadFile(filepath.Join(root, "delegated-skill", "SKILL.md"))
+	require.NoError(t, err)
+	require.Equal(t, "---\nname: delegated-skill\ndescription: a fake test skill for install_skill's global-dir test\n---\n\nBody.\n", string(content))
 }
 
 func TestInstallSkillToolEmptySlug(t *testing.T) {

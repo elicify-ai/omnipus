@@ -1,6 +1,5 @@
-// Omnipus — ADR-068 D15.3 (FR-070/FR-071, AC-17.1/AC-17.2): the boot-side
-// tool-policy tests for the knowledge-base tool family, superseding
-// ADR-067 D17.
+// Omnipus — knowledge tool registration and boot policy coverage.
+// ADR-090 defines current role permissions; ADR-077 defines sparse overrides.
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
@@ -213,89 +212,32 @@ func TestBoot_NoKnowledgeToolDenyBackfill(t *testing.T) {
 	})
 }
 
-// TestKnowledgeTools_SeededPostureMatchesD17 asserts the other half of
-// FR-071's scenario — "every knowledge tool carries its SEEDED posture" —
-// at the level that actually decides what an agent may do: the RESOLVED
-// policy, after the runtime global x agent merge.
-//
-// The seed literal alone is not sufficient evidence, and this codebase has
-// the receipts. pkg/config/defaults.go records FOUR separate occasions
-// (inspect_session, the ADR-052 plan-execution three, ADR-055's
-// plan_correct/stop_plan, ADR-056's list_jobs) on which a per-agent "allow"
-// was silently overruled by a too-tight global ceiling under strictest-wins
-// (deny > ask > allow, pkg/tools/compositor.go:resolveEffectivePolicyWith).
-// Each time, the grant was dead on every install while the seed data still
-// read exactly as its ADR required, and each time the cost was paid in
-// production before anyone noticed. An "ask" ceiling on the knowledge write
-// tools would make it five: Jim's seeded "allow" would resolve "ask", and
-// his one deliberate exception (he already holds unprompted bash, so an
-// ask-gate on these three would gate nothing real for him — see
-// pkg/coreagent/core.go's IDJim case) would quietly not exist.
-//
-// The expected matrix below is ADR-068 D15.3's, written out as data rather
-// than derived from the code it checks.
-func TestKnowledgeTools_SeededPostureMatchesD17(t *testing.T) {
+// TestKnowledgeTools_SeededPostureMatchesADR090 verifies sparse defaults through
+// the real strictest-wins resolver, including an operator's tighter ceiling.
+func TestKnowledgeTools_SeededPostureMatchesADR090(t *testing.T) {
 	cfg := seededBootConfig(t)
-
-	globalPolicies := make(map[string]config.ToolPolicy, len(cfg.Sandbox.ToolPolicies))
+	global := make(map[string]config.ToolPolicy, len(cfg.Sandbox.ToolPolicies))
 	for name, policy := range cfg.Sandbox.ToolPolicies {
-		globalPolicies[name] = config.ToolPolicy(policy)
+		global[name] = config.ToolPolicy(policy)
 	}
-
-	// D15.3: read tier "allow" for all four base agents; the three write
-	// tools "allow" for Jim, "ask" for Ava/Mia/Ray.
-	read := []string{"knowledge_describe", "knowledge_find", "knowledge_read"}
-	write := []string{"knowledge_edit", "knowledge_restructure", "knowledge_configure"}
-	writePosture := map[string]string{
-		string(coreagent.IDJim): "allow",
-		string(coreagent.IDAva): "ask",
-		string(coreagent.IDMia): "ask",
-		string(coreagent.IDRay): "ask",
-	}
-
-	want := make(map[string]map[string]string, len(writePosture))
-	for agentID, writeWant := range writePosture {
-		want[agentID] = make(map[string]string, len(read)+len(write))
-		for _, name := range read {
-			want[agentID][name] = "allow"
-		}
-		for _, name := range write {
-			want[agentID][name] = writeWant
-		}
-	}
-
-	seeded := make(map[string]map[string]config.ToolPolicy, len(cfg.Agents.List))
-	for _, ac := range cfg.Agents.List {
-		if ac.Tools == nil {
-			continue
-		}
-		seeded[ac.ID] = ac.Tools.Builtin.Policies
-	}
-
-	for agentID, wantTools := range want {
-		policies, ok := seeded[agentID]
-		require.Truef(t, ok, "base agent %q must be seeded with a tool-policy map", agentID)
-		for toolName, wantPolicy := range wantTools {
-			got, hasEntry := policies[toolName]
-			require.Truef(t, hasEntry,
-				"agent %q has NO explicit entry for %q — Constraint #6 requires a literal, "+
-					"wildcard-free entry per (agent, tool), and an absent one is filled with "+
-					"deny by the load-path repair", agentID, toolName)
-			assert.Equalf(t, wantPolicy, string(got),
-				"agent %q, tool %q: seeded literal disagrees with ADR-067 D17's matrix",
-				agentID, toolName)
-
-			resolved := tools.ResolveEffectivePolicy(&tools.ToolPolicyCfg{
-				Policies:       policies,
-				GlobalPolicies: globalPolicies,
-			}, toolName)
-			assert.Equalf(t, wantPolicy, resolved,
-				"agent %q, tool %q RESOLVES to %q, not the seeded %q. Under strictest-wins, a "+
-					"global ceiling entry in pkg/config/defaults.go tighter than the per-agent "+
-					"seed overrules it and the grant is dead on every install while the seed "+
-					"still reads correctly — see that file's ADR-052/055/056 notes for the four "+
-					"prior instances of exactly this defect",
-				agentID, toolName, resolved, wantPolicy)
+	require.Len(t, cfg.Agents.List, len(adr090KnowledgePosture))
+	for _, agent := range cfg.Agents.List {
+		want, ok := adr090KnowledgePosture[agent.ID]
+		require.True(t, ok, "unexpected seeded role %s", agent.ID)
+		require.NotNil(t, agent.Tools)
+		policy := &tools.ToolPolicyCfg{Policies: agent.Tools.Builtin.Policies, GlobalPolicies: global}
+		for _, name := range knowledgeToolNames {
+			expected := want.write
+			for _, readName := range knowledgeReadToolNames {
+				if name == readName {
+					expected = want.read
+				}
+			}
+			assert.Equal(t, expected, tools.ResolveEffectivePolicy(policy, name), "%s / %s", agent.ID, name)
+			previous := global[name]
+			global[name] = config.ToolPolicyDeny
+			assert.Equal(t, "deny", tools.ResolveEffectivePolicy(policy, name), "global deny must constrain %s / %s", agent.ID, name)
+			global[name] = previous
 		}
 	}
 }

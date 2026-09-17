@@ -37,7 +37,7 @@ func skillTreeBytes(t *testing.T, root string) map[string]string {
 	return files
 }
 
-func TestADR090_AvaSkillWritesRequireOwnerSession(t *testing.T) {
+func TestADR090_AvaSkillWritesDoNotRequireOwnerSession(t *testing.T) {
 	for _, operation := range []string{"create", "edit", "remove"} {
 		for _, mode := range []string{"attended", "delegated", "unattended", "missing-session"} {
 			t.Run(operation+"/"+mode, func(t *testing.T) {
@@ -78,13 +78,15 @@ func TestADR090_AvaSkillWritesRequireOwnerSession(t *testing.T) {
 				before := skillTreeBytes(t, root)
 				result := tool.Execute(ctx, map[string]any{"name": name, "content": validSkill(name) + "\nChanged.\n", "confirm": true, "revision": revision})
 				after := skillTreeBytes(t, root)
-				if mode == "attended" {
-					require.False(t, result.IsError, result.ForLLM)
-					require.NotEqual(t, before, after, "positive control must perform a real write")
+				require.False(t, result.IsError, result.ForLLM)
+				require.NotEqual(t, before, after, "each allowed execution context must perform the requested write")
+				skillPath := filepath.Join(global, name, "SKILL.md")
+				if operation == "remove" {
+					require.NoFileExists(t, skillPath)
 				} else {
-					require.True(t, result.IsError, result.ForLLM)
-					require.Contains(t, result.ForLLM, "DELEGATED_WRITE_FORBIDDEN")
-					require.Equal(t, before, after, "forbidden Ava must perform zero file changes")
+					content, err := os.ReadFile(skillPath)
+					require.NoError(t, err)
+					require.Contains(t, string(content), "Changed.")
 				}
 			})
 		}

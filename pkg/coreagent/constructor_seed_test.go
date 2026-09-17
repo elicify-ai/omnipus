@@ -50,7 +50,7 @@ func TestBoot_HasSystemAllowsInConstructorSeed(t *testing.T) {
 	assert.True(t, HasSystemAllowsInConstructorSeed(string(IDAva)),
 		"Ava must return true (she has explicit system.* allows)")
 
-	nonAvaAgents := []CoreAgentID{IDJim, IDMia, IDRay}
+	nonAvaAgents := []CoreAgentID{IDJim, IDMia, IDAdmin}
 	for _, id := range nonAvaAgents {
 		assert.False(t, HasSystemAllowsInConstructorSeed(string(id)),
 			"agent %q must return false (no explicit system.* allows)", id)

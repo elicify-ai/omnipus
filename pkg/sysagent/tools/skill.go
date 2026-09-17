@@ -50,9 +50,6 @@ func (t *SkillRemoveTool) Parameters() map[string]any {
 }
 
 func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
-	if err := ValidateConfigurationWriteContext(ctx); err != nil {
-		return tools.ErrorResult(errorJSON("DELEGATED_WRITE_FORBIDDEN", err.Error(), "Use switch_agent to enter Ava's owner session"))
-	}
 	name, _ := args["name"].(string)
 	confirm, _ := args["confirm"].(bool)
 	revision, _ := args["revision"].(string)

@@ -106,7 +106,7 @@ User → Mia | Jim | Ava | Admin
 
 Mia  → Jim (heavy work) · Ava (new teammate) · Admin (wire the box)
 Jim  → Planner · Researcher · General Purpose
-Jim  → Ava (handover: missing specialist — user joins)
+Jim  → Ava (delegate: configure needed team specialists or skills after conversational confirmation)
 Jim  → Admin (handover: missing document dependencies)
 Jim  → self (fork: same belt, narrower task)
 Planner → Researcher (context before the DAG)
@@ -119,7 +119,7 @@ Simple work: Jim skips Planner and assigns Researcher or General Purpose directl
 
 A same-role helper is a child turn using the same seeded agent ID/configuration, not a new permanent agent. Permit self-delegation only for `jim` and `worker` through an explicit workspace self-edge, with existing allowed modes and the global/per-edge depth caps (global default 3). Seed these self-edges for eligible fresh workspace members; an omitted/removed edge refuses the helper. Exempt only these validated self-edges from graph cycle detection; continue rejecting other cycles, other self-edges, mode violations and depth overflow. This deliberately replaces the current unconditional self-delegation refusal and the corresponding graph validation, as agent orchestration work, not worktree isolation.
 
-Handoffs requiring Ava's confirmation use `switch_agent` into the user's owner session. A delegated Ava session cannot use the owner-only question tool: it returns a proposed change to its parent without configuration writes and asks for an owner-session handoff. Internal `send_message` is not a substitute for an owner-session confirmation.
+Ava can perform permitted configuration work in a direct or delegated session. Confirmation is conversational and prompt-governed: a delegated Ava sends any unconfirmed proposal through `message_parent`, Jim asks the user, and Ava can apply the approved proposal once that answer is relayed. The founder explicitly removed Ava-specific write restrictions based on delegation depth, unattended status or missing user-session identity. The general owner-session applicability of `AskUserQuestion` remains; no approval token or mandatory owner-session handoff is added. Ordinary tool permissions, revisions and protected fields still apply.
 
 ---
 
@@ -158,6 +158,8 @@ The approved Admin installation capability requires changing the shipped `add_mc
 | Talk / handoff / ask-user | Allow | Allow | Allow | Allow | send back | send back | send back | — | — |
 | Memory | Allow | Allow | Allow | Allow | Allow | Allow | Allow | — | — |
 | Files + library read **and write** | Allow | Read | Read | Setup files | Read | Read | Allow | Reviewed workspace, read-only; seek relevant outputs | Existing scoped `grep` only |
+| Knowledge-base read | Allow | Allow | Allow | Allow | Allow | Allow | Allow | — | — |
+| Knowledge-base write | Ask | Ask | — | — | — | — | Ask | — | — |
 | Email + chat channels | Allow; send Ask | same | same | — | same | same | same | — | — |
 | Web search / fetch | Allow | Allow | Allow | — | Allow | Allow | Allow | — | — |
 | Browser (with the user) | Allow | Allow | Allow | — | — | — | — | — | — |
@@ -165,12 +167,14 @@ The approved Admin installation capability requires changing the shipped `add_mc
 | `serve_web` | — | — | — | — | — | — | Allow | — | — |
 | Tasks | Allow | Allow | — | — | Allow | — | list/update/todos | — | — |
 | **Plans** | — | **Allow** | **Deny** | — | — | — | **Deny** | — | — |
-| Delegate | — | → Planner, Researcher, GP, self | — | — | → Researcher | — | → GP helpers only | — | — |
+| Delegate | — | → Planner, Researcher, GP, self, Ava for configuration proposals | — | — | → Researcher | — | → GP helpers only | — | — |
 | Agents, teams, skills, and capability configuration | find_skills | find/list | Proposal then one user confirmation (§5.2) | — | — | — | — | — | — |
 | Installed connector discovery and assignment | — | — | Discovery Allow; assignment after confirmed proposal | Discovery/management only; no agent assignment | — | — | — | — | — |
 | Connector installation / provider / channel / doctor | — | — | — | **Allow** (remove/disable Ask) | — | — | — | — | — |
 | `inspect_session` / `plan_correct` | — | — | — | — | — | — | — | inspect | correct |
 | `set_config` (kernel) | — | — | — | — | — | — | — | — | — |
+
+Founder clarification during implementation: Jim also has knowledge-base write access, and Admin has read access. Read tools are `knowledge_describe`, `knowledge_find`, `knowledge_read` and `knowledge_list`. Write tools are `knowledge_edit`, `knowledge_restructure`, `knowledge_configure` and `knowledge_base_create`; Mia, Jim and General Purpose use the existing Ask policy for these operations. Other roles retain the table's boundaries. These are editable ordinary-role defaults, remain subject to global restrictions, and do not alter the global upfront tool set.
 
 ### 5.0 Connector assignment is enforced availability
 

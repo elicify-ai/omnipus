@@ -46,7 +46,7 @@ The user asks Ava to create or change a teammate. Ava inspects actual available 
 3. **Given** a proposal awaiting consent, **When** the user chooses Cancel or Change, **Then** no proposal mutation occurs; Change returns to preparation.
 4. **Given** concurrent edits or interruption, **When** Ava resumes application, **Then** stale assumptions are rejected, completed work is not duplicated, and material changes require a revised proposal.
 5. **Given** unavailable discovery, persistence, or runtime activation, **When** Ava attempts the workflow, **Then** she distinguishes the failed stage and any completed changes without claiming completion.
-6. **Given** a configuration request routed by another colleague, **When** Ava receives it, **Then** a user-owned handover supports confirmation while a delegated invocation returns a proposal without writes.
+6. **Given** a configuration request routed by another colleague, **When** Ava receives it, **Then** Ava can perform permitted configuration work in either session; confirmation is governed by the conversation and instructions, not a special session-type write gate.
 
 ### US-3 — Predictable tool access and role boundaries (P0)
 
@@ -191,7 +191,7 @@ Use the existing workspace lock for read/compare/validate/write. Graph persisten
 
 ### FR-007 — One proposal, confirmation and conflict recovery
 
-Reach Ava using switch_agent in the user-owned session. Mia/Jim handover must not substitute delegate/send_message for owner-session routing. AskUserQuestion remains owner-session-only. Delegated Ava can inspect and return a proposal to its parent but performs zero configuration writes and requests user-session handover. Parent approval is not user confirmation.
+Ava may receive work through switch_agent or delegation, including Jim's requests for team specialists and skills. The founder explicitly removed Ava-specific hardcoded write restrictions based on delegation depth, unattended status or missing user-session identity. Keep confirmation conversational and prompt-governed, with no approval token or session-type mutation gate. AskUserQuestion retains its general owner-session applicability: when delegated Ava needs confirmation, she sends the proposal through message_parent so Jim can ask the user and relay the answer. A parent's own approval is not user confirmation. Once the user's approval is conveyed, Ava can apply the proposal in the delegated run, subject to ordinary permissions, revision checks and protected-field rules.
 
 Ava's fixed prompt and authoring skills require read-before-propose, one combined before/after proposal including model, grants/removals, team/graph effects and shared skill changes, then exactly one `AskUserQuestion` with Apply/Change/Cancel. Read-only discovery precedes confirmation. Reuse the shipped global Allow defaults already present for `create_agent`, `update_agent`, `create_skill`, `edit_skill` and `update_workspace`; align Ava’s per-agent defaults to Allow for those configuration operations. A local Allow cannot override global Ask. For the same confirmed Ava workflow, fresh global and Ava defaults are Allow also for delete_agent, install_skill and remove_skill; keep destructive confirm flags supplied from the already-confirmed proposal. Other built-ins and custom defaults get explicit Deny where these management actions are unassigned. Never overwrite operator Ask/Deny on reload. New management reads get explicit catalog/global/role policies. Do not introduce an approval-token mechanism or separate approval tool. Preserve explicit operator Ask/Deny: if the operator changes a required mutation to Ask, the existing policy prompt can still occur and Ava must explain that this additional policy requirement overrides the default one-question experience. The confirmation authorizes that exact proposal, not later material changes. Destructive tool `confirm` flags may be supplied from this already-confirmed proposal; they do not require another ordinary user question.
 
@@ -212,6 +212,8 @@ Registration, permissions, session applicability and goal forcing still filter t
 
 Ship a catalog-derived role inventory mapping every tool to the approved group in ADR §5, effective seeded policy and prompt/skill workflow. It is generated as implementation evidence, reviewed against the catalog, and checked for no unclassified static tools; it must not generate a per-agent deny-all backfill. Explicit ADR exclusions require authored deny overrides wherever global defaults would permit them. Add explicit Ask overrides for send_email and reply on working roles granted those outbound operations; these are newly authored Ask defaults over current Allow ceilings. Exclude internal send_message/message_parent/handback from this send gate; send_file retains its existing delivery policy. Channel/email sending resolves Ask for the granted roles; Ava configuration writes default Allow under the one-question workflow, subject to the global ceiling.
 
+Knowledge-base defaults follow the founder clarification in ADR §5: all seven ordinary built-ins, including Admin, receive Allow for `knowledge_describe`, `knowledge_find`, `knowledge_read` and `knowledge_list`. Mia, Jim and General Purpose receive Ask for `knowledge_edit`, `knowledge_restructure`, `knowledge_configure` and `knowledge_base_create`; Ava, Admin, Planner and Researcher receive Deny for those writes. Judge and Plan Supervisor remain denied all eight. Preserve global restrictions and user edits. These tools remain deferred; role prompts name their supported knowledge operations and use ToolSearch when needed. Verify both the seed and the actual turn's resolved policy, including denied writes and a tighter global ceiling.
+
 Fresh global add_mcp_server becomes Allow so Admin's approved installation role is reachable. Admin default is Allow; every other built-in and every new custom-agent default gets explicit Deny. Later authorized capability edits may change ordinary overrides within global restrictions. This intentionally supersedes the former anti-injection global Deny for a fresh install; preserve operator-configured Ask/Deny and never overwrite it on reload. Implementation must update root CLAUDE.md/AGENTS.md's stale Jim-bash Allow example and MCP-install ceiling explanation to cite ADR-090.
 
 Canonical ordinary agent policy storage is sparse: author role exclusions over a non-Deny ceiling and deliberate Ask/Allow overrides. Every ADR matrix dash means effective Deny, not omission; classify the entire static catalog. Remove blanket denyAllThenOverride seeding for ordinary roles. Hidden agents may retain complete maps because their capabilities are explicitly fixed. New custom agents retain their existing complete explicitly authored default map, including installer Deny; this is distinct from ordinary built-in sparse seeding. Test each role's effective result against every catalog entry and the reviewed inventory. New tools are individually classified, not granted by omission.
@@ -219,6 +221,8 @@ Canonical ordinary agent policy storage is sparse: author role exclusions over a
 With compressed manifests enabled, the exact upfront set applies and preview-only is exactly serve_web after the other eight names move upfront. A preview is not callable. With compressed manifests disabled, preserve existing all-eligible-permitted definitions, including assignment-filtered MCP; the exact-37 requirement applies to compressed mode only. Applicability and permission checks are the same in both modes. Update pinned tier arithmetic and preview-set tests.
 
 ### FR-009 — Role-complete prompts and hidden-agent boundaries
+
+Founder clarification: Jim may delegate to Ava to identify or propose new team specialists and skills. Seed the Jim-to-Ava edge alongside his staff/self edges. Delegated Ava may inspect configuration, prepare the proposal, obtain any needed user confirmation through Jim, and apply the approved changes without a mandatory owner-session handoff. Do not silently abandon an approved team/skill need after returning the proposal.
 
 Seed all ADR §6.1 skill assignments and interview checklists §6.2 exactly. Retarget `skill-authoring` to real current tool names. General Purpose delegation compares stable built-in role identity, not `AgentTypeWorker`; custom workers cannot acquire that identity through create/update. Jim is the shipped plan runner; Ava and General Purpose ship with explicit plan-tool Deny overrides. These ordinary capability defaults remain user-editable under FR-002; they are not a third immutable policy layer. Judge's exact tools are ToolSearch, Skill, inspect_session, read_file, list_directory and grep; its sole skill is verify. inspect_session stays reviewed-session scoped; file tools are rooted in the reviewed work's workspace under existing filesystem/mount policy. No per-task file allow-list exists or is added here. Instructions prioritize relevant outputs but do not falsely promise runtime denial of other authorized workspace files. Outside-workspace access is denied. No shell/connectors/messaging. This supersedes ADR-084's empty registry-skill allow-list, retaining verdict contracts. Supervisor's exact tools are ToolSearch, Skill, grep and plan_correct; fixed skills are plan and define-goal, with one plan_correct per wake. Changing either soul does not remove engine-enforced verdict/correction contracts. Future isolation instructions remain gated, as ADR §7 states.
 
@@ -410,11 +414,11 @@ Each scenario has one triggering action. Error scenarios deliberately test failu
 - **When** an agent attempts its tool after assignment changes,
 - **Then** both offered definitions and actual execution follow the current assignment-policy intersection; unbound/stale calls are refused across reconnect/restart and no secrets are disclosed.
 
-### BDD-21 — Ava owner-session routing
+### BDD-21 — Ava confirmation without a session-type write gate
 **Traces to:** US-2, Acceptance Scenario 6. **Category:** Alternate Path.
 - **Given** the same request delivered by user-owned switch_agent or delegated invocation,
 - **When** Ava prepares the proposal,
-- **Then** owner-session Ava can ask the one confirmation while delegated Ava returns proposal/context and makes zero configuration writes.
+- **Then** Ava obtains the one conversational confirmation directly or through her parent and applies the approved proposal; delegation, unattended status or absence of a user-session ID alone does not cause a configuration-write refusal. A cancelled proposal still produces no writes, as required by her instructions.
 
 ### BDD-22 — Shared soul/entity commit and partial storage failure
 **Traces to:** US-2, Acceptance Scenarios 4 and 5. **Category:** Error Path.
@@ -471,7 +475,7 @@ Additional planned tests, ordered at the appropriate level before E2E completion
 | I2 | TestADR090_SoulEntityCommitConcurrency | Integration | 22 | Barriers around staging/replacements and real saved bytes/revisions |
 | I3 | TestADR090_AdminMCPFreshCeiling | Integration | 23 | Fresh effective policy and controlled connector subprocess/service |
 | I4 | TestADR090_SelfHelperGraphAndDepth | Integration | 15 | Actual gateway graph + runtime deny/depth path at cap−1/cap/cap+1 |
-| E1 | ADR090 Ava owner session | E2E | 21 | Real switch/delegated sessions, question and mutation counts |
+| E1 | ADR090 Ava conversational confirmation | E2E | 21 | Real switch/delegated sessions, relayed user confirmation and mutation counts |
 | E2 | ADR090 role skill workflows | E2E | 24 | Every FR-013 row's observable outputs with real tools and fault controls |
 
 ### Test datasets
@@ -509,7 +513,7 @@ D24 is fixed from the inspected OpenAPI AgentUpdate/Create components and skills
 | ID | Input/state | Expected result | Traces to |
 |---|---|---|---|
 | D26 | None/all/empty/subset connector bindings; stale loaded call; disconnect/reconnect/restart | Assignment-policy intersection enforced at actual dispatch | BDD-20 |
-| D27 | Ava via switch_agent vs delegated session | User question possible vs proposal-only and zero writes | BDD-21 |
+| D27 | Ava via switch_agent vs delegated session | Direct or parent-relayed user confirmation; approved writes allowed in both | BDD-21 |
 | D28 | Missing/stale revision; updated_at supplied; soul writer during entity commit; injected second-file failure | Invalid/conflict zero-write, no interleaving, explicit storage partial and no activation | BDD-22 |
 | D29 | Fresh Admin vs all other roles/customs; global operator Ask/Deny; newly installed server | Reachable authorized setup; other default installers denied; no unassigned tool execution | BDD-23 |
 | D30 | All 15 FR-013 skills and four interview branches; misspelled tool reference; denied invocation vs prohibition | Real outputs per table; lint rejects wrong/missing invocation; limitation reference allowed | BDD-24 |
@@ -565,7 +569,7 @@ Run these existing tests in their appropriate CI suites. Preserve their behavior
 - **SC-007:** Eight real document outputs (two roles × four formats) pass independent format/content checks and companion visual acceptance; supported dependency recovery is observed from both handoff routes.
 - **SC-008:** Every shipped skill/helper has immutable provenance and redistribution evidence; zero retired defaults or missing package dependencies remain in the release evidence.
 - **SC-009:** New contracts regenerate without drift and automated correctness is reported separately from real workflow reachability.
-- **SC-010:** All 15 role-skill workflows and four interview branches pass real-tool evaluations; fresh Admin installation succeeds; delegated Ava writes zero; an unbound MCP tool is refused even with an already loaded definition.
+- **SC-010:** All 15 role-skill workflows and four interview branches pass real-tool evaluations; fresh Admin installation succeeds; delegated Ava can apply user-confirmed changes without a session-type gate; an unbound MCP tool is refused even with an already loaded definition.
 
 | Requirement | User story / AS | BDD | Planned test(s) | Success |
 |---|---|---|---|---|
@@ -584,7 +588,7 @@ Run these existing tests in their appropriate CI suites. Preserve their behavior
 | FR-013 | US-4 AS5 | 24 | PromptSkillToolReferences; role skill workflows | SC-010 |
 | FR-001,FR-008 | US-1 AS1; US-3 AS1,3 | 25 | ExactRosterAndPolicyInventory | SC-001,005,006 |
 | FR-003,FR-005 | US-1 AS4 | 20 | MCPAssignmentEnforcedAtCall | SC-006,010 |
-| FR-007 | US-2 AS6 | 21 | Ava owner session | SC-003,010 |
+| FR-007 | US-2 AS6 | 21 | Ava conversational confirmation | SC-003,010 |
 | FR-007 | US-2 AS4,5 | 22 | SoulEntityCommitConcurrency | SC-004 |
 | FR-008,FR-011 | US-4 AS6 | 23 | AdminMCPFreshCeiling | SC-010 |
 

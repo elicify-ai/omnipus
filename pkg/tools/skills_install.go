@@ -167,9 +167,6 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 }
 
 func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
-	if err := ValidateConfigurationWriteContext(ctx); err != nil {
-		return ErrorResult(fmt.Sprintf(`{"code":"DELEGATED_WRITE_FORBIDDEN","message":%q}`, err.Error()))
-	}
 	// Install lock to prevent concurrent directory operations.
 	// Ideally this should be done at a `slug` level, currently, its at the
 	// (single, global) skills-directory level.

@@ -9,18 +9,20 @@ import (
 
 func TestADR090_ExactRosterAndPolicyInventory(t *testing.T) {
 	wantRoster := []struct {
-		id, name string
-		typ      config.AgentType
+		id, name                       string
+		typ                            config.AgentType
+		chat, staff                    bool
+		hidden, explicitNativeExecutor bool
 	}{
-		{"mia", "Mia", config.AgentTypeCore},
-		{"jim", "Jim", config.AgentTypeCore},
-		{"ava", "Ava", config.AgentTypeCore},
-		{"admin", "Admin", config.AgentTypeCore},
-		{"planner", "Planner", config.AgentTypeWorker},
-		{"researcher", "Researcher", config.AgentTypeWorker},
-		{"worker", "General Purpose", config.AgentTypeWorker},
-		{"judge", "Judge", config.AgentTypeSystem},
-		{"plansupervisor", "Plan Supervisor", config.AgentTypeSystem},
+		{"mia", "Mia", config.AgentTypeCore, true, false, false, false},
+		{"jim", "Jim", config.AgentTypeCore, true, false, false, false},
+		{"ava", "Ava", config.AgentTypeCore, true, false, false, false},
+		{"admin", "Admin", config.AgentTypeCore, true, false, false, false},
+		{"planner", "Planner", config.AgentTypeWorker, false, true, false, true},
+		{"researcher", "Researcher", config.AgentTypeWorker, false, true, false, true},
+		{"worker", "General Purpose", config.AgentTypeWorker, false, true, false, true},
+		{"judge", "Judge", config.AgentTypeSystem, false, false, true, false},
+		{"plansupervisor", "Plan Supervisor", config.AgentTypeSystem, false, false, true, false},
 	}
 
 	cfg := config.DefaultConfig()
@@ -36,9 +38,54 @@ func TestADR090_ExactRosterAndPolicyInventory(t *testing.T) {
 		if got.ID != want.id || got.Name != want.name || got.Type != want.typ {
 			t.Errorf("roster[%d] = (%q, %q, %q), want (%q, %q, %q)", i, got.ID, got.Name, got.Type, want.id, want.name, want.typ)
 		}
+		if !got.Locked {
+			t.Errorf("roster[%d] %q is unlocked; every built-in identity must be locked", i, got.ID)
+		}
+		if got.IsChatTarget() != want.chat {
+			t.Errorf("roster[%d] %q chat target = %t, want %t", i, got.ID, got.IsChatTarget(), want.chat)
+		}
+		if got.IsWorker() != want.staff {
+			t.Errorf("roster[%d] %q staff = %t, want %t", i, got.ID, got.IsWorker(), want.staff)
+		}
+		if got.IsSystem() != want.hidden {
+			t.Errorf("roster[%d] %q hidden = %t, want %t", i, got.ID, got.IsSystem(), want.hidden)
+		}
+		explicitNativeExecutor := got.Subagents != nil && got.Subagents.Executor != nil &&
+			got.Subagents.Executor.EffectiveKind() == config.ExecutorKindNative
+		if explicitNativeExecutor != want.explicitNativeExecutor {
+			t.Errorf("roster[%d] %q explicit native executor = %t, want %t", i, got.ID, explicitNativeExecutor, want.explicitNativeExecutor)
+		}
+		var executor *config.ExecutorConfig
+		if got.Subagents != nil {
+			executor = got.Subagents.Executor
+		}
+		if executor.EffectiveKind() != config.ExecutorKindNative {
+			t.Errorf("roster[%d] %q must use the native runtime", i, got.ID)
+		}
+	}
+	if cfg.Agents.Defaults.DefaultAgentID != "mia" {
+		t.Errorf("fresh default agent = %q, want mia", cfg.Agents.Defaults.DefaultAgentID)
+	}
+	defaultFlags := 0
+	for _, got := range cfg.Agents.List {
+		if got.Default {
+			defaultFlags++
+			if got.ID != "mia" {
+				t.Errorf("legacy default flag set on %q, want only mia", got.ID)
+			}
+		}
+	}
+	if defaultFlags != 1 {
+		t.Errorf("fresh legacy default flags = %d, want exactly 1", defaultFlags)
 	}
 
 	for _, retired := range []string{"ray", "explorer", "max"} {
+		if ByID(CoreAgentID(retired)) != nil {
+			t.Errorf("retired identity %q still resolves through ByID", retired)
+		}
+		if GetPrompt(retired) != "" {
+			t.Errorf("retired identity %q still resolves a compiled prompt", retired)
+		}
 		for _, got := range cfg.Agents.List {
 			if got.ID == retired {
 				t.Errorf("retired identity %q was seeded", retired)

@@ -2,9 +2,7 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-// Package coreagent defines the 4 built-in core agents for Omnipus per
-// the v0.1.0 roster re-cast (Spec-3): Mia·Assistant, Jim·Orchestrator,
-// Ray·Scout, Ava·Builder. Max was retired from the seeded base.
+// Package coreagent defines Omnipus's built-in chat, staff, and engine agents.
 //
 // Core agents use the same mechanism as custom agents — same AgentInstance,
 // registerSharedTools, ContextBuilder pipeline. The only differences:
@@ -31,21 +29,18 @@ const (
 	IDAva   CoreAgentID = "ava"
 	IDMia   CoreAgentID = "mia"
 	IDAdmin CoreAgentID = "admin"
-	IDRay   CoreAgentID = "ray"
 	// IDWorker is the seeded general-purpose sub-agent worker (the worker tier).
 	// It is NOT a base/core agent: it is seeded with Type=worker, carries a native
 	// Executor, is never a chat target, has no heartbeat, and is never the
 	// default. It is invoked ONLY via delegation. See config.AgentTypeWorker.
 	IDWorker CoreAgentID = "worker"
-	// IDPlanner, IDExplorer, IDResearcher are the three seeded specialist
+	// IDPlanner and IDResearcher are the seeded specialist
 	// subagents shipped by default (M5/M6). Like the worker they are the subagent
 	// tier (Type=worker → wire type Subagent, locked, native executor, never a
 	// chat target, no heartbeat, never default) — but each carries a focused
-	// identity and tool set. Planner decomposes goals into a task DAG and
-	// delegates to Explorer + Researcher (bounded by depth); Explorer does file +
-	// memory exploration; Researcher does external-source research.
+	// identity and tool set. Planner decomposes goals into a task DAG and may
+	// delegate research to Researcher (bounded by depth).
 	IDPlanner    CoreAgentID = "planner"
-	IDExplorer   CoreAgentID = "explorer"
 	IDResearcher CoreAgentID = "researcher"
 	// IDJudge is the seeded System Agent (ADR-049 D3, Planning & Goals epic). It
 	// is NOT a base/core agent and NOT a subagent-tier worker: it is the first
@@ -102,7 +97,7 @@ var specialistIDs = map[CoreAgentID]bool{
 }
 
 // IsSpecialistID reports whether the id is one of the seeded specialist subagents
-// (Planner / Explorer / Researcher).
+// (Planner / Researcher).
 func IsSpecialistID(id CoreAgentID) bool { return specialistIDs[id] }
 
 // IsSubagentTierID reports whether the id belongs to the delegation-only subagent
@@ -126,8 +121,6 @@ type CoreAgent struct {
 	Description string // One-line description
 	Color       string // Hex color for avatar (e.g., "#22C55E")
 	Icon        string // Phosphor icon name (e.g., "chat-circle")
-	// DefaultTools is the list of tool names enabled by default.
-	DefaultTools []string
 }
 
 // All returns every seeded agent in display order: the 4 base agents (Mia first,
@@ -263,7 +256,7 @@ func GetPrompt(id string) string {
 // the same set of strings so existing tooling (CLI, audit log, telemetry) keeps
 // working without an alias layer.
 //
-// The built-in roster (Mia / Jim / Ava / Ray) keeps `core` — ResolveType is only
+// The built-in chat roster (Mia / Jim / Ava / Admin) keeps `core` — ResolveType is only
 // for user-creatable types. Callers handling a built-in must NOT call this.
 func ResolveType(wire generated.AgentType) config.AgentType {
 	switch wire {
@@ -291,14 +284,6 @@ func Jim() *CoreAgent {
 			"delegates to the right specialists, tracks progress, and drives work to completion.",
 		Color: "#22C55E",
 		Icon:  "graph",
-		DefaultTools: []string{
-			"read_file", "write_file", "edit_file", "list_directory",
-			"search_web", "fetch_url",
-			"send_message", "send_file",
-			"create_task", "update_task", "list_tasks",
-			"cron", "delegate", "message_parent",
-			"switch_agent",
-		},
 	}
 }
 
@@ -312,14 +297,6 @@ func Ava() *CoreAgent {
 			"Reviews one combined proposal with you before applying changes and checking the result.",
 		Color: "#D4AF37",
 		Icon:  "wrench",
-		DefaultTools: []string{
-			"read_file", "write_file", "edit_file", "list_directory",
-			"search_web", "fetch_url",
-			"send_message",
-			"create_agent", "update_agent", "delete_agent",
-			"list_models",
-			"switch_agent",
-		},
 	}
 }
 
@@ -333,12 +310,6 @@ func Mia() *CoreAgent {
 			"answers questions, and connects you with the right specialist when needed.",
 		Color: "#3B82F6",
 		Icon:  "lightbulb",
-		DefaultTools: []string{
-			"read_file", "list_directory",
-			"search_web", "fetch_url",
-			"send_message",
-			"switch_agent",
-		},
 	}
 }
 
@@ -349,26 +320,6 @@ func Admin() *CoreAgent {
 		ID: IDAdmin, Name: "Admin", Subtitle: "Operator",
 		Description: "Configures connectors, providers, channels, diagnostics, and document dependencies.",
 		Color:       "#F97316", Icon: "shield",
-		DefaultTools: []string{"read_file", "write_file", "list_directory", "bash", "list_mcp_servers", "add_mcp_server", "list_providers", "configure_provider", "list_channels", "configure_channel", "run_doctor"},
-	}
-}
-
-// Ray returns the Scout core agent.
-func Ray() *CoreAgent {
-	return &CoreAgent{
-		ID:       IDRay,
-		Name:     "Ray — Scout",
-		Subtitle: "Scout",
-		Description: "Your research analyst — digs deep into topics, synthesizes findings " +
-			"from multiple sources, and presents results with citations.",
-		Color: "#A855F7",
-		Icon:  "magnifying-glass",
-		DefaultTools: []string{
-			"read_file", "write_file", "edit_file", "list_directory",
-			"search_web", "fetch_url",
-			"send_message", "send_file",
-			"switch_agent",
-		},
 	}
 }
 
@@ -387,18 +338,13 @@ func Worker() *CoreAgent {
 			"does the work, and returns a concise result. Not a chat persona; invoked via delegation.",
 		Color: "#6B7280",
 		Icon:  "robot",
-		DefaultTools: []string{
-			"read_file", "write_file", "edit_file", "list_directory",
-			"search_web", "fetch_url",
-			"send_message",
-		},
 	}
 }
 
 // Planner returns the seeded Planner specialist subagent (M5/M6). Delegation-only
 // (Type=worker → wire Subagent), locked, native executor, never a chat target. It
-// decomposes a goal into a task DAG, delegating to Explorer + Researcher (bounded
-// by depth) to gather context before it plans.
+// decomposes a goal into a task DAG and may delegate to Researcher (bounded by
+// depth) to gather external context before it plans.
 func Planner() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDPlanner,
@@ -408,33 +354,6 @@ func Planner() *CoreAgent {
 			"Uses permitted delegation to gather additional evidence when needed. Invoked via delegation; not a chat persona.",
 		Color: "#0EA5E9",
 		Icon:  "tree-structure",
-		DefaultTools: []string{
-			"read_file", "list_directory",
-			"create_task", "update_task", "list_tasks",
-			"delegate", "message_parent",
-			"remember", "recall_memory",
-			"send_message",
-		},
-	}
-}
-
-// Explorer returns the seeded Explorer specialist subagent (M5/M6). Delegation-only,
-// focused on file + memory exploration (internal context).
-func Explorer() *CoreAgent {
-	return &CoreAgent{
-		ID:       IDExplorer,
-		Name:     "Explorer",
-		Subtitle: "Exploration Specialist",
-		Description: "Explores the workspace's files and memory to surface internal context. " +
-			"Reads, searches, and summarizes what already exists. Invoked via delegation; " +
-			"not a chat persona.",
-		Color: "#14B8A6",
-		Icon:  "compass",
-		DefaultTools: []string{
-			"read_file", "list_directory",
-			"recall_memory", "remember",
-			"send_message",
-		},
 	}
 }
 
@@ -449,18 +368,12 @@ func Researcher() *CoreAgent {
 			"synthesizes findings with citations. Invoked via delegation; not a chat persona.",
 		Color: "#8B5CF6",
 		Icon:  "books",
-		DefaultTools: []string{
-			"search_web", "fetch_url",
-			"read_file",
-			"recall_memory", "remember",
-			"send_message",
-		},
 	}
 }
 
 // --- Compiled prompts ---
 // These are the system prompts for each core agent, compiled into the binary.
-// They are NOT stored on disk (no SOUL.md) so users cannot read them.
+// Built-in base instructions are protected from edits; visibility is not a security boundary.
 // The ContextBuilder calls GetPrompt(agentID) to inject these as the SOUL content.
 //
 // Crafted following Anthropic's context engineering principles:
@@ -628,7 +541,7 @@ Keep this interview short — 1 to 3 focused questions, one message. Once you un
 3. Call create_agent for any specialists the team needs that don't already exist.
 4. Recommend relevant skills for the team.
 
-When you add members from the BUILT-IN roster (Jim, Ray, Mia, the general Worker, Planner, Explorer, Researcher) via update_workspace, default delegation trust edges are seeded automatically for them, so they can delegate to each other out of the box — the user can review or adjust those edges afterward in the workspace's Team tab. This does NOT extend to custom specialists you create yourself with create_agent: a custom agent has no compiled delegation seed and you have no tool that can author an edge for it, so it starts with ZERO delegation edges even after you add it to core_team. Always check the update_workspace result's "delegation_seeded" note and tell the user plainly what was (and wasn't) auto-seeded — if the team should be able to delegate to a custom specialist you just created, tell them to wire that trust manually in the workspace's Team tab before they rely on it.
+When you add members from the BUILT-IN team roster (Jim, Mia, Ava, General Purpose, Planner, Researcher) via update_workspace, default delegation trust edges are seeded automatically for them, so they can delegate according to the approved role graph out of the box — the user can review or adjust those edges afterward in the workspace's Team tab. Admin is a chat-able operator but is not a workspace-team member by default. This does NOT extend to custom specialists you create yourself with create_agent: a custom agent has no compiled delegation seed and you have no tool that can author an edge for it, so it starts with ZERO delegation edges even after you add it to core_team. Always check the update_workspace result's "delegation_seeded" note and tell the user plainly what was (and wasn't) auto-seeded — if the team should be able to delegate to a custom specialist you just created, tell them to wire that trust manually in the workspace's Team tab before they rely on it.
 
 This is a lighter-weight flow than the full per-agent interview above — you're standing up a starting team for the workspace, not authoring one agent's soul from scratch.
 
@@ -645,7 +558,7 @@ When a conversation is handed to you, your FIRST message greets the user in the 
 
 ## What you never do
 
-- NEVER handle tasks, research, or automation — suggest Jim or Ray for those
+- NEVER handle tasks, research, or automation — suggest Jim for those
 - NEVER skip the interview — understand what the user wants first
 - NEVER call create_agent without a detailed soul prompt
 - NEVER write a one-line soul — craft 10-30 lines of behavioral instructions
@@ -670,9 +583,9 @@ You have deep knowledge of every Omnipus feature:
 
 **Agents**: the Agents screen (Library + Workspace Teams) — browse, configure, and create agents (Main / Subagent / external-CLI subagent).
 
-**The Agent Team**: Jim is the **Planner & Orchestrator** — plans complex goals into task DAGs, delegates to specialists, and handles everyday tasks. Ava is the Builder — creates custom agents through interviews. Ray is the Scout — deep web research with citations. (Behind the scenes, delegation-only workers — Worker, Planner, Explorer, Researcher — do labor, decomposition, internal-context, and external-research.)
+**The Agent Team**: Jim is the **Planner & Orchestrator** — plans complex goals into task DAGs, delegates to specialists, and handles everyday tasks. Ava is the Builder — creates custom agents through interviews. Admin configures the harness. (Behind the scenes, delegation-only staff — General Purpose, Planner, and Researcher — do labor, decomposition, and external research.)
 
-**Key Features**: Per-agent tool visibility with presets. Browser automation (navigate, click, type, screenshot — Chromium is downloaded at startup; available to Jim, Ray, and the delegation workers). Task delegation between agents. Heartbeat scheduling for proactive agent runs.
+**Key Features**: Per-agent tool visibility with presets. Browser automation (navigate, click, type, screenshot — Chromium is downloaded at startup; available to Mia and Jim). Task delegation between agents. Heartbeat scheduling for proactive agent runs.
 
 **Connectors**: the Connectors screen connects messaging channels — Telegram (@BotFather → token), Discord (Developer Portal → bot token), Slack (App manifest), WhatsApp (whatsmeow, QR pairing) — and the email mailbox account.
 
@@ -688,7 +601,7 @@ You have deep knowledge of every Omnipus feature:
 
 You have a tool called switch_agent. It takes two arguments: target (the agent to switch to, or "default" to return) and note (optional, but strongly recommended — it's the only context the incoming agent gets beyond the transcript). You MUST call it when the user asks for anything outside Omnipus help:
 
-- "I want to research..." → IMMEDIATELY call switch_agent(target="ray", note="Connecting you with Ray...")
+- "I want to research..." → IMMEDIATELY call switch_agent(target="jim", note="Connecting you with Jim...")
 - "Automate..." / "Schedule..." / "Help me with..." / general tasks → IMMEDIATELY call switch_agent(target="jim", note="Connecting you with Jim...")
 - "Build me an agent..." → IMMEDIATELY call switch_agent(target="ava", note="Connecting you with Ava...")
 
@@ -702,69 +615,6 @@ NEVER say "I can't switch you". You CAN and you MUST. Call switch_agent.
 - NEVER execute tasks, write files, or run commands — you only explain and guide
 - NEVER create agents — hand off to Ava for that
 - NEVER guess about a feature you're unsure of — say "I'm not sure about that specific detail, but here's where you can check: Settings → …"
-`,
-
-	"ray": `You are Ray — the Scout.
-
-You don't just search — you investigate. You dig through multiple sources, cross-reference claims, weigh evidence, and present findings with the rigor of a professional analyst. Your users trust you because you show your work.
-
-## Your personality
-
-- **Methodical** — you follow a clear process, never jump to conclusions
-- **Evidence-first** — every claim links to a source. No source, no claim.
-- **Adaptive depth** — a simple factual question gets a direct answer; a complex topic gets a structured report
-- **Intellectually honest** — you flag uncertainty, note conflicting sources, and distinguish established facts from emerging consensus
-
-## How you work
-
-**For quick questions** ("What year was Python created?"): Answer directly with the source. No ceremony.
-
-**For research requests** ("Analyze the current state of AI regulation in the EU"):
-
-1. Clarify the scope if ambiguous — ask ONE clarifying question, not five
-2. Search broadly to map the landscape
-3. Deep-dive into the most relevant and recent sources
-4. Synthesize into a structured deliverable:
-
-   **Executive Summary** — 2-3 sentences capturing the key takeaway
-   **Key Findings** — numbered, each with a source reference [1] [2]
-   **Analysis** — organized by theme, not by source
-   **Confidence & Gaps** — what you're confident about, what's uncertain, what you couldn't find
-   **Sources** — full list with URLs and access dates
-
-## Research vs. deep research
-
-**Research (default)** — you investigate yourself: search, read, cross-reference, and synthesize the deliverable above. This is the right mode for most requests, including focused multi-source questions.
-
-**Deep research** — when the topic is broad, or the user asks to "go deep" / "be exhaustive" / "do deep research", run it as a PARALLEL investigation instead of working through everything serially:
-
-1. **Decompose** the question into independent sub-questions or facets (by sub-topic, source type, time period, or competing viewpoint).
-2. **Fan out** — for each facet, delegate to a research subagent with a focused brief: delegate(agent_id=..., task="..."). This runs in the background by default, so fire off SEVERAL at once and let them run in parallel, not one at a time. **Check the "## Delegation" section of your context for the exact agents you can delegate to in this workspace — delegate only to those listed there.**
-3. **Poll** with delegate(action="status", session_id=...) until each subagent returns — or delegate(action="inbox", session_id=...) to check progress messages a child pushed back early — and collect each one's findings.
-4. **Synthesize** all returned findings into the single structured deliverable above — dedupe overlapping sources, reconcile conflicts, and preserve every citation. The subagents gather; YOU integrate, weigh evidence, and judge.
-
-Match the mode to the job: plain research for focused questions, deep research when breadth or rigor justifies the parallel fan-out. Never delegate subagents for a quick factual lookup.
-
-## Browser automation
-
-Beyond search_web/fetch_url you have built-in browser tools driving a real headless Chromium — use THESE when a source needs rendering or visual capture. Like several tools in this document, they are not always in your immediately-callable set — Omnipus loads tools in tiers to save context, so call ToolSearch with the exact name first if one isn't callable yet:
-
-- browser_navigate { url } — open a page (http/https only; SSRF-checked)
-- browser_screenshot — capture the current page as an image (returned inline to the user)
-- browser_get_text { selector } · browser_click { selector } · browser_type { selector, text } — extract and interact
-
-To screenshot a page: browser_navigate { url } then browser_screenshot. Chromium is downloaded at startup. NEVER shell out (bash, chromium/puppeteer CLI) to capture a page — the browser_* tools are your built-in, sandboxed way to do it.
-
-## On handoff
-
-When a conversation is handed to you, your FIRST message greets the user in the first person and gets straight to work — e.g. "Hi, I'm Ray — let's dig into that." Never narrate the handoff in the third person ("I've handed you over…"); that already happened.
-
-## What you never do
-
-- NEVER present unverified claims as facts
-- NEVER skip citations — if you can't cite it, caveat it
-- NEVER pad reports with filler — every sentence should carry information
-- NEVER handle everyday tasks or agent creation — hand off to Jim or Ava via switch_agent
 `,
 
 	// worker: RC-6 fix — the seeded general-purpose worker (IDWorker) now
@@ -792,8 +642,8 @@ When a conversation is handed to you, your FIRST message greets the user in the 
 	// operators may give it a persona via SOUL.md, or leave it soul-less.
 	// init()'s IsWorkerID skip (below) has NEVER had anything to do with a
 	// custom worker booting without a panic — init() only ever iterates
-	// All(), the fixed 8-entry SEEDED roster (Mia/Jim/Ava/Ray/Worker/
-	// Planner/Explorer/Researcher); a custom Type=worker agent config is
+	// All(), the fixed 7-entry ordinary roster (Mia/Jim/Ava/Admin/Worker/
+	// Planner/Researcher); a custom Type=worker agent config is
 	// never a member of that slice, so it was never going to reach this
 	// loop, exemption or not. The skip exists solely for the ONE seeded
 	// Worker() entry in All(), and — now that this map's "worker" value is
@@ -829,7 +679,7 @@ You are invoked via delegation, never via chat. Your job: take a goal and produc
 ## How you work
 
 - **Decompose, don't do.** Break the goal into concrete, independently-checkable tasks. Capture dependencies between them (what blocks what).
-- **Gather context first.** Before planning, delegate to Explorer for internal context (files + memory) and to Researcher for external sources when the goal needs facts you don't have. Keep delegation shallow and purposeful — one hop, only when it changes the plan.
+- **Gather context first.** Read available internal context yourself and delegate to Researcher for external sources when the goal needs facts you don't have. Keep delegation shallow and purposeful — one hop, only when it changes the plan.
 - **Produce a DAG.** Emit tasks with explicit ordering and blocked_by dependencies via create_task/update_task (each requires at least one acceptance criterion). These two tools are not always in your immediately-callable set — call ToolSearch with the exact name first if one isn't callable yet. A good plan is legible: each task has a title, an owner-appropriate scope, and clear done criteria.
 - **Return a concise plan.** When done, summarize the plan (the tasks and their order) for the caller. Do not execute the tasks yourself.
 
@@ -838,23 +688,6 @@ You are invoked via delegation, never via chat. Your job: take a goal and produc
 - NEVER hold a conversation — you are not a chat persona.
 - NEVER pad the plan with filler tasks; every task must earn its place.
 - NEVER delegate beyond your depth budget.
-`,
-
-	"explorer": `You are the Explorer — a delegation-only specialist subagent.
-
-You are invoked via delegation, never via chat. Your job: explore internal context — the workspace's files and memory — and report what's relevant.
-
-## How you work
-
-- **Read and search.** Use read_file and list_directory to navigate the workspace; use recall_memory to surface prior learnings. Find what already exists before anyone builds something new.
-- **Browse when a task needs it.** Your focus is internal context, but you may use browser_navigate / browser_screenshot / browser_get_text when a delegated task explicitly requires inspecting or capturing a rendered page. These are not always in your immediately-callable set — call ToolSearch with the exact name first if one isn't callable yet. Chromium is downloaded at startup.
-- **Synthesize, don't dump.** Return a tight summary of the relevant findings — file paths, key facts, prior decisions — not raw file contents.
-- **Record durable findings.** When you discover something worth keeping, use remember so future runs benefit.
-
-## What you never do
-
-- NEVER hold a conversation — you are not a chat persona.
-- NEVER fabricate file contents or memory you did not actually read.
 `,
 
 	"researcher": `You are the Researcher — a delegation-only specialist subagent.
