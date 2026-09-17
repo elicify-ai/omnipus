@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -148,6 +149,10 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 				"type":        "boolean",
 				"description": "Force reinstall if skill already exists (default false)",
 			},
+			"revision": map[string]any{
+				"type":        "string",
+				"description": "Required current revision when explicitly replacing an installed skill; omit only for a first install.",
+			},
 			"ownerHandle": map[string]any{
 				"type": "string",
 				"description": "Disambiguates slug when it is published by more than one owner on the " +
@@ -160,6 +165,9 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 }
 
 func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *ToolResult {
+	if err := ValidateConfigurationWriteContext(ctx); err != nil {
+		return ErrorResult(fmt.Sprintf(`{"code":"DELEGATED_WRITE_FORBIDDEN","message":%q}`, err.Error()))
+	}
 	// Install lock to prevent concurrent directory operations.
 	// Ideally this should be done at a `slug` level, currently, its at the
 	// (single, global) skills-directory level.
@@ -180,6 +188,10 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 
 	version, _ := args["version"].(string)
 	force, _ := args["force"].(bool)
+	revision, _ := args["revision"].(string)
+	if force && revision == "" {
+		return ErrorResult("revision is required when replacing an installed skill")
+	}
 
 	// Validate ownerHandle, if supplied (disambiguates a slug published by
 	// more than one owner — see Parameters()).
@@ -200,9 +212,9 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	if _, err := os.Stat(targetDir); err == nil {
 		alreadyInstalled = true
 	}
-	if alreadyInstalled && !force {
+	if alreadyInstalled && revision == "" {
 		return ErrorResult(
-			fmt.Sprintf("skill %q already installed at %s. Use force=true to reinstall.", slug, targetDir),
+			fmt.Sprintf("skill %q already installed at %s. Read it and provide its revision to replace it.", slug, targetDir),
 		)
 	}
 
@@ -294,19 +306,12 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 
 	// Everything above succeeded: only now do we touch the previous install
 	// (if any), and only to swap in the verified replacement.
-	if alreadyInstalled {
-		if err := os.RemoveAll(targetDir); err != nil {
-			return ErrorResult(fmt.Sprintf(
-				"downloaded %q successfully but failed to remove the previous install at %s: %v",
-				slug, targetDir, err,
-			))
+	nextRevision, err := skills.PublishStagedSkill(skillsDir, slug, stageDir, revision)
+	if err != nil {
+		if errors.Is(err, skills.ErrRevisionConflict) {
+			return ErrorResult(fmt.Sprintf("CONFLICT: skill %q changed after review; read it again before replacing it", slug))
 		}
-	}
-	if err := os.Rename(stageDir, targetDir); err != nil {
-		return ErrorResult(fmt.Sprintf(
-			"downloaded %q successfully but failed to move it into place at %s: %v",
-			slug, targetDir, err,
-		))
+		return ErrorResult(fmt.Sprintf("downloaded %q successfully but failed to publish it: %v", slug, err))
 	}
 
 	// Build result with moderation warning if suspicious.
@@ -321,6 +326,7 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 		output += fmt.Sprintf("Description: %s\n", result.Summary)
 	}
 	output += "\nThe skill is now available and can be loaded in the current session."
+	output += fmt.Sprintf("\nRevision: %s\nPersistence: complete\nActivation: active", nextRevision)
 
 	return SilentResult(output)
 }

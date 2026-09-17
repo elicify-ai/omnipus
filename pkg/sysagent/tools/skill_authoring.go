@@ -89,7 +89,7 @@ func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) *too
 			"skill writer not configured", "ensure the gateway is started with a valid workspace"))
 	}
 
-	path, err := t.deps.SkillWriter.CreateSkill(name, content)
+	path, revision, err := t.deps.SkillWriter.CreateSkillReviewed(name, content)
 	if err != nil {
 		return skillAuthoringError("create", name, err)
 	}
@@ -100,10 +100,14 @@ func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) *too
 		"event", "skill_authored", "action", "create", "name", name, "path", path)
 
 	return tools.NewToolResult(successJSON(map[string]any{
-		"success": true,
-		"name":    name,
-		"path":    path,
-		"action":  "created",
+		"success":            true,
+		"name":               name,
+		"path":               path,
+		"action":             "created",
+		"revision":           revision,
+		"persistence_status": "complete",
+		"activation_status":  "active",
+		"changed_fields":     []string{"content"},
 	}))
 }
 
@@ -135,8 +139,9 @@ func (t *SkillEditTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Full new SKILL.md content including YAML frontmatter.",
 			},
+			"revision": map[string]any{"type": "string", "description": "Revision returned by the reviewed skill read."},
 		},
-		"required": []string{"name", "content"},
+		"required": []string{"name", "content", "revision"},
 	}
 }
 
@@ -146,6 +151,7 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 	}
 	name, _ := args["name"].(string)
 	content, _ := args["content"].(string)
+	revision, _ := args["revision"].(string)
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
@@ -153,6 +159,9 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 		return tools.ErrorResult(
 			errorJSON("INVALID_INPUT", "content is required", "provide the full new SKILL.md including frontmatter"),
 		)
+	}
+	if revision == "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "revision is required", "read the skill again before editing"))
 	}
 
 	if t.deps == nil || t.deps.SkillWriter == nil {
@@ -172,7 +181,7 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 	// global-root path below, unchanged.
 	if shelf := resolveProjectShelf(t.deps, ctx); shelf != nil {
 		if projWriter, ps, perr := skills.ResolveProjectSkillWriter(shelf, name); perr == nil {
-			path, _, editErr := projWriter.EditSkill(name, content, true)
+			path, _, nextRevision, editErr := projWriter.EditSkillReviewed(name, content, true, revision)
 			if editErr != nil {
 				return skillAuthoringError("edit", name, editErr)
 			}
@@ -182,12 +191,16 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 				"event", "skill_authored", "action", "edit", "name", name,
 				"path", path, "shelf", "project", "mount", ps.MountName)
 			return tools.NewToolResult(successJSON(map[string]any{
-				"success": true,
-				"name":    name,
-				"path":    path,
-				"action":  "edited",
-				"shelf":   "project",
-				"mount":   ps.MountName,
+				"success":            true,
+				"name":               name,
+				"path":               path,
+				"action":             "edited",
+				"shelf":              "project",
+				"mount":              ps.MountName,
+				"revision":           nextRevision,
+				"persistence_status": "complete",
+				"activation_status":  "active",
+				"changed_fields":     []string{"content"},
 			}))
 		} else if !errors.Is(perr, skills.ErrNotFound) {
 			// ErrProjectWriteEscapesMount or another shelf-integrity problem —
@@ -205,7 +218,26 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 	// create a user override in the writer's (global) root rather than failing.
 	allowOverride := skillExistsOnLoadPath(t.deps.SkillsLoader, name)
 
-	path, createdOverride, err := t.deps.SkillWriter.EditSkill(name, content, allowOverride)
+	var path, nextRevision string
+	var createdOverride bool
+	var err error
+	if allowOverride {
+		if _, localErr := t.deps.SkillWriter.SkillRevision(name); errors.Is(localErr, skills.ErrNotFound) {
+			sourcePath := ""
+			for _, info := range t.deps.SkillsLoader.ListSkills() {
+				if strings.EqualFold(info.ID, name) {
+					sourcePath = info.Path
+					break
+				}
+			}
+			path, nextRevision, err = t.deps.SkillWriter.CreateOverrideReviewed(name, content, sourcePath, revision)
+			createdOverride = err == nil
+		} else {
+			path, createdOverride, nextRevision, err = t.deps.SkillWriter.EditSkillReviewed(name, content, allowOverride, revision)
+		}
+	} else {
+		path, createdOverride, nextRevision, err = t.deps.SkillWriter.EditSkillReviewed(name, content, false, revision)
+	}
 	if err != nil {
 		return skillAuthoringError("edit", name, err)
 	}
@@ -219,11 +251,15 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 		action = "override_created"
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
-		"success":          true,
-		"name":             name,
-		"path":             path,
-		"action":           action,
-		"created_override": createdOverride,
+		"success":            true,
+		"name":               name,
+		"path":               path,
+		"action":             action,
+		"created_override":   createdOverride,
+		"revision":           nextRevision,
+		"persistence_status": "complete",
+		"activation_status":  "active",
+		"changed_fields":     []string{"content"},
 	}))
 }
 
@@ -310,6 +346,9 @@ func skillAuthoringError(op, name string, err error) *tools.ToolResult {
 	case errors.Is(err, skills.ErrNotFound):
 		return tools.ErrorResult(errorJSON("NOT_FOUND",
 			fmt.Sprintf("skill %q not found", name), "use create_skill to author a new skill"))
+	case errors.Is(err, skills.ErrRevisionConflict):
+		return tools.ErrorResult(errorJSON("CONFLICT",
+			fmt.Sprintf("skill %q changed after review", name), "read the skill again and submit its current revision"))
 	default:
 		// Validation failures (invalid frontmatter, missing name/description)
 		// and I/O errors land here. Surface the cause for the agent to correct.

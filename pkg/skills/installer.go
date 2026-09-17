@@ -40,6 +40,25 @@ type SkillInstaller struct {
 	proxy       string
 }
 
+func (si *SkillInstaller) SkillsRoot() string { return filepath.Join(si.workspace, "skills") }
+
+// UninstallReviewed removes only the package revision the caller reviewed.
+// Comparison and deletion share the same process-wide lock as authoring and
+// marketplace replacement, so a concurrent writer cannot slip between them.
+func (si *SkillInstaller) UninstallReviewed(name, expectedRevision string) error {
+	writer := NewSkillWriter(si.SkillsRoot())
+	return WithMutationLock(writer.Root(), func() error {
+		current, err := writer.SkillRevision(name)
+		if err != nil {
+			return err
+		}
+		if expectedRevision == "" || current != expectedRevision {
+			return fmt.Errorf("%w: reviewed %q, current %q", ErrRevisionConflict, expectedRevision, current)
+		}
+		return si.Uninstall(name)
+	})
+}
+
 // NewSkillInstaller creates a new skill installer.
 // proxy is an optional HTTP/HTTPS/SOCKS5 proxy URL for downloading skills.
 // To enforce SSRF protection (SEC-24), use NewSkillInstallerWithSSRF instead.

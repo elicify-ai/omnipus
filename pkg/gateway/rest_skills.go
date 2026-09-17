@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/agent"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
@@ -34,7 +36,7 @@ func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && sub == "install":
 		a.installSkill(w, r)
 	case r.Method == http.MethodDelete && sub != "":
-		a.deleteSkill(w, sub)
+		a.deleteSkill(w, r, sub)
 	default:
 		jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
@@ -75,6 +77,17 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 			Name:     name,
 			Status:   gen.SkillStatusActive,
 			Verified: isBuiltin, // built-in skills are Omnipus-team-verified.
+		}
+		writer := skills.NewSkillWriter(filepath.Dir(filepath.Dir(s.Path)))
+		revision, revisionErr := writer.SkillRevision(id)
+		if revisionErr != nil {
+			slog.Warn("rest: compute skill revision", "skill", id, "error", revisionErr)
+			skill.Revision = "unavailable"
+			skill.Status = gen.SkillStatusError
+			stage := "read"
+			skill.ErrorStage = &stage
+		} else {
+			skill.Revision = revision
 		}
 
 		// Version: SKILL.md frontmatter when present, else a neutral default.
@@ -384,32 +397,36 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	if !decodeAndValidate(w, r, "SkillInstallRequest", &req, validateEnabled) {
 		return
 	}
-	slug := strings.TrimSpace(req.Slug)
-	if slug == "" {
-		jsonErr(w, http.StatusBadRequest, "slug is required")
+	slug := ""
+	if req.Slug != nil {
+		slug = strings.TrimSpace(*req.Slug)
+	}
+	uploadID := ""
+	if req.UploadId != nil {
+		uploadID = strings.TrimSpace(*req.UploadId)
+	}
+	if (slug == "") == (uploadID == "") {
+		jsonErr(w, http.StatusBadRequest, "exactly one of slug or upload_id is required")
 		return
 	}
 	// Path-traversal / identity guard: the slug becomes a directory name.
-	if err := validateEntityID(slug); err != nil {
+	if slug != "" && validateEntityID(slug) != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid skill slug")
 		return
 	}
+	if uploadID != "" && req.Version != nil {
+		jsonErr(w, http.StatusBadRequest, "version applies only to slug installs")
+		return
+	}
 
-	if !a.marketplaceEnabled() {
+	if slug != "" && !a.marketplaceEnabled() {
 		jsonErr(w, http.StatusConflict, "no skill marketplace is enabled")
 		return
 	}
 
-	if a.skillRegistry == nil {
+	if slug != "" && a.skillRegistry == nil {
 		slog.Warn("rest: skill install requested but no registry configured", "slug", slug)
 		jsonErr(w, http.StatusBadGateway, "skill registry unavailable")
-		return
-	}
-
-	// Reject re-installing over an existing skill (built-in or user) so an install
-	// never silently clobbers a local skill.
-	if a.skillSource(slug) != "" {
-		jsonErr(w, http.StatusConflict, fmt.Sprintf("skill %q is already installed", slug))
 		return
 	}
 
@@ -418,25 +435,71 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 		version = strings.TrimSpace(*req.Version)
 	}
 
-	targetDir := filepath.Join(a.homePath, "skills", slug)
-	result, err := a.skillRegistry.DownloadAndInstall(r.Context(), slug, version, targetDir)
-	if err != nil {
-		// Clean up any partial extraction so a failed install leaves no debris.
-		if rmErr := os.RemoveAll(targetDir); rmErr != nil {
-			slog.Warn("rest: cleanup after failed skill install", "slug", slug, "error", rmErr)
+	skillsRoot := filepath.Join(a.homePath, "skills")
+	stagingRoot := filepath.Join(skillsRoot, ".staging")
+	var result *skills.InstallResult
+	var stageDir string
+	var err error
+	if slug != "" {
+		err = os.MkdirAll(stagingRoot, 0o755)
+		if err == nil {
+			stageDir, err = os.MkdirTemp(stagingRoot, slug+".install-")
 		}
+		if err == nil {
+			result, err = a.skillRegistry.DownloadAndInstall(r.Context(), slug, version, stageDir)
+		}
+	} else {
+		store := a.agentLoop.GetMediaStore()
+		if store == nil {
+			store = a.mediaStore
+		}
+		if store == nil {
+			jsonErr(w, http.StatusServiceUnavailable, "upload store unavailable")
+			return
+		}
+		var uploadPath string
+		var meta media.MediaMeta
+		uploadPath, meta, err = store.ResolveWithMeta(uploadID)
+		if err == nil && !strings.HasPrefix(meta.Source, "upload:") {
+			err = fmt.Errorf("upload_id does not identify an authorized upload")
+		}
+		if err == nil {
+			root := filepath.Join(a.homePath, "uploads")
+			rel, relErr := filepath.Rel(root, uploadPath)
+			if relErr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				err = fmt.Errorf("upload resolves outside the authorized upload store")
+			}
+		}
+		if err == nil {
+			slug, stageDir, err = skills.StageUploadedSkill(uploadPath, stagingRoot)
+		}
+	}
+	if stageDir != "" {
+		defer os.RemoveAll(stageDir)
+	}
+	if err != nil {
 		slog.Warn("rest: skill install failed", "slug", slug, "version", version, "error", err)
-		jsonErr(w, http.StatusBadGateway, fmt.Sprintf("could not install skill %q: %v", slug, err))
+		jsonErr(w, http.StatusBadGateway, fmt.Sprintf("could not stage skill: %v", err))
 		return
 	}
 
 	// Surface a moderation block as a hard failure: do not leave a malware-flagged
 	// skill installed.
 	if result != nil && result.IsMalwareBlocked {
-		if rmErr := os.RemoveAll(targetDir); rmErr != nil {
-			slog.Warn("rest: cleanup after blocked skill install", "slug", slug, "error", rmErr)
-		}
 		jsonErr(w, http.StatusForbidden, fmt.Sprintf("skill %q is blocked by registry moderation", slug))
+		return
+	}
+	expected := ""
+	if req.Revision != nil {
+		expected = strings.TrimSpace(*req.Revision)
+	}
+	revision, err := skills.PublishStagedSkill(skillsRoot, slug, stageDir, expected)
+	if err != nil {
+		if errors.Is(err, skills.ErrRevisionConflict) {
+			jsonErr(w, http.StatusConflict, err.Error())
+		} else {
+			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not publish skill: %v", err))
+		}
 		return
 	}
 
@@ -451,6 +514,7 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 		Version:  installedVersion,
 		Status:   gen.SkillStatusActive,
 		Verified: result != nil && result.Verified,
+		Revision: revision,
 	}
 	if result != nil && result.Summary != "" {
 		summary := result.Summary
@@ -462,7 +526,7 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, skill)
 }
 
-func (a *restAPI) deleteSkill(w http.ResponseWriter, name string) {
+func (a *restAPI) deleteSkill(w http.ResponseWriter, r *http.Request, name string) {
 	if err := validateEntityID(name); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid skill name")
 		return
@@ -472,6 +536,11 @@ func (a *restAPI) deleteSkill(w http.ResponseWriter, name string) {
 	// button, but the backend is the enforcing gate. Reject with 403.
 	if a.skillSource(name) == "builtin" {
 		jsonErr(w, http.StatusForbidden, "built-in skills cannot be removed")
+		return
+	}
+	revision := strings.TrimSpace(r.URL.Query().Get("revision"))
+	if revision == "" {
+		jsonErr(w, http.StatusBadRequest, "revision is required")
 		return
 	}
 	// a.homePath (OMNIPUS_HOME) is the correct root here: ADR-046 FR-009 made
@@ -495,7 +564,11 @@ func (a *restAPI) deleteSkill(w http.ResponseWriter, name string) {
 		jsonErr(w, http.StatusInternalServerError, "could not initialize skill installer")
 		return
 	}
-	if err := installer.Uninstall(name); err != nil {
+	if err := installer.UninstallReviewed(name, revision); err != nil {
+		if errors.Is(err, skills.ErrRevisionConflict) {
+			jsonErr(w, http.StatusConflict, err.Error())
+			return
+		}
 		if strings.Contains(err.Error(), "not found") {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("skill %q not found", name))
 			return

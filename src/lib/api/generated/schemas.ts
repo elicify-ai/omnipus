@@ -1840,11 +1840,6 @@ type DayBucket = {
       }
     | undefined;
 };
-type SkillInstallRequest = {
-  revision?: ConfigurationRevision | undefined;
-  slug: string;
-  version?: string | undefined;
-};
 type ChannelConfigureRequest = Partial<
   {
     instance_id: string;
@@ -3988,15 +3983,7 @@ export const SkillMarketplaceStatus = z.object({
   enabled: z.boolean(),
   registries: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
 });
-export const SkillInstallRequest: z.ZodType<SkillInstallRequest> = z.object({
-  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/).optional(),
-  slug: z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(/^[a-z0-9][a-z0-9._-]*$/),
-  version: z.string().max(64).optional(),
-});
+export const SkillInstallRequest = z.union([z.unknown(), z.unknown()]);
 export const SseChatRequest = z.object({ message: z.string() });
 export const ActivityEvent: z.ZodType<ActivityEvent> = z
   .object({
@@ -11825,7 +11812,7 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
       {
         name: "body",
         type: "Body",
-        schema: SkillInstallRequest,
+        schema: z.union([z.unknown(), z.unknown()]),
       },
     ],
     response: Skill,

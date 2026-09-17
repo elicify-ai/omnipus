@@ -117,8 +117,10 @@ func TestInstallSkillTool_ForceReinstallStillWorks(t *testing.T) {
 
 	// A force reinstall over an existing skill — the branch that holds the
 	// os.RemoveAll — must still replace exactly that one directory.
+	revision, err := skills.NewSkillWriter(globalSkills).SkillRevision("pdf")
+	require.NoError(t, err)
 	result = tool.Execute(context.Background(), map[string]any{
-		"slug": "pdf", "registry": "fake", "force": true,
+		"slug": "pdf", "registry": "fake", "force": true, "revision": revision,
 	})
 	require.False(t, result.IsError, "force reinstall must succeed, got: %s", result.ForLLM)
 	_, err = os.Stat(filepath.Join(globalSkills, "pdf", "SKILL.md"))

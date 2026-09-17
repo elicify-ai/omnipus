@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +54,26 @@ func TestInstallSkillToolMissingSlug(t *testing.T) {
 	result := tool.Execute(context.Background(), map[string]any{})
 	assert.True(t, result.IsError)
 	assert.Contains(t, result.ForLLM, "identifier is required and must be a non-empty string")
+}
+
+func TestInstallSkillToolAvaDelegatedContextWritesNothing(t *testing.T) {
+	root := t.TempDir()
+	mgr := skills.NewRegistryManager()
+	mgr.AddRegistry(fakeSkillRegistry{})
+	tool := NewInstallSkillTool(mgr, root)
+	ctx := WithAgentID(WithTranscriptSessionID(context.Background(), "owner-session"), "ava")
+	ctx = WithDelegationDepth(ctx, 1)
+	result := tool.Execute(ctx, map[string]any{"slug": "guarded", "registry": "fake"})
+	if !result.IsError || !strings.Contains(result.ForLLM, "DELEGATED_WRITE_FORBIDDEN") {
+		t.Fatalf("result=%+v", result)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("delegated Ava wrote files: %v", entries)
+	}
 }
 
 func TestInstallSkillToolEmptySlug(t *testing.T) {
@@ -186,11 +207,18 @@ type fakeOwnerScopedRegistry struct {
 func (f *fakeOwnerScopedRegistry) Name() string { return "fake-owner-scoped" }
 
 func (f *fakeOwnerScopedRegistry) DownloadAndInstallForOwner(
-	_ context.Context, slug, ownerHandle, version, _ string,
+	_ context.Context, slug, ownerHandle, version, targetDir string,
 ) (*skills.InstallResult, error) {
 	f.gotSlug = slug
 	f.gotOwnerHandle = ownerHandle
 	f.gotVersion = version
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return nil, err
+	}
+	content := "---\nname: " + slug + "\ndescription: Use this owner-scoped test skill when requested.\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		return nil, err
+	}
 	return &skills.InstallResult{Version: "2.0.0"}, nil
 }
 

@@ -244,9 +244,14 @@ func TestSkillRemoveTool_InstalledSkill_RemovesAndReturnsSuccess(t *testing.T) {
 	deps.SkillInstaller = installer
 
 	tool := systools.NewSkillRemoveTool(deps)
+	revision, err := skills.NewSkillWriter(filepath.Join(workspace, "skills")).SkillRevision("test-skill")
+	if err != nil {
+		t.Fatal(err)
+	}
 	result := tool.Execute(context.Background(), map[string]any{
-		"name":    "test-skill",
-		"confirm": true,
+		"name":     "test-skill",
+		"confirm":  true,
+		"revision": revision,
 	})
 	m := parseSuccess(t, result.ForLLM)
 	if success, _ := m["success"].(bool); !success {
@@ -276,8 +281,9 @@ func TestSkillRemoveTool_NotInstalled_ReturnsNotFound(t *testing.T) {
 
 	tool := systools.NewSkillRemoveTool(deps)
 	result := tool.Execute(context.Background(), map[string]any{
-		"name":    "nonexistent-skill",
-		"confirm": true,
+		"name":     "nonexistent-skill",
+		"confirm":  true,
+		"revision": "reviewed-absent",
 	})
 	m := parseError(t, result.ForLLM)
 	errBlock, _ := m["error"].(map[string]any)

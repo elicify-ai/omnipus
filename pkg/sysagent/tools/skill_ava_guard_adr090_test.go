@@ -49,8 +49,11 @@ func TestADR090_AvaSkillWritesRequireOwnerSession(t *testing.T) {
 				require.NoError(t, err)
 				deps.SkillInstaller = installer
 				const name = "guard-test"
+				revision := ""
 				if operation != "create" {
 					_, err := deps.SkillWriter.CreateSkill(name, validSkill(name))
+					require.NoError(t, err)
+					revision, err = deps.SkillWriter.SkillRevision(name)
 					require.NoError(t, err)
 				}
 				ctx := tools.WithAgentID(context.Background(), "ava")
@@ -73,7 +76,7 @@ func TestADR090_AvaSkillWritesRequireOwnerSession(t *testing.T) {
 					tool = systools.NewSkillRemoveTool(deps)
 				}
 				before := skillTreeBytes(t, root)
-				result := tool.Execute(ctx, map[string]any{"name": name, "content": validSkill(name) + "\nChanged.\n", "confirm": true})
+				result := tool.Execute(ctx, map[string]any{"name": name, "content": validSkill(name) + "\nChanged.\n", "confirm": true, "revision": revision})
 				after := skillTreeBytes(t, root)
 				if mode == "attended" {
 					require.False(t, result.IsError, result.ForLLM)

@@ -16,6 +16,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -149,9 +150,11 @@ func TestDeleteSkillRemovesFromGlobalSkillsDir(t *testing.T) {
 	require.NoError(t, os.MkdirAll(skillDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
 		[]byte("---\nname: docker-compose\ndescription: manage compose stacks\n---\n"), 0o644))
+	revision, err := skills.NewSkillWriter(filepath.Join(tmpDir, "skills")).SkillRevision(slug)
+	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/"+slug, nil)
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/"+slug+"?revision="+revision, nil)
 	r.URL.Path = "/api/v1/skills/" + slug
 	api.HandleSkills(w, r)
 
@@ -200,7 +203,7 @@ func TestDeleteSkillNotFoundForUnknownSkill(t *testing.T) {
 	defer cleanup()
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/does-not-exist", nil)
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/does-not-exist?revision=reviewed-absent", nil)
 	r.URL.Path = "/api/v1/skills/does-not-exist"
 	api.HandleSkills(w, r)
 
@@ -309,7 +312,8 @@ func TestSearchSkillsConflictWhenMarketplaceDisabled(t *testing.T) {
 func TestInstallSkillConflictWhenMarketplaceDisabled(t *testing.T) {
 	api := newTestRestAPIWithClawHub(t, false, "")
 
-	body, err := json.Marshal(gen.SkillInstallRequest{Slug: "web-search"})
+	slug := "web-search"
+	body, err := json.Marshal(gen.SkillInstallRequest{Slug: &slug})
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
@@ -490,6 +494,45 @@ func TestInstallSkillSuccess(t *testing.T) {
 	assert.Equal(t, "cool-skill", skill.Id)
 	assert.Equal(t, "2.0.0", skill.Version)
 	assert.True(t, skill.Verified)
+}
+
+func TestInstallSkillFromAuthorizedMarkdownUpload(t *testing.T) {
+	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
+	uploadDir := filepath.Join(api.homePath, "uploads", "owner-session")
+	require.NoError(t, os.MkdirAll(uploadDir, 0o755))
+	uploadPath := filepath.Join(uploadDir, "local-skill.md")
+	content := "---\nname: local-skill\ndescription: Use when a local uploaded skill is requested.\n---\n\nBody.\n"
+	require.NoError(t, os.WriteFile(uploadPath, []byte(content), 0o644))
+	store := media.NewFileMediaStore()
+	api.mediaStore = store
+	ref, err := store.Store(uploadPath, media.MediaMeta{Filename: "local-skill.md", Source: "upload:webchat", CleanupPolicy: media.CleanupPolicyForgetOnly}, "upload:owner-session")
+	require.NoError(t, err)
+
+	body, err := json.Marshal(map[string]any{"upload_id": ref})
+	require.NoError(t, err)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/skills/install", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var skill gen.Skill
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &skill))
+	require.Equal(t, "local-skill", skill.Id)
+	require.NotEmpty(t, skill.Revision)
+	got, err := os.ReadFile(filepath.Join(api.homePath, "skills", "local-skill", "SKILL.md"))
+	require.NoError(t, err)
+	require.Equal(t, content, string(got))
+}
+
+func TestInstallSkillRejectsPathInsteadOfOpaqueUploadRef(t *testing.T) {
+	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
+	body, err := json.Marshal(map[string]any{"upload_id": "uploads/session/skill.md"})
+	require.NoError(t, err)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/skills/install", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
 }
 
 // TestListSkillsBuiltinEnriched verifies a seeded built-in skill is returned by

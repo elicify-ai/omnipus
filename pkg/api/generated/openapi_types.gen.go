@@ -19566,17 +19566,27 @@ type SkillSource string
 // SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 type SkillStatus string
 
-// SkillInstallRequest Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by its slug (the identifier returned in a SkillSearchResult). Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock.
+// SkillInstallRequest Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
 type SkillInstallRequest struct {
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision *string `json:"revision,omitempty"`
 
 	// Slug Slug of the skill to install from the ClawHub registry.
-	Slug string `json:"slug"`
+	Slug *string `json:"slug,omitempty"`
+
+	// UploadId Opaque media ref returned in UploadedFile.ref for a caller-authorized uploaded .md SKILL.md file or bounded .zip skill package. Filesystem paths and UploadedFile.path values are not accepted.
+	UploadId *string `json:"upload_id,omitempty"`
 
 	// Version Optional version to pin. When omitted the latest published version is installed.
 	Version *string `json:"version,omitempty"`
+	union   json.RawMessage
 }
+
+// SkillInstallRequest0 defines model for .
+type SkillInstallRequest0 = interface{}
+
+// SkillInstallRequest1 defines model for .
+type SkillInstallRequest1 = interface{}
 
 // SkillMarketplaceStatus Reports whether any skill marketplace registry is enabled, returned by GET /api/v1/skills/marketplace. The SPA gates its skill-browse UI on this: when enabled is false, search/install-by-slug are unavailable (the endpoints return 409) and the UI offers only "install from file". A registry is the ClawHub marketplace or a configured GitHub registry.
 type SkillMarketplaceStatus struct {
@@ -22696,6 +22706,7 @@ type SearchSkillsParams struct {
 
 // DeleteSkillParams defines parameters for DeleteSkill.
 type DeleteSkillParams struct {
+	// Revision Revision returned by GET /skills for the reviewed installed skill.
 	Revision ConfigurationRevision `form:"revision" json:"revision"`
 }
 
@@ -25253,5 +25264,143 @@ func (t SignInStartResponse) MarshalJSON() ([]byte, error) {
 
 func (t *SignInStartResponse) UnmarshalJSON(b []byte) error {
 	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsSkillInstallRequest0 returns the union data inside the SkillInstallRequest as a SkillInstallRequest0
+func (t SkillInstallRequest) AsSkillInstallRequest0() (SkillInstallRequest0, error) {
+	var body SkillInstallRequest0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSkillInstallRequest0 overwrites any union data inside the SkillInstallRequest as the provided SkillInstallRequest0
+func (t *SkillInstallRequest) FromSkillInstallRequest0(v SkillInstallRequest0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSkillInstallRequest0 performs a merge with any union data inside the SkillInstallRequest, using the provided SkillInstallRequest0
+func (t *SkillInstallRequest) MergeSkillInstallRequest0(v SkillInstallRequest0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsSkillInstallRequest1 returns the union data inside the SkillInstallRequest as a SkillInstallRequest1
+func (t SkillInstallRequest) AsSkillInstallRequest1() (SkillInstallRequest1, error) {
+	var body SkillInstallRequest1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromSkillInstallRequest1 overwrites any union data inside the SkillInstallRequest as the provided SkillInstallRequest1
+func (t *SkillInstallRequest) FromSkillInstallRequest1(v SkillInstallRequest1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeSkillInstallRequest1 performs a merge with any union data inside the SkillInstallRequest, using the provided SkillInstallRequest1
+func (t *SkillInstallRequest) MergeSkillInstallRequest1(v SkillInstallRequest1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t SkillInstallRequest) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	object := make(map[string]json.RawMessage)
+	if t.union != nil {
+		err = json.Unmarshal(b, &object)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if t.Revision != nil {
+		object["revision"], err = json.Marshal(t.Revision)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'revision': %w", err)
+		}
+	}
+
+	if t.Slug != nil {
+		object["slug"], err = json.Marshal(t.Slug)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'slug': %w", err)
+		}
+	}
+
+	if t.UploadId != nil {
+		object["upload_id"], err = json.Marshal(t.UploadId)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'upload_id': %w", err)
+		}
+	}
+
+	if t.Version != nil {
+		object["version"], err = json.Marshal(t.Version)
+		if err != nil {
+			return nil, fmt.Errorf("error marshaling 'version': %w", err)
+		}
+	}
+	b, err = json.Marshal(object)
+	return b, err
+}
+
+func (t *SkillInstallRequest) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	if err != nil {
+		return err
+	}
+	object := make(map[string]json.RawMessage)
+	err = json.Unmarshal(b, &object)
+	if err != nil {
+		return err
+	}
+
+	if raw, found := object["revision"]; found {
+		err = json.Unmarshal(raw, &t.Revision)
+		if err != nil {
+			return fmt.Errorf("error reading 'revision': %w", err)
+		}
+	}
+
+	if raw, found := object["slug"]; found {
+		err = json.Unmarshal(raw, &t.Slug)
+		if err != nil {
+			return fmt.Errorf("error reading 'slug': %w", err)
+		}
+	}
+
+	if raw, found := object["upload_id"]; found {
+		err = json.Unmarshal(raw, &t.UploadId)
+		if err != nil {
+			return fmt.Errorf("error reading 'upload_id': %w", err)
+		}
+	}
+
+	if raw, found := object["version"]; found {
+		err = json.Unmarshal(raw, &t.Version)
+		if err != nil {
+			return fmt.Errorf("error reading 'version': %w", err)
+		}
+	}
+
 	return err
 }

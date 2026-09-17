@@ -12390,7 +12390,7 @@ export interface components {
         };
         /**
          * SkillInstallRequest
-         * @description Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by its slug (the identifier returned in a SkillSearchResult). Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock.
+         * @description Request body for POST /api/v1/skills/install. Exactly one source is required: a marketplace slug, or the opaque media ref returned as UploadedFile.ref for an authorized local .md/.zip upload. Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock. version applies only to marketplace slug installs.
          */
         SkillInstallRequest: {
             revision?: components["schemas"]["ConfigurationRevision"];
@@ -12398,13 +12398,15 @@ export interface components {
              * @description Slug of the skill to install from the ClawHub registry.
              * @example web-search
              */
-            slug: string;
+            slug?: string;
+            /** @description Opaque media ref returned in UploadedFile.ref for a caller-authorized uploaded .md SKILL.md file or bounded .zip skill package. Filesystem paths and UploadedFile.path values are not accepted. */
+            upload_id?: string;
             /**
              * @description Optional version to pin. When omitted the latest published version is installed.
              * @example 1.4.0
              */
             version?: string;
-        };
+        } & (unknown | unknown);
         /**
          * SkillSearchResult
          * @description A single skill returned by GET /api/v1/skills/search — a hit from a skill marketplace registry (e.g. ClawHub). Distinct from Skill, which models an already-installed local skill. A search result is installed by its slug via POST /api/v1/skills/install.
@@ -19768,6 +19770,7 @@ export interface operations {
     deleteSkill: {
         parameters: {
             query: {
+                /** @description Revision returned by GET /skills for the reviewed installed skill. */
                 revision: components["schemas"]["ConfigurationRevision"];
             };
             header?: never;

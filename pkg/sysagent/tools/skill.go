@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/skills"
@@ -38,10 +39,11 @@ func (t *SkillRemoveTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"name":    map[string]any{"type": "string"},
-			"confirm": map[string]any{"type": "boolean"},
+			"name":     map[string]any{"type": "string"},
+			"confirm":  map[string]any{"type": "boolean"},
+			"revision": map[string]any{"type": "string", "description": "Revision returned by the reviewed skill read."},
 		},
-		"required": []string{"name", "confirm"},
+		"required": []string{"name", "confirm", "revision"},
 	}
 }
 
@@ -51,6 +53,7 @@ func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) *too
 	}
 	name, _ := args["name"].(string)
 	confirm, _ := args["confirm"].(bool)
+	revision, _ := args["revision"].(string)
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
@@ -78,7 +81,10 @@ func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) *too
 	// project shelf falls through to the registry path below, unchanged.
 	if shelf := resolveProjectShelf(t.deps, ctx); shelf != nil {
 		if projWriter, ps, perr := skills.ResolveProjectSkillWriter(shelf, name); perr == nil {
-			if rmErr := projWriter.RemoveSkill(name); rmErr != nil {
+			if revision == "" {
+				return tools.ErrorResult(errorJSON("INVALID_INPUT", "revision is required", "read the skill again before removing it"))
+			}
+			if rmErr := projWriter.RemoveSkillReviewed(name, revision); rmErr != nil {
 				if errors.Is(rmErr, skills.ErrNotFound) {
 					return tools.ErrorResult(errorJSON("NOT_FOUND",
 						fmt.Sprintf("skill %q is not installed", name), "use list_skills to see installed skills"))
@@ -92,10 +98,14 @@ func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) *too
 			slog.Info("sysagent: remove_skill removed project skill",
 				"name", name, "shelf", "project", "mount", ps.MountName, "path", ps.Path)
 			return tools.NewToolResult(successJSON(map[string]any{
-				"success": true,
-				"name":    name,
-				"shelf":   "project",
-				"mount":   ps.MountName,
+				"success":            true,
+				"name":               name,
+				"shelf":              "project",
+				"mount":              ps.MountName,
+				"revision":           revision,
+				"persistence_status": "complete",
+				"activation_status":  "active",
+				"changed_fields":     []string{"installed"},
 			}))
 		} else if !errors.Is(perr, skills.ErrNotFound) {
 			// ErrProjectWriteEscapesMount or another shelf-integrity problem —
@@ -114,9 +124,16 @@ func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) *too
 		return tools.ErrorResult(errorJSON("NOT_AVAILABLE",
 			"skill installer not configured", "ensure the gateway is started with a valid workspace"))
 	}
+	if revision == "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "revision is required", "read the skill again before removing it"))
+	}
 
 	slog.Info("sysagent: remove_skill", "name", name)
-	if err := t.deps.SkillInstaller.Uninstall(name); err != nil {
+	if err := t.deps.SkillInstaller.UninstallReviewed(name, revision); err != nil {
+		if errors.Is(err, skills.ErrRevisionConflict) {
+			return tools.ErrorResult(errorJSON("CONFLICT",
+				fmt.Sprintf("skill %q changed after review", name), "read the skill again and submit its current revision"))
+		}
 		if isNotFound(err) {
 			return tools.ErrorResult(errorJSON("NOT_FOUND",
 				fmt.Sprintf("skill %q is not installed", name), "use list_skills to see installed skills"))
@@ -127,8 +144,12 @@ func (t *SkillRemoveTool) Execute(ctx context.Context, args map[string]any) *too
 	}
 
 	return tools.NewToolResult(successJSON(map[string]any{
-		"success": true,
-		"name":    name,
+		"success":            true,
+		"name":               name,
+		"revision":           revision,
+		"persistence_status": "complete",
+		"activation_status":  "active",
+		"changed_fields":     []string{"installed"},
 	}))
 }
 
@@ -174,6 +195,11 @@ func (t *SkillListTool) Execute(ctx context.Context, _ map[string]any) *tools.To
 		if allow != nil && !allow(info.ID) {
 			continue
 		}
+		writer := skills.NewSkillWriter(filepath.Dir(filepath.Dir(info.Path)))
+		revision, err := writer.SkillRevision(info.ID)
+		if err != nil {
+			return tools.ErrorResult(errorJSON("READ_FAILED", fmt.Sprintf("could not read revision for skill %q: %v", info.ID, err), "retry list_skills"))
+		}
 		skillMaps = append(skillMaps, map[string]any{
 			// id is the stable slug used to read/activate the skill; name is the
 			// human-readable display name (may differ, e.g. "Daily Briefing").
@@ -187,6 +213,7 @@ func (t *SkillListTool) Execute(ctx context.Context, _ map[string]any) *tools.To
 			"name":        info.Name,
 			"source":      info.Source,
 			"description": info.Description,
+			"revision":    revision,
 		})
 	}
 

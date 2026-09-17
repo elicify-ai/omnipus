@@ -6210,6 +6210,7 @@ paths:
         required: true
         schema:
           $ref: '#/components/schemas/ConfigurationRevision'
+        description: Revision returned by GET /skills for the reviewed installed skill.
       responses:
         '204':
           description: Skill removed.
