@@ -188,7 +188,7 @@ func (s *reproIngestServer) handle(w http.ResponseWriter, r *http.Request) {
 		writeMu.Lock()
 		defer writeMu.Unlock()
 		if derr := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); derr != nil {
-			return derr
+			return fmt.Errorf("set write deadline: %w", derr)
 		}
 		return conn.WriteJSON(v)
 	}
@@ -238,7 +238,7 @@ func (s *reproIngestServer) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		generation := int(frame.Generation)
 		if deadlineErr := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); deadlineErr != nil {
-			return deadlineErr
+			return fmt.Errorf("set write deadline: %w", deadlineErr)
 		}
 		return conn.WriteJSON(generated.BrowserCaptureControlFrame{
 			Type: "browser_capture_control", Action: "recapture", CaptureGeneration: &generation,

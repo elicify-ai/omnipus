@@ -456,7 +456,10 @@ func (h *BrowserWSHandler) applyColdStartRecapture(ctx context.Context, original
 	}
 	operation, cancel := original.bindContext(ctx)
 	defer cancel()
-	return original.mgr.Live().RefreshCaptureFrameContext(operation, original.panelSessionID, cs)
+	if err := original.mgr.Live().RefreshCaptureFrameContext(operation, original.panelSessionID, cs); err != nil {
+		return fmt.Errorf("BrowserWSHandler.applyColdStartRecapture: %w", err)
+	}
+	return nil
 }
 
 // webrtcUnavailableReason evaluates the ADR-047 D3 / ADR-048 condition-3
@@ -712,7 +715,7 @@ func (h *BrowserWSHandler) ensureCaptureSession(
 		return nil, errors.New("browser media transport is closed")
 	}
 	browsingKey := mgr.BrowsingKey().String()
-	return mgr.EnsureCaptureSessionForPanel(panelSessionID, func() (*browser.CaptureSession, error) {
+	cs, ensureErr := mgr.EnsureCaptureSessionForPanel(panelSessionID, func() (*browser.CaptureSession, error) {
 		webrtcCfg := webrtc.Config{
 			StunServer:  cfg.Tools.Browser.WebRTCStunServer,
 			MediaUDPMux: h.sharedMediaUDPMux(cfg),
@@ -723,7 +726,7 @@ func (h *BrowserWSHandler) ensureCaptureSession(
 		logf := webrtcRelayLogf(agentID)
 		cs, err := browser.NewCaptureSessionWithContextInput(mgr, agentID, panelSessionID, webrtcCfg, sink, logf)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("create capture session: %w", err)
 		}
 		h.captures.set(browsingKey, cs)
 		cs.SetOnStopped(func() {
@@ -740,6 +743,10 @@ func (h *BrowserWSHandler) ensureCaptureSession(
 		go h.watchEncoderLiveness(cs, agentID, encoderLivenessCheckInterval, encoderLivenessStaleAfter)
 		return cs, nil
 	})
+	if ensureErr != nil {
+		return nil, fmt.Errorf("ensure capture session: %w", ensureErr)
+	}
+	return cs, nil
 }
 
 // webrtcRelayLogf builds the log sink passed to browser.NewCaptureSession

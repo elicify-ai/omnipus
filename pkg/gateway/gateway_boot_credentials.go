@@ -766,7 +766,11 @@ func createStartupProvider(
 		return &startupBlockedProvider{reason: reason}, "", nil
 	}
 
-	return providers.CreateProvider(cfg)
+	p, model, err := providers.CreateProvider(cfg)
+	if err != nil {
+		return nil, "", fmt.Errorf("createStartupProvider: %w", err)
+	}
+	return p, model, nil
 }
 
 // defaultModelCredentialBlocked reports whether EVERY providers[] entry backing

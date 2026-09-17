@@ -38,7 +38,7 @@ type rollupIndex map[string][]task.Task
 func (a *restAPI) buildRollupIndex() (rollupIndex, error) {
 	all, err := a.taskStore.List(task.Filter{})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("restAPI.buildRollupIndex: %w", err)
 	}
 	idx := make(rollupIndex, len(all))
 	for _, t := range all {
@@ -69,7 +69,7 @@ type taskGoalIndex map[string]*goal.Goal
 func (a *restAPI) buildTaskGoalIndex() (taskGoalIndex, error) {
 	all, _, err := tools.GoalStoreForTasks(a.taskStore).List()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("restAPI.buildTaskGoalIndex: %w", err)
 	}
 	idx := make(taskGoalIndex, len(all))
 	for i := range all {

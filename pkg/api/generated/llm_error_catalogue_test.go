@@ -30,6 +30,7 @@ package generated
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -235,7 +236,7 @@ func jsonStringLiteral(s string) (string, error) {
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(s); err != nil {
-		return "", err
+		return "", fmt.Errorf("jsonStringLiteral: %w", err)
 	}
 	// Encode appends a trailing newline.
 	return strings.TrimRight(buf.String(), "\n"), nil

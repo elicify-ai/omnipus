@@ -10,6 +10,7 @@ package task
 // the allowed set).
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -191,7 +192,7 @@ func TestInferCriterionKind_CallSitesPinned(t *testing.T) {
 		}
 		data, rerr := os.ReadFile(path)
 		if rerr != nil {
-			return rerr
+			return fmt.Errorf("read %s: %w", path, rerr)
 		}
 		if strings.Contains(string(data), "InferCriterionKind(") {
 			rel, _ := filepath.Rel(repoRoot, path)

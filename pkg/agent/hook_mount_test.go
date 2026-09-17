@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -69,7 +70,7 @@ func TestAgentLoop_ProcessDirectWithChannel_AutoMountsBuiltinHook(t *testing.T) 
 		var hookCfg builtinAutoHookConfig
 		if len(spec.Config) > 0 {
 			if err := json.Unmarshal(spec.Config, &hookCfg); err != nil {
-				return nil, err
+				return nil, fmt.Errorf("unmarshal hook config: %w", err)
 			}
 		}
 		return &builtinAutoHook{

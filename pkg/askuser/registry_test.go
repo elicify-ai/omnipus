@@ -11,6 +11,7 @@ package askuser
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -578,14 +579,21 @@ type countingMeta struct {
 }
 
 func (c *countingMeta) GetMeta(sessionID string) (*session.UnifiedMeta, error) {
-	return c.inner.GetMeta(sessionID)
+	meta, err := c.inner.GetMeta(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("GetMeta: %w", err)
+	}
+	return meta, nil
 }
 
 func (c *countingMeta) SetMeta(sessionID string, patch session.MetaPatch) error {
 	c.mu.Lock()
 	c.setCalls++
 	c.mu.Unlock()
-	return c.inner.SetMeta(sessionID, patch)
+	if err := c.inner.SetMeta(sessionID, patch); err != nil {
+		return fmt.Errorf("countingMeta.SetMeta: %w", err)
+	}
+	return nil
 }
 
 func (c *countingMeta) sets() int {

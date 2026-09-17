@@ -21,6 +21,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -74,7 +75,7 @@ func seedCriteriaOntoActiveGoal(t *testing.T, sid, prompt string, criteria []tas
 	updated, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
 		cur.Prompt = prompt
 		if serr := cur.SetCriteria(criteria, time.Now().UTC()); serr != nil {
-			return serr
+			return fmt.Errorf("Goal.SetCriteria: %w", serr)
 		}
 		// The floor DoD's two fixed "goal-dod-floor-*" sentinels are ids the
 		// canned judge providers answer for — required, because the judged

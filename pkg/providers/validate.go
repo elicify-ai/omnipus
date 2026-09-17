@@ -535,7 +535,7 @@ func fetchModelIDs(
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetchModelIDs: %w", err)
 	}
 	models := make([]string, 0, len(result.Data))
 	for _, m := range result.Data {
@@ -565,7 +565,7 @@ func fetchOllamaTags(ctx context.Context, baseURL string, checker URLChecker) ([
 		} `json:"models"`
 	}
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetchOllamaTags: %w", err)
 	}
 	out := make([]string, 0, len(decoded.Models))
 	for _, m := range decoded.Models {
@@ -592,14 +592,14 @@ func getUpstreamJSON(
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("getUpstreamJSON: %w", err)
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("getUpstreamJSON: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -610,7 +610,11 @@ func getUpstreamJSON(
 	if ct != "" && !strings.Contains(ct, "application/json") {
 		return nil, fmt.Errorf("upstream models: unexpected Content-Type %q", ct)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MB limit
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MB limit
+	if err != nil {
+		return nil, fmt.Errorf("upstream models: read body: %w", err)
+	}
+	return body, nil
 }
 
 // ── BuildMessage (FR-7 catalog) ───────────────────────────────────────────────

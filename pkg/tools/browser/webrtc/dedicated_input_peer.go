@@ -214,10 +214,10 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 	gathered := pion.GatheringCompletePromise(pc)
 	answer, err := pc.CreateAnswer(nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("DedicatedInputPeer.answerNative: %w", err)
 	}
 	if err = pc.SetLocalDescription(answer); err != nil {
-		return "", err
+		return "", fmt.Errorf("DedicatedInputPeer.answerNative: %w", err)
 	}
 	select {
 	case <-ctx.Done():

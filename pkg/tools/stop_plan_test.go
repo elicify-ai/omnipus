@@ -39,7 +39,11 @@ func (s *stopSpy) fn(_ context.Context, planID, userID, channel string) (*plan.P
 	}
 	failed := plan.StateFailed
 	reason := plan.FailedReasonStoppedByUser
-	return s.store.Update(planID, plan.Patch{State: &failed, FailedReason: &reason})
+	p, err := s.store.Update(planID, plan.Patch{State: &failed, FailedReason: &reason})
+	if err != nil {
+		return nil, fmt.Errorf("stopSpy.fn: %w", err)
+	}
+	return p, nil
 }
 
 // newStoppablePlan builds a RUNNING plan owned by "jim" plus one in-flight

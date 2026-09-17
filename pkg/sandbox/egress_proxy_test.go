@@ -5,6 +5,7 @@
 package sandbox
 
 import (
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -21,7 +22,11 @@ import (
 // that need a real upstream server.
 func listenLoopback(t *testing.T) (net.Listener, error) {
 	t.Helper()
-	return net.Listen("tcp", "127.0.0.1:0")
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return nil, fmt.Errorf("listenLoopback: %w", err)
+	}
+	return ln, nil
 }
 
 // TestEgressWildcard_PrevailingConvention exercises the spec dataset

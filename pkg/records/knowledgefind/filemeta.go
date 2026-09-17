@@ -254,7 +254,7 @@ func (s *fileMetaSource) deriveBacklinks(ctx context.Context, d Deps) *RefusalEr
 				Embed:    h.Link.Embed,
 			})
 		}); err != nil {
-			return err
+			return fmt.Errorf("extract note links: %w", err)
 		}
 		return d.Store.Relations(ctx, sel, func(h propindex.RelationHit) error {
 			return visit(records.FileLinkRow{

@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -302,7 +303,10 @@ func (s *ProcessSession) Write(data string) error {
 	}
 
 	_, err := writer.Write([]byte(data))
-	return err
+	if err != nil {
+		return fmt.Errorf("ProcessSession.Write: %w", err)
+	}
+	return nil
 }
 
 func (s *ProcessSession) Read() string {

@@ -1323,7 +1323,7 @@ func (t *DescribeTool) gather(
 
 	schemas, schemaReport, err := records.LoadSchemas(root.Path())
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("DescribeTool.gather: %w", err)
 	}
 	if opts.RecordType != "" {
 		if _, ok := schemas.Get(opts.RecordType); !ok {
@@ -1339,7 +1339,7 @@ func (t *DescribeTool) gather(
 
 	views, viewReport, err := records.LoadViews(root.Path(), schemas)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("DescribeTool.gather: %w", err)
 	}
 
 	data := &DescribeData{

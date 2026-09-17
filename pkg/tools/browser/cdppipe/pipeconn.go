@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 
@@ -91,7 +92,7 @@ func (c *PipeConn) readRaw() ([]byte, error) {
 func (c *PipeConn) Write(_ context.Context, msg *cdproto.Message) error {
 	buf, err := jsonv2.Marshal(msg, chromedp.DefaultMarshalOptions)
 	if err != nil {
-		return err
+		return fmt.Errorf("PipeConn.Write: %w", err)
 	}
 	return c.writeRaw(buf)
 }
@@ -103,7 +104,10 @@ func (c *PipeConn) Read(_ context.Context, msg *cdproto.Message) error {
 	if err != nil {
 		return err
 	}
-	return jsonv2.Unmarshal(payload, msg, chromedp.DefaultUnmarshalOptions)
+	if err := jsonv2.Unmarshal(payload, msg, chromedp.DefaultUnmarshalOptions); err != nil {
+		return fmt.Errorf("PipeConn.Read: %w", err)
+	}
+	return nil
 }
 
 // Close implements io.Closer, closing both pipe ends exactly once. Closing the

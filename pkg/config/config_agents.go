@@ -23,7 +23,7 @@ func (m *AgentModelConfig) UnmarshalJSON(data []byte) error {
 	}
 	var r raw
 	if err := json.Unmarshal(data, &r); err != nil {
-		return err
+		return fmt.Errorf("AgentModelConfig.UnmarshalJSON: %w", err)
 	}
 	m.Primary = r.Primary
 	m.Fallbacks = r.Fallbacks
@@ -36,14 +36,22 @@ func (m AgentModelConfig) MarshalJSON() ([]byte, error) {
 	// no fallbacks and no explicit provider. Once Provider is set the object form
 	// is required so the routing key round-trips (O3).
 	if len(m.Fallbacks) == 0 && m.Provider == "" && m.Primary != "" {
-		return json.Marshal(m.Primary)
+		b, err := json.Marshal(m.Primary)
+		if err != nil {
+			return nil, fmt.Errorf("AgentModelConfig.MarshalJSON: %w", err)
+		}
+		return b, nil
 	}
 	type raw struct {
 		Primary   string   `json:"primary,omitempty"`
 		Fallbacks []string `json:"fallbacks,omitempty"`
 		Provider  string   `json:"provider,omitempty"`
 	}
-	return json.Marshal(raw(m))
+	b, err := json.Marshal(raw(m))
+	if err != nil {
+		return nil, fmt.Errorf("AgentModelConfig.MarshalJSON: %w", err)
+	}
+	return b, nil
 }
 
 // UnmarshalJSON decodes either form (FR-005 + FR-006).
@@ -118,7 +126,11 @@ func (f FallbackModelSlice) MarshalJSON() ([]byte, error) {
 	for i, fb := range f {
 		out[i] = wire(fb)
 	}
-	return json.Marshal(out)
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("FallbackModelSlice.MarshalJSON: %w", err)
+	}
+	return b, nil
 }
 
 // NormalizeFallbacks is the single entry-point used at config load to

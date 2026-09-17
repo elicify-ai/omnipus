@@ -993,19 +993,19 @@ func TestADR058_FR084Identifiers_ResolveNowhereInSource(t *testing.T) {
 		}
 		absPath, absErr := filepath.Abs(path)
 		if absErr != nil {
-			return absErr
+			return fmt.Errorf("abs path %s: %w", path, absErr)
 		}
 		if absPath == thisFileAbs {
 			return nil // this file legitimately names the identifiers as data
 		}
 		relPath, relErr := filepath.Rel(repoRoot, path)
 		if relErr != nil {
-			return relErr
+			return fmt.Errorf("relative path %s: %w", path, relErr)
 		}
 		allowedHere := knownFR084HistoricalMentions[relPath]
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return readErr
+			return fmt.Errorf("read %s: %w", path, readErr)
 		}
 		content := string(data)
 		scannedFiles++

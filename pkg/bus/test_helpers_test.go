@@ -2,13 +2,17 @@ package bus
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
 
 // jsonUnmarshal is a test helper wrapping json.Unmarshal.
 func jsonUnmarshal(data []byte, v any) error {
-	return json.Unmarshal(data, v)
+	if err := json.Unmarshal(data, v); err != nil {
+		return fmt.Errorf("jsonUnmarshal: %w", err)
+	}
+	return nil
 }
 
 // jsonMarshal marshals v and fails the test on error.

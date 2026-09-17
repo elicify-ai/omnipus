@@ -244,7 +244,7 @@ func lineOf(content []byte, offset int) int {
 func (s *SecretScanner) ScanReader(path string, r *bufio.Reader) ([]SecretFinding, error) {
 	var buf bytes.Buffer
 	if _, err := buf.ReadFrom(r); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("SecretScanner.ScanReader: %w", err)
 	}
 	return s.ScanBytes(path, buf.Bytes()), nil
 }

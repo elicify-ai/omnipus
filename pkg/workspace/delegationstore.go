@@ -251,9 +251,12 @@ func SaveDelegation(home, id string, edges []DelegationEdge) error {
 	}
 	// Lock the record's sidecar, never the record this write renames over (see
 	// fileutil.SidecarLockPath); both removals take the same lock.
-	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+	if err := fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
 		return writeFileAtomicFn(path, data, 0o600)
-	})
+	}); err != nil {
+		return fmt.Errorf("SaveDelegation: %w", err)
+	}
+	return nil
 }
 
 // DeleteDelegationStore removes workspace id's entire delegation record. Called

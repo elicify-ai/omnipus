@@ -351,7 +351,10 @@ func rewriteRawTaskFile(path string, raw map[string]json.RawMessage) error {
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
-	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+	if err := fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
 		return writeFileAtomicFn(path, data, 0o600)
-	})
+	}); err != nil {
+		return fmt.Errorf("rewriteRawTaskFile: %w", err)
+	}
+	return nil
 }

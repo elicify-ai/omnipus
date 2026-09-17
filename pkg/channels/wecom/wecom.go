@@ -255,7 +255,10 @@ func classifyWeComMediaFailure(sentCount int, err error) error {
 	if errors.Is(err, channels.ErrSendFailed) {
 		return err
 	}
-	return channels.ClassifyMediaSendError("wecom", sentCount, errors.New(err.Error()))
+	if err := channels.ClassifyMediaSendError("wecom", sentCount, errors.New(err.Error())); err != nil {
+		return fmt.Errorf("classifyWeComMediaFailure: %w", err)
+	}
+	return nil
 }
 
 func (c *WeComChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage) error {

@@ -106,7 +106,10 @@ func (s *Store[T]) write(id string, t *T) error {
 	if err != nil {
 		return fmt.Errorf("entity: marshal %q: %w", id, err)
 	}
-	return fileutil.WriteFileAtomic(s.path(id), data, 0o600)
+	if err := fileutil.WriteFileAtomic(s.path(id), data, 0o600); err != nil {
+		return fmt.Errorf("Store.write: %w", err)
+	}
+	return nil
 }
 
 // Create persists a new entity. It generates a UUID when the entity has no
@@ -151,7 +154,7 @@ func (s *Store[T]) Create(t *T) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	return fileutil.WithFlock(s.lockPath(id), func() error {
+	if err := fileutil.WithFlock(s.lockPath(id), func() error {
 		if _, statErr := os.Stat(s.path(id)); statErr == nil {
 			return fmt.Errorf("entity: create %q: %w", id, ErrAlreadyExists)
 		} else if !os.IsNotExist(statErr) {
@@ -171,7 +174,10 @@ func (s *Store[T]) Create(t *T) error {
 			return fmt.Errorf("entity: create %q: verify read-back: id mismatch, got %q", id, got)
 		}
 		return nil
-	})
+	}); err != nil {
+		return fmt.Errorf("Store.Create: %w", err)
+	}
+	return nil
 }
 
 // Get returns the entity with the given id, or ErrNotFound if absent.
@@ -199,7 +205,7 @@ func (s *Store[T]) Exists(id string) bool {
 func (s *Store[T]) scanIDs() ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Store.scanIDs: %w", err)
 	}
 	ids := make([]string, 0, len(entries))
 	for _, e := range entries {
@@ -324,7 +330,7 @@ func (s *Store[T]) Update(id string, mutate func(*T) error) (*T, error) {
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Store.Update: %w", err)
 	}
 	return result, nil
 }
@@ -355,7 +361,7 @@ func (s *Store[T]) Delete(id string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	return fileutil.WithFlock(s.lockPath(id), func() error {
+	if err := fileutil.WithFlock(s.lockPath(id), func() error {
 		if err := os.Remove(s.path(id)); err != nil {
 			if os.IsNotExist(err) {
 				return ErrNotFound
@@ -363,5 +369,8 @@ func (s *Store[T]) Delete(id string) error {
 			return fmt.Errorf("entity: delete %q: %w", id, err)
 		}
 		return nil
-	})
+	}); err != nil {
+		return fmt.Errorf("Store.Delete: %w", err)
+	}
+	return nil
 }

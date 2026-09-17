@@ -475,7 +475,7 @@ type TypedIntegrityResult struct {
 // the one records.AssertRefusesWhenIndexUnavailable is pointed at.
 func TypedIntegrity(ctx context.Context, in TypedIntegrityInput, sink *findingSink) (*TypedIntegrityResult, error) {
 	if err := records.RequirePropertyIndex(records.CapabilityIntegrityCheck); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("TypedIntegrity: %w", err)
 	}
 	if in.Store == nil {
 		return nil, fmt.Errorf("knowledge: check_integrity was given no properties index to read")

@@ -572,7 +572,10 @@ func (m *BrowserManager) runTabFocusCDP(tabCtx context.Context, actions ...chrom
 	}
 	runCtx, cancel := context.WithTimeout(tabCtx, m.PageTimeout())
 	defer cancel()
-	return chromedp.Run(runCtx, actions...)
+	if err := chromedp.Run(runCtx, actions...); err != nil {
+		return fmt.Errorf("BrowserManager.runTabFocusCDP: %w", err)
+	}
+	return nil
 }
 
 // CloseTab closes tab `index` in sessionID's browsing context (cancels its

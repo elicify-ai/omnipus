@@ -875,7 +875,7 @@ func (us *UnifiedStore) ReadArchive(ctx context.Context, sessionKey string) ([]m
 	msgs, err := us.backend.ReadArchive(ctx, sessionKey)
 	if err != nil {
 		slog.Error("unified_store: read archive", "key", sessionKey, "error", err)
-		return nil, err
+		return nil, fmt.Errorf("UnifiedStore.ReadArchive: %w", err)
 	}
 	return msgs, nil
 }
@@ -887,7 +887,10 @@ func (us *UnifiedStore) ReadArchive(ctx context.Context, sessionKey string) ([]m
 func (us *UnifiedStore) ScanArchive(
 	ctx context.Context, sessionKey string, fn func(idx int, msg memory.ArchivedMessage) bool,
 ) error {
-	return us.backend.ScanArchive(ctx, sessionKey, fn)
+	if err := us.backend.ScanArchive(ctx, sessionKey, fn); err != nil {
+		return fmt.Errorf("UnifiedStore.ScanArchive: %w", err)
+	}
+	return nil
 }
 
 // Save implements SessionStore — ensures all writes are durable.

@@ -554,7 +554,7 @@ var forbiddenModelImports = []string{
 func scanForModelImports(dir string) (found []string, filesScanned int, err error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("scanForModelImports: %w", err)
 	}
 	fset := token.NewFileSet()
 	for _, e := range entries {
@@ -583,7 +583,7 @@ func scanForModelImports(dir string) (found []string, filesScanned int, err erro
 func directImportsOf(dir string) (map[string][]string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("directImportsOf: %w", err)
 	}
 	out := make(map[string][]string)
 	fset := token.NewFileSet()
@@ -977,7 +977,7 @@ func selectorsUsedFrom(file, importPath string) ([]string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, file, nil, 0)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("selectorsUsedFrom: %w", err)
 	}
 	local := ""
 	for _, imp := range f.Imports {

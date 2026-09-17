@@ -378,7 +378,10 @@ func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messag
 	}
 	mid, err := strconv.Atoi(messageID)
 	if err != nil {
-		return err
+		if err != nil {
+			return fmt.Errorf("TelegramChannel.EditMessage: %w", err)
+		}
+		return nil
 	}
 	parsedContent := parseContent(content, useMarkdownV2)
 	editMsg := tu.EditMessageText(tu.ID(cid), mid, parsedContent)
@@ -393,7 +396,7 @@ func (c *TelegramChannel) EditMessage(ctx context.Context, chatID string, messag
 		_, err = c.bot.EditMessageText(ctx, tu.EditMessageText(tu.ID(cid), mid, content))
 	}
 
-	return err
+	return fmt.Errorf("TelegramChannel.EditMessage: %w", err)
 }
 
 // DeleteMessage implements channels.MessageDeleter.
@@ -404,12 +407,15 @@ func (c *TelegramChannel) DeleteMessage(ctx context.Context, chatID string, mess
 	}
 	mid, err := strconv.Atoi(messageID)
 	if err != nil {
-		return err
+		return fmt.Errorf("TelegramChannel.DeleteMessage: %w", err)
 	}
-	return c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
+	if err := c.bot.DeleteMessage(ctx, &telego.DeleteMessageParams{
 		ChatID:    tu.ID(cid),
 		MessageID: mid,
-	})
+	}); err != nil {
+		return fmt.Errorf("TelegramChannel.DeleteMessage: %w", err)
+	}
+	return nil
 }
 
 // SendPlaceholder implements channels.PlaceholderCapable.
@@ -432,7 +438,7 @@ func (c *TelegramChannel) SendPlaceholder(ctx context.Context, chatID string) (s
 	phMsg.MessageThreadID = threadID
 	pMsg, err := c.bot.SendMessage(ctx, phMsg)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("TelegramChannel.SendPlaceholder: %w", err)
 	}
 
 	return fmt.Sprintf("%d", pMsg.MessageID), nil
@@ -500,10 +506,12 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 			if err != nil && strings.Contains(err.Error(), "PHOTO_INVALID_DIMENSIONS") {
 				if _, seekErr := file.Seek(0, io.SeekStart); seekErr != nil {
 					file.Close()
-					return channels.ClassifyMediaSendError(
+					if err := channels.ClassifyMediaSendError(
 						"telegram", sentCount,
 						fmt.Errorf("rewind media after photo failure: %w", seekErr),
-					)
+					); err != nil {
+						return fmt.Errorf("TelegramChannel.SendMedia: %w", err)
+					}
 				}
 
 				docParams := &telego.SendDocumentParams{
@@ -572,7 +580,10 @@ func (c *TelegramChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMe
 			// failure keep its normal ErrTemporary retry classification.
 			// The real API error is preserved in the chain either way, so
 			// it no longer gets flattened to an opaque "temporary failure".
-			return channels.ClassifyMediaSendError("telegram", sentCount, err)
+			if err := channels.ClassifyMediaSendError("telegram", sentCount, err); err != nil {
+				return fmt.Errorf("TelegramChannel.SendMedia: %w", err)
+			}
+			return nil
 		}
 		sentCount++
 	}
@@ -835,11 +846,14 @@ func parseTelegramChatID(chatID string) (int64, int, error) {
 	idx := strings.Index(chatID, "/")
 	if idx == -1 {
 		cid, err := strconv.ParseInt(chatID, 10, 64)
-		return cid, 0, err
+		if err != nil {
+			return cid, 0, fmt.Errorf("parseTelegramChatID: %w", err)
+		}
+		return cid, 0, nil
 	}
 	cid, err := strconv.ParseInt(chatID[:idx], 10, 64)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, fmt.Errorf("parseTelegramChatID: %w", err)
 	}
 	tid, err := strconv.Atoi(chatID[idx+1:])
 	if err != nil {

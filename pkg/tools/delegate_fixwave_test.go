@@ -14,6 +14,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -308,14 +309,21 @@ func (c *callCountingLifecycleStore) Load(sessionID string) (*session.LifecycleR
 	c.mu.Lock()
 	c.loadCalls++
 	c.mu.Unlock()
-	return c.LifecycleStore.Load(sessionID)
+	rec, err := c.LifecycleStore.Load(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("Load: %w", err)
+	}
+	return rec, nil
 }
 
 func (c *callCountingLifecycleStore) Mutate(sessionID string, fn func(*session.LifecycleRecord) error) error {
 	c.mu.Lock()
 	c.mutateCalls++
 	c.mu.Unlock()
-	return c.LifecycleStore.Mutate(sessionID, fn)
+	if err := c.LifecycleStore.Mutate(sessionID, fn); err != nil {
+		return fmt.Errorf("callCountingLifecycleStore.Mutate: %w", err)
+	}
+	return nil
 }
 
 func (c *callCountingLifecycleStore) counts() (loads, mutates int) {

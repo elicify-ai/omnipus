@@ -145,7 +145,11 @@ type defaultResolver struct {
 }
 
 func (d *defaultResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
-	return d.r.LookupIPAddr(ctx, host)
+	addrs, err := d.r.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, fmt.Errorf("defaultResolver.LookupIPAddr: %w", err)
+	}
+	return addrs, nil
 }
 
 // NewSSRFChecker creates an SSRF checker with the given allowlist.

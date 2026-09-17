@@ -137,7 +137,11 @@ func schemaSetFromRendered(inferred map[string][]InferredProperty, provisioned m
 	if err := writeSchemas(stage, inferred, provisioned); err != nil {
 		return nil, nil, err
 	}
-	return records.LoadSchemas(stage)
+	schemas, report, err := records.LoadSchemas(stage)
+	if err != nil {
+		return nil, nil, fmt.Errorf("schemaSetFromRendered: load schemas: %w", err)
+	}
+	return schemas, report, nil
 }
 
 // sortedBaseRelPaths lists every `.base` file's vault-relative path in a

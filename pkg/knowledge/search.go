@@ -448,7 +448,11 @@ func (r SearchResponse) MarshalJSON() ([]byte, error) {
 			Path: h.Path, Kind: h.Kind, Score: h.Score, Offset: h.Offset, Segment: h.Segment,
 		})
 	}
-	return json.Marshal(searchResponseJSON{Hits: hits, Report: r.report})
+	b, err := json.Marshal(searchResponseJSON{Hits: hits, Report: r.report})
+	if err != nil {
+		return nil, fmt.Errorf("SearchResponse.MarshalJSON: %w", err)
+	}
+	return b, nil
 }
 
 // There is deliberately no UnmarshalJSON. It would have to take a POINTER

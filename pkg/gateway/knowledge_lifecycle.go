@@ -457,7 +457,7 @@ func (kl *KnowledgeLifecycle) DriftInterval() time.Duration { return kl.driftPer
 func (kl *KnowledgeLifecycle) CollectionIDFor(collectionRoot string) (string, error) {
 	dir, err := knowledge.IndexDirFor(kl.home, collectionRoot)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("KnowledgeLifecycle.CollectionIDFor: %w", err)
 	}
 	return filepath.Base(dir), nil
 }

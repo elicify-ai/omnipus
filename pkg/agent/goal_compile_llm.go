@@ -767,7 +767,7 @@ func (al *AgentLoop) goalCompileLLMCall(ctx context.Context, agentInst *AgentIns
 	defer cancel()
 	resp, err := provider.Chat(callCtx, messages, nil, model, nil)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("AgentLoop.goalCompileLLMCall: %w", err)
 	}
 	if resp == nil || strings.TrimSpace(resp.Content) == "" {
 		return "", errors.New("goal compile returned no content")

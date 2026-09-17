@@ -7,6 +7,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -507,7 +508,11 @@ type raceFreeLogBuffer struct {
 func (b *raceFreeLogBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.buf.Write(p)
+	n, err := b.buf.Write(p)
+	if err != nil {
+		return 0, fmt.Errorf("write: %w", err)
+	}
+	return n, nil
 }
 
 func (b *raceFreeLogBuffer) String() string {

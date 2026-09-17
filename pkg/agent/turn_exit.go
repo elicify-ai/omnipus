@@ -190,7 +190,10 @@ func (ts *turnState) restoreSession(agent *AgentInstance) error {
 		// (interrupt handler) logs the restoreSession error if we return one.
 	}
 
-	return agent.Sessions.Save(ts.sessionKey)
+	if err := agent.Sessions.Save(ts.sessionKey); err != nil {
+		return fmt.Errorf("turnState.restoreSession: %w", err)
+	}
+	return nil
 }
 
 func (ts *turnState) interruptHintMessage() providers.Message {

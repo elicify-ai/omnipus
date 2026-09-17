@@ -9,6 +9,7 @@ package gateway
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -109,7 +110,7 @@ func (h *WSHandler) handleDevicePairingResponse(deviceID, decision string) {
 func generateDeviceToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return "", err
+		return "", fmt.Errorf("generateDeviceToken: %w", err)
 	}
 	return hex.EncodeToString(b), nil
 }

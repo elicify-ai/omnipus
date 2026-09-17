@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,7 +62,7 @@ func (d *dangerousStubTool) Execute(ctx context.Context, args map[string]any) *t
 func readAuditEntries(path string) ([]map[string]any, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("readAuditEntries: %w", err)
 	}
 	var records []map[string]any
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
@@ -76,7 +77,10 @@ func readAuditEntries(path string) ([]map[string]any, error) {
 		}
 		records = append(records, r)
 	}
-	return records, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return records, fmt.Errorf("readAuditEntries: %w", err)
+	}
+	return records, nil
 }
 
 // TestRunTurn_ScriptedToolCall_PolicyDeniesAndAudits drives runTurn end-to-end

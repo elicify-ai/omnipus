@@ -178,7 +178,7 @@ func (s *toolResultStore) retentionSweep(retentionDays int) (int, error) {
 		return nil
 	})
 	if err != nil {
-		return removed, err
+		return removed, fmt.Errorf("toolResultStore.retentionSweep: %w", err)
 	}
 
 	// Sweep empty per-session dirs.

@@ -26,6 +26,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -150,11 +151,11 @@ func (coverageYAMLLoader) Load(rawURL string) (any, error) {
 	path := strings.TrimPrefix(rawURL, "file://")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("coverageYAMLLoader.Load: %w", err)
 	}
 	var doc any
 	if uerr := yaml.Unmarshal(data, &doc); uerr != nil {
-		return nil, uerr
+		return nil, fmt.Errorf("coverageYAMLLoader.Load: %w", uerr)
 	}
 	return normalizeYAMLDoc(doc), nil
 }
@@ -205,7 +206,10 @@ func validateFixtureAgainstAsyncAPISchema(t *testing.T, schemaName string, raw [
 	sch, err := c.Compile(url)
 	require.NoError(t, err, "could not compile asyncapi schema %q from %s", schemaName, asyncapiPath)
 
-	return sch.Validate(doc)
+	if err := sch.Validate(doc); err != nil {
+		return fmt.Errorf("validateFixtureAgainstAsyncAPISchema: %w", err)
+	}
+	return nil
 }
 
 // TestStructuredFailureDiscriminators_HaveSchemaAndBudgetBoundedProducer is

@@ -1269,7 +1269,10 @@ func mediaTempDirPattern() string {
 // Close releases resources held by the agent's session store.
 func (a *AgentInstance) Close() error {
 	if a.Sessions != nil {
-		return a.Sessions.Close()
+		if err := a.Sessions.Close(); err != nil {
+			return fmt.Errorf("AgentInstance.Close: %w", err)
+		}
+		return nil
 	}
 	return nil
 }

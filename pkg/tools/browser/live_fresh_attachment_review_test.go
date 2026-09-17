@@ -54,7 +54,7 @@ func TestFreshLiveAttachmentFirstSwitchRecapturesMeasuredTarget(t *testing.T) {
 				*measured.width, *measured.height, *measured.scale = 913, 617, 1.25
 			case documentPaintAction, chromedp.ActionFunc:
 				if runErr := action.Do(cdp.WithExecutor(ctx, executor)); runErr != nil {
-					return runErr
+					return fmt.Errorf("run action: %w", runErr)
 				}
 			default:
 				return fmt.Errorf("unexpected browser action %T", action)

@@ -8,6 +8,7 @@ package vaultimport
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -40,7 +41,7 @@ func copyVaultTo(t *testing.T, src, dst string) {
 		}
 		rel, relErr := filepath.Rel(src, path)
 		if relErr != nil {
-			return relErr
+			return fmt.Errorf("relative path %s: %w", path, relErr)
 		}
 		if rel == "." {
 			return nil
@@ -61,10 +62,10 @@ func copyVaultTo(t *testing.T, src, dst string) {
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return readErr
+			return fmt.Errorf("read %s: %w", path, readErr)
 		}
 		if mkErr := os.MkdirAll(filepath.Dir(target), 0o755); mkErr != nil {
-			return mkErr
+			return fmt.Errorf("make dir: %w", mkErr)
 		}
 		return os.WriteFile(target, data, 0o644)
 	})

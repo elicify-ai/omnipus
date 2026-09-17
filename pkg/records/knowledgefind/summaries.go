@@ -698,7 +698,7 @@ func rangeValue(lo, hi records.TypedValue) (string, error) {
 	case records.TypeInteger, records.TypeDecimal:
 		d, err := hi.Number.Sub(lo.Number)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("rangeValue: %w", err)
 		}
 		return groupDigits(d.String()), nil
 	case records.TypeDate:

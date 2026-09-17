@@ -84,7 +84,7 @@ func TestWithFlock_LockFileRemovedWhileWaiting_NeverTwoHoldersAtOnce(t *testing.
 				return err
 			}
 			if err := os.Remove(lockPath); err != nil {
-				return err
+				return fmt.Errorf("remove lock: %w", err)
 			}
 			go func() {
 				laterDone <- WithFlock(lockPath, func() error {

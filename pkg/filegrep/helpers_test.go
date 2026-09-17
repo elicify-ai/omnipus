@@ -5,6 +5,7 @@
 package filegrep
 
 import (
+	"fmt"
 	"io/fs"
 	"strings"
 	"sync"
@@ -42,22 +43,42 @@ type slowFS struct {
 
 func (s slowFS) Open(name string) (fs.File, error) {
 	time.Sleep(s.delay)
-	return s.FS.Open(name)
+	v, err := s.FS.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("slowFS.Open: %w", err)
+	}
+	return v, nil
 }
 
 func (s slowFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	time.Sleep(s.delay)
 	if rd, ok := s.FS.(fs.ReadDirFS); ok {
-		return rd.ReadDir(name)
+		entries, err := rd.ReadDir(name)
+		if err != nil {
+			return nil, fmt.Errorf("slowFS.ReadDir: %w", err)
+		}
+		return entries, nil
 	}
-	return fs.ReadDir(s.FS, name)
+	entries, err := fs.ReadDir(s.FS, name)
+	if err != nil {
+		return nil, fmt.Errorf("slowFS.ReadDir: %w", err)
+	}
+	return entries, nil
 }
 
 func (s slowFS) Stat(name string) (fs.FileInfo, error) {
 	if sf, ok := s.FS.(fs.StatFS); ok {
-		return sf.Stat(name)
+		info, err := sf.Stat(name)
+		if err != nil {
+			return nil, fmt.Errorf("slowFS.Stat: %w", err)
+		}
+		return info, nil
 	}
-	return fs.Stat(s.FS, name)
+	info, err := fs.Stat(s.FS, name)
+	if err != nil {
+		return nil, fmt.Errorf("slowFS.Stat: %w", err)
+	}
+	return info, nil
 }
 
 // failingFS wraps an fs.FS and injects errors under test control:
@@ -89,7 +110,11 @@ func (f *failingFS) Open(name string) (fs.File, error) {
 	if f.failOpen != nil && f.failOpen(name) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
 	}
-	return f.FS.Open(name)
+	file, err := f.FS.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("Open: %w", err)
+	}
+	return file, nil
 }
 
 func (f *failingFS) ReadDir(name string) ([]fs.DirEntry, error) {
@@ -116,9 +141,17 @@ func (f *failingFS) ReadDir(name string) ([]fs.DirEntry, error) {
 		f.mu.Unlock()
 	}
 	if rd, ok := f.FS.(fs.ReadDirFS); ok {
-		return rd.ReadDir(name)
+		entries, err := rd.ReadDir(name)
+		if err != nil {
+			return nil, fmt.Errorf("ReadDir: %w", err)
+		}
+		return entries, nil
 	}
-	return fs.ReadDir(f.FS, name)
+	entries, err := fs.ReadDir(f.FS, name)
+	if err != nil {
+		return nil, fmt.Errorf("ReadDir: %w", err)
+	}
+	return entries, nil
 }
 
 func (f *failingFS) Stat(name string) (fs.FileInfo, error) {
@@ -129,9 +162,17 @@ func (f *failingFS) Stat(name string) (fs.FileInfo, error) {
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: errMountGone}
 	}
 	if sf, ok := f.FS.(fs.StatFS); ok {
-		return sf.Stat(name)
+		info, err := sf.Stat(name)
+		if err != nil {
+			return nil, fmt.Errorf("Stat: %w", err)
+		}
+		return info, nil
 	}
-	return fs.Stat(f.FS, name)
+	info, err := fs.Stat(f.FS, name)
+	if err != nil {
+		return nil, fmt.Errorf("Stat: %w", err)
+	}
+	return info, nil
 }
 
 type mountGoneError struct{}

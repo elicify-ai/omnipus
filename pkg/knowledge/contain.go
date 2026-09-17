@@ -93,10 +93,37 @@ type LinkFS interface {
 // osLinkFS is the real filesystem.
 type osLinkFS struct{}
 
-func (osLinkFS) Lstat(name string) (fs.FileInfo, error)     { return os.Lstat(name) }
-func (osLinkFS) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
-func (osLinkFS) EvalSymlinks(name string) (string, error)   { return filepath.EvalSymlinks(name) }
-func (osLinkFS) Open(name string) (fs.File, error)          { return os.Open(name) }
+func (osLinkFS) Lstat(name string) (fs.FileInfo, error) {
+	info, err := os.Lstat(name)
+	if err != nil {
+		return nil, fmt.Errorf("Lstat %s: %w", name, err)
+	}
+	return info, nil
+}
+
+func (osLinkFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	entries, err := os.ReadDir(name)
+	if err != nil {
+		return nil, fmt.Errorf("ReadDir %s: %w", name, err)
+	}
+	return entries, nil
+}
+
+func (osLinkFS) EvalSymlinks(name string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(name)
+	if err != nil {
+		return "", fmt.Errorf("EvalSymlinks %s: %w", name, err)
+	}
+	return resolved, nil
+}
+
+func (osLinkFS) Open(name string) (fs.File, error) {
+	f, err := os.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("Open %s: %w", name, err)
+	}
+	return f, nil
+}
 
 // OSLinkFS returns a LinkFS backed by the real filesystem.
 func OSLinkFS() LinkFS { return osLinkFS{} }

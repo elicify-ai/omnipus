@@ -1055,7 +1055,7 @@ func (aa *agentLoopRunGoalAdjudicationAdvance) advanceUnmetGoal() agentLoopRunGo
 	if _, perr := aa.ag.gstore.Update(aa.ag.rec.GoalID, func(cur *goal.Goal) error {
 		if aa.ag.verdict != nil {
 			if rerr := cur.RecordVerdict(aa.ag.verdict, aa.ag.reasonText, time.Now().UTC()); rerr != nil {
-				return rerr
+				return fmt.Errorf("Goal.RecordVerdict: %w", rerr)
 			}
 			cur.Round = newRound
 			return nil
@@ -1151,7 +1151,7 @@ func (ag *agentLoopRunGoalAdjudication) projectVerdict() {
 func (ag *agentLoopRunGoalAdjudication) finishMetGoal() agentLoopRunGoalAdjudicationFlow {
 	if _, perr := ag.gstore.Update(ag.rec.GoalID, func(cur *goal.Goal) error {
 		if rerr := cur.RecordVerdict(ag.verdict, ag.reasonText, time.Now().UTC()); rerr != nil {
-			return rerr
+			return fmt.Errorf("Goal.RecordVerdict: %w", rerr)
 		}
 		cur.Round = ag.attempt
 		return nil
@@ -1687,10 +1687,10 @@ func (al *AgentLoop) dispatchGoalFallbackCompile(
 	if _, perr := resolveGoalRecordStore().Update(rec.GoalID, func(cur *goal.Goal) error {
 		cur.Definition = outcome.Result.Goal.Definition
 		if serr := cur.SetCriteria(outcome.Result.Goal.Criteria, now); serr != nil {
-			return serr
+			return fmt.Errorf("Goal.SetCriteria: %w", serr)
 		}
 		if serr := cur.SetDoD(dod, now); serr != nil {
-			return serr
+			return fmt.Errorf("Goal.SetDoD: %w", serr)
 		}
 		// The recorded-goal ladder starts fresh (goalZeroOutputPushMax's
 		// shared-counter rule).

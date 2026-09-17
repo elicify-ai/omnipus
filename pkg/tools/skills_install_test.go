@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,11 +35,11 @@ func (fakeSkillRegistry) DownloadAndInstall(
 	_ context.Context, slug, _ string, targetDir string,
 ) (*skills.InstallResult, error) {
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fakeSkillRegistry.DownloadAndInstall: %w", err)
 	}
 	skillMD := "---\nname: " + slug + "\ndescription: a fake test skill for install_skill's global-dir test\n---\n\nBody.\n"
 	if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fakeSkillRegistry.DownloadAndInstall: %w", err)
 	}
 	return &skills.InstallResult{Version: "1.0.0"}, nil
 }
@@ -288,11 +289,11 @@ func (r blockingSkillRegistry) DownloadAndInstall(
 	_ context.Context, slug, _ string, targetDir string,
 ) (*skills.InstallResult, error) {
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("blockingSkillRegistry.DownloadAndInstall: %w", err)
 	}
 	skillMD := "---\nname: " + slug + "\ndescription: mid-install staging probe\n---\n\nBody.\n"
 	if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("blockingSkillRegistry.DownloadAndInstall: %w", err)
 	}
 	r.staged <- targetDir
 	<-r.proceed

@@ -152,10 +152,17 @@ func (p *Provider) Chat(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, common.HandleErrorResponse(resp, p.apiBase)
+		if err := common.HandleErrorResponse(resp, p.apiBase); err != nil {
+			return nil, fmt.Errorf("Provider.Chat: %w", err)
+		}
+		return nil, nil
 	}
 
-	return orc.ParseResponseBody(resp.Body)
+	body, err := orc.ParseResponseBody(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("azure Provider.Chat: %w", err)
+	}
+	return body, nil
 }
 
 // GetDefaultModel returns an empty string as Azure deployments are user-configured.

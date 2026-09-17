@@ -142,7 +142,7 @@ func (c *Config) SetUserTokenHash(username, token string) error {
 func bcryptHash(input string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(input), bcrypt.DefaultCost)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("bcryptHash: %w", err)
 	}
 	return string(hash), nil
 }

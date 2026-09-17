@@ -1315,7 +1315,7 @@ func waitForReloadOutcome(agentLoop *agent.AgentLoop) (confirmed bool, err error
 			// Fall through to the polling loop below.
 		} else {
 			slog.Error("config reload failed", "error", err)
-			return false, err
+			return false, fmt.Errorf("waitForReloadOutcome: %w", err)
 		}
 	}
 	deadline := time.Now().Add(reloadWaitTimeout)

@@ -3,6 +3,7 @@ package wecom
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -81,12 +82,12 @@ func (s *reqIDStore) load() error {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return err
+		return fmt.Errorf("reqIDStore.load: %w", err)
 	}
 
 	var routes map[string]wecomRoute
 	if err := json.Unmarshal(data, &routes); err != nil {
-		return err
+		return fmt.Errorf("reqIDStore.load: %w", err)
 	}
 	s.routes = routes
 	s.deleteExpiredLocked(time.Now())
@@ -103,11 +104,14 @@ func (s *reqIDStore) deleteExpiredLocked(now time.Time) {
 
 func (s *reqIDStore) saveLocked() error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
-		return err
+		return fmt.Errorf("reqIDStore.saveLocked: %w", err)
 	}
 	data, err := json.MarshalIndent(s.routes, "", "  ")
 	if err != nil {
-		return err
+		return fmt.Errorf("reqIDStore.saveLocked: %w", err)
 	}
-	return os.WriteFile(s.path, data, 0o600)
+	if err := os.WriteFile(s.path, data, 0o600); err != nil {
+		return fmt.Errorf("reqIDStore.saveLocked: %w", err)
+	}
+	return nil
 }

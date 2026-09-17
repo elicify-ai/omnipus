@@ -19,9 +19,12 @@ type windowContentsSizeAction struct{ width, height int }
 func (a windowContentsSizeAction) Do(ctx context.Context) error {
 	id, _, err := browser.GetWindowForTarget().Do(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("windowContentsSizeAction.Do: %w", err)
 	}
-	return browser.SetContentsSize(id).WithWidth(int64(a.width)).WithHeight(int64(a.height)).Do(ctx)
+	if err := browser.SetContentsSize(id).WithWidth(int64(a.width)).WithHeight(int64(a.height)).Do(ctx); err != nil {
+		return fmt.Errorf("windowContentsSizeAction.Do: %w", err)
+	}
+	return nil
 }
 
 // Inner dimensions include scrollbars; capture's CSS client dimensions do not.
@@ -33,7 +36,7 @@ func (a viewportContentGeometryAction) Do(ctx context.Context) error {
 		Height int `json:"height"`
 	}
 	if err := chromedp.Evaluate(`({width:window.innerWidth,height:window.innerHeight})`, &size).Do(ctx); err != nil {
-		return err
+		return fmt.Errorf("viewportContentGeometryAction.Do: %w", err)
 	}
 	w, h, err := readCSSLayoutViewport(ctx)
 	if err != nil {
@@ -1219,10 +1222,13 @@ func (a windowBoundsAction) Do(ctx context.Context) error {
 	if werr != nil {
 		return fmt.Errorf("get window for target: %w", werr)
 	}
-	return browser.SetWindowBounds(windowID, &browser.Bounds{
+	if err := browser.SetWindowBounds(windowID, &browser.Bounds{
 		Width:  int64(a.width),
 		Height: int64(a.height),
-	}).Do(ctx)
+	}).Do(ctx); err != nil {
+		return fmt.Errorf("windowBoundsAction.Do: %w", err)
+	}
+	return nil
 }
 
 // Do implements chromedp.Action.
@@ -1249,7 +1255,7 @@ func readCSSLayoutViewport(ctx context.Context) (w, h int64, err error) {
 	//nolint:dogsled // see above
 	_, _, _, cssLayout, _, _, lerr := page.GetLayoutMetrics().Do(ctx)
 	if lerr != nil {
-		return 0, 0, lerr
+		return 0, 0, fmt.Errorf("readCSSLayoutViewport: %w", lerr)
 	}
 	if cssLayout != nil {
 		w = cssLayout.ClientWidth

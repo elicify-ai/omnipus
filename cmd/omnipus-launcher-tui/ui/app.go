@@ -150,7 +150,10 @@ func New(cfg *tuicfg.TUIConfig, configPath string) *App {
 
 // Run starts the TUI event loop.
 func (a *App) Run() error {
-	return a.tapp.SetRoot(a.pages, true).EnableMouse(true).Run()
+	if err := a.tapp.SetRoot(a.pages, true).EnableMouse(true).Run(); err != nil {
+		return fmt.Errorf("App.Run: %w", err)
+	}
+	return nil
 }
 
 func (a *App) buildPages() {

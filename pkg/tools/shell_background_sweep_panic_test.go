@@ -13,6 +13,7 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -38,7 +39,11 @@ type lockedLogBuffer struct {
 func (w *lockedLogBuffer) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.b.Write(p)
+	n, err := w.b.Write(p)
+	if err != nil {
+		return 0, fmt.Errorf("write: %w", err)
+	}
+	return n, nil
 }
 
 func (w *lockedLogBuffer) String() string {

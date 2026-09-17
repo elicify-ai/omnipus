@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -51,7 +52,7 @@ type multipartCall struct {
 func (s *stubConstructor) JSONRequest(parameters any) (*ta.RequestData, error) {
 	b, err := json.Marshal(parameters)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("stubConstructor.JSONRequest: %w", err)
 	}
 	return &ta.RequestData{
 		ContentType: "application/json",
@@ -88,7 +89,7 @@ func (s *multipartRecordingConstructor) MultipartRequest(
 		}
 		data, err := io.ReadAll(file)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("multipartRecordingConstructor.MultipartRequest: %w", err)
 		}
 		call.FileSizes[field] = len(data)
 	}

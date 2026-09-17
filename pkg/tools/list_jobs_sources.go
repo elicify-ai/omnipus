@@ -556,19 +556,33 @@ func subagentLabel(rec *session.LifecycleRecord, namer JobAgentNamer) string {
 // listPlansLeniently prefers the lenient sibling when the store has one.
 func listPlansLeniently(store JobPlanLister, filter plan.Filter) ([]plan.Plan, int, error) {
 	if lenient, ok := store.(jobPlanLenientLister); ok {
-		return lenient.ListLenient(filter)
+		plans, total, err := lenient.ListLenient(filter)
+		if err != nil {
+			return plans, total, fmt.Errorf("listPlansLeniently: %w", err)
+		}
+		return plans, total, nil
 	}
 	records, err := store.List(filter)
-	return records, 0, err
+	if err != nil {
+		return records, 0, fmt.Errorf("listPlansLeniently: %w", err)
+	}
+	return records, 0, nil
 }
 
 // listTasksLeniently prefers the lenient sibling when the store has one.
 func listTasksLeniently(store JobTaskLister, filter task.Filter) ([]task.Task, int, error) {
 	if lenient, ok := store.(jobTaskLenientLister); ok {
-		return lenient.ListLenient(filter)
+		tasks, total, err := lenient.ListLenient(filter)
+		if err != nil {
+			return tasks, total, fmt.Errorf("listTasksLeniently: %w", err)
+		}
+		return tasks, total, nil
 	}
 	records, err := store.List(filter)
-	return records, 0, err
+	if err != nil {
+		return records, 0, fmt.Errorf("listTasksLeniently: %w", err)
+	}
+	return records, 0, nil
 }
 
 // listLifecycleLeniently prefers the lenient sibling when the store has one.
@@ -577,8 +591,15 @@ func listLifecycleLeniently(
 	filter session.LifecycleFilter,
 ) ([]session.LifecycleRecord, int, error) {
 	if lenient, ok := store.(jobLifecycleLenientLister); ok {
-		return lenient.ListLenient(filter)
+		records, total, err := lenient.ListLenient(filter)
+		if err != nil {
+			return records, total, fmt.Errorf("listLifecycleLeniently: %w", err)
+		}
+		return records, total, nil
 	}
 	records, err := store.List(filter)
-	return records, 0, err
+	if err != nil {
+		return records, 0, fmt.Errorf("listLifecycleLeniently: %w", err)
+	}
+	return records, 0, nil
 }

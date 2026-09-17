@@ -25,6 +25,7 @@ package resize
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"image/png"
@@ -146,7 +147,7 @@ func encodePNG(src image.Image, w, h int) ([]byte, error) {
 	dst := scaleImage(src, w, h)
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, dst); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("encodePNG: %w", err)
 	}
 	return buf.Bytes(), nil
 }
@@ -157,7 +158,7 @@ func encodeJPEG(src image.Image, w, h int, quality int) ([]byte, error) {
 	dst := scaleImage(src, w, h)
 	var buf bytes.Buffer
 	if err := jpeg.Encode(&buf, dst, &jpeg.Options{Quality: quality}); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("encodeJPEG: %w", err)
 	}
 	return buf.Bytes(), nil
 }

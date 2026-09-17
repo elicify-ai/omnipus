@@ -1,6 +1,7 @@
 package webrtc
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/pion/interceptor"
@@ -49,7 +50,7 @@ func (*viewerPlayoutDelayInterceptor) BindLocalStream(info *interceptor.StreamIn
 		}
 		// Two 12-bit fields in 10ms units: minimum 0, maximum 20.
 		if err := out.SetExtension(id, []byte{0, 0, 20}); err != nil {
-			return 0, err
+			return 0, fmt.Errorf("set playout delay extension: %w", err)
 		}
 		return writer.Write(&out, payload, attributes)
 	})

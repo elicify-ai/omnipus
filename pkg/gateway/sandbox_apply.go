@@ -139,7 +139,7 @@ func resolveMode(
 	if cliMode != "" {
 		mode, err := sandbox.ParseMode(cliMode)
 		if err != nil {
-			return "", "", err
+			return "", "", fmt.Errorf("resolveMode: %w", err)
 		}
 		return mode, "cli_flag", nil
 	}

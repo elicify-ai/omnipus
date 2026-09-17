@@ -414,7 +414,11 @@ func (f *fix6FaultyLifecycleStore) Load(sessionID string) (*session.LifecycleRec
 	if sessionID == f.failFor {
 		return nil, f.failErr
 	}
-	return f.LifecycleStore.Load(sessionID)
+	rec, err := f.LifecycleStore.Load(sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("Load: %w", err)
+	}
+	return rec, nil
 }
 
 func TestVerifyCallerOwnsSession_LogsIOErrorDistinctFromNotFound(t *testing.T) {

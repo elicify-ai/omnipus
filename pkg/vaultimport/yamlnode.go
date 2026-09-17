@@ -5,7 +5,11 @@
 
 package vaultimport
 
-import "gopkg.in/yaml.v3"
+import (
+	"fmt"
+
+	"gopkg.in/yaml.v3"
+)
 
 // ---------------------------------------------------------------------------
 // WHY THIS FILE EXISTS
@@ -76,5 +80,9 @@ func seq(items ...*yaml.Node) *yaml.Node {
 // document's bytes.
 func marshalDoc(top *yaml.Node) ([]byte, error) {
 	doc := &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{top}}
-	return yaml.Marshal(doc)
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("marshalDoc: %w", err)
+	}
+	return out, nil
 }

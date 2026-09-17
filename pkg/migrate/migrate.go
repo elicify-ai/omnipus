@@ -80,12 +80,12 @@ func (m *MigrateInstance) Run(opts Options) (*Result, error) {
 
 	sourceHome, err := handler.GetSourceHome()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("MigrateInstance.Run: %w", err)
 	}
 
 	targetHome, err := internal.ResolveTargetHome(opts.TargetHome)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("MigrateInstance.Run: %w", err)
 	}
 
 	if _, err = os.Stat(sourceHome); os.IsNotExist(err) {
@@ -135,7 +135,7 @@ func (m *MigrateInstance) Plan(opts Options, sourceHome, targetHome string) ([]A
 		configPath, err := handler.GetSourceConfigFile()
 		if err != nil {
 			if opts.ConfigOnly {
-				return nil, nil, err
+				return nil, nil, fmt.Errorf("MigrateInstance.Plan: %w", err)
 			}
 			warnings = append(warnings, fmt.Sprintf("Config migration skipped: %v", err))
 		} else {

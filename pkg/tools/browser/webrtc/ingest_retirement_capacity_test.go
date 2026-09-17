@@ -3,6 +3,7 @@ package webrtc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -32,7 +33,10 @@ type installedCleanupGate struct {
 
 func (g *installedCleanupGate) Close() error {
 	defer g.closed.Done()
-	return g.Interceptor.Close()
+	if err := g.Interceptor.Close(); err != nil {
+		return fmt.Errorf("installedCleanupGate.Close: %w", err)
+	}
+	return nil
 }
 
 func TestIngestReplacementRetainsCapacityUntilInstalledCleanupFinishes(t *testing.T) {

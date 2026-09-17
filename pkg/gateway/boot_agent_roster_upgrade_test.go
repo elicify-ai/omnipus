@@ -11,6 +11,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -37,7 +38,7 @@ func copyFixtureHome(t *testing.T, name string) string {
 		}
 		rel, err := filepath.Rel(src, path)
 		if err != nil {
-			return err
+			return fmt.Errorf("relative path %s: %w", path, err)
 		}
 		target := filepath.Join(dst, rel)
 		if d.IsDir() {
@@ -45,7 +46,7 @@ func copyFixtureHome(t *testing.T, name string) string {
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("read %s: %w", path, err)
 		}
 		return os.WriteFile(target, data, 0o600)
 	}))

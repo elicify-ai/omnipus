@@ -79,7 +79,7 @@ func pkcs7Unpad(src []byte, blockSize int) ([]byte, error) {
 func encryptAESECB(plaintext, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("encryptAESECB: %w", err)
 	}
 	padded := pkcs7Pad(plaintext, block.BlockSize())
 	out := make([]byte, len(padded))
@@ -92,7 +92,7 @@ func encryptAESECB(plaintext, key []byte) ([]byte, error) {
 func decryptAESECB(ciphertext, key []byte) ([]byte, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decryptAESECB: %w", err)
 	}
 	if len(ciphertext)%block.BlockSize() != 0 {
 		return nil, fmt.Errorf("invalid ciphertext size %d", len(ciphertext))
@@ -107,7 +107,7 @@ func decryptAESECB(ciphertext, key []byte) ([]byte, error) {
 func parseWeixinMediaAESKey(aesKeyBase64 string) ([]byte, error) {
 	decoded, err := base64.StdEncoding.DecodeString(aesKeyBase64)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parseWeixinMediaAESKey: %w", err)
 	}
 	if len(decoded) == 16 {
 		return decoded, nil
@@ -127,7 +127,7 @@ func imageAESKey(img *ImageItem) ([]byte, bool, error) {
 	if img.Aeskey != "" {
 		raw, err := hex.DecodeString(img.Aeskey)
 		if err != nil {
-			return nil, false, err
+			return nil, false, fmt.Errorf("imageAESKey: %w", err)
 		}
 		return raw, true, nil
 	}
@@ -155,7 +155,7 @@ func aesEcbPaddedSize(size int64) int64 {
 func randomHex(n int) (string, error) {
 	buf := make([]byte, n)
 	if _, err := rand.Read(buf); err != nil {
-		return "", err
+		return "", fmt.Errorf("randomHex: %w", err)
 	}
 	return hex.EncodeToString(buf), nil
 }
@@ -196,11 +196,11 @@ func uniqCDNURLs(urls []string) []string {
 func (c *WeixinChannel) downloadCDNBufferOnce(ctx context.Context, downloadURL string) ([]byte, int, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("WeixinChannel.downloadCDNBufferOnce: %w", err)
 	}
 	resp, err := c.api.HttpClient.Do(req)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, fmt.Errorf("WeixinChannel.downloadCDNBufferOnce: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -211,7 +211,7 @@ func (c *WeixinChannel) downloadCDNBufferOnce(ctx context.Context, downloadURL s
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, weixinMediaMaxBytes+1))
 	if err != nil {
-		return nil, resp.StatusCode, err
+		return nil, resp.StatusCode, fmt.Errorf("WeixinChannel.downloadCDNBufferOnce: %w", err)
 	}
 	if len(data) > weixinMediaMaxBytes {
 		return nil, resp.StatusCode, fmt.Errorf("cdn media too large: %d bytes", len(data))
@@ -344,7 +344,7 @@ func sanitizeFilename(name string) string {
 
 func writeManagedTempFile(prefix, filename string, data []byte) (string, error) {
 	if err := os.MkdirAll(media.TempDir(), 0o700); err != nil {
-		return "", err
+		return "", fmt.Errorf("writeManagedTempFile: %w", err)
 	}
 	pattern := prefix + "-*"
 	if ext := filepath.Ext(filename); ext != "" {
@@ -352,12 +352,12 @@ func writeManagedTempFile(prefix, filename string, data []byte) (string, error) 
 	}
 	f, err := os.CreateTemp(media.TempDir(), pattern)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("writeManagedTempFile: %w", err)
 	}
 	defer f.Close()
 	if _, err := f.Write(data); err != nil {
 		os.Remove(f.Name())
-		return "", err
+		return "", fmt.Errorf("writeManagedTempFile: %w", err)
 	}
 	return f.Name(), nil
 }
@@ -386,7 +386,7 @@ func (c *WeixinChannel) storeInboundBytes(
 	}, basechannels.BuildMediaScope("weixin", chatID, messageID))
 	if err != nil {
 		os.Remove(tmpPath)
-		return "", err
+		return "", fmt.Errorf("WeixinChannel.storeInboundBytes: %w", err)
 	}
 	return ref, nil
 }
@@ -658,11 +658,11 @@ func (c *WeixinChannel) downloadRemoteMediaToTemp(
 ) (string, string, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", fmt.Errorf("WeixinChannel.downloadRemoteMediaToTemp: %w", err)
 	}
 	resp, err := c.api.HttpClient.Do(req)
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", fmt.Errorf("WeixinChannel.downloadRemoteMediaToTemp: %w", err)
 	}
 	defer resp.Body.Close()
 
@@ -673,7 +673,7 @@ func (c *WeixinChannel) downloadRemoteMediaToTemp(
 
 	data, err := io.ReadAll(io.LimitReader(resp.Body, weixinMediaMaxBytes+1))
 	if err != nil {
-		return "", "", "", err
+		return "", "", "", fmt.Errorf("WeixinChannel.downloadRemoteMediaToTemp: %w", err)
 	}
 	if len(data) > weixinMediaMaxBytes {
 		return "", "", "", fmt.Errorf("remote media too large: %d bytes", len(data))
@@ -728,7 +728,7 @@ func (c *WeixinChannel) resolveOutboundPart(
 					"error":            err.Error(),
 				})
 			}
-			return "", "", "", cleanup, err
+			return "", "", "", cleanup, fmt.Errorf("WeixinChannel.resolveOutboundPart: %w", err)
 		}
 		if filename == "" {
 			filename = sanitizeFilename(meta.Filename)
@@ -754,7 +754,7 @@ func (c *WeixinChannel) resolveOutboundPart(
 	case strings.HasPrefix(part.Ref, "file://"):
 		u, err := url.Parse(part.Ref)
 		if err != nil {
-			return "", "", "", cleanup, err
+			return "", "", "", cleanup, fmt.Errorf("WeixinChannel.resolveOutboundPart: %w", err)
 		}
 		localPath := u.Path
 		if filename == "" {
@@ -786,7 +786,7 @@ func (c *WeixinChannel) uploadLocalFile(
 ) (*uploadedFileInfo, error) {
 	data, err := os.ReadFile(localPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("WeixinChannel.uploadLocalFile: %w", err)
 	}
 	if len(data) > weixinMediaMaxBytes {
 		return nil, fmt.Errorf("media too large: %d bytes", len(data))
@@ -798,7 +798,7 @@ func (c *WeixinChannel) uploadLocalFile(
 	}
 	aesKey := make([]byte, 16)
 	if _, readErr := rand.Read(aesKey); readErr != nil {
-		return nil, readErr
+		return nil, fmt.Errorf("WeixinChannel.uploadLocalFile: %w", readErr)
 	}
 	aesKeyHex := hex.EncodeToString(aesKey)
 	rawMD5 := md5.Sum(data)
@@ -870,7 +870,7 @@ func (c *WeixinChannel) uploadBufferToCDN(
 	for attempt := 1; attempt <= weixinUploadRetryMax; attempt++ {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, uploadURL, bytes.NewReader(ciphertext))
 		if reqErr != nil {
-			return "", reqErr
+			return "", fmt.Errorf("WeixinChannel.uploadBufferToCDN: %w", reqErr)
 		}
 		req.Header.Set("Content-Type", "application/octet-stream")
 
@@ -1176,7 +1176,10 @@ func (c *WeixinChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 			// ErrTemporary retry classification. The real API error stays
 			// in the chain either way (was previously flattened away
 			// entirely).
-			return basechannels.ClassifyMediaSendError("weixin", sentCount, err)
+			if err := basechannels.ClassifyMediaSendError("weixin", sentCount, err); err != nil {
+				return fmt.Errorf("WeixinChannel.SendMedia: %w", err)
+			}
+			return nil
 		}
 		sentCount++
 	}

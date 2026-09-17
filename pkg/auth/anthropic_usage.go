@@ -27,7 +27,7 @@ type AnthropicUsage struct {
 func FetchAnthropicUsage(token string) (*AnthropicUsage, error) {
 	req, err := http.NewRequest("GET", anthropicUsageURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("FetchAnthropicUsage: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Anthropic-Version", anthropicAPIVersion)
@@ -39,7 +39,7 @@ func FetchAnthropicUsage(token string) (*AnthropicUsage, error) {
 	// tests); no externally-controlled URL reaches this call.
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("FetchAnthropicUsage: %w", err)
 	}
 	// Response body is fully drained via io.ReadAll below; a Close error on
 	// an already-consumed HTTP response body carries no data-loss risk.

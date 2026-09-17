@@ -405,9 +405,12 @@ func (s *Store) saveFileNoLock(sf *storeFile) error {
 	// The sidecar is created 0600 like the store, and the sandbox already
 	// withholds it from agents — fspolicy's secret set covers every
 	// credentials.json.<suffix> name.
-	return fileutil.WithFlock(fileutil.SidecarLockPath(s.path), func() error {
+	if err := fileutil.WithFlock(fileutil.SidecarLockPath(s.path), func() error {
 		return writeFileAtomicFn(s.path, data, 0o600)
-	})
+	}); err != nil {
+		return fmt.Errorf("Store.saveFileNoLock: %w", err)
+	}
+	return nil
 }
 
 // writeFileAtomicFn is fileutil.WriteFileAtomic, held in a package variable so

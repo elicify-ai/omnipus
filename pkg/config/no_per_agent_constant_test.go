@@ -5,6 +5,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,7 +106,7 @@ func scanRepoGoFiles(t *testing.T, visit func(path string, content string)) {
 		}
 		content, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return readErr
+			return fmt.Errorf("read %s: %w", path, readErr)
 		}
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {

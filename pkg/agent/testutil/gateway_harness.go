@@ -786,7 +786,11 @@ func (g *TestGateway) NewRequest(method, path string, body io.Reader) (*http.Req
 
 // Do sends req via g.HTTPClient. Returns (nil, err) on network error.
 func (g *TestGateway) Do(req *http.Request) (*http.Response, error) {
-	return g.HTTPClient.Do(req)
+	resp, err := g.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("TestGateway.Do: %w", err)
+	}
+	return resp, nil
 }
 
 // SeedCLIToken writes tok to gateway.cli_token in config.json on disk, then

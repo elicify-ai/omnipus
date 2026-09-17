@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -128,7 +129,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 
 		rel, err := filepath.Rel(us.baseDir, path)
 		if err != nil {
-			return err
+			return fmt.Errorf("relative path %s: %w", path, err)
 		}
 		parts := strings.SplitN(rel, string(filepath.Separator), 3)
 		if len(parts) < 2 {
@@ -173,7 +174,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 	})
 	if err != nil {
 		unlock()
-		return removed, err
+		return removed, fmt.Errorf("UnifiedStore.RetentionSweep: %w", err)
 	}
 
 	// Second pass: remove session directories that lost all their transcripts

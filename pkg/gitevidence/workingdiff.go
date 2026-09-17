@@ -116,7 +116,7 @@ func (r *Repo) DiffWorkingTree(fromHash string, writeSet []string) (*DiffEvidenc
 			fromContents[f.Name] = content
 			return nil
 		}); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("Repo.DiffWorkingTree: %w", err)
 		}
 	}
 

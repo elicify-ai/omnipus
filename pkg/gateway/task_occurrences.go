@@ -723,7 +723,7 @@ func regularRruleDayFn(rruleBody string, dtstartMs int64, ruleTZ string) overvie
 	return func(dayFromMs, dayToMs int64, _ int) (dayResult, error) {
 		count, first, hasAny, err := task.CountRegularInRange(rruleBody, dtstartMs, ruleTZ, dayFromMs, dayToMs)
 		if err != nil {
-			return dayResult{}, err
+			return dayResult{}, fmt.Errorf("count rrule occurrences: %w", err)
 		}
 		if !hasAny {
 			return dayResult{}, nil
@@ -732,7 +732,7 @@ func regularRruleDayFn(rruleBody string, dtstartMs int64, ruleTZ string) overvie
 		if count <= 3 {
 			instants, _, err := task.ExpandRRULE(rruleBody, dtstartMs, ruleTZ, dayFromMs, dayToMs, count)
 			if err != nil {
-				return dayResult{}, err
+				return dayResult{}, fmt.Errorf("expand rrule: %w", err)
 			}
 			dr.instants = instants
 		}
@@ -749,7 +749,7 @@ func irregularRruleDayFn(rruleBody string, dtstartMs int64, ruleTZ string) overv
 	return func(dayFromMs, dayToMs int64, budget int) (dayResult, error) {
 		instants, truncated, err := task.ExpandRRULE(rruleBody, dtstartMs, ruleTZ, dayFromMs, dayToMs, budget)
 		if err != nil {
-			return dayResult{}, err
+			return dayResult{}, fmt.Errorf("expand rrule: %w", err)
 		}
 		if truncated {
 			return dayResult{truncated: true}, nil

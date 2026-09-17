@@ -16,11 +16,17 @@ import (
 )
 
 func flockExclusive(f *os.File) error {
-	return unix.Flock(int(f.Fd()), unix.LOCK_EX)
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
+		return fmt.Errorf("flockExclusive: %w", err)
+	}
+	return nil
 }
 
 func flockUnlock(f *os.File) error {
-	return unix.Flock(int(f.Fd()), unix.LOCK_UN)
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_UN); err != nil {
+		return fmt.Errorf("flockUnlock: %w", err)
+	}
+	return nil
 }
 
 // flockOpenedHook, when non-nil, runs each time WithFlock has opened its lock

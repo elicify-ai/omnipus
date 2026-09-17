@@ -81,7 +81,7 @@ func Open(ctx context.Context, path string, opts Options) (Store, error) {
 	// the SQLite build and a different file's answer on the other, which is how
 	// the two halves of a build gate drift apart.
 	if err := records.RequirePropertyIndex(records.CapabilityOpenIndex); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Open: %w", err)
 	}
 	// FR-032, and it is done BEFORE the driver ever touches the file: SQLite
 	// creates a missing database with 0666 & umask (0644 on a default umask),
@@ -749,7 +749,10 @@ func (ix *Index) deleteNoteDirect(ctx context.Context, path string) (err error) 
 	if !found {
 		// Deleting a note the index never held is not an error: the vault is the
 		// source of truth and the index is allowed to be behind it.
-		return tx.Commit()
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("Index.deleteNoteDirect: %w", err)
+		}
+		return nil
 	}
 	if err = ix.deleteChildren(ctx, tx, id); err != nil {
 		return err

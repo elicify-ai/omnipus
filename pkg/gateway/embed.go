@@ -3,6 +3,7 @@ package gateway
 import (
 	"compress/gzip"
 	"embed"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -571,7 +572,11 @@ type gzipResponseWriter struct {
 }
 
 func (w *gzipResponseWriter) Write(b []byte) (int, error) {
-	return w.Writer.Write(b)
+	n, err := w.Writer.Write(b)
+	if err != nil {
+		return 0, fmt.Errorf("gzipResponseWriter.Write: %w", err)
+	}
+	return n, nil
 }
 
 // gzipHandler wraps an http.Handler to add gzip compression for compressible content types.

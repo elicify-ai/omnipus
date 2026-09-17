@@ -162,7 +162,7 @@ func doOAuthPost(cfg OAuthProviderConfig, endpoint, contentType string, body []b
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		cancel()
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("doOAuthPost: %w", err)
 	}
 	req.Header.Set("Content-Type", contentType)
 
@@ -181,7 +181,7 @@ func doOAuthPost(cfg OAuthProviderConfig, endpoint, contentType string, body []b
 	resp, err := client.Do(req)
 	if err != nil {
 		cancel()
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("doOAuthPost: %w", err)
 	}
 	return resp, cancel, nil
 }
@@ -236,7 +236,11 @@ func isLoopbackHost(host string) bool {
 
 // readOAuthBody drains a bounded prefix of an OAuth response body.
 func readOAuthBody(resp *http.Response) ([]byte, error) {
-	return io.ReadAll(io.LimitReader(resp.Body, maxOAuthResponseBytes))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxOAuthResponseBytes))
+	if err != nil {
+		return nil, fmt.Errorf("readOAuthBody: %w", err)
+	}
+	return body, nil
 }
 
 // sanitizeVendorError makes a vendor's error body safe to quote in an error
@@ -346,7 +350,7 @@ func parseDeviceCodeResponse(body []byte) (deviceCodeResponse, error) {
 	}
 
 	if err := json.Unmarshal(body, &raw); err != nil {
-		return deviceCodeResponse{}, err
+		return deviceCodeResponse{}, fmt.Errorf("parseDeviceCodeResponse: %w", err)
 	}
 
 	interval, err := parseFlexibleInt(raw.Interval)
@@ -377,7 +381,11 @@ func parseFlexibleInt(raw json.RawMessage) (int, error) {
 		if intervalStr == "" {
 			return 0, nil
 		}
-		return strconv.Atoi(intervalStr)
+		n, err := strconv.Atoi(intervalStr)
+		if err != nil {
+			return 0, fmt.Errorf("parseFlexibleInt: %w", err)
+		}
+		return n, nil
 	}
 
 	return 0, fmt.Errorf("invalid integer value: %s", string(raw))
@@ -471,7 +479,7 @@ func pollDeviceCode(cfg OAuthProviderConfig, providerID, deviceAuthID, userCode 
 		CodeVerifier      string `json:"code_verifier"`
 	}
 	if unmarshalErr := json.Unmarshal(body, &tokenResp); unmarshalErr != nil {
-		return nil, "", unmarshalErr
+		return nil, "", fmt.Errorf("pollDeviceCode: %w", unmarshalErr)
 	}
 
 	redirectURI := cfg.Issuer + "/deviceauth/callback"
@@ -678,7 +686,7 @@ func parseJWTClaims(token string) (map[string]any, error) {
 
 	var claims map[string]any
 	if err := json.Unmarshal(decoded, &claims); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parseJWTClaims: %w", err)
 	}
 
 	return claims, nil
@@ -686,5 +694,9 @@ func parseJWTClaims(token string) (map[string]any, error) {
 
 func base64URLDecode(s string) ([]byte, error) {
 	s = strings.NewReplacer("-", "+", "_", "/").Replace(s)
-	return base64.StdEncoding.DecodeString(s)
+	decoded, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return nil, fmt.Errorf("base64URLDecode %q: %w", s, err)
+	}
+	return decoded, nil
 }

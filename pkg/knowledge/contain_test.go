@@ -59,7 +59,11 @@ func (f *b3RecordingFS) Lstat(name string) (fs.FileInfo, error) {
 	f.mu.Lock()
 	f.lstats = append(f.lstats, name)
 	f.mu.Unlock()
-	return f.inner.Lstat(name)
+	v, err := f.inner.Lstat(name)
+	if err != nil {
+		return nil, fmt.Errorf("Lstat: %w", err)
+	}
+	return v, nil
 }
 
 func (f *b3RecordingFS) ReadDir(name string) ([]fs.DirEntry, error) {
@@ -70,21 +74,33 @@ func (f *b3RecordingFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	return f.inner.ReadDir(name)
+	v, err := f.inner.ReadDir(name)
+	if err != nil {
+		return nil, fmt.Errorf("ReadDir: %w", err)
+	}
+	return v, nil
 }
 
 func (f *b3RecordingFS) EvalSymlinks(name string) (string, error) {
 	f.mu.Lock()
 	f.evals = append(f.evals, name)
 	f.mu.Unlock()
-	return f.inner.EvalSymlinks(name)
+	v, err := f.inner.EvalSymlinks(name)
+	if err != nil {
+		return "", fmt.Errorf("EvalSymlinks: %w", err)
+	}
+	return v, nil
 }
 
 func (f *b3RecordingFS) Open(name string) (fs.File, error) {
 	f.mu.Lock()
 	f.opened = append(f.opened, name)
 	f.mu.Unlock()
-	return f.inner.Open(name)
+	v, err := f.inner.Open(name)
+	if err != nil {
+		return nil, fmt.Errorf("Open: %w", err)
+	}
+	return v, nil
 }
 
 // openedOutside returns every CONTENT read whose path is not inside root.

@@ -27,7 +27,7 @@ const (
 func (l *SkillTrustLevel) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
-		return err
+		return fmt.Errorf("SkillTrustLevel.UnmarshalJSON: %w", err)
 	}
 	switch SkillTrustLevel(s) {
 	case SkillTrustBlockUnverified, SkillTrustWarnUnverified, SkillTrustAllowAll:
@@ -80,7 +80,7 @@ const (
 func (m *SandboxMode) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
-		return err
+		return fmt.Errorf("SandboxMode.UnmarshalJSON: %w", err)
 	}
 	switch SandboxMode(s) {
 	case SandboxModeEnforce, SandboxModePermissive, SandboxModeOff:
@@ -112,7 +112,7 @@ const (
 func (l *PromptInjectionLevel) UnmarshalJSON(data []byte) error {
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
-		return err
+		return fmt.Errorf("PromptInjectionLevel.UnmarshalJSON: %w", err)
 	}
 	switch PromptInjectionLevel(s) {
 	case PromptInjectionLow, PromptInjectionMedium, PromptInjectionHigh:

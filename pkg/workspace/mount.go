@@ -130,9 +130,12 @@ func saveWorkspaceRecord(home string, w Workspace) error {
 	// Lock the record's sidecar, never the record this write renames over (see
 	// fileutil.SidecarLockPath). pkg/sysagent/tools' writeEntity writes the same
 	// file under the same sidecar lock.
-	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+	if err := fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
 		return writeFileAtomicFn(path, data, 0o600)
-	})
+	}); err != nil {
+		return fmt.Errorf("saveWorkspaceRecord: %w", err)
+	}
+	return nil
 }
 
 // writeFileAtomicFn is fileutil.WriteFileAtomic, held in a package variable so

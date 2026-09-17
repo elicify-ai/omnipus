@@ -6,6 +6,7 @@ package agent
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -50,7 +51,11 @@ type lockedWriter struct {
 func (w lockedWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	return w.buf.Write(p)
+	n, err := w.buf.Write(p)
+	if err != nil {
+		return 0, fmt.Errorf("write: %w", err)
+	}
+	return n, nil
 }
 
 // captureSlogWarnings redirects the default slog logger into a buffer for the

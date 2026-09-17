@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -546,7 +547,7 @@ func dropLastLineLocal(in []byte) []byte {
 func rewriteDecisionLocal(path string, lineIdx int, from, to string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("rewriteDecisionLocal: %w", err)
 	}
 	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
 	if lineIdx < 0 || lineIdx >= len(lines) {
@@ -554,7 +555,7 @@ func rewriteDecisionLocal(path string, lineIdx int, from, to string) error {
 	}
 	var entry map[string]any
 	if unmarshalErr := json.Unmarshal([]byte(lines[lineIdx]), &entry); unmarshalErr != nil {
-		return unmarshalErr
+		return fmt.Errorf("rewriteDecisionLocal: %w", unmarshalErr)
 	}
 	got, ok := entry["decision"].(string)
 	if !ok || got != from {
@@ -563,8 +564,11 @@ func rewriteDecisionLocal(path string, lineIdx int, from, to string) error {
 	entry["decision"] = to
 	rewritten, err := json.Marshal(entry)
 	if err != nil {
-		return err
+		return fmt.Errorf("rewriteDecisionLocal: %w", err)
 	}
 	lines[lineIdx] = string(rewritten)
-	return os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		return fmt.Errorf("rewriteDecisionLocal: %w", err)
+	}
+	return nil
 }

@@ -1692,7 +1692,7 @@ func refreshIndexesForRename(ctx context.Context, home, collectionRoot, from str
 // direct write queues behind Store.Reconcile.
 func openPropertiesIndexStore(ctx context.Context, home, collectionRoot string) (propindex.Store, error) {
 	if err := records.RequirePropertyIndex(records.CapabilityOpenIndex); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("openPropertiesIndexStore: %w", err)
 	}
 	idxPath, err := PropertiesIndexPath(home, collectionRoot)
 	if err != nil {
@@ -1837,7 +1837,10 @@ func (s *sharedPropsStore) Close() error {
 		return nil
 	}
 	if e.retired {
-		return e.store.Close()
+		if err := e.store.Close(); err != nil {
+			return fmt.Errorf("sharedPropsStore.Close: %w", err)
+		}
+		return nil
 	}
 	e.idle = time.AfterFunc(propsStoreIdleTimeout, func() {
 		propsStores.mu.Lock()
@@ -1865,11 +1868,13 @@ func upsertPropertiesNote(ctx context.Context, store propindex.Store, collection
 		return err
 	}
 	if entry.Kind == ScanKindAttachment {
-		return store.UpsertNote(ctx, propindex.NoteRows{
+		if err := store.UpsertNote(ctx, propindex.NoteRows{
 			Path: relPath, Kind: propindex.KindAttachment,
 			Size: entry.Size, MtimeNanos: entry.ModTimeNanos,
 			CtimeNanos: entry.CtimeNanos, HasCtime: entry.HasCtime,
-		})
+		}); err != nil {
+			return fmt.Errorf("upsertPropertiesNote: %w", err)
+		}
 	}
 
 	fsys := OSLinkFS()
@@ -1904,5 +1909,8 @@ func upsertPropertiesNote(ctx context.Context, store propindex.Store, collection
 	rows := propindex.BuildNoteRows(rec, schema, src, hash)
 	rows.Size, rows.MtimeNanos = entry.Size, entry.ModTimeNanos
 	rows.CtimeNanos, rows.HasCtime = entry.CtimeNanos, entry.HasCtime
-	return store.UpsertNote(ctx, rows)
+	if err := store.UpsertNote(ctx, rows); err != nil {
+		return fmt.Errorf("upsertPropertiesNote: %w", err)
+	}
+	return nil
 }

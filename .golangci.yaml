@@ -22,7 +22,6 @@ linters:
     - tagliatelle
     - testpackage
     - varnamelen
-    - wrapcheck
     - wsl
     - wsl_v5
 
@@ -138,6 +137,18 @@ linters:
         - return
     nakedret:
       max-func-lines: 3
+    # wrapcheck: context errors are the one sanctioned bare passthrough.
+    # Cancellation/deadline signals are sentinel values that this codebase
+    # compares with == at ~17 production sites (e.g. `ctx.Err() ==
+    # context.DeadlineExceeded` in pkg/agent/loop.go, pkg/sandbox/
+    # hardened_exec.go); wrapping them would break those comparisons and
+    # prepend noise ("Foo: context canceled") to a message whose whole point
+    # is which sentinel it is. errors.Is stays correct for everything else.
+    wrapcheck:
+      ignore-interface-regexps:
+        - ^context\.Context$
+      ignore-package-globs:
+        - context
     revive:
       enable-all-rules: true
       rules:

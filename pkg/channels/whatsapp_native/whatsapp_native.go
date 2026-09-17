@@ -734,7 +734,11 @@ func parseJID(s string) (types.JID, error) {
 		return types.JID{}, fmt.Errorf("empty chat id")
 	}
 	if strings.Contains(s, "@") {
-		return types.ParseJID(s)
+		jid, err := types.ParseJID(s)
+		if err != nil {
+			return types.JID{}, fmt.Errorf("parseJID %s: %w", s, err)
+		}
+		return jid, nil
 	}
 	return types.NewJID(s, types.DefaultUserServer), nil
 }

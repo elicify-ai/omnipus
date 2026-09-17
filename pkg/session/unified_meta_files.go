@@ -336,7 +336,7 @@ func (us *UnifiedStore) u5WriteIdentityLocked(sessionID string, meta *UnifiedMet
 	if err := fileutil.WithFlock(sessionFileLockPath(metaPath), func() error {
 		return writeFileAtomicFn(metaPath, data, 0o600)
 	}); err != nil {
-		return err
+		return fmt.Errorf("UnifiedStore.u5WriteIdentityLocked: %w", err)
 	}
 
 	us.cacheMu.Lock()
@@ -390,7 +390,7 @@ func (us *UnifiedStore) u5WriteStatsLocked(sessionID string, meta *UnifiedMeta) 
 	if err := fileutil.WithFlock(sessionFileLockPath(statsPath), func() error {
 		return writeFileAtomicFn(statsPath, data, 0o600)
 	}); err != nil {
-		return err
+		return fmt.Errorf("UnifiedStore.u5WriteStatsLocked: %w", err)
 	}
 
 	us.cacheMu.Lock()
@@ -422,7 +422,7 @@ func (us *UnifiedStore) u5WriteLoopLocked(sessionID string, meta *UnifiedMeta) e
 	if err := fileutil.WithFlock(sessionFileLockPath(loopPath), func() error {
 		return writeFileAtomicFn(loopPath, data, 0o600)
 	}); err != nil {
-		return err
+		return fmt.Errorf("UnifiedStore.u5WriteLoopLocked: %w", err)
 	}
 
 	us.cacheMu.Lock()

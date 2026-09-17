@@ -579,7 +579,13 @@ func (ix *Index) Root() string { return ix.root }
 func (ix *Index) ManifestPath() string { return ix.manifestPath }
 
 // DocCount returns the number of index documents — segments, not files.
-func (ix *Index) DocCount() (uint64, error) { return ix.idx.DocCount() }
+func (ix *Index) DocCount() (uint64, error) {
+	n, err := ix.idx.DocCount()
+	if err != nil {
+		return 0, fmt.Errorf("Index.DocCount: %w", err)
+	}
+	return n, nil
+}
 
 // IndexFreshness is a READ-ONLY snapshot of how well the text index reflects
 // the collection on disk RIGHT NOW — the fact a caller needs to tell a STALE
@@ -1715,7 +1721,7 @@ func (ix *Index) hashFile(relPath string) (string, error) {
 	h := sha256.New()
 	buf := make([]byte, 1<<20)
 	if _, err := io.CopyBuffer(h, f, buf); err != nil {
-		return "", err
+		return "", fmt.Errorf("Index.hashFile: %w", err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }

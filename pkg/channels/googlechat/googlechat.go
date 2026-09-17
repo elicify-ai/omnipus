@@ -496,7 +496,7 @@ func (c *GoogleChatChannel) refreshJWKS() error {
 	jwksURL := fmt.Sprintf("%s/%s/", googleChatJWKSURL, c.saEmail)
 	req, err := http.NewRequest(http.MethodGet, jwksURL, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("GoogleChatChannel.refreshJWKS: %w", err)
 	}
 
 	resp, err := c.client.Do(req)
@@ -750,7 +750,7 @@ func (c *GoogleChatChannel) StartTyping(ctx context.Context, chatID string) (fun
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return func() {}, err
+		return func() {}, fmt.Errorf("GoogleChatChannel.StartTyping: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
