@@ -14,12 +14,14 @@ import (
 	"io/fs"
 	"path/filepath"
 	"strings"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 var ErrImageSourceNotRegular = errors.New("image source must be a regular file")
 
 const (
-	MaxInspectionImageBytes  = 20 * 1024 * 1024
+	MaxInspectionImageBytes  = config.DefaultMaxMediaSize
 	MaxInspectionImagePixels = 16 * 1024 * 1024
 )
 
@@ -43,7 +45,7 @@ func imageFormat(sniff []byte, name string) (mime string, candidate, unsupported
 	return "", false, false
 }
 
-func inspectionImageResult(ctx context.Context, file fs.File, source string, sniff []byte, pagination bool, reauthorize func(context.Context) error) (*ToolResult, bool) {
+func inspectionImageResult(ctx context.Context, file fs.File, source string, sniff []byte, pagination bool, maxBytes int64, reauthorize func(context.Context) error) (*ToolResult, bool) {
 	mime, candidate, unsupported := imageFormat(sniff, source)
 	if !candidate {
 		return nil, false
@@ -61,25 +63,22 @@ func inspectionImageResult(ctx context.Context, file fs.File, source string, sni
 	if !info.Mode().IsRegular() {
 		return ErrorResult("image source must be a regular file"), true
 	}
-	if info.Size() > MaxInspectionImageBytes {
+	if info.Size() > maxBytes {
 		return ErrorResult("image exceeds byte limit"), true
 	}
-	seeker, ok := file.(io.Seeker)
-	if !ok {
-		return ErrorResult("image source must be a regular file"), true
+	remaining := maxBytes + 1 - int64(len(sniff))
+	if remaining < 0 {
+		return ErrorResult("image exceeds byte limit"), true
 	}
-	if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-		return ErrorResult(fmt.Sprintf("invalid image: %v", err)), true
-	}
-	limited := io.LimitReader(file, MaxInspectionImageBytes+1)
-	data, err := io.ReadAll(&contextReader{ctx: ctx, r: limited})
+	tail, err := io.ReadAll(&contextReader{ctx: ctx, r: io.LimitReader(file, remaining)})
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return ErrorResult(err.Error()), true
 		}
 		return ErrorResult(fmt.Sprintf("invalid image: %v", err)), true
 	}
-	if len(data) > MaxInspectionImageBytes {
+	data := append(append([]byte(nil), sniff...), tail...)
+	if int64(len(data)) > maxBytes {
 		return ErrorResult("image exceeds byte limit"), true
 	}
 	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
@@ -95,8 +94,11 @@ func inspectionImageResult(ctx context.Context, file fs.File, source string, sni
 	if cfg.Width > MaxInspectionImagePixels/cfg.Height {
 		return ErrorResult("image exceeds pixel limit"), true
 	}
+	if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+		return ErrorResult(fmt.Sprintf("invalid image: %v", err)), true
+	}
 	sum := sha256.Sum256(data)
-	marker := fmt.Sprintf("[image: %s | original: %dx%d | presented: %dx%d | sha256: %s | not retained; re-read to view]", filepath.Base(source), cfg.Width, cfg.Height, cfg.Width, cfg.Height, hex.EncodeToString(sum[:]))
+	marker := fmt.Sprintf("[image: %s | original: %dx%d | sha256: %s | not retained; re-read to view]", source, cfg.Width, cfg.Height, hex.EncodeToString(sum[:]))
 	return &ToolResult{ForLLM: marker, InspectionImages: []InspectionImage{{Bytes: data, MIMEType: mime, Source: source, SHA256: hex.EncodeToString(sum[:]), OriginalWidth: cfg.Width, OriginalHeight: cfg.Height, Reauthorize: reauthorize}}}, true
 }
 

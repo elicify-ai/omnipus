@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/openai/openai-go/v3"
@@ -67,6 +68,18 @@ func TestBuildCodexParams_ToolCallConversation(t *testing.T) {
 	}
 	if len(params.Input.OfInputItemList) != 3 {
 		t.Errorf("len(Input items) = %d, want 3", len(params.Input.OfInputItemList))
+	}
+}
+
+func TestBuildCodexParams_ToolImageInCorrelatedOutput(t *testing.T) {
+	const dataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	params := buildCodexParams([]Message{{Role: "tool", ToolCallID: "call-image", Content: "marker", Media: []string{dataURL}}}, nil, "gpt-5", nil, false)
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"call_id":"call-image"`) || !strings.Contains(string(raw), dataURL) {
+		t.Fatalf("params=%s", raw)
 	}
 }
 

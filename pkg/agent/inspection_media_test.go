@@ -61,19 +61,19 @@ func TestAttachInspectionImages_UsesActualCandidateBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(live.Content, "resized for model: presented 384x192") {
+	if !strings.Contains(live.Content, "presented to model: 384x192, resized from 512x256") {
 		t.Fatalf("content=%q", live.Content)
 	}
 }
 
 func TestAttachInspectionImages_DeniedOrNonVisionHasNoBytes(t *testing.T) {
 	image := tools.InspectionImage{Bytes: []byte("secret"), MIMEType: "image/png", Reauthorize: func(context.Context) error { return errors.New("outside workspace") }}
-	_, err := attachInspectionImages(context.Background(), providers.Message{Role: "tool", ToolCallID: "call-8"}, []tools.InspectionImage{image}, true)
-	if err == nil || !strings.Contains(err.Error(), "outside workspace") {
-		t.Fatalf("denial error = %v", err)
+	denied, err := attachInspectionImages(context.Background(), providers.Message{Role: "tool", ToolCallID: "call-8"}, []tools.InspectionImage{image}, true)
+	if err != nil || len(denied.Media) != 0 || !strings.Contains(denied.Content, "outside workspace") {
+		t.Fatalf("denial=%#v error=%v", denied, err)
 	}
 	nonVision, err := attachInspectionImages(context.Background(), providers.Message{Role: "tool", ToolCallID: "call-8"}, []tools.InspectionImage{image}, false)
-	if err == nil || len(nonVision.Media) != 0 || !strings.Contains(err.Error(), "does not support image input") {
+	if err != nil || len(nonVision.Media) != 0 || !strings.Contains(nonVision.Content, "does not support image input") {
 		t.Fatalf("non-vision = %#v err=%v", nonVision, err)
 	}
 }

@@ -28,14 +28,17 @@ func attachInspectionImagesWithBudget(ctx context.Context, canonical providers.M
 		return live, nil
 	}
 	if !supportsImages {
-		return live, fmt.Errorf("selected model does not support image input; choose a vision-capable model")
+		live.Content += "\n[visual inspection unavailable: selected model does not support image input; choose a vision-capable model]"
+		return live, nil
 	}
 	for _, inspection := range images {
 		if inspection.Reauthorize == nil {
 			return live, fmt.Errorf("inspection image access cannot be rechecked")
 		}
 		if err := inspection.Reauthorize(ctx); err != nil {
-			return live, fmt.Errorf("inspection image access denied: %w", err)
+			live.Media = nil
+			live.Content += "\n[visual inspection unavailable: inspection image access denied: " + err.Error() + "]"
+			return live, nil
 		}
 		if len(inspection.Bytes) == 0 || !strings.HasPrefix(inspection.MIMEType, "image/") {
 			return live, fmt.Errorf("invalid inspection image")
@@ -49,16 +52,14 @@ func attachInspectionImagesWithBudget(ctx context.Context, canonical providers.M
 			return live, fmt.Errorf("image cannot fit model limits: %w", err)
 		}
 		bounds := decoded.Bounds()
-		presentedWidth, presentedHeight := bounds.Dx(), bounds.Dy()
-		if bounds.Dx() > budget.LongEdgePx || bounds.Dy() > budget.LongEdgePx {
-			if bounds.Dx() >= bounds.Dy() {
-				presentedWidth = normalized.LongEdge
-				presentedHeight = bounds.Dy() * normalized.LongEdge / bounds.Dx()
-			} else {
-				presentedHeight = normalized.LongEdge
-				presentedWidth = bounds.Dx() * normalized.LongEdge / bounds.Dy()
-			}
-			live.Content += fmt.Sprintf("\n[resized for model: presented %dx%d]", presentedWidth, presentedHeight)
+		presented, _, decodeErr := image.DecodeConfig(bytes.NewReader(normalized.Data))
+		if decodeErr != nil {
+			return live, fmt.Errorf("invalid normalized inspection image: %w", decodeErr)
+		}
+		if bounds.Dx() != presented.Width || bounds.Dy() != presented.Height {
+			live.Content += fmt.Sprintf("\n[presented to model: %dx%d, resized from %dx%d]", presented.Width, presented.Height, bounds.Dx(), bounds.Dy())
+		} else {
+			live.Content += fmt.Sprintf("\n[presented to model: %dx%d]", presented.Width, presented.Height)
 		}
 		live.Media = append(live.Media, "data:"+normalized.Mime+";base64,"+base64.StdEncoding.EncodeToString(normalized.Data))
 	}

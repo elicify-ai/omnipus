@@ -240,14 +240,16 @@ func convertMessages(messages []Message) ([]types.Message, []types.SystemContent
 
 	// Helper to create a tool result content block
 	makeToolResultBlock := func(msg Message) types.ContentBlock {
+		content := []types.ToolResultContentBlock{&types.ToolResultContentBlockMemberText{Value: msg.Content}}
+		for _, mediaURL := range msg.Media {
+			if imageBlock, ok := bedrockImageBlock(mediaURL); ok {
+				content = append(content, &types.ToolResultContentBlockMemberImage{Value: imageBlock})
+			}
+		}
 		return &types.ContentBlockMemberToolResult{
 			Value: types.ToolResultBlock{
 				ToolUseId: aws.String(msg.ToolCallID),
-				Content: []types.ToolResultContentBlock{
-					&types.ToolResultContentBlockMemberText{
-						Value: msg.Content,
-					},
-				},
+				Content:   content,
 			},
 		}
 	}
@@ -310,6 +312,39 @@ func convertMessages(messages []Message) ([]types.Message, []types.SystemContent
 	}
 
 	return bedrockMessages, systemPrompts
+}
+
+func bedrockImageBlock(mediaURL string) (types.ImageBlock, bool) {
+	if !strings.HasPrefix(mediaURL, "data:image/") {
+		return types.ImageBlock{}, false
+	}
+	parts := strings.SplitN(mediaURL, ",", 2)
+	if len(parts) != 2 || !strings.Contains(parts[0], ";base64") {
+		return types.ImageBlock{}, false
+	}
+	mediaType := strings.TrimSuffix(strings.TrimPrefix(parts[0], "data:image/"), ";base64")
+	var format types.ImageFormat
+	switch mediaType {
+	case "jpeg", "jpg":
+		format = types.ImageFormatJpeg
+	case "png":
+		format = types.ImageFormatPng
+	case "gif":
+		format = types.ImageFormatGif
+	case "webp":
+		format = types.ImageFormatWebp
+	default:
+		return types.ImageBlock{}, false
+	}
+	const maxImageSize = 10 * 1024 * 1024
+	if base64.StdEncoding.DecodedLen(len(parts[1])) > maxImageSize {
+		return types.ImageBlock{}, false
+	}
+	data, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil || len(data) > maxImageSize {
+		return types.ImageBlock{}, false
+	}
+	return types.ImageBlock{Format: format, Source: &types.ImageSourceMemberBytes{Value: data}}, true
 }
 
 // buildUserContent builds Bedrock content blocks for a user message.

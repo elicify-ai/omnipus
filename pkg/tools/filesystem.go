@@ -427,8 +427,9 @@ type ReadFileTool struct {
 	agentHome string
 	// restrict maps to fspolicy.FSScopeConfined (true) / FSScopeUnrestricted
 	// (false) — the P1 equivalent of today's restrict flag.
-	restrict bool
-	maxSize  int64
+	restrict                bool
+	maxSize                 int64
+	maxInspectionImageBytes int64
 	// patterns is the operator-configured AllowRead/WritePaths regex axis —
 	// a feature orthogonal to filesystem_scope, bridged onto ResolvePath via
 	// ResolvePathAllowingPatterns.
@@ -456,11 +457,18 @@ func NewReadFileTool(
 	}
 
 	return &ReadFileTool{
-		agentHome:     workspace,
-		restrict:      restrict,
-		maxSize:       maxSize,
-		patterns:      patterns,
-		allowPathsLen: len(patterns),
+		agentHome:               workspace,
+		restrict:                restrict,
+		maxSize:                 maxSize,
+		maxInspectionImageBytes: MaxInspectionImageBytes,
+		patterns:                patterns,
+		allowPathsLen:           len(patterns),
+	}
+}
+
+func (t *ReadFileTool) SetMaxInspectionImageBytes(maxBytes int) {
+	if maxBytes > 0 {
+		t.maxInspectionImageBytes = int64(maxBytes)
 	}
 }
 
@@ -578,7 +586,7 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		if statErr == nil && !info.Mode().IsRegular() {
 			return ErrorResult("image source must be a regular file")
 		}
-		if statErr == nil && info.Size() > MaxInspectionImageBytes {
+		if statErr == nil && info.Size() > t.maxInspectionImageBytes {
 			return ErrorResult("image exceeds byte limit")
 		}
 	}
@@ -625,7 +633,8 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	// sniff the first 512 bytes to detect binary content before loading
 	// it into the LLM context. Seeking back to 0 afterwards restores state.
-	sniff := make([]byte, 512)
+	sniffLimit := min(int64(512), t.maxInspectionImageBytes+1)
+	sniff := make([]byte, sniffLimit)
 	sniffN, sniffErr := file.Read(sniff)
 	if sniffErr != nil && !errors.Is(sniffErr, io.EOF) {
 		return ErrorResult(fmt.Sprintf("failed to sniff file content: %v", sniffErr))
@@ -637,7 +646,11 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		}
 		return fresh.Close()
 	}
-	if result, handled := inspectionImageResult(ctx, file, path, sniff[:sniffN], paginationSupplied, reauthorize); handled {
+	sourceIdentity := path
+	if resolved, resolveErr := handle.RealPath(); resolveErr == nil {
+		sourceIdentity = resolved
+	}
+	if result, handled := inspectionImageResult(ctx, file, sourceIdentity, sniff[:sniffN], paginationSupplied, t.maxInspectionImageBytes, reauthorize); handled {
 		return result
 	}
 	if offset < 0 {

@@ -136,6 +136,10 @@ func NewLibraryReadTool(
 	return &LibraryReadTool{inner: NewReadFileTool(workspace, restrict, maxReadFileSize, allowPaths...)}
 }
 
+func (t *LibraryReadTool) SetMaxInspectionImageBytes(maxBytes int) {
+	t.inner.SetMaxInspectionImageBytes(maxBytes)
+}
+
 func (t *LibraryReadTool) Name() string {
 	return "library_read"
 }

@@ -2,8 +2,10 @@ package azure
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -131,6 +133,21 @@ func TestProviderChat_AzureRequestBodyContainsModel(t *testing.T) {
 
 	if requestBody["model"] != "my-deployment" {
 		t.Errorf("model = %v, want %q", requestBody["model"], "my-deployment")
+	}
+}
+
+func TestProviderChat_AzureToolImageRequest(t *testing.T) {
+	const dataURL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+	var raw []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { raw, _ = io.ReadAll(r.Body); writeValidResponse(w) }))
+	defer server.Close()
+	p := mustNewProvider(t, "key", server.URL, "")
+	if _, err := p.Chat(t.Context(), []Message{{Role: "tool", ToolCallID: "call-az", Content: "marker", Media: []string{dataURL}}}, nil, "deployment", nil); err != nil {
+		t.Fatal(err)
+	}
+	s := string(raw)
+	if !strings.Contains(s, `"call_id":"call-az"`) || !strings.Contains(s, dataURL) {
+		t.Fatalf("request=%s", s)
 	}
 }
 

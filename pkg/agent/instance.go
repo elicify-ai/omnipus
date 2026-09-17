@@ -235,7 +235,9 @@ func (nai *newAgentInstance) registerTools() {
 	// All file-system and exec tools register unconditionally. Policy
 	// (allow / ask / deny) decides whether an agent can actually invoke them.
 	maxReadFileSize := nai.cfg.Tools.ReadFile.MaxReadFileSize
-	nai.toolsRegistry.Register(tools.NewReadFileTool(nai.workspace, nai.readRestrict, maxReadFileSize, nai.allowReadPaths))
+	readFileTool := tools.NewReadFileTool(nai.workspace, nai.readRestrict, maxReadFileSize, nai.allowReadPaths)
+	readFileTool.SetMaxInspectionImageBytes(nai.cfg.Agents.Defaults.GetMaxMediaSize())
+	nai.toolsRegistry.Register(readFileTool)
 	nai.toolsRegistry.Register(tools.NewWriteFileTool(nai.workspace, nai.restrict, nai.allowWritePaths))
 	nai.toolsRegistry.Register(tools.NewListDirTool(nai.workspace, nai.readRestrict, nai.allowReadPaths))
 	// library_list / library_read (D3, library-spec): scoped facades over
@@ -246,7 +248,9 @@ func (nai *newAgentInstance) registerTools() {
 	// deny), not conditional registration, decides who can actually invoke
 	// them (CLAUDE.md Constraint #6).
 	nai.toolsRegistry.Register(tools.NewLibraryListTool(nai.workspace, nai.readRestrict, nai.allowReadPaths))
-	nai.toolsRegistry.Register(tools.NewLibraryReadTool(nai.workspace, nai.readRestrict, maxReadFileSize, nai.allowReadPaths))
+	libraryReadTool := tools.NewLibraryReadTool(nai.workspace, nai.readRestrict, maxReadFileSize, nai.allowReadPaths)
+	libraryReadTool.SetMaxInspectionImageBytes(nai.cfg.Agents.Defaults.GetMaxMediaSize())
+	nai.toolsRegistry.Register(libraryReadTool)
 
 	execTool, err := tools.NewExecToolWithConfig(nai.workspace, nai.restrict, nai.cfg, nai.allowReadPaths)
 	if err != nil {

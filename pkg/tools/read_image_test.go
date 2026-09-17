@@ -52,6 +52,12 @@ func TestReadImage_ReturnsPrivateAuthorizedSnapshot(t *testing.T) {
 	if !strings.Contains(result.ForLLM, "not retained; re-read to view") {
 		t.Fatalf("marker = %q", result.ForLLM)
 	}
+	if !strings.Contains(result.ForLLM, filepath.Join(dir, "known.png")) {
+		t.Fatalf("marker lacks authorized source identity: %q", result.ForLLM)
+	}
+	if strings.Contains(result.ForLLM, "presented") {
+		t.Fatalf("canonical marker falsely claims candidate presentation: %q", result.ForLLM)
+	}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
@@ -101,6 +107,19 @@ func TestReadImage_InvalidAndUnsupportedFormatsAreDistinct(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "photo.heic"), append([]byte{0, 0, 0, 24}, []byte("ftypheic00000000")...), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	var headerOnly bytes.Buffer
+	headerOnly.WriteString("\x89PNG\r\n\x1a\n")
+	_ = binary.Write(&headerOnly, binary.BigEndian, uint32(13))
+	headerOnly.WriteString("IHDR")
+	ihdr := make([]byte, 13)
+	binary.BigEndian.PutUint32(ihdr[0:4], 1)
+	binary.BigEndian.PutUint32(ihdr[4:8], 1)
+	ihdr[8], ihdr[9] = 8, 6
+	headerOnly.Write(ihdr)
+	_ = binary.Write(&headerOnly, binary.BigEndian, crc32.ChecksumIEEE(append([]byte("IHDR"), ihdr...)))
+	if err := os.WriteFile(filepath.Join(dir, "header-only.png"), headerOnly.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	broken := NewReadFileTool(dir, true, MaxReadFileSize).Execute(context.Background(), map[string]any{"path": "broken.png"})
 	if !broken.IsError || !strings.Contains(broken.ForLLM, "invalid image") {
 		t.Fatalf("broken=%#v", broken)
@@ -108,6 +127,21 @@ func TestReadImage_InvalidAndUnsupportedFormatsAreDistinct(t *testing.T) {
 	unsupported := NewReadFileTool(dir, true, MaxReadFileSize).Execute(context.Background(), map[string]any{"path": "photo.heic"})
 	if !unsupported.IsError || !strings.Contains(unsupported.ForLLM, "unsupported image format") {
 		t.Fatalf("unsupported=%#v", unsupported)
+	}
+	headerOnlyResult := NewReadFileTool(dir, true, MaxReadFileSize).Execute(context.Background(), map[string]any{"path": "header-only.png"})
+	if !headerOnlyResult.IsError || !strings.Contains(headerOnlyResult.ForLLM, "invalid image") {
+		t.Fatalf("header-only=%#v", headerOnlyResult)
+	}
+}
+
+func TestReadImage_UsesConfiguredMediaByteLimit(t *testing.T) {
+	dir := t.TempDir()
+	data := writeKnownPNG(t, filepath.Join(dir, "configured.png"), 32, 24)
+	tool := NewReadFileTool(dir, true, MaxReadFileSize)
+	tool.SetMaxInspectionImageBytes(len(data) - 1)
+	result := tool.Execute(context.Background(), map[string]any{"path": "configured.png"})
+	if !result.IsError || !strings.Contains(result.ForLLM, "image exceeds byte limit") {
+		t.Fatalf("result=%#v", result)
 	}
 }
 

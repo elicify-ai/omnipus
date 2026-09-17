@@ -415,7 +415,7 @@ func buildParams(
 		case "user":
 			if msg.ToolCallID != "" {
 				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)),
+					anthropic.NewUserMessage(anthropicToolResult(msg)),
 				)
 			} else {
 				anthropicMessages = append(anthropicMessages,
@@ -472,7 +472,7 @@ func buildParams(
 			}
 		case "tool":
 			anthropicMessages = append(anthropicMessages,
-				anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)),
+				anthropic.NewUserMessage(anthropicToolResult(msg)),
 			)
 		}
 	}
@@ -513,6 +513,26 @@ func buildParams(
 	}
 
 	return params, nil
+}
+
+func anthropicToolResult(msg Message) anthropic.ContentBlockParamUnion {
+	if len(msg.Media) == 0 {
+		return anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)
+	}
+	content := []anthropic.ToolResultBlockParamContentUnion{{OfText: &anthropic.TextBlockParam{Text: msg.Content}}}
+	for _, dataURL := range msg.Media {
+		if !strings.HasPrefix(dataURL, "data:image/") {
+			continue
+		}
+		payload := strings.TrimPrefix(dataURL, "data:")
+		meta, data, ok := strings.Cut(payload, ",")
+		if !ok {
+			continue
+		}
+		mediaType, _, _ := strings.Cut(meta, ";")
+		content = append(content, anthropic.ToolResultBlockParamContentUnion{OfImage: &anthropic.ImageBlockParam{Source: anthropic.ImageBlockParamSourceUnion{OfBase64: &anthropic.Base64ImageSourceParam{Data: data, MediaType: anthropic.Base64ImageSourceMediaType(mediaType)}}}})
+	}
+	return anthropic.ContentBlockParamUnion{OfToolResult: &anthropic.ToolResultBlockParam{ToolUseID: msg.ToolCallID, Content: content}}
 }
 
 // applyThinkingConfig sets thinking parameters based on the level value.

@@ -216,7 +216,7 @@ func buildRequestBody(
 				toolResultBlock := map[string]any{
 					"type":        "tool_result",
 					"tool_use_id": msg.ToolCallID,
-					"content":     msg.Content,
+					"content":     buildAnthropicUserContent(msg.Content, msg.Media),
 				}
 				// mergeToolResultIntoLastUser always leaves apiMessages holding
 				// the tool result (merged into the previous user message, or
@@ -284,7 +284,7 @@ func buildRequestBody(
 			toolResultBlock := map[string]any{
 				"type":        "tool_result",
 				"tool_use_id": msg.ToolCallID,
-				"content":     msg.Content,
+				"content":     buildAnthropicUserContent(msg.Content, msg.Media),
 			}
 			// Same reasoning as the "user" case above: apiMessages already
 			// reflects the merge either way, and "tool" is the last case in
