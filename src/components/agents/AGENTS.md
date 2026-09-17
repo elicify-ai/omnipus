@@ -33,3 +33,5 @@ creation form for some new agent type is a regression — extend the wizard.
 
 CI group `components-agents-settings` (pattern includes
 `src/components/agents/`). Local: `npx vitest run src/components/agents/`.
+A test file matching no group pattern runs in NO CI job while CI stays green;
+`scripts/check-vitest-coverage.mjs` is the tripwire.

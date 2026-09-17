@@ -7,6 +7,14 @@ below the UI was renamed: package `pkg/channels`, interface `Channel`,
 the screen and "channel" as the thing it configures; do not finish the rename
 piecemeal.
 
+## Running tests here
+
+Never run the tree whole (400+ tests across subpackages; CI is the authority
+for full-suite results). Scope to one symbol — `CGO_ENABLED=0 go test -tags
+goolm,stdjson -run '^TestManager_InitChannels_ReturnsErrorOnFailure$' -p 1
+./pkg/channels/` — the activation ladder's failure semantics. Canonical tags:
+without `goolm` the Matrix subpackage does not even compile.
+
 ## Adding a channel
 
 Implement `Channel` (`base.go`) plus the opt-in capability interfaces it

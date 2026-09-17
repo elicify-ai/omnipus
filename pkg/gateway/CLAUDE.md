@@ -16,6 +16,16 @@ Skipping the sync ships a stale SPA (verify: `grep -c "<new string>"
 pkg/gateway/spa/assets/index-*.js`); the embed also refuses to compile with no
 directory — tests/vet need a stub `pkg/gateway/spa/index.html`.
 
+## Running tests here
+
+~3,200 tests — never run the package whole; CI is the authority. Scope to one
+symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -run
+'^TestUpdateAgent_DefaultToggle_RegistryAndRoutingAgree$' -p 1
+./pkg/gateway/`) — the two-ladder default-agent regression: after a default
+toggle, registry and routing must agree. The package refuses to compile
+without the SPA-embed directory above, so a local run needs that stub in
+place first.
+
 ## Running it locally
 
 Run the Go binary, not Vite's dev server (`/api` → `localhost:18790`):

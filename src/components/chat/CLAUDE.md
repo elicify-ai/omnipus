@@ -8,6 +8,8 @@ Workspace, not a sibling product (module map, "Product vs kernel").
 
 - CI group `components-chat` (pattern `src/components/chat/` in
   `.github/workflows/pr.yml`). Local: `npx vitest run src/components/chat/`.
+  A test file matching no group pattern runs in NO CI job while CI stays green;
+  `scripts/check-vitest-coverage.mjs` is the tripwire.
 - Chat STATE does not live here: `src/store/chat.ts` is a barrel over
   `src/store/chat/{frames,messages,store,types}.ts` — edit the owning module,
   never the barrel. Those store tests run in the `lib-store` CI group, not

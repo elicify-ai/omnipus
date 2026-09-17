@@ -1,5 +1,12 @@
 # pkg/library — the workspace file explorer
 
+## Running tests here
+
+Scope to one symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -run
+'^TestCleanRelPath_Adversarial$' -p 1 ./pkg/library/`) — path safety is this
+package's whole job, and that is its adversarial gate. CI is the authority
+for full-suite results.
+
 ## Not pkg/media/library
 
 This package is the workspace-relative path explorer rooted at

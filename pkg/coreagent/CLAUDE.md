@@ -1,5 +1,12 @@
 # pkg/coreagent — agent roster and seeding
 
+## Running tests here
+
+Scope to one symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -run
+'^TestSeedConfig_FreshInstallSeedsCoreGrants$' -p 1 ./pkg/coreagent/`) — the
+fresh-install seeding contract for the roster and its compiled-in skill
+grants. CI is the authority for full-suite results.
+
 ## Agent types — wire names vs persisted constants
 
 Wire taxonomy (`contracts/components/schemas/Agent.yaml`): `Main` (chat

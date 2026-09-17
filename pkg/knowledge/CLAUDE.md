@@ -6,6 +6,13 @@ path), `pkg/vaultimport` (Obsidian-vault importer, Bases translation),
 `pkg/vaultprops` (`knowledge_find` wrapper), and `pkg/library` underneath (the
 file-explorer surface — has its own file).
 
+## Running tests here
+
+Scope to one symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -run
+'^TestApplyEdits_SplicesOnlyTheRecordedSpans$' -p 1 ./pkg/knowledge/`) — the
+edit journal's core safety property: only the recorded spans move. CI is the
+authority for full-suite results.
+
 ## SQLite here is derived and disposable
 
 SQLite backs exactly one thing in this module: the derived properties index

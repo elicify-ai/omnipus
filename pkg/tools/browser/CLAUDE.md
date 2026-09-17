@@ -1,5 +1,15 @@
 # pkg/tools/browser — live browser
 
+## Running tests here
+
+1,000+ tests in this package (1,300+ with subpackages), and many are gated
+on a real Chrome (`skipIfNoBrowser`) — they skip locally, which is expected,
+not a failure. Scope to one symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson
+-run '^TestCoordinator_OwnershipMarker_RoundTrip$' -p 1
+./pkg/tools/browser/`) — the coordinator's ownership-marker round-trip (pid
++ identity), which runs without Chrome. CI is the authority for full-suite
+results.
+
 ## WebRTC is the ONLY live-video path (ADR-061)
 
 The JPEG screencast fallback is deleted in full: the CDP
