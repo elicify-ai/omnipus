@@ -49,9 +49,9 @@ func TestDedicatedWheelContinuationSurvivesSlowAcknowledgement(t *testing.T) {
 func TestDedicatedWheelContinuationRetainsActiveDeadline(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		entered := make(chan struct{})
-		var failures []string
+		failures := make(chan string, 1)
 		calls := 0
-		q := newDedicatedInputQueue(context.Background(), 1, 0, func(ctx context.Context, f generated.BrowserInputFrame) { calls++; close(entered); <-ctx.Done() }, func(reason string) { failures = append(failures, reason) })
+		q := newDedicatedInputQueue(context.Background(), 1, 0, func(ctx context.Context, f generated.BrowserInputFrame) { calls++; close(entered); <-ctx.Done() }, func(reason string) { failures <- reason })
 		defer q.close()
 		q.setActiveDispatchBudget(2 * time.Second)
 		q.submit(false, pressureWheel(1, 0, 10))
@@ -59,10 +59,26 @@ func TestDedicatedWheelContinuationRetainsActiveDeadline(t *testing.T) {
 		q.submit(false, pressureWheel(2, 0, 10))
 		time.Sleep(2*time.Second - time.Nanosecond)
 		synctest.Wait()
-		require.Empty(t, failures)
+		select {
+		case failure := <-failures:
+			t.Fatalf("expiry before active deadline: %s", failure)
+		default:
+		}
 		time.Sleep(time.Nanosecond)
 		synctest.Wait()
-		require.Len(t, failures, 1)
+		require.Equal(t, "reliable input queue expired", <-failures)
+		// The pre-channel version asserted the failure COUNT (require.Len
+		// == 1); a bare receive only asserts "at least one". Settle the
+		// bubble once more and drain: a second, spurious expiry would
+		// otherwise pass unnoticed. (A sender blocked on the size-1
+		// buffer is durably blocked, so Wait returns and the receive
+		// above frees it.)
+		synctest.Wait()
+		select {
+		case extra := <-failures:
+			t.Fatalf("expected exactly one expiry, got a second: %s", extra)
+		default:
+		}
 		require.Equal(t, 1, calls)
 	})
 }
@@ -86,9 +102,9 @@ func TestDedicatedWheelContinuationBoundariesRemainStrict(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				entered := make(chan struct{})
-				var failures []string
+				failures := make(chan string, 1)
 				calls := 0
-				q := newDedicatedInputQueue(context.Background(), 1, 0, func(ctx context.Context, f generated.BrowserInputFrame) { calls++; close(entered); <-ctx.Done() }, func(reason string) { failures = append(failures, reason) })
+				q := newDedicatedInputQueue(context.Background(), 1, 0, func(ctx context.Context, f generated.BrowserInputFrame) { calls++; close(entered); <-ctx.Done() }, func(reason string) { failures <- reason })
 				defer q.close()
 				q.setActiveDispatchBudget(2 * time.Second)
 				q.submit(false, pressureWheel(1, 0, 10))
@@ -98,10 +114,26 @@ func TestDedicatedWheelContinuationBoundariesRemainStrict(t *testing.T) {
 				q.submit(false, next)
 				time.Sleep(time.Second - time.Nanosecond)
 				synctest.Wait()
-				require.Empty(t, failures)
+				select {
+				case failure := <-failures:
+					t.Fatalf("expiry before strict deadline: %s", failure)
+				default:
+				}
 				time.Sleep(time.Nanosecond)
 				synctest.Wait()
-				require.Equal(t, []string{"reliable input queue expired"}, failures)
+				require.Equal(t, "reliable input queue expired", <-failures)
+				// The pre-channel version asserted the failure COUNT (require.Len
+				// == 1); a bare receive only asserts "at least one". Settle the
+				// bubble once more and drain: a second, spurious expiry would
+				// otherwise pass unnoticed. (A sender blocked on the size-1
+				// buffer is durably blocked, so Wait returns and the receive
+				// above frees it.)
+				synctest.Wait()
+				select {
+				case extra := <-failures:
+					t.Fatalf("expected exactly one expiry, got a second: %s", extra)
+				default:
+				}
 				require.Equal(t, 1, calls)
 			})
 		})
