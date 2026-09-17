@@ -7790,7 +7790,7 @@ export interface components {
              */
             name: string;
             /**
-             * @description Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Admin). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that run as real agents in a verifier role: same agent loop and ContextBuilder as any agent, own session, but with memory injection off and a narrow read-only tool set (read_file, list_directory, and a scoped inspect_session — no writes, mutations, commits, task-state changes, or delegation) (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+             * @description Agent lifecycle classification. Built-in chat colleagues Mia, Jim, Ava and Admin use core; built-in Planner, Researcher and General Purpose use Subagent on the wire. Hidden Judge and Plan Supervisor use system and are excluded from chat/team/delegation selection. Custom creation accepts Main, Subagent and subagent_3p only. Runtime type is immutable after creation. Hidden instructions and supported model tuning remain editable, while hidden capabilities are fixed. Ordinary built-in capabilities are editable within the global policy ceiling. Use editable_fields for the exact rules.
              * @example core
              * @enum {string}
              */
@@ -8060,10 +8060,6 @@ export interface components {
             /** @description Stored local override keys; an empty list removes all local overrides. */
             override_names: string[];
             config?: components["schemas"]["AgentToolsCfg"];
-            /** @description Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); the effective per-tool list is always recomputed by the server. */
-            tools?: components["schemas"]["AgentToolEntry"][];
-            /** @description Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); an agent's type is not editable here. Deliberately NOT an enum: a second copy of the agent-type enum changes oapi-codegen's collision-avoidance constant naming for the whole file and breaks the hand-written pkg/api/generated/fixtures.go. */
-            agent_type?: string;
             /** @description Builtin tool policy configuration for this agent. */
             builtin?: {
                 /** @description Complete per-tool policy map. Every static builtin tool name MUST be present as an explicit, literal key (e.g. "bash", "remember") with an "allow"/"ask"/"deny" value — this is not a sparse override set with a fallback default, and wildcard keys are not valid for the static builtin catalog. There is no default_policy field. Required on every request that includes builtin. Legacy callers that only have mode/visible available must resolve them to a complete policies map before sending this request; the server still accepts mode/visible alongside policies (ignored) for one release of transitional compatibility but no longer accepts them alone. */
@@ -8441,7 +8437,7 @@ export interface components {
             };
             tools_cfg?: components["schemas"]["AgentToolsCfg"];
             /**
-             * @description Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Main only — workers never default (rejected with 400 if attempted).
+             * @description Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
              * @example false
              */
             default?: boolean;
@@ -8459,7 +8455,7 @@ export interface components {
             voice?: string | null;
             executor?: components["schemas"]["ExecutorConfig"];
             /**
-             * @description New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Allowed on all agents.
+             * @description New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Editable where supported for ordinary/custom agents; fixed false on hidden roles.
              * @example true
              */
             memory_enabled?: boolean;
@@ -10210,6 +10206,12 @@ export interface components {
         };
         /** @description A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata. */
         Skill: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields?: string[];
+            error_stage?: string;
+            message?: string;
             /**
              * @description Unique skill identifier (typically the skill directory name or npm package name).
              * @example web-research
@@ -12388,9 +12390,10 @@ export interface components {
         };
         /**
          * SkillInstallRequest
-         * @description Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by its slug (the identifier returned in a SkillSearchResult).
+         * @description Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by its slug (the identifier returned in a SkillSearchResult). Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock.
          */
         SkillInstallRequest: {
+            revision?: components["schemas"]["ConfigurationRevision"];
             /**
              * @description Slug of the skill to install from the ClawHub registry.
              * @example web-search
@@ -12935,6 +12938,14 @@ export interface components {
         };
         /** @description A Level 1 workspace record. Workspaces are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate. */
         Workspace: {
+            /** @description Authoritative workspace delegation edges; revision covers membership and this graph. */
+            delegation?: components["schemas"]["WorkspaceDelegationEdge"][];
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields?: string[];
+            error_stage?: string;
+            message?: string;
             /**
              * @description UUID workspace identifier
              * @example a1b2c3d4-e5f6-7890-abcd-ef1234567890
@@ -13106,6 +13117,9 @@ export interface components {
         };
         /** @description Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged. */
         WorkspaceUpdateRequest: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            /** @description Explicit replacement of the candidate graph. Omission preserves valid existing edges and applies the existing new-member seed rule; [] clears all edges. */
+            delegation?: components["schemas"]["WorkspaceDelegationEdge"][];
             name?: string;
             description?: string;
             /**
@@ -13149,6 +13163,12 @@ export interface components {
         };
         /** @description The per-workspace delegation graph (M5). This is the editable source of truth surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view — always workspace-scoped, never global. Nodes are the workspace team's agents (core_team ∪ every agent named by an edge); edges are the directed delegation authorizations. This graph is the sole delegation-enforcement mechanism — there is no separate global per-agent delegation policy; the graph is both what the UI edits and what the runtime enforces. */
         WorkspaceDelegation: {
+            revision: components["schemas"]["ConfigurationRevision"];
+            persistence_status?: components["schemas"]["ConfigurationPersistenceStatus"];
+            activation_status?: components["schemas"]["ConfigurationActivationStatus"];
+            changed_fields?: string[];
+            error_stage?: string;
+            message?: string;
             /**
              * @description ID of the workspace this delegation graph belongs to.
              * @example 01J8Z9ABCDEF0123456789ABCD
@@ -13173,8 +13193,9 @@ export interface components {
              */
             default_depth: number;
         };
-        /** @description Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to a known agent; self-edges and depths above the global subturn ceiling are rejected. */
+        /** @description Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to an eligible member of the candidate team. Only explicit Jim and General Purpose self-edges are permitted, bounded by the global and edge depth. Revision covers both membership and the authoritative graph. */
         WorkspaceDelegationUpdateRequest: {
+            revision: components["schemas"]["ConfigurationRevision"];
             /** @description The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time. */
             edges: components["schemas"]["WorkspaceDelegationEdge"][];
         };
@@ -19746,7 +19767,9 @@ export interface operations {
     };
     deleteSkill: {
         parameters: {
-            query?: never;
+            query: {
+                revision: components["schemas"]["ConfigurationRevision"];
+            };
             header?: never;
             path: {
                 /** @description Skill slug (matches the `id` field on Skill). */
@@ -21204,11 +21227,29 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description Workspace membership or graph revision changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     deleteWorkspace: {
         parameters: {
-            query?: never;
+            query: {
+                revision: components["schemas"]["ConfigurationRevision"];
+            };
             header?: never;
             path: {
                 id: string;
@@ -22406,6 +22447,22 @@ export interface operations {
             400: components["responses"]["400BadRequest"];
             401: components["responses"]["401Unauthorized"];
             404: components["responses"]["404NotFound"];
+            /** @description Workspace membership or graph revision changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     createWorkspaceMount: {

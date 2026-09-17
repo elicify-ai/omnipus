@@ -22,22 +22,6 @@ properties:
     description: Stored local override keys; an empty list removes all local overrides.
   config:
     $ref: AgentToolsCfg.yaml
-  tools:
-    type: array
-    description: >
-      Ignored on write. Present so a GET response body round-trips through
-      PUT unchanged (D-86); the effective per-tool list is always recomputed
-      by the server.
-    items:
-      $ref: AgentToolEntry.yaml
-  agent_type:
-    type: string
-    description: >
-      Ignored on write. Present so a GET response body round-trips through
-      PUT unchanged (D-86); an agent's type is not editable here. Deliberately
-      NOT an enum: a second copy of the agent-type enum changes oapi-codegen's
-      collision-avoidance constant naming for the whole file and breaks the
-      hand-written pkg/api/generated/fixtures.go.
   builtin:
     type: object
     description: Builtin tool policy configuration for this agent.

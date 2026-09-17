@@ -905,69 +905,6 @@ func (e AgentToolsUpdateRequestConfigBuiltinPolicies) Valid() bool {
 	}
 }
 
-// Defines values for AgentToolsUpdateRequestToolsConfiguredPolicy.
-const (
-	AgentToolsUpdateRequestToolsConfiguredPolicyAllow AgentToolsUpdateRequestToolsConfiguredPolicy = "allow"
-	AgentToolsUpdateRequestToolsConfiguredPolicyAsk   AgentToolsUpdateRequestToolsConfiguredPolicy = "ask"
-	AgentToolsUpdateRequestToolsConfiguredPolicyDeny  AgentToolsUpdateRequestToolsConfiguredPolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestToolsConfiguredPolicy enum.
-func (e AgentToolsUpdateRequestToolsConfiguredPolicy) Valid() bool {
-	switch e {
-	case AgentToolsUpdateRequestToolsConfiguredPolicyAllow:
-		return true
-	case AgentToolsUpdateRequestToolsConfiguredPolicyAsk:
-		return true
-	case AgentToolsUpdateRequestToolsConfiguredPolicyDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentToolsUpdateRequestToolsEffectivePolicy.
-const (
-	AgentToolsUpdateRequestToolsEffectivePolicyAllow AgentToolsUpdateRequestToolsEffectivePolicy = "allow"
-	AgentToolsUpdateRequestToolsEffectivePolicyAsk   AgentToolsUpdateRequestToolsEffectivePolicy = "ask"
-	AgentToolsUpdateRequestToolsEffectivePolicyDeny  AgentToolsUpdateRequestToolsEffectivePolicy = "deny"
-)
-
-// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestToolsEffectivePolicy enum.
-func (e AgentToolsUpdateRequestToolsEffectivePolicy) Valid() bool {
-	switch e {
-	case AgentToolsUpdateRequestToolsEffectivePolicyAllow:
-		return true
-	case AgentToolsUpdateRequestToolsEffectivePolicyAsk:
-		return true
-	case AgentToolsUpdateRequestToolsEffectivePolicyDeny:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for AgentToolsUpdateRequestToolsManifestTier.
-const (
-	AgentToolsUpdateRequestToolsManifestTierCompressed AgentToolsUpdateRequestToolsManifestTier = "compressed"
-	AgentToolsUpdateRequestToolsManifestTierFull       AgentToolsUpdateRequestToolsManifestTier = "full"
-	AgentToolsUpdateRequestToolsManifestTierInfra      AgentToolsUpdateRequestToolsManifestTier = "infra"
-)
-
-// Valid indicates whether the value is a known member of the AgentToolsUpdateRequestToolsManifestTier enum.
-func (e AgentToolsUpdateRequestToolsManifestTier) Valid() bool {
-	switch e {
-	case AgentToolsUpdateRequestToolsManifestTierCompressed:
-		return true
-	case AgentToolsUpdateRequestToolsManifestTierFull:
-		return true
-	case AgentToolsUpdateRequestToolsManifestTierInfra:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for AgentUpdateRequestExecutorKind.
 const (
 	AgentUpdateRequestExecutorKindExternalCli AgentUpdateRequestExecutorKind = "external-cli"
@@ -7979,6 +7916,48 @@ func (e SignInStatusState) Valid() bool {
 	}
 }
 
+// Defines values for SkillActivationStatus.
+const (
+	SkillActivationStatusActive       SkillActivationStatus = "active"
+	SkillActivationStatusFailed       SkillActivationStatus = "failed"
+	SkillActivationStatusNotAttempted SkillActivationStatus = "not_attempted"
+)
+
+// Valid indicates whether the value is a known member of the SkillActivationStatus enum.
+func (e SkillActivationStatus) Valid() bool {
+	switch e {
+	case SkillActivationStatusActive:
+		return true
+	case SkillActivationStatusFailed:
+		return true
+	case SkillActivationStatusNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SkillPersistenceStatus.
+const (
+	SkillPersistenceStatusComplete SkillPersistenceStatus = "complete"
+	SkillPersistenceStatusNone     SkillPersistenceStatus = "none"
+	SkillPersistenceStatusPartial  SkillPersistenceStatus = "partial"
+)
+
+// Valid indicates whether the value is a known member of the SkillPersistenceStatus enum.
+func (e SkillPersistenceStatus) Valid() bool {
+	switch e {
+	case SkillPersistenceStatusComplete:
+		return true
+	case SkillPersistenceStatusNone:
+		return true
+	case SkillPersistenceStatusPartial:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SkillSource.
 const (
 	SkillSourceBuiltin   SkillSource = "builtin"
@@ -10016,6 +9995,45 @@ func (e ViewResultPartPart) Valid() bool {
 	}
 }
 
+// Defines values for WorkspaceActivationStatus.
+const (
+	WorkspaceActivationStatusActive       WorkspaceActivationStatus = "active"
+	WorkspaceActivationStatusFailed       WorkspaceActivationStatus = "failed"
+	WorkspaceActivationStatusNotAttempted WorkspaceActivationStatus = "not_attempted"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceActivationStatus enum.
+func (e WorkspaceActivationStatus) Valid() bool {
+	switch e {
+	case WorkspaceActivationStatusActive:
+		return true
+	case WorkspaceActivationStatusFailed:
+		return true
+	case WorkspaceActivationStatusNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkspaceDelegationModes.
+const (
+	WorkspaceDelegationModesDirect WorkspaceDelegationModes = "direct"
+	WorkspaceDelegationModesTask   WorkspaceDelegationModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceDelegationModes enum.
+func (e WorkspaceDelegationModes) Valid() bool {
+	switch e {
+	case WorkspaceDelegationModesDirect:
+		return true
+	case WorkspaceDelegationModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceMountsStatus.
 const (
 	WorkspaceMountsStatusBroken WorkspaceMountsStatus = "broken"
@@ -10028,6 +10046,27 @@ func (e WorkspaceMountsStatus) Valid() bool {
 	case WorkspaceMountsStatusBroken:
 		return true
 	case WorkspaceMountsStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkspacePersistenceStatus.
+const (
+	WorkspacePersistenceStatusComplete WorkspacePersistenceStatus = "complete"
+	WorkspacePersistenceStatusNone     WorkspacePersistenceStatus = "none"
+	WorkspacePersistenceStatusPartial  WorkspacePersistenceStatus = "partial"
+)
+
+// Valid indicates whether the value is a known member of the WorkspacePersistenceStatus enum.
+func (e WorkspacePersistenceStatus) Valid() bool {
+	switch e {
+	case WorkspacePersistenceStatusComplete:
+		return true
+	case WorkspacePersistenceStatusNone:
+		return true
+	case WorkspacePersistenceStatusPartial:
 		return true
 	default:
 		return false
@@ -10052,6 +10091,27 @@ func (e WorkspaceStatus) Valid() bool {
 	}
 }
 
+// Defines values for WorkspaceDelegationActivationStatus.
+const (
+	WorkspaceDelegationActivationStatusActive       WorkspaceDelegationActivationStatus = "active"
+	WorkspaceDelegationActivationStatusFailed       WorkspaceDelegationActivationStatus = "failed"
+	WorkspaceDelegationActivationStatusNotAttempted WorkspaceDelegationActivationStatus = "not_attempted"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceDelegationActivationStatus enum.
+func (e WorkspaceDelegationActivationStatus) Valid() bool {
+	switch e {
+	case WorkspaceDelegationActivationStatusActive:
+		return true
+	case WorkspaceDelegationActivationStatusFailed:
+		return true
+	case WorkspaceDelegationActivationStatusNotAttempted:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for WorkspaceDelegationEdgesModes.
 const (
 	WorkspaceDelegationEdgesModesDirect WorkspaceDelegationEdgesModes = "direct"
@@ -10064,6 +10124,27 @@ func (e WorkspaceDelegationEdgesModes) Valid() bool {
 	case WorkspaceDelegationEdgesModesDirect:
 		return true
 	case WorkspaceDelegationEdgesModesTask:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkspaceDelegationPersistenceStatus.
+const (
+	WorkspaceDelegationPersistenceStatusComplete WorkspaceDelegationPersistenceStatus = "complete"
+	WorkspaceDelegationPersistenceStatusNone     WorkspaceDelegationPersistenceStatus = "none"
+	WorkspaceDelegationPersistenceStatusPartial  WorkspaceDelegationPersistenceStatus = "partial"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceDelegationPersistenceStatus enum.
+func (e WorkspaceDelegationPersistenceStatus) Valid() bool {
+	switch e {
+	case WorkspaceDelegationPersistenceStatusComplete:
+		return true
+	case WorkspaceDelegationPersistenceStatusNone:
+		return true
+	case WorkspaceDelegationPersistenceStatusPartial:
 		return true
 	default:
 		return false
@@ -10118,6 +10199,24 @@ func (e WorkspaceMountCreateResponseStatus) Valid() bool {
 	case WorkspaceMountCreateResponseStatusBroken:
 		return true
 	case WorkspaceMountCreateResponseStatusOk:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for WorkspaceUpdateRequestDelegationModes.
+const (
+	WorkspaceUpdateRequestDelegationModesDirect WorkspaceUpdateRequestDelegationModes = "direct"
+	WorkspaceUpdateRequestDelegationModesTask   WorkspaceUpdateRequestDelegationModes = "task"
+)
+
+// Valid indicates whether the value is a known member of the WorkspaceUpdateRequestDelegationModes enum.
+func (e WorkspaceUpdateRequestDelegationModes) Valid() bool {
+	switch e {
+	case WorkspaceUpdateRequestDelegationModesDirect:
+		return true
+	case WorkspaceUpdateRequestDelegationModesTask:
 		return true
 	default:
 		return false
@@ -10779,7 +10878,7 @@ type Agent struct {
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
-	// Type Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Admin). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that run as real agents in a verifier role: same agent loop and ContextBuilder as any agent, own session, but with memory injection off and a narrow read-only tool set (read_file, list_directory, and a scoped inspect_session — no writes, mutations, commits, task-state changes, or delegation) (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+	// Type Agent lifecycle classification. Built-in chat colleagues Mia, Jim, Ava and Admin use core; built-in Planner, Researcher and General Purpose use Subagent on the wire. Hidden Judge and Plan Supervisor use system and are excluded from chat/team/delegation selection. Custom creation accepts Main, Subagent and subagent_3p only. Runtime type is immutable after creation. Hidden instructions and supported model tuning remain editable, while hidden capabilities are fixed. Ordinary built-in capabilities are editable within the global policy ceiling. Use editable_fields for the exact rules.
 	Type AgentType `json:"type"`
 
 	// UpdatedAt ISO 8601 timestamp of the last successful PUT /agents/{id} update. Returned in list and detail responses.
@@ -10813,7 +10912,7 @@ type AgentStatus string
 // AgentToolsCfgBuiltinPolicies defines model for Agent.ToolsCfg.Builtin.Policies.
 type AgentToolsCfgBuiltinPolicies string
 
-// AgentType Agent lifecycle classification. "core" = compiled-in identity-locked agent (built-in roster — Mia/Jim/Ava/Admin). "system" = the System Agents category (ADR-049 D3) — seeded, locked, non-privileged internal-LLM agents that run as real agents in a verifier role: same agent loop and ContextBuilder as any agent, own session, but with memory injection off and a narrow read-only tool set (read_file, list_directory, and a scoped inspect_session — no writes, mutations, commits, task-state changes, or delegation) (ADR-052 Judge/Verifier architecture, e.g. the Judge). Seeding is the only creation path: not creatable via POST /agents or the create_agent tool (400), not deletable, and excluded from chat-target/default-fallback/routing- binding/delegation-target/team-roster enumeration — visible only in the Agents screen "System" section. Only `model`/`provider` and `soul` are editable (soul/rubric unification, ADR-052 FR-038 — the Judge's soul IS its judging rubric, editable while the agent stays otherwise locked; the Judge additionally cannot be disabled). Despite historically being described as privileged, `system` agents are NOT privileged (`IsPrivilegedAgent` narrowed to `core`-only) and remain subject to per-agent LLM rate limits and cost caps (SEC-26). "Main" = user-defined chat colleague (the typical Main agent). "Subagent" = user-defined delegation-only worker on the Omnipus engine. "subagent_3p" = user-defined delegation-only worker on an external CLI (claude-code / codex / opencode). Legacy persisted configs with type "worker" are normalized by ToWireType to Subagent or subagent_3p (based on executor) and never appear on the wire.
+// AgentType Agent lifecycle classification. Built-in chat colleagues Mia, Jim, Ava and Admin use core; built-in Planner, Researcher and General Purpose use Subagent on the wire. Hidden Judge and Plan Supervisor use system and are excluded from chat/team/delegation selection. Custom creation accepts Main, Subagent and subagent_3p only. Runtime type is immutable after creation. Hidden instructions and supported model tuning remain editable, while hidden capabilities are fixed. Ordinary built-in capabilities are editable within the global policy ceiling. Use editable_fields for the exact rules.
 type AgentType string
 
 // AgentCreateRequest Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired).
@@ -11333,9 +11432,6 @@ type AgentToolsResponseToolsManifestTier string
 
 // AgentToolsUpdateRequest Replace tool settings using a complete effective policies map and explicit sparse override intent. revision and override_names are required. Only keys in override_names are persisted as local overrides; unlisted values must equal the current global ceiling or the request conflicts. Ordinary built-ins are editable; hidden capabilities remain fixed. Connector omission preserves and explicit empty removes assignments. The existing config wrapper is accepted.
 type AgentToolsUpdateRequest struct {
-	// AgentType Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); an agent's type is not editable here. Deliberately NOT an enum: a second copy of the agent-type enum changes oapi-codegen's collision-avoidance constant naming for the whole file and breaks the hand-written pkg/api/generated/fixtures.go.
-	AgentType *string `json:"agent_type,omitempty"`
-
 	// Builtin Builtin tool policy configuration for this agent.
 	Builtin *struct {
 		// Mode Legacy format, retained for one release of transitional compatibility. Ignored outright when a complete policies map is also present (policies always wins). Sent ALONE (no policies), mode does not successfully "build" a working policy on its own any more: under the mandatory coverage-validation model (no default_policy fallback), "explicit" converts visible[] into agent-level "allow" entries for just those names — it does not synthesize a deny-all baseline for every other static builtin tool — and "inherit" produces no per-tool entries at all. Both leave most static builtin tools without an explicit policy entry, so the request is rejected with 400 (a coverage-gap error) unless the global sandbox.tool_policies floor happens to cover every remaining tool. Callers must send a complete policies map to reliably succeed.
@@ -11386,21 +11482,6 @@ type AgentToolsUpdateRequest struct {
 
 	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision string `json:"revision"`
-
-	// Tools Ignored on write. Present so a GET response body round-trips through PUT unchanged (D-86); the effective per-tool list is always recomputed by the server.
-	Tools *[]struct {
-		// ConfiguredPolicy The policy as written in the agent's config.
-		ConfiguredPolicy AgentToolsUpdateRequestToolsConfiguredPolicy `json:"configured_policy"`
-
-		// EffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
-		EffectivePolicy AgentToolsUpdateRequestToolsEffectivePolicy `json:"effective_policy"`
-
-		// ManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
-		ManifestTier AgentToolsUpdateRequestToolsManifestTier `json:"manifest_tier"`
-
-		// Name Canonical tool name.
-		Name string `json:"name"`
-	} `json:"tools,omitempty"`
 }
 
 // AgentToolsUpdateRequestBuiltinMode Legacy format, retained for one release of transitional compatibility. Ignored outright when a complete policies map is also present (policies always wins). Sent ALONE (no policies), mode does not successfully "build" a working policy on its own any more: under the mandatory coverage-validation model (no default_policy fallback), "explicit" converts visible[] into agent-level "allow" entries for just those names — it does not synthesize a deny-all baseline for every other static builtin tool — and "inherit" produces no per-tool entries at all. Both leave most static builtin tools without an explicit policy entry, so the request is rejected with 400 (a coverage-gap error) unless the global sandbox.tool_policies floor happens to cover every remaining tool. Callers must send a complete policies map to reliably succeed.
@@ -11412,15 +11493,6 @@ type AgentToolsUpdateRequestBuiltinPolicies string
 // AgentToolsUpdateRequestConfigBuiltinPolicies defines model for AgentToolsUpdateRequest.Config.Builtin.Policies.
 type AgentToolsUpdateRequestConfigBuiltinPolicies string
 
-// AgentToolsUpdateRequestToolsConfiguredPolicy The policy as written in the agent's config.
-type AgentToolsUpdateRequestToolsConfiguredPolicy string
-
-// AgentToolsUpdateRequestToolsEffectivePolicy The policy actually enforced at LLM-call time after global policy overrides are applied.
-type AgentToolsUpdateRequestToolsEffectivePolicy string
-
-// AgentToolsUpdateRequestToolsManifestTier How the tool is presented to the LLM when the manifest optimization is active. "full" = always sent as a callable tool definition every turn; "compressed" = listed by name only in the system context, schema fetched on demand via ToolSearch; "infra" = always-callable discovery tool (ToolSearch) that drives the manifest mechanism itself and never appears in the manifest block.
-type AgentToolsUpdateRequestToolsManifestTier string
-
 // AgentUpdateRequest Partial agent update. Revision and at least one changed field are required. Ordinary built-in identity and soul are fixed; tool policies, connector assignments and skills are editable. Hidden Judge/Supervisor instructions are editable while their identity and capabilities remain fixed. Runtime applicability is validated before any mutation. Protected same-value echoes are still rejected.
 type AgentUpdateRequest struct {
 	// Color Hex color code for agent avatar display (e.g. "#D4AF37").
@@ -11429,7 +11501,7 @@ type AgentUpdateRequest struct {
 	// ContextWindowOverride Per-agent context-window override in tokens (ADR-066 D2 rung 1, D9). Lower-only — clamped to the model's capability on resolution (a WARN names the agent and the clamp). Send null to clear. Every write triggers a registry reload so the next turn uses the new window.
 	ContextWindowOverride *int `json:"context_window_override,omitempty"`
 
-	// Default Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Main only — workers never default (rejected with 400 if attempted).
+	// Default Send true to make this agent the global default that handles inbound messages with no more-specific routing rule — replacing whichever agent previously held it. Send false to clear the default, which only has an effect if this agent currently holds it (sending false for an agent that isn't the current default is a no-op). Omitting this field leaves the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external agents cannot be defaults. This does not change workspace membership.
 	Default *bool `json:"default,omitempty"`
 
 	// Description New description. Rejected on locked agents. Empty string removes it. For Subagent / subagent_3p, an empty string after trim is rejected 400 (description is required for workers per the routing contract).
@@ -11477,7 +11549,7 @@ type AgentUpdateRequest struct {
 		Tools *[]string `json:"tools,omitempty"`
 	} `json:"mcp_servers,omitempty"`
 
-	// MemoryEnabled New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Allowed on all agents.
+	// MemoryEnabled New value for the memory-injection gate (ADR-052 FR-039). When false, ContextBuilder skips memory injection for this agent's turns. Editable where supported for ordinary/custom agents; fixed false on hidden roles.
 	MemoryEnabled *bool `json:"memory_enabled,omitempty"`
 
 	// Model New model slug. Allowed on all agents. With the O3 two-field model, pair with `provider` for explicit routing.
@@ -19436,6 +19508,9 @@ type SignInStatusState string
 
 // Skill A single installed skill as returned by GET /skills. Skills are SKILL.md/package bundles loaded from ~/.omnipus/skills/ that extend agent capabilities. Each skill has an ID, version, and human-readable metadata.
 type Skill struct {
+	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+	ActivationStatus *SkillActivationStatus `json:"activation_status,omitempty"`
+
 	// AgentAssignment ID of the agent this skill is assigned to, when the skill is bound to a specific agent rather than globally available. Absent for globally assigned skills.
 	AgentAssignment *string `json:"agent_assignment,omitempty"`
 
@@ -19443,19 +19518,28 @@ type Skill struct {
 	ArgumentHint *string `json:"argument_hint,omitempty"`
 
 	// Author Skill author or publisher name.
-	Author *string `json:"author,omitempty"`
+	Author        *string   `json:"author,omitempty"`
+	ChangedFields *[]string `json:"changed_fields,omitempty"`
 
 	// Description Short description of what the skill does.
 	Description *string `json:"description,omitempty"`
+	ErrorStage  *string `json:"error_stage,omitempty"`
 
 	// Id Unique skill identifier (typically the skill directory name or npm package name).
 	Id string `json:"id"`
 
 	// LastInvoked ADR-072 D3.1: ISO 8601 timestamp of the most recent time this skill was requested by name through the Skill tool's load path (pkg/audit.Logger ::LastInvokedForSkill — both "loaded" and "denied" load outcomes count, a search match does not). Null when the skill has never been invoked by name, or its invocation history could not be determined.
 	LastInvoked *time.Time `json:"last_invoked,omitempty"`
+	Message     *string    `json:"message,omitempty"`
 
 	// Name Human-readable skill name.
 	Name string `json:"name"`
+
+	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
+	PersistenceStatus *SkillPersistenceStatus `json:"persistence_status,omitempty"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 
 	// Source Skill origin: "builtin" = pre-installed/system skill (cannot be deleted), "global"/"workspace" = user-installed (community/3rd-party).
 	Source *SkillSource `json:"source,omitempty"`
@@ -19470,14 +19554,23 @@ type Skill struct {
 	Version string `json:"version"`
 }
 
+// SkillActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+type SkillActivationStatus string
+
+// SkillPersistenceStatus Whether all, some, or none of the requested resource components were saved.
+type SkillPersistenceStatus string
+
 // SkillSource Skill origin: "builtin" = pre-installed/system skill (cannot be deleted), "global"/"workspace" = user-installed (community/3rd-party).
 type SkillSource string
 
 // SkillStatus "active" when the skill is loaded and its tools are available to agents. "disabled" when the skill has been installed but deactivated. "inactive" when the skill is installed but not currently activated. "error" when the skill failed to load (malformed SKILL.md, missing dependency, etc.).
 type SkillStatus string
 
-// SkillInstallRequest Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by its slug (the identifier returned in a SkillSearchResult).
+// SkillInstallRequest Request body for POST /api/v1/skills/install. Installs a skill from the ClawHub registry by its slug (the identifier returned in a SkillSearchResult). Replacing an installed skill requires its revision; an omitted revision requires target absence under the authoritative installation lock.
 type SkillInstallRequest struct {
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision *string `json:"revision,omitempty"`
+
 	// Slug Slug of the skill to install from the ClawHub registry.
 	Slug string `json:"slug"`
 
@@ -22105,14 +22198,34 @@ type VoiceProvider struct {
 
 // Workspace A Level 1 workspace record. Workspaces are lightweight metadata — no filesystem directories or room topology. task_count is computed at read time and never stored. core_team is a default agent roster, not an access gate.
 type Workspace struct {
+	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+	ActivationStatus *WorkspaceActivationStatus `json:"activation_status,omitempty"`
+	ChangedFields    *[]string                  `json:"changed_fields,omitempty"`
+
 	// CoreTeam Default agent roster for this workspace. Not an access gate — any agent can work on any workspace's tasks. Deduplicated at write time.
 	CoreTeam *[]string `json:"core_team,omitempty"`
 
 	// CreatedAt RFC3339 UTC creation timestamp
 	CreatedAt time.Time `json:"created_at"`
 
+	// Delegation Authoritative workspace delegation edges; revision covers membership and this graph.
+	Delegation *[]struct {
+		// Depth Maximum delegation chain depth for this edge (number of hops). 0 = no onward delegation past this hop. Bounded by the global subturn depth ceiling. Absent means the workspace/global default applies.
+		Depth *int `json:"depth,omitempty"`
+
+		// FromAgent Agent ID of the delegating agent (the source node). Must be a member of the workspace team (present in core_team or referenced by another edge).
+		FromAgent string `json:"from_agent"`
+
+		// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
+		Modes *[]WorkspaceDelegationModes `json:"modes,omitempty"`
+
+		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+		ToAgent string `json:"to_agent"`
+	} `json:"delegation,omitempty"`
+
 	// Description Optional free-text description.
 	Description *string `json:"description,omitempty"`
+	ErrorStage  *string `json:"error_stage,omitempty"`
 
 	// Id UUID workspace identifier
 	Id string `json:"id"`
@@ -22122,6 +22235,7 @@ type Workspace struct {
 
 	// MemberConfigs Per-member (agentId → config) heartbeat settings for this workspace. Absent when no member has a config (empty map). Keys are agent IDs.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
+	Message *string `json:"message,omitempty"`
 
 	// Mounts Named write-grants on real local folders (FR-5, ADR-063 D4). Absent when no mount exists (empty array is also acceptable on the wire). Created and removed via the dedicated mounts lifecycle, not via this record's own create/update requests.
 	Mounts *[]struct {
@@ -22141,11 +22255,17 @@ type Workspace struct {
 	// Owner Username of the user who created this workspace. Set server-side at creation; read-only. Attribution only — not an access gate.
 	Owner *string `json:"owner,omitempty"`
 
+	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
+	PersistenceStatus *WorkspacePersistenceStatus `json:"persistence_status,omitempty"`
+
 	// PinOrder Ascending sort position among pinned workspaces. 0 for unpinned workspaces. Last-writer-wins; tiebreak by created_at ascending.
 	PinOrder int `json:"pin_order"`
 
 	// Pinned Whether this workspace is pinned to the top of the sidebar.
 	Pinned bool `json:"pinned"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 
 	// SetupPending True while this workspace's initial team-setup interview has not yet run. Set server-side at creation when the default (Ava-only) roster was auto-seeded; cleared server-side when the setup kickoff turn is accepted. Absent/false otherwise. Server-set; ignored on input (readOnly).
 	SetupPending *bool `json:"setup_pending,omitempty"`
@@ -22160,8 +22280,17 @@ type Workspace struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// WorkspaceActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+type WorkspaceActivationStatus string
+
+// WorkspaceDelegationModes defines model for Workspace.Delegation.Modes.
+type WorkspaceDelegationModes string
+
 // WorkspaceMountsStatus Server-computed liveness of the mount target (FR-8.2). "broken" means the resolved host_path no longer exists or no longer resolves — the mount is never silently recreated as an empty directory (FR-8.3) and is never silently re-bound to a different same-named path (FR-8.5). Read-only from the client's perspective; ignored on input.
 type WorkspaceMountsStatus string
+
+// WorkspacePersistenceStatus Whether all, some, or none of the requested resource components were saved.
+type WorkspacePersistenceStatus string
 
 // WorkspaceStatus Workspace visibility status. active (default) — appears in default list. archived — hidden from default list, shown under Archive section.
 type WorkspaceStatus string
@@ -22180,11 +22309,23 @@ type WorkspaceCreateRequest struct {
 
 // WorkspaceDelegation The per-workspace delegation graph (M5). This is the editable source of truth surfaced in the workspace Team tab and the Agents-area "Workspace Teams" view — always workspace-scoped, never global. Nodes are the workspace team's agents (core_team ∪ every agent named by an edge); edges are the directed delegation authorizations. This graph is the sole delegation-enforcement mechanism — there is no separate global per-agent delegation policy; the graph is both what the UI edits and what the runtime enforces.
 type WorkspaceDelegation struct {
+	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+	ActivationStatus *WorkspaceDelegationActivationStatus `json:"activation_status,omitempty"`
+	ChangedFields    *[]string                            `json:"changed_fields,omitempty"`
+
 	// DefaultDepth The currently-resolved depth ceiling an edge inherits when its own `depth` is unset — the global configured default if set, otherwise the defaultMaxSubTurnDepth backstop. This is a read-only, already-computed value (no new depth logic; see delegationDepthCeiling) exposed purely so the UI can always pre-fill/display a concrete number for any edge instead of an ambiguous blank/"∞" state. It does NOT change per-edge enforcement: an edge with depth unset still dynamically tracks the live global default at enforcement time, this field is a snapshot for display purposes only.
 	DefaultDepth int `json:"default_depth"`
 
 	// Edges The directed delegation edges. May be empty (no delegation configured). Deduplicated by (from_agent, to_agent) at write time — last writer wins.
 	Edges []WorkspaceDelegationEdge `json:"edges"`
+	ErrorStage *string `json:"error_stage,omitempty"`
+	Message    *string `json:"message,omitempty"`
+
+	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
+	PersistenceStatus *WorkspaceDelegationPersistenceStatus `json:"persistence_status,omitempty"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 
 	// Team The workspace team roster (node set) — the union of the workspace core_team and every agent referenced by an edge. Computed at read time; informational, so the UI can render isolated nodes that have no edges yet.
 	Team *[]string `json:"team,omitempty"`
@@ -22193,8 +22334,14 @@ type WorkspaceDelegation struct {
 	WorkspaceId string `json:"workspace_id"`
 }
 
+// WorkspaceDelegationActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
+type WorkspaceDelegationActivationStatus string
+
 // WorkspaceDelegationEdgesModes defines model for WorkspaceDelegation.Edges.Modes.
 type WorkspaceDelegationEdgesModes string
+
+// WorkspaceDelegationPersistenceStatus Whether all, some, or none of the requested resource components were saved.
+type WorkspaceDelegationPersistenceStatus string
 
 // WorkspaceDelegationEdge A single directed delegation edge in a workspace's delegation graph. The graph is the per-workspace source of truth for who-delegates-to-whom (M5): each edge authorizes from_agent to delegate work to to_agent, in the listed modes, bounded by depth. Membership in the workspace team is the union of all agents referenced by any edge plus the workspace's core_team roster.
 type WorkspaceDelegationEdge struct {
@@ -22214,10 +22361,13 @@ type WorkspaceDelegationEdge struct {
 // WorkspaceDelegationEdgeModes defines model for WorkspaceDelegationEdge.Modes.
 type WorkspaceDelegationEdgeModes string
 
-// WorkspaceDelegationUpdateRequest Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to a known agent; self-edges and depths above the global subturn ceiling are rejected.
+// WorkspaceDelegationUpdateRequest Request body for PUT /workspaces/{id}/delegation. Replaces the workspace's delegation edge set wholesale (full replace, not a merge) so the Team-tab graph editor can persist the exact graph the operator drew. Every from_agent / to_agent must resolve to an eligible member of the candidate team. Only explicit Jim and General Purpose self-edges are permitted, bounded by the global and edge depth. Revision covers both membership and the authoritative graph.
 type WorkspaceDelegationUpdateRequest struct {
 	// Edges The complete set of delegation edges for this workspace. An empty array clears all delegation. Deduplicated by (from_agent, to_agent) at write time.
 	Edges []WorkspaceDelegationEdge `json:"edges"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 }
 
 // WorkspaceDelegationUpdateRequestEdgesModes defines model for WorkspaceDelegationUpdateRequest.Edges.Modes.
@@ -22295,8 +22445,23 @@ type WorkspaceMountCreateResponseStatus string
 
 // WorkspaceUpdateRequest Request body for PUT /workspaces/{id}. Uses merge (partial-update) semantics — only fields present in the request body are updated; absent fields are unchanged.
 type WorkspaceUpdateRequest struct {
-	CoreTeam    *[]string `json:"core_team,omitempty"`
-	Description *string   `json:"description,omitempty"`
+	CoreTeam *[]string `json:"core_team,omitempty"`
+
+	// Delegation Explicit replacement of the candidate graph. Omission preserves valid existing edges and applies the existing new-member seed rule; [] clears all edges.
+	Delegation *[]struct {
+		// Depth Maximum delegation chain depth for this edge (number of hops). 0 = no onward delegation past this hop. Bounded by the global subturn depth ceiling. Absent means the workspace/global default applies.
+		Depth *int `json:"depth,omitempty"`
+
+		// FromAgent Agent ID of the delegating agent (the source node). Must be a member of the workspace team (present in core_team or referenced by another edge).
+		FromAgent string `json:"from_agent"`
+
+		// Modes Allowed delegation modes for this edge. An empty/absent list means all modes are allowed. "direct" = Direct Delegation — the delegate tool dispatches to the target agent, either synchronously (await) or as a background spawn. Which of the two happens is a runtime parameter of the delegate tool call itself, not a trust distinction the edge gates separately — an edge that allows "direct" allows both call patterns. "task" = Task Delegation — task_create-style delegation (a persistent task assigned to another agent).
+		Modes *[]WorkspaceUpdateRequestDelegationModes `json:"modes,omitempty"`
+
+		// ToAgent Agent ID of the delegate (the target node). Must be a member of the workspace team. Self-edges (from_agent == to_agent) are rejected.
+		ToAgent string `json:"to_agent"`
+	} `json:"delegation,omitempty"`
+	Description *string `json:"description,omitempty"`
 
 	// MemberConfigs Per-member (agentId → config) heartbeat settings. Merge semantics: when present, replaces the config for each listed agent and garbage-collects entries for agents no longer on the core team. session_id is server-managed (set at heartbeat-enable time) and ignored on input.
 	MemberConfigs *map[string]WorkspaceMemberConfig `json:"member_configs,omitempty"`
@@ -22304,9 +22469,15 @@ type WorkspaceUpdateRequest struct {
 	PinOrder *int    `json:"pin_order,omitempty"`
 	Pinned   *bool   `json:"pinned,omitempty"`
 
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
+
 	// Status Archive or restore a workspace.
 	Status *WorkspaceUpdateRequestStatus `json:"status,omitempty"`
 }
+
+// WorkspaceUpdateRequestDelegationModes defines model for WorkspaceUpdateRequest.Delegation.Modes.
+type WorkspaceUpdateRequestDelegationModes string
 
 // WorkspaceUpdateRequestStatus Archive or restore a workspace.
 type WorkspaceUpdateRequestStatus string
@@ -22523,6 +22694,11 @@ type SearchSkillsParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// DeleteSkillParams defines parameters for DeleteSkill.
+type DeleteSkillParams struct {
+	Revision ConfigurationRevision `form:"revision" json:"revision"`
+}
+
 // GetTokenStatsParams defines parameters for GetTokenStats.
 type GetTokenStatsParams struct {
 	// Period Aggregation period. day=current calendar day UTC; week=current ISO week (Mon–Sun) UTC; month=current calendar month UTC; all=all time.
@@ -22618,6 +22794,11 @@ type ListWorkspacesParams struct {
 
 // ListWorkspacesParamsStatus defines parameters for ListWorkspaces.
 type ListWorkspacesParamsStatus string
+
+// DeleteWorkspaceParams defines parameters for DeleteWorkspace.
+type DeleteWorkspaceParams struct {
+	Revision ConfigurationRevision `form:"revision" json:"revision"`
+}
 
 // CreateAgentJSONRequestBody defines body for CreateAgent for application/json ContentType.
 type CreateAgentJSONRequestBody = AgentCreateRequest

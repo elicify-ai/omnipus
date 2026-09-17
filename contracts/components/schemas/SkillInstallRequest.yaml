@@ -2,11 +2,15 @@ title: SkillInstallRequest
 description: >
   Request body for POST /api/v1/skills/install. Installs a skill from the
   ClawHub registry by its slug (the identifier returned in a SkillSearchResult).
+  Replacing an installed skill requires its revision; an omitted revision requires
+  target absence under the authoritative installation lock.
 type: object
 additionalProperties: false
 required:
   - slug
 properties:
+  revision:
+    $ref: './ConfigurationRevision.yaml'
   slug:
     type: string
     minLength: 1

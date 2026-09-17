@@ -136,8 +136,8 @@ properties:
       previously held it. Send false to clear the default, which only has an
       effect if this agent currently holds it (sending false for an agent
       that isn't the current default is a no-op). Omitting this field leaves
-      the default unchanged. Main only — workers never default (rejected with
-      400 if attempted).
+      the default unchanged. Chat-capable core and custom Main agents only; workers, hidden and external
+      agents cannot be defaults. This does not change workspace membership.
     example: false
   skills:
     type: array
@@ -164,6 +164,5 @@ properties:
     type: boolean
     description: >
       New value for the memory-injection gate (ADR-052 FR-039). When false,
-      ContextBuilder skips memory injection for this agent's turns. Allowed
-      on all agents.
+      ContextBuilder skips memory injection for this agent's turns. Editable where supported for ordinary/custom agents; fixed false on hidden roles.
     example: true

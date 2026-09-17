@@ -6205,6 +6205,11 @@ paths:
         description: Skill slug (matches the `id` field on Skill).
         schema:
           type: string
+      - name: revision
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/ConfigurationRevision'
       responses:
         '204':
           description: Skill removed.
@@ -7847,6 +7852,14 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Workspace membership or graph revision changed; no writes occurred.
+        '500':
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
     delete:
       operationId: deleteWorkspace
       summary: Delete a workspace and cascade-delete its tasks and session links
@@ -7875,6 +7888,11 @@ paths:
         required: true
         schema:
           type: string
+      - name: revision
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/ConfigurationRevision'
       responses:
         '204':
           description: Deleted
@@ -9874,6 +9892,14 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
 
+        '409':
+          description: Workspace membership or graph revision changed; no writes occurred.
+        '500':
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
   /workspaces/{id}/mounts:
     post:
       operationId: createWorkspaceMount

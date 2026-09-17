@@ -67,3 +67,45 @@ func TestADR090ToolsUpdateContract(t *testing.T) {
 		})
 	}
 }
+
+func TestADR090WorkspaceMutationContract(t *testing.T) {
+	for _, tc := range []struct {
+		name, schema string
+		body         map[string]any
+		valid        bool
+	}{
+		{"metadata revision required", "WorkspaceUpdateRequest", map[string]any{"description": "changed", "pinned": false}, false},
+		{"metadata with revision", "WorkspaceUpdateRequest", map[string]any{"revision": strings.Repeat("a", 64), "description": "changed"}, true},
+		{"clear team and graph", "WorkspaceUpdateRequest", map[string]any{"revision": strings.Repeat("a", 64), "core_team": []any{}, "delegation": []any{}}, true},
+		{"null graph refused", "WorkspaceUpdateRequest", map[string]any{"revision": strings.Repeat("a", 64), "delegation": nil}, false},
+		{"graph revision required", "WorkspaceDelegationUpdateRequest", map[string]any{"edges": []any{}}, false},
+		{"graph explicit clear", "WorkspaceDelegationUpdateRequest", map[string]any{"revision": strings.Repeat("a", 64), "edges": []any{}}, true},
+		{"graph unknown field", "WorkspaceUpdateRequest", map[string]any{"revision": strings.Repeat("a", 64), "made_up": true}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateAgainstComponentSchema(t, tc.schema, tc.body)
+			if (err == nil) != tc.valid {
+				t.Fatalf("schema validity = %v, want %v; error: %v", err == nil, tc.valid, err)
+			}
+		})
+	}
+}
+
+func TestADR090ToolsUpdateRejectsReadOnlyEchoes(t *testing.T) {
+	for _, field := range []string{"agent_type", "tools"} {
+		t.Run(field, func(t *testing.T) {
+			body := map[string]any{"revision": strings.Repeat("a", 64), "override_names": []any{}, "builtin": map[string]any{"policies": map[string]any{"bash": "deny"}}}
+			if err := validateAgainstComponentSchema(t, "AgentToolsUpdateRequest", body); err != nil {
+				t.Fatalf("valid control rejected: %v", err)
+			}
+			if field == "agent_type" {
+				body[field] = "core"
+			} else {
+				body[field] = []any{}
+			}
+			if err := validateAgainstComponentSchema(t, "AgentToolsUpdateRequest", body); err == nil {
+				t.Fatalf("read-only echo %s was accepted", field)
+			}
+		})
+	}
+}

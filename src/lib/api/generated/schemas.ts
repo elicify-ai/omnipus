@@ -1151,8 +1151,6 @@ type AgentToolsUpdateRequest = {
   revision: ConfigurationRevision;
   override_names: Array<string>;
   config?: AgentToolsCfg | undefined;
-  tools?: Array<AgentToolEntry> | undefined;
-  agent_type?: string | undefined;
   builtin?:
     | {
         policies: {};
@@ -1168,12 +1166,6 @@ type AgentToolsUpdateRequest = {
         }>;
       }>
     | undefined;
-};
-type AgentToolEntry = {
-  name: string;
-  configured_policy: "allow" | "ask" | "deny";
-  effective_policy: "allow" | "ask" | "deny";
-  manifest_tier: "full" | "compressed" | "infra";
 };
 type AgentCreateRequest =
   | AgentCreateRequestMain
@@ -1510,6 +1502,25 @@ type IntegrationProvider = {
   requires_key: boolean;
   active?: boolean | undefined;
 };
+type Skill = {
+  revision: ConfigurationRevision;
+  persistence_status?: ConfigurationPersistenceStatus | undefined;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  changed_fields?: Array<string> | undefined;
+  error_stage?: string | undefined;
+  message?: string | undefined;
+  id: string;
+  name: string;
+  version: string;
+  description?: string | undefined;
+  author?: string | undefined;
+  source?: ("builtin" | "global" | "workspace") | undefined;
+  verified: boolean;
+  status: "active" | "disabled" | "inactive" | "error";
+  agent_assignment?: string | undefined;
+  argument_hint?: string | undefined;
+  last_invoked?: (string | null) | undefined;
+};
 type Task = {
   id: string;
   title: string;
@@ -1665,6 +1676,12 @@ type AgentToolsResponse = {
   agent_type?:
     | ("core" | "system" | "Main" | "Subagent" | "subagent_3p")
     | undefined;
+};
+type AgentToolEntry = {
+  name: string;
+  configured_policy: "allow" | "ask" | "deny";
+  effective_policy: "allow" | "ask" | "deny";
+  manifest_tier: "full" | "compressed" | "infra";
 };
 type ChannelEnabledResponse = {
   id: ChannelId;
@@ -1823,6 +1840,11 @@ type DayBucket = {
       }
     | undefined;
 };
+type SkillInstallRequest = {
+  revision?: ConfigurationRevision | undefined;
+  slug: string;
+  version?: string | undefined;
+};
 type ChannelConfigureRequest = Partial<
   {
     instance_id: string;
@@ -1932,6 +1954,13 @@ type Notification = {
   agent_id?: string | undefined;
 };
 type Workspace = {
+  delegation?: Array<WorkspaceDelegationEdge> | undefined;
+  revision: ConfigurationRevision;
+  persistence_status?: ConfigurationPersistenceStatus | undefined;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  changed_fields?: Array<string> | undefined;
+  error_stage?: string | undefined;
+  message?: string | undefined;
   id: string;
   name: string;
   description?: string | undefined;
@@ -1954,6 +1983,12 @@ type Workspace = {
   owner?: string | undefined;
   member_configs?: {} | undefined;
 };
+type WorkspaceDelegationEdge = {
+  from_agent: string;
+  to_agent: string;
+  modes?: Array<"direct" | "task"> | undefined;
+  depth?: number | undefined;
+};
 type WorkspaceMemberConfig = Partial<{
   heartbeat: WorkspaceMemberHeartbeat;
 }>;
@@ -1973,28 +2008,31 @@ type MemorySettings = Partial<{
   session_days: number;
   memory_retros_days: number;
 }>;
-type WorkspaceUpdateRequest = Partial<{
-  name: string;
-  description: string;
-  status: "active" | "archived";
-  pinned: boolean;
-  pin_order: number;
-  core_team: Array<string>;
-  member_configs: {};
-}>;
+type WorkspaceUpdateRequest = {
+  revision: ConfigurationRevision;
+  delegation?: Array<WorkspaceDelegationEdge> | undefined;
+  name?: string | undefined;
+  description?: string | undefined;
+  status?: ("active" | "archived") | undefined;
+  pinned?: boolean | undefined;
+  pin_order?: number | undefined;
+  core_team?: Array<string> | undefined;
+  member_configs?: {} | undefined;
+};
 type WorkspaceDelegation = {
+  revision: ConfigurationRevision;
+  persistence_status?: ConfigurationPersistenceStatus | undefined;
+  activation_status?: ConfigurationActivationStatus | undefined;
+  changed_fields?: Array<string> | undefined;
+  error_stage?: string | undefined;
+  message?: string | undefined;
   workspace_id: string;
   edges: Array<WorkspaceDelegationEdge>;
   team?: Array<string> | undefined;
   default_depth: number;
 };
-type WorkspaceDelegationEdge = {
-  from_agent: string;
-  to_agent: string;
-  modes?: Array<"direct" | "task"> | undefined;
-  depth?: number | undefined;
-};
 type WorkspaceDelegationUpdateRequest = {
+  revision: ConfigurationRevision;
   edges: Array<WorkspaceDelegationEdge>;
 };
 type Plan = {
@@ -3202,8 +3240,6 @@ export const AgentToolsUpdateRequest: z.ZodType<AgentToolsUpdateRequest> =
     revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
     override_names: z.array(z.string()),
     config: AgentToolsCfg.optional(),
-    tools: z.array(AgentToolEntry).optional(),
-    agent_type: z.string().optional(),
     builtin: z
       .object({
         policies: z.record(z.enum(["allow", "ask", "deny"])),
@@ -3920,7 +3956,13 @@ export const SlashCommand = z.object({
   available_while_streaming: z.boolean().optional(),
   delivery: z.enum(["client", "agent"]),
 });
-export const Skill = z.object({
+export const Skill: z.ZodType<Skill> = z.object({
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  persistence_status: ConfigurationPersistenceStatus.optional(),
+  activation_status: ConfigurationActivationStatus.optional(),
+  changed_fields: z.array(z.string()).optional(),
+  error_stage: z.string().optional(),
+  message: z.string().optional(),
   id: z.string(),
   name: z.string(),
   version: z.string(),
@@ -3946,7 +3988,8 @@ export const SkillMarketplaceStatus = z.object({
   enabled: z.boolean(),
   registries: z.array(z.object({ name: z.string(), enabled: z.boolean() })),
 });
-export const SkillInstallRequest = z.object({
+export const SkillInstallRequest: z.ZodType<SkillInstallRequest> = z.object({
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/).optional(),
   slug: z
     .string()
     .min(1)
@@ -4444,6 +4487,13 @@ export const NotificationList: z.ZodType<NotificationList> = z.object({
   notifications: z.array(Notification),
   unread_count: z.number().int(),
 });
+export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
+  z.object({
+    from_agent: z.string().min(1),
+    to_agent: z.string().min(1),
+    modes: z.array(z.enum(["direct", "task"])).optional(),
+    depth: z.number().int().gte(0).optional(),
+  });
 export const WorkspaceMemberHeartbeat: z.ZodType<WorkspaceMemberHeartbeat> = z
   .object({
     enabled: z.boolean(),
@@ -4457,6 +4507,13 @@ export const WorkspaceMemberConfig: z.ZodType<WorkspaceMemberConfig> = z
   .partial();
 export const Workspace: z.ZodType<Workspace> = z
   .object({
+    delegation: z.array(WorkspaceDelegationEdge).optional(),
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    persistence_status: ConfigurationPersistenceStatus.optional(),
+    activation_status: ConfigurationActivationStatus.optional(),
+    changed_fields: z.array(z.string()).optional(),
+    error_stage: z.string().optional(),
+    message: z.string().optional(),
     id: z.string(),
     name: z.string().min(1),
     description: z.string().optional(),
@@ -4489,18 +4546,18 @@ export const WorkspaceCreateRequest = z
     core_team: z.array(z.string()).optional(),
   })
   .passthrough();
-export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> = z
-  .object({
-    name: z.string().min(1).max(200),
-    description: z.string().max(2000),
-    status: z.enum(["active", "archived"]),
-    pinned: z.boolean(),
-    pin_order: z.number().int(),
-    core_team: z.array(z.string()),
-    member_configs: z.record(WorkspaceMemberConfig),
-  })
-  .partial()
-  .passthrough();
+export const WorkspaceUpdateRequest: z.ZodType<WorkspaceUpdateRequest> =
+  z.object({
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    delegation: z.array(WorkspaceDelegationEdge).optional(),
+    name: z.string().min(1).max(200).optional(),
+    description: z.string().max(2000).optional(),
+    status: z.enum(["active", "archived"]).optional(),
+    pinned: z.boolean().optional(),
+    pin_order: z.number().int().optional(),
+    core_team: z.array(z.string()).optional(),
+    member_configs: z.record(WorkspaceMemberConfig).optional(),
+  });
 export const MediaLibraryEntry = z.object({
   id: z.string().uuid(),
   workspace_id: z.string().min(1).max(64),
@@ -5245,21 +5302,23 @@ export const RelationWriteResponse: z.ZodType<RelationWriteResponse> = z.object(
     warnings: z.array(z.string().min(1)),
   }
 );
-export const WorkspaceDelegationEdge: z.ZodType<WorkspaceDelegationEdge> =
-  z.object({
-    from_agent: z.string().min(1),
-    to_agent: z.string().min(1),
-    modes: z.array(z.enum(["direct", "task"])).optional(),
-    depth: z.number().int().gte(0).optional(),
-  });
 export const WorkspaceDelegation: z.ZodType<WorkspaceDelegation> = z.object({
+  revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  persistence_status: ConfigurationPersistenceStatus.optional(),
+  activation_status: ConfigurationActivationStatus.optional(),
+  changed_fields: z.array(z.string()).optional(),
+  error_stage: z.string().optional(),
+  message: z.string().optional(),
   workspace_id: z.string(),
   edges: z.array(WorkspaceDelegationEdge),
   team: z.array(z.string()).optional(),
   default_depth: z.number().int().gte(0),
 });
 export const WorkspaceDelegationUpdateRequest: z.ZodType<WorkspaceDelegationUpdateRequest> =
-  z.object({ edges: z.array(WorkspaceDelegationEdge) });
+  z.object({
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+    edges: z.array(WorkspaceDelegationEdge),
+  });
 export const WorkspaceMountCreateRequest = z.object({
   name: z.string().min(1),
   host_path: z.string().min(1),
@@ -11725,6 +11784,11 @@ An anonymous response inside that window is REDUCED: &#x60;account_label&#x60; i
         type: "Path",
         schema: z.string(),
       },
+      {
+        name: "revision",
+        type: "Query",
+        schema: z.string().regex(/^[a-f0-9]{64}$/),
+      },
     ],
     response: z.void(),
     errors: [
@@ -13141,6 +13205,16 @@ Returns HTTP 201 on success.
         description: `Resource not found.`,
         schema: ErrorResponse,
       },
+      {
+        status: 409,
+        description: `Workspace membership or graph revision changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
+        status: 500,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationState,
+      },
     ],
   },
   {
@@ -13155,6 +13229,11 @@ Returns HTTP 201 on success.
         name: "id",
         type: "Path",
         schema: z.string(),
+      },
+      {
+        name: "revision",
+        type: "Query",
+        schema: z.string().regex(/^[a-f0-9]{64}$/),
       },
     ],
     response: z.void(),
@@ -13249,6 +13328,16 @@ Returns HTTP 201 on success.
         status: 404,
         description: `Resource not found.`,
         schema: ErrorResponse,
+      },
+      {
+        status: 409,
+        description: `Workspace membership or graph revision changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
+        status: 500,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationState,
       },
     ],
   },

@@ -8,10 +8,25 @@ description: >
   is no separate global per-agent delegation policy; the graph is both what the
   UI edits and what the runtime enforces.
 required:
+  - revision
   - workspace_id
   - edges
   - default_depth
 properties:
+  revision:
+    $ref: './ConfigurationRevision.yaml'
+  persistence_status:
+    $ref: './ConfigurationPersistenceStatus.yaml'
+  activation_status:
+    $ref: './ConfigurationActivationStatus.yaml'
+  changed_fields:
+    type: array
+    items:
+      type: string
+  error_stage:
+    type: string
+  message:
+    type: string
   workspace_id:
     type: string
     description: ID of the workspace this delegation graph belongs to.

@@ -2396,6 +2396,7 @@ func FixturePlanListResponse_ZeroValue() PlanListResponse {
 
 func FixtureWorkspace_Populated() Workspace {
 	return Workspace{
+		Revision:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Id:          "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		Name:        "website-api",
 		Description: strPtr("Main REST API service"),
