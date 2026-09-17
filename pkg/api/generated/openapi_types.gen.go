@@ -12338,7 +12338,7 @@ type CliValidateResponseReason string
 // ConfigurationActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 type ConfigurationActivationStatus string
 
-// ConfigurationMutationFailureState defines model for ConfigurationMutationFailureState.
+// ConfigurationMutationFailureState Mutation failure state. Revision is omitted when no live resource remains to read or revise.
 type ConfigurationMutationFailureState struct {
 	// ActivationStatus Whether the saved configuration is active. A saved but inactive configuration is not completed work.
 	ActivationStatus ConfigurationMutationFailureStateActivationStatus `json:"activation_status"`
@@ -12349,7 +12349,7 @@ type ConfigurationMutationFailureState struct {
 	// PersistenceStatus Whether all, some, or none of the requested resource components were saved.
 	PersistenceStatus ConfigurationMutationFailureStatePersistenceStatus `json:"persistence_status"`
 
-	// Revision Present only when the current resource state has an addressable revision. Omitted when a failed publication left no live resource to read or revise.
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
 	Revision *string `json:"revision,omitempty"`
 }
 

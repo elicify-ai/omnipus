@@ -3547,8 +3547,8 @@ export interface components {
             error_stage?: string;
             message?: string;
         };
+        /** @description Mutation failure state. Revision is omitted when no live resource remains to read or revise. */
         ConfigurationMutationFailureState: {
-            /** @description Present only when the current resource state has an addressable revision. Omitted when a failed publication left no live resource to read or revise. */
             revision?: components["schemas"]["ConfigurationRevision"];
             persistence_status: components["schemas"]["ConfigurationPersistenceStatus"];
             activation_status: components["schemas"]["ConfigurationActivationStatus"];

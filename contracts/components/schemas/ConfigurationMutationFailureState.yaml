@@ -1,11 +1,10 @@
 type: object
+description: Mutation failure state. Revision is omitted when no live resource remains to read or revise.
 additionalProperties: false
 required: [persistence_status, activation_status, changed_fields, error_stage, message]
 properties:
   revision:
-    allOf:
-      - $ref: './ConfigurationRevision.yaml'
-    description: Present only when the current resource state has an addressable revision. Omitted when a failed publication left no live resource to read or revise.
+    $ref: './ConfigurationRevision.yaml'
   persistence_status:
     $ref: './ConfigurationPersistenceStatus.yaml'
   activation_status:

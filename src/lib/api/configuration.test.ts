@@ -5,6 +5,7 @@ import { updateAgentTools } from './tools'
 import { installSkillBySlug } from './skills'
 import { ApiSchemaError } from './http'
 import { ApiError } from '../api-error'
+import { ConfigurationSaveError } from './configuration'
 
 const revision = 'a'.repeat(64)
 const agent = {
@@ -110,6 +111,34 @@ describe.each(mutationCases)('$name state handling', ({ resource, save }) => {
   it('cannot report a saved but inactive configuration as successful', async () => {
     response({ ...resource, ...state, activation_status: 'failed' })
     await expect(save()).rejects.toMatchObject({ name: 'ConfigurationSaveError' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+})
+
+const failedRestore = {
+  persistence_status: 'partial', activation_status: 'not_attempted',
+  changed_fields: ['installed'], error_stage: 'restore_previous',
+  message: 'Replacement and restoration failed; no live package is available.',
+}
+
+describe('ADR090 unavailable resource failure state', () => {
+  it('preserves the exact partial state without inventing a revision', async () => {
+    response(failedRestore, 500)
+    const error = await installSkillBySlug('skill').catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(ConfigurationSaveError)
+    expect((error as ConfigurationSaveError).state).toStrictEqual(failedRestore)
+    expect((error as Error).message).toBe('Some changes were saved, but configuration is incomplete. Reload before making further changes.')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+  it.each([
+    { ...failedRestore, error_stage: undefined },
+    { ...failedRestore, revision: 'invalid' },
+    { ...failedRestore, changed_fields: null },
+  ])('keeps malformed unavailable-resource state as an API error: %j', async (invalid) => {
+    response(invalid, 500)
+    const error = await installSkillBySlug('skill').catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(ApiError)
+    expect(error).not.toBeInstanceOf(ConfigurationSaveError)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

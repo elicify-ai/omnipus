@@ -3989,7 +3989,7 @@ export const SkillSearchResult = z.object({
 });
 export const ConfigurationMutationFailureState: z.ZodType<ConfigurationMutationFailureState> =
   z.object({
-    revision: ConfigurationRevision.optional(),
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/).optional(),
     persistence_status: ConfigurationPersistenceStatus,
     activation_status: ConfigurationActivationStatus,
     changed_fields: z.array(z.string()),
