@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { updateAgent, fetchAgent } from './agents'
+import { updateAgent, fetchAgent, createAgent } from './agents'
+import { createWorkspace, updateWorkspace, updateWorkspaceDelegation } from './workspaces'
+import { updateAgentTools } from './tools'
+import { installSkillBySlug } from './skills'
 import { ApiSchemaError } from './http'
 import { ApiError } from '../api-error'
 
@@ -83,5 +86,30 @@ describe('ADR090 configuration save outcomes', () => {
   it('continues to read resources without mutation outcome fields', async () => {
     response(agent)
     await expect(fetchAgent('mia')).resolves.toEqual(agent)
+  })
+})
+
+const workspaceResource = {
+  revision, id: 'ws', name: 'Team', status: 'active', pinned: false,
+  pin_order: 0, task_count: 0, created_at: '2026-09-17T00:00:00Z', updated_at: '2026-09-17T00:00:00Z',
+}
+const mutationCases = [
+  { name: 'agent creation', resource: agent, save: () => createAgent({ type: 'Main', name: 'New', soul: 'Instructions' }) },
+  { name: 'workspace creation', resource: workspaceResource, save: () => createWorkspace({ name: 'Team' }) },
+  { name: 'workspace update', resource: workspaceResource, save: () => updateWorkspace('ws', { revision, description: 'Updated' }) },
+  { name: 'graph update', resource: { revision, workspace_id: 'ws', edges: [], default_depth: 3 }, save: () => updateWorkspaceDelegation('ws', { revision, edges: [] }) },
+  { name: 'tool update', resource: { revision, override_names: [], config: { builtin: { policies: { bash: 'allow' } } }, tools: [] }, save: () => updateAgentTools('mia', { revision, override_names: [], config: { builtin: { policies: { bash: 'allow' } } } }) },
+  { name: 'skill installation', resource: { revision, id: 'skill', name: 'skill', description: 'Test skill', version: '1', author: 'Elicify', verified: false, status: 'active' }, save: () => installSkillBySlug('skill') },
+]
+
+describe.each(mutationCases)('$name state handling', ({ resource, save }) => {
+  it('returns an active complete resource', async () => {
+    response({ ...resource, ...state })
+    await expect(save()).resolves.toEqual({ ...resource, ...state })
+  })
+  it('cannot report a saved but inactive configuration as successful', async () => {
+    response({ ...resource, ...state, activation_status: 'failed' })
+    await expect(save()).rejects.toMatchObject({ name: 'ConfigurationSaveError' })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })

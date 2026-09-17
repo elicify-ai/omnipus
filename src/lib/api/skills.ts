@@ -19,6 +19,7 @@ import type {
   SlashCommand,
 } from '@/lib/api/generated/openapi-types'
 import { request } from './http'
+import { requestConfiguration } from './configuration'
 
 export async function installSkillFromFile(content: string, filename: string): Promise<void> {
   await request<void>('/skills/install', {
@@ -52,7 +53,7 @@ export async function searchSkills(q: string, limit = 20): Promise<SkillSearchRe
  */
 export async function installSkillBySlug(slug: string, version?: string): Promise<Skill> {
   const body: SkillInstallRequest = version ? { slug, version } : { slug }
-  return request<Skill>(
+  return requestConfiguration<Skill>(
     '/skills/install',
     {
       method: 'POST',
@@ -121,9 +122,9 @@ export async function fetchSkills(): Promise<Skill[]> {
   return out
 }
 
-export function deleteSkill(name: string): Promise<void> {
+export function deleteSkill(name: string, revision: string): Promise<void> {
   // no-schema: void response; DELETE has no body.
-  return request<void>(`/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
+  return request<void>(`/skills/${encodeURIComponent(name)}?${new URLSearchParams({ revision })}`, { method: 'DELETE' })
 }
 
 // ── Slash commands ─────────────────────────────────────────────────────────────
