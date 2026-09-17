@@ -41,3 +41,6 @@ Record exact tree/commit, commands, collected tests, failures, mutation checks a
 
 - Agent management checkpoint integrated as `2e50d5e44`; its worker is finishing create staging/aliases, storage envelopes and affected legacy tests. This checkpoint is not a full-suite pass.
 - Document package seeding: full `pkg/skills` suite passed after adding the four approved names to the exact roster; three asset changes (helper, knowledge file, license) were detected against pinned hashes, restored, and the focused seeding check passed again. No agent execution/runtime readiness is inferred from this package check.
+
+- Client mutation transport integrated as `51b6f9a81`: delete helpers require the reviewed revision; graph updates take the generated request; tool updates carry override intent. Agent/workspace creation and updates, graph/tools updates and skill installation all check persistence plus activation before resolving successfully. The two real-fetch test files pass 33 cases; three transport mutations were caught and restored; changed client files pass ESLint. Full frontend typecheck remains red until Settings callers and fixtures are migrated.
+- Next Settings worker checkout prepared at /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/worktrees/adr090-settings. It is not running yet; launch after a current Sol package finishes.
