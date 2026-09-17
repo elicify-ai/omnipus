@@ -9,13 +9,17 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
+	"github.com/elicify-ai/omnipus/pkg/session"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -35,13 +39,15 @@ func (t *boundaryInspectionTool) Execute(context.Context, map[string]any) *tools
 type inspectionBoundaryProvider struct {
 	calls    int
 	requests [][]providers.Message
+	toolName string
+	toolArgs map[string]any
 }
 
 func (p *inspectionBoundaryProvider) Chat(_ context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
 	p.calls++
 	p.requests = append(p.requests, append([]providers.Message(nil), messages...))
 	if p.calls == 1 {
-		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "inspect-1", Type: "function", Name: "boundary_inspection", Arguments: map[string]any{}}}}, nil
+		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "inspect-1", Type: "function", Name: p.toolName, Arguments: p.toolArgs}}}, nil
 	}
 	return &providers.LLMResponse{Content: "inspection handled"}, nil
 }
@@ -68,28 +74,26 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Home: home}}
 	cfg.Tools.Manifest.Compressed = false
 
-	provider := &inspectionBoundaryProvider{}
+	imageBytes := boundaryPNG(t, 32, 24)
+	imagePath := filepath.Join(home, "private-page.png")
+	if err := os.WriteFile(imagePath, imageBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	provider := &inspectionBoundaryProvider{toolName: "read_file", toolArgs: map[string]any{"path": imagePath}}
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
-	imageBytes := boundaryPNG(t, 32, 24)
-	authorizations := 0
-	al.RegisterTool(&boundaryInspectionTool{image: tools.InspectionImage{
-		Bytes: imageBytes, MIMEType: "image/png", Source: "private-page.png",
-		Reauthorize: func(context.Context) error { authorizations++; return nil },
-	}})
 	agent := al.GetRegistry().GetDefaultAgent()
-	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"boundary_inspection": "allow"}})
+	agent.Tools.Register(tools.NewReadFileTool(home, true, tools.MaxReadFileSize))
+	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"read_file": "allow"}})
 
 	msg := bus.InboundMessage{Channel: "telegram", ChatID: "privacy", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect this"}
 	if _, _, err := al.processMessage(context.Background(), msg); err != nil {
 		t.Fatal(err)
 	}
-	if authorizations != 1 {
-		t.Fatalf("authorization checks = %d, want 1", authorizations)
-	}
 	if len(provider.requests) != 2 || !requestHasInspectionMedia(provider.requests[1]) {
 		t.Fatalf("live provider request did not contain the inspection: %#v", provider.requests)
 	}
+	assertInspectionFixture(t, provider.requests[1], 32, 24)
 	select {
 	case outbound := <-msgBus.OutboundMediaChan():
 		t.Fatalf("private inspection was published: %+v", outbound)
@@ -101,21 +105,194 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 		t.Fatal(err)
 	}
 	key := resolveScopeKey(route, "")
-	assertInspectionRecordsPrivate(t, agent.Sessions.GetHistory(key), imageBytes)
+	assertInspectionRecordsPrivate(t, agent.Sessions.GetHistory(key), imageBytes, imagePath)
 	archive, err := agent.Sessions.ReadArchive(context.Background(), key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertInspectionRecordsPrivate(t, archive, imageBytes)
+	assertInspectionRecordsPrivate(t, archive, imageBytes, imagePath)
+	reloaded, err := session.NewUnifiedStoreWithHome(filepath.Join(agent.Home, "sessions"), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reloaded.Close()
+	assertInspectionRecordsPrivate(t, reloaded.GetHistory(key), imageBytes, imagePath)
+	reloadedArchive, err := reloaded.ReadArchive(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInspectionRecordsPrivate(t, reloadedArchive, imageBytes, imagePath)
 
 	if _, _, err := al.processMessage(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "privacy", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "continue"}); err != nil {
 		t.Fatal(err)
 	}
-	if authorizations != 1 {
-		t.Fatalf("replay reauthorized or redelivered inspection; checks = %d", authorizations)
-	}
 	if requestHasInspectionMedia(provider.requests[len(provider.requests)-1]) {
 		t.Fatal("replay request redelivered private inspection media")
+	}
+	// Use the actual reactive context-window path after a second full turn.
+	// The image turn leaves the live window; its canonical archive survives.
+	if _, trimmed := al.windowTrimForce(agent, "", key, true); !trimmed {
+		t.Fatal("forced window trim did not evict the older inspection turn")
+	}
+	compacted, err := session.NewUnifiedStoreWithHome(filepath.Join(agent.Home, "sessions"), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer compacted.Close()
+	assertNoInspectionSecrets(t, compacted.GetHistory(key), imageBytes, imagePath)
+	compactedArchive, err := compacted.ReadArchive(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInspectionRecordsPrivate(t, compactedArchive, imageBytes, imagePath)
+}
+
+func assertInspectionFixture(t *testing.T, messages []providers.Message, width, height int) {
+	t.Helper()
+	count := 0
+	for _, message := range messages {
+		count += len(message.Media)
+	}
+	if count != 1 {
+		t.Fatalf("inspection image count = %d, want 1", count)
+	}
+	for _, message := range messages {
+		for _, dataURL := range message.Media {
+			comma := strings.IndexByte(dataURL, ',')
+			if comma < 0 {
+				t.Fatal("inspection media is not a data URL")
+			}
+			data, err := base64.StdEncoding.DecodeString(dataURL[comma+1:])
+			if err != nil {
+				t.Fatal(err)
+			}
+			img, err := png.Decode(bytes.NewReader(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if img.Bounds().Dx() != width || img.Bounds().Dy() != height || color.RGBAModel.Convert(img.At(0, 0)).(color.RGBA) != (color.RGBA{R: 0x51, G: 0x72, B: 0x93, A: 0xff}) {
+				t.Fatalf("inspection fixture changed: bounds=%v first_pixel=%v", img.Bounds(), img.At(0, 0))
+			}
+			return
+		}
+	}
+	t.Fatal("inspection request contained no image")
+}
+
+type interruptedInspectionProvider struct {
+	calls   int
+	started chan struct{}
+}
+
+type rejectingInspectionProvider struct {
+	calls         int
+	rejectedMedia bool
+}
+
+func (p *rejectingInspectionProvider) Chat(_ context.Context, messages []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	p.calls++
+	if p.calls == 1 {
+		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "inspect-rejected", Type: "function", Name: "boundary_inspection", Arguments: map[string]any{}}}}, nil
+	}
+	p.rejectedMedia = requestHasInspectionMedia(messages)
+	return nil, errors.New("API error: model does not support image input")
+}
+
+func (p *rejectingInspectionProvider) GetDefaultModel() string { return "unknown-vision-model" }
+
+func (p *interruptedInspectionProvider) Chat(ctx context.Context, _ []providers.Message, _ []providers.ToolDefinition, _ string, _ map[string]any) (*providers.LLMResponse, error) {
+	p.calls++
+	if p.calls == 1 {
+		return &providers.LLMResponse{ToolCalls: []providers.ToolCall{{ID: "inspect-interrupted", Type: "function", Name: "boundary_inspection", Arguments: map[string]any{}}}}, nil
+	}
+	close(p.started)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (p *interruptedInspectionProvider) GetDefaultModel() string { return "unknown-vision-model" }
+
+func TestReadImage_InterruptedTurnDoesNotPersistInspection(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Home = home
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "unknown-vision-model"}
+	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Home: home}}
+	cfg.Tools.Manifest.Compressed = false
+	provider := &interruptedInspectionProvider{started: make(chan struct{})}
+	msgBus := bus.NewMessageBus()
+	al := mustNewAgentLoop(t, cfg, msgBus, provider)
+	imageBytes := boundaryPNG(t, 32, 24)
+	al.RegisterTool(&boundaryInspectionTool{image: tools.InspectionImage{Bytes: imageBytes, MIMEType: "image/png", Source: "interrupted-private.png", Reauthorize: func(context.Context) error { return nil }}})
+	agent := al.GetRegistry().GetDefaultAgent()
+	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"boundary_inspection": "allow"}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	msg := bus.InboundMessage{Channel: "telegram", ChatID: "interrupted", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect then stop"}
+	go func() {
+		_, _, err := al.processMessage(ctx, msg)
+		done <- err
+	}()
+	select {
+	case <-provider.started:
+	case err := <-done:
+		t.Fatalf("turn ended before image request: %v", err)
+	case <-ctx.Done():
+		t.Fatal("image request did not start before the test deadline")
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("interrupted turn error = %v, want context.Canceled", err)
+	}
+	route, _, err := al.resolveMessageRoute(msg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := resolveScopeKey(route, "")
+	assertNoInspectionSecrets(t, agent.Sessions.GetHistory(key), imageBytes, "interrupted-private.png")
+	archive, err := agent.Sessions.ReadArchive(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoInspectionSecrets(t, archive, imageBytes, "interrupted-private.png")
+	reloaded, err := session.NewUnifiedStoreWithHome(filepath.Join(agent.Home, "sessions"), home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reloaded.Close()
+	assertNoInspectionSecrets(t, reloaded.GetHistory(key), imageBytes, "interrupted-private.png")
+	select {
+	case outbound := <-msgBus.OutboundMediaChan():
+		t.Fatalf("interrupted inspection was delivered: %+v", outbound)
+	default:
+	}
+}
+
+func TestReadImage_ProviderImageRejectionStaysIncomplete(t *testing.T) {
+	home := t.TempDir()
+	cfg := config.DefaultConfig()
+	cfg.Agents.Defaults.Home = home
+	cfg.Agents.Defaults.DefaultModel = config.DefaultModel{Model: "unknown-vision-model"}
+	cfg.Agents.List = []config.AgentConfig{{ID: "mia", Home: home}}
+	cfg.Tools.Manifest.Compressed = false
+	provider := &rejectingInspectionProvider{}
+	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), provider)
+	imageBytes := boundaryPNG(t, 32, 24)
+	al.RegisterTool(&boundaryInspectionTool{image: tools.InspectionImage{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { return nil }}})
+	agent := al.GetRegistry().GetDefaultAgent()
+	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"boundary_inspection": "allow"}})
+
+	response, _, err := al.processMessage(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "rejected", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "inspect this"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.calls != 2 || !provider.rejectedMedia {
+		t.Fatalf("provider calls=%d rejected_media=%v, want one tool call and one real image rejection", provider.calls, provider.rejectedMedia)
+	}
+	if !strings.Contains(response, "can't view images") || strings.Contains(response, "inspection handled") {
+		t.Fatalf("terminal rejection claimed inspection success or lacked guidance: %q", response)
 	}
 }
 
@@ -128,7 +305,7 @@ func requestHasInspectionMedia(messages []providers.Message) bool {
 	return false
 }
 
-func assertInspectionRecordsPrivate(t *testing.T, records any, imageBytes []byte) {
+func assertInspectionRecordsPrivate(t *testing.T, records any, imageBytes []byte, source string) {
 	t.Helper()
 	serialized, err := json.Marshal(records)
 	if err != nil {
@@ -136,11 +313,24 @@ func assertInspectionRecordsPrivate(t *testing.T, records any, imageBytes []byte
 	}
 	encoded := base64.StdEncoding.EncodeToString(imageBytes)
 	joined := string(serialized)
-	if !strings.Contains(joined, inspectionMarker) {
+	if !strings.Contains(joined, "not retained; re-read to view") || !strings.Contains(joined, source) {
 		t.Fatalf("durable records lost inspection marker: %q", joined)
 	}
-	for _, secret := range []string{encoded, "data:image/", "private-page.png"} {
+	for _, secret := range []string{encoded, "data:image/"} {
 		if strings.Contains(joined, secret) {
+			t.Fatalf("durable records leaked %q", secret)
+		}
+	}
+}
+
+func assertNoInspectionSecrets(t *testing.T, records any, imageBytes []byte, source string) {
+	t.Helper()
+	serialized, err := json.Marshal(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{base64.StdEncoding.EncodeToString(imageBytes), "data:image/", source} {
+		if strings.Contains(string(serialized), secret) {
 			t.Fatalf("durable records leaked %q", secret)
 		}
 	}
@@ -252,6 +442,40 @@ func TestReadImage_ProviderFailureAndCandidate(t *testing.T) {
 	}
 	if cancelChecks != 1 || len(cancelProvider.requests["glm-4.5v"]) != 0 {
 		t.Fatalf("cancellation was not terminal: checks=%d fallback requests=%d", cancelChecks, len(cancelProvider.requests["glm-4.5v"]))
+	}
+
+	unknownProvider := &candidateCaptureProvider{requests: map[string][]providers.Message{}, fail: map[string]error{}}
+	unknownAgent := &AgentInstance{ID: "mia", Provider: unknownProvider}
+	unknownChecks := 0
+	unknownRT := &agentLoopRunTurn{
+		al: &AgentLoop{}, ts: newTurnState(unknownAgent, processOptions{}, turnEventScope{}), turnCtx: context.Background(), activeProvider: unknownProvider,
+		activeCandidates: []providers.FallbackCandidate{{Provider: "future-provider", Model: "future-model"}}, llmModel: "future-model",
+		inspectionImages: map[string][]tools.InspectionImage{"inspect-1": {{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { unknownChecks++; return nil }}}},
+	}
+	unknownRT.al.SetCapabilityCatalog(cat)
+	if _, err := unknownRT.callProvider(canonical, nil); err != nil {
+		t.Fatal(err)
+	}
+	if unknownChecks != 1 || !requestHasInspectionMedia(unknownProvider.requests["future-model"]) {
+		t.Fatalf("unknown candidate did not receive one optimistic authorized attempt: checks=%d request=%#v", unknownChecks, unknownProvider.requests["future-model"])
+	}
+
+	timeoutProvider := &candidateCaptureProvider{requests: map[string][]providers.Message{}, fail: map[string]error{"chatgpt-4o-latest": context.DeadlineExceeded}}
+	timeoutAgent := &AgentInstance{ID: "mia", Provider: timeoutProvider}
+	timeoutAgent.StoreProviderPool(map[string]providers.LLMProvider{"302ai": timeoutProvider, "zai": timeoutProvider})
+	timeoutLoop := &AgentLoop{fallback: providers.NewFallbackChain(providers.NewCooldownTracker())}
+	timeoutLoop.SetCapabilityCatalog(cat)
+	timeoutChecks := 0
+	timeoutRT := &agentLoopRunTurn{
+		al: timeoutLoop, ts: newTurnState(timeoutAgent, processOptions{}, turnEventScope{}), turnCtx: context.Background(), activeProvider: timeoutProvider,
+		activeCandidates: []providers.FallbackCandidate{{Provider: "302ai", Model: "chatgpt-4o-latest"}, {Provider: "zai", Model: "glm-4.5v"}}, llmModel: "chatgpt-4o-latest",
+		inspectionImages: map[string][]tools.InspectionImage{"inspect-1": {{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { timeoutChecks++; return nil }}}},
+	}
+	if _, err := timeoutRT.callProvider(canonical, nil); err != nil {
+		t.Fatal(err)
+	}
+	if timeoutChecks != 2 || !requestHasInspectionMedia(timeoutProvider.requests["glm-4.5v"]) {
+		t.Fatalf("timeout fallback did not reauthorize and retry once: checks=%d request=%#v", timeoutChecks, timeoutProvider.requests["glm-4.5v"])
 	}
 }
 
