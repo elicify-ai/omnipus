@@ -6,6 +6,7 @@ package systools_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -120,7 +121,7 @@ func TestSkillRemoveTool_LegitimateRemovalStillWorks(t *testing.T) {
 	if success, _ := m["success"].(bool); !success {
 		t.Errorf("expected success=true, got: %s", result.ForLLM)
 	}
-	if _, err := os.Stat(installedSkill); !os.IsNotExist(err) {
+	if _, err := os.Stat(installedSkill); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("skill directory still exists after a legitimate removal")
 	}
 	// The rest of the workspace is untouched by a legitimate removal.

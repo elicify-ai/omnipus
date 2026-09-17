@@ -19,6 +19,7 @@
 package gateway
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -206,7 +207,7 @@ func TestKnowledgeRecordCreate_PersistsTheCounterAndAdvancesIt(t *testing.T) {
 
 	// Precondition, asserted rather than assumed: no counter exists yet.
 	_, statErr := os.Stat(seq)
-	require.True(t, os.IsNotExist(statErr), "the fixture must start with no counter, or this test proves nothing")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "the fixture must start with no counter, or this test proves nothing")
 
 	first := createWidget(t, api, ws, "a.md", "First")
 	require.Equal(t, http.StatusCreated, first.Code, first.Body.String())
@@ -284,8 +285,7 @@ func TestKnowledgeRecordCreate_CorruptedCounterRefusesAndWritesNothing(t *testin
 		"minting past a counter it could not read is the duplicate-identifier bug this refusal prevents")
 
 	_, statErr := os.Stat(filepath.Join(vault, "should-not-exist.md"))
-	assert.True(t, os.IsNotExist(statErr),
-		"a refused create must not leave a note behind")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "a refused create must not leave a note behind")
 
 	after, err := os.ReadFile(seq)
 	require.NoError(t, err)

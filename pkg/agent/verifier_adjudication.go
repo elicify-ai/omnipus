@@ -317,7 +317,7 @@ func SeedSystemAgentSoulFile(workspace string, id coreagent.CoreAgentID) error {
 		if strings.TrimSpace(string(existing)) != "" {
 			return nil // operator (or a prior seed) already put real content here
 		}
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("verifier: read existing %q soul %q: %w", id, soulPath, err)
 	}
 	if err := os.MkdirAll(workspace, 0o755); err != nil {

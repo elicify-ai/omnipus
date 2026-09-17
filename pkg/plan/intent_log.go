@@ -351,7 +351,7 @@ func (l *IntentLog) readAllLocked(planID string) ([]IntentRecord, error) {
 	}
 	f, err := os.Open(l.path(planID))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("intent_log: open %q: %w", planID, err)
@@ -531,7 +531,7 @@ func (l *IntentLog) ReplayAtBoot(planID string, apply ApplyFunc) (ReplayResult, 
 func (l *IntentLog) ReplayAllPlans(apply ApplyFunc) ([]ReplayResult, error) {
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("intent_log: read dir: %w", err)

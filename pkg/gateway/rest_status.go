@@ -3,6 +3,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -190,7 +191,7 @@ func (a *restAPI) getUserContext(w http.ResponseWriter) {
 	userMDPath := filepath.Join(cfg.AgentHomeBasePath(), "USER.md")
 	content := ""
 	if data, err := os.ReadFile(userMDPath); err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			// Distinguish missing file (normal, return empty) from unreadable file (error).
 			slog.Error("rest: read USER.md", "error", err)
 			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read USER.md: %v", err))
@@ -571,7 +572,7 @@ func (a *restAPI) HandleStorageStats(w http.ResponseWriter, r *http.Request) {
 	homeDir := a.homePath
 	if err := filepath.Walk(homeDir, func(_ string, info os.FileInfo, walkErr error) error {
 		if walkErr != nil {
-			if !os.IsNotExist(walkErr) {
+			if !errors.Is(walkErr, os.ErrNotExist) {
 				slog.Warn("rest: storage stats: walk error", "error", walkErr)
 			}
 			return nil

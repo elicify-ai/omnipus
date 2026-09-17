@@ -124,7 +124,7 @@ func onboardingStateUnreadable(home string) bool {
 	statePath := filepath.Join(home, "system", "state.json")
 	data, err := os.ReadFile(statePath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return false // never onboarded — the genuine fresh-install case
 		}
 		slog.Warn("gateway: onboarding state unreadable — pre-auth provider routes will stay closed",

@@ -11,6 +11,7 @@
 package session_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,7 +74,7 @@ func TestOrphanSessionsParticipateInRetention(t *testing.T) {
 
 	// The stale file must be gone.
 	_, statErr := os.Stat(staleFile)
-	assert.True(t, os.IsNotExist(statErr), "stale orphan session file must be deleted by retention sweep")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "stale orphan session file must be deleted by retention sweep")
 
 	// The recent file must still be present.
 	_, statErr = os.Stat(recentFile)

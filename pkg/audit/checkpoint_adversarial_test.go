@@ -23,6 +23,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -245,7 +246,7 @@ func TestCleanupExpired_RePointsStaleCheckpoint_WhenDeletedFileHasNoHMAC(t *test
 	})
 
 	_, statErr := os.Stat(older)
-	assert.Truef(t, os.IsNotExist(statErr), "older pre-chain file must have been deleted by retention cleanup")
+	assert.Truef(t, errors.Is(statErr, os.ErrNotExist), "older pre-chain file must have been deleted by retention cleanup")
 	_, statErr = os.Stat(newer)
 	assert.NoError(t, statErr, "newer pre-chain file must survive (not yet past retention)")
 

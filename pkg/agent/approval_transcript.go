@@ -293,7 +293,7 @@ func mutateToolCallInTranscript(
 		found = false
 		data, err := os.ReadFile(transcriptPath)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				// No transcript file. If the session directory is still there
 				// the session exists and has no tool_call entry to settle — an
 				// entry miss. If the directory is gone too, a DeleteSession
@@ -304,7 +304,7 @@ func mutateToolCallInTranscript(
 					u22RecordTranscriptMutateMissed("transcript mutate: tool_call entry not found", sessionID, callID,
 						"expect_status", expectStatus, "reason", "entry_not_found")
 					return nil
-				case os.IsNotExist(dirErr):
+				case errors.Is(dirErr, os.ErrNotExist):
 					u22RecordTranscriptMutateMissed("transcript mutate: session not found", sessionID, callID,
 						"reason", "session_not_found")
 					return nil // no transcript — nothing to update

@@ -34,6 +34,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -115,7 +116,7 @@ func primeImminentSessionWorkerTierB(al *AgentLoop, channel, chatID string) {
 func readCancelAuditRows(t *testing.T, dir string) []map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)

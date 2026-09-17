@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -411,7 +412,7 @@ func TestNewInstallSkillTool_SweepsStaleStagingLeftoverFromCrash(t *testing.T) {
 	_ = NewInstallSkillTool(skills.NewRegistryManager(), globalSkills)
 
 	_, err := os.Stat(orphan)
-	assert.True(t, os.IsNotExist(err), "the crash-orphaned staging directory must be removed by the startup sweep")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "the crash-orphaned staging directory must be removed by the startup sweep")
 	_, err = os.Stat(filepath.Join(globalSkills, "real-skill", "SKILL.md"))
 	assert.NoError(t, err, "the sweep must not touch real, already-installed skills")
 }

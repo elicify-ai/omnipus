@@ -15,6 +15,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -154,7 +155,7 @@ func sanitize(name string) string {
 func (s *Store) loadLocked(recipient string) ([]Notification, error) {
 	data, err := os.ReadFile(s.userFile(recipient))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err

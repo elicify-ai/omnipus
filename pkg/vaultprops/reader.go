@@ -149,7 +149,7 @@ func Open(ctx context.Context, home, collectionRoot string) (knowledge.PropertyI
 	//     in $OMNIPUS_HOME that the caller never asked for and would then have
 	//     to be told is empty.
 	if _, statErr := os.Stat(path); statErr != nil {
-		if os.IsNotExist(statErr) {
+		if errors.Is(statErr, os.ErrNotExist) {
 			return nil, errIndexNotBuilt()
 		}
 		return nil, fmt.Errorf("the properties index at %s could not be read: %w", path, statErr)

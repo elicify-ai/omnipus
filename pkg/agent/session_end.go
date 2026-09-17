@@ -12,6 +12,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -1056,7 +1057,7 @@ func (al *AgentLoop) agentSessionHasRetro(agentInst *AgentInstance, sessionID st
 	retrosDir := filepath.Join(agentInst.Home, ".omnipus", "retros")
 	dateDirs, err := os.ReadDir(retrosDir)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("session_end: read retro dir failed",
 				"dir", retrosDir,
 				"agent_id", agentInst.ID,
@@ -1085,7 +1086,7 @@ func (al *AgentLoop) newestTranscriptTimestamp(sessionDir string) (time.Time, bo
 	transcriptPath := filepath.Join(sessionDir, "transcript.jsonl")
 	data, err := os.ReadFile(transcriptPath)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("session_end: cannot read transcript",
 				"path", transcriptPath,
 				"error", err,

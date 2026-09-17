@@ -235,7 +235,7 @@ func (s *Store) foldRunsLockedFrom(taskID, minDay string) (map[string]TaskRun, e
 	dir := s.runsDir(taskID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return map[string]TaskRun{}, nil
 		}
 		return nil, fmt.Errorf("task: list runs dir %q: %w", dir, err)
@@ -306,7 +306,7 @@ func (s *Store) findOpenRunLocked(taskID string, occurrenceMs *int64) (*TaskRun,
 	dir := s.runsDir(taskID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, errNoOpenRun
 		}
 		return nil, fmt.Errorf("task: list runs dir %q: %w", dir, err)
@@ -378,7 +378,7 @@ func (s *Store) appendRunRecord(taskID string, rec TaskRun, at time.Time) error 
 	// the sidecar is never read as a day file.
 	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
 		existing, readErr := os.ReadFile(path)
-		if readErr != nil && !os.IsNotExist(readErr) {
+		if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 			return fmt.Errorf("task: read run day file %q: %w", path, readErr)
 		}
 		var buf bytes.Buffer
@@ -795,7 +795,7 @@ func (s *Store) openRunSourceFiles(taskID string) (map[string]bool, error) {
 	dir := s.runsDir(taskID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return map[string]bool{}, nil
 		}
 		return nil, fmt.Errorf("task: list runs dir %q: %w", dir, err)
@@ -867,7 +867,7 @@ func (s *Store) PruneRuns(taskID string, cutoff time.Time) error {
 	dir := s.runsDir(taskID)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return fmt.Errorf("task: list runs dir %q: %w", dir, err)

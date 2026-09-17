@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -63,7 +64,7 @@ func TestLibraryContentPut_MissingVersionReturns400(t *testing.T) {
 		w := libPutJSON(t, api, "/api/v1/library/"+id+"/content", `{"path":"new.txt","content":"x"}`)
 		assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 		_, statErr := os.Stat(filepath.Join(workDir(api, id), "new.txt"))
-		assert.True(t, os.IsNotExist(statErr), "a refused save must not touch disk")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "a refused save must not touch disk")
 	})
 
 	t.Run("field-empty", func(t *testing.T) {
@@ -72,7 +73,7 @@ func TestLibraryContentPut_MissingVersionReturns400(t *testing.T) {
 			`{"path":"new2.txt","content":"x","expect_version":""}`)
 		assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 		_, statErr := os.Stat(filepath.Join(workDir(api, id), "new2.txt"))
-		assert.True(t, os.IsNotExist(statErr), "a refused save must not touch disk")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "a refused save must not touch disk")
 	})
 }
 
@@ -87,7 +88,7 @@ func TestLibraryContentBinaryPut_MissingVersionReturns400(t *testing.T) {
 		`{"path":"new.bin","content_base64":"`+enc+`"}`)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 	_, statErr := os.Stat(filepath.Join(workDir(api, id), "new.bin"))
-	assert.True(t, os.IsNotExist(statErr), "a refused save must not touch disk")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "a refused save must not touch disk")
 }
 
 // --- Test 2: TestLibraryContentPut_StaleVersionReturns409WithCurrentToken ---

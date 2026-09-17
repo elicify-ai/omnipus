@@ -11,6 +11,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -77,7 +78,7 @@ func TestRecall_BleveCountersJSONL_AccessWritten(t *testing.T) {
 
 	// The counters.jsonl must exist under the private room.
 	countersPath := ms.PrivateRoom().CountersPath
-	if _, err := os.Stat(countersPath); os.IsNotExist(err) {
+	if _, err := os.Stat(countersPath); errors.Is(err, os.ErrNotExist) {
 		t.Errorf("counters.jsonl not created after recall: %s", countersPath)
 	}
 }
@@ -115,7 +116,7 @@ func TestMemory_MinHash_DedupOnWrite(t *testing.T) {
 	// We can't assert the file exists without knowing the exact Jaccard, but we can
 	// verify that if it does exist, it is valid JSONL.
 	mhPath := filepath.Join(ms.PrivateRoom().Root, ".index", "minhash.jsonl")
-	if _, serr := os.Stat(mhPath); os.IsNotExist(serr) {
+	if _, serr := os.Stat(mhPath); errors.Is(serr, os.ErrNotExist) {
 		t.Log("minhash.jsonl not created — texts may not be similar enough at 128 perms (acceptable)")
 		return
 	}
@@ -160,7 +161,7 @@ func TestMemory_PrivateRoom_RoutingByWorkspace(t *testing.T) {
 	sharedIDs, err := memrooms.ListMemoryIDs(sharedRoom.MemoriesDir)
 	if err != nil {
 		// Dir may not exist yet if no write happened.
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("ListMemoryIDs shared: %v", err)
 		}
 	}

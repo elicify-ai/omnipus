@@ -2,6 +2,7 @@ package skills
 
 import (
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -83,7 +84,7 @@ func SeedDefaults(destDir string) (SeedResult, error) {
 		if _, statErr := os.Stat(destSkillDir); statErr == nil {
 			res.Skipped = append(res.Skipped, name)
 			continue
-		} else if !os.IsNotExist(statErr) {
+		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return res, fmt.Errorf("seed skills: stat %q: %w", destSkillDir, statErr)
 		}
 

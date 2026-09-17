@@ -129,7 +129,7 @@ func runProcEnvironChild() {
 	}
 
 	// Some other error (ENOENT means the parent exited before child ran).
-	if os.IsNotExist(readErr) {
+	if errors.Is(readErr, os.ErrNotExist) {
 		fmt.Fprintf(os.Stderr, "parent PID %d no longer exists; skip\n", parentPID)
 		os.Exit(77)
 	}
@@ -138,5 +138,5 @@ func runProcEnvironChild() {
 }
 
 func isEACCESErr(err error) bool {
-	return err != nil && (os.IsPermission(err))
+	return err != nil && (errors.Is(err, os.ErrPermission))
 }

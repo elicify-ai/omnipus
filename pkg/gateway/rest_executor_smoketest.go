@@ -97,6 +97,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -780,7 +781,7 @@ func sweepSmokeTestOrphans() (removed int, errs []error) {
 	root := filepath.Join(config.OmnipusHomeDir(), smokeTestRunsSubdir)
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil
 		}
 		return 0, []error{fmt.Errorf("reading executor-smoke-test-runs root %q: %w", root, err)}

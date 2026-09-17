@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,7 +30,7 @@ func TestReapOrphans_RemovesTempDirOrphans(t *testing.T) {
 	if res.Removed != 1 || res.Scanned != 1 {
 		t.Fatalf("reap result Scanned=%d Removed=%d, want 1/1 (errs=%v)", res.Scanned, res.Removed, res.Errors)
 	}
-	if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(orphanDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("orphan dir still present after reap: %v", err)
 	}
 }
@@ -57,7 +58,7 @@ func TestReapOrphans_RemovesWorktreeOrphansAndPrunesRepo(t *testing.T) {
 	if res.Removed != 1 {
 		t.Fatalf("Removed=%d, want 1 (errs=%v)", res.Removed, res.Errors)
 	}
-	if _, err := os.Stat(orphanDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(orphanDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("worktree orphan dir still present: %v", err)
 	}
 	// Registration must be cleaned from the source repo.

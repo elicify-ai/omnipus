@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -123,7 +124,7 @@ func sanitizeKey(key string) string {
 // Returns a zero-value sessionMeta if the file does not exist.
 func (s *JSONLStore) readMeta(key string) (sessionMeta, error) {
 	data, err := os.ReadFile(s.metaPath(key))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return sessionMeta{Key: key}, nil
 	}
 	if err != nil {
@@ -159,7 +160,7 @@ func (s *JSONLStore) writeMeta(key string, meta sessionMeta) error {
 // from the same flat keys regardless of whether "ts" is present.
 func readMessages(path string, skip int) ([]ArchivedMessage, error) {
 	f, err := os.Open(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return []ArchivedMessage{}, nil
 	}
 	if err != nil {
@@ -212,7 +213,7 @@ func readMessages(path string, skip int) ([]ArchivedMessage, error) {
 // the overhead of unmarshaling every message.
 func countLines(path string) (int, error) {
 	f, err := os.Open(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
 	if err != nil {
@@ -376,7 +377,7 @@ func (s *JSONLStore) ScanArchive(
 
 	path := s.jsonlPath(sessionKey)
 	f, err := os.Open(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {

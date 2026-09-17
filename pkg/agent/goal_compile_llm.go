@@ -409,7 +409,7 @@ func loadDefineGoalSkillContent() string {
 	}
 	data, err := os.ReadFile(p)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			logger.WarnCF("agent", "goal compile: could not read the seeded define-goal skill "+
 				"(compiling without the quality-bar rewrite)",
 				map[string]any{"path": p, "error": err.Error()})

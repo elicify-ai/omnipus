@@ -1,6 +1,7 @@
 package media
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -81,7 +82,7 @@ func TestReleaseAll(t *testing.T) {
 
 	// Files should be deleted
 	for _, p := range paths {
-		if _, err := os.Stat(p); !os.IsNotExist(err) {
+		if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("file %q should have been deleted", p)
 		}
 	}
@@ -156,7 +157,7 @@ func TestReleaseAllSharedPathDeletesOnFinalRefOnly(t *testing.T) {
 	if err := store.ReleaseAll("scopeB"); err != nil {
 		t.Fatalf("ReleaseAll(scopeB) failed: %v", err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Error("shared file should be deleted after final ref is released")
 	}
 }
@@ -210,7 +211,7 @@ func TestMultiScopeIsolation(t *testing.T) {
 	}
 
 	// scopeA file should be gone
-	if _, err := os.Stat(pathA); !os.IsNotExist(err) {
+	if _, err := os.Stat(pathA); !errors.Is(err, os.ErrNotExist) {
 		t.Error("file A should have been deleted")
 	}
 	if _, err := store.Resolve(refA); err == nil {
@@ -410,7 +411,7 @@ func TestCleanExpiredRemovesOldEntries(t *testing.T) {
 	if _, err := store.Resolve(ref); err == nil {
 		t.Error("expired ref should be unresolvable")
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Error("expired file should be deleted")
 	}
 }
@@ -587,7 +588,7 @@ func TestCleanExpiredSharedPathDeletesOnFinalRefOnly(t *testing.T) {
 	if err := store.ReleaseAll("scope-fresh"); err != nil {
 		t.Fatalf("ReleaseAll(scope-fresh) failed: %v", err)
 	}
-	if _, err := os.Stat(path); !os.IsNotExist(err) {
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Error("shared file should be deleted after final ref is released")
 	}
 }

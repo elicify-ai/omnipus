@@ -956,7 +956,7 @@ func (cs *CronService) loadStore() error {
 
 	data, err := os.ReadFile(cs.storePath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return err

@@ -7,6 +7,7 @@ package records
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -721,7 +722,7 @@ func LoadSchemas(vaultRoot string) (*SchemaSet, *SchemaLoadReport, error) {
 	dir := SchemaDir(vaultRoot)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return NewSchemaSet(), &SchemaLoadReport{}, nil
 		}
 		return nil, nil, fmt.Errorf("reading schema directory %s: %w", dir, err)

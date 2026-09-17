@@ -15,6 +15,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -127,7 +128,7 @@ func TestHandleWorkspaces_Delete_NeverTouchesMountedFolder(t *testing.T) {
 
 	// The workspace's own directory (and the symlink inside it) is gone.
 	_, statErr := os.Stat(workspace.WorkspaceDir(api.homePath, id))
-	require.True(t, os.IsNotExist(statErr))
+	require.True(t, errors.Is(statErr, os.ErrNotExist))
 }
 
 // TestHandleWorkspaces_CreateAndUpdate_RejectMountsField mirrors the

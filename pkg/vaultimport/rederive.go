@@ -41,6 +41,7 @@
 package vaultimport
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -227,7 +228,7 @@ func fileTranslatedBase(vaultRoot, baseRelPath string, pb *ParsedBase, schemaIdx
 		if _, vErr := resolveViewWritePath(vaultRoot, delPath); vErr != nil {
 			return nil, fmt.Errorf("vaultimport: view delete refused: %w", vErr)
 		}
-		if derr := os.Remove(delPath); derr != nil && !os.IsNotExist(derr) {
+		if derr := os.Remove(delPath); derr != nil && !errors.Is(derr, os.ErrNotExist) {
 			return nil, fmt.Errorf("vaultimport: removing the view this base no longer declares (%s.yaml): %w", slug, derr)
 		}
 		res.Deleted = append(res.Deleted, slug)

@@ -58,6 +58,7 @@ package knowledge
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -229,7 +230,7 @@ func mintRecordIDs(lock NoteLockConfig, collectionRoot string, sc *records.Schem
 func nextRecordSequenceValue(seqPath string) (int64, error) {
 	data, err := os.ReadFile(seqPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return 1, nil
 		}
 		return 0, fmt.Errorf("read identity sequence %q: %w", seqPath, err)

@@ -12,6 +12,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -92,7 +93,7 @@ func newAuditLoggerForCancelTest(t *testing.T, dir string) *audit.Logger {
 func readCancelAuditEvents(t *testing.T, dir string) []string {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)

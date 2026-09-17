@@ -6,6 +6,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -69,7 +70,7 @@ func TestLastMemberCommitResolver_Glue(t *testing.T) {
 	}
 	// Verify the resolver did NOT materialize ws-noexist's work dir as a side
 	// effect (the os.Stat guard in LastMemberCommit).
-	if _, statErr := os.Stat(workspace.WorkDir(home, "ws-noexist")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(workspace.WorkDir(home, "ws-noexist")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("resolver materialized ws-noexist's work dir as a Play side effect (statErr=%v), want IsNotExist", statErr)
 	}
 }
@@ -190,7 +191,7 @@ func TestLastMemberCommitResolver_ResetMemberCheckout_TreeMatchesCommit(t *testi
 	if dir != "" {
 		t.Errorf("m-nocommit ResetMemberCheckout dir = %q, want \"\" (fresh attempt leaves no tree behind)", dir)
 	}
-	if _, err := os.Stat(filepath.Join(home, "workspaces", "ws", "resume", "m-nocommit")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(home, "workspaces", "ws", "resume", "m-nocommit")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("m-nocommit resume tree materialized (statErr=%v), want IsNotExist (no commit => fresh attempt => no tree)", err)
 	}
 }

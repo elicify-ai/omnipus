@@ -13,6 +13,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -154,7 +155,7 @@ func TestWorkspaceInstructions_PutEmptyClears(t *testing.T) {
 
 	// File must be removed.
 	_, statErr := os.Stat(agentMDPath)
-	assert.True(t, os.IsNotExist(statErr), "AGENT.md must be removed after clearing")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "AGENT.md must be removed after clearing")
 
 	// GET must return empty string.
 	gw := getInstructions(t, api, id)

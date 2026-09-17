@@ -7,6 +7,7 @@ package task
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -110,7 +111,7 @@ func TestMigrateMilestones_LegacyJSONAfterFieldRemoved(t *testing.T) {
 	_, err := os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
 	assert.NoError(t, err, "completion sentinel must be written")
 	_, err = os.Stat(milestonesDir)
-	assert.True(t, os.IsNotExist(err), "milestones dir must be removed after a successful migration")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "milestones dir must be removed after a successful migration")
 }
 
 // TestMigrateMilestones_DueDateCopyOnlyIfEmpty verifies a milestone's
@@ -222,7 +223,7 @@ func TestMigrateMilestones_CrashSafe(t *testing.T) {
 
 	// No sentinel present — mirrors "crashed before Phase 3".
 	_, statErr := os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
-	require.True(t, os.IsNotExist(statErr), "test setup must not have a sentinel yet")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "test setup must not have a sentinel yet")
 
 	require.NoError(t, MigrateMilestonesToTags(home))
 
@@ -317,8 +318,7 @@ func TestMigrateMilestones_PartialFailure_DoesNotFinalize(t *testing.T) {
 	assert.Contains(t, err.Error(), "failed to migrate")
 
 	_, statErr := os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
-	assert.True(t, os.IsNotExist(statErr),
-		"sentinel must NOT be written when any task file failed to migrate")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "sentinel must NOT be written when any task file failed to migrate")
 	_, statErr = os.Stat(milestonesDir)
 	assert.NoError(t, statErr, "milestones dir must NOT be removed when any task file failed to migrate")
 
@@ -343,7 +343,7 @@ func TestMigrateMilestones_PartialFailure_DoesNotFinalize(t *testing.T) {
 	goodAfterRetry := readTaskFixture(t, tasksDir, "task-good")
 	assert.Len(t, goodAfterRetry.Tags, 1, "already-migrated task-good must not gain a duplicate tag on retry")
 	_, statErr = os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
-	assert.True(t, os.IsNotExist(statErr), "sentinel must still be withheld on a repeated failing retry")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "sentinel must still be withheld on a repeated failing retry")
 }
 
 // TestMigrateMilestones_AtTagCap_TrimsOldestAndFinalizes is the review r2
@@ -382,7 +382,7 @@ func TestMigrateMilestones_AtTagCap_TrimsOldestAndFinalizes(t *testing.T) {
 	_, statErr := os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
 	assert.NoError(t, statErr, "completion sentinel must be written — migration must finalize")
 	_, statErr = os.Stat(milestonesDir)
-	assert.True(t, os.IsNotExist(statErr), "milestones dir must be removed after finalization")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "milestones dir must be removed after finalization")
 }
 
 // TestMigrateMilestones_AlreadyOverCap_StillFails proves the fix is scoped
@@ -407,5 +407,5 @@ func TestMigrateMilestones_AlreadyOverCap_StillFails(t *testing.T) {
 	require.Error(t, err, "a task already over the tag cap before this migration's own append must still fail")
 
 	_, statErr := os.Stat(filepath.Join(home, milestoneMigrationSentinelFile))
-	assert.True(t, os.IsNotExist(statErr), "sentinel must not be written when a genuine data-integrity issue exists")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "sentinel must not be written when a genuine data-integrity issue exists")
 }

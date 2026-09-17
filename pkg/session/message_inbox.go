@@ -321,7 +321,7 @@ func sanitizeOwnerKey(key string) string {
 func (s *MessageInboxStore) readEntries(ownerKey string) ([]InboxEntry, error) {
 	f, err := os.Open(s.path(ownerKey))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("session: inbox: open %q: %w", ownerKey, err)

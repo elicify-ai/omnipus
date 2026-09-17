@@ -16,6 +16,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -369,7 +370,7 @@ func TestStatsThrottle_UnforcedFlushConverges(t *testing.T) {
 
 	statsPath := filepath.Join(store.BaseDir(), sessionID, "stats.json")
 	_, statErrBefore := os.Stat(statsPath)
-	require.True(t, os.IsNotExist(statErrBefore), "stats.json must not exist yet — the append is still only in-memory (FR-061)")
+	require.True(t, errors.Is(statErrBefore, os.ErrNotExist), "stats.json must not exist yet — the append is still only in-memory (FR-061)")
 
 	// More than one flush interval elapses on the REAL clock.
 	time.Sleep(3 * store.StatsFlushInterval())
@@ -563,7 +564,7 @@ func TestFlushAndEvictSessionMeta_ClosesTwoShardRace(t *testing.T) {
 	// only until a forced flush or periodic tick).
 	statsPath := filepath.Join(store.BaseDir(), sessionID, "stats.json")
 	_, statErrBefore := os.Stat(statsPath)
-	require.True(t, os.IsNotExist(statErrBefore), "fixture broken: stats.json must not exist before any forced flush")
+	require.True(t, errors.Is(statErrBefore, os.ErrNotExist), "fixture broken: stats.json must not exist before any forced flush")
 
 	require.NoError(t, store.FlushAndEvictSessionMeta(sessionID))
 

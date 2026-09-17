@@ -255,7 +255,7 @@ func LoadBundleManifest(bundleDir string) (*BundleManifest, error) {
 	manifestPath := filepath.Join(bundleDir, BundleManifestFilename)
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("bundle manifest %s not found in %q", BundleManifestFilename, bundleDir)
 		}
 		return nil, fmt.Errorf("read bundle manifest: %w", err)

@@ -20,6 +20,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -96,7 +97,7 @@ func u17bReadStatsMessageCount(t *testing.T, store *session.UnifiedStore, sessio
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return 0, false
 		}
 		t.Fatalf("read %s: %v", path, err)

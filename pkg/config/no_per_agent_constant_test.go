@@ -5,6 +5,7 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,7 +85,7 @@ func scanRepoGoFiles(t *testing.T, visit func(path string, content string)) {
 			// not this test's job to observe a stable repository, only to
 			// scan whatever exists. Skip just that entry; any OTHER walk
 			// error (permission denied, I/O error) still fails loudly.
-			if os.IsNotExist(walkErr) {
+			if errors.Is(walkErr, os.ErrNotExist) {
 				return nil
 			}
 			return walkErr

@@ -296,7 +296,7 @@ func isCorruptionError(err error) bool {
 // database is how a rebuild inherits the very pages that were corrupt.
 func rebuildAfterCorruption(ctx context.Context, path string, opts Options) (Store, error) {
 	for _, companion := range []string{path, path + "-journal", path + "-wal", path + "-shm"} {
-		if err := os.Remove(companion); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(companion); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("removing %q: %w", companion, err)
 		}
 	}

@@ -6,6 +6,7 @@ package task
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -131,7 +132,7 @@ func TestMigratePlanningStatus_CorruptFileSkippedNotFatal(t *testing.T) {
 	require.Error(t, err, "a corrupt file must surface as an error (blocking sentinel finalization)")
 
 	_, statErr := os.Stat(filepath.Join(home, planningStatusMigrationSentinelFile))
-	assert.True(t, os.IsNotExist(statErr), "sentinel must NOT be written when a file failed to migrate")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "sentinel must NOT be written when a file failed to migrate")
 
 	// The well-formed file must still have been migrated even though the
 	// corrupt one failed (per-file isolation).
@@ -147,7 +148,7 @@ func TestMigratePlanningStatus_CorruptFileSkippedNotFatal(t *testing.T) {
 	require.Error(t, err2, "retry with the corrupt file still present must still error")
 
 	_, statErr2 := os.Stat(filepath.Join(home, planningStatusMigrationSentinelFile))
-	assert.True(t, os.IsNotExist(statErr2), "sentinel must still be withheld on a repeated failing retry")
+	assert.True(t, errors.Is(statErr2, os.ErrNotExist), "sentinel must still be withheld on a repeated failing retry")
 
 	tkAfterRetry := readTaskFixture(t, tasksDir, "good")
 	assert.Equal(t, StatusNext, tkAfterRetry.Status,

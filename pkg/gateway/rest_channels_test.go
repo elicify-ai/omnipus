@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -361,8 +362,7 @@ func TestDeleteChannelInstance_RemovesStateDir(t *testing.T) {
 
 	// Store directory must be gone (best-effort; not a hard failure).
 	_, statErr := os.Stat(storeDir)
-	assert.True(t, os.IsNotExist(statErr),
-		"WhatsApp store directory must be removed after instance delete (US-10 AC-2)")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "WhatsApp store directory must be removed after instance delete (US-10 AC-2)")
 }
 
 // TestDeleteChannelInstance_BareTypeKey verifies that bare-type keys (e.g.

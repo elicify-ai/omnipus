@@ -21,6 +21,7 @@
 package gateway
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -245,7 +246,7 @@ func (a *restAPI) serveStaticFile(
 				return
 			}
 			cleaned = resolved
-		} else if !os.IsNotExist(evalErr) {
+		} else if !errors.Is(evalErr, os.ErrNotExist) {
 			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, token, http.StatusForbidden, startedAt)
 			jsonErr(w, http.StatusForbidden, "access denied: path could not be resolved")
 			return
@@ -255,7 +256,7 @@ func (a *restAPI) serveStaticFile(
 
 	info, err := os.Stat(absPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			a.auditServeFailure(r, "serve.path_invalid", "error", agentID, token, http.StatusNotFound, startedAt)
 			jsonErr(w, http.StatusNotFound, "file not found")
 			return

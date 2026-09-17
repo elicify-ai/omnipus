@@ -30,6 +30,7 @@ package memrooms
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -117,7 +118,7 @@ func ReadMemoryFile(memoriesDir, id string) (MemoryFile, error) {
 	path := filepath.Join(memoriesDir, Filename(id))
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return MemoryFile{}, MemoryNotFoundError(id)
 		}
 		return MemoryFile{}, fmt.Errorf("memrooms: read memory file %s: %w", id, err)
@@ -129,7 +130,7 @@ func ReadMemoryFile(memoriesDir, id string) (MemoryFile, error) {
 func ListMemoryIDs(memoriesDir string) ([]string, error) {
 	entries, err := os.ReadDir(memoriesDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("memrooms: list memories: %w", err)
@@ -155,7 +156,7 @@ func ListMemoryIDs(memoriesDir string) ([]string, error) {
 func ScanMemories(memoriesDir string) ([]MemoryFile, error) {
 	entries, err := os.ReadDir(memoriesDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("memrooms: scan memories: %w", err)

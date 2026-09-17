@@ -10,6 +10,7 @@ import (
 	"bytes"
 	crand "crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -694,7 +695,7 @@ func (ps *PartitionStore) ListSessions() ([]*SessionMeta, error) {
 
 	entries, err := os.ReadDir(ps.baseDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("session: list sessions: %w", err)
@@ -728,7 +729,7 @@ func (ps *PartitionStore) ClearAll() (int, error) {
 
 	entries, err := os.ReadDir(ps.baseDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("session: clear all: read dir: %w", err)

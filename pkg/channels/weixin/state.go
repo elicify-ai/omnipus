@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -72,7 +73,7 @@ func buildWeixinContextTokensPath(cfg config.WeixinConfig) string {
 func loadGetUpdatesBuf(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
 		}
 		return "", err
@@ -97,7 +98,7 @@ func saveGetUpdatesBuf(path, cursor string) error {
 func loadContextTokens(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return map[string]string{}, nil
 		}
 		return nil, err

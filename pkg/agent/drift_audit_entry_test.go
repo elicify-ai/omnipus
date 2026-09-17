@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,7 +36,7 @@ import (
 func readAllAuditEntries(t *testing.T, dir string) []map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil // no entries yet is valid (pre-emission check)
 	}
 	require.NoError(t, err, "failed to read audit.jsonl")

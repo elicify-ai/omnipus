@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -130,7 +131,7 @@ func TestTeardown_RemovesWorktreeAndRegistration(t *testing.T) {
 	if err := ws.Teardown(context.Background()); err != nil {
 		t.Fatalf("Teardown: %v", err)
 	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("worktree dir still present after teardown: %v", err)
 	}
 	// Registration must be gone too.

@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -108,7 +109,7 @@ func readAuditEvents(t *testing.T, auditDir string) []map[string]any {
 	auditFile := filepath.Join(auditDir, "audit.jsonl")
 	data, err := os.ReadFile(auditFile)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		t.Fatalf("read audit file: %v", err)

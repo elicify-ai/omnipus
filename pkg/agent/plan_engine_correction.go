@@ -1020,7 +1020,7 @@ func (pe *PlanEngine) reconstructCorrections() {
 	}
 	entries, err := os.ReadDir(pe.intentLog.Dir())
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			logger.WarnCF("plan_engine", "reconstructCorrections: read intent dir failed",
 				map[string]any{"error": err.Error()})
 		}

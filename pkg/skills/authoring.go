@@ -276,7 +276,7 @@ func snapshotExisting(skillDir string) (string, error) {
 	current := filepath.Join(skillDir, "SKILL.md")
 	data, err := os.ReadFile(current)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
 		}
 		return "", fmt.Errorf("read current SKILL.md for snapshot: %w", err)
@@ -309,7 +309,7 @@ func (w *SkillWriter) CreateSkill(name, content string) (string, error) {
 	}
 	if _, statErr := os.Stat(filepath.Join(skillDir, "SKILL.md")); statErr == nil {
 		return "", ErrAlreadyExists
-	} else if !os.IsNotExist(statErr) {
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return "", fmt.Errorf("stat skill: %w", statErr)
 	}
 
@@ -361,7 +361,7 @@ func (w *SkillWriter) EditSkill(
 	skillFile := filepath.Join(skillDir, "SKILL.md")
 	_, statErr := os.Stat(skillFile)
 	fileExists := statErr == nil
-	if statErr != nil && !os.IsNotExist(statErr) {
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 		return "", false, fmt.Errorf("stat skill: %w", statErr)
 	}
 
@@ -377,7 +377,7 @@ func (w *SkillWriter) EditSkill(
 	if fileExists {
 		if _, markerErr := os.Stat(filepath.Join(skillDir, builtinMarkerFile)); markerErr == nil {
 			isPristineBuiltin = true
-		} else if !os.IsNotExist(markerErr) {
+		} else if !errors.Is(markerErr, os.ErrNotExist) {
 			return "", false, fmt.Errorf("stat builtin marker: %w", markerErr)
 		}
 	}
@@ -412,7 +412,7 @@ func (w *SkillWriter) EditSkill(
 	// created_override:false instead of repeating "override created" for
 	// the same skill indefinitely.
 	if isPristineBuiltin {
-		if rmErr := os.Remove(filepath.Join(skillDir, builtinMarkerFile)); rmErr != nil && !os.IsNotExist(rmErr) {
+		if rmErr := os.Remove(filepath.Join(skillDir, builtinMarkerFile)); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			return "", false, fmt.Errorf("clear builtin marker: %w", rmErr)
 		}
 	}
@@ -433,7 +433,7 @@ func (w *SkillWriter) ListVersions(name string) ([]string, error) {
 	vdir := filepath.Join(skillDir, versionsDir)
 	entries, err := os.ReadDir(vdir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("read versions dir: %w", err)
@@ -466,7 +466,7 @@ func (w *SkillWriter) RemoveSkill(name string) error {
 		return err
 	}
 	if _, statErr := os.Stat(filepath.Join(skillDir, "SKILL.md")); statErr != nil {
-		if os.IsNotExist(statErr) {
+		if errors.Is(statErr, os.ErrNotExist) {
 			return ErrNotFound
 		}
 		return fmt.Errorf("stat skill: %w", statErr)
@@ -543,7 +543,7 @@ func (w *SkillWriter) ReadVersion(name, snapshot string) (string, error) {
 	}
 	data, err := os.ReadFile(filepath.Join(skillDir, versionsDir, snapshot))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return "", ErrNotFound
 		}
 		return "", fmt.Errorf("read snapshot: %w", err)

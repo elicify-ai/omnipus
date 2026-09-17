@@ -166,7 +166,7 @@ func (r *Root) CreateUnique(rel string) (finalRel string, f *os.File, err error)
 			if openErr == nil {
 				return candidate, file, nil
 			}
-			if !os.IsExist(openErr) {
+			if !errors.Is(openErr, os.ErrExist) {
 				return "", nil, translateErr(openErr)
 			}
 			// Exact-case race with a concurrent writer: fall through and
@@ -218,7 +218,7 @@ func CopyInto(fromRoot, toRoot *Root, fromRel, toRel string) (os.FileInfo, error
 	}
 	if _, statErr := dstRt.Stat(dstSub); statErr == nil {
 		return nil, ErrAlreadyExists
-	} else if !os.IsNotExist(statErr) {
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return nil, translateErr(statErr)
 	}
 	// Case-insensitive collision backstop (see caseInsensitiveMatch's doc).
@@ -361,7 +361,7 @@ func copyDirRecursive(fromRoot, toRoot *os.Root, fromRel, toRel string) error {
 // after a mid-copy failure. Logged rather than silently discarded, but
 // never overrides the caller's already-in-flight error.
 func removeQuietRoot(root *os.Root, rel string) {
-	if err := root.Remove(rel); err != nil && !os.IsNotExist(err) {
+	if err := root.Remove(rel); err != nil && !errors.Is(err, os.ErrNotExist) {
 		logger.WarnCF("library", "failed to remove partial copy destination after error",
 			map[string]any{"path": rel, "error": err.Error()})
 	}

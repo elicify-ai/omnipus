@@ -28,6 +28,7 @@ package systools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -99,7 +100,7 @@ func (t *AgentReadMetadataTool) Execute(ctx context.Context, args map[string]any
 
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return tools.ErrorResult(errorJSON("NOT_FOUND",
 				fmt.Sprintf("%s does not exist for agent %q", filename, agentID),
 				"The file has not been written yet."))

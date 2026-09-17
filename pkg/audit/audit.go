@@ -12,6 +12,7 @@ import (
 	"bufio"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -956,7 +957,7 @@ func (l *Logger) rotate() error {
 			} else {
 				candidate = filepath.Join(l.dir, fmt.Sprintf("audit-%s-%d-%d.jsonl", l.currentDate, millis, attempt))
 			}
-			if _, statErr := os.Stat(candidate); os.IsNotExist(statErr) {
+			if _, statErr := os.Stat(candidate); errors.Is(statErr, os.ErrNotExist) {
 				dst = candidate
 				found = true
 				break
@@ -1026,7 +1027,7 @@ func (l *Logger) recoverCorruption() {
 	if err != nil {
 		// File doesn't exist yet (fresh install) or unreadable — both fine.
 		// openCurrentFile will create it. We only log unexpected errors.
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("audit: could not open file for corruption recovery", "path", path, "error", err)
 		}
 		return

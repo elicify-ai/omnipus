@@ -3,6 +3,7 @@
 package matrix
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,7 +46,7 @@ func TestMigrateLegacyMatrixCryptoStore_SingleInstance(t *testing.T) {
 	if string(data) != "legacy-olm-store" {
 		t.Fatalf("migrated store content mismatch: got %q", string(data))
 	}
-	if _, err := os.Stat(legacyFile); !os.IsNotExist(err) {
+	if _, err := os.Stat(legacyFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected legacy flat file to be gone after migration, stat err = %v", err)
 	}
 }
@@ -79,7 +80,7 @@ func TestMigrateLegacyMatrixCryptoStore_MultipleInstances_SkipsAmbiguousCase(t *
 	if _, err := os.Stat(legacyFile); err != nil {
 		t.Fatalf("expected legacy file to remain untouched, stat err = %v", err)
 	}
-	if _, err := os.Stat(namespacedPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(namespacedPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected no namespaced destination to be created in the ambiguous case, stat err = %v", err)
 	}
 }
@@ -99,7 +100,7 @@ func TestMigrateLegacyMatrixCryptoStore_NoLegacyStore_NoOp(t *testing.T) {
 
 	migrateLegacyMatrixCryptoStore(cfg, channelDir, "matrix", namespacedPath)
 
-	if _, err := os.Stat(channelDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(channelDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected no directory to be created on a fresh install, stat err = %v", err)
 	}
 }
@@ -197,7 +198,7 @@ func TestMigrateLegacyMatrixCryptoStore_InterruptedMigration_ResumesAndPreserves
 	if string(data) != "real-olm-crypto-keys" {
 		t.Fatalf("resumed migration data mismatch: got %q, want %q", string(data), "real-olm-crypto-keys")
 	}
-	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+	if _, err := os.Stat(tmpPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected the temp staging path to be consumed by the resumed migration, stat err = %v", err)
 	}
 }
@@ -360,10 +361,10 @@ func TestMigrateLegacyMatrixCryptoStore_InterruptedMigration_MultipleInstances_N
 	migrateLegacyMatrixCryptoStore(cfg, channelDir, "matrix.us", namespacedUS)
 
 	// Neither instance may silently inherit the ambiguous staged store.
-	if _, err := os.Stat(namespacedEU); !os.IsNotExist(err) {
+	if _, err := os.Stat(namespacedEU); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("matrix.eu must NOT inherit the ambiguous staged store, stat err = %v", err)
 	}
-	if _, err := os.Stat(namespacedUS); !os.IsNotExist(err) {
+	if _, err := os.Stat(namespacedUS); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("matrix.us must NOT inherit the ambiguous staged store, stat err = %v", err)
 	}
 

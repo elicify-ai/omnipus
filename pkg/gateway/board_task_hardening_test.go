@@ -19,6 +19,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -163,7 +164,7 @@ func TestReconcileStuckTasks(t *testing.T) {
 
 	emptyTasksDir := filepath.Join(apiEmpty.homePath, "tasks")
 	entries, readDirErr := os.ReadDir(emptyTasksDir)
-	if readDirErr != nil && !os.IsNotExist(readDirErr) {
+	if readDirErr != nil && !errors.Is(readDirErr, os.ErrNotExist) {
 		require.NoError(t, readDirErr)
 	}
 	assert.Empty(t, entries, "empty tasks dir must remain empty after reconcile no-op")

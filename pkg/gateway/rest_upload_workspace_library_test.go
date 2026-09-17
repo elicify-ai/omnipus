@@ -17,6 +17,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -138,8 +139,7 @@ func TestUpload_WorkspaceLibraryLoadFailure_Returns500NotSilentFallback(t *testi
 	// media APIs never look).
 	legacyDir := filepath.Join(api.homePath, "uploads")
 	_, statErr := os.Stat(legacyDir)
-	assert.True(t, os.IsNotExist(statErr),
-		"a corrupt workspace library must not silently fall back to the legacy uploads path")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "a corrupt workspace library must not silently fall back to the legacy uploads path")
 
 	// FIX 1: the failure must be discoverable in the gateway.log-equivalent
 	// file sink, not just returned to the caller.

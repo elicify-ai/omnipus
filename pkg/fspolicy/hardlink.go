@@ -192,7 +192,7 @@ func scanForSameFile(root, skip string, target os.FileInfo, budget *int) (found,
 		}
 		entryInfo, infoErr := d.Info()
 		if infoErr != nil {
-			if os.IsNotExist(infoErr) {
+			if errors.Is(infoErr, os.ErrNotExist) {
 				// Removed between the readdir and the stat. It cannot be the
 				// link we are looking for: the candidate still exists.
 				return nil

@@ -6,6 +6,7 @@ package library
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -248,7 +249,7 @@ func (r *Root) OpenFileForDownload(rel string) (*os.File, os.FileInfo, error) {
 // carrying the primary durability guarantee.
 func (r *Root) removeQuiet(rel string) {
 	rt, sub := r.resolve(rel)
-	if err := rt.Remove(sub); err != nil && !os.IsNotExist(err) {
+	if err := rt.Remove(sub); err != nil && !errors.Is(err, os.ErrNotExist) {
 		logger.WarnCF("library", "failed to remove temp file after write error",
 			map[string]any{"path": rel, "error": err.Error()})
 	}

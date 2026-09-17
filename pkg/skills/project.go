@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -121,7 +122,7 @@ func DiscoverProjectSkills(mountName, mountRoot string) ([]ProjectSkill, []SlugC
 
 		entries, readErr := os.ReadDir(dirPath)
 		if readErr != nil {
-			if !os.IsNotExist(readErr) {
+			if !errors.Is(readErr, os.ErrNotExist) {
 				slog.Warn("skills: failed to read project skills directory",
 					"mount", mountName, "dir", dirPath, "error", readErr)
 			}

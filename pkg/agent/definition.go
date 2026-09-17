@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -88,7 +89,7 @@ func loadAgentDefinition(workspace string) AgentContextDefinition {
 		soulPath := filepath.Join(workspace, "SOUL.md")
 		if content, err := os.ReadFile(soulPath); err != nil {
 			// M8: distinguish permission/IO errors from expected absence.
-			if !os.IsNotExist(err) {
+			if !errors.Is(err, os.ErrNotExist) {
 				logger.WarnCF("agent", "Could not read SOUL.md",
 					map[string]any{"path": soulPath, "error": err.Error()})
 			}
@@ -99,7 +100,7 @@ func loadAgentDefinition(workspace string) AgentContextDefinition {
 			}
 		}
 		return definition
-	} else if !os.IsNotExist(agentErr) {
+	} else if !errors.Is(agentErr, os.ErrNotExist) {
 		// A permission error or other I/O failure reading AGENT.md. Log a warning
 		// and fall through to the legacy AGENTS.md path rather than silently
 		// treating a readable AGENT.md as absent.
@@ -121,7 +122,7 @@ func loadAgentDefinition(workspace string) AgentContextDefinition {
 	if definition.Source != "" || fileExists(defaultSoulPath) {
 		if content, err := os.ReadFile(defaultSoulPath); err != nil {
 			// M8: distinguish permission/IO errors from expected absence.
-			if !os.IsNotExist(err) {
+			if !errors.Is(err, os.ErrNotExist) {
 				logger.WarnCF("agent", "Could not read SOUL.md",
 					map[string]any{"path": defaultSoulPath, "error": err.Error()})
 			}
@@ -160,7 +161,7 @@ func loadUserDefinition(workspace string) *UserDefinition {
 			Content: string(content),
 		}
 	}
-	if !os.IsNotExist(err) {
+	if !errors.Is(err, os.ErrNotExist) {
 		logger.WarnCF("agent", "Could not read USER.md",
 			map[string]any{"path": userPath, "error": err.Error()})
 	}

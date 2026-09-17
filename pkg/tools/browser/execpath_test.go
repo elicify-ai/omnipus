@@ -21,6 +21,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -121,8 +122,7 @@ func TestPreprovision_ValidPATHCandidate_NoManagedInstallDirCreated(t *testing.T
 	assert.Equal(t, chromiumPath, got)
 
 	_, statErr := os.Stat(installRootFor(cfg))
-	assert.True(t, os.IsNotExist(statErr),
-		"Preprovision must not create the managed install dir when a PATH candidate resolves")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "Preprovision must not create the managed install dir when a PATH candidate resolves")
 }
 
 // TestPreprovision_BrokenPATH_PreSeededManagedBinary_NoNetwork verifies
