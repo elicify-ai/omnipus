@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -41,6 +42,74 @@ func workspaceRevisionError(id string, err error) *tools.ToolResult {
 type workspace = workspacepkg.Workspace
 
 func workspacesDir(home string) string { return filepath.Join(home, "workspaces") }
+
+var (
+	saveWorkspaceDelegation = workspacepkg.SaveDelegation
+	deleteWorkspaceEntity   = deleteEntity
+)
+
+func workspaceChangedFields(before, after workspace) []string {
+	fields := make([]string, 0, 7)
+	if before.Name != after.Name {
+		fields = append(fields, "name")
+	}
+	if before.Description != after.Description {
+		fields = append(fields, "description")
+	}
+	if before.Status != after.Status {
+		fields = append(fields, "status")
+	}
+	if before.Pinned != after.Pinned {
+		fields = append(fields, "pinned")
+	}
+	if before.PinOrder != after.PinOrder {
+		fields = append(fields, "pin_order")
+	}
+	if !slices.Equal(before.CoreTeam, after.CoreTeam) {
+		fields = append(fields, "core_team")
+	}
+	if before.SetupPending != after.SetupPending {
+		fields = append(fields, "setup_pending")
+	}
+	return fields
+}
+
+func workspaceActualState(state workspacepkg.State) map[string]any {
+	edges := append([]workspacepkg.DelegationEdge{}, state.Delegation...)
+	return map[string]any{
+		"exists":      true,
+		"id":          state.Workspace.ID,
+		"name":        state.Workspace.Name,
+		"description": state.Workspace.Description,
+		"status":      state.Workspace.Status,
+		"pinned":      state.Workspace.Pinned,
+		"pin_order":   state.Workspace.PinOrder,
+		"core_team":   state.Workspace.CoreTeam,
+		"delegation":  edges,
+	}
+}
+
+func workspaceMutationError(id, stage, persistence, revision string, changed []string, actual map[string]any) *tools.ToolResult {
+	payload := map[string]any{
+		"success":            false,
+		"id":                 id,
+		"persistence_status": persistence,
+		"activation_status":  "not_attempted",
+		"changed_fields":     changed,
+		"error_stage":        stage,
+		"message":            "Workspace state could not be saved completely. Read the current workspace before retrying.",
+		"actual_state":       actual,
+		"error": map[string]any{
+			"code":       "SAVE_FAILED",
+			"message":    "workspace state could not be saved completely",
+			"suggestion": "Read the current workspace and delegation graph before retrying",
+		},
+	}
+	if revision != "" {
+		payload["revision"] = revision
+	}
+	return tools.ErrorResult(successJSON(payload))
+}
 
 // sanitizeCoreTeam deduplicates (case-sensitive) the raw entries. Empty strings
 // and non-string values are silently dropped.
@@ -242,13 +311,19 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	// the team — same ordering rationale as update_workspace.
 	var delegationSeedNote string
 	if len(seeded) > 0 {
-		if err := workspacepkg.SaveDelegation(t.deps.Home, w.ID, seeded); err != nil {
+		if err := saveWorkspaceDelegation(t.deps.Home, w.ID, seeded); err != nil {
 			slog.Error("sysagent: create_workspace: failed to seed delegation edges",
 				"workspace_id", w.ID, "error", err)
-			if rollbackErr := deleteEntity(workspacesDir(t.deps.Home), w.ID); rollbackErr != nil {
+			if rollbackErr := deleteWorkspaceEntity(workspacesDir(t.deps.Home), w.ID); rollbackErr != nil {
 				slog.Error("sysagent: create_workspace: failed to roll back workspace record", "workspace_id", w.ID, "error", rollbackErr)
+				actual, readErr := workspacepkg.ReadStateLocked(t.deps.Home, w.ID)
+				if readErr != nil {
+					slog.Error("sysagent: create_workspace: failed to read partial state", "workspace_id", w.ID, "error", readErr)
+					return workspaceMutationError(w.ID, "rollback_workspace", "partial", "", []string{"workspace"}, map[string]any{"exists": true, "state_read_failed": true})
+				}
+				return workspaceMutationError(w.ID, "rollback_workspace", "partial", actual.Revision, []string{"workspace"}, workspaceActualState(actual))
 			}
-			return tools.ErrorResult(errorJSON("SAVE_FAILED", "workspace could not be created", "Retry after checking storage health"))
+			return workspaceMutationError(w.ID, "save_delegation", "none", "", []string{}, map[string]any{"exists": false, "delegation": []workspacepkg.DelegationEdge{}})
 		} else {
 			delegationSeedNote = seededEdgesSummary(seeded, w.CoreTeam)
 		}
@@ -495,8 +570,14 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 	// workspacepkg.LockID(id) is held for this whole function, which is
 	// SaveDelegation's stated caller contract.
 	if pendingDelegation != nil {
-		if err := workspacepkg.SaveDelegation(t.deps.Home, id, pendingDelegation); err != nil {
-			return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
+		if err := saveWorkspaceDelegation(t.deps.Home, id, pendingDelegation); err != nil {
+			slog.Error("sysagent: update_workspace: delegation save failed after workspace write", "workspace_id", id, "error", err)
+			actual, readErr := workspacepkg.ReadStateLocked(t.deps.Home, id)
+			if readErr != nil {
+				slog.Error("sysagent: update_workspace: failed to read partial state", "workspace_id", id, "error", readErr)
+				return workspaceMutationError(id, "save_delegation", "partial", "", workspaceChangedFields(state.Workspace, w), map[string]any{"exists": true, "state_read_failed": true})
+			}
+			return workspaceMutationError(id, "save_delegation", "partial", actual.Revision, workspaceChangedFields(state.Workspace, actual.Workspace), workspaceActualState(actual))
 		}
 	}
 	tc := computeWorkspaceTaskCount(t.deps.Home, id)
