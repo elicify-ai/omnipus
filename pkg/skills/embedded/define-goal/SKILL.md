@@ -14,10 +14,11 @@ A well-formed goal has **three parts**, authored together:
 3. **Definition of Done (DoD)** — the standing quality gates that apply *on top of*
    the criteria.
 
-Load this skill before you author a goal or its criteria anywhere: `create_task`,
-`create_plan`, `create_task_in_workspace`, `plan_correct` tail members, or a goal you
-are compiling. What you write here is exactly what the Judge will later hold the work
-to, and what the setter is asked to confirm — write it for those readers.
+Load this skill before you author a goal or its criteria anywhere: before `tool:create_task`
+or a goal you are compiling, branch:jim before `tool:create_plan`, and
+branch:plansupervisor before `tool:plan_correct` tail members. What you write here is
+exactly what the Judge will later hold the work to, and what the setter is asked to
+confirm — write it for those readers.
 
 ## Part 1 — The goal statement
 
@@ -132,8 +133,8 @@ guess is worse than a short delay, because "done" then means something the sette
 never asked for.
 
 - **Who to ask:** the goal-setter. A person in chat → ask them in the conversation
-  (use the `AskUserQuestion` card when available). Delegated work → the setter is the
-  delegating agent → ask via `message_parent`.
+  (use the `tool:AskUserQuestion` card when available). Delegated work → the setter is the
+  delegating agent → ask via `tool:message_parent`.
 - **How to ask:** at most a few sharp questions that distinguish the readings you
   actually have. Name the interpretations; never an open-ended "what do you want?".
 - **When not to ask:** if the ambiguity would not change the criteria, resolve it

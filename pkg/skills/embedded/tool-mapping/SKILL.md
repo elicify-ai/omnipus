@@ -4,11 +4,11 @@ description: Inspect and change an agent's sparse tool-policy overrides without 
 ---
 # Tool Mapping
 ## Prerequisites
-Read the target with get_agent_tools and discover catalog names with ToolSearch.
+Read the target with `tool:get_agent_tools` and discover catalog names with `tool:ToolSearch`.
 ## Steps
 1. Compare effective policy, explicit override, and global ceiling.
 2. Propose exact set and remove operations; explain grants blocked by the ceiling.
-3. Confirm the combined proposal once, submit the revision returned by get_agent_tools, apply it, and read back effective runtime policy.
+3. Confirm the combined proposal once with the actual user — `tool:AskUserQuestion` directly, or `tool:message_parent` relay when delegated — then submit the revision returned by get_agent_tools, apply it, and read back effective runtime policy.
 ## Expected output
 Verified override changes with inherited entries left absent.
 ## Stop and handoff

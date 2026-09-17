@@ -4,12 +4,12 @@ description: Design and verify workspace delegation edges, modes, self-helper ru
 ---
 # Delegation Graph
 ## Prerequisites
-Read the workspace team and current graph with get_workspace.
+Read the workspace team and current graph with `tool:get_workspace`.
 ## Steps
 1. Build candidate edges only between valid members.
 2. Check modes and depth; self-edges are limited to Jim and General Purpose.
-3. Include additions and removals in one confirmed proposal.
-4. Apply with update_workspace using the revision from get_workspace and read back the usable graph.
+3. Include additions and removals in one proposal confirmed once with the actual user — `tool:AskUserQuestion` directly, or `tool:message_parent` relay when delegated.
+4. Apply with `tool:update_workspace` using the revision from `tool:get_workspace` and read back the usable graph.
 ## Expected output
 A valid graph matching the proposal.
 ## Stop and handoff
