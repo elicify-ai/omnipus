@@ -21,18 +21,25 @@
 #     cannot be added to an already-complex function; existing complexity is
 #     not a build-stopper.
 #
-# Complexity definition implemented (stated per the ruling that named gocyclo):
-# the upstream fzipp/gocyclo count — 1 + one for each `if`, `for` (including
-# `for ... range`), each individual `case` clause (not the `switch` itself;
-# `default:` counts as a case), each `select` comm-clause (`default:` counts),
-# and each `&&` and `||`. Counted over the whole body INCLUDING nested
-# function literals, so a closure's branches belong to the enclosing function.
-# `gocyclo` itself is not on PATH here and is not a dependency; the count is
-# computed by the embedded go/ast scanner below (same approach as
-# scripts/funlen and cmd/funstats in the split-bench). The scanner parses
-# every *.go file regardless of build tags, so tag-gated files (e.g.
-# pkg/channels/matrix under goolm) ARE counted — complexity is a property of
-# the source text, not of the tag set a particular build happened to use.
+# Complexity definition implemented: fzipp/gocyclo v0.6.0 (complexity.go),
+# which is what golangci-lint's gocyclo linter wraps. 1 + one for each
+# `if`, `for` (including `for ... range`), each individual `case` clause
+# (not the `switch` itself), each `select` comm-clause, and each `&&` / `||`.
+# `default:` on a switch or select is NOT counted — gocyclo's visitor skips
+# a CaseClause with List == nil and a CommClause with Comm == nil. A first
+# draft of this gate counted default and disagreed with gocyclo by 1 on
+# every function that has one (EditTool.execEmbed was 60 vs gocyclo's 59).
+# Counted over the whole FuncDecl INCLUDING nested function literals, so a
+# closure's branches belong to the enclosing function (gocyclo does the
+# same; it does not report nested FuncLits as their own rows).
+# `gocyclo` itself is not on PATH here and is not a dependency; the count
+# is computed by the embedded go/ast scanner below (same walk/skip/naming
+# as scripts/funlen). Dual-running gocyclo-if-present would let two
+# implementations disagree; one scanner, always, so CI and a laptop agree.
+# The scanner parses every *.go file regardless of build tags, so tag-gated
+# files (e.g. pkg/channels/matrix under goolm, *_linux.go on a Mac) ARE
+# counted — complexity is a property of the source text, not of the tag set
+# a particular build happened to use.
 #
 # Matching is by `file<TAB>qualified name`, never by line number, so a listed
 # function that moves within its file keeps its entry; a package-dir+name
@@ -70,9 +77,14 @@ if [ "${1:-}" = "--self-test" ]; then
     || { echo "$NAME: mktemp failed" >&2; exit 2; }
   trap 'rm -rf "$tmp"' EXIT
 
-  # One fixture file. Complexity is 1 + (number of ifs): ThirtyOne and
-  # ListedGrew and ListedExact each have 30 ifs (complexity 31); TwentyNine
-  # has 28 (complexity 29, below the gate's report limit).
+  # One fixture file. Complexity is 1 + (number of ifs) + (non-default cases):
+  # ThirtyOne / ListedGrew / ListedExact each have 30 ifs (complexity 31);
+  # TwentyNine has 28 (complexity 29, below the gate's report limit).
+  # CaseWarns has 28 ifs + one `case` (complexity 30, must WARN).
+  # DefaultSilent / SelectDefaultSilent have 28 ifs + a `default` on
+  # switch/select — gocyclo does NOT count default, so they must stay 29
+  # and silent. If a future edit starts counting default, these two start
+  # WARNing and this self-test fails.
   gen_ifs() { # $1 = how many ifs to emit
     local i
     for ((i = 0; i < $1; i++)); do
@@ -104,6 +116,27 @@ if [ "${1:-}" = "--self-test" ]; then
     echo "func ListedExact(x int) int {"
     printf '\ty := 0\n'
     gen_ifs 30
+    printf '\treturn y\n'
+    echo "}"
+    echo
+    echo "func CaseWarns(x int) int {"
+    printf '\ty := 0\n'
+    gen_ifs 28
+    printf '\tswitch x {\n\tcase 1:\n\t\ty++\n\t}\n'
+    printf '\treturn y\n'
+    echo "}"
+    echo
+    echo "func DefaultSilent(x int) int {"
+    printf '\ty := 0\n'
+    gen_ifs 28
+    printf '\tswitch x {\n\tdefault:\n\t\ty++\n\t}\n'
+    printf '\treturn y\n'
+    echo "}"
+    echo
+    echo "func SelectDefaultSilent(x int) int {"
+    printf '\ty := 0\n'
+    gen_ifs 28
+    printf '\tselect {\n\tdefault:\n\t\ty++\n\t}\n'
     printf '\treturn y\n'
     echo "}"
   } > "$tmp/repo/pkg/fixture/complex.go"
@@ -138,7 +171,21 @@ if [ "${1:-}" = "--self-test" ]; then
     sed 's/^/    /' "$tmp/run1.out" >&2
     exit 2
   fi
+  grep -q 'WARN pkg/fixture/complex.go:[0-9]* CaseWarns 30 >= 30' "$tmp/run1.out" \
+    || { echo "$NAME: SELF-TEST FAILED — no WARN line for CaseWarns (28 ifs + one case = 30)" >&2
+         sed 's/^/    /' "$tmp/run1.out" >&2; exit 2; }
+  if grep -q 'DefaultSilent' "$tmp/run1.out"; then
+    echo "$NAME: SELF-TEST FAILED — switch default must not bump 29 to 30 (gocyclo ignores default)" >&2
+    sed 's/^/    /' "$tmp/run1.out" >&2
+    exit 2
+  fi
+  if grep -q 'SelectDefaultSilent' "$tmp/run1.out"; then
+    echo "$NAME: SELF-TEST FAILED — select default must not bump 29 to 30 (gocyclo ignores default)" >&2
+    sed 's/^/    /' "$tmp/run1.out" >&2
+    exit 2
+  fi
   echo "  ok  self-test: unlisted 31 and pinned-at-31 WARN only; 29 is silent"
+  echo "  ok  self-test: a case counts (30 warns); switch/select default does not (stays 29)"
 
   # (2) MUST PASS: same fixture, budget re-pinned at the measured values —
   # over-30 functions everywhere, zero FAILs, exit 0. This is the advisory
@@ -159,7 +206,7 @@ if [ "${1:-}" = "--self-test" ]; then
     sed 's/^/    /' "$tmp/run2.out" >&2
     exit 2
   fi
-  grep -q '^listed: 2 functions; at or over 30: 3' "$tmp/run2.out" \
+  grep -q '^listed: 2 functions; at or over 30: 4' "$tmp/run2.out" \
     || { echo "$NAME: SELF-TEST FAILED — summary line wrong" >&2
          sed 's/^/    /' "$tmp/run2.out" >&2; exit 2; }
   echo "  ok  self-test: over-30 with nothing grown warns only (exit 0)"
@@ -198,13 +245,16 @@ cat > "$TMP/gocyclo_scan.go" <<'GOSCAN'
 // scripts/funlen's walk/skip/naming so the two gates agree on which functions
 // exist.
 //
-// Complexity (upstream fzipp/gocyclo definition): 1 + one for each ast.IfStmt,
-// ast.ForStmt (a `for ... range` is an ast.RangeStmt and counts equally — the
-// ruling's "for" covers both loop forms), ast.CaseClause (each individual
-// case, not the switch; `default:` is a CaseClause and counts), ast.CommClause
-// (each select comm-clause; `default:` counts), and each `&&` / `||` binary
-// operator. Counted over the whole body including nested function literals, so
-// a closure's branches belong to the enclosing function.
+// Complexity (fzipp/gocyclo v0.6.0 complexity.go): 1 + one for each ast.IfStmt,
+// ast.ForStmt (a `for ... range` is an ast.RangeStmt and counts equally),
+// ast.CaseClause with List != nil (each individual case, not the switch;
+// `default:` is a CaseClause with List == nil and is NOT counted),
+// ast.CommClause with Comm != nil (each select comm-clause; `default:` is
+// NOT counted), and each `&&` / `||` binary operator. Counted over the whole
+// FuncDecl including nested function literals, so a closure's branches belong
+// to the enclosing function. Matches gocyclo; does not report nested FuncLits
+// as their own rows (gocyclo only reports top-level FuncDecl and var-assigned
+// FuncLits — we report FuncDecl only, same as scripts/funlen).
 //
 // Output rows: complexity<TAB>file:line<TAB>qualified name<TAB>kind, sorted by
 // complexity descending then path. kind is "function" or "test" (a _test.go
@@ -323,14 +373,23 @@ func main() {
 	}
 }
 
-// cyclomatic is the fzipp/gocyclo count over fd's whole body, closures
-// included. See the file comment for the exact node/op list.
+// cyclomatic is the fzipp/gocyclo v0.6.0 count over the whole FuncDecl,
+// closures included. Default switch/select clauses are skipped, matching
+// complexity.go's `if n.List != nil` / `if n.Comm != nil` guards.
 func cyclomatic(fd *ast.FuncDecl) int {
 	c := 1
-	ast.Inspect(fd.Body, func(n ast.Node) bool {
+	ast.Inspect(fd, func(n ast.Node) bool {
 		switch x := n.(type) {
-		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt, *ast.CaseClause, *ast.CommClause:
+		case *ast.IfStmt, *ast.ForStmt, *ast.RangeStmt:
 			c++
+		case *ast.CaseClause:
+			if x.List != nil {
+				c++
+			}
+		case *ast.CommClause:
+			if x.Comm != nil {
+				c++
+			}
 		case *ast.BinaryExpr:
 			if x.Op == token.LAND || x.Op == token.LOR {
 				c++
