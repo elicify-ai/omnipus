@@ -1,6 +1,6 @@
 # Omnipus Design System — Migration Plan
 
-**Status:** Delivery plan for the target-state constitution, amended 2026-09-17 after the founder ruling that small bounded visual changes are in scope for the big-bang.
+**Status:** Delivery plan for the target-state constitution, amended 2026-09-17. Small bounded visual changes are in scope. **The founder judges “no redesign” by eye — there is no screenshot suite and no photo baseline.**
 
 **Target state:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/docs/internal/design/design-system-definition.md`
 
@@ -12,13 +12,39 @@ The SPA moves to the complete design system in one dedicated program. Product-wi
 
 Green lint alone is insufficient. The program must preserve intended behavior, reach the actual route inventory, and pass visual, interaction, accessibility, and bundle checks.
 
-The current rendered application is the accepted visual baseline. Every work package declares its visual delta as Invisible, Normalization, or Redesign Risk under the target state's governing requirement. Appearance differences outside the approved declared deltas fail the program gate. A difference being explained and reviewed is not approval; approval must be explicit and recorded before implementation.
+The current rendered application is the accepted visual baseline. Every work package declares its visual delta as Invisible, Normalization, or Redesign Risk. The approved normalizations (12px floor, status-colour unification, 4px / 8px spacing snap) are required work. Anything outside that table is Redesign Risk and stays out unless the founder approves it.
 
-The definition's **Approved normalizations for this program** table is the explicit approval for this cutover. Those small unifications — including the 12px type floor, status-colour unification, and the 4px / 8px spacing snap — are required work, not optional polish and not a redesign. Anything outside that table still fails the gate.
+**Visual continuity is founder-judged.** Do not photograph the app as a start gate, and do not run a screenshot regression suite as a completion gate. Encode the rules, enforce them in CI, then repair what does not comply. The founder looks at the running app and says whether it still looks like Omnipus.
 
 The definition's **E1** locks are part of the deliverable, not a later cleanup. A change that invents a colour, a sub-12px label, a homemade button, a one-off gap, or a second status palette must fail CI once that lock is enabled. Each lock ships with a seeded fixture that proves it can fail.
 
+## 1a. Sequence (how we actually work)
+
+The rulebook is already written. This program is: encode it, lock it, repair what does not follow.
+
+| Order | Work | Done when |
+|---|---|---|
+| Already done | Rulebook (definition) | Colours, 12px floor, 8px spacing, status map, homemade-button rule |
+| **A. Encode** | Put that into tokens and the shared parts | Typed tokens exist; D3 hex table is the source; Button/Field/Dialog/empty/error contracts exist |
+| **B. Enforce** | CI fails a new one-off | Seeded fixtures prove each lock can fail: colour, sub-12px text, off-grid gap, raw `<button>` / confirm / switch |
+| **C. Repair** | Change existing code until it complies | Exception ledger empty; 12px / 8px / D4 status / no raw controls in feature code |
+| **D. You look** | Running app | You say it still looks like Omnipus. No photo suite |
+
+### Repair batches (C), in this order
+
+| Batch | Fix | Why this order |
+|---|---|---|
+| C1 | Tokens, 12px floor, 8px spacing, status colours | Everything else sits on this |
+| C2 | Raw buttons, dialogs, confirms, switches | Destination parts must exist first |
+| C3 | Sheets, forms, overlays | Needs Field / Dialog / Confirm |
+| C4 | Empty, error, loading, save, long-running | Needs the composites |
+| C5 | Domain widgets out of `ui/`; public export map | After callers use the official parts |
+| C6 | Turn every lock on repo-wide; empty the exception list | Cutover |
+
+Usability work (empty Board, Library, pickers, task panel, Knowledge) is **not** this program. It starts after C6.
+
 ## 2. Baseline before work starts
+
 
 Capture a reproducible baseline and distinguish measured facts from review hypotheses.
 
@@ -29,7 +55,6 @@ Capture a reproducible baseline and distinguish measured facts from review hypot
 | Token debt | Undefined tokens, forbidden edges, raw colors, arbitrary type/spacing/motion values, approved exceptions |
 | Pattern debt | Raw buttons/dialogs/confirms/switches; duplicate empty/error/skeleton/save/confirm/sheet patterns; low-level imports |
 | Accessibility | Axe, keyboard flows, 200% zoom, 320px reflow, forced colors, reduced motion, representative screen-reader findings |
-| Visual evidence | Stable screenshots for representative routes, states, overlays, dense tables, forms, long-running work |
 | Delivery footprint | Production and embedded SPA asset sizes, dependency graph, build time, install/CI impact |
 
 Known audit facts include 317 non-test TSX files potentially affected, 666 arbitrary text-size classes with 616 below 12px, 98 raw-button files without a `Button` import plus 38 mixed-use files, 352 inline-style occurrences across 77 files including legitimate dynamic values, and four confirmation mechanisms. Recount with finalized exclusions before using any number as a completion baseline.
@@ -52,7 +77,7 @@ Deliver:
 - generated typed tokens for TypeScript;
 - PostCSS/Stylelint graph parsing, AST-aware color checks, and seeded self-tests.
 
-**Exit gate.** No token cycles, undefined references, or forbidden edges; typed output matches CSS; status contracts pass contrast/distinction checks; browser tests pass at root minimum/default/maximum, 200% zoom, and 320px. Token work reproduces current computed values except for the approved normalizations, proven by before/after computed-style comparison across the reference screen set. Spacing steps on that set must be on the 4px / 8px scale; leftover 7 / 14 / 21px default-root values fail the gate. Calendar, board, list, and graph status chrome use the D4 hexes; a second palette fails the gate. E1 colour, type-floor, and spacing locks are on, with seeded fixtures.
+**Exit gate.** No token cycles, undefined references, or forbidden edges; typed output matches CSS; status contracts pass contrast/distinction checks; browser tests pass at root minimum/default/maximum, 200% zoom, and 320px. Spacing on the 4px / 8px scale; leftover 7 / 14 / 21px default-root application gaps fail the gate. Calendar, board, list, and graph status chrome use the D4 hexes; a second palette fails the gate. E1 colour, type-floor, and spacing locks are on, with seeded fixtures. Founder looks at the running app for “still Omnipus.”
 
 ### Phase 2 — Primitive and composite contracts
 
@@ -66,7 +91,7 @@ Classify the catalog and move domain widgets out of the primitive namespace. Com
 - characterization tests for behaviors at risk during replacement;
 - the exists-vs-build catalog in D8 completed: new contracts (`IconButton`, `ConfirmDialog`, `Field`, `CollectionState`, `JobStatus`, shared `Skeleton`) green before any screen conversion.
 
-**Exit gate.** Each destination component passes its manifest, unit, axe, keyboard, interaction, pointer, reduced-motion, and applicable browser tests. Export tests keep domain widgets private. No source pattern is replaced before its destination contract is green. Each destination component also passes presentation-equivalence checks against what it replaces, with before/after screenshots from representative consumers and every difference matched to an approved declared delta. E1 raw-button / confirm / switch lock is on, with seeded fixtures.
+**Exit gate.** Each destination component passes its manifest, unit, axe, keyboard, interaction, pointer, reduced-motion, and applicable browser tests. Export tests keep domain widgets private. No source pattern is replaced before its destination contract is green. E1 raw-button / confirm / switch lock is on, with seeded fixtures. Founder judges that replacements still look like today’s controls.
 
 ### Phase 3 — Storybook as verification front door
 
@@ -95,7 +120,7 @@ Internal order:
 6. Route-by-route behavioral, visual, keyboard, and accessibility verification.
 7. Remove every temporary exception and enable all final gates repository-wide.
 
-**Final cutover gate.** The route inventory is verified, all completion metrics pass, the temporary ledger has zero open entries, and production build/bundle checks preserve the single-binary and no-runtime-dependency constraints. A full before/after screenshot sweep covers every route and inventoried major modal/tab state; every appearance difference matches the approved declared-delta list, and any unmatched difference fails cutover.
+**Final cutover gate.** The route inventory is verified, all completion metrics pass, the temporary ledger has zero open entries, and production build/bundle checks preserve the single-binary and no-runtime-dependency constraints. The founder signs off that the app still looks like Omnipus. No screenshot suite.
 
 ## 4. Big-bang risk controls
 
@@ -166,7 +191,7 @@ Every lint suppression and allow-list entry maps to a ledger ID. Expired entries
 | Axe | Detectable automated accessibility faults | Full WCAG or screen-reader usability |
 | Keyboard/browser tests | Focus, input, reflow, motion, pointer behavior | Every assistive technology |
 | Screen-reader checks | Representative spoken flow and naming | Exhaustive platform coverage |
-| Visual regression | Selected appearance is reviewed | Interaction correctness |
+| Founder look | Still Omnipus, including approved small deltas | Mechanical token correctness |
 | Production bundle audit | Storybook is absent and size delta known | Runtime behavior alone |
 
 ## 7. Completion metrics
@@ -189,7 +214,7 @@ The baseline records numerator, denominator, exclusions, command, and artifact f
 | Keyboard flows | 100% pass for the representative route/component matrix |
 | Zoom/reflow | 100% pass at 200% zoom and 320px without loss of content/function |
 | Forced colors/reduced motion | 100% of the specified matrix passes |
-| Visual regression | Zero appearance diffs outside approved declared deltas; every approved delta has before/after evidence. “Explained and reviewed” alone is not approval |
+| Visual continuity | Founder sign-off on the running app. No screenshot suite |
 | Storybook coverage | 100% of curated public exports have complete applicable manifests, stories, assertions |
 | Bundle delta | Zero Storybook modules in production; embedded delta measured, explained, within approved budget |
 | Temporary exceptions | Exactly zero open or blocked entries |
