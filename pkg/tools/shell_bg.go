@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
@@ -99,6 +100,9 @@ func (t *ExecTool) runBackground(
 		if err := sandbox.ApplyChildHardening(cmd, lim); err != nil {
 			return ErrorResult(fmt.Sprintf("sandbox hardening failed: %v", err))
 		}
+	}
+	if t.documentRuntime != nil {
+		cmd.Env = documentruntime.ChildEnvironment(cmd.Env, *t.documentRuntime)
 	}
 
 	stdoutReader, err := cmd.StdoutPipe()

@@ -53,6 +53,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
@@ -193,6 +194,18 @@ type ExecTool struct {
 	// in every production build; it exists so a test can make the sweep panic
 	// and prove the completion goroutine survives it.
 	backgroundSweepFn func(ctx context.Context, command, cwd, baseDir string, started time.Time, result *ToolResult) *ToolResult
+
+	documentRuntime *documentruntime.Layout
+	documentAdmin   bool
+}
+
+// SetDocumentRuntime makes the versioned document toolchain reachable from
+// this bash tool. The caller decides whether this agent is the setup-owning
+// Admin; all other agents receive read+execute access only.
+func (t *ExecTool) SetDocumentRuntime(layout documentruntime.Layout, admin bool) {
+	copy := layout
+	t.documentRuntime = &copy
+	t.documentAdmin = admin
 }
 
 // GodModeForTest exposes the resolved god-mode flag for white-box testing.
@@ -241,7 +254,7 @@ var (
 		regexp.MustCompile(`\brmdir\s+/s\b`),
 		// Match disk wiping commands (must be followed by space/args)
 		regexp.MustCompile(
-			`\b(format|mkfs|diskpart)\b\s`,
+			`(?:^|[;&|]\s*|sudo\s+)(format|mkfs|diskpart)\s`,
 		),
 		regexp.MustCompile(`\bdd\s+if=`),
 		// Block writes to block devices (all common naming schemes).
@@ -454,7 +467,8 @@ func (t *ExecTool) Description() string {
 		"need all of it. Commands are screened by a safety guard (deny patterns, a binary allowlist, and a " +
 		"path-use check) before they run — writing outside your workspace requires a mount first (see " +
 		"list_mounts / request_mount); a \"blocked by safety guard\" or \"blocked by exec allowlist\" error means " +
-		"the guard refused the command, not that it failed to run."
+		"the guard refused the command, not that it failed to run. Admin can publish a staged document " +
+		"runtime with the exact command `" + documentruntime.FinalizeCommand + "`."
 }
 
 func (t *ExecTool) Parameters() map[string]any {
@@ -588,6 +602,12 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 		return ErrorResult("command is required and must be a non-empty string")
 	}
 	command = strings.TrimSpace(command)
+	if command == documentruntime.FinalizeCommand {
+		if auditResult := t.emitAuditOrDeny(ctx, command, t.workingDir); auditResult != nil {
+			return auditResult
+		}
+		return t.finalizeDocumentRuntime()
+	}
 
 	runInBackground := getBoolArg(args, "run_in_background")
 	persistent := getBoolArg(args, "persistent")
@@ -681,6 +701,27 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 	started := time.Now()
 	result := t.runForeground(ctx, command, lim, timeoutSeconds)
 	return t.sweepAfterRun(ctx, command, cwd, baseDir, started, result)
+}
+
+func (t *ExecTool) finalizeDocumentRuntime() *ToolResult {
+	if t.documentRuntime == nil {
+		return ErrorResult("document runtime is not configured")
+	}
+	if !t.documentAdmin {
+		return ErrorResult("document runtime setup is restricted to Admin")
+	}
+	data, err := os.ReadFile(t.documentRuntime.Manifest)
+	if err != nil {
+		return ErrorResult(fmt.Sprintf("document runtime manifest unavailable: %v", err))
+	}
+	var manifest documentruntime.Manifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return ErrorResult(fmt.Sprintf("invalid document runtime manifest: %v", err))
+	}
+	if err := documentruntime.FinalizeAdminSetup(*t.documentRuntime, manifest); err != nil {
+		return ErrorResult(fmt.Sprintf("document runtime setup incomplete: %v", err))
+	}
+	return SilentResult(`{"ok":true,"component":"document_runtime","status":"ready"}`)
 }
 
 // sweepAfterRun runs the post-command escaping-symlink sweep (D-14, see
@@ -817,7 +858,12 @@ func (t *ExecTool) turnKernelPolicy(ctx context.Context) (*sandbox.SandboxPolicy
 	if err != nil {
 		return nil, fmt.Errorf("resolve turn filesystem policy: %w", err)
 	}
-	return sandbox.KernelPolicyForTurn(authored)
+	policy, err := sandbox.KernelPolicyForTurn(authored)
+	if err != nil || policy == nil || t.documentRuntime == nil {
+		return policy, err
+	}
+	augmented := documentruntime.ApplySandboxAccess(*policy, *t.documentRuntime, t.documentAdmin)
+	return &augmented, nil
 }
 
 // --- cwd resolution (FR-B2/FR-B13) -----------------------------------------
@@ -974,7 +1020,11 @@ func (t *ExecTool) runForeground(
 		return t.runUnconstrained(ctx, argv, lim.WorkspaceDir, timeoutSeconds)
 	}
 
-	res, err := sandbox.Run(ctx, argv, nil, lim)
+	var env []string
+	if t.documentRuntime != nil {
+		env = documentruntime.ChildEnvironment(nil, *t.documentRuntime)
+	}
+	res, err := sandbox.Run(ctx, argv, env, lim)
 	if err != nil {
 		return ErrorResult(fmt.Sprintf("sandbox.Run failed: %v", err))
 	}
@@ -1072,6 +1122,9 @@ func (t *ExecTool) runUnconstrained(
 		cmd.Dir = cwdPath
 	}
 	cmd.Env = scrubbedEnv(os.Environ())
+	if t.documentRuntime != nil {
+		cmd.Env = documentruntime.ChildEnvironment(cmd.Env, *t.documentRuntime)
+	}
 
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf

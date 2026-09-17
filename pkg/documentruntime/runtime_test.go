@@ -1,0 +1,116 @@
+package documentruntime
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"os"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/sandbox"
+)
+
+func TestResolveLayoutVersionedAbsolutePrefix(t *testing.T) {
+	root := t.TempDir()
+	got, err := ResolveLayout(root, ManifestRevision, "mia")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(root, "toolchains", "documents", ManifestRevision)
+	if got.Prefix != want || !filepath.IsAbs(got.Manifest) || !strings.HasSuffix(got.Cache, filepath.Join("documents", "mia")) {
+		t.Fatalf("layout=%+v want prefix %s", got, want)
+	}
+	for _, bad := range []struct{ root, rev, id string }{{"relative", ManifestRevision, "mia"}, {root, "latest", "mia"}, {root, ManifestRevision, "../mia"}} {
+		if _, err := ResolveLayout(bad.root, bad.rev, bad.id); err == nil {
+			t.Fatalf("accepted %+v", bad)
+		}
+	}
+}
+
+func TestChildEnvironmentPrependsRuntimeAndDropsSecrets(t *testing.T) {
+	l, _ := ResolveLayout(t.TempDir(), ManifestRevision, "gp")
+	got := ChildEnvironment([]string{"PATH=/usr/bin", "LANG=en_US.UTF-8", "OPENAI_API_KEY=secret", "OMNIPUS_MASTER_KEY=master"}, l)
+	joined := strings.Join(got, "\n")
+	if !strings.Contains(joined, "PATH="+l.Bin+string(os.PathListSeparator)+"/usr/bin") || !strings.Contains(joined, "PYTHONPATH="+filepath.Join(l.Lib, "python")) || strings.Contains(joined, "secret") || strings.Contains(joined, "master") {
+		t.Fatalf("environment=%v", got)
+	}
+}
+
+func TestInstallProbeSkillsAssetsAndSandboxRoles(t *testing.T) {
+	l, _ := ResolveLayout(t.TempDir(), ManifestRevision, "mia")
+	assetPath := filepath.Join(l.Prefix, "assets", "fixture.txt")
+	if err := os.MkdirAll(filepath.Dir(assetPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(assetPath, []byte("fixture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("fixture"))
+	if err := os.MkdirAll(l.Bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"python", "node", "soffice"} {
+		if err := os.WriteFile(filepath.Join(l.Bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest := Manifest{Revision: ManifestRevision, Python: filepath.Join(l.Bin, "python"), Node: filepath.Join(l.Bin, "node"), Converter: filepath.Join(l.Bin, "soffice"), PythonRequirements: []Requirement{{Import: "docx", Version: "1.2.0"}}, Assets: []Asset{{Path: "assets/fixture.txt", SHA256: hex.EncodeToString(sum[:])}}}
+	if err := FinalizeAdminSetup(l, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyAssets(l.Prefix, manifest.Assets); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range DocumentSkillIDs {
+		for _, rel := range []string{"SKILL.md", "LICENSE"} {
+			if _, err := os.Stat(filepath.Join(l.Skills, id, rel)); err != nil {
+				t.Fatalf("%s/%s: %v", id, rel, err)
+			}
+		}
+	}
+	base := sandbox.SandboxPolicy{FilesystemRules: []sandbox.PathRule{{Path: filepath.Dir(filepath.Dir(l.Prefix)), Access: sandbox.AccessRead | sandbox.AccessWrite}}}
+	worker := ApplySandboxAccess(base, l, false)
+	admin := ApplySandboxAccess(base, l, true)
+	if worker.FilesystemRules[0].Access&sandbox.AccessWrite != 0 || worker.FilesystemRules[1].Access&sandbox.AccessWrite != 0 || admin.FilesystemRules[1].Access&sandbox.AccessWrite == 0 || worker.FilesystemRules[2].Access&sandbox.AccessExecute != 0 {
+		t.Fatalf("worker=%v admin=%v", worker.FilesystemRules, admin.FilesystemRules)
+	}
+	if reflect.DeepEqual(worker.FilesystemRules, admin.FilesystemRules) {
+		t.Fatal("admin and worker access unexpectedly identical")
+	}
+	if err := os.WriteFile(assetPath, []byte("mutated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyAssets(l.Prefix, manifest.Assets); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("mismatch err=%v", err)
+	}
+	outside := filepath.Join(t.TempDir(), "python")
+	if err := os.WriteFile(outside, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	manifest.Python = outside
+	if err := FinalizeAdminSetup(l, manifest); err == nil || !strings.Contains(err.Error(), "outside versioned prefix") {
+		t.Fatalf("outside executable err=%v", err)
+	}
+}
+
+func TestProvisionFirstPartyIsProbeableBeforeAdminDependencies(t *testing.T) {
+	layout, _ := ResolveLayout(t.TempDir(), ManifestRevision, "mia")
+	manifest, err := ProvisionFirstParty(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Assets) < 20 {
+		t.Fatalf("assets=%d, want packaged helpers and knowledge", len(manifest.Assets))
+	}
+	if _, err := os.Stat(filepath.Join(layout.Lib, "python", "omnipus_document_probe", "__main__.py")); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyAssets(layout.Prefix, manifest.Assets); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinalizeAdminSetup(layout, manifest); err == nil || !strings.Contains(err.Error(), "resolve document python") {
+		t.Fatalf("missing dependency err=%v", err)
+	}
+}
