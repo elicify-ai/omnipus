@@ -416,8 +416,16 @@ func buildDelegationDenyChecker(
 			if selfAssignmentExempt {
 				return nil
 			}
-			// For the delegate tool (exempt=false) self-delegation IS delegation
-			// and is ALWAYS denied. Deny directly (defense-in-depth) instead of
+			// Jim and General Purpose may fork bounded helpers only through the
+			// same explicit workspace edge, mode and depth checks as other targets.
+			if workspace.PermittedSelfDelegationID(currentAgentID) {
+				edge, denial := findDelegationEdge(ctx, currentAgentID, targetAgentID, mode, agentExists...)
+				if denial != nil {
+					return denial
+				}
+				return enforceEdgeModeAndDepth(ctx, edge, currentAgentID, targetAgentID, mode, globalDepthCap)
+			}
+			// Every other identity remains denied. Deny directly instead of
 			// falling through to findDelegationEdge and relying on the graph's
 			// self-edge prohibition (DelegationEdge.Validate) as the sole guard. A
 			// distinct reason + log distinguishes this caught self-delegation

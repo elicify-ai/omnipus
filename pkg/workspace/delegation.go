@@ -162,7 +162,7 @@ func (e *DelegationEdge) UnmarshalJSON(data []byte) error {
 //
 // Invariants enforced (fail-closed: any violation is a hard error):
 //   - from_agent and to_agent are both non-empty (after trimming)
-//   - from_agent != to_agent (no self-edge)
+//   - self-edges are limited to the built-in Jim and General Purpose identities
 //   - both endpoints are members of team (the workspace team set — core_team ∪
 //     existing-edge endpoints). A nil team treats EVERY endpoint as off-team
 //     (deny-by-default): callers MUST pass the real team set.
@@ -182,7 +182,7 @@ func (e DelegationEdge) Validate(team map[string]bool, ceiling int) error {
 	if from == "" || to == "" {
 		return errors.New("delegation edge from_agent and to_agent must not be empty")
 	}
-	if from == to {
+	if from == to && !PermittedSelfDelegationID(from) {
 		return fmt.Errorf("delegation edge cannot be a self-edge (from_agent == to_agent: %s)", from)
 	}
 	if !team[from] {
@@ -205,6 +205,12 @@ func (e DelegationEdge) Validate(team map[string]bool, ceiling int) error {
 		}
 	}
 	return nil
+}
+
+// PermittedSelfDelegationID identifies the two stable built-ins that may fork
+// bounded helpers through an explicit workspace edge.
+func PermittedSelfDelegationID(id string) bool {
+	return id == "jim" || id == "worker"
 }
 
 // TeamSet computes the workspace team-membership set against which a delegation
@@ -340,7 +346,7 @@ func (e DelegationEdge) ValidateShape() error {
 	if from == "" || to == "" {
 		return errors.New("delegation edge from_agent and to_agent must not be empty")
 	}
-	if from == to {
+	if from == to && !PermittedSelfDelegationID(from) {
 		return fmt.Errorf("delegation edge cannot be a self-edge (from_agent == to_agent: %s)", from)
 	}
 	for _, m := range e.Modes {

@@ -147,6 +147,9 @@ func (t *WorkspaceCreateTool) Parameters() map[string]any {
 }
 
 func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	if err := ValidateConfigurationWriteContext(ctx); err != nil {
+		return tools.ErrorResult(errorJSON("CONFIGURATION_WRITE_DENIED", err.Error(), ""))
+	}
 	name, _ := args["name"].(string)
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
@@ -267,7 +270,10 @@ func (t *WorkspaceUpdateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *WorkspaceUpdateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	if err := ValidateConfigurationWriteContext(ctx); err != nil {
+		return tools.ErrorResult(errorJSON("CONFIGURATION_WRITE_DENIED", err.Error(), ""))
+	}
 	id, _ := args["id"].(string)
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
@@ -810,7 +816,10 @@ func (t *WorkspaceDeleteTool) Parameters() map[string]any {
 	}
 }
 
-func (t *WorkspaceDeleteTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	if err := ValidateConfigurationWriteContext(ctx); err != nil {
+		return tools.ErrorResult(errorJSON("CONFIGURATION_WRITE_DENIED", err.Error(), ""))
+	}
 	id, _ := args["id"].(string)
 	confirm, _ := args["confirm"].(bool)
 	if id == "" {

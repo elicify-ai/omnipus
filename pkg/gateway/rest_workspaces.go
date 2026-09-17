@@ -416,6 +416,36 @@ func workspaceToWire(home string, w storedWorkspace, taskCount int) gen.Workspac
 	// FR-5/FR-8.2: mounts, with each entry's status computed live (never
 	// stored — see mountsToWire's doc comment).
 	wire.Mounts = mountsToWire(home, w.ID)
+	if edges, ok := workspace.LoadDelegation(home, w.ID); ok {
+		if revision, err := workspace.RevisionForState(w, edges); err == nil {
+			wire.Revision = revision
+		}
+		if len(edges) > 0 {
+			delegation := make([]struct {
+				Depth     *int                            `json:"depth,omitempty"`
+				FromAgent string                          `json:"from_agent"`
+				Modes     *[]gen.WorkspaceDelegationModes `json:"modes,omitempty"`
+				ToAgent   string                          `json:"to_agent"`
+			}, 0, len(edges))
+			for _, edge := range edges {
+				modes := make([]gen.WorkspaceDelegationModes, len(edge.Modes))
+				for i, mode := range edge.Modes {
+					modes[i] = gen.WorkspaceDelegationModes(mode)
+				}
+				var modePtr *[]gen.WorkspaceDelegationModes
+				if len(modes) > 0 {
+					modePtr = &modes
+				}
+				delegation = append(delegation, struct {
+					Depth     *int                            `json:"depth,omitempty"`
+					FromAgent string                          `json:"from_agent"`
+					Modes     *[]gen.WorkspaceDelegationModes `json:"modes,omitempty"`
+					ToAgent   string                          `json:"to_agent"`
+				}{edge.Depth, edge.FromAgent, modePtr, edge.ToAgent})
+			}
+			wire.Delegation = &delegation
+		}
+	}
 	return wire
 }
 
@@ -866,6 +896,9 @@ type restAPIHandleWorkspacePut struct {
 	incomingMC              map[string]workspace.MemberConfig
 	mcPresent               bool
 	ws                      storedWorkspace
+	state                   workspace.State
+	delegation              []storedDelegationEdge
+	delegationChanged       bool
 	rollbackCreatedSessions func()
 	changed                 bool
 	coreTeamChanged         bool
@@ -916,6 +949,9 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	effectiveCoreTeam := rw.ws.CoreTeam
 	if rw.req.CoreTeam != nil {
 		effectiveCoreTeam = deduplicateStrings(*rw.req.CoreTeam)
+	}
+	if rw.prepareDelegation(effectiveCoreTeam) {
+		return
 	}
 
 	// FR-010/022: validate and eagerly-session incoming member_configs before
@@ -1122,11 +1158,20 @@ func (rw *restAPIHandleWorkspacePut) validateRequest() bool {
 
 // loadAndValidateTeam loads the locked workspace and validates newly introduced team members.
 func (rw *restAPIHandleWorkspacePut) loadAndValidateTeam() bool {
-	var ok bool
-	rw.ws, ok = rw.a.loadWorkspace(rw.w, rw.id)
-	if !ok {
+	state, err := workspace.CheckRevisionLocked(rw.a.homePath, rw.id, rw.req.Revision)
+	if err != nil {
+		switch {
+		case errors.Is(err, workspace.ErrInvalidRevision):
+			jsonErr(rw.w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, workspace.ErrRevisionConflict):
+			jsonErr(rw.w, http.StatusConflict, err.Error())
+		default:
+			jsonErr(rw.w, http.StatusNotFound, "workspace not found")
+		}
 		return true
 	}
+	rw.ws = state.Workspace
+	rw.state = state
 
 	// review r1 major M4/Gap #6 (ADR-054 D6 rule 1: "validate the delta, not
 	// the world"): reject an unregistered or System Agent id — but only
@@ -1163,6 +1208,57 @@ func (rw *restAPIHandleWorkspacePut) loadAndValidateTeam() bool {
 			return true
 		}
 	}
+	return false
+}
+
+func (rw *restAPIHandleWorkspacePut) prepareDelegation(team []string) bool {
+	candidateTeam := workspace.TeamSet(team, nil)
+	if rw.req.Delegation != nil {
+		wire := make([]gen.WorkspaceDelegationEdge, 0, len(*rw.req.Delegation))
+		for _, edge := range *rw.req.Delegation {
+			var modes *[]gen.WorkspaceDelegationEdgeModes
+			if edge.Modes != nil {
+				converted := make([]gen.WorkspaceDelegationEdgeModes, len(*edge.Modes))
+				for i, mode := range *edge.Modes {
+					converted[i] = gen.WorkspaceDelegationEdgeModes(mode)
+				}
+				modes = &converted
+			}
+			wire = append(wire, gen.WorkspaceDelegationEdge{FromAgent: edge.FromAgent, ToAgent: edge.ToAgent, Modes: modes, Depth: edge.Depth})
+		}
+		edges, message := buildWorkspaceDelegationEdges(wire, candidateTeam, delegationDepthCeiling(rw.a.agentLoop.GetConfig()))
+		if message != "" {
+			jsonErr(rw.w, http.StatusBadRequest, message)
+			return true
+		}
+		rw.delegation = edges
+	} else {
+		for _, edge := range rw.state.Delegation {
+			if candidateTeam[edge.FromAgent] && candidateTeam[edge.ToAgent] {
+				rw.delegation = append(rw.delegation, edge)
+			}
+		}
+		existingTeam := workspace.TeamSet(rw.state.Workspace.CoreTeam, nil)
+		seeded := seedEdgesForTeam(defaultWorkspaceDelegationEdges(rw.a.agentLoop.GetConfig()), team)
+		for _, edge := range seeded {
+			if existingTeam[edge.FromAgent] && existingTeam[edge.ToAgent] {
+				continue
+			}
+			duplicate := false
+			for _, current := range rw.delegation {
+				if current.FromAgent == edge.FromAgent && current.ToAgent == edge.ToAgent {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				rw.delegation = append(rw.delegation, edge)
+			}
+		}
+	}
+	rw.delegationChanged = !slices.EqualFunc(rw.state.Delegation, rw.delegation, func(a, b storedDelegationEdge) bool {
+		return a.FromAgent == b.FromAgent && a.ToAgent == b.ToAgent && slices.Equal(a.Modes, b.Modes) && ((a.Depth == nil && b.Depth == nil) || (a.Depth != nil && b.Depth != nil && *a.Depth == *b.Depth))
+	})
 	return false
 }
 
@@ -1273,7 +1369,7 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 // persistAndRespond persists a changed workspace, reconciles schedules, audits, and responds.
 func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 	// No-op: nothing changed — return current state without writing.
-	if !rw.changed {
+	if !rw.changed && !rw.delegationChanged {
 		jsonOK(rw.w, workspaceToWire(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id)))
 		return
 	}
@@ -1287,6 +1383,13 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 		rw.rollbackCreatedSessions()
 		jsonErr(rw.w, http.StatusInternalServerError, "internal server error")
 		return
+	}
+	if rw.delegationChanged {
+		if err := workspace.SaveDelegation(rw.a.homePath, rw.id, rw.delegation); err != nil {
+			slog.Error("rest: update workspace: delegation write", "id", rw.id, "error", err)
+			jsonErr(rw.w, http.StatusInternalServerError, "workspace saved but delegation graph could not be saved")
+			return
+		}
 	}
 
 	// FR-007: after persisting, reconcile cron schedules to reflect the new
@@ -1363,13 +1466,20 @@ func (rd *restAPIHandleWorkspaceDelete) removeRecord() bool {
 	// shard-colliding kickoff's WS readLoop for no correctness benefit.
 	unlock := workspace.LockID(rd.id)
 
-	// Verify the workspace exists before cascading.
-	var ok bool
-	rd.ws, ok = rd.a.loadWorkspace(rd.w, rd.id)
-	if !ok {
+	state, err := workspace.CheckRevisionLocked(rd.a.homePath, rd.id, rd.r.URL.Query().Get("revision"))
+	if err != nil {
 		unlock()
+		switch {
+		case errors.Is(err, workspace.ErrInvalidRevision):
+			jsonErr(rd.w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, workspace.ErrRevisionConflict):
+			jsonErr(rd.w, http.StatusConflict, err.Error())
+		default:
+			jsonErr(rd.w, http.StatusNotFound, "workspace not found")
+		}
 		return true
 	}
+	rd.ws = state.Workspace
 
 	// FR-1.9: no access gate — owner is attribution only.
 

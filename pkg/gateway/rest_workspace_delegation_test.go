@@ -129,8 +129,17 @@ func getDelegation(t *testing.T, api *restAPI, id string) *httptest.ResponseReco
 
 func putDelegation(t *testing.T, api *restAPI, id, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(body), &payload))
+	revision := strings.Repeat("0", 64)
+	if state, err := workspace.ReadState(api.homePath, id); err == nil {
+		revision = state.Revision
+	}
+	payload["revision"] = revision
+	bodyBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+id+"/delegation", strings.NewReader(body))
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+id+"/delegation", strings.NewReader(string(bodyBytes)))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleWorkspaces(w, r)
 	return w
@@ -196,7 +205,7 @@ func TestWorkspaceDelegation_PutUnknownAgent_400(t *testing.T) {
 
 func TestWorkspaceDelegation_PutSelfEdge_400(t *testing.T) {
 	api, id := buildWorkspaceDelegationTestAPI(t)
-	w := putDelegation(t, api, id, `{"edges":[{"from_agent":"jim","to_agent":"jim"}]}`)
+	w := putDelegation(t, api, id, `{"edges":[{"from_agent":"ava","to_agent":"ava"}]}`)
 	assert.Equal(t, http.StatusBadRequest, w.Code, "body: %s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "self-edge")
 }
@@ -402,8 +411,8 @@ func TestDelegationEdgeValidate_MatchesHandlerWireMessages(t *testing.T) {
 	const ceiling = 3
 
 	assert.EqualError(t,
-		storedDelegationEdge{FromAgent: "jim", ToAgent: "jim"}.Validate(team, ceiling),
-		"delegation edge cannot be a self-edge (from_agent == to_agent: jim)")
+		storedDelegationEdge{FromAgent: "ava", ToAgent: "ava"}.Validate(team, ceiling),
+		"delegation edge cannot be a self-edge (from_agent == to_agent: ava)")
 	assert.EqualError(t,
 		storedDelegationEdge{FromAgent: "jim", ToAgent: "ghost"}.Validate(team, ceiling),
 		"delegation edge to_agent ghost is not a member of the workspace team")
