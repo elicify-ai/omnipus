@@ -51,6 +51,7 @@ import { queryClient } from '@/lib/queryClient'
 import type { Agent } from '@/lib/api'
 import type {
   BrowserInputFrame,
+  BrowserStatusFrame,
   BrowserVideoHealthFrame,
 } from '@/lib/api/generated/asyncapi-types'
 
@@ -808,6 +809,184 @@ export function BrowserLiveView({
   // immediately reverted the annotate-mode toggle the user just clicked,
   // making "Annotate" a silent no-op on the first click while driving.
 
+  // ── Connection-lifetime protocol handlers ────────────────────────────────
+  // Stable useCallbacks the WS lifecycle effect below registers on every
+  // (re)connection. Each reads live state through refs at CALL time and none
+  // captures the effect-local machine/inputMachine instances — which is
+  // exactly why they can live outside it: their behavior does not depend on
+  // anything per-connection. The handlers that DO reference those instances
+  // (onWebRTCState, onDisconnected, onWebRTCAnswer, the input-ack trio) stay
+  // inline in the effect, next to the machines they are wired to.
+
+  // Operator directive (JPEG-fallback removal) — WebRTC is the ONLY live-
+  // video path left; there is nothing to silently swap to any more. Every
+  // reason lands here, unconditionally: drops the stream, resets
+  // `videoReady` (a fresh attempt must decode its own first frame), and
+  // records `reason` as a persistent error
+  // (`webrtcError` → `displayError`/`webrtcErrorMessage` above) — never a
+  // toast that could auto-dismiss unnoticed. `console.warn` always fires
+  // too, for a support engineer reading the console. The machine itself
+  // keeps retrying automatically in the background (exponential backoff,
+  // up to its own retry budget — browserWebRTC.ts); the error UI's Retry
+  // button is for after that budget is exhausted, or for a manual nudge.
+  // Factored out (fix-wave, external review F1, 2026-08-13) so the SAME
+  // reset-and-report logic can also run from `onWebRTCState` below for the
+  // gap that callback covers on its own — see that handler's doc comment.
+  const applyWebrtcFailure = useCallback((reason: string, detail?: string) => {
+    // Logged as ONE argument when there is no gateway cause, not with a
+    // trailing empty string: a console line reading `failed: ice-failed ""`
+    // is noise, and the arity is what the sibling suites assert on.
+    if (detail === undefined) {
+      console.warn('[browser-live] WebRTC failed:', reason)
+    } else {
+      console.warn('[browser-live] WebRTC failed:', reason, detail)
+    }
+    releaseInputsRef.current()
+    captureRef.current.gate.bindStream(null)
+    refreshFrameGate()
+    setWebrtcStream(null)
+    setWebrtcHasAudio(false)
+    setVideoReady(false)
+    setWebrtcError(reason)
+    // Always written, never conditionally skipped: a fresh failure with no
+    // detail must CLEAR the previous one's, or the panel would attribute an
+    // old cause to a new failure.
+    setWebrtcErrorDetail(detail ?? null)
+  }, [refreshFrameGate])
+
+  // The video machine's onStream: adopt a negotiated MediaStream bound to
+  // the capture id/generation the gateway committed to (identity). Registered
+  // by the WS lifecycle effect below via machine.onStream(handleWebrtcStream).
+  const handleWebrtcStream = useCallback((stream: MediaStream, identity: BrowserPeerIdentity) => {
+    if (!identity) return
+    browserAttachedRef.current = true
+    if (captureRef.current.id !== identity.captureId && !acceptCapture(identity.captureId, identity.generation)) return
+    const current = captureRef.current
+    if (requiresFreshViewerRef.current && identity.generation !== current.generation) return
+    streamIdentityRef.current = identity
+    currentStreamRef.current = stream
+    if (freshViewerRef.current === `${identity.captureId}:${identity.generation}`) {
+      if (!current.gate.bindFreshViewer(stream, identity.generation)) return
+      // The demanded fresh viewer has arrived and been authorized for this
+      // boundary — the requirement is satisfied. Leaving the flag set kept
+      // every later recovered boundary (a new rtp_timestamp is enough)
+      // rebuilding the peer via requestFreshViewerRef: one rebuild per
+      // recovery event, forever, each cycle re-locking input and leaving a
+      // dead stream bound to the <video>. It re-arms on its own if a later
+      // bound stream genuinely cannot prove boundaries again.
+      requiresFreshViewerRef.current = false
+    } else {
+      current.gate.bindStream(stream)
+    }
+    captureViewerNeededRef.current = false
+    refreshFrameGate()
+    setWebrtcStream(stream)
+    setWebrtcError(null) // recovered
+    setWebrtcErrorDetail(null)
+  }, [acceptCapture, refreshFrameGate])
+
+  // The socket's onStatus — browser_status frames (lifecycle, error, and
+  // the control_only/operation_only broadcast variants). Registered by the
+  // WS lifecycle effect below as the connection's onStatus callback.
+  //
+  // Reviewer finding: a terminal browser_status{state:'error'} (e.g. a
+  // blocked `navigate`) used to overwrite statusState unconditionally —
+  // including while `controlling` — which flipped isControlling to
+  // false (URL bar/cursor vanish, Take-control reappears) even though
+  // the server never actually released control. `statusMessage` and
+  // `statusIsError` always update (the error must still surface), but
+  // `statusState` — the sole source of `isControlling` — is now only
+  // overwritten by TRUE lifecycle frames (attached/controlling/
+  // released/detached/idle); an error frame arriving while controlling
+  // leaves the prior 'controlling' state alone via the functional
+  // updater (correct even for two onStatus calls delivered in the same
+  // tick, since it reads the latest pending value, not a stale closure).
+  const handleWsStatus = useCallback((f: BrowserStatusFrame) => {
+    // ADR-040 D2: ANY status frame arriving means a full round-trip has
+    // completed on this connection, so a take that was in flight (either
+    // this one's or a stale one) has definitely been resolved one way or
+    // another by now — clear the in-flight guard unconditionally rather
+    // than only on the 'controlling' branch, so a REJECTED take (e.g. an
+    // error frame, or another viewer beat us to it) doesn't leave
+    // click-to-drive/Take-over permanently wedged. Also drops the
+    // optimistic "you're driving" chip (UAT A8) if the take was in fact
+    // rejected — see `visualDriveMode`'s doc comment.
+    setPendingTake(false)
+    // Reviewer finding F1: a `control_only` frame's SOLE purpose is to
+    // broadcast a control-ownership change (take/release/detach) to the
+    // OTHER viewers of this session — it carries no lifecycle/error
+    // meaning (see BrowserStatusFrame.control_only's doc comment). Two
+    // real bugs came from treating it like any other status frame: (a)
+    // it arrives as state:'idle' with no message, so unconditionally
+    // running the branches below WIPED a real, still-valid error banner
+    // shown on this viewer; (b) applying `controlled_by_other ?? false`
+    // to every frame meant a later tab-death/error frame (which omits
+    // controlled_by_other) would reset it to false and wrongly
+    // re-enable "Take control" while someone else was still driving.
+    // Apply ONLY the control-ownership axis here and stop.
+    if (f.control_only) {
+      setControlledByOther(f.controlled_by_other ?? false)
+      return
+    }
+    if (f.operation_only) {
+      if (Date.now() - inputFailureAtRef.current >= 3000) {
+        inputFailureAtRef.current = Date.now()
+        useUiStore.getState().addToast({
+          message: f.message ? translateBrowserErrorMessage(f.message) : 'The browser operation failed. Try again.',
+          variant: 'error',
+        })
+      }
+      return
+    }
+    if (f.state === 'attached') browserAttachedRef.current = true
+    if (f.state === 'detached') browserAttachedRef.current = false
+    // FE-7: only error-state messages get the raw-Go-string treatment —
+    // other states' messages (if ever present) are left alone.
+    setStatusMessage(f.state === 'error' && f.message ? translateBrowserErrorMessage(f.message) : f.message ?? null)
+    setStatusIsError(f.state === 'error')
+    setStatusState((prev) => (f.state === 'error' && prev === 'controlling' ? prev : f.state))
+    // FE-6: only overwrite `controlledByOther` when the server actually
+    // reported the field on THIS lifecycle/error frame — a frame that
+    // omits it (e.g. a tab-death/error frame) must not reset a
+    // still-true "someone else is driving" back to false.
+    if (f.controlled_by_other !== undefined) setControlledByOther(f.controlled_by_other)
+  }, [setPendingTake])
+
+  // The socket's onVideoHealth — the gateway's verdict on the SHARED capture
+  // feeding every viewer (Issue #674). Registered by the WS lifecycle effect
+  // below as the connection's onVideoHealth callback.
+  //
+  // Keep the last picture visible through capture recovery, but revoke
+  // input proof until the recovered boundary is actually presented. RTP
+  // metadata can prove a new generation on the existing peer; browsers
+  // without it require a fresh peer authorized for the committed boundary.
+  const handleVideoHealth = useCallback((f: BrowserVideoHealthFrame) => {
+    if (f.capture_id && f.capture_generation !== undefined) {
+      if (!acceptCapture(f.capture_id, f.capture_generation)) return
+      if (f.css_width !== undefined && f.css_height !== undefined) {
+        captureRef.current.css = { width: f.css_width, height: f.css_height }
+        setFrameGeometryReady(true)
+      }
+      if (f.state === 'transitioning') releaseInputsRef.current()
+      if (f.state === 'recovered' && f.rtp_timestamp !== undefined) {
+        if (captureRef.current.marker !== f.rtp_timestamp) freshViewerRef.current = null
+        captureRef.current.marker = f.rtp_timestamp
+        captureRef.current.gate.acceptBoundary({ generation: f.capture_generation, rtpTimestamp: f.rtp_timestamp })
+        if (requiresFreshViewerRef.current || captureViewerNeededRef.current || (streamIdentityRef.current && streamIdentityRef.current.captureId !== f.capture_id)) requestFreshViewerRef.current()
+      }
+      if (f.state === 'recovered' && inputFrameRequirementRef.current === null) inputFrameRequirementRef.current = { id: f.capture_id, generation: f.capture_generation }
+      refreshFrameGate()
+    }
+    if (f.state === 'lost' || f.state === 'recovering' || f.state === 'unrecoverable') {
+      releaseInputsRef.current()
+      captureRef.current.gate.suspend()
+      captureRef.current.marker = null
+      freshViewerRef.current = null
+      refreshFrameGate()
+    }
+    setVideoHealth(f.state === 'recovered' ? null : f)
+  }, [acceptCapture, refreshFrameGate])
+
   // The socket and media session share a lifetime. A new target or an
   // explicit attachment retry replaces both; socket reconnects reset media
   // negotiation through onDisconnected and the availability announcement.
@@ -851,68 +1030,7 @@ export function BrowserLiveView({
     inputFrameRequirementRef.current = undefined
     const machine = new BrowserWebRTCSession()
     webrtcRef.current = machine
-    machine.onStream((stream, identity) => {
-      if (!identity) return
-      browserAttachedRef.current = true
-      if (captureRef.current.id !== identity.captureId && !acceptCapture(identity.captureId, identity.generation)) return
-      const current = captureRef.current
-      if (requiresFreshViewerRef.current && identity.generation !== current.generation) return
-      streamIdentityRef.current = identity
-      currentStreamRef.current = stream
-      if (freshViewerRef.current === `${identity.captureId}:${identity.generation}`) {
-        if (!current.gate.bindFreshViewer(stream, identity.generation)) return
-        // The demanded fresh viewer has arrived and been authorized for this
-        // boundary — the requirement is satisfied. Leaving the flag set kept
-        // every later recovered boundary (a new rtp_timestamp is enough)
-        // rebuilding the peer via requestFreshViewerRef: one rebuild per
-        // recovery event, forever, each cycle re-locking input and leaving a
-        // dead stream bound to the <video>. It re-arms on its own if a later
-        // bound stream genuinely cannot prove boundaries again.
-        requiresFreshViewerRef.current = false
-      } else {
-        current.gate.bindStream(stream)
-      }
-      captureViewerNeededRef.current = false
-      refreshFrameGate()
-      setWebrtcStream(stream)
-      setWebrtcError(null) // recovered
-      setWebrtcErrorDetail(null)
-    })
-    // Operator directive (JPEG-fallback removal) — WebRTC is the ONLY live-
-    // video path left; there is nothing to silently swap to any more. Every
-    // reason lands here, unconditionally: drops the stream, resets
-    // `videoReady` (a fresh attempt must decode its own first frame), and
-    // records `reason` as a persistent error
-    // (`webrtcError` → `displayError`/`webrtcErrorMessage` above) — never a
-    // toast that could auto-dismiss unnoticed. `console.warn` always fires
-    // too, for a support engineer reading the console. The machine itself
-    // keeps retrying automatically in the background (exponential backoff,
-    // up to its own retry budget — browserWebRTC.ts); the error UI's Retry
-    // button is for after that budget is exhausted, or for a manual nudge.
-    // Factored out (fix-wave, external review F1, 2026-08-13) so the SAME
-    // reset-and-report logic can also run from `onWebRTCState` below for the
-    // gap that callback covers on its own — see that handler's doc comment.
-    const applyWebrtcFailure = (reason: string, detail?: string) => {
-      // Logged as ONE argument when there is no gateway cause, not with a
-      // trailing empty string: a console line reading `failed: ice-failed ""`
-      // is noise, and the arity is what the sibling suites assert on.
-      if (detail === undefined) {
-        console.warn('[browser-live] WebRTC failed:', reason)
-      } else {
-        console.warn('[browser-live] WebRTC failed:', reason, detail)
-      }
-      releaseInputsRef.current()
-      captureRef.current.gate.bindStream(null)
-      refreshFrameGate()
-      setWebrtcStream(null)
-      setWebrtcHasAudio(false)
-      setVideoReady(false)
-      setWebrtcError(reason)
-      // Always written, never conditionally skipped: a fresh failure with no
-      // detail must CLEAR the previous one's, or the panel would attribute an
-      // old cause to a new failure.
-      setWebrtcErrorDetail(detail ?? null)
-    }
+    machine.onStream(handleWebrtcStream)
     machine.onFallback(applyWebrtcFailure)
     requestFreshViewerRef.current = () => {
       const current = captureRef.current
@@ -945,68 +1063,7 @@ export function BrowserLiveView({
         activeTabIdentityRef.current = JSON.stringify([f.active_index, f.tabs[f.active_index]?.url])
         setTabState({ tabs: f.tabs, activeIndex: f.active_index })
       },
-      // Reviewer finding: a terminal browser_status{state:'error'} (e.g. a
-      // blocked `navigate`) used to overwrite statusState unconditionally —
-      // including while `controlling` — which flipped isControlling to
-      // false (URL bar/cursor vanish, Take-control reappears) even though
-      // the server never actually released control. `statusMessage` and
-      // `statusIsError` always update (the error must still surface), but
-      // `statusState` — the sole source of `isControlling` — is now only
-      // overwritten by TRUE lifecycle frames (attached/controlling/
-      // released/detached/idle); an error frame arriving while controlling
-      // leaves the prior 'controlling' state alone via the functional
-      // updater (correct even for two onStatus calls delivered in the same
-      // tick, since it reads the latest pending value, not a stale closure).
-      onStatus: (f) => {
-        // ADR-040 D2: ANY status frame arriving means a full round-trip has
-        // completed on this connection, so a take that was in flight (either
-        // this one's or a stale one) has definitely been resolved one way or
-        // another by now — clear the in-flight guard unconditionally rather
-        // than only on the 'controlling' branch, so a REJECTED take (e.g. an
-        // error frame, or another viewer beat us to it) doesn't leave
-        // click-to-drive/Take-over permanently wedged. Also drops the
-        // optimistic "you're driving" chip (UAT A8) if the take was in fact
-        // rejected — see `visualDriveMode`'s doc comment.
-        setPendingTake(false)
-        // Reviewer finding F1: a `control_only` frame's SOLE purpose is to
-        // broadcast a control-ownership change (take/release/detach) to the
-        // OTHER viewers of this session — it carries no lifecycle/error
-        // meaning (see BrowserStatusFrame.control_only's doc comment). Two
-        // real bugs came from treating it like any other status frame: (a)
-        // it arrives as state:'idle' with no message, so unconditionally
-        // running the branches below WIPED a real, still-valid error banner
-        // shown on this viewer; (b) applying `controlled_by_other ?? false`
-        // to every frame meant a later tab-death/error frame (which omits
-        // controlled_by_other) would reset it to false and wrongly
-        // re-enable "Take control" while someone else was still driving.
-        // Apply ONLY the control-ownership axis here and stop.
-        if (f.control_only) {
-          setControlledByOther(f.controlled_by_other ?? false)
-          return
-        }
-        if (f.operation_only) {
-          if (Date.now() - inputFailureAtRef.current >= 3000) {
-            inputFailureAtRef.current = Date.now()
-            useUiStore.getState().addToast({
-              message: f.message ? translateBrowserErrorMessage(f.message) : 'The browser operation failed. Try again.',
-              variant: 'error',
-            })
-          }
-          return
-        }
-        if (f.state === 'attached') browserAttachedRef.current = true
-        if (f.state === 'detached') browserAttachedRef.current = false
-        // FE-7: only error-state messages get the raw-Go-string treatment —
-        // other states' messages (if ever present) are left alone.
-        setStatusMessage(f.state === 'error' && f.message ? translateBrowserErrorMessage(f.message) : f.message ?? null)
-        setStatusIsError(f.state === 'error')
-        setStatusState((prev) => (f.state === 'error' && prev === 'controlling' ? prev : f.state))
-        // FE-6: only overwrite `controlledByOther` when the server actually
-        // reported the field on THIS lifecycle/error frame — a frame that
-        // omits it (e.g. a tab-death/error frame) must not reset a
-        // still-true "someone else is driving" back to false.
-        if (f.controlled_by_other !== undefined) setControlledByOther(f.controlled_by_other)
-      },
+      onStatus: handleWsStatus,
       // ADR-047 (WebRTC build) — the gateway's non-trickle SDP answer to the
       // offer this connection sent (via the machine's `start` callback
       // below). Feeding a stale/unexpected answer is harmless — `applyAnswer`
@@ -1082,36 +1139,7 @@ export function BrowserLiveView({
           applyWebrtcFailure(f.reason ?? 'unavailable', f.reason_detail)
         }
       },
-      // Keep the last picture visible through capture recovery, but revoke
-      // input proof until the recovered boundary is actually presented. RTP
-      // metadata can prove a new generation on the existing peer; browsers
-      // without it require a fresh peer authorized for the committed boundary.
-      onVideoHealth: (f) => {
-        if (f.capture_id && f.capture_generation !== undefined) {
-          if (!acceptCapture(f.capture_id, f.capture_generation)) return
-          if (f.css_width !== undefined && f.css_height !== undefined) {
-            captureRef.current.css = { width: f.css_width, height: f.css_height }
-            setFrameGeometryReady(true)
-          }
-          if (f.state === 'transitioning') releaseInputsRef.current()
-          if (f.state === 'recovered' && f.rtp_timestamp !== undefined) {
-            if (captureRef.current.marker !== f.rtp_timestamp) freshViewerRef.current = null
-            captureRef.current.marker = f.rtp_timestamp
-            captureRef.current.gate.acceptBoundary({ generation: f.capture_generation, rtpTimestamp: f.rtp_timestamp })
-            if (requiresFreshViewerRef.current || captureViewerNeededRef.current || (streamIdentityRef.current && streamIdentityRef.current.captureId !== f.capture_id)) requestFreshViewerRef.current()
-          }
-          if (f.state === 'recovered' && inputFrameRequirementRef.current === null) inputFrameRequirementRef.current = { id: f.capture_id, generation: f.capture_generation }
-          refreshFrameGate()
-        }
-        if (f.state === 'lost' || f.state === 'recovering' || f.state === 'unrecoverable') {
-          releaseInputsRef.current()
-          captureRef.current.gate.suspend()
-          captureRef.current.marker = null
-          freshViewerRef.current = null
-          refreshFrameGate()
-        }
-        setVideoHealth(f.state === 'recovered' ? null : f)
-      },
+      onVideoHealth: handleVideoHealth,
       onError: (message) => setConnError(message),
       onConnected: () => {
         setConnected(true)
@@ -1183,7 +1211,17 @@ export function BrowserLiveView({
       requestFreshViewerRef.current = () => {}
       if (framePresentationTimerRef.current !== null) clearTimeout(framePresentationTimerRef.current)
     }
-  }, [sessionId, agentId, connectionAttempt, acceptCapture, refreshFrameGate])
+  }, [
+    sessionId,
+    agentId,
+    connectionAttempt,
+    acceptCapture,
+    refreshFrameGate,
+    handleWebrtcStream,
+    applyWebrtcFailure,
+    handleWsStatus,
+    handleVideoHealth,
+  ])
 
   // ── Bind the <video> sink's srcObject imperatively. React has no
   // `srcObject` JSX prop (it's a DOM property, not an attribute) — this is
