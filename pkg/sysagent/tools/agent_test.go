@@ -380,7 +380,7 @@ func TestAgentDelete_RefusesLockedAgent(t *testing.T) {
 		t.Errorf("expected error code AGENT_LOCKED, got %v", errBlock["code"])
 	}
 	msg, _ := errBlock["message"].(string)
-	if !strings.Contains(msg, "locked core agent") {
+	if !strings.Contains(msg, "locked seeded agent") {
 		t.Errorf("expected message naming the locked-core-agent rejection, got %q", msg)
 	}
 	// The agent must still exist — the locked check must run BEFORE delete.

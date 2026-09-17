@@ -164,11 +164,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model (e.g. 'openrouter'). Pins model resolution to this provider instead of inferring one from the slug.",
 			},
-			"model_fallbacks": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": "Fallback model slugs tried in order if primary fails",
-			},
+			"fallback_models": fallbackModelsParameters(),
 			"heartbeat": map[string]any{
 				"type":        "string",
 				"description": "Proactive scheduling instructions (written to HEARTBEAT.md)",
@@ -331,12 +327,12 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 			},
 		}
 	}
-	// Optional: model fallbacks.
-	if fb, ok := ac.args["model_fallbacks"].([]any); ok && len(fb) > 0 {
-		for _, v := range fb {
-			if s, ok := v.(string); ok && s != "" {
-				ac.newAgent.Model.Fallbacks = append(ac.newAgent.Model.Fallbacks, s)
-			}
+	if _, retired := ac.args["model_fallbacks"]; retired {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "Use fallback_models with model/provider objects", "")), true
+	}
+	if raw, present := ac.args["fallback_models"]; present {
+		if err := applyFallbackModels(&ac.newAgent, raw); err != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "")), true
 		}
 	}
 	// Optional: explicit provider pin for the primary model (O3 two-field
@@ -550,7 +546,7 @@ func NewAgentUpdateTool(d *Deps) *AgentUpdateTool { return &AgentUpdateTool{deps
 func (t *AgentUpdateTool) Name() string           { return "update_agent" }
 func (t *AgentUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentUpdateTool) Description() string {
-	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Ava, Admin, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their tool policies, installed connector assignments, and skills are editable. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty string is ignored for name/description/color/icon, while an empty provider clears its pin. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type."
+	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Ava, Admin, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their tool policies, installed connector assignments, and skills are editable. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type."
 }
 
 func (t *AgentUpdateTool) Parameters() map[string]any {
@@ -566,7 +562,7 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"description": "New personality/instructions (overwrites SOUL.md)",
 			},
 			"model":           map[string]any{"type": "string", "description": "New primary model slug"},
-			"model_fallbacks": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"fallback_models": fallbackModelsParameters(),
 			"provider": map[string]any{
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model. Empty string clears an existing pin (falls back to default-provider resolution).",

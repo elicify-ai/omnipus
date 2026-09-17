@@ -142,18 +142,10 @@ func applyAgentToolArgs(a *config.AgentConfig, args map[string]any, known map[st
 		}
 		a.Model.Provider = strings.TrimSpace(v)
 	}
-	if raw, present := args["model_fallbacks"]; present {
-		vals, err := requiredStringArray(raw, "model_fallbacks")
-		if err != nil {
+	if raw, present := args["fallback_models"]; present {
+		if err := applyFallbackModels(a, raw); err != nil {
 			return err
 		}
-		if len(vals) > 2 {
-			return fmt.Errorf("model_fallbacks exceeds maxItems: 2")
-		}
-		if a.Model == nil {
-			a.Model = &config.AgentModelConfig{}
-		}
-		a.Model.Fallbacks = vals
 	}
 	if raw, present := args["skills"]; present {
 		vals, err := requiredStringArray(raw, "skills")

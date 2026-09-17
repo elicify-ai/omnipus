@@ -39,7 +39,7 @@ var hiddenProtected = map[string]struct{}{
 }
 var externalUnsupported = map[string]struct{}{
 	"soul": {}, "skills": {}, "mcp_servers": {}, "tools_cfg": {}, "tool_policy_changes": {}, "memory_enabled": {},
-	"voice": {}, "shell_policy": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {},
+	"voice": {}, "shell_policy": {}, "context_window_override": {}, "model_params": {}, "max_tool_iterations": {}, "fallback_models": {},
 }
 
 var ordinaryBuiltins = map[string]struct{}{

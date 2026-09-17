@@ -155,8 +155,8 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 //   - every from_agent / to_agent must be a member of the workspace team
 //     (core_team ∪ existing-edge endpoints) — an edge write may NOT silently
 //     expand the team with an off-team agent
-//   - self-edges (from_agent == to_agent) are rejected
-//   - the resulting graph must be acyclic (no A→B→A delegation cycle)
+//   - self-edges are allowed only for Jim and General Purpose (worker)
+//   - excluding those permitted self-edges, the graph must be acyclic
 //   - modes ⊆ {direct, task}
 //   - depth must be >= 0 and <= the global subturn depth ceiling
 //

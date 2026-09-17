@@ -53,7 +53,7 @@ func TestAgentCreateTool_NoOrphanedParameters(t *testing.T) {
 	consumedByExecute := map[string]bool{
 		"name": true, "description": true, "soul": true, "model": true,
 		"color": true, "icon": true, "agent_type": true, "cli": true,
-		"cli_path": true, "provider": true, "model_fallbacks": true,
+		"cli_path": true, "provider": true, "fallback_models": true,
 		"heartbeat": true, "max_tool_iterations": true,
 	}
 
@@ -97,7 +97,7 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 
 	consumedByExecute := map[string]bool{
 		"id": true, "revision": true, "name": true, "description": true, "soul": true,
-		"model": true, "model_fallbacks": true, "provider": true,
+		"model": true, "fallback_models": true, "provider": true,
 		"color": true, "icon": true, "skills": true, "mcp_servers": true,
 		"tool_policy_changes": true,
 		"max_tool_iterations": true,
