@@ -15,6 +15,20 @@ import (
 
 var ErrRevisionConflict = errors.New("skill revision conflict")
 
+type PublishOutcome struct {
+	Revision          string
+	PersistenceStatus string
+	ActivationStatus  string
+	ChangedFields     []string
+	Warning           string
+}
+
+var (
+	removeStaleBackup     = os.RemoveAll
+	removePublishedBackup = os.RemoveAll
+	renamePublishedSkill  = os.Rename
+)
+
 var skillMutationLocks sync.Map
 
 func mutationLock(root string) *sync.Mutex {
@@ -184,13 +198,13 @@ func (w *SkillWriter) RemoveSkillReviewed(name, expectedRevision string) error {
 // An empty expectedRevision is a create-only request; replacement requires the
 // exact current revision. The old directory is restored if final publication
 // fails after it has been moved aside.
-func PublishStagedSkill(root, name, stagedDir, expectedRevision string) (string, error) {
+func PublishStagedSkill(root, name, stagedDir, expectedRevision string) (PublishOutcome, error) {
 	w := NewSkillWriter(root)
 	target, err := w.resolveSkillDir(name)
 	if err != nil {
-		return "", err
+		return PublishOutcome{}, err
 	}
-	var next string
+	var outcome PublishOutcome
 	err = WithMutationLock(root, func() error {
 		current, currentErr := w.SkillRevision(name)
 		exists := currentErr == nil
@@ -206,28 +220,35 @@ func PublishStagedSkill(root, name, stagedDir, expectedRevision string) (string,
 		if err := os.MkdirAll(root, 0o755); err != nil {
 			return err
 		}
+		next, revisionErr := revisionForDir(stagedDir)
+		if revisionErr != nil {
+			return fmt.Errorf("verify staged skill: %w", revisionErr)
+		}
 		backup := target + ".replace-backup"
 		if exists {
-			if err := os.RemoveAll(backup); err != nil {
+			if err := removeStaleBackup(backup); err != nil {
 				return err
 			}
-			if err := os.Rename(target, backup); err != nil {
+			if err := renamePublishedSkill(target, backup); err != nil {
 				return fmt.Errorf("preserve previous skill: %w", err)
 			}
 		}
-		if err := os.Rename(stagedDir, target); err != nil {
+		if err := renamePublishedSkill(stagedDir, target); err != nil {
 			if exists {
-				_ = os.Rename(backup, target)
+				if restoreErr := renamePublishedSkill(backup, target); restoreErr != nil {
+					return errors.New("publish failed and previous package restore failed")
+				}
 			}
 			return fmt.Errorf("publish staged skill: %w", err)
 		}
 		if exists {
-			if err := os.RemoveAll(backup); err != nil {
-				return fmt.Errorf("skill published but previous package cleanup failed: %w", err)
+			if err := removePublishedBackup(backup); err != nil {
+				outcome = PublishOutcome{Revision: next, PersistenceStatus: "complete", ActivationStatus: "active", ChangedFields: []string{"installed"}, Warning: "previous package cleanup is incomplete"}
+				return nil
 			}
 		}
-		next, currentErr = w.SkillRevision(name)
-		return currentErr
+		outcome = PublishOutcome{Revision: next, PersistenceStatus: "complete", ActivationStatus: "active", ChangedFields: []string{"installed"}}
+		return nil
 	})
-	return next, err
+	return outcome, err
 }

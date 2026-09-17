@@ -20,6 +20,12 @@ import (
 
 // --- Skills ---
 
+var readListedSkillRevision = func(root, id string) (string, error) {
+	return skills.NewSkillWriter(root).SkillRevision(id)
+}
+
+var publishRESTSkill = skills.PublishStagedSkill
+
 // HandleSkills handles GET /api/v1/skills and POST sub-paths (search, install).
 func (a *restAPI) HandleSkills(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimSuffix(r.URL.Path, "/")
@@ -78,17 +84,13 @@ func (a *restAPI) listSkills(w http.ResponseWriter) {
 			Status:   gen.SkillStatusActive,
 			Verified: isBuiltin, // built-in skills are Omnipus-team-verified.
 		}
-		writer := skills.NewSkillWriter(filepath.Dir(filepath.Dir(s.Path)))
-		revision, revisionErr := writer.SkillRevision(id)
+		revision, revisionErr := readListedSkillRevision(filepath.Dir(filepath.Dir(s.Path)), id)
 		if revisionErr != nil {
 			slog.Warn("rest: compute skill revision", "skill", id, "error", revisionErr)
-			skill.Revision = "unavailable"
-			skill.Status = gen.SkillStatusError
-			stage := "read"
-			skill.ErrorStage = &stage
-		} else {
-			skill.Revision = revision
+			jsonErr(w, http.StatusInternalServerError, "could not read installed skill state")
+			return
 		}
+		skill.Revision = revision
 
 		// Version: SKILL.md frontmatter when present, else a neutral default.
 		if s.Version != "" {
@@ -493,12 +495,13 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 	if req.Revision != nil {
 		expected = strings.TrimSpace(*req.Revision)
 	}
-	revision, err := skills.PublishStagedSkill(skillsRoot, slug, stageDir, expected)
+	publish, err := publishRESTSkill(skillsRoot, slug, stageDir, expected)
 	if err != nil {
 		if errors.Is(err, skills.ErrRevisionConflict) {
 			jsonErr(w, http.StatusConflict, err.Error())
 		} else {
-			jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not publish skill: %v", err))
+			slog.Error("rest: publish skill", "skill", slug, "error", err)
+			jsonErr(w, http.StatusInternalServerError, "could not publish skill; inspect installed skill state before retrying")
 		}
 		return
 	}
@@ -514,14 +517,17 @@ func (a *restAPI) installSkill(w http.ResponseWriter, r *http.Request) {
 		Version:  installedVersion,
 		Status:   gen.SkillStatusActive,
 		Verified: result != nil && result.Verified,
-		Revision: revision,
+		Revision: publish.Revision,
 	}
-	persistence := gen.SkillPersistenceStatusComplete
-	activation := gen.SkillActivationStatusActive
-	changed := []string{"installed"}
+	persistence := gen.SkillPersistenceStatus(publish.PersistenceStatus)
+	activation := gen.SkillActivationStatus(publish.ActivationStatus)
+	changed := publish.ChangedFields
 	skill.PersistenceStatus = &persistence
 	skill.ActivationStatus = &activation
 	skill.ChangedFields = &changed
+	if publish.Warning != "" {
+		skill.Message = &publish.Warning
+	}
 	if result != nil && result.Summary != "" {
 		summary := result.Summary
 		skill.Description = &summary

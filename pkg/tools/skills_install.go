@@ -36,6 +36,8 @@ type InstallSkillTool struct {
 	mu              sync.Mutex
 }
 
+var publishInstalledSkill = skills.PublishStagedSkill
+
 // NewInstallSkillTool creates a new InstallSkillTool.
 // registryMgr is the shared registry manager (same instance as FindSkillsTool).
 // globalSkillsDir is the fixed, install-wide skills directory
@@ -306,12 +308,13 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 
 	// Everything above succeeded: only now do we touch the previous install
 	// (if any), and only to swap in the verified replacement.
-	nextRevision, err := skills.PublishStagedSkill(skillsDir, slug, stageDir, revision)
+	publish, err := publishInstalledSkill(skillsDir, slug, stageDir, revision)
 	if err != nil {
 		if errors.Is(err, skills.ErrRevisionConflict) {
 			return ErrorResult(fmt.Sprintf("CONFLICT: skill %q changed after review; read it again before replacing it", slug))
 		}
-		return ErrorResult(fmt.Sprintf("downloaded %q successfully but failed to publish it: %v", slug, err))
+		logger.ErrorCF("tool", "Failed to publish downloaded skill", map[string]any{"tool": t.Name(), "skill": slug, "error": err.Error()})
+		return ErrorResult(fmt.Sprintf("downloaded %q but could not publish it; read installed skill state before retrying", slug))
 	}
 
 	// Build result with moderation warning if suspicious.
@@ -326,16 +329,20 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 		output += fmt.Sprintf("Description: %s\n", result.Summary)
 	}
 	output += "\nThe skill is now available and can be loaded in the current session."
-	output += fmt.Sprintf("\nRevision: %s\nPersistence: complete\nActivation: active", nextRevision)
+	output += fmt.Sprintf("\nRevision: %s\nPersistence: %s\nActivation: %s", publish.Revision, publish.PersistenceStatus, publish.ActivationStatus)
+	if publish.Warning != "" {
+		output += "\nWarning: " + publish.Warning
+	}
 
 	payload, marshalErr := json.Marshal(map[string]any{
 		"success":            true,
 		"name":               slug,
-		"revision":           nextRevision,
-		"persistence_status": "complete",
-		"activation_status":  "active",
-		"changed_fields":     []string{"installed"},
+		"revision":           publish.Revision,
+		"persistence_status": publish.PersistenceStatus,
+		"activation_status":  publish.ActivationStatus,
+		"changed_fields":     publish.ChangedFields,
 		"message":            output,
+		"warning":            publish.Warning,
 	})
 	if marshalErr != nil {
 		return ErrorResult(fmt.Sprintf("installed skill but failed to encode mutation state: %v", marshalErr))

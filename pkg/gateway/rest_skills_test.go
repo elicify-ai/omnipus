@@ -5,6 +5,7 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -496,6 +497,32 @@ func TestInstallSkillSuccess(t *testing.T) {
 	assert.True(t, skill.Verified)
 }
 
+func TestInstallSkillReturnsSavedStateWhenBackupCleanupIsIncomplete(t *testing.T) {
+	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
+	api.skillRegistry = &fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0"}}
+	original := publishRESTSkill
+	publishRESTSkill = func(string, string, string, string) (skills.PublishOutcome, error) {
+		return skills.PublishOutcome{Revision: strings.Repeat("a", 64), PersistenceStatus: "complete", ActivationStatus: "active", ChangedFields: []string{"installed"}, Warning: "previous package cleanup is incomplete"}, nil
+	}
+	t.Cleanup(func() { publishRESTSkill = original })
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/skills/install", strings.NewReader(`{"slug":"cool-skill"}`))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var skill gen.Skill
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &skill))
+	require.Equal(t, strings.Repeat("a", 64), skill.Revision)
+	require.NotNil(t, skill.PersistenceStatus)
+	require.Equal(t, gen.SkillPersistenceStatusComplete, *skill.PersistenceStatus)
+	require.NotNil(t, skill.ActivationStatus)
+	require.Equal(t, gen.SkillActivationStatusActive, *skill.ActivationStatus)
+	require.NotNil(t, skill.Message)
+	require.Contains(t, *skill.Message, "cleanup is incomplete")
+}
+
 func TestInstallSkillFromAuthorizedMarkdownUpload(t *testing.T) {
 	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
 	uploadDir := filepath.Join(api.homePath, "uploads", "owner-session")
@@ -571,6 +598,26 @@ func TestListSkillsBuiltinEnriched(t *testing.T) {
 	assert.Equal(t, "Omnipus", *s.Author)
 
 	assert.Equal(t, "1.2.3", s.Version)
+}
+
+func TestListSkillsRevisionReadFailureReturnsVisibleErrorWithoutPlaceholder(t *testing.T) {
+	builtinDir := t.TempDir()
+	seedSkill(t, builtinDir, "daily-briefing",
+		"name: daily-briefing\ndescription: Summarize the day for the operator.",
+		"# daily-briefing\n")
+	api := newTestRestAPIWithSkillsDirs(t, builtinDir)
+	original := readListedSkillRevision
+	readListedSkillRevision = func(string, string) (string, error) { return "", errors.New("private disk detail") }
+	t.Cleanup(func() { readListedSkillRevision = original })
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "could not read installed skill state")
+	assert.NotContains(t, w.Body.String(), "unavailable")
+	assert.NotContains(t, w.Body.String(), "private disk detail")
 }
 
 // TestListSkillsVersionDefaultsWhenAbsent verifies a builtin skill without a

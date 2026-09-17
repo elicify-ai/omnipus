@@ -2,8 +2,10 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -130,4 +132,25 @@ func TestInstallSkillTool_ForceReinstallStillWorks(t *testing.T) {
 		_, statErr := os.Stat(filepath.Join(globalSkills, name, "SKILL.md"))
 		assert.NoError(t, statErr, "force reinstall must not touch the other skills (%q)", name)
 	}
+}
+
+func TestInstallSkillToolReportsSavedStateWhenBackupCleanupIsIncomplete(t *testing.T) {
+	globalSkills := t.TempDir()
+	registryMgr := skills.NewRegistryManager()
+	registryMgr.AddRegistry(fakeSkillRegistry{})
+	tool := NewInstallSkillTool(registryMgr, globalSkills)
+	original := publishInstalledSkill
+	publishInstalledSkill = func(string, string, string, string) (skills.PublishOutcome, error) {
+		return skills.PublishOutcome{Revision: strings.Repeat("b", 64), PersistenceStatus: "complete", ActivationStatus: "active", ChangedFields: []string{"installed"}, Warning: "previous package cleanup is incomplete"}, nil
+	}
+	t.Cleanup(func() { publishInstalledSkill = original })
+
+	result := tool.Execute(context.Background(), map[string]any{"slug": "new-skill", "registry": "fake"})
+	require.False(t, result.IsError, "result=%s", result.ForLLM)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(result.ForLLM), &payload))
+	require.Equal(t, strings.Repeat("b", 64), payload["revision"])
+	require.Equal(t, "complete", payload["persistence_status"])
+	require.Equal(t, "active", payload["activation_status"])
+	require.Contains(t, payload["warning"], "cleanup is incomplete")
 }

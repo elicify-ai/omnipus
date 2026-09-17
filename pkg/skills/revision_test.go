@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -127,10 +128,107 @@ func TestPublishStagedSkillRequiresExplicitCurrentRevisionAndPreservesAssets(t *
 		t.Fatalf("blind replacement changed asset: %q", got)
 	}
 	next, err := PublishStagedSkill(root, "package", makeStage("reviewed", "new"), reviewed)
-	if err != nil || next == reviewed {
+	if err != nil || next.Revision == reviewed {
 		t.Fatalf("next=%q err=%v", next, err)
 	}
 	if got, _ := os.ReadFile(asset); string(got) != "new" {
 		t.Fatalf("replacement lost staged asset: %q", got)
+	}
+}
+
+func TestPublishStagedSkillReportsSuccessfulPublishWhenBackupCleanupFails(t *testing.T) {
+	root := t.TempDir()
+	w := NewSkillWriter(root)
+	_, reviewed, err := w.CreateSkillReviewed("package", validFor("package"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := filepath.Join(root, ".staging", "replacement")
+	if err = os.MkdirAll(stage, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(stage, "SKILL.md"), []byte(validFor("package")+"\nreplacement\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalRemove := removePublishedBackup
+	removePublishedBackup = func(string) error { return errors.New("cleanup refused") }
+	t.Cleanup(func() { removePublishedBackup = originalRemove })
+
+	outcome, err := PublishStagedSkill(root, "package", stage, reviewed)
+	if err != nil {
+		t.Fatalf("published replacement reported as failed: %v", err)
+	}
+	if outcome.Revision == "" || outcome.Revision == reviewed || outcome.PersistenceStatus != "complete" || outcome.ActivationStatus != "active" {
+		t.Fatalf("outcome=%+v", outcome)
+	}
+	if outcome.Warning == "" || len(outcome.ChangedFields) != 1 || outcome.ChangedFields[0] != "installed" {
+		t.Fatalf("missing cleanup warning/state: %+v", outcome)
+	}
+	got, readErr := os.ReadFile(filepath.Join(root, "package", "SKILL.md"))
+	if readErr != nil || !strings.Contains(string(got), "replacement") {
+		t.Fatalf("published bytes missing: %q err=%v", got, readErr)
+	}
+}
+
+func TestPublishStagedSkillReportsFailedRestoreWithoutClaimingPublication(t *testing.T) {
+	root := t.TempDir()
+	w := NewSkillWriter(root)
+	_, reviewed, err := w.CreateSkillReviewed("package", validFor("package"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := filepath.Join(root, ".staging", "replacement")
+	if err = os.MkdirAll(stage, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(stage, "SKILL.md"), []byte(validFor("package")+"\nreplacement\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalRename := renamePublishedSkill
+	renames := 0
+	renamePublishedSkill = func(oldPath, newPath string) error {
+		renames++
+		if renames == 1 {
+			return os.Rename(oldPath, newPath)
+		}
+		return errors.New("rename refused")
+	}
+	t.Cleanup(func() { renamePublishedSkill = originalRename })
+
+	outcome, err := PublishStagedSkill(root, "package", stage, reviewed)
+	if err == nil || !strings.Contains(err.Error(), "restore failed") {
+		t.Fatalf("err=%v", err)
+	}
+	if outcome.Revision != "" || outcome.PersistenceStatus != "" || outcome.ActivationStatus != "" {
+		t.Fatalf("failed publication claimed saved state: %+v", outcome)
+	}
+}
+
+func TestPublishStagedSkillRejectsInvalidStageBeforeMovingPublishedSkill(t *testing.T) {
+	root := t.TempDir()
+	w := NewSkillWriter(root)
+	_, reviewed, err := w.CreateSkillReviewed("package", validFor("package"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(root, "package", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stage := filepath.Join(root, ".staging", "invalid")
+	if err = os.MkdirAll(stage, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	outcome, err := PublishStagedSkill(root, "package", stage, reviewed)
+	if err == nil || !strings.Contains(err.Error(), "verify staged skill") {
+		t.Fatalf("err=%v", err)
+	}
+	if outcome.Revision != "" {
+		t.Fatalf("invalid stage claimed revision: %+v", outcome)
+	}
+	after, readErr := os.ReadFile(filepath.Join(root, "package", "SKILL.md"))
+	if readErr != nil || string(after) != string(before) {
+		t.Fatalf("published skill changed: %q err=%v", after, readErr)
 	}
 }
