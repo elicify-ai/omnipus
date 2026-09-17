@@ -182,14 +182,32 @@ Checked in code: create already requires Title, Goal, at least one acceptance cr
 
 **Done when.** Opening a large vault shows folders without scrolling past every view. More than 10 views are grouped and searchable. A wide Decisions/CRM view reads in the Library pane. A `.base` file does not present 19 peer tabs.
 
----
+### 16. Knowledge search — keep the cap; add Show more
 
-## Parked — do not invent requirements yet
+**Context.** Search already says when it searched the whole index, and when a kind hit the page size it says “at most 20 per kind, so more may exist.” There is no button to see the rest. Tabs already split Notes, Records, Views, Attachments.
 
-| Topic | Why it is parked | Next step |
-|---|---|---|
-| Knowledge search “20 of 39” | Search already reports complete index coverage; continuation/pagination was not decided. | Later, if it still hurts after views land. |
-| Knowledge dashboard embed errors | Founder Cockpit showing parser/loader strings was not in this round. | Later, with a live dashboard. |
+**Requirement.** Keep the 20-per-kind first page. When a kind is capped, that tab gets **Show more**. Do not add extra path/type filters in this round. Do not load every hit on the first request.
+
+**Done when.** A capped Notes tab can load the next page. Uncapped kinds still say every hit is shown.
+
+### 17. Find/Print notice — one quiet line
+
+**Context.** Embeds load when you scroll to them, so browser Find and Print miss cards that are not on screen yet. A banner already says so (ADR-083). That is honest. It should not look like a permanent warning bar on a dashboard.
+
+**Requirement.** While any embed on the page is still unloaded, show **one quiet line** with that fact — not a loud persistent warning. Do not remove the fact. Do not pretend Find can see unloaded cards.
+
+**Done when.** A long dashboard shows at most one subdued line about Find/Print, and it goes away when everything on the page has loaded.
+
+### Checked — Founder Cockpit is not a broken UI
+
+The review treated loader and “shown as a link” strings as a UI failure. Checked against the current note and ADR-083:
+
+- The cockpit note is built the current way: one `![[Domain.base#View]]` per module, on its own line, in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/uat/vault/07-Dashboards/Founder Cockpit.md`.
+- `.base` embeds are supposed to mount as a live view (`inlineEmbedTreatment('base')` is block-mount). “Evaluating view…” is a wait, not a crash.
+- “Shown as a link” / “no inline view” / “add #page=N” are the **current honest fallbacks** when a file has no inline renderer, or the embed is not on its own line. They are not leftover parser junk.
+- Nested modules inside folded callouts (`> ![[Tasks.base#Doing now]]`) may not count as a standalone line. If those show as links, that is **note authoring**, not a broken widget. Empty or missing Base views are **empty data**, not a failed layout.
+
+No UI restyle requirement from those screenshots. If a standalone `![[Something.base#View]]` on the cockpit **body** still fails to mount, that is a product bug to reproduce — it is not assumed here.
 
 ---
 
@@ -215,6 +233,7 @@ Checked in code: create already requires Title, Goal, at least one acceptance cr
 5. Model picker + agent-list search (items 11–12).
 6. Task detail first view + autosave Goal (item 13); New Event headings (item 14).
 7. Knowledge views on a filled vault (item 15).
+8. Knowledge search Show more (item 16); quiet Find/Print line (item 17).
 
 Internal batches are fine. These remain product requirements until each row’s **Done when** is true.
 
@@ -222,4 +241,4 @@ Internal batches are fine. These remain product requirements until each row’s 
 
 - Findings: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/runtime/visual-audit/findings/`
 - Design system: `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/docs/internal/design/design-system-definition.md`
-- Interview: this file’s Do / Parked / Rejected tables, 2026-09-17.
+- Interview: this file’s Do / Checked / Rejected tables, 2026-09-17.
