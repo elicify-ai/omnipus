@@ -1,6 +1,6 @@
 # Omnipus Design System — Definition
 
-**Status:** Target-state constitution, amended 2026-09-17 after adversarial review.
+**Status:** Target-state constitution, amended 2026-09-17 after adversarial review, then after the founder ruling that the program is one big-bang migration and that small bounded visual changes are in scope.
 
 **Scope:** The Omnipus SPA and reusable UI package. The Go backend is in scope only where it embeds SPA assets.
 
@@ -23,13 +23,33 @@ This constitution defines the finished system, not rollout order. Where product 
 
 ## Visual continuity — governing requirement
 
-The current application appearance is the accepted visual baseline. This program matures the design system without substantially redesigning what users see. Architecture, token ownership, component consolidation, and enforcement must preserve the existing rendered appearance by default.
+The current application appearance is the accepted visual baseline. This program matures the design system without substantially redesigning what users see. Architecture, token ownership, component consolidation, and enforcement must preserve the existing rendered appearance by default, except for the bounded normalizations listed below.
 
 Every decision and migration work package must declare its visual delta as Invisible, Normalization, or Redesign Risk. Appearance-changing work must identify the affected surfaces, current and proposed values or presentations, rationale, expected noticeability, and before/after evidence. This includes typography, density, spacing, colors and opacity, component geometry, loading and motion behavior, and responsive or accessibility modes.
 
-Normalizations must be bounded and approved before implementation. Substantial changes to the established appearance require a separate founder-approved redesign decision and are outside this migration's default scope. Accessibility corrections remain required, but their visible effects must be declared and use the least disruptive compliant treatment.
+**Delivery.** One big-bang migration: foundations, contracts, and application conversion complete together. Internal batches are risk control, not a mixed long-term system.
 
-Existing rendered values take precedence over illustrative brand scales or newly selected defaults unless an explicit visual delta has been approved. Tokenization, consolidation, and lint compliance are not sufficient justification for changing appearance.
+**Small changes are in scope.** A Normalization is a small, bounded unification of something the product already does inconsistently, or a one-step snap onto a standard that is already close to what users see. Those changes land in this program. They still need a declared delta, a surface list, and before/after evidence. They do not need a separate redesign decision.
+
+Substantial changes to the established appearance remain Redesign Risk and stay outside this migration's default scope. Accessibility corrections remain required, but their visible effects must be declared and use the least disruptive compliant treatment.
+
+Existing rendered values take precedence over illustrative brand scales or newly selected defaults unless the change is in the approved-normalization list below, or a later explicit visual delta is approved. Tokenization, consolidation, and lint compliance are not sufficient justification for any other appearance change.
+
+### Approved normalizations for this program
+
+| ID | Change | Why it is small | Still out of bounds |
+|---|---|---|---|
+| D2 | Raise every UI text below 12px to 12px | Floor only; no new type scale | New heading/body sizes, families, or measures |
+| D4 | Unify equivalent status colours across calendar and tasks | Same states, one hue family each | Recolouring the brand surfaces or Forge Gold usage |
+| D10 | Map today's 14px-root rem spacing (7 / 14 / 21px…) onto one 4px / 8px scale | About one pixel per common step at the default root | A second live scale, or a default density reflow |
+| D6 timing | 300–500ms loading delay, minimum dwell, 10s long-running escalation | Timing only | Replacing inline/card errors or page-shaped skeletons with a different layout |
+| D7 | Enlarge hit regions, not chrome, to 24px / 44px | Usually invisible; spacing only where targets would overlap | Making dense checkboxes look like 44px controls |
+| D12 | Shared reduced-motion; keep today's normal timings | Noticeable only with reduced motion on | Retiming ordinary open/close motion |
+| D13 | Consistent punctuation, `…` loading copy, locale-aware numbers | Copy and format | A new stacked Field layout that moves labels or units |
+| D14 | Add a second non-colour series cue on charts | Encoding, not a new palette | Recolouring charts, Mermaid, or syntax themes |
+| D16 | Dark `color-scheme` and semantic heading/form wiring | Native controls and names | A new Settings information architecture |
+
+Anything not in this table is Invisible by default, or Redesign Risk. Two versions of a foundation (old spacing and new spacing, old type and new type) are not an accepted end state.
 
 ## Part 1 — Core decisions
 
@@ -172,11 +192,15 @@ Every public component has a coverage manifest naming variants, sizes, applicabl
 
 ### D10. Spacing, layout, breakpoints, and density adapt as one system
 
-**Decision.** The spacing system documents and tokenizes current rendered geometry, including root-relative and other values that do not land on literal 4px or 8px steps. A 4px/8px grid may guide new work, but it does not authorize rounding or reflowing existing layouts. Named tokens cover control gaps, content padding, sections, gutters, and page margins. Breakpoints express content behavior rather than device brands. Layouts reflow at 320px without two-dimensional scrolling except for intrinsically two-dimensional content such as data tables, canvases, and timelines.
+**Decision.** Spacing is one product-wide 4px / 8px token scale. Common steps are 4, 8, 16, 24, 32, 40, and 48. There is not a legacy scale and a new scale in production at the same time.
 
-Density has comfortable and compact modes. New density modes are additive and opt-in; they never re-flow existing screens by default. Density changes spacing and control geometry, never the 12px floor or accessible hit region. Coarse pointers select touch-adapted spacing and 44px targets independently of visual density.
+Today's default Tailwind rem steps at the 14px root compute to 7, 14, 21, 28px and similar. The big-bang maps those onto the 4px / 8px scale. Spacing and control geometry use this scale in pixels so they do not jump when the user changes font size (D1: `rem` is for type). Named tokens cover control gaps, content padding, sections, gutters, and page margins. Hairlines and 1px borders stay 1px.
 
-**Visual delta: Invisible by default; Redesign Risk for existing layouts.** Tokenizing current geometry changes no rendering. Any change to existing spacing, layout, breakpoints, or density requires a separate approved delta.
+Breakpoints express content behavior rather than device brands. Layouts reflow at 320px without two-dimensional scrolling except for intrinsically two-dimensional content such as data tables, canvases, and timelines.
+
+Density has comfortable and compact modes. Those modes are additive and opt-in; they are not a second unnamed scale. The default density is this 4px / 8px system on every in-scope surface. Density changes spacing and control geometry, never the 12px floor or accessible hit region. Coarse pointers select touch-adapted spacing and 44px targets independently of visual density.
+
+**Visual delta: Normalization — approved.** Mapping current 14px-root rem geometry onto the 4px / 8px scale shifts common padding and gaps by about one pixel per step (about 14% on those steps). Close comparison will notice it; it is not a redesign. A default switch to compact or comfortable density, or any larger reflow, remains Redesign Risk.
 
 **Evidence (facts only).** Lane A found tokens for sidebar width, 44px tap target, and two chrome heights, but no general spacing scale. Lane D found 23 literal 44px dimensions despite an existing token.
 

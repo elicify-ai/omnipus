@@ -1,10 +1,10 @@
 # Omnipus Design System — Migration Plan
 
-**Status:** Delivery plan for the target-state constitution, 2026-09-17.
+**Status:** Delivery plan for the target-state constitution, amended 2026-09-17 after the founder ruling that small bounded visual changes are in scope for the big-bang.
 
 **Target state:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/docs/internal/design/design-system-definition.md`
 
-**Program model:** One big-bang migration program, with controlled internal work packages and one final conformance cutover.
+**Program model:** One big-bang migration program, with controlled internal work packages and one final conformance cutover. Small approved normalizations land in that same cutover. Two live versions of a foundation are not an accepted end state.
 
 ## 1. Outcome and governing rule
 
@@ -13,6 +13,8 @@ The SPA moves to the complete design system in one dedicated program. Product-wi
 Green lint alone is insufficient. The program must preserve intended behavior, reach the actual route inventory, and pass visual, interaction, accessibility, and bundle checks.
 
 The current rendered application is the accepted visual baseline. Every work package declares its visual delta as Invisible, Normalization, or Redesign Risk under the target state's governing requirement. Appearance differences outside the approved declared deltas fail the program gate. A difference being explained and reviewed is not approval; approval must be explicit and recorded before implementation.
+
+The definition's **Approved normalizations for this program** table is the explicit approval for this cutover. Those small unifications — including the 12px type floor, status-colour unification, and the 4px / 8px spacing snap — are required work, not optional polish and not a redesign. Anything outside that table still fails the gate.
 
 ## 2. Baseline before work starts
 
@@ -41,14 +43,14 @@ Deliver:
 - the primitive → semantic → conditional component → CSS graph;
 - status contracts and explicit color exception registry;
 - complete typography with 12px floor and adjustable 12–20px root;
-- spacing/grid, breakpoints, density and touch adaptation;
+- one 4px / 8px spacing scale (mapping today's 14px-root rem steps), breakpoints, optional density modes, and touch adaptation;
 - radius, border, elevation, shadow, z-index and overlay order;
 - motion and reduced-motion policy;
 - icon, content, localization, and data-visualization rules;
 - generated typed tokens for TypeScript;
 - PostCSS/Stylelint graph parsing, AST-aware color checks, and seeded self-tests.
 
-**Exit gate.** No token cycles, undefined references, or forbidden edges; typed output matches CSS; status contracts pass contrast/distinction checks; browser tests pass at root minimum/default/maximum, 200% zoom, and 320px. Token work reproduces current computed values except for approved declared deltas, proven by before/after computed-style comparison across the reference screen set.
+**Exit gate.** No token cycles, undefined references, or forbidden edges; typed output matches CSS; status contracts pass contrast/distinction checks; browser tests pass at root minimum/default/maximum, 200% zoom, and 320px. Token work reproduces current computed values except for the approved normalizations, proven by before/after computed-style comparison across the reference screen set. Spacing steps on that set must be on the 4px / 8px scale; leftover 7 / 14 / 21px default-root values fail the gate.
 
 ### Phase 2 — Primitive and composite contracts
 
