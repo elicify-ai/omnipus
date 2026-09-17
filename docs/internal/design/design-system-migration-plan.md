@@ -12,6 +12,8 @@ The SPA moves to the complete design system in one dedicated program. Product-wi
 
 Green lint alone is insufficient. The program must preserve intended behavior, reach the actual route inventory, and pass visual, interaction, accessibility, and bundle checks.
 
+The current rendered application is the accepted visual baseline. Every work package declares its visual delta as Invisible, Normalization, or Redesign Risk under the target state's governing requirement. Appearance differences outside the approved declared deltas fail the program gate. A difference being explained and reviewed is not approval; approval must be explicit and recorded before implementation.
+
 ## 2. Baseline before work starts
 
 Capture a reproducible baseline and distinguish measured facts from review hypotheses.
@@ -46,7 +48,7 @@ Deliver:
 - generated typed tokens for TypeScript;
 - PostCSS/Stylelint graph parsing, AST-aware color checks, and seeded self-tests.
 
-**Exit gate.** No token cycles, undefined references, or forbidden edges; typed output matches CSS; status contracts pass contrast/distinction checks; browser tests pass at root minimum/default/maximum, 200% zoom, and 320px.
+**Exit gate.** No token cycles, undefined references, or forbidden edges; typed output matches CSS; status contracts pass contrast/distinction checks; browser tests pass at root minimum/default/maximum, 200% zoom, and 320px. Token work reproduces current computed values except for approved declared deltas, proven by before/after computed-style comparison across the reference screen set.
 
 ### Phase 2 — Primitive and composite contracts
 
@@ -59,7 +61,7 @@ Classify the catalog and move domain widgets out of the primitive namespace. Com
 - AST-aware syntax and import-boundary rules with explicit low-level directories;
 - characterization tests for behaviors at risk during replacement.
 
-**Exit gate.** Each destination component passes its manifest, unit, axe, keyboard, interaction, pointer, reduced-motion, and applicable browser tests. Export tests keep domain widgets private. No source pattern is replaced before its destination contract is green.
+**Exit gate.** Each destination component passes its manifest, unit, axe, keyboard, interaction, pointer, reduced-motion, and applicable browser tests. Export tests keep domain widgets private. No source pattern is replaced before its destination contract is green. Each destination component also passes presentation-equivalence checks against what it replaces, with before/after screenshots from representative consumers and every difference matched to an approved declared delta.
 
 ### Phase 3 — Storybook as verification front door
 
@@ -88,7 +90,7 @@ Internal order:
 6. Route-by-route behavioral, visual, keyboard, and accessibility verification.
 7. Remove every temporary exception and enable all final gates repository-wide.
 
-**Final cutover gate.** The route inventory is verified, all completion metrics pass, the temporary ledger has zero open entries, and production build/bundle checks preserve the single-binary and no-runtime-dependency constraints.
+**Final cutover gate.** The route inventory is verified, all completion metrics pass, the temporary ledger has zero open entries, and production build/bundle checks preserve the single-binary and no-runtime-dependency constraints. A full before/after screenshot sweep covers every route and inventoried major modal/tab state; every appearance difference matches the approved declared-delta list, and any unmatched difference fails cutover.
 
 ## 4. Big-bang risk controls
 
@@ -136,6 +138,7 @@ Temporary entries use:
 | Rule | Exact violated decision or lint rule |
 | Reason | Concrete blocker; “legacy” is insufficient |
 | Risk | User-visible, accessibility, behavior, security, or delivery impact |
+| Visual delta class | Invisible, Normalization, or Redesign Risk, plus the approval reference for every non-Invisible delta |
 | Owner | Named person or workstream |
 | Characterization | Test/evidence protecting current behavior |
 | Replacement | Destination token/component/contract |
@@ -178,7 +181,7 @@ The baseline records numerator, denominator, exclusions, command, and artifact f
 | Keyboard flows | 100% pass for the representative route/component matrix |
 | Zoom/reflow | 100% pass at 200% zoom and 320px without loss of content/function |
 | Forced colors/reduced motion | 100% of the specified matrix passes |
-| Visual regression | Zero unexplained diffs; every accepted change has reviewed evidence |
+| Visual regression | Zero appearance diffs outside approved declared deltas; every approved delta has before/after evidence. “Explained and reviewed” alone is not approval |
 | Storybook coverage | 100% of curated public exports have complete applicable manifests, stories, assertions |
 | Bundle delta | Zero Storybook modules in production; embedded delta measured, explained, within approved budget |
 | Temporary exceptions | Exactly zero open or blocked entries |

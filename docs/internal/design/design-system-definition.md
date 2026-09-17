@@ -21,11 +21,23 @@ This constitution defines the finished system, not rollout order. Where product 
 
 `@omnipus/ui` is a curated public API, not a directory mirror. Domain components remain outside the public primitive package unless a separate public contract is approved.
 
+## Visual continuity — governing requirement
+
+The current application appearance is the accepted visual baseline. This program matures the design system without substantially redesigning what users see. Architecture, token ownership, component consolidation, and enforcement must preserve the existing rendered appearance by default.
+
+Every decision and migration work package must declare its visual delta as Invisible, Normalization, or Redesign Risk. Appearance-changing work must identify the affected surfaces, current and proposed values or presentations, rationale, expected noticeability, and before/after evidence. This includes typography, density, spacing, colors and opacity, component geometry, loading and motion behavior, and responsive or accessibility modes.
+
+Normalizations must be bounded and approved before implementation. Substantial changes to the established appearance require a separate founder-approved redesign decision and are outside this migration's default scope. Accessibility corrections remain required, but their visible effects must be declared and use the least disruptive compliant treatment.
+
+Existing rendered values take precedence over illustrative brand scales or newly selected defaults unless an explicit visual delta has been approved. Tokenization, consolidation, and lint compliance are not sufficient justification for changing appearance.
+
 ## Part 1 — Core decisions
 
 ### D1. Product type density is user-adjustable, with a 14px default
 
 **Decision.** The product defaults to a 14px root size within `clamp(12px, var(--user-font-size, 14px), 20px)`. Fourteen pixels is the default density, not a fixed root. Text roles that should follow the user setting use `rem`; fixed geometry, hairlines, and minimum hit regions do not. Marketing surfaces may retain the brand guideline's 16px body default.
+
+**Visual delta: Invisible.** This codifies the current root-size behavior and does not change the rendered default.
 
 **Evidence (facts only).** The audited stylesheet already uses the 12–20px clamp with a 14px default, and Profile settings use the same default. The audit counted 317 non-test TSX files potentially affected; it did not count 317 screens. Routes and rendered surfaces are inventoried separately.
 
@@ -34,6 +46,8 @@ This constitution defines the finished system, not rollout order. Where product 
 ### D2. Type has a hard 12px floor — amended 2026-09-17 after adversarial review
 
 **Decision.** No Omnipus UI text is smaller than 12px. There is no 11px token and no compact exception below 12px. Dense metadata uses the 12px caption or label roles with appropriate weight and line height.
+
+**Visual delta: Normalization — approved.** Approximately 616 audited text spots below 12px grow to the 12px floor across metadata, code, calendar, and other dense text. The change is noticeable and widespread; the migration must record the finalized computed-style scope and before/after evidence.
 
 **Evidence (facts only).** Lane A counted 666 arbitrary `text-[Npx]` classes in 153 production files, including 616 below 12px. The brand guideline defines its caption/label at 12px. Frequency establishes current use, not usability.
 
@@ -52,6 +66,8 @@ This constitution defines the finished system, not rollout order. Where product 
 
 Every component token has an owner, purpose, supported states, and consumers. Mechanical aliases such as `card-border → border` are forbidden.
 
+**Visual delta: Invisible.** The graph must reproduce current computed values exactly. Repairing an undefined or invalid token that changes rendering is a separate declared delta, not part of token extraction.
+
 **Evidence (facts only).** Lane A found one flat CSS token list, no primitive ramps, no component layer, duplicated hexadecimal values in TypeScript maps, 125 hard-coded color values across 12 audited files, and token names referenced without definitions. The audit did not establish that every component needs component tokens.
 
 **Enforcement.** A PostCSS/Stylelint token-graph check parses custom-property declarations and references, validates namespace edges, detects cycles and undefined tokens, and covers CSS and third-party theme adapters. A generated typed token module is the only token source for TypeScript consumers. Tests seed bad edges, cycles, missing names, and allowed exceptions to prove detection.
@@ -59,6 +75,8 @@ Every component token has an owner, purpose, supported states, and consumers. Me
 ### D4. Status is a complete, distinguishable presentation contract — amended 2026-09-17 after adversarial review
 
 **Decision.** Success, warning, danger, information, and workflow states use recognizable semantic hue families—green, amber, red, blue, and others where needed—tuned to Sovereign Deep. They are not forced into silver and gold. Each status defines foreground, background, border, icon, label, hover/focus treatment, contrast ratios, and a non-color cue. Equivalent states look and read the same across surfaces. Status sets pass pairwise-distinction and common color-vision-deficiency checks.
+
+**Visual delta: Normalization — approved.** Calendar and task status presentations are unified so equivalent states use the same approved semantic colors and non-color cues. The recoloring is noticeable; the final mapping and affected surfaces must be recorded before implementation.
 
 **Evidence (facts only).** Lane A found calendar “in progress” rendered blue while the board rendered the same state in Forge Gold. It also found default Tailwind hue utilities in 32 files alongside semantic colors. The brand already defines green success and red error; it does not require every status to use silver or gold.
 
@@ -79,6 +97,10 @@ Every component token has an owner, purpose, supported states, and consumers. Me
 | Boolean preference | `Switch`; never a checkbox styled as a switch |
 
 Raw elements remain legal inside named low-level primitive directories, documented wrappers, and approved third-party integration boundaries. They are not legal shortcuts in feature code. Each exception records exact surface, reason, owner, and expiry.
+
+Destination components must preserve the current presentation of what they replace unless a visual delta is declared and approved. The default is “same look, one implementation,” not “new look, one implementation.” Required contracts may include presentation-preserving variants or wrappers for text actions, disclosures, inline controls, contextual sheet widths, and other established forms.
+
+**Visual delta: Invisible by default; Redesign Risk if presentation changes.** Any changed control geometry, styling, confirmation chrome, or sheet sizing requires a separate approved delta before replacement.
 
 **Evidence (facts only).** Lane D counted 98 production files with a raw `<button>` and no `Button` import, plus 38 mixed-use files. It found four confirmation mechanisms and one `window.confirm`. Lane B found a real primitive kit but inconsistent adoption and domain widgets mixed into `ui/`.
 
@@ -104,6 +126,10 @@ Loading behavior is observable:
 - Show determinate progress only when the operation reports real progress.
 - After 10 seconds without progress data, show an indeterminate long-running state with applicable cancel, background, or retry actions.
 
+Consolidation standardizes ownership without standardizing every presentation. Destination components must preserve the current inline, card, full-panel, page-shaped skeleton, and activity treatments they replace unless a visual delta is declared and approved.
+
+**Visual delta: Redesign Risk.** The stated loading delay, minimum dwell, and long-running escalation change timing and must be approved as bounded normalizations. Replacing distinct error, empty, skeleton, or activity presentations is not approved by consolidation alone and must otherwise remain presentation-equivalent.
+
 **Evidence (facts only).** Lane B found no shared loading state on `Button`, `Input`, or `Progress`; multiple empty/error implementations; two save indicators; and only three consumers of the field-error component. It did not establish that every component supports every state.
 
 **Enforcement.** Narrow rules ban `animate-pulse` outside `Skeleton`, local declarations named `*EmptyState`, `*ErrorState`, or `*Skeleton` outside approved locations, and direct low-level imports where a composite exists. Source-search self-tests prove those rules. Review, interaction tests, and targeted visual regression cover semantic equivalence; lint is not claimed to understand meaning.
@@ -113,6 +139,8 @@ Loading behavior is observable:
 **Decision.** `IconButton` is distinct from `Button`. It requires an accessible name through a TypeScript union of `aria-label` or `aria-labelledby`; `Button` remains child-agnostic. `Button` defaults to `type="button"`. Decorative icons are `aria-hidden`; meaningful icons have an owned accessible name. `CommandInput` has a programmatic label.
 
 Visual size and hit area are separate. Interactive hit regions are at least 24×24px and become at least 44×44px for coarse pointers. Wrappers or pseudo-elements may enlarge a hit region without enlarging dense chrome. Enlarged regions must not overlap. The WCAG spacing exception at 24px applies only when adjacent-target spacing satisfies the criterion; destructive, primary, and isolated touch controls use 44px.
+
+**Visual delta: Normalization.** Accessible-name and button-type repairs are invisible. Effective hit regions are normally invisible; spacing may change subtly to noticeably where compliant, non-overlapping coarse-pointer targets cannot fit without reflow, using the least disruptive treatment.
 
 **Evidence (facts only).** Lane C found central focus styling and Radix semantics, but no primitive guarantee for button type, icon names, decorative icons, command-input labeling, reduced motion, or minimum hit regions. It also found a hand-rolled Settings switch.
 
@@ -124,6 +152,8 @@ Visual size and hit area are separate. Interactive hit regions are at least 24×
 
 Every public component has a coverage manifest naming variants, sizes, applicable states, themes, keyboard interactions, and accessibility assertions. Static components are not forced into irrelevant states. Storybook is development-only and never enters the production dependency graph or embedded SPA assets.
 
+**Visual delta: Invisible.** Catalog, ownership, documentation, exports, and development-only verification do not change production rendering.
+
 **Evidence (facts only).** Lane B inventoried 26 primitive families, 8 domain widgets plus 2 helpers inside `ui/`, 11 shared-composite files, 14 library test files, no Storybook, and an `@omnipus/ui` stub exporting only part of the catalog.
 
 **Enforcement.** CI validates manifest-to-export and manifest-to-story coverage, builds Storybook, runs axe and interaction tests, and captures targeted visual snapshots. Export-map tests reject accidental public APIs. Storybook packages exist only in root `devDependencies`; output is separate from `dist/spa`; production source cannot import `.storybook` or `*.stories.*`; bundle inspection rejects Storybook modules; embedded asset size is compared with baseline.
@@ -132,7 +162,9 @@ Every public component has a coverage manifest naming variants, sizes, applicabl
 
 ### D9. Typography is a role system, not a bag of sizes
 
-**Decision.** Outfit is for display/headings, Inter for interface/body, and JetBrains Mono for code, identifiers, and aligned technical data. The scale defines display, page title, section title, body, compact body, label, caption, and code roles. Every role specifies family, `rem` size, weight, line height, letter spacing, and maximum line length. The minimum computed size is 12px at the minimum user setting. Body copy targets 45–75 characters per line; dense tables may use shorter measures.
+**Decision.** Outfit is for display/headings, Inter for interface/body, and JetBrains Mono for code, identifiers, and aligned technical data. The role system documents and tokenizes the current effective family, size, weight, line height, letter spacing, and maximum line length for display, page title, section title, body, compact body, label, caption, and code at the 14px default density. It does not introduce a new scale. The only approved size change is D2's 12px floor. Body copy targets 45–75 characters per line where that already reflects the current presentation; changing an established measure requires a declared delta.
+
+**Visual delta: Invisible by default; Redesign Risk for any new value.** Any change from current rendered typography—including family, size, weight, line height, tracking, or measure—must identify affected surfaces and receive approval before implementation, apart from D2's approved normalization.
 
 **Evidence (facts only).** The brand defines the three families and three example roles: 48px heading, 16px body, and 12px caption. Lane A found family tokens but no complete size, weight, or line-height system, and found `font-sans` not mapped to Inter.
 
@@ -140,9 +172,11 @@ Every public component has a coverage manifest naming variants, sizes, applicabl
 
 ### D10. Spacing, layout, breakpoints, and density adapt as one system
 
-**Decision.** Spacing uses an 8px layout grid with 4px half-steps for compact internal alignment. Named tokens cover control gaps, content padding, sections, gutters, and page margins. Breakpoints express content behavior rather than device brands. Layouts reflow at 320px without two-dimensional scrolling except for intrinsically two-dimensional content such as data tables, canvases, and timelines.
+**Decision.** The spacing system documents and tokenizes current rendered geometry, including root-relative and other values that do not land on literal 4px or 8px steps. A 4px/8px grid may guide new work, but it does not authorize rounding or reflowing existing layouts. Named tokens cover control gaps, content padding, sections, gutters, and page margins. Breakpoints express content behavior rather than device brands. Layouts reflow at 320px without two-dimensional scrolling except for intrinsically two-dimensional content such as data tables, canvases, and timelines.
 
-Density has comfortable and compact modes. Density changes spacing and control geometry, never the 12px floor or accessible hit region. Coarse pointers select touch-adapted spacing and 44px targets independently of visual density.
+Density has comfortable and compact modes. New density modes are additive and opt-in; they never re-flow existing screens by default. Density changes spacing and control geometry, never the 12px floor or accessible hit region. Coarse pointers select touch-adapted spacing and 44px targets independently of visual density.
+
+**Visual delta: Invisible by default; Redesign Risk for existing layouts.** Tokenizing current geometry changes no rendering. Any change to existing spacing, layout, breakpoints, or density requires a separate approved delta.
 
 **Evidence (facts only).** Lane A found tokens for sidebar width, 44px tap target, and two chrome heights, but no general spacing scale. Lane D found 23 literal 44px dimensions despite an existing token.
 
@@ -150,7 +184,9 @@ Density has comfortable and compact modes. Density changes spacing and control g
 
 ### D11. Radius, borders, elevation, and overlays have finite scales
 
-**Decision.** Radius, border width/style, shadow/elevation, and z-index are closed token scales. Elevation communicates hierarchy sparingly on dark surfaces. Overlay order is explicit: base content, sticky chrome, menus/popovers, sheets/dialogs, alerts/toasts, and exceptional full-screen viewers. Components never invent numeric z-index values.
+**Decision.** Radius, border width/style, shadow/elevation, and z-index are closed token scales that preserve current rendered values by default. Elevation communicates hierarchy sparingly on dark surfaces. Overlay order is explicit: base content, sticky chrome, menus/popovers, sheets/dialogs, alerts/toasts, and exceptional full-screen viewers. The order is relative to the active overlay: a dialog or sheet's owned menus and popovers render above that overlay, while unrelated background overlays remain below it. Components never invent numeric z-index values.
+
+**Visual delta: Invisible by default; Redesign Risk for ordering changes.** Any global z-index or overlay-order change must be verified against nested-menu and nested-overlay cases before rollout. A change that hides or reorders active content fails the gate; approved changes require before/after evidence.
 
 **Evidence (facts only).** Lane A found no radius or shadow tokens. Lane D found a hand-built lightbox at `z-[200]` while Dialog uses `z-50`; the audit did not visually verify the resulting stack behavior.
 
@@ -162,6 +198,8 @@ Density has comfortable and compact modes. Density changes spacing and control g
 
 Phosphor is the standard icon family. Named sizes, weights, and optical-alignment rules apply. Decorative icons are hidden from assistive technology; standalone meaningful icons use `IconButton` or have another explicit naming owner.
 
+**Visual delta: Normalization.** Shared reduced-motion behavior is noticeable in that mode; normal-mode timings and existing icon metrics remain unchanged unless separately approved.
+
 **Evidence (facts only).** Lane C found no `prefers-reduced-motion` coverage. Lane D found Phosphor used in 196 files and only two legitimate inline-SVG exceptions, so it found no competing icon set.
 
 **Enforcement.** Lint rejects raw motion durations, unregistered keyframes, `transition-all`, and Framer Motion use without the shared policy. Browser tests under reduced motion cover Dialog, Sheet, Accordion, Toast, and custom motion. Icon stories test size, alignment, labels, and decorative treatment.
@@ -172,6 +210,8 @@ Phosphor is the standard icon family. Named sizes, weights, and optical-alignmen
 
 Interface content uses consistent terminology, sentence case, and punctuation. Loading copy uses `…`. Truncation never hides information needed to decide or act; an accessible full value is provided. Dates, times, numbers, pluralization, and sorting use locale-aware APIs. User-visible strings support localization and expansion.
 
+**Visual delta: Normalization.** Punctuation, localized formatting, and required indicators may change subtly; Field composition must preserve existing form geometry unless a separate delta is approved.
+
 **Evidence (facts only).** Lane B found `FormError` used by three files and 42 files declaring their own `role="alert"`. Lane C found sparse explicit label wiring in audited settings fields and inconsistent live-region use. Lane B found both `Saving...` and `Saving…`.
 
 **Enforcement.** Component types make Field wiring the default. Interaction tests assert labels, descriptions, validation announcements, required/optional copy, and keyboard behavior. ESLint rejects literal three-dot loading copy and non-localized UI date/number formatting. Content review owns terminology and usefulness.
@@ -179,6 +219,8 @@ Interface content uses consistent terminology, sentence case, and punctuation. L
 ### D14. Data visualization uses a separate accessible palette
 
 **Decision.** Charts, graphs, diagrams, syntax highlighting, and file-type indicators may use more colors than application chrome. Their palette is separately tokenized, harmonious with Sovereign Deep surfaces, and not reused as status chrome. Series differ through at least two channels—hue plus shape, line style, label, or pattern. User-authored colors remain user data and receive contrast-aware surrounding treatment rather than silent replacement.
+
+**Visual delta: Normalization.** Existing palette values remain; adding a second distinction channel such as dash, marker, pattern, or direct label is a subtle visible change on affected visualizations.
 
 **Evidence (facts only).** Lane A found separate color maps for Mermaid, FullCalendar, file types, task/plan status, and user/agent colors. It identified dynamic entity colors and document-white surfaces as legitimate exceptions to a blanket inline-color ban.
 
@@ -189,6 +231,8 @@ Interface content uses consistent terminology, sentence case, and punctuation. L
 **Decision.** Every public component documents anatomy, slots, variants, sizes, applicable states, composition, controlled/uncontrolled behavior, keyboard model, focus behavior, and accessible-name ownership. Variants represent stable product meaning, not one-screen styling. Public roots accept safe hooks such as `className` and refs where supported.
 
 The supported browser matrix includes current Chromium, Firefox, and WebKit engines. Tests are proportional to risk: unit tests for logic/contracts, interaction tests for behavior, axe for detectable accessibility faults, browser tests for focus/reflow/motion/pointers, and targeted visual snapshots. No test type is treated as proof of the others.
+
+**Visual delta: Invisible.** Documentation, API contracts, composition rules, and verification coverage do not require production appearance changes.
 
 **Evidence (facts only).** Lane B found inconsistent variant, class merging, ref forwarding, disabled, and invalid-state APIs, and only 14 library test files for 36 production files in `ui/`.
 
@@ -208,6 +252,8 @@ The system additionally requires:
 - modal/sheet overscroll containment, background scroll lock, focus trap, focus restoration, and appropriate dismissal;
 - navigational tabs and filters reflected in the URL when refresh, sharing, and Back/Forward should preserve them;
 - representative screen-reader testing in addition to automation.
+
+**Visual delta: Normalization.** Semantic repairs are invisible by default. Browser-owned dark controls and accessibility-mode treatments may change subtly or contextually and must use the least disruptive compliant presentation.
 
 **Evidence (facts only).** Lane C found good Radix focus traps and roles in audited dialogs, a central focus ring, and strong keyboard behavior in several complex controls. It also found gaps in decorative-icon treatment, `CommandInput` naming, heading order, form wiring, dark color-scheme declaration, modal overscroll, and Settings tab URL state. Automated tests alone cannot establish screen-reader usability.
 
