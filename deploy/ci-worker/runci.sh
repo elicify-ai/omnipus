@@ -16,6 +16,33 @@ REF="${1:-HEAD}"
 GATE="${2:-all}"
 REPO_DIR=/cache/omnipus   # on the persistent volume → clone survives stop/start
 
+# --- per-run log on the persistent volume ---------------------------------
+# /tmp DOES NOT survive a machine stop — Fly destroys the root overlay a
+# stopped machine booted from, and with it every log written under /tmp. On
+# 2026-09-16 three gates on three machines failed with real defects (4 data
+# races, 10 SPA test failures, 1 e2e shard), the dispatcher then stopped the
+# machines, and every stack trace, failing test name and race report was
+# destroyed unread; only the summary counts survived, in a terminal scrollback.
+# /cache is the mounted volume that survives stop/start (the same convention
+# as TMPDIR=/cache/tmp and E2E_DIR=/cache/e2e below), so the WHOLE run is
+# tee'd to /cache/logs/<gate>@<ref>-<utc-stamp>.log — named by gate and ref so
+# a stopped machine can still be interrogated for its last runs. Retention:
+# newest 3 per gate (the minimum a post-mortem needs is the last one; two
+# older ones allow an A/B comparison). ci-cluster.sh's collection phase copies
+# this file off BEFORE stopping the machine; the `RUNLOG:` line below is what
+# it parses to find the exact path on the machine.
+RUNLOG_DIR=/cache/logs
+mkdir -p "$RUNLOG_DIR" || { echo "cannot create $RUNLOG_DIR — no persistent run log possible"; exit 2; }
+safe_ref="$(printf '%s' "$REF" | tr -c 'A-Za-z0-9._-' '-')"
+RUNLOG="$RUNLOG_DIR/${GATE}@${safe_ref}-$(date -u +%Y%m%dT%H%M%SZ).log"
+# Prune BEFORE the tee opens the new file: keep the newest 2 existing logs for
+# THIS gate (today's file becomes the 3rd). `@` separates gate from ref — gate
+# names contain `-` (go-test), so a `-` there would make `go-*` also match
+# go-test's logs. xargs -r is GNU-only; this script runs on the Linux worker.
+( cd "$RUNLOG_DIR" && ls -t "${GATE}@"*.log 2>/dev/null | tail -n +3 | xargs -r rm -f -- ) || true
+exec > >(tee -a "$RUNLOG") 2>&1
+echo "RUNLOG: $RUNLOG"
+
 # --- whole-run mutex ------------------------------------------------------
 # This worker is SHARED: every operator/session drives the same machine, and a
 # run's state is keyed by shard NAME, not by run. Two overlapping runs therefore
@@ -374,8 +401,8 @@ run_gorace() {
     # re-run must measure the SAME thing, or a package that only "fails" here
     # because it launched a real Chrome would be re-run without one and
     # stamped a flake — or vice versa.
-    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s -p 1 "$p" >"/tmp/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
-       && ! grep -aq "DATA RACE" "/tmp/rr_race_$(echo "$p" | tr '/' '_').log"; then
+    if CI=true CGO_ENABLED=1 go test -race -tags "$TAGS" -count=1 -timeout 900s -p 1 "$p" >"$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log" 2>&1 \
+       && ! grep -aq "DATA RACE" "$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log"; then
       # Excused — but say WHAT was excused. After the `--- FAIL` carve-out
       # above, reaching this point means the contended run produced a bare
       # `FAIL <pkg>` with NO named test failure (the hang/timeout signature),
@@ -390,7 +417,7 @@ run_gorace() {
       # Per-package log: a single shared path was overwritten each iteration,
       # so on a multi-package failure only the last package's output survived
       # for post-mortem.
-      grep -aE '^--- FAIL|DATA RACE' "/tmp/rr_race_$(echo "$p" | tr '/' '_').log" | head
+      grep -aE '^--- FAIL|DATA RACE' "$TMPDIR/rr_race_$(echo "$p" | tr '/' '_').log" | head
       rc=1
     fi
   done
@@ -514,7 +541,7 @@ run_gotest() {
     # uncontended) is just as exposed to go test's 10m-per-binary default,
     # and this IS the exact re-run that would otherwise stamp such a package
     # a REAL FAILURE on a timeout artifact rather than a genuine repeat.
-    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 1 "$p" >/tmp/rr.log 2>&1; then
+    if CI=true CGO_ENABLED=0 go test -tags "$TAGS" -count=1 -timeout 1800s -p 1 "$p" >"$TMPDIR/rr.log" 2>&1; then
       # Excused — but say WHAT was excused. Reaching this point means the
       # contended run produced a bare `FAIL <pkg>` with no named test failure,
       # i.e. the hang/timeout signature, and the package passed alone.
@@ -525,7 +552,7 @@ run_gotest() {
       # Failed contended AND failed alone. Whether the isolated run names
       # specific tests or times out again, twice is not a flake.
       echo "REAL FAILURE (failed contended AND isolated): $p"
-      local run2; run2=$(grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' /tmp/rr.log | awk '{print $3}' | sort -u)
+      local run2; run2=$(grep -aoE '^\s*--- FAIL: [A-Za-z0-9_/]+' "$TMPDIR/rr.log" | awk '{print $3}' | sort -u)
       if [ -n "$run2" ]; then
         echo "  isolated run named these failing tests (the contended run named none — it hung or timed out):"
         echo "$run2" | sed 's/^/    /'
@@ -536,7 +563,7 @@ run_gotest() {
       # discards the indented failure message, which is the only thing that
       # makes a failure diagnosable from CI output.
       echo "  --- isolated-run detail ---"
-      grep -aA 12 -E '^\s*--- FAIL|^panic:|test timed out after' /tmp/rr.log | head -120
+      grep -aA 12 -E '^\s*--- FAIL|^panic:|test timed out after' "$TMPDIR/rr.log" | head -120
       rc=1
     fi
   done
@@ -993,7 +1020,7 @@ run_e2e() {
   # One virtual display for every shard (see _e2e_run_shard's comment for why).
   # Reaped by exact pid on the way out; never pkill-by-pattern on this box.
   if [ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
-    Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+    Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >"$TMPDIR/xvfb.log" 2>&1 &
     _XVFB_PID=$!
     export DISPLAY=:99
     # Give the server a moment, then confirm it is actually up rather than
@@ -1002,7 +1029,7 @@ run_e2e() {
     if kill -0 "$_XVFB_PID" 2>/dev/null; then
       log "e2e: virtual display :99 up (pid $_XVFB_PID)"
     else
-      echo "WARNING: Xvfb died on startup — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect. See /tmp/xvfb.log" >&2
+      echo "WARNING: Xvfb died on startup — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect. See $TMPDIR/xvfb.log" >&2
       unset DISPLAY _XVFB_PID
     fi
   elif [ -z "${DISPLAY:-}" ]; then
