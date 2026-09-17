@@ -1020,7 +1020,8 @@ run_e2e() {
   # One virtual display for every shard (see _e2e_run_shard's comment for why).
   # Reaped by exact pid on the way out; never pkill-by-pattern on this box.
   if [ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
-    # 9>&- is load-bearing, not tidiness. The whole-run mutex is `exec 9>lock;
+    # 9>&- is load-bearing, not tidiness -- and it is needed on EVERY long-lived
+    # child of this gate, not just here. The whole-run mutex is `exec 9>lock;
     # flock -n 9`, and fd 9 is INHERITED by every child. Xvfb is backgrounded
     # and has outlived its parent before (orphaned 2026-09-17 at 10:09), which
     # left it holding the lock after runci.sh exited — wedging every later run
@@ -1149,7 +1150,7 @@ run_e2e() {
       while [ "$running" -gt 0 ]; do _e2e_reap_one; done
       log "e2e: launch shard $group (port $port, key slot $slot; SOLO)"
       ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=$E2E_DIR/e2e-$group-results --reporter=list" ) \
-        > "$E2E_DIR/e2e-shard-$group.log" 2>&1
+        > "$E2E_DIR/e2e-shard-$group.log" 2>&1 9>&-
       src=$?
       NAMES+=("$group")
       if [ "$src" -eq 0 ]; then
@@ -1170,7 +1171,7 @@ run_e2e() {
     while [ "$(_e2e_in_flight "$kind")" -ge "$cap" ]; do _e2e_reap_one; done
     log "e2e: launch shard $group (port $port, key slot $slot; $(($(_e2e_in_flight "$kind") + 1))/$cap $kind shards in flight)"
     ( _e2e_run_shard "$group" "$port" "$key" "$specs" "--output=$E2E_DIR/e2e-$group-results --reporter=list" ) \
-      > "$E2E_DIR/e2e-shard-$group.log" 2>&1 &
+      > "$E2E_DIR/e2e-shard-$group.log" 2>&1 9>&- &
     PID2NAME[$!]="$group"; NAMES+=("$group"); running=$((running + 1))
   done < <(scripts/e2e-shards.sh list 2>/dev/null)
 
