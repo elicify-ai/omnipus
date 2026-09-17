@@ -1,4 +1,6 @@
-//go:build !windows
+// ADR-090 FR-002/003/007 configuration-contract tests. The
+// validateAgainstComponentSchema harness lives in schema_harness_test.go and
+// is portable across Linux/macOS/Windows (TEST-008) — no build constraint.
 
 package generated
 

@@ -1,5 +1,3 @@
-//go:build !windows
-
 // tool_call_result_error_key_contract_test.go — F13 regression guard.
 //
 // contracts/asyncapi.yaml's ToolCallResultFrame.result oneOf (round-2

@@ -1,5 +1,3 @@
-//go:build !windows
-
 // llm_error_codes_test.go — Exhaustive classifier-code contract test.
 //
 // Companion to contract_test.go; closes the SFH-W1-01 / TD-C1 regression:
@@ -12,9 +10,6 @@
 // enum from _asyncapi-zod-schemas.generated.ts so the contract is closed
 // at every layer the SPA consumes (Go wire shape + JSON-Schema canonical
 // + Zod runtime parser).
-//
-// Build constraint: !windows — same YAML loader restriction as
-// contract_test.go.
 
 package generated
 

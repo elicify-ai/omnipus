@@ -1,5 +1,3 @@
-//go:build !windows
-
 // goal_dod_minitems_test.go is the required missing test named by the
 // code-review fix-wave: a contract/schema test proving the generated Goal
 // schema (contracts/components/schemas/Goal.yaml) rejects `dod: []` —
@@ -9,8 +7,8 @@
 // legacy persisted goal with none, precisely so this invariant always
 // holds by the time a Goal record is served). Uses the same
 // validateAgainstComponentSchemaRawJSON/mustFailComponent-style harness as
-// the rest of pkg/api/generated/contract_test.go (same package, same file
-// build tag).
+// the rest of pkg/api/generated/contract_test.go (same package; the harness
+// itself lives in schema_harness_test.go and is portable).
 //
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors

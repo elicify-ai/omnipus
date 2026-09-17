@@ -2,8 +2,6 @@
 // License: MIT
 // Copyright (c) 2026 Omnipus contributors
 
-//go:build !windows
-
 package generated
 
 // adr074_criterion_input_contract_test.go — judgment-first-criteria-spec test
