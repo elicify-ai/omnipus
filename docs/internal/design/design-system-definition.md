@@ -1,114 +1,231 @@
 # Omnipus Design System — Definition
 
-**Status:** Ratified by the founder 2026-09-17, eight decisions after a structured interview.
-**Evidence base:** the four-lane maturity audit of 2026-09-17 — reports in `docs/internal/ui-audit-2026-09-17/` (`lane-a-tokens.md`, `lane-b-library.md`, `lane-c-implementation.md`, `lane-d-consistency.md`).
-**Scope:** the SPA (`src/`) — every screen, component, and new piece of UI chrome. The Go backend is out of scope except where it serves assets.
+**Status:** Target-state constitution, amended 2026-09-17 after adversarial review.
 
-This document is the constitution of the Omnipus design system. Where code or habit disagrees with it, the code or habit is wrong. Each decision names its enforcement mechanism; an unenforced decision is a wish, and this project has already measured what wishes are worth (a published `Card` with one consumer).
+**Scope:** The Omnipus SPA and reusable UI package. The Go backend is in scope only where it embeds SPA assets.
 
----
+**Brand:** The Sovereign Deep — Deep Space Black `#0A0A0B`, Liquid Silver `#E2E8F0`, Forge Gold `#D4AF37`; Outfit, Inter, and JetBrains Mono.
 
-## Part 1 — Foundations
+**Companion:** Implementation and completion rules live in `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/docs/internal/design/design-system-migration-plan.md`.
 
-### D1. Root font size: 14px, declared the official dense baseline
+This constitution defines the finished system, not rollout order. Where product code and this document disagree, the code is non-conforming. Each decision separates measured facts from interpretation and names enforcement that can observe the rule it claims to enforce.
 
-**Decision.** The application root font size is **14px**. This is the deliberate "dense UI" posture the UX guidelines reserve for professional tools, not an accident. The brand guidelines (`docs/internal/brand/brand-guidelines.md`) must be amended: the 16px body figure applies to marketing surfaces (omnipus.ai), the product SPA runs at 14px.
+## Operating model
 
-**Evidence.** Lane A found the app serving a 14px root against a 16px brand spec, making every `rem` render 12.5% smaller than the brand sheet intends — and found this was load-bearing: 317 screens are implicitly designed around 14px.
+| Class | Owns | May depend on |
+|---|---|---|
+| Foundations | Tokens, typography, spacing, motion, icon and content rules | Nothing above foundations |
+| Primitives | Generic controls such as `Button`, `IconButton`, `Field`, `Dialog`, `Sheet` | Foundations and approved low-level libraries |
+| Composites | Reusable jobs such as `ConfirmDialog`, `EmptyState`, `QueryErrorState` | Foundations and primitives |
+| Domain components | Product-specific UI such as `ModelSelector`, `AutoSaveIndicator` | Foundations, primitives, composites |
 
-**Enforcement.** `html` font-size set once in `src/styles/globals.css`; a comment cites this decision. The brand-sheet amendment lands in the same program.
+`@omnipus/ui` is a curated public API, not a directory mirror. Domain components remain outside the public primitive package unless a separate public contract is approved.
 
-### D2. Type floor: 11px as a named "label" token
+## Part 1 — Core decisions
 
-**Decision.** The official type scale gains a bottom step: **11px "label"**, permitted for captions, badges, table metadata, and axis labels — never for body copy, never for anything a user must read to complete a task. **10px and below is banned** and all existing uses migrate up.
+### D1. Product type density is user-adjustable, with a 14px default
 
-**Evidence.** Lane A counted 616 sub-12px `text-[Npx]` classes in production code (364× 10px, 211× 11px, 39× 9px and smaller). Lane D independently reframed them: this is not 616 acts of sloppiness, it is a missing scale step the UI already voted for. The definition legitimizes the vote at 11px and refuses it below.
+**Decision.** The product defaults to a 14px root size within `clamp(12px, var(--user-font-size, 14px), 20px)`. Fourteen pixels is the default density, not a fixed root. Text roles that should follow the user setting use `rem`; fixed geometry, hairlines, and minimum hit regions do not. Marketing surfaces may retain the brand guideline's 16px body default.
 
-**Enforcement.** The scale is tokenized in `@theme`; a lint rule bans `text-[Npx]` arbitrary values entirely (the scale has named steps; arbitrary sizes are how we got 666 of them) and CI fails on new ones.
+**Evidence (facts only).** The audited stylesheet already uses the 12–20px clamp with a 14px default, and Profile settings use the same default. The audit counted 317 non-test TSX files potentially affected; it did not count 317 screens. Routes and rendered surfaces are inventoried separately.
 
-### D3. Token architecture: full three layers, built now
+**Enforcement.** The root clamp is defined once. Token metadata marks responsive `rem` roles. Browser tests cover the default, minimum, maximum, 200% zoom, and 320px reflow without loss of content or function.
 
-**Decision.** The token system is rebuilt in three layers, in one program:
+### D2. Type has a hard 12px floor — amended 2026-09-17 after adversarial review
 
-1. **Primitive ramps** — numbered shade scales per hue (e.g. `gold-100…900`, `silver-100…900`, space-black ramp), 5–10 shades each, fixed up front, never generated on the fly.
-2. **Semantic aliases** — role tokens that point at ramp steps: `surface`, `surface-raised`, `text-primary`, `text-secondary`, `accent`, `border`, `status-*` (see D4). Components consume only these.
-3. **Component tokens** — per-component tokens that point at semantics: `button-bg`, `button-text`, `card-border`, `input-bg`. Component CSS consumes only these.
+**Decision.** No Omnipus UI text is smaller than 12px. There is no 11px token and no compact exception below 12px. Dense metadata uses the 12px caption or label roles with appropriate weight and line height.
 
-Dead names (`font-inter`, `font-outfit`, `--color-text-secondary` — used but never defined) are resolved as part of the semantic layer, not patched one by one.
+**Evidence (facts only).** Lane A counted 666 arbitrary `text-[Npx]` classes in 153 production files, including 616 below 12px. The brand guideline defines its caption/label at 12px. Frequency establishes current use, not usability.
 
-**Evidence.** Lane A: today's tokens are a flat named-hex list (`--color-accent: #d4af37` binds a name to a hex, not a role to a ramp), which is why every new surface (calendar chips, mermaid, file-type maps) invented its own hex — 125 hardcoded values across 12 files.
+**Enforcement.** The closed type scale has no sub-12 token. Stylelint and Tailwind-aware source rules reject sub-12 values and arbitrary text-size utilities. Browser tests exercise zoom and narrow reflow; computed-style tests prove the minimum rather than searching strings.
 
-**Enforcement.** The three layers are the only definitions in `@theme`; a guard test asserts no component-level CSS references a primitive ramp step directly.
+### D3. Tokens have one directed dependency graph
 
-### D4. Status color: one brand-derived semantic palette
+**Decision.** The only token graph is `primitive → semantic → component → CSS`.
 
-**Decision.** Success, warning, danger, info, and the workflow states (todo / in-progress / done / blocked) are **tokens derived from the Sovereign Deep world** — cool silvers and Forge Gold, contrast-checked against Deep Space Black — each with a full ramp. "In progress" is one color everywhere; the calendar repaints to the board's gold, not the reverse. **Tailwind's default `red-*` / `amber-*` / `sky-*` / `blue-*` utilities are banned in UI chrome.** Domain visualizations (mermaid diagrams, charts) may use a wider derived palette but must draw it from the token file, not inline hex.
+- Primitive tokens are raw ramps and scales.
+- Semantic tokens express purpose: surface, text, border, accent, status, spacing, motion, and elevation.
+- Component tokens exist only when a component differs from the semantic default or needs stable public customization.
+- Application and layout code may consume semantic tokens.
+- Library components consume component tokens when their contract defines them; otherwise they consume semantic tokens directly.
+- Visualization palettes and user-authored colors are explicit exceptions governed by D4 and D14.
 
-**Evidence.** Lane A: the calendar paints "in progress" sky-blue while the board paints it Forge Gold for the same underlying task state; 32 files use Tailwind default-hue utilities next to the brand palette.
+Every component token has an owner, purpose, supported states, and consumers. Mechanical aliases such as `card-border → border` are forbidden.
 
-**Enforcement.** Lint rule banning default-hue utilities in `src/**/*.tsx` outside the token definitions; the workflow-state tokens are defined once and referenced by name.
+**Evidence (facts only).** Lane A found one flat CSS token list, no primitive ramps, no component layer, duplicated hexadecimal values in TypeScript maps, 125 hard-coded color values across 12 audited files, and token names referenced without definitions. The audit did not establish that every component needs component tokens.
 
----
+**Enforcement.** A PostCSS/Stylelint token-graph check parses custom-property declarations and references, validates namespace edges, detects cycles and undefined tokens, and covers CSS and third-party theme adapters. A generated typed token module is the only token source for TypeScript consumers. Tests seed bad edges, cycles, missing names, and allowed exceptions to prove detection.
 
-## Part 2 — Component contract
+### D4. Status is a complete, distinguishable presentation contract — amended 2026-09-17 after adversarial review
 
-### D5. Consumption: the library is the only legal path, migrated big-bang
+**Decision.** Success, warning, danger, information, and workflow states use recognizable semantic hue families—green, amber, red, blue, and others where needed—tuned to Sovereign Deep. They are not forced into silver and gold. Each status defines foreground, background, border, icon, label, hover/focus treatment, contrast ratios, and a non-color cue. Equivalent states look and read the same across surfaces. Status sets pass pairwise-distinction and common color-vision-deficiency checks.
 
-**Decision.** Using `src/components/ui/` primitives is **mandatory**, and the existing violations are converted in **one dedicated migration program**, not gradually on-touch. Raw `<button>` in screen code, hand-rolled dialogs, and one-off panels where a library component exists are defects after the migration lands.
+**Evidence (facts only).** Lane A found calendar “in progress” rendered blue while the board rendered the same state in Forge Gold. It also found default Tailwind hue utilities in 32 files alongside semantic colors. The brand already defines green success and red error; it does not require every status to use silver or gold.
 
-**Evidence.** Lane D: 98–141 files ship raw `<button>` (count depends on whether `ui/` itself is excluded); `Card` is published with ~1 consumer outside the library. Lane B judged the library 2/5 — "emerging" — precisely because consumption is optional. The founder chose big-bang over migrate-on-touch: the end state is reached once, and the definition starts its life true rather than becoming true over a year.
+**Enforcement.** Stylelint covers CSS colors and utilities; AST-aware ESLint covers JSX attributes, style objects, SVG values, and class builders. An exception registry covers document/paper surfaces, QR codes, syntax highlighting, data visualization, and user-authored colors. Contract tests verify contrast, non-color cues, and pairwise distinction under color-vision simulations.
 
-**Enforcement.** A lint rule bans new raw `<button>` / `<dialog>` / one-off confirm patterns in screen code (the `ui/` primitives themselves are exempt — they are the implementation). The migration program is tracked as its own workstream with a completion criterion of zero lint exemptions.
+### D5. Named UI jobs have one legal component path
 
-### D6. The four-state contract
+**Decision.** Feature code uses:
 
-**Decision.** Every data-driven component receives its states from **library APIs**, not local invention:
+| Job | Required path |
+|---|---|
+| General action | `Button` or `IconButton` |
+| Modal information or edit | `Dialog` |
+| Confirmation, especially destructive | `ConfirmDialog` |
+| Slide-over task | `Sheet` with named sizes |
+| Label, control, help, validation | `Field` |
+| Loading, empty, query error, long-running status | The owner named in D6 |
+| Boolean preference | `Switch`; never a checkbox styled as a switch |
 
-- **Loading** → one `Skeleton` system (with the timing rules: nothing < 1 s, skeleton for content loads 2–10 s, determinate progress > 10 s).
-- **Empty** → one `EmptyState` with title / description / action slots.
-- **Error** → one query-error pattern with retry, and inline field errors on forms.
-- **Disabled / pending** → one `Button` loading state and shared disabled styling.
+Raw elements remain legal inside named low-level primitive directories, documented wrappers, and approved third-party integration boundaries. They are not legal shortcuts in feature code. Each exception records exact surface, reason, owner, and expiry.
 
-Per-screen copies of any of these are deleted during the D5 migration.
+**Evidence (facts only).** Lane D counted 98 production files with a raw `<button>` and no `Button` import, plus 38 mixed-use files. It found four confirmation mechanisms and one `window.confirm`. Lane B found a real primitive kit but inconsistent adoption and domain widgets mixed into `ui/`.
 
-**Evidence.** Lane B: loading/empty/error are "invented per screen" and named this the inconsistency users actually see. Lane D found the same forks independently (empty states and confirm dialogs differing per module) and one surviving `window.confirm` (`src/components/library/preview/unsavedGuard.ts:42`).
+**Enforcement.** AST-aware ESLint bans raw `<button>`, `<dialog>`, `window.confirm`, and checkbox-as-switch syntax in feature code; import-boundary rules restrict low-level primitives and internal modules. Rules exempt only named directories and the reviewed exception file. Source-rule self-tests seed violations and legitimate wrappers.
 
-**Enforcement.** The state components exist in `ui/` with the specified slots; the D5 lint rule flags local reimplementations of their patterns.
+### D6. State contracts are owned by component category
 
-### D7. Fail-closed primitives
+**Decision.** State is not a universal four-item list:
 
-**Decision.** The primitives enforce correctness at build time instead of relying on convention:
+| Category | Required states | Reusable owner |
+|---|---|---|
+| Collections | initial-loading, refreshing, empty, partial, ready, error | `CollectionState` with `Skeleton`, `EmptyState`, `QueryErrorState` |
+| Actions | idle, pending, success, error, disabled | The action primitive, normally `Button` or `IconButton` |
+| Fields | default, focus, invalid, disabled, read-only | `Field` and its control |
+| Long-running jobs | queued, running, progress, paused, failed, complete, cancelled | `JobStatus` and `Progress` |
 
-- Icon-only buttons **require** an `aria-label` prop — the component refuses to render without it (type error / runtime throw in dev).
-- `Button` defaults to `type="button"` (explicit opt-in for `submit`).
-- Interactive hit targets are **≥ 24px** inside primitives (Checkbox, Switch, Slider, icon buttons), with 44px on coarse-pointer layouts.
-- One global `prefers-reduced-motion` gate in `globals.css` covers every `animate-in`, accordion, and toast — motion is gated once, centrally, not per component.
-- The Settings hand-rolled Switch fork is deleted; the library Switch is the only switch.
+Loading behavior is observable:
 
-**Evidence.** Lane C: "accessibility is a convention, not a guarantee the primitive enforces" — a central focus ring exists, Radix provides traps and roles, but `type="button"`, hit targets, reduced-motion, and remembered `aria-label`s are exactly the four holes the primitives leave open.
+- Reserve layout immediately.
+- Delay visible loading UI by 300–500ms to avoid flashes.
+- Use skeletons for initial content structure and spinners for compact blocking actions.
+- Once shown, retain the indicator for a short minimum dwell defined by motion tokens.
+- Show determinate progress only when the operation reports real progress.
+- After 10 seconds without progress data, show an indeterminate long-running state with applicable cancel, background, or retry actions.
 
-**Enforcement.** The primitives themselves (type-level and dev-runtime checks); the reduced-motion gate is a single CSS block with a guard test asserting its presence.
+**Evidence (facts only).** Lane B found no shared loading state on `Button`, `Input`, or `Progress`; multiple empty/error implementations; two save indicators; and only three consumers of the field-error component. It did not establish that every component supports every state.
 
-### D8. Storybook is the library's front door
+**Enforcement.** Narrow rules ban `animate-pulse` outside `Skeleton`, local declarations named `*EmptyState`, `*ErrorState`, or `*Skeleton` outside approved locations, and direct low-level imports where a composite exists. Source-search self-tests prove those rules. Review, interaction tests, and targeted visual regression cover semantic equivalence; lint is not claimed to understand meaning.
 
-**Decision.** The project adopts **Storybook** as the interactive component catalog: every primitive gets stories covering its variants and its four states (D6), and `@omnipus/ui` exports what `ui/` actually contains (today it exports 4 of 46 primitive files). Storybook is **dev-only tooling**: nothing it produces ships in the Go binary or the embedded SPA; hard constraint #1 (single binary) is unaffected.
+### D7. Primitives fail closed on accessibility and interaction
 
-**Evidence.** Lane B: no Storybook, no `components.json`, no catalog of any kind — and named invisibility the direct cause of Lane D's re-invention findings.
+**Decision.** `IconButton` is distinct from `Button`. It requires an accessible name through a TypeScript union of `aria-label` or `aria-labelledby`; `Button` remains child-agnostic. `Button` defaults to `type="button"`. Decorative icons are `aria-hidden`; meaningful icons have an owned accessible name. `CommandInput` has a programmatic label.
 
-**Enforcement.** A story file per primitive is part of the definition of done for the D5 migration; CI builds Storybook so broken stories fail the gate.
+Visual size and hit area are separate. Interactive hit regions are at least 24×24px and become at least 44×44px for coarse pointers. Wrappers or pseudo-elements may enlarge a hit region without enlarging dense chrome. Enlarged regions must not overlap. The WCAG spacing exception at 24px applies only when adjacent-target spacing satisfies the criterion; destructive, primary, and isolated touch controls use 44px.
 
----
+**Evidence (facts only).** Lane C found central focus styling and Radix semantics, but no primitive guarantee for button type, icon names, decorative icons, command-input labeling, reduced motion, or minimum hit regions. It also found a hand-rolled Settings switch.
 
-## Consequences and non-goals
+**Enforcement.** Type contracts and development assertions enforce accessible names and button type. Storybook interaction tests use axe and accessible-name assertions. Pointer-event tests verify effective hit regions and non-overlap at fine and coarse pointer settings. The primitive checklist blocks release when a required item is absent.
 
-- **Brand guidelines get one amendment** (14px product root, D1). Everything else in "The Sovereign Deep" stands.
-- **This is a work program, not a doc.** The natural phasing: (1) token rebuild D3+D4 and type scale D1+D2, (2) primitive contract D6+D7, (3) Storybook D8 alongside, (4) big-bang migration D5 last, onto the finished foundation — the founder's logic: migrate once, onto the final architecture.
-- **Non-goals:** redesigning screens, changing the Sovereign Deep palette or fonts, a light theme (dark-first stands), and any runtime dependency in the shipped binary.
-- **Changing this document** requires the same process that created it: a founder decision, recorded here with its date and evidence. Drive-by edits are not amendments.
+### D8. Storybook and `@omnipus/ui` are the verified front door
 
-## References
+**Decision.** Components are classified before publication. `ModelSelector`, `RestartConfirmDialog`, `AutoSaveIndicator`, `BrandIcon`, and other domain widgets do not live in the primitive namespace. `@omnipus/ui` exports a curated foundations/primitives/composites API through an explicit export map.
 
-- Audit reports: `docs/internal/ui-audit-2026-09-17/` (four lanes, file:line evidence)
-- Brand: `docs/internal/brand/brand-guidelines.md`
-- Rubric: `elicify-ui-ux-design` skill (visual-system, checklist, accessibility knowledge files)
-- Rule set: Vercel Web Interface Guidelines (via the repo-level `web-design-guidelines` skill)
+Every public component has a coverage manifest naming variants, sizes, applicable states, themes, keyboard interactions, and accessibility assertions. Static components are not forced into irrelevant states. Storybook is development-only and never enters the production dependency graph or embedded SPA assets.
+
+**Evidence (facts only).** Lane B inventoried 26 primitive families, 8 domain widgets plus 2 helpers inside `ui/`, 11 shared-composite files, 14 library test files, no Storybook, and an `@omnipus/ui` stub exporting only part of the catalog.
+
+**Enforcement.** CI validates manifest-to-export and manifest-to-story coverage, builds Storybook, runs axe and interaction tests, and captures targeted visual snapshots. Export-map tests reject accidental public APIs. Storybook packages exist only in root `devDependencies`; output is separate from `dist/spa`; production source cannot import `.storybook` or `*.stories.*`; bundle inspection rejects Storybook modules; embedded asset size is compared with baseline.
+
+## Part 2 — Complete foundations
+
+### D9. Typography is a role system, not a bag of sizes
+
+**Decision.** Outfit is for display/headings, Inter for interface/body, and JetBrains Mono for code, identifiers, and aligned technical data. The scale defines display, page title, section title, body, compact body, label, caption, and code roles. Every role specifies family, `rem` size, weight, line height, letter spacing, and maximum line length. The minimum computed size is 12px at the minimum user setting. Body copy targets 45–75 characters per line; dense tables may use shorter measures.
+
+**Evidence (facts only).** The brand defines the three families and three example roles: 48px heading, 16px body, and 12px caption. Lane A found family tokens but no complete size, weight, or line-height system, and found `font-sans` not mapped to Inter.
+
+**Enforcement.** Typography roles are generated typed tokens. Arbitrary family, size, weight, leading, and tracking values are rejected outside the exception registry. Computed-style and line-length stories cover every role.
+
+### D10. Spacing, layout, breakpoints, and density adapt as one system
+
+**Decision.** Spacing uses an 8px layout grid with 4px half-steps for compact internal alignment. Named tokens cover control gaps, content padding, sections, gutters, and page margins. Breakpoints express content behavior rather than device brands. Layouts reflow at 320px without two-dimensional scrolling except for intrinsically two-dimensional content such as data tables, canvases, and timelines.
+
+Density has comfortable and compact modes. Density changes spacing and control geometry, never the 12px floor or accessible hit region. Coarse pointers select touch-adapted spacing and 44px targets independently of visual density.
+
+**Evidence (facts only).** Lane A found tokens for sidebar width, 44px tap target, and two chrome heights, but no general spacing scale. Lane D found 23 literal 44px dimensions despite an existing token.
+
+**Enforcement.** Stylelint rejects unregistered spacing and breakpoint values in system-owned CSS. Responsive stories and browser tests cover 320px, intermediate widths, wide layouts, both density modes, and coarse/fine pointers.
+
+### D11. Radius, borders, elevation, and overlays have finite scales
+
+**Decision.** Radius, border width/style, shadow/elevation, and z-index are closed token scales. Elevation communicates hierarchy sparingly on dark surfaces. Overlay order is explicit: base content, sticky chrome, menus/popovers, sheets/dialogs, alerts/toasts, and exceptional full-screen viewers. Components never invent numeric z-index values.
+
+**Evidence (facts only).** Lane A found no radius or shadow tokens. Lane D found a hand-built lightbox at `z-[200]` while Dialog uses `z-50`; the audit did not visually verify the resulting stack behavior.
+
+**Enforcement.** Stylelint rejects raw radius, shadow, and z-index values outside token definitions and registered third-party adapters. Overlay interaction tests verify stacking, focus containment, dismissal, and scroll locking.
+
+### D12. Motion and iconography are governed foundations
+
+**Decision.** Motion tokens define duration, easing, distance, and choreography for feedback, entrance, exit, expansion, and reordering. Motion explains causality and never blocks input. A shared reduced-motion utility removes non-essential travel and replaces essential motion with immediate or low-motion feedback. Framer Motion callers use the required reduced-motion hook or configuration.
+
+Phosphor is the standard icon family. Named sizes, weights, and optical-alignment rules apply. Decorative icons are hidden from assistive technology; standalone meaningful icons use `IconButton` or have another explicit naming owner.
+
+**Evidence (facts only).** Lane C found no `prefers-reduced-motion` coverage. Lane D found Phosphor used in 196 files and only two legitimate inline-SVG exceptions, so it found no competing icon set.
+
+**Enforcement.** Lint rejects raw motion durations, unregistered keyframes, `transition-all`, and Framer Motion use without the shared policy. Browser tests under reduced motion cover Dialog, Sheet, Accordion, Toast, and custom motion. Icon stories test size, alignment, labels, and decorative treatment.
+
+### D13. Forms and content have explicit composition rules
+
+**Decision.** `Field` owns label, control identity, help text, required/optional indicator, validation message, `aria-invalid`, and `aria-describedby`. Validation explains the problem and next action without relying on color. Read-only and disabled are visually and semantically distinct.
+
+Interface content uses consistent terminology, sentence case, and punctuation. Loading copy uses `…`. Truncation never hides information needed to decide or act; an accessible full value is provided. Dates, times, numbers, pluralization, and sorting use locale-aware APIs. User-visible strings support localization and expansion.
+
+**Evidence (facts only).** Lane B found `FormError` used by three files and 42 files declaring their own `role="alert"`. Lane C found sparse explicit label wiring in audited settings fields and inconsistent live-region use. Lane B found both `Saving...` and `Saving…`.
+
+**Enforcement.** Component types make Field wiring the default. Interaction tests assert labels, descriptions, validation announcements, required/optional copy, and keyboard behavior. ESLint rejects literal three-dot loading copy and non-localized UI date/number formatting. Content review owns terminology and usefulness.
+
+### D14. Data visualization uses a separate accessible palette
+
+**Decision.** Charts, graphs, diagrams, syntax highlighting, and file-type indicators may use more colors than application chrome. Their palette is separately tokenized, harmonious with Sovereign Deep surfaces, and not reused as status chrome. Series differ through at least two channels—hue plus shape, line style, label, or pattern. User-authored colors remain user data and receive contrast-aware surrounding treatment rather than silent replacement.
+
+**Evidence (facts only).** Lane A found separate color maps for Mermaid, FullCalendar, file types, task/plan status, and user/agent colors. It identified dynamic entity colors and document-white surfaces as legitimate exceptions to a blanket inline-color ban.
+
+**Enforcement.** Visualization tokens are in the typed output and exception registry. Automated contrast and color-vision simulations cover legends, labels, and adjacent series; stories verify monochrome comprehension and non-color cues.
+
+### D15. Component anatomy, variants, composition, and support are contractual
+
+**Decision.** Every public component documents anatomy, slots, variants, sizes, applicable states, composition, controlled/uncontrolled behavior, keyboard model, focus behavior, and accessible-name ownership. Variants represent stable product meaning, not one-screen styling. Public roots accept safe hooks such as `className` and refs where supported.
+
+The supported browser matrix includes current Chromium, Firefox, and WebKit engines. Tests are proportional to risk: unit tests for logic/contracts, interaction tests for behavior, axe for detectable accessibility faults, browser tests for focus/reflow/motion/pointers, and targeted visual snapshots. No test type is treated as proof of the others.
+
+**Evidence (facts only).** Lane B found inconsistent variant, class merging, ref forwarding, disabled, and invalid-state APIs, and only 14 library test files for 36 production files in `ui/`.
+
+**Enforcement.** The coverage manifest is machine-readable. CI validates public exports, required documentation, unit and interaction suites, browser coverage, axe results, and selected visual baselines.
+
+### D16. Accessibility is a release requirement
+
+**Decision.** WCAG 2.2 AA is the minimum. Each primitive checklist covers semantics, accessible-name ownership, keyboard operation, focus visibility/restoration, target size, error identification, status announcement, zoom/reflow, contrast, forced colors, reduced motion, and high-contrast behavior.
+
+The system additionally requires:
+
+- decorative icons marked `aria-hidden`;
+- `CommandInput` programmatically labelled;
+- one logical heading hierarchy per screen;
+- labels, help, errors, and controls wired through `Field`;
+- `color-scheme: dark` on the document;
+- modal/sheet overscroll containment, background scroll lock, focus trap, focus restoration, and appropriate dismissal;
+- navigational tabs and filters reflected in the URL when refresh, sharing, and Back/Forward should preserve them;
+- representative screen-reader testing in addition to automation.
+
+**Evidence (facts only).** Lane C found good Radix focus traps and roles in audited dialogs, a central focus ring, and strong keyboard behavior in several complex controls. It also found gaps in decorative-icon treatment, `CommandInput` naming, heading order, form wiring, dark color-scheme declaration, modal overscroll, and Settings tab URL state. Automated tests alone cannot establish screen-reader usability.
+
+**Enforcement.** CI runs axe, keyboard interaction tests, forced-colors tests, 200% zoom and 320px reflow, and reduced-motion browser coverage. Release evidence includes representative screen-reader checks for navigation, a validating form, a dialog/sheet, a collection state, and a long-running job. Component owners own accessible names; callers supply domain wording where needed.
+
+## Non-goals and governance
+
+- The system remains dark-first; a light theme is not implied.
+- This does not redesign product information architecture or workflows.
+- No design-system tool becomes a shipped runtime dependency; the SPA remains embedded in the single Go binary.
+- User colors, document rendering, syntax highlighting, and visualization are governed exceptions, not loopholes.
+- Amendments require a recorded founder decision, date, evidence, and updated enforcement.
+- Completion is measured only by `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/docs/internal/design/design-system-migration-plan.md`.
+
+## Evidence sources
+
+- `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/docs/internal/ui-audit-2026-09-17/lane-a-tokens.md`
+- `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/docs/internal/ui-audit-2026-09-17/lane-b-library.md`
+- `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/docs/internal/ui-audit-2026-09-17/lane-c-implementation.md`
+- `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/docs/internal/ui-audit-2026-09-17/lane-d-consistency.md`
+- `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/docs/internal/brand/brand-guidelines.md`
