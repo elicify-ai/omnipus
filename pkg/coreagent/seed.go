@@ -502,26 +502,7 @@ func tightenGlobalCeiling(overrides map[string]config.ToolPolicy) map[string]con
 //
 // The returned map is an independent allocation — callers may mutate it safely.
 func coreAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
-	if id == IDWorker {
-		return workerSeedPolicies()
-	}
-	if IsSubagentTierID(id) {
-		return subagentTierSeedPolicies(id)
-	}
-	switch id {
-	case IDAva:
-		return avaSeedPolicies()
-	case IDMia:
-		return miaSeedPolicies()
-	case IDRay:
-		return raySeedPolicies()
-	case IDJim:
-		return jimSeedPolicies()
-	}
-	// Defensive fallback for an ID outside the known roster (All() only ever
-	// passes Mia/Jim/Ava/Ray/Worker/Planner/Explorer/Researcher, so this branch
-	// should be unreachable) — deny every known tool, no implicit allow.
-	return denyAllThenOverride(nil)
+	return adr090SparseRolePolicies(id)
 }
 
 // workerSeedPolicies is the Worker's seeded tool policy: sparse, tightening only listed tools below the global ceiling (see the comment inside).
@@ -1614,19 +1595,19 @@ func jimSeedPolicies() map[string]config.ToolPolicy {
 func coreAgentSkills(id CoreAgentID) []string {
 	switch id {
 	case IDMia:
-		return []string{"summarize", "daily-briefing", "define-goal"}
-	case IDRay:
-		return []string{"summarize", "define-goal"}
+		return []string{"interview", "handoff", "define-goal", "inbox-triage", "elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
 	case IDJim:
-		return []string{"plan", "define-goal"}
+		return []string{"interview", "orchestrate", "plan", "define-goal"}
 	case IDAva:
-		return []string{"skill-authoring", "define-goal"}
+		return []string{"interview", "agent-authoring", "skill-authoring", "tool-mapping", "skill-mapping", "delegation-graph", "workspace-team"}
+	case IDAdmin:
+		return []string{"interview", "mcp-install", "provider-setup", "channel-setup", "doctor"}
 	case IDPlanner:
-		// The Planner decomposes goals into a task DAG — the plan skill is its core.
 		return []string{"plan", "define-goal"}
-	case IDExplorer, IDResearcher:
-		// Explorer + Researcher synthesize what they find.
-		return []string{"summarize", "define-goal"}
+	case IDResearcher:
+		return []string{"deep-research"}
+	case IDWorker:
+		return []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}
 	default:
 		return nil
 	}
@@ -1674,28 +1655,7 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 	switch id {
 	case IDJim:
 		return &config.DelegationPolicy{
-			To: []config.AgentRef{ref(IDAva), ref(IDRay), ref(IDWorker)},
-			Modes: []config.DelegationMode{
-				config.DelegationModeTask,
-				config.DelegationModeBackground,
-				config.DelegationModeAwait,
-			},
-		}
-	case IDMia, IDAva:
-		return &config.DelegationPolicy{
-			To: []config.AgentRef{ref(IDWorker)},
-			Modes: []config.DelegationMode{
-				config.DelegationModeTask,
-				config.DelegationModeBackground,
-			},
-		}
-	case IDRay:
-		// Ray (Scout) runs a "deep research" mode: fan out MANY parallel research
-		// subagents (the general worker + the dedicated Researcher) and synthesize
-		// their findings. Background mode powers the parallel fan-out; await lets
-		// him collect a sub-result synchronously when needed.
-		return &config.DelegationPolicy{
-			To: []config.AgentRef{ref(IDWorker), ref(IDResearcher)},
+			To: []config.AgentRef{ref(IDPlanner), ref(IDResearcher), ref(IDWorker), ref(IDJim)},
 			Modes: []config.DelegationMode{
 				config.DelegationModeTask,
 				config.DelegationModeBackground,
@@ -1709,12 +1669,17 @@ func coreAgentDelegation(id CoreAgentID) *config.DelegationPolicy {
 		// is the bounded subagent-delegation unlock (M5) made concrete: a subagent
 		// that carries a non-empty to[].
 		return &config.DelegationPolicy{
-			To: []config.AgentRef{ref(IDExplorer), ref(IDResearcher)},
+			To: []config.AgentRef{ref(IDResearcher)},
 			Modes: []config.DelegationMode{
 				config.DelegationModeAwait,
 				config.DelegationModeTask,
 			},
 			Depth: intPtr(2),
+		}
+	case IDWorker:
+		return &config.DelegationPolicy{
+			To:    []config.AgentRef{ref(IDWorker)},
+			Modes: []config.DelegationMode{config.DelegationModeTask, config.DelegationModeBackground, config.DelegationModeAwait},
 		}
 	default:
 		// Explorer, Researcher, and the generic worker are leaves: no onward
@@ -1978,30 +1943,8 @@ func SeedConfig(cfg *config.Config) bool {
 	// — ADR-080 D-SKILL renamed the seeded grant — take no append via the
 	// define-goal guard inside applyDefineDoneSkillsMigration below) and only
 	// the marker is recorded.
-	if applyDefineDoneSkillsMigration(sc.cfg) {
-		sc.modified = true
-	}
-
-	// ADR-080 D-SKILL: one-shot, marker-keyed REWRITE migration for installs
-	// that already hold the old "define-done" token (seeded fresh by an
-	// earlier release, or just appended by applyDefineDoneSkillsMigration
-	// immediately above on an install upgrading straight from pre-ADR-074).
-	// Must run AFTER applyDefineDoneSkillsMigration so both markers can land
-	// in the SAME boot for that double-upgrade case, with the token already
-	// renamed by the time this pass returns.
-	if applyDefineGoalRenameMigration(sc.cfg) {
-		sc.modified = true
-	}
-
-	// Founder decision 2026-09-15 (issue #710): goal_claim is allowed by
-	// default for every agent that can own a goal or be assigned a task.
-	// One-time, marker-keyed update so an install seeded before the Worker's
-	// seed changed reaches the same default a fresh install gets. Runs AFTER
-	// the seeding loops, so a fresh install's just-seeded Worker (already
-	// allow) is left as-is and only the marker is recorded.
-	if applyWorkerGoalClaimAllowUpdate(sc.cfg) {
-		sc.modified = true
-	}
+	// ADR-090 is a fresh-build roster. Historical skill and policy migrations
+	// remain defined for old release branches but do not run on this seed path.
 
 	return sc.modified
 }

@@ -27,10 +27,11 @@ import (
 type CoreAgentID string
 
 const (
-	IDJim CoreAgentID = "jim"
-	IDAva CoreAgentID = "ava"
-	IDMia CoreAgentID = "mia"
-	IDRay CoreAgentID = "ray"
+	IDJim   CoreAgentID = "jim"
+	IDAva   CoreAgentID = "ava"
+	IDMia   CoreAgentID = "mia"
+	IDAdmin CoreAgentID = "admin"
+	IDRay   CoreAgentID = "ray"
 	// IDWorker is the seeded general-purpose sub-agent worker (the worker tier).
 	// It is NOT a base/core agent: it is seeded with Type=worker, carries a native
 	// Executor, is never a chat target, has no heartbeat, and is never the
@@ -97,7 +98,6 @@ const (
 // no heartbeat) but are distinct agents with their own identity and delegation.
 var specialistIDs = map[CoreAgentID]bool{
 	IDPlanner:    true,
-	IDExplorer:   true,
 	IDResearcher: true,
 }
 
@@ -140,11 +140,10 @@ func All() []*CoreAgent {
 		Mia(),
 		Jim(),
 		Ava(),
-		Ray(),
-		Worker(),
+		Admin(),
 		Planner(),
-		Explorer(),
 		Researcher(),
+		Worker(),
 	}
 }
 
@@ -155,7 +154,7 @@ func BaseAgents() []*CoreAgent {
 		Mia(),
 		Jim(),
 		Ava(),
-		Ray(),
+		Admin(),
 	}
 }
 
@@ -241,7 +240,7 @@ func init() {
 		if IsWorkerID(ca.ID) {
 			continue
 		}
-		if _, ok := prompts[string(ca.ID)]; !ok {
+		if _, ok := adr090Prompts[string(ca.ID)]; !ok {
 			panic(fmt.Sprintf("coreagent: no compiled prompt for agent %q — add to prompts map", ca.ID))
 		}
 	}
@@ -251,7 +250,7 @@ func init() {
 // Returns empty string if the ID is not a core agent — callers should
 // apply their own fallback (e.g., check SOUL.md or use default identity).
 func GetPrompt(id string) string {
-	return prompts[id]
+	return adr090Prompts[id]
 }
 
 // ResolveType maps the 3 user-creatable wire enum values (Main / Subagent /
@@ -286,7 +285,7 @@ func ResolveType(wire generated.AgentType) config.AgentType {
 func Jim() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDJim,
-		Name:     "Jim — Planner & Orchestrator",
+		Name:     "Jim",
 		Subtitle: "Planner & Orchestrator",
 		Description: "Your planning hub — decomposes complex goals into a task DAG, " +
 			"delegates to the right specialists, tracks progress, and drives work to completion.",
@@ -307,7 +306,7 @@ func Jim() *CoreAgent {
 func Ava() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDAva,
-		Name:     "Ava — Builder",
+		Name:     "Ava",
 		Subtitle: "Builder",
 		Description: "Your agent architect — interviews you about what you need, " +
 			"then creates a custom agent with a tailored personality and tools.",
@@ -328,7 +327,7 @@ func Ava() *CoreAgent {
 func Mia() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDMia,
-		Name:     "Mia — Assistant",
+		Name:     "Mia",
 		Subtitle: "Assistant",
 		Description: "Your friendly everyday assistant — guides you through Omnipus, " +
 			"answers questions, and connects you with the right specialist when needed.",
@@ -340,6 +339,17 @@ func Mia() *CoreAgent {
 			"send_message",
 			"switch_agent",
 		},
+	}
+}
+
+// Admin returns the chat-capable operator role. Admin configures the harness;
+// it is a core runtime identity, not a hidden system agent.
+func Admin() *CoreAgent {
+	return &CoreAgent{
+		ID: IDAdmin, Name: "Admin", Subtitle: "Operator",
+		Description: "Configures connectors, providers, channels, diagnostics, and document dependencies.",
+		Color:       "#F97316", Icon: "shield",
+		DefaultTools: []string{"read_file", "write_file", "list_directory", "bash", "list_mcp_servers", "add_mcp_server", "list_providers", "configure_provider", "list_channels", "configure_channel", "run_doctor"},
 	}
 }
 
@@ -371,8 +381,8 @@ func Ray() *CoreAgent {
 func Worker() *CoreAgent {
 	return &CoreAgent{
 		ID:       IDWorker,
-		Name:     "Worker",
-		Subtitle: "Worker",
+		Name:     "General Purpose",
+		Subtitle: "General Purpose",
 		Description: "General-purpose sub-agent worker — executes one delegated task at a time, " +
 			"does the work, and returns a concise result. Not a chat persona; invoked via delegation.",
 		Color: "#6B7280",

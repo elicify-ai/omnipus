@@ -368,34 +368,11 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"list_models":         "allow",
 		"run_doctor":          "allow",
 		"get_usage":           "allow",
-		// add_mcp_server is DENIED in the seeded default because an MCP
-		// server definition is a program the gateway launches, and the
-		// launched process is not confined by the sandbox. An agent that
-		// can add one has escaped the cage through the front door:
-		// config.json is in the ADR-062 secret set precisely so an agent
-		// cannot write an MCP server entry with write_file, and this tool
-		// wrote the same setting through the API.
-		//
-		// This matches the competitor threat model — Claude Code does not
-		// sandbox MCP server processes either, and defends the boundary by
-		// making .mcp.json unwritable by the agent. The control is "an
-		// agent must not be able to ADD a server", not "a server must be
-		// caged".
-		//
-		// "deny" rather than "ask": the approval modal does render the full
-		// argument JSON, so the command is visible — but it is a generic,
-		// scrollable dump with no dedicated command preview (that special
-		// case exists only for `bash`), and the decision is turn-scoped
-		// while the effect is permanent and applies at every subsequent
-		// boot. An operator who has just asked for an MCP server set up
-		// cannot tell that request apart from one injected by a page the
-		// agent read.
-		//
-		// This is seeded DATA, not a code branch (CLAUDE.md constraint 6):
-		// an operator who wants an agent to install MCP servers changes
-		// this entry to "ask" or "allow" on their own install, in Settings
-		// or config.json, and keeps that power.
-		"add_mcp_server": "deny",
+		// ADR-090 raises the fresh ceiling so Admin can perform the approved
+		// installation workflow. Every other built-in and new custom agent
+		// carries an explicit local deny; an operator-set global Ask or Deny
+		// remains authoritative under strictest-wins resolution.
+		"add_mcp_server": "allow",
 		// remove_mcp_server stays "ask", deliberately asymmetric: removing
 		// a server narrows capability rather than widening it, destroys no
 		// data, and is recoverable by re-adding the entry. The server name
@@ -411,7 +388,7 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"update_task_in_workspace": "allow",
 		"delete_task_in_workspace": "ask", // irreversible delete
 		"list_tasks_in_workspace":  "allow",
-		"remove_skill":             "ask", // irreversible delete
+		"remove_skill":             "allow", // Ava confirms the combined proposal once.
 		"list_skills":              "allow",
 		"enable_channel":           "allow",
 		"configure_channel":        "allow",
@@ -422,7 +399,7 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"set_config":               "allow",
 		"create_agent":             "allow",
 		"update_agent":             "allow",
-		"delete_agent":             "ask", // irreversible delete
+		"delete_agent":             "allow", // Ava confirms the combined proposal once.
 	}
 }
 

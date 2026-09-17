@@ -273,11 +273,7 @@ func systemAgentSeed(id CoreAgentID) map[string]config.ToolPolicy {
 func systemAgentSkills(id CoreAgentID) []string {
 	switch id {
 	case IDJudge:
-		// JUDGE-FR-059: non-nil, EMPTY — see the doc comment above for why
-		// this closes nothing on its own (context.go::skillAllowed already
-		// denies a nil allowlist too) and why it does not touch the
-		// project-shelf hole FR-059a closes separately.
-		return []string{}
+		return []string{"verify"}
 	case IDPlanSupervisor:
 		// EXACTLY these two — an explicit ADR-074 D4 amendment to
 		// plan-supervisor-spec FR-007/N3 ("exactly one" → "exactly these

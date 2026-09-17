@@ -213,10 +213,13 @@ func TestEmbeddedDefaultsHaveProperDisplayNames(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"daily-briefing":  "Daily Briefing",
-		"plan":            "Plan",
-		"skill-authoring": "Skill Authoring",
-		"summarize":       "Summarize",
+		"agent-authoring": "agent-authoring", "channel-setup": "channel-setup",
+		"deep-research": "deep-research", "define-goal": "Define Goal",
+		"delegation-graph": "delegation-graph", "doctor": "doctor", "handoff": "handoff",
+		"inbox-triage": "inbox-triage", "interview": "interview", "mcp-install": "mcp-install",
+		"orchestrate": "orchestrate", "plan": "plan", "provider-setup": "provider-setup",
+		"skill-authoring": "skill-authoring", "skill-mapping": "skill-mapping",
+		"tool-mapping": "tool-mapping", "verify": "verify", "workspace-team": "workspace-team",
 	}
 	for slug, display := range want {
 		got, ok := bySlug[slug]

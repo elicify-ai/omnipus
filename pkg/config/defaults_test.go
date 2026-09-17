@@ -29,12 +29,12 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	cfg := DefaultConfig()
 
 	destructive := map[string]bool{
-		"delete_agent":             true,
 		"delete_workspace":         true,
 		"delete_task":              true,
 		"delete_task_in_workspace": true,
 		"remove_mcp_server":        true,
-		"remove_skill":             true,
+		// remove_skill and delete_agent are ADR-090 proposal-confirmed writes,
+		// so their fresh ceiling is allow rather than a second Ask gate.
 	}
 
 	// operatorOnly is a SECOND, distinct exception to the allow-by-default
@@ -55,7 +55,7 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 	// Security -> Tool Policies, or config.json), never a code branch — CLAUDE.md
 	// hard constraint 6.
 	operatorOnly := map[string]string{
-		"add_mcp_server": "deny",
+		"add_mcp_server": "allow",
 		// request_mount (ADR-063 FR-7.2) belongs to the same class as
 		// add_mcp_server — an agent widening its OWN boundary — but is seeded
 		// "ask" rather than "deny" because the widening is exactly what the
