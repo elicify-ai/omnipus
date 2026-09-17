@@ -103,4 +103,4 @@ maintained as current documentation and may be stale.
 - [Roadmap](../../ROADMAP.md)
 
 - [ADR-090 Opus finding dispositions](architecture/ADR-090-built-in-agents-skills-and-visual-reading-opus-dispositions.md) — corrections and independent closure status.
-- [ADR-090 independent Opus closure](architecture/ADR-090-built-in-agents-skills-and-visual-reading-opus-closure.md) — engineering PASS; licensing decision remains open.
+- [ADR-090 independent Opus closure](architecture/ADR-090-built-in-agents-skills-and-visual-reading-opus-closure.md) — engineering PASS; historical L1 status, subsequently resolved in the ADR to original Elicify skills.

@@ -1,7 +1,7 @@
 # Feature Specification: Visual file reading
 
 **Created:** 2026-09-17
-**Status:** Initial grill-spec passed after corrections; independent Opus review pending; implementation and runtime validation pending.
+**Status:** Grill-spec and independent Claude Code Opus reviews passed after corrections; implementation and runtime validation pending.
 **Authority:** [ADR-090](/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/worktrees/release-20260917/docs/internal/architecture/ADR-090-built-in-agents-skills-and-visual-reading.md), decision D6 and §§6.6, 10, 13. Companion: [agent configuration and skills specification](/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/worktrees/release-20260917/docs/internal/specs/adr-090-agent-configuration-and-skills-spec.md).
 **Requirements confirmation:** Founder explicitly selected image support in the existing readers on 2026-09-17. No separate image tool, browser prerequisite, or new automatic model switching.
 

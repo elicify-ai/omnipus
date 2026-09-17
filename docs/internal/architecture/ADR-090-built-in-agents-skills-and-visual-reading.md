@@ -1,6 +1,6 @@
 # ADR-090 — Built-in agent configuration, skills, and visual file reading
 
-- **Status:** Accepted product decisions (founder-confirmed 2026-09-17); initial grill-spec review passed; Opus findings being corrected; L1 package-source decision pending; implementation pending.
+- **Status:** Accepted product decisions (founder-confirmed 2026-09-17); grill-spec and independent Claude Code Opus reviews completed and findings corrected; L1 resolved to original Elicify skills; implementation pending.
 - **Date:** 2026-09-17
 - **Decider:** Daniel Piatkowski
 - **Number verification:** ADR-090 absent from architecture paths in all locally reachable Git history after fetching origin on 2026-09-17; highest observed number 089. Recheck before publication because other branches can allocate concurrently.
@@ -265,12 +265,12 @@ A skill is a playbook loaded with the `Skill` tool. It is **not** a standing rul
 | **doctor** | Admin |
 | **verify** | Judge only (pin the allow-list) |
 | **inbox-triage** | Mia |
-| **author-document** | Mia, General Purpose |
-| **author-spreadsheet** | Mia, General Purpose |
-| **author-presentation** | Mia, General Purpose |
-| **author-pdf** | Mia, General Purpose |
+| **elicify-docx** | Mia, General Purpose |
+| **elicify-xlsx** | Mia, General Purpose |
+| **elicify-pptx** | Mia, General Purpose |
+| **elicify-pdf** | Mia, General Purpose |
 
-The four document-authoring capabilities use the selected Anthropic document skills with their existing Python and Node.js scripts, helper files, and dependencies. Mia and General Purpose run them through the execution tool. A separate native Office engine is not required; see §6.5.
+The four document-authoring capabilities use original Elicify skills from elicify-ai/elicify-Skills, with their packaged helpers and declared dependencies. Their canonical installed skill IDs are the four elicify-* names in the table. Mia and General Purpose run them through the execution tool. A separate native Office engine is not required; see §6.5.
 
 ### 6.2 Interview checklists
 
@@ -293,7 +293,7 @@ The four document-authoring capabilities use the selected Anthropic document ski
 
 ### 6.5 Document generation and dependency setup
 
-Use the chosen document skills as supplied rather than rewriting them to Python only. Package their referenced helper scripts and assets, and make the required Python/Node.js runtimes and libraries available in the actual execution environment. Include conversion, rendering, and validation programs required by the chosen workflows; a runtime installed elsewhere on the host is not proof the agent can use it. Record the selected skill versions and dependency requirements during implementation.
+Author and package the chosen original Elicify document skills; use Python by default and Node where the workflow benefits. Package their referenced helper scripts and assets, and make the required Python/Node.js runtimes and libraries available in the actual execution environment. Include conversion, rendering, and validation programs required by the chosen workflows; a runtime installed elsewhere on the host is not proof the agent can use it. Record the selected skill versions and dependency requirements during implementation.
 
 Mia can read inputs, write scripts and output files, run the generation and validation commands, inspect the results, and return the actual document to the user. Her instructions must permit this workflow; do not retain a blanket instruction to refuse execution. General Purpose has the same document-generation capability. Both use the existing execution environment and permission model.
 
@@ -433,10 +433,12 @@ The approved Python/Node document workflows are an explicit exception to the roo
 1. **[Agent configuration and skills](../specs/adr-090-agent-configuration-and-skills-spec.md):** roster, field protection, Ava, tools/visibility, prompt/skill packaging, document execution and Admin setup.
 2. **[Visual file reading](../specs/adr-090-visual-file-reading-spec.md):** reader image content, inspection-only delivery, capability handling, provider conversion, and visual validation.
 
-The second specification supplies the visual acceptance required by the first; it can be developed independently against the existing read interface. Both reuse existing runtime facilities. The package source choice is open following verified license evidence (L1 below). Exact supporting tool maps remain engineering inventory work governed by the approved role boundaries, not permission to omit capabilities.
+The second specification supplies the visual acceptance required by the first; it can be developed independently against the existing read interface. Both reuse existing runtime facilities. The founder resolved the package source choice to original Elicify skills (L1 below). Exact supporting tool maps remain engineering inventory work governed by the approved role boundaries, not permission to omit capabilities.
 
-### Open decision L1 — document-skill redistribution
+### Resolved decision L1 — original Elicify document skills
 
 During source verification on 2026-09-17, the four upstream `skills/docx`, `skills/xlsx`, `skills/pptx` and `skills/pdf` LICENSE.txt files at Anthropic skills commit `34040c9c568585f6929bedeaad110ad08f079624` all explicitly restrict copying, derivative works and redistribution. Their presence in a public repository is not evidence that Omnipus may bundle them. [Pinned license evidence](https://github.com/anthropics/skills/blob/34040c9c568585f6929bedeaad110ad08f079624/skills/docx/LICENSE.txt).
 
-Direct bundling/adaptation is blocked pending either evidence of separate permission or a founder decision to use independently authored/permissively licensed equivalents. The recommended alternative preserves all four document capabilities and Python/Node execution; it does not copy the restricted prompts/scripts. The founder question is pending. Reader/provider and agent-configuration work can be specified independently, but the document-skill package is not declared implementation-ready while this choice is open.
+Daniel resolved L1 on 2026-09-17: author original Elicify document skills after online comparison, add them to [elicify-ai/elicify-Skills](https://github.com/elicify-ai/elicify-Skills), and plan intensive testing. Select `elicify-docx`, `elicify-xlsx`, `elicify-pptx` and `elicify-pdf`; do not copy or adapt Anthropic prompts, scripts or assets. Python is the initial authoring route; Node remains available where a workflow needs it. The source choice is closed. Package pinning, explicit Elicify-approved public distribution terms, dependency provisioning and full Omnipus acceptance remain release requirements. The private skill repository’s existing license is not silently changed by this decision.
+
+The original package implementation, comparative source research and intensive test plan are available in [Elicify Skills PR 1](https://github.com/elicify-ai/elicify-Skills/pull/1). Its isolated document pilot is package evidence, not evidence that Omnipus provisioning or runtime integration has shipped.

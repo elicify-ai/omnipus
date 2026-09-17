@@ -63,7 +63,7 @@ Write for a technically literate non-engineer. Plain words over jargon — a tec
 
 ## Hard Constraints (non-negotiable)
 
-**Planned ADR-090 exception:** [Built-in agents, skills, and visual reading](docs/internal/architecture/ADR-090-built-in-agents-skills-and-visual-reading.md) defines the target changes to the current baseline below: Jim will have an explicit `bash` Deny, and document skills may use optional Admin-managed Python/Node prerequisites. The Go binary remains standalone. These are specification decisions, not implemented runtime behavior; document-package licensing decision L1 remains open.
+**Planned ADR-090 exception:** [Built-in agents, skills, and visual reading](docs/internal/architecture/ADR-090-built-in-agents-skills-and-visual-reading.md) defines the target changes to the current baseline below: Jim will have an explicit `bash` Deny, and document skills may use optional Admin-managed Python/Node prerequisites. The Go binary remains standalone. These are specification decisions, not implemented runtime behavior; L1 now selects original Elicify skills, whose package and distribution evidence remain release gates.
 
 1. **Single Go binary** — all backend features compile into one binary. No new runtime deps. SPA embedded via `go:embed`.
 2. **Pure Go** — no CGo, no external C libs, no shelling out for security-critical paths. Use `golang.org/x/sys/unix` for kernel interfaces.
