@@ -2340,15 +2340,16 @@ func TestUpdateAgent_UnknownSkillIDRejected(t *testing.T) {
 	assert.Contains(t, resp["error"], "unknown skill id", "error must name the unknown skill")
 }
 
-// TestUpdateAgent_LockedRejectsSkills verifies that PUT /api/v1/agents/{id} on a
-// locked (core) agent with a skills field is rejected with 403 (B-2 defense-in-depth).
+// TestUpdateAgent_LockedAllowsSkills verifies ADR-090 FR-002's capability
+// carve-out: locked protects built-in identity, while ordinary built-in skill
+// assignments remain editable.
 //
 // BDD: Given a locked core agent "jim",
 // When PUT /api/v1/agents/jim is called with {"skills": ["web-research"]},
-// Then the response is 403 Forbidden.
+// Then the response is 200 and the skill assignment is persisted.
 //
 // Traces to: B-2 (#332 / US-D5) extended to Skills field.
-func TestUpdateAgent_LockedRejectsSkills(t *testing.T) {
+func TestUpdateAgent_LockedAllowsSkills(t *testing.T) {
 	t.Setenv("OMNIPUS_BEARER_TOKEN", "")
 
 	tmpDir := t.TempDir()
@@ -2375,7 +2376,10 @@ func TestUpdateAgent_LockedRejectsSkills(t *testing.T) {
 	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/jim", strings.NewReader(body))
 	api.HandleAgents(w, r)
 
-	assert.Equal(t, http.StatusForbidden, w.Code, "assigning skills to a locked agent must return 403")
+	require.Equal(t, http.StatusOK, w.Code, "assigning skills to an ordinary locked built-in must succeed: %s", w.Body.String())
+	state, err := agentstore.New(tmpDir).ReadState("jim")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"web-research"}, state.Agent.Skills)
 }
 
 // --- PUT /api/v1/agents/{id} (tools_cfg) ---

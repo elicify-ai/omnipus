@@ -3,6 +3,7 @@ package agentmutation
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
@@ -54,15 +55,20 @@ func ApplyToolPolicyChanges(current map[string]config.ToolPolicy, patch ToolPoli
 }
 
 func SelectOverrides(complete map[string]config.ToolPolicy, overrideNames []string, ceiling map[string]config.ToolPolicy) (map[string]config.ToolPolicy, error) {
-	if len(complete) != len(ceiling) {
-		return nil, &FieldError{Code: InvalidInput, Fields: []string{"config.builtin.policies"}, Reason: "complete policy map required"}
-	}
 	for name, global := range ceiling {
 		value, ok := complete[name]
 		if !ok || !validPolicy(value) {
 			return nil, &FieldError{Code: InvalidInput, Fields: []string{"config.builtin.policies"}, Reason: "missing or invalid tool: " + name}
 		}
 		_ = global
+	}
+	for name, value := range complete {
+		if _, builtin := ceiling[name]; builtin {
+			continue
+		}
+		if !strings.HasPrefix(name, config.MCPToolPolicyKeyPrefix) || !validPolicy(value) {
+			return nil, &FieldError{Code: InvalidInput, Fields: []string{"config.builtin.policies"}, Reason: "unknown or invalid tool: " + name}
+		}
 	}
 	overrides := make(map[string]config.ToolPolicy, len(overrideNames))
 	selected := make(map[string]struct{}, len(overrideNames))
@@ -72,7 +78,8 @@ func SelectOverrides(complete map[string]config.ToolPolicy, overrideNames []stri
 		}
 		selected[name] = struct{}{}
 		value, ok := complete[name]
-		if !ok {
+		_, builtin := ceiling[name]
+		if !ok || (!builtin && !strings.HasPrefix(name, config.MCPToolPolicyKeyPrefix)) {
 			return nil, &FieldError{Code: InvalidInput, Fields: []string{"override_names"}, Reason: "unknown override: " + name}
 		}
 		overrides[name] = value

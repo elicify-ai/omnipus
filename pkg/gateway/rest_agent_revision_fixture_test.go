@@ -22,10 +22,10 @@ func revisionedAgentMutationRequest(t *testing.T, api *restAPI, target string, b
 	require.NoError(t, err)
 
 	var payload map[string]any
-	if json.Unmarshal(raw, &payload) != nil {
+	if json.Unmarshal(raw, &payload) != nil || payload == nil {
 		return httptest.NewRequest(http.MethodPut, target, bytes.NewReader(raw))
 	}
-	if revision, supplied := payload["revision"].(string); !supplied || revision == "" {
+	if _, supplied := payload["revision"]; !supplied {
 		id := strings.TrimPrefix(target, "/api/v1/agents/")
 		id = strings.TrimSuffix(id, "/tools")
 		state, readErr := agentstore.New(api.homePath).ReadState(id)
@@ -35,4 +35,19 @@ func revisionedAgentMutationRequest(t *testing.T, api *restAPI, target string, b
 		require.NoError(t, err)
 	}
 	return httptest.NewRequest(http.MethodPut, target, bytes.NewReader(raw))
+}
+
+func TestRevisionedAgentMutationRequestPreservesExplicitInvalidRevisionValues(t *testing.T) {
+	api := &restAPI{homePath: t.TempDir()}
+	for _, body := range []string{
+		`{"revision":"","name":"empty"}`,
+		`{"revision":null,"name":"null"}`,
+		`{"revision":42,"name":"wrong type"}`,
+		`null`,
+	} {
+		req := revisionedAgentMutationRequest(t, api, "/api/v1/agents/not-persisted", strings.NewReader(body))
+		got, err := io.ReadAll(req.Body)
+		require.NoError(t, err)
+		require.JSONEq(t, body, string(got))
+	}
 }

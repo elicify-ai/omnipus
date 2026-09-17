@@ -111,9 +111,20 @@ func TestSelectOverridesPreservesMCPExactAndWildcardOverrides(t *testing.T) {
 
 func TestSelectOverridesRejectsUnknownNonMCPExtra(t *testing.T) {
 	ceiling := map[string]config.ToolPolicy{"bash": config.ToolPolicyAllow}
-	complete := map[string]config.ToolPolicy{"bash": config.ToolPolicyAllow, "browser_*": config.ToolPolicyDeny}
-	if _, err := SelectOverrides(complete, []string{"browser_*"}, ceiling); err == nil {
-		t.Fatal("expected unknown non-MCP policy key to be rejected")
+	for _, tc := range []struct {
+		name     string
+		policy   string
+		override string
+	}{
+		{name: "unknown non-MCP key", policy: "browser_*", override: string(config.ToolPolicyDeny)},
+		{name: "invalid MCP value", policy: "mcp_context7_*", override: "sometimes"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			complete := map[string]config.ToolPolicy{"bash": config.ToolPolicyAllow, tc.policy: config.ToolPolicy(tc.override)}
+			if _, err := SelectOverrides(complete, []string{tc.policy}, ceiling); err == nil {
+				t.Fatal("expected invalid extra policy to be rejected")
+			}
+		})
 	}
 }
 
