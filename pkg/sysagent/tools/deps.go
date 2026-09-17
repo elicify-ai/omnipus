@@ -231,6 +231,10 @@ type Deps struct {
 	// constructed.
 	ResolveBashPolicy func(assigneeAgentID string) (policy string, ok bool)
 
+	// ResolveToolPolicy returns the live compositor verdict for a registered
+	// caller. ok is false when the identity is absent or no longer registered.
+	ResolveToolPolicy func(agentID, toolName string) (policy string, ok bool)
+
 	// AssigneeCannotFinish answers whether an assignee can finish a task at all
 	// (founder decision 2026-09-15) — the SAME answer the plain create_task /
 	// update_task tools and the task run's pre-run check use (pkg/agent

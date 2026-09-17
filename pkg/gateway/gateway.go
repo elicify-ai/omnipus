@@ -1314,6 +1314,7 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// DelegationDeny above) per systools.Deps.ResolveBashPolicy's doc
 		// comment.
 		ResolveBashPolicy: rc.agentLoop.NewSysagentBashPolicyResolver(),
+		ResolveToolPolicy: rc.agentLoop.ResolveRegisteredToolPolicy,
 		// Founder decision 2026-09-15: create/update_task_in_workspace refuse an
 		// assignee that cannot finish the task — the same answer as the plain
 		// task tools and the task run's pre-run check.

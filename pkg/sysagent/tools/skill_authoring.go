@@ -283,8 +283,13 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 // sysagent tools have no access to a live ContextBuilder from inside
 // Execute.
 func resolveProjectShelf(deps *Deps, ctx context.Context) skills.ProjectShelf {
+	shelf, _ := resolveProjectShelfWithCollisions(deps, ctx)
+	return shelf
+}
+
+func resolveProjectShelfWithCollisions(deps *Deps, ctx context.Context) (skills.ProjectShelf, []skills.SlugCollision) {
 	if deps == nil || strings.TrimSpace(deps.Home) == "" {
-		return nil
+		return nil, nil
 	}
 	home := deps.Home
 
@@ -292,22 +297,21 @@ func resolveProjectShelf(deps *Deps, ctx context.Context) skills.ProjectShelf {
 	if wsID == "" {
 		def, err := workspacepkg.ResolveDefaultID(home)
 		if err != nil || def == "" {
-			return nil
+			return nil, nil
 		}
 		wsID = def
 	}
 
 	mounts, ok := workspacepkg.LoadMounts(home, wsID)
 	if !ok || len(mounts) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	pm := make([]skills.ProjectMount, 0, len(mounts))
 	for _, m := range mounts {
 		pm = append(pm, skills.ProjectMount{Name: m.Name, Root: m.HostPath})
 	}
-	shelf, _ := skills.MergeProjectSkills(pm)
-	return shelf
+	return skills.MergeProjectSkills(pm)
 }
 
 // skillExistsOnLoadPath reports whether a skill of the given name is resolvable

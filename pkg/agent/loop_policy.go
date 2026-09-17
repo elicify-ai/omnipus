@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 	"github.com/elicify-ai/omnipus/pkg/tools"
@@ -77,6 +78,26 @@ func (al *AgentLoop) ResolveApprovalToolPolicy(agentID, toolName string) string 
 	// either side fails closed to "deny" inside tools.EffectiveToolPolicy.
 	polCfg, agentType := tools.BuildFallbackPolicyCfg(cfg, agentID)
 	return tools.EffectiveToolPolicy(polCfg, tools.ScopeGeneral, agentType, toolName)
+}
+
+// ResolveRegisteredToolPolicy resolves one tool through the same live policy
+// snapshot used to assemble and execute calls. It deliberately has no config
+// fallback: callers of management inventory must prove a current actor.
+func (al *AgentLoop) ResolveRegisteredToolPolicy(agentID, toolName string) (string, bool) {
+	if al.registry == nil {
+		return string(config.ToolPolicyDeny), false
+	}
+	inst, ok := al.registry.GetAgent(agentID)
+	if !ok || inst == nil {
+		return string(config.ToolPolicyDeny), false
+	}
+	scope := tools.ScopeGeneral
+	if inst.Tools != nil {
+		if tool, found := inst.Tools.Get(toolName); found {
+			scope = tool.Scope()
+		}
+	}
+	return tools.EffectiveToolPolicy(inst.LoadToolPolicy(), scope, inst.AgentType, toolName), true
 }
 
 // SetToolApprover injects the gateway's policy-level approval implementation into
