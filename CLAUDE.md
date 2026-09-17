@@ -76,6 +76,8 @@ Write for a technically literate non-engineer. Plain words over jargon — a tec
 
 **Backend:** Go (go.mod requires 1.26.4; targets 1.22+), pure Go (Hard Constraint #2) — `golang.org/x/sys/unix` for kernel interfaces, `modernc.org/sqlite` (no CGo) for the few SQLite uses. All channels are in-process Go; channels wrapping a non-Go runtime spawn a sidecar from their own `Start()` — there is no generic stdio bridge protocol. **Frontend:** TypeScript, React 19, Vite 6, shadcn/ui (Radix + Tailwind v4), AssistantUI, Phosphor Icons, Zustand, TanStack Query + Router, Framer Motion; Vite builds to `dist/spa/`, copied to `pkg/gateway/spa/`, embedded via `go:embed`. **Storage:** file-based only (JSON/JSONL); no PostgreSQL/Redis — SQLite only for WhatsApp/Matrix sessions and the knowledge base's derived, disposable properties index. Data dir `~/.omnipus/`; atomic writes (`fileutil.WriteFileAtomic`). Credentials in `credentials.json` (AES-256-GCM, Argon2id), never in `config.json` — boot contract: ADR-004.
 
+**TypeScript:** Prefer `unknown` over `any`; narrow before use. `unknown` forces a check at the point of use, so the error surfaces where the data actually arrives rather than three call-frames later. Enforced by `@typescript-eslint/no-explicit-any` (error).
+
 **Supported platforms (founder decision, 2026-09-16): Linux, macOS, Windows — and nothing else.** The BSDs are explicitly out: no CI leg builds them, no release artifact ships for them, nothing is tested there. Do not add `//go:build freebsd|netbsd|openbsd` terms or BSD branches back — that is a regression against this decision, not portability.
 
 ## Build, test, and quality gates

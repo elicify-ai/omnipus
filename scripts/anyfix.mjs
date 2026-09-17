@@ -184,66 +184,80 @@ console.log(`strategy: per-file swap, in-file bisection on tsc rejection`);
 const touched = new Set();
 let tscRuns = 0;
 
-try {
-  for (const file of files) {
-    const fileSites = inScope.filter((s) => s.file === file);
-    const { applied, skipped } = applySwaps(file, fileSites);
-    touched.add(file);
-    if (skipped.length > 0) {
-      manual.push(...skipped);
-      console.log(`  ${file}: ${skipped.length} site(s) not on a standalone any token → manual`);
-    }
-    if (applied.length === 0) continue;
+/**
+ * Decide one file: try the whole-file swap, keep it on a green tsc, otherwise
+ * bisect. `accepted` is the only set ever written; every failed probe restores
+ * the previous accepted set BEFORE recursing, so a red half cannot leak onto
+ * disk. A singleton is typechecked in isolation — not assumed bad.
+ * @param {string} file
+ * @param {Site[]} fileSites
+ */
+function decideFile(file, fileSites) {
+  const { applied, skipped } = applySwaps(file, fileSites);
+  touched.add(file);
+  if (skipped.length > 0) {
+    manual.push(...skipped);
+    console.log(`  ${file}: ${skipped.length} site(s) not on a standalone any token → manual`);
+  }
+  if (applied.length === 0) {
+    applySwaps(file, []);
+    return;
+  }
 
-    /** This file's accepted swaps — the only state applySwaps is ever called
-     *  with, so the on-disk file always equals original + `accepted`. */
-    let accepted = [];
-    const setAccepted = (sites) => {
-      accepted = sites;
-      applySwaps(file, sites);
-    };
+  /** @type {Site[]} */
+  let accepted = [];
+  const write = (sites) => {
+    accepted = sites;
+    applySwaps(file, sites);
+  };
+  const check = () => {
+    tscRuns += 1;
+    return typecheck().green;
+  };
 
-    const check = () => {
-      tscRuns += 1;
-      return typecheck().green;
-    };
+  write(applied);
+  if (check()) {
+    swapped.push(...applied);
+    console.log(`  ${file}: swapped ${applied.length}/${applied.length}`);
+    return;
+  }
 
-    setAccepted(applied);
-    if (check()) {
-      swapped.push(...applied);
-      console.log(`  ${file}: swapped ${applied.length}/${applied.length}`);
-      continue;
-    }
+  console.log(`  ${file}: batch rejected — bisecting ${applied.length} site(s)`);
+  write([]);
 
-    // Whole-file batch rejected — bisect `undecided` against the green
-    // baseline (everything accepted so far, including this file's `accepted`).
-    // Every check's delta versus a green state is exactly the half under
-    // test, so a red run always indicts that half.
-    const bisect = (undecided) => {
-      if (undecided.length === 0) return;
-      if (undecided.length === 1) {
+  const bisect = (undecided) => {
+    if (undecided.length === 0) return;
+    const previous = accepted;
+    if (undecided.length === 1) {
+      write([...previous, undecided[0]]);
+      if (check()) {
+        swapped.push(undecided[0]);
+      } else {
+        write(previous);
         manual.push(undecided[0]);
         console.log(`  ${rel(undecided[0])}: needs real typing`);
-        return; // stays unswapped: `accepted` already excludes it
       }
-      const half = undecided.slice(0, Math.floor(undecided.length / 2));
-      const rest = undecided.slice(half.length);
-      setAccepted([...accepted, ...half]);
-      if (check()) {
-        swapped.push(...half);
-        accepted = [...accepted, ...half];
-        bisect(rest);
-      } else {
-        setAccepted(accepted); // drop `half` back to unswapped and retry it
-        bisect(half);
-        bisect(rest);
-      }
-    };
-    console.log(`  ${file}: batch rejected — bisecting ${applied.length} site(s)`);
-    bisect(applied);
-    if (accepted.length > 0) {
-      setAccepted(accepted); // final on-disk state = original + accepted
+      return;
     }
+    const half = undecided.slice(0, Math.floor(undecided.length / 2));
+    const rest = undecided.slice(half.length);
+    write([...previous, ...half]);
+    if (check()) {
+      swapped.push(...half);
+      bisect(rest);
+    } else {
+      write(previous);
+      bisect(half);
+      bisect(rest);
+    }
+  };
+  bisect(applied);
+  write(accepted);
+}
+
+try {
+  for (const file of files) {
+    decideFile(file, inScope.filter((s) => s.file === file));
   }
 } finally {
   if (DRY_RUN) {

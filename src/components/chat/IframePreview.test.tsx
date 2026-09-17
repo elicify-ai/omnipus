@@ -31,7 +31,22 @@ vi.mock('@/store/ui', () => ({
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-type LooseProps = Record<string, any>
+/** Test override bag. Several cases deliberately pass a malformed `result`
+ *  (missing `expires_at`, `path: undefined`) to exercise the link-only
+ *  fallback — that is the behaviour under test, so the override type is
+ *  partial, not the production `IframePreviewProps`. */
+type LooseResult = {
+  path?: string | undefined
+  url?: string
+  expires_at?: string
+  command?: string
+  port?: number
+}
+type LooseProps = {
+  kind?: IframePreviewProps['kind']
+  result?: LooseResult | null
+  warmupTimeoutSeconds?: number
+}
 
 function makeReadyProps(overrides: LooseProps = {}): IframePreviewProps {
   return {

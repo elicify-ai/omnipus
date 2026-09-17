@@ -38,6 +38,7 @@ import { useSessionStore } from '@/store/session'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import * as api from '@/lib/api'
+import type { Agent, Workspace } from '@/lib/api'
 
 // ── API mocks ─────────────────────────────────────────────────────────────────
 
@@ -89,6 +90,41 @@ import { AgentPicker } from './AgentPicker'
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
+}
+
+/** Full-shape Agent fixture. Required wire fields get inert defaults so tests
+ *  can name only the fields the picker actually reads. */
+function makeAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: 'mia',
+    name: 'Mia',
+    type: 'core',
+    locked: false,
+    needs_model: false,
+    status: 'active',
+    soul: '',
+    timeout_seconds: 60,
+    max_tool_iterations: 20,
+    memory_enabled: true,
+    model: 'z-ai/glm-5.2',
+    description: 'Assistant',
+    ...overrides,
+  }
+}
+
+function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
+  return {
+    id: 'ws-1',
+    name: 'Test WS',
+    status: 'active',
+    pinned: false,
+    pin_order: 0,
+    task_count: 0,
+    created_at: '2025-01-01T00:00:00Z',
+    updated_at: '2025-01-01T00:00:00Z',
+    core_team: [],
+    ...overrides,
+  }
 }
 
 function renderPicker() {
@@ -181,12 +217,7 @@ describe('AgentPicker — workspace core_team scoping', () => {
   it('lists workspace-team agents (scoped when workspace + core_team set)', async () => {
     // Workspace scopes to 'mia' only; 'jim' is excluded
     vi.mocked(api.fetchWorkspaces).mockResolvedValueOnce([
-      {
-        id: 'ws-1',
-        name: 'Test WS',
-        status: 'active',
-        core_team: ['mia'],
-      } as any,
+      makeWorkspace({ id: 'ws-1', name: 'Test WS', status: 'active', core_team: ['mia'] }),
     ])
     act(() => {
       useWorkspacesStore.setState({ activeWorkspaceId: 'ws-1' })
@@ -213,22 +244,22 @@ describe('AgentPicker — workspace core_team scoping', () => {
 
   it('excludes worker agents from the dropdown', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
-      {
+      makeAgent({
         id: 'mia',
         name: 'Mia',
         type: 'core',
         status: 'active',
         model: 'z-ai/glm-5.2',
         description: 'Assistant',
-      },
-      {
+      }),
+      makeAgent({
         id: 'builder',
         name: 'Builder Worker',
-        type: 'worker',
+        type: 'Subagent',
         status: 'active',
         description: 'Labour agent',
-      },
-    ] as any[])
+      }),
+    ])
     renderPicker()
     await vi.waitFor(() => {
       const els = screen.getAllByText('Mia')
@@ -253,22 +284,22 @@ describe('AgentPicker — workspace core_team scoping', () => {
   // (chatAgents), since auto-select reads from the same filtered list.
   it('auto-selects the first non-worker agent when none is active', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
-      {
+      makeAgent({
         id: 'builder',
         name: 'Builder Worker',
-        type: 'worker',
+        type: 'Subagent',
         status: 'active',
         description: 'Labour agent',
-      },
-      {
+      }),
+      makeAgent({
         id: 'mia',
         name: 'Mia',
         type: 'core',
         status: 'active',
         model: 'z-ai/glm-5.2',
         description: 'Assistant',
-      },
-    ] as any[])
+      }),
+    ])
     act(() => {
       useSessionStore.setState({ activeAgentId: null, activeSessionId: null })
     })
@@ -356,8 +387,8 @@ describe('AgentPicker — error and empty states', () => {
     })
 
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
-      { id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
-    ] as any[])
+      makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' }),
+    ])
     fireEvent.click(screen.getByRole('button', { name: /retry/i }))
 
     await vi.waitFor(() => {
@@ -369,8 +400,8 @@ describe('AgentPicker — error and empty states', () => {
   it('a background refetch failure does NOT replace a usable cached picker (cached agent keeps rendering)', async () => {
     const client = makeClient()
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
-      { id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
-    ] as any[])
+      makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' }),
+    ])
     render(
       <QueryClientProvider client={client}>
         <AgentPicker />
@@ -394,15 +425,15 @@ describe('AgentPicker — error and empty states', () => {
 
   it('shows the all-draft message when every agent is in draft status', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
-      {
+      makeAgent({
         id: 'mia',
         name: 'Mia',
         type: 'core',
         status: 'draft',
         model: 'z-ai/glm-5.2',
         description: 'Assistant',
-      },
-    ] as any[])
+      }),
+    ])
     renderPicker()
     await vi.waitFor(() => {
       expect(
@@ -429,8 +460,8 @@ describe('AgentPicker — agentSelectorOpen latch reset', () => {
 
   it('resets agentSelectorOpen to false when the all-draft branch is active', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
-      { id: 'mia', name: 'Mia', type: 'core', status: 'draft', model: 'z-ai/glm-5.2', description: 'Assistant' },
-    ] as any[])
+      makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'draft', model: 'z-ai/glm-5.2', description: 'Assistant' }),
+    ])
     act(() => {
       useUiStore.setState({ agentSelectorOpen: true })
     })

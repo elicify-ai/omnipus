@@ -332,7 +332,7 @@ describe('BrowserWebRTCSession — _beginOffer defensive "at most one PC" guard 
     // invariant ("at most one live RTCPeerConnection at a time") is enforced
     // even against a future caller this fix wave didn't anticipate, per the
     // reviewer finding ("makes 'at most one PC' structural").
-    await (machine as any)._beginOffer()
+    await (machine as unknown as { _beginOffer: () => Promise<void> })._beginOffer()
 
     expect(pcs[0].close).toHaveBeenCalledTimes(1) // leftover pc cleaned up, not leaked
     expect(call).toBe(2) // a fresh pc was created for the new offer

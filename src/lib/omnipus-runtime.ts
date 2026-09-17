@@ -13,6 +13,11 @@ import { isImageAttachment } from "@/components/chat/AttachmentCard";
 
 type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: internal Zustand store type enriching ToolCall with a required call_id; never emitted to the backend
 
+/** Mutable content-part list. `ThreadMessageLike["content"]` is
+ *  `string | readonly parts[]`, so it cannot be `.push`ed. */
+type ThreadContentPart = Exclude<ThreadMessageLike["content"], string>[number]
+type ToolCallContentArgs = Extract<ThreadContentPart, { type: "tool-call" }>["args"]
+
 // ── Message conversion ────────────────────────────────────────────────────────
 
 /**
@@ -39,7 +44,7 @@ type StoreToolCall = ToolCall & { call_id: string }; // not-wire-format: interna
  * function can use them.
  */
 function pushHistoryParts(
-  parts: ThreadMessageLike["content"],
+  parts: ThreadContentPart[],
   text: string,
   historyToolCalls: NonNullable<ChatMessage["tool_calls"]>,
   toolCalls: Record<string, StoreToolCall>,
@@ -93,7 +98,7 @@ function pushHistoryParts(
       type: "tool-call",
       toolCallId: tc.id,
       toolName: tc.tool,
-      args: tc.params,
+      args: tc.params as ToolCallContentArgs,
       result: resolved.result,
       // Issue #617: derive isError from the store's own resolved status
       // (written from the WS tool_call_result frame — chat.ts:4222) rather
@@ -122,7 +127,7 @@ function buildContentParts(
   isLastAssistant: boolean
 ): ThreadMessageLike["content"] {
   try {
-    const parts: ThreadMessageLike["content"] = [];
+    const parts: ThreadContentPart[] = [];
     const historyTCs = msg.tool_calls ?? [];
 
     // Non-last or non-assistant messages: interleave history tool calls with text
@@ -166,7 +171,7 @@ function buildContentParts(
         type: "tool-call",
         toolCallId: id,
         toolName: tc.tool,
-        args: tc.params,
+        args: tc.params as ToolCallContentArgs,
         result: tc.result,
         // Issue #617 — same derivation as pushHistoryParts above.
         isError: tc.status === "error",

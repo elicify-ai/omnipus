@@ -16,6 +16,8 @@ import { useConnectionStore } from '@/store/connection'
 import { useUiStore } from '@/store/ui'
 import { useWorkspacesStore } from '@/store/workspacesStore'
 import * as api from '@/lib/api'
+import type { Agent } from '@/lib/api'
+import type { WsConnection } from '@/lib/ws'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
@@ -62,6 +64,28 @@ import { AgentPicker } from './AgentPicker'
 
 function makeClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false } } })
+}
+
+function makeAgent(overrides: Partial<Agent> = {}): Agent {
+  return {
+    id: 'mia',
+    name: 'Mia',
+    type: 'core',
+    locked: false,
+    needs_model: false,
+    status: 'active',
+    soul: '',
+    timeout_seconds: 60,
+    max_tool_iterations: 20,
+    memory_enabled: true,
+    model: 'z-ai/glm-5.2',
+    description: 'Assistant',
+    ...overrides,
+  }
+}
+
+function mockConnection(send: ReturnType<typeof vi.fn>): WsConnection {
+  return { send, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection
 }
 
 function renderPicker() {
@@ -146,8 +170,8 @@ describe('AgentPicker — agentSelectorOpen controlled DropdownMenu', () => {
 
   it('agent list is not changed by the controlled open flag', async () => {
     vi.mocked(api.fetchAgents).mockResolvedValueOnce([
-      { id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' },
-    ] as any[])
+      makeAgent({ id: 'mia', name: 'Mia', type: 'core', status: 'active', model: 'z-ai/glm-5.2', description: 'Assistant' }),
+    ])
 
     renderPicker()
     await vi.waitFor(() => screen.getAllByText('Mia').length > 0)
@@ -225,7 +249,7 @@ describe('AgentPicker — an explicit pick survives a later session attach', () 
     act(() => {
       useSessionStore.setState({ activeAgentId: 'mia', activeSessionId: null })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: mockConnection(mockSend),
         isConnected: true,
       })
     })
@@ -249,7 +273,7 @@ describe('AgentPicker — an explicit pick survives a later session attach', () 
     act(() => {
       useSessionStore.setState({ activeAgentId: 'jim', activeSessionId: null })
       useConnectionStore.setState({
-        connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+        connection: mockConnection(mockSend),
         isConnected: true,
       })
     })

@@ -24,6 +24,7 @@ import { useConnectionStore } from './connection'
 import { useSessionStore } from './session'
 import { useWorkspacesStore } from './workspacesStore'
 import { useUiStore } from './ui'
+import type { WsConnection } from '@/lib/ws'
 
 const WS_A = 'ws-alpha'
 const WS_B = 'ws-beta'
@@ -69,7 +70,7 @@ function connectMock() {
   const mockSend = vi.fn().mockReturnValue(true)
   act(() => {
     useConnectionStore.setState({
-      connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as any,
+      connection: { send: mockSend, disconnect: vi.fn(), connect: vi.fn(), isConnected: true } as unknown as WsConnection,
       isConnected: true,
     })
   })
