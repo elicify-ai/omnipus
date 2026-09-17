@@ -14,7 +14,8 @@ import (
 func TestDefaultSkills_EmbeddedAndSeeded(t *testing.T) {
 	want := []string{
 		"agent-authoring", "channel-setup", "deep-research", "define-goal",
-		"delegation-graph", "doctor", "handoff", "inbox-triage", "interview",
+		"delegation-graph", "doctor", "elicify-docx", "elicify-pdf", "elicify-pptx", "elicify-xlsx",
+		"handoff", "inbox-triage", "interview",
 		"mcp-install", "orchestrate", "plan", "provider-setup", "skill-authoring",
 		"skill-mapping", "tool-mapping", "verify", "workspace-team",
 	}
