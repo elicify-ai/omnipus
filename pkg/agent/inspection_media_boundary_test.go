@@ -223,7 +223,7 @@ func TestReadImage_InterruptedTurnDoesNotPersistInspection(t *testing.T) {
 	msgBus := bus.NewMessageBus()
 	al := mustNewAgentLoop(t, cfg, msgBus, provider)
 	imageBytes := boundaryPNG(t, 32, 24)
-	al.RegisterTool(&boundaryInspectionTool{image: tools.InspectionImage{Bytes: imageBytes, MIMEType: "image/png", Source: "interrupted-private.png", Reauthorize: func(context.Context) error { return nil }}})
+	al.RegisterTool(&boundaryInspectionTool{image: tools.InspectionImage{Bytes: imageBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { return nil }}})
 	agent := al.GetRegistry().GetDefaultAgent()
 	agent.StoreToolPolicy(&tools.ToolPolicyCfg{Policies: map[string]config.ToolPolicy{"boundary_inspection": "allow"}})
 

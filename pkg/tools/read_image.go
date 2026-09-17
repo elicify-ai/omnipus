@@ -99,7 +99,7 @@ func inspectionImageResult(ctx context.Context, file fs.File, source string, sni
 	}
 	sum := sha256.Sum256(data)
 	marker := fmt.Sprintf("[image: %s | original: %dx%d | sha256: %s | not retained; re-read to view]", source, cfg.Width, cfg.Height, hex.EncodeToString(sum[:]))
-	return &ToolResult{ForLLM: marker, InspectionImages: []InspectionImage{{Bytes: data, MIMEType: mime, Source: source, SHA256: hex.EncodeToString(sum[:]), OriginalWidth: cfg.Width, OriginalHeight: cfg.Height, Reauthorize: reauthorize}}}, true
+	return &ToolResult{ForLLM: marker, InspectionImages: []InspectionImage{{Bytes: data, MIMEType: mime, Reauthorize: reauthorize}}}, true
 }
 
 type contextReader struct {

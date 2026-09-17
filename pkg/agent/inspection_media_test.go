@@ -25,7 +25,7 @@ func TestAttachInspectionImages_LiveOnlyAndRechecksAccess(t *testing.T) {
 	}
 	pngBytes := fixture.Bytes()
 	checks := 0
-	images := []tools.InspectionImage{{Bytes: pngBytes, MIMEType: "image/png", Source: "page.png", Reauthorize: func(context.Context) error { checks++; return nil }}}
+	images := []tools.InspectionImage{{Bytes: pngBytes, MIMEType: "image/png", Reauthorize: func(context.Context) error { checks++; return nil }}}
 	canonical := providers.Message{Role: "tool", Content: "not retained; re-read to view", ToolCallID: "call-7"}
 	live, err := attachInspectionImages(context.Background(), canonical, images, true)
 	if err != nil {

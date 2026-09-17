@@ -3,7 +3,9 @@ package tools
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"hash/crc32"
 	"image"
@@ -40,11 +42,15 @@ func TestReadImage_ReturnsPrivateAuthorizedSnapshot(t *testing.T) {
 		t.Fatalf("inspection images = %d, want 1", len(result.InspectionImages))
 	}
 	got := result.InspectionImages[0]
-	if got.MIMEType != "image/png" || got.OriginalWidth != 32 || got.OriginalHeight != 24 {
+	if got.MIMEType != "image/png" {
 		t.Fatalf("metadata = %#v", got)
 	}
 	if !bytes.Equal(got.Bytes, wantBytes) {
 		t.Fatal("snapshot differs from independently encoded fixture")
+	}
+	decoded, _, decodeErr := image.DecodeConfig(bytes.NewReader(got.Bytes))
+	if decodeErr != nil || decoded.Width != 32 || decoded.Height != 24 {
+		t.Fatalf("decoded dimensions = %dx%d (err %v), want 32x24", decoded.Width, decoded.Height, decodeErr)
 	}
 	if len(result.Media) != 0 || result.ForUser != "" {
 		t.Fatalf("private read became delivery: media=%v user=%q", result.Media, result.ForUser)
@@ -54,6 +60,13 @@ func TestReadImage_ReturnsPrivateAuthorizedSnapshot(t *testing.T) {
 	}
 	if !strings.Contains(result.ForLLM, filepath.Join(dir, "known.png")) {
 		t.Fatalf("marker lacks authorized source identity: %q", result.ForLLM)
+	}
+	if !strings.Contains(result.ForLLM, "original: 32x24") {
+		t.Fatalf("marker lacks original dimensions: %q", result.ForLLM)
+	}
+	wantSum := sha256.Sum256(wantBytes)
+	if !strings.Contains(result.ForLLM, "sha256: "+hex.EncodeToString(wantSum[:])) {
+		t.Fatalf("marker lacks independently computed digest: %q", result.ForLLM)
 	}
 	if strings.Contains(result.ForLLM, "presented") {
 		t.Fatalf("canonical marker falsely claims candidate presentation: %q", result.ForLLM)
@@ -89,13 +102,21 @@ func TestLibraryReadImage_UsesSameVisualContract(t *testing.T) {
 	if err := os.MkdirAll(library, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeKnownPNG(t, filepath.Join(library, "chart.png"), 40, 30)
+	wantBytes := writeKnownPNG(t, filepath.Join(library, "chart.png"), 40, 30)
 	result := NewLibraryReadTool(dir, true, MaxReadFileSize).Execute(context.Background(), map[string]any{"path": "chart.png"})
 	if result.IsError || len(result.InspectionImages) != 1 {
 		t.Fatalf("library image result=%#v", result)
 	}
-	if got := result.InspectionImages[0]; got.OriginalWidth != 40 || got.OriginalHeight != 30 {
-		t.Fatalf("dimensions=%dx%d", got.OriginalWidth, got.OriginalHeight)
+	got := result.InspectionImages[0]
+	if !bytes.Equal(got.Bytes, wantBytes) {
+		t.Fatal("library snapshot differs from independently encoded fixture")
+	}
+	decoded, _, decodeErr := image.DecodeConfig(bytes.NewReader(got.Bytes))
+	if decodeErr != nil || decoded.Width != 40 || decoded.Height != 30 {
+		t.Fatalf("decoded dimensions = %dx%d (err %v), want 40x30", decoded.Width, decoded.Height, decodeErr)
+	}
+	if !strings.Contains(result.ForLLM, "original: 40x30") {
+		t.Fatalf("marker lacks original dimensions: %q", result.ForLLM)
 	}
 }
 

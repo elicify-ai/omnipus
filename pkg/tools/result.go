@@ -164,16 +164,13 @@ type ToolResult struct {
 	Deferred *ToolDeferral `json:"-"`
 }
 
-// InspectionImage is a bounded snapshot captured from an already-authorized
-// regular-file handle. Source identifies the path for a fresh authorization
-// check before a retry/fallback; it must never be used to reopen image bytes.
+// InspectionImage carries an authorized snapshot for the current turn only.
+// The reader enforces acquisition limits; the presenter decodes and resizes
+// Bytes for each provider attempt after calling Reauthorize. Durable source,
+// dimensions and digest evidence stays in the tool result's text marker.
 type InspectionImage struct {
-	Bytes          []byte
-	MIMEType       string
-	Source         string
-	SHA256         string
-	OriginalWidth  int
-	OriginalHeight int
+	Bytes    []byte
+	MIMEType string
 	// Reauthorize checks current access before an actual provider attempt.
 	// It never supplies or reopens the captured image bytes.
 	Reauthorize func(context.Context) error
