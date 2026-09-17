@@ -46,6 +46,8 @@ func newCompressedCfg(t *testing.T) *config.Config {
 			// at all instead of the real core Mia config.
 		},
 	}
+	// Ordinary roles inherit the shipped ceiling through sparse overrides.
+	cfg.Sandbox.ToolPolicies = config.DefaultConfig().Sandbox.ToolPolicies
 	cfg.Tools.Manifest.Compressed = true
 	coreagent.SeedConfig(cfg)
 	return cfg

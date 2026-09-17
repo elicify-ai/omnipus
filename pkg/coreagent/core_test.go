@@ -623,7 +623,7 @@ func TestSeed_BrowserHandoverAtAllThreeSites(t *testing.T) {
 	for _, ac := range cfg.Agents.List {
 		byID[ac.ID] = ac
 	}
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDAva} {
 		_, ok := byID[string(id)]
 		require.True(t, ok, "agent %q must be seeded", id)
 		assert.Equal(t, "allow", resolveFor(t, cfg, string(id), "browser_handover", nil),
@@ -631,13 +631,7 @@ func TestSeed_BrowserHandoverAtAllThreeSites(t *testing.T) {
 	}
 }
 
-// TestSeed_MiaAndAvaResolveDenyForBrowserHandover positively asserts what
-// BROWSER-FR-051 requires as an observable, not an absence: Mia and Ava need
-// no per-agent edit at all because denyAllThenOverride enumerates every
-// catalog name at deny first, but the test must still prove they RESOLVE
-// deny — absence is not the observable, and a future "helpful" edit adding
-// them an allow would produce a silently browser-capable Mia that no test
-// notices otherwise.
+// Non-browser roles must resolve a denial through the real compositor.
 func TestSeed_NonBrowserRolesResolveDenyForBrowserHandover(t *testing.T) {
 	cfg := config.DefaultConfig()
 	coreagent.SeedConfig(cfg)
@@ -645,7 +639,7 @@ func TestSeed_NonBrowserRolesResolveDenyForBrowserHandover(t *testing.T) {
 	for _, ac := range cfg.Agents.List {
 		byID[ac.ID] = ac
 	}
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDAva, coreagent.IDAdmin, coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDAdmin, coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker} {
 		_, ok := byID[string(id)]
 		require.True(t, ok, "agent %q must be seeded", id)
 		assert.Equal(t, "deny", resolveFor(t, cfg, string(id), "browser_handover", nil),

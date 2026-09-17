@@ -57,14 +57,8 @@ func seededAgentPolicyCfg(t *testing.T, cfg *config.Config, agentID string) *Too
 	return nil
 }
 
-// TestFilterToolsByPolicy_OmitsBrowserEvaluate_MiaAva is FR-042/AC2's
-// observable half.
-//
-// browser_evaluate is now LIVE on a fresh install (sandbox.browser_evaluate_enabled
-// is seeded true), so the runtime kill switch no longer stands between the two
-// zero-browser agents and arbitrary in-page JavaScript. Tool policy is the only
-// thing left, and this asserts it holds through the real filter rather than
-// through the seed literal.
+// ADR-090 permits browser evaluation for Mia, Jim and Ava, while Admin
+// remains excluded even though the global browser switch is enabled.
 func TestFilterToolsByPolicy_EnforcesADR090BrowserEvaluateRoles(t *testing.T) {
 	cfg := config.DefaultConfig()
 	if !coreagent.SeedConfig(cfg) {
@@ -81,14 +75,14 @@ func TestFilterToolsByPolicy_EnforcesADR090BrowserEvaluateRoles(t *testing.T) {
 		makeScopedTool("browser_navigate", ScopeCore),
 	}
 
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDAva} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDAdmin} {
 		polCfg := seededAgentPolicyCfg(t, cfg, string(id))
 		kept, policies := FilterToolsByPolicy(toolSet, "core", polCfg)
 		for _, tool := range kept {
 			if tool.Name() == "browser_evaluate" {
-				t.Errorf("%s can be sent browser_evaluate (resolved %q). She holds no browser tools at all; "+
+				t.Errorf("%s can be sent browser_evaluate (resolved %q). This role holds no browser tools; "+
 					"with sandbox.browser_evaluate_enabled seeded true, policy is the ONLY thing between "+
-					"her and arbitrary in-page JavaScript on the workspace browser that carries the "+
+					"this role and arbitrary in-page JavaScript on the workspace browser that carries the "+
 					"operator's live logins", id, policies["browser_evaluate"])
 			}
 		}
@@ -97,7 +91,7 @@ func TestFilterToolsByPolicy_EnforcesADR090BrowserEvaluateRoles(t *testing.T) {
 	// Positive controls. Without them this file passes against a build where
 	// FilterToolsByPolicy returns nothing at all, which is a broken filter
 	// rather than a safe posture.
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDAva} {
 		polCfg := seededAgentPolicyCfg(t, cfg, string(id))
 		kept, policies := FilterToolsByPolicy(toolSet, "core", polCfg)
 		var seesEvaluate bool

@@ -51,14 +51,12 @@ var d2BrowserVerbs = []string{
 }
 
 // browsingAgents are the seeded agents that hold the browser surface.
-var browsingAgents = []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim}
+var browsingAgents = []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim, coreagent.IDAva}
 
-// zeroBrowserAgents hold no browser tool at all and are expected to resolve
-// deny for every one of the six by their own least-privilege default —
-// denyAllThenOverride starts every catalog name at deny and neither names a
-// browser tool.
+// zeroBrowserAgents have explicit ADR-090 browser exclusions, which must
+// remain effective even when the global ceiling permits a browser tool.
 var zeroBrowserAgents = []coreagent.CoreAgentID{
-	coreagent.IDAva, coreagent.IDAdmin, coreagent.IDPlanner,
+	coreagent.IDAdmin, coreagent.IDPlanner,
 	coreagent.IDResearcher, coreagent.IDWorker,
 }
 

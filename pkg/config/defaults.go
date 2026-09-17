@@ -397,6 +397,8 @@ func defaultToolPoliciesSysagent() map[string]string {
 		"test_channel":             "allow",
 		"get_config":               "allow",
 		"set_config":               "allow",
+		"get_agent":                "allow",
+		"get_agent_tools":          "allow",
 		"create_agent":             "allow",
 		"update_agent":             "allow",
 		"delete_agent":             "allow", // Ava confirms the combined proposal once.

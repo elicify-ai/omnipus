@@ -200,7 +200,7 @@ var allStaticToolNames = []string{
 	"remove_skill", "list_skills",
 	"enable_channel", "configure_channel", "disable_channel", "list_channels", "test_channel",
 	"get_config", "set_config",
-	"create_agent", "update_agent", "delete_agent",
+	"create_agent", "get_agent", "get_agent_tools", "update_agent", "delete_agent",
 
 	// ADR-052 — autonomous agent plan execution: planning tools + the
 	// verifier-role-only inspect_session tool.
