@@ -10,8 +10,9 @@ CI is the authority for full-suite results.
 ## Fresh installs carry embedded skills
 
 `embed.go` compiles a default skill set into the binary
-(`//go:embed all:embedded`: daily-briefing, define-goal, plan,
-skill-authoring, summarize) so a fresh install works offline. Adding a default
+(`//go:embed all:embedded`), including the ADR-090 role workflows and four
+Elicify document packages, so a fresh install has their instructions offline.
+Document execution still requires the separately probed runtime dependencies. Adding a default
 skill means adding it under `embedded/` — shipping it only to a marketplace
 leaves fresh installs without it.
 
