@@ -42,9 +42,14 @@ Locked decisions that explain *why* the code looks the way it does:
 - [ADR-015 — Decode-and-validate](architecture/ADR-015-decode-and-validate.md)
 - [ADR-016 — SPA streaming resilience](architecture/ADR-016-spa-streaming-resilience.md)
 
+- [ADR-090 — Built-in agents, skills, and visual reading](architecture/ADR-090-built-in-agents-skills-and-visual-reading.md) ([review](architecture/ADR-090-built-in-agents-skills-and-visual-reading-review.md))
+
 ## Specs (under review or in flight)
 
 Designs being worked out. Not shipping behaviour:
+
+- [ADR-090 — Agent configuration and skills](specs/adr-090-agent-configuration-and-skills-spec.md) ([review](specs/adr-090-agent-configuration-and-skills-spec-review.md))
+- [ADR-090 — Visual file reading](specs/adr-090-visual-file-reading-spec.md) ([review](specs/adr-090-visual-file-reading-spec-review.md))
 
 - [Browser automation wiring](specs/browser-automation-wiring-spec.md)
 - [Cancel across channels](specs/cancel-cross-channel-spec.md) ([review](specs/cancel-cross-channel-spec-review.md))
@@ -96,3 +101,6 @@ maintained as current documentation and may be stale.
 - [Brand guidelines](brand/brand-guidelines.md)
 - [Contributing](../../CONTRIBUTING.md)
 - [Roadmap](../../ROADMAP.md)
+
+- [ADR-090 Opus finding dispositions](architecture/ADR-090-built-in-agents-skills-and-visual-reading-opus-dispositions.md) — corrections and independent closure status.
+- [ADR-090 independent Opus closure](architecture/ADR-090-built-in-agents-skills-and-visual-reading-opus-closure.md) — engineering PASS; licensing decision remains open.
