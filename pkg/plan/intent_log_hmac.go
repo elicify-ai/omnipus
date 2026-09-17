@@ -173,9 +173,5 @@ func (l *IntentLog) VerifyChain(ctx context.Context, planID string) (*audit.Chai
 		}
 		return nil, fmt.Errorf("intent_log: stat %q: %w", path, err)
 	}
-	result, err := audit.VerifyFile(ctx, path, l.chainKey, audit.GenesisSeed())
-	if err != nil {
-		return nil, fmt.Errorf("intent_log verify: %w", err)
-	}
-	return result, nil
+	return audit.VerifyFile(ctx, path, l.chainKey, audit.GenesisSeed())
 }

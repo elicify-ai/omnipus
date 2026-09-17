@@ -907,10 +907,7 @@ func sendSMTPWithSTARTTLS(addr string, auth smtp.Auth, from, to, body string, tl
 	if _, err := io.WriteString(w, body); err != nil {
 		return fmt.Errorf("write body: %w", err)
 	}
-	if err := w.Close(); err != nil {
-		return fmt.Errorf("sendSMTPWithSTARTTLS: %w", err)
-	}
-	return nil
+	return w.Close()
 }
 
 // sendSMTPS sends an email via implicit TLS (port 465 / SMTPS).
@@ -942,10 +939,7 @@ func sendSMTPS(addr, from, to, body, username, password string, tlsCfg *tls.Conf
 	if _, err := io.WriteString(w, body); err != nil {
 		return fmt.Errorf("write body: %w", err)
 	}
-	if err := w.Close(); err != nil {
-		return fmt.Errorf("sendSMTPS: %w", err)
-	}
-	return nil
+	return w.Close()
 }
 
 // buildEmailBody constructs a minimal RFC 5322-compliant message. When inReplyTo

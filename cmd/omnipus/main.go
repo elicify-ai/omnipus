@@ -64,7 +64,7 @@ import (
 func loadConfigWithAgents(configPath, homePath string) (*config.Config, error) {
 	cfg, err := config.LoadConfig(configPath)
 	if err != nil {
-		return nil, fmt.Errorf("loadConfigWithAgents: %w", err)
+		return nil, err
 	}
 	agents, skipped, listErr := agentstore.New(homePath).List()
 	if listErr != nil {

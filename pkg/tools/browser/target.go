@@ -492,7 +492,7 @@ func queryAXCandidates(ctx context.Context, loc Locator) (cands []axCandidate, i
 		}
 		nodes, qerr := q.Do(c)
 		if qerr != nil {
-			return fmt.Errorf("query nodes: %w", qerr)
+			return qerr
 		}
 
 		// The frame every surviving node must belong to. Sourced from the
@@ -542,7 +542,7 @@ func queryAXCandidates(ctx context.Context, loc Locator) (cands []axCandidate, i
 		return nil
 	}))
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("queryAXCandidates: %w", err)
+		return nil, 0, 0, err
 	}
 
 	// DETERMINISTIC ORDERING, asserted directly by
@@ -581,7 +581,7 @@ func documentObjectID(ctx context.Context) (runtime.RemoteObjectID, func(), erro
 	noop := func() {}
 	obj, exc, err := runtime.Evaluate("document").Do(ctx)
 	if err != nil {
-		return "", noop, fmt.Errorf("documentObjectID: %w", err)
+		return "", noop, err
 	}
 	if exc != nil {
 		return "", noop, fmt.Errorf("%s", exc.Text)
@@ -657,11 +657,11 @@ func stampAXWinner(ctx context.Context, winner axCandidate) (string, error) {
 	token := nextTextSelectorToken()
 	attrJSON, err := json.Marshal(textMarkerAttr)
 	if err != nil {
-		return "", fmt.Errorf("stampAXWinner: %w", err)
+		return "", err
 	}
 	tokenJSON, err := json.Marshal(token)
 	if err != nil {
-		return "", fmt.Errorf("stampAXWinner: %w", err)
+		return "", err
 	}
 
 	fn := fmt.Sprintf("function(){ this.setAttribute(%s, %s); return true; }", attrJSON, tokenJSON)
@@ -669,7 +669,7 @@ func stampAXWinner(ctx context.Context, winner axCandidate) (string, error) {
 	err = chromedp.Run(ctx, chromedp.ActionFunc(func(c context.Context) error {
 		obj, rerr := dom.ResolveNode().WithBackendNodeID(winner.backendID).Do(c)
 		if rerr != nil {
-			return fmt.Errorf("resolve node: %w", rerr)
+			return rerr
 		}
 		if obj == nil || obj.ObjectID == "" {
 			return fmt.Errorf("the matched element could not be resolved in the page")
@@ -681,7 +681,7 @@ func stampAXWinner(ctx context.Context, winner axCandidate) (string, error) {
 			WithReturnByValue(true).
 			Do(c)
 		if cerr != nil {
-			return fmt.Errorf("call page function: %w", cerr)
+			return cerr
 		}
 		if exc != nil {
 			return fmt.Errorf("marking the matched element failed: %s", exc.Text)
@@ -689,7 +689,7 @@ func stampAXWinner(ctx context.Context, winner axCandidate) (string, error) {
 		return nil
 	}))
 	if err != nil {
-		return "", fmt.Errorf("stampAXWinner: %w", err)
+		return "", err
 	}
 	return fmt.Sprintf(`[%s="%s"]`, textMarkerAttr, token), nil
 }

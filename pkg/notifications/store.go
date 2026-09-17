@@ -157,7 +157,7 @@ func (s *Store) loadLocked(recipient string) ([]Notification, error) {
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("Store.loadLocked: %w", err)
+		return nil, err
 	}
 	var list []Notification
 	if err := json.Unmarshal(data, &list); err != nil {
@@ -198,12 +198,9 @@ func (s *Store) saveLocked(recipient string, list []Notification) error {
 	}
 	data, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
-		return fmt.Errorf("Store.saveLocked: %w", err)
+		return err
 	}
-	if err := fileutil.WriteFileAtomic(s.userFile(recipient), data, 0o600); err != nil {
-		return fmt.Errorf("Store.saveLocked: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(s.userFile(recipient), data, 0o600)
 }
 
 // Create adds a notification for n.Recipient. If an UNREAD notification for the

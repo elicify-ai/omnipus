@@ -157,7 +157,7 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	}
 	if cookieErr := chromedp.Run(sctx, chromedp.ActionFunc(func(ctx context.Context) error {
 		if serr := network.SetCookie("reload_marker", "AdoptedSurvives").WithURL(srv.URL).Do(ctx); serr != nil {
-			return fmt.Errorf("set cookie: %w", serr)
+			return serr
 		}
 		return nil
 	})); cookieErr != nil {
@@ -204,7 +204,7 @@ func TestCoordinator_Reload_ReAdoptsContext_CookieSurvives(t *testing.T) {
 	if err := chromedp.Run(sctx2, chromedp.ActionFunc(func(ctx context.Context) error {
 		cookies, gerr := network.GetCookies().Do(ctx)
 		if gerr != nil {
-			return fmt.Errorf("get cookies: %w", gerr)
+			return gerr
 		}
 		for _, c := range cookies {
 			if c.Name == "reload_marker" && c.Value == "AdoptedSurvives" {

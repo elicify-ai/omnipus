@@ -195,7 +195,7 @@ func (dw *darwinWatcher) hasWatch(rel string) bool {
 // already covers whatever exists under root at boot.
 func (dw *darwinWatcher) addTree(startRel string, out chan<- fsEvent, stop <-chan struct{}) error {
 	startAbs := dw.absPath(startRel)
-	if err := filepath.WalkDir(startAbs, func(path string, d fs.DirEntry, err error) error {
+	return filepath.WalkDir(startAbs, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			if path == startAbs {
 				return err
@@ -234,10 +234,7 @@ func (dw *darwinWatcher) addTree(startRel string, out chan<- fsEvent, stop <-cha
 				"path", path, "error", wErr)
 		}
 		return nil
-	}); err != nil {
-		return fmt.Errorf("darwinWatcher.addTree: %w", err)
-	}
-	return nil
+	})
 }
 
 // watchDir opens abs (O_EVTONLY: notification only, no read/write access
@@ -348,7 +345,7 @@ func (dw *darwinWatcher) watchFile(rel, abs string) error {
 func (dw *darwinWatcher) listDir(abs string) (map[string]dirChild, error) {
 	entries, err := os.ReadDir(abs)
 	if err != nil {
-		return nil, fmt.Errorf("darwinWatcher.listDir: %w", err)
+		return nil, err
 	}
 	out := make(map[string]dirChild, len(entries))
 	for _, e := range entries {

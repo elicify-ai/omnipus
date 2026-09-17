@@ -203,7 +203,7 @@ func TestMemory_BothIndexesChild(t *testing.T) {
 				}
 				pv, terr := c.Props[name].Typed(prop)
 				if terr != nil {
-					return propindex.Rejected, fmt.Errorf("typed value: %w", terr)
+					return propindex.Rejected, terr
 				}
 				values += len(pv.Values)
 			}

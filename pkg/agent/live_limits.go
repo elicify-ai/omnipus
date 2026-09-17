@@ -465,7 +465,7 @@ func (ll *LiveLimits) fetchOllama(ctx context.Context, t liveTarget) (int, error
 // do performs one bounded request and returns the body on a 2xx JSON reply.
 func (ll *LiveLimits) do(ctx context.Context, method, rawURL string, payload []byte, auth func(*http.Request)) ([]byte, error) {
 	if _, err := url.Parse(rawURL); err != nil {
-		return nil, fmt.Errorf("LiveLimits.do: %w", err)
+		return nil, err
 	}
 	var reader io.Reader
 	if payload != nil {
@@ -473,7 +473,7 @@ func (ll *LiveLimits) do(ctx context.Context, method, rawURL string, payload []b
 	}
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, reader)
 	if err != nil {
-		return nil, fmt.Errorf("LiveLimits.do: %w", err)
+		return nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 	if auth != nil {
@@ -481,7 +481,7 @@ func (ll *LiveLimits) do(ctx context.Context, method, rawURL string, payload []b
 	}
 	resp, err := ll.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("LiveLimits.do: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -489,7 +489,7 @@ func (ll *LiveLimits) do(ctx context.Context, method, rawURL string, payload []b
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, liveLimitsMaxBody))
 	if err != nil {
-		return nil, fmt.Errorf("LiveLimits.do: %w", err)
+		return nil, err
 	}
 	if len(body) == 0 {
 		return nil, errors.New("live limits: empty response")
@@ -587,13 +587,10 @@ func (ll *LiveLimits) saveLocked() error {
 	}
 	raw, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
-		return fmt.Errorf("LiveLimits.saveLocked: %w", err)
+		return err
 	}
 	if err := os.MkdirAll(filepath.Dir(ll.cachePath), 0o700); err != nil {
-		return fmt.Errorf("LiveLimits.saveLocked: %w", err)
+		return err
 	}
-	if err := fileutil.WriteFileAtomic(ll.cachePath, raw, 0o600); err != nil {
-		return fmt.Errorf("LiveLimits.saveLocked: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(ll.cachePath, raw, 0o600)
 }

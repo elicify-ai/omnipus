@@ -226,12 +226,9 @@ func (s *Store) write(t *Task) error {
 	// (see fileutil.SidecarLockPath). Every other writer of a task file —
 	// DropOrphanEdges, the task migrations, pkg/sysagent/tools' writeEntity —
 	// takes this same sidecar lock.
-	if err := fileutil.WithFlock(fileutil.SidecarLockPath(p), func() error {
+	return fileutil.WithFlock(fileutil.SidecarLockPath(p), func() error {
 		return writeFileAtomicFn(p, data, 0o600)
-	}); err != nil {
-		return fmt.Errorf("write task: %w", err)
-	}
-	return nil
+	})
 }
 
 // writeFileAtomicFn is fileutil.WriteFileAtomic, held in a package variable so
@@ -345,7 +342,7 @@ func (f Filter) Matches(t *Task) bool {
 func (s *Store) scanTaskIDs() ([]string, error) {
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
-		return nil, fmt.Errorf("Store.scanTaskIDs: %w", err)
+		return nil, err
 	}
 	ids := make([]string, 0, len(entries))
 	for _, e := range entries {

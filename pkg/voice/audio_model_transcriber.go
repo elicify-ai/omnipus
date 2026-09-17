@@ -62,7 +62,7 @@ func (t *AudioModelTranscriber) Transcribe(ctx context.Context, audioFilePath st
 	format, err := utils.AudioFormat(audioFilePath)
 	if err != nil {
 		logger.ErrorCF("voice", "Failed to detect audio format", map[string]any{"path": audioFilePath, "error": err})
-		return nil, fmt.Errorf("AudioModelTranscriber.Transcribe: %w", err)
+		return nil, err
 	}
 
 	resp, err := t.provider.Chat(ctx, []providers.Message{

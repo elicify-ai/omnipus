@@ -2,7 +2,6 @@ package providers
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"strings"
 
@@ -72,7 +71,7 @@ func extractToolCallsFromText(text string) ([]ToolCall, error) {
 			json.RawMessage(tc.Function.Arguments), tc.Function.Name,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("extractToolCallsFromText: %w", err)
+			return nil, err
 		}
 
 		result = append(result, ToolCall{

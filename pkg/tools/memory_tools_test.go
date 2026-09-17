@@ -59,7 +59,7 @@ func (s *simpleMemStore) AppendLongTerm(content, category string) error {
 
 	f, err := os.OpenFile(s.memoryFile(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
-		return fmt.Errorf("simpleMemStore.AppendLongTerm: %w", err)
+		return err
 	}
 	defer f.Close()
 
@@ -68,10 +68,7 @@ func (s *simpleMemStore) AppendLongTerm(content, category string) error {
 		fmt.Fprintf(f, "<!-- next -->\n\n")
 	}
 	fmt.Fprintf(f, "<!-- ts=%s cat=%s -->\n%s\n", ts, category, content)
-	if err := f.Sync(); err != nil {
-		return fmt.Errorf("simpleMemStore.AppendLongTerm: %w", err)
-	}
-	return nil
+	return f.Sync()
 }
 
 func (s *simpleMemStore) AppendRetro(sessionID string, r tools.MemoryRetro) error {
@@ -81,7 +78,7 @@ func (s *simpleMemStore) AppendRetro(sessionID string, r tools.MemoryRetro) erro
 	dateStr := r.Timestamp.UTC().Format("2006-01-02")
 	retroDir := filepath.Join(s.dir, "sessions", dateStr)
 	if err := os.MkdirAll(retroDir, 0o700); err != nil {
-		return fmt.Errorf("simpleMemStore.AppendRetro: %w", err)
+		return err
 	}
 	retroPath := filepath.Join(retroDir, sessionID+"_retro.md")
 	ts := r.Timestamp.UTC().Format("2006-01-02T15:04:05.000Z")
@@ -95,10 +92,7 @@ func (s *simpleMemStore) AppendRetro(sessionID string, r tools.MemoryRetro) erro
 		content += "- " + n + "\n"
 	}
 	content += "<!-- next -->\n"
-	if err := os.WriteFile(retroPath, []byte(content), 0o600); err != nil {
-		return fmt.Errorf("simpleMemStore.AppendRetro: %w", err)
-	}
-	return nil
+	return os.WriteFile(retroPath, []byte(content), 0o600)
 }
 
 func (s *simpleMemStore) SearchEntries(query string, limit int) ([]tools.MemoryEntry, error) {
@@ -110,7 +104,7 @@ func (s *simpleMemStore) SearchEntries(query string, limit int) ([]tools.MemoryE
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("simpleMemStore.SearchEntries: %w", err)
+		return nil, err
 	}
 	lower := strings.ToLower(query)
 	var results []tools.MemoryEntry

@@ -256,10 +256,7 @@ func (l *IntentLog) writeLocked(planID string, rec *IntentRecord) error {
 	if err := embedChainHMAC(previous, rec, l.chainKey); err != nil {
 		return fmt.Errorf("intent_log: chain embed: %w", err)
 	}
-	if err := fileutil.AppendJSONLSync(l.path(planID), rec); err != nil {
-		return fmt.Errorf("IntentLog.writeLocked: %w", err)
-	}
-	return nil
+	return fileutil.AppendJSONLSync(l.path(planID), rec)
 }
 
 // AppendIntent writes rec as status=uncommitted (the pre-commit record). This

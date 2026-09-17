@@ -790,7 +790,7 @@ func (mt *messageParentToolExecute) finishDelivery() *ToolResult {
 // (sync.Mutex is not reentrant — Mutate takes it once internally). The
 // honesty template is delegate.go transitionLifecycle's doc comment.
 func (t *MessageParentTool) parkNeedsInput(childSessionID string, correlationID string, now time.Time) error {
-	if err := t.lifecycle.Mutate(childSessionID, func(cur *session.LifecycleRecord) error {
+	return t.lifecycle.Mutate(childSessionID, func(cur *session.LifecycleRecord) error {
 		if cur == nil {
 			return session.ErrLifecycleNotFound
 		}
@@ -801,10 +801,7 @@ func (t *MessageParentTool) parkNeedsInput(childSessionID string, correlationID 
 			TTLDeadline:     now.Add(t.needsInputTTL),
 		}
 		return nil
-	}); err != nil {
-		return fmt.Errorf("MessageParentTool.parkNeedsInput: %w", err)
-	}
-	return nil
+	})
 }
 
 // summarizeForWake renders a short, human-readable summary of sm for the

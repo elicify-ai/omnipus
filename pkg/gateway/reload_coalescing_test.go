@@ -211,10 +211,7 @@ func (h *reloadHarness) exec(c *config.Config) error {
 	if h.beforeExec != nil {
 		h.beforeExec(idx)
 	}
-	if err := h.al.ReloadProviderAndConfig(context.Background(), h.provider, c); err != nil {
-		return fmt.Errorf("reloadHarness.exec: %w", err)
-	}
-	return nil
+	return h.al.ReloadProviderAndConfig(context.Background(), h.provider, c)
 }
 
 // loadNext mirrors the production loadReloadConfig: re-read config.json from

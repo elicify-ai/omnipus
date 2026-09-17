@@ -249,12 +249,9 @@ func saveMountStore(home, id string, mounts []Mount) error {
 	}
 	// Lock the record's sidecar, never the record this write renames over (see
 	// fileutil.SidecarLockPath); both removals above take the same lock.
-	if err := fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
 		return writeFileAtomicFn(path, data, 0o600)
-	}); err != nil {
-		return fmt.Errorf("saveMountStore: %w", err)
-	}
-	return nil
+	})
 }
 
 // DeleteMountStore removes workspace id's entire mount record. Called from the

@@ -181,16 +181,12 @@ func openOrCreateAt(idxPath string) (bleve.Index, error) {
 		if mkErr := os.MkdirAll(filepath.Dir(idxPath), 0o700); mkErr != nil {
 			return nil, fmt.Errorf("create parent dir: %w", mkErr)
 		}
-		bIdx, err := bleve.NewUsing(idxPath, buildMapping(), scorch.Name, scorch.Name, scorchOpenConfig())
-		if err != nil {
-			return nil, fmt.Errorf("open memrooms index: %w", err)
-		}
-		return bIdx, nil
+		return bleve.NewUsing(idxPath, buildMapping(), scorch.Name, scorch.Name, scorchOpenConfig())
 	}
 	// Exists — open it with a bounded bbolt-lock timeout.
 	idx, err := bleve.OpenUsing(idxPath, scorchOpenConfig())
 	if err != nil {
-		return nil, fmt.Errorf("openOrCreateAt: %w", err)
+		return nil, err
 	}
 	// The mapping written at creation is authoritative for the life of the
 	// index: bleve.OpenUsing takes no mapping argument, and bleve resolves the
@@ -208,11 +204,7 @@ func openOrCreateAt(idxPath string) (bleve.Index, error) {
 		if rmErr := os.RemoveAll(idxPath); rmErr != nil {
 			return nil, fmt.Errorf("memrooms/index: remove stale-scoring index %s: %w", idxPath, rmErr)
 		}
-		bIdx, err := bleve.NewUsing(idxPath, buildMapping(), scorch.Name, scorch.Name, scorchOpenConfig())
-		if err != nil {
-			return nil, fmt.Errorf("open memrooms index: %w", err)
-		}
-		return bIdx, nil
+		return bleve.NewUsing(idxPath, buildMapping(), scorch.Name, scorch.Name, scorchOpenConfig())
 	}
 	return idx, nil
 }
@@ -482,11 +474,7 @@ func (ri *RoomIndex) rebuildLocked() error {
 func (ri *RoomIndex) DocCount() (uint64, error) {
 	ri.handleMu.RLock()
 	defer ri.handleMu.RUnlock()
-	n, err := ri.idx.DocCount()
-	if err != nil {
-		return 0, fmt.Errorf("RoomIndex.DocCount: %w", err)
-	}
-	return n, nil
+	return ri.idx.DocCount()
 }
 
 // Close releases THIS caller's reference to the shared index. The underlying

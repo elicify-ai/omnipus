@@ -14,7 +14,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -127,10 +126,7 @@ func TestGoalAdjudication_DiscardsAVerdictForARestatedGoal(t *testing.T) {
 			// The restate lands while the Judge is mid-call.
 			if _, err := goal.NewStore(config.OmnipusHomeDir()).Update(g.GoalID, func(cur *goal.Goal) error {
 				_, rerr := cur.Restate(e1BetaIntent, newFloorDoD(), time.Now().UTC())
-				if rerr != nil {
-					return fmt.Errorf("Goal.Restate: %w", rerr)
-				}
-				return nil
+				return rerr
 			}); err != nil {
 				t.Errorf("fixture: restate during judging: %v", err)
 			}

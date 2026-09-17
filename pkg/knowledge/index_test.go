@@ -69,7 +69,7 @@ func b2TreeSnapshot(t *testing.T, root string) []string {
 		}
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
-			return fmt.Errorf("relative path %s: %w", path, relErr)
+			return relErr
 		}
 		if d.IsDir() {
 			out = append(out, "d "+filepath.ToSlash(rel))
@@ -77,7 +77,7 @@ func b2TreeSnapshot(t *testing.T, root string) []string {
 		}
 		info, infoErr := d.Info()
 		if infoErr != nil {
-			return fmt.Errorf("dir entry info: %w", infoErr)
+			return infoErr
 		}
 		out = append(out, fmt.Sprintf("f %s %d", filepath.ToSlash(rel), info.Size()))
 		return nil
@@ -219,7 +219,7 @@ func TestIndexPermissions_0700_0600(t *testing.T) {
 		}
 		info, infoErr := d.Info()
 		if infoErr != nil {
-			return fmt.Errorf("dir entry info: %w", infoErr)
+			return infoErr
 		}
 		checked++
 		want := fs.FileMode(0o600)

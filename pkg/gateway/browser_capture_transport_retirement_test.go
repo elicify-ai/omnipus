@@ -34,11 +34,7 @@ func (c *captureFailingWriteConn) Write(data []byte) (int, error) {
 		<-c.release
 		return 0, os.ErrDeadlineExceeded
 	}
-	n, err := c.Conn.Write(data)
-	if err != nil {
-		return 0, fmt.Errorf("write: %w", err)
-	}
-	return n, nil
+	return c.Conn.Write(data)
 }
 
 type captureFailingHijacker struct {
@@ -53,7 +49,7 @@ func (w captureFailingHijacker) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	}
 	conn, rw, err := hijacker.Hijack()
 	if err != nil {
-		return nil, nil, fmt.Errorf("captureFailingHijacker.Hijack: %w", err)
+		return nil, nil, err
 	}
 	controlled := &captureFailingWriteConn{Conn: conn, entered: make(chan struct{}), release: make(chan struct{})}
 	w.accepted <- controlled

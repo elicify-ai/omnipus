@@ -43,7 +43,7 @@ func (s *sliceSink) emit(f any) error {
 	defer s.mu.Unlock()
 	data, err := json.Marshal(f)
 	if err != nil {
-		return fmt.Errorf("sliceSink.emit: %w", err)
+		return err
 	}
 	s.frames = append(s.frames, data)
 	return nil

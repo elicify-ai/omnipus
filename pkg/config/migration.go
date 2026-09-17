@@ -30,14 +30,14 @@ func loadConfig(data []byte) (*Config, error) {
 	// entries; when count is 0 we keep DefaultConfig's built-in list as fallback.
 	var tmp Config
 	if err := json.Unmarshal(compatData, &tmp); err != nil {
-		return nil, fmt.Errorf("loadConfig: %w", err)
+		return nil, err
 	}
 	if len(tmp.Providers) > 0 {
 		cfg.Providers = nil
 	}
 
 	if err := json.Unmarshal(compatData, cfg); err != nil {
-		return nil, fmt.Errorf("loadConfig: %w", err)
+		return nil, err
 	}
 
 	// Record whether cfg.Sandbox.AuditLog holds the seeded default (true —

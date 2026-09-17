@@ -241,7 +241,7 @@ func (a *restAPI) removeStoredCredential(refName string) error {
 		if errors.As(err, &nf) {
 			return nil
 		}
-		return fmt.Errorf("restAPI.removeStoredCredential: %w", err)
+		return err
 	}
 	return nil
 }
@@ -270,7 +270,7 @@ func (a *restAPI) credentialRefResolves(refName string) (bool, error) {
 		if errors.As(err, &nf) {
 			return false, nil // truly absent
 		}
-		return false, fmt.Errorf("restAPI.credentialRefResolves: %w", err) // locked / wrong key / I/O — surface to the caller
+		return false, err // locked / wrong key / I/O — surface to the caller
 	}
 	return strings.TrimSpace(v) != "", nil
 }
@@ -331,7 +331,7 @@ func (a *restAPI) updateConfigJSONLocked(mutate func(m map[string]any) error) er
 		return fmt.Errorf("serialize config: %w", err)
 	}
 	if writeErr := fileutil.WriteFileAtomic(a.configPath(), out, 0o600); writeErr != nil {
-		return fmt.Errorf("restAPI.updateConfigJSONLocked: %w", writeErr)
+		return writeErr
 	}
 	// Register the content hash of what we just wrote so the config file
 	// watcher knows this is an app-initiated write and does not trigger a

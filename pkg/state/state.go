@@ -145,10 +145,7 @@ func (sm *Manager) saveAtomic() error {
 		return fmt.Errorf("failed to marshal state: %w", err)
 	}
 
-	if err := fileutil.WriteFileAtomic(sm.stateFile, data, 0o600); err != nil {
-		return fmt.Errorf("Manager.saveAtomic: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(sm.stateFile, data, 0o600)
 }
 
 // load loads the state from disk.

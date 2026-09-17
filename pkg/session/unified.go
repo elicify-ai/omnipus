@@ -876,10 +876,7 @@ func (us *UnifiedStore) readMetaLocked(sessionID string) (*UnifiedMeta, error) {
 func (us *UnifiedStore) Close() error {
 	us.stopStatsFlusher()
 	us.flushAllDirtyStats()
-	if err := us.backend.Close(); err != nil {
-		return fmt.Errorf("UnifiedStore.Close: %w", err)
-	}
-	return nil
+	return us.backend.Close()
 }
 
 // readUnifiedMeta reads sessionDir's meta and composes the ADR-057 W23
@@ -947,10 +944,7 @@ func writeUnifiedMetaDirect(sessionDir string, meta *UnifiedMeta) error {
 		return fmt.Errorf("unified_store: marshal meta: %w", err)
 	}
 	metaPath := filepath.Join(sessionDir, "meta.json")
-	if err := fileutil.WithFlock(sessionFileLockPath(metaPath), func() error {
+	return fileutil.WithFlock(sessionFileLockPath(metaPath), func() error {
 		return fileutil.WriteFileAtomic(metaPath, data, 0o600)
-	}); err != nil {
-		return fmt.Errorf("writeUnifiedMetaDirect: %w", err)
-	}
-	return nil
+	})
 }

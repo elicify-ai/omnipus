@@ -6,7 +6,6 @@ package config
 
 import (
 	"bytes"
-	"fmt"
 	"log/slog"
 	"os"
 	"strings"
@@ -26,11 +25,7 @@ type lockedBuf struct {
 func (l *lockedBuf) Write(p []byte) (int, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	n, err := l.buf.Write(p)
-	if err != nil {
-		return 0, fmt.Errorf("write: %w", err)
-	}
-	return n, nil
+	return l.buf.Write(p)
 }
 
 func (l *lockedBuf) String() string {

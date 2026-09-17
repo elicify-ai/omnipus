@@ -265,7 +265,7 @@ func marshalGoalSeamRecord(g *goal.Goal) (string, error) {
 	}
 	data, err := json.Marshal(rec)
 	if err != nil {
-		return "", fmt.Errorf("marshalGoalSeamRecord: %w", err)
+		return "", err
 	}
 	return string(data), nil
 }
@@ -281,7 +281,7 @@ func parseGoalSeamRecord(recordJSON string) (goalSeamRecord, error) {
 		return rec, errors.New("empty record")
 	}
 	if err := json.Unmarshal([]byte(recordJSON), &rec); err != nil {
-		return goalSeamRecord{}, fmt.Errorf("parseGoalSeamRecord: %w", err)
+		return goalSeamRecord{}, err
 	}
 	return rec, nil
 }
@@ -594,11 +594,11 @@ func (a agentLoopGoalRecordAccess) WriteRecord(sessionID, recordJSON string) err
 	if _, uerr := store.Update(existing.GoalID, func(cur *goal.Goal) error {
 		cur.Definition = rec.Definition
 		if err := cur.SetCriteria(rec.Criteria, now); err != nil {
-			return fmt.Errorf("Goal.SetCriteria: %w", err)
+			return err
 		}
 		if len(rec.DoD) > 0 {
 			if err := cur.SetDoD(rec.DoD, now); err != nil {
-				return fmt.Errorf("Goal.SetDoD: %w", err)
+				return err
 			}
 		}
 		superseded := make([]goal.SupersededCriteriaEntry, 0, len(rec.SupersededCriteria))

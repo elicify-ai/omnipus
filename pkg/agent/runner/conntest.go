@@ -243,7 +243,7 @@ func probeVersion(ctx context.Context, binPath string, args []string) (string, e
 		if errors.As(err, &ee) && text != "" {
 			return "", fmt.Errorf("%w: %s", err, firstLine(text))
 		}
-		return "", fmt.Errorf("probeVersion: %w", err)
+		return "", err
 	}
 	v := extractVersion(text)
 	if v == "" {

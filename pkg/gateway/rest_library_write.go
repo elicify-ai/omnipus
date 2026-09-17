@@ -450,7 +450,7 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 	writeErr := knowledge.WithNoteWriteLock(lockCfg, lockRel, func() error {
 		current, verErr := knowledge.ReadFileVersion(root.HostPath(rel))
 		if verErr != nil {
-			return fmt.Errorf("read note version: %w", verErr)
+			return verErr
 		}
 		if conflict := checkLibraryVersion(rel, expectedBare, current); conflict != nil {
 			return conflict
@@ -461,7 +461,7 @@ func (a *restAPI) handleLibraryContentPut(w http.ResponseWriter, r *http.Request
 		var writeErr error
 		fi, writeErr = root.WriteContent(rel, content)
 		if writeErr != nil {
-			return fmt.Errorf("write content: %w", writeErr)
+			return writeErr
 		}
 		newToken = knowledge.ComputeVersionToken(content)
 		return nil
@@ -694,7 +694,7 @@ func (a *restAPI) handleLibraryContentBinaryPut(w http.ResponseWriter, r *http.R
 	writeErr := knowledge.WithNoteWriteLock(lockCfg, lockRel, func() error {
 		current, verErr := knowledge.ReadFileVersion(root.HostPath(rel))
 		if verErr != nil {
-			return fmt.Errorf("read note version: %w", verErr)
+			return verErr
 		}
 		if conflict := checkLibraryVersion(rel, expectedBare, current); conflict != nil {
 			return conflict
@@ -705,7 +705,7 @@ func (a *restAPI) handleLibraryContentBinaryPut(w http.ResponseWriter, r *http.R
 		var writeErr error
 		fi, writeErr = root.WriteContent(rel, decoded)
 		if writeErr != nil {
-			return fmt.Errorf("write content: %w", writeErr)
+			return writeErr
 		}
 		newToken = knowledge.ComputeVersionToken(decoded)
 		return nil

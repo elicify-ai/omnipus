@@ -22,7 +22,6 @@ package task
 
 import (
 	"encoding/json"
-	"fmt"
 	"time"
 )
 
@@ -224,7 +223,7 @@ func (td *Todo) UnmarshalJSON(data []byte) error {
 		Done   *bool  `json:"done"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("Todo.UnmarshalJSON: %w", err)
+		return err
 	}
 	td.Text = raw.Text
 	switch {

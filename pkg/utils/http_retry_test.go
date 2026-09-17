@@ -2,7 +2,6 @@ package utils
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -144,7 +143,7 @@ type bodyCloseTracker struct {
 func (t *bodyCloseTracker) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := t.rt.RoundTrip(req)
 	if err != nil {
-		return resp, fmt.Errorf("bodyCloseTracker.RoundTrip: %w", err)
+		return resp, err
 	}
 	if strings.HasPrefix(req.URL.String(), t.trackURL) {
 		resp.Body = &closeNotifier{ReadCloser: resp.Body, onClose: t.onClose}
@@ -163,10 +162,7 @@ type closeNotifier struct {
 
 func (c *closeNotifier) Close() error {
 	c.onClose()
-	if err := c.ReadCloser.Close(); err != nil {
-		return fmt.Errorf("closeNotifier.Close: %w", err)
-	}
-	return nil
+	return c.ReadCloser.Close()
 }
 
 func TestDoRequestWithRetry_Delay(t *testing.T) {

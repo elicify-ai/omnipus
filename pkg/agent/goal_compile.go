@@ -1043,7 +1043,7 @@ func marshalCompiledGoal(g *CompiledGoal) (string, error) {
 	}
 	data, err := json.Marshal(g)
 	if err != nil {
-		return "", fmt.Errorf("marshalCompiledGoal: %w", err)
+		return "", err
 	}
 	return string(data), nil
 }

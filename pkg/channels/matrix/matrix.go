@@ -541,7 +541,7 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 			// retrying the whole message would re-upload/re-send it,
 			// duplicating it for the user, so the failure is classified
 			// permanent instead. The real API error stays in the chain.
-			return fmt.Errorf("MatrixChannel.SendMedia: %w", channels.ClassifyMediaSendError("matrix", sentCount, err))
+			return channels.ClassifyMediaSendError("matrix", sentCount, err)
 		}
 
 		msgType := matrixOutboundMsgType(part.Type, filename, contentType)
@@ -566,7 +566,7 @@ func (c *MatrixChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMess
 			// parts, sentCount could be > 0 here; ClassifyMediaSendError
 			// makes that permanent so sendMediaWithRetry does not re-send
 			// the whole message and duplicate what already landed.
-			return fmt.Errorf("MatrixChannel.SendMedia: %w", channels.ClassifyMediaSendError("matrix", sentCount, err))
+			return channels.ClassifyMediaSendError("matrix", sentCount, err)
 		}
 		sentCount++
 	}
@@ -651,7 +651,7 @@ func (c *MatrixChannel) SendPlaceholder(ctx context.Context, chatID string) (str
 		Body:    text,
 	})
 	if err != nil {
-		return "", fmt.Errorf("MatrixChannel.SendPlaceholder: %w", err)
+		return "", err
 	}
 
 	return resp.EventID.String(), nil
@@ -671,10 +671,7 @@ func (c *MatrixChannel) EditMessage(ctx context.Context, chatID string, messageI
 	editContent.SetEdit(id.EventID(messageID))
 
 	_, err := c.client.SendMessageEvent(ctx, roomID, event.EventMessage, editContent)
-	if err != nil {
-		return fmt.Errorf("MatrixChannel.EditMessage: %w", err)
-	}
-	return nil
+	return err
 }
 
 func (c *MatrixChannel) handleMemberEvent(ctx context.Context, evt *event.Event) {
@@ -957,7 +954,7 @@ func (c *MatrixChannel) downloadMedia(
 
 	resp, err := c.client.Download(reqCtx, parsed)
 	if err != nil {
-		return "", fmt.Errorf("MatrixChannel.downloadMedia: %w", err)
+		return "", err
 	}
 	defer resp.Body.Close()
 
@@ -982,7 +979,7 @@ func (c *MatrixChannel) downloadMedia(
 	}
 	tmp, err := os.CreateTemp(mediaDir, "matrix-media-*"+ext)
 	if err != nil {
-		return "", fmt.Errorf("MatrixChannel.downloadMedia: %w", err)
+		return "", err
 	}
 	tmpPath := tmp.Name()
 	cleanup := true
@@ -995,13 +992,13 @@ func (c *MatrixChannel) downloadMedia(
 
 	_, err = io.Copy(tmp, reader)
 	if err != nil {
-		return "", fmt.Errorf("MatrixChannel.downloadMedia: %w", err)
+		return "", err
 	}
 	if err = readerClose(); err != nil {
 		return "", fmt.Errorf("decrypt matrix media: %w", err)
 	}
 	if err = tmp.Close(); err != nil {
-		return "", fmt.Errorf("MatrixChannel.downloadMedia: %w", err)
+		return "", err
 	}
 
 	cleanup = false
@@ -1335,7 +1332,7 @@ func (c *MatrixChannel) stripSelfMention(text string) string {
 func matrixMediaTempDir() (string, error) {
 	mediaDir := media.TempDir()
 	if err := os.MkdirAll(mediaDir, 0o700); err != nil {
-		return "", fmt.Errorf("matrixMediaTempDir: %w", err)
+		return "", err
 	}
 	return mediaDir, nil
 }

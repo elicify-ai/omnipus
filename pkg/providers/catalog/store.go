@@ -17,7 +17,6 @@ package catalog
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -54,11 +53,7 @@ func (s *FileStore) Path() string { return s.path }
 
 // Read returns the persisted bytes; a missing file surfaces fs.ErrNotExist.
 func (s *FileStore) Read(_ context.Context) ([]byte, error) {
-	data, err := os.ReadFile(s.path)
-	if err != nil {
-		return nil, fmt.Errorf("catalog FileStore.Read: %w", err)
-	}
-	return data, nil
+	return os.ReadFile(s.path)
 }
 
 // Write atomically replaces the persisted file.
@@ -67,10 +62,7 @@ func (s *FileStore) Write(ctx context.Context, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := fileutil.WriteFileAtomic(s.path, data, 0o600); err != nil {
-		return fmt.Errorf("FileStore.Write: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(s.path, data, 0o600)
 }
 
 // ModTime reports when the persisted last-known-good was last written —
@@ -84,7 +76,7 @@ func (s *FileStore) Write(ctx context.Context, data []byte) error {
 func (s *FileStore) ModTime() (time.Time, error) {
 	fi, err := os.Stat(s.path)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("FileStore.ModTime: %w", err)
+		return time.Time{}, err
 	}
 	return fi.ModTime(), nil
 }

@@ -126,7 +126,7 @@ func dirBytes(tb testing.TB, dir string) int64 {
 		}
 		info, iErr := d.Info()
 		if iErr != nil {
-			return fmt.Errorf("dir entry info: %w", iErr)
+			return iErr
 		}
 		total += info.Size()
 		return nil

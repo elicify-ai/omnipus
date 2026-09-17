@@ -7,7 +7,6 @@ package propindex
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 )
@@ -122,10 +121,10 @@ func TestReconcile_WritesThroughTheScopedStore(t *testing.T) {
 
 	err := store.Reconcile(func(s Store) error {
 		if err := s.UpsertNote(ctx, NoteRows{Path: "inside.md", Kind: KindNote}); err != nil {
-			return fmt.Errorf("upsert note: %w", err)
+			return err
 		}
 		if err := s.DeleteNote(ctx, "inside.md"); err != nil {
-			return fmt.Errorf("delete note: %w", err)
+			return err
 		}
 		return s.UpsertNote(ctx, NoteRows{Path: "inside.md", Kind: KindNote})
 	})

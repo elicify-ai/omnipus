@@ -36,7 +36,7 @@ func GetConfigPath() string {
 func LoadConfig() (*config.Config, error) {
 	cfg, err := config.LoadConfig(GetConfigPath())
 	if err != nil {
-		return nil, fmt.Errorf("LoadConfig: %w", err)
+		return nil, err
 	}
 	logger.SetLevelFromString(cfg.Gateway.LogLevel)
 	// ADR-054 D2/D3: agents are per-entity records under entities/agents/

@@ -105,7 +105,7 @@ func kltTree(t *testing.T, root string) []string {
 		}
 		rel, relErr := filepath.Rel(root, p)
 		if relErr != nil {
-			return fmt.Errorf("relative path %s: %w", p, relErr)
+			return relErr
 		}
 		out = append(out, filepath.ToSlash(rel))
 		return nil
@@ -670,10 +670,7 @@ func TestKnowledgeLifecycle_ReopenReconcilesWithoutRebuilding(t *testing.T) {
 				mu.Lock()
 				stats = append(stats, s)
 				mu.Unlock()
-				if err != nil {
-					return s, fmt.Errorf("sync knowledge index: %w", err)
-				}
-				return s, nil
+				return s, err
 			},
 			// This test is about the reconcile path (FR-033/FR-039), not
 			// drift. Without this seam, AttachMount's "once on mount" health

@@ -56,7 +56,7 @@ func hasDotGit(dir string) (bool, error) {
 	if os.IsNotExist(err) {
 		return false, nil
 	}
-	return false, fmt.Errorf("hasDotGit: %w", err)
+	return false, err
 }
 
 // ancestorHasGit walks strictly upward from dir (starting at its parent,

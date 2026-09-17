@@ -23,7 +23,7 @@ const (
 func (s *DMScope) UnmarshalJSON(data []byte) error {
 	var raw string
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return fmt.Errorf("DMScope.UnmarshalJSON: %w", err)
+		return err
 	}
 	switch DMScope(raw) {
 	case DMScopeMain, DMScopePerPeer, DMScopePerChannelPeer, DMScopePerAccountChannelPeer:

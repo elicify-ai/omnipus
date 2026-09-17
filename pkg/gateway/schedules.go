@@ -406,12 +406,9 @@ func (p *scheduledProcRegistry) Cleanup(sessionID string) {
 func killProcess(pid int) error {
 	proc, err := os.FindProcess(pid)
 	if err != nil {
-		return fmt.Errorf("killProcess: %w", err)
+		return err
 	}
-	if err := proc.Kill(); err != nil {
-		return fmt.Errorf("killProcess: %w", err)
-	}
-	return nil
+	return proc.Kill()
 }
 
 // cleanupRunProcesses best-effort terminates any child/browser processes the

@@ -581,7 +581,7 @@ func (ms *MemoryStore) AppendLongTermToScope(content, category string, scope mem
 
 	// Write the .md file first (FR-7.2 / FR-7.3).
 	if err := memrooms.WriteMemoryFile(room.MemoriesDir, mf); err != nil {
-		return fmt.Errorf("MemoryStore.AppendLongTermToScope: %w", err)
+		return err
 	}
 
 	// MinHash dedup check (FR-7.5 / M-5): non-destructive — links written to
@@ -827,14 +827,14 @@ func readMemoryByID(memoriesDir, id string) (memrooms.MemoryFile, error) {
 	// individual unreadable files, so one bad .md does not abort the lookup.
 	memories, scanErr := memrooms.ScanMemories(memoriesDir)
 	if scanErr != nil {
-		return memrooms.MemoryFile{}, fmt.Errorf("readMemoryByID: %w", err) // surface the original read error
+		return memrooms.MemoryFile{}, err // surface the original read error
 	}
 	for _, candidate := range memories {
 		if candidate.Frontmatter.ID == id {
 			return candidate, nil
 		}
 	}
-	return memrooms.MemoryFile{}, fmt.Errorf("readMemoryByID: %w", err)
+	return memrooms.MemoryFile{}, err
 }
 
 // memoryFileMtimes builds an ID→mtime map by scanning each memories directory.
@@ -911,7 +911,7 @@ func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
 	// can both target one sessionID) still cannot clobber each other.
 	lockPath := fileutil.SidecarLockPath(retroPath)
 
-	if err := fileutil.WithFlock(lockPath, func() error {
+	return fileutil.WithFlock(lockPath, func() error {
 		existing, err := os.ReadFile(retroPath)
 		if err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("memory: read existing retro: %w", err)
@@ -922,10 +922,7 @@ func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
 			return fmt.Errorf("memory: write retro: %w", err)
 		}
 		return nil
-	}); err != nil {
-		return fmt.Errorf("MemoryStore.AppendRetro: %w", err)
-	}
-	return nil
+	})
 }
 
 // WriteLastSession atomically writes content to the private room's last-session.md.
@@ -933,10 +930,7 @@ func (ms *MemoryStore) AppendRetro(sessionID string, r Retro) error {
 // room has no last-session.md.
 func (ms *MemoryStore) WriteLastSession(content string) error {
 	path := filepath.Join(ms.privateRoom.Root, memrooms.LastSessionFile)
-	if err := fileutil.WriteFileAtomic(path, []byte(content), 0o600); err != nil {
-		return fmt.Errorf("MemoryStore.WriteLastSession: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(path, []byte(content), 0o600)
 }
 
 // ReadLastSession returns the contents of last-session.md, or "" if absent.

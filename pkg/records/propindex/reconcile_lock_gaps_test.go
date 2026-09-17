@@ -221,10 +221,7 @@ func TestDirectWrite_StopsWaitingWhenItsContextEnds(t *testing.T) {
 		}},
 		{"RefreshNoteStat", func(c context.Context) error {
 			_, err := direct.RefreshNoteStat(c, "held.md", 42, 1_700_000_000_000_000_000, 0, false)
-			if err != nil {
-				return fmt.Errorf("RefreshNoteStat: %w", err)
-			}
-			return nil
+			return err
 		}},
 	}
 

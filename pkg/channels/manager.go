@@ -470,7 +470,7 @@ type finalizeHookStreamer struct {
 
 func (s *finalizeHookStreamer) Finalize(ctx context.Context, content string) error {
 	if err := s.Streamer.Finalize(ctx, content); err != nil {
-		return fmt.Errorf("finalizeHookStreamer.Finalize: %w", err)
+		return err
 	}
 	s.onFinalize()
 	return nil
@@ -1589,7 +1589,7 @@ func (m *Manager) sendMediaWithRetry(
 
 	// Rate limit: wait for token
 	if err := w.limiter.Wait(ctx); err != nil {
-		return fmt.Errorf("Manager.sendMediaWithRetry: %w", err)
+		return err
 	}
 
 	// Pre-send: stop typing and clean up any placeholder before sending media.
@@ -1638,7 +1638,7 @@ func (m *Manager) sendMediaWithRetry(
 		"error":   lastErr.Error(),
 		"retries": maxRetries,
 	})
-	return fmt.Errorf("Manager.sendMediaWithRetry: %w", lastErr)
+	return lastErr
 }
 
 // runTTLJanitor periodically scans the typingStops, reactionUndos, placeholders
@@ -2230,8 +2230,5 @@ func (m *Manager) SendToChannel(ctx context.Context, channelName, chatID, conten
 
 	// Fallback: direct send (should not happen in normal operation).
 	// channel was captured under the lock above, so this access is safe.
-	if err := channel.Send(ctx, msg); err != nil {
-		return fmt.Errorf("Manager.SendToChannel: %w", err)
-	}
-	return nil
+	return channel.Send(ctx, msg)
 }

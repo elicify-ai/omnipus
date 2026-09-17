@@ -279,11 +279,7 @@ const localModelListTimeout = 5 * time.Second
 func fetchLocalModels(ctx context.Context, protocol catalog.Protocol, apiBase, apiKey string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, localModelListTimeout)
 	defer cancel()
-	models, err := providers_pkg.ListModels(ctx, protocol, apiBase, apiKey, providers_pkg.NoopChecker{})
-	if err != nil {
-		return nil, fmt.Errorf("fetchLocalModels: %w", err)
-	}
-	return models, nil
+	return providers_pkg.ListModels(ctx, protocol, apiBase, apiKey, providers_pkg.NoopChecker{})
 }
 
 // ── PUT admission (FR-019, FR-035) ──────────────────────────────────────────
@@ -303,11 +299,7 @@ func providerAdmission(
 	apiBase string,
 	protocol string,
 ) (custom bool, err error) {
-	custom, err = providers_pkg.AdmitIn(cat, id, apiBase, protocol)
-	if err != nil {
-		return false, fmt.Errorf("providerAdmission: %w", err)
-	}
-	return custom, nil
+	return providers_pkg.AdmitIn(cat, id, apiBase, protocol)
 }
 
 // Recommended-for-chat eligibility (ADR-068 FR-030): the catalog says the

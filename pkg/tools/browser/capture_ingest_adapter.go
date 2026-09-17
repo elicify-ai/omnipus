@@ -42,7 +42,7 @@ func (cs *CaptureSession) bindIngestContext(ctx context.Context, send func(strin
 	token, err := relay.BeginIngestBinding(binding)
 	if err != nil {
 		cancel()
-		return nil, 0, fmt.Errorf("CaptureSession.bindIngestContext: %w", err)
+		return nil, 0, err
 	}
 	if token == 0 {
 		cancel()
@@ -121,7 +121,7 @@ func (cs *CaptureSession) HandleIngestOfferForBinding(ctx context.Context, epoch
 		return "", request.Err()
 	}
 	if err != nil {
-		return "", fmt.Errorf("CaptureSession.HandleIngestOfferForBinding: %w", err)
+		return "", err
 	}
 	return answer, nil
 }

@@ -18,10 +18,7 @@ import (
 // thus its cascade). Used to simulate a manual deletion / crash leaving a
 // dangling blocked_by edge.
 func removeFileRaw(s *Store, id string) error {
-	if err := os.Remove(filepath.Join(s.dir, id+".json")); err != nil {
-		return fmt.Errorf("removeFileRaw: %w", err)
-	}
-	return nil
+	return os.Remove(filepath.Join(s.dir, id+".json"))
 }
 
 func newStore(t *testing.T) *Store {

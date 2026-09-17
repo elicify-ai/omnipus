@@ -2,7 +2,6 @@ package providers
 
 import (
 	"context"
-	"fmt"
 
 	anthropicprovider "github.com/elicify-ai/omnipus/pkg/providers/anthropic"
 )
@@ -30,7 +29,7 @@ func (p *ClaudeProvider) Chat(
 ) (*LLMResponse, error) {
 	resp, err := p.delegate.Chat(ctx, messages, tools, model, options)
 	if err != nil {
-		return nil, fmt.Errorf("ClaudeProvider.Chat: %w", err)
+		return nil, err
 	}
 	return resp, nil
 }
@@ -61,11 +60,7 @@ func (p *ClaudeProvider) ChatStream(
 	onChunk func(accumulated string),
 	onProgress OnToolCallProgress,
 ) (*LLMResponse, error) {
-	res, err := p.delegate.ChatStream(ctx, messages, tools, model, options, onChunk, onProgress)
-	if err != nil {
-		return nil, fmt.Errorf("ClaudeProvider.ChatStream: %w", err)
-	}
-	return res, nil
+	return p.delegate.ChatStream(ctx, messages, tools, model, options, onChunk, onProgress)
 }
 
 func (p *ClaudeProvider) GetDefaultModel() string {

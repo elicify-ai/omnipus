@@ -68,7 +68,7 @@ func (r *Reader) ScanRecords(ctx context.Context, recordType string, visit func(
 		return fmt.Errorf("vaultprops: ScanRecords called with no properties index")
 	}
 	sel := propindex.Selector{RecordType: recordType}
-	if err := r.store.Candidates(ctx, sel, func(c propindex.Candidate) (propindex.Verdict, error) {
+	return r.store.Candidates(ctx, sel, func(c propindex.Candidate) (propindex.Verdict, error) {
 		if err := visit(knowledge.IndexedRecord{
 			Path:       c.Path,
 			RecordType: c.RecordType,
@@ -77,10 +77,7 @@ func (r *Reader) ScanRecords(ctx context.Context, recordType string, visit func(
 			return propindex.Rejected, err
 		}
 		return propindex.Rejected, nil
-	}); err != nil {
-		return fmt.Errorf("Reader.ScanRecords: %w", err)
-	}
-	return nil
+	})
 }
 
 // ScanRelations visits every relation edge owned by records of one type.
@@ -89,17 +86,14 @@ func (r *Reader) ScanRelations(ctx context.Context, recordType string, visit fun
 		return fmt.Errorf("vaultprops: ScanRelations called with no properties index")
 	}
 	sel := propindex.Selector{RecordType: recordType}
-	if err := r.store.Relations(ctx, sel, func(hit propindex.RelationHit) error {
+	return r.store.Relations(ctx, sel, func(hit propindex.RelationHit) error {
 		return visit(knowledge.IndexedRelation{
 			Path:     hit.Path,
 			RecordID: hit.RecordID,
 			Property: hit.Relation.Prop,
 			Target:   hit.Relation.Target,
 		})
-	}); err != nil {
-		return fmt.Errorf("Reader.ScanRelations: %w", err)
-	}
-	return nil
+	})
 }
 
 // Close releases the underlying store.
@@ -107,10 +101,7 @@ func (r *Reader) Close() error {
 	if r == nil || r.store == nil {
 		return nil
 	}
-	if err := r.store.Close(); err != nil {
-		return fmt.Errorf("Reader.Close: %w", err)
-	}
-	return nil
+	return r.store.Close()
 }
 
 // Open is the knowledge.OpenPropertyIndexFunc a host wires into the vault
@@ -139,7 +130,7 @@ func Open(ctx context.Context, home, collectionRoot string) (knowledge.PropertyI
 	// and it would send an operator on linux/mipsle to run an index that
 	// cannot exist. FR-020h wants the refusal that names the PLATFORM.
 	if err := records.RequirePropertyIndex(records.CapabilityOpenIndex); err != nil {
-		return nil, fmt.Errorf("Open: %w", err)
+		return nil, err
 	}
 	path, err := knowledge.PropertiesIndexPath(home, collectionRoot)
 	if err != nil {
@@ -168,7 +159,7 @@ func Open(ctx context.Context, home, collectionRoot string) (knowledge.PropertyI
 		// Returned unchanged. On a SQLite-less build this IS the platform
 		// refusal, and wrapping it would replace the one message that names
 		// the platform and says what still works.
-		return nil, fmt.Errorf("Open: %w", err)
+		return nil, err
 	}
 	if store.NeedsFullIndex() {
 		if cerr := store.Close(); cerr != nil {

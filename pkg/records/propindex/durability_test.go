@@ -9,7 +9,6 @@ package propindex
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -203,7 +202,7 @@ func TestOpen_EverySecondConnectionCarriesThePragmas(t *testing.T) {
 			// one.
 			var got int
 			if err := ix.queryRow(ctx, PhaseOpen, "PRAGMA busy_timeout").Scan(&got); err != nil {
-				return Rejected, fmt.Errorf("read busy_timeout: %w", err)
+				return Rejected, err
 			}
 			readings = append(readings, got)
 			return Rejected, nil
@@ -259,7 +258,7 @@ func TestIndex_ANestedReadInsideAStreamCompletes(t *testing.T) {
 		done <- store.Candidates(bounded, Selector{}, func(Candidate) (Verdict, error) {
 			n, err := store.CountCandidates(bounded, Selector{Kind: KindNote})
 			if err != nil {
-				return Rejected, fmt.Errorf("count candidates: %w", err)
+				return Rejected, err
 			}
 			if n != 3 {
 				t.Errorf("the nested count read %d notes, expected 3", n)

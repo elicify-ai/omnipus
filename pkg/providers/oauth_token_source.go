@@ -124,7 +124,7 @@ func readStoreOAuthCred(store *credentials.Store, entryName string) (*storeOAuth
 		if errors.As(err, &notFound) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("readStoreOAuthCred: %w", err)
+		return nil, err
 	}
 	var cred storeOAuthCred
 	if err := json.Unmarshal([]byte(raw), &cred); err != nil {
@@ -138,10 +138,7 @@ func writeStoreOAuthCred(store *credentials.Store, entryName string, cred *store
 	if err != nil {
 		return fmt.Errorf("encoding OAuth credential %q: %w", entryName, err)
 	}
-	if err := store.Set(entryName, string(data)); err != nil {
-		return fmt.Errorf("writeStoreOAuthCred: %w", err)
-	}
-	return nil
+	return store.Set(entryName, string(data))
 }
 
 // OAuthCredential is the caller-facing shape of one stored device-code OAuth
@@ -222,10 +219,7 @@ func DeleteStoreOAuthCred(providerID string, store *credentials.Store) error {
 	defer mu.Unlock()
 	err := store.Delete(entryName)
 	forgetOAuthTokenRegistration(entryName)
-	if err != nil {
-		return fmt.Errorf("DeleteStoreOAuthCred: %w", err)
-	}
-	return nil
+	return err
 }
 
 // needsOAuthRefresh mirrors auth.AuthCredential.NeedsRefresh (5-minute

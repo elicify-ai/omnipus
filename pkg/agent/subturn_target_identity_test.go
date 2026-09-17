@@ -16,7 +16,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1001,11 +1000,7 @@ func (p *providerPoolCapturingProvider) Chat(
 		p.sawPoolNil = true
 	}
 	p.mu.Unlock()
-	resp, err := p.wrapped.Chat(ctx, messages, toolDefs, model, opts)
-	if err != nil {
-		return nil, fmt.Errorf("Chat: %w", err)
-	}
-	return resp, nil
+	return p.wrapped.Chat(ctx, messages, toolDefs, model, opts)
 }
 
 func (p *providerPoolCapturingProvider) GetDefaultModel() string { return p.wrapped.GetDefaultModel() }

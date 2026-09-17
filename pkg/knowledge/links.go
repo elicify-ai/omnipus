@@ -39,7 +39,6 @@ package knowledge
 
 import (
 	"bytes"
-	"fmt"
 	"io"
 	"net/url"
 	"path"
@@ -196,7 +195,7 @@ func ScanNote(r io.Reader) (NoteScan, error) {
 			if err == io.EOF {
 				break
 			}
-			return NoteScan{Links: s.links, Headings: s.headings, Stats: s.stats}, fmt.Errorf("ScanNote: %w", err)
+			return NoteScan{Links: s.links, Headings: s.headings, Stats: s.stats}, err
 		}
 	}
 	if len(buf) > 0 {

@@ -161,11 +161,7 @@ func (p *CodexProvider) Chat(
 		return nil, fmt.Errorf("codex API call: stream ended without completed response")
 	}
 
-	parsed, err := orc.ParseResponseFromStruct(resp)
-	if err != nil {
-		return nil, fmt.Errorf("codex API parse: %w", err)
-	}
-	return parsed, nil
+	return orc.ParseResponseFromStruct(resp)
 }
 
 func (p *CodexProvider) GetDefaultModel() string {

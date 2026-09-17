@@ -4,7 +4,6 @@
 package agent
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -529,8 +528,5 @@ func truncateStr(s string, n int) string {
 }
 
 func writeFile(dir, name, content string) error {
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
-		return fmt.Errorf("writeFile: %w", err)
-	}
-	return nil
+	return os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)
 }

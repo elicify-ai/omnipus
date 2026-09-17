@@ -1780,11 +1780,7 @@ func (w *wrappingProvider) Chat(
 	if w.onChat != nil {
 		w.onChat(messages)
 	}
-	resp, err := w.inner.Chat(ctx, messages, tools, model, opts)
-	if err != nil {
-		return nil, fmt.Errorf("Chat: %w", err)
-	}
-	return resp, nil
+	return w.inner.Chat(ctx, messages, tools, model, opts)
 }
 
 func (w *wrappingProvider) GetDefaultModel() string {

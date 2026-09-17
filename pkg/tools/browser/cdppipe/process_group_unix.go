@@ -4,7 +4,6 @@ package cdppipe
 
 import (
 	"errors"
-	"fmt"
 	"os/exec"
 	"syscall"
 )
@@ -39,7 +38,7 @@ func killProcessGroup(pid int) error {
 		return nil
 	}
 	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		return fmt.Errorf("killProcessGroup: %w", err)
+		return err
 	}
 	return nil
 }

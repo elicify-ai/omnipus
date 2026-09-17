@@ -6,8 +6,6 @@
 package agent
 
 import (
-	"fmt"
-
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/policy"
 )
@@ -37,7 +35,7 @@ var _ policy.AuditLogger = (*auditBridge)(nil)
 // to the audit log. This bridges SEC-15 (structured audit logging) with SEC-17
 // (explainable policy decisions) so every policy evaluation produces an audit record.
 func (b *auditBridge) LogPolicyDecision(entry *policy.AuditEntry) error {
-	if err := b.logger.Log(&audit.Entry{
+	return b.logger.Log(&audit.Entry{
 		Timestamp:  entry.Timestamp,
 		Event:      entry.Event,
 		Decision:   entry.Decision,
@@ -46,8 +44,5 @@ func (b *auditBridge) LogPolicyDecision(entry *policy.AuditEntry) error {
 		Tool:       entry.Tool,
 		Command:    entry.Command,
 		PolicyRule: entry.PolicyRule,
-	}); err != nil {
-		return fmt.Errorf("auditBridge.LogPolicyDecision: %w", err)
-	}
-	return nil
+	})
 }

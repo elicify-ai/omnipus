@@ -397,7 +397,7 @@ func promptPassphrase(prompt string) (string, error) {
 	raw, err := term.ReadPassword(fd)
 	fmt.Fprintln(os.Stderr) // newline after silent input
 	if err != nil {
-		return "", fmt.Errorf("promptPassphrase: %w", err)
+		return "", err
 	}
 	return string(raw), nil
 }

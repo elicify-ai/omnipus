@@ -196,10 +196,7 @@ func upsertCLIToken(configPath, tokenHash string) error {
 	if err != nil {
 		return fmt.Errorf("serialize config.json: %w", err)
 	}
-	if err := fileutil.WriteFileAtomic(configPath, out, 0o600); err != nil {
-		return fmt.Errorf("upsertCLIToken: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(configPath, out, 0o600)
 }
 
 // GenerateBearerToken returns a new random bearer token of the form
@@ -209,7 +206,7 @@ func upsertCLIToken(configPath, tokenHash string) error {
 func GenerateBearerToken() (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("GenerateBearerToken: %w", err)
+		return "", err
 	}
 	return "omnipus_" + hex.EncodeToString(b), nil
 }

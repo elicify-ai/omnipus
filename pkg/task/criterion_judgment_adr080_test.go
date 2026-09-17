@@ -14,7 +14,6 @@ package task
 // criterion_infer_adr074_test.go's kind-inference coverage field-for-field).
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -214,7 +213,7 @@ func TestInferJudgment_CallSitesPinned(t *testing.T) {
 		}
 		data, rerr := os.ReadFile(path)
 		if rerr != nil {
-			return fmt.Errorf("read %s: %w", path, rerr)
+			return rerr
 		}
 		if strings.Contains(string(data), "InferJudgment(") {
 			rel, _ := filepath.Rel(repoRoot, path)

@@ -7,7 +7,6 @@
 package vaultimport
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -87,15 +86,15 @@ func fr105Fixture(t *testing.T) (root string, rep *Report) {
 			}
 			rel, relErr := filepath.Rel(relRoot, path)
 			if relErr != nil {
-				return fmt.Errorf("relative path %s: %w", path, relErr)
+				return relErr
 			}
 			data, readErr := os.ReadFile(path)
 			if readErr != nil {
-				return fmt.Errorf("read %s: %w", path, readErr)
+				return readErr
 			}
 			dst := filepath.Join(root, rel)
 			if mkErr := os.MkdirAll(filepath.Dir(dst), 0o755); mkErr != nil {
-				return fmt.Errorf("make dir: %w", mkErr)
+				return mkErr
 			}
 			return os.WriteFile(dst, data, 0o644)
 		})

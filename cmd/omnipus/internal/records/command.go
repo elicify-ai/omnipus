@@ -75,7 +75,7 @@ than silently dropped or approximated.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			vault, err := cmd.Flags().GetString("vault")
 			if err != nil {
-				return fmt.Errorf("import-obsidian: read --vault flag: %w", err)
+				return err
 			}
 			if vault == "" {
 				return fmt.Errorf("--vault is required")
@@ -138,7 +138,7 @@ little on every touch.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			vault, err := cmd.Flags().GetString("vault")
 			if err != nil {
-				return fmt.Errorf("stamp-ids: read --vault flag: %w", err)
+				return err
 			}
 			if vault == "" {
 				return fmt.Errorf("--vault is required")

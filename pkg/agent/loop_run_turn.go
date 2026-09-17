@@ -86,7 +86,7 @@ func (rz *agentLoopRunTurnFinalize) finalizeTurn() (turnResult, error) {
 			// transcript so the replay path re-renders it after reload (see
 			// appendErrorTranscript docstring).
 			rz.rc.rx.rr.rq.ri.rf.rt.ts.appendClassifiedError(EventKindError.String(), "runTurn", saveLLM)
-			return turnResult{}, fmt.Errorf("agentLoopRunTurnFinalize.finalizeTurn: %w", err)
+			return turnResult{}, err
 		}
 	}
 
@@ -1384,7 +1384,7 @@ func (rt *agentLoopRunTurn) callProvider(messagesForCall []providers.Message, to
 			},
 		)
 		if fbErr != nil {
-			return nil, fmt.Errorf("agentLoopRunTurn.callProvider: %w", fbErr)
+			return nil, fbErr
 		}
 		if fbResult.Provider != "" && len(fbResult.Attempts) > 0 {
 			logger.InfoCF(
@@ -1487,13 +1487,9 @@ func (rt *agentLoopRunTurn) callProvider(messagesForCall []providers.Message, to
 			// FR-013: also push to the streamer so Finalize stamps the
 			// per-turn Model field on the streamed assistant entry.
 			rt.ts.markLastStreamerProducedModel(rt.llmModel)
-			return resp, fmt.Errorf("agentLoopRunTurn.callProvider: %w", streamErr)
+			return resp, streamErr
 		}
 	}
 	rt.ts.setLastProducedModel(rt.llmModel)
-	res, err := rt.activeProvider.Chat(providerCtx, messagesForCall, toolDefsForCall, rt.llmModel, rt.llmOpts)
-	if err != nil {
-		return nil, fmt.Errorf("agentLoopRunTurn.callProvider: %w", err)
-	}
-	return res, nil
+	return rt.activeProvider.Chat(providerCtx, messagesForCall, toolDefsForCall, rt.llmModel, rt.llmOpts)
 }

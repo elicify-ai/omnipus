@@ -2,7 +2,6 @@ package browser
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -54,7 +53,7 @@ func TestNewTargetViewportUsesContentsSizeWhenOuterBoundsDoNotConverge(t *testin
 					continue
 				}
 				if err := action.Do(cdp.WithExecutor(ctx, executor)); err != nil {
-					return fmt.Errorf("run action: %w", err)
+					return err
 				}
 			}
 			return nil

@@ -657,20 +657,14 @@ func (r *archiveBudgetReader) Read(p []byte) (int, error) {
 			r.budget.exceeded = true
 			return 0, errArchiveDecompressionLimit
 		}
-		if err != nil {
-			return 0, fmt.Errorf("archiveBudgetReader.Read: %w", err)
-		}
-		return 0, nil
+		return 0, err
 	}
 	if int64(len(p)) > r.budget.remaining {
 		p = p[:r.budget.remaining]
 	}
 	n, err := r.r.Read(p)
 	r.budget.remaining -= int64(n)
-	if err != nil {
-		return n, fmt.Errorf("archiveBudgetReader.Read: %w", err)
-	}
-	return n, nil
+	return n, err
 }
 
 func (b *archiveReadBudget) reader(r io.Reader) io.Reader {
@@ -986,7 +980,7 @@ func loadXlsxSharedStrings(zr *zip.Reader, budget *archiveReadBudget) ([]string,
 		}
 		rc, err := f.Open()
 		if err != nil {
-			return nil, fmt.Errorf("loadXlsxSharedStrings: %w", err)
+			return nil, err
 		}
 		defer rc.Close()
 		return parseSharedStrings(budget.reader(rc))
@@ -1008,7 +1002,7 @@ func parseSharedStrings(r io.Reader) ([]string, error) {
 			break
 		}
 		if err != nil {
-			return result, fmt.Errorf("parseSharedStrings: %w", err)
+			return result, err
 		}
 		switch t := tok.(type) {
 		case xml.StartElement:

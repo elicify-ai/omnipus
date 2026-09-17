@@ -10,7 +10,6 @@ package vaultimport
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -145,11 +144,11 @@ func w4Serve(t *testing.T) (root string, rep *Report, s w4Served) {
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return fmt.Errorf("read %s: %w", path, readErr)
+			return readErr
 		}
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
-			return fmt.Errorf("relative path %s: %w", path, relErr)
+			return relErr
 		}
 		rel = filepath.ToSlash(rel)
 		rec := records.ParseRecord(rel, data)
@@ -157,7 +156,7 @@ func w4Serve(t *testing.T) (root string, rep *Report, s w4Served) {
 		hash := propindex.SourceHash(data)
 		rows := propindex.BuildNoteRows(rec, sc, data, hash)
 		if upErr := store.UpsertNote(context.Background(), rows); upErr != nil {
-			return fmt.Errorf("upsert note: %w", upErr)
+			return upErr
 		}
 		text.hashes[rel] = hash
 		stems[strings.TrimSuffix(filepath.Base(rel), ".md")] = rel

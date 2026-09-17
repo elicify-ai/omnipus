@@ -213,17 +213,14 @@ func SyncSelectedModelToMainConfig(scheme Scheme, user User, modelID string) err
 
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		return fmt.Errorf("SyncSelectedModelToMainConfig: %w", err)
+		return err
 	}
 
 	if err := os.MkdirAll(filepath.Dir(mainConfigPath), 0o700); err != nil {
-		return fmt.Errorf("SyncSelectedModelToMainConfig: %w", err)
+		return err
 	}
 
-	if err := os.WriteFile(mainConfigPath, data, 0o600); err != nil {
-		return fmt.Errorf("SyncSelectedModelToMainConfig: %w", err)
-	}
-	return nil
+	return os.WriteFile(mainConfigPath, data, 0o600)
 }
 
 func (cfg *TUIConfig) CurrentModelLabel() string {

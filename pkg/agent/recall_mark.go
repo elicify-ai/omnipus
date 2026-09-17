@@ -64,7 +64,7 @@ func buildRecallMark(state, tool, toolCallID string, archiveLine int, content st
 		// no longer see, so losing the mark loses the only pointer back to
 		// it. Every family producer reports its marshal fallback this way.
 		tools.ReportStructuredFailureMarshalError("pkg/agent.buildRecallMark", tool, tools.ToolResultRecallMarkCode, err)
-		return "", fmt.Errorf("buildRecallMark: %w", err)
+		return "", err
 	}
 	return string(encoded), nil
 }

@@ -395,7 +395,7 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 
 	data, err := json.Marshal(aux)
 	if err != nil {
-		return nil, fmt.Errorf("Config.MarshalJSON: %w", err)
+		return nil, err
 	}
 
 	// Merge unknown fields back for round-trip safety (FR-004).
@@ -413,11 +413,7 @@ func (c *Config) MarshalJSON() ([]byte, error) {
 			m[k] = v
 		}
 	}
-	b, err := json.Marshal(m)
-	if err != nil {
-		return nil, fmt.Errorf("Config.MarshalJSON: %w", err)
-	}
-	return b, nil
+	return json.Marshal(m)
 }
 
 type AgentsConfig struct {
@@ -2381,7 +2377,7 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 			return c, nil
 		}
 		logger.Errorf("failed to read config file: %v", err)
-		return nil, fmt.Errorf("loadConfigInternal: %w", err)
+		return nil, err
 	}
 
 	// First, try to detect config version by reading the version field.
@@ -2424,7 +2420,7 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	}
 
 	if err := env.Parse(cfg); err != nil {
-		return nil, fmt.Errorf("loadConfigInternal: %w", err)
+		return nil, err
 	}
 
 	// ADR-067 FR-036 / A-19: the config boundary is the ONE place a provider
@@ -2666,11 +2662,11 @@ func SaveConfig(path string, cfg *Config) error {
 	// Restore original ModelList after serialization regardless of outcome.
 	cfg.Providers = originalModelList
 	if err != nil {
-		return fmt.Errorf("SaveConfig: %w", err)
+		return err
 	}
 	logger.Infof("saving config to %s", path)
 	if err := fileutil.WriteFileAtomic(path, data, 0o600); err != nil {
-		return fmt.Errorf("SaveConfig: %w", err)
+		return err
 	}
 	return nil
 }

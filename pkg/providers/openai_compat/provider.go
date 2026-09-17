@@ -215,14 +215,10 @@ func (p *Provider) Chat(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Provider.Chat: %w", common.HandleErrorResponse(resp, p.apiBase))
+		return nil, common.HandleErrorResponse(resp, p.apiBase)
 	}
 
-	parsed, err := common.ReadAndParseResponse(resp, p.apiBase)
-	if err != nil {
-		return nil, fmt.Errorf("openai-compat Provider.Chat: %w", err)
-	}
-	return parsed, nil
+	return common.ReadAndParseResponse(resp, p.apiBase)
 }
 
 // ChatStream implements streaming via OpenAI-compatible SSE (stream: true).
@@ -272,7 +268,7 @@ func (p *Provider) ChatStream(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Provider.ChatStream: %w", common.HandleErrorResponse(resp, p.apiBase))
+		return nil, common.HandleErrorResponse(resp, p.apiBase)
 	}
 
 	// Intentional concurrent close: net/http response bodies are safe to Close() concurrently with reads, unblocking any blocked scanner.Scan().
@@ -501,7 +497,7 @@ func parseStreamResponse(
 			// well-formed wrong-shaped payload, and so the refused
 			// attempt's billed usage isn't silently discarded (ADR-087
 			// D3.9 / D5).
-			return nil, fmt.Errorf("parseStreamResponse: %w", common.AttachToolArgumentsEvidence(err, finishReason, usage))
+			return nil, common.AttachToolArgumentsEvidence(err, finishReason, usage)
 		}
 		toolCalls = append(toolCalls, ToolCall{
 			ID:        acc.id,

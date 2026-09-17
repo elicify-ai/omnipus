@@ -110,7 +110,7 @@ func (o *OpenclawHandler) ExecuteConfigMigration(srcConfigPath, dstConfigPath st
 
 	incoming := picoCfg.ToStandardConfig()
 	if err := os.MkdirAll(filepath.Dir(dstConfigPath), 0o755); err != nil {
-		return fmt.Errorf("OpenclawHandler.ExecuteConfigMigration: %w", err)
+		return err
 	}
 
 	// ADR-054: agents are no longer entities inside config.json —
@@ -128,10 +128,7 @@ func (o *OpenclawHandler) ExecuteConfigMigration(srcConfigPath, dstConfigPath st
 		return fmt.Errorf("persist migrated agents to entity store: %w", err)
 	}
 
-	if err := config.SaveConfig(dstConfigPath, incoming); err != nil {
-		return fmt.Errorf("OpenclawHandler.ExecuteConfigMigration: %w", err)
-	}
-	return nil
+	return config.SaveConfig(dstConfigPath, incoming)
 }
 
 // persistMigratedAgents writes each migrated agent as its own per-entity

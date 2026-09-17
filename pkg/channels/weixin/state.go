@@ -75,12 +75,12 @@ func loadGetUpdatesBuf(path string) (string, error) {
 		if os.IsNotExist(err) {
 			return "", nil
 		}
-		return "", fmt.Errorf("loadGetUpdatesBuf: %w", err)
+		return "", err
 	}
 
 	var decoded syncCursorFile
 	if err := json.Unmarshal(data, &decoded); err != nil {
-		return "", fmt.Errorf("loadGetUpdatesBuf: %w", err)
+		return "", err
 	}
 
 	return decoded.GetUpdatesBuf, nil
@@ -89,12 +89,9 @@ func loadGetUpdatesBuf(path string) (string, error) {
 func saveGetUpdatesBuf(path, cursor string) error {
 	data, err := json.Marshal(syncCursorFile{GetUpdatesBuf: cursor})
 	if err != nil {
-		return fmt.Errorf("saveGetUpdatesBuf: %w", err)
+		return err
 	}
-	if err := fileutil.WriteFileAtomic(path, data, 0o600); err != nil {
-		return fmt.Errorf("saveGetUpdatesBuf: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(path, data, 0o600)
 }
 
 func loadContextTokens(path string) (map[string]string, error) {
@@ -103,11 +100,11 @@ func loadContextTokens(path string) (map[string]string, error) {
 		if os.IsNotExist(err) {
 			return map[string]string{}, nil
 		}
-		return nil, fmt.Errorf("loadContextTokens: %w", err)
+		return nil, err
 	}
 	var decoded contextTokensFile
 	if err := json.Unmarshal(data, &decoded); err != nil {
-		return nil, fmt.Errorf("loadContextTokens: %w", err)
+		return nil, err
 	}
 	return decoded.Tokens, nil
 }
@@ -115,12 +112,9 @@ func loadContextTokens(path string) (map[string]string, error) {
 func saveContextTokens(path string, tokens map[string]string) error {
 	data, err := json.Marshal(contextTokensFile{Tokens: tokens})
 	if err != nil {
-		return fmt.Errorf("saveContextTokens: %w", err)
+		return err
 	}
-	if err := fileutil.WriteFileAtomic(path, data, 0o600); err != nil {
-		return fmt.Errorf("saveContextTokens: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(path, data, 0o600)
 }
 
 func (c *WeixinChannel) cdnBaseURL() string {

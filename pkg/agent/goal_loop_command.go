@@ -178,10 +178,7 @@ func (al *AgentLoop) applyGoalCommandPrompt(
 			restated, err := resolveGoalRecordStore().Update(activeGoal.GoalID, func(cur *goal.Goal) error {
 				changed, rerr := cur.Restate(newCondition, newFloorDoD(), now)
 				superseded = changed
-				if rerr != nil {
-					return fmt.Errorf("Goal.Restate: %w", rerr)
-				}
-				return nil
+				return rerr
 			})
 			if err != nil {
 				logger.WarnCF("agent", "goal: could not persist prose-restated condition",
@@ -498,7 +495,7 @@ func (al *AgentLoop) applyGoalMarkerRestate(
 		cur.Prompt = condition
 		cur.Definition = compiled.Definition
 		if serr := cur.SetCriteria(compiled.Criteria, now); serr != nil {
-			return fmt.Errorf("Goal.SetCriteria: %w", serr)
+			return serr
 		}
 		return cur.SetDoD(dod, now)
 	}); err != nil {

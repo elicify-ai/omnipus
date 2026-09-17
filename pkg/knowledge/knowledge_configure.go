@@ -1334,7 +1334,7 @@ func createControlPlaneFile(target mutationTarget, abs string, data []byte) erro
 		}
 		f, oerr := os.OpenFile(abs, os.O_WRONLY|os.O_CREATE|os.O_EXCL, controlPlaneFilePerm)
 		if oerr != nil {
-			return fmt.Errorf("open %s: %w", abs, oerr)
+			return oerr
 		}
 		if _, werr := f.Write(data); werr != nil {
 			_ = f.Close()
@@ -1375,7 +1375,7 @@ func removeControlPlaneFile(target mutationTarget, abs string) error {
 			return fmt.Errorf("knowledge: control-plane delete refused: %w", vErr)
 		}
 		if rerr := os.Remove(abs); rerr != nil {
-			return fmt.Errorf("remove %s: %w", abs, rerr)
+			return rerr
 		}
 		return nil
 	})

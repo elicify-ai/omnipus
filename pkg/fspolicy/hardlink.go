@@ -6,7 +6,6 @@ package fspolicy
 
 import (
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -198,7 +197,7 @@ func scanForSameFile(root, skip string, target os.FileInfo, budget *int) (found,
 				// link we are looking for: the candidate still exists.
 				return nil
 			}
-			return fmt.Errorf("stat candidate: %w", infoErr)
+			return infoErr
 		}
 		if os.SameFile(entryInfo, target) {
 			found = true

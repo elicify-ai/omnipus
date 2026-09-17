@@ -61,7 +61,6 @@ package gateway
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -219,13 +218,13 @@ func serveLibraryPath(
 ) error {
 	f, err := os.Open(absPath)
 	if err != nil {
-		return fmt.Errorf("serveLibraryPath: %w", err)
+		return err
 	}
 	defer func() { _ = f.Close() }()
 
 	fi, err := f.Stat()
 	if err != nil {
-		return fmt.Errorf("serveLibraryPath: %w", err)
+		return err
 	}
 	if fi.IsDir() {
 		return errLibraryBytesNotAFile

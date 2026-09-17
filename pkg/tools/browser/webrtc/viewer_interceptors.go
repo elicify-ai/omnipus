@@ -1,8 +1,6 @@
 package webrtc
 
 import (
-	"fmt"
-
 	"github.com/pion/interceptor"
 	"github.com/pion/interceptor/pkg/report"
 	"github.com/pion/webrtc/v4"
@@ -16,24 +14,24 @@ import (
 // sender-clock, ingest receiver-report and viewer feedback tests guard its purpose.
 func registerViewerInterceptors(m *webrtc.MediaEngine, registry *interceptor.Registry) error {
 	if err := m.RegisterHeaderExtension(webrtc.RTPHeaderExtensionCapability{URI: viewerPlayoutDelayURI}, webrtc.RTPCodecTypeVideo); err != nil {
-		return fmt.Errorf("registerViewerInterceptors: %w", err)
+		return err
 	}
 	if err := webrtc.ConfigureNack(m, registry); err != nil {
-		return fmt.Errorf("registerViewerInterceptors: %w", err)
+		return err
 	}
 	receiver, err := report.NewReceiverInterceptor()
 	if err != nil {
-		return fmt.Errorf("registerViewerInterceptors: %w", err)
+		return err
 	}
 	registry.Add(receiver)
 	if err := webrtc.ConfigureSimulcastExtensionHeaders(m); err != nil {
-		return fmt.Errorf("registerViewerInterceptors: %w", err)
+		return err
 	}
 	if err := webrtc.ConfigureStatsInterceptor(registry); err != nil {
-		return fmt.Errorf("registerViewerInterceptors: %w", err)
+		return err
 	}
 	if err := webrtc.ConfigureTWCCSender(m, registry); err != nil {
-		return fmt.Errorf("registerViewerInterceptors: %w", err)
+		return err
 	}
 	// Pion wraps in registration order: last runs first on outbound RTP.
 	registry.Add(viewerPlayoutDelayFactory{})

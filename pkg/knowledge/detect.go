@@ -85,22 +85,10 @@ type DetectFS interface {
 type OSFS struct{}
 
 // ReadDir implements DetectFS.
-func (OSFS) ReadDir(name string) ([]os.DirEntry, error) {
-	entries, err := os.ReadDir(name)
-	if err != nil {
-		return nil, fmt.Errorf("ReadDir %s: %w", name, err)
-	}
-	return entries, nil
-}
+func (OSFS) ReadDir(name string) ([]os.DirEntry, error) { return os.ReadDir(name) }
 
 // ReadFile implements DetectFS.
-func (OSFS) ReadFile(name string) ([]byte, error) {
-	data, err := os.ReadFile(name)
-	if err != nil {
-		return nil, fmt.Errorf("ReadFile %s: %w", name, err)
-	}
-	return data, nil
-}
+func (OSFS) ReadFile(name string) ([]byte, error) { return os.ReadFile(name) }
 
 // Detection is what detection decided about one folder. It is a verdict plus the
 // evidence behind it, so a caller can tell an Obsidian vault Omnipus has never

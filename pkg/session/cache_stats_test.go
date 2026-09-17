@@ -21,7 +21,6 @@ package session
 
 import (
 	"encoding/json"
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,10 +29,7 @@ import (
 
 // jsonUnmarshal is an alias for json.Unmarshal used in tests for legibility.
 func jsonUnmarshal(data []byte, v any) error {
-	if err := json.Unmarshal(data, v); err != nil {
-		return fmt.Errorf("jsonUnmarshal: %w", err)
-	}
-	return nil
+	return json.Unmarshal(data, v)
 }
 
 // TestSessionStats_BackwardCompat_LegacyMetaLoadsWithZeroCacheFields verifies

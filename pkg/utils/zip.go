@@ -58,14 +58,14 @@ func ExtractZipFile(zipPath string, targetDir string) error {
 
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(destPath, 0o755); err != nil {
-				return fmt.Errorf("ExtractZipFile: %w", err)
+				return err
 			}
 			continue
 		}
 
 		// Ensure parent directory exists.
 		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-			return fmt.Errorf("ExtractZipFile: %w", err)
+			return err
 		}
 
 		if err := extractSingleFile(f, destPath); err != nil {

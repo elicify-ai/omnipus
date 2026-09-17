@@ -689,38 +689,22 @@ type singleEntryFS struct {
 
 func (s singleEntryFS) Open(name string) (fs.File, error) {
 	if name == "." {
-		f, err := s.fsys.Open(name)
-		if err != nil {
-			return nil, fmt.Errorf("singleEntryFS.Open %s: %w", name, err)
-		}
-		return f, nil
+		return s.fsys.Open(name)
 	}
 	if name != s.name && !isGrepIgnoreFileName(name) {
 		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrNotExist}
 	}
-	f, err := s.fsys.Open(name)
-	if err != nil {
-		return nil, fmt.Errorf("singleEntryFS.Open %s: %w", name, err)
-	}
-	return f, nil
+	return s.fsys.Open(name)
 }
 
 func (s singleEntryFS) Stat(name string) (fs.FileInfo, error) {
 	if name == "." {
-		info, err := fs.Stat(s.fsys, name)
-		if err != nil {
-			return nil, fmt.Errorf("singleEntryFS.Stat %s: %w", name, err)
-		}
-		return info, nil
+		return fs.Stat(s.fsys, name)
 	}
 	if name != s.name {
 		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
 	}
-	info, err := fs.Stat(s.fsys, name)
-	if err != nil {
-		return nil, fmt.Errorf("singleEntryFS.Stat %s: %w", name, err)
-	}
-	return info, nil
+	return fs.Stat(s.fsys, name)
 }
 
 func (s singleEntryFS) ReadDir(name string) ([]fs.DirEntry, error) {
@@ -729,7 +713,7 @@ func (s singleEntryFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	}
 	entries, err := fs.ReadDir(s.fsys, ".")
 	if err != nil {
-		return nil, fmt.Errorf("singleEntryFS.ReadDir: %w", err)
+		return nil, err
 	}
 	for _, e := range entries {
 		if e.Name() == s.name {
@@ -951,22 +935,14 @@ func (c carveOutFS) Open(name string) (fs.File, error) {
 	if c.denied(name) {
 		return nil, c.refusal("open", name)
 	}
-	f, err := c.fsys.Open(name)
-	if err != nil {
-		return nil, fmt.Errorf("carveOutFS.Open %s: %w", name, err)
-	}
-	return f, nil
+	return c.fsys.Open(name)
 }
 
 func (c carveOutFS) Stat(name string) (fs.FileInfo, error) {
 	if c.denied(name) {
 		return nil, c.refusal("stat", name)
 	}
-	info, err := fs.Stat(c.fsys, name)
-	if err != nil {
-		return nil, fmt.Errorf("carveOutFS.Stat %s: %w", name, err)
-	}
-	return info, nil
+	return fs.Stat(c.fsys, name)
 }
 
 func (c carveOutFS) ReadDir(name string) ([]fs.DirEntry, error) {
@@ -975,7 +951,7 @@ func (c carveOutFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	}
 	entries, err := fs.ReadDir(c.fsys, name)
 	if err != nil {
-		return nil, fmt.Errorf("carveOutFS.ReadDir: %w", err)
+		return nil, err
 	}
 	if !c.holdsCarveOutRoots(name) {
 		return entries, nil

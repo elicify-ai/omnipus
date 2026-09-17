@@ -164,7 +164,7 @@ func resolvePathAgainstExistingAncestor(path string) (string, error) {
 		if err == nil {
 			suffix, relErr := filepath.Rel(current, cleaned)
 			if relErr != nil {
-				return "", fmt.Errorf("resolvePathAgainstExistingAncestor: %w", relErr)
+				return "", relErr
 			}
 			if suffix == "." {
 				return filepath.Clean(resolved), nil
@@ -172,7 +172,7 @@ func resolvePathAgainstExistingAncestor(path string) (string, error) {
 			return filepath.Clean(filepath.Join(resolved, suffix)), nil
 		}
 		if !os.IsNotExist(err) {
-			return "", fmt.Errorf("resolvePathAgainstExistingAncestor: %w", err)
+			return "", err
 		}
 		if filepath.Dir(current) == current {
 			return "", os.ErrNotExist
@@ -214,7 +214,7 @@ func resolveAbsPath(rawPath, workspace string) (string, error) {
 	} else {
 		absWS, err := filepath.Abs(workspace)
 		if err != nil {
-			return "", fmt.Errorf("resolveAbsPath: %w", err)
+			return "", err
 		}
 		abs = filepath.Clean(filepath.Join(absWS, rawPath))
 	}

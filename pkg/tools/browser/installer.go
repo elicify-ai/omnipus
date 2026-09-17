@@ -626,12 +626,12 @@ func fetchCFTManifest(ctx context.Context) (*cftManifest, error) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("fetchCFTManifest: %w", err)
+		return nil, err
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetchCFTManifest: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -639,7 +639,7 @@ func fetchCFTManifest(ctx context.Context) (*cftManifest, error) {
 	}
 	var m cftManifest
 	if err := json.NewDecoder(resp.Body).Decode(&m); err != nil {
-		return nil, fmt.Errorf("fetchCFTManifest: %w", err)
+		return nil, err
 	}
 	return &m, nil
 }
@@ -655,12 +655,12 @@ func fetchCFTManifest(ctx context.Context) (*cftManifest, error) {
 func downloadFile(ctx context.Context, url, dest string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return fmt.Errorf("downloadFile: %w", err)
+		return err
 	}
 	client := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("downloadFile: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -669,7 +669,7 @@ func downloadFile(ctx context.Context, url, dest string) error {
 
 	tmp, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".part-*")
 	if err != nil {
-		return fmt.Errorf("downloadFile: %w", err)
+		return err
 	}
 	tmpPath := tmp.Name()
 
@@ -677,11 +677,11 @@ func downloadFile(ctx context.Context, url, dest string) error {
 	if _, err := io.Copy(io.MultiWriter(tmp, hasher), resp.Body); err != nil {
 		tmp.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("downloadFile: %w", err)
+		return err
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("downloadFile: %w", err)
+		return err
 	}
 
 	if err := verifyGoogHashMD5(resp.Header, hasher.Sum(nil)); err != nil {
@@ -691,10 +691,7 @@ func downloadFile(ctx context.Context, url, dest string) error {
 		return fmt.Errorf("integrity check failed: %w", err)
 	}
 
-	if err := os.Rename(tmpPath, dest); err != nil {
-		return fmt.Errorf("downloadFile: %w", err)
-	}
-	return nil
+	return os.Rename(tmpPath, dest)
 }
 
 // allowHeaderlessDownloadForTesting lets verifyGoogHashMD5 accept a download
@@ -775,7 +772,7 @@ func verifyGoogHashMD5(header http.Header, got []byte) error {
 func extractZip(zipPath, destDir string) error {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {
-		return fmt.Errorf("extractZip: %w", err)
+		return err
 	}
 	defer r.Close()
 
@@ -811,17 +808,17 @@ func extractZip(zipPath, destDir string) error {
 
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(outPath, 0o755); err != nil {
-				return fmt.Errorf("extractZip: %w", err)
+				return err
 			}
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-			return fmt.Errorf("extractZip: %w", err)
+			return err
 		}
 
 		rc, err := f.Open()
 		if err != nil {
-			return fmt.Errorf("extractZip: %w", err)
+			return err
 		}
 		mode := f.Mode()
 		if mode == 0 {
@@ -830,16 +827,16 @@ func extractZip(zipPath, destDir string) error {
 		out, err := os.OpenFile(outPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 		if err != nil {
 			rc.Close()
-			return fmt.Errorf("extractZip: %w", err)
+			return err
 		}
 		if _, err := io.Copy(out, rc); err != nil {
 			rc.Close()
 			out.Close()
-			return fmt.Errorf("extractZip: %w", err)
+			return err
 		}
 		rc.Close()
 		if err := out.Close(); err != nil {
-			return fmt.Errorf("extractZip: %w", err)
+			return err
 		}
 	}
 	return nil

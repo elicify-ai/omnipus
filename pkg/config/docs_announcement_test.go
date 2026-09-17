@@ -5,7 +5,6 @@
 package config
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -44,12 +43,12 @@ func readHandbookPageContaining(t *testing.T, root, statement string) handbookPa
 		}
 		body, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return fmt.Errorf("read %s: %w", path, readErr)
+			return readErr
 		}
 		if strings.Contains(string(body), statement) {
 			rel, relErr := filepath.Rel(root, path)
 			if relErr != nil {
-				return fmt.Errorf("relative path %s: %w", path, relErr)
+				return relErr
 			}
 			match = handbookPage{name: filepath.ToSlash(rel), body: string(body)}
 			return fs.SkipAll

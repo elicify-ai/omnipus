@@ -328,7 +328,7 @@ var _ knowledgefind.TextDeepSearcher = (*findTextSearcher)(nil)
 func (s *findTextSearcher) Search(_ context.Context, words string, limit int) ([]knowledgefind.TextHit, error) {
 	hits, err := s.ix.Search(words, limit)
 	if err != nil {
-		return nil, fmt.Errorf("findTextSearcher.Search: %w", err)
+		return nil, err
 	}
 	return convertIndexHits(hits), nil
 }
@@ -356,7 +356,7 @@ func (s *findTextSearcher) SearchDeep(_ context.Context, words string, limit int
 	// would give the same fact two owners that can disagree.
 	hits, truncated, _, err := s.ix.SearchFiltered(words, limit, nil)
 	if err != nil {
-		return nil, false, fmt.Errorf("findTextSearcher.SearchDeep: %w", err)
+		return nil, false, err
 	}
 	return convertIndexHits(hits), !truncated, nil
 }
@@ -391,7 +391,7 @@ func convertIndexHits(hits []knowledge.IndexHit) []knowledgefind.TextHit {
 func (s *findTextSearcher) TermDocumentCounts(_ context.Context, words string) ([]generated.VaultTermCount, error) {
 	counts, err := s.ix.TermDocumentCounts(words)
 	if err != nil {
-		return nil, fmt.Errorf("findTextSearcher.TermDocumentCounts: %w", err)
+		return nil, err
 	}
 	out := make([]generated.VaultTermCount, 0, len(counts))
 	for _, c := range counts {
@@ -403,7 +403,7 @@ func (s *findTextSearcher) TermDocumentCounts(_ context.Context, words string) (
 func (s *findTextSearcher) NearestTerms(_ context.Context, words string, limit int) ([]generated.VaultTermCount, error) {
 	terms, err := s.ix.NearMissVocabularyWithCounts(words, limit)
 	if err != nil {
-		return nil, fmt.Errorf("findTextSearcher.NearestTerms: %w", err)
+		return nil, err
 	}
 	out := make([]generated.VaultTermCount, 0, len(terms))
 	for _, t := range terms {
@@ -413,11 +413,7 @@ func (s *findTextSearcher) NearestTerms(_ context.Context, words string, limit i
 }
 
 func (s *findTextSearcher) SourceHash(_ context.Context, path string) (string, bool, error) {
-	hash, ok, err := s.ix.SourceHashForPath(path)
-	if err != nil {
-		return "", false, fmt.Errorf("findTextSearcher.SourceHash: %w", err)
-	}
-	return hash, ok, nil
+	return s.ix.SourceHashForPath(path)
 }
 
 // IndexFreshness implements knowledgefind.TextFreshnessReporter (A2(d)), so a
@@ -519,16 +515,16 @@ func (s *findTextSearcher) Populated(_ context.Context) (bool, error) {
 	case errors.Is(err, fs.ErrNotExist):
 		return false, nil
 	default:
-		return false, fmt.Errorf("findTextSearcher.Populated: %w", err)
+		return false, err
 	}
 
 	manifest, err := knowledge.LoadManifest(s.ix.ManifestPath(), s.ix.Root())
 	if err != nil {
-		return false, fmt.Errorf("findTextSearcher.Populated: %w", err)
+		return false, err
 	}
 	scan, err := knowledge.Scan(s.ix.Root())
 	if err != nil {
-		return false, fmt.Errorf("findTextSearcher.Populated: %w", err)
+		return false, err
 	}
 	return manifest.Len() == len(scan.Entries), nil
 }

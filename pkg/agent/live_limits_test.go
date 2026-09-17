@@ -7,7 +7,6 @@ package agent
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -100,11 +99,7 @@ func (rt rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	clone.URL.Scheme = rt.target.Scheme
 	clone.URL.Host = rt.target.Host
 	clone.Host = rt.target.Host
-	resp, err := rt.inner.RoundTrip(clone)
-	if err != nil {
-		return nil, fmt.Errorf("RoundTrip: %w", err)
-	}
-	return resp, nil
+	return rt.inner.RoundTrip(clone)
 }
 
 // liveTestClock is the injectable clock; the 25 h idle test advances it.

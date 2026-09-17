@@ -28,7 +28,6 @@ package gateway
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"log/slog"
 	"path/filepath"
 	"strings"
@@ -55,11 +54,7 @@ type orphanEndRaceLogBuffer struct {
 func (b *orphanEndRaceLogBuffer) Write(p []byte) (int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	n, err := b.buf.Write(p)
-	if err != nil {
-		return 0, fmt.Errorf("write: %w", err)
-	}
-	return n, nil
+	return b.buf.Write(p)
 }
 
 func (b *orphanEndRaceLogBuffer) String() string {

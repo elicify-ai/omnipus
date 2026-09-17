@@ -35,7 +35,6 @@
 package knowledge
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/blevesearch/bleve/v2/analysis"
@@ -95,9 +94,9 @@ func registerProseAnalyzer(m *bleveMapping.IndexMappingImpl) error {
 		"type": unicodenorm.Name,
 		"form": unicodenorm.NFC,
 	}); err != nil {
-		return fmt.Errorf("registerProseAnalyzer: %w", err)
+		return err
 	}
-	if err := m.AddCustomAnalyzer(proseAnalyzerName, map[string]any{
+	return m.AddCustomAnalyzer(proseAnalyzerName, map[string]any{
 		"type":      custom.Name,
 		"tokenizer": unicode.Name,
 		"token_filters": []any{
@@ -108,10 +107,7 @@ func registerProseAnalyzer(m *bleveMapping.IndexMappingImpl) error {
 			en.StopName,
 			porter.Name,
 		},
-	}); err != nil {
-		return fmt.Errorf("registerProseAnalyzer: %w", err)
-	}
-	return nil
+	})
 }
 
 // proseTermFolder is the query-side twin of the analyzer's NFC + ASCII fold

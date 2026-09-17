@@ -28,13 +28,13 @@ func (ic *captureIngestConn) answerCaptureOffer(socket context.Context, cs *brow
 	}
 	answer, err := cs.HandleIngestOfferForBinding(request, epoch, uint64(*frame.OfferId), frame.Sdp, uint64(*frame.CaptureGeneration), *frame.TargetId)
 	if errors.Is(err, webrtc.ErrStaleIngestOffer) {
-		return fmt.Errorf("captureIngestConn.answerCaptureOffer: %w", err)
+		return err
 	}
 	if err != nil {
 		if sendErr := send(generated.ErrorFrame{Type: string(generated.WsFrameTypeError), Message: fmt.Sprintf("capture ingest offer failed: %v", err)}); sendErr != nil {
 			return sendErr
 		}
-		return fmt.Errorf("captureIngestConn.answerCaptureOffer: %w", err)
+		return err
 	}
 	return send(generated.BrowserCaptureAnswerFrame{Type: string(generated.WsFrameTypeBrowserCaptureAnswer), Sdp: answer, CaptureGeneration: frame.CaptureGeneration, TargetId: frame.TargetId, OfferId: frame.OfferId})
 }

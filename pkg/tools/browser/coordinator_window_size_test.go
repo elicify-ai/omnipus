@@ -119,7 +119,7 @@ func windowBoundsForSession(t *testing.T, tabCtx context.Context) *browser.Bound
 	err := chromedp.Run(tabCtx, chromedp.ActionFunc(func(ctx context.Context) error {
 		_, b, gerr := browser.GetWindowForTarget().Do(ctx)
 		if gerr != nil {
-			return fmt.Errorf("get window: %w", gerr)
+			return gerr
 		}
 		bounds = b
 		return nil

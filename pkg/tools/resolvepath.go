@@ -842,10 +842,7 @@ func (h *PathHandle) Close() error {
 	if h == nil || h.root == nil {
 		return nil
 	}
-	if err := h.root.Close(); err != nil {
-		return fmt.Errorf("PathHandle.Close: %w", err)
-	}
-	return nil
+	return h.root.Close()
 }
 
 // resolvePath carries the shared state of ResolvePath across its stages.
@@ -1366,7 +1363,7 @@ func ResolveTurnFSPolicy(ctx context.Context, agentHome string, restrict bool) (
 		ReadConfined(ctx),
 	)
 	if err != nil {
-		return policy, fmt.Errorf("ResolveTurnFSPolicy: %w", err)
+		return policy, err
 	}
 
 	// ADR-063 FR-6.1: the workspace's mounts become the turn's additional
@@ -1670,10 +1667,7 @@ func wrapOpenErr(err error) error {
 // WriteFile contract exactly (fileutil.WriteFileAtomic: temp file + fsync +
 // rename, 0o600).
 func writeFileAtomicHost(abs string, data []byte) error {
-	if err := fileutil.WriteFileAtomic(abs, data, 0o600); err != nil {
-		return fmt.Errorf("writeFileAtomicHost: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(abs, data, 0o600)
 }
 
 // writeFileAtomicRoot writes data to relPath underneath root atomically

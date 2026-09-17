@@ -805,11 +805,7 @@ func (t *WebServeTool) spawnDevChild(
 		KernelPolicy:     kernelPolicy,
 	}
 
-	child, err := sandbox.SpawnBackgroundChild(parts, workDir, env, port, limits)
-	if err != nil {
-		return nil, fmt.Errorf("WebServeTool.spawnDevChild: %w", err)
-	}
-	return child, nil
+	return sandbox.SpawnBackgroundChild(parts, workDir, env, port, limits)
 }
 
 // auditDevNilOnce gates the sticky boot warning for a nil auditLogger on the

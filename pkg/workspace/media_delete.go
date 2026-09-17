@@ -192,12 +192,9 @@ func logCascadeAuditEvent(
 		decision = audit.DecisionError
 		details["error"] = cascadeErr.Error()
 	}
-	if err := auditor.Log(&audit.Entry{
+	return auditor.Log(&audit.Entry{
 		Event:    audit.EventMediaCascadeDelete,
 		Decision: decision,
 		Details:  details,
-	}); err != nil {
-		return fmt.Errorf("logCascadeAuditEvent: %w", err)
-	}
-	return nil
+	})
 }

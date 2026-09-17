@@ -42,7 +42,6 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -75,11 +74,11 @@ func (loopStatusFrameYAMLLoader) Load(url string) (any, error) {
 	path := strings.TrimPrefix(url, "file://")
 	data, err := os.ReadFile(path) // gosec rationale (out of gosec scope; kept as documentation): test-only, path built from runtime.Caller
 	if err != nil {
-		return nil, fmt.Errorf("loopStatusFrameYAMLLoader.Load: %w", err)
+		return nil, err
 	}
 	var v any
 	if err := yaml.Unmarshal(data, &v); err != nil {
-		return nil, fmt.Errorf("loopStatusFrameYAMLLoader.Load: %w", err)
+		return nil, err
 	}
 	return loopStatusFrameJSONifyYAML(v), nil
 }

@@ -17,7 +17,6 @@ package browser
 // kind of declaration gets lost, and this is what notices.
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -57,12 +56,12 @@ func readHandbookDocContaining(t *testing.T, statement string) (string, string) 
 		}
 		contents, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return fmt.Errorf("read %s: %w", path, readErr)
+			return readErr
 		}
 		if strings.Contains(string(contents), statement) {
 			rel, relErr := filepath.Rel(root, path)
 			if relErr != nil {
-				return fmt.Errorf("relative path %s: %w", path, relErr)
+				return relErr
 			}
 			name, body = filepath.ToSlash(rel), string(contents)
 			return fs.SkipAll

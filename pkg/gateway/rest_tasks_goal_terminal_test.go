@@ -30,7 +30,6 @@
 package gateway
 
 import (
-	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -78,7 +77,7 @@ func startTaskWithActiveGoal(t *testing.T, api *restAPI, wsID, title string) (ta
 	now := time.Now().UTC()
 	_, err = gs.Update(rec.GoalID, func(g *goal.Goal) error {
 		if aErr := g.Activate(runOneSessionID, now); aErr != nil {
-			return fmt.Errorf("Goal.Activate: %w", aErr)
+			return aErr
 		}
 		g.AttemptsUsed = 2
 		g.Round = 3

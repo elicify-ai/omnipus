@@ -226,25 +226,22 @@ func (a *restAPI) syncTaskGoalRecord(
 		if nErr != nil {
 			return fmt.Errorf("build goal record: %w", nErr)
 		}
-		if cErr := gs.Create(g); cErr != nil {
-			return fmt.Errorf("create task goal record: %w", cErr)
-		}
-		return nil
+		return gs.Create(g)
 	}
 	_, err = gs.Update(existing.GoalID, func(g *goal.Goal) error {
 		if criteriaProvided {
 			if sErr := g.SetCriteria(criteria, now); sErr != nil {
-				return fmt.Errorf("Goal.SetCriteria: %w", sErr)
+				return sErr
 			}
 		}
 		if dodProvided {
 			if sErr := g.SetDoD(dod, now); sErr != nil {
-				return fmt.Errorf("Goal.SetDoD: %w", sErr)
+				return sErr
 			}
 		}
 		return nil
 	})
-	return fmt.Errorf("restAPI.syncTaskGoalRecord: %w", err)
+	return err
 }
 
 // pairedGoalDoD returns the Definition of Done currently persisted on the goal

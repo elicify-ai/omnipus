@@ -19,7 +19,6 @@ package catalog
 
 import (
 	"bytes"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -197,7 +196,7 @@ func TestSingleCatalogEmbedUnderProviders(t *testing.T) {
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return fmt.Errorf("read %s: %w", path, readErr)
+			return readErr
 		}
 		for _, line := range strings.Split(string(data), "\n") {
 			trimmed := strings.TrimSpace(line)
@@ -241,7 +240,7 @@ func TestCapabilitiesPackageGone(t *testing.T) {
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return fmt.Errorf("read %s: %w", path, readErr)
+			return readErr
 		}
 		if strings.Contains(string(data), bannedResolver) {
 			hits = append(hits, path)

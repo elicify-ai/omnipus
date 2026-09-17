@@ -112,7 +112,7 @@ func planDirCopy(srcDir, dstDir string, force bool) ([]Action, error) {
 
 		relPath, err := filepath.Rel(srcDir, path)
 		if err != nil {
-			return fmt.Errorf("walk %s: %w", path, err)
+			return err
 		}
 
 		dst := filepath.Join(dstDir, relPath)
@@ -131,10 +131,7 @@ func planDirCopy(srcDir, dstDir string, force bool) ([]Action, error) {
 		return nil
 	})
 
-	if err != nil {
-		return actions, fmt.Errorf("planDirCopy: %w", err)
-	}
-	return actions, nil
+	return actions, err
 }
 
 func RelPath(path, base string) string {
@@ -148,30 +145,27 @@ func RelPath(path, base string) string {
 func CopyFile(src, dst string) error {
 	srcFile, err := os.Open(src)
 	if err != nil {
-		return fmt.Errorf("CopyFile: %w", err)
+		return err
 	}
 	defer srcFile.Close()
 
 	info, err := srcFile.Stat()
 	if err != nil {
-		return fmt.Errorf("CopyFile: %w", err)
+		return err
 	}
 
 	dstFile, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode())
 	if err != nil {
-		return fmt.Errorf("CopyFile: %w", err)
+		return err
 	}
 
 	if _, err = io.Copy(dstFile, srcFile); err != nil {
 		dstFile.Close()
-		return fmt.Errorf("CopyFile: %w", err)
+		return err
 	}
 	if err = dstFile.Sync(); err != nil {
 		dstFile.Close()
-		return fmt.Errorf("CopyFile: %w", err)
+		return err
 	}
-	if err := dstFile.Close(); err != nil {
-		return fmt.Errorf("CopyFile: %w", err)
-	}
-	return nil
+	return dstFile.Close()
 }

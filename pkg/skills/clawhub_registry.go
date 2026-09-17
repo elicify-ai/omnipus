@@ -378,7 +378,7 @@ func (c *ClawHubRegistry) downloadAndInstall(
 
 	// Step 5: Extract from file on disk.
 	if err := utils.ExtractZipFile(tmpPath, targetDir); err != nil {
-		return nil, fmt.Errorf("ClawHubRegistry.downloadAndInstall: %w", err)
+		return nil, err
 	}
 
 	return result, nil
@@ -409,7 +409,7 @@ func (c *ClawHubRegistry) doGet(ctx context.Context, urlStr string) ([]byte, err
 
 	resp, err := utils.DoRequestWithRetry(c.client, req)
 	if err != nil {
-		return nil, fmt.Errorf("ClawHubRegistry.doGet: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -429,7 +429,7 @@ func (c *ClawHubRegistry) doGet(ctx context.Context, urlStr string) ([]byte, err
 func (c *ClawHubRegistry) newGetRequest(ctx context.Context, urlStr, accept string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
 	if err != nil {
-		return nil, fmt.Errorf("ClawHubRegistry.newGetRequest: %w", err)
+		return nil, err
 	}
 	req.Header.Set("Accept", accept)
 	if c.authToken != "" {

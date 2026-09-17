@@ -253,7 +253,7 @@ func newAttachedLiveManager(t *testing.T) (*BrowserManager, *LiveView, *CaptureS
 				*a.w, *a.h = 800, 600
 			case documentPaintAction, chromedp.ActionFunc:
 				if runErr := action.Do(cdp.WithExecutor(ctx, executor)); runErr != nil {
-					return fmt.Errorf("run action: %w", runErr)
+					return runErr
 				}
 			}
 		}

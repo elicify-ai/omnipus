@@ -41,7 +41,7 @@ func readIngestBounded(r io.Reader, bound int64, source string) ([]byte, error) 
 	bound = effectiveIngestBound(bound)
 	body, err := io.ReadAll(io.LimitReader(r, bound+1))
 	if err != nil {
-		return nil, fmt.Errorf("readIngestBounded: %w", err)
+		return nil, err
 	}
 	if int64(len(body)) > bound {
 		return nil, &IngestBoundError{Source: source, Bound: bound}

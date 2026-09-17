@@ -591,11 +591,7 @@ func (s *rootDelegationAdmittingSpawner) SpawnSubTurn(ctx context.Context, cfg t
 		return nil, errors.New("rootDelegationAdmittingSpawner: nil spawner")
 	}
 	if s.gate == nil {
-		res, err := s.inner.SpawnSubTurn(ctx, cfg)
-		if err != nil {
-			return nil, fmt.Errorf("rootDelegationAdmittingSpawner.SpawnSubTurn: %w", err)
-		}
-		return res, nil
+		return s.inner.SpawnSubTurn(ctx, cfg)
 	}
 	parentTS := turnStateFromContext(ctx)
 	if parentTS == nil || parentTS.depth != 0 {
@@ -603,11 +599,7 @@ func (s *rootDelegationAdmittingSpawner) SpawnSubTurn(ctx context.Context, cfg t
 		// a bare unit-test call outside a real turn) — RootDelegationAdmission
 		// gates root-level fan-out only; a nested child's own fan-out stays
 		// governed exclusively by its concurrencySem (FR-070).
-		res, err := s.inner.SpawnSubTurn(ctx, cfg)
-		if err != nil {
-			return nil, fmt.Errorf("rootDelegationAdmittingSpawner.SpawnSubTurn: %w", err)
-		}
-		return res, nil
+		return s.inner.SpawnSubTurn(ctx, cfg)
 	}
 	ok, reason, release := s.gate.TryAdmitWithReason()
 	if !ok {
@@ -617,9 +609,5 @@ func (s *rootDelegationAdmittingSpawner) SpawnSubTurn(ctx context.Context, cfg t
 		return RefuseRootDelegation(s.gate.Cap(), s.delegatingAgentID, cfg.TargetAgentID), nil
 	}
 	defer release()
-	res, err := s.inner.SpawnSubTurn(ctx, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("rootDelegationAdmittingSpawner.SpawnSubTurn: %w", err)
-	}
-	return res, nil
+	return s.inner.SpawnSubTurn(ctx, cfg)
 }

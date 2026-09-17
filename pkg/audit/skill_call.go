@@ -53,7 +53,6 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"os"
 	"time"
@@ -252,7 +251,7 @@ func scanFileForSkillCallLoads(filePath, slug string) ([]time.Time, error) {
 	// identical justification in query.go.
 	data, err := os.ReadFile(filePath)
 	if err != nil {
-		return nil, fmt.Errorf("scanFileForSkillCallLoads: %w", err)
+		return nil, err
 	}
 
 	scanner := bufio.NewScanner(bytes.NewReader(data))
@@ -282,7 +281,7 @@ func scanFileForSkillCallLoads(filePath, slug string) ([]time.Time, error) {
 		out = append(out, e.Timestamp)
 	}
 	if scanErr := scanner.Err(); scanErr != nil {
-		return nil, fmt.Errorf("scanFileForSkillCallLoads: %w", scanErr)
+		return nil, scanErr
 	}
 
 	return out, nil

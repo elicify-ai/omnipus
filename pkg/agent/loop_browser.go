@@ -152,7 +152,7 @@ func (r *agentLoopBrowserResolver) ManagerFor(
 	// coordinator's ownership-marker root, which is a different question.
 	key, err := browser.ResolveBrowsingKey(ctx, omnipusHome())
 	if err != nil {
-		return nil, browser.BrowsingKey{}, browser.TabOwner{}, fmt.Errorf("agentLoopBrowserResolver.ManagerFor: %w", err)
+		return nil, browser.BrowsingKey{}, browser.TabOwner{}, err
 	}
 	// FR-080: the tab set is the SESSION's, keyed on transcriptSessionID and
 	// never on routingSessionID (which a whole delegation subtree shares, so it
@@ -171,7 +171,7 @@ func (r *agentLoopBrowserResolver) ManagerFor(
 	// merge ErrNoTabOwner exists to prevent.
 	owner, err := browser.TabOwnerSession(tools.ToolTranscriptSessionID(ctx))
 	if err != nil {
-		return nil, browser.BrowsingKey{}, browser.TabOwner{}, fmt.Errorf("agentLoopBrowserResolver.ManagerFor: %w", err)
+		return nil, browser.BrowsingKey{}, browser.TabOwner{}, err
 	}
 	mgr, err := r.al.BrowserManagerForKey(ctx, key)
 	if err != nil {

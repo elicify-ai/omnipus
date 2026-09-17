@@ -40,7 +40,7 @@ func (f *FlexibleStringSlice) UnmarshalJSON(data []byte) error {
 		var s string
 		// fail over to compatible to old format string
 		if err = json.Unmarshal(data, &s); err != nil {
-			return fmt.Errorf("FlexibleStringSlice.UnmarshalJSON: %w", err)
+			return err
 		}
 		*f = []string{s}
 		return nil

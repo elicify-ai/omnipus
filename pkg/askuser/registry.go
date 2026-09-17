@@ -387,7 +387,7 @@ func (r *Registry) RearmSession(sessionID string) error {
 	}
 	meta, err := r.meta.GetMeta(sessionID)
 	if err != nil {
-		return fmt.Errorf("Registry.RearmSession: %w", err)
+		return err
 	}
 	if meta.PendingAskJSON == "" {
 		return nil
@@ -613,13 +613,10 @@ func (r *Registry) persist(set *PendingSet) error {
 	}
 	data, err := json.Marshal(set)
 	if err != nil {
-		return fmt.Errorf("persist pending ask: %w", err)
+		return err
 	}
 	s := string(data)
-	if err := r.meta.SetMeta(set.TranscriptSessionID, session.MetaPatch{PendingAskJSON: &s}); err != nil {
-		return fmt.Errorf("persist pending ask: %w", err)
-	}
-	return nil
+	return r.meta.SetMeta(set.TranscriptSessionID, session.MetaPatch{PendingAskJSON: &s})
 }
 
 // persistTerminal updates the terminal registry/session-meta record (§0.6:
@@ -642,10 +639,7 @@ func (r *Registry) dispatchResume(set *PendingSet) error {
 	if err != nil {
 		return err
 	}
-	if err := r.resume.DispatchResume(set.Clone(), text); err != nil {
-		return fmt.Errorf("Registry.dispatchResume: %w", err)
-	}
-	return nil
+	return r.resume.DispatchResume(set.Clone(), text)
 }
 
 // resumePayload is the JSON payload embedded in the resume message (spec §2:

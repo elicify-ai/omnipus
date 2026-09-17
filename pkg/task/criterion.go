@@ -252,7 +252,7 @@ func (b *CriterionBehavior) UnmarshalJSON(data []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&a); err != nil {
-		return fmt.Errorf("CriterionBehavior.UnmarshalJSON: %w", err)
+		return err
 	}
 	*b = CriterionBehavior(a)
 	return nil

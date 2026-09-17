@@ -373,7 +373,7 @@ func (wh *wsHandlerHandleAttachSession) runReplay() {
 		}
 		data, merr := json.Marshal(f)
 		if merr != nil {
-			return fmt.Errorf("marshal frame: %w", merr)
+			return merr
 		}
 		select {
 		case wh.wc.sendCh <- data:

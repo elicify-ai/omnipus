@@ -260,7 +260,7 @@ func defaultIO(cmd *cobra.Command) wizardIO {
 		readPassword: func() (string, error) {
 			b, err := term.ReadPassword(int(os.Stdin.Fd()))
 			if err != nil {
-				return "", fmt.Errorf("readPassword: %w", err)
+				return "", err
 			}
 			return string(b), nil
 		},
@@ -299,7 +299,7 @@ func inputFromFlags(stdin io.Reader, f inputFlags) (Input, error) {
 	// refused with the catalog's own reason instead of being written into a
 	// config whose very first turn cannot construct a provider.
 	if _, admitErr := providers.Admit(f.providerID, "", ""); admitErr != nil {
-		return in, fmt.Errorf("inputFromFlags: %w", admitErr)
+		return in, admitErr
 	}
 	in.ProviderID = f.providerID
 
@@ -649,7 +649,7 @@ func promptProviderMenu(out io.Writer, reader *bufio.Reader) (string, error) {
 			rawID = strings.TrimSpace(rawID)
 			// Same admission gate as --non-interactive (ADR-067 FR-019/FR-035).
 			if _, admitErr := providers.Admit(rawID, "", ""); admitErr != nil {
-				return "", fmt.Errorf("promptProviderMenu: %w", admitErr)
+				return "", admitErr
 			}
 			return rawID, nil
 		}
@@ -662,7 +662,7 @@ func readNonEmpty(out io.Writer, r *bufio.Reader, promptStr, defaultVal string) 
 	fmt.Fprint(out, promptStr)
 	line, err := r.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		return "", fmt.Errorf("readNonEmpty: %w", err)
+		return "", err
 	}
 	line = strings.TrimSpace(line)
 	if line == "" {
@@ -678,7 +678,7 @@ func readWithDefault(out io.Writer, r *bufio.Reader, label, defaultVal string) (
 	fmt.Fprintf(out, "%s [%s]: ", label, defaultVal)
 	line, err := r.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
-		return "", fmt.Errorf("readWithDefault: %w", err)
+		return "", err
 	}
 	line = strings.TrimSpace(line)
 	if line == "" {

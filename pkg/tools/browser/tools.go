@@ -1601,10 +1601,7 @@ func abandonTabAfterFailedLoad(
 // wedged-renderer case deterministically; see that field's doc comment.
 func (m *BrowserManager) runAbandonCDP(ctx context.Context, actions ...chromedp.Action) error {
 	if m == nil {
-		if err := chromedp.Run(ctx, actions...); err != nil {
-			return fmt.Errorf("BrowserManager.runAbandonCDP: %w", err)
-		}
-		return nil
+		return chromedp.Run(ctx, actions...)
 	}
 	m.mu.Lock()
 	fn := m.abandonCDPFn
@@ -1612,10 +1609,7 @@ func (m *BrowserManager) runAbandonCDP(ctx context.Context, actions ...chromedp.
 	if fn != nil {
 		return fn(ctx, actions...)
 	}
-	if err := chromedp.Run(ctx, actions...); err != nil {
-		return fmt.Errorf("BrowserManager.runAbandonCDP: %w", err)
-	}
-	return nil
+	return chromedp.Run(ctx, actions...)
 }
 
 // redirectHopRecorder collects the URLs a navigation actually requested,

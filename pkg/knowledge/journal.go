@@ -397,7 +397,7 @@ func (s *JournalStore) Load(id string) (*Journal, error) {
 	}
 	data, err := os.ReadFile(s.path(id))
 	if err != nil {
-		return nil, fmt.Errorf("JournalStore.Load: %w", err)
+		return nil, err
 	}
 	var j Journal
 	if err := json.Unmarshal(data, &j); err != nil {

@@ -21,7 +21,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -66,7 +65,7 @@ func (d *turnBoundDispatcher) ExecuteTask(ctx context.Context, taskID string, _ 
 func (d *turnBoundDispatcher) executeTaskPlanVerified(ctx context.Context, taskID string) error {
 	inProgress := task.StatusInProgress
 	if _, err := d.store.Update(taskID, task.Patch{Status: &inProgress}); err != nil {
-		return fmt.Errorf("turnBoundDispatcher.executeTaskPlanVerified: %w", err)
+		return err
 	}
 	// VERBATIM the derivation at task_executor.go's ExecuteTask.
 	taskCtx, cancel := context.WithCancel(ctx)
@@ -425,7 +424,7 @@ func TestSupersede_OutcomeWithheldFromJudgeClaimText(t *testing.T) {
 		done := task.StatusDone
 		result := replacementEvidence
 		_, err := h.tasks.Update(taskID, task.Patch{Status: &done, Result: &result})
-		return fmt.Errorf("update task %s: %w", taskID, err)
+		return err
 	}
 
 	if _, err := h.pe.AppendCorrection(context.Background(), "p-supjudge", supervisorCaller(), CorrectionRequest{

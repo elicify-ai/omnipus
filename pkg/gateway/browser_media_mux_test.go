@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"errors"
-	"fmt"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -26,10 +25,7 @@ type observedOwnerUDPMux struct {
 func (m *observedOwnerUDPMux) Close() error {
 	m.closes.Add(1)
 	m.beforeClose()
-	if err := m.UDPMux.Close(); err != nil {
-		return fmt.Errorf("observedOwnerUDPMux.Close: %w", err)
-	}
-	return nil
+	return m.UDPMux.Close()
 }
 
 type observedOwnerTCPMux struct {
@@ -39,10 +35,7 @@ type observedOwnerTCPMux struct {
 
 func (m *observedOwnerTCPMux) Close() error {
 	m.closes.Add(1)
-	if err := m.TCPMux.Close(); err != nil {
-		return fmt.Errorf("observedOwnerTCPMux.Close: %w", err)
-	}
-	return nil
+	return m.TCPMux.Close()
 }
 
 func TestSharedMediaMuxGatewayOwnership(t *testing.T) {

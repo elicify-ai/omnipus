@@ -108,10 +108,7 @@ func Filename(id string) string {
 func WriteMemoryFile(memoriesDir string, m MemoryFile) error {
 	content := serializeMemoryFile(m)
 	path := filepath.Join(memoriesDir, Filename(m.Frontmatter.ID))
-	if err := fileutil.WriteFileAtomic(path, []byte(content), 0o600); err != nil {
-		return fmt.Errorf("WriteMemoryFile: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(path, []byte(content), 0o600)
 }
 
 // ReadMemoryFile reads and parses <memoriesDir>/<id>.md.
@@ -382,10 +379,7 @@ func parseFrontmatter(text string) (MemoryFrontmatter, error) {
 			fm.BornIn = unquoteYAML(val)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return fm, fmt.Errorf("parseFrontmatter: %w", err)
-	}
-	return fm, nil
+	return fm, scanner.Err()
 }
 
 // parseKV splits "key: value" into (key, value, true). Returns (_, _, false) on mismatch.
@@ -439,8 +433,5 @@ type CounterRecord struct {
 // AppendCounterRecord appends a CounterRecord to the room's counters.jsonl.
 // One JSON line < PIPE_BUF (4 KB) — POSIX-safe multi-process append (FR-7.5).
 func AppendCounterRecord(countersPath string, rec CounterRecord) error {
-	if err := fileutil.AppendJSONL(countersPath, rec); err != nil {
-		return fmt.Errorf("AppendCounterRecord: %w", err)
-	}
-	return nil
+	return fileutil.AppendJSONL(countersPath, rec)
 }

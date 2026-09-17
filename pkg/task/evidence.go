@@ -200,12 +200,9 @@ func (es *EvidenceStore) write(rec *EvidenceRecord) error {
 	path := filepath.Join(dir, fmt.Sprintf("%s-%d.json", rec.CriterionID, rec.Attempt))
 	// Lock the record's sidecar, never the record this write renames over (see
 	// fileutil.SidecarLockPath). List skips the sidecar by its extension.
-	if err := fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
 		return writeFileAtomicFn(path, data, 0o600)
-	}); err != nil {
-		return fmt.Errorf("EvidenceStore.write: %w", err)
-	}
-	return nil
+	})
 }
 
 // List returns every EvidenceRecord persisted for taskID. Unreadable/corrupt

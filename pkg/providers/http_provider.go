@@ -8,7 +8,6 @@ package providers
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/providers/openai_compat"
@@ -44,7 +43,7 @@ func NewHTTPProviderWithTimeouts(
 		openai_compat.WithExtraBody(extraBody),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("NewHTTPProviderWithTimeouts: %w", err)
+		return nil, err
 	}
 	return &HTTPProvider{delegate: p}, nil
 }
@@ -56,11 +55,7 @@ func (p *HTTPProvider) Chat(
 	model string,
 	options map[string]any,
 ) (*LLMResponse, error) {
-	res, err := p.delegate.Chat(ctx, messages, tools, model, options)
-	if err != nil {
-		return nil, fmt.Errorf("HTTPProvider.Chat: %w", err)
-	}
-	return res, nil
+	return p.delegate.Chat(ctx, messages, tools, model, options)
 }
 
 // ChatStream implements providers.StreamingProvider by delegating to the
@@ -74,11 +69,7 @@ func (p *HTTPProvider) ChatStream(
 	onChunk func(accumulated string),
 	onProgress OnToolCallProgress,
 ) (*LLMResponse, error) {
-	res, err := p.delegate.ChatStream(ctx, messages, tools, model, options, onChunk, onProgress)
-	if err != nil {
-		return nil, fmt.Errorf("HTTPProvider.ChatStream: %w", err)
-	}
-	return res, nil
+	return p.delegate.ChatStream(ctx, messages, tools, model, options, onChunk, onProgress)
 }
 
 func (p *HTTPProvider) GetDefaultModel() string {

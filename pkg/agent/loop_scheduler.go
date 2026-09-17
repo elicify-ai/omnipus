@@ -79,10 +79,7 @@ func NewLoopScheduler(storePath string, al *AgentLoop) *LoopScheduler {
 // Start wires this scheduler as its own cron runner and starts the engine.
 func (s *LoopScheduler) Start() error {
 	s.cs.SetRunner(s)
-	if err := s.cs.Start(); err != nil {
-		return fmt.Errorf("LoopScheduler.Start: %w", err)
-	}
-	return nil
+	return s.cs.Start()
 }
 
 // Stop shuts down the underlying dedicated cron engine.

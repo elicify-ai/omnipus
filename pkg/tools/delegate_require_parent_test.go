@@ -23,7 +23,6 @@ package tools
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -87,11 +86,7 @@ type lockedWriter struct {
 func (w *lockedWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	n, err := w.buf.Write(p)
-	if err != nil {
-		return 0, fmt.Errorf("write: %w", err)
-	}
-	return n, nil
+	return w.buf.Write(p)
 }
 
 // mintedRecords returns every lifecycle record in the store.

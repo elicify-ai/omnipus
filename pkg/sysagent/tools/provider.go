@@ -516,14 +516,14 @@ func fetchProviderModels(baseURL, apiKey string) ([]string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest("GET", strings.TrimSuffix(baseURL, "/")+"/models", nil)
 	if err != nil {
-		return nil, fmt.Errorf("fetchProviderModels: %w", err)
+		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("X-Api-Key", apiKey)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetchProviderModels: %w", err)
+		return nil, err
 	}
 	defer resp.Body.Close()
 
@@ -533,7 +533,7 @@ func fetchProviderModels(baseURL, apiKey string) ([]string, error) {
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
 	if err != nil {
-		return nil, fmt.Errorf("fetchProviderModels: %w", err)
+		return nil, err
 	}
 
 	var result struct {
@@ -542,7 +542,7 @@ func fetchProviderModels(baseURL, apiKey string) ([]string, error) {
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("fetchProviderModels: %w", err)
+		return nil, err
 	}
 
 	models := make([]string, 0, len(result.Data))

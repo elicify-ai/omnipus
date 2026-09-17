@@ -170,7 +170,7 @@ func Evaluate(
 		capability = records.CapabilityTypedFilter
 	}
 	if err := records.RequirePropertyIndex(capability); err != nil {
-		return rep, fmt.Errorf("Evaluate: %w", err)
+		return rep, err
 	}
 
 	// (2) FR-023 / FR-024. Prepared ONCE: a filter re-validated per record
@@ -215,7 +215,7 @@ func Evaluate(
 		return Accepted, nil
 	})
 	if err != nil {
-		return rep, fmt.Errorf("Evaluate: %w", err)
+		return rep, err
 	}
 	return rep, nil
 }
@@ -261,7 +261,7 @@ func (q Query) prepare() ([]records.PreparedFilter, Selector, error) {
 	for _, f := range q.Filters {
 		pf, err := f.Prepare(q.Schema)
 		if err != nil {
-			return nil, sel, fmt.Errorf("prepare query: %w", err)
+			return nil, sel, err
 		}
 		prepared = append(prepared, pf)
 	}

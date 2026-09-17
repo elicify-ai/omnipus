@@ -73,7 +73,7 @@ func randomWechatUIN() string {
 func (c *ApiClient) post(ctx context.Context, endpoint string, body any, responseObj any) error {
 	u, err := url.Parse(c.BaseURL)
 	if err != nil {
-		return fmt.Errorf("ApiClient.post: %w", err)
+		return err
 	}
 	u.Path = path.Join(u.Path, endpoint)
 
@@ -172,7 +172,7 @@ func (c *ApiClient) SendTyping(ctx context.Context, req SendTypingReq) (*SendTyp
 func (c *ApiClient) getQR(ctx context.Context, endpoint string, query map[string]string, respObj any) error {
 	u, err := url.Parse(c.BaseURL)
 	if err != nil {
-		return fmt.Errorf("ApiClient.getQR: %w", err)
+		return err
 	}
 	u.Path = path.Join(u.Path, endpoint)
 	q := u.Query()
@@ -183,26 +183,26 @@ func (c *ApiClient) getQR(ctx context.Context, endpoint string, query map[string
 
 	req, err := http.NewRequestWithContext(ctx, "GET", u.String(), nil)
 	if err != nil {
-		return fmt.Errorf("ApiClient.getQR: %w", err)
+		return err
 	}
 	req.Header["iLink-App-Id"] = []string{weixinIlinkAppID}
 	req.Header["iLink-App-ClientVersion"] = []string{strconv.Itoa(weixinClientVersion)}
 
 	resp, err := c.HttpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("ApiClient.getQR: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("ApiClient.getQR: %w", err)
+		return err
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("%s failed: %d %s", endpoint, resp.StatusCode, string(respBody))
 	}
 	if err := json.Unmarshal(respBody, respObj); err != nil {
-		return fmt.Errorf("ApiClient.getQR: %w", err)
+		return err
 	}
 
 	return nil

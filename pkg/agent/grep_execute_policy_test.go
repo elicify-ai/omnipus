@@ -18,7 +18,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -48,15 +47,15 @@ func seedGrepPolicyTestWorkspace(t *testing.T, home, agentID, wsID string, files
 		ID: wsID, Name: "test", Status: "active", CreatedAt: now, UpdatedAt: now,
 		CoreTeam: []string{agentID},
 	}); err != nil {
-		return fmt.Errorf("seedGrepPolicyTestWorkspace: %w", err)
+		return err
 	}
 	work, err := workspace.EnsureWorkDir(home, wsID)
 	if err != nil {
-		return fmt.Errorf("seedGrepPolicyTestWorkspace: %w", err)
+		return err
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(work, name), []byte(content), 0o600); err != nil {
-			return fmt.Errorf("seedGrepPolicyTestWorkspace: %w", err)
+			return err
 		}
 	}
 	return nil

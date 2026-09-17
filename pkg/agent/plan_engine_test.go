@@ -68,17 +68,14 @@ func (f *fakePlanDispatcher) ExecuteTask(_ context.Context, taskID string, _ *in
 	}
 	t, err := f.store.Get(taskID)
 	if err != nil {
-		return fmt.Errorf("fakePlanDispatcher.ExecuteTask: %w", err)
+		return err
 	}
 	if t.Status != task.StatusNext {
 		return fmt.Errorf("fakePlanDispatcher: task %q is %s, not next", taskID, t.Status)
 	}
 	inProgress := task.StatusInProgress
 	_, err = f.store.Update(taskID, task.Patch{Status: &inProgress})
-	if err != nil {
-		return fmt.Errorf("fakePlanDispatcher.ExecuteTask: %w", err)
-	}
-	return nil
+	return err
 }
 
 // executeTaskPlanVerified satisfies planTaskDispatcher's bypass method (S1

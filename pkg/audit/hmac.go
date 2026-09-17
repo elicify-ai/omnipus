@@ -249,7 +249,7 @@ func canonicalMarshal(v any) ([]byte, error) {
 			}
 			kb, err := json.Marshal(k)
 			if err != nil {
-				return nil, fmt.Errorf("canonicalMarshal: %w", err)
+				return nil, err
 			}
 			buf.Write(kb)
 			buf.WriteByte(':')
@@ -277,11 +277,7 @@ func canonicalMarshal(v any) ([]byte, error) {
 		buf.WriteByte(']')
 		return buf.Bytes(), nil
 	default:
-		b, err := json.Marshal(v)
-		if err != nil {
-			return nil, fmt.Errorf("canonicalMarshal: %w", err)
-		}
-		return b, nil
+		return json.Marshal(v)
 	}
 }
 

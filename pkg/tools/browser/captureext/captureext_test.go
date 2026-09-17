@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -548,11 +547,11 @@ func assertSeedMatchesEmbedded(t *testing.T, destDir string) {
 		}
 		rel, err := filepath.Rel(embeddedRoot, p)
 		if err != nil {
-			return fmt.Errorf("relative path %s: %w", p, err)
+			return err
 		}
 		want, err := fs.ReadFile(embeddedExt, p)
 		if err != nil {
-			return fmt.Errorf("read embedded %s: %w", p, err)
+			return err
 		}
 		got, err := os.ReadFile(filepath.Join(destDir, rel))
 		if err != nil {

@@ -9,7 +9,6 @@ package propindex
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 )
@@ -185,10 +184,7 @@ type recordingStore struct {
 
 func (s recordingStore) UpsertNote(ctx context.Context, rows NoteRows) error {
 	*s.order = append(*s.order, "sqlite")
-	if err := s.Store.UpsertNote(ctx, rows); err != nil {
-		return fmt.Errorf("recordingStore.UpsertNote: %w", err)
-	}
-	return nil
+	return s.Store.UpsertNote(ctx, rows)
 }
 
 type failingStore struct {

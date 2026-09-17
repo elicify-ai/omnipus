@@ -453,7 +453,7 @@ func materializeCommitTree(repo *git.Repository, hash, targetDir string) error {
 	if err != nil {
 		return fmt.Errorf("gitevidence: tree for commit %s: %w", hash, err)
 	}
-	if err := tree.Files().ForEach(func(f *object.File) error {
+	return tree.Files().ForEach(func(f *object.File) error {
 		dest := filepath.Join(targetDir, filepath.FromSlash(f.Name))
 		switch f.Mode {
 		case filemode.Regular, filemode.Executable:
@@ -487,10 +487,7 @@ func materializeCommitTree(repo *git.Repository, hash, targetDir string) error {
 		default:
 			return fmt.Errorf("gitevidence: unsupported tree entry %s (mode %s) at commit %s — refusing a partial restore", f.Name, f.Mode, hash)
 		}
-	}); err != nil {
-		return fmt.Errorf("materializeCommitTree: %w", err)
-	}
-	return nil
+	})
 }
 
 // RemoveIsolatedCheckout tears down a previously materialized isolated

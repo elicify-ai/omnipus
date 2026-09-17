@@ -5,7 +5,6 @@
 package gateway
 
 import (
-	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -616,8 +615,5 @@ type storedDelegationEdge = workspace.DelegationEdge
 func saveWorkspaceDelegation(home, id string, edges []storedDelegationEdge) error {
 	unlock := workspace.LockID(id)
 	defer unlock()
-	if err := workspace.SaveDelegation(home, id, edges); err != nil {
-		return fmt.Errorf("saveWorkspaceDelegation: %w", err)
-	}
-	return nil
+	return workspace.SaveDelegation(home, id, edges)
 }

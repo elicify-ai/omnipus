@@ -26,7 +26,6 @@ package knowledge
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -279,7 +278,7 @@ func TestCreateNote_NameShapeAppliesOnCreateAndNotOnRead(t *testing.T) {
 		windows := func(rel string) error {
 			for _, seg := range strings.Split(rel, "/") {
 				if err := pathsafe.WindowsRules.ValidateComponent(seg); err != nil {
-					return fmt.Errorf("validate component %q: %w", seg, err)
+					return err
 				}
 			}
 			return nil

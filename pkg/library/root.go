@@ -333,10 +333,7 @@ func (r *Root) Close() error {
 			_ = m.root.Close()
 		}
 	}
-	if err := r.root.Close(); err != nil {
-		return fmt.Errorf("Root.Close: %w", err)
-	}
-	return nil
+	return r.root.Close()
 }
 
 // CleanRelPath validates and cleans a caller-supplied, workspace-relative

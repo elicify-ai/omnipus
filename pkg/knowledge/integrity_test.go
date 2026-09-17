@@ -793,37 +793,16 @@ type unreadableNoteFS struct {
 	failOpenSuffix string
 }
 
-func (u unreadableNoteFS) Lstat(name string) (fs.FileInfo, error) {
-	info, err := os.Lstat(name)
-	if err != nil {
-		return nil, fmt.Errorf("Lstat %s: %w", name, err)
-	}
-	return info, nil
-}
-
-func (u unreadableNoteFS) ReadDir(name string) ([]fs.DirEntry, error) {
-	entries, err := os.ReadDir(name)
-	if err != nil {
-		return nil, fmt.Errorf("ReadDir %s: %w", name, err)
-	}
-	return entries, nil
-}
+func (u unreadableNoteFS) Lstat(name string) (fs.FileInfo, error)     { return os.Lstat(name) }
+func (u unreadableNoteFS) ReadDir(name string) ([]fs.DirEntry, error) { return os.ReadDir(name) }
 func (u unreadableNoteFS) EvalSymlinks(name string) (string, error) {
-	v, err := filepath.EvalSymlinks(name)
-	if err != nil {
-		return "", fmt.Errorf("EvalSymlinks: %w", err)
-	}
-	return v, nil
+	return filepath.EvalSymlinks(name)
 }
 func (u unreadableNoteFS) Open(name string) (fs.File, error) {
 	if strings.HasSuffix(name, u.failOpenSuffix) {
 		return nil, fs.ErrPermission
 	}
-	v, err := os.Open(name)
-	if err != nil {
-		return nil, fmt.Errorf("unreadableNoteFS.Open: %w", err)
-	}
-	return v, nil
+	return os.Open(name)
 }
 
 func TestIntegrity_UnreadableNoteIsReportedNotSkipped(t *testing.T) {

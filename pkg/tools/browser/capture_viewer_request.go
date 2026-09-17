@@ -66,7 +66,7 @@ func (cs *CaptureSession) HandleViewerOfferRequest(negotiation, parent context.C
 		return "", handle, fmt.Errorf("capture session: stale viewer request")
 	}
 	if offerErr != nil {
-		return "", handle, fmt.Errorf("CaptureSession.HandleViewerOfferRequest: %w", offerErr)
+		return "", handle, offerErr
 	}
 	// The relay removal callback also takes cs.mu after releasing its own
 	// viewer lock. It therefore either precedes this check, or observes the

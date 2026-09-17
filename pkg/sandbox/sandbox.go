@@ -924,7 +924,7 @@ func (f *FallbackBackend) CheckPathAccess(path string, access uint64) error {
 func canonicalizePath(p string) (string, error) {
 	abs, err := filepath.Abs(p)
 	if err != nil {
-		return "", fmt.Errorf("canonicalizePath: %w", err)
+		return "", err
 	}
 	resolved, err := filepath.EvalSymlinks(abs)
 	if err == nil {

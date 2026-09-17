@@ -9,7 +9,6 @@ package knowledge
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -126,28 +125,11 @@ func (f *a4DatalessFS) Lstat(name string) (fs.FileInfo, error) {
 	if size, ok := f.dataless[name]; ok {
 		return a4FakeInfo{name: filepath.Base(name), size: size}, nil
 	}
-	v, err := f.inner.Lstat(name)
-	if err != nil {
-		return nil, fmt.Errorf("a4DatalessFS.Lstat: %w", err)
-	}
-	return v, nil
+	return f.inner.Lstat(name)
 }
 
-func (f *a4DatalessFS) ReadDir(name string) ([]fs.DirEntry, error) {
-	entries, err := f.inner.ReadDir(name)
-	if err != nil {
-		return nil, fmt.Errorf("a4DatalessFS.ReadDir: %w", err)
-	}
-	return entries, nil
-}
-
-func (f *a4DatalessFS) EvalSymlinks(name string) (string, error) {
-	resolved, err := f.inner.EvalSymlinks(name)
-	if err != nil {
-		return "", fmt.Errorf("a4DatalessFS.EvalSymlinks: %w", err)
-	}
-	return resolved, nil
-}
+func (f *a4DatalessFS) ReadDir(name string) ([]fs.DirEntry, error) { return f.inner.ReadDir(name) }
+func (f *a4DatalessFS) EvalSymlinks(name string) (string, error)   { return f.inner.EvalSymlinks(name) }
 
 func (f *a4DatalessFS) Open(name string) (fs.File, error) {
 	if err, ok := f.openErr[name]; ok {
@@ -159,11 +141,7 @@ func (f *a4DatalessFS) Open(name string) (fs.File, error) {
 			readErr: f.readErr[name],
 		}, nil
 	}
-	v, err := f.inner.Open(name)
-	if err != nil {
-		return nil, fmt.Errorf("a4DatalessFS.Open: %w", err)
-	}
-	return v, nil
+	return f.inner.Open(name)
 }
 
 type a4FakeInfo struct {

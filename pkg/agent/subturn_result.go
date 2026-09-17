@@ -185,13 +185,13 @@ func updateToolCallStatusWithRetry(
 ) (found bool, err error) {
 	found, err = store.UpdateToolCallStatusAndResult(sessionID, toolCallID, status, durationMS, result)
 	if err != nil || found || !async {
-		return found, fmt.Errorf("updateToolCallStatusWithRetry: %w", err)
+		return found, err
 	}
 	for _, delay := range updateToolCallStatusRetryDelays {
 		updateToolCallStatusSleep(delay)
 		found, err = store.UpdateToolCallStatusAndResult(sessionID, toolCallID, status, durationMS, result)
 		if err != nil || found {
-			return found, fmt.Errorf("updateToolCallStatusWithRetry: %w", err)
+			return found, err
 		}
 	}
 	return false, nil

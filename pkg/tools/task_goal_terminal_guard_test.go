@@ -31,7 +31,6 @@
 package tools
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -224,7 +223,7 @@ func scanTaskStatusWriters(t *testing.T) map[string]bool {
 		}
 		rel, rErr := filepath.Rel(filepath.Dir(root), path)
 		if rErr != nil {
-			return fmt.Errorf("relative path %s: %w", path, rErr)
+			return rErr
 		}
 		pkgDir := filepath.ToSlash(filepath.Dir(rel))
 		if pkgDir == "pkg/task" {
@@ -232,7 +231,7 @@ func scanTaskStatusWriters(t *testing.T) map[string]bool {
 		}
 		file, pErr := parser.ParseFile(fset, path, nil, 0)
 		if pErr != nil {
-			return fmt.Errorf("parse %s: %w", path, pErr)
+			return pErr
 		}
 		patchStateTypes := taskPatchStateTypes(file)
 		receiverHooks := map[string]bool{}

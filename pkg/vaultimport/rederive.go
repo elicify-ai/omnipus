@@ -101,7 +101,7 @@ type RederiveBaseResult struct {
 func resolveViewWritePath(vaultRoot, abs string) (string, error) {
 	root, err := knowledge.NewCollectionRoot(knowledge.OSLinkFS(), vaultRoot)
 	if err != nil {
-		return "", fmt.Errorf("resolveViewWritePath: %w", err)
+		return "", err
 	}
 	// Strip the caller's spelling of the root (on macOS /var is a link to
 	// /private/var, and NewCollectionRoot resolved it), then run the
@@ -110,11 +110,7 @@ func resolveViewWritePath(vaultRoot, abs string) (string, error) {
 	if rerr != nil || strings.HasPrefix(rel, "..") {
 		return "", fmt.Errorf("vaultimport: %q is not under %q", abs, vaultRoot)
 	}
-	resolved, err := root.ResolveContainedNoSymlink(knowledge.OSLinkFS(), filepath.ToSlash(rel))
-	if err != nil {
-		return "", fmt.Errorf("resolveViewWritePath: %w", err)
-	}
-	return resolved, nil
+	return root.ResolveContainedNoSymlink(knowledge.OSLinkFS(), filepath.ToSlash(rel))
 }
 
 func RederiveBase(vaultRoot, baseRelPath string) (*RederiveBaseResult, error) {

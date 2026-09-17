@@ -256,8 +256,5 @@ func AppendJSONL(path string, record any) error {
 		f.Close()
 		return fmt.Errorf("fileutil: sync jsonl file: %w", err)
 	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("AppendJSONL: %w", err)
-	}
-	return nil
+	return f.Close()
 }

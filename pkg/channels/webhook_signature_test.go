@@ -4,7 +4,6 @@
 package channels
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -118,7 +117,7 @@ func TestWebhookHandlers_HaveSignatureVerification(t *testing.T) {
 func scanChannelPackage(dir string) (hasWebhookPath, hasSignatureChecker bool, err error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return false, false, fmt.Errorf("scanChannelPackage: %w", err)
+		return false, false, err
 	}
 	fset := token.NewFileSet()
 	for _, e := range entries {
@@ -129,7 +128,7 @@ func scanChannelPackage(dir string) (hasWebhookPath, hasSignatureChecker bool, e
 		path := filepath.Join(dir, name)
 		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if parseErr != nil {
-			return false, false, fmt.Errorf("scanChannelPackage: %w", parseErr)
+			return false, false, parseErr
 		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			switch node := n.(type) {

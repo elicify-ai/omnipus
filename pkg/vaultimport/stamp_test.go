@@ -6,7 +6,6 @@ package vaultimport
 
 import (
 	"bytes"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,7 +146,7 @@ func snapshotVault(t *testing.T, root string) map[string][]byte {
 		}
 		data, rerr := os.ReadFile(path)
 		if rerr != nil {
-			return fmt.Errorf("read %s: %w", path, rerr)
+			return rerr
 		}
 		rel, _ := filepath.Rel(root, path)
 		out[filepath.ToSlash(rel)] = data

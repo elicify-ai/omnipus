@@ -389,7 +389,7 @@ func launchManagedPipe(ctx context.Context, execPath string, cfg pipeLaunchConfi
 		Errf:      func(f string, a ...any) { logger.WarnCF("browser", fmt.Sprintf(f, a...), nil) },
 	})
 	if err != nil {
-		return nil, fmt.Errorf("launchManagedPipe: %w", err)
+		return nil, err
 	}
 	var browser *chromedp.Browser
 	if cc := chromedp.FromContext(rootCtx); cc != nil {

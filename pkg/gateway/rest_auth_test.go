@@ -1839,7 +1839,7 @@ func TestLogin_AfterOnboardingWithoutRestart(t *testing.T) {
 	credStore, credErr := func() (*credentials.Store, error) {
 		s := credentials.NewStore(filepath.Join(tmpDir, "credentials.json"))
 		if err := credentials.Unlock(s); err != nil {
-			return nil, fmt.Errorf("unlock credentials: %w", err)
+			return nil, err
 		}
 		return s, nil
 	}()

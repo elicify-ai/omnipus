@@ -227,7 +227,7 @@ func scanTasks(home string, fn func(id string, t task.Task)) error {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("scanTasks: %w", err)
+		return err
 	}
 	for _, e := range entries {
 		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
@@ -294,10 +294,7 @@ func countTasksForWorkspace(home, workspaceID string) int {
 // function because the call sites read better with it and it documents where
 // the gateway's workspace writes go.
 func writeWorkspaceFile(home string, w storedWorkspace) error {
-	if err := workspace.SaveRecord(home, w); err != nil {
-		return fmt.Errorf("writeWorkspaceFile: %w", err)
-	}
-	return nil
+	return workspace.SaveRecord(home, w)
 }
 
 // wireMount is a type ALIAS (not a new named type — the "=" form) for the
@@ -1958,10 +1955,7 @@ func deleteWorkspaceBrowserProfile(pool *browser.BrowserPool, key browser.Browsi
 		if dirErr != nil {
 			// The key has no resolvable profile directory, so there is nothing
 			// to confirm against and retrying cannot change that.
-			if lastErr != nil {
-				return fmt.Errorf("deleteWorkspaceBrowserProfile: %w", lastErr)
-			}
-			return nil
+			return lastErr
 		}
 		if !browserProfileExistsFn(dir) {
 			return nil

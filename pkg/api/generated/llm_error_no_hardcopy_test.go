@@ -5,7 +5,6 @@
 package generated_test
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,7 +74,7 @@ func TestLLMErrorMessages_NoHandCopiesOutsideTheCatalogue(t *testing.T) {
 			}
 			rel, relErr := filepath.Rel(root, path)
 			if relErr != nil {
-				return fmt.Errorf("relative path %s: %w", path, relErr)
+				return relErr
 			}
 			if allowed[rel] {
 				return nil
@@ -87,7 +86,7 @@ func TestLLMErrorMessages_NoHandCopiesOutsideTheCatalogue(t *testing.T) {
 			}
 			body, readErr := os.ReadFile(path)
 			if readErr != nil {
-				return fmt.Errorf("read %s: %w", path, readErr)
+				return readErr
 			}
 			text := string(body)
 			for code, needle := range needles {

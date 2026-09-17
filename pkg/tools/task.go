@@ -118,25 +118,22 @@ func syncTaskGoalRecord(
 		if nErr != nil {
 			return fmt.Errorf("build goal record: %w", nErr)
 		}
-		if cErr := gs.Create(g); cErr != nil {
-			return fmt.Errorf("create task goal record: %w", cErr)
-		}
-		return nil
+		return gs.Create(g)
 	}
 	_, err = gs.Update(existing.GoalID, func(g *goal.Goal) error {
 		if criteriaProvided {
 			if sErr := g.SetCriteria(criteria, now); sErr != nil {
-				return fmt.Errorf("Goal.SetCriteria: %w", sErr)
+				return sErr
 			}
 		}
 		if dodProvided {
 			if sErr := g.SetDoD(dod, now); sErr != nil {
-				return fmt.Errorf("Goal.SetDoD: %w", sErr)
+				return sErr
 			}
 		}
 		return nil
 	})
-	return fmt.Errorf("syncTaskGoalRecord: %w", err)
+	return err
 }
 
 // pairedGoalDoD returns the Definition of Done currently persisted on the goal
@@ -190,10 +187,7 @@ func terminateGoalForOwnerDeletion(g *goal.Goal, now time.Time) error {
 	if g == nil || g.State != generated.GoalStateActive {
 		return nil
 	}
-	if err := g.Terminate(generated.GoalStateCleared, goalTerminalReasonOwnerDeleted, now); err != nil {
-		return fmt.Errorf("terminateGoalForOwnerDeletion: %w", err)
-	}
-	return nil
+	return g.Terminate(generated.GoalStateCleared, goalTerminalReasonOwnerDeleted, now)
 }
 
 // RemoveTaskGoalRecords implements GOAL-FR-044/EC-4 in full for one task: every
@@ -418,7 +412,7 @@ func TerminateTaskGoalRecord(
 			return nil
 		}
 		if terr := cur.Terminate(state, terminalReason, now); terr != nil {
-			return fmt.Errorf("Goal.Terminate: %w", terr)
+			return terr
 		}
 		transitioned = true
 		return nil

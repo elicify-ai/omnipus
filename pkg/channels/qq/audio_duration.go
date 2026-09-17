@@ -2,7 +2,6 @@ package qq
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -59,13 +58,13 @@ func qqAudioDurationFormat(localPath, filename, contentType string) string {
 func qqWAVDuration(localPath string) (time.Duration, bool, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return 0, false, fmt.Errorf("qqWAVDuration: %w", err)
+		return 0, false, err
 	}
 	defer file.Close()
 
 	var header [12]byte
 	if _, err := io.ReadFull(file, header[:]); err != nil {
-		return 0, false, fmt.Errorf("qqWAVDuration: %w", err)
+		return 0, false, err
 	}
 
 	var order binary.ByteOrder
@@ -93,7 +92,7 @@ func qqWAVDuration(localPath string) (time.Duration, bool, error) {
 			if err == io.EOF {
 				break
 			}
-			return 0, false, fmt.Errorf("qqWAVDuration: %w", err)
+			return 0, false, err
 		}
 
 		chunkSize := order.Uint32(chunkHeader[4:8])
@@ -101,7 +100,7 @@ func qqWAVDuration(localPath string) (time.Duration, bool, error) {
 		case "fmt ":
 			chunkData := make([]byte, chunkSize)
 			if _, err := io.ReadFull(file, chunkData); err != nil {
-				return 0, false, fmt.Errorf("qqWAVDuration: %w", err)
+				return 0, false, err
 			}
 			if len(chunkData) >= 12 {
 				byteRate = order.Uint32(chunkData[8:12])
@@ -111,17 +110,17 @@ func qqWAVDuration(localPath string) (time.Duration, bool, error) {
 			dataSize = chunkSize
 			foundData = true
 			if _, err := io.CopyN(io.Discard, file, int64(chunkSize)); err != nil {
-				return 0, false, fmt.Errorf("qqWAVDuration: %w", err)
+				return 0, false, err
 			}
 		default:
 			if _, err := io.CopyN(io.Discard, file, int64(chunkSize)); err != nil {
-				return 0, false, fmt.Errorf("qqWAVDuration: %w", err)
+				return 0, false, err
 			}
 		}
 
 		if chunkSize%2 == 1 {
 			if _, err := io.CopyN(io.Discard, file, 1); err != nil {
-				return 0, false, fmt.Errorf("qqWAVDuration: %w", err)
+				return 0, false, err
 			}
 		}
 
@@ -141,7 +140,7 @@ func qqWAVDuration(localPath string) (time.Duration, bool, error) {
 func qqOggDuration(localPath string) (time.Duration, bool, error) {
 	file, err := os.Open(localPath)
 	if err != nil {
-		return 0, false, fmt.Errorf("qqOggDuration: %w", err)
+		return 0, false, err
 	}
 	defer file.Close()
 
@@ -157,7 +156,7 @@ func qqOggDuration(localPath string) (time.Duration, bool, error) {
 			if err == io.EOF {
 				break
 			}
-			return 0, false, fmt.Errorf("qqOggDuration: %w", err)
+			return 0, false, err
 		}
 
 		if string(header[:4]) != "OggS" {
@@ -167,7 +166,7 @@ func qqOggDuration(localPath string) (time.Duration, bool, error) {
 		pageSegments := int(header[26])
 		segments := make([]byte, pageSegments)
 		if _, err := io.ReadFull(file, segments); err != nil {
-			return 0, false, fmt.Errorf("qqOggDuration: %w", err)
+			return 0, false, err
 		}
 
 		payloadLen := 0
@@ -177,7 +176,7 @@ func qqOggDuration(localPath string) (time.Duration, bool, error) {
 
 		payload := make([]byte, payloadLen)
 		if _, err := io.ReadFull(file, payload); err != nil {
-			return 0, false, fmt.Errorf("qqOggDuration: %w", err)
+			return 0, false, err
 		}
 
 		granule := binary.LittleEndian.Uint64(header[6:14])

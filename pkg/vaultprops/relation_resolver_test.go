@@ -7,7 +7,6 @@ package vaultprops
 import (
 	"context"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -228,10 +227,7 @@ type countingStore struct {
 
 func (c *countingStore) Candidates(ctx context.Context, sel propindex.Selector, visit func(propindex.Candidate) (propindex.Verdict, error)) error {
 	c.calls++
-	if err := c.Store.Candidates(ctx, sel, visit); err != nil {
-		return fmt.Errorf("countingStore.Candidates: %w", err)
-	}
-	return nil
+	return c.Store.Candidates(ctx, sel, visit)
 }
 
 // TestRelationResolver_MemoisesWithinOneResolver proves the memo: resolving

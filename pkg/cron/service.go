@@ -774,11 +774,7 @@ func invokeRun(
 		}
 	}()
 	if runner != nil {
-		id, err := runner.RunScheduled(ctx, job)
-		if err != nil {
-			return "", fmt.Errorf("run scheduled job %q: %w", job.Name, err)
-		}
-		return id, nil
+		return runner.RunScheduled(ctx, job)
 	}
 	return "", nil
 }
@@ -963,26 +959,20 @@ func (cs *CronService) loadStore() error {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return fmt.Errorf("CronService.loadStore: %w", err)
+		return err
 	}
 
-	if err := json.Unmarshal(data, cs.store); err != nil {
-		return fmt.Errorf("CronService.loadStore: %w", err)
-	}
-	return nil
+	return json.Unmarshal(data, cs.store)
 }
 
 func (cs *CronService) saveStoreUnsafe() error {
 	data, err := json.MarshalIndent(cs.store, "", "  ")
 	if err != nil {
-		return fmt.Errorf("CronService.saveStoreUnsafe: %w", err)
+		return err
 	}
 
 	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	if err := fileutil.WriteFileAtomic(cs.storePath, data, 0o600); err != nil {
-		return fmt.Errorf("CronService.saveStoreUnsafe: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(cs.storePath, data, 0o600)
 }
 
 // AddJob creates a schedule. It used to take deliver/channel/to as well; those

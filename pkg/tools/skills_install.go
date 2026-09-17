@@ -345,12 +345,9 @@ func writeOriginMeta(targetDir, registryName, slug, version string) error {
 
 	data, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		return fmt.Errorf("writeOriginMeta: %w", err)
+		return err
 	}
 
 	// Use unified atomic write utility with explicit sync for flash storage reliability.
-	if err := fileutil.WriteFileAtomic(filepath.Join(targetDir, ".skill-origin.json"), data, 0o600); err != nil {
-		return fmt.Errorf("writeOriginMeta: %w", err)
-	}
-	return nil
+	return fileutil.WriteFileAtomic(filepath.Join(targetDir, ".skill-origin.json"), data, 0o600)
 }

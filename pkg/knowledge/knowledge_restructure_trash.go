@@ -820,7 +820,7 @@ func (tr *Trasher) Restore(req RestoreRequest) (*RestoreResult, error) {
 		return nil, rerr
 	} else if !errors.Is(statErr, fs.ErrNotExist) {
 		tr.emit(trashOpRestore, "refused", []string{orig}, statErr.Error())
-		return nil, fmt.Errorf("Trasher.Restore: %w", statErr)
+		return nil, statErr
 	}
 
 	content, rerr := os.ReadFile(chosen.FileAbs)
@@ -914,7 +914,7 @@ func removeEmptyDirsRecursively(dir string) error {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("removeEmptyDirsRecursively: %w", err)
+		return err
 	}
 	for _, e := range entries {
 		if e.IsDir() {
@@ -925,13 +925,10 @@ func removeEmptyDirsRecursively(dir string) error {
 	}
 	entries, err = os.ReadDir(dir)
 	if err != nil {
-		return fmt.Errorf("removeEmptyDirsRecursively: %w", err)
+		return err
 	}
 	if len(entries) == 0 {
-		if err := os.Remove(dir); err != nil {
-			return fmt.Errorf("removeEmptyDirsRecursively: %w", err)
-		}
-		return nil
+		return os.Remove(dir)
 	}
 	return nil
 }

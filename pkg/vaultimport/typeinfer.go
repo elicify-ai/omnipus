@@ -597,7 +597,7 @@ func writeTypeKey(absPath, typeName string) error {
 	}
 	src, err := os.ReadFile(absPath)
 	if err != nil {
-		return fmt.Errorf("writeTypeKey: %w", err)
+		return err
 	}
 
 	bom := []byte{}
@@ -649,10 +649,7 @@ func writeTypeKey(absPath, typeName string) error {
 	if fi, statErr := os.Stat(absPath); statErr == nil {
 		mode = fi.Mode().Perm()
 	}
-	if err := os.WriteFile(absPath, out.Bytes(), mode); err != nil {
-		return fmt.Errorf("writeTypeKey: %w", err)
-	}
-	return nil
+	return os.WriteFile(absPath, out.Bytes(), mode)
 }
 
 // isPlainYAMLScalar accepts the conservative subset of type names this edit

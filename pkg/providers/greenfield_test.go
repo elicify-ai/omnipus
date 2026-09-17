@@ -33,7 +33,6 @@ package providers
 // still covered by the shell gate's own rules.
 
 import (
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -221,11 +220,11 @@ func walkGreenfieldGoFiles(t *testing.T, root string, fn func(rel string, fset *
 		fset := token.NewFileSet()
 		file, parseErr := parser.ParseFile(fset, path, nil, 0)
 		if parseErr != nil {
-			return fmt.Errorf("parse %s: %w", path, parseErr)
+			return parseErr
 		}
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {
-			return fmt.Errorf("relative path %s: %w", path, relErr)
+			return relErr
 		}
 		seen++
 		fn(filepath.ToSlash(rel), fset, file)

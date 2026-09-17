@@ -126,7 +126,7 @@ func (a *restAPI) libraryManagedEntryInCollection(root *library.Root, rel string
 	case errors.Is(statErr, library.ErrIsDir), errors.Is(statErr, library.ErrNotFound):
 		return nil, false, nil
 	case statErr != nil:
-		return nil, false, fmt.Errorf("restAPI.libraryManagedEntryInCollection: %w", statErr)
+		return nil, false, statErr
 	case !fi.Mode().IsRegular():
 		return nil, false, nil
 	}

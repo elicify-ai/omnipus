@@ -2,7 +2,6 @@ package browser
 
 import (
 	"context"
-	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -37,7 +36,7 @@ func TestLiveInputBackWorksWithoutReadyPicture(t *testing.T) {
 			lv := newNavigateTestLiveView(t, func(ctx context.Context, _ time.Duration, actions ...chromedp.Action) error {
 				for _, action := range actions {
 					if err := action.Do(cdp.WithExecutor(ctx, executor)); err != nil {
-						return fmt.Errorf("run action: %w", err)
+						return err
 					}
 				}
 				return nil

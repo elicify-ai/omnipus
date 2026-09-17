@@ -188,7 +188,7 @@ func (si *SkillInstaller) InstallFromGitHub(ctx context.Context, repo string) er
 func (si *SkillInstaller) getGithubDirAllFiles(ctx context.Context, apiURL, localDir string, isRoot bool) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
-		return fmt.Errorf("SkillInstaller.getGithubDirAllFiles: %w", err)
+		return err
 	}
 	if si.githubToken != "" {
 		req.Header.Set("Authorization", "Bearer "+si.githubToken)
@@ -196,7 +196,7 @@ func (si *SkillInstaller) getGithubDirAllFiles(ctx context.Context, apiURL, loca
 
 	resp, err := utils.DoRequestWithRetry(si.client, req)
 	if err != nil {
-		return fmt.Errorf("SkillInstaller.getGithubDirAllFiles: %w", err)
+		return err
 	}
 	defer resp.Body.Close()
 
@@ -206,7 +206,7 @@ func (si *SkillInstaller) getGithubDirAllFiles(ctx context.Context, apiURL, loca
 
 	var items []GitHubContent
 	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
-		return fmt.Errorf("SkillInstaller.getGithubDirAllFiles: %w", err)
+		return err
 	}
 
 	for _, item := range items {
@@ -269,28 +269,25 @@ func (si *SkillInstaller) downloadRaw(ctx context.Context, owner, repo, ref, sub
 		return fmt.Errorf("failed to write skill file: %w", err)
 	}
 
-	if err := os.Chmod(localPath, 0o600); err != nil {
-		return fmt.Errorf("SkillInstaller.downloadRaw: %w", err)
-	}
-	return nil
+	return os.Chmod(localPath, 0o600)
 }
 
 func (si *SkillInstaller) downloadFile(ctx context.Context, url, localPath string) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return fmt.Errorf("SkillInstaller.downloadFile: %w", err)
+		return err
 	}
 
 	// Use chunked download to temporary file, retrying on transient
 	// GitHub rate-limit/5xx failures, then move atomically to target.
 	tmpPath, err := utils.DownloadToFileWithRetry(ctx, si.client, req, 0)
 	if err != nil {
-		return fmt.Errorf("SkillInstaller.downloadFile: %w", err)
+		return err
 	}
 	defer os.Remove(tmpPath)
 
 	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
-		return fmt.Errorf("SkillInstaller.downloadFile: %w", err)
+		return err
 	}
 
 	// Atomic move from temp to final location.
@@ -298,10 +295,7 @@ func (si *SkillInstaller) downloadFile(ctx context.Context, url, localPath strin
 		return fmt.Errorf("failed to move downloaded file: %w", err)
 	}
 
-	if err := os.Chmod(localPath, 0o600); err != nil {
-		return fmt.Errorf("SkillInstaller.downloadFile: %w", err)
-	}
-	return nil
+	return os.Chmod(localPath, 0o600)
 }
 
 // shouldDownload determines if a file should be downloaded

@@ -838,13 +838,13 @@ func (te *TaskExecutor) activateTaskGoal(t *task.Task, taskSessionID string) err
 		switch {
 		case cur.IsDefining():
 			if err := cur.Activate(taskSessionID, now); err != nil {
-				return fmt.Errorf("Goal.Activate: %w", err)
+				return err
 			}
 			cur.MaxRounds = tryLimit
 			return nil
 		case cur.IsTerminal():
 			if err := cur.Reactivate(taskSessionID, now); err != nil {
-				return fmt.Errorf("Goal.Reactivate: %w", err)
+				return err
 			}
 			cur.MaxRounds = tryLimit
 			return nil
@@ -1458,11 +1458,7 @@ func (te *TaskExecutor) planForGate(planID string) (*plan.Plan, error) {
 	if planStore == nil {
 		return nil, errors.New("task_executor: no plan store wired, cannot verify parent plan state")
 	}
-	p, err := planStore.Get(planID)
-	if err != nil {
-		return nil, fmt.Errorf("TaskExecutor.planForGate: %w", err)
-	}
-	return p, nil
+	return planStore.Get(planID)
 }
 
 // ErrRunTaskApprovalRequired is returned by executeTask's automatic-dispatch

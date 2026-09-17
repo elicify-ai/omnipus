@@ -713,10 +713,7 @@ func startEncoderWithFrame(ctx context.Context, mgr *BrowserManager, panelSessio
 		err := chromedp.Run(runCtx,
 			chromedp.ActionFunc(func(ctx context.Context) error {
 				_, err := page.AddScriptToEvaluateOnNewDocument(injectScript).Do(ctx)
-				if err != nil {
-					return fmt.Errorf("capture session: inject script: %w", err)
-				}
-				return nil
+				return err
 			}),
 			chromedp.Navigate("chrome-extension://"+captureext.ExtensionID+"/encoder.html"),
 		)
@@ -1034,11 +1031,7 @@ func (cs *CaptureSession) ViewerIDs() []string {
 // encoder page's SDP offer, arriving as a browser_capture_offer frame on the
 // ingest WS.
 func (cs *CaptureSession) HandleIngestOffer(sdp string) (answer string, err error) {
-	answer, err = cs.relay.HandleIngestOffer(sdp)
-	if err != nil {
-		return "", fmt.Errorf("CaptureSession.HandleIngestOffer: %w", err)
-	}
-	return answer, nil
+	return cs.relay.HandleIngestOffer(sdp)
 }
 
 // ViewerAttachHandle identifies one specific CaptureSession.HandleViewerOffer
@@ -1105,10 +1098,7 @@ func (cs *CaptureSession) HandleViewerOfferContext(parent context.Context, viewe
 	if contextErr := cs.recordViewerRelayHandle(parent, viewerID, gen, relayHandle); contextErr != nil {
 		return "", handle, contextErr
 	}
-	if err != nil {
-		return answer, handle, fmt.Errorf("CaptureSession.HandleViewerOfferContext: %w", err)
-	}
-	return answer, handle, nil
+	return answer, handle, err
 }
 
 // recordViewerRelayHandle records relayHandle — the exact `any` value

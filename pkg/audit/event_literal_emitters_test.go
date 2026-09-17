@@ -3,7 +3,6 @@
 package audit
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -61,7 +60,7 @@ func TestEveryBareLiteralEventNameIsRegistered(t *testing.T) {
 		}
 		data, readErr := os.ReadFile(path)
 		if readErr != nil {
-			return fmt.Errorf("read %s: %w", path, readErr)
+			return readErr
 		}
 		rel, relErr := filepath.Rel(root, path)
 		if relErr != nil {

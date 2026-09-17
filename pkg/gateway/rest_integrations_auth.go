@@ -750,7 +750,7 @@ func (a *restAPI) spoolUpload(src io.Reader, filename string) (string, func(), e
 	}
 	tmp, err := os.CreateTemp("", "omnipus-voice-*"+ext)
 	if err != nil {
-		return "", func() {}, fmt.Errorf("restAPI.spoolUpload: %w", err)
+		return "", func() {}, err
 	}
 	cleanup := func() {
 		_ = tmp.Close()
@@ -758,11 +758,11 @@ func (a *restAPI) spoolUpload(src io.Reader, filename string) (string, func(), e
 	}
 	if _, err := io.Copy(tmp, io.LimitReader(src, maxTranscribeBytes)); err != nil {
 		cleanup()
-		return "", func() {}, fmt.Errorf("restAPI.spoolUpload: %w", err)
+		return "", func() {}, err
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmp.Name())
-		return "", func() {}, fmt.Errorf("restAPI.spoolUpload: %w", err)
+		return "", func() {}, err
 	}
 	return tmp.Name(), func() { _ = os.Remove(tmp.Name()) }, nil
 }

@@ -7,7 +7,6 @@ package config
 
 import (
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"strings"
 
@@ -282,7 +281,7 @@ func (s *SecureString) UnmarshalJSON(value []byte) error {
 	}
 	var v string
 	if err := json.Unmarshal(value, &v); err != nil {
-		return fmt.Errorf("SecureString.UnmarshalJSON: %w", err)
+		return err
 	}
 	s.resolved = v
 	return nil

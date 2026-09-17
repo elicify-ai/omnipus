@@ -9,7 +9,6 @@ package propindex
 import (
 	"context"
 	"database/sql"
-	"fmt"
 )
 
 // ---------------------------------------------------------------------------
@@ -36,29 +35,17 @@ func (r *Recorder) record(phase Phase, sql string) {
 
 func (ix *Index) exec(ctx context.Context, phase Phase, query string, args ...any) (sql.Result, error) {
 	ix.rec.record(phase, query)
-	res, err := ix.db.ExecContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("propindex exec: %w", err)
-	}
-	return res, nil
+	return ix.db.ExecContext(ctx, query, args...)
 }
 
 func (ix *Index) execTx(ctx context.Context, tx *sql.Tx, phase Phase, query string, args ...any) (sql.Result, error) {
 	ix.rec.record(phase, query)
-	res, err := tx.ExecContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("propindex execTx: %w", err)
-	}
-	return res, nil
+	return tx.ExecContext(ctx, query, args...)
 }
 
 func (ix *Index) query(ctx context.Context, phase Phase, query string, args ...any) (*sql.Rows, error) {
 	ix.rec.record(phase, query)
-	rows, err := ix.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("propindex query: %w", err)
-	}
-	return rows, nil
+	return ix.db.QueryContext(ctx, query, args...)
 }
 
 func (ix *Index) queryRow(ctx context.Context, phase Phase, query string, args ...any) *sql.Row {

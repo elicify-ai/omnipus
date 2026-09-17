@@ -25,7 +25,6 @@
 package memrooms
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 
@@ -122,7 +121,7 @@ func buildRoom(root string) Room {
 // Returns the Room so callers can chain: EnsureRoom(ResolveAgentPrivateRoom(...)).
 func EnsureRoom(room Room) (Room, error) {
 	if err := os.MkdirAll(room.MemoriesDir, 0o700); err != nil {
-		return room, fmt.Errorf("EnsureRoom: %w", err)
+		return room, err
 	}
 	return room, nil
 }

@@ -376,7 +376,7 @@ func (s *Store) appendRunRecord(taskID string, rec TaskRun, at time.Time) error 
 	// Lock the day file's sidecar, never the day file this write renames over
 	// (see fileutil.SidecarLockPath). Every runs-dir lister selects *.jsonl, so
 	// the sidecar is never read as a day file.
-	if err := fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
+	return fileutil.WithFlock(fileutil.SidecarLockPath(path), func() error {
 		existing, readErr := os.ReadFile(path)
 		if readErr != nil && !os.IsNotExist(readErr) {
 			return fmt.Errorf("task: read run day file %q: %w", path, readErr)
@@ -391,10 +391,7 @@ func (s *Store) appendRunRecord(taskID string, rec TaskRun, at time.Time) error 
 		buf.Write(line)
 		buf.WriteByte('\n')
 		return writeFileAtomicFn(path, buf.Bytes(), 0o600)
-	}); err != nil {
-		return fmt.Errorf("Store.appendRunRecord: %w", err)
-	}
-	return nil
+	})
 }
 
 // OpenRun atomically creates-or-returns the currently-open (EndedAt == nil)

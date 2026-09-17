@@ -160,7 +160,7 @@ func (s *sandboxedStdioConn) reap() error {
 		}
 	}
 	if err := s.cmd.Process.Kill(); err != nil {
-		return fmt.Errorf("sandboxedStdioConn.reap: %w", err)
+		return err
 	}
 	if err, ok := wait(); ok {
 		return err
@@ -188,11 +188,7 @@ func (t *headerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if base == nil {
 		base = http.DefaultTransport
 	}
-	resp, err := base.RoundTrip(req)
-	if err != nil {
-		return nil, fmt.Errorf("headerTransport.RoundTrip: %w", err)
-	}
-	return resp, nil
+	return base.RoundTrip(req)
 }
 
 // loadEnvFile loads environment variables from a file in .env format

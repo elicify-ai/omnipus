@@ -189,11 +189,7 @@ func (t *TURNServer) Credentials(viewerID string) (username, password string, er
 	if t == nil {
 		return "", "", nil
 	}
-	username, password, err = turn.GenerateLongTermTURNRESTCredentials(t.secret, viewerID, turnCredentialTTL)
-	if err != nil {
-		return "", "", fmt.Errorf("TURNServer.Credentials: %w", err)
-	}
-	return username, password, nil
+	return turn.GenerateLongTermTURNRESTCredentials(t.secret, viewerID, turnCredentialTTL)
 }
 
 // ICEServers returns the entry to hand this viewer, or nil when TURN is off.
@@ -238,8 +234,5 @@ func (t *TURNServer) Close() error {
 		err = t.srv.Close()
 	}
 	t.closeConns()
-	if err != nil {
-		return fmt.Errorf("TURNServer.Close: %w", err)
-	}
-	return nil
+	return err
 }

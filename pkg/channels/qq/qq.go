@@ -363,7 +363,7 @@ func (c *QQChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage)
 			// classification. The real API error stays in the chain either
 			// way, instead of being flattened to an opaque "temporary
 			// failure".
-			return fmt.Errorf("QQChannel.SendMedia: %w", channels.ClassifyMediaSendError("qq", sentCount, err))
+			return channels.ClassifyMediaSendError("qq", sentCount, err)
 		}
 
 		if err := c.sendUploadedMedia(ctx, chatKind, msg.ChatID, part, fileInfo); err != nil {
@@ -377,7 +377,7 @@ func (c *QQChannel) SendMedia(ctx context.Context, msg bus.OutboundMediaMessage)
 			// the follow-up post failed), so if an earlier part also fully
 			// sent (sentCount > 0), a bare retry of the whole message would
 			// duplicate it.
-			return fmt.Errorf("QQChannel.SendMedia: %w", channels.ClassifyMediaSendError("qq", sentCount, err))
+			return channels.ClassifyMediaSendError("qq", sentCount, err)
 		}
 		sentCount++
 	}
@@ -415,7 +415,7 @@ func (c *QQChannel) uploadMedia(
 
 	body, err := c.api.Transport(ctx, http.MethodPost, c.mediaUploadURL(chatKind, chatID), payload)
 	if err != nil {
-		return nil, fmt.Errorf("QQChannel.uploadMedia: %w", err)
+		return nil, err
 	}
 
 	var uploaded dto.Message
@@ -587,16 +587,10 @@ func (c *QQChannel) sendUploadedMedia(
 
 	if chatKind == "group" {
 		_, err := c.api.PostGroupMessage(ctx, chatID, msg)
-		if err != nil {
-			return fmt.Errorf("QQChannel.sendUploadedMedia: %w", err)
-		}
-		return nil
+		return err
 	}
 	_, err := c.api.PostC2CMessage(ctx, chatID, msg)
-	if err != nil {
-		return fmt.Errorf("QQChannel.sendUploadedMedia: %w", err)
-	}
-	return nil
+	return err
 }
 
 func (c *QQChannel) applyPassiveReplyMetadata(chatID string, msg *dto.MessageToCreate) {

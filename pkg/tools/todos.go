@@ -192,7 +192,7 @@ func (t *SetTodosTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 func (t *SetTodosTool) findActiveGoalTask(agentID, goal, sessionID string) (*task.Task, error) {
 	tasks, err := t.store.List(task.Filter{AgentID: agentID})
 	if err != nil {
-		return nil, fmt.Errorf("SetTodosTool.findActiveGoalTask: %w", err)
+		return nil, err
 	}
 	var found *task.Task
 	for i := range tasks {

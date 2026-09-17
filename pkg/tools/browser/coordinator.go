@@ -1136,11 +1136,11 @@ func (c *BrowserCoordinator) readOwnershipMarker() (pid int, owner string, err e
 func readOwnershipMarkerAt(path string) (pid int, owner string, err error) {
 	data, rerr := os.ReadFile(path)
 	if rerr != nil {
-		return 0, "", fmt.Errorf("readOwnershipMarkerAt: %w", rerr)
+		return 0, "", rerr
 	}
 	var m ownershipMarker
 	if jerr := json.Unmarshal(data, &m); jerr != nil {
-		return 0, "", fmt.Errorf("readOwnershipMarkerAt: %w", jerr)
+		return 0, "", jerr
 	}
 	return m.PID, m.Owner, nil
 }

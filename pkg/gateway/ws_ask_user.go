@@ -26,7 +26,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"slices"
 	"time"
@@ -205,10 +204,7 @@ func (d *askUserResumeDispatcher) DispatchResume(set *askuser.PendingSet, resume
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := d.msgBus.PublishInbound(ctx, msg); err != nil {
-		return fmt.Errorf("askUserResumeDispatcher.DispatchResume: %w", err)
-	}
-	return nil
+	return d.msgBus.PublishInbound(ctx, msg)
 }
 
 // askUserAuditSink records one audit entry per default-safe auto-resolution

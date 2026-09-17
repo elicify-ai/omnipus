@@ -26,7 +26,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -530,11 +529,7 @@ type bodyReadRecorder struct {
 
 func (b *bodyReadRecorder) Read(p []byte) (int, error) {
 	b.reads++
-	n, err := b.data.Read(p)
-	if err != nil {
-		return 0, fmt.Errorf("read: %w", err)
-	}
-	return n, nil
+	return b.data.Read(p)
 }
 
 // TestPreviewTokenPath_VerbsGetHeadOnly is spec test 114.

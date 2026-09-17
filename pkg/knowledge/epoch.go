@@ -196,7 +196,7 @@ func BumpIndexEpoch(home, collectionRoot string) (int64, error) {
 		return fileutil.WriteFileAtomic(path, data, 0o600)
 	})
 	if err != nil {
-		return 0, fmt.Errorf("BumpIndexEpoch: %w", err)
+		return 0, err
 	}
 	return next, nil
 }

@@ -19,7 +19,6 @@ package gateway
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -111,11 +110,11 @@ func newProviderValidationTestAPI(t *testing.T, providerID, upstreamBaseURL stri
 		defer al.ClearReloadPending()
 		raw, err := os.ReadFile(tmpDir + "/config.json")
 		if err != nil {
-			return fmt.Errorf("read config: %w", err)
+			return err
 		}
 		var m map[string]any
 		if err := json.Unmarshal(raw, &m); err != nil {
-			return fmt.Errorf("unmarshal config: %w", err)
+			return err
 		}
 		// Re-seed the in-memory provider list preserving the api_base.
 		list, _ := m["providers"].([]any)
@@ -172,12 +171,9 @@ func writeMinimalProviderConfig(t *testing.T, tmpDir, providerID string) error {
 	}
 	b, err := json.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("writeMinimalProviderConfig: %w", err)
+		return err
 	}
-	if err := os.WriteFile(tmpDir+"/config.json", b, 0o600); err != nil {
-		return fmt.Errorf("writeMinimalProviderConfig: %w", err)
-	}
-	return nil
+	return os.WriteFile(tmpDir+"/config.json", b, 0o600)
 }
 
 // doPutProvider sends PUT /api/v1/providers/{id} with the given JSON body and

@@ -19,7 +19,6 @@ package gateway
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -80,7 +79,7 @@ func snapshotOutsideToolState(t *testing.T, dir string) map[string]string {
 		}
 		raw, rerr := os.ReadFile(p)
 		if rerr != nil {
-			return fmt.Errorf("read %s: %w", p, rerr)
+			return rerr
 		}
 		rel, _ := filepath.Rel(dir, p)
 		out[filepath.ToSlash(rel)] = string(raw)

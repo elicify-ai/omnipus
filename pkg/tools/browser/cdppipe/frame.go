@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
-	"fmt"
 	"io"
 )
 
@@ -30,10 +29,10 @@ func writeFrame(w io.Writer, payload []byte) error {
 		return errNULInPayload
 	}
 	if _, err := w.Write(payload); err != nil {
-		return fmt.Errorf("writeFrame: %w", err)
+		return err
 	}
 	if _, err := w.Write([]byte{frameDelimiter}); err != nil {
-		return fmt.Errorf("writeFrame: %w", err)
+		return err
 	}
 	return nil
 }
@@ -48,12 +47,12 @@ func readFrame(r *bufio.Reader) ([]byte, error) {
 	data, err := r.ReadBytes(frameDelimiter)
 	if err != nil {
 		if len(data) == 0 {
-			return nil, fmt.Errorf("readFrame: %w", err) // clean boundary: typically io.EOF
+			return nil, err // clean boundary: typically io.EOF
 		}
 		if err == io.EOF {
 			return nil, io.ErrUnexpectedEOF
 		}
-		return nil, fmt.Errorf("readFrame: %w", err)
+		return nil, err
 	}
 	return data[:len(data)-1], nil // strip the trailing delimiter
 }
