@@ -2408,14 +2408,15 @@ export function BrowserLiveView({
     // releases the wheel and returns focus to the address bar — a real,
     // advertised exit that satisfies 2.1.2 on its own, independent of
     // whatever container happens to host this component.
+    // Composition first: an IME's keys are its own, Escape included (it cancels
+    // the composition, it does not hand back the wheel). Hoisted from both branches.
+    if (textComposition.nativeKey(e)) return
     if (e.key === 'Escape') {
-      if (textComposition.nativeKey(e)) return
       e.preventDefault()
       releaseWheel()
       return
     }
     if (!canDispatchInput()) { e.preventDefault(); return }
-    if (textComposition.nativeKey(e)) return
     e.preventDefault()
     const modifiers = computeModifiers(e)
     // Keep physical transitions for page shortcuts/games and provide the
