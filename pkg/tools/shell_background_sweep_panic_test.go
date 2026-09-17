@@ -125,7 +125,7 @@ func TestExecTool_BackgroundSweepPanicIsRecovered(t *testing.T) {
 	require.NoError(t, auditLog.Close())
 	files, err := filepath.Glob(filepath.Join(auditDir, "*.jsonl"))
 	require.NoError(t, err)
-	var all []byte //nolint:prealloc // size depends on the audit logger's rotation, not on anything this test controls
+	var all []byte // size depends on the audit logger's rotation, not on anything this test controls
 	for _, f := range files {
 		b, rerr := os.ReadFile(f)
 		require.NoError(t, rerr)
