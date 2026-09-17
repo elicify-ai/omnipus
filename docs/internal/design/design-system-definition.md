@@ -217,7 +217,7 @@ Consolidation standardizes ownership without standardizing every presentation. D
 
 **Evidence (facts only).** Lane B found no shared loading state on `Button`, `Input`, or `Progress`; multiple empty/error implementations; two save indicators; and only three consumers of the field-error component. It did not establish that every component supports every state.
 
-**Enforcement.** Narrow rules ban `animate-pulse` outside `Skeleton`, local declarations named `*EmptyState`, `*ErrorState`, or `*Skeleton` outside approved locations, and direct low-level imports where a composite exists. Source-search self-tests prove those rules. Review, interaction tests, and targeted visual regression cover semantic equivalence; lint is not claimed to understand meaning.
+**Enforcement.** Narrow rules ban `animate-pulse` outside `Skeleton`, local declarations named `*EmptyState`, `*ErrorState`, or `*Skeleton` outside approved locations, and direct low-level imports where a composite exists. Source-search self-tests prove those rules. Review and interaction tests cover semantic equivalence; lint is not claimed to understand meaning. The founder judges visual continuity on the running app. A one-off explanatory image is optional and never a gate.
 
 ### D7. Primitives fail closed on accessibility and interaction
 
@@ -252,7 +252,7 @@ Existing parts keep their current look. New parts are added to fill the holes; t
 
 **Evidence (facts only).** Lane B inventoried 26 primitive families, 8 domain widgets plus 2 helpers inside `ui/`, 11 shared-composite files, 14 library test files, no Storybook, and an `@omnipus/ui` stub exporting only part of the catalog.
 
-**Enforcement.** CI validates manifest-to-export and manifest-to-story coverage, builds Storybook, runs axe and interaction tests, and captures targeted visual snapshots. Export-map tests reject accidental public APIs. Storybook packages exist only in root `devDependencies`; output is separate from `dist/spa`; production source cannot import `.storybook` or `*.stories.*`; bundle inspection rejects Storybook modules; embedded asset size is compared with baseline.
+**Enforcement.** CI validates manifest-to-export and manifest-to-story coverage, builds Storybook, and runs axe and interaction tests. Export-map tests reject accidental public APIs. Storybook packages exist only in root `devDependencies`; output is separate from `dist/spa`; production source cannot import `.storybook` or `*.stories.*`; bundle inspection rejects Storybook modules; embedded asset size is measured and checked against its approved budget. Storybook is not a screenshot or snapshot baseline.
 
 ## Part 2 — Complete foundations
 
@@ -330,13 +330,13 @@ Interface content uses consistent terminology, sentence case, and punctuation. L
 
 **Decision.** Every public component documents anatomy, slots, variants, sizes, applicable states, composition, controlled/uncontrolled behavior, keyboard model, focus behavior, and accessible-name ownership. Variants represent stable product meaning, not one-screen styling. Public roots accept safe hooks such as `className` and refs where supported.
 
-The supported browser matrix includes current Chromium, Firefox, and WebKit engines. Tests are proportional to risk: unit tests for logic/contracts, interaction tests for behavior, axe for detectable accessibility faults, browser tests for focus/reflow/motion/pointers, and targeted visual snapshots. No test type is treated as proof of the others.
+The supported browser matrix includes current Chromium, Firefox, and WebKit engines. Tests are proportional to risk: unit tests for logic/contracts, interaction tests for behavior, axe for detectable accessibility faults, and browser tests for focus/reflow/motion/pointers. No test type is treated as proof of the others.
 
 **Visual delta: Invisible.** Documentation, API contracts, composition rules, and verification coverage do not require production appearance changes.
 
 **Evidence (facts only).** Lane B found inconsistent variant, class merging, ref forwarding, disabled, and invalid-state APIs, and only 14 library test files for 36 production files in `ui/`.
 
-**Enforcement.** The coverage manifest is machine-readable. CI validates public exports, required documentation, unit and interaction suites, browser coverage, axe results, and selected visual baselines.
+**Enforcement.** The coverage manifest is machine-readable. CI validates public exports, required documentation, unit and interaction suites, browser coverage, and axe results. Visual continuity is founder-judged on the running app, not through a screenshot or snapshot suite.
 
 ### D16. Accessibility is a release requirement
 
