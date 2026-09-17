@@ -22,6 +22,9 @@ package systools_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -214,6 +217,10 @@ func TestAgentDelete_ReloadFuncFailure_StillSucceeds_WithPublishWarning(t *testi
 		return errors.New("registry rebuild failed")
 	}, nil)
 	deleteDeps.Home = createDeps.Home
+	unrelatedPath := filepath.Join(deleteDeps.Home, "agents", id, "notes.txt")
+	if err := os.WriteFile(unrelatedPath, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	result := systools.NewAgentDeleteTool(deleteDeps).Execute(context.Background(), map[string]any{
 		"id":       id,
@@ -233,6 +240,21 @@ func TestAgentDelete_ReloadFuncFailure_StillSucceeds_WithPublishWarning(t *testi
 	}
 	if !strings.Contains(warning, "registry rebuild failed") {
 		t.Fatalf("publish_warning must name the underlying error, got: %q", warning)
+	}
+	if got := body["persistence_status"]; got != "complete" {
+		t.Fatalf("persistence_status=%v want complete", got)
+	}
+	if got := body["activation_status"]; got != "failed" {
+		t.Fatalf("activation_status=%v want failed", got)
+	}
+	if got := body["changed_fields"]; !reflect.DeepEqual(got, []any{"entity", "soul"}) {
+		t.Fatalf("changed_fields=%v want [entity soul]", got)
+	}
+	if _, err := os.Stat(filepath.Join(deleteDeps.Home, "agents", id, "SOUL.md")); !os.IsNotExist(err) {
+		t.Fatalf("SOUL.md stat error=%v want not exist", err)
+	}
+	if got, err := os.ReadFile(unrelatedPath); err != nil || string(got) != "keep me" {
+		t.Fatalf("unrelated agent-home file got=%q error=%v", got, err)
 	}
 
 	// Prove the delete itself really landed on disk.

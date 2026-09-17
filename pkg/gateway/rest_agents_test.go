@@ -52,8 +52,8 @@ func TestDeleteAgent_DeniesPendingApprovalsAndBroadcasts(t *testing.T) {
 	t.Cleanup(func() { reg.resolve(survivor.ApprovalID, ApprovalActionCancel) })
 
 	w := httptest.NewRecorder()
-	api.HandleAgents(w, httptest.NewRequest(http.MethodDelete, "/api/v1/agents/test-agent", nil))
-	require.Equal(t, http.StatusNoContent, w.Code, "delete must succeed: %s", w.Body.String())
+	api.HandleAgents(w, revisionedDeleteRequest(t, api, "test-agent"))
+	require.Equal(t, http.StatusOK, w.Code, "delete must succeed: %s", w.Body.String())
 
 	o := apprResAwaitOutcome(t, doomed)
 	assert.Equal(t, ApprovalOutcome{Approved: false, Reason: denialReasonCancel}, o)
@@ -459,10 +459,10 @@ func TestHandleSystemCliDetect_MethodNotAllowed(t *testing.T) {
 // --- DELETE /api/v1/agents/{id} ---
 
 // TestHandleAgentsDelete_OK verifies DELETE on a custom (non-locked) agent
-// returns 204 No Content and removes the agent from the config.
+// returns the truthful complete/active state and removes the agent.
 //
 // BDD: Given a custom agent exists in config, When DELETE /api/v1/agents/{id}
-// is called, Then the response is 204 No Content and the agent no longer
+// is called, Then the response is complete/active and the agent no longer
 // appears in the list.
 // Traces to: agent-form-requirements.md §6.1 — Edit slide-over Delete flow.
 func TestHandleAgentsDelete_OK(t *testing.T) {
@@ -516,11 +516,19 @@ func TestHandleAgentsDelete_OK(t *testing.T) {
 
 	// Delete the agent.
 	delW := httptest.NewRecorder()
-	delR := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+created.Id, nil)
+	delR := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+created.Id+"?revision="+created.Revision, nil)
 	delR.URL.Path = "/api/v1/agents/" + created.Id
 	api.HandleAgents(delW, delR)
-	assert.Equal(t, http.StatusNoContent, delW.Code,
-		"DELETE on a custom agent must return 204 No Content")
+	require.Equal(t, http.StatusOK, delW.Code, "delete body=%s", delW.Body.String())
+	var deletion gen.ConfigurationMutationState
+	require.NoError(t, json.Unmarshal(delW.Body.Bytes(), &deletion))
+	assert.Equal(t, gen.ConfigurationMutationStatePersistenceStatusComplete, deletion.PersistenceStatus)
+	assert.Equal(t, gen.ConfigurationMutationStateActivationStatusActive, deletion.ActivationStatus)
+	assert.Equal(t, []string{"entity", "soul"}, deletion.ChangedFields)
+	assert.Regexp(t, "^[0-9a-f]{64}$", deletion.Revision)
+	if _, err := os.Stat(filepath.Join(api.homePath, "agents", created.Id, "SOUL.md")); !os.IsNotExist(err) {
+		t.Fatalf("SOUL.md stat error=%v want not exist", err)
+	}
 
 	// GET on the same id should now return 404.
 	getW := httptest.NewRecorder()
@@ -632,8 +640,8 @@ func TestDeleteAgent_EndsTheDeletedAgentsActiveGoals(t *testing.T) {
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	api.HandleAgents(w, httptest.NewRequest(http.MethodDelete, "/api/v1/agents/test-agent", nil))
-	require.Equal(t, http.StatusNoContent, w.Code, "delete must succeed: %s", w.Body.String())
+	api.HandleAgents(w, revisionedDeleteRequest(t, api, "test-agent"))
+	require.Equal(t, http.StatusOK, w.Code, "delete must succeed: %s", w.Body.String())
 
 	after, err := gs.Get(g.GoalID)
 	require.NoError(t, err, "the goal record must be retained, not erased")
@@ -1563,17 +1571,19 @@ func TestGetAgentTools_CustomAgent(t *testing.T) {
 }
 
 // TestDeleteAgent_SuccessAndLocked403 verifies DELETE /agents/{id}: an unlocked
-// custom agent is removed (204) and a locked core agent is rejected with 403
+// custom agent is removed with a truthful state envelope and a locked core agent is rejected with 403
 // plus the agent_locked code.
 func TestDeleteAgent_SuccessAndLocked403(t *testing.T) {
 	// buildExecutorTestAPI seeds a writable config.json with an unlocked custom agent.
 	api1 := buildExecutorTestAPI(t)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/agents/test-agent", nil)
+	r := revisionedDeleteRequest(t, api1, "test-agent")
 	api1.HandleAgents(w, r)
-	assert.Equal(t, http.StatusNoContent, w.Code, "custom agent delete must 204")
-	assert.Equal(t, 0, w.Body.Len(), "204 must have empty body")
+	assert.Equal(t, http.StatusOK, w.Code, "custom agent delete must report state")
+	var deletion gen.ConfigurationMutationState
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &deletion))
+	assert.Equal(t, gen.ConfigurationMutationStatePersistenceStatusComplete, deletion.PersistenceStatus)
 
 	// newTestRestAPI seeds the locked core roster (Mia).
 	api2, _ := newTestRestAPI(t)
@@ -1584,6 +1594,13 @@ func TestDeleteAgent_SuccessAndLocked403(t *testing.T) {
 	var errResp map[string]any
 	require.NoError(t, json.Unmarshal(w2.Body.Bytes(), &errResp))
 	assert.Equal(t, "agent_locked", errResp["code"])
+}
+
+func revisionedDeleteRequest(t *testing.T, api *restAPI, id string) *http.Request {
+	t.Helper()
+	state, err := agentstore.New(api.homePath).ReadState(id)
+	require.NoError(t, err)
+	return httptest.NewRequest(http.MethodDelete, "/api/v1/agents/"+id+"?revision="+state.Revision, nil)
 }
 
 // --- GET /api/v1/agents/{id}/tools round-trip ---

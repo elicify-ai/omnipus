@@ -1194,7 +1194,8 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	// core_team) are surfaced for repair per D6 rule 2, never silently
 	// pruned here.
 	revision := r.URL.Query().Get("revision")
-	if err := agentstore.New(a.homePath).DeleteState(id, revision); err != nil {
+	deletion, err := agentstore.New(a.homePath).DeleteState(id, revision)
+	if err != nil {
 		if errors.Is(err, agentstore.ErrInvalidRevision) {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
@@ -1204,7 +1205,7 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 			return
 		}
 		slog.Error("rest: deleteAgent: delete agent entity record failed", "agent_id", id, "error", err)
-		jsonErr(w, http.StatusInternalServerError, "failed to delete agent")
+		writeConfigurationMutationFailure(w, deletion)
 		return
 	}
 	// Tell the roster regression guard this shrink was INTENTIONAL before the
@@ -1231,13 +1232,19 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	}
 	// Reload the live config so the deleted agent is no longer in memory.
 	// triggerReloadAndWait polls until reload completes (or 5s deadline) so the in-memory config is
-	// updated before the 204 response is sent back to the caller (prevents a
+	// updated before the state response is sent back to the caller (prevents a
 	// race where an immediate GET /sessions/:id still sees agent_removed=false).
+	activation := agentstore.ActivationActive
+	var activationMessage string
 	if confirmed, err := a.triggerReloadAndWaitOutcome(); err != nil {
 		slog.Error("rest: deleteAgent: reload failed", "agent_id", id, "error", err)
+		activation = agentstore.ActivationFailed
+		activationMessage = "agent was deleted from storage but runtime activation failed; retry reload before treating it as inactive"
 	} else if !confirmed {
 		slog.Warn("rest: deleteAgent: reload did not confirm within the poll window; "+
 			"deleted agent may still be resolvable in the runtime registry", "agent_id", id)
+		activation = agentstore.ActivationFailed
+		activationMessage = "agent was deleted from storage but runtime activation was not confirmed"
 	}
 	// Deny every tool approval the deleted agent is still waiting on. Left
 	// pending, each one keeps its turn blocked and its dialog open in every
@@ -1269,7 +1276,16 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string)
 	// O6 — drop any heartbeat schedule the deleted agent owned (the reconciler
 	// removes heartbeat jobs whose agent is no longer in config).
 	a.reconcileHeartbeatSchedules()
-	w.WriteHeader(http.StatusNoContent)
+	response := gen.ConfigurationMutationState{
+		PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatus(deletion.PersistenceStatus),
+		ActivationStatus:  gen.ConfigurationMutationStateActivationStatus(activation),
+		Revision:          deletion.Revision,
+		ChangedFields:     deletion.ChangedFields,
+	}
+	if activationMessage != "" {
+		response.Message = &activationMessage
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // cliDetectAll is the detection function used by HandleSystemCliDetect. It is a

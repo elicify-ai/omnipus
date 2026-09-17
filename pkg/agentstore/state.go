@@ -313,28 +313,52 @@ func (s *Store) CreateState(id string, agent *config.AgentConfig, soul string) (
 // DeleteState deletes an agent only if the caller's revision still names the
 // persisted entity+SOUL state. The comparison and delete share one lock, so a
 // stale caller cannot delete a newer record between validation and removal.
-func (s *Store) DeleteState(id, expectedRevision string) error {
+func (s *Store) DeleteState(id, expectedRevision string) (result MutationResult, err error) {
+	result.PersistenceStatus = PersistenceNone
+	result.ActivationStatus = ActivationNotAttempted
 	if err := ValidateRevision(expectedRevision); err != nil {
-		return err
+		return result, err
 	}
-	err := s.inner.WithLock(id, func(entityPath string) error {
-		current, _, _, err := readStateFiles(entityPath, s.soulPath(id))
+	err = s.inner.WithLock(id, func(entityPath string) error {
+		soulPath := s.soulPath(id)
+		current, _, oldSoul, err := readStateFiles(entityPath, soulPath)
 		if err != nil {
 			return err
 		}
+		_, soulStatErr := os.Stat(soulPath)
+		soulExists := soulStatErr == nil
+		if soulStatErr != nil && !os.IsNotExist(soulStatErr) {
+			return fmt.Errorf("stat soul: %w", soulStatErr)
+		}
+		result.Revision = current.Revision
 		if current.Revision != expectedRevision {
 			return fmt.Errorf("%w: expected %s, current %s", ErrRevisionConflict, expectedRevision, current.Revision)
 		}
-		if err := os.Remove(entityPath); err != nil {
+		if err := s.removeFile(entityPath); err != nil {
+			result.PersistenceStatus = PersistenceNone
+			result.ErrorStage = "remove_entity"
 			return fmt.Errorf("delete entity: %w", err)
+		}
+		result.ChangedFields = append(result.ChangedFields, "entity")
+		if soulExists {
+			if err := s.removeFile(soulPath); err != nil {
+				result.PersistenceStatus = PersistencePartial
+				result.ErrorStage = "remove_soul"
+				result.Revision = revisionFor(nil, oldSoul)
+				return fmt.Errorf("delete soul: %w", err)
+			}
+			result.ChangedFields = append(result.ChangedFields, "soul")
+		}
+		result.PersistenceStatus = PersistenceComplete
+		result.Revision = revisionFor(nil, nil)
+		if s.notifier != nil {
+			s.notifier.AgentDeleted(id)
 		}
 		return nil
 	})
 	if err != nil {
-		return fmt.Errorf("agentstore: delete state %q: %w", id, err)
+		result.Message = err.Error()
+		return result, fmt.Errorf("agentstore: delete state %q: %w", id, err)
 	}
-	if s.notifier != nil {
-		s.notifier.AgentDeleted(id)
-	}
-	return nil
+	return result, nil
 }

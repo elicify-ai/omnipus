@@ -666,6 +666,7 @@ type agentDeleteToolExecute struct {
 	workspacesUpdated       int
 	edgesRemoved            int
 	publishWarning          string
+	deletionResult          agentstore.MutationResult
 }
 
 func (t *AgentDeleteTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
@@ -762,7 +763,7 @@ func (ad *agentDeleteToolExecute) validateAndLoad() (*tools.ToolResult, bool) {
 		// for this exact refusal — a UAT run observed the tool and REST
 		// paths disagreeing on the error code for the identical condition.
 		return tools.ErrorResult(errorJSON("AGENT_LOCKED",
-			fmt.Sprintf("agent %q is a locked seeded agent and cannot be deleted", ad.id),
+			fmt.Sprintf("agent %q is a locked core agent and cannot be deleted", ad.id),
 			"seeded built-in agents cannot be deleted")), true
 	}
 	// Guard (ADR-049 D4/FR-065), ported from the REST deleteAgent handler
@@ -830,19 +831,24 @@ func (ad *agentDeleteToolExecute) deleteAndCascade() (*tools.ToolResult, bool) {
 	// which promises "a step that fails partway through is reported in the
 	// response rather than silently swallowed". With store.Delete FIRST: if
 	// it fails, nothing destructive has happened yet — the fail-safe order.
-	// This also matches the wsPath home-directory removal immediately below,
-	// which was already correctly sequenced after store.Delete.
-	if err := ad.store.DeleteState(ad.id, ad.revision); err != nil {
+	// Unrelated files in the agent home are deliberately preserved; DeleteState
+	// removes only the entity and applicable SOUL bytes owned by this resource.
+	var err error
+	ad.deletionResult, err = ad.store.DeleteState(ad.id, ad.revision)
+	if err != nil {
 		if errors.Is(err, agentstore.ErrRevisionConflict) {
 			return tools.ErrorResult(errorJSON("REVISION_CONFLICT", err.Error(), "Read the agent again and retry with its current revision")), true
 		}
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), "")), true
-	}
-	// Remove workspace directory (best-effort; failure is non-fatal but logged).
-	wsPath := datamodel.AgentHomePath(ad.omnipusHome, ad.id)
-	if err := os.RemoveAll(wsPath); err != nil {
-		slog.Warn("sysagent: workspace cleanup incomplete",
-			"agent_id", ad.id, "path", wsPath, "error", err)
+		payload := map[string]any{
+			"code":               "SAVE_FAILED",
+			"message":            "agent storage deletion failed; read the agent again before retrying",
+			"persistence_status": ad.deletionResult.PersistenceStatus,
+			"activation_status":  ad.deletionResult.ActivationStatus,
+			"revision":           ad.deletionResult.Revision,
+			"changed_fields":     ad.deletionResult.ChangedFields,
+			"error_stage":        ad.deletionResult.ErrorStage,
+		}
+		return tools.ErrorResult(successJSON(payload)), true
 	}
 
 	// Step 1a: delete every session in the SHARED session store
@@ -955,7 +961,13 @@ func (ad *agentDeleteToolExecute) respond() *tools.ToolResult {
 	}
 	if ad.publishWarning != "" {
 		result["publish_warning"] = ad.publishWarning
+		result["activation_status"] = agentstore.ActivationFailed
+	} else {
+		result["activation_status"] = agentstore.ActivationActive
 	}
+	result["persistence_status"] = ad.deletionResult.PersistenceStatus
+	result["revision"] = ad.deletionResult.Revision
+	result["changed_fields"] = ad.deletionResult.ChangedFields
 	// A per-step cascade failure is best-effort and
 	// non-fatal (the agent record above is already durably deleted either
 	// way), but must not be silently swallowed — an unqualified
