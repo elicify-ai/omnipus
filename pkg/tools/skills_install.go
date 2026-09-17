@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -86,7 +87,7 @@ func sweepStaleStaging(skillsDir string) {
 	stagingRoot := filepath.Join(skillsDir, stagingDirName)
 	entries, err := os.ReadDir(stagingRoot)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			logger.WarnCF("tool", "install_skill: failed to read staging directory during startup sweep",
 				map[string]any{
 					"tool":  "install_skill",

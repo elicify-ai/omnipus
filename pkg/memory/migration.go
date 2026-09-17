@@ -38,7 +38,7 @@ func MigrateFromJSON(
 	ctx context.Context, sessionsDir string, store StoreWriter,
 ) (int, error) {
 	entries, err := os.ReadDir(sessionsDir)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
 	if err != nil {

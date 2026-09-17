@@ -1,6 +1,7 @@
 package media
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -377,7 +378,7 @@ func (s *FileMediaStore) ReleaseAll(scope string) error {
 
 	// Phase 2: delete files without holding the lock
 	for _, p := range paths {
-		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 			logger.WarnCF("media", "release: failed to remove file", map[string]any{
 				"path":  p,
 				"error": err.Error(),
@@ -452,7 +453,7 @@ func (s *FileMediaStore) CleanExpired() int {
 		if e.deletePath == "" {
 			continue
 		}
-		if err := os.Remove(e.deletePath); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(e.deletePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 			logger.WarnCF("media", "cleanup: failed to remove file", map[string]any{
 				"path":  e.deletePath,
 				"error": err.Error(),

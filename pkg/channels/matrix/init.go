@@ -5,6 +5,7 @@
 package matrix
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 
@@ -101,7 +102,7 @@ func migrateLegacyMatrixCryptoStore(cfg *config.Config, channelDir, instanceID, 
 
 	_, legacyStatErr := os.Stat(legacyDBFile)
 	legacyPresent := legacyStatErr == nil
-	if legacyStatErr != nil && !os.IsNotExist(legacyStatErr) {
+	if legacyStatErr != nil && !errors.Is(legacyStatErr, os.ErrNotExist) {
 		// Something other than "file not found" (e.g. permission denied) —
 		// treating this the same as "nothing to migrate" could paper over a
 		// real problem, so it gets its own loud, distinct log instead of
@@ -151,7 +152,7 @@ func migrateLegacyMatrixCryptoStore(cfg *config.Config, channelDir, instanceID, 
 			)
 			return
 		}
-		if _, destErr := os.Stat(namespacedPath); os.IsNotExist(destErr) {
+		if _, destErr := os.Stat(namespacedPath); errors.Is(destErr, os.ErrNotExist) {
 			// Nothing has used the namespaced destination yet since the crash
 			// (no fresh store was created there), so it is safe to finish the
 			// interrupted move — this is exactly the final step a healthy run

@@ -43,6 +43,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -81,7 +82,7 @@ func u5ReadPendingAskFile(sessionDir string) (u5PendingAskFile, error) {
 	path := filepath.Join(sessionDir, "pending_ask.json")
 	data, err := readFileFn(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return f, nil
 		}
 		return f, fmt.Errorf("read %q: %w", path, err)

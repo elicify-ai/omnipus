@@ -33,6 +33,7 @@ package knowledge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -130,7 +131,7 @@ func w0ReadFormat(t *testing.T, dir string) int {
 func w0Exists(t *testing.T, path string) bool {
 	t.Helper()
 	_, err := os.Stat(path)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stat %s: %v", path, err)
 	}
 	return err == nil

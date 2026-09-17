@@ -18,6 +18,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -124,8 +125,7 @@ func TestRunTurn_MultiMembership_AdvertisementMatchesEnforcement(t *testing.T) {
 
 	aFile := filepath.Join(workspacesDir, "ws-a-current", "work", "proof.txt")
 	_, aStatErr := os.Stat(aFile)
-	assert.True(t, os.IsNotExist(aStatErr),
-		"write_file must NOT land under the OTHER (non-bound) workspace (%s) it also belongs to", aFile)
+	assert.True(t, errors.Is(aStatErr, os.ErrNotExist), "write_file must NOT land under the OTHER (non-bound) workspace (%s) it also belongs to", aFile)
 
 	// --- Advertisement: the prompt sent to the LLM must name the SAME workspace ---
 	msgs := provider.LastMessages()

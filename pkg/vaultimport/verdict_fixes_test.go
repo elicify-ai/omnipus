@@ -7,6 +7,7 @@
 package vaultimport
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -516,7 +517,7 @@ func TestRun_DryRunValidatesAgainstTheSchemasItWouldHaveWritten(t *testing.T) {
 		t.Fatalf("dry run reports %d valid of 2", rep.Validation.ValidRecords)
 	}
 	// And it must not have written anything.
-	if _, err := os.Stat(records.SchemaDir(vault)); !os.IsNotExist(err) {
+	if _, err := os.Stat(records.SchemaDir(vault)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a dry run created %s", records.SchemaDir(vault))
 	}
 }

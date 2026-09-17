@@ -1,6 +1,7 @@
 package session
 
 import (
+	"errors"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -161,7 +162,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 					// is already gone and the meta file on its own is harmless
 					// (readMeta returns defaults when the .jsonl is absent).
 					metaPath := strings.TrimSuffix(path, ".jsonl") + ".meta.json"
-					if metaDelErr := os.Remove(metaPath); metaDelErr != nil && !os.IsNotExist(metaDelErr) {
+					if metaDelErr := os.Remove(metaPath); metaDelErr != nil && !errors.Is(metaDelErr, os.ErrNotExist) {
 						slog.Warn("session: retention_sweep: delete context meta failed",
 							"file", metaPath, "error", metaDelErr)
 					}
@@ -223,7 +224,7 @@ func (us *UnifiedStore) RetentionSweep(retentionDays int) (int, error) {
 		}
 		// Cascade-delete uploads for this session so disk space is reclaimed.
 		uploadsDir := filepath.Join(uploadsRoot, sessID)
-		if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !os.IsNotExist(rmErr) {
+		if rmErr := os.RemoveAll(uploadsDir); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			slog.Warn("session: retention_sweep: cascade-delete uploads failed",
 				"session_id", sessID, "error", rmErr)
 		}

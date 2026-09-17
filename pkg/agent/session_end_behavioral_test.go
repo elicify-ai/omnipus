@@ -8,6 +8,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -196,7 +197,7 @@ func TestRunRecap_HappyPath_PersistsLastSessionAndRetro(t *testing.T) {
 	for time.Now().Before(retroDeadline) {
 		dateDirs, err := os.ReadDir(sessionsDir)
 		if err != nil {
-			if !os.IsNotExist(err) {
+			if !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("read sessions dir (unexpected error): %v", err)
 			}
 			// Directory not yet created by AppendRetro — retry.

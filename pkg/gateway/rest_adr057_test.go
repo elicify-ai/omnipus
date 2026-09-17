@@ -36,6 +36,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -599,7 +600,7 @@ func TestU18DeleteSession_CascadesUploadsAcrossDescendants(t *testing.T) {
 
 	for _, dir := range []string{parentUploads, childUploads, grandchildUploads} {
 		_, statErr := os.Stat(dir)
-		assert.Truef(t, os.IsNotExist(statErr), "%s must be removed after the parent session is deleted (FR-071)", dir)
+		assert.Truef(t, errors.Is(statErr, os.ErrNotExist), "%s must be removed after the parent session is deleted (FR-071)", dir)
 	}
 }
 
@@ -626,5 +627,5 @@ func TestU18DeleteSession_NoLifecycleStore_DegradesToOwnUploadsOnly(t *testing.T
 	require.Equal(t, http.StatusOK, w.Code, "DELETE must succeed even with no lifecycle store wired; body=%s", w.Body.String())
 
 	_, statErr := os.Stat(soloUploads)
-	assert.True(t, os.IsNotExist(statErr), "the session's own uploads dir must still be removed (pre-existing ADR-017 cascade)")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the session's own uploads dir must still be removed (pre-existing ADR-017 cascade)")
 }

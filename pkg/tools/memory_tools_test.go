@@ -5,6 +5,7 @@ package tools_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -101,7 +102,7 @@ func (s *simpleMemStore) SearchEntries(query string, limit int) ([]tools.MemoryE
 	}
 	data, err := os.ReadFile(s.memoryFile())
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
@@ -345,7 +346,7 @@ func TestRecallMemoryTool_NoAuditEntryForReads(t *testing.T) {
 	// events are the only ones this tool could emit. Counting actual jsonl
 	// entries matching `memory.` gives us the signal.
 	entries, err := os.ReadDir(auditDir)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("read auditDir: %v", err)
 	}
 	memoryEventCount := 0

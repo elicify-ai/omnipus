@@ -22,6 +22,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -62,7 +63,7 @@ func ReapOrphans(ctx context.Context) (ReapResult, error) {
 
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return res, nil
 		}
 		return res, fmt.Errorf("reading runner-runs root %q: %w", root, err)

@@ -17,6 +17,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -764,7 +765,7 @@ func assertNoSmokeTestRunsLeftover(t *testing.T, home string) {
 	root := filepath.Join(home, smokeTestRunsSubdir)
 	entries, err := os.ReadDir(root)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return
 		}
 		t.Fatalf("reading %q: %v", root, err)

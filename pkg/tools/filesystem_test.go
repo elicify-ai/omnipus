@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -594,7 +595,7 @@ func TestHostRW_Write_ParentDirMissing_OutsideWorkDir_Denied(t *testing.T) {
 	assert.Error(t, err, "FR-2.2: a write outside WorkDir and outside any mount must be denied, even under Unrestricted scope")
 	assert.ErrorIs(t, err, ErrOutsideScope)
 
-	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(target); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("target must not have been created: stat err=%v", statErr)
 	}
 }
@@ -641,7 +642,7 @@ func TestHostRW_Write_OutsideWorkDir_Denied(t *testing.T) {
 	assert.Error(t, err, "FR-2.2: writes outside WorkDir and outside any mount are denied, even under Unrestricted scope")
 	assert.ErrorIs(t, err, ErrOutsideScope)
 
-	if _, statErr := os.Stat(testFile); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(testFile); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("target must not have been created: stat err=%v", statErr)
 	}
 
@@ -805,7 +806,7 @@ func TestWhitelistFs_WriteSymlinkEscapeInAllowedDir_StillBlocked(t *testing.T) {
 	if !result.IsError {
 		t.Fatalf("expected a write through the symlink escape to still be blocked, got: %s", result.ForLLM)
 	}
-	if _, statErr := os.Stat(filepath.Join(secretDir, "evil.txt")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(secretDir, "evil.txt")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("write must not have landed in secretDir: stat err=%v", statErr)
 	}
 }

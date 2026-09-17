@@ -1,6 +1,7 @@
 package sandbox_test
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -128,7 +129,7 @@ func TestResolveLimits(t *testing.T) {
 		if lim != (sandbox.Limits{}) {
 			t.Errorf("expected zero Limits under god mode, got %+v", lim)
 		}
-		if _, statErr := os.Stat(nested); !os.IsNotExist(statErr) {
+		if _, statErr := os.Stat(nested); !errors.Is(statErr, os.ErrNotExist) {
 			t.Errorf("god mode must not create the workspace dir; os.Stat(%q) error = %v", nested, statErr)
 		}
 	})

@@ -19,6 +19,7 @@
 package vaultimport
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -240,7 +241,7 @@ views:
 	// and nothing may write it back at a slug that is only ever a collision
 	// artifact.
 	_, err = os.Stat(filepath.Join(records.ViewsDir(root), "projects--closed.yaml"))
-	assert.True(t, os.IsNotExist(err), "no file may be written at a slug that was only ever a collision artifact")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "no file may be written at a slug that was only ever a collision artifact")
 }
 
 // TestRederiveBase_DeletesViewsTheBaseNoLongerDeclares — an edit that drops
@@ -273,7 +274,7 @@ views:
 	assert.Equal(t, []string{"projects--closed"}, res.Deleted)
 
 	_, err = os.Stat(filepath.Join(records.ViewsDir(root), "projects--closed.yaml"))
-	assert.True(t, os.IsNotExist(err), "the dropped view's file must be removed")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "the dropped view's file must be removed")
 
 	_, vs := loadRederivedViews(t, root)
 	_, ok := vs.Get("projects--open")

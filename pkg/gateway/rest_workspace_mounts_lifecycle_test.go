@@ -13,6 +13,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -224,7 +225,7 @@ func TestDeleteWorkspaceMount_RemovesFromGetAndDiskButPreservesOperatorFolder(t 
 	assert.Nil(t, ws.Mounts, "the mount must be gone from GET after delete")
 
 	_, statErr = os.Lstat(linkPath)
-	assert.True(t, os.IsNotExist(statErr), "the work/ symlink must be removed from disk")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the work/ symlink must be removed from disk")
 
 	data, err := os.ReadFile(filepath.Join(target, "operator-file.txt"))
 	require.NoError(t, err, "the operator's real folder must survive mount deletion (FR-8.6)")

@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -447,7 +448,7 @@ func NewUnifiedStoreWithHome(baseDir, homePath string) (*UnifiedStore, error) {
 func (us *UnifiedStore) loadMetaCacheLocked() {
 	entries, err := os.ReadDir(us.baseDir)
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("unified_store: load meta cache: read base dir", "dir", us.baseDir, "error", err)
 		}
 		return
@@ -643,7 +644,7 @@ func (us *UnifiedStore) createSessionLocked(
 	}
 	// Create empty transcript so readers don't error on first access.
 	transcriptPath := filepath.Join(sessionDir, "transcript.jsonl")
-	if _, statErr := os.Stat(transcriptPath); os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(transcriptPath); errors.Is(statErr, os.ErrNotExist) {
 		if wErr := fileutil.WriteFileAtomic(transcriptPath, []byte{}, 0o600); wErr != nil {
 			slog.Warn("unified_store: could not create empty transcript", "path", transcriptPath, "error", wErr)
 		}

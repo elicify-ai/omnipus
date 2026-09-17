@@ -10,6 +10,7 @@ package audit_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -404,7 +405,7 @@ func TestEmptyEvent_RejectedWithIncSkipped(t *testing.T) {
 	// And the log file should NOT contain the rejected entry.
 	logPath := filepath.Join(dir, "audit.jsonl")
 	data, readErr := os.ReadFile(logPath)
-	if readErr != nil && !os.IsNotExist(readErr) {
+	if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
 		t.Fatalf("os.ReadFile(%s): %v", logPath, readErr)
 	}
 	assert.NotContains(t, string(data), `"event":""`,

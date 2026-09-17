@@ -22,6 +22,7 @@ package security_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -217,8 +218,7 @@ func TestExecCommandInjection(t *testing.T) {
 				// The tool ran. Verify no secondary command took effect.
 				if tc.ensureAbsent != "" {
 					_, err := os.Stat(tc.ensureAbsent)
-					require.True(t, os.IsNotExist(err),
-						"injection %q executed side effect: %q exists",
+					require.True(t, errors.Is(err, os.ErrNotExist), "injection %q executed side effect: %q exists",
 						tc.command, tc.ensureAbsent)
 				}
 				// Verify the tool did not actually DROP anything in sensitive paths
@@ -602,8 +602,7 @@ func TestExecCommandInjection_WorkspaceRestriction(t *testing.T) {
 
 				if tc.absent != "" {
 					_, statErr := os.Stat(tc.absent)
-					require.True(t, os.IsNotExist(statErr),
-						"write %q was refused but %q exists anyway — the refusal did not stop the write",
+					require.True(t, errors.Is(statErr, os.ErrNotExist), "write %q was refused but %q exists anyway — the refusal did not stop the write",
 						tc.cmd, tc.absent)
 				}
 				if tc.unchanged != "" {

@@ -34,6 +34,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -147,7 +148,7 @@ func TestBootSweep_ReconcilesChildAcrossRestart(t *testing.T) {
 	childDir := filepath.Join(transcriptBase, u19UnmintedChildID)
 	if _, statErr := os.Stat(childDir); statErr == nil {
 		t.Fatalf("AppendTranscriptStrict created a directory at %s despite returning a non-nil error", childDir)
-	} else if !os.IsNotExist(statErr) {
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("unexpected stat error on %s: %v", childDir, statErr)
 	}
 

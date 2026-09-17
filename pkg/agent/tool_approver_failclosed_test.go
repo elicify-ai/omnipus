@@ -22,6 +22,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,7 +52,7 @@ func readAuditJSONL(t *testing.T, dir string) []map[string]any {
 	t.Helper()
 	path := filepath.Join(dir, "audit.jsonl")
 	f, err := os.Open(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)

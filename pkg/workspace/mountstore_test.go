@@ -10,6 +10,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -237,7 +238,7 @@ func TestDeleteMountStore_RemovesTheRecordNotTheFolder(t *testing.T) {
 	storePath, err := MountStorePath(home, id)
 	require.NoError(t, err)
 	_, statErr := os.Stat(storePath)
-	require.True(t, os.IsNotExist(statErr))
+	require.True(t, errors.Is(statErr, os.ErrNotExist))
 
 	data, err := os.ReadFile(filepath.Join(target, "keep.txt"))
 	require.NoError(t, err)

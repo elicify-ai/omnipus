@@ -33,6 +33,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -188,7 +189,7 @@ func isRunningInDocker(getEnv func(string) string) bool {
 	}
 	if _, err := os.Stat(dockerenvPath); err == nil {
 		return true
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		// EACCES, EPERM, or other non-ENOENT error: the file may exist but is
 		// unreadable (e.g. hardened AppArmor profile, read-only root with restricted
 		// stat).  Log so operators on those setups know why auto-detect fired or

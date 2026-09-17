@@ -8,6 +8,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -597,7 +598,7 @@ func putCountingCopilotOnPath(t *testing.T, stdout, stderr string, exitCode int)
 func countInvocations(t *testing.T, tally string) int {
 	t.Helper()
 	data, err := os.ReadFile(tally)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return 0
 	}
 	require.NoError(t, err)
@@ -833,7 +834,7 @@ func attachTestAuditor(t *testing.T, api *restAPI) string {
 func readAuditEntries(t *testing.T, auditDir, event string) []map[string]any {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(auditDir, "audit.jsonl"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)

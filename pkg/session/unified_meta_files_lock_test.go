@@ -6,6 +6,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sync"
@@ -90,7 +91,7 @@ func waitWriteDone(t *testing.T, done <-chan error) {
 func requireAbsentOrComplete(t *testing.T, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return
 	}
 	require.NoError(t, err)

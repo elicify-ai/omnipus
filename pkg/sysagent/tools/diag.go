@@ -6,6 +6,7 @@ package systools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -101,7 +102,7 @@ func (t *DoctorRunTool) Execute(_ context.Context, _ map[string]any) *tools.Tool
 
 	// Check audit log directory.
 	auditDir := filepath.Join(t.deps.Home, "system")
-	if _, err := os.Stat(auditDir); os.IsNotExist(err) {
+	if _, err := os.Stat(auditDir); errors.Is(err, os.ErrNotExist) {
 		issues = append(issues, issue{
 			Severity:       "medium",
 			Message:        "Audit log directory ~/.omnipus/system/ does not exist",

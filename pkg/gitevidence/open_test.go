@@ -114,7 +114,7 @@ func TestGitEvidence_Open_NestedRepoAboveDirDegrades(t *testing.T) {
 	if !errors.Is(err, ErrNestedRepo) {
 		t.Fatalf("Open() error = %v, want wrapping ErrNestedRepo", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(workDir, ".git")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(workDir, ".git")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("Open() initialized a .git under a nested-repo work dir; must skip entirely")
 	}
 }

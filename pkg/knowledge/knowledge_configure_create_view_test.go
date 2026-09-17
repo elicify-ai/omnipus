@@ -9,6 +9,7 @@
 package knowledge
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,7 +86,7 @@ func cvViewPath(root, name string) string {
 func cvAssertFileAbsent(t *testing.T, root, name string) {
 	t.Helper()
 	_, err := os.Stat(cvViewPath(root, name))
-	require.True(t, os.IsNotExist(err), "view %q must not have been written", name)
+	require.True(t, errors.Is(err, os.ErrNotExist), "view %q must not have been written", name)
 }
 
 // ---------------------------------------------------------------------------
@@ -662,7 +663,7 @@ func TestKnowledgeConfigure_CreateView_NameEscapingTheViewsDir_Refused(t *testin
 		"/tmp/omnipus-cv-pwned.yaml",
 	} {
 		_, serr := os.Stat(escaped)
-		require.True(t, os.IsNotExist(serr), "nothing may be written at %s", escaped)
+		require.True(t, errors.Is(serr, os.ErrNotExist), "nothing may be written at %s", escaped)
 	}
 
 	// Control: an ordinary name still composes and writes.

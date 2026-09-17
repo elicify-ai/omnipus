@@ -19,6 +19,7 @@ package gateway
 // through the package-level function to cover the full agent-iteration path.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -130,8 +131,7 @@ func TestIntegration_RetroSweep180Split(t *testing.T) {
 		"SweepRetros(180): exactly 1 retro file should be deleted (the 190-day-old one)")
 
 	_, err = os.Stat(staleFile)
-	assert.True(t, os.IsNotExist(err),
-		"190-day-old retro file must be deleted by SweepRetros(180); stat=%v", err)
+	assert.True(t, errors.Is(err, os.ErrNotExist), "190-day-old retro file must be deleted by SweepRetros(180); stat=%v", err)
 
 	_, err = os.Stat(freshFile)
 	assert.NoError(t, err,
@@ -161,8 +161,7 @@ func TestIntegration_RetroSweep180Split(t *testing.T) {
 		"RetentionSweep(90): the 100-day-old session file must be deleted")
 
 	_, err = os.Stat(staleSession)
-	assert.True(t, os.IsNotExist(err),
-		"100-day-old session .jsonl must be swept by RetentionSweep(90); stat=%v", err)
+	assert.True(t, errors.Is(err, os.ErrNotExist), "100-day-old session .jsonl must be swept by RetentionSweep(90); stat=%v", err)
 
 	// ── Assert: default resolves to 180 ──────────────────────────────────────
 
@@ -289,8 +288,7 @@ func TestIntegration_DefaultRetroRetentionIs180(t *testing.T) {
 		"SweepRetros(%d): exactly the 181-day-old file must be deleted", retentionDays)
 
 	_, err = os.Stat(stale)
-	assert.True(t, os.IsNotExist(err),
-		"181-day-old retro file must be deleted by SweepRetros(%d)", retentionDays)
+	assert.True(t, errors.Is(err, os.ErrNotExist), "181-day-old retro file must be deleted by SweepRetros(%d)", retentionDays)
 
 	_, err = os.Stat(fresh)
 	assert.NoError(t, err,

@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -40,7 +41,7 @@ func TestToolResultStore_RetentionSweep_DeletesAgedFiles(t *testing.T) {
 	if removed != 1 {
 		t.Errorf("removed = %d; want 1", removed)
 	}
-	if _, err := os.Stat(stalePath); !os.IsNotExist(err) {
+	if _, err := os.Stat(stalePath); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("stale.json should have been deleted, stat err = %v", err)
 	}
 	if _, err := os.Stat(freshPath); err != nil {
@@ -98,7 +99,7 @@ func TestToolResultStore_RetentionSweep_RemovesEmptySessionDir(t *testing.T) {
 	if _, err := s.retentionSweep(7); err != nil {
 		t.Fatalf("retentionSweep: %v", err)
 	}
-	if _, err := os.Stat(sessDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(sessDir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("session dir should have been removed after last file deleted, stat err = %v", err)
 	}
 }

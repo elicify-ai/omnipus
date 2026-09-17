@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -112,8 +113,7 @@ func TestUpload_Endpoint_TargetsWorkspaceLibrary(t *testing.T) {
 	// The legacy session-scoped uploads dir must NOT have been created.
 	legacyDir := filepath.Join(api.homePath, "uploads")
 	_, statErr := os.Stat(legacyDir)
-	assert.True(t, os.IsNotExist(statErr),
-		"legacy uploads dir must not exist; workspace path should have been used")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "legacy uploads dir must not exist; workspace path should have been used")
 }
 
 // TestUpload_Endpoint_WorkspaceIDFromQueryParam verifies workspace_id can be

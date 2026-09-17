@@ -370,7 +370,7 @@ func TestBaseline_Unrestricted_ReadWriteMatrix(t *testing.T) {
 		if !errors.Is(err, ErrOutsideScope) {
 			t.Errorf("err = %v, want ErrOutsideScope — FR-2.2: writes are confined to WorkDir/a mount regardless of Scope", err)
 		}
-		if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		if _, statErr := os.Stat(target); !errors.Is(statErr, os.ErrNotExist) {
 			t.Fatalf("target must not have been created: stat err=%v", statErr)
 		}
 	})
@@ -507,7 +507,7 @@ func TestBaseline_FSOp_IsNowConsulted(t *testing.T) {
 		if !errors.Is(writeErr, ErrOutsideScope) {
 			t.Fatalf("FR-2.2/FR-2.5: expected the write to now be denied even under Unrestricted, got: %v", writeErr)
 		}
-		if _, statErr := os.Stat(writeTarget); !os.IsNotExist(statErr) {
+		if _, statErr := os.Stat(writeTarget); !errors.Is(statErr, os.ErrNotExist) {
 			t.Fatalf("target must not have been created: stat err=%v", statErr)
 		}
 	})

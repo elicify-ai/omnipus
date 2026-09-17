@@ -143,7 +143,7 @@ func installFakeCopilot(t *testing.T, dir, stdout, stderr string, exitCode int, 
 		t.Skip("fake CLI uses a #!/bin/bash shebang with no Windows equivalent (see #113)")
 	}
 	if tally != "" {
-		if err := os.Remove(tally); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(tally); err != nil && !errors.Is(err, os.ErrNotExist) {
 			require.NoError(t, err)
 		}
 	}

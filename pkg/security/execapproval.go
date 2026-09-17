@@ -7,6 +7,7 @@ package security
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -127,7 +128,7 @@ func (m *ExecApprovalManager) WithAllowlistFile(path string) error {
 func (m *ExecApprovalManager) load() error {
 	data, err := os.ReadFile(m.filePath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return fmt.Errorf("execapproval: read %s: %w", m.filePath, err)

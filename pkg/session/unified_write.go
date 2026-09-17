@@ -395,7 +395,7 @@ func (us *UnifiedStore) MarkLastEntryTruncated(sessionID, turnID, reason string)
 	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
 	data, err := os.ReadFile(transcriptPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			// No transcript at all — nothing to mark; treat as no-op.
 			return nil
 		}
@@ -664,7 +664,7 @@ func (us *UnifiedStore) rewriteTranscriptToolCalls(
 	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
 	data, err := os.ReadFile(transcriptPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			// No transcript at all — nothing to update; treat as no-op.
 			return 0, nil
 		}
@@ -770,7 +770,7 @@ func (us *UnifiedStore) ReadTranscript(sessionID string) ([]TranscriptEntry, err
 	transcriptPath := filepath.Join(us.baseDir, sessionID, "transcript.jsonl")
 	data, err := os.ReadFile(transcriptPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return []TranscriptEntry{}, nil
 		}
 		return nil, fmt.Errorf("unified_store: read transcript: %w", err)

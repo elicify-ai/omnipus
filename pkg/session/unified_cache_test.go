@@ -156,7 +156,7 @@ func TestRetentionSweep_EvictsRemovedSessionsFromCache(t *testing.T) {
 
 	// The session directory (and its meta.json) must be gone from disk.
 	_, statErr := os.Stat(filepath.Join(store.baseDir, sessionID))
-	require.True(t, os.IsNotExist(statErr), "swept session directory must be removed from disk")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "swept session directory must be removed from disk")
 
 	// Regression check: GetMeta must NOT still serve this session from a
 	// stale cache entry.

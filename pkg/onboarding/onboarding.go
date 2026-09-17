@@ -143,7 +143,7 @@ func (m *Manager) LastDoctorScore() *int {
 func (m *Manager) load() error {
 	data, err := os.ReadFile(m.statePath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			m.state = State{Version: 1, CreatedAt: time.Now().UTC()}
 			return nil
 		}

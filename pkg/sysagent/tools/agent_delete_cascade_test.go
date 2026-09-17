@@ -7,6 +7,7 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -98,10 +99,10 @@ func TestAgentDelete_CascadeDeletesSoleOwnedSessionAndUploads(t *testing.T) {
 	}
 
 	sessionDir := filepath.Join(home, "sessions", sessionID)
-	if _, err := os.Stat(sessionDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(sessionDir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("session directory %s still present after cascade delete (err=%v)", sessionDir, err)
 	}
-	if _, err := os.Stat(uploadDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(uploadDir); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("upload directory %s still present after cascade delete (err=%v)", uploadDir, err)
 	}
 }

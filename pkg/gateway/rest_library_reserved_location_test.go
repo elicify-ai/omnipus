@@ -19,6 +19,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"io/fs"
 	"net/http"
@@ -118,7 +119,7 @@ func TestLibraryDelete_VaultMarkerDemotesKnowledgeBase(t *testing.T) {
 		"U-58: deleting the knowledge base's own marker folder must succeed, not be refused as a reserved location: %s", w.Body.String())
 
 	_, err := os.Stat(filepath.Join(vault, ".omnipus-vault"))
-	require.True(t, os.IsNotExist(err), "the marker folder is gone, with everything in it")
+	require.True(t, errors.Is(err, os.ErrNotExist), "the marker folder is gone, with everything in it")
 
 	info := detectKnowledgeBase(t, api, ws, "vault")
 	require.False(t, info.IsKnowledgeBase, "the folder is no longer a knowledge base")
@@ -127,7 +128,7 @@ func TestLibraryDelete_VaultMarkerDemotesKnowledgeBase(t *testing.T) {
 	require.Equal(t, notesBefore, snapshotOutsideToolState(t, vault),
 		"every note and attachment stays exactly as it was: nothing rewritten, trashed or added")
 	_, err = os.Stat(filepath.Join(workDir(api, ws), ".omnipus-vault"))
-	require.True(t, os.IsNotExist(err), "no marker is conjured anywhere else")
+	require.True(t, errors.Is(err, os.ErrNotExist), "no marker is conjured anywhere else")
 
 	// No crash, and the demoted folder behaves as plain files from here on: a
 	// note delete is an ordinary delete, which would have recreated
@@ -137,9 +138,9 @@ func TestLibraryDelete_VaultMarkerDemotesKnowledgeBase(t *testing.T) {
 	w = libTree(t, api, http.MethodDelete, "/api/v1/library/"+ws+"/entries?path=vault/Projects/Brief.md", "")
 	require.Equal(t, http.StatusNoContent, w.Code, w.Body.String())
 	_, err = os.Stat(filepath.Join(vault, "Projects", "Brief.md"))
-	require.True(t, os.IsNotExist(err))
+	require.True(t, errors.Is(err, os.ErrNotExist))
 	_, err = os.Stat(filepath.Join(vault, ".omnipus-vault"))
-	require.True(t, os.IsNotExist(err), "a delete in the demoted folder goes to no knowledge-base trash")
+	require.True(t, errors.Is(err, os.ErrNotExist), "a delete in the demoted folder goes to no knowledge-base trash")
 }
 
 // TestLibraryDoors_ToolStateLocationsKeepPlainSemantics covers every Library
@@ -150,7 +151,7 @@ func TestLibraryDoors_ToolStateLocationsKeepPlainSemantics(t *testing.T) {
 	gone := func(rel string) check {
 		return func(t *testing.T, vault string) {
 			_, err := os.Stat(filepath.Join(vault, filepath.FromSlash(rel)))
-			require.Truef(t, os.IsNotExist(err), "%s must be gone", rel)
+			require.Truef(t, errors.Is(err, os.ErrNotExist), "%s must be gone", rel)
 		}
 	}
 	present := func(rel string) check {

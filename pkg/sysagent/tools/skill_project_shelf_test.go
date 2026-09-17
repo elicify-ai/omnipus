@@ -9,6 +9,7 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -125,7 +126,7 @@ func TestSkillEditTool_ProjectShelf_WritesIntoMount(t *testing.T) {
 	}
 
 	// D6.1: no shadow copy in the central registry.
-	if _, err := os.Stat(filepath.Join(globalDir, "db-migrate")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(globalDir, "db-migrate")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("edit_skill must NOT fork a copy into the central registry; found err=%v", err)
 	}
 }
@@ -205,7 +206,7 @@ func TestSkillRemoveTool_ProjectShelf_DeletesMountFile(t *testing.T) {
 	}
 
 	mountSkillDir := filepath.Join(mountRoot, ".claude", "skills", "db-migrate")
-	if _, err := os.Stat(mountSkillDir); !os.IsNotExist(err) {
+	if _, err := os.Stat(mountSkillDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expected the mount's own skill directory to be removed, stat err=%v", err)
 	}
 }
