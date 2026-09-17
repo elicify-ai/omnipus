@@ -214,6 +214,9 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 			}
 		}
 	}
+	if !validateAgentUpdateShape(uf.w, uf.rawBody) {
+		return true
+	}
 	if uf.ru.req.ToolsCfg != nil && uf.ru.req.ToolPolicyChanges != nil {
 		jsonErr(uf.w, http.StatusBadRequest, "tools_cfg and tool_policy_changes cannot be supplied together")
 		return true
