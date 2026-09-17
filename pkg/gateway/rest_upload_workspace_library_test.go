@@ -98,7 +98,7 @@ func TestUpload_WorkspaceLibraryLoadFailure_Returns500NotSilentFallback(t *testi
 	// discoverable there.
 	logFile := filepath.Join(t.TempDir(), "upload-workspace-library.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	require.NoError(t, logger.EnableFileLogging(logFile))
 	t.Cleanup(func() {
