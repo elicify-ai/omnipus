@@ -517,6 +517,18 @@ lint-budgets:
 	bash scripts/check-function-budget-selfcheck.sh
 	bash scripts/check-function-budget.sh
 
+## lint-gocyclo: WARN-only cyclomatic-complexity gate (founder ruling, decision #3 of the
+## 2026-09-16 conventions interview): a Go function at or above complexity 30 warns, never fails;
+## the only FAIL is a function listed in scripts/budgets/gocyclo.txt that grew (shrink-only
+## ratchet). Implemented in the custom budget script, NOT .golangci.yaml — cyclop stays off,
+## nestif not adopted. Runs the gate's own --self-test first so a guard that can no longer fail
+## is itself a failure. Thin delegate for muscle memory and direct invocation — scripts/guards.sh
+## (via `lint-guards` below) discovers check-gocyclo-budget.sh automatically and is what `lint`
+## actually depends on; this target requires no separate wiring into `lint`.
+lint-gocyclo:
+	bash scripts/check-gocyclo-budget.sh --self-test
+	bash scripts/check-gocyclo-budget.sh
+
 ## lint-guards: Run every discovered guard under scripts/ (scripts/guards.sh)
 ## The eight targets above remain as thin delegates to their own guard for muscle memory and
 ## direct references; this is the aggregate that `lint` actually depends on. Adding a guard to

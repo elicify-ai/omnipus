@@ -1,0 +1,174 @@
+# Cyclomatic-complexity budget list (shrink-only).
+# Gate: scripts/check-gocyclo-budget.sh — founder ruling, decision #3 of the
+# 2026-09-16 conventions interview (loop-split-bench results/conventions-decisions.md):
+# gocyclo WARN at 30, implemented in the CUSTOM budget script, NOT .golangci.yaml.
+# cyclop stays off. nestif NOT adopted.
+#
+# The gate is ADVISORY: a function at or above 30 WARNs and the build stays green.
+# The only FAIL is here: a listed function that GREW above its pinned value
+# (`FAIL <file:line> <name> <n> > listed <m>`). A PR may lower a number or delete
+# a row; it may never raise a number. An over-30 function NOT listed here simply
+# WARNs — that is the intended advisory state for a function that newly crossed
+# 30, not a gap in the list.
+#
+# Seeded 2026-09-17 on chore/gocyclo-gate. 138 rows — 85 production, 53 test,
+# same-numbers-for-both like the function-size gate. Measured by the gate's
+# embedded scanner; every row then cross-checked against github.com/fzipp/gocyclo
+# v0.6.0 on the same file (138/138 name+value match). Definition is gocyclo's:
+# 1 + if/for/range/case/select-comm/&&/||; switch/select `default:` is NOT
+# counted. A first draft of this list counted default and was 1 high on every
+# function that has one (EditTool.execEmbed was listed at 60; gocyclo says 59).
+#
+# Why 138 when the conventions survey said 74: the survey ran
+# `golangci-lint run --enable-only=gocyclo --build-tags=goolm,stdjson` against
+# audit/conventions-survey @ 062d16013, where .golangci.yaml's `_test.go`
+# exclude-rules drop test findings (53 of these 138) and golangci's package
+# load is GOOS/tag-aware (this scanner is not: complexity is a property of the
+# source text, so linux-only files such as command_libs_linux.go are counted
+# on a Mac). The remaining production gap (85 vs 74) is that tagged load plus
+# commit drift between the survey tree and this tip. Do not "correct" either
+# figure to the other — they answer different questions.
+#
+# Format: file<TAB>qualified name (Receiver.Method for methods)<TAB>complexity.
+# Keyed by exact file+name, with the gate's package-dir+name fallback so a
+# function moved to a sibling file in the same package (a file split) keeps its
+# row. A move to another package, or a rename, needs a hand re-key here.
+# Sorted by complexity descending, then path.
+pkg/utils/markdown.go	converter.walk	70
+pkg/gateway/replay.go	streamReplay	63
+pkg/gateway/task_occurrences_test.go	TestOccurrences_BucketingAndCaps	61
+pkg/knowledge/knowledge_edit.go	EditTool.execEmbed	59
+pkg/gateway/browser_dedicated_input.go	BrowserWSHandler.dispatchDedicatedControl	58
+pkg/agent/goal_flow_integration_test.go	TestGoalClarify_WebCardRoundtrip	57
+pkg/agent/task_trigger_rrule_test.go	TestTriggerScheduler_RruleRearmAllPaths	57
+pkg/gateway/browser_webrtc.go	BrowserWSHandler.handleWebRTCOffer	56
+pkg/gateway/rest_agents_update.go	restAPIUpdateAgentFlow.validateTarget	54
+pkg/tools/browser/live_input_context.go	LiveView.dispatchInputContext	54
+pkg/agent/subturn.go	spawnSubTurn	53
+pkg/tools/browser/webrtc/dedicated_input_peer_test.go	TestDedicatedInputPeerChannelsAndRetirement	52
+pkg/tools/browser/live_viewport_frame.go	LiveView.applyViewportContextWithConvergence	50
+pkg/agent/attach_hydrate_test.go	TestAttach_EmptyArchiveHydratesStandaloneToolCalls	49
+pkg/plan/store_test.go	TestPlan_RestartTransition_ViaStoreUpdate	49
+cmd/omnipus/internal/doctor/command_libs_linux.go	missingChromeLibsELF	48
+pkg/records/formula_eval_test.go	TestFormula_AbsencePropagatesAndArithmeticIsExact	48
+pkg/gateway/browser_capture_answer_test.go	TestCaptureAnswerRetainsOriginalIdentityThroughWriterWait	46
+pkg/gateway/rest_task_wire.go	restAPI.toWireTask	46
+pkg/knowledge/rename.go	Renamer.Plan	46
+pkg/records/invalidate_test.go	TestSchemaChange_InvalidatesAffectedRecords	46
+pkg/sysagent/tools/agent.go	AgentUpdateTool.Execute	46
+pkg/vaultimport/report.go	Report.Render	46
+pkg/gateway/websocket_pump.go	sendRawFrameBytes	45
+pkg/knowledge/knowledge_describe.go	renderViewClauses	45
+pkg/records/enum_test.go	TestEnum_ClosedAndLexical	44
+pkg/tools/message_parent.go	messageParentToolExecute.encodeMessage	44
+pkg/agent/loop.go	AgentLoop.processMessage	43
+pkg/gateway/browser_webrtc_e2e_test.go	startE2EFakeEncoder	43
+pkg/records/filter_test.go	TestFilter_AbsentIsDistinctAndIncludedByNegation	43
+pkg/task/store.go	storeUpdateLocked.applyRemainingFields	43
+pkg/tools/browser/webrtc/input_binary.go	DecodeInputPacket	43
+pkg/tools/set_goal_test.go	TestSetGoalTool_ValidatesAndWrites	43
+pkg/agent/tool_result_admit_test.go	scanChokePointBypasses	42
+pkg/gateway/rest_agents.go	restAPI.HandleAgents	42
+pkg/gateway/rest_knowledge.go	restAPI.handleKnowledgeGraph	42
+pkg/plan/plan_test.go	TestPlan_StateTransitions	42
+pkg/records/formula_set_test.go	TestFormula_CyclesAndTypesRefusedAtWrite	42
+pkg/tools/browser/webrtc/input_context_integration_test.go	TestInputContextRetainsOriginalAttachmentAndCancelsWithSource	42
+pkg/gateway/rest_tasks.go	restAPI.handleTaskCreate	41
+pkg/records/schema_test.go	TestSchema_LoadAndReject	41
+pkg/tools/browser/live_document_frame.go	liveDocumentWatch.onEvent	41
+pkg/tools/browser/webrtc/dedicated_input_queue.go	dedicatedInputQueue.enqueueLocked	41
+pkg/agent/plan_restart_continuity_adr052_qa_test.go	TestRestartContinuity_DoneMembersPreservedNonDoneReset	40
+pkg/migrate/sources/openclaw/openclaw_config.go	OpenClawConfig.convertChannels	40
+pkg/tools/tier1_bounding_params_test.go	TestTier1Tools_BoundingParams	40
+pkg/agent/attach_hydrate.go	AgentLoop.HydrateAgentHistoryFromTranscript	39
+pkg/gateway/rest_agents_update.go	restAPIUpdateAgentPersistAgent.updateRecord	39
+pkg/gateway/rest_library.go	restAPI.HandleLibrary	39
+pkg/gateway/rest_mcp.go	restAPI.patchMCPServer	39
+pkg/gateway/rest_sandbox_config.go	restAPI.putSandboxConfig	39
+pkg/gateway/rest_mcp.go	restAPI.addMCPServer	38
+pkg/tools/web.go	NewWebSearchTool	38
+pkg/agent/verifier_antipatterns_adr052_qa_test.go	TestVerifierAntiPatterns	37
+pkg/gateway/browser_dedicated_input.go	BrowserWSHandler.dispatchDedicatedInputOffer	37
+pkg/records/compare_truthtable_test.go	sweepFixtures	37
+pkg/records/knowledgefind/request.go	query.applyColumns	37
+pkg/vaultimport/typeinfer_fixture_test.go	TestImporter_UntypedNotes_ExitProof	37
+pkg/agent/goal_flow_integration_test.go	TestGoalFlow_EndToEnd_Web	36
+pkg/agent/task_run_operator_fix_test.go	TestTaskRun_OperatorOnlyErrorEndsFailedAtOnce	36
+pkg/config/config_refs_test.go	TestChannelConfig_AllRefsRoundTrip	36
+pkg/gateway/browser_viewport_cdp_fixture_test.go	newViewportCDPEndpoint	36
+pkg/gateway/rest_plans.go	restAPI.toWirePlan	36
+pkg/gateway/rest_uploads.go	restAPI.HandleUpload	36
+pkg/knowledge/knowledge_restructure_trash.go	Trasher.Restore	36
+pkg/records/knowledgefind/cell_metadata_test.go	checkCell	36
+pkg/records/view_format_test.go	TestView_TreeExpressesDisjunction	36
+pkg/vaultimport/view_formula.go	buildV2LeafNode	36
+scripts/gen-asyncapi-go/main.go	resolveGoType	36
+pkg/agent/breadcrumb.go	extractEntities	35
+pkg/agent/registry.go	AgentLoop.UpsertAgentFast	35
+pkg/filegrep/filegrep.go	state.scanFile	35
+pkg/gateway/rest_channels.go	restAPI.HandleChannels	35
+pkg/gateway/rest_knowledge.go	restAPI.handleKnowledge	35
+pkg/gateway/rest_knowledge_relation.go	restAPI.handleKnowledgeRecordRelation	35
+pkg/records/formula_type.go	inferCall	35
+pkg/sandbox/seatbelt_profile.go	renderSeatbeltProfile	35
+pkg/tools/browser/capture_recapture_frame_adapter.go	CaptureSession.RecaptureFrameContext	35
+pkg/tools/browser/webrtc/viewer_request_test.go	TestViewerRequestNativeSaturationPreservesHealthyPeerAndReusesReleasedSlot	35
+pkg/tools/task.go	taskUpdateToolExecute.buildPatchFields	35
+pkg/tools/web.go	WebFetchTool.Execute	35
+cmd/omnipus/internal/onboard/onboard_test.go	TestRun_FreshInstall_WritesUsableConfig	34
+pkg/config/context_settings_test.go	TestConfig_NoContextWindowDefaultKey	34
+pkg/gateway/provider_dependents.go	computeProviderDependents	34
+pkg/gateway/rest_plans.go	restAPI.handlePlanPut	34
+pkg/gateway/websocket_forward.go	eventForwardState.onToolExecEnd	34
+pkg/gitevidence/workingdiff.go	Repo.DiffWorkingTree	34
+pkg/providers/catalog/catalog_test.go	TestParseDocument_Conforming	34
+pkg/records/checkbox_test.go	TestCheckbox_IsTheEighthTypeAndComparesByEqualityOnly	34
+pkg/sandbox/gitguard.go	GitGuard.inspectGitArgs	34
+pkg/tools/browser/webrtc/dedicated_input_queue.go	matchingPressRelease	34
+pkg/vaultprops/sync.go	syncReconcileBody	34
+pkg/filegrep/matcher_test.go	TestFileGrep_CaseModesAndSmartCase	33
+pkg/gateway/rest_agents_create.go	restAPICreateAgent.prepareAgent	33
+pkg/gateway/rest_providers_delete.go	restAPI.runProviderDelete	33
+pkg/gateway/rest_workspaces.go	restAPIHandleWorkspacePut.applyUpdate	33
+pkg/knowledge/links_test.go	TestKnowledge_NoLanguageModelInTheGraphPath	33
+pkg/plan/store.go	storeUpdateLocked.loadAndApplyFields	33
+pkg/providers/catalog/parse.go	parseProvider	33
+pkg/records/compare_truthtable_test.go	TestComparisonTruthTable	33
+pkg/task/rrule_test.go	TestRruleExpansion_WallClockDST	33
+pkg/tools/browser/capture_frame_generation_test.go	TestCaptureFrameGenerationTransitions	33
+pkg/tools/filesystem.go	ReadFileTool.Execute	33
+pkg/agent/steering_test.go	TestAgentLoop_InterruptGraceful_UsesTerminalNoToolCall	32
+pkg/channels/telegram/telegram.go	TelegramChannel.handleMessage	32
+pkg/filegrep/filegrep.go	state.walkDir	32
+pkg/gateway/browser_capture_health.go	captureHealthTracker.observe	32
+pkg/gateway/rest_tasks.go	taskPatch.buildPatch	32
+pkg/gateway/websocket.go	wsHandlerReadLoop.dispatchFrame	32
+pkg/tools/browser/live_input_dispatch.go	buildInputAction	32
+pkg/tools/browser/webrtc/dedicated_input_peer.go	DedicatedInputPeer.bindChannel	32
+pkg/tools/browser/webrtc/ingest.go	Session.attachIngestTrack	32
+pkg/tools/browser/webrtc/ingest_preparation_integration_test.go	TestIngestPreparationBoundsRetiredNativeCandidates	32
+pkg/tools/browser/webrtc/viewer_preparation_test.go	TestViewerPreparationBoundsCanceledNativeWorkers	32
+pkg/agent/conformance_design_test.go	TestConformance_t3_PlanningReplanning_Design	31
+pkg/agent/loop_test.go	TestHandleReasoning	31
+pkg/agent/session_end_behavioral_test.go	TestRunRecap_HappyPath_PersistsLastSessionAndRetro	31
+pkg/filegrep/bounds_test.go	TestFileGrep_BoundsMatrix	31
+pkg/gitevidence/commit.go	Repo.Commit	31
+pkg/media/library/library_test.go	TestWorkspaceLibrary_AuditEventShape	31
+pkg/tools/browser/live_input_context.go	LiveView.dispatchTrackedInput	31
+pkg/tools/browser/webrtc/dedicated_input_queue.go	mergePendingWheel	31
+pkg/tools/browser/webrtc_ingest_repro_test.go	reproIngestServer.handle	31
+pkg/agent/goal_first_move_test.go	TestGoalTurn_NarrowingPredicateAndSurface	30
+pkg/agent/memory_recap_integration_test.go	TestIntegration_IdleTimerFiresRecap	30
+pkg/agent/task_run_loop.go	TaskExecutor.finishRunTurn	30
+pkg/gateway/rest_channels.go	restAPISetChannelRouting.handleBound	30
+pkg/gateway/rest_preview.go	restAPI.serveStaticFile	30
+pkg/knowledge/authoring_tools.go	TasksTool.Execute	30
+pkg/knowledge/index_test.go	TestIndex_SegmentedNoteCollapsesToOneHit	30
+pkg/knowledge/knowledge_configure_create_view.go	composePartsForKind	30
+pkg/knowledge/links.go	parseMarkdownLink	30
+pkg/media/library/library.go	Library.uploadInternal	30
+pkg/media/library/library_test.go	TestWorkspaceLibrary_AuditCascadeDelete	30
+pkg/media/library/library_test.go	TestWorkspaceLibrary_CascadeDelete_ReconcileFailure_DoesNotLaunderStrandedEntry	30
+pkg/session/usage.go	AggregateUsage	30
+pkg/tools/plan_correct.go	PlanCorrectTool.buildCorrection	30
+pkg/tools/web_serve.go	WebServeTool.executeDev	30
