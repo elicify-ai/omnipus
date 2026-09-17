@@ -1,5 +1,12 @@
 # pkg/skills — skills, registries, embedded defaults
 
+## Running tests here
+
+Scope to one symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -run
+'^TestDefaultSkills_EmbeddedAndSeeded$' -p 1 ./pkg/skills/`) — the embedded
+default set is compiled in and seeded into an empty skills dir on first boot.
+CI is the authority for full-suite results.
+
 ## Fresh installs carry embedded skills
 
 `embed.go` compiles a default skill set into the binary

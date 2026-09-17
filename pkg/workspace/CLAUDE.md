@@ -1,5 +1,12 @@
 # pkg/workspace — workspace records, team, delegation, mounts
 
+## Running tests here
+
+Scope to one symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -run
+'^TestDelegationEdge_ValidateShape_FirstViolationWins$' -p 1
+./pkg/workspace/`) — the delegation-edge contract this module's trust model
+stands on. CI is the authority for full-suite results.
+
 ## Delegation trust is workspace-scoped (ADR-037)
 
 `delegation.go`'s per-workspace `Delegation[]` edge list is the SOLE runtime

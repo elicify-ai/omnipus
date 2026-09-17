@@ -1,5 +1,12 @@
 # pkg/providers — LLM provider adapters and catalog
 
+## Running tests here
+
+Scope to one symbol (`CGO_ENABLED=0 go test -tags goolm,stdjson -run
+'^TestAdmit_AgainstTheEmbeddedSnapshot$' -p 1 ./pkg/providers/`) — model
+admission against the embedded catalog snapshot, hermetic by construction.
+CI is the authority for full-suite results.
+
 ## Deleted provider ids leave no trace (ADR-068 §2.4)
 
 The `antigravity` and `claude-cli` provider ids are deleted — greenfield, no
