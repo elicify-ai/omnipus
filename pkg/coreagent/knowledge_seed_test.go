@@ -30,10 +30,13 @@ var knowledgeSeedMatrix = map[string]struct {
 	read  config.ToolPolicy
 	write config.ToolPolicy
 }{
-	string(coreagent.IDJim): {read: config.ToolPolicyAllow, write: config.ToolPolicyAllow},
-	string(coreagent.IDAva): {read: config.ToolPolicyAllow, write: config.ToolPolicyAsk},
-	string(coreagent.IDMia): {read: config.ToolPolicyAllow, write: config.ToolPolicyAsk},
-	string(coreagent.IDRay): {read: config.ToolPolicyAllow, write: config.ToolPolicyAsk},
+	string(coreagent.IDMia):        {read: config.ToolPolicyDeny, write: config.ToolPolicyDeny},
+	string(coreagent.IDJim):        {read: config.ToolPolicyDeny, write: config.ToolPolicyDeny},
+	string(coreagent.IDAva):        {read: config.ToolPolicyDeny, write: config.ToolPolicyDeny},
+	string(coreagent.IDAdmin):      {read: config.ToolPolicyDeny, write: config.ToolPolicyDeny},
+	string(coreagent.IDPlanner):    {read: config.ToolPolicyDeny, write: config.ToolPolicyDeny},
+	string(coreagent.IDResearcher): {read: config.ToolPolicyDeny, write: config.ToolPolicyDeny},
+	string(coreagent.IDWorker):     {read: config.ToolPolicyDeny, write: config.ToolPolicyDeny},
 }
 
 // knowledgeReadTools / knowledgeWriteTools split ADR-068 D15.3's six by BLAST

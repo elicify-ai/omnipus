@@ -94,11 +94,10 @@ func TestToolSearch_Worker_InheritsGlobalCeiling_NoRedundantEntry(t *testing.T) 
 
 	worker := findSeeded(t, cfg, string(coreagent.IDWorker))
 	require.NotNil(t, worker.Tools, "Worker must carry an explicit tools policy")
-	_, hasExplicitEntry := worker.Tools.Builtin.Policies["ToolSearch"]
-	assert.False(t, hasExplicitEntry,
-		"Worker's sparse map must NOT name ToolSearch explicitly — it is meant to inherit "+
-			"the global ceiling like every other untightened tool")
+	p, hasExplicitEntry := worker.Tools.Builtin.Policies["ToolSearch"]
+	assert.True(t, hasExplicitEntry, "ADR-090 records the every-seat ToolSearch floor explicitly")
+	assert.Equal(t, config.ToolPolicyAllow, p)
 
 	assert.Equal(t, "allow", resolveFor(t, cfg, string(coreagent.IDWorker), "ToolSearch", nil),
-		"(Worker, ToolSearch) must still RESOLVE allow, purely via ceiling inheritance")
+		"(Worker, ToolSearch) must resolve allow")
 }

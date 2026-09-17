@@ -22,7 +22,6 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
-	"slices"
 	"strings"
 	"testing"
 
@@ -90,8 +89,7 @@ func TestDelegateDescription_PointsParallelMultiPartWorkAtPlans(t *testing.T) {
 		}
 	}
 
-	// The pointer is only useful if the names it gives are real tools that
-	// ToolSearch can load by name: present in the catalog and lazy-tier.
+	// The pointer is only useful if the names it gives are real upfront tools.
 	catalog := make(map[string]bool)
 	for _, tl := range tools.GeneralBuiltinMetadata() {
 		catalog[tl.Name()] = true
@@ -100,41 +98,21 @@ func TestDelegateDescription_PointsParallelMultiPartWorkAtPlans(t *testing.T) {
 		if !catalog[name] {
 			t.Errorf("delegate's description names %q, but no catalog tool has that name — the pointer dangles", name)
 		}
-		if got := tools.ToolManifestTier(name); got != tools.ManifestLazy {
-			t.Errorf("ToolManifestTier(%q) = %v, want ManifestLazy — the description tells the "+
-				"model to load it via ToolSearch", name, got)
+		if got := tools.ToolManifestTier(name); got != tools.ManifestFull {
+			t.Errorf("ToolManifestTier(%q) = %v, want ManifestFull under ADR-090", name, got)
 		}
 	}
 }
 
-func TestToolSearch_ParallelMultiPartQueriesLoadCreatePlan(t *testing.T) {
-	tt := newRealCatalogToolSearch(t)
-
-	cases := []struct {
-		query      string
-		wantLoaded string
-		notLoaded  string
-	}{
-		// Ways a model describes the multi-part parallel work create_plan exists for.
-		{query: "work in parallel", wantLoaded: "create_plan"},
-		{query: "split work across multiple agents in parallel", wantLoaded: "create_plan"},
-		{query: "coordinate several independent subtasks", wantLoaded: "create_plan"},
-		{query: "several deliverables written by different agents", wantLoaded: "create_plan"},
-		// Neighbouring intents must keep their own tool and not drag create_plan in.
-		{query: "create a task", wantLoaded: "create_task", notLoaded: "create_plan"},
-		{query: "stop a running plan", wantLoaded: "stop_plan", notLoaded: "create_plan"},
-		{query: "start executing the plan", wantLoaded: "execute_plan"},
-		{query: "mark goal met", wantLoaded: "goal_claim", notLoaded: "create_plan"},
+func TestPlanToolsAreUpfrontAndAbsentFromDeferredSearchCorpus(t *testing.T) {
+	reg := tools.NewToolRegistry()
+	for _, tl := range tools.GeneralBuiltinMetadata() {
+		reg.Register(tl)
 	}
-	for _, tc := range cases {
-		t.Run(tc.query, func(t *testing.T) {
-			loaded := toolSearchLoaded(t, tt, tc.query)
-			if !slices.Contains(loaded, tc.wantLoaded) {
-				t.Errorf("ToolSearch(%q) loaded %v, want it to include %q", tc.query, loaded, tc.wantLoaded)
-			}
-			if tc.notLoaded != "" && slices.Contains(loaded, tc.notLoaded) {
-				t.Errorf("ToolSearch(%q) loaded %v, must not include %q", tc.query, loaded, tc.notLoaded)
-			}
-		})
+	snapshot := reg.SnapshotSearchableTools()
+	for _, doc := range snapshot.Docs {
+		if doc.Name == "create_plan" || doc.Name == "execute_plan" {
+			t.Errorf("upfront plan tool %q leaked into deferred ToolSearch corpus", doc.Name)
+		}
 	}
 }

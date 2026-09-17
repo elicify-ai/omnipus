@@ -69,19 +69,13 @@ func TestCoreAgentSeed_UploadIsDenyForNonBrowsingAgents(t *testing.T) {
 //
 // Worker is also the delegation-tier agent the `ask` on browser_upload_file
 // exists for, so this is a posture assertion twice over.
-func TestCoreAgentSeed_WorkerInheritsGlobalCeiling(t *testing.T) {
+func TestCoreAgentSeed_WorkerExplicitlyDeniesBrowserSurface(t *testing.T) {
 	for _, tool := range d2BrowserVerbs {
-		if got := d2Resolve(t, coreagent.IDWorker, tool); got != "allow" {
-			t.Errorf("(Worker, %s) resolves %q, want \"allow\". Worker's own map is SPARSE and "+
-				"names no browser tool, so this value is the global sandbox.tool_policies ceiling "+
-				"speaking directly, in both directions — including the permissive one that every "+
-				"agent carrying its own entry would mask", tool, got)
+		if got := d2Resolve(t, coreagent.IDWorker, tool); got != "deny" {
+			t.Errorf("(Worker, %s) resolves %q, want deny under ADR-090", tool, got)
 		}
 	}
-	if got := d2Resolve(t, coreagent.IDWorker, "browser_upload_file"); got != "ask" {
-		t.Errorf("(Worker, browser_upload_file) resolves %q, want \"ask\". Worker inherits this "+
-			"straight from the global ceiling, and it is the delegation-tier agent the consent "+
-			"gate exists for: an unattended worker attaching the operator's files to a page on "+
-			"their signed-in session is the exact case FR-021 is about", got)
+	if got := d2Resolve(t, coreagent.IDWorker, "browser_upload_file"); got != "deny" {
+		t.Errorf("(Worker, browser_upload_file) resolves %q, want deny", got)
 	}
 }

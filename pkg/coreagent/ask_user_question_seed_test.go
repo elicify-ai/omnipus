@@ -54,17 +54,16 @@ func TestAskUserQuestion_ResolvedPostureAcrossSeededRoster(t *testing.T) {
 	require.True(t, coreagent.SeedConfig(cfg))
 
 	want := map[coreagent.CoreAgentID]string{
-		coreagent.IDMia: "allow",
-		coreagent.IDJim: "allow",
-		coreagent.IDAva: "allow",
-		coreagent.IDRay: "allow",
+		coreagent.IDMia:   "allow",
+		coreagent.IDJim:   "allow",
+		coreagent.IDAva:   "allow",
+		coreagent.IDAdmin: "allow",
 		// Subagent tier: allow (US-7 S1 — "core roster, subagent tier"). The
 		// Worker's sparse map inherits the ceiling's allow; the other three
 		// carry an explicit allow override.
-		coreagent.IDWorker:     "allow",
-		coreagent.IDPlanner:    "allow",
-		coreagent.IDExplorer:   "allow",
-		coreagent.IDResearcher: "allow",
+		coreagent.IDWorker:     "deny",
+		coreagent.IDPlanner:    "deny",
+		coreagent.IDResearcher: "deny",
 		// System Agents: explicit deny via their denyAllThenOverride stamps.
 		coreagent.IDJudge:          "deny",
 		coreagent.IDPlanSupervisor: "deny",

@@ -37,11 +37,11 @@ import (
 func TestCoreAgentCount(t *testing.T) {
 	base := coreagent.BaseAgents()
 	require.Len(t, base, 4,
-		"BaseAgents() must return exactly 4 base core agents (Spec-3: mia, jim, ava, ray — max retired)")
+		"BaseAgents() must return ADR-090's four chat-capable built-ins")
 
 	all := coreagent.All()
-	require.Len(t, all, 8,
-		"All() must return the 4 base agents + 1 worker + 3 specialist subagents (M5/M6)")
+	require.Len(t, all, 7,
+		"All() must return 4 chat-capable agents plus Planner, Researcher, and General Purpose")
 
 	// The worker is present and is the only generic-worker entry.
 	workerCount := 0
@@ -55,7 +55,7 @@ func TestCoreAgentCount(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, workerCount, "All() must include exactly one worker (the seeded general-purpose worker)")
-	require.Equal(t, 3, specialistCount, "All() must include the 3 specialist subagents (Planner/Explorer/Researcher)")
+	require.Equal(t, 2, specialistCount, "All() must include Planner and Researcher specialists")
 }
 
 // TestCoreAgentDisplayOrder verifies Mia is first (default selection for new users).
@@ -82,10 +82,10 @@ func TestCoreAgentIDs(t *testing.T) {
 	}{
 		// Dataset: Spec-3 4-base roster. Names are the full display strings seeded
 		// into config so users see the role alongside the name in the roster card.
-		{coreagent.IDJim, "Jim — Planner & Orchestrator"},
-		{coreagent.IDAva, "Ava — Builder"},
-		{coreagent.IDMia, "Mia — Assistant"},
-		{coreagent.IDRay, "Ray — Scout"},
+		{coreagent.IDJim, "Jim"},
+		{coreagent.IDAva, "Ava"},
+		{coreagent.IDMia, "Mia"},
+		{coreagent.IDAdmin, "Admin"},
 	}
 
 	for _, tc := range tests {
@@ -208,9 +208,9 @@ func TestCoreAgentPromptsDifferentiation(t *testing.T) {
 		"Jim and Ava must have different compiled prompts — not the same hardcoded string")
 
 	miaPrompt := coreagent.GetPrompt("mia")
-	rayPrompt := coreagent.GetPrompt("ray")
-	assert.NotEqual(t, miaPrompt, rayPrompt,
-		"Mia and Ray must have different compiled prompts")
+	adminPrompt := coreagent.GetPrompt("admin")
+	assert.NotEqual(t, miaPrompt, adminPrompt,
+		"Mia and Admin must have different compiled prompts")
 }
 
 // TestAvaPromptContainsWorkspaceSetupInterview verifies Ava's compiled prompt
@@ -229,38 +229,16 @@ func TestAvaPromptContainsWorkspaceSetupInterview(t *testing.T) {
 	avaPrompt := coreagent.GetPrompt("ava")
 	require.NotEmpty(t, avaPrompt)
 
-	assert.Contains(t, avaPrompt, "## Workspace setup interview",
-		"Ava's prompt must have a dedicated section for the workspace-setup kickoff")
-	assert.Contains(t, avaPrompt, "workspace-setup kickoff",
-		"the section must name the kickoff trigger so Ava recognizes the message")
-	assert.Contains(t, avaPrompt, "When a message announces that a workspace was just created",
-		"the trigger phrasing must describe the kickoff as a plain message, not a system message")
-	assert.NotContains(t, avaPrompt, "a system message announces",
-		"the prompt must not claim the kickoff arrives as a system message — it is a plain user-role message")
-	assert.Contains(t, avaPrompt, "Hi, I'm Ava",
-		"Ava's first reply on kickoff must greet in first person")
+	assert.Contains(t, avaPrompt, "combined proposal",
+		"Ava must combine configuration changes before asking for consent")
+	assert.Contains(t, avaPrompt, "AskUserQuestion",
+		"Ava must use the owner-session question tool for the single confirmation")
 	assert.Contains(t, avaPrompt, "update_workspace",
 		"the interview must end in setting the workspace's core_team via update_workspace")
 	assert.Contains(t, avaPrompt, "create_agent",
 		"the interview must cover creating specialists that don't already exist")
-	assert.Contains(
-		t,
-		avaPrompt,
-		"default delegation trust edges are seeded automatically",
-		"Ava's prompt must tell her that adding built-in roster members via update_workspace auto-seeds delegation edges",
-	)
-	assert.Contains(t, avaPrompt, "Team tab",
-		"Ava's prompt must point the user to the Team tab to review/adjust the auto-seeded edges")
-	assert.Contains(t, avaPrompt, "does NOT extend to custom specialists you create yourself with create_agent",
-		"the prompt must be honest that custom agents get zero auto-seeded delegation edges")
-	assert.Contains(t, avaPrompt, "delegation_seeded",
-		"the prompt must tell Ava to check the update_workspace result's delegation_seeded note and relay it")
-	assert.NotContains(
-		t,
-		avaPrompt,
-		"so the team can delegate to each other out of the box",
-		"the prompt must not overclaim that ALL team members (including custom specialists) can delegate out of the box",
-	)
+	assert.Contains(t, avaPrompt, "get_agent_tools")
+	assert.Contains(t, avaPrompt, "delegation graph")
 }
 
 // TestGetPromptUnknownID verifies GetPrompt returns empty string for unknown IDs.
@@ -327,7 +305,8 @@ func TestCoreAgentIsCoreAgentFunction(t *testing.T) {
 		{"jim", true, "Jim is a core agent (Orchestrator)"},
 		{"ava", true, "Ava is a core agent (Builder)"},
 		{"mia", true, "Mia is a core agent (Assistant)"},
-		{"ray", true, "Ray is a core agent (Scout)"},
+		{"admin", true, "Admin is a core agent (operator)"},
+		{"ray", false, "Ray is retired by ADR-090"},
 		// Max is retired from the seeded base — must NOT be identified as core
 		{"max", false, "Max was retired from the seeded base (Spec-3); not a core agent"},
 		// Dataset: IDs that must NOT be identified as core
@@ -338,7 +317,7 @@ func TestCoreAgentIsCoreAgentFunction(t *testing.T) {
 		{"", false, "empty string is not a core agent"},
 		// Old IDs that no longer exist must return false
 		{"general-assistant", false, "old ID removed in issue #45"},
-		{"researcher", false, "old ID removed in issue #45"},
+		{"researcher", false, "Researcher is staff, not a core chat identity"},
 		{"content-creator", false, "old ID removed in issue #45"},
 	}
 
@@ -583,7 +562,7 @@ func TestCatalog_ContainsGoalClaimAndBrowserHandover(t *testing.T) {
 // unlike its set_goal deny: a native task run finishes only through an upheld
 // goal_claim (ADR-084 §11, issue #710), and the Worker takes task runs.
 func TestSeed_GoalClaimResolvesForEveryAgent(t *testing.T) {
-	cfg := &config.Config{}
+	cfg := config.DefaultConfig()
 	coreagent.SeedConfig(cfg)
 
 	byID := make(map[string]config.AgentConfig, len(cfg.Agents.List))
@@ -592,15 +571,13 @@ func TestSeed_GoalClaimResolvesForEveryAgent(t *testing.T) {
 	}
 
 	allowIDs := []coreagent.CoreAgentID{
-		coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDRay,
-		coreagent.IDWorker, coreagent.IDPlanner, coreagent.IDExplorer, coreagent.IDResearcher,
+		coreagent.IDMia, coreagent.IDJim, coreagent.IDAva, coreagent.IDAdmin,
+		coreagent.IDWorker, coreagent.IDPlanner, coreagent.IDResearcher,
 	}
 	for _, id := range allowIDs {
-		ac, ok := byID[string(id)]
+		_, ok := byID[string(id)]
 		require.True(t, ok, "agent %q must be seeded", id)
-		p, present := ac.Tools.Builtin.Policies["goal_claim"]
-		require.True(t, present, "agent %q must have an explicit goal_claim policy", id)
-		assert.Equal(t, config.ToolPolicyAllow, p, "agent %q must resolve goal_claim allow", id)
+		assert.Equal(t, "allow", resolveFor(t, cfg, string(id), "goal_claim", nil), "agent %q must resolve goal_claim allow", id)
 	}
 
 	denyIDs := []coreagent.CoreAgentID{coreagent.IDJudge, coreagent.IDPlanSupervisor}
@@ -640,18 +617,17 @@ func TestSeed_BrowserHandoverAtAllThreeSites(t *testing.T) {
 
 	// Site 3: the per-agent seeds — every browser-capable agent (Jim, Ray,
 	// Explorer, Researcher) resolves allow.
-	cfg := &config.Config{}
+	cfg := config.DefaultConfig()
 	coreagent.SeedConfig(cfg)
 	byID := make(map[string]config.AgentConfig, len(cfg.Agents.List))
 	for _, ac := range cfg.Agents.List {
 		byID[ac.ID] = ac
 	}
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDJim, coreagent.IDRay, coreagent.IDExplorer, coreagent.IDResearcher} {
-		ac, ok := byID[string(id)]
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim} {
+		_, ok := byID[string(id)]
 		require.True(t, ok, "agent %q must be seeded", id)
-		p, present := ac.Tools.Builtin.Policies["browser_handover"]
-		require.True(t, present, "browser-capable agent %q must have an explicit browser_handover policy", id)
-		assert.Equal(t, config.ToolPolicyAllow, p, "browser-capable agent %q must resolve browser_handover allow", id)
+		assert.Equal(t, "allow", resolveFor(t, cfg, string(id), "browser_handover", nil),
+			"browser-capable agent %q must resolve browser_handover allow", id)
 	}
 }
 
@@ -662,19 +638,18 @@ func TestSeed_BrowserHandoverAtAllThreeSites(t *testing.T) {
 // deny — absence is not the observable, and a future "helpful" edit adding
 // them an allow would produce a silently browser-capable Mia that no test
 // notices otherwise.
-func TestSeed_MiaAndAvaResolveDenyForBrowserHandover(t *testing.T) {
-	cfg := &config.Config{}
+func TestSeed_NonBrowserRolesResolveDenyForBrowserHandover(t *testing.T) {
+	cfg := config.DefaultConfig()
 	coreagent.SeedConfig(cfg)
 	byID := make(map[string]config.AgentConfig, len(cfg.Agents.List))
 	for _, ac := range cfg.Agents.List {
 		byID[ac.ID] = ac
 	}
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDAva} {
-		ac, ok := byID[string(id)]
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDAva, coreagent.IDAdmin, coreagent.IDPlanner, coreagent.IDResearcher, coreagent.IDWorker} {
+		_, ok := byID[string(id)]
 		require.True(t, ok, "agent %q must be seeded", id)
-		p, present := ac.Tools.Builtin.Policies["browser_handover"]
-		require.True(t, present, "agent %q must have an explicit (denyAllThenOverride-stamped) browser_handover policy", id)
-		assert.Equal(t, config.ToolPolicyDeny, p, "agent %q must resolve browser_handover deny (no browser action set to stand down from)", id)
+		assert.Equal(t, "deny", resolveFor(t, cfg, string(id), "browser_handover", nil),
+			"agent %q must resolve browser_handover deny", id)
 	}
 }
 
@@ -704,5 +679,5 @@ func TestSeed_JudgeSkillsAllowlistIsNonNilEmpty(t *testing.T) {
 	}
 	require.NotNil(t, judge, "SeedConfig must seed the Judge")
 	require.NotNil(t, judge.Skills, "Judge's seeded Skills must be non-nil (nil means unrestricted)")
-	assert.Empty(t, judge.Skills, "Judge's seeded Skills must be empty")
+	assert.Equal(t, []string{"verify"}, judge.Skills, "ADR-090 assigns Judge exactly the verify skill")
 }

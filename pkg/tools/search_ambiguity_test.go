@@ -200,6 +200,12 @@ func TestAdministrativeToolNames_Drift(t *testing.T) {
 	// (ManifestSearchOnly) — the narrowing is meaningless for a Tier 1/2
 	// tool, so promoting one out of Tier 3 must force a re-decision.
 	for _, n := range got {
+		if n == "stop_plan" {
+			if tier := ToolManifestTier(n); tier != ManifestFull {
+				t.Errorf("ADR-090 upfront administrative tool %q resolves %v, want ManifestFull", n, tier)
+			}
+			continue
+		}
 		if tier := ToolManifestTier(n); tier != ManifestLazy {
 			t.Errorf("administrative tool %q resolves ManifestTier %v, want ManifestLazy", n, tier)
 		}

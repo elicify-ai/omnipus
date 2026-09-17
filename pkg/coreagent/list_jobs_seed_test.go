@@ -43,17 +43,16 @@ func TestListJobs_ResolvedPostureAcrossSeededRoster(t *testing.T) {
 
 	want := map[coreagent.CoreAgentID]string{
 		// The four base agents: chat targets, therefore possible plan owners.
-		coreagent.IDMia: "allow",
-		coreagent.IDJim: "allow",
-		coreagent.IDAva: "allow",
-		coreagent.IDRay: "allow",
+		coreagent.IDMia:   "deny",
+		coreagent.IDJim:   "allow",
+		coreagent.IDAva:   "deny",
+		coreagent.IDAdmin: "deny",
 		// The delegation-only tier. The Worker's map is SPARSE, so its "deny"
 		// is only reachable because coreAgentSeed names list_jobs explicitly —
 		// an omission there would inherit the "allow" ceiling. The other three
 		// are fully-enumerated (denyAllThenOverride), so their deny is stamped.
 		coreagent.IDWorker:     "deny",
 		coreagent.IDPlanner:    "deny",
-		coreagent.IDExplorer:   "deny",
 		coreagent.IDResearcher: "deny",
 		// System Agents. The Judge is a verifier with no background work of its
 		// own; PlanSupervisor is roster-blind by design (D-04).

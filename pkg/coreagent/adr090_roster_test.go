@@ -95,8 +95,8 @@ func TestADR090_FreshSkillAssignmentsAndExplicitEmptySelectionsPersist(t *testin
 
 func TestADR090_RolePolicyRequiredExclusionsAndOutboundAsk(t *testing.T) {
 	want := map[string]map[string]config.ToolPolicy{
-		"mia":        {"send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
-		"jim":        {"bash": config.ToolPolicyDeny, "serve_web": config.ToolPolicyDeny, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
+		"mia":        {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
+		"jim":        {"browser_evaluate": config.ToolPolicyAllow, "browser_upload_file": config.ToolPolicyAsk, "bash": config.ToolPolicyDeny, "serve_web": config.ToolPolicyDeny, "send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk, "add_mcp_server": config.ToolPolicyDeny},
 		"ava":        {"create_plan": config.ToolPolicyDeny, "execute_plan": config.ToolPolicyDeny, "stop_plan": config.ToolPolicyDeny, "add_mcp_server": config.ToolPolicyDeny},
 		"admin":      {"add_mcp_server": config.ToolPolicyAllow},
 		"planner":    {"send_email": config.ToolPolicyAsk, "reply": config.ToolPolicyAsk},

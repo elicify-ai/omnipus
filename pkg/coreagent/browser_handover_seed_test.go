@@ -66,18 +66,17 @@ func TestSeed_BrowserHandoverAtAllThreeConstraint6Sites(t *testing.T) {
 	assert.Equal(t, string(config.ToolPolicyAllow), ceiling, "browser_handover ceiling must be allow")
 
 	// Site 3: the per-agent seeds for every browser-capable agent.
-	cfg := &config.Config{}
+	cfg := config.DefaultConfig()
 	coreagent.SeedConfig(cfg)
 	byID := make(map[string]config.AgentConfig, len(cfg.Agents.List))
 	for _, ac := range cfg.Agents.List {
 		byID[ac.ID] = ac
 	}
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDJim, coreagent.IDRay, coreagent.IDExplorer, coreagent.IDResearcher} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDJim} {
 		ac, seeded := byID[string(id)]
 		require.True(t, seeded, "agent %q must be seeded", id)
-		p, present := ac.Tools.Builtin.Policies["browser_handover"]
-		require.True(t, present, "browser-capable agent %q must have an explicit browser_handover policy", id)
-		assert.Equal(t, config.ToolPolicyAllow, p, "browser-capable agent %q must resolve browser_handover allow", id)
+		assert.Equal(t, "allow", resolveFor(t, cfg, ac.ID, "browser_handover", nil),
+			"browser-capable agent %q must resolve browser_handover allow", id)
 	}
 
 	// Site 4 (this wave's own addition, not part of FR-051's three sites,

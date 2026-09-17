@@ -118,7 +118,7 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 	// the delegation-edges check below is independent of AgentConfig.
 	findSeeded(t, cfg, string(coreagent.IDJim))
 	findSeeded(t, cfg, string(coreagent.IDMia))
-	findSeeded(t, cfg, string(coreagent.IDRay))
+	findSeeded(t, cfg, string(coreagent.IDAdmin))
 	findSeeded(t, cfg, string(coreagent.IDAva))
 	findSeeded(t, cfg, string(coreagent.IDWorker))
 
@@ -147,9 +147,10 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 
 	jimDP := coreagent.SeedDelegationEdges(coreagent.IDJim)
 	require.NotNil(t, jimDP, "Jim must have a seeded delegation policy")
-	assert.True(t, hasTarget(jimDP, string(coreagent.IDAva)), "Jim → Ava")
-	assert.True(t, hasTarget(jimDP, string(coreagent.IDRay)), "Jim → Ray")
+	assert.True(t, hasTarget(jimDP, string(coreagent.IDPlanner)), "Jim → Planner")
+	assert.True(t, hasTarget(jimDP, string(coreagent.IDResearcher)), "Jim → Researcher")
 	assert.True(t, hasTarget(jimDP, string(coreagent.IDWorker)), "Jim → worker")
+	assert.True(t, hasTarget(jimDP, string(coreagent.IDJim)), "Jim → self helper")
 	assert.True(t, hasMode(jimDP, config.DelegationModeTask), "Jim allows task mode")
 	assert.True(t, hasMode(jimDP, config.DelegationModeBackground), "Jim allows background mode")
 	assert.True(t, hasMode(jimDP, config.DelegationModeAwait), "Jim allows await mode")
@@ -163,24 +164,12 @@ func TestSeedBaseDelegationPolicies(t *testing.T) {
 		seedModesToEdgeModes(jimDP.Modes),
 		"Jim's seeded modes, translated onto a workspace graph edge, must collapse to [direct, task]")
 
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDRay, coreagent.IDAva} {
-		dp := coreagent.SeedDelegationEdges(id)
-		require.NotNil(t, dp, "%s must have a seeded delegation policy", id)
-		assert.True(t, hasTarget(dp, string(coreagent.IDWorker)),
-			"%s must be able to delegate to the worker", id)
-		assert.True(t, hasMode(dp, config.DelegationModeTask), "%s allows task mode", id)
-		assert.True(t, hasMode(dp, config.DelegationModeBackground), "%s allows background mode", id)
-
-		// Companion assertion: same collapse applies to Mia/Ray/Ava's seeded
-		// graph edges.
-		assert.ElementsMatch(t,
-			[]workspace.DelegationMode{workspace.ModeTask, workspace.ModeDirect},
-			seedModesToEdgeModes(dp.Modes),
-			"%s's seeded modes, translated onto a workspace graph edge, must collapse to [direct, task]", id)
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDMia, coreagent.IDAva, coreagent.IDAdmin, coreagent.IDResearcher} {
+		assert.Nil(t, coreagent.SeedDelegationEdges(id), "%s has no shipped delegation edge", id)
 	}
-
-	assert.Nil(t, coreagent.SeedDelegationEdges(coreagent.IDWorker),
-		"the worker is a leaf — it has no seeded onward delegation (deny-by-default)")
+	workerDP := coreagent.SeedDelegationEdges(coreagent.IDWorker)
+	require.NotNil(t, workerDP)
+	assert.True(t, hasTarget(workerDP, string(coreagent.IDWorker)), "General Purpose may create only same-role helpers")
 }
 
 // TestWorkerToolPolicyTightensGlobalCeiling verifies the worker's own policy
@@ -225,8 +214,8 @@ func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 	// ceiling's "allow": the 3 named task exceptions, list_agents, and every
 	// tool outside the 6 tightened categories (e.g. the memory tools).
 	for _, tool := range []string{
-		"list_agents", "update_task", "set_todos", "list_tasks",
-		"remember", "recall_memory", "run_retrospective",
+		"update_task", "set_todos", "list_tasks",
+		"remember", "recall_memory",
 	} {
 		_, ok := pol[tool]
 		assert.False(t, ok, "worker must NOT have its own entry for %q — it inherits the global ceiling", tool)

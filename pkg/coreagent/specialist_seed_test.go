@@ -21,7 +21,7 @@ func TestSeedSpecialists(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg), "SeedConfig on empty config must modify")
 
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDPlanner, coreagent.IDExplorer, coreagent.IDResearcher} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDPlanner, coreagent.IDResearcher} {
 		t.Run(string(id), func(t *testing.T) {
 			ac := findSeeded(t, cfg, string(id))
 			assert.Equal(t, config.AgentTypeWorker, ac.Type, "specialist must have Type=worker")
@@ -68,11 +68,10 @@ func TestPlannerBoundedDelegation(t *testing.T) {
 		assert.Equal(t, config.AgentRefKindLocal, ref.Kind)
 		targets[ref.ID] = true
 	}
-	assert.True(t, targets["explorer"], "Planner must delegate to Explorer")
 	assert.True(t, targets["researcher"], "Planner must delegate to Researcher")
+	assert.Len(t, targets, 1, "Planner's ADR-090 default delegation target is Researcher only")
 
 	// Explorer and Researcher are leaves: no onward delegation seeded.
-	assert.Nil(t, coreagent.SeedDelegationEdges(coreagent.IDExplorer), "Explorer must be a delegation leaf")
 	assert.Nil(t, coreagent.SeedDelegationEdges(coreagent.IDResearcher), "Researcher must be a delegation leaf")
 }
 
@@ -83,7 +82,7 @@ func TestSpecialistsKeepMemoryTools(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
 
-	for _, id := range []coreagent.CoreAgentID{coreagent.IDPlanner, coreagent.IDExplorer, coreagent.IDResearcher} {
+	for _, id := range []coreagent.CoreAgentID{coreagent.IDPlanner, coreagent.IDResearcher} {
 		ac := findSeeded(t, cfg, string(id))
 		require.NotNil(t, ac.Tools)
 		pol := ac.Tools.Builtin.Policies

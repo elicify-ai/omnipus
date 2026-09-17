@@ -28,127 +28,10 @@ import (
 //
 // Traces to: pkg/coreagent/core.go — coreAgentSeed (FR-008, FR-010, FR-022).
 func TestBoot_ConstructorSeedDispositionMap(t *testing.T) {
-	// All four base agents are now LEAST-PRIVILEGE: deny-by-default (via a
-	// fully-enumerated explicit map — the DefaultPolicy field was removed
-	// project-wide), explicit allow/ask for exactly their role's tools, no
-	// "system.*" rail.
-	tests := []struct {
-		id                   CoreAgentID
-		expectExtraAllows    []string // must be present AND == allow
-		expectAsk            []string // must be present AND == ask
-		expectExplicitDenies []string
-	}{
-		{
-			id: IDAva,
-			expectExtraAllows: []string{
-				"create_agent", "update_agent", "list_agents",
-				"list_models", "search_web", "fetch_url",
-				"remember", "recall_memory", "run_retrospective",
-				"send_message", "switch_agent",
-				"find_skills", "list_skills",
-				"update_workspace", "list_workspaces", "get_workspace",
-			},
-			expectAsk: []string{"delete_agent", "create_skill", "edit_skill", "install_skill"},
-		},
-		{
-			id: IDMia,
-			expectExtraAllows: []string{
-				"send_message", "switch_agent", "list_agents",
-				"send_file",
-				"remember", "recall_memory", "run_retrospective",
-				"create_task", "update_task", "list_tasks", "set_todos",
-				"read_inbox", "read_message", "reply", "send_email", "search_email",
-				"search_web", "fetch_url", "find_skills",
-			},
-			expectAsk: []string{"delete_task"},
-		},
-		{
-			id: IDRay,
-			expectExtraAllows: []string{
-				"search_web", "fetch_url",
-				"browser_navigate", "browser_click", "browser_type",
-				"browser_get_text", "browser_wait", "browser_screenshot",
-				"read_file", "list_directory", "write_file", "append_file", "edit_file",
-				"delegate",
-				"remember", "recall_memory", "run_retrospective",
-				"send_message", "switch_agent", "send_file",
-				"find_skills", "set_todos",
-			},
-		},
-		{
-			id: IDJim,
-			// Jim's full explicit allow-list (a representative sample tested here).
-			expectExtraAllows: []string{
-				// File operations.
-				"read_file", "write_file", "edit_file", "append_file", "list_directory",
-				// Lookups.
-				"search_web", "fetch_url",
-				// Execution (ADR-036: exec/workspace_shell/workspace_shell_bg merged into "bash").
-				"bash", "serve_web",
-				// Communication / routing.
-				"send_message", "send_file", "switch_agent",
-				// Memory.
-				"remember", "recall_memory", "run_retrospective", "set_todos",
-				// Delegation.
-				"delegate", "list_agents",
-				// Task management (current + cross-workspace).
-				"create_task", "list_tasks", "update_task",
-				"create_task_in_workspace", "list_tasks_in_workspace", "update_task_in_workspace",
-				// Workspace lifecycle.
-				"get_workspace", "list_workspaces", "update_workspace", "create_workspace",
-				// Skill discovery + install.
-				"find_skills", "list_skills", "install_skill",
-				// MCP — read-only only. add_mcp_server is an explicit DENY
-				// (see expectExplicitDenies below): an MCP server definition is
-				// a program the gateway launches unconfined, so granting an
-				// agent the ability to add one escapes the sandbox.
-				"list_mcp_servers",
-				// Browser.
-				"browser_navigate", "browser_click", "browser_type",
-				"browser_wait", "browser_get_text", "browser_screenshot",
-			},
-			// Destructive/irreversible operations are consent-gated.
-			expectAsk: []string{
-				"delete_task", "delete_task_in_workspace",
-				"delete_workspace", "remove_mcp_server",
-			},
-			// Boundary-widening operations are denied outright, not prompted:
-			// adding an MCP server runs an unconfined program, which is why
-			// config.json is in the ADR-062 secret set in the first place.
-			// Seeded data — an operator can grant it on their own install.
-			expectExplicitDenies: []string{"add_mcp_server"},
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(string(tc.id), func(t *testing.T) {
-			policies := coreAgentSeed(tc.id)
-
-			// "system.*" was never a real tool name (dead wildcard) — it must
-			// never appear as a key, for any agent.
-			_, hasRail := policies["system.*"]
-			assert.False(t, hasRail, "agent %q must NOT carry the dead 'system.*' rail", tc.id)
-
-			for _, toolName := range tc.expectExtraAllows {
-				p, ok := policies[toolName]
-				require.True(t, ok, "agent %q must have explicit policy for %q", tc.id, toolName)
-				assert.Equal(t, config.ToolPolicyAllow, p,
-					"agent %q policy for %q must be 'allow'", tc.id, toolName)
-			}
-
-			for _, toolName := range tc.expectAsk {
-				p, ok := policies[toolName]
-				require.True(t, ok, "agent %q must have explicit policy for %q", tc.id, toolName)
-				assert.Equal(t, config.ToolPolicyAsk, p,
-					"agent %q policy for %q must be 'ask'", tc.id, toolName)
-			}
-
-			for _, toolName := range tc.expectExplicitDenies {
-				p, ok := policies[toolName]
-				require.True(t, ok, "agent %q must have explicit deny for %q", tc.id, toolName)
-				assert.Equal(t, config.ToolPolicyDeny, p,
-					"agent %q explicit deny for %q must be 'deny'", tc.id, toolName)
-			}
+	for _, id := range []CoreAgentID{IDMia, IDJim, IDAva, IDAdmin, IDPlanner, IDResearcher, IDWorker} {
+		t.Run(string(id), func(t *testing.T) {
+			assert.Equal(t, adr090SparseRolePolicies(id), coreAgentSeed(id),
+				"ordinary role seed must be exactly the sparse ADR-090 delta")
 		})
 	}
 }
@@ -294,17 +177,7 @@ func TestAgentConstructor_CoreAgent_SeedsRailPlusAllowances(t *testing.T) {
 	_, hasRail := avaAgent.Tools.Builtin.Policies["system.*"]
 	assert.False(t, hasRail, "Ava must NOT carry the dead 'system.*' rail after redesign")
 
-	for _, allow := range []string{"create_agent", "update_agent", "list_models", "update_workspace"} {
-		ap, aok := avaAgent.Tools.Builtin.Policies[allow]
-		require.True(t, aok, "Ava must have explicit allow for %q", allow)
-		assert.Equal(t, config.ToolPolicyAllow, ap)
-	}
-	// Destructive + authoring tools are consent-gated (ask).
-	for _, ask := range []string{"delete_agent", "create_skill", "edit_skill"} {
-		ap, aok := avaAgent.Tools.Builtin.Policies[ask]
-		require.True(t, aok, "Ava must have explicit policy for %q", ask)
-		assert.Equal(t, config.ToolPolicyAsk, ap)
-	}
+	assert.Equal(t, adr090SparseRolePolicies(IDAva), avaAgent.Tools.Builtin.Policies)
 }
 
 // TestJimSeed_DenyDefaultWithExplicitAllows verifies that Jim's constructor seed
@@ -327,8 +200,8 @@ func TestJimSeed_DenyDefaultWithExplicitAllows(t *testing.T) {
 	for _, toolName := range []string{"bash", "serve_web"} {
 		p, ok := policies[toolName]
 		require.True(t, ok, "Jim must have explicit policy for %q", toolName)
-		assert.Equal(t, config.ToolPolicyAllow, p,
-			"Jim's policy for %q must be 'allow'", toolName)
+		assert.Equal(t, config.ToolPolicyDeny, p,
+			"Jim's ADR-090 policy for %q must be deny", toolName)
 	}
 
 	// The dead "system.*" deny rail must be gone — it was the old legacy approach.
@@ -359,8 +232,8 @@ func TestJimSeed_ConsentGatedDeleteTools(t *testing.T) {
 	} {
 		p, ok := policies[toolName]
 		require.True(t, ok, "Jim must have explicit policy for consent-gated tool %q", toolName)
-		assert.Equal(t, config.ToolPolicyAsk, p,
-			"Jim's policy for %q must be 'ask' (consent-gated)", toolName)
+		assert.Equal(t, config.ToolPolicyDeny, p,
+			"Jim's ADR-090 default for out-of-role destructive tool %q must be deny", toolName)
 	}
 }
 
