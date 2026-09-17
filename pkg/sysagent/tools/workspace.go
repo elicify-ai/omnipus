@@ -7,6 +7,7 @@ package systools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,6 +22,16 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
+
+func workspaceRevisionError(id string, err error) *tools.ToolResult {
+	if errors.Is(err, workspacepkg.ErrInvalidRevision) {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Use the revision returned by get_workspace"))
+	}
+	if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "NOT_FOUND") {
+		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id), "Use list_workspaces to see available workspaces"))
+	}
+	return tools.ErrorResult(errorJSON("REVISION_CONFLICT", err.Error(), "Call get_workspace and retry with its current revision"))
+}
 
 // workspace is the canonical on-disk workspace type shared with pkg/gateway.
 // Using the shared type (instead of a local struct) ensures that both write
@@ -217,8 +228,12 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	var delegationSeedNote string
 	if len(seeded) > 0 {
 		if err := workspacepkg.SaveDelegation(t.deps.Home, w.ID, seeded); err != nil {
-			slog.Warn("sysagent: create_workspace: failed to seed delegation edges",
+			slog.Error("sysagent: create_workspace: failed to seed delegation edges",
 				"workspace_id", w.ID, "error", err)
+			if rollbackErr := deleteEntity(workspacesDir(t.deps.Home), w.ID); rollbackErr != nil {
+				slog.Error("sysagent: create_workspace: failed to roll back workspace record", "workspace_id", w.ID, "error", rollbackErr)
+			}
+			return tools.ErrorResult(errorJSON("SAVE_FAILED", "workspace could not be created", "Retry after checking storage health"))
 		} else {
 			delegationSeedNote = seededEdgesSummary(seeded, w.CoreTeam)
 		}
@@ -251,6 +266,7 @@ func (t *WorkspaceUpdateTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"id":          map[string]any{"type": "string", "description": "Workspace ID from list_workspaces"},
+			"revision":    map[string]any{"type": "string", "description": "Revision returned by get_workspace"},
 			"name":        map[string]any{"type": "string", "description": "New workspace title"},
 			"description": map[string]any{"type": "string", "description": "New description"},
 			"status": map[string]any{
@@ -266,7 +282,7 @@ func (t *WorkspaceUpdateTool) Parameters() map[string]any {
 				"description": "List of agent IDs associated with this workspace",
 			},
 		},
-		"required": []string{"id"},
+		"required": []string{"id", "revision"},
 	}
 }
 
@@ -275,6 +291,7 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 		return tools.ErrorResult(errorJSON("CONFIGURATION_WRITE_DENIED", err.Error(), ""))
 	}
 	id, _ := args["id"].(string)
+	revision, _ := args["revision"].(string)
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
@@ -289,11 +306,11 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 	unlock := workspacepkg.LockID(id)
 	defer unlock()
 
-	w, err := readWorkspaceFromDisk(t.deps.Home, id)
+	state, err := workspacepkg.CheckRevisionLocked(t.deps.Home, id, revision)
 	if err != nil {
-		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id),
-			"Use list_workspaces to see available workspaces"))
+		return workspaceRevisionError(id, err)
 	}
+	w := state.Workspace
 
 	// Snapshot the pre-update core team so a core_team change below can be
 	// diffed for newly added members — see the delegation-edge auto-seed
@@ -652,7 +669,7 @@ func seedDelegationEdgesForNewMembers(
 			depth = &d
 		}
 		for _, ref := range dp.To {
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == from {
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == from && !workspacepkg.PermittedSelfDelegationID(from)) {
 				continue
 			}
 			to := ref.ID
@@ -806,13 +823,14 @@ func (t *WorkspaceDeleteTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id": map[string]any{"type": "string", "description": "Workspace ID from list_workspaces"},
+			"id":       map[string]any{"type": "string", "description": "Workspace ID from list_workspaces"},
+			"revision": map[string]any{"type": "string", "description": "Revision returned by get_workspace"},
 			"confirm": map[string]any{
 				"type":        "boolean",
 				"description": "Must be true to confirm irreversible deletion",
 			},
 		},
-		"required": []string{"id", "confirm"},
+		"required": []string{"id", "revision", "confirm"},
 	}
 }
 
@@ -821,6 +839,7 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 		return tools.ErrorResult(errorJSON("CONFIGURATION_WRITE_DENIED", err.Error(), ""))
 	}
 	id, _ := args["id"].(string)
+	revision, _ := args["revision"].(string)
 	confirm, _ := args["confirm"].(bool)
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
@@ -847,10 +866,9 @@ func (t *WorkspaceDeleteTool) Execute(ctx context.Context, args map[string]any) 
 	unlock := workspacepkg.LockID(id)
 
 	// Guard: verify the workspace exists before any irreversible mutations.
-	if _, err := readWorkspaceFromDisk(t.deps.Home, id); err != nil {
+	if _, err := workspacepkg.CheckRevisionLocked(t.deps.Home, id, revision); err != nil {
 		unlock()
-		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id),
-			"Use list_workspaces to see available workspaces"))
+		return workspaceRevisionError(id, err)
 	}
 
 	// Step 1: cascade-delete tasks
@@ -1081,16 +1099,18 @@ func (t *WorkspaceGetTool) Execute(_ context.Context, args map[string]any) *tool
 	if id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
 	}
-	w, err := readWorkspaceFromDisk(t.deps.Home, id)
+	state, err := workspacepkg.ReadState(t.deps.Home, id)
 	if err != nil {
 		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id),
 			"Use list_workspaces to see available workspaces"))
 	}
+	w := state.Workspace
 	tc := computeWorkspaceTaskCount(t.deps.Home, id)
 	return tools.NewToolResult(successJSON(map[string]any{
 		"id": w.ID, "name": w.Name, "description": w.Description,
 		"status": w.Status, "pinned": w.Pinned, "pin_order": w.PinOrder,
 		"is_default": w.IsDefault, "core_team": w.CoreTeam,
 		"task_count": tc, "created_at": w.CreatedAt, "updated_at": w.UpdatedAt,
+		"revision": state.Revision, "delegation": state.Delegation,
 	}))
 }

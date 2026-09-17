@@ -31,6 +31,42 @@ func workspaceID(t *testing.T, body string) string {
 	return id
 }
 
+func currentWorkspaceRevision(t *testing.T, home, id string) string {
+	t.Helper()
+	state, err := workspacepkg.ReadState(home, id)
+	if err != nil {
+		return strings.Repeat("0", 64)
+	}
+	return state.Revision
+}
+
+func TestWorkspaceUpdate_StaleRevisionDoesNotWrite(t *testing.T) {
+	deps, home := newTestDepsWithHome(t)
+	created := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{"name": "Original"})
+	if created.IsError {
+		t.Fatalf("create failed: %s", created.ForLLM)
+	}
+	id := workspaceID(t, created.ForLLM)
+	before, err := os.ReadFile(filepath.Join(home, "workspaces", id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
+		"id": id, "revision": strings.Repeat("0", 64), "name": "Must not persist",
+	})
+	if !result.IsError {
+		t.Fatal("stale revision unexpectedly succeeded")
+	}
+	after, err := os.ReadFile(filepath.Join(home, "workspaces", id+".json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("stale update changed workspace bytes")
+	}
+}
+
 // newTestDepsWithHomeAndAgents behaves like newTestDepsWithHome but also seeds
 // the live config's Agents.List with the given IDs (ID field only) — required
 // for delegation-edge auto-seed tests now that seedDelegationEdgesForNewMembers
@@ -84,6 +120,7 @@ func TestWorkspaceUpdate_PreservesDelegationGraph(t *testing.T) {
 	// Update the workspace exactly as Ava did: add a new agent to core_team.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"mia", "jim", "ava", "ray", "codereview"},
 	})
 	if res.IsError {
@@ -160,8 +197,9 @@ func TestWorkspaceUpdate_FullFieldRoundTrip(t *testing.T) {
 
 	// Perform a minimal update — rename only. All other fields must be unchanged.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":   id,
-		"name": "Renamed Workspace",
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"name":     "Renamed Workspace",
 	})
 	if res.IsError {
 		t.Fatalf("update_workspace failed: %s", res.ForLLM)
@@ -628,7 +666,7 @@ func TestWorkspaceList_Populated(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.10
 func TestWorkspaceList_StatusFilter(t *testing.T) {
-	deps, _ := newTestDepsWithHome(t)
+	deps, home := newTestDepsWithHome(t)
 	ctx := context.Background()
 	createTool := systools.NewWorkspaceCreateTool(deps)
 	updateTool := systools.NewWorkspaceUpdateTool(deps)
@@ -642,7 +680,7 @@ func TestWorkspaceList_StatusFilter(t *testing.T) {
 	id2 := workspaceID(t, r2.ForLLM)
 
 	// Archive the second workspace.
-	if ur := updateTool.Execute(ctx, map[string]any{"id": id2, "status": "archived"}); ur.IsError {
+	if ur := updateTool.Execute(ctx, map[string]any{"id": id2, "revision": currentWorkspaceRevision(t, home, id2), "status": "archived"}); ur.IsError {
 		t.Fatalf("archive failed: %s", ur.ForLLM)
 	}
 
@@ -686,6 +724,7 @@ func TestWorkspaceUpdate_Happy(t *testing.T) {
 
 	ur := systools.NewWorkspaceUpdateTool(deps).Execute(ctx, map[string]any{
 		"id":          id,
+		"revision":    currentWorkspaceRevision(t, home, id),
 		"name":        "New Name",
 		"description": "Updated description",
 		"pinned":      true,
@@ -728,8 +767,9 @@ func TestWorkspaceUpdate_NotFound(t *testing.T) {
 	tool := systools.NewWorkspaceUpdateTool(deps)
 
 	result := tool.Execute(context.Background(), map[string]any{
-		"id":   "01JZZZZZZZZZZZZZZZZZZZZZZZ",
-		"name": "Should Not Work",
+		"id":       "01JZZZZZZZZZZZZZZZZZZZZZZZ",
+		"revision": strings.Repeat("0", 64),
+		"name":     "Should Not Work",
 	})
 	if !result.IsError {
 		t.Fatalf("expected error for unknown id, got success: %s", result.ForLLM)
@@ -745,7 +785,7 @@ func TestWorkspaceUpdate_NotFound(t *testing.T) {
 //
 // Traces to: docs/internal/specs/tool-test-plan-2026-06.md §3.10
 func TestWorkspaceUpdate_InvalidStatus(t *testing.T) {
-	deps, _ := newTestDepsWithHome(t)
+	deps, home := newTestDepsWithHome(t)
 	ctx := context.Background()
 
 	cr := systools.NewWorkspaceCreateTool(deps).Execute(ctx, map[string]any{"name": "Status Test"})
@@ -755,8 +795,9 @@ func TestWorkspaceUpdate_InvalidStatus(t *testing.T) {
 	id := workspaceID(t, cr.ForLLM)
 
 	result := systools.NewWorkspaceUpdateTool(deps).Execute(ctx, map[string]any{
-		"id":     id,
-		"status": "deleted",
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"status":   "deleted",
 	})
 	if !result.IsError {
 		t.Fatalf("expected error for invalid status, got success: %s", result.ForLLM)
@@ -892,6 +933,7 @@ func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "jim", "worker"},
 	})
 	if res.IsError {
@@ -976,6 +1018,7 @@ func TestWorkspaceUpdate_SeedDedupesExistingEdge(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "jim", "worker"},
 	})
 	if res.IsError {
@@ -1033,6 +1076,7 @@ func TestWorkspaceUpdate_SeedDoesNotResurrectRemovedEdge(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "worker", "ray"},
 	})
 	if res.IsError {
@@ -1082,8 +1126,9 @@ func TestWorkspaceUpdate_NoCoreTeamArg_DelegationUntouched(t *testing.T) {
 
 	// Update only the name — no core_team key present in args at all.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":   id,
-		"name": "Renamed Untouched Test",
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"name":     "Renamed Untouched Test",
 	})
 	if res.IsError {
 		t.Fatalf("update_workspace failed: %s", res.ForLLM)
@@ -1140,6 +1185,7 @@ func TestWorkspaceUpdate_RemovalOnly_NoNewEdgesNoGC(t *testing.T) {
 	// Remove "worker" from core_team — no additions.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "jim"},
 	})
 	if res.IsError {
@@ -1201,6 +1247,7 @@ func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "jim", "worker"},
 	})
 	if res.IsError {
@@ -1268,6 +1315,7 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 	// Remove jim, add ray — in one call.
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "worker", "ray"},
 	})
 	if res.IsError {
@@ -1344,6 +1392,7 @@ func TestWorkspaceUpdate_InstallingTeamClearsSetupPending(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava"},
 	})
 	if res.IsError {
@@ -1384,8 +1433,9 @@ func TestWorkspaceUpdate_NoCoreTeamArg_SetupPendingUntouched(t *testing.T) {
 	}
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":   id,
-		"name": "Renamed Setup Pending Test",
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"name":     "Renamed Setup Pending Test",
 	})
 	if res.IsError {
 		t.Fatalf("update_workspace failed: %s", res.ForLLM)
@@ -1426,6 +1476,7 @@ func TestWorkspaceUpdate_CoreTeamOnNonPending_NoOp(t *testing.T) {
 
 	res := systools.NewWorkspaceUpdateTool(deps).Execute(context.Background(), map[string]any{
 		"id":        id,
+		"revision":  currentWorkspaceRevision(t, home, id),
 		"core_team": []any{"ava", "jim"},
 	})
 	if res.IsError {
@@ -1475,8 +1526,9 @@ func TestWorkspaceDelete_ConfirmationGate(t *testing.T) {
 
 	// Without confirm — must reject.
 	noConfirmResult := systools.NewWorkspaceDeleteTool(deps).Execute(ctx, map[string]any{
-		"id":      id,
-		"confirm": false,
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"confirm":  false,
 	})
 	if !noConfirmResult.IsError {
 		t.Fatal("expected error when confirm=false, got success")
@@ -1508,8 +1560,9 @@ func TestWorkspaceDelete_Happy(t *testing.T) {
 	id := workspaceID(t, cr.ForLLM)
 
 	delResult := systools.NewWorkspaceDeleteTool(deps).Execute(ctx, map[string]any{
-		"id":      id,
-		"confirm": true,
+		"id":       id,
+		"revision": currentWorkspaceRevision(t, home, id),
+		"confirm":  true,
 	})
 	if delResult.IsError {
 		t.Fatalf("delete failed: %s", delResult.ForLLM)
@@ -1536,8 +1589,9 @@ func TestWorkspaceDelete_Happy(t *testing.T) {
 func TestWorkspaceDelete_NotFound(t *testing.T) {
 	deps, _ := newTestDepsWithHome(t)
 	result := systools.NewWorkspaceDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      "01JZZZZZZZZZZZZZZZZZZZZZZZ",
-		"confirm": true,
+		"id":       "01JZZZZZZZZZZZZZZZZZZZZZZZ",
+		"revision": strings.Repeat("0", 64),
+		"confirm":  true,
 	})
 	if !result.IsError {
 		t.Fatalf("expected error for unknown id, got success: %s", result.ForLLM)
@@ -1587,8 +1641,9 @@ func TestWorkspaceDelete_CascadeTasks(t *testing.T) {
 
 	// Delete the workspace with confirm=true.
 	delResult := systools.NewWorkspaceDeleteTool(deps).Execute(ctx, map[string]any{
-		"id":      wsID,
-		"confirm": true,
+		"id":       wsID,
+		"revision": currentWorkspaceRevision(t, home, wsID),
+		"confirm":  true,
 	})
 	if delResult.IsError {
 		t.Fatalf("delete failed: %s", delResult.ForLLM)

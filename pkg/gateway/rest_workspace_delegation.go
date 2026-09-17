@@ -113,6 +113,10 @@ func workspaceDelegationToWire(
 		DefaultDepth: defaultDepth,
 		Revision:     revision,
 	}
+	persistence := gen.WorkspaceDelegationPersistenceStatusComplete
+	activation := gen.WorkspaceDelegationActivationStatusActive
+	changed := []string{}
+	out.PersistenceStatus, out.ActivationStatus, out.ChangedFields = &persistence, &activation, &changed
 	if len(team) > 0 {
 		out.Team = &team
 	}
@@ -231,7 +235,13 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 	// is SaveDelegation's stated caller contract.
 	if err := workspace.SaveDelegation(a.homePath, id, edges); err != nil {
 		slog.Error("rest: update workspace delegation", "error", err, "id", id)
-		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		stage := "delegation"
+		message := "delegation graph was not saved; read the workspace again before retrying"
+		writeJSON(w, http.StatusInternalServerError, gen.ConfigurationMutationState{
+			PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatusNone,
+			ActivationStatus:  gen.ConfigurationMutationStateActivationStatusNotAttempted,
+			Revision:          state.Revision, ChangedFields: []string{}, ErrorStage: &stage, Message: &message,
+		})
 		return
 	}
 	revision, err := workspace.RevisionForState(ws, edges)
@@ -325,7 +335,7 @@ func defaultWorkspaceDelegationEdges(cfg *config.Config) []storedDelegationEdge 
 			depth = &d
 		}
 		for _, ref := range dp.To {
-			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || ref.ID == ac.ID {
+			if ref.Kind != config.AgentRefKindLocal || ref.ID == "*" || (ref.ID == ac.ID && !workspace.PermittedSelfDelegationID(ac.ID)) {
 				continue
 			}
 			edges = append(edges, storedDelegationEdge{

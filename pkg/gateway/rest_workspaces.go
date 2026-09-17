@@ -366,6 +366,10 @@ func workspaceToWire(home string, w storedWorkspace, taskCount int) gen.Workspac
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
 	}
+	persistence := gen.WorkspacePersistenceStatusComplete
+	activation := gen.WorkspaceActivationStatusActive
+	changed := []string{}
+	wire.PersistenceStatus, wire.ActivationStatus, wire.ChangedFields = &persistence, &activation, &changed
 	if w.IsDefault {
 		t := true
 		wire.IsDefault = &t
@@ -836,19 +840,28 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		validSeedEdges = append(validSeedEdges, edge)
 	}
 
+	createUnlock := workspace.LockID(ws.ID)
+	defer createUnlock()
+	workspacePath := filepath.Join(a.homePath, "workspaces", ws.ID+".json")
+	if _, err := os.Stat(workspacePath); err == nil {
+		jsonErr(w, http.StatusConflict, "workspace already exists")
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
 	if err := writeWorkspaceFile(a.homePath, ws); err != nil {
 		slog.Error("rest: create workspace", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	// Seed edges go to the delegation store, never onto the record — see
-	// pkg/workspace/delegationstore.go. The workspace record is already
-	// committed at this point, so a store failure is logged rather than turned
-	// into a 500 the client would read as "nothing was created". The fallout is
-	// fail-closed (a workspace with no delegation graph denies every
-	// delegation) and repairable from the Team tab.
-	if err := saveWorkspaceDelegation(a.homePath, ws.ID, validSeedEdges); err != nil {
+	if err := workspace.SaveDelegation(a.homePath, ws.ID, validSeedEdges); err != nil {
 		slog.Error("rest: create workspace: seed delegation store", "error", err, "id", ws.ID)
+		if rollbackErr := fileutil.RemoveLocked(workspacePath); rollbackErr != nil && !errors.Is(rollbackErr, os.ErrNotExist) {
+			slog.Error("rest: create workspace: rollback record", "error", rollbackErr, "id", ws.ID)
+		}
+		jsonErr(w, http.StatusInternalServerError, "workspace could not be created")
+		return
 	}
 	// D3: a workspace created while the gateway is running was never named by
 	// the boot sweep, so nothing has ever resolved its scope. Sweeping it here
@@ -1387,7 +1400,14 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 	if rw.delegationChanged {
 		if err := workspace.SaveDelegation(rw.a.homePath, rw.id, rw.delegation); err != nil {
 			slog.Error("rest: update workspace: delegation write", "id", rw.id, "error", err)
-			jsonErr(rw.w, http.StatusInternalServerError, "workspace saved but delegation graph could not be saved")
+			revision, _ := workspace.RevisionForState(rw.ws, rw.state.Delegation)
+			stage := "delegation"
+			message := "workspace fields were saved, but the delegation graph could not be saved; read the workspace again before retrying"
+			writeJSON(rw.w, http.StatusInternalServerError, gen.ConfigurationMutationState{
+				PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatusPartial,
+				ActivationStatus:  gen.ConfigurationMutationStateActivationStatusNotAttempted,
+				Revision:          revision, ChangedFields: []string{"workspace"}, ErrorStage: &stage, Message: &message,
+			})
 			return
 		}
 	}
