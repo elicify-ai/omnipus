@@ -6,7 +6,7 @@ The founder authorized the agreed parallel implementation on 2026-09-17, using S
 
 ## Latest checkpoint: integrated review fixes
 
-Current code snapshot: `f94d14d3f` (2026-09-17). This checkpoint supersedes outstanding-work statements in the historical entries below; the full feature remains in progress.
+Current code snapshot: `281b55712` (2026-09-17). This checkpoint supersedes outstanding-work statements in the historical entries below; the full feature remains in progress.
 
 - Integrated canonical fallback configuration (`09b2b8b5f`), safe agent-save errors (`5b9eb0926`), authorized document finalizer reads (`0f5c12e81`), management skill inventory (`7f21eca43`), upload client (`527fa9841`), corrected SVG/tool descriptions (`52b158de7`), bounded ZIP extraction (`9d24e3700`), truthful skill publication outcomes (`b55bbf62c`), and composite agent deletion (`f94d14d3f`).
 - The full native `codex review --base 12d97e7e70a869b72a246c9385776e71e9bdaa22` completed on snapshot `7f21eca43`. It found archive bounds and SVG description issues, subsequently corrected, and confirmed then-open deletion/publication issues. Completion of the review command does not mean a clean verdict. Report: /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/worktrees/adr090-native-review/.local/adr090/native-review-assessment.md.
@@ -15,23 +15,40 @@ Current code snapshot: `f94d14d3f` (2026-09-17). This checkpoint supersedes outs
 - A new integration finding remains open: the deletion client ignores the returned mutation state and can show success after failed runtime activation. A separate Sol fixer owns the client and regression tests.
 - Real browser verification has started against an isolated local profile and the built application. It has no provider credentials, so this cannot prove live agent or document/model acceptance. Actual workflow and supported-platform acceptance remain open. No CI, push or PR has run.
 
+## Browser and specialist review checkpoint
+
+- Security review on `f94d14d3f` has no actionable findings. Its initially proposed confirmation token was withdrawn because FR-007 explicitly chooses prompt-governed confirmation and forbids that mechanism.
+- Silent-failure findings SF-090-001 (skill publication plus failed restoration), SF-090-002 (workspace entity/graph partial saves), and SF-090-003 (deletion UI discarding mutation state) were assigned separate Sol fixers. SF-090-002 is integrated in 265b0307c; all remain open until final verification and independent recheck.
+- Type review found retired role constructors/IDs, unrestricted skill outcome states, and redundant inspection-media fields. The skill outcome type is assigned with SF-090-001; the other two remain open.
+- Prometheus tool-description findings are corrected in `7366b92fb` and independently rechecked. Browser-discovered roster/profile wording and seeded Ava/Planner descriptions are being corrected; final content recheck remains pending.
+- The isolated built app accepted a real browser login and rendered the roster and Mia profile. Browser inspection then exposed a functional mismatch: the Tools editor asked for `tools_cfg`, while the backend advertises `tool_policy_changes`. The corrected UI passes four focused descriptor cases and 193 tests across the affected frontend files. Three semantic mutations were caught and restored. The SPA build passes; rebuilt-binary browser evidence is pending. The earlier broad fixture used the wrong field name too, so it did not prove actual editability.
+- Full system-tools rerun passed (66.716 seconds). Full coreagent suite passed after metadata corrections (4.389 seconds). A local contract guard reproduced the handwritten field-descriptor response; the handler now uses the generated descriptor type and the guard passes. Full contract generation and TypeScript compilation pass; generated descriptor cleanup is committed as ee3679c15. Subsequent affected gateway tests compile but are red: 69 top-level failures among the 95 test functions selected by Test(GetAgent|ListAgents|UpdateAgent). At least 45 failures include missing-revision refusals; the remainder require fixture-versus-implementation diagnosis. This is an open regression gate, not a passing gateway suite. Evidence: /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/worktrees/release-20260917/.local/adr090/gateway-configuration-regressions-red.log (exit 1).
+
+## Current verification follow-up
+
+- Skill failed-restoration outcomes and typed persistence/activation states are integrated in `9c381c638`. Client support for the failure envelope without a live revision is integrated in `539b49bd9`. All 32 tests pass; all three deliberate mutations were caught and restored, and lint plus full contract generation/typecheck passed. Final independent end-to-end recheck remains open.
+- The rebuilt application now passes real browser permission editing: Mia's `search_web` setting was changed to `ask`, and a fresh authenticated API read confirmed the saved policy and override. Evidence: /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/worktrees/release-20260917/.local/adr090/browser-permission-save-proof.json. This supersedes earlier pending-browser statements.
+- Deletion UI fixes are complete on the worker branch (`127a5c4d5`, `93d4e81dd`), with 164 affected tests passing, three mutations caught/restored, typecheck and targeted lint passing. Integrated as `4e42b38e0` and `281b55712`; combined parent frontend verification passed all 172 cases across four files; parent typecheck passed. The permission-descriptor tests are being split into a dedicated file to address the remaining profile test-file budget overrun.
+- Independent test-quality review found missing actual-turn image privacy/retry coverage, incomplete reader boundary and provider request datasets, omission-preserve and exact workspace partial-state assertions, incomplete exact roster coverage, and an unnecessary-looking Windows test exclusion that still needs investigation. The actual-turn/retry and gateway cases have active owners. Report: /Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/worktrees/release-20260917/.local/adr090/test-quality-final-review.md.
+- A Sol worker is repairing the 69 observed gateway regression failures without weakening revision validation. Its corrected regression exposed a real production gap: a valid revision plus the retired updated_at field is accepted instead of rejected with INVALID_INPUT. Production correction is queued after the active update-handler refactor. Another is refactoring the three oversized backend functions without changing behavior or raising guard thresholds. Frontend budget findings and remaining independent reviewer contexts are still open.
+
 ## Scope and ownership
 
 | Work package | Requirements | Status |
 |---|---|---|
-| Public contracts and generated clients | Configuration FR-002/003/007/012 | Integrated; full generator and TypeScript compilation pass; final upload client correction underway |
-| Agent persistence and management | Configuration FR-001–005/007/012 agent portions | Integrated; combined agentmutation and focused agent tests pass; independent review underway |
+| Public contracts and generated clients | Configuration FR-002/003/007/012 | Upload client integrated; generated field-descriptor cleanup and final generation underway |
+| Agent persistence and management | Configuration FR-001–005/007/012 agent portions | Integrated through composite deletion; affected local packages pass; deletion UI correction pending integration |
 | Visual reader and private lifecycle | Visual FR-001–015 reader/lifecycle portions | Integrated; focused live-image lifecycle tests pass; real model acceptance remains pending |
-| Roster, effective policies and global visibility | Configuration FR-001/008/009 | Integrated; combined coreagent tests pass; final mutation proofs and review remain |
-| Role prompts and packaged procedures | Configuration FR-009/013 | First Prometheus review found seven issues; six guidance fixes integrated as 65fe1eeb8, management inventory implementation underway; independent recheck pending |
-| Workspace graph, skill mutation and Ava routing | Configuration FR-006/007 | Integrated; combined workspace and skills tests pass; system-tool fixture corrections under verification |
+| Roster, effective policies and global visibility | Configuration FR-001/008/009 | Integrated; full coreagent and role mutation checks pass; retired exported identity cleanup remains |
+| Role prompts and packaged procedures | Configuration FR-009/013 | Original tool findings corrected and rechecked; seeded metadata/UI wording corrected in 189f833f1, final content recheck pending |
+| Workspace graph, skill mutation and Ava routing | Configuration FR-006/007 | Workspace partial-state correction integrated as 265b0307c; skill failed-restoration backend integrated as 9c381c638, client validation underway |
 | Connector assignment at discovery and dispatch | Configuration FR-003/004/005 | Integrated; combined focused agent tests pass; four earlier mutations caught and restored; review pending |
-| Settings and all configuration callers | Configuration FR-002/003/007 | Settings integrated; worker final frontend suite 4,093 passed, two expected failures; upload client and integrated browser acceptance pending |
+| Settings and all configuration callers | Configuration FR-002/003/007 | Settings/upload integrated; real browser exposed descriptor mismatch, fixed in 189f833f1 with 193 affected tests passing and three mutations caught; rebuilt browser permission save and fresh readback pass |
 | Provider image request matrix and candidate checks | Visual provider requirements and BDD-10/11/12 | Provider and transport commits integrated; local provider suites passed; live-model/document acceptance pending |
 | Elicify document packages and actual runtime setup | Configuration FR-010/011; visual document acceptance | Packages, runtime and application wiring integrated; combined runtime tests pass; actual four-format/two-role visual workflow and platform certification pending |
 | Local end-to-end verification | All BDD and acceptance requirements | Pending final integrated execution |
-| Full code review and seven reviewer lenses | Complete implementation diff | Holistic grill complete: seven major and four minor findings; fixes underway; native full review and remaining independent lenses pending |
-| Prometheus review | All changed prompts, tool descriptions and skills | First review complete at 5940635c4: two critical, four high, one medium; six guidance fixes integrated, management fix and independent recheck required |
+| Full code review and seven reviewer lenses | Complete implementation diff | Holistic and full native review complete; security, silent-failure and type reviews complete with follow-up fixes; test-quality review complete with open findings; remaining independent lenses and final delta review pending |
+| Prometheus review | All changed prompts, tool descriptions and skills | Initial and final review performed; original tool guidance corrected/rechecked; latest metadata and UI wording awaits recheck |
 
 The requirements and BDD identifiers refer to the accepted companion specifications. This ledger does not replace them or mark omitted requirements complete. The advanced document-skill maturity/competitive campaign remains deferred under Elicify Skills #2 and Omnipus #730; baseline runtime document integration remains required here.
 
