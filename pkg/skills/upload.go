@@ -9,7 +9,10 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
 
-const MaxUploadedSkillPackageBytes = 50 * 1024 * 1024
+const (
+	MaxUploadedSkillPackageBytes   = 50 * 1024 * 1024
+	MaxUploadedSkillArchiveEntries = 1024
+)
 
 // StageUploadedSkill validates an authorized local upload and materializes a
 // package in stagingRoot. Only a single Markdown SKILL.md or a bounded ZIP
@@ -35,10 +38,11 @@ func StageUploadedSkill(uploadPath, stagingRoot string) (slug, stagedDir string,
 	if err != nil {
 		return "", "", err
 	}
+	cleanupDir := stagedDir
 	ok := false
 	defer func() {
 		if !ok {
-			_ = os.RemoveAll(stagedDir)
+			_ = os.RemoveAll(cleanupDir)
 		}
 	}()
 	switch ext {
@@ -52,7 +56,10 @@ func StageUploadedSkill(uploadPath, stagingRoot string) (slug, stagedDir string,
 		}
 		err = os.WriteFile(filepath.Join(stagedDir, "SKILL.md"), data, 0o644)
 	case ".zip":
-		err = utils.ExtractZipFile(uploadPath, stagedDir)
+		err = utils.ExtractZipFileWithLimits(uploadPath, stagedDir, utils.ZipExtractionLimits{
+			MaxEntries:       MaxUploadedSkillArchiveEntries,
+			MaxExpandedBytes: MaxUploadedSkillPackageBytes,
+		})
 		if err == nil {
 			data, readErr := os.ReadFile(filepath.Join(stagedDir, "SKILL.md"))
 			if readErr != nil {
