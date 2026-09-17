@@ -183,8 +183,7 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 	if err := p.ctx.Err(); err != nil {
 		return "", err
 	}
-	// A dedicated offer must contain only an application section. Reuse the
-	// existing viewer ICE settings/mux ownership, never the ingest settings.
+	// A dedicated offer must contain only an application section.
 	applications := 0
 	for _, line := range strings.Split(sdp, "\n") {
 		if strings.HasPrefix(line, "m=") {
@@ -197,12 +196,23 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 	if applications != 1 {
 		return "", errors.New("input offer must have one application section")
 	}
-	session := NewSession(p.cfg, nil, nil)
+	logf := func(format string, args ...any) {
+		slog.Info(fmt.Sprintf("browser dedicated input: "+format, args...))
+	}
+	session := NewSession(p.cfg, nil, logf)
 	pc, err := session.buildPeerConnection(session.apiViewer, true)
 	if err != nil {
 		return "", err
 	}
 	p.pc = pc
+	prefix := fmt.Sprintf("[input-%d]", p.queue.peer)
+	diag := newICEDiag(prefix, "input", logf)
+	pc.OnICECandidate(diag.noteLocalCandidate)
+	pc.OnICEGatheringStateChange(diag.noteGatheringState)
+	pc.OnICEConnectionStateChange(func(state pion.ICEConnectionState) {
+		logf("%s ICE connection state -> %s", prefix, state.String())
+		diag.noteICEState(state, pc)
+	})
 	pc.OnDataChannel(p.bindChannel)
 	pc.OnConnectionStateChange(func(state pion.PeerConnectionState) {
 		switch state {
@@ -210,6 +220,7 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 			p.fail("input connection closed")
 		}
 	})
+	diag.noteRemoteOffer(sdp)
 	if err = pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeOffer, SDP: sdp}); err != nil {
 		return "", fmt.Errorf("input offer: %w", err)
 	}

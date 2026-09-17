@@ -3,6 +3,9 @@ package webrtc
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
+	"net"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -11,6 +14,88 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
 	pion "github.com/pion/webrtc/v4"
 )
+
+func TestDedicatedInputPeerGathersOnSharedMediaMux(t *testing.T) {
+	conn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	mux := newTestUDPMux(t, conn)
+	mediaPort := conn.LocalAddr().(*net.UDPAddr).Port
+
+	peer := NewDedicatedInputPeer(context.Background(), Config{
+		MediaUDPMux: mux,
+		PublicIPs:   []string{"127.0.0.1"},
+	}, 1, 0, func(context.Context, generated.BrowserInputFrame) {}, nil, nil)
+	t.Cleanup(peer.Close)
+
+	se := pion.SettingEngine{}
+	se.SetIncludeLoopbackCandidate(true)
+	client, err := pion.NewAPI(pion.WithSettingEngine(se)).NewPeerConnection(pion.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	protocol := InputBinaryProtocol
+	if _, err = client.CreateDataChannel("input-reliable", &pion.DataChannelInit{Protocol: &protocol}); err != nil {
+		t.Fatal(err)
+	}
+	ordered, retries := false, uint16(0)
+	if _, err = client.CreateDataChannel("input-hover", &pion.DataChannelInit{Ordered: &ordered, MaxRetransmits: &retries, Protocol: &protocol}); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	offer, err := client.CreateOffer(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gather := pion.GatheringCompletePromise(client)
+	if err = client.SetLocalDescription(offer); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-gather:
+	case <-ctx.Done():
+		t.Fatal(ctx.Err())
+	}
+	answer, err := peer.Answer(ctx, client.LocalDescription().SDP)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var candidates []string
+	for _, line := range strings.Split(answer, "\r\n") {
+		fields := strings.Fields(strings.TrimPrefix(line, "a="))
+		if len(fields) < 6 || !strings.HasPrefix(fields[0], "candidate:") {
+			continue
+		}
+		candidates = append(candidates, line)
+		if fields[5] != fmt.Sprint(mediaPort) {
+			t.Fatalf("dedicated input candidate did not use media mux port %d: %s", mediaPort, line)
+		}
+	}
+	if len(candidates) == 0 {
+		t.Fatal("dedicated input answer gathered no candidates")
+	}
+	connected := make(chan struct{})
+	var connectedOnce sync.Once
+	client.OnICEConnectionStateChange(func(state pion.ICEConnectionState) {
+		if state == pion.ICEConnectionStateConnected || state == pion.ICEConnectionStateCompleted {
+			connectedOnce.Do(func() { close(connected) })
+		}
+	})
+	if err = client.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeAnswer, SDP: answer}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-connected:
+	case <-ctx.Done():
+		t.Fatal("data-only peer formed no candidate pair on the shared media mux")
+	}
+}
 
 func TestDedicatedInputPeerChannelsAndRetirement(t *testing.T) {
 	for _, invalid := range []string{"", "duplicate", "wrong-options", "wrong-label", "wrong-protocol", "json-message", "unknown-version", "truncated-message"} {
