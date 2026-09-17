@@ -3,11 +3,16 @@ package documentruntime
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"sync"
 )
+
+var provisionMu sync.Mutex
 
 // ProvisionFirstParty materializes the compiled probe, knowledge and helper
 // files before external dependencies exist. It publishes an intentionally
@@ -15,6 +20,23 @@ import (
 // A worker invoking the probe before setup receives a structured non-zero
 // missing-component result rather than falling through to host tooling.
 func ProvisionFirstParty(layout Layout) (Manifest, error) {
+	provisionMu.Lock()
+	defer provisionMu.Unlock()
+	if data, err := os.ReadFile(layout.Manifest); err == nil {
+		var existing Manifest
+		if err := json.Unmarshal(data, &existing); err != nil {
+			return Manifest{}, err
+		}
+		if existing.Revision != ManifestRevision {
+			return Manifest{}, fmt.Errorf("document manifest revision mismatch: %s", existing.Revision)
+		}
+		if err := VerifyAssets(layout.Prefix, existing.Assets); err != nil {
+			return Manifest{}, err
+		}
+		return existing, nil
+	} else if !os.IsNotExist(err) {
+		return Manifest{}, err
+	}
 	manifest := Manifest{
 		Revision:  ManifestRevision,
 		Python:    filepath.Join(layout.Bin, "python"),

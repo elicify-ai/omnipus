@@ -638,7 +638,11 @@ func (t *ExecTool) executeRun(ctx context.Context, args map[string]any, cb Async
 
 	// FR-B4: hardcoded deny-pattern baseline (unconditional) + the opt-in
 	// operator-extensible layer + the legacy command-text absolute-path scan.
-	if guardErr := t.guardCommand(ctx, command, cwd); guardErr != "" {
+	// The document probe is an immutable first-party command whose manifest
+	// lives outside the agent work directory by design. Its filesystem access
+	// is still confined by the per-turn kernel policy augmented below.
+	isDocumentProbe := t.documentRuntime != nil && command == strings.Join(documentruntime.ProbeArgv(*t.documentRuntime), " ")
+	if guardErr := t.guardCommand(ctx, command, cwd); guardErr != "" && !isDocumentProbe {
 		t.emitAudit(ctx, command, cwd, audit.DecisionDeny)
 		return ErrorResult(guardErr)
 	}
@@ -1022,7 +1026,7 @@ func (t *ExecTool) runForeground(
 
 	var env []string
 	if t.documentRuntime != nil {
-		env = documentruntime.ChildEnvironment(nil, *t.documentRuntime)
+		env = documentruntime.ChildEnvironment(sandbox.ScrubGatewayEnv(), *t.documentRuntime)
 	}
 	res, err := sandbox.Run(ctx, argv, env, lim)
 	if err != nil {

@@ -1593,6 +1593,9 @@ func (rw *registerSharedToolsWire3) registerSkillTool(agentID string, agent *Age
 
 		if _, already := agent.Tools.Get("Skill"); !already {
 			skillTool := tools.NewSkillTool(skillMaxResults)
+			if agent.DocumentRuntime != nil {
+				skillTool.SetDocumentRuntime(*agent.DocumentRuntime)
+			}
 			skillTool.SetResolver(
 				// load resolves slug for the acting agent through the full
 				// per-shelf grant model (ADR-072 D4/D4.1, via

@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/memory"
@@ -144,7 +145,8 @@ type AgentInstance struct {
 	LightCandidates []providers.FallbackCandidate
 	// LightProvider is the concrete provider instance for the configured light model.
 	// It is only used when routing selects the light tier for a turn.
-	LightProvider providers.LLMProvider
+	LightProvider   providers.LLMProvider
+	DocumentRuntime *documentruntime.Layout
 }
 
 // newAgentInstance carries the shared state of NewAgentInstance across its stages.
@@ -181,6 +183,7 @@ type newAgentInstance struct {
 	lightCandidates     []providers.FallbackCandidate
 	lightProvider       providers.LLMProvider
 	timeoutSeconds      int
+	documentRuntime     *documentruntime.Layout
 }
 
 // NewAgentInstance creates an agent instance from config.
@@ -257,6 +260,21 @@ func (nai *newAgentInstance) registerTools() {
 		logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 			map[string]any{"error": err.Error()})
 	} else {
+		id := ""
+		if nai.agentCfg != nil {
+			id = routing.NormalizeAgentID(nai.agentCfg.ID)
+		}
+		if id == "mia" || id == "worker" || id == "admin" {
+			layout, layoutErr := documentruntime.ResolveLayout(config.OmnipusHomeDir(), documentruntime.ManifestRevision, id)
+			if layoutErr != nil {
+				logger.ErrorCF("agent", "Failed to resolve document runtime", map[string]any{"agent_id": id, "error": layoutErr.Error()})
+			} else if _, provisionErr := documentruntime.ProvisionFirstParty(layout); provisionErr != nil {
+				logger.ErrorCF("agent", "Failed to provision document runtime", map[string]any{"agent_id": id, "error": provisionErr.Error()})
+			} else {
+				nai.documentRuntime = &layout
+				execTool.SetDocumentRuntime(layout, id == "admin")
+			}
+		}
 		nai.toolsRegistry.Register(execTool)
 	}
 
@@ -557,6 +575,7 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 		Router:              nai.router,
 		LightCandidates:     nai.lightCandidates,
 		LightProvider:       nai.lightProvider,
+		DocumentRuntime:     nai.documentRuntime,
 		TimeoutSeconds:      nai.timeoutSeconds,
 		AgentType:           resolvedAgentType,
 	}
@@ -741,6 +760,7 @@ func (a *AgentInstance) snapshotForExternalDispatch() *AgentInstance {
 		Router:          a.Router,
 		LightCandidates: a.LightCandidates,
 		LightProvider:   a.LightProvider,
+		DocumentRuntime: a.DocumentRuntime,
 	}
 	if pool != nil {
 		out.StoreProviderPool(*pool)
