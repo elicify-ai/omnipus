@@ -1,15 +1,19 @@
-# Built-in agents and skills — requirements
+# ADR-090 — Built-in agent configuration, skills, and visual file reading
 
-**Status:** founder decisions confirmed 2026-09-17; requirements consolidated, implementation pending
-**Document role:** consolidated product requirements on the release lineage; detailed implementation tasks follow this document.
-**Supersedes:** the five-core README story (Mia, Jim, Ava, Ray, Max) and the compiled seed where it disagrees.
-**Related:** vault note `Feature design — Workspace packs`; ADR-082 v10 (worktree isolation, branch `feat/lsp-and-native-worktrees`).
+- **Status:** Accepted product decisions (founder-confirmed 2026-09-17); initial grill-spec review passed; Opus findings being corrected; L1 package-source decision pending; implementation pending.
+- **Date:** 2026-09-17
+- **Decider:** Daniel Piatkowski
+- **Number verification:** ADR-090 absent from architecture paths in all locally reachable Git history after fetching origin on 2026-09-17; highest observed number 089. Recheck before publication because other branches can allocate concurrently.
+- **Input:** [Consolidated requirements](../design/built-in-agents-and-skills-2026-09.md) and [confirmed decisions](../design/built-in-agents-and-skills-2026-09-decisions.md).
+- **Evidence baseline:** release worktree at `3463b2d36`; source findings are documented in the [image verification](../design/built-in-agents-and-skills-visual-inspection-verification.md) and [tool analysis](../design/built-in-agents-and-skills-tool-visibility-analysis.md). GitNexus cannot resolve this unindexed worktree; source inspection is the fallback, not graph-derived impact evidence.
 
-This is the confirmed requirements input. Its decisions are now recorded in [ADR-090](../architecture/ADR-090-built-in-agents-skills-and-visual-reading.md); use that ADR and its implementation specifications where review clarifications extend this historical requirements capture. Packs are extra. Code today does not yet match the target behavior.
+## Context and decision boundary
 
-**Scope:** built-in agents, their capability assignments, prompts, and skills. **Greenfield only: no migrations or compatibility work for existing installations.** Ray and Max are absent from the new default roster; this work does not migrate, replace, or delete historical agents. Worktree isolation and other coding-engine features are separate work. Section 7 records only future prompt/skill guidance for using isolation once that capability is delivered; it is not a dependency for delivering this roster and its skills.
+The current built-ins are too broadly locked for users to configure their capabilities, Ava lacks the complete operations her role promises, and document generation lacks a direct visual-reading path. The approved requirements already define the desired roles and workflows. This ADR retains that document's detailed tables and records the architectural choices and consequences alongside them.
 
----
+This is greenfield work on agents, skills, and the tool integration required for their workflows. No migrations, legacy-agent deletion, worktree isolation engine, new Office engine, or autonomous model switching is included. Existing installed user choices still survive ordinary reload and restart. Source code describes current behavior; this accepted ADR specifies the intended changes, not a claim that they already ship.
+
+Decision identifiers: **D1** roster and role boundaries (§§1–4); **D2** field-level editing (§2.6); **D3** Ava's configuration workflow (§§5.1–5.2); **D4** default permissions and global visibility (§§5, 5.3–5.4); **D5** skills and dependency ownership (§6); **D6** visual file reading (§6.6); **D7** isolation exclusion (§7). Sections 10–11 define acceptance and delivery boundaries.
 
 ## 1. Intent
 
@@ -28,15 +32,33 @@ Success looks like:
 
 ## 2. Roster
 
+### 2.0 Stable roster identities
+
+These are fresh-install identities, not migrations or type changes to existing records. General Purpose keeps the existing `worker` identity with a new display name. Admin is an operator role using persisted `core`, so the existing chat-target rules apply; “system operator” is a job description, not the hidden `system` runtime type.
+
+| Display name | ID | Persisted type | API type | Chat target | Locked identity |
+|---|---|---|---|---|---|
+| Mia | mia | core | core | Yes | Yes |
+| Jim | jim | core | core | Yes | Yes |
+| Ava | ava | core | core | Yes | Yes |
+| Admin | admin | core | core | Yes | Yes |
+| Planner | planner | worker | Subagent | No | Yes |
+| Researcher | researcher | worker | Subagent | No | Yes |
+| General Purpose | worker | worker | Subagent | No | Yes |
+| Judge | judge | system | system | No | Yes |
+| Plan Supervisor | plansupervisor | system | system | No | Yes |
+
+Ray, Max and Explorer are not seeded. Add Admin's compiled identity/prompt and retarget Worker's display/prompt; every seeded identity must resolve through the existing catalog. Hidden agents remain engine-only. Their exact fixed tools are Judge: `read_file`, `list_directory`, `grep`, `inspect_session`, `ToolSearch`, `Skill`; Supervisor: `plan_correct`, `grep`, `ToolSearch`, `Skill`. Judge's filesystem boundary is the reviewed workspace under existing path/mount policy; relevant-task selection is an instruction, not a new per-task file allowlist. Its session inspection retains the existing verifier-session restrictions.
+
 ### 2.1 Colleagues (chat)
 
 | Agent | Job |
 |---|---|
-| **Mia** ⭐ | Welcome. Personal assistant: files, library, email, tasks, light look-up, live browser with the user, and document generation using the execution tool. Heavy / multi-step work → Jim. |
+| **Mia** | Welcome. Personal assistant: files, library, email, tasks, light look-up, live browser with the user, and document generation using the execution tool. Heavy / multi-step work → Jim. |
 | **Jim** | Orchestrator. Interviews (including planning questions). Runs the **plan engine**. Assigns Planner, Researcher, General Purpose. Approves the plan. Does not shell, does not author agents. |
 | **Ava** | Team and skill author. Configure agents, models, **tool permissions**, **installed connector assignments**, **skills**, teams, and **workspace delegation relationships**. Author custom-agent instructions; respect built-in field protections (§2.6). Choose type at creation; create a new agent when a different type is needed. Present changes together and obtain one user confirmation (§5.2). Does **not** install connectors or run plans. |
 
-### 2.2 Operator (system, chat-able)
+### 2.2 Operator (core runtime, chat-able)
 
 | Agent | Job |
 |---|---|
@@ -54,12 +76,12 @@ Success looks like:
 
 | Agent | Job |
 |---|---|
-| **Judge** | Assess each criterion using the existing `met` / `unmet` verdict contract; the engine decides further work. Read the task’s activity record through `inspect_session` and its relevant output files, read-only. No execution or connector access. Instructions are editable; tools and skills are fixed, with **verify** as the only assigned skill. |
+| **Judge** | Assess each criterion using the existing `met` / `unmet` verdict contract; the engine decides further work. Read the task’s activity record through `inspect_session` and seek relevant output files within the reviewed workspace, read-only; no new per-task filesystem allowlist is introduced. No execution or connector access. Instructions are editable; tools and skills are fixed, with **verify** as the only assigned skill. |
 | **Plan Supervisor** | One `plan_correct` per wake. Instructions are editable; tool, connector, and skill assignments are fixed. Retain existing `grep` access within its existing file scope, alongside `plan_correct`, `ToolSearch`, and `Skill`. |
 
 ### 2.5 Out of the default box
 
-Ray as a chat Scout. Max. Staff for Mia or Ava. Jim holding bash / `serve_web`. Ava holding plan tools or `add_mcp_server`. Inherit-parent-tools when the target is a **different** seat (self-delegate is not that).
+Ray as a chat Scout. Max. Explorer. Staff for Mia or Ava. Jim holding bash / `serve_web`. Ava holding plan tools or `add_mcp_server`. Inherit-parent-tools when the target is a **different** seat (self-delegate is not that).
 
 ---
 
@@ -71,7 +93,7 @@ Ray as a chat Scout. Max. Staff for Mia or Ava. Jim holding bash / `serve_web`. 
 | Judge and Plan Supervisor | User-editable, directly or through Ava’s confirmed proposal. | Fixed capability sets. No execution or connector access for the Judge. This is the explicit exception to ordinary built-in editing. |
 | Custom agents | Ava and the user may author and edit them. | Configurable, within the agent runtime’s supported capabilities and global permissions. External coding agents use their own runtime; do not claim they can load Omnipus skills or tools when they cannot. |
 
-The same field rules apply in the screen, server requests, and agent tools. Reject protected-field changes clearly; do not silently drop them or unlock all fields together. Names and other built-in identity fields retain their existing protection unless expressly changed here. Agent type is chosen at creation and is not editable: a different type means a new agent, with any team changes included in Ava’s proposal.
+The same field rules apply in the screen, server requests, and agent tools. Reject protected-field changes clearly; do not silently drop them or unlock all fields together. Names and other built-in identity fields retain their existing protection unless expressly changed here. Fixed capabilities mean tools (including nested tool access settings), connector access, and skill assignments; this does not freeze existing editable model/provider or runtime-tuning fields. Judge/Supervisor identities are engine-owned and are not available as custom creation types. Agent type is chosen at creation and is not editable: a different type means a new agent, with any team changes included in Ava’s proposal.
 
 Changing skill assignments intentionally changes which playbooks an ordinary built-in can use without modifying its base instructions. Capability edits must survive reload and restart, including deliberately empty skill/connector selections and edited Judge/Supervisor instructions. Startup seeding must not restore user-removed defaults. Preserve user choices in future releases as a product principle; implementing upgrade migrations is outside this greenfield scope.
 
@@ -85,6 +107,7 @@ User → Mia | Jim | Ava | Admin
 Mia  → Jim (heavy work) · Ava (new teammate) · Admin (wire the box)
 Jim  → Planner · Researcher · General Purpose
 Jim  → Ava (handover: missing specialist — user joins)
+Jim  → Admin (handover: missing document dependencies)
 Jim  → self (fork: same belt, narrower task)
 Planner → Researcher (context before the DAG)
 Planner → Jim only (questions), never the user
@@ -93,6 +116,10 @@ General Purpose → General Purpose helpers only
 ```
 
 Simple work: Jim skips Planner and assigns Researcher or General Purpose directly.
+
+A same-role helper is a child turn using the same seeded agent ID/configuration, not a new permanent agent. Permit self-delegation only for `jim` and `worker` through an explicit workspace self-edge, with existing allowed modes and the global/per-edge depth caps (global default 3). Seed these self-edges for eligible fresh workspace members; an omitted/removed edge refuses the helper. Exempt only these validated self-edges from graph cycle detection; continue rejecting other cycles, other self-edges, mode violations and depth overflow. This deliberately replaces the current unconditional self-delegation refusal and the corresponding graph validation, as agent orchestration work, not worktree isolation.
+
+Handoffs requiring Ava's confirmation use `switch_agent` into the user's owner session. A delegated Ava session cannot use the owner-only question tool: it returns a proposed change to its parent without configuration writes and asks for an owner-session handoff. Internal `send_message` is not a substitute for an owner-session confirmation.
 
 ---
 
@@ -118,15 +145,19 @@ Simple work: Jim skips Planner and assigns Researcher or General Purpose directl
 
 **Floor (every seat):** `Skill` (load), `ToolSearch`, included in shipped defaults. Ordinary built-in capability settings remain user-editable under §2.6; removing a needed tool must produce a clear unavailable-capability response, not an automatic hidden regrant.
 
-The matrix below states shipped defaults. “—” means not granted by default. Enumerate concrete tools during implementation, including the supporting operations below. Permission resolution remains the existing global ceiling plus per-agent overrides: no new fallback layer or automatic per-agent deny backfill.
+Ordinary role tool exclusions and descriptions in this ADR describe shipped defaults, not immutable capability bans. Authorized user changes replace those local overrides within the global ceiling. Prompts must not claim a user-enabled supported tool remains denied solely because its role normally does not use it. GP helper-role restrictions and hidden engine scope remain enforced invariants.
 
-**Send on channels and email is Ask** by default for every working agent who has them (Mia, Jim, Ava, Planner, Researcher, General Purpose). Judge and Plan Supervisor stay mute.
+The matrix below states shipped defaults. “—” means not granted by default. Enumerate concrete tools during implementation, including the supporting operations below. Permission resolution remains the existing global ceiling plus per-agent overrides: no new fallback layer or automatic per-agent deny backfill. An explicit role exclusion in this table must have a deliberately authored per-tool deny override wherever the global ceiling would otherwise allow it; omission alone is not denial. Keep these chosen overrides sparse rather than generating a deny entry for every tool. Connector eligibility follows §5.0: no binding means no access; ordinary users may subsequently change assignments within the global ceiling.
+
+**External sending is Ask** by default for each working agent assigned it: author explicit Ask overrides for `send_email` and `reply`. Internal agent communication (`send_message`, `message_parent`, `switch_agent`) does not acquire an external-send approval prompt. Judge and Plan Supervisor stay mute.
+
+The approved Admin installation capability requires changing the shipped `add_mcp_server` ceiling from Deny to Allow, with explicit Deny defaults for other built-ins and new custom agents; Admin alone ships with installation enabled. This follows the already confirmed Allow matrix, not a new recommendation to ask per install. User-set global Ask/Deny remains authoritative. Ava's approved one-question workflow similarly requires shipped Allow ceilings/defaults for configuration mutations including `delete_agent`, `install_skill`, `create_skill`, `edit_skill` and `remove_skill`; author other-role restrictions deliberately and preserve operator-set ceilings. Already-present Allow defaults need no change. Destructive-operation flags reflect the confirmed proposal, not a second user question.
 
 | Group | Mia | Jim | Ava | Admin | Planner | Researcher | GP | Judge | Plan Supervisor |
 |---|---|---|---|---|---|---|---|---|---|
 | Talk / handoff / ask-user | Allow | Allow | Allow | Allow | send back | send back | send back | — | — |
 | Memory | Allow | Allow | Allow | Allow | Allow | Allow | Allow | — | — |
-| Files + library read **and write** | Allow | Read | Read | Setup files | Read | Read | Allow | Relevant task outputs, read-only | Existing scoped `grep` only |
+| Files + library read **and write** | Allow | Read | Read | Setup files | Read | Read | Allow | Reviewed workspace, read-only; seek relevant outputs | Existing scoped `grep` only |
 | Email + chat channels | Allow; send Ask | same | same | — | same | same | same | — | — |
 | Web search / fetch | Allow | Allow | Allow | — | Allow | Allow | Allow | — | — |
 | Browser (with the user) | Allow | Allow | Allow | — | — | — | — | — | — |
@@ -136,10 +167,16 @@ The matrix below states shipped defaults. “—” means not granted by default
 | **Plans** | — | **Allow** | **Deny** | — | — | — | **Deny** | — | — |
 | Delegate | — | → Planner, Researcher, GP, self | — | — | → Researcher | — | → GP helpers only | — | — |
 | Agents, teams, skills, and capability configuration | find_skills | find/list | Proposal then one user confirmation (§5.2) | — | — | — | — | — | — |
-| Installed connector discovery and assignment | — | — | Discovery Allow; assignment after confirmed proposal | Allow | — | — | — | — | — |
+| Installed connector discovery and assignment | — | — | Discovery Allow; assignment after confirmed proposal | Discovery/management only; no agent assignment | — | — | — | — | — |
 | Connector installation / provider / channel / doctor | — | — | — | **Allow** (remove/disable Ask) | — | — | — | — | — |
 | `inspect_session` / `plan_correct` | — | — | — | — | — | — | — | inspect | correct |
 | `set_config` (kernel) | — | — | — | — | — | — | — | — | — |
+
+### 5.0 Connector assignment is enforced availability
+
+Installed does not mean assigned. Native agents begin with no MCP execution access unless a concrete binding is explicitly seeded/assigned; new server installation grants none automatically. Admin can manage installed servers through management tools without implicitly executing their connector tools. For each call, effective connector availability is the intersection of target bindings and existing global/per-agent tool policy. Enforce it during discovery/registration and execution, including already loaded/stale definitions after unassignment. This is assignment eligibility like skills, not a third Allow/Ask/Deny resolver.
+
+An omitted assignment field preserves state on update; explicit empty bindings mean no access. Within an assigned server, omitted tool selection means all of that server's policy-permitted tools; an explicit empty selection means none. The current binding persistence/selection collapses these states and does not enforce per-agent server binding at runtime: both must be corrected. No global tool-policy override can make an unassigned connector callable. Test the actual invocation after unbinding, not merely readback.
 
 ### 5.1 Ava’s complete configuration workflow
 
@@ -163,7 +200,7 @@ For each configuration request, Ava shows one combined proposal: affected agents
 
 Do not use a separate approval tool for this workflow. Align Ava’s authoring/configuration tool defaults with this one-confirmation experience rather than also defaulting each proposed write to a second approval prompt. Existing operator-configured global restrictions remain authoritative and cannot be bypassed. Interrupted or partially failed operations must report what changed and what remains; do not report the whole proposal as applied.
 
-Before applying a confirmed proposal, re-read the affected settings and check that its assumptions still hold. Preserve unrelated concurrent edits. If another edit changes the proposal's meaning or permissions, show the revised proposal and obtain a new confirmation rather than overwrite it. After interruption, read back what succeeded before proposing any remaining work; do not blindly replay creations or deletions.
+Before applying a confirmed proposal, re-read the affected settings and check that its assumptions still hold. Preserve unrelated concurrent edits. If another edit changes the proposal's meaning or permissions, show the revised proposal and obtain a new confirmation rather than overwrite it. After interruption, read back what succeeded before proposing any remaining work; do not blindly replay creations or deletions. Validate the expected state atomically with each resource write under the existing entity/workspace lock; a separate pre-read does not close the race. Use the canonical opaque `revision` precondition defined in the configuration specification across agent, tools, skill and workspace mutations, including deletion; `updated_at` remains display metadata. Agent checks cover both entity and applicable instruction-file content under a shared lock. Stage both files before replacement and report any subsequent storage failure as actual partial state without activation; do not promise cross-file rollback or a cross-resource transaction framework.
 
 ### 5.3 General Purpose defaults
 
@@ -214,7 +251,7 @@ A skill is a playbook loaded with the `Skill` tool. It is **not** a standing rul
 | **handoff** | Mia |
 | **orchestrate** | Jim — future isolation guidance is gated by §7 |
 | **plan** | Jim, Planner, Plan Supervisor — future isolation guidance is gated by §7 |
-| **define-goal** | Planner, Jim, Mia — anyone who **creates** a task or plan |
+| **define-goal** | Planner, Jim, Mia, Plan Supervisor — authors and correctors of task/plan goals |
 | **deep-research** | Researcher |
 | **agent-authoring** | Ava |
 | **skill-authoring** | Ava |
@@ -273,6 +310,8 @@ Reuse the existing media processing, image normalization, size limits, and model
 At minimum, valid PNG and JPEG files must be inspectable. Other formats follow the existing normalizer's supported formats and limits. Invalid, unsupported, inaccessible, or oversized images must produce an accurate explanation without claiming visual inspection. If normalization resizes an image, tell the model it received a resized view so it can use execution to create and read a crop when fine details matter.
 
 Ensure image content survives every provider conversion used for supported vision models, including images returned by tools. The current Responses and Anthropic tool-result paths omit image media and require correction. Apply the existing capability handling consistently to read-tool images and other tool-produced images; do not bypass it by attaching pre-encoded image data directly. For a model without image support, preserve file access and provide the existing guidance to switch models. Do not silently switch models or claim that text extraction completes visual inspection.
+
+Inspection images are transient to the active turn and its existing request retries. Durable session/transcript/archive records retain only text metadata (source identity/path, content hash and dimensions), not inspection image bytes or retained snapshot refs. On later replay/compaction, show “image not retained; re-read to view”; a fresh read applies current filesystem permissions. This chooses the existing allowed unavailable-evidence outcome instead of adding a retention/revocation subsystem. Explicit user uploads and file-delivery history retain their existing behavior. All retained native provider adapters, including optional Bedrock, must be inventoried; external CLI transports without a native image-result path return an explicit unsupported-route limitation.
 
 Mia and General Purpose's document skills must render pages or sheets as needed, read the resulting images, check layout and readability, correct detected defects, and inspect the revised output before delivery. If required visual validation cannot be completed, explicitly report it and keep that validation incomplete. Browser permissions are not a prerequisite for this document workflow.
 
@@ -333,10 +372,10 @@ Completion requires appropriate automated checks **and real workflows**:
 |---|---|
 | Tool visibility and discovery | In a fresh session, permitted tools from the 37-name global set are callable without ToolSearch, including Skill, questions, execution, and hidden-agent essentials in their valid scopes. A role-specific deferred tool is named in its prompt, loaded by exact name through ToolSearch, and then successfully used. Denied/unregistered tools are not offered or made usable by a prompt mention. |
 | Ava builds a teammate | One combined proposal, one user-question confirmation, then actual creation, model/tool/skill/connector configuration, team membership, and workspace delegation. Jim can assign the resulting teammate a task and it can use its configured capabilities. |
-| Ava changes existing settings | Read before editing, preserve unrelated settings, support deliberate removals/empty lists, and accurately report partial failure or unavailable live activation. A cancelled proposal changes nothing. A concurrent material edit triggers a revised proposal; resumption does not duplicate already completed mutations. |
+| Ava changes existing settings | Read before editing, preserve unrelated settings, support deliberate removals/empty lists, and accurately report partial failure or unavailable live activation. A cancelled proposal changes nothing. A concurrent material edit, including one inserted after the preliminary read but before the locked write, rejects that resource mutation and triggers a revised proposal; earlier successful resources are reported and resumption does not duplicate completed mutations. |
 | Built-in editing | Through both Settings and Ava, ordinary built-in prompts stay protected while tools/connectors/skills can change. Judge/Supervisor instructions can change while their capability sets stay fixed. |
 | Persistence | Save, reload, and restart preserve permitted edits, edited Judge/Supervisor instructions, and empty selections. No migration or old-version upgrade test is required in this greenfield scope. |
-| Global permissions | An agent-level grant cannot override a global denial. A user who removes a necessary capability gets a clear explanation rather than a hidden regrant. |
+| Global permissions | An agent-level grant cannot override a global denial. A user who removes a necessary capability gets a clear explanation rather than a hidden regrant. With global bash Allow, fresh Jim still cannot execute because his shipped Deny is explicit; an authorized subsequent user removal of that override follows the existing ceiling. |
 | Mia’s document outputs | Generate valid, openable Word, spreadsheet, presentation, and PDF files using the actual assigned skills and execution environment; inspect/render/validate as their workflows require and return the files. |
 | Visual inspection | Mia and General Purpose read rendered PNG/JPEG pages through the read tools without browser access or automatic user delivery. Images reach each supported vision-provider request. A live model identifies known visual defects and checks corrected output. Unsupported models and corrupt, oversized, or inaccessible files produce accurate limitations; existing text/document reading still works. |
 | Missing dependency | Mia identifies the missing dependency, Admin performs supported setup, and Mia verifies availability and resumes. General Purpose follows the parent/Jim-to-Admin route and verifies its own runtime before resuming. Unsupported setup is reported without claiming completion. |
@@ -358,4 +397,46 @@ Record code-check results separately from proof that a user or agent can actuall
 | Hidden agents | Native Judge/Supervisor execution and evidence tools | Editable instructions with fixed capabilities; relevant Judge output access | Existing verdict/correction contracts and scope restrictions continue to hold |
 | Isolation | Separate feature design | Future prompt/skill guidance only | No isolation engine or merge/retry implementation in this delivery |
 
-This table describes planned delivery, not completed runtime functionality. The companion decisions record is the interview history; the main requirements above are the implementation authority. Historical review and tool-analysis recommendations are superseded wherever they differ from these confirmed requirements.
+This table describes planned delivery, not completed runtime functionality. The companion decisions record is the interview history; this ADR is the architectural authority, and its linked specifications define testable implementation contracts. Historical review and tool-analysis recommendations are superseded wherever they differ from these confirmed requirements.
+
+
+## 12. Alternatives and rationale
+
+| Decision | Chosen approach and reason | Alternatives declined |
+|---|---|---|
+| D1 | Named working roles and fixed hidden engine roles keep delegation understandable and preserve existing engine contracts. | Retaining retired Ray/Max defaults; unrestricted GP cross-role delegation. |
+| D2 | Enforce editability per field at every mutation surface, preserving user configuration across restarts. | Whole-record locks prevent legitimate capability changes; unlocking every field would expose protected prompts. |
+| D3 | Extend existing tools and workspace configuration; one normal user-question confirmation covers the exact proposal. Re-read and report partial application. | A separate approval tool or confirmation per write; a new cross-resource transaction framework; silent rollback of user changes. |
+| D4 | Keep the two-layer permission model and one global hardcoded visibility list. ToolSearch loads remaining allowed tools. | Per-agent visibility settings or a third policy fallback layer add unnecessary concepts. |
+| D5 | Use selected document skills with their Python/Node helpers; Admin owns environment setup. | Rewriting all skills to Python only, inventing a native Office engine, or promising dependencies unavailable in the actual runtime. |
+| D6 | Add visual images to existing read tools and connect existing media/capability/provider paths. Reading does not deliver a file to the user. | A separate view-image tool expands the surface; browser-serving workarounds require unrelated permissions; base64 text alone is not vision input. |
+| D7 | Gate future isolation instructions on the separate feature's delivered contract. | Bundling isolation engine, merge/retry, or Stop changes into the agent roster. |
+
+## 13. Consequences, operation, and recovery
+
+This changes backend validation, configuration tools, startup seeding, Settings controls, prompts, packaged skills, and provider image conversion. A UI-only edit is insufficient. Existing filesystem, authentication, global-permission, and credential boundaries remain authoritative. Protected and malformed fields are rejected rather than silently ignored. A failed read or configuration activation is visible to the agent and user.
+
+Configuration changes take effect through the existing runtime refresh path; saved-but-inactive state must be reported distinctly. Document dependency failures remain pending until verified setup. Image capability failures preserve file access and give guidance, without fabricating successful inspection. Existing audit and tool records must identify the operation and outcome without exposing connector secrets or dumping image base64 into ordinary text logs.
+
+This is a greenfield release change, not a migration or rollback programme for earlier installations. Delivery must distinguish spec review, automated code checks, and actual user/agent reachability. Implementation may be delivered in the two dependency-ordered specifications below; the complete roster is not declared delivered until both meet their acceptance criteria.
+
+## 14. Relationship to prior decisions
+
+This ADR supersedes older whole-record built-in write locks and seed/prompt defaults only where they conflict with §2.6 and the role tables. It replaces the full/deferred name selection in ADR-071 — Tool manifest tier redesign with §5.4, while retaining its discovery mechanism. It preserves ADR-077 — Two-layer tool policy's global ceiling and per-agent tightening; a local Allow never defeats global Ask or Deny.
+
+It extends ADR-051 revision 4 — Workspace media library and presentation layer with a private read-tool image path and consistent tool-media capability handling. It preserves ADR-084 — Judge as an active reviewer's criterion verdict/workspace evidence scope and ADR-055 — Plan supervisor's correction lifecycle; only instruction editability and explicit capability defaults change as stated here. This intentionally supersedes the self-edge/self-delegation prohibition for only the two bounded helper roles, the shipped `add_mcp_server` Deny for the explicitly scoped Admin workflow, and ADR-084 JUDGE-FR-059's empty skill allowlist with the fixed `verify` assignment. Plan Supervisor retains both `plan` and `define-goal`.
+
+The approved Python/Node document workflows are an explicit exception to the root “no new runtime deps” wording for optional external document-execution prerequisites; the Omnipus Go binary itself remains standalone and gains no mandatory startup dependency. The implementation must provide the shared restricted dependency prefix and worker PATH/probes defined in the configuration specification, so Admin's install is actually usable by both workers. The root operating rules annotate these planned exceptions alongside the current runtime baseline; implementation must update the baseline statements when delivered. Historical ADRs remain unchanged as an audit trail. Where an older editable-field matrix conflicts, this ADR governs these built-in roles; unrelated custom/external runtime restrictions remain.
+
+## 15. Specification split and open decisions
+
+1. **[Agent configuration and skills](../specs/adr-090-agent-configuration-and-skills-spec.md):** roster, field protection, Ava, tools/visibility, prompt/skill packaging, document execution and Admin setup.
+2. **[Visual file reading](../specs/adr-090-visual-file-reading-spec.md):** reader image content, inspection-only delivery, capability handling, provider conversion, and visual validation.
+
+The second specification supplies the visual acceptance required by the first; it can be developed independently against the existing read interface. Both reuse existing runtime facilities. The package source choice is open following verified license evidence (L1 below). Exact supporting tool maps remain engineering inventory work governed by the approved role boundaries, not permission to omit capabilities.
+
+### Open decision L1 — document-skill redistribution
+
+During source verification on 2026-09-17, the four upstream `skills/docx`, `skills/xlsx`, `skills/pptx` and `skills/pdf` LICENSE.txt files at Anthropic skills commit `34040c9c568585f6929bedeaad110ad08f079624` all explicitly restrict copying, derivative works and redistribution. Their presence in a public repository is not evidence that Omnipus may bundle them. [Pinned license evidence](https://github.com/anthropics/skills/blob/34040c9c568585f6929bedeaad110ad08f079624/skills/docx/LICENSE.txt).
+
+Direct bundling/adaptation is blocked pending either evidence of separate permission or a founder decision to use independently authored/permissively licensed equivalents. The recommended alternative preserves all four document capabilities and Python/Node execution; it does not copy the restricted prompts/scripts. The founder question is pending. Reader/provider and agent-configuration work can be specified independently, but the document-skill package is not declared implementation-ready while this choice is open.
