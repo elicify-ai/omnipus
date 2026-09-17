@@ -17,6 +17,7 @@ import type {
   RunnerTestResponse,
 } from '@/lib/api/generated/openapi-types'
 import { request } from './http'
+import { requestConfiguration } from './configuration'
 
 // ── Agents ────────────────────────────────────────────────────────────────────
 
@@ -122,7 +123,7 @@ export function createAgent(data: AgentCreateRequest): Promise<Agent> {
 }
 
 export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent> {
-  return request<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
+  return requestConfiguration<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
 }
 
 // Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete button.
