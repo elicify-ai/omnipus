@@ -32,7 +32,7 @@ func (t *SkillRemoveTool) Description() string {
 		"returns NOT_FOUND even though list_skills reports it as available. If the removed skill " +
 		"was shadowing a lower-priority skill of the same id (an override or a built-in), that " +
 		"one becomes visible again. Parameters: name (required, the skill id as " +
-		"reported by list_skills — no path separators), confirm (bool, must be true)."
+		"reported by list_skills — no path separators), revision (required from the reviewed skill read), confirm (bool, must be true). A conflict requires a fresh read; do not retry the stale deletion."
 }
 
 func (t *SkillRemoveTool) Parameters() map[string]any {

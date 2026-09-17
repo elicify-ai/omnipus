@@ -9,8 +9,8 @@ Read the workspace team and current graph with get_workspace.
 1. Build candidate edges only between valid members.
 2. Check modes and depth; self-edges are limited to Jim and General Purpose.
 3. Include additions and removals in one confirmed proposal.
-4. Apply with update_workspace and read back the usable graph.
+4. Apply with update_workspace using the revision from get_workspace and read back the usable graph.
 ## Expected output
 A valid graph matching the proposal.
 ## Stop and handoff
-Reject unknown endpoints, prohibited self-edges, cycles, invalid modes, and depth overflow.
+Reject unknown endpoints, prohibited self-edges, cycles, invalid modes, and depth overflow. On a conflict, stop remaining writes, reread, and reconfirm a materially changed proposal.

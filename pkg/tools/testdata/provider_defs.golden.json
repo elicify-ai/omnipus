@@ -50,7 +50,7 @@
   },
   {
     "name": "delete_agent",
-    "description": "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and its home directory ($OMNIPUS_HOME/agents/\u003cid\u003e/ — SOUL.md, HEARTBEAT.md, MEMORY.md, its skills folder). Also cascades: every chat session in the shared session store that belongs SOLELY to this agent is deleted, together with its uploaded files — a session another agent also participated in (e.g. via a mid-conversation agent switch) is left untouched to avoid destroying that agent's history, and is reported separately in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself survives); tasks it merely created keep that historical attribution. This agent is also removed from every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from each affected workspace's delegation graph. Locked core agents (Mia, Jim, Ava, Ray), the currently configured default agent, and an agent that owns at least one active (running) Plan cannot be deleted — set another agent as default first (Agents screen ★), or stop/reassign the Plan(s), before retrying. A step that fails partway through is reported in the response rather than silently swallowed — check for a warning field before assuming the cascade fully completed.\nParameters: id (required), confirm (bool, must be true).",
+    "description": "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and its home directory ($OMNIPUS_HOME/agents/\u003cid\u003e/ — SOUL.md, HEARTBEAT.md, MEMORY.md, its skills folder). Also cascades: every chat session in the shared session store that belongs SOLELY to this agent is deleted, together with its uploaded files — a session another agent also participated in (e.g. via a mid-conversation agent switch) is left untouched to avoid destroying that agent's history, and is reported separately in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself survives); tasks it merely created keep that historical attribution. This agent is also removed from every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Ava, Admin, Planner, Researcher, General Purpose, Judge, and Plan Supervisor), the currently configured default agent, and an agent that owns at least one active (running) Plan cannot be deleted — set another agent as default first (Agents screen ★), or stop/reassign the Plan(s), before retrying. A step that fails partway through is reported in the response rather than silently swallowed — check for a warning field before assuming the cascade fully completed.\nParameters: id (required), revision (required, from get_agent), confirm (bool, must be true).",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
@@ -64,7 +64,7 @@
   },
   {
     "name": "delete_workspace",
-    "description": "Delete a workspace. This is IRREVERSIBLE and destroys more than the workspace record: all GTD tasks belonging to the workspace, the mount/folder-grant store (records of which host folders were shared with it), the delegation trust graph (which agents may delegate to which within it), and the workspace's own directory (AGENT.md and its shared memory room) are all permanently removed. Only GTD-status tasks (inbox/next/in_progress/blocked/done/failed) are cascade-deleted — workflow-status tasks that still reference this workspace_id are left in place and become orphans. Call list_workspaces first to find the workspace id. Requires confirm:true.\nParameters: id (required), confirm (bool, must be true to prevent accidental deletion).",
+    "description": "Delete a workspace. This is IRREVERSIBLE and destroys more than the workspace record: its GTD tasks, mount grants, delegation graph, and workspace directory are permanently removed; workflow-status tasks that still reference it become orphans. Read it with get_workspace first. Parameters: id, revision from that read, and confirm:true are all required.",
     "scope": "core",
     "category": "workspaces",
     "source": "builtin"
@@ -78,7 +78,7 @@
   },
   {
     "name": "edit_skill",
-    "description": "Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version for rollback, then writes the new SKILL.md; whether the write additionally prompts for operator approval depends on your operator's tool-approval policy for this tool. Editing a built-in creates a user override; the built-in is never mutated in place. content must not exceed 262144 bytes. Parameters: name (required), content (required, full new SKILL.md).",
+    "description": "Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version for rollback, then writes the new SKILL.md; whether the write additionally prompts for operator approval depends on your operator's tool-approval policy for this tool. Editing a built-in creates a user override; the built-in is never mutated in place. content must not exceed 262144 bytes. Parameters: name, content (full new SKILL.md), and revision from the reviewed skill read are required. A conflict means the skill changed after review; stop, reread, and do not retry the stale write.",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
@@ -120,7 +120,7 @@
   },
   {
     "name": "get_workspace",
-    "description": "Get a single workspace by ID, including its live task count.\nUse this to refresh workspace data after creating tasks. Returns id, name, description, status, pinned, pin_order, is_default, core_team, task_count, created_at and updated_at. It does NOT return the delegation graph (which agents on this team may delegate to which) — that lives in a separate store; see the workspace's Team tab for it.\nParameters: id (required, from list_workspaces).",
+    "description": "Get a workspace by ID, including its authoritative team, delegation graph, revision, and live task count.\nUse this before every workspace mutation and for readback. Returns id, name, description, status, pinned, pin_order, is_default, core_team, delegation, revision, task_count, created_at, and updated_at.\nParameters: id (required, from list_workspaces).",
     "scope": "core",
     "category": "workspaces",
     "source": "builtin"
@@ -190,7 +190,7 @@
   },
   {
     "name": "remove_skill",
-    "description": "Remove an installed skill. IRREVERSIBLE — the skill's whole directory, including any version history it holds, is permanently deleted; there is no undo. This only reaches a skill in the operator's installed-skills directory (populated by installing from the marketplace) — it does NOT reach a skill authored with create_skill or a user override created with edit_skill, which live in a separate directory: naming one here returns NOT_FOUND even though list_skills reports it as available. If the removed skill was shadowing a lower-priority skill of the same id (an override or a built-in), that one becomes visible again. Parameters: name (required, the skill id as reported by list_skills — no path separators), confirm (bool, must be true).",
+    "description": "Remove an installed skill. IRREVERSIBLE — the skill's whole directory, including any version history it holds, is permanently deleted; there is no undo. This only reaches a skill in the operator's installed-skills directory (populated by installing from the marketplace) — it does NOT reach a skill authored with create_skill or a user override created with edit_skill, which live in a separate directory: naming one here returns NOT_FOUND even though list_skills reports it as available. If the removed skill was shadowing a lower-priority skill of the same id (an override or a built-in), that one becomes visible again. Parameters: name (required, the skill id as reported by list_skills — no path separators), revision (required from the reviewed skill read), confirm (bool, must be true). A conflict requires a fresh read; do not retry the stale deletion.",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
@@ -225,7 +225,7 @@
   },
   {
     "name": "update_agent",
-    "description": "Update an existing agent's configuration. Only provided fields are changed; omitted fields are left as-is. Locked core agents (Mia, Jim, Ava, Ray) cannot be modified at all — the call is refused. An empty string is silently IGNORED for name/description/color/icon (they cannot be cleared this way — omit the field instead), but an empty string for provider CLEARS an existing provider pin (falls back to default-provider resolution) — this is a deliberate asymmetry, not a bug. The agent's type (Main/Subagent/subagent_3p) and, for subagent_3p, its external CLI runtime (cli/cli_path) cannot be changed after creation — delete and recreate the agent to change these.",
+    "description": "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Ava, Admin, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their tool policies, installed connector assignments, and skills are editable. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty string is ignored for name/description/color/icon, while an empty provider clears its pin. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"
@@ -239,7 +239,7 @@
   },
   {
     "name": "update_workspace",
-    "description": "Update an existing workspace's name, description, status, pin state, or core team. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use list_workspaces first to find the workspace id.\nParameters: id (required, from list_workspaces), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs). Only provided fields are updated — EXCEPT core_team: sending it REPLACES the entire team list, it does not merge or add to it. WARNING: to add one member without dropping the rest, first call get_workspace, append the new agent id to the existing core_team array, then send that complete array back here. Adding an agent to core_team also grants the default delegation trust edges between it and the existing team — this tool writes real authorization records, bounded to the built-in seed matrix (it can never invent an arbitrary edge or name an off-team agent). Edges among members that were already on the team are never re-added, so a trust edge you previously removed stays removed. The response reports any edges seeded in `delegation_seeded`. If the workspace's delegation record is unreadable the whole update is refused rather than overwriting it with defaults (DELEGATION_STORE_UNREADABLE). Updating core_team on a workspace whose setup was pending also marks setup_completed in the response. name is capped at 200 characters, description at 2000.",
+    "description": "Update an existing workspace using the revision returned by get_workspace. Call this to change its name, description, status, pin state, complete core team, or complete delegation graph. Omitted fields are preserved. core_team replaces the entire team. Omitted delegation preserves valid existing edges, removes edges for removed members, and may seed approved edges for newly added built-ins; an explicit delegation array replaces the entire graph, suppresses implicit seeding, and [] clears it. Read the workspace first, include all intended membership and graph effects in the proposal, then submit its id and revision.",
     "scope": "core",
     "category": "workspaces",
     "source": "builtin"

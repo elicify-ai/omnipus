@@ -488,12 +488,13 @@ func (t *ReadFileTool) Name() string {
 }
 
 func (t *ReadFileTool) Description() string {
-	return "Read the contents of a file. Supports pagination via `offset` and `length`. " +
+	return "Read text and supported documents, or inspect a PNG, JPEG, or SVG image in the current model turn. " +
+		"Image inspection rejects offset/length pagination, enforces the configured media byte limit, and supplies visible image content only to the model; it does not attach the image to the user or retain its bytes in history. " +
+		"Text supports pagination via `offset` and `length`. " +
 		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +
 		"automatically decoded to plain text; for these, `offset` and `length` count " +
 		"characters of extracted text rather than raw bytes. Other binary files (containing " +
-		"null bytes and not one of those document formats) are rejected outright — this tool " +
-		"is for text and the document formats above only. `length` above the server-side max " +
+		"null bytes and not one of those document or image formats) are rejected outright. `length` above the server-side max " +
 		"is silently capped, not rejected — check the returned header's total size if you need " +
 		"to know how much was actually read."
 }

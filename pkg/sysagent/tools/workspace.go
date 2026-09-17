@@ -273,7 +273,7 @@ func NewWorkspaceUpdateTool(d *Deps) *WorkspaceUpdateTool { return &WorkspaceUpd
 func (t *WorkspaceUpdateTool) Name() string               { return "update_workspace" }
 func (t *WorkspaceUpdateTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceUpdateTool) Description() string {
-	return "Update an existing workspace's name, description, status, pin state, or core team. Call this when the user wants to rename, archive, pin, or reconfigure a workspace. Use list_workspaces first to find the workspace id.\nParameters: id (required, from list_workspaces), name, description, status (active/archived), pinned (bool), pin_order (int), core_team (list of agent IDs). Only provided fields are updated — EXCEPT core_team: sending it REPLACES the entire team list, it does not merge or add to it. WARNING: to add one member without dropping the rest, first call get_workspace, append the new agent id to the existing core_team array, then send that complete array back here. Adding an agent to core_team also grants the default delegation trust edges between it and the existing team — this tool writes real authorization records, bounded to the built-in seed matrix (it can never invent an arbitrary edge or name an off-team agent). Edges among members that were already on the team are never re-added, so a trust edge you previously removed stays removed. The response reports any edges seeded in `delegation_seeded`. If the workspace's delegation record is unreadable the whole update is refused rather than overwriting it with defaults (DELEGATION_STORE_UNREADABLE). Updating core_team on a workspace whose setup was pending also marks setup_completed in the response. name is capped at 200 characters, description at 2000."
+	return "Update an existing workspace using the revision returned by get_workspace. Call this to change its name, description, status, pin state, complete core team, or complete delegation graph. Omitted fields are preserved. core_team replaces the entire team. Omitted delegation preserves valid existing edges, removes edges for removed members, and may seed approved edges for newly added built-ins; an explicit delegation array replaces the entire graph, suppresses implicit seeding, and [] clears it. Read the workspace first, include all intended membership and graph effects in the proposal, then submit its id and revision."
 }
 
 func (t *WorkspaceUpdateTool) Parameters() map[string]any {
@@ -933,7 +933,7 @@ func NewWorkspaceDeleteTool(d *Deps) *WorkspaceDeleteTool { return &WorkspaceDel
 func (t *WorkspaceDeleteTool) Name() string               { return "delete_workspace" }
 func (t *WorkspaceDeleteTool) Scope() tools.ToolScope     { return tools.ScopeCore }
 func (t *WorkspaceDeleteTool) Description() string {
-	return "Delete a workspace. This is IRREVERSIBLE and destroys more than the workspace record: all GTD tasks belonging to the workspace, the mount/folder-grant store (records of which host folders were shared with it), the delegation trust graph (which agents may delegate to which within it), and the workspace's own directory (AGENT.md and its shared memory room) are all permanently removed. Only GTD-status tasks (inbox/next/in_progress/blocked/done/failed) are cascade-deleted — workflow-status tasks that still reference this workspace_id are left in place and become orphans. Call list_workspaces first to find the workspace id. Requires confirm:true.\nParameters: id (required), confirm (bool, must be true to prevent accidental deletion)."
+	return "Delete a workspace. This is IRREVERSIBLE and destroys more than the workspace record: its GTD tasks, mount grants, delegation graph, and workspace directory are permanently removed; workflow-status tasks that still reference it become orphans. Read it with get_workspace first. Parameters: id, revision from that read, and confirm:true are all required."
 }
 
 func (t *WorkspaceDeleteTool) Parameters() map[string]any {
@@ -1197,8 +1197,8 @@ func (t *WorkspaceGetTool) Description() string {
 	// TestVisibility_PreviewedDescriptionsFitWithoutTruncation (internal,
 	// pkg/tools) and TestVisibility_ScopeCoreGetWorkspaceDescriptionFitsWithoutTruncation
 	// (external, pkg/tools/manifest_scopecore_test.go) which both guard this.
-	return "Get a single workspace by ID, including its live task count.\n" +
-		"Use this to refresh workspace data after creating tasks. Returns id, name, description, status, pinned, pin_order, is_default, core_team, task_count, created_at and updated_at. It does NOT return the delegation graph (which agents on this team may delegate to which) — that lives in a separate store; see the workspace's Team tab for it.\nParameters: id (required, from list_workspaces)."
+	return "Get a workspace by ID, including its authoritative team, delegation graph, revision, and live task count.\n" +
+		"Use this before every workspace mutation and for readback. Returns id, name, description, status, pinned, pin_order, is_default, core_team, delegation, revision, task_count, created_at, and updated_at.\nParameters: id (required, from list_workspaces)."
 }
 
 func (t *WorkspaceGetTool) Parameters() map[string]any {

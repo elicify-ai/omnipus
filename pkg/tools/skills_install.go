@@ -147,7 +147,7 @@ func (t *InstallSkillTool) Parameters() map[string]any {
 			},
 			"force": map[string]any{
 				"type":        "boolean",
-				"description": "Force reinstall if skill already exists (default false)",
+				"description": "Marks an explicitly requested reinstall; it never replaces an existing skill without its current revision.",
 			},
 			"revision": map[string]any{
 				"type":        "string",

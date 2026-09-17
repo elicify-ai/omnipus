@@ -125,7 +125,7 @@ func (t *SkillEditTool) Description() string {
 			"for operator approval depends on your operator's tool-approval policy for this tool. "+
 			"Editing a built-in creates a user override; the built-in is never mutated in place. "+
 			"content must not exceed %d bytes. "+
-			"Parameters: name (required), content (required, full new SKILL.md).",
+			"Parameters: name, content (full new SKILL.md), and revision from the reviewed skill read are required. A conflict means the skill changed after review; stop, reread, and do not retry the stale write.",
 		skills.MaxSkillMarkdownBytes,
 	)
 }

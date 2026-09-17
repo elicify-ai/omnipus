@@ -550,7 +550,7 @@ func NewAgentUpdateTool(d *Deps) *AgentUpdateTool { return &AgentUpdateTool{deps
 func (t *AgentUpdateTool) Name() string           { return "update_agent" }
 func (t *AgentUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentUpdateTool) Description() string {
-	return "Update an existing agent's configuration. Only provided fields are changed; omitted fields are left as-is. Locked core agents (Mia, Jim, Ava, Ray) cannot be modified at all — the call is refused. An empty string is silently IGNORED for name/description/color/icon (they cannot be cleared this way — omit the field instead), but an empty string for provider CLEARS an existing provider pin (falls back to default-provider resolution) — this is a deliberate asymmetry, not a bug. The agent's type (Main/Subagent/subagent_3p) and, for subagent_3p, its external CLI runtime (cli/cli_path) cannot be changed after creation — delete and recreate the agent to change these."
+	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Ava, Admin, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their tool policies, installed connector assignments, and skills are editable. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty string is ignored for name/description/color/icon, while an empty provider clears its pin. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type."
 }
 
 func (t *AgentUpdateTool) Parameters() map[string]any {
@@ -607,12 +607,12 @@ func (t *AgentDeleteTool) Description() string {
 		"in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself " +
 		"survives); tasks it merely created keep that historical attribution. This agent is also removed from " +
 		"every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from " +
-		"each affected workspace's delegation graph. Locked core agents (Mia, Jim, Ava, Ray), the currently " +
+		"each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Ava, Admin, Planner, Researcher, General Purpose, Judge, and Plan Supervisor), the currently " +
 		"configured default agent, and an agent that owns at least one active (running) Plan cannot be deleted " +
 		"— set another agent as default first (Agents screen ★), or stop/reassign the Plan(s), before retrying. " +
 		"A step that fails partway through is reported in the response rather than " +
 		"silently swallowed — check for a warning field before assuming the cascade fully completed." +
-		"\nParameters: id (required), confirm (bool, must be true)."
+		"\nParameters: id (required), revision (required, from get_agent), confirm (bool, must be true)."
 }
 
 func (t *AgentDeleteTool) Parameters() map[string]any {
@@ -766,8 +766,8 @@ func (ad *agentDeleteToolExecute) validateAndLoad() (*tools.ToolResult, bool) {
 		// for this exact refusal — a UAT run observed the tool and REST
 		// paths disagreeing on the error code for the identical condition.
 		return tools.ErrorResult(errorJSON("AGENT_LOCKED",
-			fmt.Sprintf("agent %q is a locked core agent and cannot be deleted", ad.id),
-			"Locked core agents (Mia, Jim, Ava, Ray) can never be deleted")), true
+			fmt.Sprintf("agent %q is a locked seeded agent and cannot be deleted", ad.id),
+			"seeded built-in agents cannot be deleted")), true
 	}
 	// Guard (ADR-049 D4/FR-065), ported from the REST deleteAgent handler
 	// (pkg/gateway/rest.go, search "agent_owns_active_plans"): an agent
