@@ -188,6 +188,17 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 // Adding a new entry is a deliberate, reviewed exception: confirm which type
 // is genuinely involved before silencing a failure this way.
 var allowedWorkspaceIdentifierLines = map[string]bool{
+	// ADR-090 workspace.State.Workspace is the multi-agent workspace record
+	// paired with its delegation graph and revision, not an agent home.
+	// These callers read that state through ReadState/CheckRevisionLocked.
+	"pkg/gateway/rest_workspace_delegation.go:140": true,
+	"pkg/gateway/rest_workspace_delegation.go:213": true,
+	"pkg/gateway/rest_workspaces.go:1208":          true,
+	"pkg/gateway/rest_workspaces.go:1276":          true,
+	"pkg/gateway/rest_workspaces.go:1534":          true,
+	"pkg/sysagent/tools/workspace.go:336":         true,
+	"pkg/sysagent/tools/workspace.go:1224":        true,
+
 	"pkg/skills/github_registry.go:41": true,
 	"pkg/skills/github_registry.go:50": true,
 	"pkg/skills/github_registry.go:65": true,

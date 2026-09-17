@@ -1,13 +1,19 @@
 title: SkillInstallRequest
 description: >
-  Request body for POST /api/v1/skills/install. Installs a skill from the
-  ClawHub registry by its slug (the identifier returned in a SkillSearchResult).
-  Replacing an installed skill requires its revision; an omitted revision requires
-  target absence under the authoritative installation lock.
+  Request body for POST /api/v1/skills/install. Exactly one source is required:
+  a marketplace slug, or the opaque media ref returned as UploadedFile.ref for
+  an authorized local .md/.zip upload. Replacing an installed skill requires its
+  revision; an omitted revision requires target absence under the authoritative
+  installation lock. version applies only to marketplace slug installs.
 type: object
 additionalProperties: false
-required:
-  - slug
+oneOf:
+  - required: [slug]
+    not:
+      required: [upload_id]
+  - required: [upload_id]
+    not:
+      required: [slug]
 properties:
   revision:
     $ref: './ConfigurationRevision.yaml'
@@ -18,6 +24,14 @@ properties:
     pattern: '^[a-z0-9][a-z0-9._-]*$'
     description: Slug of the skill to install from the ClawHub registry.
     example: "web-search"
+  upload_id:
+    type: string
+    minLength: 1
+    maxLength: 512
+    description: >
+      Opaque media ref returned in UploadedFile.ref for a caller-authorized
+      uploaded .md SKILL.md file or bounded .zip skill package. Filesystem paths
+      and UploadedFile.path values are not accepted.
   version:
     type: string
     maxLength: 64
