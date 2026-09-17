@@ -199,6 +199,14 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	}
 	var presence map[string]json.RawMessage
 	if err := json.Unmarshal(uf.rawBody, &presence); err == nil {
+		if _, supplied := presence["updated_at"]; supplied {
+			writeJSON(uf.w, http.StatusBadRequest, gen.ErrorResponse{
+				Error: "updated_at is read-only; use revision for configuration updates",
+				Code:  strPtr("invalid_input"),
+				Field: strPtr("updated_at"),
+			})
+			return true
+		}
 		for _, field := range []string{"skills", "mcp_servers", "tool_policy_changes", "soul"} {
 			if raw, ok := presence[field]; ok && string(bytes.TrimSpace(raw)) == "null" {
 				jsonErr(uf.w, http.StatusBadRequest, field+" must not be null")
@@ -941,13 +949,8 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 
 // updateRecord applies the validated request fields to the locked agent record.
 func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentConfig) error {
-	// Optimistic concurrency check (runs INSIDE both a.configMu AND
-	// the entity's own sidecar lock, so two concurrent PUTs cannot
-	// both pass the version check and then both write). If the
-	// caller sent an updated_at value, it must match the persisted
-	// value exactly; otherwise another edit raced and we abort the
-	// mutate (nothing is written). The caller maps errConflict to
-	// HTTP 409.
+	// MutateState checks the reviewed revision under the entity lock before
+	// applying these fields. UpdatedAt is display metadata, never a precondition.
 	storedModelBefore, storedFallbacksBefore := agentModelIdentity(agentRec)
 	rp.updateIdentityAndModel(agentRec)
 	rp.updatePresentationAndFallbacks(agentRec)
@@ -960,7 +963,7 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	}
 	rp.updateExecutorAndSkills(agentRec)
 
-	// Refresh the optimistic-concurrency timestamp with sub-second precision;
+	// Refresh the display timestamp with sub-second precision;
 	// the frontend compares it as an ordinal when incorporating autosaves.
 	storedModelAfter, storedFallbacksAfter := agentModelIdentity(agentRec)
 	rp.ru.modelIdentityChanged = !sameAgentModelIdentity(
