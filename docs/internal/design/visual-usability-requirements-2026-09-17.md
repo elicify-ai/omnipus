@@ -9,7 +9,7 @@ This document is **product behaviour**. It is not the design-system migration. E
 ## How to read this
 
 - **Do** — we agreed this is required.
-- **Parked** — we will interview it before writing rules.
+- **Checked** — we looked; it is not a UI change.
 - **Rejected** — the review was wrong, or it is out of product scope.
 
 Anything not listed is not a requirement.
