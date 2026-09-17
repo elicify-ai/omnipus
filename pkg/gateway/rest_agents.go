@@ -669,17 +669,9 @@ func buildAgentDefaults(cfg *config.Config) gen.Agent {
 
 func applyAgentEditableFields(agent *gen.Agent, cfg config.AgentConfig) {
 	descriptors := agentmutation.FieldDescriptors(cfg)
-	wire := make([]struct {
-		Editable bool    `json:"editable"`
-		Name     string  `json:"name"`
-		Reason   *string `json:"reason,omitempty"`
-	}, 0, len(descriptors))
+	wire := make([]gen.AgentFieldDescriptor, 0, len(descriptors))
 	for _, descriptor := range descriptors {
-		row := struct {
-			Editable bool    `json:"editable"`
-			Name     string  `json:"name"`
-			Reason   *string `json:"reason,omitempty"`
-		}{Editable: descriptor.Editable, Name: descriptor.Name}
+		row := gen.AgentFieldDescriptor{Editable: descriptor.Editable, Name: descriptor.Name}
 		if descriptor.Reason != "" {
 			reason := descriptor.Reason
 			row.Reason = &reason

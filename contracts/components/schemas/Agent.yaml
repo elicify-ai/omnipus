@@ -36,6 +36,7 @@ properties:
     type: array
     items:
       $ref: './AgentFieldDescriptor.yaml'
+      x-go-type: AgentFieldDescriptor
   id:
     type: string
     description: Unique agent identifier. UUID for user-created agents; well-known strings for core agents (e.g. "jim").

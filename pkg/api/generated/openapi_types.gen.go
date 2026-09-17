@@ -10725,15 +10725,9 @@ type Agent struct {
 	DegradedReason *AgentDegradedReason `json:"degraded_reason,omitempty"`
 
 	// Description Short description of the agent's purpose.
-	Description    *string `json:"description,omitempty"`
-	EditableFields *[]struct {
-		Editable bool   `json:"editable"`
-		Name     string `json:"name"`
-
-		// Reason Explanation when the field is protected or unsupported by this runtime.
-		Reason *string `json:"reason,omitempty"`
-	} `json:"editable_fields,omitempty"`
-	ErrorStage *string `json:"error_stage,omitempty"`
+	Description    *string                 `json:"description,omitempty"`
+	EditableFields *[]AgentFieldDescriptor `json:"editable_fields,omitempty"`
+	ErrorStage     *string                 `json:"error_stage,omitempty"`
 
 	// Executor Executor configuration for a sub-agent. Controls which runtime is used to execute the sub-agent's tasks.
 	// "native" (default) runs the task inside the Omnipus agent loop — the existing behaviour, always available.
