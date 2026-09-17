@@ -17,7 +17,7 @@ import (
 // writes through a properly-guarded path (refusing locked core agents).
 func AllTools(d *Deps) []tools.Tool {
 	return []tools.Tool{
-		// Agent management (4: 3 original + 1 metadata accessor from issue #240; list, activate, deactivate retired)
+		// Agent management (6: includes ADR-090 configuration and tool readback)
 		NewAgentCreateTool(d),
 		NewAgentGetTool(d),
 		NewAgentGetToolsTool(d),
@@ -74,7 +74,7 @@ func AllTools(d *Deps) []tools.Tool {
 	}
 }
 
-// BuildRegistry creates a ToolRegistry containing all 33 system tools.
+// BuildRegistry creates a ToolRegistry containing all 35 system tools.
 // Use this registry as the backing store for the SystemToolHandler.
 func BuildRegistry(d *Deps) *tools.ToolRegistry {
 	reg := tools.NewToolRegistry()

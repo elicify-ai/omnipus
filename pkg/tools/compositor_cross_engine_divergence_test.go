@@ -52,6 +52,7 @@ func TestCompositor_SpecificAllowCarveOut_HonorsMostSpecific(t *testing.T) {
 		makeMCPAdapters("foo", carveout, danger),
 		"custom-agent",
 		&ToolPolicyCfg{
+			MCPServers: []config.AgentMCPServerBinding{{ID: "foo"}},
 			GlobalPolicies: map[string]config.ToolPolicy{
 				broad:    "deny",
 				carveout: "allow",
@@ -79,6 +80,7 @@ func TestCompositor_BroadDenyNoCarveOut_DeniesAll(t *testing.T) {
 		makeMCPAdapters("bar", tool),
 		"custom-agent",
 		&ToolPolicyCfg{
+			MCPServers:     []config.AgentMCPServerBinding{{ID: "bar"}},
 			GlobalPolicies: map[string]config.ToolPolicy{broad: "deny"},
 		},
 	)

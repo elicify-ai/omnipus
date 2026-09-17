@@ -91,6 +91,20 @@
     "source": "builtin"
   },
   {
+    "name": "get_agent",
+    "description": "Read one agent's sanitized configuration, instructions, editable fields, stored assignments, revision, and activation status. Use get_agent_tools for the full tool catalog.",
+    "scope": "core",
+    "category": "agents",
+    "source": "builtin"
+  },
+  {
+    "name": "get_agent_tools",
+    "description": "Read the static and installed connector tool inventory with a target agent's stored assignments and effective policies. This does not grant or execute target tools.",
+    "scope": "core",
+    "category": "agents",
+    "source": "builtin"
+  },
+  {
     "name": "get_config",
     "description": "Read a setting (port, timeout, host, feature flag, or similar) from config.json by dot-notation key, e.g. 'gateway.port', 'sandbox.mode'. Pair with set_config to change a value. Credential-shaped fields (API keys, secrets, tokens, passwords) and a handful of security-critical keys (gateway account/token data, the whole sandbox namespace's writable form, etc.) are refused or returned redacted — use list_providers to check configured providers without exposing keys.\nParameters: key (required, e.g. 'gateway.port').",
     "scope": "core",

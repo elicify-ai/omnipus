@@ -42,7 +42,7 @@
 //     invariant for pkg/sysagent/tools, independent of any single tool's
 //     source. See TestSysagentCatalog_AllToolsAreScopeCore.
 //  3. pkg/sysagent/tools/registry.go's own doc comment on BuildRegistry:
-//     "creates a ToolRegistry containing all 33 system tools" — an
+//     "creates a ToolRegistry containing all 35 system tools" — an
 //     independently-stated count used as the catalog-membership sanity
 //     check in TestSysagentCatalog_AllToolsAreScopeCore, not derived by
 //     counting AllTools' literal entries.
@@ -164,19 +164,18 @@ func TestGeneralBuiltinMetadata_AllToolsHaveKnownScope(t *testing.T) {
 // call (every sysagent constructor only stores the *Deps pointer it is
 // given; Name()/Scope() are static and never dereference it).
 //
-// The exact-33 count comes from pkg/sysagent/tools/registry.go's own
-// BuildRegistry doc comment ("creates a ToolRegistry containing all 33
+// The exact-35 count comes from pkg/sysagent/tools/registry.go's own
+// BuildRegistry doc comment ("creates a ToolRegistry containing all 35
 // system tools"), not from counting AllTools' literal entries — an
 // independent textual source, so a silent catalog-membership drift (a tool
-// added/removed without updating that comment) is itself a finding. (Was 35
-// until navigate and write_agent_metadata were retired.)
+// added/removed without updating that comment) is itself a finding. (ADR-090 adds get_agent and get_agent_tools to the prior 33.)
 //
 // Traces to: pkg/tools/base.go ToolScope doc comment;
 // pkg/sysagent/tools/registry.go BuildRegistry doc comment.
 func TestSysagentCatalog_AllToolsAreScopeCore(t *testing.T) {
 	catalog := systools.AllTools(nil)
-	if len(catalog) != 33 {
-		t.Fatalf("expected systools.AllTools(nil) to return exactly 33 tools (per registry.go's BuildRegistry doc comment: \"all 33 system tools\"), got %d — catalog membership drifted from its own documentation", len(catalog))
+	if len(catalog) != 35 {
+		t.Fatalf("expected systools.AllTools(nil) to return exactly 35 tools (per registry.go's BuildRegistry doc comment: \"all 35 system tools\"), got %d — catalog membership drifted from its own documentation", len(catalog))
 	}
 
 	for _, tl := range catalog {
