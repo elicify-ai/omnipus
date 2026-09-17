@@ -109,7 +109,9 @@ func (p *DedicatedInputPeer) fail(reason string) {
 // retaining its healthy peer. Install before Answer. Callers must fence the
 // supplied control epoch and explicitly advance control after joining/releasing
 // the old source; no queued action is replayed. Without a handler expiry remains
-// a visible fatal failure rather than silently leaving a caller paused.
+// a visible fatal failure rather than silently leaving a caller paused. Expiry
+// may invoke the handler from the queue's timer goroutine, after internal locks
+// are released; handlers must synchronize access to any shared state.
 func (p *DedicatedInputPeer) SetControlFailureHandler(handler func(int, string)) {
 	p.mu.Lock()
 	p.controlFailure = handler
