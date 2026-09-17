@@ -113,14 +113,42 @@ Two jobs, one gold button. Do not compete with two gold buttons.
 
 **Done when.** A user can stop background work, jump to a subagent and back to the parent, and open details on non-agent work, without a new panel design.
 
+### 11. Model picker — one control, search only when long, no Recommended chip
+
+**Context.** The shared `ModelSelector` already searches, groups by provider/vendor, and can virtualise long lists. OpenRouter may list hundreds of models; another provider may list five. The review asked for a friendlier catalog. Founder: keep that picker; do not rebuild it. Drop the “Recommended for chat” chip. Search is extra, only when the list is long.
+
+**Requirement.**
+
+- Every model chooser (chat, agent create/edit, Settings) uses the same `ModelSelector` behaviour. No chat-only snowflake.
+- The control is always the same. **Search appears when there are more than 10 models** in the list being shown. At 10 or fewer, it is a grouped list without a search field.
+- Groups by provider/vendor stay.
+- Each row shows a **readable name** when the catalog has one, and the **slug underneath** (or beside, smaller) so power users still see `anthropic/claude-sonnet-4.6`.
+- Remove the **Recommended for chat** chip. Do not auto-select a model.
+- Typing a slug that is not in the catalog stays allowed, with a **clear warning** that it is not in the catalog. Do not present it as a normal catalog pick.
+
+**Done when.** A 5-model provider has no search field. An OpenRouter-sized list has search. No Recommended chip. Readable name + slug on catalog rows. Unknown slug warns. Chat, wizard, and Settings match.
+
+### 12. Agent picker — search when more than 10
+
+**Context.** The chat agent picker is a plain dropdown with no search. Team → Add agent already searches. Other dropdowns in the app switch to search at 5 items (`SmartSelect`). Founder: one rule for every agent list, search when more than 10.
+
+**Requirement.**
+
+- Every agent chooser (chat composer, Team add, and any other agent list) follows the same rule.
+- **10 or fewer agents:** simple dropdown, no search field.
+- **More than 10 agents:** search field, same look as other searchable selects.
+- Team add may keep search if it already has it when the list is long; when the list is 10 or fewer it must match this rule (no extra search field).
+- Workers stay out of the chat picker (existing rule). This requirement does not change who is on the list, only how you find them.
+
+**Done when.** A workspace with 8 chat agents has no agent search. A workspace with 12 has search in chat and in every other agent list. No new picker visual language.
+
 ---
 
 ## Parked — do not invent requirements yet
 
 | Topic | Why it is parked | Next step |
 |---|---|---|
-| Model picker | Depends on the provider (OpenRouter has hundreds; others may have five). Current search is not that bad. | Dedicated interview (next). |
-| Knowledge views | A filled vault is not an empty vault. Do not overload users, but do not guess. | Dedicated interview after the model picker. |
+| Knowledge views | A filled vault is not an empty vault. Do not overload users, but do not guess. | Dedicated interview next. |
 | Task / event side panel | Duplicates, “advanced”, and density are not yet listed field by field. | Walk the real panel together before writing rules. |
 
 ---
@@ -134,6 +162,7 @@ Two jobs, one gold button. Do not compete with two gold buttons.
 | Restyle empty states, Settings, or Chat | **Out of scope.** Design-system continuity. |
 | Compact/comfortable density as the default | **Out of scope.** Design-system constitution. |
 | Bring back JPEG live-browser fallback | **Forbidden.** Existing operator rule. |
+| “Recommended for chat” model chips | **Dropped.** Search, grouping, and readable names are enough. |
 
 ---
 
@@ -143,7 +172,8 @@ Two jobs, one gold button. Do not compete with two gold buttons.
 2. Settings URLs + Memory autosave; New Event errors.
 3. Login-only signed-out route; session must not drop.
 4. Live browser failure + Activity stop / open / return / details.
-5. Then the parked interviews: model picker, then Knowledge, then the task panel.
+5. Model picker + agent-list search (items 11–12).
+6. Then the parked interviews: Knowledge, then the task panel.
 
 Internal batches are fine. These remain product requirements until each row’s **Done when** is true.
 
