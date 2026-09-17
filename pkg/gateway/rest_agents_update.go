@@ -10,17 +10,16 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/entity"
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -41,6 +40,8 @@ type restAPIUpdateAgent struct {
 	newModel                    string
 	defaultAgentIDChanged       bool
 	modelIdentityChanged        bool
+	mutationResult              agentstore.MutationResult
+	activationFailed            string
 }
 
 // restAPIUpdateAgentFlow carries the shared state of updateAgent across its stages.
@@ -54,6 +55,39 @@ type restAPIUpdateAgentFlow struct {
 	foundAgent          config.AgentConfig
 	toolsCoverageMutate func(*config.Config)
 	workspace           string
+}
+
+func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
+	if req == nil {
+		return nil
+	}
+	fields := make([]string, 0, 20)
+	add := func(present bool, name string) {
+		if present {
+			fields = append(fields, name)
+		}
+	}
+	add(req.Name != nil, "name")
+	add(req.Description != nil, "description")
+	add(req.Color != nil, "color")
+	add(req.Icon != nil, "icon")
+	add(req.Soul != nil, "soul")
+	add(req.Skills != nil, "skills")
+	add(req.McpServers != nil, "mcp_servers")
+	add(req.ToolsCfg != nil, "tools_cfg")
+	add(req.ToolPolicyChanges != nil, "tool_policy_changes")
+	add(req.Model != nil, "model")
+	add(req.Provider != nil, "provider")
+	add(req.FallbackModels != nil, "fallback_models")
+	add(req.ContextWindowOverride != nil, "context_window_override")
+	add(req.ModelParams != nil, "model_params")
+	add(req.MaxToolIterations != nil, "max_tool_iterations")
+	add(req.MemoryEnabled != nil, "memory_enabled")
+	add(req.Default != nil, "default")
+	add(req.Voice != nil, "voice")
+	add(req.Executor != nil, "executor")
+	add(req.ShellPolicy != nil, "shell_policy")
+	return fields
 }
 
 func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string) {
@@ -153,6 +187,27 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 
 	validateEnabled := uf.cfg.Gateway.ValidateInbound
 	if !decodeAndValidate(uf.w, uf.r, "AgentUpdateRequest", &uf.ru.req, validateEnabled) {
+		return true
+	}
+	if uf.ru.req.Revision == "" {
+		jsonErr(uf.w, http.StatusBadRequest, "revision is required")
+		return true
+	}
+	if err := agentstore.ValidateRevision(uf.ru.req.Revision); err != nil {
+		jsonErr(uf.w, http.StatusBadRequest, err.Error())
+		return true
+	}
+	var presence map[string]json.RawMessage
+	if err := json.Unmarshal(uf.rawBody, &presence); err == nil {
+		for _, field := range []string{"skills", "mcp_servers", "tool_policy_changes", "soul"} {
+			if raw, ok := presence[field]; ok && string(bytes.TrimSpace(raw)) == "null" {
+				jsonErr(uf.w, http.StatusBadRequest, field+" must not be null")
+				return true
+			}
+		}
+	}
+	if uf.ru.req.ToolsCfg != nil && uf.ru.req.ToolPolicyChanges != nil {
+		jsonErr(uf.w, http.StatusBadRequest, "tools_cfg and tool_policy_changes cannot be supplied together")
 		return true
 	}
 	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — see
@@ -309,28 +364,14 @@ func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 		return true
 	}
 
-	if uf.foundAgent.Locked {
-		// Protected: name, description, soul (prompt content),
-		// color, icon, and skills are identity/capability fields — reject on locked agents.
-		// Skills are included here (B-2 defense-in-depth): core agents have compiled-in capability
-		// sets; allowing runtime skill assignment would silently override that invariant.
-		//
-		// ADR-052 FR-038 (soul/rubric unification, R3-1 CLOSED): AgentConfig.Rubric
-		// was deleted — a System Agent's (e.g. the Judge) verification standards ARE
-		// its soul, and the ADR is explicit that "the Judge's soul is editable while
-		// the agent stays otherwise locked (core agents keep their souls locked)".
-		// So req.Soul is exempted from the reject-set for System Agents ONLY —
-		// every other identity field (name/description/color/icon/skills) stays
-		// locked even for a System Agent, and core agents (Mia/Jim/Ava/Ray) keep
-		// the full reject-set including soul: their souls are product identity,
-		// not a verifier rubric.
-		soulLocked := uf.ru.req.Soul != nil && !uf.foundAgent.IsSystem()
-		if uf.ru.req.Name != nil || uf.ru.req.Description != nil ||
-			soulLocked ||
-			uf.ru.req.Color != nil || uf.ru.req.Icon != nil || uf.ru.req.Skills != nil {
-			jsonErr(uf.w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
-			return true
+	if fieldErr := agentmutation.ValidateFields(uf.foundAgent, suppliedRESTAgentFields(&uf.ru.req)); fieldErr != nil {
+		var classified *agentmutation.FieldError
+		if errors.As(fieldErr, &classified) && classified.Code == agentmutation.ProtectedField {
+			jsonErr(uf.w, http.StatusForbidden, classified.Error())
+		} else {
+			jsonErr(uf.w, http.StatusBadRequest, fieldErr.Error())
 		}
+		return true
 	}
 	// Referential validation: reject unknown skill IDs before doing any work.
 	if uf.ru.req.Skills != nil && len(*uf.ru.req.Skills) > 0 {
@@ -588,14 +629,6 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 		jsonErr(uf.w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
 		return true
 	}
-	if uf.ru.req.Soul != nil {
-		soulPath := filepath.Join(uf.workspace, "SOUL.md")
-		if err := fileutil.WriteFileAtomic(soulPath, []byte(*uf.ru.req.Soul), 0o600); err != nil {
-			slog.Error("rest: write SOUL.md for agent", "agent_id", uf.ru.id, "error", err)
-			jsonErr(uf.w, http.StatusInternalServerError, fmt.Sprintf("could not write SOUL.md: %v", err))
-			return true
-		}
-	}
 	// Rebuild the running agent only when a changed field is one the
 	// AgentInstance caches at construction (soul, skills, model params, context
 	// window, the model/provider/fallbacks, or a default-agent flip). Fields the
@@ -688,10 +721,7 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 		if rebuildErr := uf.ru.a.fastAgentUpsert(uf.ru.id); rebuildErr != "" {
 			slog.Error("updateAgent: change saved but the running agent could not be rebuilt",
 				"agent_id", uf.ru.id, "error", rebuildErr)
-			jsonErr(uf.w, http.StatusInternalServerError, fmt.Sprintf(
-				"agent %q was saved but the running agent could not be updated (%s); restart the gateway to apply the change",
-				uf.ru.id, rebuildErr))
-			return true
+			uf.ru.activationFailed = rebuildErr
 		}
 	}
 	return false
@@ -806,12 +836,21 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 		}
 	}
 	// Override defaults with request values when provided.
-	if uf.ru.req.TimeoutSeconds != nil {
-		ag.TimeoutSeconds = *uf.ru.req.TimeoutSeconds
-	}
 	if uf.ru.req.MaxToolIterations != nil {
 		ag.MaxToolIterations = *uf.ru.req.MaxToolIterations
 	}
+	ag.Revision = uf.ru.mutationResult.Revision
+	persistence := gen.AgentPersistenceStatusComplete
+	ag.PersistenceStatus = &persistence
+	activation := gen.AgentActivationStatusActive
+	if uf.ru.activationFailed != "" {
+		activation = gen.AgentActivationStatusFailed
+		message := fmt.Sprintf("saved but activation failed: %s", uf.ru.activationFailed)
+		ag.Message = &message
+	}
+	ag.ActivationStatus = &activation
+	changed := suppliedRESTAgentFields(&uf.ru.req)
+	ag.ChangedFields = &changed
 	jsonOK(uf.w, ag)
 }
 
@@ -827,9 +866,10 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 
 	store := agentstore.New(rp.ru.a.homePath)
 
-	_, updateErr := store.Update(rp.ru.id, func(agentRec *config.AgentConfig) error {
+	result, updateErr := store.MutateState(rp.ru.id, rp.ru.req.Revision, func(agentRec *config.AgentConfig) error {
 		return rp.updateRecord(agentRec)
-	})
+	}, rp.ru.req.Soul)
+	rp.ru.mutationResult = result
 	if updateErr != nil {
 		if rp.conflictErr != nil {
 			return errConflict
@@ -841,6 +881,12 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 			// PUT. Mapped to 404 by withToolPolicyCoverageGuard (see
 			// errAgentVanishedDuringUpdate's doc comment).
 			return fmt.Errorf("%w: agent %q not found", errAgentVanishedDuringUpdate, rp.ru.id)
+		}
+		if errors.Is(updateErr, agentstore.ErrRevisionConflict) {
+			return errConflict
+		}
+		if errors.Is(updateErr, agentstore.ErrInvalidRevision) {
+			return fmt.Errorf("invalid revision: %w", updateErr)
 		}
 		return fmt.Errorf("update agent entity record: %w", updateErr)
 	}
@@ -901,10 +947,6 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	// value exactly; otherwise another edit raced and we abort the
 	// mutate (nothing is written). The caller maps errConflict to
 	// HTTP 409.
-	if rp.ru.req.UpdatedAt != nil && agentRec.UpdatedAt != nil && !rp.ru.req.UpdatedAt.Equal(*agentRec.UpdatedAt) {
-		rp.conflictErr = errConflict
-		return errConflict
-	}
 	storedModelBefore, storedFallbacksBefore := agentModelIdentity(agentRec)
 	if rp.ru.req.Name != nil {
 		agentRec.Name = rp.ru.newName
@@ -1073,6 +1115,50 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 			newTools.MCP = agentRec.Tools.MCP
 		}
 		agentRec.Tools = newTools
+	}
+	if rp.ru.req.McpServers != nil {
+		if agentRec.Tools == nil {
+			agentRec.Tools = &config.AgentToolsCfg{}
+		}
+		servers := make([]config.AgentMCPServerBinding, 0, len(*rp.ru.req.McpServers))
+		for _, s := range *rp.ru.req.McpServers {
+			binding := config.AgentMCPServerBinding{ID: s.Id, ToolsSpecified: s.Tools != nil}
+			if s.Tools != nil {
+				binding.Tools = *s.Tools
+			}
+			if err := config.ValidateAgentMCPServerBinding(binding); err != nil {
+				return err
+			}
+			if _, ok := rp.ru.a.agentLoop.GetConfig().Tools.MCP.Servers[s.Id]; !ok {
+				return fmt.Errorf("MCP server %q is not configured", s.Id)
+			}
+			servers = append(servers, binding)
+		}
+		agentRec.Tools.MCP.Servers = servers
+	}
+	if rp.ru.req.ToolPolicyChanges != nil {
+		if agentRec.Tools == nil {
+			agentRec.Tools = &config.AgentToolsCfg{}
+		}
+		patch := agentmutation.ToolPolicyChanges{}
+		if rp.ru.req.ToolPolicyChanges.Set != nil {
+			patch.Set = make(map[string]config.ToolPolicy, len(*rp.ru.req.ToolPolicyChanges.Set))
+			for name, policy := range *rp.ru.req.ToolPolicyChanges.Set {
+				patch.Set[name] = config.ToolPolicy(policy)
+			}
+		}
+		if rp.ru.req.ToolPolicyChanges.Remove != nil {
+			patch.Remove = *rp.ru.req.ToolPolicyChanges.Remove
+		}
+		known := make(map[string]struct{})
+		for name := range buildKnownBuiltinToolNames() {
+			known[name] = struct{}{}
+		}
+		next, err := agentmutation.ApplyToolPolicyChanges(agentRec.Tools.Builtin.Policies, patch, known)
+		if err != nil {
+			return err
+		}
+		agentRec.Tools.Builtin.Policies = next
 	}
 	// Executor: write the sub-agent executor under Subagents.Executor
 	// when the caller sends it. kind="native" with no cli clears any

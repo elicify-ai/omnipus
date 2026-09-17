@@ -16,8 +16,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
@@ -314,11 +316,25 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		builtinPolicies[toolName] = gen.AgentToolsResponseConfigBuiltinPolicies(configured)
 	}
 	agentTypeVal := gen.AgentToolsResponseAgentType(wireAgentType)
+	state, stateErr := agentstore.New(a.homePath).ReadState(agentID)
+	if stateErr != nil {
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read agent revision: %v", stateErr))
+		return
+	}
+	overrideNames := make([]string, 0)
+	if toolsCfg != nil {
+		for name := range toolsCfg.Builtin.Policies {
+			overrideNames = append(overrideNames, name)
+		}
+	}
+	sort.Strings(overrideNames)
 
 	// Build the AgentToolsResponse. The Tools field uses the same anonymous struct
 	// as gen.AgentToolsResponse.Tools, aliased as toolsEntry above.
 	resp := gen.AgentToolsResponse{
-		AgentType: &agentTypeVal,
+		AgentType:     &agentTypeVal,
+		Revision:      state.Revision,
+		OverrideNames: overrideNames,
 		Config: struct {
 			Builtin *struct {
 				Policies map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies"`

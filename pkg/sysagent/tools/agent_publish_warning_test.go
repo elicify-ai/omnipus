@@ -166,14 +166,15 @@ func TestAgentUpdate_ReloadFuncFailure_StillSucceeds_WithPublishWarning(t *testi
 	updateDeps.Home = createDeps.Home // same on-disk entity store as the setup create
 
 	result := systools.NewAgentUpdateTool(updateDeps).Execute(context.Background(), map[string]any{
-		"id":   id,
-		"name": "Publish Warning Update Target (renamed)",
+		"id":       id,
+		"revision": currentAgentRevision(t, updateDeps, id),
+		"name":     "Publish Warning Update Target (renamed)",
 	})
 	if result.IsError {
 		t.Fatalf("expected success (entity updated) even though hot-reload failed, got error: %s", result.ForLLM)
 	}
 	body := parseSuccess(t, result.ForLLM)
-	warning, ok := body["publish_warning"].(string)
+	warning, ok := body["message"].(string)
 	if !ok || warning == "" {
 		t.Fatalf("expected a non-empty publish_warning field naming the reload failure, got body: %s", result.ForLLM)
 	}

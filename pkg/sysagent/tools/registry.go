@@ -19,6 +19,8 @@ func AllTools(d *Deps) []tools.Tool {
 	return []tools.Tool{
 		// Agent management (4: 3 original + 1 metadata accessor from issue #240; list, activate, deactivate retired)
 		NewAgentCreateTool(d),
+		NewAgentGetTool(d),
+		NewAgentGetToolsTool(d),
 		NewAgentUpdateTool(d),
 		NewAgentDeleteTool(d),
 		NewAgentReadMetadataTool(d),

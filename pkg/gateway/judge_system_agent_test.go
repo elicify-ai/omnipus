@@ -108,7 +108,7 @@ func TestAgents_JudgeUndeletable(t *testing.T) {
 	api := newJudgeRosterAPI(t)
 
 	w := httptest.NewRecorder()
-	api.deleteAgent(w, "judge")
+	api.deleteAgent(w, httptest.NewRequest(http.MethodDelete, "/api/v1/agents/judge?revision="+strings.Repeat("a", 64), nil), "judge")
 
 	require.Equal(t, http.StatusBadRequest, w.Code, "DELETE judge must be 400; body=%s", w.Body.String())
 	assert.Contains(t, strings.ToLower(w.Body.String()), "not deletable")

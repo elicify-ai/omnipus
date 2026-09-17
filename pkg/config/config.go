@@ -678,8 +678,9 @@ type AgentMCPToolsCfg struct {
 
 // AgentMCPServerBinding binds an MCP server to an agent.
 type AgentMCPServerBinding struct {
-	ID    string   `json:"id"`
-	Tools []string `json:"tools,omitempty"` // empty or ["*"] = all tools from that server
+	ID             string   `json:"id"`
+	ToolsSpecified bool     `json:"-"`
+	Tools          []string `json:"-"`
 }
 
 // DelegationMode is the mode in which delegation is allowed.

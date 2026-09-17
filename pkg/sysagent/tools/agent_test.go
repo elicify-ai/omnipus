@@ -251,8 +251,9 @@ func TestAgentUpdate_PartialFields(t *testing.T) {
 
 	tool := systools.NewAgentUpdateTool(deps)
 	result := tool.Execute(context.Background(), map[string]any{
-		"id":   "my-agent",
-		"name": "New Name",
+		"id":       "my-agent",
+		"revision": currentAgentRevision(t, deps, "my-agent"),
+		"name":     "New Name",
 	})
 
 	if result.IsError {
@@ -434,9 +435,14 @@ func TestAgentCreate_RejectsInvalidIcon(t *testing.T) {
 func TestAgentUpdate_RejectsInvalidColor(t *testing.T) {
 	deps, cfg := newTestDeps()
 	cfg.Agents.List = []config.AgentConfig{{ID: "my-agent", Name: "My Agent"}}
+	store := agentstore.New(deps.Home)
+	if err := store.Create("my-agent", &config.AgentConfig{ID: "my-agent", Name: "My Agent"}); err != nil {
+		t.Fatal(err)
+	}
 	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":    "my-agent",
-		"color": "not-a-color",
+		"id":       "my-agent",
+		"revision": currentAgentRevision(t, deps, "my-agent"),
+		"color":    "not-a-color",
 	})
 	if !result.IsError {
 		t.Fatal("update with invalid color should fail")
@@ -742,8 +748,9 @@ func TestAgentCreateUpdate_ContentOnly_NoMetadataToolBypass(t *testing.T) {
 	newSoul := "You are now an expert in data analysis."
 	updateTool := systools.NewAgentUpdateTool(deps)
 	updateResult := updateTool.Execute(context.Background(), map[string]any{
-		"id":   "content-only-bot",
-		"soul": newSoul,
+		"id":       "content-only-bot",
+		"revision": currentAgentRevision(t, deps, "content-only-bot"),
+		"soul":     newSoul,
 	})
 	if updateResult.IsError {
 		t.Fatalf("update failed: %s", updateResult.ForLLM)

@@ -207,7 +207,7 @@ func (a *restAPI) HandleAgents(w http.ResponseWriter, r *http.Request) {
 		}
 	case http.MethodDelete:
 		if agentID != "" {
-			a.deleteAgent(w, agentID)
+			a.deleteAgent(w, r, agentID)
 		} else {
 			jsonErr(w, http.StatusMethodNotAllowed, "method not allowed")
 		}
@@ -738,6 +738,11 @@ func (a *restAPI) listAgents(w http.ResponseWriter) {
 		if ac.UpdatedAt != nil {
 			ag.UpdatedAt = ac.UpdatedAt
 		}
+		if state, stateErr := agentstore.New(a.homePath).ReadState(ac.ID); stateErr == nil {
+			ag.Revision = state.Revision
+		} else {
+			slog.Warn("rest: listAgents: could not compute revision", "agent_id", ac.ID, "error", stateErr)
+		}
 		agents = append(agents, ag)
 	}
 
@@ -802,6 +807,12 @@ func (a *restAPI) getAgent(w http.ResponseWriter, id string) {
 			setAgentExecutorResponse(&ag, ac.Subagents)
 			if ac.UpdatedAt != nil {
 				ag.UpdatedAt = ac.UpdatedAt
+			}
+			if state, stateErr := agentstore.New(a.homePath).ReadState(ac.ID); stateErr == nil {
+				ag.Revision = state.Revision
+			} else {
+				jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read agent revision: %v", stateErr))
+				return
 			}
 			jsonOK(w, ag)
 			return
@@ -1057,7 +1068,7 @@ func mergeAgentModelParams(existing *config.AgentModelParams, in *agentModelPara
 // deleteAgent handles DELETE /api/v1/agents/{id}.
 // Removes the agent from config.json and reloads the live config.
 // Core (locked) agents cannot be deleted (403).
-func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
+func (a *restAPI) deleteAgent(w http.ResponseWriter, r *http.Request, id string) {
 	cfg := a.agentLoop.GetConfig()
 	var found *config.AgentConfig
 	for i := range cfg.Agents.List {
@@ -1130,7 +1141,16 @@ func (a *restAPI) deleteAgent(w http.ResponseWriter, id string) {
 	// cleanup below. Dangling referrers (bindings, mailboxes, workspace
 	// core_team) are surfaced for repair per D6 rule 2, never silently
 	// pruned here.
-	if err := agentstore.New(a.homePath).Delete(id); err != nil {
+	revision := r.URL.Query().Get("revision")
+	if err := agentstore.New(a.homePath).DeleteState(id, revision); err != nil {
+		if errors.Is(err, agentstore.ErrInvalidRevision) {
+			jsonErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, agentstore.ErrRevisionConflict) {
+			jsonErr(w, http.StatusConflict, err.Error())
+			return
+		}
 		slog.Error("rest: deleteAgent: delete agent entity record failed", "agent_id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "failed to delete agent")
 		return

@@ -96,9 +96,10 @@ func TestAgentUpdateTool_NoOrphanedParameters(t *testing.T) {
 	declared := declaredObjectProperties(t, tool.Parameters())
 
 	consumedByExecute := map[string]bool{
-		"id": true, "name": true, "description": true, "soul": true,
+		"id": true, "revision": true, "name": true, "description": true, "soul": true,
 		"model": true, "model_fallbacks": true, "provider": true,
-		"color": true, "icon": true, "heartbeat": true,
+		"color": true, "icon": true, "skills": true, "mcp_servers": true,
+		"tool_policy_changes": true,
 		"max_tool_iterations": true,
 	}
 
@@ -205,6 +206,7 @@ func TestAgentUpdate_AppliesProviderAndMaxToolIterations(t *testing.T) {
 	tool := systools.NewAgentUpdateTool(deps)
 	result := tool.Execute(context.Background(), map[string]any{
 		"id":                  "my-agent",
+		"revision":            currentAgentRevision(t, deps, "my-agent"),
 		"provider":            "openrouter",
 		"max_tool_iterations": float64(99),
 	})
@@ -226,6 +228,7 @@ func TestAgentUpdate_AppliesProviderAndMaxToolIterations(t *testing.T) {
 	// Now clear the provider with an explicit empty string.
 	result2 := tool.Execute(context.Background(), map[string]any{
 		"id":       "my-agent",
+		"revision": currentAgentRevision(t, deps, "my-agent"),
 		"provider": "",
 	})
 	if result2.IsError {
