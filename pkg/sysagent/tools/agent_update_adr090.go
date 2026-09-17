@@ -76,7 +76,26 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 		case errors.As(mutateErr, &fe):
 			return tools.ErrorResult(errorJSON(string(fe.Code), fe.Error(), ""))
 		default:
-			payload := map[string]any{"code": "SAVE_FAILED", "message": mutateErr.Error(), "persistence_status": result.PersistenceStatus, "activation_status": result.ActivationStatus, "revision": result.Revision, "changed_fields": result.ChangedFields, "error_stage": result.ErrorStage}
+			// A failure before staging has changed no files. Preserve explicit
+			// partial/complete outcomes supplied by later storage stages.
+			if result.PersistenceStatus == "" {
+				result.PersistenceStatus = agentstore.PersistenceNone
+			}
+			if result.ErrorStage == "" {
+				result.ErrorStage = "prepare"
+			}
+			slog.Warn("sysagent: save updated agent failed", "id", id, "stage", result.ErrorStage, "error", mutateErr)
+			payload := map[string]any{
+				"code":               "SAVE_FAILED",
+				"message":            "Agent configuration could not be saved. Read its current state before retrying.",
+				"persistence_status": result.PersistenceStatus,
+				"activation_status":  result.ActivationStatus,
+				"changed_fields":     append([]string{}, result.ChangedFields...),
+				"error_stage":        result.ErrorStage,
+			}
+			if result.Revision != "" {
+				payload["revision"] = result.Revision
+			}
 			return tools.ErrorResult(successJSON(payload))
 		}
 	}
