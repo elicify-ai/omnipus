@@ -99,7 +99,7 @@ func TestWorkspaceDelegation_EdgeWiredViaTeamTabPersistsForLiveSession(t *testin
 	// saveFn orders its two PUTs.
 	wUp := httptest.NewRecorder()
 	rUp := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+id,
-		strings.NewReader(`{"core_team":["jim","ava","ray","planner","worker"]}`))
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, id, `{"core_team":["jim","ava","ray","planner","worker"]}`)))
 	rUp.Header.Set("Content-Type", "application/json")
 	rUp.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wUp, rUp)

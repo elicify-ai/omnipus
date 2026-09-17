@@ -48,7 +48,7 @@ func TestHandleWorkspaces_GetIncludesMountsWithLiveStatus(t *testing.T) {
 	require.NoError(t, os.RemoveAll(brokenTarget))
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, id), nil)
 	r.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(w, r)
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
@@ -90,7 +90,7 @@ func TestHandleWorkspaces_GetOmitsMountsWhenNone(t *testing.T) {
 	id := createWorkspaceViaAPI(t, api, "NoMountsProject", "")
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, id), nil)
 	r.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(w, r)
 	require.Equal(t, http.StatusOK, w.Code)
@@ -116,7 +116,7 @@ func TestHandleWorkspaces_Delete_NeverTouchesMountedFolder(t *testing.T) {
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	r.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(w, r)
 	require.Equal(t, http.StatusNoContent, w.Code, "body=%s", w.Body.String())

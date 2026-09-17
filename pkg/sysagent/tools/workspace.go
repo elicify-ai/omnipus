@@ -152,6 +152,14 @@ func (t *WorkspaceCreateTool) Parameters() map[string]any {
 				"items":       map[string]any{"type": "string"},
 				"description": "Optional list of agent IDs associated with this workspace",
 			},
+			"delegation": map[string]any{
+				"type": "array", "description": "Complete replacement delegation graph; [] clears it",
+				"items": map[string]any{"type": "object", "properties": map[string]any{
+					"from_agent": map[string]any{"type": "string"}, "to_agent": map[string]any{"type": "string"},
+					"modes": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"direct", "task"}}},
+					"depth": map[string]any{"type": "integer", "minimum": 0},
+				}, "required": []string{"from_agent", "to_agent"}},
+			},
 		},
 		"required": []string{"name"},
 	}
@@ -190,6 +198,10 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 	if raw, ok := args["core_team"].([]any); ok {
 		w.CoreTeam = sanitizeCoreTeam(raw)
 	}
+	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
+	if delegationErr != nil {
+		return tools.ErrorResult(errorJSON("INVALID_DELEGATION_EDGE", delegationErr.Error(), "Send a complete valid graph using current team members"))
+	}
 
 	// Serialize this create against the freshly-minted workspace ID
 	// (workspace.LockID), mirroring update_workspace/delete_workspace.
@@ -217,6 +229,9 @@ func (t *WorkspaceCreateTool) Execute(ctx context.Context, args map[string]any) 
 		ceiling := workspaceDelegationDepthCeiling(t.deps)
 		configPresent := configAgentPresenceSet(t.deps)
 		seeded = seedDelegationEdgesForNewMembers(w.CoreTeam, w.CoreTeam, nil, ceiling, configPresent)
+	}
+	if delegationPresent {
+		seeded = explicitDelegation
 	}
 
 	if err := writeEntity(workspacesDir(t.deps.Home), w.ID, w); err != nil {
@@ -280,6 +295,14 @@ func (t *WorkspaceUpdateTool) Parameters() map[string]any {
 				"type":        "array",
 				"items":       map[string]any{"type": "string"},
 				"description": "List of agent IDs associated with this workspace",
+			},
+			"delegation": map[string]any{
+				"type": "array", "description": "Complete replacement delegation graph; [] clears it",
+				"items": map[string]any{"type": "object", "properties": map[string]any{
+					"from_agent": map[string]any{"type": "string"}, "to_agent": map[string]any{"type": "string"},
+					"modes": map[string]any{"type": "array", "items": map[string]any{"type": "string", "enum": []string{"direct", "task"}}},
+					"depth": map[string]any{"type": "integer", "minimum": 0},
+				}, "required": []string{"from_agent", "to_agent"}},
 			},
 		},
 		"required": []string{"id", "revision"},
@@ -347,6 +370,10 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 		w.CoreTeam = sanitizeCoreTeam(raw)
 		coreTeamChanged = true
 	}
+	explicitDelegation, delegationPresent, delegationErr := parseWorkspaceDelegationArg(args, w.CoreTeam, workspaceDelegationDepthCeiling(t.deps))
+	if delegationErr != nil {
+		return tools.ErrorResult(errorJSON("INVALID_DELEGATION_EDGE", delegationErr.Error(), "Send a complete valid graph using current team members"))
+	}
 
 	// Auto-seed default delegation edges for newly added core_team members
 	// (closes an ADR-037 gap). Per ADR-037 the per-workspace Delegation[] edge
@@ -370,7 +397,9 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 	// the store at all.
 	var delegationSeedNote string
 	var pendingDelegation []workspacepkg.DelegationEdge
-	if coreTeamChanged {
+	if delegationPresent {
+		pendingDelegation = explicitDelegation
+	} else if coreTeamChanged {
 		added := teamDiffAdded(oldTeam, w.CoreTeam)
 		if len(added) > 0 {
 			existing, storeOK := workspacepkg.LoadDelegation(t.deps.Home, id)
@@ -446,7 +475,7 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 	// update that seeds nothing leaves the delegation record untouched, so
 	// there is no write surface to guard and no reason to fail an unrelated
 	// rename over a graph this call never rewrites.
-	if len(pendingDelegation) > 0 {
+	if pendingDelegation != nil {
 		team := workspaceDelegationTeamSet(w, pendingDelegation)
 		ceiling := workspaceDelegationDepthCeiling(t.deps)
 		for i := range pendingDelegation {
@@ -465,7 +494,7 @@ func (t *WorkspaceUpdateTool) Execute(ctx context.Context, args map[string]any) 
 	// leave the store authorizing agents the record does not list on the team.
 	// workspacepkg.LockID(id) is held for this whole function, which is
 	// SaveDelegation's stated caller contract.
-	if len(pendingDelegation) > 0 {
+	if pendingDelegation != nil {
 		if err := workspacepkg.SaveDelegation(t.deps.Home, id, pendingDelegation); err != nil {
 			return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), ""))
 		}
@@ -504,6 +533,94 @@ func teamDiffAdded(oldTeam, newTeam []string) []string {
 		}
 	}
 	return added
+}
+
+func parseWorkspaceDelegationArg(args map[string]any, teamIDs []string, ceiling int) ([]workspacepkg.DelegationEdge, bool, error) {
+	raw, present := args["delegation"]
+	if !present {
+		return nil, false, nil
+	}
+	if raw == nil {
+		return nil, true, errors.New("delegation must be an array; null is not allowed")
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return nil, true, errors.New("delegation must be an array")
+	}
+	team := workspacepkg.TeamSet(teamIDs, nil)
+	edges := make([]workspacepkg.DelegationEdge, 0, len(items))
+	seen := make(map[string]int, len(items))
+	for _, item := range items {
+		row, ok := item.(map[string]any)
+		if !ok {
+			return nil, true, errors.New("delegation entries must be objects")
+		}
+		from, _ := row["from_agent"].(string)
+		to, _ := row["to_agent"].(string)
+		edge := workspacepkg.DelegationEdge{FromAgent: strings.TrimSpace(from), ToAgent: strings.TrimSpace(to)}
+		if rawModes, exists := row["modes"]; exists {
+			values, ok := rawModes.([]any)
+			if !ok {
+				return nil, true, errors.New("delegation modes must be an array")
+			}
+			for _, value := range values {
+				mode, ok := value.(string)
+				if !ok {
+					return nil, true, errors.New("delegation modes must be strings")
+				}
+				edge.Modes = append(edge.Modes, workspacepkg.DelegationMode(mode))
+			}
+		}
+		if rawDepth, exists := row["depth"]; exists {
+			value, ok := rawDepth.(float64)
+			if !ok || value != float64(int(value)) {
+				return nil, true, errors.New("delegation depth must be an integer")
+			}
+			depth := int(value)
+			edge.Depth = &depth
+		}
+		if err := edge.Validate(team, ceiling); err != nil {
+			return nil, true, err
+		}
+		key := edge.FromAgent + "\x00" + edge.ToAgent
+		if index, duplicate := seen[key]; duplicate {
+			edges[index] = edge
+		} else {
+			seen[key] = len(edges)
+			edges = append(edges, edge)
+		}
+	}
+	adj := make(map[string][]string)
+	for _, edge := range edges {
+		if edge.FromAgent != edge.ToAgent {
+			adj[edge.FromAgent] = append(adj[edge.FromAgent], edge.ToAgent)
+		}
+	}
+	visiting, visited := map[string]bool{}, map[string]bool{}
+	var cycle func(string) bool
+	cycle = func(node string) bool {
+		if visiting[node] {
+			return true
+		}
+		if visited[node] {
+			return false
+		}
+		visiting[node] = true
+		for _, next := range adj[node] {
+			if cycle(next) {
+				return true
+			}
+		}
+		visiting[node] = false
+		visited[node] = true
+		return false
+	}
+	for node := range adj {
+		if cycle(node) {
+			return nil, true, errors.New("delegation graph contains a cycle")
+		}
+	}
+	return edges, true, nil
 }
 
 // edgeModeCategory collapses a coreagent seed's 3-value delegate-tool call

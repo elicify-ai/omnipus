@@ -855,7 +855,7 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	if err := workspace.SaveDelegation(a.homePath, ws.ID, validSeedEdges); err != nil {
+	if err := workspaceSaveDelegationFn(a.homePath, ws.ID, validSeedEdges); err != nil {
 		slog.Error("rest: create workspace: seed delegation store", "error", err, "id", ws.ID)
 		if rollbackErr := fileutil.RemoveLocked(workspacePath); rollbackErr != nil && !errors.Is(rollbackErr, os.ErrNotExist) {
 			slog.Error("rest: create workspace: rollback record", "error", rollbackErr, "id", ws.ID)
@@ -1407,7 +1407,7 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 	}
 	if rw.delegationChanged {
 		rw.changedFields = append(rw.changedFields, "delegation")
-		if err := workspace.SaveDelegation(rw.a.homePath, rw.id, rw.delegation); err != nil {
+		if err := workspaceSaveDelegationFn(rw.a.homePath, rw.id, rw.delegation); err != nil {
 			slog.Error("rest: update workspace: delegation write", "id", rw.id, "error", err)
 			revision, _ := workspace.RevisionForState(rw.ws, rw.state.Delegation)
 			stage := "delegation"

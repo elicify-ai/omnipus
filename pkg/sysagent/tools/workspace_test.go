@@ -67,6 +67,67 @@ func TestWorkspaceUpdate_StaleRevisionDoesNotWrite(t *testing.T) {
 	}
 }
 
+func TestWorkspaceUpdate_ExplicitDelegationReplaceAndClear(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "jim", "ava")
+	created := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{
+		"name": "Graph", "core_team": []any{"jim", "ava"},
+	})
+	if created.IsError {
+		t.Fatalf("create failed: %s", created.ForLLM)
+	}
+	id := workspaceID(t, created.ForLLM)
+	tool := systools.NewWorkspaceUpdateTool(deps)
+
+	updated := tool.Execute(context.Background(), map[string]any{
+		"id": id, "revision": currentWorkspaceRevision(t, home, id),
+		"delegation": []any{map[string]any{"from_agent": "jim", "to_agent": "ava", "modes": []any{"direct"}, "depth": float64(1)}},
+	})
+	if updated.IsError {
+		t.Fatalf("replace failed: %s", updated.ForLLM)
+	}
+	edges, ok := workspacepkg.LoadDelegation(home, id)
+	if !ok || len(edges) != 1 || edges[0].FromAgent != "jim" || edges[0].ToAgent != "ava" {
+		t.Fatalf("unexpected replacement: %#v", edges)
+	}
+
+	cleared := tool.Execute(context.Background(), map[string]any{
+		"id": id, "revision": currentWorkspaceRevision(t, home, id), "delegation": []any{},
+	})
+	if cleared.IsError {
+		t.Fatalf("clear failed: %s", cleared.ForLLM)
+	}
+	edges, ok = workspacepkg.LoadDelegation(home, id)
+	if !ok || len(edges) != 0 {
+		t.Fatalf("graph was not cleared: %#v", edges)
+	}
+}
+
+func TestWorkspaceUpdate_ExplicitDelegationRejectsNullOffTeamAndCycleWithoutWrites(t *testing.T) {
+	deps, home := newTestDepsWithHomeAndAgents(t, "jim", "ava")
+	created := systools.NewWorkspaceCreateTool(deps).Execute(context.Background(), map[string]any{"name": "Graph", "core_team": []any{"jim", "ava"}})
+	if created.IsError {
+		t.Fatalf("create failed: %s", created.ForLLM)
+	}
+	id := workspaceID(t, created.ForLLM)
+	tool := systools.NewWorkspaceUpdateTool(deps)
+	cases := []any{
+		nil,
+		[]any{map[string]any{"from_agent": "jim", "to_agent": "ghost"}},
+		[]any{map[string]any{"from_agent": "jim", "to_agent": "ava"}, map[string]any{"from_agent": "ava", "to_agent": "jim"}},
+	}
+	for _, graph := range cases {
+		before, _ := os.ReadFile(filepath.Join(home, "workspaces", id+".json"))
+		result := tool.Execute(context.Background(), map[string]any{"id": id, "revision": currentWorkspaceRevision(t, home, id), "name": "must-not-write", "delegation": graph})
+		if !result.IsError {
+			t.Fatalf("invalid graph %#v succeeded", graph)
+		}
+		after, _ := os.ReadFile(filepath.Join(home, "workspaces", id+".json"))
+		if string(before) != string(after) {
+			t.Fatalf("invalid graph %#v changed workspace", graph)
+		}
+	}
+}
+
 // newTestDepsWithHomeAndAgents behaves like newTestDepsWithHome but also seeds
 // the live config's Agents.List with the given IDs (ID field only) — required
 // for delegation-edge auto-seed tests now that seedDelegationEdgesForNewMembers
@@ -482,14 +543,14 @@ func TestWorkspaceCreate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 	if findEdge(edges, "jim", "ray") != nil {
 		t.Error("jim→ray must be dropped — ray is not on the team")
 	}
-	if findEdge(edges, "jim", "ava") == nil {
-		t.Error("expected jim→ava edge")
+	if findEdge(edges, "jim", "jim") == nil {
+		t.Error("expected Jim self edge")
 	}
 	if findEdge(edges, "jim", "worker") == nil {
 		t.Error("expected jim→worker edge")
 	}
-	if findEdge(edges, "ava", "worker") == nil {
-		t.Error("expected ava→worker edge")
+	if findEdge(edges, "worker", "worker") == nil {
+		t.Error("expected General Purpose self edge")
 	}
 
 	// The edge list must never be copied into the child-writable workspace
@@ -958,17 +1019,17 @@ func TestWorkspaceUpdate_SeedsDelegationEdgesForNewMembers(t *testing.T) {
 		t.Error("jim→ray must be dropped — ray is not on the team")
 	}
 
-	jimAva := findEdge(edges, "jim", "ava")
+	jimAva := findEdge(edges, "jim", "jim")
 	if jimAva == nil {
-		t.Fatal("expected jim→ava edge")
+		t.Fatal("expected Jim self edge")
 	}
 	jimWorker := findEdge(edges, "jim", "worker")
 	if jimWorker == nil {
 		t.Fatal("expected jim→worker edge")
 	}
-	avaWorker := findEdge(edges, "ava", "worker")
+	avaWorker := findEdge(edges, "worker", "worker")
 	if avaWorker == nil {
-		t.Fatal("expected ava→worker edge (worker is newly added, even though ava pre-existed)")
+		t.Fatal("expected General Purpose self edge")
 	}
 
 	// Jim's seed [task, background, await] must collapse+dedupe to [task, direct].
@@ -1041,11 +1102,11 @@ func TestWorkspaceUpdate_SeedDedupesExistingEdge(t *testing.T) {
 	}
 
 	// The genuinely new edges must still be added.
-	if findEdge(edges, "jim", "ava") == nil {
-		t.Error("expected jim→ava edge to be seeded")
+	if findEdge(edges, "jim", "jim") == nil {
+		t.Error("expected Jim self edge to be seeded")
 	}
-	if findEdge(edges, "ava", "worker") == nil {
-		t.Error("expected ava→worker edge to be seeded")
+	if findEdge(edges, "worker", "worker") == nil {
+		t.Error("expected General Purpose self edge to be seeded")
 	}
 }
 
@@ -1090,12 +1151,8 @@ func TestWorkspaceUpdate_SeedDoesNotResurrectRemovedEdge(t *testing.T) {
 	if findEdge(edges, "ray", "researcher") != nil {
 		t.Error("ray→researcher must be dropped — researcher is not on the team")
 	}
-	rayWorker := findEdge(edges, "ray", "worker")
-	if rayWorker == nil {
-		t.Fatalf("expected ray→worker edge to be seeded, got edges=%v", edges)
-	}
-	if len(edges) != 1 {
-		t.Errorf("expected exactly 1 seeded edge (ray→worker), got %d: %v", len(edges), edges)
+	if len(edges) != 0 {
+		t.Errorf("Ray has no approved seed edge in ADR-090; got %d: %v", len(edges), edges)
 	}
 }
 
@@ -1255,8 +1312,8 @@ func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
 	}
 
 	edges := delegationEdgesFromDisk(t, home, id)
-	if findEdge(edges, "jim", "ava") == nil {
-		t.Errorf("expected jim→ava edge to be seeded (both endpoints present in config), got %v", edges)
+	if findEdge(edges, "jim", "jim") == nil {
+		t.Errorf("expected Jim self edge to be seeded, got %v", edges)
 	}
 	if findEdge(edges, "jim", "worker") != nil {
 		t.Error("jim→worker must NOT be seeded — worker is absent from the live config")
@@ -1265,7 +1322,7 @@ func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
 		t.Error("ava→worker must NOT be seeded — worker is absent from the live config")
 	}
 	if len(edges) != 1 {
-		t.Errorf("expected exactly 1 seeded edge (jim→ava), got %d: %v", len(edges), edges)
+		t.Errorf("expected exactly 1 seeded edge (Jim self edge), got %d: %v", len(edges), edges)
 	}
 }
 
@@ -1323,16 +1380,14 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 	}
 
 	m := parseSuccess(t, res.ForLLM)
-	note, _ := m["delegation_seeded"].(string)
-	if !strings.Contains(note, "ray") {
-		t.Errorf("delegation_seeded note = %q, want it to mention ray", note)
+	if note, present := m["delegation_seeded"]; present {
+		t.Errorf("Ray has no approved ADR-090 seed edge; unexpected note %v", note)
 	}
 
 	edges := delegationEdgesFromDisk(t, home, id)
 
-	// The addition: ray→worker seeded (both endpoints on NEW team + in config).
-	if findEdge(edges, "ray", "worker") == nil {
-		t.Errorf("expected ray→worker edge to be seeded, got %v", edges)
+	if findEdge(edges, "ray", "worker") != nil {
+		t.Errorf("ray→worker is not in the approved ADR-090 matrix, got %v", edges)
 	}
 	// ray→researcher dropped — researcher is not on the team.
 	if findEdge(edges, "ray", "researcher") != nil {
@@ -1356,8 +1411,8 @@ func TestWorkspaceUpdate_CombinedAddRemove_SeedsAdditionsPreservesRemovedEdges(t
 		t.Errorf("pre-existing ava→worker edge must be left untouched, got modes=%v", modes)
 	}
 
-	if len(edges) != 4 {
-		t.Errorf("expected exactly 4 edges (3 pre-existing + 1 new ray→worker), got %d: %v", len(edges), edges)
+	if len(edges) != 3 {
+		t.Errorf("expected the 3 pre-existing edges only, got %d: %v", len(edges), edges)
 	}
 }
 

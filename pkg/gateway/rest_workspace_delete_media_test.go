@@ -61,7 +61,7 @@ func TestHandleWorkspaceDelete_ActorAttribution(t *testing.T) {
 	_, _, uploadErr := lib.Upload("note.txt", gen.MediaLibraryEntrySourceUserUpload, strings.NewReader("bytes"))
 	require.NoError(t, uploadErr)
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	r = r.WithContext(contextWithUser(r.Context(), "alice"))
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
@@ -125,7 +125,7 @@ func TestHandleWorkspaceDelete_MediaCascadeFailure_Returns500AndAudits(t *testin
 		logger.SetLevel(prevLevel)
 	})
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	r = r.WithContext(contextWithUser(r.Context(), "bob"))
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
@@ -150,7 +150,7 @@ func TestHandleWorkspaceDelete_MediaCascadeFailure_Returns500AndAudits(t *testin
 	)
 
 	getW := httptest.NewRecorder()
-	getR := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	getR := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, id), nil)
 	api.handleWorkspaceGet(getW, getR, id)
 	assert.Equal(
 		t,
@@ -208,7 +208,7 @@ func TestHandleWorkspaceDelete_MediaCascadeSuccess_StillReturns204(t *testing.T)
 	api, auditDir := newTestAPIWithAuditor(t)
 	id := createWorkspaceViaAPI(t, api, "NoMediaAtAll", "")
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
 
@@ -266,7 +266,7 @@ func TestHandleWorkspaceDelete_DirRemoveFailure_Returns500(t *testing.T) {
 		_ = os.RemoveAll(wsDir)
 	})
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	r = r.WithContext(contextWithUser(r.Context(), "carol"))
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
@@ -286,7 +286,7 @@ func TestHandleWorkspaceDelete_DirRemoveFailure_Returns500(t *testing.T) {
 	// The authoritative workspace record delete is unaffected by the
 	// directory-wipe failure — a follow-up GET must still 404.
 	getW := httptest.NewRecorder()
-	getR := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	getR := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, id), nil)
 	api.handleWorkspaceGet(getW, getR, id)
 	assert.Equal(t, http.StatusNotFound, getW.Code,
 		"workspace record must be confirmed gone via GET despite the directory-removal 500")
@@ -323,7 +323,7 @@ func TestHandleWorkspaceDelete_DirRemoveFailure_Injected(t *testing.T) {
 	removeAllFn = func(string) error { return sentinel }
 	t.Cleanup(func() { removeAllFn = orig })
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	r = r.WithContext(contextWithUser(r.Context(), "carol"))
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
@@ -336,7 +336,7 @@ func TestHandleWorkspaceDelete_DirRemoveFailure_Injected(t *testing.T) {
 
 	// The workspace record delete is independent of the directory wipe.
 	getW := httptest.NewRecorder()
-	getR := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	getR := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, id), nil)
 	api.handleWorkspaceGet(getW, getR, id)
 	assert.Equal(t, http.StatusNotFound, getW.Code,
 		"workspace record must still be gone despite the directory-removal 500")

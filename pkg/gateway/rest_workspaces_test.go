@@ -124,7 +124,7 @@ func TestHandleWorkspaces_GetByID(t *testing.T) {
 
 	// GET /api/v1/workspaces/{id} → 200 with correct fields.
 	wGet := httptest.NewRecorder()
-	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	rGet := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, id), nil)
 	rGet.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wGet, rGet)
 
@@ -137,7 +137,7 @@ func TestHandleWorkspaces_GetByID(t *testing.T) {
 
 	// GET /api/v1/workspaces/nonexistent → 404.
 	wNot := httptest.NewRecorder()
-	rNot := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/01JXNOTEXISTENT00000000000", nil)
+	rNot := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, "01JXNOTEXISTENT00000000000"), nil)
 	rNot.URL.Path = "/api/v1/workspaces/01JXNOTEXISTENT00000000000"
 	api.HandleWorkspaces(wNot, rNot)
 	assert.Equal(t, http.StatusNotFound, wNot.Code, "GET /workspaces/nonexistent must return 404")
@@ -215,7 +215,7 @@ func TestHandleWorkspaces_Delete_Returns204(t *testing.T) {
 
 	// DELETE → 204.
 	wDel := httptest.NewRecorder()
-	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	rDel := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	rDel.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wDel, rDel)
 	assert.Equal(t, http.StatusNoContent, wDel.Code, "DELETE /workspaces/{id} must return 204")
@@ -223,7 +223,7 @@ func TestHandleWorkspaces_Delete_Returns204(t *testing.T) {
 
 	// DELETE nonexistent → 404.
 	wNot := httptest.NewRecorder()
-	rNot := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/01JXNOTEXISTENT00000000000", nil)
+	rNot := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, "01JXNOTEXISTENT00000000000"), nil)
 	rNot.URL.Path = "/api/v1/workspaces/01JXNOTEXISTENT00000000000"
 	api.HandleWorkspaces(wNot, rNot)
 	assert.Equal(t, http.StatusNotFound, wNot.Code, "DELETE /workspaces/nonexistent must return 404")
@@ -249,7 +249,7 @@ func TestHandleWorkspaces_CascadeDelete_RemovesTasks(t *testing.T) {
 
 	// DELETE project → 204.
 	wDel := httptest.NewRecorder()
-	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	rDel := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	rDel.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wDel, rDel)
 	require.Equal(t, http.StatusNoContent, wDel.Code, "DELETE /workspaces/{id} must return 204")
@@ -310,7 +310,7 @@ func TestHandleWorkspaces_CascadeDelete_RemovesMailboxes(t *testing.T) {
 
 	// DELETE the workspace → 204.
 	wDel := httptest.NewRecorder()
-	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	rDel := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	rDel.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wDel, rDel)
 	require.Equal(t, http.StatusNoContent, wDel.Code, "DELETE /workspaces/{id} must return 204")
@@ -531,7 +531,7 @@ func TestHandleWorkspaces_ConcurrentDelete(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+projID, nil)
+			r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, projID), nil)
 			r.URL.Path = "/api/v1/workspaces/" + projID
 			api.HandleWorkspaces(w, r)
 			results[i] = result{code: w.Code, body: w.Body.String()}
@@ -560,7 +560,7 @@ func TestHandleWorkspaces_ConcurrentDelete(t *testing.T) {
 
 	// Verify the project is truly gone by trying to GET it.
 	wGet := httptest.NewRecorder()
-	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+projID, nil)
+	rGet := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, projID), nil)
 	rGet.URL.Path = "/api/v1/workspaces/" + projID
 	api.HandleWorkspaces(wGet, rGet)
 	assert.Equal(t, http.StatusNotFound, wGet.Code,
@@ -757,7 +757,7 @@ func TestHandleWorkspaces_InboxNotDeletable(t *testing.T) {
 
 	// DELETE Inbox → 409.
 	wDel := httptest.NewRecorder()
-	rDel := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+inboxID, nil)
+	rDel := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, inboxID), nil)
 	rDel.URL.Path = "/api/v1/workspaces/" + inboxID
 	api.HandleWorkspaces(wDel, rDel)
 
@@ -766,7 +766,7 @@ func TestHandleWorkspaces_InboxNotDeletable(t *testing.T) {
 
 	// Verify Inbox still exists after failed delete.
 	wGet := httptest.NewRecorder()
-	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+inboxID, nil)
+	rGet := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, inboxID), nil)
 	rGet.URL.Path = "/api/v1/workspaces/" + inboxID
 	api.HandleWorkspaces(wGet, rGet)
 	assert.Equal(t, http.StatusOK, wGet.Code,
@@ -942,7 +942,7 @@ func TestHandleWorkspaces_LegacyUnownedAccessible(t *testing.T) {
 
 	// Any user (e.g. "bob") can read an unowned project.
 	wGet := httptest.NewRecorder()
-	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+projID, nil)
+	rGet := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, projID), nil)
 	rGet.URL.Path = "/api/v1/workspaces/" + projID
 	rGet = rGet.WithContext(
 		contextWithUser(rGet.Context(), "bob"))
@@ -1129,7 +1129,7 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 
 	// Step 4: GET the workspace back and assert every untouched field survived.
 	wGet := httptest.NewRecorder()
-	rGet := httptest.NewRequest(http.MethodGet, "/api/v1/workspaces/"+id, nil)
+	rGet := httptest.NewRequest(http.MethodGet, workspaceDeleteURL(t, api, id), nil)
 	rGet.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wGet, rGet)
 	require.Equal(t, http.StatusOK, wGet.Code,

@@ -37,6 +37,8 @@ import (
 // seed data is trusted, hardcoded Go, not operator input).
 const delegationDepthCeilingFallback = 3
 
+var workspaceSaveDelegationFn = workspace.SaveDelegation
+
 // delegationDepthCeiling returns the effective maximum delegation chain depth a
 // caller may request, reusing the global subturn depth cap rather than inventing
 // a new constant. It tracks getSubTurnConfig: the configured
@@ -233,7 +235,7 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 
 	// Persist to the delegation store. LockID(id) is already held above, which
 	// is SaveDelegation's stated caller contract.
-	if err := workspace.SaveDelegation(a.homePath, id, edges); err != nil {
+	if err := workspaceSaveDelegationFn(a.homePath, id, edges); err != nil {
 		slog.Error("rest: update workspace delegation", "error", err, "id", id)
 		stage := "delegation"
 		message := "delegation graph was not saved; read the workspace again before retrying"

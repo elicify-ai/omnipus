@@ -235,7 +235,7 @@ func TestWorkspaceDelete_PartialCascade_AbortsIntact(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(api.homePath, 0o700) })
 
 	// Attempt to delete workspace "sales" — must fail at the channel-unbind step.
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/sales", nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, "sales"), nil)
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, "sales")
 
