@@ -488,7 +488,7 @@ func (t *ReadFileTool) Name() string {
 }
 
 func (t *ReadFileTool) Description() string {
-	return "Read text and supported documents, or inspect a PNG, JPEG, or SVG image in the current model turn. " +
+	return "Read text and supported documents, or inspect a PNG or JPEG image in the current model turn. Direct SVG reads return text; render SVG to PNG/JPEG before visual inspection. " +
 		"Image inspection rejects offset/length pagination, enforces the configured media byte limit, and supplies visible image content only to the model; it does not attach the image to the user or retain its bytes in history. " +
 		"Text supports pagination via `offset` and `length`. " +
 		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +

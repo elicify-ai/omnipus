@@ -155,7 +155,7 @@
   },
   {
     "name": "list_skills",
-    "description": "List all installed skills (procedures, playbooks, and capabilities loaded from SKILL.md files) available to you right now, with each skill's id, name, and description. Use find_skills instead to search the marketplace for skills that are NOT yet installed. No parameters required.",
+    "description": "List installed skills. scope=usable (the default) lists only skills assigned for this agent to run. scope=management lists sanitized installed inventory for configuration review when the caller has management-read authority; name may inspect one skill's sanitized content in management scope. Use Skill to run an assigned skill and find_skills to search the marketplace.",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
