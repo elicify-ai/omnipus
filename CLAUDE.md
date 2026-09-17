@@ -107,7 +107,7 @@ A merge from a branch cut before a removal can resurrect deleted files/surfaces 
 - **Fail-closed per-agent tool-policy backfill** (ADR-077) — see Hard Constraint #6. Guard: `scripts/check-no-fail-closed-backfill.sh`.
 - **Goal-ending-on-lost-UI watchdog** (ADR-082) — a turn never depends on a UI connection; only an explicit Stop/cancel (`RequestCancel`, `InterruptSessionHard`) ends a turn early. Guard: `scripts/check-no-orphan-turn-watchdog.sh`.
 
-Guards are wired into CI via `scripts/guards.sh` (`make lint-guards`), each with a Makefile target; every guard's full deletion inventory (each symbol, file and wire type it bans) is enumerated inside the guard script itself.
+Guards are wired into CI via `scripts/guards.sh` (`make lint-guards`); discovery picks up every `scripts/check-*.sh`, and each guard's banned-name list lives in that script.
 
 ## Spec-Driven Workflow
 
