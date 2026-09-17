@@ -1020,7 +1020,16 @@ run_e2e() {
   # One virtual display for every shard (see _e2e_run_shard's comment for why).
   # Reaped by exact pid on the way out; never pkill-by-pattern on this box.
   if [ -z "${DISPLAY:-}" ] && command -v Xvfb >/dev/null 2>&1; then
-    Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >"$TMPDIR/xvfb.log" 2>&1 &
+    # 9>&- is load-bearing, not tidiness. The whole-run mutex is `exec 9>lock;
+    # flock -n 9`, and fd 9 is INHERITED by every child. Xvfb is backgrounded
+    # and has outlived its parent before (orphaned 2026-09-17 at 10:09), which
+    # left it holding the lock after runci.sh exited — wedging every later run
+    # on that machine for the full 90-minute flock timeout. Two runs were lost
+    # to this in one afternoon, each reading as "is a run wedged?" with nothing
+    # actually running. Closing fd 9 in the child means an orphaned Xvfb can no
+    # longer hold the worker hostage. Any other long-lived background child
+    # added here needs the same treatment.
+    Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >"$TMPDIR/xvfb.log" 2>&1 9>&- &
     _XVFB_PID=$!
     export DISPLAY=:99
     # Give the server a moment, then confirm it is actually up rather than
