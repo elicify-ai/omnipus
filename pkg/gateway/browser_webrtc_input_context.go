@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -61,20 +62,56 @@ func newWebRTCContextInputSinkWithDispatchSampling(validateInbound bool, samplin
 	if sampling == nil {
 		sampling = &browserInputTimingSampling{}
 	}
+	// Five paths below discard an input frame before it reaches CDP, and four of
+	// them used to be silent at the gateway's default `warn` level (three bare
+	// returns plus a slog.Debug). A click could therefore arrive over a healthy
+	// data channel and vanish with NO trace — which is exactly the shape of the
+	// ui-browser shard's failures: peer connected, picture unchanged, log empty.
+	// Investigating that from absence cost several rounds.
+	//
+	// dropOnce reports the FIRST occurrence of each reason per sink at Warn and
+	// counts the rest, so the signal is bounded (at most one line per reason)
+	// rather than one line per input event. Input is high-rate; an unbounded
+	// log here would be its own defect.
+	var dropMu sync.Mutex
+	dropSeen := map[string]int{}
+	dropOnce := func(reason, viewerID string, detail any) {
+		dropMu.Lock()
+		n := dropSeen[reason]
+		dropSeen[reason] = n + 1
+		dropMu.Unlock()
+		if n == 0 {
+			slog.Warn("browser-webrtc: input frame DROPPED before dispatch",
+				"reason", reason, "viewer_id", viewerID, "detail", detail,
+				"note", "first occurrence for this sink; further drops of this reason are counted, not logged")
+		}
+	}
+
 	return func(ctx context.Context, viewerID string, raw []byte) {
 		if ctx == nil || ctx.Err() != nil {
+			dropOnce("source-context-done", viewerID, ctxErrString(ctx))
 			return
 		}
 		if disabled, _ := ctx.Value(disabledMediaInputKey{}).(bool); disabled {
+			dropOnce("media-input-disabled", viewerID, "disabledMediaInputKey set on the context")
 			return
 		}
 		route, ok := ctx.Value(webRTCInputRouteKey{}).(webRTCInputRoute)
 		if !ok || route.attachment == nil || route.attachment.Err() != nil {
+			reason := "no-route-on-context"
+			var detail any = "webRTCInputRouteKey absent"
+			switch {
+			case ok && route.attachment == nil:
+				reason, detail = "route-without-attachment", "route present, attachment nil"
+			case ok:
+				reason, detail = "attachment-done", route.attachment.Err().Error()
+			}
+			dropOnce(reason, viewerID, detail)
 			return
 		}
 		if validateInbound {
 			if message, _ := ValidateInboundFrameJSON("BrowserInputFrame", raw); message != "" {
-				slog.Debug("browser-webrtc: dropping invalid input data-channel frame", "viewer_id", viewerID, "error", message)
+				dropOnce("schema-invalid", viewerID, message)
 				return
 			}
 		}
@@ -126,4 +163,16 @@ func newWebRTCContextInputSinkWithDispatchSampling(validateInbound bool, samplin
 			route.report(ctx, frame.Kind, err)
 		}
 	}
+}
+
+// ctxErrString renders a context's error for the drop log without panicking on
+// a nil context (the first drop reason explicitly covers ctx == nil).
+func ctxErrString(ctx context.Context) string {
+	if ctx == nil {
+		return "nil context"
+	}
+	if err := ctx.Err(); err != nil {
+		return err.Error()
+	}
+	return "no error"
 }
