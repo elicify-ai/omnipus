@@ -720,10 +720,20 @@ test.describe('UAT Group C — the live browser panel', () => {
       // reached the page at all. Reporting them as one finding would be useless.
       const afterMiss = await sampleFrame(video);
       const reacted = changedCells(beforeClick, afterMiss, 6);
+      // The panel publishes WHY input is suppressed (data-input-blocked-by on
+      // the dedicated-input root). A click that never reached the page is
+      // otherwise indistinguishable from a broken transport, and reading the
+      // gateway log to tell them apart has cost several rounds.
+      const gate = await page
+        .locator('[data-input-mode="dedicated"]')
+        .first()
+        .getAttribute('data-input-blocked-by')
+        .catch(() => null);
       await saveFrame(testInfo, 'frame-after-missed-click.png', afterMiss);
       throw new Error(
         `the click at remote (${target.x},${target.y}) in a ${media.width}x${media.height} capture ` +
-          `did not open /dropdown — the address bar still reads ` +
+          `did not open /dropdown — the panel's input gate reported ` +
+          `${gate ? `BLOCKED by ${gate}` : 'no blocking reason (gate open)'}, and the address bar still reads ` +
           `${JSON.stringify(await addressBar(page).inputValue())}. The picture ` +
           `${reacted > 0 ? `DID change (${reacted}/64 cells), so the click reached the page and hit ` +
             'the wrong thing — this is UAT-14\'s named silent failure, the picture sitting behind ' +
