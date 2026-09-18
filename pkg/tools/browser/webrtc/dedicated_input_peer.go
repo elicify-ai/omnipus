@@ -284,10 +284,29 @@ func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 	}
 	p.mu.Lock()
 	if !valid || p.channels[dc.Label()] != nil || p.ctx.Err() != nil {
+		duplicate := p.channels[dc.Label()] != nil
+		ctxErr := p.ctx.Err()
 		p.mu.Unlock()
+		// Say WHICH predicate rejected the channel. This branch surfaces to the
+		// operator as "Could not negotiate the input connection", and until now
+		// it named nothing — so a peer whose ICE connects fine, and whose input
+		// then silently never arrives, gave the investigator no way to tell a
+		// label mismatch from a protocol mismatch from a duplicate. That
+		// ambiguity cost several rounds on the ui-browser shard.
+		retx := "nil"
+		if v := dc.MaxRetransmits(); v != nil {
+			retx = fmt.Sprintf("%d", *v)
+		}
+		life := "nil"
+		if v := dc.MaxPacketLifeTime(); v != nil {
+			life = fmt.Sprintf("%d", *v)
+		}
+		dedicatedInputLogf("input data channel REJECTED: label=%q protocol=%q negotiated=%t ordered=%t max_retransmits=%s max_packet_lifetime=%s duplicate=%t ctx_err=%v (want label input-reliable|input-hover, protocol %q, negotiated=false, lifetime=nil; reliable: ordered=true retransmits=nil; hover: ordered=false retransmits=0)",
+			dc.Label(), dc.Protocol(), dc.Negotiated(), dc.Ordered(), retx, life, duplicate, ctxErr, InputBinaryProtocol)
 		p.fail("invalid input data channel")
 		return
 	}
+	dedicatedInputLogf("input data channel accepted: label=%q protocol=%q ordered=%t", dc.Label(), dc.Protocol(), dc.Ordered())
 	p.channels[dc.Label()] = dc
 	p.mu.Unlock()
 	dc.OnOpen(func() {
@@ -349,4 +368,13 @@ func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 		}
 		p.queue.submit(hover, frame)
 	})
+}
+
+// dedicatedInputLogf mirrors the peer's existing Warn-level logging shape (see
+// the logf closure built in Answer). bindChannel is reached from pion's
+// OnDataChannel callback, which has no access to that closure, and the gateway
+// filters below Warn — so Info here would be invisible, which is the exact trap
+// the ICE diagnostics fell into.
+func dedicatedInputLogf(format string, args ...any) {
+	slog.Warn(fmt.Sprintf("browser dedicated input: "+format, args...))
 }
