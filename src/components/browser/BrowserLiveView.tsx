@@ -151,6 +151,31 @@ export interface BrowserLiveViewProps {
 // driving-state signal. The data-visual-state attribute on the (invisible)
 // overlay is kept for tests + potential future use.
 
+/**
+ * Fault 3 (docs/internal/browser-viewport-input-rootcause-2026-07-31.md) —
+ * builds the `capture_width`/`capture_height` keys for a coordinate-carrying
+ * `BrowserInputFrame`, or an empty object when the mapping reported no
+ * capture dims. A plain `capture_width: undefined` field would survive
+ * property-existence checks (and any consumer reading the object before it
+ * hits `JSON.stringify`, the only place `undefined` values actually vanish)
+ * — spreading this return value keeps the keys genuinely absent, not merely
+ * undefined.
+ *
+ * These keys are load-bearing, not decorative: the gateway's
+ * rescaleToCSSViewport only runs when `capture_width > 0 && capture_height >
+ * 0`, and without it positional input is dispatched in capture-frame space
+ * against the tab's real CSS viewport. On the CI worker those differ (capture
+ * 1344x672, real viewport 2560x1297, measured 2026-09-18), so a click landed
+ * ~1.9x off its target — on empty background, with nothing dropped, nothing
+ * rejected and nothing logged. This stamping shipped 2026-07-31 (ad0ac85a0)
+ * and was lost in the 2026-09-07 frame-binding rework (0ecabac98); UAT-13/14
+ * 15 have failed on the ui-browser shard ever since.
+ */
+function captureDimsFields(dims: { captureWidth?: number; captureHeight?: number }): { capture_width?: number; capture_height?: number } {
+  if (dims.captureWidth === undefined || dims.captureHeight === undefined) return {}
+  return { capture_width: dims.captureWidth, capture_height: dims.captureHeight }
+}
+
 // UAT finding FE-7 / D5: the backend surfaces raw Go error strings verbatim
 // on a terminal browser_status{state:'error'} frame — e.g. `browser input
 // failed: browser live: navigate blocked: ... SSRF: blocked cloud metadata
@@ -266,8 +291,10 @@ export function BrowserLiveView({
   const pendingAnnotationRef = useRef<PendingAnnotation | null>(null)
   // Coalesce mouse moves on the input timer. Store final CSS coordinates so
   // later encoder adaptation cannot reinterpret an already mapped position.
+  // captureWidth/captureHeight travel with those coordinates (not re-read at
+  // flush time) for the same reason — see captureDimsFields's doc comment.
   const flushWheelBeforeActionRef = useRef<() => void>(() => {})
-  const pendingMoveRef = useRef<{ x: number; y: number; modifiers: number } | null>(null)
+  const pendingMoveRef = useRef<{ x: number; y: number; modifiers: number; captureWidth?: number; captureHeight?: number } | null>(null)
   // Wheel is coalesced on the SAME pacer as moves, with deltas ACCUMULATED
   // (position = latest). Un-paced wheel was the second half of the operator's
   // "clicks work only sometimes": a trackpad/momentum scroll emits wheel at the
@@ -281,6 +308,8 @@ export function BrowserLiveView({
     modifiers: number
     deltaX: number
     deltaY: number
+    captureWidth?: number
+    captureHeight?: number
   } | null>(null)
   // Guards re-scheduling of the shared move+wheel flush, and OWNS the timer
   // handle. Storing the id is what makes cancellation real: clearing the flag
@@ -1301,13 +1330,21 @@ export function BrowserLiveView({
   // ── The ONE place a client-space pointer coordinate is turned into the
   // CSS-page coordinate CDP dispatch/BrowserInputFrame expects. Replaces
   // four previously-duplicated call sites (wheel/pointerMove/pointerDown/
-  // pointerUp below) with one routed call.
+  // pointerUp below) with one routed call. The returned captureWidth/
+  // captureHeight name the css.width × css.height space x/y were mapped
+  // into (the gateway's own declared capture CSS size) — the server rescales
+  // from that space into the tab's real CSS viewport, but ONLY when those
+  // dims ride along on the frame (see captureDimsFields). Omitting them is
+  // the regression that mis-aimed every positional input by the capture/
+  // viewport size ratio (root-cause doc Fault 3).
   const mapPointerToDeviceCoords = useCallback(
-    (clientX: number, clientY: number, rect: RectLike, allowOutside = false): DeviceCoords | null => {
+    (clientX: number, clientY: number, rect: RectLike, allowOutside = false): (DeviceCoords & { captureWidth?: number; captureHeight?: number }) | null => {
       const dims = activeFrameDims()
       const css = captureRef.current.css
       if (!dims || !css) return null
-      return mapClientToBrowserCss(clientX, clientY, rect, dims.width, dims.height, css.width, css.height, allowOutside)
+      const coords = mapClientToBrowserCss(clientX, clientY, rect, dims.width, dims.height, css.width, css.height, allowOutside)
+      if (!coords) return null
+      return { ...coords, captureWidth: css.width, captureHeight: css.height }
     },
     [activeFrameDims],
   )
@@ -1766,6 +1803,9 @@ export function BrowserLiveView({
         x: pending.x,
         y: pending.y,
         modifiers: pending.modifiers,
+        // Fault 3 — carried from the pointermove's own mapping call, not
+        // re-derived here; see pendingMoveRef's doc comment.
+        ...captureDimsFields(pending),
       },
     )
   }, [canDispatchInput, dispatchInput])
@@ -1799,6 +1839,10 @@ export function BrowserLiveView({
       delta_x: pending.deltaX,
       delta_y: pending.deltaY,
       modifiers: pending.modifiers,
+      // Fault 3 (browser-viewport-input-rootcause-2026-07-31.md) — see
+      // captureDimsFields's doc comment for why this is a spread, not a
+      // direct assignment.
+      ...captureDimsFields(pending),
     })
   }, [canDispatchInput, dispatchInput])
 
@@ -1862,6 +1906,8 @@ export function BrowserLiveView({
         modifiers,
         deltaX: (prev?.deltaX ?? 0) + e.deltaX,
         deltaY: (prev?.deltaY ?? 0) + e.deltaY,
+        captureWidth: device.captureWidth,
+        captureHeight: device.captureHeight,
       }
       scheduleInputFlush()
     }
@@ -2083,6 +2129,13 @@ export function BrowserLiveView({
       x: device.x,
       y: device.y,
       modifiers: computeModifiers(e),
+      // Captured HERE, at the same event that computed x/y, and ride through
+      // to the coalesced flush unchanged — the stream geometry can drift
+      // between this event and the timer firing, and re-reading at flush
+      // would report a capture size that no longer matches the already-mapped
+      // x/y (Fault 3; see captureDimsFields).
+      captureWidth: device.captureWidth,
+      captureHeight: device.captureHeight,
     }
     scheduleInputFlush()
   }, [scheduleInputFlush, annotateMode, canDispatchInput, mapPointerToDeviceCoords])
@@ -2164,6 +2217,10 @@ export function BrowserLiveView({
         y: device.y,
         button: mapMouseButton(e.button),
         modifiers: computeModifiers(e),
+        // Fault 3 — the dims of the space this event's x/y were mapped into;
+        // without them the gateway dispatches raw capture-frame coordinates
+        // against the tab's real CSS viewport (see captureDimsFields).
+        ...captureDimsFields(device),
       },
     )
   }, [
@@ -2220,6 +2277,9 @@ export function BrowserLiveView({
         y: device.y,
         button: mapMouseButton(e.button),
         modifiers: computeModifiers(e),
+        // Fault 3 — same as mouse_down; the release's landing point must be
+        // rescaled by the same space the press was (see captureDimsFields).
+        ...captureDimsFields(device),
       },
     )
   }, [

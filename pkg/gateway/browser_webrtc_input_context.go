@@ -155,7 +155,14 @@ func newWebRTCContextInputSinkWithDispatchSampling(validateInbound bool, samplin
 			return
 		}
 		if browser.IsBenignLiveInputError(err) {
-			slog.Debug("browser-webrtc: input rejected (benign)", "viewer_id", viewerID, "error", err)
+			// Benign rejections were Debug-only — invisible at the gateway's
+			// default warn level. Several of them ("displayed frame changed",
+			// "input source retired or another viewer holds control") never
+			// self-correct while both sides keep their own beliefs, so a wedge
+			// here reads as "input never arrived" with an empty log — the exact
+			// signature of the ui-browser shard's failures. One Warn per reason
+			// per sink keeps the signal bounded exactly like the paths above.
+			dropOnce("benign-reject", viewerID, err.Error())
 			return
 		}
 		slog.Warn("browser-webrtc: input dispatch failed", "viewer_id", viewerID, "error", err)
