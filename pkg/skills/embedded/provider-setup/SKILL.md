@@ -1,5 +1,7 @@
 ---
 name: provider-setup
+metadata:
+  display_name: Provider Setup
 description: Configure a model provider and verify it through the real model catalog.
 ---
 # Provider Setup

@@ -1,5 +1,7 @@
 ---
 name: interview
+metadata:
+  display_name: Interview
 description: Gather missing facts before personal-assistant, project-planning, agent-configuration, or system-setup work.
 ---
 # Interview

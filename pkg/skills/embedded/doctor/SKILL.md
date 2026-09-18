@@ -1,6 +1,8 @@
 ---
 name: doctor
 description: Diagnose a concrete setup fault, apply a supported repair, and tell the requester to re-probe their own environment.
+metadata:
+  display_name: Doctor
 ---
 # Doctor
 

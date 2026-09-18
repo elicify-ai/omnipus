@@ -44,6 +44,7 @@ func TestPlanAuthoredByAgent(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			p := &Plan{Title: "t", WorkspaceID: "ws", OwnerAgentID: "a", CreatedBy: tc.createdBy, CreatedByKind: tc.kind}
 			if got := p.AuthoredByAgent(tc.isAgent); got != tc.want {
 				t.Errorf("AuthoredByAgent() = %v, want %v", got, tc.want)

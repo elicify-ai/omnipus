@@ -1,5 +1,7 @@
 ---
 name: inbox-triage
+metadata:
+  display_name: Inbox Triage
 description: Classify permitted inbox messages into summaries, tasks, and drafts while keeping external sends approval-gated.
 ---
 # Inbox Triage

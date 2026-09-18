@@ -1,5 +1,7 @@
 ---
 name: elicify-pdf
+metadata:
+  display_name: PDF
 description: Create, inspect, extract, edit, merge, split, rotate, fill and validate PDFs. Use for .pdf documents, PDF forms, printable reports, scanned pages, searchable OCR, page rendering and PDF exports. Preserve originals, inspect actual page images, and distinguish text extraction from visual checks and secure redaction.
 ---
 

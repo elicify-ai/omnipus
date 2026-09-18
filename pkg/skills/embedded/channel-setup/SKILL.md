@@ -1,6 +1,8 @@
 ---
 name: channel-setup
 description: Configure and verify a communication channel under its outbound-send policy.
+metadata:
+  display_name: Channel Setup
 ---
 # Channel Setup
 ## Prerequisites

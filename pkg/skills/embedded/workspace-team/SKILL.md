@@ -1,6 +1,8 @@
 ---
 name: workspace-team
 description: Change workspace membership while preserving unrelated members and coordinating delegation edges.
+metadata:
+  display_name: Workspace Team
 ---
 # Workspace Team
 ## Prerequisites

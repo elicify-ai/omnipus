@@ -85,16 +85,14 @@ func diskMarkerList(t *testing.T, configPath, key string) []any {
 	return list
 }
 
-// assertSkillMarkersIntact checks the two marker lists stay separate on disk:
-// the skills migrations' markers are still recorded under seeded_skill_grants,
-// and the tool-policy marker never lands there.
+// assertSkillMarkersIntact checks that greenfield installs do not fabricate
+// old skill-migration history, while tool-policy bookkeeping stays in its own
+// marker list.
 func assertSkillMarkersIntact(t *testing.T, configPath string) {
 	t.Helper()
 	skills := diskMarkerList(t, configPath, "seeded_skill_grants")
-	assert.Contains(t, skills, coreagent.SkillsMigrationDefineDone,
-		"the skills migration marker must still be recorded under seeded_skill_grants")
-	assert.Contains(t, skills, coreagent.SkillsMigrationDefineGoalRename,
-		"the skills rename marker must still be recorded under seeded_skill_grants")
+	assert.Empty(t, skills,
+		"greenfield installs must not create legacy skill-migration markers")
 	assert.NotContains(t, skills, coreagent.ToolPolicyUpdateWorkerGoalClaimAllow,
 		"the tool-policy marker must never be written under seeded_skill_grants")
 }

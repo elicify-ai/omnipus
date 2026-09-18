@@ -1,6 +1,8 @@
 ---
 name: verify
 description: Judge acceptance criteria from reviewed session and workspace evidence without executing or modifying work.
+metadata:
+  display_name: Verify
 ---
 # Verify
 ## Prerequisites

@@ -155,6 +155,14 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 		return true
 	}
 	uf.r.Body = io.NopCloser(bytes.NewReader(uf.rawBody))
+	// The strict generated-shape validator intentionally rejects retired or
+	// unknown fields before semantic handlers run. A system-agent disable
+	// attempt uses exactly such an unknown field (`enabled`/`disabled`), so
+	// check that protection before shape validation to preserve its specific
+	// operator-facing error.
+	if uf.rejectSystemAgentDisable() {
+		return true
+	}
 	if bytes.Contains(uf.rawBody, []byte(`"sandbox_profile"`)) {
 		jsonErr(uf.w, http.StatusBadRequest,
 			`sandbox_profile is retired — use the global god-mode switch (POST /api/v1/gateway/god-mode)`)
@@ -267,61 +275,43 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	return false
 }
 
+// rejectSystemAgentDisable inspects the raw update body before strict wire-shape
+// validation. AgentUpdateRequest deliberately has no enabled/disabled field; a
+// disable attempt is therefore an unknown-field request, but System Agents need
+// their explicit protection message rather than a generic schema error.
+func (uf *restAPIUpdateAgentFlow) rejectSystemAgentDisable() bool {
+	uf.foundAgent = uf.cfg.Agents.List[uf.foundIdx]
+	if !coreagent.IsSystemAgentID(coreagent.CoreAgentID(uf.foundAgent.ID)) && !uf.foundAgent.IsSystem() {
+		return false
+	}
+
+	var statePeek struct { // not-wire-format: decode-only local peek at raw body fields to reject a disable attempt, never serialized to any response
+		Enabled  *bool `json:"enabled"`
+		Disabled *bool `json:"disabled"`
+	}
+	if peekErr := json.Unmarshal(uf.rawBody, &statePeek); peekErr != nil {
+		// Unreachable by construction — the caller has already verified that
+		// this exact body is JSON. Logged rather than discarded so a future
+		// reordering that makes it reachable cannot silently disarm this guard.
+		slog.Warn("gateway: could not peek enabled/disabled on System Agent update; disable guard not evaluated",
+			"agent_id", uf.foundAgent.ID, "error", peekErr)
+	}
+	if (statePeek.Enabled != nil && !*statePeek.Enabled) ||
+		(statePeek.Disabled != nil && *statePeek.Disabled) {
+		name := strings.TrimSpace(uf.foundAgent.Name)
+		if name == "" {
+			name = uf.foundAgent.ID
+		}
+		jsonErr(uf.w, http.StatusBadRequest,
+			fmt.Sprintf("the %s System Agent cannot be disabled", name))
+		return true
+	}
+	return false
+}
+
 // validateTarget enforces agent-type, lock, skill, and executor constraints.
 func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 	uf.foundAgent = uf.cfg.Agents.List[uf.foundIdx]
-	// ADR-049 D3 / ADR-055 — System Agent guards.
-	//
-	// NO seeded System Agent can be disabled. Both of today's members hold a
-	// grant nothing else holds, so switching one off silently breaks the loop
-	// that depends on it: disabling the Judge stalls every goal/plan loop via
-	// the D7 judge-unavailability pause, and disabling the PlanSupervisor —
-	// the SOLE holder of the plan-correction grant — leaves a wedged plan with
-	// no actor able to correct it. The condition is therefore the whole
-	// System-Agent category, not an id equality test: it was `== IDJudge` and
-	// the PlanSupervisor slipped straight through it.
-	//
-	// AgentUpdateRequest carries no enabled/disabled field, so a client can
-	// only smuggle one as an unknown field; sniff the raw body (mirrors the
-	// sandbox_profile/delegation_policy raw-body-sniff precedent above) and
-	// reject a disable attempt with a loud 400 rather than a silent drop.
-	//
-	// NOT the plan kill switch: containment is plan-scoped (stopping a plan
-	// stops its supervision). This only stops a locked System Agent being
-	// switched off through the agent API.
-	//
-	// Both predicates, deliberately: IsSystemAgentID is seeded-ROSTER
-	// membership, so a seeded System Agent stays protected even if its
-	// persisted type was tampered with in config.json (seedSystemAgents
-	// repairs the type at the next boot, but a PUT can land before that);
-	// IsSystem is the persisted-TYPE predicate every sibling System-Agent
-	// guard in this file already uses (the not-deletable 400 above, the
-	// soul-editable carve-out below), so the two categories cannot drift apart
-	// into "deletable: no, disable-able: yes" for the same agent.
-	if coreagent.IsSystemAgentID(coreagent.CoreAgentID(uf.foundAgent.ID)) || uf.foundAgent.IsSystem() {
-		var statePeek struct { // not-wire-format: decode-only local peek at raw body fields to reject a disable attempt, never serialized to any response
-			Enabled  *bool `json:"enabled"`
-			Disabled *bool `json:"disabled"`
-		}
-		if peekErr := json.Unmarshal(uf.rawBody, &statePeek); peekErr != nil {
-			// Unreachable by construction — decodeAndValidate above already
-			// parsed this exact body as JSON. Logged rather than discarded so
-			// a future reordering that makes it reachable cannot silently
-			// disarm this guard.
-			slog.Warn("gateway: could not peek enabled/disabled on System Agent update; disable guard not evaluated",
-				"agent_id", uf.foundAgent.ID, "error", peekErr)
-		}
-		if (statePeek.Enabled != nil && !*statePeek.Enabled) ||
-			(statePeek.Disabled != nil && *statePeek.Disabled) {
-			name := strings.TrimSpace(uf.foundAgent.Name)
-			if name == "" {
-				name = uf.foundAgent.ID
-			}
-			jsonErr(uf.w, http.StatusBadRequest,
-				fmt.Sprintf("the %s System Agent cannot be disabled", name))
-			return true
-		}
-	}
 	// Worker agents can never be the routing default — they are not chat targets
 	// (invoked only via delegation). Reject an attempt to star a worker before
 	// any work is done so the single-default invariant and routing stay coherent.

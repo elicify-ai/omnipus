@@ -1,5 +1,7 @@
 ---
 name: elicify-pptx
+metadata:
+  display_name: PPTX
 description: Create, inspect, edit, or populate editable PowerPoint .pptx decks and assess .potx templates. Use for presentations, pitch decks, board updates, training slides, native charts, speaker notes, template-based decks, or repairing slide overflow. Combines Python generation with rendered slide inspection and preservation checks. A document memo or PDF-only request does not by itself require this skill.
 ---
 

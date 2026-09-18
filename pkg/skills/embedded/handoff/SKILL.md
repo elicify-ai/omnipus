@@ -1,6 +1,8 @@
 ---
 name: handoff
 description: Route Mia's project or configuration request to the correct chat colleague without losing context or duplicating work.
+metadata:
+  display_name: Handoff
 ---
 # Handoff
 ## Prerequisites

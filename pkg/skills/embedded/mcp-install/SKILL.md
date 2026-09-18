@@ -1,5 +1,7 @@
 ---
 name: mcp-install
+metadata:
+  display_name: MCP Install
 description: Install and probe an MCP server through Admin without automatically granting any agent execution access.
 ---
 # MCP Install

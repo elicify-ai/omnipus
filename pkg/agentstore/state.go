@@ -334,20 +334,20 @@ func (s *Store) DeleteState(id, expectedRevision string) (result MutationResult,
 		if current.Revision != expectedRevision {
 			return fmt.Errorf("%w: expected %s, current %s", ErrRevisionConflict, expectedRevision, current.Revision)
 		}
-		if err := s.removeFile(entityPath); err != nil {
+		if removeErr := s.removeFile(entityPath); removeErr != nil {
 			result.PersistenceStatus = PersistenceNone
 			result.ErrorStage = "remove_entity"
-			return fmt.Errorf("delete entity: %w", err)
+			return fmt.Errorf("delete entity: %w", removeErr)
 		}
 		result.ChangedFields = append(result.ChangedFields, "entity")
 		if soulExists {
-			if err := s.removeFile(soulPath); err != nil {
+			if removeErr := s.removeFile(soulPath); removeErr != nil {
 				result.PersistenceStatus = PersistencePartial
 				result.ErrorStage = "remove_soul"
 				// Entity is gone: ReadState/get_agent return not-found, so a
 				// digest over leftover soul is not a readable revision (SE-C).
 				result.Revision = ""
-				return fmt.Errorf("delete soul: %w; entity is gone so reads report not-found and no readable revision exists", err)
+				return fmt.Errorf("delete soul: %w; entity is gone so reads report not-found and no readable revision exists", removeErr)
 			}
 			result.ChangedFields = append(result.ChangedFields, "soul")
 		}

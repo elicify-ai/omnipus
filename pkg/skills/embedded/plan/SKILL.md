@@ -1,5 +1,7 @@
 ---
 name: plan
+metadata:
+  display_name: Plan
 description: Decompose a multi-step goal into a dependency-aware task DAG with explicit files, criteria, and evidence.
 ---
 # Plan

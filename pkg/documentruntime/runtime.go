@@ -18,7 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
-const ManifestRevision = "bb4b2349ec5b15b6766ef5770074f62c6278e649"
+const ManifestRevision = "687242a67612744c88aa1c6b4ac0a56a5537cde3"
 const FinalizeCommand = "omnipus-document-runtime finalize"
 
 var revisionPattern = regexp.MustCompile(`^[a-f0-9]{40,64}$`)

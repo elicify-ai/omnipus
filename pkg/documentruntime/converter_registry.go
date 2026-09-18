@@ -342,8 +342,8 @@ func prepareConverterServiceRegistry(layout Layout, converter, goos string) (fun
 				return nil, err
 			}
 		}
-		if err := fileutil.WriteFileAtomic(filepath.Join(stage, entry.Name()), data, 0o644); err != nil {
-			return nil, fmt.Errorf("write converter registry %s: %w", entry.Name(), err)
+		if writeErr := fileutil.WriteFileAtomic(filepath.Join(stage, entry.Name()), data, 0o644); writeErr != nil {
+			return nil, fmt.Errorf("write converter registry %s: %w", entry.Name(), writeErr)
 		}
 	}
 	if !sawRdb {

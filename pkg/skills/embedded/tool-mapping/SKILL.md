@@ -1,6 +1,8 @@
 ---
 name: tool-mapping
 description: Inspect and change an agent's sparse tool-policy overrides without bypassing the global ceiling.
+metadata:
+  display_name: Tool Mapping
 ---
 # Tool Mapping
 ## Prerequisites

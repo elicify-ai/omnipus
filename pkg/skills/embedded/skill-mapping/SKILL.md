@@ -1,6 +1,8 @@
 ---
 name: skill-mapping
 description: Assign, revoke, install, or remove skills while distinguishing agent assignment from shared package deletion.
+metadata:
+  display_name: Skill Mapping
 ---
 # Skill Mapping
 ## Prerequisites

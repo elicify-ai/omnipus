@@ -1,6 +1,8 @@
 ---
 name: agent-authoring
 description: Design or update an agent through Ava's protected-field, proposal-first workflow.
+metadata:
+  display_name: Agent Authoring
 ---
 # Agent Authoring
 ## Prerequisites

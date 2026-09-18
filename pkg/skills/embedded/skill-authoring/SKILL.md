@@ -1,5 +1,7 @@
 ---
 name: skill-authoring
+metadata:
+  display_name: Skill Authoring
 description: Author or refine a reusable Omnipus skill through Ava's proposal-first workflow.
 ---
 # Skill Authoring

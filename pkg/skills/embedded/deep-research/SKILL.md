@@ -1,6 +1,8 @@
 ---
 name: deep-research
 description: Produce a cited evidence bundle from external sources for a delegated research question.
+metadata:
+  display_name: Deep Research
 ---
 # Deep Research
 ## Prerequisites

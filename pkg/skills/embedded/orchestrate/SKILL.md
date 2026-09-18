@@ -1,5 +1,7 @@
 ---
 name: orchestrate
+metadata:
+  display_name: Orchestrate
 description: Run Jim's multi-step work through planning, delegation, monitoring, and honest correction.
 ---
 # Orchestrate

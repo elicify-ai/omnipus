@@ -1,5 +1,7 @@
 ---
 name: elicify-xlsx
+metadata:
+  display_name: XLSX
 description: Create, inspect, edit, validate and deliver Excel workbooks and CSV/TSV data. Use for .xlsx, .xlsm, .xltx or .xltm files, spreadsheet formulas, financial models, tables, charts, workbook templates and spreadsheet imports/exports. Preserve existing workbook features, distinguish formulas from cached results, and verify calculations with a real spreadsheet engine.
 ---
 

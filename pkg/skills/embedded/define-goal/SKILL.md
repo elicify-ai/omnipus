@@ -2,6 +2,8 @@
 name: define-goal
 description: Articulate a goal, its acceptance criteria, and its Definition of Done before creating a task, plan, or goal. Use whenever you author, rewrite, or amend a goal or its criteria — the pattern here governs goal-, criteria-, and DoD-writing everywhere.
 context: global
+metadata:
+  display_name: Define Goal
 ---
 
 # Define Goal

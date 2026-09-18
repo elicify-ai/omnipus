@@ -1,5 +1,7 @@
 ---
 name: elicify-docx
+metadata:
+  display_name: DOCX
 description: Create, inspect, edit, or populate Word .docx documents and assess .dotx templates. Use for proposals, reports, letters, minutes, Word tables, tracked-change preservation, or converting an approved brief into an editable Word deliverable. Includes Python generation, careful edits, and rendered page inspection. Does not treat a PDF-only request or plain chat summary as a Word task.
 ---
 

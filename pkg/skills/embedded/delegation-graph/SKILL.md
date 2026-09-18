@@ -1,6 +1,8 @@
 ---
 name: delegation-graph
 description: Design and verify workspace delegation edges, modes, self-helper rules, and depth limits.
+metadata:
+  display_name: Delegation Graph
 ---
 # Delegation Graph
 ## Prerequisites
