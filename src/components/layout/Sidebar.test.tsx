@@ -245,12 +245,14 @@ describe('Sidebar — overlay rendering when open', () => {
     act(() => { useSidebarStore.setState({ isOpen: true, isPinned: false }) })
     render(<Sidebar />, { wrapper: makeWrapper() })
 
-    // + an Assets section (Agents, Skills & Tools, Connectors, Library) + username trigger.
+    // + an Assets section (Admin chat, Agents, Skills & Tools, Connectors, Library) + username trigger.
     // library-spec.md D-7: "Library" renamed the SECTION to "Assets"; the new
     // nav entry (opens the Library panel) took the "Library" name instead.
     expect(screen.getByRole('group', { name: 'Workspaces' })).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Assets' })).toBeTruthy()
 
+    const adminChat = screen.getByRole('link', { name: 'Admin chat' })
+    expect(adminChat.getAttribute('href')).toBe('/admin/chat')
     expect(screen.getByText('Agents')).toBeTruthy()
     expect(screen.getByText('Skills & Tools')).toBeTruthy()
     expect(screen.getByText('Connectors')).toBeTruthy()

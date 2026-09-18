@@ -1168,6 +1168,11 @@ func TestLoadToCallableRoundTrip(t *testing.T) {
 // `ToolSearch` infra tool in its provider defs (force-included) but the EXECUTION
 // gate denied it, so every lazy tool was unreachable in practice. This asserts
 // the full authorization chain now allows infra-tool execution.
+//
+// Operator Deny of ToolSearch is also non-deniable infrastructure (user
+// clarification 2026-09-18); that invariant is pinned in
+// adr090_discovery_always_available_test.go, not here. Target-tool permissions
+// still apply.
 func TestInfraToolsExecutable_DenyDefaultAgent(t *testing.T) {
 	cfg := newCompressedCfg(t)
 	al := mustNewAgentLoop(t, cfg, bus.NewMessageBus(), &mockProvider{})

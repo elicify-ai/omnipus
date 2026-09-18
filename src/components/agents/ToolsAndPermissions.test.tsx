@@ -408,8 +408,11 @@ describe('ToolsAndPermissions — role preset selector (US-D2 / #333)', () => {
         onChange={NOOP_CHANGE}
       />
     )
+    // Preset buttons render before the tools draft hydrates; awaiting
+    // enablement (not just presence) keeps this click out of the
+    // pre-hydration window (see ToolsAndPermissions.hydration.test.tsx).
     await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeEnabled()
     })
 
     fireEvent.click(document.querySelector('[data-testid="preset-cautious"]')!)
@@ -653,7 +656,7 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
     )
 
     await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeEnabled()
     })
 
     // No runGated before user interaction
@@ -698,7 +701,7 @@ describe('ToolsAndPermissions — re-auth-gated save on real edit', () => {
     )
 
     await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-balanced"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-balanced"]')).toBeEnabled()
     })
 
     fireEvent.click(document.querySelector('[data-testid="preset-balanced"]')!)
@@ -763,7 +766,7 @@ describe('ToolsAndPermissions — 403 re-auth path (Spec-6 FR-12.2)', () => {
     )
 
     await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeEnabled()
     })
 
     // No save before user interaction.
@@ -885,8 +888,10 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
     )
 
     // Wait for the editor to hydrate with REAL timers (queries are async).
+    // Enablement (not just presence) confirms hydration landed before the
+    // fake-timer section clicks presets.
     await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeEnabled()
     })
     // Confirm isDraftReady gate opened (agentToolsData arrived).
     await waitFor(() => {
@@ -980,9 +985,10 @@ describe('ToolsAndPermissions — latest-wins: no edit dropped during in-flight 
       />
     )
 
-    // Wait for initial hydration (real timers).
+    // Wait for initial hydration (real timers). Enablement, not just
+    // presence — the preset click below must be post-hydration.
     await waitFor(() => {
-      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeInTheDocument()
+      expect(document.querySelector('[data-testid="preset-cautious"]')).toBeEnabled()
     })
     await waitFor(() => expect(api.fetchAgentTools).toHaveBeenCalledWith('agent-1'))
     expect(api.updateAgentTools).not.toHaveBeenCalled()

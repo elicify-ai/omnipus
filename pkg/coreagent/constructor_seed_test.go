@@ -113,16 +113,9 @@ func TestAgentConstructor_CustomAgent_DenyByDefaultFullCoverage(t *testing.T) {
 		"custom agent policy map key set must exactly match allStaticToolNames — no gaps, no extras")
 }
 
-// TestNewCustomAgentToolsCfg_GoalClaimAndBrowserHandoverAreExplicit is
-// R-12's guard: NewCustomAgentToolsCfg is the SEVENTH per-agent policy map
-// (the other six are coreAgentSeed's core roster + IDWorker + the subagent
-// tier, and systemAgentSeed's Judge/PlanSupervisor) and every new tool name
-// this delivery adds MUST get an explicit, intended entry here too — an
-// absent key is not an unknown key, so validateOverrideKeys does not panic
-// and a fresh custom agent would silently resolve the tool to the
-// denyAllThenOverride floor (deny) with no test noticing, exactly the gap
-// R-12 found already caught by hand once (see the set_goal comment on this
-// function's overrides map).
+// TestNewCustomAgentToolsCfg_GoalClaimAndBrowserHandoverAreExplicit guards
+// the custom-agent seed: new tools need explicit intended entries here;
+// otherwise denyAllThenOverride supplies Deny.
 func TestNewCustomAgentToolsCfg_GoalClaimAndBrowserHandoverAreExplicit(t *testing.T) {
 	cfg := NewCustomAgentToolsCfg()
 	require.NotNil(t, cfg)

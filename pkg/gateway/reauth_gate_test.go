@@ -261,20 +261,28 @@ func TestAgentToolsPUT_NoReAuthToken_Succeeds(t *testing.T) {
 		Type: config.AgentTypeCustom,
 	}))
 
-	// There is no default_policy field on the wire any more (CLAUDE.md hard
-	// constraint 6) — this body used to send one (which decodes to a no-op
-	// now, leaving builtinPolicies empty). updateAgentTools fully replaces
-	// the agent's builtin tools_cfg on persist, so a complete, explicit
-	// policies map is required for config.ValidateToolPolicyCoverage to pass
-	// (this fixture has no global sandbox.tool_policies floor either).
-	known := buildKnownBuiltinToolNames()
-	policies := make(map[string]string, len(known))
-	for name := range known {
-		policies[name] = "allow"
-	}
-	policiesJSON, err := json.Marshal(policies)
+	// Submit the reviewed revision and explicit overrides. Unrelated tools
+	// inherit their ceiling; this test exercises removal of the re-auth gate,
+	// not permission to widen every catalog entry.
+	state, err := store.ReadState(agentID)
 	require.NoError(t, err)
-	body := `{"builtin":{"policies":` + string(policiesJSON) + `}}`
+	policies := make(map[string]string)
+	for name := range buildKnownBuiltinToolNames() {
+		policy := string(api.agentLoop.GetConfig().Sandbox.ToolPolicies[name])
+		if policy == "" {
+			policy = "deny"
+		}
+		policies[name] = policy
+	}
+	policies["bash"] = "allow"
+	policies["read_file"] = "allow"
+	bodyJSON, err := json.Marshal(map[string]any{
+		"revision":       state.Revision,
+		"override_names": []string{"bash", "read_file"},
+		"config":         map[string]any{"builtin": map[string]any{"policies": policies}},
+	})
+	require.NoError(t, err)
+	body := string(bodyJSON)
 
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+agentID+"/tools",
 		strings.NewReader(body))

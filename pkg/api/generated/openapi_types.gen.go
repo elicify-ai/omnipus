@@ -22440,16 +22440,22 @@ type WorkspaceDelegationUpdateRequest struct {
 // WorkspaceDelegationUpdateRequestEdgesModes defines model for WorkspaceDelegationUpdateRequest.Edges.Modes.
 type WorkspaceDelegationUpdateRequestEdgesModes string
 
-// WorkspaceInstructionsRequest Request body for PUT /api/v1/workspaces/{id}/instructions. Replaces the entire content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. Passing an empty string clears the file.
+// WorkspaceInstructionsRequest Request body for PUT /api/v1/workspaces/{id}/instructions. Replaces the entire content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. Passing an empty string clears the file. revision is the opaque SHA-256 returned by GET and is required; a mismatch is 409 with zero writes (ADR-090 FR-007).
 type WorkspaceInstructionsRequest struct {
 	// Content Full replacement content for the workspace's AGENT.md. May be empty to clear the file. Maximum 262144 bytes (256 KB). The underlying filesystem write via fileutil.WriteFileAtomic provides the physical limit; this schema constraint enforces a reasonable upper bound at the API layer.
 	Content string `json:"content"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 }
 
-// WorkspaceInstructionsResponse Response from GET and PUT /api/v1/workspaces/{id}/instructions. Returns the current content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. An empty string means the file does not exist or has not been written yet.
+// WorkspaceInstructionsResponse Response from GET /api/v1/workspaces/{id}/instructions. Returns the current content of the workspace's AGENT.md and the opaque SHA-256 revision of those bytes. An empty string means the file does not exist or has not been written yet; that empty state still has a revision.
 type WorkspaceInstructionsResponse struct {
 	// Content Current content of the workspace's AGENT.md. Empty string when the file does not exist or has not been set yet.
 	Content string `json:"content"`
+
+	// Revision Opaque SHA-256 revision of the relevant resource state. Required as a write precondition for an existing resource; stale state is rejected without writes.
+	Revision string `json:"revision"`
 }
 
 // WorkspaceMemberConfig Per-member config inside a workspace (keyed by agentId).

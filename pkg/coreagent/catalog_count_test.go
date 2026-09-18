@@ -132,8 +132,9 @@ import (
 // join the catalog on top of the campaign's arithmetic (104 -> 107). The three
 // names are listed in the merge decision record; the merge arithmetic below is
 // left as the campaign wrote it and the post-merge delta is carried here.
-// ADR-090 adds get_agent and get_agent_tools management readback (107 -> 109).
-const catalogSizeToday = 109
+// ADR-090 adds get_agent and get_agent_tools management readback (107 -> 109)
+// and environment_setup (109 -> 110, ES-FR-01).
+const catalogSizeToday = 110
 
 // currentKnowledgeToolNames is every knowledge_* tool presently in the
 // catalog: ADR-068 D15.3's original six (the replacement for ADR-067's
@@ -344,7 +345,7 @@ func TestCatalog_MergeArithmetic(t *testing.T) {
 		// alongside (the two knowledge names) their own implementation.
 		// Bump this alongside catalogSizeToday, in the same commit,
 		// whenever a tool is added post-merge.
-		postMergeAdditions = 8 // +3 goal-flow tools; +2 ADR-090 management readback tools
+		postMergeAdditions = 9 // +3 goal-flow tools; +2 ADR-090 management readback tools; +1 environment_setup (ES-FR-01)
 	)
 	// Checked against the FROZEN adr068OriginalSixKnowledgeToolNames, not
 	// currentKnowledgeToolNames — this arithmetic is a fact about what the

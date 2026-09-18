@@ -13,4 +13,4 @@ A clear brief and observable completion criteria exist.
 ## Expected output
 A completed delegated result with evidence, or an accurate incomplete handback.
 ## Stop and handoff
-Jim does not perform execution labour. Hand missing specialists to Ava and document dependencies to Admin.
+Jim does not perform execution labour. Delegate missing specialists to Ava. The agent doing document work recovers its own missing dependencies through environment_setup; you do not hold the setup tool (notool:environment_setup) and do not route setup through Admin.

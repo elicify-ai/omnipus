@@ -11791,7 +11791,7 @@ export interface components {
         };
         /**
          * WorkspaceInstructionsRequest
-         * @description Request body for PUT /api/v1/workspaces/{id}/instructions. Replaces the entire content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. Passing an empty string clears the file.
+         * @description Request body for PUT /api/v1/workspaces/{id}/instructions. Replaces the entire content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. Passing an empty string clears the file. revision is the opaque SHA-256 returned by GET and is required; a mismatch is 409 with zero writes (ADR-090 FR-007).
          */
         WorkspaceInstructionsRequest: {
             /**
@@ -11799,10 +11799,11 @@ export interface components {
              * @example Use TypeScript. Prefer functional components. Ship small PRs.
              */
             content: string;
+            revision: components["schemas"]["ConfigurationRevision"];
         };
         /**
          * WorkspaceInstructionsResponse
-         * @description Response from GET and PUT /api/v1/workspaces/{id}/instructions. Returns the current content of the workspace's AGENT.md (Workspace / Project Instructions) at workspaces/<id>/AGENT.md. An empty string means the file does not exist or has not been written yet.
+         * @description Response from GET /api/v1/workspaces/{id}/instructions. Returns the current content of the workspace's AGENT.md and the opaque SHA-256 revision of those bytes. An empty string means the file does not exist or has not been written yet; that empty state still has a revision.
          */
         WorkspaceInstructionsResponse: {
             /**
@@ -11810,6 +11811,7 @@ export interface components {
              * @example Use TypeScript. Prefer functional components. Ship small PRs.
              */
             content: string;
+            revision: components["schemas"]["ConfigurationRevision"];
         };
         /**
          * TaskCreateRequest
@@ -21281,17 +21283,34 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Deleted */
-            204: {
+            /** @description Workspace record deleted. Reports persisted and activated state. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
+            404: components["responses"]["404NotFound"];
+            /** @description Workspace membership or graph revision changed, or the default workspace cannot be deleted; no authoritative delete occurred. */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content?: never;
             };
-            400: components["responses"]["400BadRequest"];
-            401: components["responses"]["401Unauthorized"];
-            404: components["responses"]["404NotFound"];
-            500: components["responses"]["500InternalServerError"];
+            /** @description Storage failed after the workspace record was removed; reports actual partial state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
+                };
+            };
         };
     };
     listWorkspaceMedia: {
@@ -22597,13 +22616,13 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Updated AGENT.md content (echoed back). */
+            /** @description Instructions saved. Reports persisted and activated state; GET instructions for content readback. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["WorkspaceInstructionsResponse"];
+                    "application/json": components["schemas"]["ConfigurationMutationState"];
                 };
             };
             400: components["responses"]["400BadRequest"];
@@ -22618,7 +22637,22 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            500: components["responses"]["500InternalServerError"];
+            /** @description Instructions revision changed; no writes occurred. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Storage failed; reports actual saved state. */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConfigurationMutationFailureState"];
+                };
+            };
         };
     };
     listWorkspacePlans: {

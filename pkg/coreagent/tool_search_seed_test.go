@@ -54,11 +54,11 @@ func TestToolSearch_ResolvedAllowAcrossSeededRoster(t *testing.T) {
 		assert.Equalf(t, "allow", resolveFor(t, cfg, a.ID, "ToolSearch", nil),
 			"(%s, ToolSearch) must RESOLVE allow through the real compositor merge — "+
 				"every agent needs it to reach any tiered (lazy/search-only) tool at all "+
-				"(CLAUDE.md constraint 6: seeded data, not a code-level force-allow)", a.ID)
+				"(ADR-090: seeded Allow; runtime discovery remains non-deniable)", a.ID)
 	}
 	require.GreaterOrEqual(t, checked, 9,
 		"sanity: the sweep must have covered the full seeded roster (4 core + worker + "+
-			"3 subagent-tier + judge + plansupervisor = 9), not silently skipped everything")
+			"2 specialist roles + judge + plansupervisor = 9), not silently skipped everything")
 }
 
 // TestToolSearch_ResolvedAllow_FreshCustomAgent verifies the tenth seed
@@ -78,16 +78,9 @@ func TestToolSearch_ResolvedAllow_FreshCustomAgent(t *testing.T) {
 		"a freshly created custom agent must resolve ToolSearch allow from its own seeded policy")
 }
 
-// TestToolSearch_Worker_InheritsGlobalCeiling_NoRedundantEntry pins the one
-// deliberate exception named in the operator directive: the Worker's sparse
-// tightenGlobalCeiling map does NOT name ToolSearch explicitly — it inherits
-// the tool from the global ceiling (pkg/config/defaults.go seeds
-// "ToolSearch": "allow" there), matching the Worker's whole design principle
-// ("sparse map, inherit the ceiling for everything not deliberately
-// tightened"). This asserts BOTH halves: the seed literal has no ToolSearch
-// key, and the RESOLVED policy is still allow — so an operator lowering the
-// global ceiling controls the Worker's ToolSearch access, not a redundant
-// per-agent entry that would silently stop tracking the ceiling.
+// TestToolSearch_Worker_InheritsGlobalCeiling_NoRedundantEntry verifies that the
+// Worker seed records an explicit Allow entry for ToolSearch, as required by the
+// ADR-090 discovery/skill-loading floor. The historical test name is retained.
 func TestToolSearch_Worker_InheritsGlobalCeiling_NoRedundantEntry(t *testing.T) {
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))

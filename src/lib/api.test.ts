@@ -536,11 +536,11 @@ describe('Security API helpers', () => {
       expect((init.method ?? '').toUpperCase()).toBe('DELETE')
     })
 
-    it('deleteSkill resolves successfully on a real 204', async () => {
+    it('deleteSkill rejects a 204 without confirmed mutation state', async () => {
       fetchSpy.mockResolvedValueOnce(make204Response())
 
       const { deleteSkill } = await import('./api')
-      await expect(deleteSkill('my-skill', 'a'.repeat(64))).resolves.toBeUndefined()
+      await expect(deleteSkill('my-skill', 'a'.repeat(64))).rejects.toMatchObject({ name: 'ApiSchemaError' })
     })
 
     it('deleteMcpServer resolves successfully on a real 204', async () => {
@@ -2473,7 +2473,7 @@ describe('fetchWorkspaceInstructions / updateWorkspaceInstructions', () => {
 
   describe('fetchWorkspaceInstructions', () => {
     it('GET /api/v1/workspaces/{id}/instructions — returns content', async () => {
-      const wire = { content: '# Project Instructions\n\nUse TypeScript.' }
+      const wire = { content: '# Project Instructions\n\nUse TypeScript.', revision: 'a'.repeat(64) }
       fetchSpy.mockResolvedValueOnce(makeOkResponse(wire))
 
       const { fetchWorkspaceInstructions } = await import('./api')
@@ -2486,7 +2486,7 @@ describe('fetchWorkspaceInstructions / updateWorkspaceInstructions', () => {
     })
 
     it('URL-encodes workspace id with special characters', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ content: '' }))
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({ content: '', revision: 'a'.repeat(64) }))
 
       const { fetchWorkspaceInstructions } = await import('./api')
       await fetchWorkspaceInstructions('ws/with spaces')
@@ -2496,7 +2496,7 @@ describe('fetchWorkspaceInstructions / updateWorkspaceInstructions', () => {
     })
 
     it('returns empty content when workspace has no instructions file', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ content: '' }))
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({ content: '', revision: 'a'.repeat(64) }))
 
       const { fetchWorkspaceInstructions } = await import('./api')
       const result = await fetchWorkspaceInstructions('ws-empty')
@@ -2521,44 +2521,49 @@ describe('fetchWorkspaceInstructions / updateWorkspaceInstructions', () => {
 
   describe('updateWorkspaceInstructions', () => {
     it('PUT /api/v1/workspaces/{id}/instructions — sends CSRF and content body', async () => {
-      const wire = { content: 'Use TypeScript. Prefer functional components.' }
+      const revision = 'a'.repeat(64)
+      const wire = { revision, persistence_status: 'complete', activation_status: 'active', changed_fields: ['instructions'] }
       fetchSpy.mockResolvedValueOnce(makeOkResponse(wire))
 
       const { updateWorkspaceInstructions } = await import('./api')
-      const result = await updateWorkspaceInstructions('ws-abc', 'Use TypeScript. Prefer functional components.')
+      const result = await updateWorkspaceInstructions('ws-abc', 'Use TypeScript. Prefer functional components.', revision)
 
       const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
       expect(url).toContain('/api/v1/workspaces/ws-abc/instructions')
       expect((init.method ?? '').toUpperCase()).toBe('PUT')
       const headers = new Headers(init.headers as HeadersInit)
       expect(headers.get('X-CSRF-Token')).toBe('test-csrf-token')
-      expect(JSON.parse(init.body as string)).toEqual({ content: 'Use TypeScript. Prefer functional components.' })
-      expect(result.content).toBe('Use TypeScript. Prefer functional components.')
+      expect(JSON.parse(init.body as string)).toEqual({ content: 'Use TypeScript. Prefer functional components.', revision })
+      expect(result.persistence_status).toBe('complete')
+      expect(result.revision).not.toBeUndefined()
     })
 
     it('sends empty string to clear instructions', async () => {
-      fetchSpy.mockResolvedValueOnce(makeOkResponse({ content: '' }))
+      const revision = 'a'.repeat(64)
+      fetchSpy.mockResolvedValueOnce(makeOkResponse({
+        revision, persistence_status: 'complete', activation_status: 'active', changed_fields: [],
+      }))
 
       const { updateWorkspaceInstructions } = await import('./api')
-      const result = await updateWorkspaceInstructions('ws-abc', '')
+      const result = await updateWorkspaceInstructions('ws-abc', '', revision)
 
       const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
-      expect(JSON.parse(init.body as string)).toEqual({ content: '' })
-      expect(result.content).toBe('')
+      expect(JSON.parse(init.body as string)).toEqual({ content: '', revision })
+      expect(result.persistence_status).toBe('complete')
     })
 
     it('throws ApiSchemaError when PUT response is missing content field', async () => {
       fetchSpy.mockResolvedValueOnce(makeOkResponse({ saved: true }))
 
       const { updateWorkspaceInstructions, ApiSchemaError: ApiSchemaErrorClass } = await import('./api')
-      await expect(updateWorkspaceInstructions('ws-abc', 'text')).rejects.toBeInstanceOf(ApiSchemaErrorClass)
+      await expect(updateWorkspaceInstructions('ws-abc', 'text', 'a'.repeat(64))).rejects.toBeInstanceOf(ApiSchemaErrorClass)
     })
 
     it('throws typed error on 400', async () => {
       fetchSpy.mockResolvedValueOnce(new Response('content too long', { status: 400 }))
 
       const { updateWorkspaceInstructions } = await import('./api')
-      await expect(updateWorkspaceInstructions('ws-abc', 'x')).rejects.toThrow('400')
+      await expect(updateWorkspaceInstructions('ws-abc', 'x', 'a'.repeat(64))).rejects.toThrow('400')
     })
   })
 })

@@ -36,9 +36,23 @@ func workspaceRevisionError(id string, err error) *tools.ToolResult {
 	}
 	if errors.Is(err, workspacepkg.ErrDelegationUnreadable) {
 		return tools.ErrorResult(errorJSON("DELEGATION_STORE_UNREADABLE", err.Error(),
-			"Inspect (or remove) $OMNIPUS_HOME/entities/delegation/"+id+".json, then re-save the graph from the Team tab"))
+			"Inspect $OMNIPUS_HOME/entities/delegation/"+id+".json and restore a readable record; this workspace still exists"))
 	}
 	return tools.ErrorResult(errorJSON("READ_FAILED", err.Error(), "Inspect workspace storage; a revision retry cannot repair unreadable storage"))
+}
+
+func workspaceReadError(id string, err error) *tools.ToolResult {
+	if errors.Is(err, workspacepkg.ErrInvalidWorkspaceID) {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "Use a workspace id from list_workspaces"))
+	}
+	if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "NOT_FOUND") {
+		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id), "Use list_workspaces to see available workspaces"))
+	}
+	if errors.Is(err, workspacepkg.ErrDelegationUnreadable) {
+		return tools.ErrorResult(errorJSON("DELEGATION_STORE_UNREADABLE", err.Error(),
+			"Inspect $OMNIPUS_HOME/entities/delegation/"+id+".json and restore a readable record; this workspace still exists"))
+	}
+	return tools.ErrorResult(errorJSON("READ_FAILED", err.Error(), "Inspect the workspace record on disk; this is not a missing workspace"))
 }
 
 // workspace is the canonical on-disk workspace type shared with pkg/gateway.
@@ -1345,8 +1359,7 @@ func (t *WorkspaceGetTool) Execute(_ context.Context, args map[string]any) *tool
 	}
 	state, err := workspacepkg.ReadState(t.deps.Home, id)
 	if err != nil {
-		return tools.ErrorResult(errorJSON("WORKSPACE_NOT_FOUND", fmt.Sprintf("No workspace %q", id),
-			"Use list_workspaces to see available workspaces"))
+		return workspaceReadError(id, err)
 	}
 	w := state.Workspace
 	tc := computeWorkspaceTaskCount(t.deps.Home, id)

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -31,33 +30,37 @@ func TestResolveLayoutVersionedAbsolutePrefix(t *testing.T) {
 
 func TestChildEnvironmentPrependsRuntimeAndDropsSecrets(t *testing.T) {
 	l, _ := ResolveLayout(t.TempDir(), ManifestRevision, "gp")
-	got := ChildEnvironment([]string{"PATH=/usr/bin", "LANG=en_US.UTF-8", "OPENAI_API_KEY=secret", "OMNIPUS_MASTER_KEY=master"}, l)
+	got := ChildEnvironment([]string{"PATH=/usr/bin", "TMPDIR=/host/temp", "OSL_SOCKET_PATH=/host/socket", "LANG=en_US.UTF-8", "OPENAI_API_KEY=secret", "OMNIPUS_MASTER_KEY=master"}, l)
 	joined := strings.Join(got, "\n")
-	if !strings.Contains(joined, "PATH="+l.Bin+string(os.PathListSeparator)+"/usr/bin") || !strings.Contains(joined, "PYTHONPATH="+filepath.Join(l.Lib, "python")) || strings.Contains(joined, "secret") || strings.Contains(joined, "master") {
+	if !strings.Contains(joined, "PATH="+l.Bin+string(os.PathListSeparator)+"/usr/bin") || !strings.Contains(joined, "PYTHONPATH="+filepath.Join(l.Lib, "python")) || !strings.Contains(joined, "TMPDIR="+l.Cache) || !strings.Contains(joined, "OSL_SOCKET_PATH=.") || strings.Contains(joined, "/host/temp") || strings.Contains(joined, "/host/socket") || strings.Contains(joined, "secret") || strings.Contains(joined, "master") {
 		t.Fatalf("environment=%v", got)
 	}
 }
 
-func TestInstallProbeSkillsAssetsAndSandboxRoles(t *testing.T) {
+func TestApplySandboxAccessScopesDocumentIPCToAuthorizedWorkDir(t *testing.T) {
+	root := t.TempDir()
+	l, _ := ResolveLayout(root, ManifestRevision, "mia")
+	work := filepath.Join(root, "workspaces", "ws", "work")
+	base := sandbox.SandboxPolicy{FilesystemRules: []sandbox.PathRule{{Path: work, Access: sandbox.AccessRead | sandbox.AccessWrite}}}
+	got, err := ApplySandboxAccess(base, l, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.UnixSocketRules) != 1 || got.UnixSocketRules[0].Path != work || !got.UnixSocketRules[0].Bind || !got.UnixSocketRules[0].Connect {
+		t.Fatalf("unix socket rules=%+v", got.UnixSocketRules)
+	}
+	if _, err := ApplySandboxAccess(base, l, root); err == nil {
+		t.Fatal("granted document IPC to parent of writable directory")
+	}
+	if _, err := ApplySandboxAccess(base, l, filepath.Join(root, "outside")); err == nil {
+		t.Fatal("granted document IPC outside an existing writable policy path")
+	}
+}
+
+func TestProvisionInstallsSkillsAndSandboxAccessIsWorkerOnly(t *testing.T) {
 	l, _ := ResolveLayout(t.TempDir(), ManifestRevision, "mia")
-	assetPath := filepath.Join(l.Prefix, "assets", "fixture.txt")
-	if err := os.MkdirAll(filepath.Dir(assetPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(assetPath, []byte("fixture"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256([]byte("fixture"))
-	if err := os.MkdirAll(l.Bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"python", "node", "soffice"} {
-		if err := os.WriteFile(filepath.Join(l.Bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-			t.Fatal(err)
-		}
-	}
-	manifest := Manifest{Revision: ManifestRevision, Python: filepath.Join(l.Bin, "python"), Node: filepath.Join(l.Bin, "node"), Converter: filepath.Join(l.Bin, "soffice"), PythonRequirements: []Requirement{{Import: "docx", Version: "1.2.0"}}, Assets: []Asset{{Path: "assets/fixture.txt", SHA256: hex.EncodeToString(sum[:])}}}
-	if err := FinalizeAdminSetup(l, manifest); err != nil {
+	manifest, err := ProvisionFirstParty(l)
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := VerifyAssets(l.Prefix, manifest.Assets); err != nil {
@@ -70,28 +73,28 @@ func TestInstallProbeSkillsAssetsAndSandboxRoles(t *testing.T) {
 			}
 		}
 	}
+	// A base rule that overlaps the managed prefix must not give agents write
+	// access to it — even when their ordinary workspace policy says otherwise.
 	base := sandbox.SandboxPolicy{FilesystemRules: []sandbox.PathRule{{Path: filepath.Dir(filepath.Dir(l.Prefix)), Access: sandbox.AccessRead | sandbox.AccessWrite}}}
-	worker := ApplySandboxAccess(base, l, false)
-	admin := ApplySandboxAccess(base, l, true)
-	if worker.FilesystemRules[0].Access&sandbox.AccessWrite != 0 || worker.FilesystemRules[1].Access&sandbox.AccessWrite != 0 || admin.FilesystemRules[1].Access&sandbox.AccessWrite == 0 || worker.FilesystemRules[2].Access&sandbox.AccessExecute != 0 {
-		t.Fatalf("worker=%v admin=%v", worker.FilesystemRules, admin.FilesystemRules)
+	worker, err := ApplySandboxAccess(base, l, l.Cache)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if reflect.DeepEqual(worker.FilesystemRules, admin.FilesystemRules) {
-		t.Fatal("admin and worker access unexpectedly identical")
+	if len(worker.FilesystemRules) < 3 {
+		t.Fatalf("filesystem rules=%v", worker.FilesystemRules)
 	}
-	if err := os.WriteFile(assetPath, []byte("mutated"), 0o644); err != nil {
+	if worker.FilesystemRules[0].Access&sandbox.AccessWrite != 0 || worker.FilesystemRules[1].Access&sandbox.AccessWrite != 0 {
+		t.Fatalf("write access to the managed prefix survived: %v", worker.FilesystemRules)
+	}
+	if worker.FilesystemRules[2].Access&sandbox.AccessWrite == 0 {
+		t.Fatalf("worker cache must stay writable: %v", worker.FilesystemRules)
+	}
+	// A tampered asset is detected by checksum.
+	if err := os.WriteFile(filepath.Join(l.Skills, DocumentSkillIDs[0], "SKILL.md"), []byte("mutated"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := VerifyAssets(l.Prefix, manifest.Assets); err == nil || !strings.Contains(err.Error(), "checksum mismatch") {
 		t.Fatalf("mismatch err=%v", err)
-	}
-	outside := filepath.Join(t.TempDir(), "python")
-	if err := os.WriteFile(outside, []byte("x"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	manifest.Python = outside
-	if err := FinalizeAdminSetup(l, manifest); err == nil || !strings.Contains(err.Error(), "outside versioned prefix") {
-		t.Fatalf("outside executable err=%v", err)
 	}
 }
 
@@ -115,7 +118,7 @@ func TestVerifyAssetsRejectsSymlinkOutsideManagedPrefix(t *testing.T) {
 	}
 }
 
-func TestProvisionFirstPartyIsProbeableBeforeAdminDependencies(t *testing.T) {
+func TestProvisionFirstPartyIsProbeableBeforeDependencies(t *testing.T) {
 	layout, _ := ResolveLayout(t.TempDir(), ManifestRevision, "mia")
 	manifest, err := ProvisionFirstParty(layout)
 	if err != nil {
@@ -130,7 +133,30 @@ func TestProvisionFirstPartyIsProbeableBeforeAdminDependencies(t *testing.T) {
 	if err := VerifyAssets(layout.Prefix, manifest.Assets); err != nil {
 		t.Fatal(err)
 	}
-	if err := FinalizeAdminSetup(layout, manifest); err == nil || !strings.Contains(err.Error(), "resolve document python") {
-		t.Fatalf("missing dependency err=%v", err)
+	// The manifest names the dependency paths the skills expect, but nothing
+	// requires them to exist at provisioning time: a probe run before the
+	// agent installs anything reports missing components instead of falling
+	// through to host tooling.
+	if _, err := os.Stat(manifest.Python); !os.IsNotExist(err) {
+		t.Fatalf("provisioning must not fabricate dependencies: %v", err)
+	}
+}
+
+func TestProvisionFirstPartyExistingManifestCreatesCallingWorkerCache(t *testing.T) {
+	root := t.TempDir()
+	first, _ := ResolveLayout(root, ManifestRevision, "mia")
+	if _, err := ProvisionFirstParty(first); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := ResolveLayout(root, ManifestRevision, "gp")
+	if _, err := os.Stat(second.Cache); !os.IsNotExist(err) {
+		t.Fatalf("second worker cache exists before its provisioning call: %v", err)
+	}
+	if _, err := ProvisionFirstParty(second); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(second.Cache)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("second worker cache was not created on existing-manifest path: info=%v err=%v", info, err)
 	}
 }

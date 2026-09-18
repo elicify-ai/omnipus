@@ -18,8 +18,8 @@ afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 describe('configuration revision transport', () => {
   it.each([
     ['agent', deleteAgent, '/api/v1/agents/a%2Fb', true],
-    ['workspace', deleteWorkspace, '/api/v1/workspaces/a%2Fb', false],
-    ['skill', deleteSkill, '/api/v1/skills/a%2Fb', false],
+    ['workspace', deleteWorkspace, '/api/v1/workspaces/a%2Fb', true],
+    ['skill', deleteSkill, '/api/v1/skills/a%2Fb', true],
   ] as const)('sends the reviewed revision when deleting a %s', async (_kind, remove, path, returnsState) => {
     const body = returnsState
       ? JSON.stringify({ revision, persistence_status: 'complete', activation_status: 'active', changed_fields: ['agents.a/b'] })

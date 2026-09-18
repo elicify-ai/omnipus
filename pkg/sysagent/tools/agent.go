@@ -16,6 +16,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
@@ -173,6 +174,21 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "integer",
 				"description": "Max tool calls per turn (0 = inherit the system default)",
 			},
+			"skills":              skillsParameters(false),
+			"mcp_servers":         mcpServersParameters(),
+			"tool_policy_changes": toolPolicyChangesParameters(),
+			"memory_enabled":      map[string]any{"type": "boolean"},
+			"default":             map[string]any{"type": "boolean"},
+			"voice": map[string]any{
+				"type":        "string",
+				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
+			},
+			"shell_policy": shellPolicyParameters(),
+			"context_window_override": map[string]any{
+				"type":        "integer",
+				"description": "Positive token override. JSON null clears the override.",
+			},
+			"model_params": modelParamsParameters(),
 		},
 		"required": []string{"name", "description", "soul", "model", "color", "icon"},
 	}
@@ -196,6 +212,7 @@ type agentCreateToolExecute struct {
 	newAgent        config.AgentConfig
 	finalID         string
 	joinedWorkspace bool
+	mutation        agentstore.MutationResult
 }
 
 func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
@@ -280,6 +297,12 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 		ac.execCLIPath, _ = ac.args["cli_path"].(string)
 	}
 
+	if err := rejectUnknownAgentFields(ac.args, agentCreateArgNames); err != nil {
+		return fieldErrorResult(err), true
+	}
+	if _, _, err := parseOptionalHeartbeat(ac.args); err != nil {
+		return fieldErrorResult(err), true
+	}
 	ac.id = toSlug(ac.name)
 	if err := validateID(ac.id); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "")), true
@@ -367,6 +390,13 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	// coreagent.NewCustomAgentToolsCfg()) — so the two agent-creation
 	// paths cannot drift out of sync on this seed again.
 	ac.newAgent.Tools = coreagent.NewCustomAgentToolsCfg()
+	fields := mutationFieldNames(ac.args)
+	if err := agentmutation.ValidateFields(ac.newAgent, fields); err != nil {
+		return fieldErrorResult(err), true
+	}
+	if err := applyAgentToolArgs(&ac.newAgent, ac.args, knownToolPolicies(ac.t.deps), ac.t.deps.currentInventory()); err != nil {
+		return fieldErrorResult(err), true
+	}
 	return nil, false
 }
 
@@ -382,8 +412,14 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 			"Set OMNIPUS_HOME environment variable")), true
 	}
 
+	if _, present := ac.args["default"]; present {
+		if err := requireDefaultWriter(ac.t.deps); err != nil {
+			return fieldErrorResult(err), true
+		}
+	}
 	ac.finalID = ac.id
 	mutation, err := agentstore.New(omnipusHome).CreateState(ac.id, &ac.newAgent, ac.soul)
+	ac.mutation = mutation
 	if err != nil {
 		if errors.Is(err, entity.ErrAlreadyExists) {
 			return tools.ErrorResult(errorJSON(
@@ -395,18 +431,34 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 		return tools.ErrorResult(errorJSON("SAVE_FAILED", fmt.Sprintf("persistence=%s stage=%s revision=%s", mutation.PersistenceStatus, mutation.ErrorStage, mutation.Revision), "Read the agent state before retrying")), true
 	}
 
-	// Create agent workspace and write personality files.
-	wsPath := omnipusHome + "/agents/" + ac.finalID
-	if err := datamodel.InitAgentHome(omnipusHome, ac.finalID); err != nil {
-		return tools.ErrorResult(errorJSON("WORKSPACE_ERROR",
-			"could not create agent workspace: "+err.Error(),
-			"Check disk space and permissions")), true
+	if raw, present := ac.args["default"]; present {
+		if want, ok := raw.(bool); ok {
+			if err := writeDefaultSingleton(ac.t.deps, ac.finalID, want); err != nil {
+				return defaultSingletonPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args)), true
+			}
+		}
 	}
 
-	// Write HEARTBEAT.md if provided.
-	if hb, ok := ac.args["heartbeat"].(string); ok && strings.TrimSpace(hb) != "" {
-		if err := os.WriteFile(wsPath+"/HEARTBEAT.md", []byte(hb), 0o644); err != nil {
-			slog.Warn("sysagent: could not write HEARTBEAT.md", "id", ac.finalID, "error", err)
+	// Create agent workspace and write personality files.
+	if err := datamodel.InitAgentHome(omnipusHome, ac.finalID); err != nil {
+		// Entity (and optional default singleton) already durable. Do not
+		// delete them: report the actual revision so the caller can read
+		// and recover instead of claiming a complete create.
+		slog.Error("sysagent: create_agent: InitAgentHome failed after entity save",
+			"id", ac.finalID, "error", err)
+		return createHomePartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), err), true
+	}
+
+	heartbeat, _, hbErr := parseOptionalHeartbeat(ac.args)
+	if hbErr != nil {
+		return fieldErrorResult(hbErr), true
+	}
+	if strings.TrimSpace(heartbeat) != "" {
+		hbPath := filepath.Join(omnipusHome, "agents", ac.finalID, "HEARTBEAT.md")
+		if err := os.WriteFile(hbPath, []byte(heartbeat), 0o600); err != nil {
+			slog.Error("sysagent: create_agent: HEARTBEAT.md write failed after entity save",
+				"id", ac.finalID, "error", err)
+			return createHeartbeatPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), err), true
 		}
 	}
 
@@ -457,23 +509,14 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 	// new agent is live and routable when it is NOT — it keeps 404ing on
 	// chat/delegate until the next restart or config reload. Pattern mirrors
 	// pkg/tools/task.go's update_task advance_warning field.
+	activation, publishErr := publishAgentActivation(ac.t.deps, ac.finalID)
 	var publishWarning string
-	if ac.t.deps.UpsertAgentFastFunc != nil {
-		if err := ac.t.deps.UpsertAgentFastFunc(ac.finalID); err != nil {
-			slog.Warn("sysagent: fast agent upsert after agent create failed — agent available after restart",
-				"id", ac.finalID, "error", err)
-			publishWarning = fmt.Sprintf(
-				"agent %q was created but is not yet live: fast publish failed (%s); it will become routable "+
-					"after the next config reload or gateway restart", ac.finalID, err.Error())
-		}
-	} else if ac.t.deps.ReloadFunc != nil {
-		if err := ac.t.deps.ReloadFunc(); err != nil {
-			slog.Warn("sysagent: hot-reload after agent create failed — agent available after restart",
-				"id", ac.finalID, "error", err)
-			publishWarning = fmt.Sprintf(
-				"agent %q was created but is not yet live: hot-reload failed (%s); it will become routable "+
-					"after the next gateway restart", ac.finalID, err.Error())
-		}
+	if publishErr != "" {
+		slog.Warn("sysagent: publish after agent create failed — agent available after restart",
+			"id", ac.finalID, "error", publishErr)
+		publishWarning = fmt.Sprintf(
+			"agent %q was created but is not yet live: publish failed (%s); it will become routable "+
+				"after the next config reload or gateway restart", ac.finalID, publishErr)
 	}
 
 	// status must reflect actual runnability, not
@@ -486,11 +529,15 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 		status = "joined_workspace"
 	}
 	result := map[string]any{
-		"id":     ac.finalID,
-		"name":   ac.name,
-		"model":  ac.model,
-		"type":   ac.agentType,
-		"status": status,
+		"id":                 ac.finalID,
+		"name":               ac.name,
+		"model":              ac.model,
+		"type":               ac.agentType,
+		"status":             status,
+		"revision":           ac.mutation.Revision,
+		"persistence_status": ac.mutation.PersistenceStatus,
+		"activation_status":  activation,
+		"changed_fields":     mutationFieldNames(ac.args),
 	}
 	if ac.agentType == "subagent_3p" {
 		result["cli"] = ac.execCLI
@@ -500,6 +547,46 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 		result["publish_warning"] = publishWarning
 	}
 	return tools.NewToolResult(successJSON(result))
+}
+
+func parseOptionalHeartbeat(args map[string]any) (string, bool, error) {
+	raw, present := args["heartbeat"]
+	if !present {
+		return "", false, nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return "", true, fieldErr("heartbeat", "heartbeat must be a string")
+	}
+	return s, true, nil
+}
+
+func createHomePartialResult(id, revision string, fields []string, err error) *tools.ToolResult {
+	return tools.ErrorResult(successJSON(map[string]any{
+		"id":                 id,
+		"code":               "SAVE_FAILED",
+		"message":            "agent was saved but the agent home could not be initialized. Read current state before retrying.",
+		"persistence_status": agentstore.PersistencePartial,
+		"activation_status":  agentstore.ActivationNotAttempted,
+		"revision":           revision,
+		"changed_fields":     fields,
+		"error_stage":        "init_home",
+		"detail":             err.Error(),
+	}))
+}
+
+func createHeartbeatPartialResult(id, revision string, fields []string, err error) *tools.ToolResult {
+	return tools.ErrorResult(successJSON(map[string]any{
+		"id":                 id,
+		"code":               "SAVE_FAILED",
+		"message":            "agent was saved but HEARTBEAT.md could not be written. Read current state before retrying.",
+		"persistence_status": agentstore.PersistencePartial,
+		"activation_status":  agentstore.ActivationNotAttempted,
+		"revision":           revision,
+		"changed_fields":     fields,
+		"error_stage":        "heartbeat",
+		"detail":             err.Error(),
+	}))
 }
 
 // joinWorkspaceTeam appends agentID to workspace wsID's CoreTeam (deduped)
@@ -567,9 +654,18 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 			"color":               map[string]any{"type": "string"},
 			"icon":                map[string]any{"type": "string"},
 			"max_tool_iterations": map[string]any{"type": "integer", "description": "New max tool calls per turn (0 = inherit the system default)"},
-			"skills":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"mcp_servers":         map[string]any{"type": "array", "items": map[string]any{"type": "object"}},
-			"tool_policy_changes": map[string]any{"type": "object"},
+			"skills":              skillsParameters(true),
+			"mcp_servers":         mcpServersParameters(),
+			"tool_policy_changes": toolPolicyChangesParameters(),
+			"memory_enabled":      map[string]any{"type": "boolean"},
+			"default":             map[string]any{"type": "boolean"},
+			"voice": map[string]any{
+				"type":        "string",
+				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
+			},
+			"shell_policy":            shellPolicyParameters(),
+			"context_window_override": map[string]any{"type": "integer", "description": "Positive token override. JSON null clears the override."},
+			"model_params":            modelParamsParameters(),
 		},
 		"required": []string{"id", "revision"},
 	}

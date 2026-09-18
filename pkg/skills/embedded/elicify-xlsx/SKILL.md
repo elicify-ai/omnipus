@@ -33,8 +33,8 @@ or reader; renaming their extension is not conversion.
 
 Probe installed packages and the spreadsheet engine through the execution
 tool. Use an existing isolated Python environment. Missing dependencies are a
-specific blocker, not permission to silently install software. In Omnipus,
-request provisioning from Admin; a GP worker routes that request through Jim.
+specific blocker, not permission to silently install software; follow the harness
+runtime notes for the supported provisioning route.
 Required for ordinary work: `openpyxl`. Rendering and recalculation need an
 available Excel/LibreOffice workflow. No tool names or paths are assumed.
 

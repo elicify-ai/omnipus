@@ -33,9 +33,9 @@ PNG pages. Resolve paths under the current project; keep originals unchanged and
 write a distinct output unless the user specifically requested replacement.
 Use the project's environment and record dependency versions.
 
-Check imports before promising execution. In Omnipus, missing Python packages,
-fonts, or a renderer go to **Admin**; a General Purpose worker routes that request
-through **Jim**. Do not install system dependencies or bypass role policy. If a
+Check imports before promising execution. Missing Python packages, fonts, or a
+renderer are blockers; follow the harness runtime notes for the supported
+provisioning route. Do not install system dependencies or bypass role policy. If a
 tool is deferred, discover it by its documented name. A path, OCR transcript, or
 successful conversion is not evidence that the model saw an image. The read tool
 must return actual visible image content. If image input is unavailable, report

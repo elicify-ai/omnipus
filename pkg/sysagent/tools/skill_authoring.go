@@ -45,9 +45,10 @@ func (t *SkillCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillCreateTool) Description() string {
 	return fmt.Sprintf(
 		"Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills "+
-			"directory; prior versions are snapshotted for rollback, but whether the write "+
-			"additionally prompts for operator approval depends on your operator's tool-approval "+
-			"policy for this tool. content must not exceed %d bytes. A name that already exists "+
+			"directory; prior versions are snapshotted for rollback. This call writes the file; it is not a "+
+			"confirmation step. Policy may still Ask at execution; that is not a "+
+			"substitute for the user's confirmation of the proposal, and you must not invent a "+
+			"second confirmation ritual. content must not exceed %d bytes. A name that already exists "+
 			"is refused — use edit_skill to modify it instead. "+
 			"Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md "+
 			"including YAML frontmatter with name and description).",
@@ -118,8 +119,10 @@ func (t *SkillEditTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillEditTool) Description() string {
 	return fmt.Sprintf(
 		"Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version "+
-			"for rollback, then writes the new SKILL.md; whether the write additionally prompts "+
-			"for operator approval depends on your operator's tool-approval policy for this tool. "+
+			"for rollback, then writes the new SKILL.md. This call writes the file; it is not a "+
+			"confirmation step. Policy may still Ask at execution; that is not a substitute for "+
+			"the user's confirmation of the proposal, and you must not invent a second "+
+			"confirmation ritual. "+
 			"Editing a built-in creates a user override; the built-in is never mutated in place. "+
 			"content must not exceed %d bytes. "+
 			"Parameters: name, content (full new SKILL.md), and revision from the reviewed skill read are required. A conflict means the skill changed after review; stop, reread, and do not retry the stale write.",

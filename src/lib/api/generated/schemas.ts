@@ -1739,6 +1739,14 @@ type ActivityEvent = {
 type RotateTokenResponse = {
   token: BearerToken;
 };
+type WorkspaceInstructionsRequest = {
+  content: string;
+  revision: ConfigurationRevision;
+};
+type WorkspaceInstructionsResponse = {
+  content: string;
+  revision: ConfigurationRevision;
+};
 type TaskCreateRequest = {
   title: string;
   prompt?: string | undefined;
@@ -4100,6 +4108,16 @@ export const AcceptanceCriterion: z.ZodType<AcceptanceCriterion> = z.object({
         .optional()
         .default("task_session"),
     })
+    .strict()
+    .refine(
+      (behavior) =>
+        behavior.max_count === undefined ||
+        behavior.max_count >= behavior.min_count,
+      {
+        message: "max_count must be >= min_count when present (AcceptanceCriterion.yaml behavior; ADR-052 DS-7 row 6)",
+        path: ["max_count"],
+      },
+    )
     .optional(),
   author: z.object({ kind: z.enum(["agent", "user"]), id: z.string().min(1) }),
   status: z.enum(["pending", "met", "unmet"]),
@@ -4213,6 +4231,16 @@ export const AcceptanceCriterionInput: z.ZodType<AcceptanceCriterionInput> =
           .optional()
           .default("task_session"),
       })
+      .strict()
+      .refine(
+        (behavior) =>
+          behavior.max_count === undefined ||
+          behavior.max_count >= behavior.min_count,
+        {
+          message: "max_count must be >= min_count when present (AcceptanceCriterion.yaml behavior; ADR-052 DS-7 row 6)",
+          path: ["max_count"],
+        },
+      )
       .optional(),
     author: z.object({
       kind: z.enum(["agent", "user"]),
@@ -5336,10 +5364,16 @@ export const WorkspaceMountCreateResponse = z.object({
   skills_grants_message: z.string().min(1).optional(),
   skills_threshold_warning: z.string().min(1).optional(),
 });
-export const WorkspaceInstructionsResponse = z.object({ content: z.string() });
-export const WorkspaceInstructionsRequest = z.object({
-  content: z.string().max(262144),
-});
+export const WorkspaceInstructionsResponse: z.ZodType<WorkspaceInstructionsResponse> =
+  z.object({
+    content: z.string(),
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  });
+export const WorkspaceInstructionsRequest: z.ZodType<WorkspaceInstructionsRequest> =
+  z.object({
+    content: z.string().max(262144),
+    revision: ConfigurationRevision.regex(/^[a-f0-9]{64}$/),
+  });
 export const Plan: z.ZodType<Plan> = z.object({
   id: z.string(),
   workspace_id: z.string(),
@@ -13245,7 +13279,7 @@ Returns HTTP 201 on success.
         schema: z.string().regex(/^[a-f0-9]{64}$/),
       },
     ],
-    response: z.void(),
+    response: ConfigurationMutationState,
     errors: [
       {
         status: 400,
@@ -13263,9 +13297,14 @@ Returns HTTP 201 on success.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Workspace membership or graph revision changed, or the default workspace cannot be deleted; no authoritative delete occurred.`,
+        schema: z.void(),
+      },
+      {
         status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
+        description: `Storage failed after the workspace record was removed; reports actual partial state.`,
+        schema: ConfigurationMutationState,
       },
     ],
   },
@@ -13364,7 +13403,7 @@ Returns HTTP 201 on success.
         schema: z.string(),
       },
     ],
-    response: z.object({ content: z.string() }),
+    response: WorkspaceInstructionsResponse,
     errors: [
       {
         status: 401,
@@ -13399,7 +13438,7 @@ Returns HTTP 201 on success.
       {
         name: "body",
         type: "Body",
-        schema: z.object({ content: z.string().max(262144) }),
+        schema: WorkspaceInstructionsRequest,
       },
       {
         name: "id",
@@ -13407,7 +13446,7 @@ Returns HTTP 201 on success.
         schema: z.string(),
       },
     ],
-    response: z.object({ content: z.string() }),
+    response: ConfigurationMutationState,
     errors: [
       {
         status: 400,
@@ -13430,9 +13469,14 @@ Returns HTTP 201 on success.
         schema: ErrorResponse,
       },
       {
+        status: 409,
+        description: `Instructions revision changed; no writes occurred.`,
+        schema: z.void(),
+      },
+      {
         status: 500,
-        description: `Internal server error.`,
-        schema: ErrorResponse,
+        description: `Storage failed; reports actual saved state.`,
+        schema: ConfigurationMutationFailureState,
       },
     ],
   },

@@ -157,11 +157,10 @@ describe('deleteWorkspace', () => {
     // Then DELETE /api/v1/workspaces/id is requested.
     // Note: request() always calls res.json(); mock returns {} so it parses cleanly.
     // Traces to: wave4-level1-project-task-mgmt spec — deleteWorkspace shape
-    fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse({ revision: 'a'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['workspace'] }, 200))
 
     const { deleteWorkspace } = await import('./api')
-    // deleteWorkspace returns void — should not throw.
-    await expect(deleteWorkspace('test-id', 'a'.repeat(64))).resolves.not.toThrow()
+    await expect(deleteWorkspace('test-id', 'a'.repeat(64))).resolves.toMatchObject({ persistence_status: 'complete' })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
@@ -176,7 +175,7 @@ describe('deleteWorkspace', () => {
     // When deleteWorkspace is called,
     // Then the URL contains the id.
     // Traces to: wave4-level1-project-task-mgmt spec — deleteWorkspace URL encoding
-    fetchSpy.mockResolvedValueOnce(makeJsonResponse({}, 200))
+    fetchSpy.mockResolvedValueOnce(makeJsonResponse({ revision: 'a'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['workspace'] }, 200))
 
     const { deleteWorkspace } = await import('./api')
     await deleteWorkspace('proj-xyz-001', 'a'.repeat(64))

@@ -98,9 +98,10 @@ export function normalizeDepth(raw: unknown): number | undefined {
 // `buildSaveEdges` below) is EDGES-ONLY, and in isolation the backend derives
 // ITS team view as `core_team ∪ {every edge endpoint}` — an edgeless member
 // wouldn't show up there. But the editor's autosave (WorkspaceTeamTab's
-// `saveFn`) also fires a SEPARATE `updateWorkspace({ core_team: <full
+// `saveFn`) sends a combined `updateWorkspace({ core_team: <full
 // current member list>, delegation: ... })` update when membership changes —
-// that atomically persists every member and edge. So an
+// that validates membership and edges together under one revision. Persistence
+// can still fail partially, which the response reports. On a successful save, an
 // edgeless member IS durably kept on the team once autosave lands; the only
 // window it can appear to "vanish" in is the transient gap between adding it
 // and the debounced save completing (see `isMemberPersisted` / the
@@ -563,9 +564,14 @@ export function setEdgeDepth(
   }
 }
 
+const NON_TEAM_AGENT_IDS = new Set(['admin', 'judge', 'plansupervisor'])
+
 /** Immutably add an agent to the team (node only; no edges). No-op if present. */
 export function addMember(state: TeamEditState, agentId: string): TeamEditState {
   if (state.members.includes(agentId)) return state
+  // ADR-090: Admin is standalone (never a teammate). Hidden Judge / Plan
+  // Supervisor are engine-owned and cannot join a workspace team.
+  if (NON_TEAM_AGENT_IDS.has(agentId)) return state
   return { ...state, members: [...state.members, agentId] }
 }
 

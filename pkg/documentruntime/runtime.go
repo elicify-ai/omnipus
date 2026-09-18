@@ -18,7 +18,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
 
-const ManifestRevision = "f5c241825045341b9b71a9c1f369c24ba6de4f9c"
+const ManifestRevision = "bb4b2349ec5b15b6766ef5770074f62c6278e649"
 const FinalizeCommand = "omnipus-document-runtime finalize"
 
 var revisionPattern = regexp.MustCompile(`^[a-f0-9]{40,64}$`)
@@ -64,9 +64,6 @@ func ResolveLayout(dataRoot, revision, workerID string) (Layout, error) {
 func WorkerSandboxRules(layout Layout) (readExec []string, writable []string) {
 	return []string{layout.Prefix}, []string{layout.Cache}
 }
-func AdminSandboxRules(layout Layout) (readExec []string, writable []string) {
-	return []string{layout.Prefix}, []string{layout.Prefix, layout.Cache}
-}
 
 func ChildEnvironment(base []string, layout Layout) []string {
 	out := make([]string, 0, len(base)+6)
@@ -80,7 +77,7 @@ func ChildEnvironment(base []string, layout Layout) []string {
 			continue
 		}
 		switch upper {
-		case "PATH", "PYTHONPATH", "NODE_PATH", "XDG_CACHE_HOME", "HOME", "TMPDIR", "LANG", "LC_ALL":
+		case "PATH", "PYTHONPATH", "NODE_PATH", "XDG_CACHE_HOME", "HOME", "TMPDIR", "OSL_SOCKET_PATH", "LANG", "LC_ALL":
 			continue
 		}
 		out = append(out, kv)
@@ -92,7 +89,7 @@ func ChildEnvironment(base []string, layout Layout) []string {
 			break
 		}
 	}
-	return append(out, "PATH="+pathValue, "PYTHONPATH="+filepath.Join(layout.Lib, "python"), "NODE_PATH="+filepath.Join(layout.Lib, "node_modules"), "OMNIPUS_DOCUMENT_SKILLS="+layout.Skills, "XDG_CACHE_HOME="+layout.Cache, "HOME="+layout.Cache)
+	return append(out, "PATH="+pathValue, "PYTHONPATH="+filepath.Join(layout.Lib, "python"), "NODE_PATH="+filepath.Join(layout.Lib, "node_modules"), "OMNIPUS_DOCUMENT_SKILLS="+layout.Skills, "XDG_CACHE_HOME="+layout.Cache, "HOME="+layout.Cache, "TMPDIR="+layout.Cache, "OSL_SOCKET_PATH=.")
 }
 
 func InstallProbe(layout Layout, manifest Manifest) error {
@@ -128,59 +125,6 @@ func InstallProbe(layout Layout, manifest Manifest) error {
 	}
 	data = append(data, '\n')
 	return fileutil.WriteFileAtomic(layout.Manifest, data, 0o644)
-}
-
-// FinalizeAdminSetup is the last step of the Admin-owned installation. The
-// dependency installer must first place Python, Node and the converter inside
-// layout.Prefix and populate the manifest with their absolute paths. This
-// function refuses host-path shortcuts, materializes the packaged probe and
-// skill assets, verifies checksums, and only then publishes manifest.json.
-func FinalizeAdminSetup(layout Layout, manifest Manifest) error {
-	if err := validateRuntimeExecutable(layout.Prefix, manifest.Python, "python"); err != nil {
-		return err
-	}
-	if err := validateRuntimeExecutable(layout.Prefix, manifest.Node, "node"); err != nil {
-		return err
-	}
-	if err := validateRuntimeExecutable(layout.Prefix, manifest.Converter, "converter"); err != nil {
-		return err
-	}
-	if len(manifest.PythonRequirements) == 0 {
-		return errors.New("document manifest has no Python requirements")
-	}
-	if err := os.MkdirAll(layout.Skills, 0o755); err != nil {
-		return fmt.Errorf("create document skills directory: %w", err)
-	}
-	if err := InstallEmbeddedSkills(layout); err != nil {
-		return fmt.Errorf("install document skill packages: %w", err)
-	}
-	if err := VerifyAssets(layout.Prefix, manifest.Assets); err != nil {
-		return err
-	}
-	return InstallProbe(layout, manifest)
-}
-
-func validateRuntimeExecutable(prefix, name, component string) error {
-	if !filepath.IsAbs(name) {
-		return fmt.Errorf("document %s path must be absolute", component)
-	}
-	realPrefix, err := filepath.EvalSymlinks(prefix)
-	if err != nil {
-		return fmt.Errorf("resolve document prefix: %w", err)
-	}
-	realName, err := filepath.EvalSymlinks(name)
-	if err != nil {
-		return fmt.Errorf("resolve document %s: %w", component, err)
-	}
-	rel, err := filepath.Rel(realPrefix, realName)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-		return fmt.Errorf("document %s resolves outside versioned prefix", component)
-	}
-	info, err := os.Stat(realName)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&0o111 == 0 {
-		return fmt.Errorf("document %s is not an executable regular file", component)
-	}
-	return nil
 }
 
 var DocumentSkillIDs = []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"}

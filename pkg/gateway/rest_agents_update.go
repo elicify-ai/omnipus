@@ -1075,6 +1075,12 @@ func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRe
 	if rp.ru.req.Icon != nil {
 		agentRec.Icon = *rp.ru.req.Icon
 	}
+	// voice: ADR-090 FR-002 supported editable persona field. Persisted
+	// even though TTS playback is inactive. Worker non-empty values are
+	// rejected before this persist step. Empty string clears.
+	if rp.ru.req.Voice != nil {
+		agentRec.Voice = strings.TrimSpace(*rp.ru.req.Voice)
+	}
 	// memory_enabled (ADR-052 FR-039): "Allowed on all agents" per
 	// AgentUpdateRequest.yaml — including locked/system agents (the
 	// Judge), which is why this is not gated behind the

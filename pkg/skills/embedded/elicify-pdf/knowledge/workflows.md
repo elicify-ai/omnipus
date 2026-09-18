@@ -118,8 +118,8 @@ compatible engine; ordinary AcroForm code is not an XFA solution.
 
 ## Searchable OCR
 
-Probe OCRmyPDF/Tesseract and their language packs; ask Admin to provision
-missing components in Omnipus. A normal OCRmyPDF command is:
+Probe OCRmyPDF/Tesseract and their language packs. Missing components are blockers;
+follow the already-loaded harness runtime notes. A normal OCRmyPDF command is:
 
 ```text
 ocrmypdf -l eng --skip-text /ABSOLUTE/INPUT.pdf /ABSOLUTE/SEARCHABLE.pdf

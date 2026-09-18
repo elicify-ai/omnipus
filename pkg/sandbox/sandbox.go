@@ -39,6 +39,12 @@ type NetPortRule struct {
 	Port uint16
 }
 
+type UnixSocketRule struct {
+	Path    string
+	Bind    bool
+	Connect bool
+}
+
 // SandboxPolicy describes sandbox restrictions to apply.
 //
 // BindPortRules are honored by the Landlock backend on kernels exposing ABI v4
@@ -73,6 +79,7 @@ type SandboxPolicy struct {
 	FilesystemRules   []PathRule
 	BindPortRules     []NetPortRule
 	ConnectPortRules  []NetPortRule
+	UnixSocketRules   []UnixSocketRule
 	InheritToChildren bool
 
 	// ReadsOpen and ExecOpen carry the FilesystemModel decision down to the

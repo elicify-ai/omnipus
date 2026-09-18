@@ -95,21 +95,11 @@ func TestWorkerNotCoreAgent(t *testing.T) {
 	}
 }
 
-// TestSeedBaseDelegationPolicies verifies the seeded trust graph so orchestration +
-// worker fan-out work out of the box:
-//
-//	Jim → [ava, ray, worker]   modes: [task, background, await]
-//	Mia, Ray, Ava → [worker]   modes: [task, background]
-//
-// And the worker itself has no onward delegation (leaf, deny-by-default).
-//
-// ADR-037: AgentConfig.DelegationPolicy no longer exists — the per-workspace
-// delegation graph is the sole runtime authority now, and this seed data
-// (coreAgentDelegation, exported via coreagent.SeedDelegationEdges) survives
-// only as bootstrap data for a fresh workspace's graph
-// (defaultWorkspaceDelegationEdges), not as a field on the seeded AgentConfig.
-// This test now checks that seed source directly rather than the (removed)
-// AgentConfig field.
+// TestSeedBaseDelegationPolicies verifies fresh defaults: Jim delegates to
+// Planner, Researcher, General Purpose, Jim and Ava; Planner delegates only
+// to Researcher with depth 2; General Purpose delegates to itself. Other
+// roles have no onward defaults. SeededEdgeDepth bounds self-edge depth.
+// The workspace graph remains the runtime authority.
 func TestSeedBaseDelegationPolicies(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))
@@ -203,16 +193,9 @@ func TestSeedDelegationPolicies_SelfRolesDoNotPinRoleWideDepth(t *testing.T) {
 	assert.Equal(t, 2, *plannerDP.Depth, "planner's seeded depth cap is 2")
 }
 
-// TestWorkerToolPolicyTightensGlobalCeiling verifies the worker's own policy
-// map is SPARSE: channels, providers, platform, most of agents (list_agents
-// excepted), most of tasks (update_task/set_todos/list_tasks excepted), and
-// workspaces are tightened to explicit "deny" — but every other tool
-// (including the persistent-memory tools) is deliberately ABSENT from the
-// worker's own map, so it inherits the seeded global ceiling
-// (sandbox.tool_policies, "allow") via the coverage validator's OR-semantics.
-// This is an operator-confirmed design choice, not a gap — see
-// pkg/coreagent/core.go's coreAgentSeed IDWorker branch and
-// tightenGlobalCeiling.
+// TestWorkerToolPolicyTightensGlobalCeiling verifies the Worker's sparse ADR-090
+// policy retains required denies and explicit workflow entries while
+// inheriting unchanged ceiling values.
 func TestWorkerToolPolicyTightensGlobalCeiling(t *testing.T) {
 	cfg := &config.Config{}
 	require.True(t, coreagent.SeedConfig(cfg))

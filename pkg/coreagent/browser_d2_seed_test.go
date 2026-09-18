@@ -119,10 +119,9 @@ func TestCoreAgentSeed_UploadIsAskForEveryBrowsingAgent(t *testing.T) {
 	}
 }
 
-// TestCoreAgentSeed_ExplorerResearcherBrowserParity is FR-024. The research
-// tier gets the same browsing surface Jim and Ray get, minus browser_evaluate
-// — and the minus is asserted too, because a parity test that only checked the
-// grants would pass on a build that had quietly widened the carve-out.
+// TestCoreAgentSeed_ResearcherHasNoBrowserSurface verifies Researcher uses
+// search_web and fetch_url and has no browser surface by default. Every
+// browser verb checked here must resolve Deny.
 func TestCoreAgentSeed_ResearcherHasNoBrowserSurface(t *testing.T) {
 	for _, agent := range []coreagent.CoreAgentID{coreagent.IDResearcher} {
 		for _, tool := range d2BrowserVerbs {

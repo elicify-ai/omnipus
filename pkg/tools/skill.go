@@ -37,7 +37,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
@@ -238,8 +237,7 @@ func (t *SkillTool) execLoad(ctx context.Context, name string) *ToolResult {
 	case SkillLoadLoaded:
 		content := outcome.Content
 		if t.documentRuntime != nil && documentruntime.IsDocumentSkill(name) {
-			root := filepath.Join(t.documentRuntime.Skills, name)
-			content += "\n\n## Omnipus runtime location\nResolve every relative knowledge/ and scripts/ reference above under this authorized absolute package root: `" + root + "`. The document probe command is `" + strings.Join(documentruntime.ProbeArgv(*t.documentRuntime), " ") + "`."
+			content = appendDocumentRuntimeGuidance(ctx, content, name, *t.documentRuntime)
 		}
 		return SilentResult(content)
 	case SkillLoadDenied:

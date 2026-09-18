@@ -528,6 +528,12 @@ describe('addMember / removeMember', () => {
     const s: TeamEditState = state({ members: ['mia'], edges: [] })
     expect(addMember(s, 'mia')).toBe(s)
   })
+  it('refuses Admin and hidden engine agents', () => {
+    const s: TeamEditState = state({ members: ['mia'], edges: [] })
+    expect(addMember(s, 'admin')).toBe(s)
+    expect(addMember(s, 'judge')).toBe(s)
+    expect(addMember(s, 'plansupervisor')).toBe(s)
+  })
   it('removes the node AND every edge touching it', () => {
     const s: TeamEditState = state({
       members: ['mia', 'jim', 'planner'],

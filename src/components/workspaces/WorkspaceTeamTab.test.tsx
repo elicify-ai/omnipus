@@ -254,6 +254,71 @@ describe('WorkspaceTeamTab', () => {
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
 
+  it('adopts a clean refetch revision for the next edit without saving the refresh itself', async () => {
+    vi.mocked(useActiveWorkspace).mockReturnValue({ ...WORKSPACE, core_team: ['mia', 'jim', 'planner'] })
+    const refreshedRevision = '3'.repeat(64)
+    const { client } = renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-node-jim')).toBeInTheDocument())
+
+    act(() => {
+      client.setQueryData<WorkspaceDelegation>(
+        workspacesQueryKeys.delegation('ws-1'),
+        { ...DELEGATION, revision: refreshedRevision },
+      )
+    })
+
+    // A revision-only server refresh is not a local graph change and must not
+    // cause an echo PUT through the autosave debounce.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700))
+    })
+    expect(updateWorkspace).not.toHaveBeenCalled()
+    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
+
+    expect(capturedGraphProps).not.toBeNull()
+    act(() => {
+      capturedGraphProps!.onSetDepth('jim', 'planner', 1)
+    })
+
+    await waitFor(() => expect(updateWorkspaceDelegation).toHaveBeenCalled(), {
+      timeout: 3000,
+    })
+    expect(updateWorkspaceDelegation).toHaveBeenCalledWith('ws-1', {
+      revision: refreshedRevision,
+      edges: expect.arrayContaining([
+        expect.objectContaining({ from_agent: 'jim', to_agent: 'planner', depth: 1 }),
+      ]),
+    })
+  })
+
+  it('keeps the reviewed revision when a refetch arrives over a dirty draft', async () => {
+    const { client } = renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
+    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+
+    // The draft was formed from revision 2. A background revision 3 snapshot
+    // must neither replace the draft nor silently retag it as revision 3.
+    act(() => {
+      client.setQueryData<WorkspaceDelegation>(
+        workspacesQueryKeys.delegation('ws-1'),
+        { ...DELEGATION, revision: '3'.repeat(64) },
+      )
+    })
+
+    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
+    expect(updateWorkspace).toHaveBeenCalledWith('ws-1', {
+      revision: '2'.repeat(64),
+      core_team: ['mia', 'jim', 'planner', 'ray'],
+      delegation: DELEGATION.edges,
+    })
+  })
+
   it('shows the empty state (no members) and an add-agent CTA', async () => {
     vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
       revision: '2'.repeat(64),

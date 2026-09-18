@@ -9,6 +9,7 @@ import {
   WorkspaceDelegation as WorkspaceDelegationSchema,
   // Workspace / Project Instructions (contract-first #8):
   WorkspaceInstructionsResponse as WorkspaceInstructionsResponseSchema,
+  ConfigurationMutationState as ConfigurationMutationStateSchema,
   // ADR-051 Rev 4 — workspace media library (contract-first #8):
   MediaLibraryEntry as MediaLibraryEntrySchema,
 } from '@/lib/api/generated/schemas'
@@ -17,6 +18,7 @@ import type {
   Workspace,
   WorkspaceCreateRequest,
   WorkspaceUpdateRequest,
+  ConfigurationMutationState,
   // M5 per-workspace delegation graph (contract-first #8):
   WorkspaceDelegation,
   WorkspaceDelegationUpdateRequest,
@@ -79,8 +81,12 @@ export function updateWorkspace(id: string, body: WorkspaceUpdateRequest): Promi
   )
 }
 
-export function deleteWorkspace(id: string, revision: string): Promise<void> {
-  return request<void>(`/workspaces/${encodeURIComponent(id)}?${new URLSearchParams({ revision })}`, { method: 'DELETE' })
+export function deleteWorkspace(id: string, revision: string): Promise<ConfigurationMutationState> {
+  return requestConfiguration<ConfigurationMutationState>(
+    `/workspaces/${encodeURIComponent(id)}?${new URLSearchParams({ revision })}`,
+    { method: 'DELETE' },
+    ConfigurationMutationStateSchema as ZodType<ConfigurationMutationState>,
+  )
 }
 
 // ── ADR-051 Rev 4 — Workspace Media Library (Slice H) ─────────────────────────
@@ -180,11 +186,12 @@ export function fetchWorkspaceInstructions(workspaceId: string): Promise<Workspa
 export function updateWorkspaceInstructions(
   workspaceId: string,
   content: string,
-): Promise<WorkspaceInstructionsResponse> {
-  const body: WorkspaceInstructionsRequest = { content }
-  return request<WorkspaceInstructionsResponse>(
+  revision: string,
+): Promise<ConfigurationMutationState> {
+  const body: WorkspaceInstructionsRequest = { content, revision }
+  return requestConfiguration<ConfigurationMutationState>(
     `/workspaces/${encodeURIComponent(workspaceId)}/instructions`,
     { method: 'PUT', body: JSON.stringify(body) },
-    WorkspaceInstructionsResponseSchema as ZodType<WorkspaceInstructionsResponse>,
+    ConfigurationMutationStateSchema as ZodType<ConfigurationMutationState>,
   )
 }

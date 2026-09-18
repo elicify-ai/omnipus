@@ -8,15 +8,8 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
-// TestSeedConfig_SeedsSkillAllowlistMatrix verifies FR-9.4: SeedConfig seeds the
-// per-agent skill allowlist matrix on a fresh install:
-//
-//	summarize       → Mia, Ray
-//	plan            → Jim
-//	skill-authoring → Ava
-//	daily-briefing  → Mia
-//	define-goal     → all of the above (ADR-074 D4; renamed from define-done
-//	                  by ADR-080 D-SKILL)
+// TestSeedConfig_SeedsSkillAllowlistMatrix verifies the complete fresh-install
+// ADR-090 role-to-skill assignments in the expected matrix below.
 func TestSeedConfig_SeedsSkillAllowlistMatrix(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Agents.List = nil // fresh install — no agents yet

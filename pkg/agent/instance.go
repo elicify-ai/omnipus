@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -145,8 +147,12 @@ type AgentInstance struct {
 	LightCandidates []providers.FallbackCandidate
 	// LightProvider is the concrete provider instance for the configured light model.
 	// It is only used when routing selects the light tier for a turn.
-	LightProvider   providers.LLMProvider
-	DocumentRuntime *documentruntime.Layout
+	LightProvider providers.LLMProvider
+	// sourceConfigJSON is the immutable configuration snapshot used to build
+	// this particular registered instance. It proves publication independently
+	// of AgentLoop's mutable config pointer.
+	sourceConfigJSON []byte
+	DocumentRuntime  *documentruntime.Layout
 }
 
 // newAgentInstance carries the shared state of NewAgentInstance across its stages.
@@ -260,21 +266,36 @@ func (nai *newAgentInstance) registerTools() {
 		logger.ErrorCF("agent", "Failed to initialize exec tool; continuing without exec",
 			map[string]any{"error": err.Error()})
 	} else {
-		id := ""
-		if nai.agentCfg != nil {
-			id = routing.NormalizeAgentID(nai.agentCfg.ID)
+		// ADR-090 environment-setup (ES-FR-04): context-based runtime
+		// availability — EVERY native agent gets the managed document runtime
+		// view. The old Mia/worker/Admin ID gate is retired: per-turn writable
+		// state (cache) and generic prefixes resolve inside the turn's
+		// authorized root by the exec tool itself, so no role has a different
+		// runtime view and no role is excluded by construction. Policy — not
+		// registration — decides who can invoke what.
+		layout, layoutErr := documentruntime.ResolveLayout(config.OmnipusHomeDir(), documentruntime.ManifestRevision, "shared")
+		if layoutErr != nil {
+			logger.ErrorCF("agent", "Failed to resolve document runtime", map[string]any{"error": layoutErr.Error()})
+		} else if _, provisionErr := documentruntime.ProvisionFirstParty(layout); provisionErr != nil {
+			logger.ErrorCF("agent", "Failed to provision document runtime", map[string]any{"error": provisionErr.Error()})
+		} else {
+			nai.documentRuntime = &layout
+			execTool.SetDocumentRuntime(layout)
 		}
-		if id == "mia" || id == "worker" || id == "admin" {
-			layout, layoutErr := documentruntime.ResolveLayout(config.OmnipusHomeDir(), documentruntime.ManifestRevision, id)
-			if layoutErr != nil {
-				logger.ErrorCF("agent", "Failed to resolve document runtime", map[string]any{"agent_id": id, "error": layoutErr.Error()})
-			} else if _, provisionErr := documentruntime.ProvisionFirstParty(layout); provisionErr != nil {
-				logger.ErrorCF("agent", "Failed to provision document runtime", map[string]any{"agent_id": id, "error": provisionErr.Error()})
-			} else {
-				nai.documentRuntime = &layout
-				execTool.SetDocumentRuntime(layout, id == "admin")
-			}
-		}
+
+		// ADR-090 environment_setup (ES-FR-01): registered unconditionally
+		// like every sibling tool — its Ask policy (the founder-confirmed
+		// matrix in pkg/coreagent's role policies) decides who may call it.
+		// Admin's cross-workspace setup authority is a wiring-time identity
+		// fact derived server-side from the agent ID; never caller-supplied.
+		nai.toolsRegistry.Register(tools.NewEnvironmentSetupTool(tools.EnvironmentSetupToolDeps{
+			Home:            config.OmnipusHomeDir(),
+			AgentWorkDir:    nai.workspace,
+			Admin:           nai.agentCfg != nil && routing.NormalizeAgentID(nai.agentCfg.ID) == "admin",
+			GodMode:         GodModeActive(nai.cfg),
+			AuditFailClosed: resolveBoolWithDefault(nai.cfg.Sandbox.PathGuardAuditFailClosed, nai.cfg.Sandbox.AuditLog),
+		}))
+
 		nai.toolsRegistry.Register(execTool)
 	}
 
@@ -579,6 +600,9 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 		TimeoutSeconds:      nai.timeoutSeconds,
 		AgentType:           resolvedAgentType,
 	}
+	if nai.agentCfg != nil {
+		inst.sourceConfigJSON, _ = json.Marshal(nai.agentCfg)
+	}
 	// Publish the eagerly-built pool. StoreProviderPool uses the atomic
 	// pointer; calling it here (vs. direct field assignment) keeps the
 	// publish path identical to the model-switch path in ApplyAgentModel.
@@ -593,6 +617,18 @@ func (nai *newAgentInstance) assembleInstance() *AgentInstance {
 	}
 	inst.toolPolicy.Store(agentToolsCfgToPolicy(nai.cfg, agentToolsCfg))
 	return inst
+}
+
+// MatchesSourceConfig reports whether candidate is the configuration used to
+// construct this exact instance. SOUL.md is deliberately outside this check:
+// ContextBuilder reads that file dynamically, so a soul-only revision does not
+// require replacing the registered instance.
+func (a *AgentInstance) MatchesSourceConfig(candidate *config.AgentConfig) bool {
+	if a == nil || candidate == nil || len(a.sourceConfigJSON) == 0 {
+		return false
+	}
+	candidateJSON, err := json.Marshal(candidate)
+	return err == nil && bytes.Equal(a.sourceConfigJSON, candidateJSON)
 }
 
 // LoadToolPolicy returns the current tool policy snapshot for this agent.

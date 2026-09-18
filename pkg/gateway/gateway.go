@@ -1333,6 +1333,15 @@ func (rc *runContextWithOptions) wireSystemTools() {
 		// reach the central/per-agent registries until the next hot reload or process restart.
 		ReconcileMCP: rc.agentLoop.ReconcileMCP,
 		MCPStatus:    rc.agentLoop.MCPServerStatus,
+		AgentConfigInventory: func() systools.AgentConfigInventory {
+			return sysagentAgentConfigInventory(rc)
+		},
+		AgentIsLive: func(id string) bool {
+			return sysagentAgentIsLive(rc, id)
+		},
+		AgentActiveRevision: func(id string) string {
+			return sysagentAgentActiveRevision(rc.agentLoop, rc.homePath, id)
+		},
 	}
 	rc.agentLoop.WireSysagentDeps(sysAgentDeps)
 

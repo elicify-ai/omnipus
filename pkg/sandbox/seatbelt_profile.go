@@ -224,6 +224,14 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 		}
 	}
 
+	for _, rule := range rs.policy.UnixSocketRules {
+		if err := validateSeatbeltPath(rule.Path); err != nil {
+			return "", fmt.Errorf("seatbelt: unix socket rule path %q: %w", rule.Path, err)
+		}
+		if !rule.Bind && !rule.Connect {
+			return "", fmt.Errorf("seatbelt: unix socket rule for %q has no operation", rule.Path)
+		}
+	}
 	rs.renderNetwork()
 
 	// --- Secret set: denied LAST (ADR-062 §4.1, spec FR-3.2) ---
@@ -387,6 +395,15 @@ func (rs *renderSeatbeltProfileState) renderNetwork() {
 		// This remains far stricter than Linux — UDP is confined to the
 		// allow-list rather than unrestricted.
 		fmt.Fprintf(&rs.b, "(allow network-outbound (remote udp \"*:%d\"))\n", r.Port)
+	}
+	for _, r := range rs.policy.UnixSocketRules {
+		path, _ := resolveSeatbeltPath(r.Path)
+		if r.Bind {
+			fmt.Fprintf(&rs.b, "(allow network-bind (subpath %q))\n", path)
+		}
+		if r.Connect {
+			fmt.Fprintf(&rs.b, "(allow network-outbound (subpath %q))\n", path)
+		}
 	}
 }
 

@@ -304,6 +304,25 @@ var allStaticToolNames = []string{
 	// workspace root and mounts only (FR-020), with no posture left to
 	// silent inheritance anywhere in the roster.
 	"grep",
+
+	// ADR-090 environment setup (docs/internal/specs/adr-090-environment-setup-spec.md
+	// ES-FR-01) — the environment setup tool. Installation execution is
+	// GENERIC under the founder's 2026-09-18 Option A ruling: dependency
+	// knowledge lives in skills and task plans, never in tool
+	// implementation. Shipped at the
+	// global ceiling as "ask": the existing tool-approval mechanism IS the
+	// approval. Founder ruling (2026-09-18): setup permission is set at BOTH
+	// levels — the ceiling asks, AND every agent permitted to set up
+	// environments carries an explicit stored "ask" of its own (Mia, General
+	// Purpose, Admin via the deliberate-posture list in
+	// adr090SparseRolePolicies; new custom native agents via the constructor
+	// below), so a later ceiling raise loosens none of them. Jim, Ava,
+	// Planner and Researcher persist an explicit deny; Judge and Plan
+	// Supervisor stay locked deny via systemAgentSeed. Same one-commit rule
+	// as every block above — the ceiling entry (pkg/config/defaults.go's
+	// defaultToolPoliciesGeneral), the per-agent seeds and this literal land
+	// together.
+	"environment_setup",
 }
 
 // AllStaticToolNames returns a copy of the full static builtin tool-name
@@ -1033,7 +1052,7 @@ func applyDefineGoalRenameMigration(cfg *config.Config) bool {
 func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 	allow := config.ToolPolicyAllow
 	ask := config.ToolPolicyAsk
-	return &config.AgentToolsCfg{
+	policies := &config.AgentToolsCfg{
 		Builtin: config.AgentBuiltinToolsCfg{
 			Policies: denyAllThenOverride(map[string]config.ToolPolicy{
 				// AskUserQuestion (spec US-7 S1): customs' default allowlist
@@ -1047,14 +1066,12 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// goal_claim (ADR-084 D12, JUDGE-FR-089): customs' default
 				// allowlist carries it too, seeded alongside set_goal — see
 				// that entry's comment above. R-12: this is the SEVENTH
-				// per-agent policy map (the other six are coreAgentSeed's
-				// core roster + IDWorker + the subagent tier, and
-				// systemAgentSeed's Judge/PlanSupervisor), and every new
-				// tool name in this delivery gets an explicit, intended
-				// entry here too — an absent key is not an unknown key, so
-				// validateOverrideKeys does not panic and a fresh custom
-				// agent would silently resolve the tool to the
-				// denyAllThenOverride floor (deny) with no test noticing.
+				// per-agent policy map, and every new tool name in this
+				// delivery gets an explicit, intended entry here too — an
+				// absent key is not an unknown key, so validateOverrideKeys
+				// does not panic, but a fresh custom agent would silently
+				// resolve the tool to the denyAllThenOverride floor (deny)
+				// with no test noticing.
 				"goal_claim": allow,
 				// browser_handover (ADR-085 BROWSER-FR-051, C-70): EXPLICIT
 				// deny, not absence, for the same R-12 reason directly
@@ -1073,9 +1090,23 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 				// the same read-only filesystem surface as read_file/
 				// list_directory above — a fresh agent can find and read
 				// whatever the operator uploaded to this workspace's chat.
-				"library_list":        allow,
-				"library_read":        allow,
-				"request_mount":       ask,
+				"library_list":  allow,
+				"library_read":  allow,
+				"request_mount": ask,
+				// environment_setup (ADR-090 ES-FR-01, founder ruling
+				// 2026-09-18: setup permission is set at BOTH levels):
+				// new custom native agents stamp an explicit per-agent
+				// "ask", the same deliberate-posture data Mia, General
+				// Purpose and Admin carry — NOT an omission riding the
+				// ceiling — so a later ceiling raise loosens no one.
+				// Precedent: request_mount above (ceiling ask, per-agent
+				// ask; strictest-wins keeps ask+ask → ask). Both creation
+				// routes (REST create, create_agent) and the
+				// get_agent_tools preview read this ONE constructor, so
+				// creation default and preview cannot drift. A saved
+				// operator override (deny included) always wins over this
+				// default.
+				"environment_setup":   ask,
 				"list_mounts":         allow,
 				"remember":            allow,
 				"recall_memory":       allow,
@@ -1118,4 +1149,5 @@ func NewCustomAgentToolsCfg() *config.AgentToolsCfg {
 			}),
 		},
 	}
+	return policies
 }

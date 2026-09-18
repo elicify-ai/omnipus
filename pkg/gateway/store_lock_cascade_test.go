@@ -53,7 +53,7 @@ func TestHandleWorkspaceDelete_RemovesTheWorkspaceRecordLockFile(t *testing.T) {
 	r = r.WithContext(contextWithUser(r.Context(), "alice"))
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
-	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	require.NoFileExists(t, recordPath)
 	require.NoFileExists(t, lock, "a deleted workspace must not leave its record's lock file behind")

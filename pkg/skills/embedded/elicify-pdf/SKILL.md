@@ -30,8 +30,8 @@ forms, OCR and rendering. Choose only the libraries the job needs:
 
 Probe available packages and external programs through the execution tool.
 Use an existing isolated environment. Missing dependencies are explicit
-blockers; in Omnipus ask Admin to provision them, with GP requests routed via
-Jim. Do not silently install system software or switch models. Credentials or
+blockers; follow the harness runtime notes for the supported provisioning route.
+Do not silently install system software or switch models. Credentials or
 PDF passwords belong in approved secret inputs, not scripts or command lines.
 
 The bundled `scripts/inspect_pdf.py` reports page geometry, rotation, form names

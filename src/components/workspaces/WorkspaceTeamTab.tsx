@@ -166,11 +166,14 @@ export function WorkspaceTeamTab(props: WorkspaceTeamTabProps) {
     setEditState((prev) => {
       if (!prev) {
         baselineRef.current = nextKey
+        revisionRef.current = delegation.revision
         return next
       }
       const adopt = stateKey(prev) === baselineRef.current
+      if (!adopt) return prev
       baselineRef.current = nextKey
-      return adopt ? next : prev
+      revisionRef.current = delegation.revision
+      return next
     })
   }, [delegation, workspace.core_team, stateKey])
 

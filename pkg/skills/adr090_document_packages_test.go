@@ -22,7 +22,7 @@ func TestADR090_DocumentPackagesSeedPinnedAssets(t *testing.T) {
 	if err := json.Unmarshal(data, &inventory); err != nil {
 		t.Fatal(err)
 	}
-	if inventory.SourceCommit != "f5c241825045341b9b71a9c1f369c24ba6de4f9c" {
+	if inventory.SourceCommit != "bb4b2349ec5b15b6766ef5770074f62c6278e649" {
 		t.Fatal("unexpected source revision")
 	}
 	for _, name := range []string{"elicify-docx", "elicify-xlsx", "elicify-pptx", "elicify-pdf"} {

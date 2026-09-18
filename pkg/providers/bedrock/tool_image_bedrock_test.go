@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -42,6 +43,35 @@ func TestConvertMessages_ToolImageNativeBlock(t *testing.T) {
 	cfg, err := png.DecodeConfig(bytes.NewReader(bytesSource.Value))
 	if err != nil || cfg.Width != 1 || cfg.Height != 1 {
 		t.Fatalf("config=%#v err=%v", cfg, err)
+	}
+	for _, block := range tool.Value.Content {
+		if text, ok := block.(*types.ToolResultContentBlockMemberText); ok && strings.Contains(text.Value, "Tool-result media omitted") {
+			t.Fatalf("supported PNG produced an omission warning: %q", text.Value)
+		}
+	}
+}
+
+func TestConvertMessages_ToolMediaOmissionIsVisible(t *testing.T) {
+	const warning = "[Tool-result media omitted for Bedrock: unsupported image format (2), malformed image data (1), image exceeds 10 MiB (1). Re-read the attachment in a supported image format.]"
+	oversize := "data:image/png;base64," + strings.Repeat("A", 14*1024*1024)
+	messages, _ := convertMessages([]Message{{
+		Role:       "tool",
+		ToolCallID: "call-warning",
+		Content:    "inspection completed",
+		Media: []string{
+			"data:image/bmp;base64,AA==",
+			"data:image/tiff;base64,AA==",
+			"data:image/png;base64,not-valid!!!",
+			oversize,
+		},
+	}})
+	tool := messages[0].Content[0].(*types.ContentBlockMemberToolResult)
+	if len(tool.Value.Content) != 2 {
+		t.Fatalf("tool result content=%#v, want original text plus one warning", tool.Value.Content)
+	}
+	text, ok := tool.Value.Content[1].(*types.ToolResultContentBlockMemberText)
+	if !ok || text.Value != warning {
+		t.Fatalf("warning block=%#v, want exact %q", tool.Value.Content[1], warning)
 	}
 }
 

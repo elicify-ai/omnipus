@@ -124,13 +124,15 @@ func ensureInfraToolsExecutable(
 		return policyFiltered
 	}
 	for _, infraName := range tools.InfraManifestToolNames() {
-		if _, ok := policyMap[infraName]; ok {
-			continue // already authorized (by EffectiveToolPolicy or a prior pass)
+		t, registered := agentTools.Get(infraName)
+		if !registered {
+			continue
 		}
-		if t, ok := agentTools.Get(infraName); ok {
+		if _, included := policyMap[infraName]; !included {
 			policyFiltered = append(policyFiltered, t)
-			policyMap[infraName] = "allow"
 		}
+		// Discovery stays available without an operator permission gate.
+		policyMap[infraName] = "allow"
 	}
 	return policyFiltered
 }

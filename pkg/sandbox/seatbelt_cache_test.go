@@ -139,6 +139,11 @@ func TestSeatbeltCache_KeyDiffersForEveryFieldWithKernelExpression(t *testing.T)
 			p.ConnectPortRules = []NetPortRule{{Port: 8443}}
 			return p
 		}(),
+		"unix socket path changed": func() SandboxPolicy {
+			p := base
+			p.UnixSocketRules = []UnixSocketRule{{Path: "/socket", Bind: true, Connect: true}}
+			return p
+		}(),
 		"denied path changed": func() SandboxPolicy {
 			p := base
 			p.DeniedPaths = []string{"/a/other-secret"}

@@ -1,7 +1,7 @@
 # ADR-090 — Built-in agent configuration, skills, and visual file reading
 
-- **Status:** Accepted product decisions (founder-confirmed 2026-09-17); grill-spec and independent Claude Code Opus reviews completed and findings corrected; L1 resolved to original Elicify skills; implementation pending.
-- **Date:** 2026-09-17
+- **Status:** Accepted product decisions (founder-confirmed 2026-09-17); grill-spec and independent Claude Code Opus reviews completed and findings corrected; L1 resolved to original Elicify skills; implementation delivered with verification recorded in the [implementation and verification ledger](../specs/adr-090-implementation-status.md) and the [generic environment setup verification record](../specs/adr-090-environment-setup-verification.md); release review pending; native Windows explicitly deferred; Linux Office rendering pending UAT.
+- **Date:** 2026-09-17; dependency-setup decision amended 2026-09-18
 - **Decider:** Daniel Piatkowski
 - **Number verification:** ADR-090 absent from architecture paths in all locally reachable Git history after fetching origin on 2026-09-17; highest observed number 089. Recheck before publication because other branches can allocate concurrently.
 - **Input:** [Consolidated requirements](../design/built-in-agents-and-skills-2026-09.md) and [confirmed decisions](../design/built-in-agents-and-skills-2026-09-decisions.md).
@@ -62,7 +62,7 @@ Ray, Max and Explorer are not seeded. Add Admin's compiled identity/prompt and r
 
 | Agent | Job |
 |---|---|
-| **Admin** | Harness: connector installation and credentials, providers, channels, doctor, usage, and setup of missing document-generation dependencies. Must have a working setup route, including execution and supporting file tools where needed (§6.5). Not on a workspace team. Kernel `set_config` / sandbox / tokens stay Settings UI. |
+| **Admin** | Harness: connector installation and credentials, providers, channels, doctor, usage, and system diagnostics. Dependency installation uses the user-approved application tool (§6.5), not an Admin-only route. Not on a workspace team. Kernel `set_config` / sandbox / tokens stay Settings UI. |
 
 ### 2.3 Staff (not chat)
 
@@ -95,7 +95,7 @@ Ray as a chat Scout. Max. Explorer. Staff for Mia or Ava. Jim holding bash / `se
 
 The same field rules apply in the screen, server requests, and agent tools. Reject protected-field changes clearly; do not silently drop them or unlock all fields together. Names and other built-in identity fields retain their existing protection unless expressly changed here. Fixed capabilities mean tools (including nested tool access settings), connector access, and skill assignments; this does not freeze existing editable model/provider or runtime-tuning fields. Judge/Supervisor identities are engine-owned and are not available as custom creation types. Agent type is chosen at creation and is not editable: a different type means a new agent, with any team changes included in Ava’s proposal.
 
-Changing skill assignments intentionally changes which playbooks an ordinary built-in can use without modifying its base instructions. Capability edits must survive reload and restart, including deliberately empty skill/connector selections and edited Judge/Supervisor instructions. Startup seeding must not restore user-removed defaults. Preserve user choices in future releases as a product principle; implementing upgrade migrations is outside this greenfield scope.
+Changing skill assignments intentionally changes which playbooks an ordinary built-in can use without modifying its base instructions. Capability edits must survive reload and restart, including deliberately empty skill/connector selections and edited Judge/Supervisor instructions. Startup seeding must not restore user-removed defaults. Preserve user choices in future releases unless the user explicitly chooses to reset them. Never automatically add new capability defaults to existing ordinary built-in agents. Judge/Supervisor capabilities remain engine-fixed, while their edited instructions are preserved. Implementing upgrade migrations is outside this greenfield scope.
 
 ---
 
@@ -107,7 +107,7 @@ User → Mia | Jim | Ava | Admin
 Mia  → Jim (heavy work) · Ava (new teammate) · Admin (wire the box)
 Jim  → Planner · Researcher · General Purpose
 Jim  → Ava (delegate: configure needed team specialists or skills after conversational confirmation)
-Jim  → Admin (handover: missing document dependencies)
+Any permitted native agent → environment_setup → actual user approval → application setup
 Jim  → self (fork: same belt, narrower task)
 Planner → Researcher (context before the DAG)
 Planner → Jim only (questions), never the user
@@ -163,7 +163,8 @@ The approved Admin installation capability requires changing the shipped `add_mc
 | Email + chat channels | Allow; send Ask | same | same | — | same | same | same | — | — |
 | Web search / fetch | Allow | Allow | Allow | — | Allow | Allow | Allow | — | — |
 | Browser (with the user) | Allow | Allow | Allow | — | — | — | — | — | — |
-| Execution (`bash`) | Allow: document workflows | — | — | Allow: dependency setup | — | — | Allow | — | — |
+| Execution (`bash`) | Allow: document workflows | — | — | Allow: supported operator work | — | — | Allow | — | — |
+| Dependency setup (`environment_setup`) | Ask | — | — | Ask | — | — | Ask | — | — |
 | `serve_web` | — | — | — | — | — | — | Allow | — | — |
 | Tasks | Allow | Allow | — | — | Allow | — | list/update/todos | — | — |
 | **Plans** | — | **Allow** | **Deny** | — | — | — | **Deny** | — | — |
@@ -214,7 +215,9 @@ Give General Purpose explicit, practical task-runner tool defaults, including ex
 
 **Founder decision, 2026-09-17:** keep one global hardcoded classification by tool name. Do not introduce per-agent visibility settings or role-dependent visibility lists. Permissions remain per agent; initial visibility does not grant permission.
 
-The following tools form the global upfront set. A registered, permitted tool in this set has its full callable definition in context from the first ordinary request; it does not require ToolSearch. Existing session applicability and goal-forcing restrictions still apply. `ToolSearch` can retain its infrastructure classification; the table describes the combined upfront surface, not a requirement to move it into the ordinary full-tool map.
+The following tools form the global upfront set. A registered, permitted tool in this set has its full callable definition in context from the first ordinary request; it does not require ToolSearch. Existing session applicability and goal-forcing restrictions still apply. `ToolSearch` retains its infrastructure classification; the table describes the combined upfront surface, not a requirement to move it into the ordinary full-tool map.
+
+**User clarification, 2026-09-18:** ToolSearch discovery infrastructure is intentionally always available on compressed turns and cannot be denied. Permissions still govern which target tools discovery may reveal, load, or execute. Goal forcing may still withhold ToolSearch on a narrowed first-move request. This is not an automatic regrant of a denied target tool.
 
 | Purpose | Upfront tools |
 |---|---|
@@ -295,15 +298,25 @@ The four document-authoring capabilities use original Elicify skills from elicif
 
 ---
 
-### 6.5 Document generation and dependency setup
+### 6.5 Document generation and approval-gated environment setup
 
-Author and package the chosen original Elicify document skills; use Python by default and Node where the workflow benefits. Package their referenced helper scripts and assets, and make the required Python/Node.js runtimes and libraries available in the actual execution environment. Include conversion, rendering, and validation programs required by the chosen workflows; a runtime installed elsewhere on the host is not proof the agent can use it. Record the selected skill versions and dependency requirements during implementation.
+**Founder amendment, 2026-09-18:** dependency setup belongs to an application tool, not to Admin, an agent handoff, or a delegation graph. This replaces the original D5 setup route. Workspace-local installation is the default; compatible runtimes and native tools can be shared through an Omnipus-managed, versioned installation. Dependency names, versions and installation instructions come from the agent’s task plan or skills; Omnipus must not hardcode a library/application catalogue or package-specific installation recipes. This is a generic installation facility, not a document-specific installer. Actual operating-system and privilege constraints still apply.
 
-Mia can read inputs, write scripts and output files, run the generation and validation commands, inspect the results, and return the actual document to the user. Her instructions must permit this workflow; do not retain a blanket instruction to refuse execution. General Purpose has the same document-generation capability. Both use the existing execution environment and permission model.
+**Founder clarification, 2026-09-18 — option A:** the tool is Bash with enhanced, bounded installation permission. Reuse existing execution, background sessions, poll/read/kill and platform process controls. Do not build a separate supervisor to guarantee cleanup of deliberately detached processes. Such processes retain the inherited sandbox restrictions but have the same cleanup limitations as Bash; neither a completed command nor shared publication proves all detached children have stopped. Installation commands should wait for their work to finish, and results must state the actual outcome without promising stronger cleanup.
 
-If required software is missing, Mia explains what is missing and hands setup to Admin, keeping the document task pending. Admin must have a working setup route with the necessary execution/file access and installation permissions; a `doctor` report alone is not setup. Respect host/environment boundaries and report unsupported installation clearly. Resume generation only after checking the dependency in the agent’s actual environment; do not ask the user to manually complete a task Admin has claimed to handle.
+Add deferred tool `environment_setup` with its normal tool permission set to **Ask**. That existing tool approval is the installation approval. There is no separate approval workflow, immutable approval token, expiry protocol, second confirmation or special God-mode handling. Existing policy resolution and user overrides apply; do not introduce a new authorization layer. The normal tool call describes dependencies, reason, workspace and requested workspace/shared scope so the user knows what they are approving. Denied approval executes no installation. Reusing installed dependencies through a readiness check needs no setup call.
 
-General Purpose reports missing dependencies to its parent/Jim, who requests Admin setup through the existing handoff route. This does not grant General Purpose delegation to Admin or other roles. Its document work remains pending until it verifies the dependency in its own execution environment.
+Omnipus provides generic installation execution with existing bounded setup/sandbox access. Founder clarification: no hardcoded libraries or application-specific recipes. The founder selected agent-supplied installation commands or scripts, shown in the existing Ask approval and executed within the selected installation area. Earlier structured-package-only and recipe-specific wording is superseded. No unrestricted host-privilege grant is implied. Project libraries and caches are workspace-local by default. Shared runtimes/native tools are application-managed and read/execute-only for agents. Dependency hooks remain untrusted code; setup does not grant ordinary agents access to other workspaces, gateway secrets, host administrator rights, normal execution network access or agent tools. Unsupported privilege/platform/licence requirements fail visibly rather than retrying unsandboxed.
+
+All permitted native agents, including newly created custom agents without delegation edges, use the same route. Seed environment_setup as Ask for Mia, General Purpose and Admin; Deny for Jim, Ava, Planner and Researcher; and locked Deny for Judge and Plan Supervisor. Founder clarification: both existing levels must be Ask — global Ask plus explicit per-agent Ask for Mia, General Purpose, Admin and new custom native agents, independently of execution or skills. Preserve that explicit posture in sparse-policy reconciliation. Creation and permission previews must agree. It stays discoverable through ToolSearch, outside the unchanged upfront set. Preserve user overrides on update. Skill assignment never grants setup, execution or file-reading permissions.
+
+Package the original Elicify document skills and referenced helpers. The document skills specify compatible Python and authoring libraries, LibreOffice, a PDF-to-image renderer, and fonts; these are skill/workflow requirements and acceptance fixtures, not a tool-side package catalogue; include Node or build tools only where the selected workflow needs them. Generation and visual-check dependencies are separate so an existing authoring environment remains usable if rendering is unavailable. The optional runtime does not become an Omnipus startup dependency.
+
+The requesting agent checks its actual sandbox, requests setup if necessary, waits for user approval and completion, then rechecks its own environment. Render Office files through LibreOffice to temporary PDF and page/sheet/slide images, inspect the images with read_file, correct defects and rerender. PDF is an internal inspection intermediate; the editable Office file remains the deliverable. Successful installation, converter --version, text extraction, or image creation alone never proves visual inspection. Missing rendering or model vision leaves visual validation explicitly incomplete. No document-library preview UI is added.
+
+The [environment setup specification](../specs/adr-090-environment-setup-spec.md) defines the tool contract, existing Ask integration, installation boundaries and acceptance tests. Skills give portable dependency requirements; Omnipus supplies setup guidance without naming privileged agents.
+
+Admin uses its cross-workspace filesystem authority to select a target workspace without team membership; each installation remains confined to its selected destination. Installation runs asynchronously using the existing Bash-style background session pattern (session_id, poll/read/kill). Starting a session is not completion. Unattended Ask requests retain existing automatic denial; no pending-approval queue or new approval workflow is added. See ES-FR-02–05 and ES-BDD-09–11.
 
 ### 6.6 Visual inspection through the read tools
 
@@ -364,7 +377,7 @@ Default box does **not** include domain packs. See vault **Feature design — Wo
 2. Implement the field rules in §2.6 consistently in the screen, server, agent tools, and startup behavior. Replace conflicting older field-matrix requirements and tests; preserve unrelated restrictions.
 3. Complete Ava’s tool operations and one-question proposal workflow (§5.1–5.2), including team and workspace delegation configuration.
 4. Write/adapt the role skills; package the selected document skills and their dependencies; omit the retired skills in §6.3. Keep built-in prompts consistent with executable capabilities.
-5. Give Mia document execution and Admin a real dependency-setup route. Verify each in its actual runtime.
+5. Give Mia document execution and all permitted native agents the approval-gated environment_setup route (§6.5). Verify custom-agent use without delegation edges and actual sandbox readiness.
 6. Set the fixed Judge/Supervisor capabilities, editable instructions, and the Judge’s read-only task-evidence access.
 7. Implement the global upfront set and role-prompt discovery instructions in §5.4. Keep the existing global classification model; add no per-agent visibility setting.
 8. Keep future isolation guidance gated by §7. Isolation implementation is not part of delivery.
@@ -382,7 +395,7 @@ Completion requires appropriate automated checks **and real workflows**:
 | Global permissions | An agent-level grant cannot override a global denial. A user who removes a necessary capability gets a clear explanation rather than a hidden regrant. With global bash Allow, fresh Jim still cannot execute because his shipped Deny is explicit; an authorized subsequent user removal of that override follows the existing ceiling. |
 | Mia’s document outputs | Generate valid, openable Word, spreadsheet, presentation, and PDF files using the actual assigned skills and execution environment; inspect/render/validate as their workflows require and return the files. |
 | Visual inspection | Mia and General Purpose read rendered PNG/JPEG pages through the read tools without browser access or automatic user delivery. Images reach each supported vision-provider request. A live model identifies known visual defects and checks corrected output. Unsupported models and corrupt, oversized, or inaccessible files produce accurate limitations; existing text/document reading still works. |
-| Missing dependency | Mia identifies the missing dependency, Admin performs supported setup, and Mia verifies availability and resumes. General Purpose follows the parent/Jim-to-Admin route and verifies its own runtime before resuming. Unsupported setup is reported without claiming completion. |
+| Missing dependency | Any permitted native agent requests environment_setup; the user approves the setup tool call through Ask; application setup completes; the requesting agent verifies its sandbox and resumes. Rejection changes no installation state. Unsupported setup remains explicit and incomplete. |
 | Agent type and delegation | Ava creates a new agent when another type is needed. General Purpose may create helpers of its own role but cannot delegate to another role; merely sharing the generic worker runtime is insufficient. |
 | Judge | Reads the relevant task activity and output files; cannot execute commands or access connectors. Its editable instructions are used after reload. |
 
@@ -396,7 +409,7 @@ Record code-check results separately from proof that a user or agent can actuall
 | Ava | Agent/skill tools and workspace configuration | Complete discovery and mutation operations; one confirmed proposal; effective readback and conflict handling | A created/configured teammate can receive and complete a task |
 | Role defaults | Global ceiling and per-agent overrides | Complete role tool maps and aligned fixed prompts; GP helpers limited to their own role | Permitted workflows succeed; explicit boundaries remain enforced |
 | Tool visibility | Global manifest and ToolSearch | Adopt the exact 37-name list; prompts name deferred role tools | Fresh-session availability and exact-name discovery checks |
-| Document skills | Execution environment and skill loader | Package selected skills, scripts/assets, and dependencies; Admin setup route | Mia and GP produce usable files; missing-dependency recovery is demonstrated |
+| Document skills | Execution environment and skill loader | Package selected skills and assets; approval-gated environment_setup and sandbox-compatible dependencies | Mia and GP produce usable files; missing-dependency recovery is demonstrated |
 | Image reading | Generic media processing and model-capability handling | Image return in existing readers, inspection-only delivery, provider preservation | Real visual defect detection/correction and negative-path checks (§6.6) |
 | Hidden agents | Native Judge/Supervisor execution and evidence tools | Editable instructions with fixed capabilities; relevant Judge output access | Existing verdict/correction contracts and scope restrictions continue to hold |
 | Isolation | Separate feature design | Future prompt/skill guidance only | No isolation engine or merge/retry implementation in this delivery |
@@ -412,7 +425,7 @@ This table describes planned delivery, not completed runtime functionality. The 
 | D2 | Enforce editability per field at every mutation surface, preserving user configuration across restarts. | Whole-record locks prevent legitimate capability changes; unlocking every field would expose protected prompts. |
 | D3 | Extend existing tools and workspace configuration; one normal user-question confirmation covers the exact proposal. Re-read and report partial application. | A separate approval tool or confirmation per write; a new cross-resource transaction framework; silent rollback of user changes. |
 | D4 | Keep the two-layer permission model and one global hardcoded visibility list. ToolSearch loads remaining allowed tools. | Per-agent visibility settings or a third policy fallback layer add unnecessary concepts. |
-| D5 | Use selected document skills with their Python/Node helpers; Admin owns environment setup. | Rewriting all skills to Python only, inventing a native Office engine, or promising dependencies unavailable in the actual runtime. |
+| D5 | Use selected document skills; application-owned environment_setup installs workspace packages/shared runtimes through existing Ask tool approval. | Rewriting all skills to Python only, inventing a native Office engine, or promising dependencies unavailable in the actual runtime. |
 | D6 | Add visual images to existing read tools and connect existing media/capability/provider paths. Reading does not deliver a file to the user. | A separate view-image tool expands the surface; browser-serving workarounds require unrelated permissions; base64 text alone is not vision input. |
 | D7 | Gate future isolation instructions on the separate feature's delivered contract. | Bundling isolation engine, merge/retry, or Stop changes into the agent roster. |
 
@@ -422,7 +435,7 @@ This changes backend validation, configuration tools, startup seeding, Settings 
 
 Configuration changes take effect through the existing runtime refresh path; saved-but-inactive state must be reported distinctly. Document dependency failures remain pending until verified setup. Image capability failures preserve file access and give guidance, without fabricating successful inspection. Existing audit and tool records must identify the operation and outcome without exposing connector secrets or dumping image base64 into ordinary text logs.
 
-This is a greenfield release change, not a migration or rollback programme for earlier installations. Delivery must distinguish spec review, automated code checks, and actual user/agent reachability. Implementation may be delivered in the two dependency-ordered specifications below; the complete roster is not declared delivered until both meet their acceptance criteria.
+This is a greenfield release change, not a migration or rollback programme for earlier installations. Delivery must distinguish spec review, automated code checks, and actual user/agent reachability. Implementation may be delivered in the three linked specifications below; the feature is not declared delivered until all applicable acceptance criteria pass.
 
 ## 14. Relationship to prior decisions
 
@@ -430,14 +443,15 @@ This ADR supersedes older whole-record built-in write locks and seed/prompt defa
 
 It extends ADR-051 revision 4 — Workspace media library and presentation layer with a private read-tool image path and consistent tool-media capability handling. It preserves ADR-084 — Judge as an active reviewer's criterion verdict/workspace evidence scope and ADR-055 — Plan supervisor's correction lifecycle; only instruction editability and explicit capability defaults change as stated here. This intentionally supersedes the self-edge/self-delegation prohibition for only the two bounded helper roles, the shipped `add_mcp_server` Deny for the explicitly scoped Admin workflow, and ADR-084 JUDGE-FR-059's empty skill allowlist with the fixed `verify` assignment. Plan Supervisor retains both `plan` and `define-goal`.
 
-The approved Python/Node document workflows are an explicit exception to the root “no new runtime deps” wording for optional external document-execution prerequisites; the Omnipus Go binary itself remains standalone and gains no mandatory startup dependency. The implementation must provide the shared restricted dependency prefix and worker PATH/probes defined in the configuration specification, so Admin's install is actually usable by both workers. The root operating rules annotate these planned exceptions alongside the current runtime baseline; implementation must update the baseline statements when delivered. Historical ADRs remain unchanged as an audit trail. Where an older editable-field matrix conflicts, this ADR governs these built-in roles; unrelated custom/external runtime restrictions remain.
+The approved Python/Node document workflows are an explicit exception to the root “no new runtime deps” wording for optional external document-execution prerequisites; the Omnipus Go binary itself remains standalone and gains no mandatory startup dependency. The implementation must provide the workspace package paths, shared runtime paths and actual sandbox probes defined in the environment setup specification, so an approved installation is usable by any permitted native agent, including custom agents. The root operating rules annotate these planned exceptions alongside the current runtime baseline; implementation must update the baseline statements when delivered. Historical ADRs remain unchanged as an audit trail. Where an older editable-field matrix conflicts, this ADR governs these built-in roles; unrelated custom/external runtime restrictions remain.
 
 ## 15. Specification split and open decisions
 
-1. **[Agent configuration and skills](../specs/adr-090-agent-configuration-and-skills-spec.md):** roster, field protection, Ava, tools/visibility, prompt/skill packaging, document execution and Admin setup.
+1. **[Agent configuration and skills](../specs/adr-090-agent-configuration-and-skills-spec.md):** roster, field protection, Ava, tools/visibility, prompt/skill packaging, document execution and approval-gated setup.
 2. **[Visual file reading](../specs/adr-090-visual-file-reading-spec.md):** reader image content, inspection-only delivery, capability handling, provider conversion, and visual validation.
+3. **[Environment setup](../specs/adr-090-environment-setup-spec.md):** workspace packages, shared runtimes, existing Ask tool approval, sandbox readiness and Office dependencies.
 
-The second specification supplies the visual acceptance required by the first; it can be developed independently against the existing read interface. Both reuse existing runtime facilities. The founder resolved the package source choice to original Elicify skills (L1 below). Exact supporting tool maps remain engineering inventory work governed by the approved role boundaries, not permission to omit capabilities.
+The second specification supplies the visual acceptance required by the first; it can be developed independently against the existing read interface. All three reuse existing runtime facilities; environment setup extends the approval and provisioning paths. The founder resolved the package source choice to original Elicify skills (L1 below). Exact supporting tool maps remain engineering inventory work governed by the approved role boundaries, not permission to omit capabilities.
 
 ### Resolved decision L1 — original Elicify document skills
 

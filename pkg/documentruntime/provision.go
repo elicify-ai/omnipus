@@ -22,6 +22,9 @@ var provisionMu sync.Mutex
 func ProvisionFirstParty(layout Layout) (Manifest, error) {
 	provisionMu.Lock()
 	defer provisionMu.Unlock()
+	if err := os.MkdirAll(layout.Cache, 0o755); err != nil {
+		return Manifest{}, fmt.Errorf("create document worker cache: %w", err)
+	}
 	if data, err := os.ReadFile(layout.Manifest); err == nil {
 		var existing Manifest
 		if err := json.Unmarshal(data, &existing); err != nil {
@@ -30,10 +33,14 @@ func ProvisionFirstParty(layout Layout) (Manifest, error) {
 		if existing.Revision != ManifestRevision {
 			return Manifest{}, fmt.Errorf("document manifest revision mismatch: %s", existing.Revision)
 		}
-		if err := VerifyAssets(layout.Prefix, existing.Assets); err != nil {
-			return Manifest{}, err
+		// A matching revision without checksummed assets is incomplete cache
+		// state, not completed first-party provisioning. Rebuild it below.
+		if len(existing.Assets) > 0 {
+			if err := VerifyAssets(layout.Prefix, existing.Assets); err != nil {
+				return Manifest{}, err
+			}
+			return existing, nil
 		}
-		return existing, nil
 	} else if !os.IsNotExist(err) {
 		return Manifest{}, err
 	}
@@ -55,9 +62,6 @@ func ProvisionFirstParty(layout Layout) (Manifest, error) {
 		return Manifest{}, err
 	}
 	if err := InstallEmbeddedSkills(layout); err != nil {
-		return Manifest{}, err
-	}
-	if err := InstallProbe(layout, manifest); err != nil {
 		return Manifest{}, err
 	}
 	assets, err := inventoryTree(layout.Prefix, layout.Skills)

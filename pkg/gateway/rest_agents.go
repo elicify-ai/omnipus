@@ -590,6 +590,11 @@ func applyAgentOverrides(ag *gen.Agent, ac *config.AgentConfig) {
 	// agent's actual effective value.
 	memEnabled := ac.MemoryEnabledEffective()
 	ag.MemoryEnabled = &memEnabled
+	// voice: echo the persisted persona identifier. Previously decoded and
+	// counted as changed on PUT but never written or read back.
+	if v := strings.TrimSpace(ac.Voice); v != "" {
+		ag.Voice = &v
+	}
 	// shell_policy: echo the persisted per-agent override. Previously this was
 	// persisted (updateAgent) or should have been persisted (createAgent, fixed
 	// alongside this) but never surfaced on any response path (list/get/create/
@@ -972,16 +977,17 @@ func (e *configurationMutationError) Unwrap() error { return e.Err }
 
 func writeConfigurationMutationFailure(w http.ResponseWriter, result agentstore.MutationResult) {
 	slog.Error("configuration mutation persistence failed", "stage", result.ErrorStage, "error", result.Message)
-	stage := result.ErrorStage
-	message := "configuration storage failed before completion; read the resource again before retrying"
-	writeJSON(w, http.StatusInternalServerError, gen.ConfigurationMutationState{
-		PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatus(result.PersistenceStatus),
-		ActivationStatus:  gen.ConfigurationMutationStateActivationStatus(agentstore.ActivationNotAttempted),
-		Revision:          result.Revision,
-		ChangedFields:     result.ChangedFields,
-		ErrorStage:        &stage,
-		Message:           &message,
-	})
+	state := gen.ConfigurationMutationFailureState{
+		PersistenceStatus: gen.ConfigurationMutationFailureStatePersistenceStatus(result.PersistenceStatus),
+		ActivationStatus:  gen.ConfigurationMutationFailureStateActivationStatusNotAttempted,
+		ChangedFields:     append([]string{}, result.ChangedFields...),
+		ErrorStage:        result.ErrorStage,
+		Message:           "configuration storage failed before completion; read the resource again before retrying",
+	}
+	if result.Revision != "" {
+		state.Revision = &result.Revision
+	}
+	writeJSON(w, http.StatusInternalServerError, state)
 }
 
 // fastAgentUpsert is createAgent/updateAgent's ADR-054-completing fast path

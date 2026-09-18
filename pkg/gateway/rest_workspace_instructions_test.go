@@ -27,6 +27,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
 // buildWorkspaceInstructionsTestAPI creates a minimal restAPI and a pre-seeded
@@ -81,6 +82,16 @@ func getInstructions(t *testing.T, api *restAPI, id string) *httptest.ResponseRe
 // putInstructions sends PUT /api/v1/workspaces/{id}/instructions with the given body.
 func putInstructions(t *testing.T, api *restAPI, id, body string) *httptest.ResponseRecorder {
 	t.Helper()
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err == nil {
+		if _, ok := payload["revision"]; !ok {
+			current, _ := workspace.ReadInstructions(api.homePath, id)
+			payload["revision"] = workspace.RevisionForInstructions(current)
+			if encoded, err := json.Marshal(payload); err == nil {
+				body = string(encoded)
+			}
+		}
+	}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+id+"/instructions", strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
@@ -116,8 +127,7 @@ func TestWorkspaceInstructions_PutThenGet(t *testing.T) {
 	// PUT
 	pw := putInstructions(t, api, id, body)
 	require.Equal(t, http.StatusOK, pw.Code, "body: %s", pw.Body.String())
-	putResp := decodeInstructions(t, pw.Body.Bytes())
-	assert.Equal(t, instructions, putResp.Content)
+	assert.Contains(t, pw.Body.String(), `"persistence_status"`)
 
 	// GET round-trip
 	gw := getInstructions(t, api, id)
@@ -149,8 +159,7 @@ func TestWorkspaceInstructions_PutEmptyClears(t *testing.T) {
 	// Now clear with an empty string.
 	cw := putInstructions(t, api, id, `{"content":""}`)
 	require.Equal(t, http.StatusOK, cw.Code, "body: %s", cw.Body.String())
-	clearResp := decodeInstructions(t, cw.Body.Bytes())
-	assert.Equal(t, "", clearResp.Content)
+	assert.Contains(t, cw.Body.String(), `"persistence_status"`)
 
 	// File must be removed.
 	_, statErr := os.Stat(agentMDPath)

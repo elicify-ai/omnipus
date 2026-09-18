@@ -488,10 +488,23 @@ func (t *ReadFileTool) Name() string {
 	return "read_file"
 }
 
+// readerImageInspectionParagraph is the ADR-090 §6.6 model-facing image
+// contract, shared with library_read (same inner reader). Keep the two
+// descriptions in lock-step: an uploaded PNG is inspected the same way as
+// a workspace PNG.
+const readerImageInspectionParagraph = "Direct SVG reads return text; render SVG to PNG/JPEG before visual inspection. " +
+	"Image inspection rejects offset/length pagination, enforces the configured media byte limit, and supplies visible image content only to the model; it does not attach the image to the user or retain its bytes in history. "
+
+// readerOffsetParamDesc / readerLengthParamDesc state the actual units
+// readOpenFile and extractDocument use. Plain text seeks bytes; extracted
+// documents page by rune; PNG/JPEG reject any supplied offset or length.
+const readerOffsetParamDesc = "Start position. Plain text: byte offset. Word/PowerPoint/Excel/PDF: character offset into extracted text. Omit for PNG/JPEG — image inspection rejects offset and length."
+const readerLengthParamDesc = "Amount to read. Plain text: bytes (silently capped at the server-side max). Word/PowerPoint/Excel/PDF: characters of extracted text (also capped). Omit for PNG/JPEG — image inspection rejects offset and length."
+
 func (t *ReadFileTool) Description() string {
-	return "Read text and supported documents, or inspect a PNG or JPEG image in the current model turn. Direct SVG reads return text; render SVG to PNG/JPEG before visual inspection. " +
-		"Image inspection rejects offset/length pagination, enforces the configured media byte limit, and supplies visible image content only to the model; it does not attach the image to the user or retain its bytes in history. " +
-		"Text supports pagination via `offset` and `length`. " +
+	return "Read text and supported documents, or inspect a PNG or JPEG image in the current model turn. " +
+		readerImageInspectionParagraph +
+		"Text supports pagination via `offset` and `length` as bytes. " +
 		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +
 		"automatically decoded to plain text; for these, `offset` and `length` count " +
 		"characters of extracted text rather than raw bytes. Other binary files (containing " +
@@ -513,12 +526,12 @@ func (t *ReadFileTool) Parameters() map[string]any {
 			},
 			"offset": map[string]any{
 				"type":        "integer",
-				"description": "Byte offset to start reading from.",
+				"description": readerOffsetParamDesc,
 				"default":     0,
 			},
 			"length": map[string]any{
 				"type":        "integer",
-				"description": "Maximum number of bytes to read.",
+				"description": readerLengthParamDesc,
 				"default":     t.maxSize,
 			},
 		},

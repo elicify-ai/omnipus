@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { updateAgent, fetchAgent, createAgent, deleteAgent } from './agents'
 import { createWorkspace, updateWorkspace, updateWorkspaceDelegation } from './workspaces'
 import { updateAgentTools } from './tools'
-import { installSkillBySlug } from './skills'
+import { installSkillBySlug, deleteSkill } from './skills'
 import { ApiSchemaError } from './http'
 import { ApiError } from '../api-error'
 import { ConfigurationSaveError } from './configuration'
@@ -106,6 +106,14 @@ describe('ADR090 configuration save outcomes', () => {
   it('continues to read resources without mutation outcome fields', async () => {
     response(agent)
     await expect(fetchAgent('mia')).resolves.toEqual(agent)
+  })
+  it('cannot report a persisted but inactive skill deletion as successful', async () => {
+    const deletionState = { ...state, activation_status: 'failed', changed_fields: ['installed'] }
+    response(deletionState)
+    await expect(deleteSkill('web-research', revision)).rejects.toMatchObject({
+      name: 'ConfigurationSaveError', state: deletionState,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
 

@@ -120,6 +120,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search agents…"
+            aria-label="Search agents"
             data-testid="team-add-agent-search"
             className="w-full bg-transparent text-sm text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none"
           />

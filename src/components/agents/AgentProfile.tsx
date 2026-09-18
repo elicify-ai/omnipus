@@ -1548,8 +1548,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             {/* Sampling parameters — collapsed disclosure. Operator decision
                 2026-07-03: editable for locked core agents too (model,
                 sampling, rate limits, and execution knobs ARE mutable on the
-                backend for locked agents — only identity/soul/skills are
-                403'd). Hidden for subagent_3p: model_params is a
+                backend for locked agents; ordinary built-in identity and base
+                instructions are protected, and editable settings follow the
+                backend field descriptors). Hidden for subagent_3p: model_params is a
                 runner-side concern for that type (field matrix) and the
                 formData branch for subagent_3p never sends it — rendering
                 this disclosure without the gate let an operator "edit" and
@@ -1828,16 +1829,9 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
             voice={voice}
             setVoice={(v) => { markDirty(); setVoice(v) }}
             renderUploadButton={(_target, onUpload) => <UploadMdButton onUpload={(v) => { onUpload(v); markDirty() }} />}
-            // ADR-052 FR-038 (soul/rubric unification): soul is read-only
-            // for locked CORE agents (Mia/Jim/Ava/Ray) — their souls are
-            // product identity, not a verifier rubric, and the backend's
-            // updateAgent handler still rejects `soul` unconditionally for
-            // them. System Agents (the Judge) are the carve-out: the
-            // backend now allows `soul` for a locked agent when
-            // `IsSystem()` is true (pkg/gateway/rest.go), because the
-            // Judge's soul IS its operator-editable verification rubric —
-            // identity (name/description/color/icon/skills) stays locked,
-            // soul does not. See the System-agent banner below.
+            // Backend field descriptors keep ordinary built-in base instructions
+            // read-only. Judge and PlanSupervisor instructions remain editable
+            // while their capabilities stay fixed.
             soulReadOnly={!isFieldEditable('soul')}
           />
 
@@ -1875,6 +1869,7 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
                 agentType={agent.type}
                 isLocked={isLocked}
                 isEditable={isFieldEditable('tool_policy_changes')}
+                isMcpEditable={isFieldEditable('mcp_servers')}
                 tools={toolsCfg}
                 onChange={setToolsCfg}
                 onRevisionChange={(revision) => {
@@ -1916,7 +1911,8 @@ export function AgentProfile({ agentId: agentIdProp }: AgentProfileProps = {}) {
               <div className="space-y-3">
                 {!isFieldEditable('skills') ? (
                   <p className="text-xs text-[var(--color-muted)]">
-                    Skill assignment is read-only for locked core agents.
+                    {(agent.editable_fields ?? []).find((field) => field.name === 'skills')?.reason
+                      ?? 'Skill assignment is not editable for this agent.'}
                   </p>
                 ) : (
                   <p className="text-xs text-[var(--color-muted)]">

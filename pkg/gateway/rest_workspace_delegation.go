@@ -133,7 +133,7 @@ func (a *restAPI) handleWorkspaceDelegationGet(w http.ResponseWriter, _ *http.Re
 	}
 	state, err := workspace.ReadState(a.homePath, id)
 	if err != nil {
-		jsonErr(w, http.StatusNotFound, "workspace not found")
+		writeWorkspaceReadError(w, err)
 		return
 	}
 	ws := state.Workspace
@@ -205,7 +205,7 @@ func (a *restAPI) handleWorkspaceDelegationPut(w http.ResponseWriter, r *http.Re
 		case errors.Is(revisionErr, workspace.ErrRevisionConflict):
 			jsonErr(w, http.StatusConflict, revisionErr.Error())
 		default:
-			jsonErr(w, http.StatusNotFound, "workspace not found")
+			writeWorkspaceReadError(w, revisionErr)
 		}
 		return
 	}

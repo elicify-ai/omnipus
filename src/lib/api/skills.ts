@@ -7,6 +7,7 @@ import {
   Skill as SkillSchema,
   SkillSearchResult as SkillSearchResultSchema,
   SkillMarketplaceStatus as SkillMarketplaceStatusSchema,
+  ConfigurationMutationState as ConfigurationMutationStateSchema,
   // Slash-command harmonization (contract-first #8):
   SlashCommand as SlashCommandSchema,
 } from '@/lib/api/generated/schemas'
@@ -15,6 +16,7 @@ import type {
   SkillSearchResult,
   SkillMarketplaceStatus,
   SkillInstallRequest,
+  ConfigurationMutationState,
   // Slash-command harmonization (contract-first #8):
   SlashCommand,
 } from '@/lib/api/generated/openapi-types'
@@ -131,16 +133,26 @@ export async function fetchSkills(): Promise<Skill[]> {
       out.push(parsed.data as Skill)
     } else dropped++
   }
-  if (dropped > 0 && import.meta.env?.DEV) {
-
-    console.warn(`fetchSkills: dropped ${dropped} skill(s) that failed schema validation`)
+  if (dropped > 0) {
+    if (import.meta.env?.DEV) {
+      console.warn(`fetchSkills: dropped ${dropped} skill(s) that failed schema validation`)
+    } else if (import.meta.env?.MODE !== 'test') {
+      logError({
+        event: 'skillSchemaDrop',
+        droppedCount: dropped,
+        totalCount: raw.length,
+      })
+    }
   }
   return out
 }
 
-export function deleteSkill(name: string, revision: string): Promise<void> {
-  // no-schema: void response; DELETE has no body.
-  return request<void>(`/skills/${encodeURIComponent(name)}?${new URLSearchParams({ revision })}`, { method: 'DELETE' })
+export function deleteSkill(id: string, revision: string): Promise<ConfigurationMutationState> {
+  return requestConfiguration<ConfigurationMutationState>(
+    `/skills/${encodeURIComponent(id)}?${new URLSearchParams({ revision })}`,
+    { method: 'DELETE' },
+    ConfigurationMutationStateSchema as ZodType<ConfigurationMutationState>,
+  )
 }
 
 // ── Slash commands ─────────────────────────────────────────────────────────────

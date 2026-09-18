@@ -2,6 +2,7 @@ package skills
 
 import (
 	"io/fs"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -24,7 +25,8 @@ func TestADR090_PromptSkillToolReferences_RoleSkillPackagesAreComplete(t *testin
 			}
 		}
 		for _, retired := range []string{"system.skill.create", "system.skill.edit", "system.workspace.create", "spawn", "subagent"} {
-			if strings.Contains(body, retired) {
+			// Match complete names: subagent_3p remains a valid agent type.
+			if regexp.MustCompile(`\b` + regexp.QuoteMeta(retired) + `\b`).MatchString(body) {
 				t.Errorf("role skill %q references retired operation %q", name, retired)
 			}
 		}

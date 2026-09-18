@@ -163,6 +163,12 @@ var previewedLazyToolNames = map[string]struct{}{
 // TestAdministrativeToolNames_Drift — do not hand-edit this map without
 // updating that test's literal list too.
 var administrativeToolNames = map[string]struct{}{
+	// environment_setup (ADR-090 ES-FR-01, review finding GS-22): installs
+	// packages into the shared-scope .omnipus/env subtree — install-wide
+	// state. Classifying it here narrows only ToolSearch's speculative
+	// cross-category promotion; it is NOT a policy mechanism (the tool's
+	// policy is the ordinary two-level ask) and does not make it Admin-only.
+	"environment_setup":        {},
 	"delete_agent":             {},
 	"delete_task":              {},
 	"delete_task_in_workspace": {},

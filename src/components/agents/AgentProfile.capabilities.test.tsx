@@ -31,10 +31,19 @@ vi.mock('@/lib/api', async (importOriginal) => {
     fetchSkills: vi.fn(),
     fetchProviders: vi.fn(),
     testAgentRunner: vi.fn(),
+    fetchAgentTools: vi.fn(),
+    fetchGlobalToolPolicies: vi.fn(),
   }
 })
 
-import { fetchRegistryTools, fetchAgent, fetchProviders, fetchSkills } from '@/lib/api'
+import {
+  fetchAgent,
+  fetchAgentTools,
+  fetchGlobalToolPolicies,
+  fetchProviders,
+  fetchRegistryTools,
+  fetchSkills,
+} from '@/lib/api'
 
 const lockedAgent: Agent = {
   revision: '0'.repeat(64),
@@ -68,6 +77,13 @@ function switchTab(testId: string) {
 beforeEach(() => {
   vi.mocked(fetchAgent).mockReset()
   vi.mocked(fetchRegistryTools).mockReset().mockResolvedValue([])
+  vi.mocked(fetchAgentTools).mockReset().mockResolvedValue({
+    revision: '0'.repeat(64),
+    override_names: [],
+    config: { builtin: { policies: {} }, mcp: { servers: [] } },
+    tools: [],
+  })
+  vi.mocked(fetchGlobalToolPolicies).mockReset().mockResolvedValue({ policies: {} })
   vi.mocked(fetchSkills).mockReset().mockResolvedValue([])
   vi.mocked(fetchProviders).mockReset().mockResolvedValue([])
   useUiStore.setState({ editAgentId: 'mia', toasts: [] })
@@ -94,4 +110,3 @@ describe('AgentProfile — ADR090 tool policy descriptor', () => {
     else expect(warning).toBeInTheDocument()
   })
 })
-

@@ -363,6 +363,25 @@ func mountsToWire(home, id string) *[]wireMount {
 // because mounts no longer live on the record and are loaded from their own
 // store (see mountsToWire).
 func workspaceToWire(home string, w storedWorkspace, taskCount int) gen.Workspace {
+	return workspaceToWireFrom(home, w, taskCount, nil)
+}
+
+func workspacePutGraph(rw *restAPIHandleWorkspacePut) *workspace.State {
+	edges := rw.state.Delegation
+	if rw.delegationChanged {
+		edges = rw.delegation
+	}
+	revision, err := workspace.RevisionForState(rw.ws, edges)
+	if err != nil {
+		revision = rw.state.Revision
+	}
+	return &workspace.State{Workspace: rw.ws, Delegation: edges, Revision: revision}
+}
+
+// workspaceToWireFrom maps a workspace record to the wire type. When graph is
+// non-nil it is the team/graph snapshot from the same ReadState/write as w —
+// do not LoadDelegation again after LockID is released (WO-1).
+func workspaceToWireFrom(home string, w storedWorkspace, taskCount int, graph *workspace.State) gen.Workspace {
 	createdAt, err := time.Parse(time.RFC3339, w.CreatedAt)
 	if err != nil {
 		slog.Warn("rest: workspace: invalid created_at timestamp", "id", w.ID, "raw", w.CreatedAt)
@@ -438,35 +457,44 @@ func workspaceToWire(home string, w storedWorkspace, taskCount int) gen.Workspac
 	// FR-5/FR-8.2: mounts, with each entry's status computed live (never
 	// stored — see mountsToWire's doc comment).
 	wire.Mounts = mountsToWire(home, w.ID)
-	if edges, ok := workspace.LoadDelegation(home, w.ID); ok {
+	var edges []workspace.DelegationEdge
+	if graph != nil {
+		edges = graph.Delegation
+		wire.Revision = graph.Revision
+	} else {
+		loaded, ok := workspace.LoadDelegation(home, w.ID)
+		if !ok {
+			return wire
+		}
+		edges = loaded
 		if revision, err := workspace.RevisionForState(w, edges); err == nil {
 			wire.Revision = revision
 		}
-		if len(edges) > 0 {
-			delegation := make([]struct {
+	}
+	if len(edges) > 0 {
+		delegation := make([]struct {
+			Depth     *int                            `json:"depth,omitempty"`
+			FromAgent string                          `json:"from_agent"`
+			Modes     *[]gen.WorkspaceDelegationModes `json:"modes,omitempty"`
+			ToAgent   string                          `json:"to_agent"`
+		}, 0, len(edges))
+		for _, edge := range edges {
+			modes := make([]gen.WorkspaceDelegationModes, len(edge.Modes))
+			for i, mode := range edge.Modes {
+				modes[i] = gen.WorkspaceDelegationModes(mode)
+			}
+			var modePtr *[]gen.WorkspaceDelegationModes
+			if len(modes) > 0 {
+				modePtr = &modes
+			}
+			delegation = append(delegation, struct {
 				Depth     *int                            `json:"depth,omitempty"`
 				FromAgent string                          `json:"from_agent"`
 				Modes     *[]gen.WorkspaceDelegationModes `json:"modes,omitempty"`
 				ToAgent   string                          `json:"to_agent"`
-			}, 0, len(edges))
-			for _, edge := range edges {
-				modes := make([]gen.WorkspaceDelegationModes, len(edge.Modes))
-				for i, mode := range edge.Modes {
-					modes[i] = gen.WorkspaceDelegationModes(mode)
-				}
-				var modePtr *[]gen.WorkspaceDelegationModes
-				if len(modes) > 0 {
-					modePtr = &modes
-				}
-				delegation = append(delegation, struct {
-					Depth     *int                            `json:"depth,omitempty"`
-					FromAgent string                          `json:"from_agent"`
-					Modes     *[]gen.WorkspaceDelegationModes `json:"modes,omitempty"`
-					ToAgent   string                          `json:"to_agent"`
-				}{edge.Depth, edge.FromAgent, modePtr, edge.ToAgent})
-			}
-			wire.Delegation = &delegation
+			}{edge.Depth, edge.FromAgent, modePtr, edge.ToAgent})
 		}
+		wire.Delegation = &delegation
 	}
 	return wire
 }
@@ -904,17 +932,34 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	jsonCreated(w, wire)
 }
 
+func writeWorkspaceReadError(w http.ResponseWriter, err error) {
+	if errors.Is(err, workspace.ErrInvalidWorkspaceID) {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
+		return
+	}
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, errWorkspaceNotFound) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if errors.Is(err, workspace.ErrDelegationUnreadable) {
+		jsonErr(w, http.StatusInternalServerError, "workspace delegation record is unreadable")
+		return
+	}
+	jsonErr(w, http.StatusInternalServerError, "workspace record is unreadable")
+}
+
 func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id string) {
 	if err := validateEntityID(id); err != nil {
 		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
-	ws, ok := a.loadWorkspace(w, id)
-	if !ok {
+	state, err := workspace.ReadState(a.homePath, id)
+	if err != nil {
+		writeWorkspaceReadError(w, err)
 		return
 	}
 	// FR-1.9: owner is attribution only — no access gate.
-	jsonOK(w, workspaceToWire(a.homePath, ws, countTasksForWorkspace(a.homePath, id)))
+	jsonOK(w, workspaceToWireFrom(a.homePath, state.Workspace, countTasksForWorkspace(a.homePath, id), &state))
 }
 
 // restAPIHandleWorkspacePut carries the shared state of handleWorkspacePut across its stages.
@@ -1412,7 +1457,7 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 	// No-op: nothing changed — return current state without writing.
 	if !rw.changed && !rw.delegationChanged {
-		jsonOK(rw.w, workspaceToWire(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id)))
+		jsonOK(rw.w, workspaceToWireFrom(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id), workspacePutGraph(rw)))
 		return
 	}
 
@@ -1436,7 +1481,7 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 			writeJSON(rw.w, http.StatusInternalServerError, gen.ConfigurationMutationState{
 				PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatusPartial,
 				ActivationStatus:  gen.ConfigurationMutationStateActivationStatusNotAttempted,
-				Revision:          revision, ChangedFields: append([]string(nil), rw.changedFields[:len(rw.changedFields)-1]...), ErrorStage: &stage, Message: &message,
+				Revision:          revision, ChangedFields: append([]string{}, rw.changedFields[:len(rw.changedFields)-1]...), ErrorStage: &stage, Message: &message,
 			})
 			return
 		}
@@ -1460,7 +1505,7 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 			slog.Warn("audit write failed", "event", "workspace.update", "id", rw.id, "error", err)
 		}
 	}
-	wire := workspaceToWire(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id))
+	wire := workspaceToWireFrom(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id), workspacePutGraph(rw))
 	wire.ChangedFields = &rw.changedFields
 	jsonOK(rw.w, wire)
 }
@@ -1805,16 +1850,31 @@ func (rd *restAPIHandleWorkspaceDelete) auditAndRespond() {
 	// in the media library via GET /workspaces/{id}/media.
 	if rd.mediaCascadeFailed || rd.dirRemoveFailed {
 		msg := "workspace deleted, but media library cleanup failed; see server logs"
+		stage := "remove_media"
 		switch {
 		case rd.mediaCascadeFailed && rd.dirRemoveFailed:
 			msg = "workspace deleted, but media library cleanup and on-disk directory removal both failed; see server logs"
+			stage = "remove_media_and_directory"
 		case rd.dirRemoveFailed:
 			msg = "workspace record deleted, but the on-disk workspace directory could not be fully removed; see server logs"
+			stage = "remove_directory"
 		}
-		jsonErr(rd.w, http.StatusInternalServerError, msg)
+		writeJSON(rd.w, http.StatusInternalServerError, gen.ConfigurationMutationState{
+			PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatusPartial,
+			ActivationStatus:  gen.ConfigurationMutationStateActivationStatusNotAttempted,
+			Revision:          workspace.EmptyRevision(),
+			ChangedFields:     []string{"workspace"},
+			ErrorStage:        &stage,
+			Message:           &msg,
+		})
 		return
 	}
-	rd.w.WriteHeader(http.StatusNoContent)
+	writeJSON(rd.w, http.StatusOK, gen.ConfigurationMutationState{
+		PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatusComplete,
+		ActivationStatus:  gen.ConfigurationMutationStateActivationStatusActive,
+		Revision:          workspace.EmptyRevision(),
+		ChangedFields:     []string{"workspace"},
+	})
 }
 
 // releaseHeartbeatSessionsForWorkspace deletes the standing heartbeat session for

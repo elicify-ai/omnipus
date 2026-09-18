@@ -166,16 +166,17 @@ func TestAmbiguity_ZeroOrNegativeScoreNeverPromoted(t *testing.T) {
 	}
 }
 
-// TestAdministrativeToolNames_Drift pins ADR-071 §3.2.1's 13-name
-// "destructive-and-install-wide" seed and the coverage tripwire regex,
-// mirroring the established TestVisibility_PreviewedSetIsExactlyNine /
+// TestAdministrativeToolNames_Drift pins ADR-071 §3.2.1's "destructive-and-
+// install-wide" seed (14 names since ADR-090's environment_setup, GS-22) and
+// the coverage tripwire regex, mirroring the established
+// TestVisibility_PreviewedSetIsExactlyNine /
 // TestCatalog_MatchesGlobalCeilingEntryForEntry pattern.
 func TestAdministrativeToolNames_Drift(t *testing.T) {
 	want := []string{
 		"delete_agent", "delete_task", "delete_task_in_workspace", "delete_workspace",
 		"remove_mcp_server", "remove_skill", "disable_channel", "enable_channel",
 		"add_mcp_server", "configure_channel", "configure_provider", "set_config",
-		"stop_plan",
+		"stop_plan", "environment_setup",
 	}
 	got := AdministrativeToolNames()
 	if len(got) != len(want) {

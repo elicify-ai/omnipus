@@ -26,6 +26,8 @@ import {
   isApiError,
   fetchWorkspaceInstructions,
   updateWorkspaceInstructions,
+  getCsrfCookie,
+  CSRF_HEADER_NAME,
 } from '@/lib/api'
 import type { Workspace } from '@/lib/api'
 
@@ -33,19 +35,8 @@ interface WorkspaceSettingsTabProps {
   workspace: Workspace
 }
 
-// Item 4 / item 10: same inline auth-token read the rest of the app uses
-// (sessionStorage preferred, localStorage fallback — see WorkspaceTeamTab's
-// readAuthToken for the sibling pattern; the hook's own built-in flush now
-// rides the CSRF header instead, post-ADR-044). No shared accessor exists
-// (getAuthHeaders is module-private in src/lib/api.ts), so this is the
-// established convention rather than a new one.
-function readAuthToken(): string | undefined {
-  if (typeof sessionStorage === 'undefined') return undefined
-  return (
-    sessionStorage.getItem('omnipus_auth_token') ??
-    localStorage.getItem('omnipus_auth_token') ??
-    undefined
-  )
+function instructionsRevisionOf(data: { content: string; revision?: string }): string {
+  return typeof data.revision === 'string' ? data.revision : ''
 }
 
 /**
@@ -63,6 +54,12 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
   const [description, setDescription] = useState(workspace.description ?? '')
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [instructionsContent, setInstructionsContent] = useState('')
+  // Reviewed AGENT.md revision from the last successful GET/save. Held in a
+  // ref so the acknowledgement token is not part of useAutoSave's dirty-data
+  // comparator — a revision-only update must not look like a new edit (WO-4).
+  // Never replaced by a newer GET while the draft is dirty — that would let a
+  // retry overwrite someone else's text (ADR-090 FR-007).
+  const instructionsRevisionRef = useRef('')
 
   // Draft-ownership rule (see useAutoSave's `onSaved` doc comment): a dirty
   // field is never overwritten by server data. Each auto-saved field group
@@ -173,6 +170,7 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
     identityDirtyRef.current = false
     instructionsDirtyRef.current = false
     setInstructionsHydrated(false)
+    instructionsRevisionRef.current = ''
     // D3 residual (2nd site) fix: re-arm the identity group's readiness gate
     // in the SAME mid-render reset — see `identityHydrated`'s doc comment
     // above for why this must happen here rather than in a separate effect.
@@ -219,6 +217,10 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
     // `instructionsHydrated` is true).
     if (!instructionsDirtyRef.current) {
       setInstructionsContent(instructionsData.content)
+      const reviewed = instructionsRevisionOf(instructionsData)
+      if (reviewed) {
+        instructionsRevisionRef.current = reviewed
+      }
     }
     setInstructionsHydrated(true)
   }, [instructionsData])
@@ -240,19 +242,23 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
   // close / page hide / backgrounding, mirroring AgentProfile's `flushUrl`
   // pattern. A plain `flushUrl` can't be used here because the tracked
   // `data` carries `workspaceId` (for the item-10 guard above), which is
-  // NOT part of the wire body (`{content}` only, per
-  // `updateWorkspaceInstructions`) — `beaconFlush` lets us keep watching
+  // NOT part of the wire body (`{content, revision}`) — `beaconFlush` lets us keep watching
   // the tagged object for isCurrent/dirty purposes while still sending the
-  // correct wire shape.
+  // correct wire shape. Auth is the HttpOnly session cookie (`credentials:
+  // 'include'`) plus the CSRF double-submit header — same as useAutoSave's
+  // default flush. A JS bearer is not attached (ADR-044).
   const instructionsBeaconFlush = useCallback(() => {
-    const token = readAuthToken()
+    const revision = instructionsRevisionRef.current
+    if (!revision) return
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (token) headers['Authorization'] = `Bearer ${token}`
+    const csrf = getCsrfCookie()
+    if (csrf) headers[CSRF_HEADER_NAME] = csrf
     void fetch(`/api/v1/workspaces/${encodeURIComponent(workspace.id)}/instructions`, {
       method: 'PUT',
       keepalive: true,
+      credentials: 'include',
       headers,
-      body: JSON.stringify({ content: instructionsContent }),
+      body: JSON.stringify({ content: instructionsContent, revision }),
     }).catch((err) => {
       // Match the useAutoSave.ts unmount-flush precedent: a failed
       // best-effort flush is at least discoverable in the console rather
@@ -267,7 +273,14 @@ export function WorkspaceSettingsTab({ workspace }: WorkspaceSettingsTabProps) {
       // Item 10: a stale timer from a workspace we've since navigated away
       // from — no-op instead of writing its draft into the CURRENT workspace.
       if (data.workspaceId !== workspace.id) return
-      await updateWorkspaceInstructions(workspace.id, data.content)
+      const revision = instructionsRevisionRef.current
+      if (!revision) {
+        throw new Error('Workspace instructions revision is not available yet')
+      }
+      const saved = await updateWorkspaceInstructions(workspace.id, data.content, revision)
+      if (data.workspaceId === workspace.id && saved.revision) {
+        instructionsRevisionRef.current = saved.revision
+      }
       await queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.instructions(workspace.id) })
     },
     {

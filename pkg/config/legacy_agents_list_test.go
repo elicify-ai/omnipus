@@ -138,22 +138,34 @@ func TestConfigClone_EmptyAgentsList(t *testing.T) {
 	}
 }
 
+// adr090SeededRoster is ADR-090 §2.0's stable roster identities, written out
+// here as the spec-derived oracle for the mirror tests below: the four chat
+// colleagues (mia/jim/ava/admin), the three staff (planner/researcher/worker),
+// and the two hidden System Agents (judge/plansupervisor). Ray, Max and
+// Explorer are explicitly NOT seeded (ADR-090 §2.0 "Out of the default box").
+// Kept literal — pkg/config cannot import pkg/coreagent (import cycle) — but
+// sourced from the ADR's roster table, NOT copied off coreAgentIDs, so the
+// two can disagree and these tests are what notices.
+var adr090SeededRoster = []string{
+	"mia", "jim", "ava", "admin",
+	"planner", "researcher", "worker",
+	"judge", "plansupervisor",
+}
+
 // TestStripAgentsListOnDisk_ClassifiesEverySeededID pins the whole seeded
 // roster, not a sample of it. coreAgentIDs is a hand-maintained mirror of
 // pkg/coreagent's roster (the import cycle makes a derived list impossible),
-// so the realistic failure is that a NEW seeded agent is added to coreagent
-// and nobody updates the mirror — which is exactly what happened to
-// plansupervisor: a legacy config.json carrying it was reported to the
-// operator with the alarming "real, operator-authored data loss" WARN for an
-// agent that SeedConfig recreates moments later on the same boot.
+// so the realistic failure is that a roster change lands in coreagent and
+// nobody updates the mirror — which is exactly what happened twice:
+// plansupervisor (a legacy config.json carrying it was reported with the
+// alarming "real, operator-authored data loss" WARN for an agent that
+// SeedConfig recreates moments later on the same boot), and ADR-090's roster
+// swap (admin/planner/researcher/worker missing, retired ray still present).
 //
 // This asserts the property (every seeded ID classifies as core) rather than
 // the map's contents, so it fails on the omission rather than on a rewrite.
 func TestStripAgentsListOnDisk_ClassifiesEverySeededID(t *testing.T) {
-	// Mirrors pkg/coreagent's seeded roster: the four base agents plus the
-	// System Agents. Kept literal for the same import-cycle reason as
-	// coreAgentIDs itself.
-	seeded := []string{"mia", "jim", "ava", "ray", "judge", "plansupervisor"}
+	seeded := adr090SeededRoster
 
 	for _, id := range seeded {
 		t.Run(id, func(t *testing.T) {
@@ -179,6 +191,65 @@ func TestStripAgentsListOnDisk_ClassifiesEverySeededID(t *testing.T) {
 				t.Errorf("coreIDs = %v, want [%s]", coreIDs, id)
 			}
 		})
+	}
+}
+
+// TestStripAgentsListOnDisk_RetiredIDsAreCustomNotCore is the inverse of
+// ClassifiesEverySeededID. ADR-090 §2.0 / §2.5 retire Ray, Max and Explorer:
+// SeedConfig no longer recreates them, so a leftover agents.list entry for
+// any of those IDs is real operator-authored data, not a benign core drop.
+// Classifying them as core would log the "auto-reseeded moments after boot"
+// WARN, which is false for a retired identity.
+func TestStripAgentsListOnDisk_RetiredIDsAreCustomNotCore(t *testing.T) {
+	retired := []string{"ray", "max", "explorer"}
+	for _, id := range retired {
+		t.Run(id, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.json")
+			raw := `{"version":1,"agents":{"list":[{"id":"` + id + `","name":"X"}]}}`
+			if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+				t.Fatalf("write fixture: %v", err)
+			}
+			coreIDs, customIDs, written, err := stripAgentsListOnDisk(path)
+			if err != nil {
+				t.Fatalf("stripAgentsListOnDisk failed: %v", err)
+			}
+			if written == nil {
+				t.Fatal("expected the legacy list to be stripped")
+			}
+			if len(coreIDs) != 0 {
+				t.Errorf("retired agent %q was reported as a CORE id (%v) — the operator is "+
+					"told SeedConfig will auto-reseed it, but ADR-090 does not seed %q. "+
+					"Remove %q from coreAgentIDs.", id, coreIDs, id, id)
+			}
+			if len(customIDs) != 1 || customIDs[0] != id {
+				t.Errorf("customIDs = %v, want [%s]", customIDs, id)
+			}
+		})
+	}
+}
+
+// TestCoreAgentIDsMirror_ExactADR090Roster pins BOTH directions of the
+// import-cycle mirror: every ADR-090 seeded ID is present, and no extra
+// (retired or invented) ID remains. ClassifiesEverySeededID alone cannot
+// catch a leftover "ray" key; RetiredIDsAreCustomNotCore catches three
+// known retirees; this test catches any fourth leftover.
+func TestCoreAgentIDsMirror_ExactADR090Roster(t *testing.T) {
+	want := make(map[string]bool, len(adr090SeededRoster))
+	for _, id := range adr090SeededRoster {
+		want[id] = true
+		if !coreAgentIDs[id] {
+			t.Errorf("coreAgentIDs missing seeded id %q — a legacy agents.list drop of this id "+
+				"is logged as unrecoverable custom-ID data loss even though SeedConfig recreates it", id)
+		}
+	}
+	for id := range coreAgentIDs {
+		if !want[id] {
+			t.Errorf("coreAgentIDs still contains %q, which is not an ADR-090 §2.0 seeded identity — "+
+				"a leftover agents.list drop of this id is logged as a benign core reseed", id)
+		}
+	}
+	if len(coreAgentIDs) != len(adr090SeededRoster) {
+		t.Errorf("coreAgentIDs has %d keys, ADR-090 roster has %d", len(coreAgentIDs), len(adr090SeededRoster))
 	}
 }
 

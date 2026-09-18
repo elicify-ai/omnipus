@@ -10,14 +10,12 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
 	"os/exec"
 	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
-	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 	"github.com/elicify-ai/omnipus/pkg/sandbox"
 )
@@ -67,6 +65,7 @@ func (t *ExecTool) runBackground(
 	command, cwd, baseDir string,
 	timeoutSeconds int32,
 	lim sandbox.Limits,
+	execEnv []string,
 	ownerSessionID string,
 	cb AsyncCallback,
 ) *ToolResult {
@@ -93,16 +92,14 @@ func (t *ExecTool) runBackground(
 	// which only sets fields on an already-non-nil SysProcAttr.
 	prepareCommandForTermination(cmd)
 
-	if t.godMode {
-		cmd.Env = scrubbedEnv(os.Environ())
-	} else {
-		cmd.Env = sandboxLimitsEnv(lim)
+	// execEnv is the per-turn composition from executeRun (composeExecutionEnv):
+	// scrubbed host environ under god mode, sandboxLimitsEnv baseline otherwise —
+	// composed over by the per-turn runtime layers. No construction-time layer.
+	cmd.Env = execEnv
+	if !t.godMode {
 		if err := sandbox.ApplyChildHardening(cmd, lim); err != nil {
 			return ErrorResult(fmt.Sprintf("sandbox hardening failed: %v", err))
 		}
-	}
-	if t.documentRuntime != nil {
-		cmd.Env = documentruntime.ChildEnvironment(cmd.Env, *t.documentRuntime)
 	}
 
 	stdoutReader, err := cmd.StdoutPipe()
@@ -120,7 +117,12 @@ func (t *ExecTool) runBackground(
 	if t.godMode {
 		startErr = cmd.Start()
 	} else {
-		startErr = sandbox.StartLocked(cmd)
+		// CRIT-1 (ADR-090 security review): the background path must carry the
+		// DERIVED PER-TURN kernel policy — the same one sandbox.Run applies on
+		// the foreground path — not the boot-global profile. StartLocked
+		// (nil policy) is exactly the boot-profile fallback and silently
+		// widened background children relative to foreground ones.
+		startErr = sandbox.StartLockedWithPolicy(cmd, lim.KernelPolicy)
 	}
 	if startErr != nil {
 		return ErrorResult(fmt.Sprintf("failed to start command: %v", startErr))

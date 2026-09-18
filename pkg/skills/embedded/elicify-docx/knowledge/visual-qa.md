@@ -30,8 +30,9 @@ if not pdf.is_file() or pdf.stat().st_size == 0:
 
 Use a fresh preview directory for each revision so a stale PDF cannot pass the
 existence check. LibreOffice is a separate prerequisite, not installed by
-python-docx. Missing renderer/fonts go through Admin in Omnipus; never claim
-rendering happened if it did not. An approved application export is also valid.
+python-docx. Missing renderer/fonts are blockers; follow the already-loaded
+harness runtime notes. Never claim rendering happened if it did not. An approved
+application export is also valid.
 
 Rasterize the PDF with the Elicify PDF skill or an approved PDF renderer into
 numbered PNG pages at readable resolution (start around 150–200 DPI). Open each

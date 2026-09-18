@@ -15,13 +15,18 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
-func TestNewAgentInstanceWiresDocumentRuntimeForApprovedRoles(t *testing.T) {
+// TestNewAgentInstanceWiresDocumentRuntimeForAllNativeAgents pins the ES-FR-04
+// context-based availability rule: EVERY native agent — including the Deny-matrix
+// roles (Jim, Researcher) and a custom agent — gets the managed document runtime
+// view. Availability follows the turn context; POLICY, not registration, decides
+// who can invoke what. The old Mia/worker/Admin gate is retired.
+func TestNewAgentInstanceWiresDocumentRuntimeForAllNativeAgents(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 	// The macOS acceptance environment supplies Python from the project toolchain;
 	// external document dependencies intentionally remain absent in this test.
 	t.Setenv("PATH", "/Users/danielpiatkowski/Documents/Agent-Workspace/elicify-Skills/.venv/bin"+string(os.PathListSeparator)+os.Getenv("PATH"))
-	for _, id := range []string{"mia", "worker", "admin"} {
+	for _, id := range []string{"mia", "worker", "admin", "jim", "researcher"} {
 		t.Run(id, func(t *testing.T) {
 			cfg := config.DefaultConfig()
 			cfg.Agents.Defaults.Home = filepath.Join(home, "agents")
@@ -30,7 +35,7 @@ func TestNewAgentInstanceWiresDocumentRuntimeForApprovedRoles(t *testing.T) {
 			if instance.DocumentRuntime == nil {
 				t.Fatal("document runtime was not wired")
 			}
-			want, err := documentruntime.ResolveLayout(home, documentruntime.ManifestRevision, id)
+			want, err := documentruntime.ResolveLayout(home, documentruntime.ManifestRevision, "shared")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -40,6 +45,9 @@ func TestNewAgentInstanceWiresDocumentRuntimeForApprovedRoles(t *testing.T) {
 			if _, err = os.Stat(want.Manifest); err != nil {
 				t.Fatalf("manifest not provisioned: %v", err)
 			}
+			// The probe must run through the registered bash (the exempt argv)
+			// and report the missing external dependency as structured output —
+			// readiness is the agent's own check, never an app assertion.
 			bash, ok := instance.Tools.Get("bash")
 			if !ok {
 				t.Fatal("bash not registered")
@@ -52,27 +60,20 @@ func TestNewAgentInstanceWiresDocumentRuntimeForApprovedRoles(t *testing.T) {
 				t.Fatalf("probe must report the incomplete dependency as structured output: %+v", result)
 			}
 
+			// The retired Admin finalize route must stay retired: the magic
+			// command is an ordinary command now, whatever the caller's role.
 			finalize := bash.Execute(tools.WithAgentID(context.Background(), id), map[string]any{"command": documentruntime.FinalizeCommand})
 			if !finalize.IsError {
-				t.Fatalf("unready runtime unexpectedly finalized: %+v", finalize)
+				t.Fatalf("finalize must not be intercepted for %s: %+v", id, finalize)
 			}
-			wantMessage := "restricted to Admin"
-			if id == "admin" {
-				wantMessage = "setup incomplete"
+			if strings.Contains(finalize.ForLLM, `"status":"ready"`) || strings.Contains(finalize.ForLLM, "restricted to Admin") {
+				t.Fatalf("finalize interception survived for %s: %+v", id, finalize)
 			}
-			if !strings.Contains(finalize.ForLLM, wantMessage) {
-				t.Fatalf("finalize result=%q want substring %q", finalize.ForLLM, wantMessage)
-			}
-			if id == "admin" {
-				for _, path := range []string{filepath.Join(want.Bin, "python"), filepath.Join(want.Bin, "node"), filepath.Join(want.Bin, "soffice")} {
-					if err = os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-						t.Fatal(err)
-					}
-				}
-				finalize = bash.Execute(tools.WithAgentID(context.Background(), id), map[string]any{"command": documentruntime.FinalizeCommand})
-				if finalize.IsError || !strings.Contains(finalize.ForLLM, `"status":"ready"`) {
-					t.Fatalf("Admin finalization failed through registered bash: %+v", finalize)
-				}
+
+			// environment_setup is registered live for every native agent
+			// (ES-FR-01); its Ask matrix is seeded policy, not registration.
+			if _, ok := instance.Tools.Get("environment_setup"); !ok {
+				t.Fatalf("environment_setup not registered for %s", id)
 			}
 		})
 	}
@@ -115,20 +116,31 @@ func TestNewAgentLoopDocumentSkillPublishesProvisionedRuntime(t *testing.T) {
 	}
 }
 
-func TestNewAgentInstanceDoesNotWireDocumentRuntimeForOtherRoles(t *testing.T) {
+// TestNewAgentInstanceWiresDocumentRuntimeForCustomAgent covers ES-BDD-02's
+// category: a custom native agent with no special role gets the same runtime
+// view — document skills included — with no delegation edges required.
+func TestNewAgentInstanceWiresDocumentRuntimeForCustomAgent(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
 	cfg := config.DefaultConfig()
 	cfg.Agents.Defaults.Home = filepath.Join(home, "agents")
-	agentCfg := config.AgentConfig{ID: "jim", Name: "Jim", Type: config.AgentTypeCore}
+	agentCfg := config.AgentConfig{ID: "custom-doc-agent", Name: "Custom", Type: config.AgentTypeCore}
 	instance := NewAgentInstance(&agentCfg, &cfg.Agents.Defaults, cfg, &mockProvider{})
-	if instance.DocumentRuntime != nil {
-		t.Fatalf("Jim unexpectedly received document runtime: %+v", instance.DocumentRuntime)
+	if instance.DocumentRuntime == nil {
+		t.Fatal("custom agent unexpectedly lacks the document runtime view")
 	}
+	if _, ok := instance.Tools.Get("environment_setup"); !ok {
+		t.Fatal("custom agent lacks environment_setup registration")
+	}
+	// Skill-tool REGISTRATION is a loop-layer concern (the instance ships the
+	// runtime view the skill load publishes into) — proven end to end by
+	// TestNewAgentLoopDocumentSkillPublishesProvisionedRuntime on native
+	// agents; a bare instance must expose the runtime, not the registry
+	// surface of a higher layer.
 }
 
 func TestProvisionFirstPartyPreservesFinalizedManifest(t *testing.T) {
-	layout, err := documentruntime.ResolveLayout(t.TempDir(), documentruntime.ManifestRevision, "admin")
+	layout, err := documentruntime.ResolveLayout(t.TempDir(), documentruntime.ManifestRevision, "shared")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +163,7 @@ func TestProvisionFirstPartyPreservesFinalizedManifest(t *testing.T) {
 }
 
 func TestProvisionFirstPartyIsSafeDuringConcurrentStartup(t *testing.T) {
-	layout, err := documentruntime.ResolveLayout(t.TempDir(), documentruntime.ManifestRevision, "mia")
+	layout, err := documentruntime.ResolveLayout(t.TempDir(), documentruntime.ManifestRevision, "shared")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,10 +200,14 @@ func TestProvisionFirstPartyIsSafeDuringConcurrentStartup(t *testing.T) {
 	}
 }
 
+// TestNewAgentInstanceProvisionFailureLeavesRuntimeUnwired keeps the failure
+// posture: when first-party provisioning fails, the runtime view stays
+// unwired, bash runs without the managed layer (and without any interception
+// of the retired finalize command).
 func TestNewAgentInstanceProvisionFailureLeavesRuntimeUnwired(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv(config.EnvHome, home)
-	layout, err := documentruntime.ResolveLayout(home, documentruntime.ManifestRevision, "mia")
+	layout, err := documentruntime.ResolveLayout(home, documentruntime.ManifestRevision, "shared")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +229,10 @@ func TestNewAgentInstanceProvisionFailureLeavesRuntimeUnwired(t *testing.T) {
 		t.Fatal("bash not registered")
 	}
 	result := bash.Execute(tools.WithAgentID(context.Background(), "mia"), map[string]any{"command": documentruntime.FinalizeCommand})
-	if !result.IsError || !strings.Contains(result.ForLLM, "not configured") {
-		t.Fatalf("failed provisioning must stay unavailable: %+v", result)
+	if !result.IsError {
+		t.Fatalf("finalize must be an ordinary failing command: %+v", result)
+	}
+	if strings.Contains(result.ForLLM, `"status":"ready"`) || strings.Contains(result.ForLLM, "restricted to Admin") {
+		t.Fatalf("finalize interception survived a failed provisioning: %+v", result)
 	}
 }

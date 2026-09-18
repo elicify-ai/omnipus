@@ -77,16 +77,9 @@ func TestSkill_ResolvedAllow_FreshCustomAgent(t *testing.T) {
 		"a freshly created custom agent must resolve Skill allow from its own seeded policy")
 }
 
-// TestSkill_Worker_InheritsGlobalCeiling_NoRedundantEntry pins the same
-// deliberate exception ToolSearch carries: the Worker's sparse
-// tightenGlobalCeiling map does NOT name Skill explicitly — it inherits the
-// tool from the global ceiling (pkg/config/defaults.go seeds "Skill":
-// "allow" there), matching the Worker's whole design principle ("sparse map,
-// inherit the ceiling for everything not deliberately tightened"). This
-// asserts BOTH halves: the seed literal has no Skill key, and the RESOLVED
-// policy is still allow — so an operator lowering the global ceiling
-// controls the Worker's Skill access, not a redundant per-agent entry that
-// would silently stop tracking the ceiling.
+// TestSkill_Worker_InheritsGlobalCeiling_NoRedundantEntry verifies that the
+// Worker seed records an explicit Allow entry for Skill, as required by the
+// ADR-090 discovery/skill-loading floor. The historical test name is retained.
 func TestSkill_Worker_InheritsGlobalCeiling_NoRedundantEntry(t *testing.T) {
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))

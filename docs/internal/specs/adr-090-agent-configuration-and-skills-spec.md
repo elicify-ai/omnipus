@@ -1,6 +1,6 @@
 # ADR-090 — Agent configuration and skills specification
 
-- **Status:** Grill-spec and independent Claude Code Opus reviews passed after corrections; L1 selects original Elicify skills; Omnipus implementation and runtime acceptance tests pending.
+- **Status:** Grill-spec and independent Claude Code Opus reviews passed after corrections; L1 selects original Elicify skills; implementation delivered with verification recorded in the [implementation and verification ledger](adr-090-implementation-status.md) and the [generic environment setup verification record](adr-090-environment-setup-verification.md); release review pending; native Windows explicitly deferred; Linux Office rendering pending UAT.
 - **Date:** 2026-09-17
 - **Authority:** [ADR-090 — Built-in agent configuration, skills, and visual file reading](../architecture/ADR-090-built-in-agents-skills-and-visual-reading.md), decisions D1–D5 and D7.
 - **Companion:** [Visual file reading specification](adr-090-visual-file-reading-spec.md), D6. Its acceptance is a release dependency for document workflows here.
@@ -64,7 +64,7 @@ Every agent receives permitted common tools immediately and discovers permitted 
 
 ### US-4 — Deliver documents with packaged skills (P1)
 
-Mia and General Purpose use complete document skills and their actual execution environments to deliver valid files. Admin handles missing dependencies through the supported handoff route.
+Mia and General Purpose use complete document skills and their actual execution environments to deliver valid files. Any permitted native agent requests user-approved application setup, including custom agents without delegation edges.
 
 **Why this priority:** Skill text without scripts, dependencies or accessible execution produces misleading capability claims.
 
@@ -72,7 +72,7 @@ Mia and General Purpose use complete document skills and their actual execution 
 
 **Acceptance Scenarios:**
 1. **Given** a fresh installation with packaged skills, **When** Mia or General Purpose completes a document request, **Then** it delivers a valid file using the selected workflow, with required visual validation complete.
-2. **Given** a missing dependency, **When** the worker requests setup, **Then** Admin performs supported setup through the permitted handoff route and the worker verifies its own environment before resuming.
+2. **Given** a missing dependency, **When** the worker requests setup, **Then** the actual user approves the environment_setup call through the existing Ask mechanism, the application performs supported setup, and the requesting worker verifies its own environment before resuming.
 3. **Given** unsupported setup or incomplete visual validation, **When** the workflow reaches that limitation, **Then** it remains incomplete and reports the limitation without fabricated success.
 4. **Given** a release candidate, **When** its skill package is verified, **Then** all selected skill versions, permissions to redistribute, dependencies and referenced helpers are evidenced, and retired defaults are absent.
 5. **Given** the assigned role skills, **When** each role performs their specified workflow, **Then** real tools produce the stated output and denied/missing prerequisites produce the specified limitation.
@@ -108,7 +108,7 @@ The system must not override operator global policy; explicit fresh-default chan
 
 Implement ADR-090 §§2–4 and §6.1 exactly, including chat/sidebar eligibility, default assignment, hidden roles and role-specific instructions. Do not seed retired Ray/Explorer/Max/default skills or domain packs. Do not delete pre-existing custom records as a migration. Ordinary built-in identity fields (`id`, `name`, `description`, `color`, `icon`, `locked`, built-in role classification) and base `soul` are fixed. Custom creation accepts only existing engine-facing types `Main`, `Subagent`, `subagent_3p`; reject `core`, `system`, built-in role IDs and caller-supplied `locked`. Type is immutable after creation for every agent. Do not expose a writable role identifier that lets custom agents impersonate General Purpose.
 
-For hidden Judge/Supervisor, fixed identity and capability seeds are re-enforced; user-authored soul content is preserved. For ordinary built-ins, tool/MCP/skill defaults apply only on record creation; intentional empty selections and removed overrides survive reload and restart. The existing global ceiling reconciliation remains; do not introduce per-agent policy backfill. The fresh-install-only skill rule already exists and must be preserved.
+For hidden Judge/Supervisor, fixed identity and capability seeds are re-enforced; user-authored soul content is preserved. For ordinary built-ins, tool/MCP/skill defaults apply only on record creation; intentional empty selections and removed overrides survive reload and restart. The existing global ceiling reconciliation remains; do not introduce per-agent policy backfill. The fresh-install-only skill rule already exists and must be preserved. Future built-in updates must preserve saved user settings unless the user explicitly chooses a reset, and must never automatically add new capability defaults to existing ordinary agents. This does not make hidden Judge/Supervisor capabilities editable or introduce upgrade migrations into scope.
 
 Fresh records use this exact identity mapping; no rename/type migration is included:
 
@@ -175,6 +175,8 @@ Extend `list_skills` with `scope: "usable" | "management"` (default usable) and 
 
 Add a deferred `get_agent_tools` management tool returning static tool catalog, installed connector tools, stored overrides/bindings and target effective policies; it does not require Ava to execute the target tool. It requires effective `get_agent_tools` permission and no broader credential access. Reuse `list_mcp_servers` for sanitized installed-server status; provide no environment secrets or credential values. Register every added tool in the static catalog, global ceiling and chosen role policy seed; do not silently grant management discovery to all roles through an Allow ceiling. Management tools' global ceiling permits explicit role grants; explicit ordinary-role denials enforce ADR exclusions under strictest-wins.
 
+Creation preflight: `get_agent_tools` accepts exactly one of an existing `id` or `new_agent_type` (`Main` or `Subagent`). The latter is a read-only preview built from the same custom-agent defaults used by creation, combined with the current global ceiling. It returns the complete default overrides/effective policies and empty connector assignments, explicitly marked `preview: true`, without a persisted agent ID or revision. It creates no files, entities or live instances. External CLI and built-in types are refused. Preview and existing-agent readback must report non-deniable ToolSearch as available. The preview is a snapshot, not a reservation; changed settings before apply still require normal readback/conflict handling. Ava must distinguish preserved defaults from proposed sparse changes rather than describe a sparse patch as an exclusive allowlist.
+
 ### FR-005 — Complete mutation and readback
 
 Extend `create_agent` with native `skills`, `mcp_servers`, `tool_policy_changes` and existing model/type inputs; its initial override set starts from the supported custom-agent defaults and applies explicit patch changes before publication. Reject capability fields on unsupported external runtimes. Extend `update_agent` with those fields, `revision`, and the shared field rules. Validate skill IDs, connector IDs and connector tool names against current inventory before committing. Denied effective grants are reported as restrictions in proposal/readback; no grant bypasses the ceiling.
@@ -208,7 +210,7 @@ Use exactly ADR-090 §5.4's 37 names globally:
 
 `ToolSearch, Skill, AskUserQuestion, bash, read_file, write_file, edit_file, append_file, list_directory, grep, list_mounts, library_list, library_read, get_workspace, search_web, fetch_url, list_agents, send_message, switch_agent, message_parent, send_file, remember, recall_memory, recall_conversation, set_todos, list_tasks, list_jobs, create_task, update_task, set_goal, goal_claim, delegate, create_plan, execute_plan, stop_plan, inspect_session, plan_correct`.
 
-Registration, permissions, session applicability and goal forcing still filter this set. `ToolSearch` may retain infrastructure classification. Full schema assembly, previews and offered-call validation MUST agree. New management tools above stay deferred. No per-agent visibility setting or full skill-body preload. Every role prompt names its standard tools and exact-name discovery rule from ADR §5.4.
+Registration, permissions, session applicability and goal forcing still filter this set. `ToolSearch` retains infrastructure classification and is intentionally always available on compressed turns — operator Deny of `ToolSearch` does not remove the discovery door (user clarification, 2026-09-18). Permissions still govern which *target* tools discovery may reveal, load, or execute. Goal forcing may still withhold `ToolSearch` on a narrowed first-move request. Full schema assembly, previews and offered-call validation MUST agree for every target tool. New management tools above stay deferred. No per-agent visibility setting or full skill-body preload. Every role prompt names its standard tools and exact-name discovery rule from ADR §5.4.
 
 Ship a catalog-derived role inventory mapping every tool to the approved group in ADR §5, effective seeded policy and prompt/skill workflow. It is generated as implementation evidence, reviewed against the catalog, and checked for no unclassified static tools; it must not generate a per-agent deny-all backfill. Explicit ADR exclusions require authored deny overrides wherever global defaults would permit them. Add explicit Ask overrides for send_email and reply on working roles granted those outbound operations; these are newly authored Ask defaults over current Allow ceilings. Exclude internal send_message/message_parent/handback from this send gate; send_file retains its existing delivery policy. Channel/email sending resolves Ask for the granted roles; Ava configuration writes default Allow under the one-question workflow, subject to the global ceiling.
 
@@ -258,11 +260,11 @@ Before release, commit a dependency/provenance inventory with upstream repositor
 
 ### FR-011 — Dependency ownership and honest completion
 
-Mia reports missing dependencies and hands setup to Admin. General Purpose reports to its parent/Jim, which requests Admin through the existing handoff; do not grant GP→Admin delegation. Admin's supported setup path includes execution/files and required installation permissions in the actual target environment. A host-only install does not satisfy a sandboxed execution probe. Unsupported platform/setup fails visibly without claiming success or transferring promised Admin work silently to the user. Tasks remain pending until the originating worker verifies the dependency and resumes. Keep visual validation incomplete when its companion workflow cannot succeed.
+The [environment setup specification](adr-090-environment-setup-spec.md) supersedes the former Admin installation/handoff contract. Add environment_setup as a normal deferred tool with **Ask** permission. The existing tool-approval mechanism is the approval; no separate plan/token/expiry workflow, second confirmation or special God-mode exception. Existing policy resolution and user overrides remain authoritative. Mia, General Purpose and Admin default to Ask; Jim, Ava, Planner and Researcher default to Deny; Judge/Supervisor remain locked Deny. Founder clarification: the existing global and per-agent levels must both be Ask for Mia, General Purpose, Admin and new custom native agents; do not prune the explicit Ask posture during sparse-policy reconciliation. There is no execution-dependent default logic. Creation and permission previews agree; skills grant no permissions and saved overrides remain preserved. Keep the global upfront set unchanged.
 
-The ADR records a scoped exception to the no-new-runtime-dependencies rule: the engine remains a pure-Go single binary; Python, Node and converters are external document-authoring prerequisites installed by Admin, not bundled engine services. Use one instance-owned prefix `<data-root>/toolchains/documents/<manifest-revision>/`, resolved to an absolute path at runtime. Its bin directory holds approved runtime/converter launchers, python resolves to that manifest's isolated environment, and Node helper modules resolve inside that prefix. Admin gets supported setup writes there; Mia/GP get read+execute only. Explicitly include required runtime/library paths in sandbox read/execute allow-paths on Linux/macOS/Windows; a host install or PATH setting does not itself grant Landlock access. Per-agent writable caches remain separate.
+Any permitted native agent, including custom Main/Subagent agents without delegation edges, requests dependencies through this tool. Workspace-local packages/caches are the default; shared runtime/native installations must be explicit in the normal approved call. The application manages shared installations, agents receive read/execute access, and skill assignment grants no setup, execution, network or file permissions. Replace role-ID wiring and Admin-only finalization; no Admin handoff is needed. Admin has cross-workspace filesystem access and can target a workspace without membership; each installation stays confined to its selected destination. Installation runs in the background with the existing Bash-style session_id and poll/read/kill lifecycle. Unattended Ask retains existing automatic denial, without a new approval queue. The pure-Go binary remains standalone.
 
-Prepend the resolved prefix bin to the child PATH without forwarding secrets. Each requesting worker runs the packaged first-party probe through its actual bash tool: `python -m omnipus_document_probe --manifest <absolute-prefix>/manifest.json --format all`. The probe checks manifest version constraints/imports/converter execution/helper assets, then generates and independently validates tiny DOCX/XLSX/PPTX/PDF outputs in that worker's writable workspace. Exit zero plus structured per-format success is required; missing components return nonzero with names. Admin's own result is insufficient. Unsupported installation/privilege remains pending and visible. Exact platform install commands must be certified against the selected Elicify package revision and each actual execution environment.
+The document skills’ dependency request covers Python and authoring libraries, LibreOffice, a supported PDF rasterizer and fonts; these are skill-provided requirements, not hardcoded tool recipes. The setup tool executes agent-supplied installation commands/scripts through existing Ask approval and must accept dependencies unknown to Omnipus at build time; Node is conditional on actual helper requirements. Use existing bounded installation/execution infrastructure, not an unrestricted host shell. After setup, the requesting agent checks actual generation, format validation, Office conversion and image rendering inside its own sandbox. Inspect real images through read_file and the companion visual-reading contract. A host install or --version check does not establish readiness; image creation does not prove visual inspection. Denial/failure preserves a resumable task and honest incomplete validation, without hidden permission grants or automatic approval retries.
 
 ### FR-012 — Observable outcomes and contract discipline
 
@@ -390,17 +392,17 @@ Each scenario has one triggering action. Error scenarios deliberately test failu
 - **When** it completes a request for each of Word, spreadsheet, presentation and PDF,
 - **Then** the eight outputs open in independent format validators, satisfy content assertions, pass required visual workflow and are actually delivered.
 
-### BDD-17 — Dependency setup handoff
+### BDD-17 — Approved dependency setup without delegation
 **Traces to:** US-4, Acceptance Scenario 2. **Category:** Happy Path.
 - **Given** one missing dependency in the worker's actual environment,
 - **When** the worker requests setup,
-- **Then** Mia→Admin or GP→parent/Jim→Admin performs permitted setup and the worker's own probe passes before work resumes.
+- **Then** the requesting agent uses environment_setup, the authenticated user approves the tool call through existing Ask, and the application installs it; the agent's own sandbox probe and rendering check pass before work resumes. Repeat with a custom agent having no delegation edges.
 
 ### BDD-18 — Unsupported setup or inspection
 **Traces to:** US-4, Acceptance Scenario 3. **Category:** Error Path.
 - **Given** an unavailable installer, denied setup, unsupported platform or missing visual capability,
 - **When** the document workflow reaches that prerequisite,
-- **Then** it identifies the limitation and keeps work/validation incomplete without GP delegating directly to Admin.
+- **Then** it identifies the limitation and keeps work/validation incomplete without routing setup to Admin or claiming visual inspection.
 
 ### BDD-19 — Release package inventory
 **Traces to:** US-4, Acceptance Scenario 4. **Category:** Happy Path.
@@ -566,10 +568,10 @@ Run these existing tests in their appropriate CI suites. Preserve their behavior
 - **SC-004:** Forced conflicts at each authoritative resource boundary produce no stale writes; interrupted creates produce zero duplicates; publication failures are reported as saved-but-inactive.
 - **SC-005:** With compressed manifests enabled, fresh-session upfront names equal the eligible permitted intersection with exactly 37 approved names for every role; at least one deferred role tool is discovered and actually used.
 - **SC-006:** All explicit role exclusions and global ceiling tests pass; GP cannot delegate to either a different built-in role or custom same-runtime worker.
-- **SC-007:** Eight real document outputs (two roles × four formats) pass independent format/content checks and companion visual acceptance; supported dependency recovery is observed from both handoff routes.
+- **SC-007:** Eight real document outputs (two roles × four formats) pass independent format/content checks and companion visual acceptance; approved dependency recovery is observed for Mia, GP and a custom agent without delegation edges, including actual sandbox rendering; environment setup ES-SC-01 through ES-SC-04 also pass.
 - **SC-008:** Every shipped skill/helper has immutable provenance and redistribution evidence; zero retired defaults or missing package dependencies remain in the release evidence.
 - **SC-009:** New contracts regenerate without drift and automated correctness is reported separately from real workflow reachability.
-- **SC-010:** All 15 role-skill workflows and four interview branches pass real-tool evaluations; fresh Admin installation succeeds; delegated Ava can apply user-confirmed changes without a session-type gate; an unbound MCP tool is refused even with an already loaded definition.
+- **SC-010:** All 15 role-skill workflows and four interview branches pass real-tool evaluations; fresh Admin connector installation succeeds; delegated Ava can apply user-confirmed changes without a session-type gate; an unbound MCP tool is refused even with an already loaded definition.
 
 | Requirement | User story / AS | BDD | Planned test(s) | Success |
 |---|---|---|---|---|
@@ -590,7 +592,7 @@ Run these existing tests in their appropriate CI suites. Preserve their behavior
 | FR-003,FR-005 | US-1 AS4 | 20 | MCPAssignmentEnforcedAtCall | SC-006,010 |
 | FR-007 | US-2 AS6 | 21 | Ava conversational confirmation | SC-003,010 |
 | FR-007 | US-2 AS4,5 | 22 | SoulEntityCommitConcurrency | SC-004 |
-| FR-008,FR-011 | US-4 AS6 | 23 | AdminMCPFreshCeiling | SC-010 |
+| FR-008 | US-4 AS6 | 23 | AdminMCPFreshCeiling | SC-010 |
 
 Test short names refer to the uniquely named full entries in §7. Contract generation/verification is an additional CI gate for SC-009, not a substitute for scenario tests. Every AS and every BDD, including revision scenarios 20–25, is represented; holdouts below are intentionally excluded from TDD traceability.
 
@@ -604,7 +606,7 @@ These are public evaluation protocols, not secret fixtures. After implementation
 | H2 | Happy | Edit ordinary built-in assignments and hidden reviewer instructions through Settings, restart, and observe different intended working/review behavior. |
 | H3 | Happy | Request a mixed-format document bundle with unseen content; open every output and inspect its corrected final layout. |
 | H4 | Error | Revoke a required capability after discovery but before applying a proposal; observe an honest conflict/limitation without permission bypass. |
-| H5 | Error | Disable a required document dependency in the worker environment; observe pending work and supported Admin recovery or explicit unsupported result. |
+| H5 | Error | Disable a required document dependency in the worker environment; observe pending work, existing Ask approval and application-managed recovery, or an explicit unsupported result. |
 | H6 | Edge | Interrupt immediately after a teammate is created; resume and verify there is one teammate and a correct remaining-work proposal. |
 | H7 | Edge | Have two people edit an agent and its workspace graph concurrently using independently chosen changes; observe preserved unrelated edits and explicit conflicts. |
 

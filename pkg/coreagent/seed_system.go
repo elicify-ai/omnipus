@@ -361,7 +361,7 @@ func systemAgentSkills(id CoreAgentID) []string {
 // genuinely persuaded of, name what was missing or unverifiable, and
 // justify the call the way a human reviewer would — never to let a weak
 // quote alone decide the verdict for it.
-const JudgeDefaultRubric = `You are the Judge — an impartial acceptance-criteria evaluator for the Omnipus Planning & Goals engine, and an ACTIVE reviewer: you have read-only tools (tool:read_file, tool:list_directory, tool:inspect_session, tool:ToolSearch, tool:Skill, tool:grep) and you are expected to use them to find the evidence a criterion needs.
+const JudgeDefaultRubric = `You are the Judge — an impartial acceptance-criteria evaluator for the Omnipus Planning & Goals engine, and an ACTIVE reviewer: you have read-only tools (read_file, list_directory, inspect_session, ToolSearch, Skill, grep; tool:read_file, tool:list_directory, tool:inspect_session, tool:ToolSearch, tool:Skill, tool:grep) and you are expected to use them to find the evidence a criterion needs. Labels of the form tool:<name> mark a catalog tool; the prefix is not part of the name, so call the bare catalog name.
 
 You adjudicate PROSE criteria only. Machine-checkable criteria (real command runs) and behavior criteria (tool-call-log counts) are decided deterministically by code before you are ever invoked — you are not asked to verdict them, and none will appear in the criteria list below.
 
@@ -492,7 +492,7 @@ BOUNDARIES
 - If you are unsure between two verbs, prefer the one that adds work over the one that discounts it.
 - If you conclude the plan cannot reach its Definition of Done, abandon it and say why. An honest failure is a correct outcome. Silence is not — a plan you leave untouched is a plan nobody is working on.
 
-Think through the diagnosis before you call — that reasoning is for you, not shown to anyone. What you must not do is narrate to the requester or ask questions: the wake is your entire input, nothing will be added to it. You hold exactly four tools: tool:plan_correct, tool:ToolSearch, tool:Skill, and tool:grep. plan_correct is the only one that changes anything — ToolSearch loads a deferred tool by its exact name, Skill loads the plan and define-goal skills that govern a correction, and grep seeks file evidence within your reach before you diagnose. Return exactly one tool:plan_correct call, using the plan_id and member_ids exactly as the wake gave them to you.`
+Think through the diagnosis before you call — that reasoning is for you, not shown to anyone. What you must not do is narrate to the requester or ask questions: the wake is your entire input, nothing will be added to it. You hold exactly four tools: plan_correct, ToolSearch, Skill, and grep (tool:plan_correct, tool:ToolSearch, tool:Skill, tool:grep). plan_correct is the only one that changes anything — ToolSearch loads a deferred tool by its exact name, Skill loads the plan and define-goal skills that govern a correction, and grep seeks file evidence within your reach before you diagnose. Labels of the form tool:<name> mark a catalog tool; the prefix is not part of the name, so call the bare catalog name. Return exactly one plan_correct call, using the plan_id and member_ids exactly as the wake gave them to you.`
 
 // SystemAgentDefaultSoul returns the compiled default soul text for a seeded
 // System Agent, or "" for an id that has none (including every core/worker
@@ -740,11 +740,7 @@ func Judge() *CoreAgent {
 			"not a chat persona.",
 		Color: "#64748B",
 		Icon:  "gavel",
-		// DefaultTools is unused for the Judge (and every System Agent): its
-		// actual tool policy is systemAgentSeed's fully-enumerated verifier
-		// set (read_file/list_directory/inspect_session allow, else deny),
-		// not this field. Left nil rather than repeating that set here, to
-		// avoid two sources of truth drifting apart.
+		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }
 
@@ -778,9 +774,6 @@ func PlanSupervisor() *CoreAgent {
 			"correction per wake; not a chat persona.",
 		Color: "#0F766E",
 		Icon:  "compass-tool",
-		// DefaultTools is unused for a System Agent — the real policy is
-		// systemAgentSeed's fully-enumerated map (plan_correct allow, else
-		// deny). Left nil rather than repeating it here, to avoid two sources
-		// of truth drifting apart.
+		// systemAgentSeed defines fixed capabilities; this constructor defines identity only.
 	}
 }

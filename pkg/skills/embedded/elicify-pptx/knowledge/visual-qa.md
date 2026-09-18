@@ -36,8 +36,9 @@ if not pdf.is_file() or pdf.stat().st_size == 0:
 Here paths are resolved absolute project paths; `libreoffice_executable` is the
 approved binary. Start with an empty output directory to exclude stale files.
 A separate LibreOffice installation and suitable fonts are required; python-pptx
-does not include them. Missing prerequisites go to Admin in Omnipus. Do not
-claim a LibreOffice export verifies PowerPoint animation/playback compatibility.
+does not include them. Missing prerequisites are blockers; follow the already-loaded
+harness runtime notes. Do not claim a LibreOffice export verifies PowerPoint
+animation/playback compatibility.
 
 Use the Elicify PDF skill or an approved PDF renderer to create one PNG per
 slide. Open every image through a tool returning actual image content. A contact

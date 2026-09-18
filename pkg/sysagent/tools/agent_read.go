@@ -9,6 +9,7 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/entity"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -42,12 +43,25 @@ func (t *AgentGetTool) Execute(_ context.Context, args map[string]any) *tools.To
 		return tools.ErrorResult(errorJSON("READ_FAILED", err.Error(), ""))
 	}
 	overrides := storedOverrideNames(state.Agent)
+	activation := agentstore.ActivationNotAttempted
+	if t.deps != nil && t.deps.AgentActiveRevision != nil && t.deps.AgentActiveRevision(id) == state.Revision {
+		activation = agentstore.ActivationActive
+	}
+	defaultAgent := state.Agent.Default
+	if t.deps != nil && t.deps.GetCfg != nil {
+		if cfg := t.deps.GetCfg(); cfg != nil {
+			defaultAgent = cfg.Agents.Defaults.DefaultAgentID == state.Agent.ID
+		}
+	}
 	resp := map[string]any{
 		"id": state.Agent.ID, "name": state.Agent.Name, "description": state.Agent.Description,
 		"type": wireAgentType(*state.Agent), "soul": state.Soul, "skills": nonNilStrings(state.Agent.Skills),
 		"mcp_servers": storedMCPBindings(state.Agent), "stored_tool_overrides": storedOverrides(state.Agent),
 		"override_names": overrides, "model": state.Agent.Model, "revision": state.Revision,
-		"activation_status": "active", "editable_fields": editableDescriptors(*state.Agent),
+		"activation_status": activation, "editable_fields": editableDescriptors(*state.Agent),
+		"memory_enabled": state.Agent.MemoryEnabled, "default": defaultAgent, "voice": state.Agent.Voice,
+		"shell_policy": state.Agent.ShellPolicy, "context_window_override": state.Agent.ContextWindowOverride,
+		"model_params": state.Agent.ModelParams,
 	}
 	return tools.NewToolResult(successJSON(resp))
 }
@@ -58,24 +72,44 @@ func NewAgentGetToolsTool(d *Deps) *AgentGetToolsTool { return &AgentGetToolsToo
 func (t *AgentGetToolsTool) Name() string             { return "get_agent_tools" }
 func (t *AgentGetToolsTool) Scope() tools.ToolScope   { return tools.ScopeCore }
 func (t *AgentGetToolsTool) Description() string {
-	return "Read the static and installed connector tool inventory with a target agent's stored assignments and effective policies. This does not grant or execute target tools."
+	return "Read tool inventory and effective policies. Supply either id for an existing agent or new_agent_type (Main or Subagent) to preview native creation defaults before proposing a new agent. Preview is read-only, has no persisted id/revision, and includes no connector assignments. In preview, stored_tool_overrides contains creation defaults before proposed changes, not user-applied overrides. Main and Subagent share these defaults. Sparse creation patches modify only named policies; omitted policies retain their defaults. This does not grant or execute target tools."
 }
 func (t *AgentGetToolsTool) Parameters() map[string]any {
-	return map[string]any{"type": "object", "properties": map[string]any{"id": map[string]any{"type": "string"}}, "required": []string{"id"}}
+	return map[string]any{
+		"type": "object", "additionalProperties": false,
+		"properties": map[string]any{
+			"id":             map[string]any{"type": "string", "description": "Existing agent ID; omit for creation preview."},
+			"new_agent_type": map[string]any{"type": "string", "enum": []string{"Main", "Subagent"}, "description": "Preview native creation defaults without creating an agent; mutually exclusive with id."},
+		},
+	}
 }
 func (t *AgentGetToolsTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
 	id, _ := args["id"].(string)
-	if err := validateID(id); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
+	rawType, preview := args["new_agent_type"]
+	var state *agentstore.State
+	if preview {
+		kind, ok := rawType.(string)
+		_, hasID := args["id"]
+		if hasID || !ok || (kind != "Main" && kind != "Subagent") {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", "Supply exactly one existing id or new_agent_type Main/Subagent", ""))
+		}
+		// Both native types use this same constructor in agentCreateToolExecute.
+		// Preview in memory without touching the agent store.
+		state = &agentstore.State{Agent: &config.AgentConfig{Tools: coreagent.NewCustomAgentToolsCfg()}}
+	} else {
+		if err := validateID(id); err != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
+		}
+		home, err := resolveOmnipusHome(t.deps.Home)
+		if err != nil {
+			return tools.ErrorResult(errorJSON("WORKSPACE_ERROR", err.Error(), ""))
+		}
+		state, err = agentstore.New(home).ReadState(id)
+		if err != nil {
+			return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND", err.Error(), "Use list_agents"))
+		}
 	}
-	home, err := resolveOmnipusHome(t.deps.Home)
-	if err != nil {
-		return tools.ErrorResult(errorJSON("WORKSPACE_ERROR", err.Error(), ""))
-	}
-	state, err := agentstore.New(home).ReadState(id)
-	if err != nil {
-		return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND", err.Error(), "Use list_agents"))
-	}
+
 	global := map[string]string{}
 	if t.deps.GetCfg != nil {
 		if cfg := t.deps.GetCfg(); cfg != nil {
@@ -93,11 +127,36 @@ func (t *AgentGetToolsTool) Execute(_ context.Context, args map[string]any) *too
 			effective[name] = strictest(policy, config.ToolPolicy(global[name]))
 		}
 	}
-	return tools.NewToolResult(successJSON(map[string]any{
+	// Discovery is always available, even when stored policy says deny.
+	effective["ToolSearch"] = "allow"
+	connectorCatalog := map[string][]string{}
+	if t.deps != nil {
+		for server, names := range t.deps.currentInventory().LiveMCPTools {
+			connectorCatalog[server] = sortedSetKeys(names)
+		}
+	}
+	response := map[string]any{
 		"id": id, "revision": state.Revision, "override_names": storedOverrideNames(state.Agent),
 		"stored_tool_overrides": storedOverrides(state.Agent), "mcp_servers": storedMCPBindings(state.Agent),
 		"effective_policies": effective, "static_catalog": sortedStringKeys(global),
-	}))
+		"connector_catalog": connectorCatalog,
+	}
+	if preview {
+		delete(response, "id")
+		delete(response, "revision")
+		response["preview"] = true
+		response["new_agent_type"] = rawType
+	}
+	return tools.NewToolResult(successJSON(response))
+}
+
+func sortedSetKeys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for name := range m {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func storedOverrides(a *config.AgentConfig) map[string]config.ToolPolicy {

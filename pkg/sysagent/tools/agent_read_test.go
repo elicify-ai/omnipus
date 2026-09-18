@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
@@ -65,7 +67,16 @@ func TestGetAgentToolsReturnsCatalogEffectivePoliciesAndStoredOverrideNames(t *t
 	}
 	cfg := &config.Config{}
 	cfg.Sandbox.ToolPolicies = map[string]string{"bash": "allow", "read_file": "allow"}
-	result := systools.NewAgentGetToolsTool(&systools.Deps{Home: home, GetCfg: func() *config.Config { return cfg }}).Execute(context.Background(), map[string]any{"id": agent.ID})
+	deps := &systools.Deps{Home: home, GetCfg: func() *config.Config { return cfg }}
+	deps.AgentConfigInventory = func() systools.AgentConfigInventory {
+		return systools.AgentConfigInventory{
+			ConfiguredMCP: map[string]struct{}{"mail": {}},
+			LiveMCPTools: map[string]map[string]struct{}{
+				"mail": {"mcp_mail_send": {}, "send": {}},
+			},
+		}
+	}
+	result := systools.NewAgentGetToolsTool(deps).Execute(context.Background(), map[string]any{"id": agent.ID})
 	if result.IsError {
 		t.Fatalf("result=%s", result.ForLLM)
 	}
@@ -79,5 +90,59 @@ func TestGetAgentToolsReturnsCatalogEffectivePoliciesAndStoredOverrideNames(t *t
 	policies := got["effective_policies"].(map[string]any)
 	if policies["bash"] != "deny" || policies["read_file"] != "allow" {
 		t.Fatalf("effective=%v", policies)
+	}
+	connectors, ok := got["connector_catalog"].(map[string]any)
+	if !ok {
+		t.Fatalf("connector_catalog=%T %v, want sanitized per-server live tool inventory", got["connector_catalog"], got["connector_catalog"])
+	}
+	mail, ok := connectors["mail"].([]any)
+	if !ok || len(mail) != 2 || mail[0] != "mcp_mail_send" || mail[1] != "send" {
+		t.Fatalf("connector_catalog.mail=%v, want sorted public and remote names", connectors["mail"])
+	}
+}
+
+func TestGetAgentActivationRequiresPublishedRevisionMatch(t *testing.T) {
+	home := t.TempDir()
+	agent := config.AgentConfig{ID: "writer", Name: "Writer"}
+	if err := agentstore.New(home).Create(agent.ID, &agent); err != nil {
+		t.Fatal(err)
+	}
+	state, err := agentstore.New(home).ReadState(agent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	deps := &systools.Deps{Home: home, AgentIsLive: func(string) bool { return true }}
+	field := reflect.ValueOf(deps).Elem().FieldByName("AgentActiveRevision")
+	if !field.IsValid() {
+		t.Fatal("Deps.AgentActiveRevision is missing; registry membership alone cannot prove the persisted revision is active")
+	}
+	setRevision := func(revision string) {
+		field.Set(reflect.ValueOf(func(id string) string {
+			if id == agent.ID {
+				return revision
+			}
+			return ""
+		}))
+	}
+	readStatus := func() any {
+		result := systools.NewAgentGetTool(deps).Execute(context.Background(), map[string]any{"id": agent.ID})
+		if result.IsError {
+			t.Fatalf("get_agent failed: %s", result.ForLLM)
+		}
+		var got map[string]any
+		if err := json.Unmarshal([]byte(result.ForLLM), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got["activation_status"]
+	}
+
+	setRevision(strings.Repeat("0", 64))
+	if got := readStatus(); got != string(agentstore.ActivationNotAttempted) {
+		t.Fatalf("stale live instance status=%v, want not_attempted", got)
+	}
+	setRevision(state.Revision)
+	if got := readStatus(); got != string(agentstore.ActivationActive) {
+		t.Fatalf("matching published revision status=%v, want active", got)
 	}
 }

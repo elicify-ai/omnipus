@@ -29,6 +29,13 @@ func ValidateRevision(revision string) error {
 	return nil
 }
 
+// EmptyRevision is the SHA-256 of no bytes. Used when a resource has been
+// removed so no read path can echo a live revision (FR-007 delete envelope).
+func EmptyRevision() string {
+	sum := sha256.Sum256(nil)
+	return hex.EncodeToString(sum[:])
+}
+
 func RevisionForState(w Workspace, edges []DelegationEdge) (string, error) {
 	w.UpdatedAt = ""
 	canonical, err := json.Marshal(struct {

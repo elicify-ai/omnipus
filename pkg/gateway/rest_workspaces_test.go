@@ -218,8 +218,8 @@ func TestHandleWorkspaces_Delete_Returns204(t *testing.T) {
 	rDel := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	rDel.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wDel, rDel)
-	assert.Equal(t, http.StatusNoContent, wDel.Code, "DELETE /workspaces/{id} must return 204")
-	assert.Empty(t, wDel.Body.String(), "DELETE response body must be empty")
+	assert.Equal(t, http.StatusOK, wDel.Code, "DELETE /workspaces/{id} must return 200 envelope")
+	assert.Contains(t, wDel.Body.String(), `"persistence_status"`)
 
 	// DELETE nonexistent → 404.
 	wNot := httptest.NewRecorder()
@@ -252,7 +252,7 @@ func TestHandleWorkspaces_CascadeDelete_RemovesTasks(t *testing.T) {
 	rDel := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	rDel.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wDel, rDel)
-	require.Equal(t, http.StatusNoContent, wDel.Code, "DELETE /workspaces/{id} must return 204")
+	require.Equal(t, http.StatusOK, wDel.Code, "DELETE /workspaces/{id} must return 200 envelope")
 
 	// Task file must be gone.
 	_, err = os.Stat(taskPath)
@@ -313,7 +313,7 @@ func TestHandleWorkspaces_CascadeDelete_RemovesMailboxes(t *testing.T) {
 	rDel := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	rDel.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wDel, rDel)
-	require.Equal(t, http.StatusNoContent, wDel.Code, "DELETE /workspaces/{id} must return 204")
+	require.Equal(t, http.StatusOK, wDel.Code, "DELETE /workspaces/{id} must return 200 envelope")
 
 	raw, err := os.ReadFile(filepath.Join(api.homePath, "config.json"))
 	require.NoError(t, err)
@@ -544,8 +544,8 @@ func TestHandleWorkspaces_ConcurrentDelete(t *testing.T) {
 	// Step 5: Assert both responses had status 204 or 404 (never 500).
 	for i, res := range results {
 		assert.True(t,
-			res.code == http.StatusNoContent || res.code == http.StatusNotFound,
-			"goroutine %d: concurrent DELETE must return 204 or 404, got %d; body=%s",
+			res.code == http.StatusOK || res.code == http.StatusNotFound,
+			"goroutine %d: concurrent DELETE must return 200 or 404, got %d; body=%s",
 			i, res.code, res.body,
 		)
 		assert.NotEqual(t, http.StatusInternalServerError, res.code,
