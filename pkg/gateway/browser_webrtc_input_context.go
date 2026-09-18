@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -73,6 +74,7 @@ func newWebRTCContextInputSinkWithDispatchSampling(validateInbound bool, samplin
 	// counts the rest, so the signal is bounded (at most one line per reason)
 	// rather than one line per input event. Input is high-rate; an unbounded
 	// log here would be its own defect.
+	var dispatched atomic.Int64
 	var dropMu sync.Mutex
 	dropSeen := map[string]int{}
 	dropOnce := func(reason, viewerID string, detail any) {
@@ -145,6 +147,19 @@ func newWebRTCContextInputSinkWithDispatchSampling(validateInbound bool, samplin
 		}
 		in.SourceContext = ctx
 		err := dispatch(ctx, route.manager, route.panelSessionID, viewerID, in)
+		// POSITIVE signal. Every other line in this sink reports a FAILURE, so
+		// "0 drops, 0 dispatch failures" is equally consistent with "everything
+		// flowed" and "nothing ever arrived" — an ambiguity that cost a full
+		// round on the ui-browser shard. One line on the first successful
+		// dispatch per sink removes it; the rest are counted, not logged.
+		if err == nil {
+			if dispatched.Add(1) == 1 {
+				slog.Warn("browser-webrtc: first input DISPATCHED to the browser",
+					"viewer_id", viewerID, "kind", frame.Kind,
+					"capture_width", frame.CaptureWidth, "capture_height", frame.CaptureHeight,
+					"note", "first success for this sink; further dispatches are counted, not logged")
+			}
+		}
 		if probe != nil {
 			probe.outcome = browserTimingOutcome(err)
 			if browser.IsBenignLiveInputError(err) {
