@@ -3,6 +3,7 @@ package webrtc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"sync"
@@ -63,6 +64,26 @@ type dedicatedInputQueue struct {
 	activeDeadline                   time.Time
 	expiry                           *time.Timer
 	observeQueue                     func(generated.BrowserInputFrame, InputQueueTiming)
+	dropNoted                        map[string]bool // silent-suppression paths already reported (diagnostic)
+}
+
+// noteDropLocked reports, at most once per distinct reason per queue, a frame
+// that reached submit() and was silently NOT enqueued. Those paths return ""
+// — no fail(), no log — by design (duplicate suppression, control takeover),
+// but each one is indistinguishable from "the SPA never sent" to an operator
+// reading the gateway log. That ambiguity is exactly the shape the ui-browser
+// shard's input failures wore: every hop instrumented and clean, zero frames
+// dispatched, nothing anywhere saying why. One Warn line per reason bounds
+// the noise while making the silent paths observable.
+func (q *dedicatedInputQueue) noteDropLocked(reason string) {
+	if q.dropNoted == nil {
+		q.dropNoted = make(map[string]bool)
+	}
+	if q.dropNoted[reason] {
+		return
+	}
+	q.dropNoted[reason] = true
+	dedicatedInputLogf("input frame silently NOT enqueued: %s", reason)
 }
 
 func newDedicatedInputQueue(parent context.Context, peer, control int, sink func(context.Context, generated.BrowserInputFrame), fail func(string)) *dedicatedInputQueue {
@@ -337,12 +358,14 @@ func (q *dedicatedInputQueue) submit(hover bool, f generated.BrowserInputFrame) 
 }
 func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInputFrame) string {
 	if q.closed || q.paused || q.ctx.Err() != nil {
+		q.noteDropLocked(fmt.Sprintf("queue not accepting (closed=%t paused=%t ctx_err=%v)", q.closed, q.paused, q.ctx.Err()))
 		return ""
 	}
 	if !validInputCounter(f.InputEpoch, 1) || !validInputCounter(f.ControlEpoch, 0) || !validInputCounter(f.GestureBarrier, 0) {
 		return "invalid input identity"
 	}
 	if *f.InputEpoch != q.peer || *f.ControlEpoch != q.control {
+		q.noteDropLocked(fmt.Sprintf("identity mismatch: frame(input_epoch=%d control_epoch=%d) queue(peer=%d control=%d)", *f.InputEpoch, *f.ControlEpoch, q.peer, q.control))
 		return ""
 	}
 	if hover {
@@ -350,6 +373,7 @@ func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInput
 			return "invalid hover payload"
 		}
 		if *f.GestureBarrier != q.barrier || len(q.held) > 0 || *f.HoverSeq <= q.hoverSequence {
+			q.noteDropLocked(fmt.Sprintf("hover not admitted (barrier frame=%d queue=%d held=%d hover_seq frame=%d queue=%d)", *f.GestureBarrier, q.barrier, len(q.held), *f.HoverSeq, q.hoverSequence))
 			return ""
 		}
 		q.hoverSequence = *f.HoverSeq
@@ -364,6 +388,7 @@ func (q *dedicatedInputQueue) enqueueLocked(hover bool, f generated.BrowserInput
 			return "invalid reliable sequence"
 		}
 		if *f.ReliableSeq <= q.reliable {
+			q.noteDropLocked(fmt.Sprintf("reliable seq not advancing (frame=%d last=%d)", *f.ReliableSeq, q.reliable))
 			return ""
 		}
 		if *f.ReliableSeq != q.reliable+1 {
