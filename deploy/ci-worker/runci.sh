@@ -1030,17 +1030,46 @@ run_e2e() {
     # actually running. Closing fd 9 in the child means an orphaned Xvfb can no
     # longer hold the worker hostage. Any other long-lived background child
     # added here needs the same treatment.
-    Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >"$TMPDIR/xvfb.log" 2>&1 9>&- &
-    _XVFB_PID=$!
-    export DISPLAY=:99
-    # Give the server a moment, then confirm it is actually up rather than
-    # assuming: a dead Xvfb and no Xvfb look identical to a launching browser.
-    sleep 2
-    if kill -0 "$_XVFB_PID" 2>/dev/null; then
-      log "e2e: virtual display :99 up (pid $_XVFB_PID)"
-    else
-      echo "WARNING: Xvfb died on startup — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect. See $TMPDIR/xvfb.log" >&2
-      unset DISPLAY _XVFB_PID
+    # An Xvfb ORPHANED by a killed run keeps display :99 and its /tmp/.X99-lock,
+    # and every later run then dies with "Server is already active for display
+    # 99" — one ungraceful shutdown wedges the preview-headed shard until the
+    # machine is rebuilt. Observed 2026-09-17/18: a stray Xvfb from a killed run
+    # failed every subsequent shard at browserType.launch in 2ms.
+    #
+    # So: ADOPT a healthy existing display rather than failing, and only clear
+    # a lock whose owner is genuinely gone. Never pkill-by-pattern on this box.
+    _xvfb_display_ok() { command -v xdpyinfo >/dev/null 2>&1 && xdpyinfo -display :99 >/dev/null 2>&1; }
+    _XVFB_PID=""
+    if [ -f /tmp/.X99-lock ]; then
+      _owner=$(tr -dc '0-9' < /tmp/.X99-lock 2>/dev/null)
+      if [ -n "$_owner" ] && kill -0 "$_owner" 2>/dev/null; then
+        # Live owner. Adopt it if it actually serves; do NOT record a pid we did
+        # not start, or the RETURN trap would kill another run's display.
+        export DISPLAY=:99
+        if _xvfb_display_ok || [ ! -x "$(command -v xdpyinfo 2>/dev/null)" ]; then
+          log "e2e: adopting existing virtual display :99 (owner pid $_owner, not started by this run — will not be reaped)"
+        else
+          echo "WARNING: display :99 is held by pid $_owner but does not answer; leaving it alone and continuing without a display" >&2
+          unset DISPLAY
+        fi
+      else
+        log "e2e: clearing a stale X99 lock (owner ${_owner:-unknown} is gone)"
+        rm -f /tmp/.X99-lock "/tmp/.X11-unix/X99" 2>/dev/null || true
+      fi
+    fi
+    if [ -z "${DISPLAY:-}" ]; then
+      Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp >"$TMPDIR/xvfb.log" 2>&1 9>&- &
+      _XVFB_PID=$!
+      export DISPLAY=:99
+      # Give the server a moment, then confirm it is actually up rather than
+      # assuming: a dead Xvfb and no Xvfb look identical to a launching browser.
+      sleep 2
+      if kill -0 "$_XVFB_PID" 2>/dev/null; then
+        log "e2e: virtual display :99 up (pid $_XVFB_PID)"
+      else
+        echo "WARNING: Xvfb died on startup — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect. See $TMPDIR/xvfb.log" >&2
+        unset DISPLAY _XVFB_PID
+      fi
     fi
   elif [ -z "${DISPLAY:-}" ]; then
     echo "WARNING: no Xvfb on this box — the preview-headed shard will fail at browserType.launch, and that is an ENVIRONMENT failure, not a code defect" >&2
