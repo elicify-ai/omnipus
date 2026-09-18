@@ -268,7 +268,7 @@ func TestAgentToolsPUT_NoReAuthToken_Succeeds(t *testing.T) {
 	require.NoError(t, err)
 	policies := make(map[string]string)
 	for name := range buildKnownBuiltinToolNames() {
-		policy := string(api.agentLoop.GetConfig().Sandbox.ToolPolicies[name])
+		policy := api.agentLoop.GetConfig().Sandbox.ToolPolicies[name]
 		if policy == "" {
 			policy = "deny"
 		}

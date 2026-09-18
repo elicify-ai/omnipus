@@ -60,7 +60,14 @@ var skillMutationLocks sync.Map
 func mutationLock(root string) *sync.Mutex {
 	key := filepath.Clean(root)
 	value, _ := skillMutationLocks.LoadOrStore(key, &sync.Mutex{})
-	return value.(*sync.Mutex)
+	mu, ok := value.(*sync.Mutex)
+	if !ok {
+		// Impossible by construction: only this function stores into the
+		// private map, always &sync.Mutex{}. Fail loudly rather than return
+		// a nil lock, which would silently drop mutation serialization.
+		panic(fmt.Sprintf("skills: mutation lock entry for %q is %T, want *sync.Mutex", key, value))
+	}
+	return mu
 }
 
 // WithMutationLock serializes every checked mutation of a skill tree rooted at
@@ -85,7 +92,7 @@ func (w *SkillWriter) SkillRevision(name string) (string, error) {
 
 func revisionForDir(dir string) (string, error) {
 	if _, err := os.Stat(filepath.Join(dir, "SKILL.md")); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return "", ErrNotFound
 		}
 		return "", err
@@ -119,9 +126,9 @@ func revisionForDir(dir string) (string, error) {
 			return err
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(path)
-			if err != nil {
-				return err
+			target, readlinkErr := os.Readlink(path)
+			if readlinkErr != nil {
+				return readlinkErr
 			}
 			_, err = io.WriteString(h, target)
 			return err
@@ -156,7 +163,7 @@ func (w *SkillWriter) CreateSkillReviewed(name, content string) (path, revision 
 		revision, createErr = w.SkillRevision(name)
 		return createErr
 	})
-	return
+	return path, revision, err
 }
 
 func (w *SkillWriter) EditSkillReviewed(name, content string, allowCreateOverride bool, expectedRevision string) (path string, createdOverride bool, revision string, err error) {
@@ -175,7 +182,7 @@ func (w *SkillWriter) EditSkillReviewed(name, content string, allowCreateOverrid
 		revision, revisionErr = w.SkillRevision(name)
 		return revisionErr
 	})
-	return
+	return path, createdOverride, revision, err
 }
 
 func (w *SkillWriter) CreateOverrideReviewed(name, content, sourceSkillFile, expectedRevision string) (path, revision string, err error) {
@@ -204,7 +211,7 @@ func (w *SkillWriter) CreateOverrideReviewed(name, content, sourceSkillFile, exp
 		revision, sourceErr = w.SkillRevision(name)
 		return sourceErr
 	})
-	return
+	return path, revision, err
 }
 
 func (w *SkillWriter) RemoveSkillReviewed(name, expectedRevision string) error {
@@ -243,8 +250,8 @@ func PublishStagedSkill(root, name, stagedDir, expectedRevision string) (Publish
 		if exists && (expectedRevision == "" || expectedRevision != current) {
 			return fmt.Errorf("%w: reviewed %q, current %q", ErrRevisionConflict, expectedRevision, current)
 		}
-		if err := os.MkdirAll(root, 0o755); err != nil {
-			return err
+		if mkErr := os.MkdirAll(root, 0o755); mkErr != nil {
+			return mkErr
 		}
 		next, revisionErr := revisionForDir(stagedDir)
 		if revisionErr != nil {
@@ -252,14 +259,14 @@ func PublishStagedSkill(root, name, stagedDir, expectedRevision string) (Publish
 		}
 		backup := target + ".replace-backup"
 		if exists {
-			if err := removeStaleBackup(backup); err != nil {
-				return err
+			if rmErr := removeStaleBackup(backup); rmErr != nil {
+				return rmErr
 			}
-			if err := renamePublishedSkill(target, backup); err != nil {
-				return fmt.Errorf("preserve previous skill: %w", err)
+			if renameErr := renamePublishedSkill(target, backup); renameErr != nil {
+				return fmt.Errorf("preserve previous skill: %w", renameErr)
 			}
 		}
-		if err := renamePublishedSkill(stagedDir, target); err != nil {
+		if pubErr := renamePublishedSkill(stagedDir, target); pubErr != nil {
 			if exists {
 				if restoreErr := renamePublishedSkill(backup, target); restoreErr != nil {
 					outcome = PublishOutcome{
@@ -270,20 +277,20 @@ func PublishStagedSkill(root, name, stagedDir, expectedRevision string) (Publish
 						Message:           "replacement publication failed and the previous package could not be restored; no live package is available",
 					}
 					return errors.Join(
-						fmt.Errorf("publish staged skill: %w", err),
+						fmt.Errorf("publish staged skill: %w", pubErr),
 						fmt.Errorf("restore previous skill: %w", restoreErr),
 					)
 				}
 			}
-			return fmt.Errorf("publish staged skill: %w", err)
+			return fmt.Errorf("publish staged skill: %w", pubErr)
 		}
+		warning := ""
 		if exists {
-			if err := removePublishedBackup(backup); err != nil {
-				outcome = PublishOutcome{Revision: next, PersistenceStatus: PersistenceComplete, ActivationStatus: ActivationActive, ChangedFields: []string{"installed"}, Warning: "previous package cleanup is incomplete"}
-				return nil
+			if cleanupErr := removePublishedBackup(backup); cleanupErr != nil {
+				warning = fmt.Sprintf("previous package cleanup is incomplete: %v", cleanupErr)
 			}
 		}
-		outcome = PublishOutcome{Revision: next, PersistenceStatus: PersistenceComplete, ActivationStatus: ActivationActive, ChangedFields: []string{"installed"}}
+		outcome = PublishOutcome{Revision: next, PersistenceStatus: PersistenceComplete, ActivationStatus: ActivationActive, ChangedFields: []string{"installed"}, Warning: warning}
 		return nil
 	})
 	return outcome, err

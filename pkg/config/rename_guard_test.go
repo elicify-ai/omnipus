@@ -179,11 +179,6 @@ func TestNoAgentConfigWorkspaceIdentifier(t *testing.T) {
 //     allowlisted, and must never be added here).
 //   - (retired) pkg/sandbox/sandbox.go's comment heading ("// Workspace: full
 //     RWX ...", a prose label), not a struct field or composite literal.
-//   - pkg/agent/loop.go's comment explaining why a second, competing
-//     remove_skill registration was deleted (commit 81f7ef26): the prose
-//     names "agent.Workspace" only as the root the DELETED code used to be
-//     constructed against, pre-ADR-046 — historical context in a comment,
-//     not a live selector or composite-literal key.
 //
 // Adding a new entry is a deliberate, reviewed exception: confirm which type
 // is genuinely involved before silencing a failure this way.
@@ -191,13 +186,38 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	// ADR-090 workspace.State.Workspace is the multi-agent workspace record
 	// paired with its delegation graph and revision, not an agent home.
 	// These callers read that state through ReadState/CheckRevisionLocked.
-	"pkg/gateway/rest_workspace_delegation.go:140": true,
-	"pkg/gateway/rest_workspace_delegation.go:213": true,
-	"pkg/gateway/rest_workspaces.go:1208":          true,
-	"pkg/gateway/rest_workspaces.go:1276":          true,
-	"pkg/gateway/rest_workspaces.go:1534":          true,
-	"pkg/sysagent/tools/workspace.go:336":         true,
-	"pkg/sysagent/tools/workspace.go:1224":        true,
+	// (Re-pointed 2026-09-18 after the ADR-090 delivery shifted the lines;
+	// per the fragility note above, a uniform shift means re-pointing, not a
+	// regression. The old entries were rest_workspace_delegation.go:140,213;
+	// rest_workspaces.go:1208,1276,1534; workspace.go:336,1224.)
+	"pkg/gateway/rest_workspace_delegation.go:139":             true,
+	"pkg/gateway/rest_workspace_delegation.go:212":             true,
+	"pkg/gateway/rest_workspace_wire_snapshot_test.go:32":      true,
+	"pkg/gateway/rest_workspace_wire_snapshot_test.go:37":      true,
+	"pkg/gateway/rest_workspaces.go:378":                       true,
+	"pkg/gateway/rest_workspaces.go:962":                       true,
+	"pkg/gateway/rest_workspaces.go:1253":                      true,
+	"pkg/gateway/rest_workspaces.go:1321":                      true,
+	"pkg/gateway/rest_workspaces.go:1579":                      true,
+	"pkg/sysagent/tools/workspace.go:102":                      true,
+	"pkg/sysagent/tools/workspace.go:103":                      true,
+	"pkg/sysagent/tools/workspace.go:104":                      true,
+	"pkg/sysagent/tools/workspace.go:105":                      true,
+	"pkg/sysagent/tools/workspace.go:106":                      true,
+	"pkg/sysagent/tools/workspace.go:107":                      true,
+	"pkg/sysagent/tools/workspace.go:108":                      true,
+	"pkg/sysagent/tools/workspace.go:464":                      true,
+	"pkg/sysagent/tools/workspace.go:644":                      true,
+	"pkg/sysagent/tools/workspace.go:646":                      true,
+	"pkg/sysagent/tools/workspace.go:1364":                     true,
+	"pkg/sysagent/tools/ava_configuration_context_test.go:236": true,
+	"pkg/sysagent/tools/ava_configuration_context_test.go:237": true,
+	"pkg/sysagent/tools/ava_configuration_context_test.go:238": true,
+	"pkg/sysagent/tools/ava_configuration_context_test.go:269": true,
+	"pkg/sysagent/tools/ava_configuration_context_test.go:270": true,
+	"pkg/sysagent/tools/ava_configuration_context_test.go:271": true,
+	"pkg/sysagent/tools/ava_configuration_context_test.go:272": true,
+	"pkg/sysagent/tools/workspace_outcomes_test.go:76":         true,
 
 	"pkg/skills/github_registry.go:41": true,
 	"pkg/skills/github_registry.go:50": true,
@@ -206,7 +226,6 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	"pkg/skills/registry.go:208":       true,
 	"pkg/skills/config_bridge.go:53":   true,
 	"pkg/skills/config_bridge.go:54":   true,
-	"pkg/agent/loop.go:1978":           true,
 
 	// MarketplaceConfig.Workspace (pkg/skills), not AgentConfig — the same
 	// unrelated type whose producing lines config_bridge.go:53,54 are

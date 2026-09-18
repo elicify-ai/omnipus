@@ -70,7 +70,7 @@ func revisionFor(entityBytes, soulBytes []byte) string {
 
 func readSoul(path string) ([]byte, error) {
 	b, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
@@ -82,13 +82,13 @@ func readSoul(path string) ([]byte, error) {
 func readStateFiles(entityPath, soulPath string) (*State, []byte, []byte, error) {
 	entityBytes, err := os.ReadFile(entityPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil, nil, entity.ErrNotFound
 		}
 		return nil, nil, nil, fmt.Errorf("agentstore: read entity: %w", err)
 	}
 	var agent config.AgentConfig
-	if err := json.Unmarshal(entityBytes, &agent); err != nil {
+	if err = json.Unmarshal(entityBytes, &agent); err != nil {
 		return nil, nil, nil, fmt.Errorf("agentstore: parse entity: %w", err)
 	}
 	soulBytes, err := readSoul(soulPath)
@@ -255,7 +255,7 @@ func (s *Store) CreateState(id string, agent *config.AgentConfig, soul string) (
 	err = s.inner.WithLock(id, func(entityPath string) error {
 		if _, statErr := os.Stat(entityPath); statErr == nil {
 			return entity.ErrAlreadyExists
-		} else if !os.IsNotExist(statErr) {
+		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return statErr
 		}
 		agent.ID = id
@@ -316,18 +316,18 @@ func (s *Store) CreateState(id string, agent *config.AgentConfig, soul string) (
 func (s *Store) DeleteState(id, expectedRevision string) (result MutationResult, err error) {
 	result.PersistenceStatus = PersistenceNone
 	result.ActivationStatus = ActivationNotAttempted
-	if err := ValidateRevision(expectedRevision); err != nil {
+	if err = ValidateRevision(expectedRevision); err != nil {
 		return result, err
 	}
 	err = s.inner.WithLock(id, func(entityPath string) error {
 		soulPath := s.soulPath(id)
-		current, _, _, err := readStateFiles(entityPath, soulPath)
-		if err != nil {
-			return err
+		current, _, _, readErr := readStateFiles(entityPath, soulPath)
+		if readErr != nil {
+			return readErr
 		}
 		_, soulStatErr := os.Stat(soulPath)
 		soulExists := soulStatErr == nil
-		if soulStatErr != nil && !os.IsNotExist(soulStatErr) {
+		if soulStatErr != nil && !errors.Is(soulStatErr, os.ErrNotExist) {
 			return fmt.Errorf("stat soul: %w", soulStatErr)
 		}
 		result.Revision = current.Revision

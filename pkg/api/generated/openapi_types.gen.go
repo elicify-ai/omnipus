@@ -10904,13 +10904,7 @@ type Agent struct {
 		// Mcp MCP server bindings for this agent.
 		Mcp *struct {
 			// Servers List of MCP server bindings.
-			Servers *[]struct {
-				// Id MCP server identifier as registered in config.json.
-				Id string `json:"id"`
-
-				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
-				Tools *[]string `json:"tools,omitempty"`
-			} `json:"servers,omitempty"`
+			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
@@ -11032,13 +11026,7 @@ type AgentCreateRequestMain struct {
 		// Mcp MCP server bindings for this agent.
 		Mcp *struct {
 			// Servers List of MCP server bindings.
-			Servers *[]struct {
-				// Id MCP server identifier as registered in config.json.
-				Id string `json:"id"`
-
-				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
-				Tools *[]string `json:"tools,omitempty"`
-			} `json:"servers,omitempty"`
+			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
@@ -11134,13 +11122,7 @@ type AgentCreateRequestSubagent struct {
 		// Mcp MCP server bindings for this agent.
 		Mcp *struct {
 			// Servers List of MCP server bindings.
-			Servers *[]struct {
-				// Id MCP server identifier as registered in config.json.
-				Id string `json:"id"`
-
-				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
-				Tools *[]string `json:"tools,omitempty"`
-			} `json:"servers,omitempty"`
+			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 
@@ -11380,14 +11362,17 @@ type AgentToolsCfg struct {
 	// Mcp MCP server bindings for this agent.
 	Mcp *struct {
 		// Servers List of MCP server bindings.
-		Servers *[]struct {
-			// Id MCP server identifier as registered in config.json.
-			Id string `json:"id"`
-
-			// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
-			Tools *[]string `json:"tools,omitempty"`
-		} `json:"servers,omitempty"`
+		Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 	} `json:"mcp,omitempty"`
+}
+
+// AgentToolsMcpServerBinding A single MCP server binding in an agent's tool configuration: which server is assigned and which of its tools are exposed. Shared by AgentToolsCfg (config.mcp.servers) and AgentToolsUpdateRequest (mcp.servers).
+type AgentToolsMcpServerBinding struct {
+	// Id MCP server identifier as registered in config.json.
+	Id string `json:"id"`
+
+	// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
+	Tools *[]string `json:"tools,omitempty"`
 }
 
 // AgentToolsResponse Response from GET /api/v1/agents/{id}/tools and PUT /api/v1/agents/{id}/tools. Returns the agent's tool policy configuration plus the effective per-tool policy list.
@@ -11410,13 +11395,7 @@ type AgentToolsResponse struct {
 		// Mcp MCP server bindings for this agent.
 		Mcp *struct {
 			// Servers List of MCP server bindings.
-			Servers *[]struct {
-				// Id MCP server identifier as registered in config.json.
-				Id string `json:"id"`
-
-				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
-				Tools *[]string `json:"tools,omitempty"`
-			} `json:"servers,omitempty"`
+			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"config"`
 	ErrorStage    *string  `json:"error_stage,omitempty"`
@@ -11491,26 +11470,14 @@ type AgentToolsUpdateRequest struct {
 		// Mcp MCP server bindings for this agent.
 		Mcp *struct {
 			// Servers List of MCP server bindings.
-			Servers *[]struct {
-				// Id MCP server identifier as registered in config.json.
-				Id string `json:"id"`
-
-				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
-				Tools *[]string `json:"tools,omitempty"`
-			} `json:"servers,omitempty"`
+			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"config,omitempty"`
 
 	// Mcp MCP server bindings for this agent.
 	Mcp *struct {
 		// Servers List of MCP server bindings.
-		Servers *[]struct {
-			// Id MCP server identifier as registered in config.json.
-			Id string `json:"id"`
-
-			// Tools Specific tool names to expose from this server. When absent, all tools from the server are available.
-			Tools *[]string `json:"tools,omitempty"`
-		} `json:"servers,omitempty"`
+		Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 	} `json:"mcp,omitempty"`
 
 	// OverrideNames Stored local override keys; an empty list removes all local overrides.
@@ -11639,13 +11606,7 @@ type AgentUpdateRequest struct {
 		// Mcp MCP server bindings for this agent.
 		Mcp *struct {
 			// Servers List of MCP server bindings.
-			Servers *[]struct {
-				// Id MCP server identifier as registered in config.json.
-				Id string `json:"id"`
-
-				// Tools Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
-				Tools *[]string `json:"tools,omitempty"`
-			} `json:"servers,omitempty"`
+			Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 		} `json:"mcp,omitempty"`
 	} `json:"tools_cfg,omitempty"`
 

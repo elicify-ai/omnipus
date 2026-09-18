@@ -136,8 +136,8 @@ type SkillTool struct {
 }
 
 func (t *SkillTool) SetDocumentRuntime(layout documentruntime.Layout) {
-	copy := layout
-	t.documentRuntime = &copy
+	layoutCopy := layout
+	t.documentRuntime = &layoutCopy
 }
 
 // SetAuditLogger satisfies auditLoggerAware (registry.go) so the tool

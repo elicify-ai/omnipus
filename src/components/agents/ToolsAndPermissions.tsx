@@ -453,7 +453,7 @@ export function ToolsAndPermissions({
         <p className="text-xs text-[var(--color-error)]">
           Failed to load this agent&apos;s tool settings.
         </p>
-        <button
+        <button tabIndex={0}
           type="button"
           data-testid="agent-tools-retry"
           onClick={() => { void refetchAgentTools() }}
@@ -540,7 +540,7 @@ export function ToolsAndPermissions({
           <p className="text-xs text-[var(--color-error)]">
             Failed to load the global permission ceiling. Tool policies remain read-only until it is available.
           </p>
-          <button
+          <button tabIndex={0}
             type="button"
             data-testid="global-policies-retry"
             onClick={() => { void refetchGlobalPolicies() }}
@@ -573,7 +573,7 @@ export function ToolsAndPermissions({
               <p className="text-xs text-[var(--color-error)]">
                 Failed to load configured MCP servers. Existing connector assignments are preserved.
               </p>
-              <button
+              <button tabIndex={0}
                 type="button"
                 data-testid="mcp-servers-retry"
                 onClick={() => { void refetchMcpServers() }}

@@ -2,6 +2,7 @@ package documentruntime
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -183,10 +184,10 @@ func TestMaterializeConverterServiceRegistryStagesAndPreservesPublishedCopy(t *t
 	// Sabotage the shipped registry so the next finalize fails mid-copy; the
 	// previously published registry must survive intact and still advertised.
 	sabotaged := registryXML(componentXML("vnd.sun.star.expand:$LO_LIB_DIR/libmergedlo.dylib", macSpellFixture, macSpellFixture))
-	if err := os.WriteFile(filepath.Join(layout.Prefix, "libreoffice", "LibreOffice.app", "Contents", "Resources", "services", "services.rdb"), []byte(sabotaged), 0o644); err != nil {
+	if err = os.WriteFile(filepath.Join(layout.Prefix, "libreoffice", "LibreOffice.app", "Contents", "Resources", "services", "services.rdb"), []byte(sabotaged), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := materializeConverterServiceRegistry(layout, converter, "darwin"); err == nil || !strings.Contains(err.Error(), "registrations") {
+	if err = materializeConverterServiceRegistry(layout, converter, "darwin"); err == nil || !strings.Contains(err.Error(), "registrations") {
 		t.Fatalf("sabotaged re-finalize err=%v", err)
 	}
 	second, err := os.ReadFile(published)
@@ -256,7 +257,7 @@ func TestMaterializeConverterServiceRegistryDistinguishesBundleFromFlat(t *testi
 	if err := materializeConverterServiceRegistry(layout, flat, "darwin"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(ConverterServiceRegistryDir(layout)); !os.IsNotExist(err) {
+	if _, err := os.Stat(ConverterServiceRegistryDir(layout)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("flat install materialized a registry: %v", err)
 	}
 	if got := mustConverterServiceOverride(t, layout); got != "" {
@@ -280,7 +281,7 @@ func TestMaterializeConverterServiceRegistryDistinguishesBundleFromFlat(t *testi
 	if err := materializeConverterServiceRegistry(layout, bundle, "darwin"); err == nil || !strings.Contains(err.Error(), ".rdb") {
 		t.Fatalf("empty services directory err=%v", err)
 	}
-	if _, err := os.Stat(ConverterServiceRegistryDir(layout)); !os.IsNotExist(err) {
+	if _, err := os.Stat(ConverterServiceRegistryDir(layout)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("broken bundle published a registry: %v", err)
 	}
 	if err := materializeConverterServiceRegistry(layout, bundle, "linux"); err != nil {
@@ -317,20 +318,20 @@ func TestConverterRegistryRejectsCorruptSibling(t *testing.T) {
 			corrupt := func(dir string) {
 				t.Helper()
 				path := filepath.Join(dir, "pyuno.rdb")
-				if err := os.Remove(path); err != nil {
+				if err = os.Remove(path); err != nil {
 					t.Fatal(err)
 				}
 				if bad.directory {
-					if err := os.Mkdir(path, 0755); err != nil {
+					if err = os.Mkdir(path, 0755); err != nil {
 						t.Fatal(err)
 					}
-				} else if err := os.WriteFile(path, []byte(bad.data), 0644); err != nil {
+				} else if err = os.WriteFile(path, []byte(bad.data), 0644); err != nil {
 					t.Fatal(err)
 				}
 			}
 			shipped := filepath.Join(layout.Prefix, "libreoffice", "LibreOffice.app", "Contents", "Resources", "services")
 			corrupt(shipped)
-			if err := materializeConverterServiceRegistry(layout, converter, "darwin"); err == nil || !strings.Contains(err.Error(), "pyuno.rdb") {
+			if err = materializeConverterServiceRegistry(layout, converter, "darwin"); err == nil || !strings.Contains(err.Error(), "pyuno.rdb") {
 				t.Errorf("corrupt shipped sibling must fail by name, got %v", err)
 			}
 			after, err := os.ReadFile(filepath.Join(published, "services.rdb"))
@@ -564,12 +565,12 @@ func TestConverterRegistryConcurrentReadersKeepCompleteSelection(t *testing.T) {
 			}
 			u, err := url.Parse(strings.TrimSuffix(strings.TrimPrefix(value, "<"), ">*"))
 			if err != nil || u.Scheme != "file" {
-				finished <- fmt.Errorf("reader lost managed selection: %q %v", value, err)
+				finished <- fmt.Errorf("reader lost managed selection: %q %w", value, err)
 				return
 			}
 			data, err := os.ReadFile(filepath.Join(u.Path, "services.rdb"))
 			if err != nil || (string(data) != first && string(data) != second) {
-				finished <- fmt.Errorf("reader selected incomplete registry: %q %v", data, err)
+				finished <- fmt.Errorf("reader selected incomplete registry: %q %w", data, err)
 				return
 			}
 		}

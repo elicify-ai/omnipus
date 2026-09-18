@@ -97,8 +97,14 @@ func TestSkillListTool_ManagementNamedInspectionIsSanitizedAndUnfiltered(t *test
 		}
 	}
 	payload := parseSuccess(t, result.ForLLM)
-	entries := payload["skills"].([]any)
-	entry := entries[0].(map[string]any)
+	entries, entriesOK := payload["skills"].([]any)
+	if !entriesOK {
+		t.Fatalf("skills=%T %v, want array", payload["skills"], payload["skills"])
+	}
+	entry, entryOK := entries[0].(map[string]any)
+	if !entryOK {
+		t.Fatalf("skills[0]=%T %v, want object", entries[0], entries[0])
+	}
 	if entry["origin"] != "user" || entry["shared_impact"] != "all_agents" || entry["revision"] == "" {
 		t.Fatalf("response lacks management metadata: %#v", entry)
 	}
@@ -222,7 +228,14 @@ func TestSkillListTool_ManagementContentAndRevisionShareMutationLock(t *testing.
 		t.Fatal(err)
 	}
 	payload := parseSuccess(t, result.ForLLM)
-	entry := payload["skills"].([]any)[0].(map[string]any)
+	entries, entriesOK := payload["skills"].([]any)
+	if !entriesOK {
+		t.Fatalf("skills=%T %v, want array", payload["skills"], payload["skills"])
+	}
+	entry, entryOK := entries[0].(map[string]any)
+	if !entryOK {
+		t.Fatalf("skills[0]=%T %v, want object", entries[0], entries[0])
+	}
 	if entry["revision"] != wantRevision {
 		t.Fatalf("content/revision snapshot mismatch: got %v want %s", entry["revision"], wantRevision)
 	}

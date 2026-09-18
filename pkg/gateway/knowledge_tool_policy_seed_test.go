@@ -162,8 +162,15 @@ func TestBoot_NoKnowledgeToolDenyBackfill(t *testing.T) {
 
 	t.Run("positive control: a deleted ceiling entry is reconciled back from the shipped default", func(t *testing.T) {
 		const (
+			// (mia, environment_setup) is the control pair: the ADR-090 §6.5
+			// Ask posture is a deliberately explicit per-agent seed (kept even
+			// though it equals the ceiling), and the shipped ceiling carries
+			// the same ask (pkg/config/defaults.go) — so BOTH sides of the
+			// OR exist to delete. knowledge_find lost its per-agent seed
+			// under ADR-090 (only the ceiling posture remains), so it can no
+			// longer serve as the both-sides control.
 			victimAgent = string(coreagent.IDMia)
-			victimTool  = "knowledge_find"
+			victimTool  = "environment_setup"
 		)
 		cfg := seededBootConfig(t)
 
@@ -183,7 +190,7 @@ func TestBoot_NoKnowledgeToolDenyBackfill(t *testing.T) {
 		require.NotNil(t, victim.Tools)
 		_, hadAgent := victim.Tools.Builtin.Policies[victimTool]
 		require.Truef(t, hadAgent,
-			"(%s, %s) must be seeded per-agent to delete (pkg/coreagent/core.go)",
+			"(%s, %s) must be seeded per-agent to delete (pkg/coreagent/role_policies_adr090.go)",
 			victimAgent, victimTool)
 		delete(victim.Tools.Builtin.Policies, victimTool)
 
@@ -200,8 +207,8 @@ func TestBoot_NoKnowledgeToolDenyBackfill(t *testing.T) {
 		restored, ok := cfg.Sandbox.ToolPolicies[victimTool]
 		require.Truef(t, ok,
 			"ReconcileToolPolicyCeiling must restore the deleted catalog tool %q to the ceiling", victimTool)
-		assert.Equal(t, "allow", restored,
-			"restored to the SHIPPED default (defaults.go: knowledge_find=allow), never a "+
+		assert.Equal(t, "ask", restored,
+			"restored to the SHIPPED default (defaults.go: environment_setup=ask), never a "+
 				"code-branch deny — ADR-077's whole point")
 
 		// And no per-agent entry was resurrected: sparse per-agent maps only

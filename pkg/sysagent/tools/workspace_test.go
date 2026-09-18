@@ -1510,14 +1510,17 @@ func TestWorkspaceUpdate_SeedSkipsAgentsAbsentFromConfig(t *testing.T) {
 	if findEdge(edges, "jim", "jim") == nil {
 		t.Errorf("expected Jim self edge to be seeded, got %v", edges)
 	}
+	if findEdge(edges, "jim", "ava") == nil {
+		t.Errorf("expected Jim→Ava delegation edge to be seeded (ADR-090 §3: Jim delegates configuration proposals to Ava), got %v", edges)
+	}
 	if findEdge(edges, "jim", "worker") != nil {
 		t.Error("jim→worker must NOT be seeded — worker is absent from the live config")
 	}
 	if findEdge(edges, "ava", "worker") != nil {
-		t.Error("ava→worker must NOT be seeded — worker is absent from the live config")
+		t.Error("ava→worker must NOT be seeded — worker is absent from local config")
 	}
-	if len(edges) != 1 {
-		t.Errorf("expected exactly 1 seeded edge (Jim self edge), got %d: %v", len(edges), edges)
+	if len(edges) != 2 {
+		t.Errorf("expected exactly 2 seeded edges (Jim self edge + Jim→Ava configuration-delegation edge), got %d: %v", len(edges), edges)
 	}
 }
 

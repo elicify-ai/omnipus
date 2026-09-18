@@ -214,16 +214,16 @@ func TestBashSharedGenerationReachableReadExecOnly(t *testing.T) {
 	// Two independent arbitrary generations with different executable names —
 	// no catalogue, just storage's generic lifecycle API, so the fixture
 	// cannot drift from the runtime reader's layout.
-	var genBins []string
+	genBins := make([]string, 0, 2)
 	for range 2 {
-		target, err := environmentsetup.BeginInstall(home, "", environmentsetup.ScopeShared)
-		if err != nil {
-			t.Fatalf("begin shared install: %v", err)
+		target, beginErr := environmentsetup.BeginInstall(home, "", environmentsetup.ScopeShared)
+		if beginErr != nil {
+			t.Fatalf("begin shared install: %v", beginErr)
 		}
 		bin := filepath.Join(target.Prefix(), "bin")
 		writeFakeManagedPython(t, bin)
-		if _, err := target.Commit(); err != nil {
-			t.Fatalf("commit shared generation: %v", err)
+		if _, commitErr := target.Commit(); commitErr != nil {
+			t.Fatalf("commit shared generation: %v", commitErr)
 		}
 		genBins = append(genBins, bin)
 	}
@@ -296,11 +296,11 @@ func TestBashDocumentCacheSymlinkRefused(t *testing.T) {
 	}
 	layout := provisionLayout(t, home, "mia")
 	outside := filepath.Join(home, "outside-target")
-	if err := os.MkdirAll(outside, 0o755); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.MkdirAll(outside, 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
-	if err := os.Symlink(outside, filepath.Join(workspace, ".omnipus-document-cache")); err != nil {
-		t.Fatal(err)
+	if linkErr := os.Symlink(outside, filepath.Join(workspace, ".omnipus-document-cache")); linkErr != nil {
+		t.Fatal(linkErr)
 	}
 	tool, err := NewExecToolWithDeps(workspace, true, nil, ExecToolDeps{GodMode: false})
 	if err != nil {
@@ -403,8 +403,8 @@ func TestBashGenericRuntimeStateReportedNotSilent(t *testing.T) {
 		// classifies as a broken (non-fatal) generation. The published tree
 		// is read-only (0555 dirs / 0444 files), so the generation DIR needs
 		// its write bit back before anything inside can be unlinked.
-		if err := os.Chmod(published.Dir, 0o755); err != nil {
-			t.Fatal(err)
+		if chmodErr := os.Chmod(published.Dir, 0o755); chmodErr != nil {
+			t.Fatal(chmodErr)
 		}
 		entries, err := os.ReadDir(published.Dir)
 		if err != nil {
@@ -413,11 +413,11 @@ func TestBashGenericRuntimeStateReportedNotSilent(t *testing.T) {
 		for _, entry := range entries {
 			if entry.Type().IsRegular() {
 				marker := filepath.Join(published.Dir, entry.Name())
-				if err := os.Chmod(marker, 0o644); err != nil {
-					t.Fatal(err)
+				if markerErr := os.Chmod(marker, 0o644); markerErr != nil {
+					t.Fatal(markerErr)
 				}
-				if err := os.Remove(marker); err != nil {
-					t.Fatal(err)
+				if rmErr := os.Remove(marker); rmErr != nil {
+					t.Fatal(rmErr)
 				}
 			}
 		}
@@ -449,8 +449,8 @@ func TestBashGenericRuntimeStateReportedNotSilent(t *testing.T) {
 		}
 		// A symlink loop at <workspace>/.omnipus makes os.Stat on the env root
 		// fail with ELOOP — a hard RuntimeEnvPaths error, not "missing state".
-		if err := os.Symlink(filepath.Join(workspace, ".omnipus"), filepath.Join(workspace, ".omnipus")); err != nil {
-			t.Fatal(err)
+		if linkErr := os.Symlink(filepath.Join(workspace, ".omnipus"), filepath.Join(workspace, ".omnipus")); linkErr != nil {
+			t.Fatal(linkErr)
 		}
 		tool, err := NewExecToolWithDeps(workspace, true, nil, ExecToolDeps{GodMode: false})
 		if err != nil {
@@ -473,13 +473,14 @@ func unlockPublished(t *testing.T, root string) {
 	t.Helper()
 	t.Cleanup(func() {
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if d.IsDir() {
-				_ = os.Chmod(path, 0o755)
-			} else {
-				_ = os.Chmod(path, 0o644)
+			// Best-effort unlock: a path the walk could not stat is skipped,
+			// and the walk continues so later paths still get unlocked.
+			if err == nil {
+				if d.IsDir() {
+					_ = os.Chmod(path, 0o755)
+				} else {
+					_ = os.Chmod(path, 0o644)
+				}
 			}
 			return nil
 		})
@@ -524,11 +525,11 @@ func TestBashDocumentRuntimeCorruptRegistryRunsCommandsWithNotice(t *testing.T) 
 	}
 	layout := provisionLayout(t, home, "mia")
 	registry := documentruntime.ConverterServiceRegistryDir(layout)
-	if err := os.MkdirAll(registry, 0o755); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.MkdirAll(registry, 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
-	if err := os.WriteFile(filepath.Join(registry, "services.rdb"), []byte(`<components>`), 0o644); err != nil {
-		t.Fatal(err)
+	if writeErr := os.WriteFile(filepath.Join(registry, "services.rdb"), []byte(`<components>`), 0o644); writeErr != nil {
+		t.Fatal(writeErr)
 	}
 	tool, err := NewExecToolWithDeps(workspace, true, nil, ExecToolDeps{GodMode: false})
 	if err != nil {
@@ -580,11 +581,11 @@ func TestBashDocumentRuntimeCorruptRegistryNoticeAcrossSpawnModes(t *testing.T) 
 			}
 			layout := provisionLayout(t, home, "mia")
 			registry := documentruntime.ConverterServiceRegistryDir(layout)
-			if err := os.MkdirAll(registry, 0o755); err != nil {
-				t.Fatal(err)
+			if mkdirErr := os.MkdirAll(registry, 0o755); mkdirErr != nil {
+				t.Fatal(mkdirErr)
 			}
-			if err := os.WriteFile(filepath.Join(registry, "services.rdb"), []byte(`<components>`), 0o644); err != nil {
-				t.Fatal(err)
+			if writeErr := os.WriteFile(filepath.Join(registry, "services.rdb"), []byte(`<components>`), 0o644); writeErr != nil {
+				t.Fatal(writeErr)
 			}
 			tool, err := NewExecToolWithDeps(workspace, true, nil, ExecToolDeps{GodMode: tc.godMode})
 			if err != nil {
@@ -738,8 +739,8 @@ func TestBashDocumentRuntimeActualProbe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(layout.Cache, 0o755); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.MkdirAll(layout.Cache, 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
 	workspace := t.TempDir()
 	tool, err := NewExecToolWithDeps(workspace, false, nil, ExecToolDeps{GodMode: false})

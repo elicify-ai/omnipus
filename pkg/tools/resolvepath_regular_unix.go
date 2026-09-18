@@ -3,8 +3,9 @@
 package tools
 
 import (
-	"golang.org/x/sys/unix"
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
 // OpenRegularNonBlocking atomically opens through the anchored handle with a

@@ -23,21 +23,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// manifestBullet is the prefix BuildCompressedManifest writes for one
-// previewed tool: "  - <name> — ".
-func manifestBullet(name string) string { return "  - " + name + " — " }
-
-// manifestLineFor returns the rendered description text of name's bullet in
-// note, or "" when note has no bullet for name.
-func manifestLineFor(note, name string) string {
-	for _, line := range strings.Split(note, "\n") {
-		if rest, ok := strings.CutPrefix(line, manifestBullet(name)); ok {
-			return rest
-		}
-	}
-	return ""
-}
-
 func TestManifest_PlanToolUpfrontDefinitionsFollowToolPolicy(t *testing.T) {
 	catalog := []Tool{
 		&PlanCreateTool{},

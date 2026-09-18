@@ -29,12 +29,6 @@ import (
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
 
-// errAgentLocked is a sentinel wrapped by AgentUpdateTool's locked-core-agent
-// refusal so the caller can distinguish it (via errors.Is) from every other
-// agentstore.Update failure and report the dedicated AGENT_LOCKED error code
-// instead of the generic SAVE_FAILED — see that error branch's own comment.
-var errAgentLocked = errors.New("agent is a locked core agent")
-
 // slugRegexp matches characters that should be replaced in agent name → ID conversion.
 var slugRegexp = regexp.MustCompile(`[^a-z0-9]+`)
 

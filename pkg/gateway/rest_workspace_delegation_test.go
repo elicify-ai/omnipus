@@ -333,8 +333,10 @@ func TestDelegationEdgeValidate_RejectionCases(t *testing.T) {
 		wantErr string // substring the rejection message must contain ("" = accept)
 	}{
 		{
-			name:    "self-edge",
-			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "jim"},
+			name: "self-edge for a non-permitted agent",
+			// ADR-090 §3: self-edges are permitted ONLY for jim and worker;
+			// every other agent's self-edge stays rejected.
+			edge:    storedDelegationEdge{FromAgent: "ava", ToAgent: "ava"},
 			wantErr: "self-edge",
 		},
 		{
@@ -384,6 +386,13 @@ func TestDelegationEdgeValidate_RejectionCases(t *testing.T) {
 		{
 			name:    "valid edge depth 0 accepted",
 			edge:    storedDelegationEdge{FromAgent: "ray", ToAgent: "ava", Depth: intPtrGW(0)},
+			wantErr: "",
+		},
+		{
+			name: "permitted self-edge accepted (ADR-090 §3)",
+			// jim is one of the two agents (jim, worker) whose self-edge is a
+			// first-class seeded trust relationship, not a rejection.
+			edge:    storedDelegationEdge{FromAgent: "jim", ToAgent: "jim", Depth: intPtrGW(3)},
 			wantErr: "",
 		},
 	}
@@ -619,10 +628,9 @@ func TestDefaultWorkspaceTeam_ExcludesCustomAgents(t *testing.T) {
 				{ID: "mia", Type: config.AgentTypeCore},
 				{ID: "jim", Type: config.AgentTypeCore},
 				{ID: "ava", Type: config.AgentTypeCore},
-				{ID: "ray", Type: config.AgentTypeCore},
+				{ID: "admin", Type: config.AgentTypeCore},
 				{ID: "worker", Type: config.AgentTypeWorker},
 				{ID: "planner", Type: config.AgentTypeWorker},
-				{ID: "explorer", Type: config.AgentTypeWorker},
 				{ID: "researcher", Type: config.AgentTypeWorker},
 				// Custom/user-created agents — must NEVER appear in the default team.
 				{ID: "my-custom-bot", Type: config.AgentTypeCustom},
@@ -632,8 +640,11 @@ func TestDefaultWorkspaceTeam_ExcludesCustomAgents(t *testing.T) {
 	}
 	team := defaultWorkspaceTeam(cfg)
 	assert.ElementsMatch(t,
-		[]string{"mia", "jim", "ava", "ray", "worker", "planner", "explorer", "researcher"},
-		team, "defaultWorkspaceTeam must return ONLY the built-in roster, never a custom agent")
+		[]string{"mia", "jim", "ava", "worker", "planner", "researcher"},
+		team, "defaultWorkspaceTeam must return ONLY the ADR-090 §2.0 built-in workspace roster "+
+			"(admin excluded as the standalone operator), never a custom agent")
+	assert.NotContains(t, team, "admin",
+		"admin is the standalone operator and must never join a workspace team (ADR-090 FR-001)")
 	assert.NotContains(t, team, "my-custom-bot")
 	assert.NotContains(t, team, "another-custom-agent")
 }
@@ -846,6 +857,7 @@ func TestDefaultWorkspaceDelegationEdges_SelfEdgesPinDepthAtCeilingOr3(t *testin
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			cfg := &config.Config{}
 			require.True(t, coreagent.SeedConfig(cfg), "SeedConfig on empty config must modify")
 			if tc.configured > 0 {

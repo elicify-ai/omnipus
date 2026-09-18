@@ -26,6 +26,7 @@ package systools_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -206,7 +207,7 @@ func TestWorkspaceUpdate_ExplicitDelegationAdminEndpointRejected(t *testing.T) {
 	before := assertWorkspaceBytes(t, home, id)
 	delegationPath := filepath.Join(home, "entities", "delegation", id+".json")
 	delegationBefore, beforeErr := os.ReadFile(delegationPath)
-	if beforeErr != nil && !os.IsNotExist(beforeErr) {
+	if beforeErr != nil && !errors.Is(beforeErr, os.ErrNotExist) {
 		t.Fatal(beforeErr)
 	}
 
@@ -228,10 +229,10 @@ func TestWorkspaceUpdate_ExplicitDelegationAdminEndpointRejected(t *testing.T) {
 		t.Fatal("rejected delegation update changed workspace bytes")
 	}
 	delegationAfter, afterErr := os.ReadFile(delegationPath)
-	if afterErr != nil && !os.IsNotExist(afterErr) {
+	if afterErr != nil && !errors.Is(afterErr, os.ErrNotExist) {
 		t.Fatal(afterErr)
 	}
-	if os.IsNotExist(beforeErr) != os.IsNotExist(afterErr) || string(delegationBefore) != string(delegationAfter) {
+	if errors.Is(beforeErr, os.ErrNotExist) != errors.Is(afterErr, os.ErrNotExist) || string(delegationBefore) != string(delegationAfter) {
 		t.Fatal("rejected delegation update changed delegation storage")
 	}
 }

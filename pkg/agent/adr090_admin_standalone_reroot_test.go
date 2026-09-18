@@ -94,7 +94,7 @@ func TestResolveTurnWorkDirOrRefuse_AdminRootsAtOwnHome_IgnoresForgedCoreTeam(t 
 		"Admin's turn must root at its own agent home, not at any workspace — even one whose record claims admin")
 
 	_, statErr := os.Stat(filepath.Join(home, "workspaces", "forged-ws", "work"))
-	assert.True(t, os.IsNotExist(statErr),
+	assert.True(t, errors.Is(statErr, os.ErrNotExist),
 		"resolving an Admin turn must not materialize any workspace work/ directory — the Admin branch must precede workspace resolution")
 
 	_, homeStatErr := os.Stat(adminHome)
@@ -149,7 +149,7 @@ func TestResolveTurnWorkDirOrRefuse_UnsafeWorkspaceIDStillFails(t *testing.T) {
 		"refusal must wrap ErrWorkspaceWorkDirUnavailable, got: %v", err)
 
 	_, statErr := os.Stat(filepath.Join(filepath.Dir(home), "evil"))
-	assert.True(t, os.IsNotExist(statErr),
+	assert.True(t, errors.Is(statErr, os.ErrNotExist),
 		"an unsafe workspace id must not materialize a directory outside home")
 }
 
@@ -203,11 +203,11 @@ func TestRunTurn_AdminStandalone_WritesToOwnHomeNotForgedWorkspace(t *testing.T)
 	// The forged membership must not have re-rooted the turn…
 	forgedWork := filepath.Join(home, "workspaces", "forged-ws", "work", "proof.txt")
 	_, forgedErr := os.Stat(forgedWork)
-	assert.True(t, os.IsNotExist(forgedErr),
+	assert.True(t, errors.Is(forgedErr, os.ErrNotExist),
 		"write_file must NOT land in a workspace that merely claims admin on core_team (%s)", forgedWork)
 	// …and must not even have had its work/ tree materialized.
 	_, forgedDirErr := os.Stat(filepath.Join(home, "workspaces", "forged-ws", "work"))
-	assert.True(t, os.IsNotExist(forgedDirErr),
+	assert.True(t, errors.Is(forgedDirErr, os.ErrNotExist),
 		"an Admin turn must not materialize any workspace work/ directory")
 
 	// No spontaneous workspace creation or join: exactly the one seeded
@@ -257,7 +257,7 @@ func TestRunTurn_OrdinaryUnassignedAgentRefused(t *testing.T) {
 		"refusal must wrap ErrAgentNotWorkspaceMember, got: %v", procErr)
 
 	_, statErr := os.Stat(filepath.Join(jimHome, "proof.txt"))
-	assert.True(t, os.IsNotExist(statErr), "a refused turn must write nothing")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "a refused turn must write nothing")
 	_, wsErr := os.Stat(filepath.Join(home, "workspaces"))
-	assert.True(t, os.IsNotExist(wsErr), "a refused turn must not create any workspace directory")
+	assert.True(t, errors.Is(wsErr, os.ErrNotExist), "a refused turn must not create any workspace directory")
 }

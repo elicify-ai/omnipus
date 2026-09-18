@@ -49,7 +49,7 @@ func TestBeginInstallRefusesSymlinkedOmnipusDir(t *testing.T) {
 		_ = target.Abort()
 		t.Fatal("pre-existing .omnipus symlink must be refused, not followed")
 	}
-	if _, err := os.Stat(filepath.Join(outside, "omnipus", "env")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(outside, "omnipus", "env")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("setup escaped the workspace: outside env created: %v", err)
 	}
 }
@@ -200,7 +200,7 @@ func TestWorkspaceInstallLockSerializesAndAbortReleases(t *testing.T) {
 	if !errors.Is(err, errTargetBusy) {
 		t.Fatalf("busy refusal must be recognizable: %v", err)
 	}
-	if err := first.Abort(); err != nil {
+	if err = first.Abort(); err != nil {
 		t.Fatalf("Abort must release the target lock: %v", err)
 	}
 	// Retry after release must succeed.
@@ -208,7 +208,7 @@ func TestWorkspaceInstallLockSerializesAndAbortReleases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin after Abort must succeed: %v", err)
 	}
-	if err := third.Abort(); err != nil {
+	if err = third.Abort(); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -285,7 +285,7 @@ func TestSharedAbortRemovesReadOnlyTreeAfterFailedCommit(t *testing.T) {
 	if err := b.Abort(); err != nil {
 		t.Fatalf("Abort must remove its read-only unpublished tree: %v", err)
 	}
-	if _, err := os.Stat(b.Prefix()); !os.IsNotExist(err) {
+	if _, err := os.Stat(b.Prefix()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("unpublished read-only tree not removed: %v", err)
 	}
 	valid, broken, err := SharedPublished(dataRoot)

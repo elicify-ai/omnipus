@@ -39,7 +39,7 @@ func decodeToolError(t *testing.T, raw string) map[string]any {
 func snapshotPath(t *testing.T, path string) []byte {
 	t.Helper()
 	b, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
 	return b

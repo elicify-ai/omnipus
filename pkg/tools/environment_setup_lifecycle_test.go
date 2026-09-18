@@ -162,7 +162,7 @@ func (h *lifecycleHarness) auditContents(t *testing.T) string {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(h.auditDir, "*.jsonl"))
 	require.NoError(t, err)
-	var all []byte
+	all := make([]byte, 0, len(files)*1024)
 	for _, f := range files {
 		b, rerr := os.ReadFile(f)
 		require.NoError(t, rerr)

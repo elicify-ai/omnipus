@@ -19,66 +19,11 @@
 package tools_test
 
 import (
-	"context"
-	"encoding/json"
-	"regexp"
 	"strings"
 	"testing"
 
-	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
-
-// newRealCatalogToolSearch builds a ToolSearch over the real static catalog
-// (general builtins + system tools) with the production result/TTL defaults
-// (loop.go: MaxSearchResults and TTL both default to 5) and an allow-all
-// policy, so ranking and auto-load reflect the shipped descriptions alone.
-func newRealCatalogToolSearch(t *testing.T) *tools.ToolsTool {
-	t.Helper()
-	reg := tools.NewToolRegistry()
-	for _, tl := range tools.GeneralBuiltinMetadata() {
-		reg.Register(tl)
-	}
-	for _, tl := range systools.AllTools(nil) {
-		if _, exists := reg.GetIncludingHidden(tl.Name()); !exists {
-			reg.Register(tl)
-		}
-	}
-	tt := tools.NewToolsTool(reg, 5, 5)
-	tt.SetResolver(
-		func(context.Context, string) (bool, string) { return true, "" },
-		func(_ context.Context, names []string) (map[string]any, []string) {
-			schemas := make(map[string]any, len(names))
-			for _, n := range names {
-				schemas[n] = map[string]any{}
-			}
-			return schemas, nil
-		},
-	)
-	return tt
-}
-
-var toolSearchPayload = regexp.MustCompile(`(?s)\{.*\}`)
-
-// toolSearchLoaded runs a ToolSearch query and returns the auto-loaded names.
-func toolSearchLoaded(t *testing.T, tt *tools.ToolsTool, query string) []string {
-	t.Helper()
-	res := tt.Execute(context.Background(), map[string]any{"query": query})
-	if res.IsError {
-		t.Fatalf("ToolSearch(%q) returned an error: %s", query, res.ForLLM)
-	}
-	raw := toolSearchPayload.FindString(res.ForLLM)
-	if raw == "" {
-		return nil // "No tools found matching the query." — nothing loaded.
-	}
-	var payload struct {
-		Loaded []string `json:"loaded"`
-	}
-	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
-		t.Fatalf("ToolSearch(%q): cannot decode result payload: %v\n%s", query, err, res.ForLLM)
-	}
-	return payload.Loaded
-}
 
 func TestDelegateDescription_PointsParallelMultiPartWorkAtPlans(t *testing.T) {
 	desc := tools.NewDelegateTool("", 0, 0).Description()

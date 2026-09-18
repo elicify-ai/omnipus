@@ -8043,22 +8043,27 @@ export interface components {
             /** @description MCP server bindings for this agent. */
             mcp?: {
                 /** @description List of MCP server bindings. */
-                servers?: {
-                    /**
-                     * @description MCP server identifier as registered in config.json.
-                     * @example my-mcp-server
-                     */
-                    id: string;
-                    /**
-                     * @description Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
-                     * @example [
-                     *       "search",
-                     *       "fetch"
-                     *     ]
-                     */
-                    tools?: string[];
-                }[];
+                servers?: components["schemas"]["AgentToolsMcpServerBinding"][];
             };
+        };
+        /**
+         * AgentToolsMcpServerBinding
+         * @description A single MCP server binding in an agent's tool configuration: which server is assigned and which of its tools are exposed. Shared by AgentToolsCfg (config.mcp.servers) and AgentToolsUpdateRequest (mcp.servers).
+         */
+        AgentToolsMcpServerBinding: {
+            /**
+             * @description MCP server identifier as registered in config.json.
+             * @example my-mcp-server
+             */
+            id: string;
+            /**
+             * @description Specific tool names to expose from this server. When absent, all tools from this assigned server are available; explicit [] grants none. Null is rejected. An unassigned server grants no execution access.
+             * @example [
+             *       "search",
+             *       "fetch"
+             *     ]
+             */
+            tools?: string[];
         };
         /**
          * AgentToolsUpdateRequest
@@ -8086,12 +8091,7 @@ export interface components {
             /** @description MCP server bindings for this agent. */
             mcp?: {
                 /** @description List of MCP server bindings. */
-                servers?: {
-                    /** @description MCP server identifier as registered in config.json. */
-                    id: string;
-                    /** @description Specific tool names to expose from this server. When absent, all tools from the server are available. */
-                    tools?: string[];
-                }[];
+                servers?: components["schemas"]["AgentToolsMcpServerBinding"][];
             };
         };
         /** @description Body for POST /agents. Creates a new agent; a UUID is assigned by the server and the agent starts in "draft" status (no SOUL.md written yet). Discriminated by `type` — each agent type carries EXACTLY the fields the agent-types field matrix allows it; a field sent on the wrong variant is a schema violation (400), never silently persisted. `type` is REQUIRED on every variant (the historical omit-type→Main default is retired). */
@@ -23142,6 +23142,7 @@ export type AgentRateLimits = components["schemas"]["AgentRateLimits"];
 export type AgentStats = components["schemas"]["AgentStats"];
 export type AgentShellPolicy = components["schemas"]["AgentShellPolicy"];
 export type AgentToolsCfg = components["schemas"]["AgentToolsCfg"];
+export type AgentToolsMcpServerBinding = components["schemas"]["AgentToolsMcpServerBinding"];
 export type AgentToolsUpdateRequest = components["schemas"]["AgentToolsUpdateRequest"];
 export type AgentCreateRequest = components["schemas"]["AgentCreateRequest"];
 export type AgentCreateRequestMain = components["schemas"]["AgentCreateRequestMain"];

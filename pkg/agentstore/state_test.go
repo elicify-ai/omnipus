@@ -40,7 +40,7 @@ func TestReadStateRevisionChangesWithEntityOrSoul(t *testing.T) {
 		t.Fatalf("stable bytes changed revision: %s != %s", two.Revision, one.Revision)
 	}
 
-	if err := os.WriteFile(soulPath, []byte("second"), 0o600); err != nil {
+	if err = os.WriteFile(soulPath, []byte("second"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	three, err := s.ReadState("ava")
@@ -64,9 +64,9 @@ func TestMutateStateRejectsMalformedAndStaleRevisionWithoutWrites(t *testing.T) 
 	}
 
 	for _, revision := range []string{"", "not-a-revision", string(make([]byte, 64))} {
-		_, err := s.MutateState("ava", revision, func(a *config.AgentConfig) error { a.Name = "Changed"; return nil }, nil)
-		if !errors.Is(err, ErrInvalidRevision) {
-			t.Fatalf("revision %q error=%v want ErrInvalidRevision", revision, err)
+		_, mutErr := s.MutateState("ava", revision, func(a *config.AgentConfig) error { a.Name = "Changed"; return nil }, nil)
+		if !errors.Is(mutErr, ErrInvalidRevision) {
+			t.Fatalf("revision %q error=%v want ErrInvalidRevision", revision, mutErr)
 		}
 	}
 	stale := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -185,11 +185,11 @@ func TestDeleteStateRejectsStaleRevisionWithoutDeleting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.MutateState("agent-1", stale.Revision, func(a *config.AgentConfig) error {
+	if _, mutErr := s.MutateState("agent-1", stale.Revision, func(a *config.AgentConfig) error {
 		a.Name = "newer"
 		return nil
-	}, nil); err != nil {
-		t.Fatal(err)
+	}, nil); mutErr != nil {
+		t.Fatal(mutErr)
 	}
 	result, err := s.DeleteState("agent-1", stale.Revision)
 	if !errors.Is(err, ErrRevisionConflict) {
@@ -218,7 +218,7 @@ func TestDeleteStateRemovesEntityAndSoulButPreservesAgentHomeFiles(t *testing.T)
 		t.Fatal(err)
 	}
 	unrelatedPath := filepath.Join(home, "agents", "agent-1", "notes.txt")
-	if err := os.WriteFile(unrelatedPath, []byte("user data"), 0o600); err != nil {
+	if err = os.WriteFile(unrelatedPath, []byte("user data"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	observer := &deleteStateObserver{
@@ -240,10 +240,10 @@ func TestDeleteStateRemovesEntityAndSoulButPreservesAgentHomeFiles(t *testing.T)
 	if result.Revision != revisionFor(nil, nil) {
 		t.Fatalf("revision=%q want absent-state revision %q", result.Revision, revisionFor(nil, nil))
 	}
-	if _, err := os.Stat(filepath.Join(home, "entities", "agents", "agent-1.json")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(home, "entities", "agents", "agent-1.json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("entity stat error=%v want not exist", err)
 	}
-	if _, err := os.Stat(filepath.Join(home, "agents", "agent-1", "SOUL.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(home, "agents", "agent-1", "SOUL.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("soul stat error=%v want not exist", err)
 	}
 	if got, err := os.ReadFile(unrelatedPath); err != nil || string(got) != "user data" {
@@ -268,8 +268,8 @@ func (o *deleteStateObserver) AgentDeleted(string) {
 	o.called = true
 	_, entityErr := os.Stat(o.entityPath)
 	_, soulErr := os.Stat(o.soulPath)
-	o.entityExisted = !os.IsNotExist(entityErr)
-	o.soulExisted = !os.IsNotExist(soulErr)
+	o.entityExisted = !errors.Is(entityErr, os.ErrNotExist)
+	o.soulExisted = !errors.Is(soulErr, os.ErrNotExist)
 }
 
 func TestDeleteStateMissingSoulCompletesWithoutRemovingOtherHomeFiles(t *testing.T) {
@@ -363,7 +363,7 @@ func TestDeleteStateReportsActualPartialStateWhenSoulRemovalFails(t *testing.T) 
 	if !strings.Contains(err.Error(), "not-found") || !strings.Contains(err.Error(), "no readable revision") {
 		t.Fatalf("error must state that reads now report not-found: %v", err)
 	}
-	if _, statErr := os.Stat(filepath.Join(home, "entities", "agents", "agent-1.json")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(home, "entities", "agents", "agent-1.json")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("entity stat error=%v want not exist", statErr)
 	}
 	if got, readErr := os.ReadFile(soulPath); readErr != nil || string(got) != "soul" {

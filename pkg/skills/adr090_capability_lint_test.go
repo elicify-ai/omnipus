@@ -83,8 +83,9 @@ type scopedInvocation struct {
 // break. Deterministic by construction (text order).
 func extractCapabilityMarks(text string) (invocations []scopedInvocation, prohibitions []string) {
 	for line := range strings.SplitSeq(text, "\n") {
-		var prohibitionSpans [][2]int
-		for _, loc := range prohibitedToolRef.FindAllStringIndex(line, -1) {
+		prohibitedLocs := prohibitedToolRef.FindAllStringIndex(line, -1)
+		prohibitionSpans := make([][2]int, 0, len(prohibitedLocs))
+		for _, loc := range prohibitedLocs {
 			prohibitionSpans = append(prohibitionSpans, [2]int{loc[0], loc[1]})
 			prohibitions = append(prohibitions, line[loc[0]+len("notool:"):loc[1]])
 		}

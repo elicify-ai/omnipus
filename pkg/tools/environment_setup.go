@@ -484,8 +484,33 @@ func (t *EnvironmentSetupTool) startRun(ctx context.Context, args map[string]any
 	})
 }
 
+// environmentSetupAuditDenyPreviewBytes bounds every agent-supplied string on
+// a deny-decision audit entry (command, reason, target_workspace). Deny paths
+// run BEFORE the environmentSetupMaxCommandBytes cap is enforced, so the
+// uncapped request text would otherwise be written whole into the audit
+// JSONL. Inputs at or under the bound stay verbatim; anything larger is cut
+// at a UTF-8 rune boundary and recorded with its original length.
+const environmentSetupAuditDenyPreviewBytes = 512
+
+// auditDenyPreview bounds s for a deny-path audit entry: at or under the
+// bound verbatim, larger inputs truncated with an omitted-bytes count so the
+// record identifies the request without embedding the payload.
+func auditDenyPreview(s string) string {
+	if len(s) <= environmentSetupAuditDenyPreviewBytes {
+		return s
+	}
+	cut := environmentSetupAuditDenyPreviewBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s [audit preview truncated; %d of %d bytes omitted]",
+		s[:cut], len(s)-cut, len(s))
+}
+
 // emitDeny writes a deny-decision audit entry for a refused run request and
 // returns the error result. Nil logger is a no-op (mirrors bash's emitAudit).
+// Command and reason ride auditDenyPreview: the entry must not embed any
+// uncapped agent-supplied string.
 func (t *EnvironmentSetupTool) emitDeny(ctx context.Context, args map[string]any, result *ToolResult) *ToolResult {
 	if t.auditLogger != nil {
 		cmd, _ := args["command"].(string)
@@ -494,9 +519,9 @@ func (t *EnvironmentSetupTool) emitDeny(ctx context.Context, args map[string]any
 			Decision: audit.DecisionDeny,
 			AgentID:  ToolAgentID(ctx),
 			Tool:     t.Name(),
-			Command:  cmd,
+			Command:  auditDenyPreview(cmd),
 			Details: map[string]any{
-				"reason": result.ForLLM,
+				"reason": auditDenyPreview(result.ForLLM),
 			},
 		}
 		if err := t.auditLogger.Log(entry); err != nil {
@@ -508,7 +533,9 @@ func (t *EnvironmentSetupTool) emitDeny(ctx context.Context, args map[string]any
 
 // emitDisallowedTarget is emitDeny with the target recorded, so the audit
 // trail shows WHO tried to reach WHICH workspace (the cross-workspace probe
-// signal ES-BDD-03 is about).
+// signal ES-BDD-03 is about). Every agent-supplied string in the entry —
+// command, reason (which echoes the requested target), target_workspace —
+// rides the same bounded preview.
 func (t *EnvironmentSetupTool) emitDisallowedTarget(ctx context.Context, args map[string]any, requested string, err error) *ToolResult {
 	if t.auditLogger != nil {
 		cmd, _ := args["command"].(string)
@@ -517,10 +544,10 @@ func (t *EnvironmentSetupTool) emitDisallowedTarget(ctx context.Context, args ma
 			Decision: audit.DecisionDeny,
 			AgentID:  ToolAgentID(ctx),
 			Tool:     t.Name(),
-			Command:  cmd,
+			Command:  auditDenyPreview(cmd),
 			Details: map[string]any{
-				"reason":           err.Error(),
-				"target_workspace": requested,
+				"reason":           auditDenyPreview(err.Error()),
+				"target_workspace": auditDenyPreview(requested),
 			},
 		}
 		if e := t.auditLogger.Log(entry); e != nil {

@@ -2254,7 +2254,17 @@ jobs:
           echo "OPENROUTER_API_KEY_CI is set (${#OPENROUTER_API_KEY_CI} chars)."
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        # Install the engines the shard's playwright.config.ts projects
+        # actually launch: the preview-isolation shard matches the
+        # isolation-firefox / isolation-webkit projects; every other shard
+        # is Chromium-only.
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.group }}" = "preview-isolation" ]; then
+            npx playwright install --with-deps chromium firefox webkit
+          else
+            npx playwright install --with-deps chromium
+          fi
 
       - name: Run Playwright tests
         # OPENROUTER_API_KEY_CI is inherited per-shard from $GITHUB_ENV (Resolve shard LLM key).
@@ -2280,7 +2290,19 @@ jobs:
           OMNIPUS_URL: http://localhost:6060
           OPENROUTER_API_KEY: ${{ env.OPENROUTER_API_KEY_CI }}
           PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/pw-results.json
-        run: npx playwright test ${{ matrix.specs }} --reporter=html,list,json
+        run: |
+          set -euo pipefail
+          # The preview-headed project pins headless:false — the browser's
+          # own PDF viewer (ADR-067 §13.4 item 4) is what's measured, and
+          # headless Chromium has none. Runners have no X server, so launch
+          # under xvfb-run: a real headed browser on a virtual display. Do
+          # NOT flip the project to headless — that replaces the thing
+          # under test.
+          if [ "${{ matrix.group }}" = "preview-headed" ]; then
+            xvfb-run -a npx playwright test ${{ matrix.specs }} --reporter=html,list,json
+          else
+            npx playwright test ${{ matrix.specs }} --reporter=html,list,json
+          fi
 
       - name: Fail on skipped or flaky Playwright tests
         # Two ways this suite went green without being green:
@@ -2350,6 +2372,22 @@ jobs:
             test-results/
           retention-days: 7
 
+      - name: Prepare gateway logs for upload
+        # Bound each log (last 5000 lines / 5 MB) and scrub provider-key
+        # shapes before upload — logs are archived on every outcome, so no
+        # credential material may ride along.
+        if: always()
+        run: |
+          set -euo pipefail
+          STAGING=/tmp/gateway-logs-staging
+          rm -rf "$STAGING" && mkdir -p "$STAGING"
+          for f in /tmp/omnipus.log /tmp/omnipus-e2e/logs/*; do
+            [ -f "$f" ] || continue
+            out="$STAGING/$(basename "$f")"
+            tail -c 5242880 "$f" | tail -n 5000 \
+              | sed -E 's/sk-or-[A-Za-z0-9_-]+/[REDACTED]/g; s/sk-[A-Za-z0-9_-]{16,}/[REDACTED]/g' > "$out"
+          done
+
       - name: Upload gateway logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -2359,9 +2397,7 @@ jobs:
           # uploaded twice and upload-artifact 409s — failing an always()/failure()
           # step and the job, for a reason unrelated to the code under test.
           overwrite: true
-          path: |
-            /tmp/omnipus.log
-            /tmp/omnipus-e2e/logs/
+          path: /tmp/gateway-logs-staging/
           retention-days: 7
 
       - name: Stop gateway

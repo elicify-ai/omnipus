@@ -66,7 +66,7 @@ func TestAgentProvider_CreateGetUpdateRoundTrip(t *testing.T) {
 	// 3. PUT a new provider.
 	{
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 			strings.NewReader(`{"provider":"anthropic"}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
@@ -80,7 +80,7 @@ func TestAgentProvider_CreateGetUpdateRoundTrip(t *testing.T) {
 	// 4. PUT provider:"" clears it.
 	{
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 			strings.NewReader(`{"provider":""}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
@@ -136,7 +136,7 @@ func TestAgentPUT_HeartbeatFieldsIgnored(t *testing.T) {
 
 	// PUT with legacy heartbeat fields → must succeed (200), not 400.
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 		strings.NewReader(`{"heartbeat_enabled":true,"heartbeat_interval":30}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
@@ -206,7 +206,7 @@ func TestAgentProvider_NeedsModelDerived(t *testing.T) {
 		`{"name":"NMAgent2","type":"Main","soul":"s","model":"glm-5.2-air","provider":"openrouter"}`)
 	{
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+cleared.Id,
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+cleared.Id,
 			strings.NewReader(`{"provider":""}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
@@ -227,7 +227,7 @@ func TestAgentProvider_NeedsModelDerived(t *testing.T) {
 	// needs_model true on the PUT response and on GET.
 	{
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 			strings.NewReader(`{"provider":"groq"}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)

@@ -27,6 +27,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -261,7 +262,7 @@ func TestWorkspaceDelegationPUT_ADR090_RejectsAdminEndpoints(t *testing.T) {
 	// Zero-write on the delegation store too: no store file may appear.
 	storePath := filepath.Join(api.homePath, "entities", "delegation", wsID+".json")
 	_, statErr := os.Stat(storePath)
-	assert.True(t, os.IsNotExist(statErr),
+	assert.True(t, errors.Is(statErr, os.ErrNotExist),
 		"a rejected delegation write must not create a delegation store record")
 }
 

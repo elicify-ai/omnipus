@@ -1348,6 +1348,8 @@ components:
       $ref: ./components/schemas/AgentShellPolicy.yaml
     AgentToolsCfg:
       $ref: ./components/schemas/AgentToolsCfg.yaml
+    AgentToolsMcpServerBinding:
+      $ref: ./components/schemas/AgentToolsMcpServerBinding.yaml
     AgentToolsUpdateRequest:
       $ref: ./components/schemas/AgentToolsUpdateRequest.yaml
     # AgentCreateRequest is a discriminated union hosted INLINE here (not in a

@@ -38,7 +38,7 @@ function AdminChatRoute() {
       <div className="flex h-full flex-col items-center justify-center gap-3 px-4 text-center">
         <p className="text-sm font-medium text-[var(--color-secondary)]">Could not start Admin chat.</p>
         <p className="max-w-sm text-xs text-[var(--color-muted)]">{error}</p>
-        <button
+        <button tabIndex={0}
           type="button"
           onClick={() => {
             startedRef.current = false

@@ -154,6 +154,42 @@ func (lv *LiveView) acceptViewportConvergence(ctx, target context.Context, measu
 	return nil
 }
 
+// reusableViewportFrame decides whether the panel's current capture frame
+// already depicts exactly what this apply would produce — same target, same
+// size, same scale — and if so accepts convergence and records the request
+// without touching the browser. Returns handled=true when the apply is
+// complete; handled=false means the caller must run the resize loop below.
+// The error wraps keep their original stage names ("viewport no-op target
+// lookup", "viewport initial geometry", "viewport cached convergence").
+func (lv *LiveView) reusableViewportFrame(operation, tabCtx context.Context, cs *CaptureSession, width, height int, scale float64, converge bool) (handled bool, err error) {
+	if cs == nil {
+		return false, nil
+	}
+	before := cs.FrameState()
+	_, target, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
+	if err != nil {
+		return false, fmt.Errorf("viewport no-op target lookup: %w", err)
+	}
+	// A different target cannot reuse the previous picture, even at
+	// identical dimensions. Invalidate it through the resize path first.
+	if before.TargetID == string(target) && before.Width == width && before.Height == height && before.Scale == scale {
+		measured, err := lv.measureCaptureFrame(operation, cs)
+		if err != nil {
+			return false, fmt.Errorf("viewport initial geometry: %w", err)
+		}
+		if sameViewportGeometry(before, measured) {
+			if err := lv.acceptViewportConvergence(operation, tabCtx, measured, !converge); err != nil {
+				return false, fmt.Errorf("viewport cached convergence: %w", err)
+			}
+			lv.mu.Lock()
+			lv.lastRequestedW, lv.lastRequestedH, lv.lastRequestedScale = width, height, scale
+			lv.mu.Unlock()
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (lv *LiveView) applyViewportContext(caller, tabCtx context.Context, width, height int, scale float64) (bool, error) {
 	return lv.applyViewportContextWithConvergence(caller, tabCtx, width, height, scale, false)
 }
@@ -168,29 +204,12 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 		if lv.mgr != nil {
 			cs = lv.mgr.CaptureSessionForPanel(lv.sessionID)
 		}
-		if cs != nil {
-			before := cs.FrameState()
-			_, target, err := lv.mgr.activeTargetSnapshot(lv.sessionID)
-			if err != nil {
-				return false, fmt.Errorf("viewport no-op target lookup: %w", err)
-			}
-			// A different target cannot reuse the previous picture, even at
-			// identical dimensions. Invalidate it through the resize path first.
-			if before.TargetID == string(target) && before.Width == width && before.Height == height && before.Scale == scale {
-				measured, err := lv.measureCaptureFrame(operation, cs)
-				if err != nil {
-					return false, fmt.Errorf("viewport initial geometry: %w", err)
-				}
-				if sameViewportGeometry(before, measured) {
-					if err := lv.acceptViewportConvergence(operation, tabCtx, measured, !converge); err != nil {
-						return false, fmt.Errorf("viewport cached convergence: %w", err)
-					}
-					lv.mu.Lock()
-					lv.lastRequestedW, lv.lastRequestedH, lv.lastRequestedScale = width, height, scale
-					lv.mu.Unlock()
-					return true, nil
-				}
-			}
+		reuseHandled, reuseErr := lv.reusableViewportFrame(operation, tabCtx, cs, width, height, scale, converge)
+		if reuseErr != nil {
+			return false, reuseErr
+		}
+		if reuseHandled {
+			return true, nil
 		}
 		anyApplied := false
 		measurementRetried := false

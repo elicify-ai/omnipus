@@ -79,6 +79,17 @@ func TestDefaultConfig_SeedsDestructiveToolPoliciesAsAsk(t *testing.T) {
 		// Listing it here rather than under `destructive` is deliberate: it
 		// destroys nothing. It is consent-gated on the direction of travel.
 		"browser_upload_file": "ask",
+		// environment_setup (ADR-090 §6.5) is the fourth member of this class:
+		// the generic self-service installer an agent drives with its OWN
+		// supplied command, so the approval is exactly where the operator sees
+		// and gates that command before it runs. The ceiling seeds "ask" for
+		// every agent; the role policies then differentiate — Mia/GP/Admin ask,
+		// Jim/Ava/Planner/Researcher deny — and the tool sits OUTSIDE the
+		// ADR-090 §5.4 upfront set, so it reaches the model only through
+		// discovery. An "allow" ceiling would defeat §6.5's approval gate for
+		// every agent at once; "deny" would make the installer inert and push
+		// dependency setup back to the operator by hand.
+		"environment_setup": "ask",
 	}
 
 	for name, want := range operatorOnly {

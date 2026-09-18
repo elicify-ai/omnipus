@@ -145,18 +145,17 @@ function resetStores() {
 let SessionRoute: React.ComponentType | null = null
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+beforeEach(async () => {
+  vi.clearAllMocks()
+  resetStores()
 
-describe('SessionRoute — Bug 2: deep-link redirects to workspace', () => {
-  beforeEach(async () => {
-    vi.clearAllMocks()
-    resetStores()
+  if (!SessionRoute) {
+    const mod = await import('./sessions.$sessionId')
+    SessionRoute = (mod.Route as unknown as { component: React.ComponentType }).component
+  }
+})
 
-    if (!SessionRoute) {
-      const mod = await import('./sessions.$sessionId')
-      SessionRoute = (mod.Route as unknown as { component: React.ComponentType }).component
-    }
-  })
-
+describe('SessionRoute — redirect resolution (workspace vs inline attach)', () => {
   it(
     'sets activeWorkspaceId and activeSessionId then navigates to workspace chat (WS connected)',
     async () => {
@@ -242,6 +241,36 @@ describe('SessionRoute — Bug 2: deep-link redirects to workspace', () => {
   )
 
   it(
+    'does NOT navigate when workspace_id is set but workspace not in active list (deleted/archived)',
+    async () => {
+      // BDD: Given a session with workspace_id='deleted-ws' but that workspace
+      //   is not in the active workspaces list,
+      //   When SessionRoute mounts,
+      //   Then no workspace redirect fires (inline path used instead).
+      const detail = makeChatSessionWithWorkspace({ workspace_id: 'deleted-ws' })
+      _mockUseQueryData = detail
+      _mockWorkspaces = []  // workspace not found
+
+      const mockConn = makeMockConnection()
+      useConnectionStore.setState({ connection: mockConn as never, isConnected: true })
+
+      const Route = SessionRoute
+      if (!Route) throw new Error('SessionRoute not loaded')
+      await act(async () => { render(<Route />) })
+
+      await waitFor(() => {
+        // Inline attach fires (fallback path)
+        expect(useSessionStore.getState().activeSessionId).toBe(mockSessionId)
+      }, { timeout: 2000 })
+
+      // No workspace redirect
+      expect(mockNavigate).not.toHaveBeenCalled()
+    },
+  )
+})
+
+describe('SessionRoute — standalone attach deduplication', () => {
+  it(
     'attaches a standalone session when the socket opens after the route recorded it offline',
     async () => {
       // Given the route first sees a connecting socket, it records the
@@ -315,35 +344,9 @@ describe('SessionRoute — Bug 2: deep-link redirects to workspace', () => {
       expect(useSessionStore.getState().activeSessionId).toBe(mockSessionId)
     },
   )
+})
 
-  it(
-    'does NOT navigate when workspace_id is set but workspace not in active list (deleted/archived)',
-    async () => {
-      // BDD: Given a session with workspace_id='deleted-ws' but that workspace
-      //   is not in the active workspaces list,
-      //   When SessionRoute mounts,
-      //   Then no workspace redirect fires (inline path used instead).
-      const detail = makeChatSessionWithWorkspace({ workspace_id: 'deleted-ws' })
-      _mockUseQueryData = detail
-      _mockWorkspaces = []  // workspace not found
-
-      const mockConn = makeMockConnection()
-      useConnectionStore.setState({ connection: mockConn as never, isConnected: true })
-
-      const Route = SessionRoute
-      if (!Route) throw new Error('SessionRoute not loaded')
-      await act(async () => { render(<Route />) })
-
-      await waitFor(() => {
-        // Inline attach fires (fallback path)
-        expect(useSessionStore.getState().activeSessionId).toBe(mockSessionId)
-      }, { timeout: 2000 })
-
-      // No workspace redirect
-      expect(mockNavigate).not.toHaveBeenCalled()
-    },
-  )
-
+describe('SessionRoute — sessionByWorkspace handoff contract', () => {
   it(
     'sessionByWorkspace is populated under wsId so enterWorkspaceChat is a no-op after redirect',
     async () => {

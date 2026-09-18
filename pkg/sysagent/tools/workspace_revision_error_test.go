@@ -277,7 +277,7 @@ func TestWorkspaceUpdate_DelegationStoreCorruptionNotRevisionConflict(t *testing
 		t.Fatalf("update unexpectedly succeeded over a corrupt delegation store: %s", result.ForLLM)
 	}
 	var payload map[string]any
-	if err := json.Unmarshal([]byte(result.ForLLM), &payload); err != nil {
+	if err = json.Unmarshal([]byte(result.ForLLM), &payload); err != nil {
 		t.Fatal(err)
 	}
 	block, _ := payload["error"].(map[string]any)

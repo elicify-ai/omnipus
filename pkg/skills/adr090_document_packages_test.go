@@ -19,7 +19,7 @@ func TestADR090_DocumentPackagesSeedPinnedAssets(t *testing.T) {
 		SourceCommit string            `json:"source_commit"`
 		Files        map[string]string `json:"files"`
 	}
-	if err := json.Unmarshal(data, &inventory); err != nil {
+	if err = json.Unmarshal(data, &inventory); err != nil {
 		t.Fatal(err)
 	}
 	if inventory.SourceCommit != "bb4b2349ec5b15b6766ef5770074f62c6278e649" {

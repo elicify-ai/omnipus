@@ -111,7 +111,7 @@ func ExportEmbeddedPackage(name, destDir string) error {
 	}
 	if _, err := os.Lstat(destDir); err == nil {
 		return fmt.Errorf("export embedded skill %q: destination exists", name)
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return copyEmbeddedSkill(name, destDir)

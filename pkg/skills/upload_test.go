@@ -20,8 +20,8 @@ func TestStageUploadedSkillSupportsMarkdownAndBoundedZip(t *testing.T) {
 	if err != nil || slug != "local-skill" {
 		t.Fatalf("slug=%q stage=%q err=%v", slug, stage, err)
 	}
-	if got, err := os.ReadFile(filepath.Join(stage, "SKILL.md")); err != nil || string(got) != content {
-		t.Fatalf("staged markdown=%q err=%v", got, err)
+	if got, readErr := os.ReadFile(filepath.Join(stage, "SKILL.md")); readErr != nil || string(got) != content {
+		t.Fatalf("staged markdown=%q err=%v", got, readErr)
 	}
 
 	archive := filepath.Join(t.TempDir(), "zip-skill.zip")

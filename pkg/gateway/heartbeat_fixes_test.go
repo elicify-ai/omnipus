@@ -620,7 +620,7 @@ func TestWorkspaceDelete_Cascade(t *testing.T) {
 
 	// DELETE /api/v1/workspaces/{wsID}
 	w := deleteWorkspaceViaAPI(t, api, wsID)
-	require.Equal(t, http.StatusNoContent, w.Code, "DELETE workspace must return 204; body=%s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "DELETE workspace must return a 200 ConfigurationMutationState envelope (ADR-090 §5.2); body=%s", w.Body.String())
 
 	// Assert: cron job gone.
 	assert.Empty(t, heartbeatJobsFor(cs), "heartbeat cron job must be removed by cascade delete")
@@ -671,7 +671,7 @@ func TestWorkspaceDelete_Cascade_SharedStore(t *testing.T) {
 		"heartbeat cron job must exist before workspace delete (reconciled by the enable PUT)")
 
 	w := deleteWorkspaceViaAPI(t, api, wsID)
-	require.Equal(t, http.StatusNoContent, w.Code, "DELETE workspace must return 204; body=%s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "DELETE workspace must return a 200 ConfigurationMutationState envelope (ADR-090 §5.2); body=%s", w.Body.String())
 
 	assert.Empty(t, heartbeatJobsFor(cs), "heartbeat cron job must be removed by cascade delete")
 
@@ -772,7 +772,7 @@ func TestWorkspaceDelete_Cascade_DualCopy(t *testing.T) {
 
 	// DELETE /api/v1/workspaces/{wsID}
 	w := deleteWorkspaceViaAPI(t, api, wsID)
-	require.Equal(t, http.StatusNoContent, w.Code, "DELETE workspace must return 204; body=%s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "DELETE workspace must return a 200 ConfigurationMutationState envelope (ADR-090 §5.2); body=%s", w.Body.String())
 
 	// FIX 1: BOTH copies must be gone — not just the shared one.
 	_, sharedErrAfter := sharedStore.GetMeta(legacyMeta.ID)

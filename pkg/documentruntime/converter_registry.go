@@ -316,7 +316,7 @@ func prepareConverterServiceRegistry(layout Layout, converter, goos string) (fun
 		return nil, fmt.Errorf("read converter services registry: %w", err)
 	}
 	dst := ConverterServiceRegistryDir(layout)
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return nil, fmt.Errorf("create document lib directory: %w", err)
 	}
 	stage, err := os.MkdirTemp(filepath.Dir(dst), "."+converterServiceDirName+".stage-")
@@ -333,8 +333,8 @@ func prepareConverterServiceRegistry(layout Layout, converter, goos string) (fun
 			return nil, fmt.Errorf("converter registry %s is not a regular file", entry.Name())
 		}
 		sawRdb = true
-		data, err := os.ReadFile(filepath.Join(services, entry.Name()))
-		if err != nil {
+		var data []byte
+		if data, err = os.ReadFile(filepath.Join(services, entry.Name())); err != nil {
 			return nil, fmt.Errorf("read converter registry %s: %w", entry.Name(), err)
 		}
 		if entry.Name() == converterServiceRdbName {
@@ -349,7 +349,7 @@ func prepareConverterServiceRegistry(layout Layout, converter, goos string) (fun
 	if !sawRdb {
 		return nil, fmt.Errorf("converter services registry %s carries no .rdb files", services)
 	}
-	if err := os.Chmod(stage, 0o755); err != nil {
+	if err = os.Chmod(stage, 0o755); err != nil {
 		return nil, fmt.Errorf("open staged converter services registry: %w", err)
 	}
 	usable, err := converterServiceRegistryUsable(stage)
@@ -364,7 +364,7 @@ func prepareConverterServiceRegistry(layout Layout, converter, goos string) (fun
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(dst, 0755); err != nil {
+	if err = os.MkdirAll(dst, 0755); err != nil {
 		return nil, fmt.Errorf("create converter registry root: %w", err)
 	}
 	info, err := os.Lstat(dst)
@@ -376,7 +376,7 @@ func prepareConverterServiceRegistry(layout Layout, converter, goos string) (fun
 		// Another writer or previous preparation may already have stored the exact
 		// same immutable content. Verify it rather than replacing its directory.
 		if verifyErr := verifyConverterGeneration(generation, name); verifyErr != nil {
-			return nil, fmt.Errorf("publish converter registry generation: %w (%v)", err, verifyErr)
+			return nil, fmt.Errorf("publish converter registry generation: %w (%w)", err, verifyErr)
 		}
 	}
 	if err := verifyConverterGeneration(generation, name); err != nil {
@@ -453,11 +453,11 @@ func converterGenerationDigest(dir string) (string, error) {
 // Contents/MacOS declares a bundle, so an unreadable services registry is a
 // broken install that errors instead of masquerading as a flat no-op.
 func converterBundleServicesDir(converter string) (string, bool, error) {
-	real, err := filepath.EvalSymlinks(converter)
+	resolved, err := filepath.EvalSymlinks(converter)
 	if err != nil {
 		return "", false, fmt.Errorf("resolve converter executable: %w", err)
 	}
-	macOS := filepath.Dir(real)
+	macOS := filepath.Dir(resolved)
 	if filepath.Base(macOS) != "MacOS" || filepath.Base(filepath.Dir(macOS)) != "Contents" {
 		return "", false, nil
 	}

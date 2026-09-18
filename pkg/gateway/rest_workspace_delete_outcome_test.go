@@ -46,7 +46,7 @@ func TestHandleWorkspaceDelete_CompleteEnvelopeIs200Not204(t *testing.T) {
 	if len(state.ChangedFields) != 1 || state.ChangedFields[0] != "workspace" {
 		t.Fatalf("changed_fields=%v want [workspace]", state.ChangedFields)
 	}
-	if _, err := os.Stat(record); !os.IsNotExist(err) {
+	if _, err := os.Stat(record); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("workspace record must be gone: %v", err)
 	}
 }
@@ -104,7 +104,7 @@ func TestHandleWorkspaceDelete_DirectoryWipeFailureReportsPartialEnvelope(t *tes
 	if state.ErrorStage == nil || *state.ErrorStage != "remove_directory" {
 		t.Fatalf("error_stage=%v want remove_directory", state.ErrorStage)
 	}
-	if _, err := os.Stat(record); !os.IsNotExist(err) {
+	if _, err := os.Stat(record); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("authoritative record must already be gone: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, "AGENT.md")); err != nil {

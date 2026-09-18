@@ -107,7 +107,7 @@ export function MCPServerPicker({
                     key={value}
                     className="flex items-center gap-2 text-[11px] text-[var(--color-secondary)]"
                   >
-                    <input
+                    <input tabIndex={0}
                       type="radio"
                       name={`mcp-mode-${server.id}`}
                       value={value}
@@ -136,7 +136,7 @@ export function MCPServerPicker({
                       const checked = (binding?.tools ?? []).includes(toolName)
                       return (
                         <label key={toolName} className="flex items-center gap-2 text-[11px] font-mono text-[var(--color-muted)]">
-                          <input
+                          <input tabIndex={0}
                             type="checkbox"
                             checked={checked}
                             data-testid={`mcp-tool-${server.id}-${toolName}`}

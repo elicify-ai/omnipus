@@ -40,10 +40,10 @@ func digestTree(root, exclude string) (string, int, error) {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
-		switch {
-		case rel == ".":
+		switch rel {
+		case ".":
 			return nil
-		case rel == exclude:
+		case exclude:
 			return nil
 		}
 		fmt.Fprint(h, len(rel), ":", rel, ":")
@@ -233,14 +233,14 @@ func addWorkspaceView(env *RuntimeEnv, workspaceRoot string) error {
 	if err := validateCleanAbsPath("workspace root", workspaceRoot); err != nil {
 		return err
 	}
-	real, err := filepath.EvalSymlinks(workspaceRoot)
+	resolved, err := filepath.EvalSymlinks(workspaceRoot)
 	if err != nil {
 		if fsErrorIsNotExist(err) {
 			return nil
 		}
 		return fmt.Errorf("resolve workspace root: %w", err)
 	}
-	root, err := openConfinedRoot("workspace root", real)
+	root, err := openConfinedRoot("workspace root", resolved)
 	if err != nil {
 		if fsErrorIsNotExist(err) {
 			return nil // raced away between resolve and open: no env
@@ -248,7 +248,7 @@ func addWorkspaceView(env *RuntimeEnv, workspaceRoot string) error {
 		return fmt.Errorf("open workspace root: %w", err)
 	}
 	defer root.Close()
-	envRoot := filepath.Join(real, filepath.FromSlash(workspaceEnvRelative))
+	envRoot := filepath.Join(resolved, filepath.FromSlash(workspaceEnvRelative))
 	info, err := root.Stat(workspaceEnvRelative)
 	if err != nil {
 		if fsErrorIsNotExist(err) {
@@ -299,14 +299,14 @@ func pathWithin(root, path string) bool {
 // shared environments must not fail unrelated turns. A store that exists but
 // is NOT reachable inside the data root is an error, never a grant.
 func resolveStoreDir(dataRoot string) (store string, absent bool, err error) {
-	real, err := resolveExistingDir("data root", dataRoot)
+	resolved, err := resolveExistingDir("data root", dataRoot)
 	if err != nil {
 		if fsErrorIsNotExist(err) {
 			return "", true, nil // no data root yet: nothing published
 		}
 		return "", false, err
 	}
-	root, err := openConfinedRoot("data root", real)
+	root, err := openConfinedRoot("data root", resolved)
 	if err != nil {
 		if fsErrorIsNotExist(err) {
 			return "", true, nil
@@ -320,5 +320,5 @@ func resolveStoreDir(dataRoot string) (store string, absent bool, err error) {
 		}
 		return "", false, fmt.Errorf("shared store is not accessible inside the data root: %w", err)
 	}
-	return filepath.Join(real, filepath.FromSlash(storeRelative)), false, nil
+	return filepath.Join(resolved, filepath.FromSlash(storeRelative)), false, nil
 }

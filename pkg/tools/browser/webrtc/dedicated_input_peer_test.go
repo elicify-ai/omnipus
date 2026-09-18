@@ -22,7 +22,11 @@ func TestDedicatedInputPeerGathersOnSharedMediaMux(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	mux := newTestUDPMux(t, conn)
-	mediaPort := conn.LocalAddr().(*net.UDPAddr).Port
+	udpAddr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		t.Fatalf("media mux listener address is %T, want *net.UDPAddr", conn.LocalAddr())
+	}
+	mediaPort := udpAddr.Port
 
 	peer := NewDedicatedInputPeer(context.Background(), Config{
 		MediaUDPMux: mux,

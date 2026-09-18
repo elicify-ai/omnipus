@@ -250,7 +250,7 @@ func TestAgentDelete_ReloadFuncFailure_StillSucceeds_WithPublishWarning(t *testi
 	if got := body["changed_fields"]; !reflect.DeepEqual(got, []any{"entity", "soul"}) {
 		t.Fatalf("changed_fields=%v want [entity soul]", got)
 	}
-	if _, err := os.Stat(filepath.Join(deleteDeps.Home, "agents", id, "SOUL.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(deleteDeps.Home, "agents", id, "SOUL.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("SOUL.md stat error=%v want not exist", err)
 	}
 	if got, err := os.ReadFile(unrelatedPath); err != nil || string(got) != "keep me" {

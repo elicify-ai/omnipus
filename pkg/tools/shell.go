@@ -206,8 +206,8 @@ type ExecTool struct {
 // Admin write grant — installation goes through environment_setup, not a
 // bash finalizer (ES-FR-03/04).
 func (t *ExecTool) SetDocumentRuntime(layout documentruntime.Layout) {
-	copy := layout
-	t.documentRuntime = &copy
+	layoutCopy := layout
+	t.documentRuntime = &layoutCopy
 }
 
 // GodModeForTest exposes the resolved god-mode flag for white-box testing.

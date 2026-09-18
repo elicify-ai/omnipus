@@ -38,9 +38,15 @@ func (t *AgentUpdateTool) executeADR090(args map[string]any) *tools.ToolResult {
 		return tools.ErrorResult(errorJSON("WORKSPACE_ERROR", err.Error(), ""))
 	}
 	store := agentstore.New(home)
-	soul, err := optionalSoul(args)
-	if err != nil {
-		return fieldErrorResult(err)
+	// An absent soul is a normal "field not supplied" case, not an error: the
+	// pointer stays nil and MutateState leaves the persisted soul untouched.
+	var soul *string
+	if raw, present := args["soul"]; present {
+		v, ok := raw.(string)
+		if !ok || strings.TrimSpace(v) == "" {
+			return fieldErrorResult(fieldErr("soul", "soul must be a nonblank string"))
+		}
+		soul = &v
 	}
 	if _, present := args["default"]; present {
 		if err := requireDefaultWriter(t.deps); err != nil {
@@ -134,18 +140,6 @@ func validateColorIconArgs(args map[string]any) *tools.ToolResult {
 		}
 	}
 	return nil
-}
-
-func optionalSoul(args map[string]any) (*string, error) {
-	raw, present := args["soul"]
-	if !present {
-		return nil, nil
-	}
-	v, ok := raw.(string)
-	if !ok || strings.TrimSpace(v) == "" {
-		return nil, fieldErr("soul", "soul must be a nonblank string")
-	}
-	return &v, nil
 }
 
 func suppliedAgentFields(args map[string]any) []string {

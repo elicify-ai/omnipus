@@ -17,13 +17,13 @@ import (
 func TestSeededEdgeDepth_SelfPinAndNonSelfCopy(t *testing.T) {
 	policyTwo := 2
 	cases := []struct {
-		name        string
-		from, to    string
-		policy      *int
-		ceiling     int
-		wantNil     bool
-		want        int
-		keepPolicy  bool // returned pointer must not alias policy
+		name       string
+		from, to   string
+		policy     *int
+		ceiling    int
+		wantNil    bool
+		want       int
+		keepPolicy bool // returned pointer must not alias policy
 	}{
 		{"jim self, unset ceiling pins 3", "jim", "jim", nil, 0, false, 3, false},
 		{"jim self, ceiling 1 clamps to 1", "jim", "jim", nil, 1, false, 1, false},

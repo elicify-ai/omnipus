@@ -1,12 +1,13 @@
-//go:build !windows && !darwin
+//go:build !windows && !darwin && !linux
 
 package tools
 
 import "testing"
 
-// installKernelTestBackend on Linux: no backend install is needed — the
-// per-turn Landlock domain is applied at spawn time on the launching thread
-// (StartLockedWithPolicy), which is the CRIT-1 call site this fixture guards.
+// installKernelTestBackend on platforms with no kernel sandbox backend:
+// skip truthfully — the fixture asserts real kernel denials that nothing
+// on such a platform can enforce.
 func installKernelTestBackend(t *testing.T, _ string) {
 	t.Helper()
+	t.Skip("no kernel sandbox backend on this platform")
 }

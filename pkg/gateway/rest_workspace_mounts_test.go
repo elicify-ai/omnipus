@@ -120,7 +120,9 @@ func TestHandleWorkspaces_Delete_NeverTouchesMountedFolder(t *testing.T) {
 	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	r.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(w, r)
-	require.Equal(t, http.StatusNoContent, w.Code, "body=%s", w.Body.String())
+	// ADR-090 §5.2: DELETE returns a 200 ConfigurationMutationState envelope
+	// (not the old bare 204).
+	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 
 	data, err := os.ReadFile(filepath.Join(target, "operator-file.txt"))
 	require.NoError(t, err, "the operator's mounted folder must survive workspace deletion (FR-8.6)")
@@ -191,7 +193,11 @@ func TestHandleWorkspaceMountCreate_D117_SystemDirectoryRefused(t *testing.T) {
 		var resp gen.WorkspaceMountCreateResponse
 		require.NoError(t, json.Unmarshal(broad.Body.Bytes(), &resp))
 		require.NotNil(t, resp.Warning, "a broad location must carry a warning the dialog can show")
-		assert.Contains(t, *resp.Warning, "broad location")
+		// The warning's wording changed with ADR-090's mount hardening: it now
+		// names the CONCRETE consequence (everything else under the mount root
+		// becomes agent-writable) instead of the old generic "broad location"
+		// phrase. Pin the consequence clause, not the phrasing history.
+		assert.Contains(t, *resp.Warning, "writable by any agent on this workspace")
 	}
 }
 

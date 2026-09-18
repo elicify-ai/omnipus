@@ -61,6 +61,11 @@ const STUB_CHANNELS = [
 // schema and REJECTS the whole payload on any mismatch (ApiSchemaError) —
 // stubs must carry every schema-required field or the panel renders its
 // "Couldn't load agent list." error instead of routing-agent-select.
+// `revision` is REQUIRED on the Agent and Workspace schemas under ADR-090
+// (ConfigurationRevision, ^[a-f0-9]{64}$) — a stub missing it makes the SPA's
+// zod validation reject the whole GET payload (ApiSchemaError), so the Routing
+// section renders "Couldn't load agent list." instead of the pickers.
+const STUB_REVISION = 'a'.repeat(64)
 const AGENT_REQUIRED = {
   status: 'idle',
   soul: 'stub soul',
@@ -70,6 +75,7 @@ const AGENT_REQUIRED = {
   // generated AgentSchema rejects the payload and the panel shows
   // "Couldn't load agent list." false = healthy (has a usable model).
   needs_model: false,
+  revision: STUB_REVISION,
 }
 const STUB_AGENTS = [
   { id: 'mia', name: 'Mia', type: 'core', locked: true, ...AGENT_REQUIRED },
@@ -85,6 +91,7 @@ const WS_REQUIRED = {
   pin_order: 0,
   created_at: '2026-07-01T00:00:00Z',
   updated_at: '2026-07-01T00:00:00Z',
+  revision: STUB_REVISION,
 }
 
 const STUB_WORKSPACES = [
@@ -144,7 +151,7 @@ async function registerBaseRoutes(
     workspacesOverride = STUB_WORKSPACES,
     workspaceDetailOverride = {
       sales: STUB_WORKSPACE_SALES,
-      engineering: { id: 'engineering', name: 'Engineering', status: 'active', core_team: ['jim', 'ava'], task_count: 0 },
+      engineering: { id: 'engineering', name: 'Engineering', status: 'active', core_team: ['jim', 'ava'], task_count: 0, ...WS_REQUIRED },
       'empty-ws': STUB_WORKSPACE_EMPTY,
     },
   } = opts

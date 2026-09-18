@@ -1908,10 +1908,7 @@ func FixtureAgentToolsResponse_Populated() AgentToolsResponse {
 				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -1954,10 +1951,7 @@ func FixtureAgentToolsResponse_Edge() AgentToolsResponse {
 				Policies map[string]AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -2554,10 +2548,7 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 				Policies map[string]AgentCreateRequestMainToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -2568,15 +2559,9 @@ func FixtureAgentCreateRequestMain_Populated() AgentCreateRequestMain {
 				},
 			},
 			Mcp: &struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			}{
-				Servers: &[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				}{{Id: "my-mcp"}},
+				Servers: &[]AgentToolsMcpServerBinding{{Id: "my-mcp"}},
 			},
 		},
 	}
@@ -2618,10 +2603,7 @@ func FixtureAgentCreateRequestSubagent_Populated() AgentCreateRequestSubagent {
 				Policies map[string]AgentCreateRequestSubagentToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -2773,10 +2755,7 @@ func FixtureAgentUpdateRequest_Populated() AgentUpdateRequest {
 				Policies map[string]AgentUpdateRequestToolsCfgBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {

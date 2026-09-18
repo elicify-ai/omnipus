@@ -318,9 +318,10 @@ func (t *SkillListTool) executeManagement(ctx context.Context, name string) *too
 		}
 		seen[key] = struct{}{}
 		origin, impact := info.Source, "all_agents"
-		if origin == "global" {
+		switch origin {
+		case "global":
 			origin = "user"
-		} else if origin == "workspace" {
+		case "workspace":
 			origin, impact = "project", "workspace_members"
 		}
 		items = append(items, managedSkill{info: info, origin: origin, sharedImpact: impact})

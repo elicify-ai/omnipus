@@ -35,11 +35,11 @@ func TestWorkspaceEnvRootToleratesDeepLayout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	real, err := filepath.EvalSymlinks(ws)
+	resolved, err := filepath.EvalSymlinks(ws)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := filepath.Join(real, ".omnipus", "env"); got != want {
+	if want := filepath.Join(resolved, ".omnipus", "env"); got != want {
 		t.Fatalf("env root = %q, want %q", got, want)
 	}
 }
@@ -57,7 +57,7 @@ func TestReadFileLimitedRejectsOversizeControlFile(t *testing.T) {
 
 	// Exactly the cap: fine.
 	okBytes := make([]byte, 64<<10)
-	if err := os.WriteFile(filepath.Join(dir, "exact"), okBytes, 0o644); err != nil {
+	if err = os.WriteFile(filepath.Join(dir, "exact"), okBytes, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	f, err := root.Open("exact")
@@ -75,7 +75,7 @@ func TestReadFileLimitedRejectsOversizeControlFile(t *testing.T) {
 
 	// One byte over: rejected as oversize, not truncated.
 	big := make([]byte, 64<<10+1)
-	if err := os.WriteFile(filepath.Join(dir, "big"), big, 0o644); err != nil {
+	if err = os.WriteFile(filepath.Join(dir, "big"), big, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	f, err = root.Open("big")

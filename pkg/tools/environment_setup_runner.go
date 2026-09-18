@@ -187,10 +187,11 @@ func (t *EnvironmentSetupTool) setupEnv(lim sandbox.Limits, area EnvironmentSetu
 	// PATH ahead of the scrubbed base. Same per-OS bin-dir names storage uses
 	// ("bin" always; "Scripts" also on Windows) and the PATH separator rule,
 	// kept in lockstep like the env-var literals above.
-	binDirs := []string{filepath.Join(prefix, "bin")}
+	binDirs := make([]string, 0, 2+len(runtimeEnv.BinDirs))
 	if runtime.GOOS == "windows" {
-		binDirs = []string{filepath.Join(prefix, "Scripts"), filepath.Join(prefix, "bin")}
+		binDirs = append(binDirs, filepath.Join(prefix, "Scripts"))
 	}
+	binDirs = append(binDirs, filepath.Join(prefix, "bin"))
 	// Existing runtime directories follow the selected destination. This lets
 	// a new shared generation use helpers from prior published generations,
 	// and lets a workspace install use its earlier environment, without any
@@ -407,19 +408,9 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 		}
 
 		// MAJ-1: persist the publication outcome on the EXISTING session —
-		// the note feeds poll, the cap-aware buffer append feeds read, and
-		// the terminal status is written only NOW (after publication), so a
-		// mid-publication poll truthfully reports "running". One mutex
-		// section keeps the note, buffer, and status atomic.
-		session.mu.Lock()
-		session.resultNote = t.setupPollNote(pub)
-		if !session.outputTruncated {
-			session.outputBuffer.WriteString(notice)
-		}
-		if naturalExit && session.Status == StatusRunning {
-			session.Status = StatusDone
-		}
-		session.mu.Unlock()
+		// ordering and the publication-window terminal discipline live in
+		// persistCompletionOutcome.
+		t.persistCompletionOutcome(session, pub, notice, naturalExit, finalExitCode)
 
 		// Publication audit trail: a shared install that exited 0 but failed
 		// to publish must be VISIBLE as an error, not folded into exit 0.
@@ -449,6 +440,35 @@ func (t *EnvironmentSetupTool) startSession(ctx context.Context, plan startPlan)
 		ForLLM:  string(data) + notice,
 		ForUser: fmt.Sprintf("Installation session %s started", session.ID),
 		IsError: marshalErr != nil,
+	}
+}
+
+// persistCompletionOutcome writes the terminal record once publication has
+// settled, atomically under one mutex section: the note feeds poll and read,
+// the cap-aware buffer append feeds read, and the terminal status is the
+// LAST thing written, so a poll landing mid-publication truthfully reports
+// "running".
+//
+// When the natural exit was captured before publishTarget ran and the shared
+// publication committed, the install genuinely finished and is published — a
+// kill, timeout, cancel cascade, or shutdown reaper landing in the
+// publication window stopped nothing, and every such relabel writes
+// ExitCode=-1. The truthful terminal record is therefore done with the
+// captured exit code, and both fields are written back, refusing the
+// mid-flight downgrade. Any other terminal label means the natural exit was
+// never captured (a real cancellation or failure): it stands.
+func (t *EnvironmentSetupTool) persistCompletionOutcome(session *ProcessSession, pub setupPublication, notice string, naturalExit bool, finalExitCode int) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	session.resultNote = t.setupPollNote(pub)
+	if !session.outputTruncated {
+		session.outputBuffer.WriteString(notice)
+	}
+	if naturalExit && pub.outcome == "committed" {
+		session.Status = StatusDone
+		session.ExitCode = finalExitCode
+	} else if naturalExit && session.Status == StatusRunning {
+		session.Status = StatusDone
 	}
 }
 
@@ -713,9 +733,16 @@ func (t *EnvironmentSetupTool) sessionActionResult(sessionID string, session *Pr
 		slog.Warn("environment_setup: failed to marshal session action response", "error", marshalErr.Error())
 		data = marshalErrorFallback(marshalErr)
 	}
-	return &ToolResult{
+	result := &ToolResult{
 		ForLLM:  string(data),
 		ForUser: fmt.Sprintf("Session %s %s", sessionID, status),
 		IsError: marshalErr != nil,
 	}
+	// Poll/read/kill parity: a finished session's kill action carries the
+	// same persisted publication story, so a publication failure is never
+	// hidden behind a bare {"status":"done"}.
+	if note := session.ResultNote(); note != "" {
+		result.ForLLM += "\n\n" + note
+	}
+	return result
 }

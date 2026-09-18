@@ -44,25 +44,59 @@ func TestChatTransportsCorrelatedToolImagesInOrder(t *testing.T) {
 	if _, err := p.Chat(t.Context(), messages, nil, "model", map[string]any{"max_tokens": 10}); err != nil {
 		t.Fatal(err)
 	}
-	apiMessages := body["messages"].([]any)
+	apiMessages, ok := body["messages"].([]any)
+	if !ok {
+		t.Fatalf("messages=%#v, want array", body["messages"])
+	}
 	var ids []string
 	var images [][]byte
 	for _, rawMessage := range apiMessages {
-		for _, rawBlock := range rawMessage.(map[string]any)["content"].([]any) {
-			block := rawBlock.(map[string]any)
+		message, ok := rawMessage.(map[string]any)
+		if !ok {
+			t.Fatalf("message=%#v, want object", rawMessage)
+		}
+		content, ok := message["content"].([]any)
+		if !ok {
+			t.Fatalf("message content=%#v, want array", message["content"])
+		}
+		for _, rawBlock := range content {
+			block, ok := rawBlock.(map[string]any)
+			if !ok {
+				t.Fatalf("content block=%#v, want object", rawBlock)
+			}
 			if block["type"] != "tool_result" {
 				continue
 			}
-			ids = append(ids, block["tool_use_id"].(string))
-			for _, rawChild := range block["content"].([]any) {
-				child := rawChild.(map[string]any)
-				if child["type"] == "image" {
-					decoded, err := base64.StdEncoding.DecodeString(child["source"].(map[string]any)["data"].(string))
-					if err != nil {
-						t.Fatal(err)
-					}
-					images = append(images, decoded)
+			toolUseID, ok := block["tool_use_id"].(string)
+			if !ok {
+				t.Fatalf("tool_use_id=%#v, want string", block["tool_use_id"])
+			}
+			ids = append(ids, toolUseID)
+			blockContent, ok := block["content"].([]any)
+			if !ok {
+				t.Fatalf("tool_result content=%#v, want array", block["content"])
+			}
+			for _, rawChild := range blockContent {
+				child, ok := rawChild.(map[string]any)
+				if !ok {
+					t.Fatalf("result child=%#v, want object", rawChild)
 				}
+				if child["type"] != "image" {
+					continue
+				}
+				source, ok := child["source"].(map[string]any)
+				if !ok {
+					t.Fatalf("image source=%#v, want object", child["source"])
+				}
+				data, ok := source["data"].(string)
+				if !ok {
+					t.Fatalf("image data=%#v, want string", source["data"])
+				}
+				decoded, err := base64.StdEncoding.DecodeString(data)
+				if err != nil {
+					t.Fatal(err)
+				}
+				images = append(images, decoded)
 			}
 		}
 	}

@@ -5,6 +5,7 @@
 package environmentsetup
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -32,17 +33,17 @@ func writeExecutable(t *testing.T, dir, path string) {
 }
 
 // unlockForTest restores writability on a committed (read-only) generation so
-// t.TempDir cleanup can remove it.
+// t.TempDir cleanup can remove it. Best-effort: an entry that cannot be
+// visited or chmod'ed is skipped, never aborts the walk.
 func unlockForTest(root string) {
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.Type()&fs.ModeSymlink != 0 {
-			return nil
+		if err == nil && d.Type()&fs.ModeSymlink == 0 {
+			if d.IsDir() {
+				_ = os.Chmod(path, 0o755)
+			} else {
+				_ = os.Chmod(path, 0o644)
+			}
 		}
-		if d.IsDir() {
-			_ = os.Chmod(path, 0o755)
-			return nil
-		}
-		_ = os.Chmod(path, 0o644)
 		return nil
 	})
 }
@@ -82,11 +83,11 @@ func TestBeginInstallWorkspaceCreatesReservedSubtree(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = target.Abort() })
-	real, err := filepath.EvalSymlinks(ws)
+	resolved, err := filepath.EvalSymlinks(ws)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := filepath.Join(real, ".omnipus", "env")
+	want := filepath.Join(resolved, ".omnipus", "env")
 	if target.Prefix() != want {
 		t.Fatalf("prefix = %q, want %q", target.Prefix(), want)
 	}
@@ -102,9 +103,9 @@ func TestBeginInstallWorkspaceCreatesReservedSubtree(t *testing.T) {
 }
 
 func TestBeginInstallWorkspaceResolvesSymlinkedRoot(t *testing.T) {
-	real := t.TempDir()
+	resolved := t.TempDir()
 	link := filepath.Join(t.TempDir(), "ws-link")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(resolved, link); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	target, err := BeginInstall(t.TempDir(), link, ScopeWorkspace)
@@ -188,10 +189,10 @@ func TestSharedAbortPreservesPublishedGenerations(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeExecutable(t, b.Prefix(), "bin/tool-b-broken")
-	if err := b.Abort(); err != nil {
+	if err = b.Abort(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(b.Prefix()); !os.IsNotExist(err) {
+	if _, err = os.Stat(b.Prefix()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("aborted generation dir still present: %v", err)
 	}
 	valid, broken, err := SharedPublished(dataRoot)
@@ -202,7 +203,7 @@ func TestSharedAbortPreservesPublishedGenerations(t *testing.T) {
 		t.Fatalf("after failed B: valid=%d broken=%d — A must remain published", len(valid), len(broken))
 	}
 	// A's files remain reachable at their exact published paths.
-	if _, err := os.Stat(filepath.Join(a.Prefix(), "bin", "tool-a")); err != nil {
+	if _, err = os.Stat(filepath.Join(a.Prefix(), "bin", "tool-a")); err != nil {
 		t.Fatalf("A's files must stay reachable: %v", err)
 	}
 }
@@ -217,13 +218,13 @@ func TestSharedPrefixPathStableAcrossPublication(t *testing.T) {
 	prefixBefore := target.Prefix()
 	// A script embeds the absolute prefix path (venv-shebang analogue).
 	script := filepath.Join(prefixBefore, "bin", "embedded")
-	if err := os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(script, []byte("#!"+prefixBefore+"/bin/interp\n"), 0o755); err != nil {
+	if err = os.WriteFile(script, []byte("#!"+prefixBefore+"/bin/interp\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := target.Commit(); err != nil {
+	if _, err = target.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	if target.Prefix() != prefixBefore {
@@ -446,8 +447,8 @@ func TestBeginInstallSharedPreallocatesInsideStore(t *testing.T) {
 	t.Cleanup(func() { _ = target.Abort() })
 
 	for _, dir := range []string{target.Prefix(), target.Cache(), target.Tmp()} {
-		info, err := os.Stat(dir)
-		if err != nil {
+		var info os.FileInfo
+		if info, err = os.Stat(dir); err != nil {
 			t.Fatalf("pre-allocated destination missing on return: %s: %v", dir, err)
 		}
 		if !info.IsDir() {

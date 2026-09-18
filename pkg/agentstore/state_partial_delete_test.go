@@ -77,7 +77,7 @@ func TestDeleteState_SoulRemovalFailureReportsNoReadableRevision(t *testing.T) {
 	if _, readErr := s.ReadState("agent-1"); !errors.Is(readErr, entity.ErrNotFound) {
 		t.Fatalf("ReadState error=%v, want entity.ErrNotFound", readErr)
 	}
-	if _, statErr := os.Stat(entityPath); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(entityPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("entity stat error=%v, want not exist", statErr)
 	}
 	got, readErr := os.ReadFile(soulPath)

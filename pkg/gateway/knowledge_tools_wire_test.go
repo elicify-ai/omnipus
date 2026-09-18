@@ -337,16 +337,14 @@ func TestKnowledgeTools_AllEightRegisteredForEveryAgent(t *testing.T) {
 // 3. Reachable at runtime, not merely present in a map (D17).
 // ---------------------------------------------------------------------------
 
-// knowledgeReadToolNames / knowledgeWriteToolNames split the knowledge
-// family by blast radius, matching pkg/coreagent/core.go's actual seed axis
-// — superseding this file's old retrieval/authoring split. Widened by KB-1/
-// KB-2 (defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
-// 2026-09-08): knowledge_list joins the read tier (reports only),
-// knowledge_base_create joins the write tier (makes a new collection).
-var (
-	knowledgeReadToolNames  = []string{"knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
-	knowledgeWriteToolNames = []string{"knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create"}
-)
+// knowledgeReadToolNames names the read tier of the knowledge family, which
+// the tests below split by blast radius via the adr090KnowledgePosture map,
+// matching pkg/coreagent/core.go's actual seed axis — superseding this
+// file's old retrieval/authoring split. Widened by KB-1/KB-2
+// (defect-list-knowledge-base-ux-2026-09-08.md, founder-ratified
+// 2026-09-08): knowledge_list joins the read tier (reports only);
+// knowledge_base_create stays in the write tier (makes a new collection).
+var knowledgeReadToolNames = []string{"knowledge_describe", "knowledge_find", "knowledge_read", "knowledge_list"}
 
 // TestKnowledgeTools_SurviveTheTurnsPolicyFilter checks the actual offered
 // tool definitions, with denied writes as a control against a no-op filter.

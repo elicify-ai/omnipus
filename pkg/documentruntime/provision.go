@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -25,7 +26,7 @@ func ProvisionFirstParty(layout Layout) (Manifest, error) {
 	if err := os.MkdirAll(layout.Cache, 0o755); err != nil {
 		return Manifest{}, fmt.Errorf("create document worker cache: %w", err)
 	}
-	if data, err := os.ReadFile(layout.Manifest); err == nil {
+	if data, readErr := os.ReadFile(layout.Manifest); readErr == nil {
 		var existing Manifest
 		if err := json.Unmarshal(data, &existing); err != nil {
 			return Manifest{}, err
@@ -41,8 +42,8 @@ func ProvisionFirstParty(layout Layout) (Manifest, error) {
 			}
 			return existing, nil
 		}
-	} else if !os.IsNotExist(err) {
-		return Manifest{}, err
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return Manifest{}, readErr
 	}
 	manifest := Manifest{
 		Revision:  ManifestRevision,

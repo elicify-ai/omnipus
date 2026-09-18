@@ -600,43 +600,10 @@ func TestInfraManifestToolNames_Set(t *testing.T) {
 // literal name lists below are transcribed from ADR-071 §4.1, never
 // re-derived from a count.
 
-// tier3SearchOnlyToolNames is ADR-071 §4.1's literal Tier 3 list, transcribed
-// verbatim and kept current, now 66 names: 62 after write_agent_metadata's
-// retirement (a redundant, unguarded second door onto the same files
-// update_agent already writes through a properly-guarded path — see
-// pkg/sysagent/tools/metadata.go), plus ADR-075 D2's five new browser tools
-// and Stream C's browser_handle_dialog, minus create_plan and execute_plan,
-// which the ADR-071 amendment of 2026-09-14 moved to the previewed tier
-// (founder decision: agents never discovered them). It exists ONLY as the third leg
-// of the arithmetic check below — pkg/tools has no other reason to enumerate
-// Tier 3 by name, since search-only tools resolve to ManifestSearchOnly by
-// DEFAULT (everything lazy that isn't in previewedLazyToolNames), not by
-// membership in an explicit set.
-var tier3SearchOnlyToolNames = []string{
-	"append_file", "library_list", "library_read", "request_mount", "find_skills",
-	"install_skill", "browser_navigate", "browser_click", "browser_type", "browser_screenshot",
-	"browser_get_text", "browser_wait", "browser_evaluate", "browser_list_tabs", "browser_switch_tab",
-	"browser_close_tab", "browser_open_tab",
-	// ADR-075 D2 (ADR D1.9b ruling 3) — all five new browser tools are Tier 3
-	// search-only, alongside the other eleven. browser_upload_file is here
-	// even though FR-029 holds its registration: the tier sets are about
-	// manifest VISIBILITY of a catalog name, not about registration.
-	"browser_select_option", "browser_press_key", "browser_hover", "browser_snapshot",
-	"browser_upload_file",
-	// ADR-075 D2 Stream C — the dialog recovery verb, Tier 3 like the rest of
-	// the browser surface.
-	"browser_handle_dialog",
-	"create_workspace", "update_workspace", "delete_workspace",
-	"list_workspaces", "read_agent_metadata", "configure_provider",
-	"list_providers", "test_provider", "list_models", "run_doctor", "get_usage", "add_mcp_server",
-	"remove_mcp_server", "list_mcp_servers", "create_skill", "edit_skill", "create_task_in_workspace",
-	"update_task_in_workspace", "delete_task_in_workspace", "list_tasks_in_workspace", "remove_skill",
-	"list_skills", "enable_channel", "configure_channel", "disable_channel", "list_channels",
-	"test_channel", "get_config", "set_config", "create_agent", "update_agent", "delete_agent",
-	"run_task", "inspect_session", "plan_correct", "stop_plan",
-	"run_retrospective", "read_inbox", "search_email", "read_message", "send_email", "reply",
-	"delete_task",
-}
+// tier3SearchOnlyToolNames was ADR-071 §4.1’s literal Tier 3 list, transcribed
+// verbatim; removed as unused — no live reference remains (search-only tools
+// resolve to ManifestSearchOnly by DEFAULT per ADR-071 §4.4, everything lazy
+// that isn’t in previewedLazyToolNames, not by membership in an explicit set).
 
 // TestVisibility_TierArithmetic pins ADR-090's 36 full + 1 preview + 1 infra
 // cardinalities and their disjointness. Deferred tools remain lazy/search-only.
@@ -774,7 +741,8 @@ func TestVisibility_SearchOnlyToolsRemainInSearchIndex(t *testing.T) {
 // knowledge_restructure, knowledge_configure — see
 // pkg/agent/knowledge_tools.go's registerKnowledgeTools and
 // pkg/coreagent/catalog_count_test.go's currentKnowledgeToolNames). Declared here
-// (not merged into tier3SearchOnlyToolNames above) because that list is
+// (deliberately absent from ADR-071 §4.1's Tier 3 transcription, formerly the
+// tier3SearchOnlyToolNames list) because that list is
 // documented as "ADR-071 §4.1's literal Tier 3 list, transcribed verbatim" —
 // a closed historical snapshot of an ADR that predates ADR-068 and never
 // mentions these names; folding them in would misrepresent the transcription

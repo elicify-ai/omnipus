@@ -335,16 +335,34 @@ export async function createMainAgent(
   const agentId = res.body.id
 
   if (builtinPolicies !== undefined) {
-    const getRes = await apiFetch<{ config?: { builtin?: { policies?: Record<string, string> } } }>(
-      page,
-      'GET',
-      `/api/v1/agents/${agentId}/tools`,
-    )
+    const getRes = await apiFetch<{
+      revision?: string
+      override_names?: string[]
+      config?: { builtin?: { policies?: Record<string, string> } }
+    }>(page, 'GET', `/api/v1/agents/${agentId}/tools`)
     if (!getRes.ok) {
       throw new Error(`createMainAgent: GET /agents/${agentId}/tools failed ${getRes.status}: ${getRes.raw}`)
     }
+    // ADR-090 read-modify-write contract (AgentToolsUpdateRequest.yaml):
+    //   - `revision` is REQUIRED — echo the state hash from this GET; a
+    //     revision-less PUT is rejected.
+    //   - `override_names` is REQUIRED and is the ONLY set of keys persisted
+    //     as this agent's per-agent overrides; every key NOT named here is
+    //     validated against the CURRENT global ceiling, and any mismatch is a
+    //     409 "inherited echo" conflict (agentmutation.SelectOverrides).
+    //     A fresh POST /agents agent carries a complete deny-seeded stored
+    //     map (rest_agents_create.go: denyAllThenOverride), so every stored
+    //     key must be re-declared: list all stored override keys PLUS the
+    //     requested flips in override_names and send the complete map with
+    //     the flips applied. Untouched tools keep their existing explicit
+    //     entries — the deny-by-default policy boundary is preserved.
     const fullPolicies = { ...(getRes.body.config?.builtin?.policies ?? {}), ...builtinPolicies }
+    const overrideNames = Array.from(
+      new Set([...(getRes.body.override_names ?? []), ...Object.keys(builtinPolicies)]),
+    )
     const putRes = await apiFetch<{ warning?: string }>(page, 'PUT', `/api/v1/agents/${agentId}/tools`, {
+      revision: getRes.body.revision,
+      override_names: overrideNames,
       builtin: { policies: fullPolicies },
     })
     if (!putRes.ok) {
@@ -596,15 +614,16 @@ export function extractPlanCorrectCalls(
 }
 
 /**
- * Start a fresh chat session, route to a delegate-capable task agent, and
- * return when the composer is ready to receive input.
+ * Start a fresh chat session, route to the given built-in agent, and return
+ * when the composer is ready to receive input.
  *
- * AGENT ROUTING: conformance e2e uses Jim (the general-purpose task agent)
- * for goal/plan flows. Mia — the default — declines to perform goal-loop
- * or plan operations because her persona is "guide, not executor" (see
- * subagent.spec.ts's `startFreshChat` for the same rationale).
+ * AGENT ROUTING: pick the agent to match what the test's oracle needs. The
+ * ADR-090 role inventory (pkg/coreagent/role_policies_adr090.go) is
+ * deny-by-default — e.g. a `/goal` with a `[check: … exit:0]` machine
+ * criterion requires the SESSION agent to have `bash` allow (feasibility
+ * gate, FR-111/D9), so Jim (bash deny) can never run it; Mia or Admin can.
  */
-export async function startFreshChatWithJim(page: Page): Promise<void> {
+export async function startFreshChatWithAgent(page: Page, agent: RegExp): Promise<void> {
   await page.goto('/')
   // Drive /new via the slash command (the canonical replacement for the
   // header "New Chat" button that was removed in workspace top-bar redesign).
@@ -613,5 +632,13 @@ export async function startFreshChatWithJim(page: Page): Promise<void> {
   await input.fill('/new')
   await input.press('Enter')
   await expect(assistantMessages(page)).toHaveCount(0, { timeout: 15_000 })
-  await selectAgent(page, /Jim/i)
+  await selectAgent(page, agent)
+}
+
+/**
+ * Start a fresh chat routed to Jim (general-purpose task agent) — the
+ * delegate/plan-capable default for conformance goal/plan flows.
+ */
+export async function startFreshChatWithJim(page: Page): Promise<void> {
+  await startFreshChatWithAgent(page, /Jim/i)
 }

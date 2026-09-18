@@ -21,27 +21,27 @@ func TestProvisionFirstPartyInventoryFailureDoesNotPublishManifest(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(layout.Skills, 0o755); err != nil {
+	if err = os.MkdirAll(layout.Skills, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	broken := filepath.Join(layout.Skills, "unreadable-asset")
-	if err := os.Symlink(filepath.Join(layout.Prefix, "missing-asset"), broken); err != nil {
+	if err = os.Symlink(filepath.Join(layout.Prefix, "missing-asset"), broken); err != nil {
 		t.Fatal(err)
 	}
 
 	for attempt := 1; attempt <= 2; attempt++ {
-		_, err := ProvisionFirstParty(layout)
+		_, err = ProvisionFirstParty(layout)
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("attempt %d: want missing asset inventory error, got %v", attempt, err)
 		}
-		if _, err := os.Stat(layout.Manifest); !errors.Is(err, os.ErrNotExist) {
+		if _, err = os.Stat(layout.Manifest); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("attempt %d: failed inventory must leave manifest absent, stat error=%v", attempt, err)
 		}
 	}
 
 	// Once the asset problem is removed, retry must actually inventory the
 	// exported packages rather than accept an earlier empty-assets manifest.
-	if err := os.Remove(broken); err != nil {
+	if err = os.Remove(broken); err != nil {
 		t.Fatal(err)
 	}
 	manifest, err := ProvisionFirstParty(layout)
@@ -82,7 +82,7 @@ func TestProvisionFirstPartyRebuildsEmptyInventoryManifest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.MkdirAll(layout.Prefix, 0o755); err != nil {
+			if err = os.MkdirAll(layout.Prefix, 0o755); err != nil {
 				t.Fatal(err)
 			}
 			incomplete := Manifest{Revision: ManifestRevision, Assets: tc.assets}
@@ -90,7 +90,7 @@ func TestProvisionFirstPartyRebuildsEmptyInventoryManifest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(layout.Manifest, data, 0o644); err != nil {
+			if err = os.WriteFile(layout.Manifest, data, 0o644); err != nil {
 				t.Fatal(err)
 			}
 
@@ -120,13 +120,13 @@ func TestProvisionFirstPartyRebuildsEmptyInventoryManifest(t *testing.T) {
 				t.Fatal(err)
 			}
 			var persisted Manifest
-			if err := json.Unmarshal(data, &persisted); err != nil {
+			if err = json.Unmarshal(data, &persisted); err != nil {
 				t.Fatal(err)
 			}
 			if !reflect.DeepEqual(got, persisted) {
 				t.Fatal("rebuilt manifest must be persisted")
 			}
-			if _, err := os.Stat(filepath.Join(layout.Lib, "python", "omnipus_document_probe", "__main__.py")); err != nil {
+			if _, err = os.Stat(filepath.Join(layout.Lib, "python", "omnipus_document_probe", "__main__.py")); err != nil {
 				t.Fatalf("rebuilding incomplete cache must install probe: %v", err)
 			}
 			again, err := ProvisionFirstParty(layout)

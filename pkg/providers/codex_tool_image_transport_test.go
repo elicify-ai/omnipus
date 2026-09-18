@@ -90,7 +90,11 @@ func TestCodexProvider_ChatTransportsCorrelatedToolImagesInOrder(t *testing.T) {
 		if !reflect.DeepEqual(output, want) {
 			t.Fatalf("call-%d output=%#v, want %#v", index+1, output, want)
 		}
-		encoded := output[1]["image_url"].(string)[len("data:image/png;base64,"):]
+		imageURL, ok := output[1]["image_url"].(string)
+		if !ok {
+			t.Fatalf("call-%d image_url=%#v, want string", index+1, output[1]["image_url"])
+		}
+		encoded := imageURL[len("data:image/png;base64,"):]
 		data, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			t.Fatal(err)

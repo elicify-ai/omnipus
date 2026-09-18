@@ -126,17 +126,15 @@ const (
 	ManifestSearchOnly
 )
 
-// previewedLazyToolNames is the exact 9-name Tier 2 set (ADR-071 D3 §4.1,
-// minus navigate's retirement, which held one of the original 8 slots as a
-// total no-op — its callback was nil in every production path and nothing
-// anywhere could receive a navigation event; plus create_plan and
-// execute_plan, moved in from search-only by the 2026-09-14 amendment; see
-// TestVisibility_PreviewedSetIsExactlyNine's doc comment in
-// manifest_test.go): lazy tools that still render a preview line in the
-// compressed manifest block. Everything else lazy resolves to ManifestSearchOnly.
-// Membership is pinned by TestVisibility_PreviewedSetIsExactlyNine — adding
-// a tool here (or removing one) without updating that test's literal list is
-// a build failure by design (FR-034).
+// previewedLazyToolNames is the Tier 2 set: lazy tools that still render a
+// preview line in the compressed manifest block (ADR-071 D3 §4.1 as amended).
+// Under ADR-090's 37-name upfront set the previewed tier has collapsed to
+// serve_web alone; overall cardinality (36 full + 1 previewed + 1 infra) is
+// pinned by TestVisibility_TierArithmetic, and previewed membership itself by
+// TestVisibility_PreviewedSetIsServeWebOnly in manifest_test.go — adding a
+// tool here (or removing one) without updating that test's literal list is
+// a build failure by design (FR-034). Everything else lazy resolves to
+// ManifestSearchOnly.
 //
 // A preview line is never a policy bypass: BuildCompressedManifest renders
 // only the tools its caller passes, and the agent loop passes the

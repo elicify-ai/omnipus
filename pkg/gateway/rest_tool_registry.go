@@ -329,16 +329,10 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	}
 	sort.Strings(overrideNames)
 
-	mcpServers := make([]struct {
-		Id    string    `json:"id"`
-		Tools *[]string `json:"tools,omitempty"`
-	}, 0)
+	mcpServers := make([]gen.AgentToolsMcpServerBinding, 0)
 	if toolsCfg != nil {
 		for _, binding := range toolsCfg.MCP.Servers {
-			entry := struct {
-				Id    string    `json:"id"`
-				Tools *[]string `json:"tools,omitempty"`
-			}{Id: binding.ID}
+			entry := gen.AgentToolsMcpServerBinding{Id: binding.ID}
 			if binding.ToolsSpecified {
 				copied := append([]string(nil), binding.Tools...)
 				if copied == nil {
@@ -361,10 +355,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 				Policies map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]gen.AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -379,10 +370,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 			// assignment. An empty servers list means no servers assigned;
 			// omitted tools on a binding still means all tools of that server.
 			Mcp: &struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]gen.AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			}{Servers: &mcpServers},
 		},
 		Tools: toolEntries,

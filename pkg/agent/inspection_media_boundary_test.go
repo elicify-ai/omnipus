@@ -123,8 +123,8 @@ func TestReadImage_HistoryAndDeliveryRegression(t *testing.T) {
 	}
 	assertInspectionRecordsPrivate(t, reloadedArchive, imageBytes, imagePath)
 
-	if _, _, err := al.processMessage(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "privacy", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "continue"}); err != nil {
-		t.Fatal(err)
+	if _, _, procErr := al.processMessage(context.Background(), bus.InboundMessage{Channel: "telegram", ChatID: "privacy", Sender: bus.SenderInfo{CanonicalID: "owner"}, Content: "continue"}); procErr != nil {
+		t.Fatal(procErr)
 	}
 	if requestHasInspectionMedia(provider.requests[len(provider.requests)-1]) {
 		t.Fatal("replay request redelivered private inspection media")
@@ -156,27 +156,35 @@ func assertInspectionFixture(t *testing.T, messages []providers.Message, width, 
 	if count != 1 {
 		t.Fatalf("inspection image count = %d, want 1", count)
 	}
+	var dataURL string
 	for _, message := range messages {
-		for _, dataURL := range message.Media {
-			comma := strings.IndexByte(dataURL, ',')
-			if comma < 0 {
-				t.Fatal("inspection media is not a data URL")
-			}
-			data, err := base64.StdEncoding.DecodeString(dataURL[comma+1:])
-			if err != nil {
-				t.Fatal(err)
-			}
-			img, err := png.Decode(bytes.NewReader(data))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if img.Bounds().Dx() != width || img.Bounds().Dy() != height || color.RGBAModel.Convert(img.At(0, 0)).(color.RGBA) != (color.RGBA{R: 0x51, G: 0x72, B: 0x93, A: 0xff}) {
-				t.Fatalf("inspection fixture changed: bounds=%v first_pixel=%v", img.Bounds(), img.At(0, 0))
-			}
-			return
+		if len(message.Media) > 0 {
+			dataURL = message.Media[0]
+			break
 		}
 	}
-	t.Fatal("inspection request contained no image")
+	if dataURL == "" {
+		t.Fatal("inspection request contained no image")
+	}
+	comma := strings.IndexByte(dataURL, ',')
+	if comma < 0 {
+		t.Fatal("inspection media is not a data URL")
+	}
+	data, err := base64.StdEncoding.DecodeString(dataURL[comma+1:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pixel, ok := color.RGBAModel.Convert(img.At(0, 0)).(color.RGBA)
+	if !ok {
+		t.Fatalf("inspection pixel is %T, want color.RGBA", img.At(0, 0))
+	}
+	if img.Bounds().Dx() != width || img.Bounds().Dy() != height || pixel != (color.RGBA{R: 0x51, G: 0x72, B: 0x93, A: 0xff}) {
+		t.Fatalf("inspection fixture changed: bounds=%v first_pixel=%v", img.Bounds(), img.At(0, 0))
+	}
 }
 
 type interruptedInspectionProvider struct {

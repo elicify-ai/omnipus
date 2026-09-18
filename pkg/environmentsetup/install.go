@@ -112,11 +112,11 @@ func BeginInstall(appDataRoot string, workspaceRoot string, scope Scope) (*Targe
 }
 
 func beginWorkspaceInstall(workspaceRoot string) (*Target, error) {
-	real, err := resolveExistingDir("workspace root", workspaceRoot)
+	resolved, err := resolveExistingDir("workspace root", workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
-	root, err := openConfinedRoot("workspace root", real)
+	root, err := openConfinedRoot("workspace root", resolved)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func beginWorkspaceInstall(workspaceRoot string) (*Target, error) {
 	// pre-existing symlink below the authorized workspace root is refused,
 	// not followed (ES-FR-03) — the child sandbox cannot retroactively
 	// protect these parent-side operations.
-	if err := mkdirConfined(root, "workspace metadata dir", workspaceMetaRelative); err != nil {
+	if err = mkdirConfined(root, "workspace metadata dir", workspaceMetaRelative); err != nil {
 		return nil, err
 	}
 	// The prefix lifetime lock lives in the reserved metadata dir, OUTSIDE
@@ -154,7 +154,7 @@ func beginWorkspaceInstall(workspaceRoot string) (*Target, error) {
 		lock.release()
 		return nil, err
 	}
-	lexical := filepath.Join(real, filepath.FromSlash(workspaceEnvRelative))
+	lexical := filepath.Join(resolved, filepath.FromSlash(workspaceEnvRelative))
 	return &Target{
 		scope:         ScopeWorkspace,
 		workspaceRoot: lexical, // resolved; kept for reference only
@@ -171,22 +171,22 @@ func beginSharedInstall(appDataRoot string) (*Target, error) {
 	// and not lexically): the store and all its ancestors below the data root
 	// are descendants of an authorized root, so a planted <dataRoot>/toolchains
 	// symlink must be refused here, before any creation follows it (CRIT2).
-	real, err := resolveExistingDir("data root", appDataRoot)
+	resolved, err := resolveExistingDir("data root", appDataRoot)
 	if err != nil {
 		return nil, err
 	}
-	root, err := openConfinedRoot("data root", real)
+	root, err := openConfinedRoot("data root", resolved)
 	if err != nil {
 		return nil, err
 	}
 	defer root.Close()
-	if err := mkdirConfined(root, "shared store", storeRelative); err != nil {
+	if err = mkdirConfined(root, "shared store", storeRelative); err != nil {
 		return nil, err
 	}
 	// The store was created (or already lives) INSIDE the confined data root,
 	// so the lexical join is its real location; no symlink components were
 	// followed to reach it.
-	realStore := filepath.Join(real, filepath.FromSlash(storeRelative))
+	realStore := filepath.Join(resolved, filepath.FromSlash(storeRelative))
 	t := &Target{
 		scope:    ScopeShared,
 		storeDir: realStore,
@@ -296,10 +296,10 @@ func (t *Target) Commit() (SharedResult, error) {
 // leaves a read-only tree that plain RemoveAll cannot delete. A failed or
 // cancelled command leaves previously published generations untouched.
 func (t *Target) Abort() error {
-	switch {
-	case t.state == targetCommitted:
+	switch t.state {
+	case targetCommitted:
 		return errors.New("environmentsetup: refusing to abort a committed (published) installation")
-	case t.state == targetAborted:
+	case targetAborted:
 		return nil
 	}
 	t.state = targetAborted

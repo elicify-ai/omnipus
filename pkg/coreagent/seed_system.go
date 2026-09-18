@@ -294,7 +294,7 @@ func systemAgentSkills(id CoreAgentID) []string {
 		// where the define-goal grant reaches existing installs
 		// automatically — no migration marker involved (ADR-074 D4; the
 		// ADR-080 D-SKILL rename rides the same exact-equality
-		// re-enforcement, not the applyDefineGoalRenameMigration below).
+		// re-enforcement, not a one-shot migration).
 		return []string{"plan", "define-goal"}
 	default:
 		return nil

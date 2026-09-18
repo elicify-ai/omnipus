@@ -37,13 +37,19 @@ func TestAgentToolsCreationPreviewIsReadOnlyAndHonorsCeiling(t *testing.T) {
 			if _, exists := got["revision"]; exists {
 				t.Fatal("preview must not invent a persisted revision")
 			}
-			policies := got["effective_policies"].(map[string]any)
+			policies, policiesOK := got["effective_policies"].(map[string]any)
+			if !policiesOK {
+				t.Fatalf("effective_policies=%T %v, want object", got["effective_policies"], got["effective_policies"])
+			}
 			for name, want := range map[string]string{"read_file": "ask", "bash": "deny", "write_file": "deny", "ToolSearch": "allow"} {
 				if policies[name] != want {
 					t.Errorf("%s=%v want %s", name, policies[name], want)
 				}
 			}
-			stored := got["stored_tool_overrides"].(map[string]any)
+			stored, storedOK := got["stored_tool_overrides"].(map[string]any)
+			if !storedOK {
+				t.Fatalf("stored_tool_overrides=%T %v, want object", got["stored_tool_overrides"], got["stored_tool_overrides"])
+			}
 			for name, want := range map[string]string{"read_file": "allow", "AskUserQuestion": "allow", "browser_handover": "deny", "bash": "deny"} {
 				if stored[name] != want {
 					t.Errorf("stored creation default %s=%v want %s", name, stored[name], want)

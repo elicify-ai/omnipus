@@ -1,8 +1,9 @@
 package coreagent
 
 import (
-	"github.com/elicify-ai/omnipus/pkg/config"
 	"testing"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
 // The expected matrix follows the founder's ADR-090 decision: Jim, Mia and

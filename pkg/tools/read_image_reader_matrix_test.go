@@ -49,8 +49,8 @@ func TestReadImage_ReaderJPEGAndByteBoundaryMatrix(t *testing.T) {
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					var reader interface {
-						Execute(context.Context, map[string]any) *ToolResult
-						SetMaxInspectionImageBytes(int)
+						Execute(ctx context.Context, args map[string]any) *ToolResult
+						SetMaxInspectionImageBytes(maxBytes int)
 					}
 					if library {
 						reader = NewLibraryReadTool(root, true, MaxReadFileSize)

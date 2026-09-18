@@ -168,7 +168,7 @@ func ReadInstructionsForManagement(home, id string) (string, error) {
 	}
 	f, err := os.Open(instructionsPath(home, id))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
 		}
 		return "", fmt.Errorf("workspace: read instructions %q: %w", id, err)

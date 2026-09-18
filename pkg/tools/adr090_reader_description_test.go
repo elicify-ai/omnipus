@@ -64,10 +64,8 @@ func TestReadFileAndLibraryRead_ImageInspectionSameContract(t *testing.T) {
 			t.Errorf("library_read Description missing %q:\n%s", want, library)
 		}
 	}
-	lowerLib := strings.ToLower(library)
-	if strings.Contains(lowerLib, "attach") && strings.Contains(lowerLib, "user") {
-		// Either phrasing is fine; the false claim would be that inspection delivers the file.
-	}
+	// Either "attach"/"user" phrasing is fine; the false claim would be that
+	// inspection delivers the file — asserted negatively below.
 	if strings.Contains(library, "sends the file to the user") || strings.Contains(library, "attaches the image to the user") {
 		t.Errorf("library_read Description must not claim user delivery:\n%s", library)
 	}

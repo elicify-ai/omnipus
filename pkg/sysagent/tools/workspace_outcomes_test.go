@@ -85,8 +85,15 @@ func TestWorkspaceUpdateReportsActualPartialStateWhenDelegationSaveFails(t *test
 	if !reflect.DeepEqual(got["changed_fields"], []any{"name"}) {
 		t.Fatalf("changed_fields=%#v", got["changed_fields"])
 	}
-	actual := got["actual_state"].(map[string]any)
-	if actual["name"] != "After" || len(actual["delegation"].([]any)) != 1 {
+	actual, actualOK := got["actual_state"].(map[string]any)
+	if !actualOK {
+		t.Fatalf("actual_state=%T %v, want object", got["actual_state"], got["actual_state"])
+	}
+	delegation, delegationOK := actual["delegation"].([]any)
+	if !delegationOK {
+		t.Fatalf("actual_state.delegation=%T %v, want array", actual["delegation"], actual["delegation"])
+	}
+	if actual["name"] != "After" || len(delegation) != 1 {
 		t.Fatalf("actual_state=%#v", actual)
 	}
 }
@@ -106,8 +113,11 @@ func TestWorkspaceCreateReportsNoPersistenceWhenDelegationSaveFailsAndRollbackSu
 	if !reflect.DeepEqual(got["changed_fields"], []any{}) {
 		t.Fatalf("changed_fields=%#v", got["changed_fields"])
 	}
-	id := got["id"].(string)
-	if _, err := os.Stat(filepath.Join(workspacesDir(deps.Home), id+".json")); !os.IsNotExist(err) {
+	id, idOK := got["id"].(string)
+	if !idOK {
+		t.Fatalf("id=%T %v, want string", got["id"], got["id"])
+	}
+	if _, err := os.Stat(filepath.Join(workspacesDir(deps.Home), id+".json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("rolled-back entity still exists: %v", err)
 	}
 }
@@ -130,7 +140,10 @@ func TestWorkspaceCreateReportsSurvivingPartialStateWhenRollbackFails(t *testing
 	if !reflect.DeepEqual(got["changed_fields"], []any{"workspace"}) {
 		t.Fatalf("changed_fields=%#v", got["changed_fields"])
 	}
-	id := got["id"].(string)
+	id, idOK := got["id"].(string)
+	if !idOK {
+		t.Fatalf("id=%T %v, want string", got["id"], got["id"])
+	}
 	after, err := workspacepkg.ReadState(deps.Home, id)
 	if err != nil {
 		t.Fatal(err)
@@ -138,8 +151,15 @@ func TestWorkspaceCreateReportsSurvivingPartialStateWhenRollbackFails(t *testing
 	if got["revision"] != after.Revision {
 		t.Fatalf("revision=%v want %s", got["revision"], after.Revision)
 	}
-	actual := got["actual_state"].(map[string]any)
-	if actual["name"] != "Create" || len(actual["delegation"].([]any)) != 0 {
+	actual, actualOK := got["actual_state"].(map[string]any)
+	if !actualOK {
+		t.Fatalf("actual_state=%T %v, want object", got["actual_state"], got["actual_state"])
+	}
+	delegation, delegationOK := actual["delegation"].([]any)
+	if !delegationOK {
+		t.Fatalf("actual_state.delegation=%T %v, want array", actual["delegation"], actual["delegation"])
+	}
+	if actual["name"] != "Create" || len(delegation) != 0 {
 		t.Fatalf("actual_state=%#v", actual)
 	}
 }

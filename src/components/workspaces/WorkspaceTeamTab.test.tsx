@@ -201,7 +201,7 @@ beforeEach(() => {
   vi.mocked(updateWorkspaceDelegation).mockResolvedValue(DELEGATION)
 })
 
-describe('WorkspaceTeamTab', () => {
+describe('WorkspaceTeamTab — rendering and the add-agent picker', () => {
   it('renders a node for each team agent from the fetched delegation graph', async () => {
     renderTab()
     await waitFor(() => {
@@ -253,6 +253,27 @@ describe('WorkspaceTeamTab', () => {
     })
     expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
   })
+
+  it('shows the empty state (no members) and an add-agent CTA', async () => {
+    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      revision: '2'.repeat(64),
+      workspace_id: 'ws-1',
+      team: [],
+      edges: [],
+      default_depth: 3,
+    } as WorkspaceDelegation)
+    // core_team would normally seed members; for this case the workspace mock
+    // already supplies core_team, so to get a truly empty graph we also clear
+    // it by returning an empty team and no edges — buildTeamEditState seeds from
+    // core_team only when team is empty, so assert the picker CTA is present.
+    renderTab()
+    await waitFor(() => {
+      expect(screen.getByText('Team & delegation')).toBeInTheDocument()
+    })
+  })
+})
+
+describe('WorkspaceTeamTab — revision and autosave semantics', () => {
 
   it('adopts a clean refetch revision for the next edit without saving the refresh itself', async () => {
     vi.mocked(useActiveWorkspace).mockReturnValue({ ...WORKSPACE, core_team: ['mia', 'jim', 'planner'] })
@@ -319,24 +340,6 @@ describe('WorkspaceTeamTab', () => {
     })
   })
 
-  it('shows the empty state (no members) and an add-agent CTA', async () => {
-    vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
-      revision: '2'.repeat(64),
-      workspace_id: 'ws-1',
-      team: [],
-      edges: [],
-      default_depth: 3,
-    } as WorkspaceDelegation)
-    // core_team would normally seed members; for this case the workspace mock
-    // already supplies core_team, so to get a truly empty graph we also clear
-    // it by returning an empty team and no edges — buildTeamEditState seeds from
-    // core_team only when team is empty, so assert the picker CTA is present.
-    renderTab()
-    await waitFor(() => {
-      expect(screen.getByText('Team & delegation')).toBeInTheDocument()
-    })
-  })
-
   it('D7: an edgeless, non-core member shows the transient "not saved yet" hint AND still autosaves core_team', async () => {
     // D7 regression. Root cause: saveBody only watched `edges`
     // (`buildSaveEdges(editState)`), so adding a member with NO incident edge
@@ -387,6 +390,44 @@ describe('WorkspaceTeamTab', () => {
       await Promise.resolve()
     })
   })
+
+  it('partial-failure ordering: updateWorkspace rejects — updateWorkspaceDelegation is never called and status becomes error', async () => {
+    // If the core_team write itself fails, the edges PUT must NEVER fire —
+    // otherwise the backend could accept an edge referencing a member that
+    // was never actually persisted to core_team.
+    vi.mocked(updateWorkspace).mockRejectedValue(new Error('core_team PUT failed'))
+
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
+    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+
+    expect(capturedGraphProps).not.toBeNull()
+    act(() => {
+      capturedGraphProps!.onConnect('jim', 'ray')
+    })
+
+    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
+
+    // The error surfaces via AutoSaveIndicator.
+    await waitFor(
+      () => {
+        expect(screen.getByText('core_team PUT failed')).toBeInTheDocument()
+      },
+      { timeout: 3000 },
+    )
+
+    // The edges PUT must never have been reached.
+    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
+  })
+})
+
+describe('WorkspaceTeamTab — atomic candidate save ordering (P0/F3)', () => {
 
   it('saves a candidate team and graph atomically through one workspace update', async () => {
     // Traces to the P0 bug: the Team tab's auto-save PUT the edge set only,
@@ -506,41 +547,6 @@ describe('WorkspaceTeamTab', () => {
     })
   })
 
-  it('partial-failure ordering: updateWorkspace rejects — updateWorkspaceDelegation is never called and status becomes error', async () => {
-    // If the core_team write itself fails, the edges PUT must NEVER fire —
-    // otherwise the backend could accept an edge referencing a member that
-    // was never actually persisted to core_team.
-    vi.mocked(updateWorkspace).mockRejectedValue(new Error('core_team PUT failed'))
-
-    renderTab()
-    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
-
-    fireEvent.click(screen.getByTestId('team-add-agent'))
-    await waitFor(() =>
-      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
-    )
-    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
-    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
-
-    expect(capturedGraphProps).not.toBeNull()
-    act(() => {
-      capturedGraphProps!.onConnect('jim', 'ray')
-    })
-
-    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
-
-    // The error surfaces via AutoSaveIndicator.
-    await waitFor(
-      () => {
-        expect(screen.getByText('core_team PUT failed')).toBeInTheDocument()
-      },
-      { timeout: 3000 },
-    )
-
-    // The edges PUT must never have been reached.
-    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
-  })
-
   it('page-hide flushes one revision-aware candidate workspace update', async () => {
     // Regression for F3: the emergency-flush beacon (visibilitychange/
     // beforeunload/pagehide) must honor the same core_team-before-edges
@@ -609,6 +615,9 @@ describe('WorkspaceTeamTab', () => {
     restoreCsrfCookie()
     fetchSpy.mockRestore()
   })
+})
+
+describe('WorkspaceTeamTab — node interactions', () => {
 
   it('passes the workspaceId to openEditAgentSlideOver when a node edit button is clicked (FR-018 / A5)', async () => {
     // Traces to: FR-018 / A5 — Team tab wires handleOpenAgent to call
@@ -659,6 +668,7 @@ describe('WorkspaceTeamTab', () => {
     ).not.toBeNull()
   })
 })
+
 
 // ── Implicit Judge row (operator-reported: "Judge invisible in workspace
 // Teams") ─────────────────────────────────────────────────────────────────

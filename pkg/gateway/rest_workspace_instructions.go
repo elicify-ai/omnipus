@@ -109,7 +109,7 @@ func (a *restAPI) handleWorkspaceInstructionsPut(w http.ResponseWriter, r *http.
 		return
 	}
 
-	if err := workspace.WriteInstructions(a.homePath, id, req.Content); err != nil {
+	if err = workspace.WriteInstructions(a.homePath, id, req.Content); err != nil {
 		if errors.Is(err, workspace.ErrInstructionsTooLarge) || errors.Is(err, workspace.ErrInvalidWorkspaceID) {
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return

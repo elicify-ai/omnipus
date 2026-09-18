@@ -40,6 +40,7 @@
 package tools
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -138,18 +139,32 @@ func ensureTurnCache(baseDir string) error {
 		if !info.IsDir() {
 			return fmt.Errorf("%s is not a directory", documentCacheDirName)
 		}
-	} else if os.IsNotExist(err) {
-		if err := os.Mkdir(cache, 0o755); err != nil && !os.IsExist(err) {
-			return err
+	} else if errors.Is(err, os.ErrNotExist) {
+		if mkErr := os.Mkdir(cache, 0o755); mkErr != nil && !errors.Is(mkErr, os.ErrExist) {
+			return mkErr
 		}
 	} else {
 		return err
 	}
-	realCache, err := filepath.EvalSymlinks(cache)
+	// Resolve through the sanctioned realpath layer (resolvepath.go), not a
+	// direct filepath.EvalSymlinks — FR-034's chokepoint rule; the lint
+	// allowlist is not expanded. The inputs are internally owned paths this
+	// function has just verified or created (never caller-supplied tool
+	// arguments), so for them the helper resolves exactly like EvalSymlinks.
+	// Its extra walk-up fallback fires only for a leaf that vanished between
+	// the Lstat/Mkdir above and this call (a concurrent delete); there the
+	// containment check below — not the resolver — is the guard. The
+	// must-exist re-check keeps the original EvalSymlinks contract: a cache
+	// that vanished after creation still fails this function (the helper's
+	// not-yet-existing-leaf fallback must not turn that into success).
+	if _, err := os.Lstat(cache); err != nil {
+		return err
+	}
+	realCache, err := resolveRealpathUnderWorkDir(cache, baseDir)
 	if err != nil {
 		return err
 	}
-	realBase, err := filepath.EvalSymlinks(baseDir)
+	realBase, err := resolveRealpathUnderWorkDir(baseDir, baseDir)
 	if err != nil {
 		return err
 	}

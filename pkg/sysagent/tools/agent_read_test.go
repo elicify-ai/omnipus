@@ -42,15 +42,28 @@ func TestGetAgentReturnsSanitizedConfigSoulSparseAssignmentsAndRevision(t *testi
 	if got["id"] != "writer" || got["soul"] != "Write clearly." {
 		t.Fatalf("response=%v", got)
 	}
-	if len(got["revision"].(string)) != 64 {
+	revision, ok := got["revision"].(string)
+	if !ok {
+		t.Fatalf("revision=%T %v, want string", got["revision"], got["revision"])
+	}
+	if len(revision) != 64 {
 		t.Fatalf("revision=%v", got["revision"])
 	}
-	overrides := got["override_names"].([]any)
+	overrides, overridesOK := got["override_names"].([]any)
+	if !overridesOK {
+		t.Fatalf("override_names=%T %v, want array", got["override_names"], got["override_names"])
+	}
 	if len(overrides) != 1 || overrides[0] != "bash" {
 		t.Fatalf("override_names=%v", overrides)
 	}
-	servers := got["mcp_servers"].([]any)
-	server := servers[0].(map[string]any)
+	servers, serversOK := got["mcp_servers"].([]any)
+	if !serversOK {
+		t.Fatalf("mcp_servers=%T %v, want array", got["mcp_servers"], got["mcp_servers"])
+	}
+	server, serverOK := servers[0].(map[string]any)
+	if !serverOK {
+		t.Fatalf("mcp_servers[0]=%T %v, want object", servers[0], servers[0])
+	}
 	if tools, ok := server["tools"].([]any); !ok || len(tools) != 0 {
 		t.Fatalf("server=%v want explicit empty tools", server)
 	}
@@ -84,10 +97,17 @@ func TestGetAgentToolsReturnsCatalogEffectivePoliciesAndStoredOverrideNames(t *t
 	if err := json.Unmarshal([]byte(result.ForLLM), &got); err != nil {
 		t.Fatal(err)
 	}
-	if names := got["override_names"].([]any); len(names) != 1 || names[0] != "bash" {
+	names, namesOK := got["override_names"].([]any)
+	if !namesOK {
+		t.Fatalf("override_names=%T %v, want array", got["override_names"], got["override_names"])
+	}
+	if len(names) != 1 || names[0] != "bash" {
 		t.Fatalf("response=%v", got)
 	}
-	policies := got["effective_policies"].(map[string]any)
+	policies, policiesOK := got["effective_policies"].(map[string]any)
+	if !policiesOK {
+		t.Fatalf("effective_policies=%T %v, want object", got["effective_policies"], got["effective_policies"])
+	}
 	if policies["bash"] != "deny" || policies["read_file"] != "allow" {
 		t.Fatalf("effective=%v", policies)
 	}

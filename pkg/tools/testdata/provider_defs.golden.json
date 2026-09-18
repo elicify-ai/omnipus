@@ -29,7 +29,7 @@
   },
   {
     "name": "create_skill",
-    "description": "Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills directory; prior versions are snapshotted for rollback, but whether the write additionally prompts for operator approval depends on your operator's tool-approval policy for this tool. content must not exceed 262144 bytes. A name that already exists is refused — use edit_skill to modify it instead. Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md including YAML frontmatter with name and description).",
+    "description": "Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills directory; prior versions are snapshotted for rollback. This call writes the file; it is not a confirmation step. Policy may still Ask at execution; that is not a substitute for the user's confirmation of the proposal, and you must not invent a second confirmation ritual. content must not exceed 262144 bytes. A name that already exists is refused — use edit_skill to modify it instead. Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md including YAML frontmatter with name and description).",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
@@ -78,7 +78,7 @@
   },
   {
     "name": "edit_skill",
-    "description": "Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version for rollback, then writes the new SKILL.md; whether the write additionally prompts for operator approval depends on your operator's tool-approval policy for this tool. Editing a built-in creates a user override; the built-in is never mutated in place. content must not exceed 262144 bytes. Parameters: name, content (full new SKILL.md), and revision from the reviewed skill read are required. A conflict means the skill changed after review; stop, reread, and do not retry the stale write.",
+    "description": "Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version for rollback, then writes the new SKILL.md. This call writes the file; it is not a confirmation step. Policy may still Ask at execution; that is not a substitute for the user's confirmation of the proposal, and you must not invent a second confirmation ritual. Editing a built-in creates a user override; the built-in is never mutated in place. content must not exceed 262144 bytes. Parameters: name, content (full new SKILL.md), and revision from the reviewed skill read are required. A conflict means the skill changed after review; stop, reread, and do not retry the stale write.",
     "scope": "core",
     "category": "skills",
     "source": "builtin"
@@ -99,7 +99,7 @@
   },
   {
     "name": "get_agent_tools",
-    "description": "Read the static and installed connector tool inventory with a target agent's stored assignments and effective policies. This does not grant or execute target tools.",
+    "description": "Read tool inventory and effective policies. Supply either id for an existing agent or new_agent_type (Main or Subagent) to preview native creation defaults before proposing a new agent. Preview is read-only, has no persisted id/revision, and includes no connector assignments. In preview, stored_tool_overrides contains creation defaults before proposed changes, not user-applied overrides. Main and Subagent share these defaults. Sparse creation patches modify only named policies; omitted policies retain their defaults. This does not grant or execute target tools.",
     "scope": "core",
     "category": "agents",
     "source": "builtin"

@@ -88,19 +88,23 @@ func scriptedToolCall(id, name, args string) providers.ToolCall {
 // TestToolNotOfferedMessage_PreviewVsSearchOnlyWording pins the refusal text
 // for the two lazy-tier visibility classes (pkg/tools/manifest.go's
 // ManifestVisibility). BuildCompressedManifest only ever renders a "More
-// tools" preview line for a ManifestPreviewed (Tier 2) name — a
-// ManifestSearchOnly (Tier 3) name, e.g. AskUserQuestion/set_goal/
-// find_skills, gets zero preview text. Before this fix toolNotOfferedMessage
-// told the model "It is listed under More tools" for BOTH classes, which was
-// false for Tier 3 and could send the model hunting a listing that never
-// existed instead of just calling ToolSearch with the name it already has.
+// tools" preview line for a ManifestPreviewed (Tier 2) name — under ADR-090
+// §5.4 that is exactly serve_web — while a ManifestSearchOnly (Tier 3) name,
+// e.g. find_skills, gets zero preview text. (The former Tier 2/3 split pins
+// here used bash, AskUserQuestion and set_goal — all three were promoted to
+// the upfront full tier by ADR-090 §5.4, so they can no longer reach this
+// refusal path at all: a full-tier tool is offered as a callable def every
+// turn.) Before this fix toolNotOfferedMessage told the model "It is listed
+// under More tools" for BOTH lazy classes, which was false for Tier 3 and
+// could send the model hunting a listing that never existed instead of just
+// calling ToolSearch with the name it already has.
 func TestToolNotOfferedMessage_PreviewVsSearchOnlyWording(t *testing.T) {
 	t.Run("previewed lazy tool is told it is listed under More tools", func(t *testing.T) {
-		require.Equal(t, tools.ManifestPreviewed, tools.ToolManifestVisibility("bash"),
-			"test precondition: bash must be a Tier 2 previewed lazy tool")
-		msg := toolNotOfferedMessage("bash", goalForcingDecision{}, true)
-		assert.Contains(t, msg, "It is listed under More tools", "bash: %q", msg)
-		assert.Contains(t, msg, "load it with ToolSearch first", "bash: %q", msg)
+		require.Equal(t, tools.ManifestPreviewed, tools.ToolManifestVisibility("serve_web"),
+			"test precondition: serve_web must be a Tier 2 previewed lazy tool (ADR-090 §5.4: the only previewed name)")
+		msg := toolNotOfferedMessage("serve_web", goalForcingDecision{}, true)
+		assert.Contains(t, msg, "It is listed under More tools", "serve_web: %q", msg)
+		assert.Contains(t, msg, "load it with ToolSearch first", "serve_web: %q", msg)
 	})
 
 	t.Run("search-only lazy tool is NOT told it is listed under More tools", func(t *testing.T) {

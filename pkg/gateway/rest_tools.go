@@ -163,10 +163,7 @@ func (rau *restAPIUpdateAgentTools) validateRequest() bool {
 	}
 
 	validateEnabled := rau.a.agentLoop.GetConfig().Gateway.ValidateInbound
-	if !decodeAndValidate(rau.w, rau.r, "AgentToolsUpdateRequest", &rau.req, validateEnabled) {
-		return true
-	}
-	return false
+	return !decodeAndValidate(rau.w, rau.r, "AgentToolsUpdateRequest", &rau.req, validateEnabled)
 }
 
 // normalizeBuiltinPolicies normalizes and validates the complete built-in tool policy map.

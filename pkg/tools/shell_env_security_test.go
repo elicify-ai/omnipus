@@ -361,7 +361,7 @@ func TestBashBackgroundChildEnvStaysScrubbed(t *testing.T) {
 	report := filepath.Join(ws, "env-report.txt")
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		if _, err := os.Stat(report); err == nil {
+		if _, statErr := os.Stat(report); statErr == nil {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -578,8 +578,8 @@ func TestAugmentKernelPolicyStripsWriteOnSharedStoreAncestorRule(t *testing.T) {
 	// The turn workspace INSIDE home: an ancestor rule over home covers both
 	// the workspace and the shared store.
 	ws := filepath.Join(home, "workspaces", "ws")
-	if err := os.MkdirAll(ws, 0o755); err != nil {
-		t.Fatal(err)
+	if mkdirErr := os.MkdirAll(ws, 0o755); mkdirErr != nil {
+		t.Fatal(mkdirErr)
 	}
 	rt, err := runtimeEnvTurn(ws)
 	if err != nil {

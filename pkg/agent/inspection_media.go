@@ -31,14 +31,16 @@ func attachInspectionImagesWithBudget(ctx context.Context, canonical providers.M
 		live.Content += "\n[visual inspection unavailable: selected model does not support image input; choose a vision-capable model]"
 		return live, nil
 	}
+	// A denied recheck downgrades the entire attachment to a text notice
+	// rather than failing the turn; the downgrade is applied after the loop.
+	var denied error
 	for _, inspection := range images {
 		if inspection.Reauthorize == nil {
 			return live, fmt.Errorf("inspection image access cannot be rechecked")
 		}
-		if err := inspection.Reauthorize(ctx); err != nil {
-			live.Media = nil
-			live.Content += "\n[visual inspection unavailable: inspection image access denied: " + err.Error() + "]"
-			return live, nil
+		if reauthErr := inspection.Reauthorize(ctx); reauthErr != nil {
+			denied = reauthErr
+			break
 		}
 		if len(inspection.Bytes) == 0 || !strings.HasPrefix(inspection.MIMEType, "image/") {
 			return live, fmt.Errorf("invalid inspection image")
@@ -63,11 +65,11 @@ func attachInspectionImagesWithBudget(ctx context.Context, canonical providers.M
 		}
 		live.Media = append(live.Media, "data:"+normalized.Mime+";base64,"+base64.StdEncoding.EncodeToString(normalized.Data))
 	}
+	if denied != nil {
+		live.Media = nil
+		live.Content += "\n[visual inspection unavailable: inspection image access denied: " + denied.Error() + "]"
+	}
 	return live, nil
-}
-
-func attachTurnInspectionImages(ctx context.Context, messages []providers.Message, byToolCall map[string][]tools.InspectionImage, supportsImages bool) ([]providers.Message, error) {
-	return attachTurnInspectionImagesWithBudget(ctx, messages, byToolCall, supportsImages, catalog.DefaultResizeLimits)
 }
 
 func attachTurnInspectionImagesWithBudget(ctx context.Context, messages []providers.Message, byToolCall map[string][]tools.InspectionImage, supportsImages bool, budget catalog.ResizeLimits) ([]providers.Message, error) {

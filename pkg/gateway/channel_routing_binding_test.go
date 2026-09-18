@@ -155,7 +155,7 @@ func TestWorkspaceDelete_CascadesToInstances(t *testing.T) {
 	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, "sales"), nil)
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, "sales")
-	require.Equal(t, http.StatusNoContent, w.Code, "workspace delete must succeed with 204")
+	require.Equal(t, http.StatusOK, w.Code, "workspace delete must return a 200 ConfigurationMutationState envelope (ADR-090 §5.2)")
 
 	// Workspace file must be gone.
 	wsPath := filepath.Join(api.homePath, "workspaces", "sales.json")

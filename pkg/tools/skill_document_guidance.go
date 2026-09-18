@@ -11,7 +11,9 @@ import (
 // appendDocumentRuntimeGuidance adds the Omnipus-specific runtime location and
 // the self-serve dependency recovery route to a just-loaded first-party
 // document skill. Portable elicify-* package text is left unchanged
-// (Prometheus H4).
+// (ADR-090 §6.5/L1: the packaged skills carry the portable dependency
+// requirements; Omnipus supplies setup guidance rather than rewriting the
+// package).
 //
 // The route is CALLER-INDEPENDENT (ADR-090 §6.5: any permitted native agent
 // uses the same route) and follows the ES-FR-05 workflow with the generic

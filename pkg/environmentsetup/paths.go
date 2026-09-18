@@ -117,23 +117,23 @@ func resolveExistingDir(what, dir string) (string, error) {
 	if err := validateCleanAbsPath(what, dir); err != nil {
 		return "", err
 	}
-	real, err := filepath.EvalSymlinks(dir)
+	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		return "", fmt.Errorf("resolve %s: %w", what, err)
 	}
 	// Re-validate the resolved path so a symlink cannot smuggle in a
 	// non-canonical form.
-	if err := validateCleanAbsPath(what, real); err != nil {
+	if err = validateCleanAbsPath(what, resolved); err != nil {
 		return "", fmt.Errorf("resolve %s: %w", what, err)
 	}
-	info, err := os.Stat(real)
+	info, err := os.Stat(resolved)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", what, err)
 	}
 	if !info.IsDir() {
 		return "", fmt.Errorf("%s is not a directory", what)
 	}
-	return real, nil
+	return resolved, nil
 }
 
 // validateCleanAbsPath enforces the structural properties of an absolute

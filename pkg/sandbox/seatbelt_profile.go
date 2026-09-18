@@ -263,41 +263,8 @@ func renderSeatbeltProfile(policy SandboxPolicy) (string, error) {
 	if len(rs.policy.DeniedPaths) > 0 || len(rs.policy.DeniedNodes) > 0 || len(rs.policy.DeniedPathPrefixes) > 0 {
 		rs.b.WriteString("\n;; --- Secret set: denied last so no earlier allow can re-open it ---\n")
 	}
-	if len(rs.policy.DeniedPaths) > 0 {
-		emitted := make(map[string]struct{}, len(rs.policy.DeniedPaths)*2)
-		for _, raw := range rs.policy.DeniedPaths {
-			clean, expanded := expandUserPath(raw)
-			if !expanded {
-				return "", fmt.Errorf("seatbelt: denied path %q is not absolute and could not be expanded", raw)
-			}
-			if err := validateSeatbeltPath(clean); err != nil {
-				return "", fmt.Errorf("seatbelt: denied path %q: %w", raw, err)
-			}
-
-			// Deny the declared path AND its symlink-resolved form. Seatbelt
-			// matches resolved paths, so the resolved form is the one that
-			// actually bites; the declared form is emitted too because these
-			// paths may not exist yet, and the resolution of a path that is
-			// created later can differ from the resolution computed now.
-			target, _ := resolveSeatbeltPath(clean)
-			for _, path := range []string{clean, target} {
-				if err := validateSeatbeltPath(path); err != nil {
-					return "", fmt.Errorf("seatbelt: denied path %q resolved to %q: %w", raw, path, err)
-				}
-				if _, dup := emitted[path]; dup {
-					continue
-				}
-				emitted[path] = struct{}{}
-
-				// Read AND write. A read-only deny is defeated in two syscalls:
-				// rename(2) moves the file to a name the deny does not cover and
-				// it reads normally afterwards, and truncate destroys the vault
-				// irreversibly without reading anything at all. Both were
-				// executed against a real child before this line was written.
-				fmt.Fprintf(&rs.b, "(deny file-read* (subpath %q))\n", path)
-				fmt.Fprintf(&rs.b, "(deny file-write* (subpath %q))\n", path)
-			}
-		}
+	if err := rs.renderDeniedPaths(); err != nil {
+		return "", err
 	}
 
 	// --- Denied NODES: the directory entries on the chain down to the work
@@ -405,6 +372,51 @@ func (rs *renderSeatbeltProfileState) renderNetwork() {
 			fmt.Fprintf(&rs.b, "(allow network-outbound (subpath %q))\n", path)
 		}
 	}
+}
+
+// renderDeniedPaths writes the subpath denies for SandboxPolicy.DeniedPaths —
+// read AND write, and for the declared path AND its symlink-resolved form. It
+// is the first stage of the secret-set block; see renderSeatbeltProfile's
+// measured-precedence comment for why nothing may follow a deny.
+func (rs *renderSeatbeltProfileState) renderDeniedPaths() error {
+	if len(rs.policy.DeniedPaths) == 0 {
+		return nil
+	}
+	emitted := make(map[string]struct{}, len(rs.policy.DeniedPaths)*2)
+	for _, raw := range rs.policy.DeniedPaths {
+		clean, expanded := expandUserPath(raw)
+		if !expanded {
+			return fmt.Errorf("seatbelt: denied path %q is not absolute and could not be expanded", raw)
+		}
+		if err := validateSeatbeltPath(clean); err != nil {
+			return fmt.Errorf("seatbelt: denied path %q: %w", raw, err)
+		}
+
+		// Deny the declared path AND its symlink-resolved form. Seatbelt
+		// matches resolved paths, so the resolved form is the one that
+		// actually bites; the declared form is emitted too because these
+		// paths may not exist yet, and the resolution of a path that is
+		// created later can differ from the resolution computed now.
+		target, _ := resolveSeatbeltPath(clean)
+		for _, path := range []string{clean, target} {
+			if err := validateSeatbeltPath(path); err != nil {
+				return fmt.Errorf("seatbelt: denied path %q resolved to %q: %w", raw, path, err)
+			}
+			if _, dup := emitted[path]; dup {
+				continue
+			}
+			emitted[path] = struct{}{}
+
+			// Read AND write. A read-only deny is defeated in two syscalls:
+			// rename(2) moves the file to a name the deny does not cover and
+			// it reads normally afterwards, and truncate destroys the vault
+			// irreversibly without reading anything at all. Both were
+			// executed against a real child before this line was written.
+			fmt.Fprintf(&rs.b, "(deny file-read* (subpath %q))\n", path)
+			fmt.Fprintf(&rs.b, "(deny file-write* (subpath %q))\n", path)
+		}
+	}
+	return nil
 }
 
 // renderDeniedPrefixes writes anchored regex denials for protected path prefixes and returns the completed profile.

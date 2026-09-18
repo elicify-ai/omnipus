@@ -3,6 +3,7 @@ package documentruntime
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -63,12 +64,12 @@ func TestProvisionInstallsSkillsAndSandboxAccessIsWorkerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := VerifyAssets(l.Prefix, manifest.Assets); err != nil {
+	if err = VerifyAssets(l.Prefix, manifest.Assets); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range DocumentSkillIDs {
 		for _, rel := range []string{"SKILL.md", "LICENSE"} {
-			if _, err := os.Stat(filepath.Join(l.Skills, id, rel)); err != nil {
+			if _, err = os.Stat(filepath.Join(l.Skills, id, rel)); err != nil {
 				t.Fatalf("%s/%s: %v", id, rel, err)
 			}
 		}
@@ -137,7 +138,7 @@ func TestProvisionFirstPartyIsProbeableBeforeDependencies(t *testing.T) {
 	// requires them to exist at provisioning time: a probe run before the
 	// agent installs anything reports missing components instead of falling
 	// through to host tooling.
-	if _, err := os.Stat(manifest.Python); !os.IsNotExist(err) {
+	if _, err := os.Stat(manifest.Python); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("provisioning must not fabricate dependencies: %v", err)
 	}
 }
@@ -149,7 +150,7 @@ func TestProvisionFirstPartyExistingManifestCreatesCallingWorkerCache(t *testing
 		t.Fatal(err)
 	}
 	second, _ := ResolveLayout(root, ManifestRevision, "gp")
-	if _, err := os.Stat(second.Cache); !os.IsNotExist(err) {
+	if _, err := os.Stat(second.Cache); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("second worker cache exists before its provisioning call: %v", err)
 	}
 	if _, err := ProvisionFirstParty(second); err != nil {

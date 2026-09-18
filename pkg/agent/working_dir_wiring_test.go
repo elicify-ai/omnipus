@@ -115,10 +115,10 @@ func TestWorkingDirWiring_PrefersCurrentSessionWorkspace(t *testing.T) {
 	// session" workspace so the test only passes if the preference is real.
 	const wsA = "ws-a-current"
 	const wsZ = "ws-z-other"
-	home := seedWorkspaceTeam(t, wsA, true, []string{"ray"}, "Workspace A", "")
-	writeWorkspaceTeamRecord(t, home, wsZ, false, []string{"ray"}, "Workspace Z", "")
+	home := seedWorkspaceTeam(t, wsA, true, []string{"worker"}, "Workspace A", "")
+	writeWorkspaceTeamRecord(t, home, wsZ, false, []string{"worker"}, "Workspace Z", "")
 
-	al, cb := wireTestLoopWithGraph(t, "ray")
+	al, cb := wireTestLoopWithGraph(t, "worker")
 	_ = al
 
 	got := cb.buildDynamicContext(wsZ, "", "", "", "")

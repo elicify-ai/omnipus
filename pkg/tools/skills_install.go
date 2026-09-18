@@ -290,11 +290,11 @@ func (t *InstallSkillTool) Execute(ctx context.Context, args map[string]any) *To
 	}
 
 	// Write origin metadata into the staged copy before it becomes the real one.
-	if err := writeOriginMeta(stageDir, registry.Name(), slug, result.Version); err != nil {
+	if metaErr := writeOriginMeta(stageDir, registry.Name(), slug, result.Version); metaErr != nil {
 		logger.ErrorCF("tool", "Failed to write origin metadata",
 			map[string]any{
 				"tool":     "install_skill",
-				"error":    err.Error(),
+				"error":    metaErr.Error(),
 				"target":   stageDir,
 				"registry": registry.Name(),
 				"slug":     slug,

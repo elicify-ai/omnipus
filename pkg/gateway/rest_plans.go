@@ -109,18 +109,9 @@ func (a *restAPI) auditPlan(event, id string, kvs ...any) {
 	}
 }
 
-// isAgentID reports whether id resolves to a known agent in the registry
-// (SD-A7's tiered-DoD authorship-kind heuristic: a Plan's CreatedBy is either
-// a human username or an agent ID depending on who created it — there is no
-// separate discriminator field, mirroring how CriterionAuthor.Kind is
-// recorded explicitly at criterion-authorship time but Plan.CreatedBy is not).
-// Every plan created via THIS wave's only creation path (handleWorkspacePlanCreate,
-// human/UI via REST) sets CreatedBy to the caller's username, which never
-// resolves to an agent ID — so this heuristic naturally routes every
-// REST-created plan through the soft tier today, while staying
-// forward-compatible with a future agent-side create_plan tool (out of this
-// wave's scope) that would set CreatedBy to an agent ID and thereby trigger
-// the strict tier automatically, with no change needed here.
+// isAgentID reports whether id resolves to a registered agent. Only the
+// legacy-kindless fallback inside plan.AuthoredByAgent now; the approve gate
+// reads the creation-time CreatedByKind stamp first.
 func (a *restAPI) isAgentID(id string) bool {
 	if id == "" || a.agentLoop == nil {
 		return false
@@ -733,11 +724,14 @@ func (a *restAPI) handleWorkspacePlanCreate(w http.ResponseWriter, r *http.Reque
 	// trim needed here.
 	c := a.callerIdentity(r)
 	p := &plan.Plan{
-		WorkspaceID:  workspaceID,
-		Title:        req.Title,
-		OwnerAgentID: req.OwnerAgentId,
-		Owner:        c.Username,
-		CreatedBy:    c.Username,
+		WorkspaceID: workspaceID,
+		Title:       req.Title,
+		// A REST create is an authenticated-human action — stamp the soft
+		// tier even when the username collides with an agent ID.
+		Owner:         c.Username,
+		CreatedBy:     c.Username,
+		CreatedByKind: plan.CreatedByKindUser,
+		OwnerAgentID:  req.OwnerAgentId,
 	}
 	if req.Goal != nil {
 		p.Goal = *req.Goal
@@ -1220,8 +1214,8 @@ func (a *restAPI) handlePlanApprove(w http.ResponseWriter, id string) {
 		return
 	}
 
-	// SD-A7 tiered DoD gate.
-	if a.isAgentID(p.CreatedBy) && len(p.DoD) == 0 {
+	// SD-A7 tiered-DoD gate — origin via the explicit CreatedByKind stamp.
+	if p.AuthoredByAgent(a.isAgentID) && len(p.DoD) == 0 {
 		writeJSON(w, http.StatusBadRequest, gen.PlanApproveError{
 			Error: ptr("plan requires a Definition of Done before approval (agent-authored plan)"),
 		})

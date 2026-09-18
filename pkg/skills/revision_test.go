@@ -92,7 +92,7 @@ func TestReviewedRemoveRequiresCurrentRevision(t *testing.T) {
 func TestPublishStagedSkillRequiresExplicitCurrentRevisionAndPreservesAssets(t *testing.T) {
 	root := t.TempDir()
 	w := NewSkillWriter(root)
-	_, reviewed, err := w.CreateSkillReviewed("package", validFor("package"))
+	_, _, err := w.CreateSkillReviewed("package", validFor("package"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,21 +103,21 @@ func TestPublishStagedSkillRequiresExplicitCurrentRevisionAndPreservesAssets(t *
 	if err = os.WriteFile(asset, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	reviewed, err = w.SkillRevision("package")
+	reviewed, err := w.SkillRevision("package")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	makeStage := func(body, helper string) string {
 		stage := filepath.Join(root, ".staging", body)
-		if err := os.MkdirAll(filepath.Join(stage, "scripts"), 0o755); err != nil {
-			t.Fatal(err)
+		if mkdirErr := os.MkdirAll(filepath.Join(stage, "scripts"), 0o755); mkdirErr != nil {
+			t.Fatal(mkdirErr)
 		}
-		if err := os.WriteFile(filepath.Join(stage, "SKILL.md"), []byte(validFor("package")+"\n"+body), 0o644); err != nil {
-			t.Fatal(err)
+		if writeErr := os.WriteFile(filepath.Join(stage, "SKILL.md"), []byte(validFor("package")+"\n"+body), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
 		}
-		if err := os.WriteFile(filepath.Join(stage, "scripts", "helper.py"), []byte(helper), 0o644); err != nil {
-			t.Fatal(err)
+		if writeErr := os.WriteFile(filepath.Join(stage, "scripts", "helper.py"), []byte(helper), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
 		}
 		return stage
 	}

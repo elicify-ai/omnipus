@@ -115,13 +115,16 @@ func TestAgents_JudgeUndeletable(t *testing.T) {
 }
 
 // TestAgents_JudgeUndisable verifies PUT /api/v1/agents/judge with a disable
-// intent ({"enabled":false} or {"disabled":true}) is rejected 400.
+// intent ({"enabled":false} or {"disabled":true}) is rejected 400. The
+// request carries the current entity revision (ADR-090 §5.2 precondition) —
+// the "cannot be disabled" refusal is the assertion under test, not the
+// revision gate.
 func TestAgents_JudgeUndisable(t *testing.T) {
 	for _, body := range []string{`{"enabled":false}`, `{"disabled":true}`} {
 		t.Run(body, func(t *testing.T) {
 			api := newJudgeRosterAPI(t)
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/judge", strings.NewReader(body))
+			r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/judge", strings.NewReader(body))
 			r.Header.Set("Content-Type", "application/json")
 			api.updateAgent(w, r, "judge")
 
@@ -144,7 +147,7 @@ func TestAgents_JudgeRubricAbsent(t *testing.T) {
 
 	t.Run("stray rubric field on a non-system agent PUT is not rejected as a rubric guard", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia", strings.NewReader(`{"rubric":"nope"}`))
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/mia", strings.NewReader(`{"rubric":"nope"}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.updateAgent(w, r, "mia")
 		// The rubric-specific 400 guard was deleted along with AgentConfig.Rubric

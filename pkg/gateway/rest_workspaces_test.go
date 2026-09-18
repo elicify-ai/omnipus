@@ -157,10 +157,11 @@ func TestHandleWorkspaces_Update(t *testing.T) {
 	api := newTestRestAPIWithHome(t)
 	id := createWorkspaceViaAPI(t, api, "OriginalName", "")
 
-	// PUT with new name + pinned=true → 200.
+	// PUT with new name + pinned=true → 200. ADR-090 §5.2: workspace mutations
+	// carry the canonical opaque revision; stale/missing revision → 409/400.
 	wUp := httptest.NewRecorder()
 	rUp := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+id,
-		strings.NewReader(`{"name":"Beta","pinned":true}`))
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, id, `{"name":"Beta","pinned":true}`)))
 	rUp.Header.Set("Content-Type", "application/json")
 	rUp.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wUp, rUp)
@@ -174,7 +175,7 @@ func TestHandleWorkspaces_Update(t *testing.T) {
 	// Differentiation test: a second PUT with a different name produces a different result.
 	wUp2 := httptest.NewRecorder()
 	rUp2 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+id,
-		strings.NewReader(`{"name":"Gamma"}`))
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, id, `{"name":"Gamma"}`)))
 	rUp2.Header.Set("Content-Type", "application/json")
 	rUp2.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wUp2, rUp2)
@@ -184,10 +185,14 @@ func TestHandleWorkspaces_Update(t *testing.T) {
 	assert.Equal(t, "Gamma", updated2.Name, "second PUT must reflect the new name (not hardcoded)")
 	assert.NotEqual(t, updated.Name, updated2.Name, "different inputs must produce different outputs")
 
-	// PUT to nonexistent ID → 404.
+	// PUT to nonexistent ID → 404. The revision gate sits between the field
+	// validators and the not-found resolution, so the body carries a
+	// syntactically valid (all-zeros) revision — same fallback shape the
+	// delete helper uses — to reach the ErrNotFound branch rather than being
+	// rejected earlier for a missing revision.
 	wNot := httptest.NewRecorder()
 	rNot := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/01JXNOTEXISTENT00000000000",
-		strings.NewReader(`{"name":"X"}`))
+		strings.NewReader(`{"revision":"`+strings.Repeat("0", 64)+`","name":"X"}`))
 	rNot.Header.Set("Content-Type", "application/json")
 	rNot.URL.Path = "/api/v1/workspaces/01JXNOTEXISTENT00000000000"
 	api.HandleWorkspaces(wNot, rNot)
@@ -361,7 +366,7 @@ func TestHandleWorkspaces_List_SortOrder(t *testing.T) {
 	// Pin project id3 with pin_order=1.
 	wPin := httptest.NewRecorder()
 	rPin := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+id3,
-		strings.NewReader(`{"pinned":true,"pin_order":1}`))
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, id3, `{"pinned":true,"pin_order":1}`)))
 	rPin.Header.Set("Content-Type", "application/json")
 	rPin.URL.Path = "/api/v1/workspaces/" + id3
 	api.HandleWorkspaces(wPin, rPin)
@@ -455,7 +460,8 @@ func TestHandleWorkspaces_Boundaries(t *testing.T) {
 	updateBody, err := json.Marshal(map[string]any{"name": "BoundaryProject", "description": longDesc})
 	require.NoError(t, err)
 	wDesc := httptest.NewRecorder()
-	rDesc := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+projID, strings.NewReader(string(updateBody)))
+	rDesc := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+projID,
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, projID, string(updateBody))))
 	rDesc.Header.Set("Content-Type", "application/json")
 	rDesc.URL.Path = "/api/v1/workspaces/" + projID
 	api.HandleWorkspaces(wDesc, rDesc)
@@ -466,6 +472,7 @@ func TestHandleWorkspaces_Boundaries(t *testing.T) {
 	exactDesc := strings.Repeat("e", 2000)
 	exactDescBody, err := json.Marshal(map[string]any{"name": "BoundaryProject", "description": exactDesc})
 	require.NoError(t, err)
+	exactDescBody = []byte(withWorkspaceRevisionJSON(t, api, projID, string(exactDescBody)))
 	wExactDesc := httptest.NewRecorder()
 	rExactDesc := httptest.NewRequest(
 		http.MethodPut,
@@ -606,18 +613,23 @@ func TestSeed_ConcurrentBoot_NoDoubleSeed(t *testing.T) {
 }
 
 // TestUpgrade_ExistingDefaultWorkspace_NoCustomAutoAdd (ADR-046 P1, FR-008 /
-// US-3 AS-4) proves ensureDefaultWorkspace's upgrade back-fill path: when a
-// default workspace ALREADY exists (the upgraded-install case), calling
-// ensureDefaultWorkspace again must:
-//  1. Back-fill any built-in-roster member missing from the existing
-//     CoreTeam (here: "ray" was omitted from the pre-existing team, e.g. a
-//     coreagent added after the operator's original install).
+// US-3 AS-4) proves ensureDefaultWorkspace's built-in-roster self-heal for a
+// pre-existing default workspace (fresh installs are greenfield per the
+// ADR-090 release — there is no upgrade migration; this back-fill is the
+// boot-time self-heal that runs whenever the default workspace already
+// exists). Calling ensureDefaultWorkspace on an existing default workspace
+// must:
+//  1. Back-fill any ADR-090 §2.0 built-in-roster member missing from the
+//     existing CoreTeam (here: "researcher" was omitted from the
+//     pre-existing team).
 //  2. Leave a custom agent the operator added to the team by hand
 //     ("hand-added-custom") untouched — never removed.
 //  3. NEVER add "never-on-team-custom" (a second custom agent present in
 //     cfg.Agents.List but never added to this workspace) — the back-fill is
 //     built-in-roster-only.
-//  4. Leave the workspace's delegation edge set completely unchanged —
+//  4. NEVER add "admin" — the standalone operator is excluded from workspace
+//     teams by role (ADR-090 FR-001, coreagent.ExcludedFromWorkspaceTeams).
+//  5. Leave the workspace's delegation edge set completely unchanged —
 //     expanding/back-filling a team must never create or imply a trust edge
 //     (FR-038). The edges live in the delegation store, not the workspace
 //     record (pkg/workspace/delegationstore.go), so this reads them there.
@@ -629,10 +641,9 @@ func TestUpgrade_ExistingDefaultWorkspace_NoCustomAutoAdd(t *testing.T) {
 				{ID: "mia", Type: config.AgentTypeCore},
 				{ID: "jim", Type: config.AgentTypeCore},
 				{ID: "ava", Type: config.AgentTypeCore},
-				{ID: "ray", Type: config.AgentTypeCore},
+				{ID: "admin", Type: config.AgentTypeCore},
 				{ID: "worker", Type: config.AgentTypeWorker},
 				{ID: "planner", Type: config.AgentTypeWorker},
-				{ID: "explorer", Type: config.AgentTypeWorker},
 				{ID: "researcher", Type: config.AgentTypeWorker},
 				{ID: "hand-added-custom", Type: config.AgentTypeCustom},
 				{ID: "never-on-team-custom", Type: config.AgentTypeCustom},
@@ -640,16 +651,16 @@ func TestUpgrade_ExistingDefaultWorkspace_NoCustomAutoAdd(t *testing.T) {
 		},
 	}
 
-	// Simulate an upgraded install: a pre-existing default workspace missing
-	// "ray" from the built-in roster, but WITH a custom agent an operator
-	// added by hand, and a pre-existing delegation edge.
+	// A pre-existing default workspace missing "researcher" from the built-in
+	// roster, but WITH a custom agent an operator added by hand, and a
+	// pre-existing delegation edge.
 	now := time.Now().UTC().Format(time.RFC3339)
 	ws := storedWorkspace{
 		ID:        "existing-default-ws",
 		Name:      "My Workspace",
 		Status:    "active",
 		IsDefault: true,
-		CoreTeam:  []string{"mia", "jim", "ava", "worker", "planner", "explorer", "researcher", "hand-added-custom"},
+		CoreTeam:  []string{"mia", "jim", "ava", "worker", "planner", "hand-added-custom"},
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -666,13 +677,15 @@ func TestUpgrade_ExistingDefaultWorkspace_NoCustomAutoAdd(t *testing.T) {
 	got := wss[0]
 
 	assert.True(t, got.IsDefault)
-	assert.Contains(t, got.CoreTeam, "ray", "the missing built-in roster member must be back-filled")
+	assert.Contains(t, got.CoreTeam, "researcher", "the missing built-in roster member must be back-filled")
 	assert.Contains(t, got.CoreTeam, "hand-added-custom",
 		"a custom agent already on the team must never be removed by the back-fill")
 	assert.NotContains(t, got.CoreTeam, "never-on-team-custom",
 		"a custom agent NOT already on the team must never be auto-added by the back-fill")
+	assert.NotContains(t, got.CoreTeam, "admin",
+		"admin is the standalone operator and must never join a workspace team (ADR-090 FR-001)")
 	assert.ElementsMatch(t,
-		[]string{"mia", "jim", "ava", "ray", "worker", "planner", "explorer", "researcher", "hand-added-custom"},
+		[]string{"mia", "jim", "ava", "worker", "planner", "researcher", "hand-added-custom"},
 		got.CoreTeam)
 	gotEdges, storeOK := workspace.LoadDelegation(home, got.ID)
 	require.True(t, storeOK, "delegation store record must still be readable after the back-fill")
@@ -803,10 +816,10 @@ func TestHandleWorkspaces_DefaultNotArchivable(t *testing.T) {
 	}
 	require.NotEmpty(t, defaultID, "must find default workspace in the list")
 
-	// Attempt to archive the default workspace → 409.
-	archived := gen.WorkspaceUpdateRequestStatusArchived
-	bodyBytes, err := json.Marshal(gen.WorkspaceUpdateRequest{Status: &archived})
-	require.NoError(t, err)
+	// Attempt to archive the default workspace → 409. The cannot-archive check
+	// sits behind the revision gate (ADR-090 §5.2), so the request carries the
+	// current revision.
+	bodyBytes := []byte(withWorkspaceRevisionJSON(t, api, defaultID, `{"status":"archived"}`))
 	wPut := httptest.NewRecorder()
 	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+defaultID, bytes.NewReader(bodyBytes))
 	rPut.Header.Set("Content-Type", "application/json")
@@ -839,8 +852,7 @@ func TestHandleWorkspaces_DefaultNotArchivable(t *testing.T) {
 	require.NoError(t, json.Unmarshal(wCreate.Body.Bytes(), &created))
 
 	// Archive the non-default workspace → 200.
-	bodyBytes2, err := json.Marshal(gen.WorkspaceUpdateRequest{Status: &archived})
-	require.NoError(t, err)
+	bodyBytes2 := []byte(withWorkspaceRevisionJSON(t, api, created.Id, `{"status":"archived"}`))
 	wPut2 := httptest.NewRecorder()
 	rPut2 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id, bytes.NewReader(bodyBytes2))
 	rPut2.Header.Set("Content-Type", "application/json")
@@ -977,7 +989,7 @@ func TestHandleWorkspaces_OwnerImmutableOnPut(t *testing.T) {
 	// Even if a malicious client included it, the handler would ignore it.
 	wPut := httptest.NewRecorder()
 	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+proj.Id,
-		strings.NewReader(`{"name":"AliceOwnedRenamed"}`))
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, proj.Id, `{"name":"AliceOwnedRenamed"}`)))
 	rPut.Header.Set("Content-Type", "application/json")
 	rPut.URL.Path = "/api/v1/workspaces/" + proj.Id
 	rPut = rPut.WithContext(
@@ -1117,10 +1129,12 @@ func TestHandleWorkspacePut_FullFieldRoundTrip(t *testing.T) {
 		{FromAgent: "mia", ToAgent: "ray"},
 	}))
 
-	// Step 3: PUT — mutate only the name.
+	// Step 3: PUT — mutate only the name. The revision is read AFTER the
+	// Step-2 back-patch (the wholesale file rewrite changed the state the
+	// revision fingerprints).
 	wPut := httptest.NewRecorder()
 	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+id,
-		strings.NewReader(`{"name":"Renamed"}`))
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, id, `{"name":"Renamed"}`)))
 	rPut.Header.Set("Content-Type", "application/json")
 	rPut.URL.Path = "/api/v1/workspaces/" + id
 	api.HandleWorkspaces(wPut, rPut)
@@ -1202,7 +1216,7 @@ func TestHandleWorkspaces_RepositoryFieldRejected_PUT(t *testing.T) {
 	// A PUT with no repository field at all is unaffected.
 	wOK := httptest.NewRecorder()
 	rOK := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+projID,
-		strings.NewReader(`{"name":"RepoPUTProject Renamed"}`))
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, projID, `{"name":"RepoPUTProject Renamed"}`)))
 	rOK.Header.Set("Content-Type", "application/json")
 	rOK.URL.Path = "/api/v1/workspaces/" + projID
 	api.HandleWorkspaces(wOK, rOK)
@@ -1212,7 +1226,7 @@ func TestHandleWorkspaces_RepositoryFieldRejected_PUT(t *testing.T) {
 	// outright; the field is retired, not merely scheme-validated.
 	wBad := httptest.NewRecorder()
 	rBad := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+projID,
-		strings.NewReader(`{"repository":"https://github.com/ok/repo"}`))
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, projID, `{"repository":"https://github.com/ok/repo"}`)))
 	rBad.Header.Set("Content-Type", "application/json")
 	rBad.URL.Path = "/api/v1/workspaces/" + projID
 	api.HandleWorkspaces(wBad, rBad)
@@ -1421,7 +1435,10 @@ func TestHandleWorkspacePut_CoreTeam_RejectsSystemAgentAndUnregisteredID(t *test
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id,
-				strings.NewReader(`{"core_team":`+tc.coreTeam+`}`))
+				// Membership validation sits behind the revision gate
+				// (ADR-090 §5.2), so the request carries the current revision.
+				strings.NewReader(withWorkspaceRevisionJSON(t, api, created.Id,
+					`{"core_team":`+tc.coreTeam+`}`)))
 			r.Header.Set("Content-Type", "application/json")
 			r.URL.Path = "/api/v1/workspaces/" + created.Id
 			api.HandleWorkspaces(w, r)
@@ -1489,17 +1506,19 @@ func TestHandleWorkspacePost_ExplicitEmptyCoreTeam_SeedsAvaOnly_SetupPending(t *
 // TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending is a
 // regression: the auto-created boot default workspace ("My Workspace",
 // ensureDefaultWorkspace) is UNCHANGED by the Ava-only seed introduced for
-// ordinary POST-created workspaces — it must still seed the full install
-// roster (every base + specialist agent present in config) with its full seed
+// ordinary POST-created workspaces — it must still seed the full ADR-090 §2.0
+// workspace roster (every base + specialist agent present in config, minus the
+// standalone-operator admin and the hidden System Agents) with its full seed
 // edges, and setup_pending must stay false (this workspace never runs the
 // setup interview).
 // BDD:
 //
-//	Given a config with the full install roster registered,
+//	Given a config with the full ADR-090 seed roster registered,
 //	When ensureDefaultWorkspace creates the default workspace,
-//	Then GET /api/v1/workspaces/{id} returns core_team containing every
-//	registered base/specialist agent, setup_pending absent/false, and the
-//	full seed delegation edge count on disk.
+//	Then core_team contains every registered base/specialist agent except
+//	admin, setup_pending absent/false, and the full seed delegation edge set
+//	on disk (jim→planner/researcher/worker/jim/ava, planner→researcher,
+//	worker→worker — 7 edges).
 func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T) {
 	home := t.TempDir()
 	cfg := &config.Config{
@@ -1508,10 +1527,9 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 				{ID: "mia", Type: config.AgentTypeCore},
 				{ID: "jim", Type: config.AgentTypeCore},
 				{ID: "ava", Type: config.AgentTypeCore},
-				{ID: "ray", Type: config.AgentTypeCore},
+				{ID: "admin", Type: config.AgentTypeCore},
 				{ID: "worker", Type: config.AgentTypeWorker},
 				{ID: "planner", Type: config.AgentTypeWorker},
-				{ID: "explorer", Type: config.AgentTypeWorker},
 				{ID: "researcher", Type: config.AgentTypeWorker},
 			},
 		},
@@ -1524,11 +1542,15 @@ func TestEnsureDefaultWorkspace_StillSeedsFullRoster_NoSetupPending(t *testing.T
 	ws := wss[0]
 	assert.True(t, ws.IsDefault)
 	assert.ElementsMatch(t,
-		[]string{"mia", "jim", "ava", "ray", "worker", "planner", "explorer", "researcher"},
-		ws.CoreTeam, "the boot default workspace must still seed the FULL install roster")
+		[]string{"mia", "jim", "ava", "worker", "planner", "researcher"},
+		ws.CoreTeam, "the boot default workspace must seed the FULL ADR-090 §2.0 workspace roster — "+
+			"admin stays out as the standalone operator (ADR-090 FR-001)")
+	assert.NotContains(t, ws.CoreTeam, "admin",
+		"admin must never be auto-seeded onto the default workspace team")
 	bootEdges, storeOK := workspace.LoadDelegation(home, ws.ID)
 	require.True(t, storeOK, "delegation store record must be readable")
-	assert.Len(t, bootEdges, 9, "the boot default workspace must still seed the full edge set")
+	assert.Len(t, bootEdges, 7, "the boot default workspace must seed the full ADR-090 edge set "+
+		"(jim→planner/researcher/worker/jim/ava, planner→researcher, worker→worker)")
 	assert.False(t, ws.SetupPending,
 		"the boot default workspace must never be setup_pending — it never runs the setup interview")
 
@@ -1562,7 +1584,8 @@ func TestHandleWorkspacePut_PreservesSetupPending(t *testing.T) {
 
 	wPut := httptest.NewRecorder()
 	rPut := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id,
-		strings.NewReader(`{"name":"SetupPendingWS-Renamed"}`))
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, created.Id,
+			`{"name":"SetupPendingWS-Renamed"}`)))
 	rPut.Header.Set("Content-Type", "application/json")
 	rPut.URL.Path = "/api/v1/workspaces/" + created.Id
 	api.HandleWorkspaces(wPut, rPut)
@@ -1682,11 +1705,16 @@ func TestHandleWorkspacePut_SerializesAgainstWorkspaceLock(t *testing.T) {
 		code int
 		body string
 	}
+	// The revisioned body is prepared BEFORE the lock is taken: the handler
+	// itself blocks on workspace.LockID while the lock is held, and reading
+	// the state inside the goroutine would serialize the fixture read behind
+	// the very lock this test is holding.
+	putBody := withWorkspaceRevisionJSON(t, api, wsID, `{"name":"LockRaceWorkspace-Renamed"}`)
 	done := make(chan result, 1)
 	go func() {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID,
-			strings.NewReader(`{"name":"LockRaceWorkspace-Renamed"}`))
+			strings.NewReader(putBody))
 		r.Header.Set("Content-Type", "application/json")
 		r.URL.Path = "/api/v1/workspaces/" + wsID
 		api.HandleWorkspaces(w, r)
@@ -1768,32 +1796,34 @@ func TestHandleWorkspacePut_DeltaValidation_PreExistingDanglingMemberDoesNotWedg
 	cfg.Agents.List = newList
 
 	// A typical client reads the current team (["mia","jim"]) and PUTs it
-	// back with one new member appended ("ray") — this is the realistic
+	// back with one new member appended ("worker") — this is the realistic
 	// "add a member" pattern that round-trips the dangling id.
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id,
-		strings.NewReader(`{"core_team":["mia","jim","ray"]}`))
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, created.Id,
+			`{"core_team":["mia","jim","worker"]}`)))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/workspaces/" + created.Id
 	api.HandleWorkspaces(w, r)
 
 	require.Equal(t, http.StatusOK, w.Code,
 		"a PUT that merely round-trips a PRE-EXISTING dangling member ('jim') alongside one new valid "+
-			"member ('ray') must succeed — rejecting it is the exact permanent-wedge bug ADR-054 fixes. body=%s",
+			"member ('worker') must succeed — rejecting it is the exact permanent-wedge bug ADR-054 fixes. body=%s",
 		w.Body.String())
 
 	var updated gen.Workspace
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
 	require.NotNil(t, updated.CoreTeam)
-	assert.ElementsMatch(t, []string{"mia", "jim", "ray"}, *updated.CoreTeam,
-		"the dangling member ('jim') survives untouched (surfaced, not pruned) and the new member ('ray') is added")
+	assert.ElementsMatch(t, []string{"mia", "jim", "worker"}, *updated.CoreTeam,
+		"the dangling member ('jim') survives untouched (surfaced, not pruned) and the new member ('worker') is added")
 
 	// A write that introduces a genuinely NEW bad id must still be rejected
 	// (delta validation still catches new problems — it only stops
 	// re-validating what was already there).
 	w2 := httptest.NewRecorder()
 	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+created.Id,
-		strings.NewReader(`{"core_team":["mia","jim","ray","brand-new-ghost"]}`))
+		strings.NewReader(withWorkspaceRevisionJSON(t, api, created.Id,
+			`{"core_team":["mia","jim","worker","brand-new-ghost"]}`)))
 	r2.Header.Set("Content-Type", "application/json")
 	r2.URL.Path = "/api/v1/workspaces/" + created.Id
 	api.HandleWorkspaces(w2, r2)

@@ -731,14 +731,11 @@ func SeedConfig(cfg *config.Config) bool {
 		sc.modified = true
 	}
 
-	// ADR-074 D4: one-shot, marker-keyed, additive-only define-done migration
-	// for existing installs. Runs AFTER the seeding loops so a fresh install's
-	// just-seeded lists (which already contain define-goal via coreAgentSkills
-	// — ADR-080 D-SKILL renamed the seeded grant — take no append via the
-	// define-goal guard inside applyDefineDoneSkillsMigration below) and only
-	// the marker is recorded.
-	// ADR-090 is a fresh-build roster. Historical skill and policy migrations
-	// remain defined for old release branches but do not run on this seed path.
+	// ADR-074 D4 / ADR-080 D-SKILL: the one-shot, marker-keyed skill-grant
+	// migrations for existing installs do NOT run on this seed path. ADR-090
+	// is a fresh-build roster: fresh installs seed "define-goal" directly via
+	// coreAgentSkills, and the marker constants below stay exported only for
+	// the gateway's marker-persistence contract (gateway_boot_roster.go).
 
 	return sc.modified
 }
@@ -793,145 +790,12 @@ func (sc *seedConfig) seedFreshInstallDefaults() {
 // config.json after SeedConfig (SeedConfig itself does no file I/O).
 const ToolPolicyUpdateWorkerGoalClaimAllow = "adr084-worker-goal-claim-allow"
 
-// applyWorkerGoalClaimAllowUpdate moves the Worker's stored goal_claim from
-// "deny" to "allow", once per install.
-//
-// Why: a native task run completes only when its goal_claim is upheld by the
-// Judge (ADR-084 §11, ADR-043 §8, issue #710), so an agent that resolves
-// goal_claim deny can never finish a task assigned to it. The founder
-// decided on 2026-09-15 that goal_claim is allowed by default for every
-// agent. Fresh installs get that from the seed; installs seeded before the
-// change stored the old value and keep it forever unless something updates
-// it, because stored per-agent policy is data that neither SeedConfig nor
-// config.ReconcileToolPolicyCeiling rewrites (ADR-076 D2, ADR-077 D2).
-//
-// Scope, from git history: the only seed that ever wrote an explicit
-// goal_claim deny for an agent this update may touch is the Worker's
-// (coreAgentSeed's IDWorker branch, commit 1addf6e1d, 2026-09-12). The Judge
-// and PlanSupervisor also carry deny, but their whole tool policy is
-// re-applied from systemAgentSeed on every boot (seedSystemAgents), so their
-// value is the seed's current value and is not this update's to change. Every
-// other seed has always written allow, so a deny on any other agent is an
-// operator's choice and is left alone.
-//
-// A stored deny on the Worker cannot be told apart from an operator who set
-// the same value, so the update flips it exactly once: the marker is written
-// in the same pass, and once it is present this function does nothing, so a
-// deny the operator sets afterwards stays. Semantics:
-//   - Marker present: no-op.
-//   - Marker absent: for the agent with id "worker" only, a stored goal_claim
-//     of exactly "deny" becomes "allow". An absent entry stays absent (it
-//     already resolves from the ceiling); "ask" and "allow" are left as they
-//     are. No other key and no other agent is touched. The marker is recorded
-//     whether or not anything flipped.
-//
-// This is not the retired fail-closed backfill (ADR-077 D3): it never adds an
-// entry, never denies anything, runs once, and changes one named value on one
-// named agent.
-//
-// Returns true when it modified cfg (always, when the marker was absent,
-// because recording the marker is itself a modification).
-func applyWorkerGoalClaimAllowUpdate(cfg *config.Config) bool {
-	for _, marker := range cfg.SeededToolPolicyUpdates {
-		if marker == ToolPolicyUpdateWorkerGoalClaimAllow {
-			return false
-		}
-	}
-	const goalClaim = "goal_claim"
-	for i := range cfg.Agents.List {
-		a := &cfg.Agents.List[i]
-		if a.ID != string(IDWorker) || a.Tools == nil {
-			continue
-		}
-		if a.Tools.Builtin.Policies[goalClaim] == config.ToolPolicyDeny {
-			a.Tools.Builtin.Policies[goalClaim] = config.ToolPolicyAllow
-		}
-	}
-	cfg.SeededToolPolicyUpdates = append(cfg.SeededToolPolicyUpdates, ToolPolicyUpdateWorkerGoalClaimAllow)
-	return true
-}
-
 // SkillsMigrationDefineDone is the ADR-074 D4 marker recorded in
 // config.seeded_skill_grants once the one-shot define-done allowlist migration
 // has run on an install. Exported so pkg/gateway can persist the marker into
 // config.json after SeedConfig (SeedConfig itself is a pure config-struct
 // mutation with zero filesystem side effects — see its doc comment).
 const SkillsMigrationDefineDone = "adr074-define-done"
-
-// applyDefineDoneSkillsMigration is the ADR-074 D4 marker-keyed migration.
-//
-// Background: the fresh-install gate on the core-roster skill seed
-// (isFreshInstall && len(a.Skills)==0 above) makes adding "define-done" to
-// coreAgentSkills a silent no-op on every EXISTING install, and ADR-072 D5.1
-// explicitly prohibits re-running the seed ("would silently restore a grant
-// list the operator later emptied on purpose"). This migration is the narrow,
-// argued exception ADR-074 D4 records: it appends a grant that has NEVER
-// existed before, which cannot restore anything — additive-only, run once,
-// keyed by the SkillsMigrationDefineDone marker.
-//
-// Semantics, exactly as ratified:
-//   - Marker present → no-op in full (second boot is byte-identical).
-//   - Marker absent → for each CORE-ROSTER agent whose compiled-in seed
-//     carries an allowlist (coreAgentSkills != nil): append "define-done"
-//     only when the live list is non-nil AND non-empty AND lacks it AND
-//     lacks its ADR-080 rename "define-goal" (a list that already carries
-//     the renamed grant — e.g. a genuinely fresh install seeded directly
-//     from coreAgentSkills, which now returns "define-goal" — is already
-//     granted in substance; appending the OLD name onto it would reintroduce
-//     define-done onto an install that never had it, defeating the D-SKILL
-//     rename this same boot's applyDefineGoalRenameMigration performs).
-//   - Nil stays nil (unrestricted already resolves every installed skill).
-//   - Empty [] stays empty (an operator who zeroed the list opted out —
-//     respected, per ADR-072 D5.1).
-//   - User-created agents and System Agents are never touched (ByID only
-//     resolves the core/worker roster; PlanSupervisor's grant propagates via
-//     seedSystemAgents' exact-equality re-enforcement instead).
-//   - The marker is recorded in the SAME SeedConfig pass as the appends, so
-//     both land in one config mutation; the caller persists them together.
-//
-// Returns true when it modified cfg (it always does when the marker was
-// absent, because writing the marker is itself a modification).
-func applyDefineDoneSkillsMigration(cfg *config.Config) bool {
-	for _, marker := range cfg.SeededSkillGrants {
-		if marker == SkillsMigrationDefineDone {
-			return false
-		}
-	}
-	const (
-		skillDefineDone = "define-done"
-		skillDefineGoal = "define-goal"
-	)
-	for i := range cfg.Agents.List {
-		a := &cfg.Agents.List[i]
-		ca := ByID(CoreAgentID(a.ID))
-		if ca == nil {
-			// Not a core-roster agent (user-created, or a System Agent —
-			// ByID iterates All(), which excludes SystemAgents()).
-			continue
-		}
-		if coreAgentSkills(ca.ID) == nil {
-			// A roster agent whose seed grants no skills (e.g. the worker):
-			// the migration introduces no grant it never seeded.
-			continue
-		}
-		if len(a.Skills) == 0 {
-			// Nil stays nil; operator-emptied [] stays empty.
-			continue
-		}
-		alreadyGranted := false
-		for _, s := range a.Skills {
-			if s == skillDefineDone || s == skillDefineGoal {
-				alreadyGranted = true
-				break
-			}
-		}
-		if !alreadyGranted {
-			a.Skills = append(a.Skills, skillDefineDone)
-		}
-	}
-	cfg.SeededSkillGrants = append(cfg.SeededSkillGrants, SkillsMigrationDefineDone)
-	return true
-}
 
 // SkillsMigrationDefineGoalRename is the ADR-080 D-SKILL marker recorded in
 // config.seeded_skill_grants once the one-shot "define-done"→"define-goal"
@@ -950,76 +814,6 @@ func applyDefineDoneSkillsMigration(cfg *config.Config) bool {
 // in pkg/providers and pkg/config — though as a pkg/coreagent constant this
 // marker sits outside those two scanned roots regardless.
 const SkillsMigrationDefineGoalRename = "adr080-define-goal-rename"
-
-// applyDefineGoalRenameMigration is the ADR-080 D-SKILL one-shot,
-// marker-keyed REWRITE migration (ADR-080 §151 step 1).
-//
-// Background: ADR-080 D-SKILL renames the built-in criteria-authoring skill
-// "define-done" → "define-goal". coreAgentSkills/systemAgentSkills above now
-// seed "define-goal" for every fresh grant, so an install that already holds
-// the OLD token — either seeded by an earlier release, or just appended by
-// applyDefineDoneSkillsMigration immediately above (the pre-ADR-074 →
-// post-ADR-080 double-upgrade case) — is left holding "define-done" in its
-// allowlist unless this migration rewrites it in place.
-//
-// Semantics, exactly as ratified (ADR-080 §151.1):
-//   - Marker present → no-op in full (second boot is byte-identical).
-//   - Marker absent → for EVERY agent in cfg.Agents.List — core-roster,
-//     user-created, AND System Agents alike. Unlike SkillsMigrationDefineDone
-//     this is NOT restricted to the core roster: it is a pure rename of an
-//     ALREADY-granted permission, never a new grant, so ADR-072 D5.1's
-//     "never restore a grant the operator removed" concern does not apply —
-//     there is nothing to restore, only a token to relabel. When the live
-//     Skills list is non-nil AND non-empty AND contains "define-done" AND
-//     lacks "define-goal": REPLACE the token in its existing slot (rewrite,
-//     not append), preserving the list's order.
-//   - Nil stays nil (unrestricted already resolves every installed skill).
-//   - Empty [] stays empty (an operator who zeroed the list opted out —
-//     respected, per ADR-072 D5.1 — same discipline as
-//     applyDefineDoneSkillsMigration).
-//   - A list that already carries "define-goal" is left alone even if it
-//     (unusually) also still carries "define-done" — there is nothing to
-//     rewrite INTO, and a dedup rule is out of scope for what is meant to
-//     stay a narrow, mechanical token substitution.
-//
-// Returns true when it modified cfg (it always does when the marker was
-// absent, because writing the marker is itself a modification).
-func applyDefineGoalRenameMigration(cfg *config.Config) bool {
-	for _, marker := range cfg.SeededSkillGrants {
-		if marker == SkillsMigrationDefineGoalRename {
-			return false
-		}
-	}
-	const (
-		skillDefineDone = "define-done"
-		skillDefineGoal = "define-goal"
-	)
-	for i := range cfg.Agents.List {
-		a := &cfg.Agents.List[i]
-		if len(a.Skills) == 0 {
-			// Nil stays nil; operator-emptied [] stays empty.
-			continue
-		}
-		hasDefineGoal := false
-		defineDoneIdx := -1
-		for idx, s := range a.Skills {
-			if s == skillDefineGoal {
-				hasDefineGoal = true
-			}
-			if s == skillDefineDone {
-				defineDoneIdx = idx
-			}
-		}
-		if hasDefineGoal || defineDoneIdx == -1 {
-			// Already renamed, or never carried the old token — nothing to
-			// rewrite.
-			continue
-		}
-		a.Skills[defineDoneIdx] = skillDefineGoal
-	}
-	cfg.SeededSkillGrants = append(cfg.SeededSkillGrants, SkillsMigrationDefineGoalRename)
-	return true
-}
 
 // NewCustomAgentToolsCfg returns the default AgentToolsCfg for a newly created
 // custom/subagent/subagent_3p agent (FR-008, FR-022). Every new agent starts

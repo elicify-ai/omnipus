@@ -85,17 +85,5 @@ properties:
         type: array
         description: List of MCP server bindings.
         items:
-          type: object
-          required:
-            - id
-          properties:
-            id:
-              type: string
-              description: MCP server identifier as registered in config.json.
-            tools:
-              type: array
-              items:
-                type: string
-              description: >
-                Specific tool names to expose from this server. When absent,
-                all tools from the server are available.
+          $ref: './AgentToolsMcpServerBinding.yaml'
+          x-go-type: AgentToolsMcpServerBinding

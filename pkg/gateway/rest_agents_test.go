@@ -4,6 +4,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -526,7 +527,7 @@ func TestHandleAgentsDelete_OK(t *testing.T) {
 	assert.Equal(t, gen.ConfigurationMutationStateActivationStatusActive, deletion.ActivationStatus)
 	assert.Equal(t, []string{"entity", "soul"}, deletion.ChangedFields)
 	assert.Regexp(t, "^[0-9a-f]{64}$", deletion.Revision)
-	if _, err := os.Stat(filepath.Join(api.homePath, "agents", created.Id, "SOUL.md")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(api.homePath, "agents", created.Id, "SOUL.md")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("SOUL.md stat error=%v want not exist", err)
 	}
 
@@ -1382,8 +1383,22 @@ func TestHandleAgentsListIncludesConfiguredAgents(t *testing.T) {
 // Then the response has id "omnipus-system" and type "system".
 // Traces to: wave5a-wire-ui-spec.md — Scenario: Get agent by ID (US-7 AC1)
 func TestHandleAgentsGetByIDSystemAgent(t *testing.T) {
-	api, cleanup := newTestRestAPI(t)
-	defer cleanup()
+	// ADR-090 §5.2: the GET-by-ID response carries the agent's canonical
+	// revision, read from the entity store — a missing entity record is a 500,
+	// not a 404. Production boot persists every seeded agent
+	// (persistSeededCoreAgents), so the harness must too: use the with-home
+	// variant (newTestRestAPI has no homePath), register the system agent on
+	// the config roster (listAgents/getAgent read cfg.Agents.List at request
+	// time), and persist real entity records for the whole roster.
+	api := newTestRestAPIWithHomeAndAgent(t)
+	cfg := api.agentLoop.GetConfig()
+	cfg.Agents.List = append(cfg.Agents.List, config.AgentConfig{
+		ID:     "omnipus-system",
+		Name:   "Omnipus",
+		Type:   config.AgentTypeSystem,
+		Locked: true,
+	})
+	seedAgentEntities(t, api.homePath, cfg.Agents.List)
 
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/agents/omnipus-system", nil)

@@ -6,6 +6,7 @@ package environmentsetup
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -40,8 +41,9 @@ func acquireBounded(t *testing.T, key string) (*sync.Mutex, error) {
 	case r := <-done:
 		return r.mu, r.err
 	case <-time.After(2 * time.Second):
-		t.Fatalf("acquireInprocessLock(%q) blocked 2s — global map mutex never released (cross-target deadlock)", key)
-		return nil, nil
+		err := fmt.Errorf("acquireInprocessLock(%q) blocked 2s — global map mutex never released (cross-target deadlock)", key)
+		t.Fatal(err)
+		return nil, err
 	}
 }
 
@@ -104,7 +106,7 @@ func TestWorkspaceLockLivesOutsideInstallerPrefix(t *testing.T) {
 		t.Fatalf("lifetime lock must exist at %s, outside the prefix: %v", outside, err)
 	}
 	inside := filepath.Join(target.Prefix(), ".install.lock")
-	if _, err := os.Stat(inside); !os.IsNotExist(err) {
+	if _, err := os.Stat(inside); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("no lock file may remain INSIDE the installer-writable prefix: %v", err)
 	}
 	if g := target.Grant(); len(g.Writable) != 1 || g.Writable[0] != target.Prefix() {
@@ -130,11 +132,11 @@ func TestWorkspaceLockSurvivesPrefixRecreation(t *testing.T) {
 	// The installer legitimately owns its prefix: clear and recreate exactly
 	// as a generic "clean install" script would. The reserved metadata (and
 	// with it the lock file) is outside this grant.
-	if err := os.RemoveAll(first.Prefix()); err != nil {
+	if err = os.RemoveAll(first.Prefix()); err != nil {
 		t.Fatal(err)
 	}
 	for _, dir := range []string{first.Prefix(), first.Cache(), first.Tmp()} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		if err = os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -149,7 +151,7 @@ func TestWorkspaceLockSurvivesPrefixRecreation(t *testing.T) {
 	}
 
 	// Abort still releases the lock for the next installer.
-	if err := first.Abort(); err != nil {
+	if err = first.Abort(); err != nil {
 		t.Fatalf("Abort must release the target lock: %v", err)
 	}
 	third, err := BeginInstall(dataRoot, ws, ScopeWorkspace)

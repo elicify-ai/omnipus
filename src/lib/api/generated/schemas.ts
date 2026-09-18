@@ -1116,12 +1116,13 @@ type AgentToolsCfg = Partial<{
     policies: {};
   };
   mcp: Partial<{
-    servers: Array<{
-      id: string;
-      tools?: Array<string> | undefined;
-    }>;
+    servers: Array<AgentToolsMcpServerBinding>;
   }>;
 }>;
+type AgentToolsMcpServerBinding = {
+  id: string;
+  tools?: Array<string> | undefined;
+};
 type AgentShellPolicy = Partial<{
   enable_deny_patterns: boolean;
   custom_deny_patterns: Array<string>;
@@ -1168,10 +1169,7 @@ type AgentToolsUpdateRequest = {
     | undefined;
   mcp?:
     | Partial<{
-        servers: Array<{
-          id: string;
-          tools?: Array<string> | undefined;
-        }>;
+        servers: Array<AgentToolsMcpServerBinding>;
       }>
     | undefined;
 };
@@ -2968,19 +2966,17 @@ export const AgentFieldDescriptor: z.ZodType<AgentFieldDescriptor> = z.object({
   editable: z.boolean(),
   reason: z.string().optional(),
 });
+export const AgentToolsMcpServerBinding: z.ZodType<AgentToolsMcpServerBinding> =
+  z
+    .object({ id: z.string(), tools: z.array(z.string()).optional() })
+    .passthrough();
 export const AgentToolsCfg: z.ZodType<AgentToolsCfg> = z
   .object({
     builtin: z
       .object({ policies: z.record(z.enum(["allow", "ask", "deny"])) })
       .passthrough(),
     mcp: z
-      .object({
-        servers: z.array(
-          z
-            .object({ id: z.string(), tools: z.array(z.string()).optional() })
-            .passthrough()
-        ),
-      })
+      .object({ servers: z.array(AgentToolsMcpServerBinding) })
       .partial()
       .passthrough(),
   })
@@ -3260,13 +3256,7 @@ export const AgentToolsUpdateRequest: z.ZodType<AgentToolsUpdateRequest> =
       .passthrough()
       .optional(),
     mcp: z
-      .object({
-        servers: z.array(
-          z
-            .object({ id: z.string(), tools: z.array(z.string()).optional() })
-            .passthrough()
-        ),
-      })
+      .object({ servers: z.array(AgentToolsMcpServerBinding) })
       .partial()
       .passthrough()
       .optional(),

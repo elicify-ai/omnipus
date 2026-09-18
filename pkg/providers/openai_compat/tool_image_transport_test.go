@@ -61,18 +61,39 @@ func assertOpenAIToolImageRequest(t *testing.T, body map[string]any, wantBase64 
 	gotCallIDs := make([]string, 0, 2)
 	imageCount := 0
 	for _, raw := range rawMessages {
-		msg := raw.(map[string]any)
-		gotRoles = append(gotRoles, msg["role"].(string))
-		if msg["role"] == "tool" {
-			gotCallIDs = append(gotCallIDs, msg["tool_call_id"].(string))
+		msg, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("message=%#v, want object", raw)
+		}
+		role, ok := msg["role"].(string)
+		if !ok {
+			t.Fatalf("role=%#v, want string", msg["role"])
+		}
+		gotRoles = append(gotRoles, role)
+		if role == "tool" {
+			toolCallID, ok := msg["tool_call_id"].(string)
+			if !ok {
+				t.Fatalf("tool_call_id=%#v, want string", msg["tool_call_id"])
+			}
+			gotCallIDs = append(gotCallIDs, toolCallID)
 		}
 		parts, _ := msg["content"].([]any)
 		for _, rawPart := range parts {
-			part := rawPart.(map[string]any)
+			part, ok := rawPart.(map[string]any)
+			if !ok {
+				t.Fatalf("content part=%#v, want object", rawPart)
+			}
 			if part["type"] != "image_url" {
 				continue
 			}
-			url := part["image_url"].(map[string]any)["url"].(string)
+			imageURL, ok := part["image_url"].(map[string]any)
+			if !ok {
+				t.Fatalf("image_url=%#v, want object", part["image_url"])
+			}
+			url, ok := imageURL["url"].(string)
+			if !ok {
+				t.Fatalf("url=%#v, want string", imageURL["url"])
+			}
 			encoded := strings.TrimPrefix(url, "data:image/png;base64,")
 			decoded, err := base64.StdEncoding.DecodeString(encoded)
 			if err != nil || !reflect.DeepEqual(decoded, mustDecodeBase64(t, wantBase64)) {

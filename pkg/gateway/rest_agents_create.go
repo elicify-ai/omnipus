@@ -144,10 +144,7 @@ func agentCreateToolsCfgFromWire[P ~string](tc *struct {
 		Policies map[string]P `json:"policies"`
 	} `json:"builtin,omitempty"`
 	Mcp *struct {
-		Servers *[]struct {
-			Id    string    `json:"id"`
-			Tools *[]string `json:"tools,omitempty"`
-		} `json:"servers,omitempty"`
+		Servers *[]gen.AgentToolsMcpServerBinding `json:"servers,omitempty"`
 	} `json:"mcp,omitempty"`
 },
 ) *agentCreateToolsCfgInput {

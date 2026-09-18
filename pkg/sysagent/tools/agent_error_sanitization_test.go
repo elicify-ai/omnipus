@@ -24,10 +24,10 @@ func TestAgentUpdateStorageFailureIsSanitizedAndTruthful(t *testing.T) {
 		t.Fatal(err)
 	}
 	soul := filepath.Join(deps.Home, "agents", "storage-failure", "SOUL.md")
-	if err := os.Remove(soul); err != nil {
+	if err = os.Remove(soul); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(soul, 0700); err != nil {
+	if err = os.Mkdir(soul, 0700); err != nil {
 		t.Fatal(err)
 	}
 	result := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{"id": "storage-failure", "revision": before.Revision, "name": "must not persist"})

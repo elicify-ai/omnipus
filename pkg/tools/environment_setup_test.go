@@ -13,6 +13,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -109,7 +111,7 @@ func (h *setupTestHarness) auditContents(t *testing.T) string {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(h.auditDir, "*.jsonl"))
 	require.NoError(t, err)
-	var all []byte
+	all := make([]byte, 0, len(files)*1024)
 	for _, f := range files {
 		b, rerr := os.ReadFile(f)
 		require.NoError(t, rerr)
@@ -306,7 +308,7 @@ func TestEnvironmentSetup_CrossWorkspace_NonAdmin_Refused(t *testing.T) {
 
 	// No installation area was created anywhere for the refused request.
 	_, err := os.Stat(filepath.Join(alphaDir, ".omnipus"))
-	assert.True(t, os.IsNotExist(err), "refused request must not create an area")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "refused request must not create an area")
 }
 
 func TestEnvironmentSetup_Admin_ExistingWorkspace_Targeted(t *testing.T) {
@@ -408,7 +410,101 @@ func TestEnvironmentSetup_RunValidation_Refusals(t *testing.T) {
 	}
 	// Nothing was started: no area exists under the workspace.
 	_, err := os.Stat(filepath.Join(wsDir, ".omnipus"))
-	assert.True(t, os.IsNotExist(err), "refused runs must not create an installation area")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "refused runs must not create an installation area")
+}
+
+// setupDenyAuditEntries parses the harness's audit JSONL into entries.
+func setupDenyAuditEntries(t *testing.T, h *setupTestHarness) []audit.Entry {
+	t.Helper()
+	var entries []audit.Entry
+	for _, line := range strings.Split(strings.TrimSpace(h.auditContents(t)), "\n") {
+		if line == "" {
+			continue
+		}
+		var e audit.Entry
+		require.NoError(t, json.Unmarshal([]byte(line), &e), "bad audit line: %s", line)
+		entries = append(entries, e)
+	}
+	return entries
+}
+
+// assertDenyAuditBounded fails the test if the raw serialized audit record
+// embeds the oversized payload or exceeds the bounded size — the whole-record
+// guarantee behind the per-field preview bound.
+func assertDenyAuditBounded(t *testing.T, rawLine string, payload string) {
+	t.Helper()
+	assert.Less(t, len(rawLine), 2048,
+		"whole serialized deny record must stay bounded")
+	assert.NotContains(t, rawLine, payload[:600],
+		"no field of the deny record may embed the oversized payload")
+}
+
+// TestEnvironmentSetup_DenyAudit_OversizedCommandBounded: the deny path runs
+// BEFORE the command-size cap, so its audit entry must record a bounded
+// preview of the oversized command plus the original length — never the
+// payload itself.
+func TestEnvironmentSetup_DenyAudit_OversizedCommandBounded(t *testing.T) {
+	h := newSetupHarness(t, false)
+	wsDir := filepath.Join(h.home, "workspaces", "alpha")
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+	ctx := h.ctx("mia", "alpha", wsDir, "t-denyaudit-1")
+
+	oversized := strings.Repeat("x", environmentSetupMaxCommandBytes+65)
+	res := h.tool.Execute(ctx, map[string]any{
+		"command": oversized,
+		"purpose": "p",
+	})
+	require.True(t, res.IsError, "oversized command must be refused")
+	assert.Contains(t, res.ForLLM, "command must be at most")
+
+	lines := strings.Split(strings.TrimSpace(h.auditContents(t)), "\n")
+	require.Len(t, lines, 1, "exactly one deny entry must be audited")
+	var entry audit.Entry
+	require.NoError(t, json.Unmarshal([]byte(lines[0]), &entry))
+	assert.Equal(t, audit.DecisionDeny, entry.Decision)
+	assert.Contains(t, entry.Command, " [audit preview truncated; ")
+	assert.Contains(t, entry.Command, fmt.Sprintf(" %d of %d bytes omitted]",
+		len(oversized)-environmentSetupAuditDenyPreviewBytes, len(oversized)),
+		"the record must state the original length")
+	assertDenyAuditBounded(t, lines[0], oversized)
+}
+
+// TestEnvironmentSetup_DenyAudit_OversizedTargetBoundedEverywhere: on the
+// disallowed-target path the reason echoes the requested target_workspace, so
+// command, reason, and target_workspace must ALL ride the bound — no field of
+// the serialized record carries the raw oversized string.
+func TestEnvironmentSetup_DenyAudit_OversizedTargetBoundedEverywhere(t *testing.T) {
+	h := newSetupHarness(t, false)
+	wsDir := filepath.Join(h.home, "workspaces", "alpha")
+	require.NoError(t, os.MkdirAll(wsDir, 0o755))
+	ctx := h.ctx("mia", "alpha", wsDir, "t-denyaudit-2")
+
+	bigTarget := strings.Repeat("t", 4096)
+	res := h.tool.Execute(ctx, map[string]any{
+		"command":          "echo ok",
+		"purpose":          "p",
+		"scope":            "workspace",
+		"target_workspace": bigTarget,
+	})
+	require.True(t, res.IsError, "invalid target must be refused")
+	assert.Contains(t, res.ForLLM, "not a valid workspace identifier")
+
+	entries := setupDenyAuditEntries(t, h)
+	require.Len(t, entries, 1, "exactly the disallowed-target deny is audited")
+	entry := entries[0]
+	assert.Equal(t, audit.DecisionDeny, entry.Decision)
+	assert.Equal(t, "echo ok", entry.Command,
+		"a within-cap command stays verbatim on the deny entry")
+
+	targetDetail, ok := entry.Details["target_workspace"].(string)
+	require.True(t, ok, "target_workspace detail must be a string")
+	assert.Contains(t, targetDetail, " [audit preview truncated; ")
+	reason, ok := entry.Details["reason"].(string)
+	require.True(t, ok, "reason detail must be a string")
+	assert.Contains(t, reason, " [audit preview truncated; ",
+		"the reason echoes the oversized target, so it must carry the truncation marker")
+
+	assertDenyAuditBounded(t, h.auditContents(t), bigTarget)
 }
 
 func TestEnvironmentSetup_StoreNotWired_Refused(t *testing.T) {
@@ -548,13 +644,14 @@ func unlockSharedTree(t *testing.T, root string) {
 	t.Helper()
 	t.Cleanup(func() {
 		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				return nil
-			}
-			if d.IsDir() {
-				_ = os.Chmod(path, 0o755)
-			} else {
-				_ = os.Chmod(path, 0o644)
+			// Best-effort unlock: a path the walk could not stat is skipped,
+			// and the walk continues so later paths still get unlocked.
+			if err == nil {
+				if d.IsDir() {
+					_ = os.Chmod(path, 0o755)
+				} else {
+					_ = os.Chmod(path, 0o644)
+				}
 			}
 			return nil
 		})
