@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -38,6 +39,8 @@ type DedicatedInputPeer struct {
 	closeOnce       sync.Once
 	nativeCloseOnce sync.Once
 	closed          chan struct{}
+	inbound         atomic.Int64 // inbound data-channel messages seen (diagnostic)
+	inboundDropped  atomic.Int64 // inbound messages dropped because ctx was done
 }
 
 func NewDedicatedInputPeer(parent context.Context, cfg Config, epoch, control int, sink func(context.Context, generated.BrowserInputFrame), validate func([]byte) error, state func(string)) *DedicatedInputPeer {
@@ -328,7 +331,20 @@ func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 	dc.OnClose(func() { p.fail("input data channel closed") })
 	dc.OnError(func(error) { p.fail("input data channel failed") })
 	dc.OnMessage(func(message pion.DataChannelMessage) {
-		if p.ctx.Err() != nil {
+		// First inbound message per channel is reported, and a context-cancelled
+		// drop is reported too. Every OTHER rejection below calls p.fail() and
+		// reaches the operator; this one returned silently, so a peer whose
+		// context had already been cancelled swallowed every input byte with no
+		// trace anywhere. From outside that is identical to "the SPA never sent"
+		// — and the two have opposite fixes. The ui-browser shard spent several
+		// investigations unable to tell them apart.
+		if n := p.inbound.Add(1); n == 1 {
+			dedicatedInputLogf("first inbound input message on %q (%d bytes, string=%t)", dc.Label(), len(message.Data), message.IsString)
+		}
+		if err := p.ctx.Err(); err != nil {
+			if p.inboundDropped.Add(1) == 1 {
+				dedicatedInputLogf("input message DROPPED on %q: peer context already done (%v) — further drops counted, not logged", dc.Label(), err)
+			}
 			return
 		}
 		p.mu.Lock()
