@@ -278,13 +278,7 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 }
 func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 	hover := dc.Label() == "input-hover"
-	valid := dc.Label() == "input-reliable" || hover
-	valid = valid && dc.Protocol() == InputBinaryProtocol && !dc.Negotiated() && dc.MaxPacketLifeTime() == nil
-	if hover {
-		valid = valid && !dc.Ordered() && dc.MaxRetransmits() != nil && *dc.MaxRetransmits() == 0
-	} else {
-		valid = valid && dc.Ordered() && dc.MaxRetransmits() == nil
-	}
+	valid := inputChannelShapeValid(dc)
 	p.mu.Lock()
 	if !valid || p.channels[dc.Label()] != nil || p.ctx.Err() != nil {
 		duplicate := p.channels[dc.Label()] != nil
@@ -296,16 +290,7 @@ func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 		// then silently never arrives, gave the investigator no way to tell a
 		// label mismatch from a protocol mismatch from a duplicate. That
 		// ambiguity cost several rounds on the ui-browser shard.
-		retx := "nil"
-		if v := dc.MaxRetransmits(); v != nil {
-			retx = fmt.Sprintf("%d", *v)
-		}
-		life := "nil"
-		if v := dc.MaxPacketLifeTime(); v != nil {
-			life = fmt.Sprintf("%d", *v)
-		}
-		dedicatedInputLogf("input data channel REJECTED: label=%q protocol=%q negotiated=%t ordered=%t max_retransmits=%s max_packet_lifetime=%s duplicate=%t ctx_err=%v (want label input-reliable|input-hover, protocol %q, negotiated=false, lifetime=nil; reliable: ordered=true retransmits=nil; hover: ordered=false retransmits=0)",
-			dc.Label(), dc.Protocol(), dc.Negotiated(), dc.Ordered(), retx, life, duplicate, ctxErr, InputBinaryProtocol)
+		logRejectedInputChannel(dc, duplicate, ctxErr)
 		p.fail("invalid input data channel")
 		return
 	}
@@ -393,4 +378,42 @@ func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 // the ICE diagnostics fell into.
 func dedicatedInputLogf(format string, args ...any) {
 	slog.Warn(fmt.Sprintf("browser dedicated input: "+format, args...))
+}
+
+// logRejectedInputChannel reports every attribute bindChannel checked next to
+// what was expected. Extracted from bindChannel so the diagnostic's branches do
+// not count against that function's complexity budget — the reporting is
+// incidental to the decision, and the budget should measure the decision.
+func logRejectedInputChannel(dc *pion.DataChannel, duplicate bool, ctxErr error) {
+	retx := "nil"
+	if v := dc.MaxRetransmits(); v != nil {
+		retx = fmt.Sprintf("%d", *v)
+	}
+	life := "nil"
+	if v := dc.MaxPacketLifeTime(); v != nil {
+		life = fmt.Sprintf("%d", *v)
+	}
+	dedicatedInputLogf("input data channel REJECTED: label=%q protocol=%q negotiated=%t ordered=%t max_retransmits=%s max_packet_lifetime=%s duplicate=%t ctx_err=%v (want label input-reliable|input-hover, protocol %q, negotiated=false, lifetime=nil; reliable: ordered=true retransmits=nil; hover: ordered=false retransmits=0)",
+		dc.Label(), dc.Protocol(), dc.Negotiated(), dc.Ordered(), retx, life, duplicate, ctxErr, InputBinaryProtocol)
+}
+
+// inputChannelShapeValid answers the one question bindChannel needs: does this
+// data channel have the shape the input protocol requires? Extracted so the
+// predicate's branches are budgeted where the decision lives, not inside the
+// bind path that also handles locking, duplicate detection and failure
+// reporting. Reliable is ordered with no retransmit cap; hover is unordered
+// with a zero cap; both carry the binary protocol, are not negotiated, and set
+// no packet lifetime.
+func inputChannelShapeValid(dc *pion.DataChannel) bool {
+	hover := dc.Label() == "input-hover"
+	if dc.Label() != "input-reliable" && !hover {
+		return false
+	}
+	if dc.Protocol() != InputBinaryProtocol || dc.Negotiated() || dc.MaxPacketLifeTime() != nil {
+		return false
+	}
+	if hover {
+		return !dc.Ordered() && dc.MaxRetransmits() != nil && *dc.MaxRetransmits() == 0
+	}
+	return dc.Ordered() && dc.MaxRetransmits() == nil
 }
