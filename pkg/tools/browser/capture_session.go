@@ -749,7 +749,17 @@ func startEncoderWithFrame(ctx context.Context, mgr *BrowserManager, panelSessio
 		// on Chrome 153. Best-effort: a failed re-focus is logged and the
 		// capture still starts — a working capture at a frozen viewport beats
 		// no capture at all.
-		if err := refocusCapturedTabBeforeEncoderLoad(runCtx, frame.TargetID); err != nil {
+		// Through chromedp.Run, NOT a bare call: Target.activateTarget is a
+		// browser-level command needing a context that carries a CDP executor.
+		// runCtx does not have one, so the direct call returned "invalid
+		// context" on every capture (CI worker, 2026-09-18) — the layout freeze
+		// this exists to prevent kept happening while the code looked wired.
+		// The failure is logged and swallowed by design (a frozen capture beats
+		// no capture), so nothing else revealed it. The helper stays
+		// executor-agnostic so its tests can drive it with a recording executor.
+		if err := chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
+			return refocusCapturedTabBeforeEncoderLoad(c, frame.TargetID)
+		})); err != nil {
 			logger.WarnCF("browser", "live view: could not re-focus the captured tab before its capture starts — the viewport may stop following resizes on Chrome 153", map[string]any{
 				"target_id": frame.TargetID,
 				"error":     err.Error(),
