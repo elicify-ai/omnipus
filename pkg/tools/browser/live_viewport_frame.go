@@ -253,8 +253,22 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 			// inner/CSS geometry distinguishes it from a normal scrollbar.
 			recoverShortfall := attempt == 0 && initialLayoutUnverified &&
 				(width-measured.Width > viewportDriftTolerancePx || height-measured.Height > viewportDriftTolerancePx)
+			// A VERIFIED read LARGER than the request means the window-bounds
+			// shrink was ignored outright, not overshot benignly: the CI worker
+			// measured 2560x1297 (--window-size=2560,1440 minus chrome) against
+			// a requested 561x628 on 2026-09-18, and every later click mis-aimed
+			// because the capture kept depicting the un-reshaped tab. The
+			// "overshoot needs no correction" rule in the mechanism comment
+			// covers a window that legitimately ends bigger than asked; a shrink
+			// request that moved nothing is that rule's blind spot. Give it the
+			// same single content-size retry the new-tab convergence path has
+			// (SetContentsSize — the one resize lever chrome.tabs.get, and so
+			// the capture, actually reflects), then accept whatever settles,
+			// exactly as the shortfall path does.
+			recoverOvershoot := attempt == 0 && !initialLayoutUnverified &&
+				(measured.Width-width > viewportDriftTolerancePx || measured.Height-height > viewportDriftTolerancePx)
 			matches := true
-			if converge || recoverShortfall {
+			if converge || recoverShortfall || recoverOvershoot {
 				matches, err = lv.viewportMatchesRequest(operation, measured, width, height)
 				if err != nil {
 					return anyApplied, fmt.Errorf("viewport convergence measurement: %w", err)
