@@ -120,7 +120,8 @@ func (p *Provider) Chat(
 
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", p.apiKey) // The Anthropic API requires this exact header name.
+	// HTTP/2 requires the canonical MIME form; Anthropic accepts this header name.
+	req.Header.Set("X-Api-Key", p.apiKey)
 	req.Header.Set("Anthropic-Version", defaultAPIVersion)
 
 	// Execute request
