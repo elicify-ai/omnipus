@@ -1212,7 +1212,7 @@ func cascadeCleanAgentWorkspaceReferences(home, agentID string) (workspacesUpdat
 	dir := workspacesDir(home)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return 0, 0, nil
 		}
 		return 0, 0, []string{fmt.Sprintf("could not list workspaces for cascade reference cleanup: %v", err)}

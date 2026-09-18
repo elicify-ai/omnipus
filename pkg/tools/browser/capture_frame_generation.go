@@ -25,6 +25,9 @@ type captureFrameSnapshot struct { // not-wire-format: internal generation state
 type captureFrameTracker struct { // not-wire-format: capture-local state machine.
 	mu      sync.Mutex
 	current captureFrameSnapshot
+	// claimed is sticky: a positive layout means this capture has owned a
+	// picture, even if a later document transition unpublished width/height.
+	claimed bool
 }
 
 func (f *captureFrameTracker) begin(geometry captureFrameGeometry) (captureFrameSnapshot, error) {
@@ -53,7 +56,16 @@ func (f *captureFrameTracker) beginTransition(geometry captureFrameGeometry, for
 		return f.current, fmt.Errorf("capture generation exhausted; replace capture session")
 	}
 	f.current = captureFrameSnapshot{Generation: f.current.Generation + 1, Geometry: geometry}
+	if geometry.Width > 0 && geometry.Height > 0 {
+		f.claimed = true
+	}
 	return f.current, nil
+}
+
+func (f *captureFrameTracker) hasClaimed() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.claimed
 }
 
 func (f *captureFrameTracker) commit(generation uint64, targetID string, timestamp uint32) bool {

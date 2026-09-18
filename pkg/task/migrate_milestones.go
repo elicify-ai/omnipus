@@ -13,6 +13,7 @@ package task
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -72,14 +73,14 @@ func MigrateMilestonesToTags(home string) error {
 				"dir", milestonesDir, "error", rmErr)
 		}
 		return nil
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("task: milestone migration: stat sentinel: %w", err)
 	}
 
 	milestonesDir := filepath.Join(home, "milestones")
 	entries, err := os.ReadDir(milestonesDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return writeMigrationSentinel(sentinelPath)
 		}
 		return fmt.Errorf("task: milestone migration: read milestones dir: %w", err)
@@ -137,7 +138,7 @@ func MigrateMilestonesToTags(home string) error {
 		emptyMilestones[id] = true
 	}
 	taskEntries, terr := os.ReadDir(tasksDir)
-	if terr != nil && !os.IsNotExist(terr) {
+	if terr != nil && !errors.Is(terr, os.ErrNotExist) {
 		return fmt.Errorf("task: milestone migration: read tasks dir: %w", terr)
 	}
 	var migrationFailures int

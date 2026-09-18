@@ -13,6 +13,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -288,8 +289,7 @@ func TestPool_DeleteProfileOnWorkspaceDeletionOnly(t *testing.T) {
 		f.pool.Close(key)
 		require.NoError(t, f.pool.DeleteProfile(key))
 		_, statErr := os.Stat(dir)
-		assert.True(t, os.IsNotExist(statErr),
-			"a deleted workspace's browser profile — session cookies included — must be gone from disk")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "a deleted workspace's browser profile — session cookies included — must be gone from disk")
 	})
 
 	t.Run("refuses while the browser is still live", func(t *testing.T) {
@@ -444,7 +444,7 @@ func TestPool_ReconcileMarkersAtBoot(t *testing.T) {
 	assert.Empty(t, refused, "a stale marker is cleared, not refused — nothing else is driving that key")
 	for _, ws := range []string{"alpha", "beta"} {
 		_, err := os.Stat(f.pool.markerPathFor(browserTestKey(ws)))
-		assert.True(t, os.IsNotExist(err), "workspace %q's stale marker must be cleared", ws)
+		assert.True(t, errors.Is(err, os.ErrNotExist), "workspace %q's stale marker must be cleared", ws)
 	}
 	assert.Empty(t, f.pool.LiveKeys(), "reconciliation launches nothing")
 }

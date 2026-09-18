@@ -162,7 +162,7 @@ func TestDeleteSkillRemovesFromGlobalSkillsDir(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "response body: %s", w.Body.String())
 
 	_, statErr := os.Stat(skillDir)
-	assert.True(t, os.IsNotExist(statErr), "skill directory should have been removed")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "skill directory should have been removed")
 }
 
 // TestDeleteSkillRejectsBuiltinSkill verifies the 403 guard that protects the

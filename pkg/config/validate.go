@@ -32,6 +32,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -103,7 +104,7 @@ func ValidateAgentConfigs(
 ) (results []AgentValidationResult, abortBoot bool) {
 	entries, err := os.ReadDir(agentsDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, false // no agents directory — fresh install, nothing to validate
 		}
 		// Cannot read agents dir at all; this is not the same as a corrupt agent
@@ -132,7 +133,7 @@ func ValidateAgentConfigs(
 		// the agent simply uses constructor defaults (Boot Order step 7, dataset row 7/8).
 		raw, readErr := os.ReadFile(agentPath) // #nosec G304 — path is under agentsDir
 		if readErr != nil {
-			if os.IsNotExist(readErr) {
+			if errors.Is(readErr, os.ErrNotExist) {
 				// No agent.json — constructor seeds apply; not an error.
 				result.Valid = true
 				results = append(results, result)

@@ -110,8 +110,7 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 	// The agent's own private directory must NOT have received the file.
 	privateFile := filepath.Join(agentWorkspaceDir, "proof.txt")
 	_, statErr := os.Stat(privateFile)
-	assert.True(t, os.IsNotExist(statErr),
-		"write_file must NOT land in the agent's own private directory (%s) when it is a CoreTeam member", privateFile)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "write_file must NOT land in the agent's own private directory (%s) when it is a CoreTeam member", privateFile)
 
 	// The workspace root itself (one level up from work/) must NOT have
 	// received the file either — proving the re-root target is the
@@ -120,9 +119,7 @@ func TestRunTurn_CoreTeamMember_WritesToWorkspaceSharedDir(t *testing.T) {
 	workspaceRootFile := filepath.Join(workspacesDir, "team-ws", "proof.txt")
 	_, rootStatErr := os.Stat(workspaceRootFile)
 	assert.True(
-		t,
-		os.IsNotExist(rootStatErr),
-		"write_file must NOT land directly in the workspace's own directory (%s) — only in its work/ subdirectory",
+		t, errors.Is(rootStatErr, os.ErrNotExist), "write_file must NOT land directly in the workspace's own directory (%s) — only in its work/ subdirectory",
 		workspaceRootFile,
 	)
 }
@@ -183,15 +180,13 @@ func TestRunTurn_WorkspacelessAgentRefused(t *testing.T) {
 	// No file anywhere: neither the agent's own private directory...
 	privateFile := filepath.Join(agentWorkspaceDir, "proof.txt")
 	_, statErr := os.Stat(privateFile)
-	assert.True(t, os.IsNotExist(statErr),
-		"write_file must NOT land in the agent's own directory when the turn is refused (%s)", privateFile)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "write_file must NOT land in the agent's own directory when the turn is refused (%s)", privateFile)
 
 	// ...nor any workspace (there are none — the turn must never have reached
 	// the tool-call stage at all).
 	workspacesDir := filepath.Join(tmpHome, "workspaces")
 	_, wsStatErr := os.Stat(workspacesDir)
-	assert.True(t, os.IsNotExist(wsStatErr),
-		"a refused turn must not create any workspace directory")
+	assert.True(t, errors.Is(wsStatErr, os.ErrNotExist), "a refused turn must not create any workspace directory")
 }
 
 // TestRunTurn_WorkspacelessAgentRefused_ViaProcessMessage (ADR-046 P1,
@@ -264,13 +259,11 @@ func TestRunTurn_WorkspacelessAgentRefused_ViaProcessMessage(t *testing.T) {
 
 	privateFile := filepath.Join(agentWorkspaceDir, "proof.txt")
 	_, statErr := os.Stat(privateFile)
-	assert.True(t, os.IsNotExist(statErr),
-		"write_file must NOT land in the agent's own directory when the turn is refused (%s)", privateFile)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "write_file must NOT land in the agent's own directory when the turn is refused (%s)", privateFile)
 
 	workspacesDir := filepath.Join(tmpHome, "workspaces")
 	_, wsStatErr := os.Stat(workspacesDir)
-	assert.True(t, os.IsNotExist(wsStatErr),
-		"a refused turn must not create any workspace directory")
+	assert.True(t, errors.Is(wsStatErr, os.ErrNotExist), "a refused turn must not create any workspace directory")
 }
 
 // TestRunTurn_MemberGetsWorkspaceWorkDir (ADR-046 P1, FR-007, US-2 AS-1)

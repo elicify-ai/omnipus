@@ -22,6 +22,18 @@ linters:
     - tagliatelle
     - testpackage
     - varnamelen
+    # wrapcheck: DISABLED until wrapping is done package-by-package under
+    # scripts/check-no-unsafe-error-wrap.sh. The previous enablement
+    # (0b4585ec0, reverted at ed86a62f9) wrapped ~377 files in one sweep
+    # and broke 18 packages: it wrapped io.EOF in Read methods (stdlib
+    # compares err == io.EOF) and wrapped nil successes into
+    # `%!w(<nil>)`. Settings below are the carve-outs that must be in
+    # place BEFORE wrapcheck is removed from this list. Plan for the
+    # enablement pass: (1) guard is live and proven, (2) os.IsNotExist
+    # sites migrated to errors.Is so wrapping those paths is safe,
+    # (3) wrap one package, run that package's tests, (4) only then
+    # remove this disable. Zero suppressions — do not path-exclude
+    # findings to make a partial wrap look clean.
     - wrapcheck
     - wsl
     - wsl_v5
@@ -138,6 +150,44 @@ linters:
         - return
     nakedret:
       max-func-lines: 3
+    # wrapcheck carve-outs. These apply the moment wrapcheck is enabled;
+    # they are documented here so the enablement pass does not have to
+    # invent them under pressure. Each one is a sentinel whose IDENTITY
+    # is the contract — wrapping it breaks `==` comparisons that
+    # errors.Is does not rescue.
+    wrapcheck:
+      # context errors are the one sanctioned bare passthrough (precedent
+      # from the reverted enablement). Cancellation/deadline signals are
+      # sentinel values that this codebase compares with == at production
+      # sites (e.g. `ctx.Err() == context.DeadlineExceeded` in
+      # pkg/agent/loop.go, pkg/sandbox/hardened_exec.go). Wrapping a
+      # returned ctx.Err() would break those comparisons and prepend
+      # noise ("Foo: context canceled") to a message whose whole point
+      # is which sentinel it is. errors.Is stays correct for everything
+      # else.
+      ignore-interface-regexps:
+        - ^context\.Context$
+        # io.Reader.Read must return io.EOF bare. The standard library
+        # (io.Copy, bufio, json.Decoder, http.MaxBytesReader, ...)
+        # compares `err == io.EOF`; wrapping it turns a normal end-of-
+        # stream into a hard failure. The same contract applies to
+        # Write (short-write / ErrShortWrite), Seek, and the ReadAt/
+        # WriteAt / ReadCloser / WriteCloser combinations. Observed
+        # live on armReader.Read and boundedBody.Read in the reverted
+        # change. The companion guard scripts/check-no-unsafe-error-wrap.sh
+        # fails the build if a wrap is introduced in those methods even
+        # when wrapcheck is off.
+        - ^io\.
+      ignore-package-globs:
+        - context
+        # Package io itself (io.ReadAll, io.Copy, io.NopCloser, ...).
+        # io.ReadAll never returns EOF (EOF is success), but wrapping
+        # other io errors at the decorator boundary is the same trap
+        # as wrapping Read: the caller asked for an io.Reader, not a
+        # wrapped failure. Glob `io` matches package "io" only, not
+        # "io/fs" — fs.ErrNotExist wrapping is safe once callers use
+        # errors.Is (and is wanted at package boundaries).
+        - io
     revive:
       enable-all-rules: true
       rules:

@@ -241,7 +241,7 @@ func readWorkspaceFromDisk(home, id string) (workspace, error) {
 	path := entityPath(workspacesDir(home), id)
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return workspace{}, fmt.Errorf("NOT_FOUND: %s", id)
 		}
 		return workspace{}, fmt.Errorf("read workspace %s: %w", id, err)
@@ -1234,7 +1234,7 @@ func (t *WorkspaceListTool) Execute(_ context.Context, args map[string]any) *too
 	// Read all workspaces from disk, applying the legacy migration via workspaceFromFile.
 	dir := workspacesDir(t.deps.Home)
 	entries, err := os.ReadDir(dir)
-	if err != nil && !os.IsNotExist(err) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return tools.ErrorResult(errorJSON("LIST_FAILED", err.Error(), ""))
 	}
 

@@ -12,6 +12,7 @@ import (
 	"embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -148,7 +149,7 @@ func Seed(destRoot string) (dir string, err error) {
 			return destDir, nil // idempotent: already seeded, content verified
 		}
 		replacing = true
-	} else if !os.IsNotExist(statErr) {
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return "", fmt.Errorf("captureext: stat %q: %w", destDir, statErr)
 	}
 

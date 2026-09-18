@@ -25,6 +25,7 @@ package session
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -116,7 +117,7 @@ func TestGoalMetaGreenfield(t *testing.T) {
 
 		goalPath := filepath.Join(store.baseDir, sid, "goal.json")
 		_, statErr := os.Stat(goalPath)
-		assert.True(t, os.IsNotExist(statErr), "a brand-new session must never gain a goal.json — there is no writer left that creates one")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "a brand-new session must never gain a goal.json — there is no writer left that creates one")
 
 		// Even a MetaPatch write on a forced-flush field (Status) — the
 		// kind of call that used to cascade into the goal group's writer
@@ -125,7 +126,7 @@ func TestGoalMetaGreenfield(t *testing.T) {
 		status := StatusArchived
 		require.NoError(t, store.SetMeta(sid, MetaPatch{Status: &status}))
 		_, statErr = os.Stat(goalPath)
-		assert.True(t, os.IsNotExist(statErr), "goal.json must still not exist after a SetMeta touching an unrelated group")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "goal.json must still not exist after a SetMeta touching an unrelated group")
 
 		// And writeMetaLocked's own diff-based dispatcher (unified_api.go's
 		// two call sites reach it, not SetMeta) must not create it either —
@@ -141,6 +142,6 @@ func TestGoalMetaGreenfield(t *testing.T) {
 		h.Unlock()
 		require.NoError(t, writeErr)
 		_, statErr = os.Stat(goalPath)
-		assert.True(t, os.IsNotExist(statErr), "writeMetaLocked must still never create goal.json — there is no writeGoal branch left")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "writeMetaLocked must still never create goal.json — there is no writeGoal branch left")
 	})
 }

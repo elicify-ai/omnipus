@@ -145,9 +145,7 @@ func TestHandleWorkspaceDelete_MediaCascadeFailure_Returns500AndAudits(t *testin
 	wsPath := filepath.Join(api.homePath, "workspaces", id+".json")
 	_, statErr := os.Stat(wsPath)
 	assert.True(
-		t,
-		os.IsNotExist(statErr),
-		"workspace file must be gone — the authoritative delete is unaffected by the cascade failure",
+		t, errors.Is(statErr, os.ErrNotExist), "workspace file must be gone — the authoritative delete is unaffected by the cascade failure",
 	)
 
 	getW := httptest.NewRecorder()

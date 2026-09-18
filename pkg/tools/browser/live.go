@@ -1037,7 +1037,9 @@ func (lv *LiveView) watchForUnexpectedDeath(watchedListenCtx context.Context) {
 	if original != nil {
 		// An unmeasured capture has not claimed this source yet. In particular,
 		// a recovery capture waiting for its first frame is not the dead picture.
-		if frame.Generation == 0 || frame.TargetID == "" || frame.Width <= 0 || frame.Height <= 0 {
+		// A document transition unpublished width/height of a source that already
+		// claimed a picture; that overlay is not a missing claim.
+		if frame.Generation == 0 || frame.TargetID == "" || !original.frames.hasClaimed() {
 			return
 		}
 		sameFrame := func(current CaptureFrameState) bool {

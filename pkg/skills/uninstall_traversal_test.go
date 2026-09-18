@@ -5,6 +5,7 @@
 package skills
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,7 +123,7 @@ func TestUninstall_LegitimateRemovalStillWorks(t *testing.T) {
 		if err := installer.Uninstall("keep-me"); err != nil {
 			t.Fatalf("Uninstall(keep-me) = %v, want nil", err)
 		}
-		if _, err := os.Stat(fx.installedSkill); !os.IsNotExist(err) {
+		if _, err := os.Stat(fx.installedSkill); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("skill directory still exists after a legitimate uninstall")
 		}
 		mustExist(t, fx.workspace, "the operator fx.workspace")
@@ -143,7 +144,7 @@ func TestUninstall_LegitimateRemovalStillWorks(t *testing.T) {
 			if err := installer.Uninstall(name); err != nil {
 				t.Fatalf("Uninstall(%q) = %v, want nil", name, err)
 			}
-			if _, err := os.Stat(fx.installedSkill); !os.IsNotExist(err) {
+			if _, err := os.Stat(fx.installedSkill); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("skill directory still exists after Uninstall(%q)", name)
 			}
 		})

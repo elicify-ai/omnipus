@@ -6,6 +6,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -22,7 +23,7 @@ func main() {
 	}
 
 	configDir := filepath.Dir(configPath)
-	if _, err := os.Stat(configDir); os.IsNotExist(err) {
+	if _, err := os.Stat(configDir); errors.Is(err, os.ErrNotExist) {
 		cmd := exec.Command("omnipus", "onboard")
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout

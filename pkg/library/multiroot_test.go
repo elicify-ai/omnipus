@@ -120,7 +120,7 @@ func TestDelete_RefusesTheMountsOwnEntry(t *testing.T) {
 	// Deleting something INSIDE the mount is legitimate and still works.
 	require.NoError(t, r.Delete("repo/sub"))
 	_, statErr = os.Stat(filepath.Join(target, "sub"))
-	assert.True(t, os.IsNotExist(statErr))
+	assert.True(t, errors.Is(statErr, os.ErrNotExist))
 }
 
 // TestRename_RefusesCrossRootAndMountRoot pins both rename guards. A rename
@@ -263,7 +263,7 @@ func TestMoveInto_CrossesTheMountBoundary(t *testing.T) {
 	assert.Equal(t, "workspace file", string(onDisk))
 
 	_, statErr := os.Stat(filepath.Join(workDir, "drafts", "note.md"))
-	assert.True(t, os.IsNotExist(statErr), "a move must remove the source, not duplicate it")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "a move must remove the source, not duplicate it")
 
 	// mount -> work tree: the return journey.
 	_, err = MoveInto(r, r, "repo/moved.md", "drafts/back.md")
@@ -271,7 +271,7 @@ func TestMoveInto_CrossesTheMountBoundary(t *testing.T) {
 	_, statErr = os.Stat(filepath.Join(workDir, "drafts", "back.md"))
 	assert.NoError(t, statErr)
 	_, statErr = os.Stat(filepath.Join(target, "moved.md"))
-	assert.True(t, os.IsNotExist(statErr), "the operator's copy must be gone after moving it out")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the operator's copy must be gone after moving it out")
 }
 
 // TestCopyInto_CrossesTheMountBoundary is the same boundary for copy, where the
@@ -323,7 +323,7 @@ func TestMoveInto_DirectoryCrossesTheBoundary(t *testing.T) {
 	assert.Equal(t, "deep", string(got))
 
 	_, statErr := os.Stat(filepath.Join(workDir, "bundle"))
-	assert.True(t, os.IsNotExist(statErr), "the source tree must be removed after a move")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the source tree must be removed after a move")
 }
 
 // TestList_MarksMountsAndCorrectsTheirShape covers what the UI depends on to

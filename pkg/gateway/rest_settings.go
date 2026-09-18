@@ -40,7 +40,7 @@ func (a *restAPI) HandleAuditLog(w http.ResponseWriter, r *http.Request) {
 	// (~/.omnipus/system/audit.jsonl per audit package).
 	auditPath := filepath.Join(a.homePath, "system", "audit.jsonl")
 	f, err := os.Open(auditPath)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		// AuditLogResponse envelope: no entries, chain not checkable.
 		jsonOK(w, map[string]any{"entries": []json.RawMessage{}, "chain_status": "unknown"})
 		return
@@ -459,7 +459,7 @@ func (a *restAPI) HandleListBackups(w http.ResponseWriter, r *http.Request) {
 	backupsDir := filepath.Join(a.homePath, "backups")
 	entries, err := os.ReadDir(backupsDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			jsonOK(w, []any{})
 			return
 		}
@@ -518,7 +518,7 @@ func (a *restAPI) HandleRestore(w http.ResponseWriter, r *http.Request) {
 	}
 	backupPath := filepath.Join(a.homePath, "backups", req.Filename)
 	if _, err := os.Stat(backupPath); err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			jsonErr(w, http.StatusNotFound, fmt.Sprintf("backup %q not found", req.Filename))
 			return
 		}

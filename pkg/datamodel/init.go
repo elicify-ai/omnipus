@@ -8,6 +8,7 @@ package datamodel
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -107,7 +108,7 @@ func Init(home string) error {
 
 	// Write default config.json if it does not exist.
 	configPath := filepath.Join(home, "config.json")
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+	if _, err := os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
 		data, err := json.MarshalIndent(defaultConfig, "", "  ")
 		if err != nil {
 			return fmt.Errorf("datamodel: marshal default config: %w", err)
@@ -123,7 +124,7 @@ func Init(home string) error {
 
 	// Write system/state.json if it does not exist.
 	statePath := filepath.Join(home, "system", "state.json")
-	if _, err := os.Stat(statePath); os.IsNotExist(err) {
+	if _, err := os.Stat(statePath); errors.Is(err, os.ErrNotExist) {
 		state := map[string]any{
 			"version":    1,
 			"created_at": time.Now().UTC().Format(time.RFC3339),

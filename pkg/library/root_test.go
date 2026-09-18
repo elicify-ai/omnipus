@@ -187,7 +187,7 @@ func TestRoot_Delete_DirectoryRemovesContents(t *testing.T) {
 
 	require.NoError(t, r.Delete("sub"))
 	_, statErr := os.Stat(filepath.Join(dir, "sub"))
-	assert.True(t, os.IsNotExist(statErr))
+	assert.True(t, errors.Is(statErr, os.ErrNotExist))
 }
 
 func TestRoot_Rename_NoOpSameFromTo(t *testing.T) {
@@ -302,7 +302,7 @@ func TestCountVisibleRootEntries_AbsentWorkTree(t *testing.T) {
 
 	// Confirm it did NOT create the directory as a side effect.
 	_, statErr := os.Stat(filepath.Join(home, "workspaces", "ws-none", "work"))
-	assert.True(t, os.IsNotExist(statErr), "CountVisibleRootEntries must not mkdir the work tree")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "CountVisibleRootEntries must not mkdir the work tree")
 }
 
 // --- ADR-067 Stage 0: addressing safety vs. name shape -------------------

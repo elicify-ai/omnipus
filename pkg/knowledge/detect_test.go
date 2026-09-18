@@ -608,7 +608,7 @@ func TestCreateInWorkspace_RefusesNestedKnowledgeBase_Grandparent(t *testing.T) 
 
 	if _, statErr := os.Stat(filepath.Join(outer.Root(), "plain-subfolder")); statErr == nil {
 		t.Errorf("refused deep-nested create still created outer/plain-subfolder")
-	} else if !os.IsNotExist(statErr) {
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("stat outer/plain-subfolder: unexpected error %v", statErr)
 	}
 }

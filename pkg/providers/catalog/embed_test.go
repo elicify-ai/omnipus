@@ -19,6 +19,7 @@ package catalog
 
 import (
 	"bytes"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -223,8 +224,7 @@ func TestSingleCatalogEmbedUnderProviders(t *testing.T) {
 // file is not itself a hit.
 func TestCapabilitiesPackageGone(t *testing.T) {
 	_, err := os.Stat(filepath.Join("..", "capabilities"))
-	assert.True(t, os.IsNotExist(err),
-		"pkg/providers/capabilities must not exist (FR-005, SC-008)")
+	assert.True(t, errors.Is(err, os.ErrNotExist), "pkg/providers/capabilities must not exist (FR-005, SC-008)")
 
 	// Assembled, never written whole: a literal here would make this file its
 	// own first hit.

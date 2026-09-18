@@ -14,6 +14,7 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -2371,7 +2372,7 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			logger.WarnF("config file not found, using default config", map[string]any{"path": path})
 			c := DefaultConfig()
 			seedPublicURLFromEnv(c) // fresh pod: no config.json, but $DEVPOD_PREVIEW_URL may be set
@@ -2644,7 +2645,7 @@ func SaveConfig(path string, cfg *Config) error {
 	// Callers that need to create a new config path must ensure the directory
 	// exists first (e.g., the first-run gateway path via os.MkdirAll).
 	dir := filepath.Dir(path)
-	if _, statErr := os.Stat(dir); os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(dir); errors.Is(statErr, os.ErrNotExist) {
 		return fmt.Errorf("failed to create directory: directory does not exist: %s", dir)
 	}
 

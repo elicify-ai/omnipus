@@ -30,6 +30,7 @@
 package index
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -176,7 +177,7 @@ func scorchOpenConfig() map[string]any {
 // the timeout never fires — it exists purely so a hung index open is impossible
 // in this single-binary process.
 func openOrCreateAt(idxPath string) (bleve.Index, error) {
-	if _, statErr := os.Stat(idxPath); os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(idxPath); errors.Is(statErr, os.ErrNotExist) {
 		// Does not exist — create a new scorch index.
 		if mkErr := os.MkdirAll(filepath.Dir(idxPath), 0o700); mkErr != nil {
 			return nil, fmt.Errorf("create parent dir: %w", mkErr)

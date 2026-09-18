@@ -6,6 +6,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -139,7 +140,7 @@ func TestSecretSet_WriteFileToolCannotTruncateOrOverwriteAuditLog(t *testing.T) 
 	})
 	require.True(t, res2.IsError, "write_file must be denied for a NEW file inside system/, got success: %s %s", res2.ForLLM, res2.ForUser)
 	_, statErr := os.Stat(newFile)
-	assert.True(t, os.IsNotExist(statErr), "a new file must not be plantable inside system/")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "a new file must not be plantable inside system/")
 
 	// Control: the write path still works outside system/.
 	controlPath := filepath.Join(agentHome, "scratch.txt")

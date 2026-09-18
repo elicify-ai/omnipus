@@ -1964,7 +1964,7 @@ func deleteHeartbeatSessionAnyStore(al agentLoopAccessor, agentID, sessionID str
 		}
 		dir := filepath.Join(store.BaseDir(), sessionID)
 		if _, statErr := os.Stat(dir); statErr != nil {
-			if os.IsNotExist(statErr) {
+			if errors.Is(statErr, os.ErrNotExist) {
 				return false, nil // absent from this store: not a failure
 			}
 			return false, fmt.Errorf("stat session %q: %w", sessionID, statErr)

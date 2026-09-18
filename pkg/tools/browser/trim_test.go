@@ -13,6 +13,7 @@ package browser
 // with it and log the workspace out of every site using a service worker.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -70,7 +71,7 @@ func TestTrim_RemovesAllowListOnly(t *testing.T) {
 			rel += "1.2.3"
 		}
 		_, statErr := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
-		assert.True(t, os.IsNotExist(statErr), "%s is regenerable cache and must be gone", p)
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "%s is regenerable cache and must be gone", p)
 	}
 
 	_, statErr := os.Stat(dir)
@@ -230,8 +231,7 @@ func TestTrim_FiresOnCloseAndOnSweep(t *testing.T) {
 		f.pool.Close(inst.key)
 
 		_, err := os.Stat(filepath.Join(inst.profileDir, "Default", "Cache", "data_0"))
-		assert.True(t, os.IsNotExist(err),
-			"the cache must be gone within milliseconds of the browser closing — no interval to wait for")
+		assert.True(t, errors.Is(err, os.ErrNotExist), "the cache must be gone within milliseconds of the browser closing — no interval to wait for")
 		_, err = os.Stat(filepath.Join(inst.profileDir, "Default", "Cookies", "payload"))
 		assert.NoError(t, err, "the login must survive the close and the trim that follows it")
 	})
@@ -253,7 +253,7 @@ func TestTrim_FiresOnCloseAndOnSweep(t *testing.T) {
 		for _, ws := range []string{"alpha", "beta"} {
 			dir, _ := f.pool.ProfileDirFor(browserTestKey(ws))
 			_, err := os.Stat(filepath.Join(dir, "Default", "Cache", "data_0"))
-			assert.True(t, os.IsNotExist(err), "%s's cache must be trimmed", ws)
+			assert.True(t, errors.Is(err, os.ErrNotExist), "%s's cache must be trimmed", ws)
 			_, err = os.Stat(filepath.Join(dir, "Default", "Local Storage", "payload"))
 			assert.NoError(t, err, "%s's web storage must survive", ws)
 		}

@@ -5,6 +5,7 @@
 package knowledge
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -284,7 +285,7 @@ func TestPreviewRecordIDs_DoesNotAdvanceTheCounter(t *testing.T) {
 
 	seq := filepath.Join(c.Root(), records.VaultMarkerDirName, records.RecordsDirName, "company.seq")
 	_, statErr := os.Stat(seq)
-	require.True(t, os.IsNotExist(statErr), "a preview must not create the counter file")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "a preview must not create the counter file")
 
 	minted, _, err := MintRecordIDs(lock, c.Root(), sc, 3)
 	require.NoError(t, err)

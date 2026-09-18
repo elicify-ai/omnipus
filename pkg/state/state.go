@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -51,7 +52,7 @@ func NewManager(workspace string) *Manager {
 	}
 
 	// Try to load from new location first
-	if _, err := os.Stat(stateFile); os.IsNotExist(err) {
+	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
 		// New file doesn't exist, try migrating from old location
 		if data, err := os.ReadFile(oldStateFile); err == nil {
 			if err := json.Unmarshal(data, sm.state); err == nil {
@@ -153,7 +154,7 @@ func (sm *Manager) load() error {
 	data, err := os.ReadFile(sm.stateFile)
 	if err != nil {
 		// File doesn't exist yet, that's OK
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		return fmt.Errorf("failed to read state file: %w", err)

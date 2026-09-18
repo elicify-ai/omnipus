@@ -544,7 +544,7 @@ func LoadViews(vaultRoot string, schemas *SchemaSet) (*ViewSet, *ViewLoadReport,
 	dir := ViewsDir(vaultRoot)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return NewViewSet(), &ViewLoadReport{}, nil
 		}
 		return nil, nil, fmt.Errorf("reading views directory %s: %w", dir, err)

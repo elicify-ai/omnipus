@@ -50,6 +50,7 @@ package vaultprops
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -224,7 +225,7 @@ func watcherStalenessPropPaths(t *testing.T, home, root string) map[string]bool 
 	path, err := knowledge.PropertiesIndexPath(home, root)
 	require.NoError(t, err)
 	if _, statErr := os.Stat(path); statErr != nil {
-		require.True(t, os.IsNotExist(statErr), "unexpected stat error for %s: %v", path, statErr)
+		require.True(t, errors.Is(statErr, os.ErrNotExist), "unexpected stat error for %s: %v", path, statErr)
 		return map[string]bool{}
 	}
 	store, err := propindex.Open(context.Background(), path, propindex.Options{})

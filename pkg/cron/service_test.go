@@ -1,6 +1,7 @@
 package cron
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -245,7 +246,7 @@ func TestCronService_PersistenceIntegrity(t *testing.T) {
 	cs1.AddJob("PersistMe", CronSchedule{Kind: "at", AtMS: &at}, "payload")
 
 	// check file exists
-	if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
+	if _, err := os.Stat(tmpFile); errors.Is(err, os.ErrNotExist) {
 		t.Fatal("Store file was not created")
 	}
 

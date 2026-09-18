@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -210,7 +211,7 @@ func TestMigrateFromJSON_RenamesFiles(t *testing.T) {
 
 	// Original .json should not exist.
 	_, statErr := os.Stat(filepath.Join(sessionsDir, "rename.json"))
-	if !os.IsNotExist(statErr) {
+	if !errors.Is(statErr, os.ErrNotExist) {
 		t.Error("rename.json should have been renamed")
 	}
 	// .json.migrated should exist.
@@ -411,7 +412,7 @@ func TestMigrateFromJSON_SkipsMetaJSONFiles(t *testing.T) {
 	if _, statErr := os.Stat(metaPath); statErr != nil {
 		t.Fatalf("meta file should remain in place: %v", statErr)
 	}
-	if _, statErr := os.Stat(metaPath + ".migrated"); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(metaPath + ".migrated"); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("meta file should not be renamed, stat err = %v", statErr)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/elicify-ai/omnipus/pkg/api/generated"
@@ -38,6 +39,8 @@ type DedicatedInputPeer struct {
 	closeOnce       sync.Once
 	nativeCloseOnce sync.Once
 	closed          chan struct{}
+	inbound         atomic.Int64 // inbound data-channel messages seen (diagnostic)
+	inboundDropped  atomic.Int64 // inbound messages dropped because ctx was done
 }
 
 func NewDedicatedInputPeer(parent context.Context, cfg Config, epoch, control int, sink func(context.Context, generated.BrowserInputFrame), validate func([]byte) error, state func(string)) *DedicatedInputPeer {
@@ -183,8 +186,7 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 	if err := p.ctx.Err(); err != nil {
 		return "", err
 	}
-	// A dedicated offer must contain only an application section. Reuse the
-	// existing viewer ICE settings/mux ownership, never the ingest settings.
+	// A dedicated offer must contain only an application section.
 	applications := 0
 	for _, line := range strings.Split(sdp, "\n") {
 		if strings.HasPrefix(line, "m=") {
@@ -197,12 +199,30 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 	if applications != 1 {
 		return "", errors.New("input offer must have one application section")
 	}
-	session := NewSession(p.cfg, nil, nil)
+	// Warn, not Info: the gateway's default log level is "warn"
+	// (pkg/config/defaults.go's LogLevel), so an Info line here is invisible in
+	// every default deployment — which is exactly how this peer's ICE
+	// instrumentation sat merged, tested, and silent while three lanes argued
+	// its defect from absence. The lines are one-shot per negotiation (offer
+	// summary, one line per candidate, state transitions), so Warn-level noise
+	// is bounded the way pion's own ICE warnings already are.
+	logf := func(format string, args ...any) {
+		slog.Warn(fmt.Sprintf("browser dedicated input: "+format, args...))
+	}
+	session := NewSession(p.cfg, nil, logf)
 	pc, err := session.buildPeerConnection(session.apiViewer, true)
 	if err != nil {
 		return "", err
 	}
 	p.pc = pc
+	prefix := fmt.Sprintf("[input-%d]", p.queue.peer)
+	diag := newICEDiag(prefix, "input", logf)
+	pc.OnICECandidate(diag.noteLocalCandidate)
+	pc.OnICEGatheringStateChange(diag.noteGatheringState)
+	pc.OnICEConnectionStateChange(func(state pion.ICEConnectionState) {
+		logf("%s ICE connection state -> %s", prefix, state.String())
+		diag.noteICEState(state, pc)
+	})
 	pc.OnDataChannel(p.bindChannel)
 	pc.OnConnectionStateChange(func(state pion.PeerConnectionState) {
 		switch state {
@@ -210,6 +230,7 @@ func (p *DedicatedInputPeer) answerNative(ctx context.Context, sdp string) (stri
 			p.fail("input connection closed")
 		}
 	})
+	diag.noteRemoteOffer(sdp)
 	if err = pc.SetRemoteDescription(pion.SessionDescription{Type: pion.SDPTypeOffer, SDP: sdp}); err != nil {
 		return "", fmt.Errorf("input offer: %w", err)
 	}
@@ -266,10 +287,29 @@ func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 	}
 	p.mu.Lock()
 	if !valid || p.channels[dc.Label()] != nil || p.ctx.Err() != nil {
+		duplicate := p.channels[dc.Label()] != nil
+		ctxErr := p.ctx.Err()
 		p.mu.Unlock()
+		// Say WHICH predicate rejected the channel. This branch surfaces to the
+		// operator as "Could not negotiate the input connection", and until now
+		// it named nothing — so a peer whose ICE connects fine, and whose input
+		// then silently never arrives, gave the investigator no way to tell a
+		// label mismatch from a protocol mismatch from a duplicate. That
+		// ambiguity cost several rounds on the ui-browser shard.
+		retx := "nil"
+		if v := dc.MaxRetransmits(); v != nil {
+			retx = fmt.Sprintf("%d", *v)
+		}
+		life := "nil"
+		if v := dc.MaxPacketLifeTime(); v != nil {
+			life = fmt.Sprintf("%d", *v)
+		}
+		dedicatedInputLogf("input data channel REJECTED: label=%q protocol=%q negotiated=%t ordered=%t max_retransmits=%s max_packet_lifetime=%s duplicate=%t ctx_err=%v (want label input-reliable|input-hover, protocol %q, negotiated=false, lifetime=nil; reliable: ordered=true retransmits=nil; hover: ordered=false retransmits=0)",
+			dc.Label(), dc.Protocol(), dc.Negotiated(), dc.Ordered(), retx, life, duplicate, ctxErr, InputBinaryProtocol)
 		p.fail("invalid input data channel")
 		return
 	}
+	dedicatedInputLogf("input data channel accepted: label=%q protocol=%q ordered=%t", dc.Label(), dc.Protocol(), dc.Ordered())
 	p.channels[dc.Label()] = dc
 	p.mu.Unlock()
 	dc.OnOpen(func() {
@@ -291,7 +331,20 @@ func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 	dc.OnClose(func() { p.fail("input data channel closed") })
 	dc.OnError(func(error) { p.fail("input data channel failed") })
 	dc.OnMessage(func(message pion.DataChannelMessage) {
-		if p.ctx.Err() != nil {
+		// First inbound message per channel is reported, and a context-cancelled
+		// drop is reported too. Every OTHER rejection below calls p.fail() and
+		// reaches the operator; this one returned silently, so a peer whose
+		// context had already been cancelled swallowed every input byte with no
+		// trace anywhere. From outside that is identical to "the SPA never sent"
+		// — and the two have opposite fixes. The ui-browser shard spent several
+		// investigations unable to tell them apart.
+		if n := p.inbound.Add(1); n == 1 {
+			dedicatedInputLogf("first inbound input message on %q (%d bytes, string=%t)", dc.Label(), len(message.Data), message.IsString)
+		}
+		if err := p.ctx.Err(); err != nil {
+			if p.inboundDropped.Add(1) == 1 {
+				dedicatedInputLogf("input message DROPPED on %q: peer context already done (%v) — further drops counted, not logged", dc.Label(), err)
+			}
 			return
 		}
 		p.mu.Lock()
@@ -331,4 +384,13 @@ func (p *DedicatedInputPeer) bindChannel(dc *pion.DataChannel) {
 		}
 		p.queue.submit(hover, frame)
 	})
+}
+
+// dedicatedInputLogf mirrors the peer's existing Warn-level logging shape (see
+// the logf closure built in Answer). bindChannel is reached from pion's
+// OnDataChannel callback, which has no access to that closure, and the gateway
+// filters below Warn — so Info here would be invisible, which is the exact trap
+// the ICE diagnostics fell into.
+func dedicatedInputLogf(format string, args ...any) {
+	slog.Warn(fmt.Sprintf("browser dedicated input: "+format, args...))
 }

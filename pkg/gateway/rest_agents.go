@@ -516,7 +516,7 @@ func agentWorkspacePath(cfg interface {
 func readSoulMD(workspace string) string {
 	data, err := os.ReadFile(filepath.Join(workspace, "SOUL.md"))
 	if err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("rest: readSoulMD: cannot read SOUL.md", "workspace", workspace, "error", err)
 		}
 		return ""
@@ -530,14 +530,14 @@ func readSoulMD(workspace string) string {
 // Permission and other I/O errors (not IsNotExist) are logged at Warn level (M11).
 func readAgentFiles(workspace string) (soul, heartbeat string) {
 	if data, err := os.ReadFile(filepath.Join(workspace, "SOUL.md")); err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("rest: readAgentFiles: cannot read SOUL.md", "workspace", workspace, "error", err)
 		}
 	} else {
 		soul = string(data)
 	}
 	if data, err := os.ReadFile(filepath.Join(workspace, "HEARTBEAT.md")); err != nil {
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			slog.Warn("rest: readAgentFiles: cannot read HEARTBEAT.md", "workspace", workspace, "error", err)
 		}
 	} else {

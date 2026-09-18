@@ -28,6 +28,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -774,8 +775,7 @@ func TestProbeProvider_SignIn(t *testing.T) {
 		assert.Equal(t, "not signed in", body["error"])
 
 		_, err := os.Stat(argv)
-		assert.True(t, os.IsNotExist(err),
-			"a probe with no login must not spend a subprocess run")
+		assert.True(t, errors.Is(err, os.ErrNotExist), "a probe with no login must not spend a subprocess run")
 	})
 
 	t.Run("codex-cli signed in but the vendor rejects the model is success=false", func(t *testing.T) {

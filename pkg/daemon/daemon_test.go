@@ -6,6 +6,7 @@
 package daemon
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -47,7 +48,7 @@ func writePIDFile(t *testing.T, home string, pid int) {
 func readPIDFile(t *testing.T, home string) string {
 	t.Helper()
 	data, err := os.ReadFile(PIDPath(home))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return ""
 	}
 	if err != nil {

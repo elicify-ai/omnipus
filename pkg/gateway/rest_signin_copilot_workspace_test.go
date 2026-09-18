@@ -6,6 +6,7 @@
 package gateway
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,8 +56,7 @@ func TestSignInStatus_CopilotCheckNeverRunsInGatewayCwd(t *testing.T) {
 	assert.True(t, strings.HasPrefix(filepath.Base(ranIn), "omnipus-copilot-check-"),
 		"with no Omnipus home the check must run in its own private directory, ran in %q", ranIn)
 	_, statErr := os.Stat(ranIn)
-	assert.True(t, os.IsNotExist(statErr),
-		"the private check directory must be removed after the check, %q still exists", ranIn)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "the private check directory must be removed after the check, %q still exists", ranIn)
 }
 
 // TestSignInStatus_CopilotCheckRunsInOmnipusHome pins the ordinary case the

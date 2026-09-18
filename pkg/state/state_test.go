@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,7 +39,7 @@ func TestAtomicSave(t *testing.T) {
 
 	// Verify state file exists
 	stateFile := filepath.Join(tmpDir, "state", "state.json")
-	if _, err := os.Stat(stateFile); os.IsNotExist(err) {
+	if _, err := os.Stat(stateFile); errors.Is(err, os.ErrNotExist) {
 		t.Error("Expected state file to exist")
 	}
 

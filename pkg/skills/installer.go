@@ -3,6 +3,7 @@ package skills
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -387,7 +388,7 @@ func (si *SkillInstaller) Uninstall(skillName string) error {
 		return fmt.Errorf("refusing to uninstall %q: %w", skillName, err)
 	}
 
-	if _, err := os.Stat(skillDir); os.IsNotExist(err) {
+	if _, err := os.Stat(skillDir); errors.Is(err, os.ErrNotExist) {
 		// NOTE: skillName here is always expected to be the skill's stable ID
 		// (the on-disk directory slug) — the SAME identifier SkillsLoader.ListSkills
 		// and list_skills report as "id" (SkillInfo.ID, pkg/skills/loader.go).

@@ -7,6 +7,7 @@ package audit_test
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -246,8 +247,7 @@ func TestAuditLogger_WriteAndRotate(t *testing.T) {
 		}()
 
 		_, statErr := os.Stat(stalePath)
-		assert.True(t, os.IsNotExist(statErr),
-			"stale audit file (8 days old with 7-day retention) should be deleted")
+		assert.True(t, errors.Is(statErr, os.ErrNotExist), "stale audit file (8 days old with 7-day retention) should be deleted")
 	})
 
 	t.Run("crash recovery: malformed last line is truncated on startup", func(t *testing.T) {

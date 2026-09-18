@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -97,7 +98,7 @@ func readAuditEventsForTest(t *testing.T, auditDir string) []map[string]any {
 	auditFile := filepath.Join(auditDir, "audit.jsonl")
 	data, err := os.ReadFile(auditFile)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		t.Fatalf("read audit file: %v", err)

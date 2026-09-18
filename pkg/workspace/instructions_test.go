@@ -179,8 +179,7 @@ func TestInstructions_EmptyStringClearsFile(t *testing.T) {
 	// Disk state: file must be absent.
 	expectedPath := filepath.Join(home, "workspaces", id, "AGENT.md")
 	_, statErr := os.Stat(expectedPath)
-	require.True(t, os.IsNotExist(statErr),
-		"AGENT.md must be removed after writing empty content; got stat err: %v", statErr)
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "AGENT.md must be removed after writing empty content; got stat err: %v", statErr)
 
 	// ReadInstructions must return ("", nil).
 	got, err := ReadInstructions(home, id)
@@ -207,8 +206,7 @@ func TestInstructions_WhitespaceOnlyClearsFile(t *testing.T) {
 	// Disk state: file must be absent.
 	expectedPath := filepath.Join(home, "workspaces", id, "AGENT.md")
 	_, statErr := os.Stat(expectedPath)
-	require.True(t, os.IsNotExist(statErr),
-		"AGENT.md must be removed after writing whitespace-only content")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "AGENT.md must be removed after writing whitespace-only content")
 
 	// ReadInstructions must return ("", nil).
 	got, err := ReadInstructions(home, id)
@@ -235,8 +233,7 @@ func TestInstructions_EmptyWriteOnNonExistentFile(t *testing.T) {
 	// Disk state: AGENT.md must not exist.
 	expectedPath := filepath.Join(home, "workspaces", id, "AGENT.md")
 	_, statErr := os.Stat(expectedPath)
-	require.True(t, os.IsNotExist(statErr),
-		"WriteInstructions with empty content must not create AGENT.md")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "WriteInstructions with empty content must not create AGENT.md")
 }
 
 // ---------------------------------------------------------------------------
@@ -285,8 +282,7 @@ func TestInstructions_SizeBoundary(t *testing.T) {
 		// Disk state: no file must have been written.
 		expectedPath := filepath.Join(home, "workspaces", id, "AGENT.md")
 		_, statErr := os.Stat(expectedPath)
-		require.True(t, os.IsNotExist(statErr),
-			"AGENT.md must NOT be created when content exceeds the size limit")
+		require.True(t, errors.Is(statErr, os.ErrNotExist), "AGENT.md must NOT be created when content exceeds the size limit")
 	})
 }
 

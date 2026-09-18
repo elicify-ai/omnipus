@@ -211,7 +211,7 @@ func TestCheckMountTarget_RefusesOmnipusHome(t *testing.T) {
 		// path.
 		workDir := WorkDir(home, id)
 		_, statErr := os.Lstat(filepath.Join(workDir, "sneaky-mount"))
-		require.True(t, os.IsNotExist(statErr), "refused mount must not leave a symlink on disk")
+		require.True(t, errors.Is(statErr, os.ErrNotExist), "refused mount must not leave a symlink on disk")
 		mounts, _ := LoadMounts(home, id)
 		require.Empty(t, mounts)
 	})
@@ -308,12 +308,12 @@ func TestMountStatus_BrokenTargetNeverRecreated(t *testing.T) {
 
 	// FR-8.3: NEVER silently recreated as an empty directory.
 	_, statErr := os.Stat(target)
-	require.True(t, os.IsNotExist(statErr), "a broken mount's target must NEVER be silently recreated")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "a broken mount's target must NEVER be silently recreated")
 
 	// Calling MountStatus again must not change that.
 	require.Equal(t, "broken", MountStatus(m))
 	_, statErr = os.Stat(target)
-	require.True(t, os.IsNotExist(statErr))
+	require.True(t, errors.Is(statErr, os.ErrNotExist))
 }
 
 // TestMountStatus_NeverSilentlyRebound is #24: a same-named path existing
@@ -391,7 +391,7 @@ func TestDeleteMount_NeverTouchesTargetContents(t *testing.T) {
 	// The symlink and the record are both gone.
 	workDir := WorkDir(home, id)
 	_, statErr := os.Lstat(filepath.Join(workDir, "proj"))
-	require.True(t, os.IsNotExist(statErr))
+	require.True(t, errors.Is(statErr, os.ErrNotExist))
 	mounts, _ := LoadMounts(home, id)
 	require.Empty(t, mounts)
 
@@ -423,7 +423,7 @@ func TestWorkspaceDirectoryRemoval_NeverTouchesMountTarget(t *testing.T) {
 	require.NoError(t, os.RemoveAll(wsDir), "mirrors pkg/gateway's unconditional workspace-directory wipe on delete")
 
 	_, statErr := os.Stat(wsDir)
-	require.True(t, os.IsNotExist(statErr), "the workspace's own directory must be gone")
+	require.True(t, errors.Is(statErr, os.ErrNotExist), "the workspace's own directory must be gone")
 
 	data, err := os.ReadFile(filepath.Join(target, "important.txt"))
 	require.NoError(t, err, "the operator's mounted folder must survive a full workspace-directory delete (FR-8.6)")

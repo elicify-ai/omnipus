@@ -131,7 +131,7 @@ func ReadInstructions(home, id string) (string, error) {
 	path := instructionsPath(home, id)
 	f, err := os.Open(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
 		}
 		return "", fmt.Errorf("workspace: read instructions %q: %w", id, err)
@@ -203,7 +203,7 @@ func WriteInstructions(home, id, content string) error {
 	path := instructionsPath(home, id)
 	if strings.TrimSpace(content) == "" {
 		// Clear: remove the file. Absent file == empty instructions.
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return fmt.Errorf("workspace: clear instructions %q: %w", id, err)
 		}
 		return nil

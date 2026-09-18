@@ -20,6 +20,7 @@ package gateway
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -144,7 +145,7 @@ func readAuditRecords(t *testing.T, homePath string) []map[string]any {
 	systemDir := filepath.Join(homePath, "system")
 	entries, err := os.ReadDir(systemDir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		require.NoError(t, err)

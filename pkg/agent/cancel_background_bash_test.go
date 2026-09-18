@@ -19,6 +19,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,7 +50,7 @@ type auditRecordRow struct {
 func readCancelAuditRecords(t *testing.T, dir string) []auditRecordRow {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join(dir, "audit.jsonl"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)

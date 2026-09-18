@@ -17,6 +17,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -64,7 +65,7 @@ func newAuditHarness(t *testing.T) *auditHarness {
 func (h *auditHarness) entries(t *testing.T) []map[string]any {
 	t.Helper()
 	f, err := os.Open(filepath.Join(h.dir, "audit.jsonl"))
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	require.NoError(t, err)

@@ -784,6 +784,34 @@ func (pe *PlanEngine) runPlanJudgeRound(planID string, release func()) {
 	pe.applyJudgeRoundOutcome(planID, result, false, terminalSig)
 }
 
+// noteJudgeUnavailable stamps Plan.PausedReason so an in-flight D7 backoff
+// is visible on the board instead of looking like ordinary "Judging". Prefix
+// is plan.PausedReasonJudgeUnavailable; the suffix names the cause and wait.
+// An owner-disabled pause is left untouched. Caller must NOT hold
+// planDecisionMu (the D7 retry loop in JudgeCriteria does not).
+func (pe *PlanEngine) noteJudgeUnavailable(planID, cause string, wait time.Duration) {
+	if pe == nil || planID == "" {
+		return
+	}
+	pe.planDecisionMu.Lock()
+	defer pe.planDecisionMu.Unlock()
+	current, err := pe.planStore.Get(planID)
+	if err != nil {
+		return
+	}
+	if current.PausedReason != "" && !plan.IsJudgeUnavailablePausedReason(current.PausedReason) {
+		return
+	}
+	reason := plan.PausedReasonJudgeUnavailable + ": " + judgeUnavailableReasonText(cause)
+	if wait > 0 {
+		reason += fmt.Sprintf("; retrying in %s", wait.Round(time.Second))
+	}
+	if _, uerr := pe.planStore.Update(planID, plan.Patch{PausedReason: &reason}); uerr != nil {
+		logger.WarnCF("plan_engine", "judge round: could not persist judge-unavailability pause",
+			map[string]any{"plan_id": planID, "error": uerr.Error()})
+	}
+}
+
 // clearJudgeUnavailablePause retracts a judge-unavailability pause from
 // planID, and ONLY that: a PausedReason set by anything else (owner_disabled)
 // is left exactly as it is. It is called from three places, all of which must
@@ -820,6 +848,33 @@ func (pe *PlanEngine) clearJudgeUnavailablePauseLocked(planID string) {
 		logger.WarnCF("plan_engine", "judge round: could not clear judge-unavailability pause",
 			map[string]any{"plan_id": planID, "error": uerr.Error()})
 	}
+}
+
+// revertAbandonedJudgeRoundLocked is the below-bound Unavailable exit:
+// revert to dispatching so the next tick starts a fresh round, persist an
+// operator-visible handover (the plan must not look like ordinary work),
+// and retract any in-round pause so processPlan is not skipped forever.
+// Caller holds planDecisionMu.
+func (pe *PlanEngine) revertAbandonedJudgeRoundLocked(p *plan.Plan, judgeReason string) {
+	dispatching := plan.PhaseDispatching
+	note := buildJudgeUnavailableRetryHandover(judgeReason)
+	if _, uerr := pe.planStore.Update(p.ID, plan.Patch{PlanPhase: &dispatching, HandoverText: &note}); uerr != nil {
+		logger.WarnCF("plan_engine", "judge round: could not revert plan_phase after unavailability",
+			map[string]any{"plan_id": p.ID, "error": uerr.Error()})
+	}
+	pe.clearJudgeUnavailablePauseLocked(p.ID)
+	logger.WarnCF("plan_engine", "plan judge round abandoned (judge unavailable)",
+		map[string]any{"plan_id": p.ID, "reason": judgeReason})
+}
+
+// buildJudgeUnavailableRetryHandover is the operator-facing note for a
+// below-bound abandoned round. Distinct from stallHandoverNotePrefix: this
+// plan is still going to be retried, not parked.
+func buildJudgeUnavailableRetryHandover(judgeReason string) string {
+	return plan.ClampHandoverText(
+		"The plan judge could not finish this round, so the Definition of Done has not been scored yet. " +
+			"No judge round was consumed. The engine will retry. Last judge failure: " +
+			judgeUnavailableReasonText(judgeReason) + ".")
 }
 
 // applyJudgeRoundOutcome applies a just-computed plan-level judge
@@ -888,19 +943,7 @@ func (pe *PlanEngine) applyJudgeRoundOutcome(planID string, result JudgeCriteria
 			pe.surfaceJudgeUnavailableStall(current, streak, result.Reason)
 			return
 		}
-		dispatching := plan.PhaseDispatching
-		if _, uerr := pe.planStore.Update(current.ID, plan.Patch{PlanPhase: &dispatching}); uerr != nil {
-			logger.WarnCF("plan_engine", "judge round: could not revert plan_phase after unavailability",
-				map[string]any{"plan_id": current.ID, "error": uerr.Error()})
-		}
-		// The round is over, so its judge-unavailability pause marker no
-		// longer describes anything live — retract it in the SAME critical
-		// section that reverts the phase, so the plan is never observable as
-		// "dispatching AND paused on a judge that is no longer being waited
-		// for". Prefix-guarded: an owner-disabled pause is left alone.
-		pe.clearJudgeUnavailablePauseLocked(current.ID)
-		logger.WarnCF("plan_engine", "plan judge round abandoned (judge unavailable)",
-			map[string]any{"plan_id": current.ID, "reason": result.Reason})
+		pe.revertAbandonedJudgeRoundLocked(current, result.Reason)
 		return
 	}
 

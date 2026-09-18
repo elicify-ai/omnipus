@@ -5,6 +5,7 @@
 package library
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -34,7 +35,7 @@ func (r *Root) Mkdir(rel string) (fi os.FileInfo, created bool, err error) {
 			return nil, false, ErrAlreadyExists
 		}
 		return existing, false, nil
-	} else if !os.IsNotExist(statErr) {
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return nil, false, translateErr(statErr)
 	}
 

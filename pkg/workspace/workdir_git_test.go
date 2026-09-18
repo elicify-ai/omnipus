@@ -8,6 +8,7 @@
 package workspace
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,7 +68,7 @@ func TestGitEvidence_EnsureWorkDir_DegradesGracefullyOnNestedUserRepo(t *testing
 	if _, statErr := os.Stat(dir); statErr != nil {
 		t.Fatalf("work dir must still be created even when the git layer degrades: %v", statErr)
 	}
-	if _, statErr := os.Stat(filepath.Join(dir, ".git")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(dir, ".git")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("EnsureWorkDir must NOT initialize a .git under a nested-repo work dir")
 	}
 }

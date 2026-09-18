@@ -3,6 +3,7 @@
 package stop_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -56,7 +57,7 @@ func TestStop_StalePID(t *testing.T) {
 	}
 
 	// The stale PID file must have been removed.
-	if _, statErr := os.Stat(filepath.Join(home, "gateway.pid")); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(filepath.Join(home, "gateway.pid")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("stale PID file was not removed after daemon.Stop")
 	}
 }

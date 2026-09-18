@@ -55,6 +55,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -528,7 +529,7 @@ func TestRealGW_CliTokenAuditedAsUser(t *testing.T) {
 	auditFile := filepath.Join(auditDir, "audit.jsonl")
 
 	_, statErr := os.Stat(auditFile)
-	if os.IsNotExist(statErr) {
+	if errors.Is(statErr, os.ErrNotExist) {
 		var found []string
 		_ = filepath.Walk(auditDir, func(p string, _ os.FileInfo, _ error) error {
 			found = append(found, p)

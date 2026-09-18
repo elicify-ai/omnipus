@@ -6,6 +6,7 @@ package entity
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -97,7 +98,7 @@ func (s *Store[T]) lockPath(id string) string {
 func (s *Store[T]) load(id string) (*T, error) {
 	data, err := os.ReadFile(s.path(id))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("entity: read %q: %w", id, err)
@@ -171,7 +172,7 @@ func (s *Store[T]) Create(t *T) error {
 	return fileutil.WithFlock(s.lockPath(id), func() error {
 		if _, statErr := os.Stat(s.path(id)); statErr == nil {
 			return fmt.Errorf("entity: create %q: %w", id, ErrAlreadyExists)
-		} else if !os.IsNotExist(statErr) {
+		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return fmt.Errorf("entity: create %q: stat: %w", id, statErr)
 		}
 
@@ -249,7 +250,7 @@ func (s *Store[T]) scanIDs() ([]string, error) {
 func (s *Store[T]) List() (result []T, skipped []string, err error) {
 	ids, err := s.scanIDs()
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil, nil
 		}
 		return nil, nil, fmt.Errorf("entity: list dir %q: %w", s.dir, err)
@@ -374,7 +375,7 @@ func (s *Store[T]) Delete(id string) error {
 
 	return fileutil.WithFlock(s.lockPath(id), func() error {
 		if err := os.Remove(s.path(id)); err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				return ErrNotFound
 			}
 			return fmt.Errorf("entity: delete %q: %w", id, err)

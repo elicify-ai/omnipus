@@ -129,7 +129,7 @@ describe('BrowserLiveView displayed capture identity', () => {
       expect(sendInput.mock.calls).toEqual([])
       fireEvent.pointerMove(frame, { clientX: 200, clientY: 200 })
       act(() => vi.advanceTimersByTime(60))
-      expect(sendInput.mock.calls).toEqual([[{ kind: 'mouse_move', x: 200, y: 200, modifiers: 0, capture_id: 'capture-a', capture_generation: 2 }]])
+      expect(sendInput.mock.calls).toEqual([[{ kind: 'mouse_move', x: 200, y: 200, modifiers: 0, capture_width: 1280, capture_height: 720, capture_id: 'capture-a', capture_generation: 2 }]])
     } finally { vi.useRealTimers() }
   })
 
@@ -227,8 +227,8 @@ describe('BrowserLiveView displayed capture identity', () => {
     fireEvent.pointerDown(container, { clientX: 500, clientY: 350, button: 0 })
     fireEvent.pointerUp(container, { clientX: 150, clientY: 350, button: 0 })
     expect(sendInput.mock.calls).toEqual([
-      [{ kind: 'mouse_down', x: 300, y: 200, button: 'left', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
-      [{ kind: 'mouse_up', x: -50, y: 200, button: 'left', modifiers: 0, capture_id: 'capture-a', capture_generation: 1 }],
+      [{ kind: 'mouse_down', x: 300, y: 200, button: 'left', modifiers: 0, capture_width: 600, capture_height: 400, capture_id: 'capture-a', capture_generation: 1 }],
+      [{ kind: 'mouse_up', x: -50, y: 200, button: 'left', modifiers: 0, capture_width: 600, capture_height: 400, capture_id: 'capture-a', capture_generation: 1 }],
     ])
   })
 

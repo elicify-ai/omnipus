@@ -255,7 +255,7 @@ func (a *restAPI) HandleUpload(w http.ResponseWriter, r *http.Request) {
 		// with a nanosecond suffix to guarantee uniqueness.
 		destPath := filepath.Join(uploadDir, sanitized)
 		f, createErr := os.OpenFile(destPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if createErr != nil && os.IsExist(createErr) {
+		if createErr != nil && errors.Is(createErr, os.ErrExist) {
 			ext := filepath.Ext(sanitized)
 			base := strings.TrimSuffix(sanitized, ext)
 			sanitized = fmt.Sprintf("%s_%d%s", base, time.Now().UnixNano(), ext)
@@ -403,7 +403,7 @@ func (ru *restAPIHandleUpload) finishWorkspaceUpload(fileName string, ref string
 func (ru *restAPIHandleUpload) finishLegacyUpload(sanitized string, destPath string, contentType string, cleanupUploaded func(), written int64, copyErr error) restAPIHandleUploadFlow {
 	if copyErr != nil {
 		slog.Error("rest: upload: copy failed", "path", destPath, "error", copyErr)
-		if rmErr := os.Remove(destPath); rmErr != nil && !os.IsNotExist(rmErr) {
+		if rmErr := os.Remove(destPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			slog.Warn("rest: upload: remove partial file failed", "path", destPath, "error", rmErr)
 		}
 		cleanupUploaded()
@@ -412,7 +412,7 @@ func (ru *restAPIHandleUpload) finishLegacyUpload(sanitized string, destPath str
 	}
 
 	if written > maxUploadFileSize {
-		if rmErr := os.Remove(destPath); rmErr != nil && !os.IsNotExist(rmErr) {
+		if rmErr := os.Remove(destPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 			slog.Warn("rest: upload: remove oversized file failed", "path", destPath, "error", rmErr)
 		}
 		cleanupUploaded()
@@ -543,7 +543,7 @@ func (a *restAPI) stageWorkspaceUploadCopy(
 			destFile = f
 			break
 		}
-		if !os.IsExist(openErr) {
+		if !errors.Is(openErr, os.ErrExist) {
 			return "", fmt.Errorf("create workspace library file: %w", openErr)
 		}
 		if attempt > maxDedupAttempts {
@@ -559,7 +559,7 @@ func (a *restAPI) stageWorkspaceUploadCopy(
 	keepFile := false
 	defer func() {
 		if !keepFile {
-			if rmErr := os.Remove(destPath); rmErr != nil && !os.IsNotExist(rmErr) {
+			if rmErr := os.Remove(destPath); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 				logger.WarnCF("rest", "upload: cleanup partial workspace library file failed",
 					map[string]any{"path": destPath, "error": rmErr.Error()})
 			}

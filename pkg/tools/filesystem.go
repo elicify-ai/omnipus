@@ -173,7 +173,7 @@ func resolvePathAgainstExistingAncestor(path string) (string, error) {
 			}
 			return filepath.Clean(filepath.Join(resolved, suffix)), nil
 		}
-		if !os.IsNotExist(err) {
+		if !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
 		if filepath.Dir(current) == current {

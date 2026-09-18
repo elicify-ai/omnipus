@@ -76,7 +76,7 @@ func (s *Store) path(id string) string {
 func (s *Store) load(id string) (*Plan, error) {
 	data, err := os.ReadFile(s.path(id))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("plan: read %q: %w", id, err)
@@ -166,7 +166,7 @@ func (s *Store) scanPlanIDs() ([]string, error) {
 func (s *Store) List(filter Filter) ([]Plan, error) {
 	ids, err := s.scanPlanIDs()
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return []Plan{}, nil
 		}
 		return nil, fmt.Errorf("plan: list dir: %w", err)

@@ -6,6 +6,7 @@
 package gitevidence
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -95,7 +96,7 @@ func expandWriteSet(root string, entries []string) ([]expandedFile, error) {
 			}
 			continue
 		}
-		if statErr != nil && !os.IsNotExist(statErr) {
+		if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
 			return nil, fmt.Errorf("gitevidence: stat write-set entry %q: %w", raw, statErr)
 		}
 		// Either a plain file, or a path that doesn't exist (a pending

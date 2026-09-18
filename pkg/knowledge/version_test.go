@@ -466,7 +466,7 @@ func TestWrite_NoteDeletedUnderneathIsRefusedWithNoActualVersion(t *testing.T) {
 	if wire := conflict.Wire(); wire.ActualVersion != nil {
 		t.Errorf("wire actual_version = %q, want omitted for a deleted file", *wire.ActualVersion)
 	}
-	if _, statErr := os.Lstat(f.abs(rel)); !os.IsNotExist(statErr) {
+	if _, statErr := os.Lstat(f.abs(rel)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Error("the refused write recreated the deleted note")
 	}
 }

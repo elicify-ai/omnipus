@@ -2264,7 +2264,7 @@ func TestHandleChangePassword_ReloadTimeout_LogsDistinctWarning(t *testing.T) {
 
 	logFile := filepath.Join(t.TempDir(), "change-password-reload-timeout.log")
 	prevLevel := logger.GetLevel()
-	logger.DisableConsole()
+	t.Cleanup(logger.DisableConsole())
 	logger.SetLevel(logger.WARN)
 	require.NoError(t, logger.EnableFileLogging(logFile))
 	t.Cleanup(func() {

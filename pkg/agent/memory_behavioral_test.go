@@ -8,6 +8,7 @@
 package agent
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -355,7 +356,7 @@ func TestMemoryStore_SweepRetros_Deletes30DayOld(t *testing.T) {
 	}
 
 	// Old retro must be gone.
-	if _, statErr := os.Stat(oldRetroPath); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(oldRetroPath); !errors.Is(statErr, os.ErrNotExist) {
 		t.Errorf("old retro file still exists after sweep: %s", oldRetroPath)
 	}
 

@@ -773,7 +773,7 @@ func TestCatalog_ImportBoundary(t *testing.T) {
 			}
 		}
 	}
-	if _, err := os.Stat("gen"); !os.IsNotExist(err) {
+	if _, err := os.Stat("gen"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("gen/ must be deleted (T067-02), stat err=%v", err)
 	}
 }

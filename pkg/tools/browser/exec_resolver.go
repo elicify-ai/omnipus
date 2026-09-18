@@ -23,6 +23,7 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -555,7 +556,7 @@ func (e *execPathCaches) resolve(ctx context.Context, cfg BrowserConfig) (string
 				// returning here — the freshly-discovered binary still
 				// needs the same --version probe every other candidate
 				// gets before being trusted (FIX-CRIT-001 discipline).
-			case statErr != nil && !os.IsNotExist(statErr):
+			case statErr != nil && !errors.Is(statErr, os.ErrNotExist):
 				// The re-stat itself failed with something OTHER than a
 				// plain "not exist" — permission revoked on a parent dir,
 				// an I/O error, a symlink loop, etc. This branch used to

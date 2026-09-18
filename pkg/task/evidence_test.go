@@ -5,6 +5,7 @@
 package task
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,7 +99,7 @@ func TestEvidence_DeletedWithTask(t *testing.T) {
 	assert.Empty(t, after, "evidence must be gone once the task is deleted")
 
 	_, statErr := os.Stat(filepath.Join(home, "tasks_evidence", tk.ID))
-	assert.True(t, os.IsNotExist(statErr), "evidence directory itself must be removed, not just emptied")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "evidence directory itself must be removed, not just emptied")
 }
 
 // TestEvidence_DeletedWithTask_UnrelatedTaskUnaffected differentiates the

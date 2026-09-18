@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -256,7 +257,7 @@ func TestHandleWorkspaces_CascadeDelete_RemovesTasks(t *testing.T) {
 
 	// Task file must be gone.
 	_, err = os.Stat(taskPath)
-	assert.True(t, os.IsNotExist(err), "task file must be removed by cascade delete; stat err: %v", err)
+	assert.True(t, errors.Is(err, os.ErrNotExist), "task file must be removed by cascade delete; stat err: %v", err)
 }
 
 // TestHandleWorkspaces_CascadeDelete_RemovesMailboxes verifies DELETE cascades
@@ -555,8 +556,7 @@ func TestHandleWorkspaces_ConcurrentDelete(t *testing.T) {
 	// Step 6: Assert the workspace file is gone after both deletes.
 	projectPath := filepath.Join(api.homePath, "workspaces", projID+".json")
 	_, statErr := os.Stat(projectPath)
-	assert.True(t, os.IsNotExist(statErr),
-		"workspace file must not exist after concurrent deletes; path=%s, err=%v", projectPath, statErr)
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "workspace file must not exist after concurrent deletes; path=%s, err=%v", projectPath, statErr)
 
 	// Verify the project is truly gone by trying to GET it.
 	wGet := httptest.NewRecorder()

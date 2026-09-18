@@ -159,7 +159,7 @@ func (sl *SkillsLoader) ListSkills() []SkillInfo {
 		}
 		dirs, err := os.ReadDir(dir)
 		if err != nil {
-			if !os.IsNotExist(err) {
+			if !errors.Is(err, os.ErrNotExist) {
 				slog.Warn("skills: failed to read skills directory", "dir", dir, "source", source, "error", err)
 			}
 			return

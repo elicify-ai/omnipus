@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -61,7 +62,7 @@ func PlanWorkspaceMigration(
 
 	for _, dirname := range migrateableDirs {
 		srcDir := filepath.Join(srcWorkspace, dirname)
-		if _, err := os.Stat(srcDir); os.IsNotExist(err) {
+		if _, err := os.Stat(srcDir); errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		dirActions, err := planDirCopy(srcDir, filepath.Join(dstWorkspace, dirname), force)
@@ -75,7 +76,7 @@ func PlanWorkspaceMigration(
 }
 
 func planFileCopy(src, dst string, force bool) Action {
-	if _, err := os.Stat(src); os.IsNotExist(err) {
+	if _, err := os.Stat(src); errors.Is(err, os.ErrNotExist) {
 		return Action{
 			Type:        ActionSkip,
 			Source:      src,

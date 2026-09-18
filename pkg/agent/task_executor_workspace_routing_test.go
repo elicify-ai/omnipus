@@ -32,6 +32,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -131,6 +132,5 @@ func TestExecuteTask_NativeDispatch_RootsAtTaskWorkspaceID_WhenAgentBelongsToMul
 
 	wrongFile := filepath.Join(workspacesDir, "ws-aaa", "work", "proof.txt")
 	_, wrongStatErr := os.Stat(wrongFile)
-	assert.True(t, os.IsNotExist(wrongStatErr),
-		"write_file must NOT land in ws-aaa (the alphabetically-first, WRONG workspace) — got %s", wrongFile)
+	assert.True(t, errors.Is(wrongStatErr, os.ErrNotExist), "write_file must NOT land in ws-aaa (the alphabetically-first, WRONG workspace) — got %s", wrongFile)
 }

@@ -15,6 +15,7 @@ package gateway
 // different claims.
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -65,10 +66,10 @@ func TestDeleteWorkspaceBrowserProfile_RemovesTheProfileAndItsLogins(t *testing.
 	if err := deleteWorkspaceBrowserProfile(pool, key); err != nil {
 		t.Fatalf("deleting a departed workspace's profile must succeed; got %v", err)
 	}
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the profile directory %s must be gone after the workspace is deleted; Stat err = %v", dir, err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "Default", "Cookies")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(dir, "Default", "Cookies")); !errors.Is(err, os.ErrNotExist) {
 		t.Error("the deleted workspace's session cookies are still on disk — a departed client's data must depart")
 	}
 }

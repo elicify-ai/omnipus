@@ -202,7 +202,7 @@ func readChainCheckpoint(dir string, key []byte) (*chainCheckpoint, error) {
 	// never request-derived); checkpointFileName is a hardcoded literal.
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, errNoCheckpoint
 		}
 		return nil, fmt.Errorf("audit: read chain checkpoint: %w", err)

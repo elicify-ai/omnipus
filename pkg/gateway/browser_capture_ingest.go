@@ -101,7 +101,24 @@ func (h *captureIngestWSHandler) serveBoundIngest(conn *websocket.Conn, cs *brow
 				return
 			}
 			err := ic.answerCaptureOffer(socketCtx, cs, epoch, offer)
-			if socketCtx.Err() != nil || errors.Is(err, webrtc.ErrStaleIngestOffer) {
+			if errors.Is(err, webrtc.ErrStaleIngestOffer) {
+				// A stale offer means the committed frame moved after this
+				// encoder had begun capturing for an older generation.
+				// Answering with silence left the encoder to its 10s
+				// offer-answer timeout, whose only escape is a WS reconnect
+				// whose own connect path re-issues a recapture — a
+				// teardown loop that restarted the whole capture (the
+				// ui-browser shard's two-to-five encoder re-inits per test,
+				// 2026-09-18). Reply with the committed frame instead: the
+				// encoder re-captures for the right generation on THIS
+				// socket and re-offers, converging in one round trip.
+				// RecaptureFrameContext refuses on its own while a document
+				// transition is pending — that transition's measured frame
+				// issues its own recapture.
+				cs.RecaptureFrameContext(socketCtx, cs.FrameState())
+				continue
+			}
+			if socketCtx.Err() != nil {
 				// The loop retains the connection-wide terminal notice, while an
 				// ordinary response never revives its retired request context.
 				continue

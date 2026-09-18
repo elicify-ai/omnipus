@@ -6,6 +6,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -159,7 +160,7 @@ func TestWorkspaceDelete_CascadesToInstances(t *testing.T) {
 	// Workspace file must be gone.
 	wsPath := filepath.Join(api.homePath, "workspaces", "sales.json")
 	_, statErr := os.Stat(wsPath)
-	assert.True(t, os.IsNotExist(statErr), "workspace file must be removed after delete")
+	assert.True(t, errors.Is(statErr, os.ErrNotExist), "workspace file must be removed after delete")
 
 	// Channel instance must be disabled and unbound.
 	afterCfg := api.agentLoop.GetConfig()

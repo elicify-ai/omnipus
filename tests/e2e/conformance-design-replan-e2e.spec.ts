@@ -288,7 +288,8 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   // pkg/agent/plan_engine_supervise.go writes JudgeRounds,
   // PlanPhaseAwaitingSupervision, handover text and the terminal signature
   // atomically after an UNMET verdict.
-  const firstHoldDeadline = Date.now() + 600_000
+  const firstHoldBudgetMs = 600_000
+  const firstHoldDeadline = Date.now() + firstHoldBudgetMs
   while (Date.now() < firstHoldDeadline) {
     const poll = await apiFetch<{ plan_phase?: string }>(page, 'GET', `/api/v1/plans/${planId}`)
     if (!poll.ok) throw new Error(`t3: GET /plans/{id} poll (first hold) failed ${poll.status}: ${poll.raw}`)
@@ -300,7 +301,7 @@ test('Conformance_t3_PlanningReplanningE2E: re-plan applies SUPERSEDE + TARGETED
   }
   expect(
     reachedHoldOnce,
-    `t3: plan ${planId} must reach plan_phase=awaiting_supervision within 300s of approval — m2 (done, ` +
+    `t3: plan ${planId} must reach plan_phase=awaiting_supervision within ${firstHoldBudgetMs / 1000}s of approval — m2 (done, ` +
       'DoD-flagged wrong) + m3 (its stub worker ends every run Blocked at once) make a round-1 unmet verdict ' +
       'expected reliably.',
   ).toBe(true)

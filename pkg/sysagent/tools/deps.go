@@ -482,7 +482,7 @@ func deleteEntity(dir, id string) error {
 func listEntities[T any](dir string) ([]T, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("list %s: %w", dir, err)

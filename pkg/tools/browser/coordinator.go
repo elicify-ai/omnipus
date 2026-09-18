@@ -1038,7 +1038,7 @@ func (c *BrowserCoordinator) takeLaunchLock() (*os.File, error) {
 	// Only non-Unix O_EXCL files need marker-based stale-file recovery.
 	// Never unlink a held Unix flock: the holder owns the inode, and recreating
 	// its pathname would let a second process bypass that lock.
-	if rmErr := os.Remove(path); rmErr != nil && !os.IsNotExist(rmErr) {
+	if rmErr := os.Remove(path); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("browser: coordinator: cannot clear stale launch lock %s: %w", path, rmErr)
 	}
 	f, ok, err = acquireProfileLaunchLock(profileDir)
@@ -1057,7 +1057,7 @@ func (c *BrowserCoordinator) takeLaunchLock() (*os.File, error) {
 func cleanStaleSingletons(profileDir string) {
 	for _, name := range []string{"SingletonLock", "SingletonCookie", "SingletonSocket"} {
 		path := filepath.Join(profileDir, name)
-		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			logger.WarnCF("browser", "coordinator: failed to remove stale Chromium singleton file", map[string]any{
 				"path":  path,
 				"error": err.Error(),

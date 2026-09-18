@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -446,7 +447,7 @@ func TestInstaller_EnsureChromiumFullBuild_DetectsEither_VerifiesIntegrity(t *te
 	}
 	// No binary must have been extracted anywhere under badZipRoot.
 	expectBadBin := fullBuild.binaryFullPath(filepath.Join(badZipRoot, "131.0.6778.999"), platform)
-	if _, statErr := os.Stat(expectBadBin); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(expectBadBin); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected no binary at %s after a bad-hash rejection, stat err: %v", expectBadBin, statErr)
 	}
 	// No leftover .part-* temp files or the .zip itself either.
@@ -543,7 +544,7 @@ func TestInstaller_ExtractFailure_CleansUpPartialInstall(t *testing.T) {
 	// The build's own extraction subdirectory must actually be gone from
 	// disk, not merely orphaned and silently ignored.
 	buildDir := filepath.Join(root, "131.0.6778.777", build.subdir(platform))
-	if _, statErr := os.Stat(buildDir); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(buildDir); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected the partial extraction subdirectory to be removed, stat err: %v", statErr)
 	}
 }
@@ -667,7 +668,7 @@ func TestInstaller_MissingGoogHashHeader_RejectedByDefault(t *testing.T) {
 	}
 	// No binary must have been extracted anywhere under root.
 	expectBin := build.binaryFullPath(filepath.Join(root, "131.0.6778.999"), platform)
-	if _, statErr := os.Stat(expectBin); !os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(expectBin); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("expected no binary at %s after a headerless-download rejection, stat err: %v", expectBin, statErr)
 	}
 }

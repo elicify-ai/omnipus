@@ -7,6 +7,7 @@ package systools_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1058,7 +1059,7 @@ func delegationEdgesFromDisk(t *testing.T, home, id string) []map[string]any {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
 		t.Fatalf("read delegation store record: %v", err)
@@ -1790,7 +1791,7 @@ func TestWorkspaceDelete_ConfirmationGate(t *testing.T) {
 
 	// File must still exist.
 	wsFile := filepath.Join(home, "workspaces", id+".json")
-	if _, err := os.Stat(wsFile); os.IsNotExist(err) {
+	if _, err := os.Stat(wsFile); errors.Is(err, os.ErrNotExist) {
 		t.Error("workspace file was deleted even though confirm=false")
 	}
 }
@@ -1827,7 +1828,7 @@ func TestWorkspaceDelete_Happy(t *testing.T) {
 
 	// Verify the file is gone from disk.
 	wsFile := filepath.Join(home, "workspaces", id+".json")
-	if _, err := os.Stat(wsFile); !os.IsNotExist(err) {
+	if _, err := os.Stat(wsFile); !errors.Is(err, os.ErrNotExist) {
 		t.Error("workspace file still present on disk after delete")
 	}
 }
@@ -1909,13 +1910,13 @@ func TestWorkspaceDelete_CascadeTasks(t *testing.T) {
 		t.Errorf("tasks_deleted = %v, want >= 1 (cascade delete should have removed the task)", tasksDeleted)
 	}
 	taskFile := filepath.Join(tasksDir, taskID+".json")
-	if _, err := os.Stat(taskFile); !os.IsNotExist(err) {
+	if _, err := os.Stat(taskFile); !errors.Is(err, os.ErrNotExist) {
 		t.Error("task file still present on disk after workspace cascade delete")
 	}
 
 	// Workspace file must also be gone.
 	wsFile := filepath.Join(home, "workspaces", wsID+".json")
-	if _, err := os.Stat(wsFile); !os.IsNotExist(err) {
+	if _, err := os.Stat(wsFile); !errors.Is(err, os.ErrNotExist) {
 		t.Error("workspace file still present on disk after delete")
 	}
 }

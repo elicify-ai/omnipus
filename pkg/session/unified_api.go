@@ -23,6 +23,7 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -230,7 +231,7 @@ func (us *UnifiedStore) CreateSessionWithID(
 	sessionDir := filepath.Join(us.baseDir, childID)
 	if _, statErr := os.Stat(sessionDir); statErr == nil {
 		return nil, fmt.Errorf("unified_store: create session with id: session %q already exists", childID)
-	} else if !os.IsNotExist(statErr) {
+	} else if !errors.Is(statErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("unified_store: create session with id: stat %q: %w", sessionDir, statErr)
 	}
 

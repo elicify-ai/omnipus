@@ -195,7 +195,7 @@ func (s *Store) path(id string) string {
 func (s *Store) load(id string) (*Task, error) {
 	data, err := os.ReadFile(s.path(id))
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("task: read %q: %w", id, err)
@@ -382,7 +382,7 @@ func (s *Store) ListWithUnreadable(filter Filter) (tasks []Task, unreadableIDs [
 	s.listCalls.Add(1)
 	ids, err := s.scanTaskIDs()
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return []Task{}, nil, nil
 		}
 		return nil, nil, fmt.Errorf("task: list dir: %w", err)

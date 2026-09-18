@@ -19,6 +19,7 @@ package session
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -591,7 +592,7 @@ func assertFileExists(t *testing.T, path string) {
 func assertFileAbsent(t *testing.T, path string) {
 	t.Helper()
 	_, err := os.Stat(path)
-	assert.Truef(t, os.IsNotExist(err), "expected file to be ABSENT: %s (stat err=%v)", path, err)
+	assert.Truef(t, errors.Is(err, os.ErrNotExist), "expected file to be ABSENT: %s (stat err=%v)", path, err)
 }
 
 // readJSONKeys reads path and returns its top-level JSON object's key set,
