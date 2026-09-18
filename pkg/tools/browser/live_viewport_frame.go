@@ -24,6 +24,80 @@ func (a windowContentsSizeAction) Do(ctx context.Context) error {
 	return browser.SetContentsSize(id).WithWidth(int64(a.width)).WithHeight(int64(a.height)).Do(ctx)
 }
 
+// viewportBoundsProbe records what the OS-level window actually looked like
+// around a resize attempt — the diagnostic for the un-converging viewport
+// (diag(browser) 2026-09-18): Chrome accepts Browser.setWindowBounds yet the
+// tab keeps reporting launch geometry, so the apply needs to show WHICH window
+// it resolved and whether the outer bounds moved at all.
+type viewportBoundsProbe struct {
+	windowID  int64
+	beforeW   int64
+	beforeH   int64
+	beforeErr string
+	afterW    int64
+	afterH    int64
+	afterErr  string
+}
+
+func (p *viewportBoundsProbe) fields() map[string]any {
+	f := map[string]any{
+		"bounds_probe_window_id": p.windowID,
+		"bounds_probe_before":    fmt.Sprintf("%dx%d", p.beforeW, p.beforeH),
+		"bounds_probe_after":     fmt.Sprintf("%dx%d", p.afterW, p.afterH),
+	}
+	if p.beforeErr != "" {
+		f["bounds_probe_before_err"] = p.beforeErr
+	}
+	if p.afterErr != "" {
+		f["bounds_probe_after_err"] = p.afterErr
+	}
+	return f
+}
+
+// viewportBoundsProbeAction reads the session target's window ID and outer
+// bounds into the probe. Recording failures in the struct (never returning
+// them) keeps the probe strictly observational: a resize diagnostic must not
+// become a new way for the resize to fail.
+type viewportBoundsProbeAction struct {
+	probe *viewportBoundsProbe
+	stage string
+}
+
+func (a *viewportBoundsProbeAction) Do(ctx context.Context) error {
+	id, _, err := browser.GetWindowForTarget().Do(ctx)
+	if err != nil {
+		if a.probe != nil {
+			if a.stage == "after" {
+				a.probe.afterErr = err.Error()
+			} else {
+				a.probe.beforeErr = err.Error()
+			}
+		}
+		return nil
+	}
+	b, err := browser.GetWindowBounds(id).Do(ctx)
+	if err != nil {
+		if a.probe != nil {
+			if a.stage == "after" {
+				a.probe.afterErr = err.Error()
+			} else {
+				a.probe.beforeErr = err.Error()
+			}
+		}
+		return nil
+	}
+	if a.probe == nil {
+		return nil
+	}
+	a.probe.windowID = int64(id)
+	if a.stage == "after" {
+		a.probe.afterW, a.probe.afterH = b.Width, b.Height
+	} else {
+		a.probe.beforeW, a.probe.beforeH = b.Width, b.Height
+	}
+	return nil
+}
+
 // Inner dimensions include scrollbars; capture's CSS client dimensions do not.
 type viewportContentGeometryAction struct{ width, height, clientWidth, clientHeight *int }
 
@@ -214,6 +288,11 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 				applied, initialLayoutUnverified, err = lv.applyViewportAdmitted(caller, tabCtx, operation, width, height, scale)
 			} else {
 				// Size content directly: repeating outer bounds can retain Chrome's toolbar deficit.
+				logger.WarnCF("browser", "live view: viewport contents-size retry dispatched", map[string]any{
+					"session_id":       lv.sessionID,
+					"requested_width":  width,
+					"requested_height": height,
+				})
 				err = lv.runCDP(operation, viewportSetTimeout, windowContentsSizeAction{width, height})
 				if err == nil {
 					_, _, err = lv.settleCSSViewport(operation, width, height)
@@ -559,6 +638,7 @@ type liveViewApplyViewportAdmitted struct {
 	compensated       bool
 	compensatedAskW   int
 	compensatedAskH   int
+	boundsProbe       *viewportBoundsProbe
 	ret0              bool
 	ret1              bool
 	ret2              error
@@ -737,6 +817,10 @@ func (av *liveViewApplyViewportAdmitted) resizeWindow() liveViewApplyViewportAdm
 			}
 		}
 	}
+	av.boundsProbe = &viewportBoundsProbe{}
+	if err := av.run(viewportSetTimeout, &viewportBoundsProbeAction{probe: av.boundsProbe, stage: "before"}); err != nil {
+		logger.WarnCF("browser", "live view: viewport bounds probe (before) failed", map[string]any{"error": err.Error()})
+	}
 	boundsAction := windowBoundsAction{width: av.width, height: av.height}
 	if err := av.run(viewportSetTimeout, boundsAction); err != nil {
 		// One retry, and ONLY for a deadline timeout (2026-08-13 UAT: "could
@@ -763,6 +847,12 @@ func (av *liveViewApplyViewportAdmitted) resizeWindow() liveViewApplyViewportAdm
 			av.ret2 = fmt.Errorf("browser live: resize viewport (after retry): %w", err)
 			return liveViewApplyViewportAdmittedReturn
 		}
+	}
+
+	// Immediate outer-bounds read after the bounds write: distinguishes
+	// "Chrome refused/moved nothing" from "moved, then restored".
+	if err := av.run(viewportSetTimeout, &viewportBoundsProbeAction{probe: av.boundsProbe, stage: "after"}); err != nil {
+		logger.WarnCF("browser", "live view: viewport bounds probe (after) failed", map[string]any{"error": err.Error()})
 	}
 
 	if err := viewportContextError(av.caller, av.operationCtx); err != nil {
@@ -864,6 +954,13 @@ func (av *liveViewApplyViewportAdmitted) measureInitialLayout() liveViewApplyVie
 
 // compensateLayout performs one shortfall compensation pass and records its settled measurement.
 func (av *liveViewApplyViewportAdmitted) compensateLayout() liveViewApplyViewportAdmittedFlow {
+	// Post-settle outer-bounds read: if the immediate-after probe showed the
+	// window moved and this shows launch geometry again, something restored it.
+	if av.boundsProbe != nil {
+		if err := av.run(viewportSetTimeout, &viewportBoundsProbeAction{probe: av.boundsProbe, stage: "after"}); err != nil {
+			logger.WarnCF("browser", "live view: viewport bounds probe (post-settle) failed", map[string]any{"error": err.Error()})
+		}
+	}
 	av.compensated = false
 
 	shortW := av.width - int(av.actualW)
@@ -950,6 +1047,7 @@ func (av *liveViewApplyViewportAdmitted) compensateLayout() liveViewApplyViewpor
 func (av *liveViewApplyViewportAdmitted) logOutcome() {
 	fields := map[string]any{
 		"session_id":          av.lv.sessionID,
+		"bounds_probe":        "see bounds_probe_* fields",
 		"requested_width":     av.width,
 		"requested_height":    av.height,
 		"actual_width":        av.actualW,
@@ -962,6 +1060,11 @@ func (av *liveViewApplyViewportAdmitted) logOutcome() {
 		// log alone — reconstructing it by hand produced two wrong models.
 		"compensated_ask_width":  av.compensatedAskW,
 		"compensated_ask_height": av.compensatedAskH,
+	}
+	if av.boundsProbe != nil {
+		for k, v := range av.boundsProbe.fields() {
+			fields[k] = v
+		}
 	}
 	if viewportDeltaPx(av.width, av.actualW) > viewportDriftTolerancePx ||
 		viewportDeltaPx(av.height, av.actualH) > viewportDriftTolerancePx {
