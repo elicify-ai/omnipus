@@ -270,8 +270,7 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 			// The initial read can fail before toolbar compensation, even when the
 			// final read succeeds immediately. Correct that shortfall once; fresh
 			// inner/CSS geometry distinguishes it from a normal scrollbar.
-			recoverShortfall := attempt == 0 && initialLayoutUnverified &&
-				(width-measured.Width > viewportDriftTolerancePx || height-measured.Height > viewportDriftTolerancePx)
+			recoverShortfall := viewportNeedsShortfallRetry(attempt, initialLayoutUnverified, measured, width, height)
 			// A VERIFIED read LARGER than the request means the window-bounds
 			// shrink was ignored outright, not overshot benignly: the CI worker
 			// measured 2560x1297 (--window-size=2560,1440 minus chrome) against
@@ -284,8 +283,7 @@ func (lv *LiveView) applyViewportContextWithConvergence(caller, tabCtx context.C
 			// (SetContentsSize — the one resize lever chrome.tabs.get, and so
 			// the capture, actually reflects), then accept whatever settles,
 			// exactly as the shortfall path does.
-			recoverOvershoot := attempt == 0 && !initialLayoutUnverified &&
-				(measured.Width-width > viewportDriftTolerancePx || measured.Height-height > viewportDriftTolerancePx)
+			recoverOvershoot := viewportNeedsIgnoredShrinkRetry(attempt, initialLayoutUnverified, measured, width, height)
 			matches := true
 			if converge || recoverShortfall || recoverOvershoot {
 				matches, err = lv.viewportMatchesRequest(operation, measured, width, height)
@@ -1799,4 +1797,24 @@ func (lv *LiveView) requestBasisRecapture(w, h int) {
 // not, so it can stay a trivial, allocation-free ratio computation.
 func rescaleInputCoords(x, y, capW, capH, cssW, cssH float64) (float64, float64) {
 	return x * cssW / capW, y * cssH / capH
+}
+
+// viewportNeedsShortfallRetry: an UNVERIFIED first read that came back SMALLER
+// than requested. Extracted so the two retry predicates are budgeted here
+// rather than inside applyViewportContextWithConvergence, whose complexity
+// should measure the apply's control flow, not the arithmetic of its
+// preconditions.
+func viewportNeedsShortfallRetry(attempt int, initialLayoutUnverified bool, measured CaptureFrameState, width, height int) bool {
+	return attempt == 0 && initialLayoutUnverified &&
+		(width-measured.Width > viewportDriftTolerancePx || height-measured.Height > viewportDriftTolerancePx)
+}
+
+// viewportNeedsIgnoredShrinkRetry: a VERIFIED first read LARGER than requested
+// means the shrink was ignored outright rather than overshot benignly — the CI
+// worker measured 2560x1297 against a requested 561x628 on 2026-09-18. The
+// "overshoot needs no correction" rule covers a window that legitimately ends
+// bigger; a shrink that moved nothing is that rule's blind spot.
+func viewportNeedsIgnoredShrinkRetry(attempt int, initialLayoutUnverified bool, measured CaptureFrameState, width, height int) bool {
+	return attempt == 0 && !initialLayoutUnverified &&
+		(measured.Width-width > viewportDriftTolerancePx || measured.Height-height > viewportDriftTolerancePx)
 }
