@@ -249,7 +249,7 @@ Either way, the directory layout is the same:
 
 Mount the entire data directory as a single named volume or bind-mount. Splitting sub-paths into separate mounts is not supported.
 
-**Back up `master.key`.** Losing it makes every credential in `credentials.json` permanently unrecoverable. For headless deployments, inject the key via `OMNIPUS_MASTER_KEY` (64-character hex) or `OMNIPUS_KEY_FILE` (path to a 0600 file) instead of relying on the auto-generated key file.
+**Back up `master.key`.** Losing it makes every credential in `credentials.json` permanently unrecoverable. For headless deployments, inject the key via `OMNIPUS_MASTER_KEY` (64-character hex) or `OMNIPUS_KEY_FILE` (path to a 0600 file) instead of relying on the auto-generated key file. A platform that must not leave the key at rest can instead pass `OMNIPUS_MASTER_KEY_SOURCE` (path to a 0600 file holding the hex key, consumed on use: read, unlock, then deleted; highest priority, fails closed, requires re-delivery on every boot).
 
 ---
 

@@ -7,6 +7,7 @@ package credentials
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,6 +27,27 @@ const (
 	// The file must have mode 0600 (owner read/write only).
 	EnvKeyFile = "OMNIPUS_KEY_FILE"
 
+	// EnvMasterKeySource is the env var for a path to a file holding the hex
+	// master key that the instance CONSUMES at boot: it is read once, used to
+	// unlock the store, and then deleted.
+	//
+	// Why it exists, when EnvKeyFile already reads a key from a file: the two
+	// have opposite intentions about what happens next.
+	//
+	//   - EnvKeyFile PERSISTS. The file is expected to survive every boot —
+	//     it IS the instance's copy of the key, deliberately kept at rest.
+	//   - EnvMasterKeySource CONSUMES. The file is a delivery hop, not a
+	//     home. After a successful unlock nothing holding the plaintext key
+	//     remains on disk, and the platform that delivered it must deliver it
+	//     again on the next boot.
+	//
+	// This is the mode a hosted control plane uses to hand a tenant's master
+	// key to a fresh instance: the plaintext key exists only in the instance's
+	// memory and in the transient delivery hop, never at rest and never in an
+	// environment variable (which is visible in platform dashboards, machine
+	// configuration and process listings).
+	EnvMasterKeySource = "OMNIPUS_MASTER_KEY_SOURCE"
+
 	// DefaultKeyFileName is the filename used for the auto-generated master
 	// key when no env-var or explicit key file is configured. It is placed
 	// next to credentials.json inside the Omnipus home directory, so the
@@ -36,12 +58,50 @@ const (
 
 // Unlock attempts to unlock store using the following provisioning priority:
 //
+//  0. OMNIPUS_MASTER_KEY_SOURCE environment variable — consume-once delivery
+//     (path to a 0600 file with the hex key; the file is DELETED after a
+//     successful unlock, and nothing is persisted)
 //  1. OMNIPUS_MASTER_KEY environment variable (hex-encoded 256-bit key)
 //  2. OMNIPUS_KEY_FILE environment variable (path to a 0600 file with hex key)
 //  3. Default key file next to credentials.json ($OMNIPUS_HOME/master.key, 0600)
 //  4. Auto-generate a fresh key on a truly fresh install (no credentials.json
 //     and no master.key) and write it to the default path with 0600
 //  5. Interactive passphrase prompt (requires TTY; derives key via Argon2id)
+//
+// # Mode 0 — consume-once delivery (no plaintext key at rest)
+//
+// Mode 0 exists for a hosted control plane that must hand a tenant's master
+// key to a freshly provisioned instance at first boot without the plaintext
+// key ever coming to rest. Modes 1-4 each fail that requirement: mode 1 puts
+// the key in an environment variable (visible in the platform dashboard,
+// machine configuration and process listing), modes 2 and 3 keep hex
+// plaintext on disk by design, and mode 4 mints and persists a key of its
+// own. Mode 0 reads the delivered file through the same loader modes 2 and 3
+// use — symlink-aware, regular-file-only, strict 0600, audited on every
+// attempt — unlocks the store, and then removes the file.
+//
+// The delivery point is meant to be a RAM-backed (tmpfs) mount, so the key
+// never touches durable storage in the first place. The removal is what makes
+// the guarantee ours rather than the platform's. If the removal fails — a
+// read-only secret mount is a legitimate platform choice — the boot still
+// succeeds and a WARN records that the plaintext key remains readable at
+// rest. Note that when the delivery path is a symlink, removal unlinks the
+// symlink and not its target; a delivery point that symlinks into durable
+// storage leaves the target's plaintext behind.
+//
+// Consequence, and it is intended rather than a limitation: because mode 0
+// persists nothing, THE PLATFORM MUST RE-DELIVER THE KEY ON EVERY BOOT. An
+// instance restarted without a fresh delivery has no key and will not unlock.
+//
+// Mode 0 fails closed. Any error — a missing file, wrong permissions, bad hex,
+// a store that refuses the key — aborts Unlock instead of falling through to
+// modes 1-5. Falling through would reach mode 4 on a fresh-looking instance,
+// auto-generate a DIFFERENT key, and strand the tenant's existing encrypted
+// data behind a key nobody has. For the same reason, mode 0 refuses to run at
+// all when $OMNIPUS_HOME/master.key already exists: two candidate keys is an
+// ambiguity to report, not to resolve by guessing.
+//
+// # Modes 3 and 4 — headless first run
 //
 // Modes 3 and 4 make the headless first-run experience work: on a clean VPS,
 // starting the gateway with no env vars set will mint a fresh master key,
@@ -54,8 +114,21 @@ const (
 // possible (e.g., the default key file is present but unreadable), Unlock
 // returns an error. Callers must check store.IsLocked() before use.
 //
-// Implements US-4 acceptance criteria.
+// Implements US-4 acceptance criteria; mode 0 implements IN-12.
 func Unlock(store *Store) error {
+	// $OMNIPUS_HOME/master.key — the persisted default key file. Modes 0, 3
+	// and 4 all reason about it, so it is resolved once up front.
+	defaultKeyPath := filepath.Join(filepath.Dir(store.Path()), DefaultKeyFileName)
+
+	// Mode 0: OMNIPUS_MASTER_KEY_SOURCE — consume-once delivery. Fails closed:
+	// an error here never falls through to a later mode (see the doc comment).
+	if sourcePath := os.Getenv(EnvMasterKeySource); sourcePath != "" {
+		if err := unlockFromDeliveredKey(store, sourcePath, defaultKeyPath); err != nil {
+			return fmt.Errorf("credentials: OMNIPUS_MASTER_KEY_SOURCE %q failed: %w", sourcePath, err)
+		}
+		return nil
+	}
+
 	// Mode 1: OMNIPUS_MASTER_KEY direct hex key.
 	if hexKey := os.Getenv(EnvMasterKey); hexKey != "" {
 		key, err := hexToKey(hexKey)
@@ -89,7 +162,6 @@ func Unlock(store *Store) error {
 
 	// Mode 3: Default key file next to credentials.json. If the file exists,
 	// load it; its failure is fatal for the same reason as OMNIPUS_KEY_FILE.
-	defaultKeyPath := filepath.Join(filepath.Dir(store.Path()), DefaultKeyFileName)
 	if _, err := os.Stat(defaultKeyPath); err == nil {
 		key, err := loadKeyFile(defaultKeyPath)
 		if err != nil {
@@ -147,6 +219,151 @@ func Unlock(store *Store) error {
 		return err
 	}
 	slog.Debug("credentials: unlocked via interactive passphrase")
+	return nil
+}
+
+// unlockFromDeliveredKey implements Unlock mode 0: read the master key from
+// the platform's delivery point, unlock the store with it, then delete the
+// delivery file so no plaintext key is left at rest.
+//
+// It never writes a key anywhere — in particular it never reaches
+// generateAndPersistMasterKey, whose whole job is the opposite. Every error it
+// returns is fatal to the boot: the caller wraps it and returns rather than
+// trying a later mode, because a fall-through would auto-generate a different
+// key and strand the tenant's data.
+//
+// sourcePath is the delivery point ($OMNIPUS_MASTER_KEY_SOURCE); defaultKeyPath
+// is $OMNIPUS_HOME/master.key, checked only for the ambiguity refusal below.
+func unlockFromDeliveredKey(store *Store, sourcePath, defaultKeyPath string) error {
+	// Refuse before reading anything when a persisted key is also present.
+	// Two candidate keys means we cannot know which one encrypts the store,
+	// and picking one at random would either strand the data or silently
+	// consume a key the operator meant to keep. Name both and stop.
+	//
+	// Match ONLY on "does not exist". A stat that fails for any other reason —
+	// EACCES, ELOOP, a dangling symlink — means a file may well be there and we
+	// cannot see it, which is exactly the murky case this guard exists for.
+	// Treating those as absent would let mode 0 proceed and consume the
+	// delivered key on top of a persisted one we simply failed to stat.
+	if _, statErr := os.Stat(defaultKeyPath); statErr == nil {
+		emitMasterKeyAuditRule(sourcePath, false,
+			"ambiguous: persisted key also present at "+defaultKeyPath, "master_key_ambiguous")
+		return fmt.Errorf(
+			"delivered key %q and persisted key %q are both present: refusing to guess which one encrypts the store; remove whichever is stale",
+			sourcePath, defaultKeyPath)
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		emitMasterKeyAuditRule(sourcePath, false,
+			fmt.Sprintf("cannot determine whether a persisted key exists at %s: %v", defaultKeyPath, statErr),
+			"master_key_ambiguous")
+		return fmt.Errorf(
+			"cannot determine whether a persisted key exists at %q (%w): refusing to consume the delivered key while a persisted one may be present",
+			defaultKeyPath, statErr)
+	}
+
+	// Refuse a symlinked delivery point. loadKeyFile deliberately follows
+	// symlinks — that is right for modes 2 and 3, where the file is meant to
+	// persist and an operator may legitimately link to it. It is wrong here:
+	// removal below unlinks the LINK, not its target, so a delivery point
+	// symlinked into durable storage would leave the plaintext key at rest
+	// while every log line said it had been consumed. The one guarantee this
+	// mode exists to provide would be silently false.
+	//
+	// #nosec G703 -- sourcePath is the platform-set OMNIPUS_MASTER_KEY_SOURCE
+	// env var, never request-derived.
+	if lInfo, lErr := os.Lstat(sourcePath); lErr == nil && lInfo.Mode()&os.ModeSymlink != 0 {
+		emitMasterKeyAuditRule(sourcePath, false, "delivery point is a symlink", "master_key_delivery_symlink")
+		return fmt.Errorf(
+			"delivery point %q is a symlink: refusing, because consuming it would unlink the symlink and leave the key readable at its target",
+			sourcePath)
+	}
+
+	// Same loader as modes 2 and 3: lstat/symlink detection, regular-file
+	// check, strict 0600 enforcement, hex validation, and an audit record on
+	// every outcome.
+	key, err := loadKeyFile(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	// Prove the key actually opens this store BEFORE destroying the only copy
+	// of it. UnlockWithKey validates length and nothing else (store.go), so
+	// without this check any 32 bytes are accepted and then the delivery file
+	// is deleted. A stale or wrong-tenant key would unlock "successfully",
+	// the instance would run unable to read a single existing credential, and
+	// writes would append entries under the wrong key — leaving one file
+	// holding two key generations, where a later boot with the RIGHT key
+	// silently cannot read the newer half. Fail before the removal, not after.
+	if verifyErr := verifyKeyOpensStore(store.Path(), key); verifyErr != nil {
+		emitMasterKeyAuditRule(sourcePath, false,
+			fmt.Sprintf("delivered key does not decrypt the existing store: %v", verifyErr),
+			"master_key_wrong_key")
+		return fmt.Errorf(
+			"delivered key does not decrypt the existing credential store at %q (%w): refusing, and leaving %q in place so the correct key can be delivered",
+			store.Path(), verifyErr, sourcePath)
+	}
+
+	if err := store.UnlockWithKey(key); err != nil {
+		return err
+	}
+
+	// Consume the delivery point. The mount is expected to be RAM-backed, but
+	// removing the file is what makes "no plaintext key at rest" our guarantee
+	// rather than the platform's.
+	//
+	// #nosec G703 -- sourcePath is the operator/platform-set
+	// OMNIPUS_MASTER_KEY_SOURCE env var, never request-derived, and was just
+	// validated by loadKeyFile above.
+	if rmErr := os.Remove(sourcePath); rmErr != nil {
+		// Deliberately NOT fatal. A read-only secret mount is a legitimate
+		// platform choice, and refusing to boot over it would strand a tenant
+		// whose key was delivered correctly. Say plainly what the cost is.
+		//
+		// #nosec G706 -- path/error are discrete slog fields, escaped by both
+		// log sinks (see the sink detail on execproxy.go's SSRF-blocked lines).
+		slog.Warn("credentials: could not consume delivered master key",
+			"path", sourcePath,
+			"error", rmErr.Error(),
+			"consequence", "the plaintext master key remains readable at rest at this path",
+			"remedy", "deliver the key on a tmpfs (RAM-backed) mount the instance can write to, so it can be removed after boot",
+		)
+		emitMasterKeyAudit(sourcePath, true, fmt.Sprintf("consumed=false, remove failed: %v", rmErr))
+		return nil
+	}
+
+	emitMasterKeyAudit(sourcePath, true, "consumed=true, delivery file removed")
+	// #nosec G706 -- see the Warn above; path is a discrete slog field.
+	slog.Debug("credentials: unlocked via OMNIPUS_MASTER_KEY_SOURCE (delivery file consumed)",
+		"path", sourcePath)
+	return nil
+}
+
+// verifyKeyOpensStore reports whether key can actually decrypt the store at
+// path. It is a no-op for a store that does not exist yet or holds no entries —
+// there is nothing to be wrong about, and any key is as good as any other for a
+// store whose first write has not happened.
+//
+// It works on a throwaway Store rather than the caller's, so a failed check
+// leaves no half-unlocked store holding a key we just rejected.
+func verifyKeyOpensStore(path string, key []byte) error {
+	probe := NewStore(path)
+	if !probe.Exists() {
+		return nil
+	}
+	if err := probe.UnlockWithKey(key); err != nil {
+		return err
+	}
+	names, err := probe.List()
+	if err != nil {
+		return fmt.Errorf("reading the existing store: %w", err)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	// AES-GCM is authenticated, so a wrong key fails the tag check rather than
+	// returning plausible garbage. One entry is a sufficient probe.
+	if _, err := probe.Get(names[0]); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -355,6 +572,15 @@ func loadKeyFile(path string) ([]byte, error) {
 // who provisioned a 0644 master.key to bypass mode-0600 enforcement leaves a
 // loud audit footprint on every boot.
 func emitMasterKeyAudit(path string, success bool, detail string) {
+	emitMasterKeyAuditRule(path, success, detail, "master_key_perm_0600")
+}
+
+// emitMasterKeyAuditRule is emitMasterKeyAudit with an explicit policy_rule.
+// The rule name is what an operator triaging the alert reads first, so a
+// refusal must not borrow a rule that did not fire — a boot stopped because two
+// candidate keys were present is not a file-permission violation, and sending
+// whoever is paged to `chmod` wastes the part of an incident where time matters.
+func emitMasterKeyAuditRule(path string, success bool, detail, policyRule string) {
 	event := "credentials.master_key_load"
 	decision := "deny"
 	if success {
@@ -384,7 +610,7 @@ func emitMasterKeyAudit(path string, success bool, detail string) {
 		"decision", decision,
 		"path", path,
 		"detail", detail,
-		"policy_rule", "master_key_perm_0600",
+		"policy_rule", policyRule,
 	)
 }
 
