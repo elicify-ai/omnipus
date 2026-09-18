@@ -1324,9 +1324,22 @@ export function BrowserLiveView({
     inputFrameRequirementRef.current = undefined
     return true
   }, [])
-  const canDispatchInput = useCallback(() => {
-    return !viewportHandoffRef.current && canIssueCommands() && (inputRef.current?.state === 'ready' && dedicatedFrameReady()) && captureRef.current.gate.read(performance.now()).status === 'ready'
+  // Names the FIRST predicate that closes the input gate, or '' when input may
+  // flow. The gate is a four-way AND and used to fail silently: a click was
+  // simply not sent, with nothing anywhere saying why. From the gateway's side
+  // that is indistinguishable from a broken transport — ICE connected, data
+  // channels accepted, zero frames arriving — and several investigation rounds
+  // on the ui-browser shard were spent on the transport because of it.
+  const inputGateBlockedBy = useCallback((): string => {
+    if (viewportHandoffRef.current) return 'viewport-handoff'
+    if (!canIssueCommands()) return 'cannot-issue-commands'
+    if (inputRef.current?.state !== 'ready') return `input-state:${inputRef.current?.state ?? 'none'}`
+    if (!dedicatedFrameReady()) return 'no-dedicated-frame'
+    const gate = captureRef.current.gate.read(performance.now())
+    if (gate.status !== 'ready') return `capture-gate:${gate.status}`
+    return ''
   }, [canIssueCommands, dedicatedFrameReady])
+  const canDispatchInput = useCallback(() => inputGateBlockedBy() === '', [inputGateBlockedBy])
 
   // Gestures use only the dedicated input peer; navigation stays on the socket. A successful send is local
   // admission, not execution proof; never replay uncertain actions elsewhere.
@@ -2375,7 +2388,7 @@ export function BrowserLiveView({
   }
 
   return (
-    <div data-input-mode="dedicated" data-input-state={viewportHandoffState !== 'idle' && !inputError && (inputState === 'ready' || inputState === 'paused') ? viewportHandoffState : inputState} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
+    <div data-input-mode="dedicated" data-input-blocked-by={inputGateBlockedBy() || undefined} data-input-state={viewportHandoffState !== 'idle' && !inputError && (inputState === 'ready' || inputState === 'paused') ? viewportHandoffState : inputState} className={cn('relative flex h-full min-h-0 flex-col bg-[var(--color-primary)]', className)}>
       {inputError && <div role="alert" data-testid="browser-input-error" className="absolute bottom-2 left-2 right-2 z-30 rounded bg-[var(--color-primary)] p-2 text-sm">
         <span>{inputError}</span>{' '}
         <button type="button" tabIndex={0} disabled={inputState === 'paused' && !inputCanResume} onClick={() => {
