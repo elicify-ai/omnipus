@@ -412,7 +412,7 @@ describe('BrowserLiveView — input routing: dedicated input during media connec
     const identity = { capture_id: 'capture-test', capture_generation: 1 }
     expect(mockSendInput.mock.calls.map(([input]) => input)).toEqual([
       { kind: 'key_up', key: 'Shift', code: 'ShiftLeft', key_code: 16, modifiers: 0, ...identity },
-      { kind: 'mouse_up', x: 10, y: 10, button: 'left', modifiers: 0, ...identity },
+      { kind: 'mouse_up', x: 10, y: 10, button: 'left', modifiers: 0, capture_width: 1280, capture_height: 720, ...identity },
     ])
     fireEvent.blur(window)
     expect(mockSendInput).toHaveBeenCalledTimes(2)
@@ -584,8 +584,10 @@ describe('BrowserLiveView — confirmed CSS coordinates on input', () => {
     expect(mockMachineSendInput).not.toHaveBeenCalled()
     expect(mockSendInput).toHaveBeenCalledTimes(1)
     const payload = mockSendInput.mock.calls[0][0]
+    // capture_width/height name the CSS space x/y were mapped into — without
+    // them the gateway dispatches raw capture coordinates (2026-09-07 regression).
     expect(payload).toEqual(
-      { kind: 'mouse_down', x: 10, y: 10, button: 'left', modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+      { kind: 'mouse_down', x: 10, y: 10, button: 'left', modifiers: 0, capture_width: 1280, capture_height: 720, capture_id: 'capture-test', capture_generation: 1 },
     )
   })
 
@@ -621,7 +623,7 @@ describe('BrowserLiveView — confirmed CSS coordinates on input', () => {
         .filter((p) => p.kind === 'wheel')
       expect(wheels).toHaveLength(1)
       expect(wheels[0]).toEqual(
-        { kind: 'wheel', x: 10, y: 10, delta_x: 0, delta_y: 120, modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+        { kind: 'wheel', x: 10, y: 10, delta_x: 0, delta_y: 120, modifiers: 0, capture_width: 1280, capture_height: 720, capture_id: 'capture-test', capture_generation: 1 },
       )
     } finally {
       vi.useRealTimers()
@@ -678,8 +680,8 @@ describe('BrowserLiveView — confirmed CSS coordinates on input', () => {
       await vi.advanceTimersByTimeAsync(60)
       const wheels = mockSendInput.mock.calls.map(c => c[0]).filter(p => p.kind === 'wheel')
       expect(wheels).toEqual([
-        { kind: 'wheel', x: 10, y: 10, modifiers: 0, delta_x: 0, delta_y: 100, capture_id: 'capture-test', capture_generation: 1 },
-        { kind: 'wheel', ...secondPoint, delta_x: 0, delta_y: 1, capture_id: 'capture-test', capture_generation: 1 },
+        { kind: 'wheel', x: 10, y: 10, modifiers: 0, delta_x: 0, delta_y: 100, capture_width: 1280, capture_height: 720, capture_id: 'capture-test', capture_generation: 1 },
+        { kind: 'wheel', ...secondPoint, delta_x: 0, delta_y: 1, capture_width: 1280, capture_height: 720, capture_id: 'capture-test', capture_generation: 1 },
       ])
     } finally {
       vi.useRealTimers()
@@ -736,8 +738,10 @@ describe('BrowserLiveView — confirmed CSS coordinates on input', () => {
 
       expect(mockSendInput).toHaveBeenCalledTimes(1)
       const payload = mockSendInput.mock.calls[0][0]
+      // Dims still describe the event-time css space (1280x720), not the
+      // rebuilt stream's 320x160 — carried, never re-derived at flush.
       expect(payload).toEqual(
-        { kind: 'mouse_move', x: 10, y: 10, modifiers: 0, capture_id: 'capture-test', capture_generation: 1 },
+        { kind: 'mouse_move', x: 10, y: 10, modifiers: 0, capture_width: 1280, capture_height: 720, capture_id: 'capture-test', capture_generation: 1 },
       )
     } finally {
       vi.useRealTimers()
