@@ -1,0 +1,15 @@
+type: object
+additionalProperties: false
+description: Sparse override changes. A tool cannot occur in both set and remove. Tool names are validated against the live static catalog. Null members are rejected.
+properties:
+  set:
+    type: object
+    additionalProperties:
+      type: string
+      enum: [allow, ask, deny]
+  remove:
+    type: array
+    uniqueItems: true
+    items:
+      type: string
+      minLength: 1

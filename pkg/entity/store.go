@@ -46,6 +46,23 @@ func New[T any](dir string, acc Accessors[T]) *Store[T] {
 // Dir returns the store's entity directory.
 func (s *Store[T]) Dir() string { return s.dir }
 
+// WithLock runs fn while holding the same in-process and sidecar locks used
+// by Create, Update, and Delete for id. Composite stores use this to extend
+// the entity critical section across an authoritative sidecar file without
+// acquiring the non-reentrant entity lock a second time.
+func (s *Store[T]) WithLock(id string, fn func(dataPath string) error) error {
+	if err := validateID(id); err != nil {
+		return err
+	}
+	if fn == nil {
+		return fmt.Errorf("entity: with lock %q: nil callback", id)
+	}
+	mu := fileLock.get(s.path(id))
+	mu.Lock()
+	defer mu.Unlock()
+	return fileutil.WithFlock(s.lockPath(id), func() error { return fn(s.path(id)) })
+}
+
 // path returns the absolute path for an entity's data file.
 func (s *Store[T]) path(id string) string {
 	return filepath.Join(s.dir, id+".json")

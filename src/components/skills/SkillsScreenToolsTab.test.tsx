@@ -34,6 +34,7 @@ import { fetchTools, fetchSkills, type Skill } from '@/lib/api'
 import { SkillsScreen } from '@/components/screens/SkillsScreen'
 
 const builtinSkill: Skill = {
+  revision: '0'.repeat(64),
   id: 'builtin-1',
   name: 'system-skill',
   version: '0.0.0',
@@ -45,6 +46,7 @@ const builtinSkill: Skill = {
 }
 
 const communitySkill: Skill = {
+  revision: '0'.repeat(64),
   id: 'community-1',
   name: 'community-skill',
   version: '1.2.3',

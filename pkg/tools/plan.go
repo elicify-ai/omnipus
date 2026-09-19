@@ -376,8 +376,10 @@ func (t *PlanCreateTool) Execute(ctx context.Context, args map[string]any) *Tool
 		OwnerAgentID: ownerAgentID,
 		Owner:        callerID,
 		CreatedBy:    callerID,
-		DoD:          dod,
-		Rationale:    rationale,
+		// Every caller of this tool is an agent — stamp the strict tier.
+		CreatedByKind: plan.CreatedByKindAgent,
+		DoD:           dod,
+		Rationale:     rationale,
 	}
 	if goal, ok := args["goal"].(string); ok {
 		p.Goal = goal
@@ -454,19 +456,10 @@ type PlanExecuteTool struct {
 	BaseTool
 	planStore *plan.Store
 	taskStore *task.Store
-	// isAgentID reports whether id resolves to a registered agent — mirrors
-	// restAPI.isAgentID (pkg/gateway/rest_plans.go) exactly, and drives the
-	// SAME SD-A7 tiered-DoD gate handlePlanApprove enforces: a plan whose
-	// CreatedBy resolves to an agent (strict tier) must carry >=1 DoD
-	// criterion; a human-authored plan (soft tier) may have none. Injected
-	// by the wiring layer (pkg/agent/loop.go, another wave's job) — mirrors
-	// PlanCreateTool.validateOwner's unwired-until-wired discipline.
-	//
-	// FAIL CLOSED, not open, when unwired: an unset isAgentID must NOT be
-	// read as "CreatedBy is not an agent" (which would silently skip the
-	// gate for every plan, agent-authored or not). Treat CreatedBy as
-	// agent-authored (require DoD) until the real checker is wired — same
-	// discipline as every other DI checker in this package.
+	// isAgentID is the legacy-kindless fallback for the SD-A7 tiered-DoD
+	// gate (wired via SetIsAgentIDChecker); the explicit CreatedByKind stamp
+	// decides first. Unwired fails closed to strict — see
+	// plan.AuthoredByAgent.
 	isAgentID func(id string) bool
 }
 
@@ -560,12 +553,9 @@ func (t *PlanExecuteTool) Execute(_ context.Context, args map[string]any) *ToolR
 		return ErrorResult(fmt.Sprintf("plan %q is in an unrecognized state %q", planID, p.State))
 	}
 
-	// SD-A7 tiered-DoD gate (mirrors handlePlanApprove exactly — see the
-	// isAgentID field doc for the fail-closed default when unwired).
-	requiresDoD := true
-	if t.isAgentID != nil {
-		requiresDoD = t.isAgentID(p.CreatedBy)
-	}
+	// SD-A7 tiered-DoD gate, mirroring handlePlanApprove (see
+	// plan.AuthoredByAgent).
+	requiresDoD := p.AuthoredByAgent(t.isAgentID)
 	if requiresDoD && len(p.DoD) == 0 {
 		return ErrorResult(
 			"execute_plan failed: plan requires a Definition of Done before execution (agent-authored plan)")

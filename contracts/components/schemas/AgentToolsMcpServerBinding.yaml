@@ -1,0 +1,24 @@
+title: AgentToolsMcpServerBinding
+description: >
+  A single MCP server binding in an agent's tool configuration: which server
+  is assigned and which of its tools are exposed. Shared by AgentToolsCfg
+  (config.mcp.servers) and AgentToolsUpdateRequest (mcp.servers).
+type: object
+required:
+  - id
+properties:
+  id:
+    type: string
+    description: MCP server identifier as registered in config.json.
+    example: "my-mcp-server"
+  tools:
+    type: array
+    items:
+      type: string
+    description: >
+      Specific tool names to expose from this server. When absent,
+      all tools from this assigned server are available; explicit [] grants none.
+      Null is rejected. An unassigned server grants no execution access.
+    example:
+      - "search"
+      - "fetch"

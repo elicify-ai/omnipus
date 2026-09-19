@@ -148,3 +148,36 @@ func TestDelegationDenyChecker_PlantedRecordCannotWidenAnExistingEdge(t *testing
 		t.Fatalf("the legitimate depth-1 worker→ray edge must still authorize a depth-0 call; got %+v", denial)
 	}
 }
+
+func TestDelegationDenyChecker_GeneralPurposeSelfEdgesRequireIdentityModeAndDepth(t *testing.T) {
+	seedWorkspaceGraph(t, testWS, true, []graphEdge{
+		edge("jim", "jim", []string{"direct"}, intPtr(1)),
+		edge("worker", "worker", []string{"task"}, intPtr(2)),
+	})
+
+	jimDirect := buildDelegationDenyCheckerForDelegate("jim", config.AgentDefaults{}, config.DelegationModeBackground)
+	if denial := jimDirect(ctxWS(testWS, 0), "jim"); denial != nil {
+		t.Fatalf("jim explicit self edge denied: %+v", denial)
+	}
+	if denial := jimDirect(ctxWS(testWS, 1), "jim"); denial == nil {
+		t.Fatal("jim self edge ignored its depth cap")
+	}
+	jimTask := buildDelegationDenyCheckerForDelegate("jim", config.AgentDefaults{}, config.DelegationModeTask)
+	if denial := jimTask(ctxWS(testWS, 0), "jim"); denial == nil {
+		t.Fatal("jim self edge ignored its mode restriction")
+	}
+
+	workerTask := buildDelegationDenyCheckerForDelegate("worker", config.AgentDefaults{}, config.DelegationModeTask)
+	if denial := workerTask(ctxWS(testWS, 1), "worker"); denial != nil {
+		t.Fatalf("worker explicit task self edge denied: %+v", denial)
+	}
+	workerDirect := buildDelegationDenyCheckerForDelegate("worker", config.AgentDefaults{}, config.DelegationModeAwait)
+	if denial := workerDirect(ctxWS(testWS, 0), "worker"); denial == nil {
+		t.Fatal("worker self edge allowed an unlisted mode")
+	}
+
+	mia := buildDelegationDenyCheckerForDelegate("mia", config.AgentDefaults{}, config.DelegationModeAwait)
+	if denial := mia(ctxWS(testWS, 0), "mia"); denial == nil {
+		t.Fatal("non-general identity self-delegation was allowed")
+	}
+}

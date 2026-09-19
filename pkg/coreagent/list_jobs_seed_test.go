@@ -27,33 +27,22 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 )
 
-// TestListJobs_ResolvedPostureAcrossSeededRoster is the load-bearing assertion
-// for the ROSTER VISIBILITY rule: it pins the resolved list_jobs policy for
-// EVERY seeded agent, as a complete partition rather than a spot check, so a
-// new agent added to coreAgentSeed cannot land with an unconsidered posture.
-//
-// The allow set is exactly the four base agents. They are the only durable,
-// user-addressable identities and the only agents that can be a plan's
-// OwnerAgentID (IsChatTarget) — for anyone else, list_jobs' agent-identity
-// scope means "every concurrent run of this role in the installation" rather
-// than "this run's work".
+// TestListJobs_ResolvedPostureAcrossSeededRoster pins the ADR-090 default:
+// Jim resolves list_jobs Allow; every other seeded role resolves Deny.
+// Ordinary role seeds are sparse differences from the global ceiling.
 func TestListJobs_ResolvedPostureAcrossSeededRoster(t *testing.T) {
 	cfg := config.DefaultConfig()
 	require.True(t, coreagent.SeedConfig(cfg))
 
 	want := map[coreagent.CoreAgentID]string{
-		// The four base agents: chat targets, therefore possible plan owners.
-		coreagent.IDMia: "allow",
-		coreagent.IDJim: "allow",
-		coreagent.IDAva: "allow",
-		coreagent.IDRay: "allow",
-		// The delegation-only tier. The Worker's map is SPARSE, so its "deny"
-		// is only reachable because coreAgentSeed names list_jobs explicitly —
-		// an omission there would inherit the "allow" ceiling. The other three
-		// are fully-enumerated (denyAllThenOverride), so their deny is stamped.
+		// Chat targets have independent role-specific list_jobs policies.
+		coreagent.IDMia:   "deny",
+		coreagent.IDJim:   "allow",
+		coreagent.IDAva:   "deny",
+		coreagent.IDAdmin: "deny",
+		// Delegation-only roles explicitly deny list_jobs in their sparse seeds.
 		coreagent.IDWorker:     "deny",
 		coreagent.IDPlanner:    "deny",
-		coreagent.IDExplorer:   "deny",
 		coreagent.IDResearcher: "deny",
 		// System Agents. The Judge is a verifier with no background work of its
 		// own; PlanSupervisor is roster-blind by design (D-04).

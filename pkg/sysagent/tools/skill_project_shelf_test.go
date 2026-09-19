@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/elicify-ai/omnipus/pkg/skills"
 	systools "github.com/elicify-ai/omnipus/pkg/sysagent/tools"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
@@ -102,7 +103,8 @@ func TestSkillEditTool_ProjectShelf_WritesIntoMount(t *testing.T) {
 	edit := systools.NewSkillEditTool(deps)
 	ctx := tools.WithWorkspaceID(context.Background(), wsID)
 	newContent := "---\nname: db-migrate\ndescription: EDITED-BY-R3-TEST, long enough to pass validation.\n---\n\nEdited body.\n"
-	res := edit.Execute(ctx, map[string]any{"name": "db-migrate", "content": newContent})
+	revision, _ := skills.NewSkillWriter(filepath.Join(mountRoot, ".claude", "skills")).SkillRevision("db-migrate")
+	res := edit.Execute(ctx, map[string]any{"name": "db-migrate", "content": newContent, "revision": revision})
 
 	m := parseSuccess(t, res.ForLLM)
 	if m["shelf"] != "project" {
@@ -158,9 +160,11 @@ func TestSkillEditTool_ProjectShelf_UnmountedSlugFallsThroughToRegistry(t *testi
 	}
 
 	edit := systools.NewSkillEditTool(deps)
+	revision, _ := deps.SkillWriter.SkillRevision("unrelated-skill")
 	res := edit.Execute(ctx, map[string]any{
-		"name":    "unrelated-skill",
-		"content": "---\nname: unrelated-skill\ndescription: Edited via the registry path, long enough to pass.\n---\n\nEdited.\n",
+		"name":     "unrelated-skill",
+		"content":  "---\nname: unrelated-skill\ndescription: Edited via the registry path, long enough to pass.\n---\n\nEdited.\n",
+		"revision": revision,
 	})
 	m := parseSuccess(t, res.ForLLM)
 	if _, hasShelf := m["shelf"]; hasShelf {
@@ -195,7 +199,8 @@ func TestSkillRemoveTool_ProjectShelf_DeletesMountFile(t *testing.T) {
 
 	remove := systools.NewSkillRemoveTool(deps)
 	ctx := tools.WithWorkspaceID(context.Background(), wsID)
-	res := remove.Execute(ctx, map[string]any{"name": "db-migrate", "confirm": true})
+	revision, _ := skills.NewSkillWriter(filepath.Join(mountRoot, ".claude", "skills")).SkillRevision("db-migrate")
+	res := remove.Execute(ctx, map[string]any{"name": "db-migrate", "confirm": true, "revision": revision})
 
 	m := parseSuccess(t, res.ForLLM)
 	if m["shelf"] != "project" {

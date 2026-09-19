@@ -70,7 +70,7 @@ func TestAgents_PlanSupervisorUndisable(t *testing.T) {
 			require.NoError(t, readErr, "the PlanSupervisor must be persisted before the PUT")
 
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPut,
+			r := revisionedAgentMutationRequest(t, api,
 				"/api/v1/agents/"+string(coreagent.IDPlanSupervisor), strings.NewReader(body))
 			r.Header.Set("Content-Type", "application/json")
 			api.updateAgent(w, r, string(coreagent.IDPlanSupervisor))
@@ -106,8 +106,8 @@ func TestAgents_SystemAgentUndisable_CoversEverySeededSystemAgent(t *testing.T) 
 		t.Run(string(sa.ID), func(t *testing.T) {
 			api := newSeededJudgeAPI(t)
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+string(sa.ID),
-				strings.NewReader(`{"enabled":false}`))
+			r := revisionedAgentMutationRequest(t, api,
+				"/api/v1/agents/"+string(sa.ID), strings.NewReader(`{"enabled":false}`))
 			r.Header.Set("Content-Type", "application/json")
 			api.updateAgent(w, r, string(sa.ID))
 

@@ -160,7 +160,7 @@ func TestAgentUpdate_WhitespaceName_Rejected(t *testing.T) {
 	created := decodeAgentResp(t, cw.Body.Bytes())
 
 	uw := httptest.NewRecorder()
-	ur := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+	ur := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 		strings.NewReader(`{"name":"   "}`))
 	ur.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(uw, ur)

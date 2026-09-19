@@ -678,6 +678,7 @@ test.describe('UAT Group C — the live browser panel', () => {
     await navigateLiveBrowser(page, `${HEROKU}/`);
     await expect(addressBar(page)).toHaveValue(/herokuapp\.com\/?$/, { timeout: 45_000 });
     await page.waitForTimeout(2_000);
+    await waitForViewportInput(page);
 
     const media = await video.evaluate((el) => {
       const v = el as HTMLVideoElement;
@@ -820,6 +821,7 @@ test.describe('UAT Group C — the live browser panel', () => {
     // already done so without clicking anything in the picture.
     await navigateLiveBrowser(page, `${HEROKU}/login`);
     await expect(addressBar(page)).toHaveValue(/\/login$/, { timeout: 45_000 });
+    await waitForViewportInput(page);
     const afterOmniboxLabel = (await chip.innerText()).trim();
 
     // Hand it back with the advertised escape (Esc — named on screen, which is

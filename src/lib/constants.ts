@@ -1,13 +1,19 @@
 // Shared constants and utilities used across multiple components
 
-/** Generate a unique ID. Uses crypto.randomUUID() in secure contexts (HTTPS),
- *  falls back to a timestamp+random string for HTTP contexts. */
+/** Generate an unguessable ID from a CSPRNG: crypto.randomUUID() where
+ *  available, else crypto.getRandomValues() (128-bit — it is not gated to
+ *  secure contexts, so it covers plain HTTP). These ids serve as unguessable
+ *  storage/URL keys for uploads, so there is deliberately no predictable
+ *  fallback: with no secure source, generateId() throws. */
 export function generateId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
   }
-  // Fallback for non-secure contexts (HTTP)
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = crypto.getRandomValues(new Uint8Array(16))
+    return `${Date.now().toString(36)}-${Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')}`
+  }
+  throw new Error('generateId: no secure random source available (crypto.randomUUID / crypto.getRandomValues)')
 }
 
 /** Avatar color palette for agent creation and display. */

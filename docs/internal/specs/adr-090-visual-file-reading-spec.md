@@ -1,7 +1,7 @@
 # Feature Specification: Visual file reading
 
 **Created:** 2026-09-17
-**Status:** Grill-spec and independent Claude Code Opus reviews passed after corrections; implementation and runtime validation pending.
+**Status:** Grill-spec and independent Claude Code Opus reviews passed after corrections; implementation delivered with runtime verification recorded in the [implementation and verification ledger](adr-090-implementation-status.md) and the [generic environment setup verification record](adr-090-environment-setup-verification.md); release review pending; native Windows explicitly deferred; Linux Office rendering pending UAT.
 **Authority:** [ADR-090](/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/worktrees/release-20260917/docs/internal/architecture/ADR-090-built-in-agents-skills-and-visual-reading.md), decision D6 and §§6.6, 10, 13. Companion: [agent configuration and skills specification](/Users/danielpiatkowski/Documents/Agent-Workspace/omnipus/worktrees/release-20260917/docs/internal/specs/adr-090-agent-configuration-and-skills-spec.md).
 **Requirements confirmation:** Founder explicitly selected image support in the existing readers on 2026-09-17. No separate image tool, browser prerequisite, or new automatic model switching.
 
@@ -496,3 +496,7 @@ These are **post-implementation external evaluation briefs**, excluded from the 
 ## Clarifications
 
 2026-09-17: visual inspection belongs in the existing readers; generic image-return plumbing alone is insufficient. Inspection is private, provider adapters must carry real images, and unsupported models use existing guidance. The Opus review corrected the Judge boundary to its existing reviewed workspace, simplified inspection retention to live-turn memory plus durable text markers, added the optional Bedrock adapter and explicit CLI transport limitations, and limited image acquisition to regular files. These corrections add no permissions, per-task file scope, revocation registry, persistent inspection archive or separate viewing tool.
+
+## Dependency-setup amendment — 2026-09-18
+
+[Environment setup](adr-090-environment-setup-spec.md) owns missing Python/library/LibreOffice/rasterizer/font installation. Setup is workspace-local by default with application-managed shared runtimes, approved through the setup tool's existing Ask permission, independent of agent role and delegation graph. The read tools do not install dependencies or ask for installation approval themselves. Repeat BDD-13 document visual acceptance and BDD-14 failure coverage with a custom native agent having assigned document skills, permitted tools and no delegation edges. Installation and sandbox rendering success do not complete visual verification: actual images must reach a supported vision model, defects must be corrected and new renders inspected. Missing vision support retains the existing explicit limitation; no automatic model switch. Office-to-PDF-to-image processing is private agent inspection, not a library preview feature.

@@ -49,21 +49,25 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/#/agents');
 });
 
-// (a) roster test was updated for the v0.1.0-foundation 4-base roster (Mia/Jim/Ava/Ray).
-// Max was retired per the .preview-doc/ concept (see pkg/coreagent/core.go: "IDMax is
-// intentionally absent: Max was retired from the 4-base roster"). The 4-base roster
-// replaces the legacy 5-core roster (Mia/Jim/Ava/Ray/Max).
-test('(a) roster loads with 4 base agents (Mia/Jim/Ava/Ray) plus any custom', async ({
+// (a) roster test updated for the ADR-090 locked core roster: Mia, Jim, Ava and
+// Admin are the four built-in colleagues (Ray was retired). The Sub-agent workers
+// (Planner/Researcher/General Purpose) and System agents (Judge, Plan
+// Supervisor) render in their own sections, so the body-level assertions below
+// stay scoped to the four core names.
+test('(a) roster loads with 4 base agents (Mia/Jim/Ava/Admin) plus any custom', async ({
   page,
 }) => {
   await expect(page).toHaveURL(/agents/, { timeout: 10_000 });
 
   // Verify each base agent name appears in the page body
-  for (const name of ['Mia', 'Jim', 'Ava', 'Ray']) {
+  for (const name of ['Mia', 'Jim', 'Ava', 'Admin']) {
     await expect(page.locator('body')).toContainText(new RegExp(name, 'i'), { timeout: 15_000 });
   }
 
-  // Max is intentionally NOT seeded — see .preview-doc/ for the retirement rationale.
+  // Retired names are intentionally NOT seeded. Ray was retired with the
+  // ADR-090 roster change (Max was retired earlier, per the .preview-doc/
+  // concept); neither may reappear.
+  await expect(page.locator('body')).not.toContainText(/^Ray$/m);
   await expect(page.locator('body')).not.toContainText(/^Max$/m);
 
   // The built-in roster opens expanded by default in a fresh env (O2 adaptive
@@ -303,8 +307,19 @@ test('(g) session with deleted agent shows read-only transcript and "Agent remov
   const sessionId = session.id ?? session.session?.id;
   expect(sessionId, 'session response had no id').toBeTruthy();
 
-  // Step 3: Delete the agent
-  const deleteResp = await page.request.delete(`/api/v1/agents/${agentId}`, { headers: authHeaders });
+  // Step 3: Delete the agent. ADR-090: DELETE is a revision-checked mutation —
+  // `revision` is a REQUIRED query parameter (contracts/openapi.yaml deleteAgent,
+  // ConfigurationRevision), so read it off the agent first; a revision-less
+  // DELETE is rejected 400 "invalid revision".
+  const agentBeforeDelete = await page.request.get(`/api/v1/agents/${agentId}`, { headers: authHeaders });
+  expect(
+    agentBeforeDelete.ok(),
+    `fetch agent before delete failed: ${agentBeforeDelete.status()} ${await agentBeforeDelete.text()}`,
+  ).toBeTruthy();
+  const { revision } = (await agentBeforeDelete.json()) as { revision: string };
+  const deleteResp = await page.request.delete(`/api/v1/agents/${agentId}?revision=${encodeURIComponent(revision)}`, {
+    headers: authHeaders,
+  });
   expect(deleteResp.ok(), `delete agent failed: ${deleteResp.status()} ${await deleteResp.text()}`).toBeTruthy();
 
   // Step 4: Navigate to the session
@@ -330,13 +345,16 @@ test('(g) session with deleted agent shows read-only transcript and "Agent remov
 });
 
 test.afterAll(async ({ request }) => {
-  // Clean up any PennyTest agents created by test (c) across all runs
+  // Clean up any PennyTest agents created by test (c) across all runs.
+  // ADR-090: each DELETE must carry the agent's current revision as a query
+  // precondition — the list response already carries it per agent.
   const resp = await request.get('/api/v1/agents');
   if (!resp.ok()) return;
-  const data = (await resp.json()) as { id: string; name: string }[];
+  const data = (await resp.json()) as { id: string; name: string; revision?: string }[];
   for (const agent of data) {
     if (/^PennyTest/i.test(agent.name)) {
-      await request.delete(`/api/v1/agents/${agent.id}`);
+      if (!agent.revision) continue;
+      await request.delete(`/api/v1/agents/${agent.id}?revision=${encodeURIComponent(agent.revision)}`);
     }
   }
 });

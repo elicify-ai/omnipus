@@ -354,6 +354,9 @@ func BuildFallbackPolicyCfg(cfg *config.Config, agentID string) (polCfg *ToolPol
 		if ac.Type != "" {
 			agentType = string(ac.Type)
 		}
+		if ac.Tools != nil {
+			polCfg.MCPServers = CloneMCPBindings(ac.Tools.MCP.Servers)
+		}
 		if ac.Tools != nil && len(ac.Tools.Builtin.Policies) > 0 {
 			// ac.Tools.Builtin.Policies is already map[string]config.ToolPolicy
 			// (typed at the config layer) — a direct copy, no string round-trip.
@@ -378,6 +381,9 @@ func BuildFallbackPolicyCfg(cfg *config.Config, agentID string) (polCfg *ToolPol
 // is enforced structurally by config.ValidateToolPolicyCoverage at boot and at
 // every agent create/update/tools-write.
 type ToolPolicyCfg struct {
+	// MCPServers is an immutable snapshot of assigned connectors; no entries grants none.
+	MCPServers []config.AgentMCPServerBinding
+
 	Policies map[string]config.ToolPolicy // per-tool overrides (supports trailing ".*" wildcards)
 
 	// GlobalPolicies holds the operator-level global tool policy overrides.
@@ -423,6 +429,10 @@ func FilterToolsByPolicy(allTools []Tool, agentType string, cfg *ToolPolicyCfg) 
 	policyMap := make(map[string]string)
 
 	for _, t := range allTools {
+		if !mcpAssignmentAllows(t, cfg) {
+			activeToolMetricsRecorder.IncFilterTotal(agentType, "deny")
+			continue
+		}
 		// Resolve the FULL per-tool verdict through the single shared primitive
 		// (scope gate → global×agent strictest-wins). Routing every per-tool
 		// decision through effectiveToolPolicyWith is what makes the loop's
@@ -464,6 +474,8 @@ func newMCPToolAdapter(serverName string, toolDef *mcp.Tool, caller MCPCaller) *
 		params:     params,
 	}
 }
+
+func (a *mcpToolAdapter) MCPSource() (string, string) { return a.serverName, a.toolDef.Name }
 
 func (a *mcpToolAdapter) Name() string               { return a.toolDef.Name }
 func (a *mcpToolAdapter) Description() string        { return a.toolDef.Description }

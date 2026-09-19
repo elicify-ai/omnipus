@@ -74,7 +74,7 @@ func TestGoalClaimDefaultsToAllow_EveryAgentCreationPath(t *testing.T) {
 			assert.Equalf(t, "allow", resolveGoalClaim(ac.Tools.Builtin.Policies),
 				"seeded agent %q must resolve goal_claim allow by default", ac.ID)
 		}
-		assert.Equal(t, 8, nonSystem, "Mia, Jim, Ava, Ray, Worker, Planner, Explorer, Researcher")
+		assert.Equal(t, 7, nonSystem, "Mia, Jim, Ava, Admin, Worker, Planner, Researcher (ADR-090 §2.0)")
 	})
 
 	t.Run("NewCustomAgentToolsCfg", func(t *testing.T) {

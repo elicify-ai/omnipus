@@ -55,6 +55,7 @@ function agent(id: string, over: Partial<Agent> = {}): Agent {
 }
 
 const WORKSPACE: Workspace = {
+  revision: '2'.repeat(64),
   id: 'ws-1',
   name: 'My Workspace',
   status: 'active',
@@ -80,6 +81,7 @@ const AGENTS: Agent[] = [
 ]
 
 const DELEGATION: WorkspaceDelegation = {
+  revision: '2'.repeat(64),
   workspace_id: 'ws-1',
   team: ['mia', 'jim', 'planner'],
   edges: [{ from_agent: 'jim', to_agent: 'planner', modes: ['direct', 'task'], depth: 2 }],
@@ -199,7 +201,7 @@ beforeEach(() => {
   vi.mocked(updateWorkspaceDelegation).mockResolvedValue(DELEGATION)
 })
 
-describe('WorkspaceTeamTab', () => {
+describe('WorkspaceTeamTab — rendering and the add-agent picker', () => {
   it('renders a node for each team agent from the fetched delegation graph', async () => {
     renderTab()
     await waitFor(() => {
@@ -254,6 +256,7 @@ describe('WorkspaceTeamTab', () => {
 
   it('shows the empty state (no members) and an add-agent CTA', async () => {
     vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      revision: '2'.repeat(64),
       workspace_id: 'ws-1',
       team: [],
       edges: [],
@@ -266,6 +269,74 @@ describe('WorkspaceTeamTab', () => {
     renderTab()
     await waitFor(() => {
       expect(screen.getByText('Team & delegation')).toBeInTheDocument()
+    })
+  })
+})
+
+describe('WorkspaceTeamTab — revision and autosave semantics', () => {
+
+  it('adopts a clean refetch revision for the next edit without saving the refresh itself', async () => {
+    vi.mocked(useActiveWorkspace).mockReturnValue({ ...WORKSPACE, core_team: ['mia', 'jim', 'planner'] })
+    const refreshedRevision = '3'.repeat(64)
+    const { client } = renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-node-jim')).toBeInTheDocument())
+
+    act(() => {
+      client.setQueryData<WorkspaceDelegation>(
+        workspacesQueryKeys.delegation('ws-1'),
+        { ...DELEGATION, revision: refreshedRevision },
+      )
+    })
+
+    // A revision-only server refresh is not a local graph change and must not
+    // cause an echo PUT through the autosave debounce.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 700))
+    })
+    expect(updateWorkspace).not.toHaveBeenCalled()
+    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
+
+    expect(capturedGraphProps).not.toBeNull()
+    act(() => {
+      capturedGraphProps!.onSetDepth('jim', 'planner', 1)
+    })
+
+    await waitFor(() => expect(updateWorkspaceDelegation).toHaveBeenCalled(), {
+      timeout: 3000,
+    })
+    expect(updateWorkspaceDelegation).toHaveBeenCalledWith('ws-1', {
+      revision: refreshedRevision,
+      edges: expect.arrayContaining([
+        expect.objectContaining({ from_agent: 'jim', to_agent: 'planner', depth: 1 }),
+      ]),
+    })
+  })
+
+  it('keeps the reviewed revision when a refetch arrives over a dirty draft', async () => {
+    const { client } = renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
+    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+
+    // The draft was formed from revision 2. A background revision 3 snapshot
+    // must neither replace the draft nor silently retag it as revision 3.
+    act(() => {
+      client.setQueryData<WorkspaceDelegation>(
+        workspacesQueryKeys.delegation('ws-1'),
+        { ...DELEGATION, revision: '3'.repeat(64) },
+      )
+    })
+
+    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
+    expect(updateWorkspace).toHaveBeenCalledWith('ws-1', {
+      revision: '2'.repeat(64),
+      core_team: ['mia', 'jim', 'planner', 'ray'],
+      delegation: DELEGATION.edges,
     })
   })
 
@@ -304,7 +375,9 @@ describe('WorkspaceTeamTab', () => {
     await waitFor(
       () => {
         expect(updateWorkspace).toHaveBeenCalledWith('ws-1', {
+          revision: '2'.repeat(64),
           core_team: ['mia', 'jim', 'planner', 'ray'],
+          delegation: DELEGATION.edges,
         })
       },
       { timeout: 3000 },
@@ -318,7 +391,45 @@ describe('WorkspaceTeamTab', () => {
     })
   })
 
-  it('P0 regression: add a non-core agent, draw a delegation edge to it, save — persists core_team via updateWorkspace BEFORE the edges PUT', async () => {
+  it('partial-failure ordering: updateWorkspace rejects — updateWorkspaceDelegation is never called and status becomes error', async () => {
+    // If the core_team write itself fails, the edges PUT must NEVER fire —
+    // otherwise the backend could accept an edge referencing a member that
+    // was never actually persisted to core_team.
+    vi.mocked(updateWorkspace).mockRejectedValue(new Error('core_team PUT failed'))
+
+    renderTab()
+    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
+
+    fireEvent.click(screen.getByTestId('team-add-agent'))
+    await waitFor(() =>
+      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
+    )
+    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
+    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
+
+    expect(capturedGraphProps).not.toBeNull()
+    act(() => {
+      capturedGraphProps!.onConnect('jim', 'ray')
+    })
+
+    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
+
+    // The error surfaces via AutoSaveIndicator.
+    await waitFor(
+      () => {
+        expect(screen.getByText('core_team PUT failed')).toBeInTheDocument()
+      },
+      { timeout: 3000 },
+    )
+
+    // The edges PUT must never have been reached.
+    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
+  })
+})
+
+describe('WorkspaceTeamTab — atomic candidate save ordering (P0/F3)', () => {
+
+  it('saves a candidate team and graph atomically through one workspace update', async () => {
     // Traces to the P0 bug: the Team tab's auto-save PUT the edge set only,
     // never core_team, so the backend's delegation PUT (which validates every
     // edge endpoint against the STORED core_team) rejected the very edge the
@@ -329,6 +440,7 @@ describe('WorkspaceTeamTab', () => {
       core_team: ['mia', 'jim', 'planner', 'ray'],
     })
     vi.mocked(updateWorkspaceDelegation).mockResolvedValue({
+      revision: '2'.repeat(64),
       workspace_id: 'ws-1',
       team: ['mia', 'jim', 'planner', 'ray'],
       edges: [
@@ -366,29 +478,18 @@ describe('WorkspaceTeamTab', () => {
       capturedGraphProps!.onConnect('jim', 'ray')
     })
 
-    // The debounced auto-save fires; both PUTs must land.
+    // The debounced auto-save fires through the atomic workspace route.
     await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
-    await waitFor(() => expect(updateWorkspaceDelegation).toHaveBeenCalled(), { timeout: 3000 })
+    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
 
     // core_team is written with the full current membership, including ray.
     expect(updateWorkspace).toHaveBeenCalledWith('ws-1', {
+      revision: '2'.repeat(64),
       core_team: ['mia', 'jim', 'planner', 'ray'],
-    })
-    // The edges PUT carries the new jim->ray edge.
-    const edgesArg = vi.mocked(updateWorkspaceDelegation).mock.calls[0]?.[1]
-    expect(edgesArg).toEqual(
-      expect.arrayContaining([
+      delegation: expect.arrayContaining([
         expect.objectContaining({ from_agent: 'jim', to_agent: 'ray' }),
       ]),
-    )
-
-    // Ordering is load-bearing: core_team must commit before the edges PUT —
-    // otherwise the backend 400s ("not a member of the workspace team").
-    const coreTeamCallOrder = vi.mocked(updateWorkspace).mock.invocationCallOrder[0]
-    const edgesCallOrder = vi.mocked(updateWorkspaceDelegation).mock.invocationCallOrder[0]
-    expect(coreTeamCallOrder).toBeDefined()
-    expect(edgesCallOrder).toBeDefined()
-    expect(coreTeamCallOrder as number).toBeLessThan(edgesCallOrder as number)
+    })
 
     // Both PUTs succeeded — the unsaved-members warning must clear for ray
     // (it now has an incident edge, so isMemberPersisted is true regardless).
@@ -446,81 +547,7 @@ describe('WorkspaceTeamTab', () => {
     })
   })
 
-  it('partial-failure ordering: updateWorkspace rejects — updateWorkspaceDelegation is never called and status becomes error', async () => {
-    // If the core_team write itself fails, the edges PUT must NEVER fire —
-    // otherwise the backend could accept an edge referencing a member that
-    // was never actually persisted to core_team.
-    vi.mocked(updateWorkspace).mockRejectedValue(new Error('core_team PUT failed'))
-
-    renderTab()
-    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
-
-    fireEvent.click(screen.getByTestId('team-add-agent'))
-    await waitFor(() =>
-      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
-    )
-    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
-    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
-
-    expect(capturedGraphProps).not.toBeNull()
-    act(() => {
-      capturedGraphProps!.onConnect('jim', 'ray')
-    })
-
-    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
-
-    // The error surfaces via AutoSaveIndicator.
-    await waitFor(
-      () => {
-        expect(screen.getByText('core_team PUT failed')).toBeInTheDocument()
-      },
-      { timeout: 3000 },
-    )
-
-    // The edges PUT must never have been reached.
-    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
-  })
-
-  it('F4 inverse partial-failure: updateWorkspace resolves but updateWorkspaceDelegation rejects — surfaces a distinguishing message', async () => {
-    vi.mocked(updateWorkspace).mockResolvedValue({
-      ...WORKSPACE,
-      core_team: ['mia', 'jim', 'planner', 'ray'],
-    })
-    vi.mocked(updateWorkspaceDelegation).mockRejectedValue(new Error('edges PUT failed'))
-
-    renderTab()
-    await waitFor(() => expect(screen.getByTestId('team-add-agent')).toBeInTheDocument())
-
-    fireEvent.click(screen.getByTestId('team-add-agent'))
-    await waitFor(() =>
-      expect(screen.getByTestId('team-add-agent-option-ray')).toBeInTheDocument(),
-    )
-    fireEvent.click(screen.getByTestId('team-add-agent-option-ray'))
-    await waitFor(() => expect(screen.getByTestId('team-node-ray')).toBeInTheDocument())
-
-    expect(capturedGraphProps).not.toBeNull()
-    act(() => {
-      capturedGraphProps!.onConnect('jim', 'ray')
-    })
-
-    await waitFor(() => expect(updateWorkspace).toHaveBeenCalled(), { timeout: 3000 })
-    await waitFor(() => expect(updateWorkspaceDelegation).toHaveBeenCalled(), { timeout: 3000 })
-
-    // F4: the surfaced message must distinguish "team membership saved, but
-    // delegation edges failed" from a generic/undifferentiated save failure.
-    await waitFor(
-      () => {
-        expect(
-          screen.getByText(
-            'Team membership saved, but delegation edges failed: edges PUT failed',
-          ),
-        ).toBeInTheDocument()
-      },
-      { timeout: 3000 },
-    )
-  })
-
-  it('F3: the page-hide beacon fires the core_team PUT before the edges PUT for a newly added member + edge', async () => {
+  it('page-hide flushes one revision-aware candidate workspace update', async () => {
     // Regression for F3: the emergency-flush beacon (visibilitychange/
     // beforeunload/pagehide) must honor the same core_team-before-edges
     // ordering as the debounced saveFn — otherwise a member added and
@@ -562,10 +589,9 @@ describe('WorkspaceTeamTab', () => {
     expect(updateWorkspace).not.toHaveBeenCalled()
     expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
 
-    // The beacon's two ordered keepalive PUTs must land — core_team first.
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1))
 
-    const [coreTeamCall, edgesCall] = fetchSpy.mock.calls
+    const [coreTeamCall] = fetchSpy.mock.calls
     expect(coreTeamCall[0]).toBe('/api/v1/workspaces/ws-1')
     expect(coreTeamCall[1]).toMatchObject({
       method: 'PUT',
@@ -579,29 +605,19 @@ describe('WorkspaceTeamTab', () => {
     const coreTeamHeaders = coreTeamCall[1]?.headers as Record<string, string>
     expect(coreTeamHeaders['X-CSRF-Token']).toBe(CSRF_TOKEN)
     expect(JSON.parse(coreTeamCall[1]?.body as string)).toEqual({
+      revision: '2'.repeat(64),
       core_team: ['mia', 'jim', 'planner', 'ray'],
-    })
-
-    expect(edgesCall[0]).toBe('/api/v1/workspaces/ws-1/delegation')
-    expect(edgesCall[1]).toMatchObject({
-      method: 'PUT',
-      keepalive: true,
-      credentials: 'include',
-    })
-    const edgesHeaders = edgesCall[1]?.headers as Record<string, string>
-    expect(edgesHeaders['X-CSRF-Token']).toBe(CSRF_TOKEN)
-    const edgesBody = JSON.parse(edgesCall[1]?.body as string) as {
-      edges: Array<{ from_agent: string; to_agent: string }>
-    }
-    expect(edgesBody.edges).toEqual(
-      expect.arrayContaining([
+      delegation: expect.arrayContaining([
         expect.objectContaining({ from_agent: 'jim', to_agent: 'ray' }),
       ]),
-    )
+    })
 
     restoreCsrfCookie()
     fetchSpy.mockRestore()
   })
+})
+
+describe('WorkspaceTeamTab — node interactions', () => {
 
   it('passes the workspaceId to openEditAgentSlideOver when a node edit button is clicked (FR-018 / A5)', async () => {
     // Traces to: FR-018 / A5 — Team tab wires handleOpenAgent to call
@@ -653,6 +669,7 @@ describe('WorkspaceTeamTab', () => {
   })
 })
 
+
 // ── Implicit Judge row (operator-reported: "Judge invisible in workspace
 // Teams") ─────────────────────────────────────────────────────────────────
 //
@@ -677,6 +694,7 @@ describe('WorkspaceTeamTab — implicit Judge row (ADR-049 D3)', () => {
 
   it('a workspace with ZERO real members still shows the Judge row', async () => {
     vi.mocked(fetchWorkspaceDelegation).mockResolvedValue({
+      revision: '2'.repeat(64),
       workspace_id: 'ws-1',
       team: [],
       edges: [],
@@ -698,12 +716,13 @@ describe('WorkspaceTeamTab — implicit Judge row (ADR-049 D3)', () => {
     expect(screen.queryByTestId('team-add-agent-option-judge')).toBeNull()
   })
 
-  it('saving the team (adding a real member + drawing an edge) never includes the Judge in either PUT payload', async () => {
+  it('saving the team never includes the Judge in the atomic candidate payload', async () => {
     vi.mocked(updateWorkspace).mockResolvedValue({
       ...WORKSPACE,
       core_team: ['mia', 'jim', 'planner', 'ray'],
     })
     vi.mocked(updateWorkspaceDelegation).mockResolvedValue({
+      revision: '2'.repeat(64),
       workspace_id: 'ws-1',
       team: ['mia', 'jim', 'planner', 'ray'],
       edges: [
@@ -735,8 +754,8 @@ describe('WorkspaceTeamTab — implicit Judge row (ADR-049 D3)', () => {
     const coreTeamArg = vi.mocked(updateWorkspace).mock.calls[0]?.[1] as { core_team?: string[] }
     expect(coreTeamArg?.core_team).not.toContain('judge')
 
-    await waitFor(() => expect(updateWorkspaceDelegation).toHaveBeenCalled(), { timeout: 3000 })
-    const edgesArg = vi.mocked(updateWorkspaceDelegation).mock.calls[0]?.[1] as Array<{
+    expect(updateWorkspaceDelegation).not.toHaveBeenCalled()
+    const edgesArg = (vi.mocked(updateWorkspace).mock.calls[0]?.[1]?.delegation ?? []) as Array<{
       from_agent: string
       to_agent: string
     }>

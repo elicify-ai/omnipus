@@ -40,6 +40,7 @@ import (
 	"strings"
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
+	"github.com/elicify-ai/omnipus/pkg/documentruntime"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/utils"
 )
@@ -130,7 +131,13 @@ type SkillTool struct {
 	// which has direct access to per-outcome shelf/slug detail this tool
 	// does not resolve itself; this field exists so the search path — owned
 	// entirely inside this file — can audit itself the same way (S67).
-	auditLogger *audit.Logger
+	auditLogger     *audit.Logger
+	documentRuntime *documentruntime.Layout
+}
+
+func (t *SkillTool) SetDocumentRuntime(layout documentruntime.Layout) {
+	layoutCopy := layout
+	t.documentRuntime = &layoutCopy
 }
 
 // SetAuditLogger satisfies auditLoggerAware (registry.go) so the tool
@@ -228,7 +235,11 @@ func (t *SkillTool) execLoad(ctx context.Context, name string) *ToolResult {
 	outcome := t.load(ctx, name)
 	switch outcome.Status {
 	case SkillLoadLoaded:
-		return SilentResult(outcome.Content)
+		content := outcome.Content
+		if t.documentRuntime != nil && documentruntime.IsDocumentSkill(name) {
+			content = appendDocumentRuntimeGuidance(ctx, content, name, *t.documentRuntime)
+		}
+		return SilentResult(content)
 	case SkillLoadDenied:
 		return skillPermissionDeniedResult(name)
 	default: // SkillLoadNotFound

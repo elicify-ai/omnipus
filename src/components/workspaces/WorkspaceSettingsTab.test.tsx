@@ -73,8 +73,25 @@ import * as api from '@/lib/api'
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
 const WORKSPACE_ID = 'ws-test-001'
+const INSTRUCTIONS_REVISION = 'a'.repeat(64)
+const INSTRUCTIONS_REVISION_NEXT = 'b'.repeat(64)
+
+function fetchedInstructions(content: string, revision = INSTRUCTIONS_REVISION) {
+  return { content, revision } as Awaited<ReturnType<typeof api.fetchWorkspaceInstructions>>
+}
+
+function savedInstructions(revision = INSTRUCTIONS_REVISION) {
+  return {
+    revision,
+    persistence_status: 'complete' as const,
+    activation_status: 'active' as const,
+    changed_fields: ['instructions'],
+  }
+}
+
 
 const mockWorkspace: Workspace = {
+  revision: '0'.repeat(64),
   id: WORKSPACE_ID,
   name: 'Test Workspace',
   description: 'A test workspace',
@@ -120,8 +137,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   mockNavigate.mockClear()
   // Default: resolves successfully so each test that needs an error can override.
-  vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue({ content: '' })
-  vi.mocked(api.updateWorkspaceInstructions).mockResolvedValue({ content: '' })
+  vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue(fetchedInstructions(''))
+  vi.mocked(api.updateWorkspaceInstructions).mockResolvedValue(savedInstructions())
 })
 
 afterEach(() => {
@@ -135,7 +152,7 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
    * value must equal "hello world".
    */
   it('hydrates the textarea from fetchWorkspaceInstructions', async () => {
-    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue({ content: 'hello world' })
+    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue(fetchedInstructions('hello world'))
 
     renderTab()
 
@@ -159,7 +176,7 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
    * field), so the advance below and its comment were updated to match.
    */
   it('calls updateWorkspaceInstructions after typing into the textarea', async () => {
-    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue({ content: 'initial text' })
+    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue(fetchedInstructions('initial text'))
 
     renderTab()
 
@@ -199,7 +216,7 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
     vi.useRealTimers()
 
     await waitFor(() => {
-      expect(api.updateWorkspaceInstructions).toHaveBeenCalledWith(WORKSPACE_ID, 'updated text')
+      expect(api.updateWorkspaceInstructions).toHaveBeenCalledWith(WORKSPACE_ID, 'updated text', INSTRUCTIONS_REVISION)
     })
   })
 
@@ -249,8 +266,8 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
    * with an empty string — clearing is intentional.
    */
   it('calls updateWorkspaceInstructions with empty string when textarea is cleared', async () => {
-    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue({ content: 'some instructions' })
-    vi.mocked(api.updateWorkspaceInstructions).mockResolvedValue({ content: '' })
+    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue(fetchedInstructions('some instructions'))
+    vi.mocked(api.updateWorkspaceInstructions).mockResolvedValue(savedInstructions())
 
     renderTab()
 
@@ -278,7 +295,7 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
     vi.useRealTimers()
 
     await waitFor(() => {
-      expect(api.updateWorkspaceInstructions).toHaveBeenCalledWith(WORKSPACE_ID, '')
+      expect(api.updateWorkspaceInstructions).toHaveBeenCalledWith(WORKSPACE_ID, '', INSTRUCTIONS_REVISION)
     })
   })
 })
@@ -295,7 +312,7 @@ describe('WorkspaceSettingsTab — Project Instructions section', () => {
 // straight back.
 describe('WorkspaceSettingsTab — D3: hydration must not trigger a spurious PUT', () => {
   it('loading non-empty instructions content never calls updateWorkspaceInstructions, even after the debounce window elapses (REVERT-PROOF: fails without the instructionsHydrated gate)', async () => {
-    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue({ content: 'hello world' })
+    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue(fetchedInstructions('hello world'))
 
     renderTab()
 
@@ -321,7 +338,7 @@ describe('WorkspaceSettingsTab — D3: hydration must not trigger a spurious PUT
     // become useAutoSave's "already saved" baseline the moment
     // `instructionsHydrated` flips true, and would never actually reach
     // the server.
-    let resolveFetch: (v: { content: string }) => void
+    let resolveFetch: (v: ReturnType<typeof fetchedInstructions>) => void
     vi.mocked(api.fetchWorkspaceInstructions).mockReturnValue(
       new Promise((resolve) => { resolveFetch = resolve }),
     )
@@ -331,7 +348,7 @@ describe('WorkspaceSettingsTab — D3: hydration must not trigger a spurious PUT
     const textarea = screen.getByRole('textbox', { name: /workspace \/ project instructions/i })
     expect(textarea).toBeDisabled()
 
-    resolveFetch!({ content: 'loaded content' })
+    resolveFetch!(fetchedInstructions('loaded content'))
 
     await waitFor(() => {
       expect(textarea).not.toBeDisabled()
@@ -354,7 +371,7 @@ describe('WorkspaceSettingsTab — D3: hydration must not trigger a spurious PUT
     const mockWorkspaceB: Workspace = { ...mockWorkspace, id: WORKSPACE_B_ID, name: 'Workspace B' }
 
     vi.mocked(api.fetchWorkspaceInstructions).mockImplementation((id: string) =>
-      Promise.resolve({ content: id === WORKSPACE_B_ID ? 'workspace B instructions' : 'hello world' }),
+      Promise.resolve(fetchedInstructions(id === WORKSPACE_B_ID ? 'workspace B instructions' : 'hello world')),
     )
 
     const client = makeClient()
@@ -511,17 +528,17 @@ describe('WorkspaceSettingsTab — instructions echo-race (autosave hydration mu
     // relative to the live draft), and the invalidate-refetch fired by
     // save #2 (server now genuinely has the newest text).
     vi.mocked(api.fetchWorkspaceInstructions).mockReset()
-      .mockResolvedValueOnce({ content: 'initial text' })
-      .mockResolvedValueOnce({ content: 'first edit' })
-      .mockResolvedValue({ content: 'first edit second edit' })
+      .mockResolvedValueOnce(fetchedInstructions('initial text', INSTRUCTIONS_REVISION))
+      .mockResolvedValueOnce(fetchedInstructions('first edit', INSTRUCTIONS_REVISION_NEXT))
+      .mockResolvedValue(fetchedInstructions('first edit second edit', 'c'.repeat(64)))
 
     // Both PUTs are manually controlled so the test can inspect the exact
     // moment save #1's stale echo lands WHILE save #2 is still queued/in
     // flight — the precise race window this fix closes.
-    let resolvePut1!: (v: { content: string }) => void
-    const putPromise1 = new Promise<{ content: string }>((r) => { resolvePut1 = r })
-    let resolvePut2!: (v: { content: string }) => void
-    const putPromise2 = new Promise<{ content: string }>((r) => { resolvePut2 = r })
+    let resolvePut1!: (v: ReturnType<typeof savedInstructions>) => void
+    const putPromise1 = new Promise<ReturnType<typeof savedInstructions>>((r) => { resolvePut1 = r })
+    let resolvePut2!: (v: ReturnType<typeof savedInstructions>) => void
+    const putPromise2 = new Promise<ReturnType<typeof savedInstructions>>((r) => { resolvePut2 = r })
     vi.mocked(api.updateWorkspaceInstructions).mockReset()
       .mockReturnValueOnce(putPromise1)
       .mockReturnValueOnce(putPromise2)
@@ -561,7 +578,7 @@ describe('WorkspaceSettingsTab — instructions echo-race (autosave hydration mu
     // immediately blocks on the still-unresolved `putPromise2`, giving a
     // clean checkpoint to inspect the draft mid-race.
     await act(async () => {
-      resolvePut1({ content: 'first edit' })
+      resolvePut1(savedInstructions(INSTRUCTIONS_REVISION_NEXT))
     })
 
     await waitFor(() => {
@@ -584,14 +601,14 @@ describe('WorkspaceSettingsTab — instructions echo-race (autosave hydration mu
     // own invalidate-refetch (mocked to return the now-genuinely-current
     // value) settles cleanly.
     await act(async () => {
-      resolvePut2({ content: 'first edit second edit' })
+      resolvePut2(savedInstructions('c'.repeat(64)))
     })
 
     await waitFor(() => {
       expect(api.fetchWorkspaceInstructions).toHaveBeenCalledTimes(3)
     })
-    expect(api.updateWorkspaceInstructions).toHaveBeenNthCalledWith(1, WORKSPACE_ID, 'first edit')
-    expect(api.updateWorkspaceInstructions).toHaveBeenNthCalledWith(2, WORKSPACE_ID, 'first edit second edit')
+    expect(api.updateWorkspaceInstructions).toHaveBeenNthCalledWith(1, WORKSPACE_ID, 'first edit', INSTRUCTIONS_REVISION)
+    expect(api.updateWorkspaceInstructions).toHaveBeenNthCalledWith(2, WORKSPACE_ID, 'first edit second edit', INSTRUCTIONS_REVISION_NEXT)
     expect(textarea).toHaveValue('first edit second edit')
   })
 })
@@ -784,7 +801,8 @@ describe('WorkspaceSettingsTab — no-op invalidation (item 6)', () => {
 // sends, as a `keepalive: true` fetch (so it can survive page teardown).
 describe('WorkspaceSettingsTab — instructions pagehide flush (item 4)', () => {
   it('keepalive-flushes the pending instructions edit on pagehide before the debounce fires', async () => {
-    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue({ content: 'initial text' })
+    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue(fetchedInstructions('initial text'))
+    vi.spyOn(api, 'getCsrfCookie').mockReturnValue('csrf-test-token')
     const fetchSpy = vi.spyOn(window, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }))
 
     renderTab()
@@ -807,9 +825,18 @@ describe('WorkspaceSettingsTab — instructions pagehide flush (item 4)', () => 
       expect.objectContaining({
         method: 'PUT',
         keepalive: true,
-        body: JSON.stringify({ content: 'unsaved edit' }),
+        credentials: 'include',
+        body: JSON.stringify({ content: 'unsaved edit', revision: INSTRUCTIONS_REVISION }),
       }),
     )
+    const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(init.headers).toEqual(
+      expect.objectContaining({
+        'Content-Type': 'application/json',
+        [api.CSRF_HEADER_NAME]: 'csrf-test-token',
+      }),
+    )
+    expect(init.headers).not.toHaveProperty('Authorization')
     // The debounced PUT itself must NOT have fired yet — the flush is a
     // best-effort SEPARATE keepalive fetch, not a substitute for the
     // normal save path.
@@ -867,5 +894,173 @@ describe('WorkspaceSettingsTab — Archive / Delete protection for default works
         screen.queryByText(/cannot be archived or deleted/i),
       ).not.toBeInTheDocument()
     })
+  })
+})
+
+describe('WorkspaceSettingsTab — instructions revision (FR-007)', () => {
+  it('does not adopt a newer GET revision while the draft is dirty', async () => {
+    const client = makeClient()
+    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue(fetchedInstructions('initial text'))
+    // A successful server save must be reflected by its subsequent readback.
+    // The request token assertion below still checks the reviewed old revision.
+    vi.mocked(api.updateWorkspaceInstructions).mockImplementationOnce(async (_id, content) => {
+      vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue(
+        fetchedInstructions(content, INSTRUCTIONS_REVISION_NEXT),
+      )
+      return savedInstructions(INSTRUCTIONS_REVISION_NEXT)
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <WorkspaceSettingsTab workspace={mockWorkspace} />
+      </QueryClientProvider>,
+    )
+    const textarea = await screen.findByRole('textbox', { name: /workspace \/ project instructions/i })
+    await waitFor(() => expect(textarea).toHaveValue('initial text'))
+
+    vi.useFakeTimers()
+    fireEvent.change(textarea, { target: { value: 'local edit' } })
+    client.setQueryData(
+      api.workspacesQueryKeys.instructions(WORKSPACE_ID),
+      fetchedInstructions('other tab', INSTRUCTIONS_REVISION_NEXT),
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    vi.useRealTimers()
+
+    await waitFor(() => {
+      expect(api.updateWorkspaceInstructions).toHaveBeenCalledTimes(1)
+    })
+    expect(api.updateWorkspaceInstructions).toHaveBeenCalledWith(WORKSPACE_ID, 'local edit', INSTRUCTIONS_REVISION)
+    expect(api.updateWorkspaceInstructions).not.toHaveBeenCalledWith(
+      WORKSPACE_ID,
+      expect.anything(),
+      INSTRUCTIONS_REVISION_NEXT,
+    )
+    expect(textarea).toHaveValue('local edit')
+  })
+
+  it('a 409 conflict does not retry with a newer GET revision', async () => {
+    const { ApiError } = await import('@/lib/api-error')
+    const client = makeClient()
+    vi.mocked(api.fetchWorkspaceInstructions).mockResolvedValue(fetchedInstructions('initial text'))
+    vi.mocked(api.updateWorkspaceInstructions).mockRejectedValue(new ApiError(409, 'revision conflict'))
+    render(
+      <QueryClientProvider client={client}>
+        <WorkspaceSettingsTab workspace={mockWorkspace} />
+      </QueryClientProvider>,
+    )
+    const textarea = await screen.findByRole('textbox', { name: /workspace \/ project instructions/i })
+    await waitFor(() => expect(textarea).toHaveValue('initial text'))
+
+    vi.useFakeTimers()
+    fireEvent.change(textarea, { target: { value: 'stale draft' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    vi.useRealTimers()
+
+    await waitFor(() => {
+      expect(api.updateWorkspaceInstructions).toHaveBeenCalledTimes(1)
+    })
+    expect(api.updateWorkspaceInstructions).toHaveBeenCalledWith(WORKSPACE_ID, 'stale draft', INSTRUCTIONS_REVISION)
+
+    client.setQueryData(
+      api.workspacesQueryKeys.instructions(WORKSPACE_ID),
+      fetchedInstructions('newer on server', INSTRUCTIONS_REVISION_NEXT),
+    )
+    vi.useFakeTimers()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    vi.useRealTimers()
+    expect(api.updateWorkspaceInstructions).toHaveBeenCalledTimes(1)
+    expect(api.updateWorkspaceInstructions).not.toHaveBeenCalledWith(
+      WORKSPACE_ID,
+      expect.anything(),
+      INSTRUCTIONS_REVISION_NEXT,
+    )
+    expect(textarea).toHaveValue('stale draft')
+  })
+
+  it('after a successful save the next PUT uses the returned revision', async () => {
+    vi.mocked(api.fetchWorkspaceInstructions)
+      .mockResolvedValueOnce(fetchedInstructions('initial text'))
+      .mockResolvedValue(fetchedInstructions('first', INSTRUCTIONS_REVISION_NEXT))
+    vi.mocked(api.updateWorkspaceInstructions)
+      .mockResolvedValueOnce(savedInstructions(INSTRUCTIONS_REVISION_NEXT))
+      .mockResolvedValue(savedInstructions('c'.repeat(64)))
+
+    renderTab()
+    const textarea = await screen.findByRole('textbox', { name: /workspace \/ project instructions/i })
+    await waitFor(() => expect(textarea).toHaveValue('initial text'))
+
+    vi.useFakeTimers()
+    fireEvent.change(textarea, { target: { value: 'first' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    vi.useRealTimers()
+    await waitFor(() => {
+      expect(api.updateWorkspaceInstructions).toHaveBeenNthCalledWith(
+        1,
+        WORKSPACE_ID,
+        'first',
+        INSTRUCTIONS_REVISION,
+      )
+    })
+
+    vi.useFakeTimers()
+    fireEvent.change(textarea, { target: { value: 'second' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    vi.useRealTimers()
+    await waitFor(() => {
+      expect(api.updateWorkspaceInstructions).toHaveBeenNthCalledWith(
+        2,
+        WORKSPACE_ID,
+        'second',
+        INSTRUCTIONS_REVISION_NEXT,
+      )
+    })
+  })
+
+  it('a successful save does not fire another PUT from the revision acknowledgement alone', async () => {
+    vi.mocked(api.fetchWorkspaceInstructions)
+      .mockResolvedValueOnce(fetchedInstructions('initial text'))
+      .mockResolvedValue(fetchedInstructions('first', INSTRUCTIONS_REVISION_NEXT))
+    vi.mocked(api.updateWorkspaceInstructions).mockResolvedValue(
+      savedInstructions(INSTRUCTIONS_REVISION_NEXT),
+    )
+
+    renderTab()
+    const textarea = await screen.findByRole('textbox', { name: /workspace \/ project instructions/i })
+    await waitFor(() => expect(textarea).toHaveValue('initial text'))
+
+    vi.useFakeTimers()
+    fireEvent.change(textarea, { target: { value: 'first' } })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    vi.useRealTimers()
+    await waitFor(() => {
+      expect(api.updateWorkspaceInstructions).toHaveBeenCalledTimes(1)
+    })
+    await waitFor(() => {
+      expect(api.fetchWorkspaceInstructions).toHaveBeenCalledTimes(2)
+    })
+
+    vi.useFakeTimers()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1600)
+    })
+    vi.useRealTimers()
+    expect(api.updateWorkspaceInstructions).toHaveBeenCalledTimes(1)
+    expect(api.updateWorkspaceInstructions).toHaveBeenCalledWith(
+      WORKSPACE_ID,
+      'first',
+      INSTRUCTIONS_REVISION,
+    )
   })
 })

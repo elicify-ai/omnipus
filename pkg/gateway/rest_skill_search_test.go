@@ -8,6 +8,8 @@ package gateway
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 
 	"github.com/elicify-ai/omnipus/pkg/skills"
 )
@@ -43,12 +45,26 @@ func (f *fakeSkillRegistry) GetSkillMeta(_ context.Context, _ string) (*skills.S
 	return nil, errFakeSkillRegistryGetSkillMetaUnused
 }
 
-func (f *fakeSkillRegistry) DownloadAndInstall(_ context.Context, _, _, _ string) (*skills.InstallResult, error) {
+func (f *fakeSkillRegistry) DownloadAndInstall(_ context.Context, slug, _, targetDir string) (*skills.InstallResult, error) {
 	if f.installErr != nil {
 		return nil, f.installErr
 	}
 	if f.installRes != nil {
+		if err := os.MkdirAll(targetDir, 0o755); err != nil {
+			return nil, err
+		}
+		content := "---\nname: " + slug + "\ndescription: Use this installed test skill when requested.\n---\n\nBody.\n"
+		if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+			return nil, err
+		}
 		return f.installRes, nil
+	}
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return nil, err
+	}
+	content := "---\nname: " + slug + "\ndescription: Use this installed test skill when requested.\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		return nil, err
 	}
 	return &skills.InstallResult{}, nil
 }

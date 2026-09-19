@@ -46,6 +46,7 @@ describe('fetchWorkspaceDelegation', () => {
     // Then GET /api/v1/workspaces/{id}/delegation is requested (no method override),
     // And the workspace_id, edges, and team are returned.
     const payload = {
+      revision: '0'.repeat(64),
       workspace_id: 'ws-1',
       team: ['mia', 'jim', 'planner'],
       edges: [
@@ -76,7 +77,7 @@ describe('fetchWorkspaceDelegation', () => {
 
   it('encodes the workspace id in the URL', async () => {
     fetchSpy.mockResolvedValueOnce(
-      makeJsonResponse({ workspace_id: 'ws weird/id', edges: [], default_depth: 3 }),
+      makeJsonResponse({ revision: '0'.repeat(64), workspace_id: 'ws weird/id', edges: [], default_depth: 3 }),
     )
     const { fetchWorkspaceDelegation } = await import('./api')
     await fetchWorkspaceDelegation('ws weird/id')
@@ -113,6 +114,7 @@ describe('updateWorkspaceDelegation', () => {
       { from_agent: 'jim', to_agent: 'explorer', modes: ['direct'], depth: 2 },
     ]
     const resp = {
+      revision: 'b'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['delegation'],
       workspace_id: 'ws-2',
       team: ['jim', 'explorer'],
       edges: [{ from_agent: 'jim', to_agent: 'explorer', modes: ['direct'], depth: 2 }],
@@ -121,7 +123,7 @@ describe('updateWorkspaceDelegation', () => {
     fetchSpy.mockResolvedValueOnce(makeJsonResponse(resp))
 
     const { updateWorkspaceDelegation } = await import('./api')
-    const result = await updateWorkspaceDelegation('ws-2', [...edges])
+    const result = await updateWorkspaceDelegation('ws-2', { revision: 'a'.repeat(64), edges })
 
     expect(fetchSpy).toHaveBeenCalledOnce()
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
@@ -132,6 +134,7 @@ describe('updateWorkspaceDelegation', () => {
     const body = JSON.parse((init as RequestInit).body as string)
     expect(Array.isArray(body)).toBe(false)
     expect(Array.isArray(body.edges)).toBe(true)
+    expect(body.revision).toBe('a'.repeat(64))
     expect(body.edges).toHaveLength(1)
     expect(body.edges[0].from_agent).toBe('jim')
     expect(body.edges[0].to_agent).toBe('explorer')
@@ -144,10 +147,10 @@ describe('updateWorkspaceDelegation', () => {
 
   it('sends { edges: [] } to clear all delegation', async () => {
     fetchSpy.mockResolvedValueOnce(
-      makeJsonResponse({ workspace_id: 'ws-3', team: ['mia'], edges: [], default_depth: 3 }),
+      makeJsonResponse({ revision: 'b'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['delegation'], workspace_id: 'ws-3', team: ['mia'], edges: [], default_depth: 3 }),
     )
     const { updateWorkspaceDelegation } = await import('./api')
-    await updateWorkspaceDelegation('ws-3', [])
+    await updateWorkspaceDelegation('ws-3', { revision: 'a'.repeat(64), edges: [] })
     const [, init] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const body = JSON.parse((init as RequestInit).body as string)
     expect(body.edges).toEqual([])
@@ -156,18 +159,18 @@ describe('updateWorkspaceDelegation', () => {
   it('differentiation: two workspaces hit different URLs with different bodies', async () => {
     fetchSpy
       .mockResolvedValueOnce(
-        makeJsonResponse({ workspace_id: 'ws-a', edges: [], default_depth: 3 }),
+        makeJsonResponse({ revision: 'b'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['delegation'], workspace_id: 'ws-a', edges: [], default_depth: 3 }),
       )
       .mockResolvedValueOnce(
-        makeJsonResponse({ workspace_id: 'ws-b', edges: [], default_depth: 3 }),
+        makeJsonResponse({ revision: 'c'.repeat(64), persistence_status: 'complete', activation_status: 'active', changed_fields: ['delegation'], workspace_id: 'ws-b', edges: [], default_depth: 3 }),
       )
     const { updateWorkspaceDelegation } = await import('./api')
-    await updateWorkspaceDelegation('ws-a', [
+    await updateWorkspaceDelegation('ws-a', { revision: 'a'.repeat(64), edges: [
       { from_agent: 'mia', to_agent: 'jim', modes: ['direct'] },
-    ])
-    await updateWorkspaceDelegation('ws-b', [
+    ] })
+    await updateWorkspaceDelegation('ws-b', { revision: 'b'.repeat(64), edges: [
       { from_agent: 'jim', to_agent: 'ray', modes: ['task'] },
-    ])
+    ] })
     const [url1, init1] = fetchSpy.mock.calls[0] as [string, RequestInit]
     const [url2, init2] = fetchSpy.mock.calls[1] as [string, RequestInit]
     expect(url1).toContain('/workspaces/ws-a/delegation')
@@ -189,9 +192,9 @@ describe('updateWorkspaceDelegation', () => {
     const { updateWorkspaceDelegation, isApiError, ApiError } = await import('./api')
     let thrown: unknown
     try {
-      await updateWorkspaceDelegation('ws-x', [
+      await updateWorkspaceDelegation('ws-x', { revision: 'a'.repeat(64), edges: [
         { from_agent: 'mia', to_agent: 'mia', modes: ['direct'] },
-      ])
+      ] })
     } catch (err) {
       thrown = err
     }

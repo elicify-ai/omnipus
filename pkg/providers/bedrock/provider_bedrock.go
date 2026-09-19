@@ -240,14 +240,35 @@ func convertMessages(messages []Message) ([]types.Message, []types.SystemContent
 
 	// Helper to create a tool result content block
 	makeToolResultBlock := func(msg Message) types.ContentBlock {
+		content := []types.ToolResultContentBlock{&types.ToolResultContentBlockMemberText{Value: msg.Content}}
+		rejected := map[string]int{}
+		for _, mediaURL := range msg.Media {
+			if imageBlock, reason := bedrockImageBlock(mediaURL); reason == "" {
+				content = append(content, &types.ToolResultContentBlockMemberImage{Value: imageBlock})
+			} else {
+				rejected[reason]++
+			}
+		}
+		if len(rejected) > 0 {
+			parts := make([]string, 0, 4)
+			for _, reason := range []string{"unsupported image format", "malformed image data", "image exceeds 10 MiB", "unsupported media type"} {
+				if count := rejected[reason]; count > 0 {
+					parts = append(parts, fmt.Sprintf("%s (%d)", reason, count))
+				}
+			}
+			warning := "[Tool-result media omitted for Bedrock: " + strings.Join(parts, ", ") + ". Re-read the attachment in a supported image format.]"
+			content = append(content, &types.ToolResultContentBlockMemberText{Value: warning})
+			logger.WarnCF("bedrock", "tool-result media omitted", map[string]any{
+				"unsupported_image_format_count": rejected["unsupported image format"],
+				"malformed_image_data_count":     rejected["malformed image data"],
+				"image_oversize_count":           rejected["image exceeds 10 MiB"],
+				"unsupported_media_type_count":   rejected["unsupported media type"],
+			})
+		}
 		return &types.ContentBlockMemberToolResult{
 			Value: types.ToolResultBlock{
 				ToolUseId: aws.String(msg.ToolCallID),
-				Content: []types.ToolResultContentBlock{
-					&types.ToolResultContentBlockMemberText{
-						Value: msg.Content,
-					},
-				},
+				Content:   content,
 			},
 		}
 	}
@@ -310,6 +331,42 @@ func convertMessages(messages []Message) ([]types.Message, []types.SystemContent
 	}
 
 	return bedrockMessages, systemPrompts
+}
+
+func bedrockImageBlock(mediaURL string) (types.ImageBlock, string) {
+	if !strings.HasPrefix(mediaURL, "data:image/") {
+		return types.ImageBlock{}, "unsupported media type"
+	}
+	parts := strings.SplitN(mediaURL, ",", 2)
+	if len(parts) != 2 || !strings.Contains(parts[0], ";base64") {
+		return types.ImageBlock{}, "malformed image data"
+	}
+	mediaType := strings.TrimSuffix(strings.TrimPrefix(parts[0], "data:image/"), ";base64")
+	var format types.ImageFormat
+	switch mediaType {
+	case "jpeg", "jpg":
+		format = types.ImageFormatJpeg
+	case "png":
+		format = types.ImageFormatPng
+	case "gif":
+		format = types.ImageFormatGif
+	case "webp":
+		format = types.ImageFormatWebp
+	default:
+		return types.ImageBlock{}, "unsupported image format"
+	}
+	const maxImageSize = 10 * 1024 * 1024
+	if base64.StdEncoding.DecodedLen(len(parts[1])) > maxImageSize {
+		return types.ImageBlock{}, "image exceeds 10 MiB"
+	}
+	data, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return types.ImageBlock{}, "malformed image data"
+	}
+	if len(data) > maxImageSize {
+		return types.ImageBlock{}, "image exceeds 10 MiB"
+	}
+	return types.ImageBlock{Format: format, Source: &types.ImageSourceMemberBytes{Value: data}}, ""
 }
 
 // buildUserContent builds Bedrock content blocks for a user message.

@@ -5,6 +5,7 @@ import { z } from 'zod'
 import {
   Agent as AgentSchema,
   AgentSession as AgentSessionSchema,
+  ConfigurationMutationState as ConfigurationMutationStateSchema,
   // Spec-4 — external-CLI runner connection test (contract-first #8):
   RunnerTestResponse as RunnerTestResponseSchema,
 } from '@/lib/api/generated/schemas'
@@ -14,9 +15,11 @@ import type {
   Agent,
   AgentUpdateRequest,
   AgentCreateRequest,
+  ConfigurationMutationState,
   RunnerTestResponse,
 } from '@/lib/api/generated/openapi-types'
 import { request } from './http'
+import { requestConfiguration } from './configuration'
 
 // ── Agents ────────────────────────────────────────────────────────────────────
 
@@ -118,20 +121,21 @@ export function fetchAgent(id: string): Promise<Agent> {
 }
 
 export function createAgent(data: AgentCreateRequest): Promise<Agent> {
-  return request<Agent>('/agents', { method: 'POST', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
+  return requestConfiguration<Agent>('/agents', { method: 'POST', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
 }
 
 export function updateAgent(id: string, data: AgentUpdateRequest): Promise<Agent> {
-  return request<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
+  return requestConfiguration<Agent>(`/agents/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }, AgentSchema as ZodType<Agent>)
 }
 
-// Wave 5 / spec §6.1 BDD #15: Edit slide-over footer Delete button.
-// DELETE /api/v1/agents/{id} — handler rejects locked (core/system) agents
-// with 403 + code `agent_locked`. Custom (non-locked) agents return 204 No
-// Content; 404 for unknown ids. The wrapper uses `request<void>` (no
-// response body) so the mutation consumer only sees success/failure.
-export function deleteAgent(id: string): Promise<void> {
-  return request<void>(`/agents/${encodeURIComponent(id)}`, { method: 'DELETE' })
+// Delete uses the revision the user reviewed. A stale revision conflicts;
+// built-in identities remain protected from deletion.
+export function deleteAgent(id: string, revision: string): Promise<ConfigurationMutationState> {
+  return requestConfiguration<ConfigurationMutationState>(
+    `/agents/${encodeURIComponent(id)}?${new URLSearchParams({ revision })}`,
+    { method: 'DELETE' },
+    ConfigurationMutationStateSchema as ZodType<ConfigurationMutationState>,
+  )
 }
 
 // Spec-4 FR-4.2 — external-CLI runner connection test.

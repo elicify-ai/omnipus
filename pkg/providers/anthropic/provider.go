@@ -2,6 +2,7 @@ package anthropicprovider
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -415,7 +416,7 @@ func buildParams(
 		case "user":
 			if msg.ToolCallID != "" {
 				anthropicMessages = append(anthropicMessages,
-					anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)),
+					anthropic.NewUserMessage(anthropicToolResult(msg)),
 				)
 			} else {
 				anthropicMessages = append(anthropicMessages,
@@ -472,7 +473,7 @@ func buildParams(
 			}
 		case "tool":
 			anthropicMessages = append(anthropicMessages,
-				anthropic.NewUserMessage(anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)),
+				anthropic.NewUserMessage(anthropicToolResult(msg)),
 			)
 		}
 	}
@@ -513,6 +514,58 @@ func buildParams(
 	}
 
 	return params, nil
+}
+
+func anthropicToolResult(msg Message) anthropic.ContentBlockParamUnion {
+	if len(msg.Media) == 0 {
+		return anthropic.NewToolResultBlock(msg.ToolCallID, msg.Content, false)
+	}
+	content := []anthropic.ToolResultBlockParamContentUnion{{OfText: &anthropic.TextBlockParam{Text: msg.Content}}}
+	unsupported, unsupportedFormat, malformed := 0, 0, 0
+	for _, dataURL := range msg.Media {
+		if !strings.HasPrefix(dataURL, "data:image/") {
+			unsupported++
+			continue
+		}
+		payload := strings.TrimPrefix(dataURL, "data:")
+		meta, data, ok := strings.Cut(payload, ",")
+		if !ok || !strings.HasSuffix(meta, ";base64") || data == "" {
+			malformed++
+			continue
+		}
+		mediaType, _, _ := strings.Cut(meta, ";")
+		switch mediaType {
+		case "image/jpeg", "image/png", "image/gif", "image/webp":
+		default:
+			unsupportedFormat++
+			continue
+		}
+		if _, err := base64.StdEncoding.DecodeString(data); err != nil {
+			malformed++
+			continue
+		}
+		content = append(content, anthropic.ToolResultBlockParamContentUnion{OfImage: &anthropic.ImageBlockParam{Source: anthropic.ImageBlockParamSourceUnion{OfBase64: &anthropic.Base64ImageSourceParam{Data: data, MediaType: anthropic.Base64ImageSourceMediaType(mediaType)}}}})
+	}
+	if unsupported > 0 || unsupportedFormat > 0 || malformed > 0 {
+		parts := make([]string, 0, 3)
+		if unsupported > 0 {
+			parts = append(parts, fmt.Sprintf("unsupported media type (%d)", unsupported))
+		}
+		if malformed > 0 {
+			parts = append(parts, fmt.Sprintf("malformed image data (%d)", malformed))
+		}
+		if unsupportedFormat > 0 {
+			parts = append(parts, fmt.Sprintf("unsupported image format (%d)", unsupportedFormat))
+		}
+		warning := "[Tool-result media omitted for Anthropic: " + strings.Join(parts, ", ") + ". Re-read the attachment in a supported image format.]"
+		content = append(content, anthropic.ToolResultBlockParamContentUnion{OfText: &anthropic.TextBlockParam{Text: warning}})
+		logger.WarnCF("anthropic", "tool-result media omitted", map[string]any{
+			"unsupported_media_type_count":   unsupported,
+			"unsupported_image_format_count": unsupportedFormat,
+			"malformed_image_data_count":     malformed,
+		})
+	}
+	return anthropic.ContentBlockParamUnion{OfToolResult: &anthropic.ToolResultBlockParam{ToolUseID: msg.ToolCallID, Content: content}}
 }
 
 // applyThinkingConfig sets thinking parameters based on the level value.

@@ -150,6 +150,10 @@ func (t *MCPTool) Description() string {
 // and are available to all agent types (subject to per-agent MCP server binding config).
 func (t *MCPTool) Scope() ToolScope { return ScopeGeneral }
 
+func (t *MCPTool) Category() ToolCategory { return CategoryMCP }
+
+func (t *MCPTool) MCPSource() (string, string) { return t.serverName, t.tool.Name }
+
 // Parameters returns the tool parameters schema
 func (t *MCPTool) Parameters() map[string]any {
 	// The InputSchema is already a JSON Schema object

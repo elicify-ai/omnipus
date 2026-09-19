@@ -17,6 +17,7 @@ import (
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/bus"
 	"github.com/elicify-ai/omnipus/pkg/config"
+	"github.com/elicify-ai/omnipus/pkg/media"
 	"github.com/elicify-ai/omnipus/pkg/onboarding"
 	"github.com/elicify-ai/omnipus/pkg/skills"
 	"github.com/elicify-ai/omnipus/pkg/task"
@@ -150,9 +151,11 @@ func TestDeleteSkillRemovesFromGlobalSkillsDir(t *testing.T) {
 	require.NoError(t, os.MkdirAll(skillDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(skillDir, "SKILL.md"),
 		[]byte("---\nname: docker-compose\ndescription: manage compose stacks\n---\n"), 0o644))
+	revision, err := skills.NewSkillWriter(filepath.Join(tmpDir, "skills")).SkillRevision(slug)
+	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/"+slug, nil)
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/"+slug+"?revision="+revision, nil)
 	r.URL.Path = "/api/v1/skills/" + slug
 	api.HandleSkills(w, r)
 
@@ -201,7 +204,7 @@ func TestDeleteSkillNotFoundForUnknownSkill(t *testing.T) {
 	defer cleanup()
 
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/does-not-exist", nil)
+	r := httptest.NewRequest(http.MethodDelete, "/api/v1/skills/does-not-exist?revision=reviewed-absent", nil)
 	r.URL.Path = "/api/v1/skills/does-not-exist"
 	api.HandleSkills(w, r)
 
@@ -310,7 +313,8 @@ func TestSearchSkillsConflictWhenMarketplaceDisabled(t *testing.T) {
 func TestInstallSkillConflictWhenMarketplaceDisabled(t *testing.T) {
 	api := newTestRestAPIWithClawHub(t, false, "")
 
-	body, err := json.Marshal(gen.SkillInstallRequest{Slug: "web-search"})
+	slug := "web-search"
+	body, err := json.Marshal(gen.SkillInstallRequest{Slug: &slug})
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
@@ -493,6 +497,105 @@ func TestInstallSkillSuccess(t *testing.T) {
 	assert.True(t, skill.Verified)
 }
 
+func TestInstallSkillReturnsSavedStateWhenBackupCleanupIsIncomplete(t *testing.T) {
+	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
+	api.skillRegistry = &fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0"}}
+	original := publishRESTSkill
+	publishRESTSkill = func(string, string, string, string) (skills.PublishOutcome, error) {
+		return skills.PublishOutcome{Revision: strings.Repeat("a", 64), PersistenceStatus: "complete", ActivationStatus: "active", ChangedFields: []string{"installed"}, Warning: "previous package cleanup is incomplete"}, nil
+	}
+	t.Cleanup(func() { publishRESTSkill = original })
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/skills/install", strings.NewReader(`{"slug":"cool-skill"}`))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var skill gen.Skill
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &skill))
+	require.Equal(t, strings.Repeat("a", 64), skill.Revision)
+	require.NotNil(t, skill.PersistenceStatus)
+	require.Equal(t, gen.SkillPersistenceStatusComplete, *skill.PersistenceStatus)
+	require.NotNil(t, skill.ActivationStatus)
+	require.Equal(t, gen.SkillActivationStatusActive, *skill.ActivationStatus)
+	require.NotNil(t, skill.Message)
+	require.Contains(t, *skill.Message, "cleanup is incomplete")
+}
+
+func TestInstallSkillReturnsPartialStateWhenPreviousPackageCannotBeRestored(t *testing.T) {
+	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
+	api.skillRegistry = &fakeSkillRegistry{installRes: &skills.InstallResult{Version: "2.0.0"}}
+	original := publishRESTSkill
+	publishRESTSkill = func(string, string, string, string) (skills.PublishOutcome, error) {
+		return skills.PublishOutcome{
+			PersistenceStatus: skills.PersistencePartial,
+			ActivationStatus:  skills.ActivationNotAttempted,
+			ChangedFields:     []string{"installed"},
+			ErrorStage:        skills.PublicationErrorStageRestorePrevious,
+			Message:           "replacement publication failed and the previous package could not be restored; no live package is available",
+		}, errors.New("private publish cause; private restore cause")
+	}
+	t.Cleanup(func() { publishRESTSkill = original })
+
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/skills/install", strings.NewReader(`{"slug":"cool-skill"}`))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code, "body: %s", w.Body.String())
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &payload))
+	require.Equal(t, map[string]any{
+		"activation_status":  "not_attempted",
+		"changed_fields":     []any{"installed"},
+		"error_stage":        "restore_previous",
+		"message":            "replacement publication failed and the previous package could not be restored; no live package is available",
+		"persistence_status": "partial",
+	}, payload)
+	require.NotContains(t, w.Body.String(), "private publish cause")
+	require.NotContains(t, w.Body.String(), "private restore cause")
+}
+
+func TestInstallSkillFromAuthorizedMarkdownUpload(t *testing.T) {
+	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
+	uploadDir := filepath.Join(api.homePath, "uploads", "owner-session")
+	require.NoError(t, os.MkdirAll(uploadDir, 0o755))
+	uploadPath := filepath.Join(uploadDir, "local-skill.md")
+	content := "---\nname: local-skill\ndescription: Use when a local uploaded skill is requested.\n---\n\nBody.\n"
+	require.NoError(t, os.WriteFile(uploadPath, []byte(content), 0o644))
+	store := media.NewFileMediaStore()
+	api.mediaStore = store
+	ref, err := store.Store(uploadPath, media.MediaMeta{Filename: "local-skill.md", Source: "upload:webchat", CleanupPolicy: media.CleanupPolicyForgetOnly}, "upload:owner-session")
+	require.NoError(t, err)
+
+	body, err := json.Marshal(map[string]any{"upload_id": ref})
+	require.NoError(t, err)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/skills/install", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	var skill gen.Skill
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &skill))
+	require.Equal(t, "local-skill", skill.Id)
+	require.NotEmpty(t, skill.Revision)
+	got, err := os.ReadFile(filepath.Join(api.homePath, "skills", "local-skill", "SKILL.md"))
+	require.NoError(t, err)
+	require.Equal(t, content, string(got))
+}
+
+func TestInstallSkillRejectsPathInsteadOfOpaqueUploadRef(t *testing.T) {
+	api := newTestRestAPIWithSkillsDirs(t, t.TempDir())
+	body, err := json.Marshal(map[string]any{"upload_id": "uploads/session/skill.md"})
+	require.NoError(t, err)
+	r := httptest.NewRequest(http.MethodPost, "/api/v1/skills/install", bytes.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+	require.Equal(t, http.StatusServiceUnavailable, w.Code)
+}
+
 // TestListSkillsBuiltinEnriched verifies a seeded built-in skill is returned by
 // GET /api/v1/skills with a non-empty description, source=builtin, verified=true,
 // author=Omnipus, and the frontmatter version.
@@ -529,6 +632,26 @@ func TestListSkillsBuiltinEnriched(t *testing.T) {
 	assert.Equal(t, "Omnipus", *s.Author)
 
 	assert.Equal(t, "1.2.3", s.Version)
+}
+
+func TestListSkillsRevisionReadFailureReturnsVisibleErrorWithoutPlaceholder(t *testing.T) {
+	builtinDir := t.TempDir()
+	seedSkill(t, builtinDir, "daily-briefing",
+		"name: daily-briefing\ndescription: Summarize the day for the operator.",
+		"# daily-briefing\n")
+	api := newTestRestAPIWithSkillsDirs(t, builtinDir)
+	original := readListedSkillRevision
+	readListedSkillRevision = func(string, string) (string, error) { return "", errors.New("private disk detail") }
+	t.Cleanup(func() { readListedSkillRevision = original })
+
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/skills", nil)
+	w := httptest.NewRecorder()
+	api.HandleSkills(w, r)
+
+	require.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "could not read installed skill state")
+	assert.NotContains(t, w.Body.String(), "unavailable")
+	assert.NotContains(t, w.Body.String(), "private disk detail")
 }
 
 // TestListSkillsVersionDefaultsWhenAbsent verifies a builtin skill without a

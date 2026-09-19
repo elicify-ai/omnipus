@@ -234,6 +234,11 @@ func wireWorkingDirInjectors(al *AgentLoop, registry *AgentRegistry) {
 
 		id := agentID
 		agentInst.ContextBuilder.WithWorkingDirInjector(func(workspaceID string) string {
+			// Admin operates from its agent home, even if a workspace record
+			// claims membership. Keep context consistent with turn admission.
+			if coreagent.CoreAgentID(id) == coreagent.IDAdmin {
+				return ""
+			}
 			home := omnipusHome()
 			// FindForAgentPreferring — NOT FindForAgent — so that an agent
 			// belonging to more than one workspace's CoreTeam is told about

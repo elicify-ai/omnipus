@@ -45,7 +45,7 @@ func TestDeleteLockedCoreAgentRejected(t *testing.T) {
 	coreagent.SeedConfig(cfg)
 
 	// All 4 base core agent IDs (Spec-3): Max retired from the seeded base.
-	coreIDs := []string{"jim", "ava", "mia", "ray"}
+	coreIDs := []string{"mia", "jim", "ava", "admin"}
 
 	for _, id := range coreIDs {
 		t.Run(id, func(t *testing.T) {

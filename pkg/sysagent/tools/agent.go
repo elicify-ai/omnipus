@@ -16,6 +16,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
@@ -27,12 +28,6 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/tools"
 	workspacepkg "github.com/elicify-ai/omnipus/pkg/workspace"
 )
-
-// errAgentLocked is a sentinel wrapped by AgentUpdateTool's locked-core-agent
-// refusal so the caller can distinguish it (via errors.Is) from every other
-// agentstore.Update failure and report the dedicated AGENT_LOCKED error code
-// instead of the generic SAVE_FAILED — see that error branch's own comment.
-var errAgentLocked = errors.New("agent is a locked core agent")
 
 // slugRegexp matches characters that should be replaced in agent name → ID conversion.
 var slugRegexp = regexp.MustCompile(`[^a-z0-9]+`)
@@ -164,11 +159,7 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model (e.g. 'openrouter'). Pins model resolution to this provider instead of inferring one from the slug.",
 			},
-			"model_fallbacks": map[string]any{
-				"type":        "array",
-				"items":       map[string]any{"type": "string"},
-				"description": "Fallback model slugs tried in order if primary fails",
-			},
+			"fallback_models": fallbackModelsParameters(),
 			"heartbeat": map[string]any{
 				"type":        "string",
 				"description": "Proactive scheduling instructions (written to HEARTBEAT.md)",
@@ -177,6 +168,21 @@ func (t *AgentCreateTool) Parameters() map[string]any {
 				"type":        "integer",
 				"description": "Max tool calls per turn (0 = inherit the system default)",
 			},
+			"skills":              skillsParameters(false),
+			"mcp_servers":         mcpServersParameters(),
+			"tool_policy_changes": toolPolicyChangesParameters(),
+			"memory_enabled":      map[string]any{"type": "boolean"},
+			"default":             map[string]any{"type": "boolean"},
+			"voice": map[string]any{
+				"type":        "string",
+				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
+			},
+			"shell_policy": shellPolicyParameters(),
+			"context_window_override": map[string]any{
+				"type":        "integer",
+				"description": "Positive token override. JSON null clears the override.",
+			},
+			"model_params": modelParamsParameters(),
 		},
 		"required": []string{"name", "description", "soul", "model", "color", "icon"},
 	}
@@ -200,6 +206,7 @@ type agentCreateToolExecute struct {
 	newAgent        config.AgentConfig
 	finalID         string
 	joinedWorkspace bool
+	mutation        agentstore.MutationResult
 }
 
 func (t *AgentCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
@@ -284,6 +291,12 @@ func (ac *agentCreateToolExecute) validate() (*tools.ToolResult, bool) {
 		ac.execCLIPath, _ = ac.args["cli_path"].(string)
 	}
 
+	if err := rejectUnknownAgentFields(ac.args, agentCreateArgNames); err != nil {
+		return fieldErrorResult(err), true
+	}
+	if _, _, err := parseOptionalHeartbeat(ac.args); err != nil {
+		return fieldErrorResult(err), true
+	}
 	ac.id = toSlug(ac.name)
 	if err := validateID(ac.id); err != nil {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "")), true
@@ -328,12 +341,12 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 			},
 		}
 	}
-	// Optional: model fallbacks.
-	if fb, ok := ac.args["model_fallbacks"].([]any); ok && len(fb) > 0 {
-		for _, v := range fb {
-			if s, ok := v.(string); ok && s != "" {
-				ac.newAgent.Model.Fallbacks = append(ac.newAgent.Model.Fallbacks, s)
-			}
+	if _, retired := ac.args["model_fallbacks"]; retired {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "Use fallback_models with model/provider objects", "")), true
+	}
+	if raw, present := ac.args["fallback_models"]; present {
+		if err := applyFallbackModels(&ac.newAgent, raw); err != nil {
+			return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), "")), true
 		}
 	}
 	// Optional: explicit provider pin for the primary model (O3 two-field
@@ -371,6 +384,13 @@ func (ac *agentCreateToolExecute) prepareConfig() (*tools.ToolResult, bool) {
 	// coreagent.NewCustomAgentToolsCfg()) — so the two agent-creation
 	// paths cannot drift out of sync on this seed again.
 	ac.newAgent.Tools = coreagent.NewCustomAgentToolsCfg()
+	fields := mutationFieldNames(ac.args)
+	if err := agentmutation.ValidateFields(ac.newAgent, fields); err != nil {
+		return fieldErrorResult(err), true
+	}
+	if err := applyAgentToolArgs(&ac.newAgent, ac.args, knownToolPolicies(ac.t.deps), ac.t.deps.currentInventory()); err != nil {
+		return fieldErrorResult(err), true
+	}
 	return nil, false
 }
 
@@ -386,8 +406,15 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 			"Set OMNIPUS_HOME environment variable")), true
 	}
 
+	if _, present := ac.args["default"]; present {
+		if err := requireDefaultWriter(ac.t.deps); err != nil {
+			return fieldErrorResult(err), true
+		}
+	}
 	ac.finalID = ac.id
-	if err := agentstore.New(omnipusHome).Create(ac.id, &ac.newAgent); err != nil {
+	mutation, err := agentstore.New(omnipusHome).CreateState(ac.id, &ac.newAgent, ac.soul)
+	ac.mutation = mutation
+	if err != nil {
 		if errors.Is(err, entity.ErrAlreadyExists) {
 			return tools.ErrorResult(errorJSON(
 				"AGENT_ALREADY_EXISTS",
@@ -395,27 +422,37 @@ func (ac *agentCreateToolExecute) persistAndJoin() (*tools.ToolResult, bool) {
 				"Use update_agent to modify the existing agent or choose a different name",
 			)), true
 		}
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), "Check disk space and permissions")), true
+		return tools.ErrorResult(errorJSON("SAVE_FAILED", fmt.Sprintf("persistence=%s stage=%s revision=%s", mutation.PersistenceStatus, mutation.ErrorStage, mutation.Revision), "Read the agent state before retrying")), true
+	}
+
+	if raw, present := ac.args["default"]; present {
+		if want, ok := raw.(bool); ok {
+			if err := writeDefaultSingleton(ac.t.deps, ac.finalID, want); err != nil {
+				return defaultSingletonPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args)), true
+			}
+		}
 	}
 
 	// Create agent workspace and write personality files.
-	wsPath := omnipusHome + "/agents/" + ac.finalID
 	if err := datamodel.InitAgentHome(omnipusHome, ac.finalID); err != nil {
-		return tools.ErrorResult(errorJSON("WORKSPACE_ERROR",
-			"could not create agent workspace: "+err.Error(),
-			"Check disk space and permissions")), true
+		// Entity (and optional default singleton) already durable. Do not
+		// delete them: report the actual revision so the caller can read
+		// and recover instead of claiming a complete create.
+		slog.Error("sysagent: create_agent: InitAgentHome failed after entity save",
+			"id", ac.finalID, "error", err)
+		return createHomePartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), err), true
 	}
 
-	// Write SOUL.md — this is the agent's personality and is mandatory.
-	if err := os.WriteFile(wsPath+"/SOUL.md", []byte(ac.soul), 0o644); err != nil {
-		return tools.ErrorResult(errorJSON("WRITE_ERROR",
-			"could not write SOUL.md: "+err.Error(),
-			"Check disk space and permissions")), true
+	heartbeat, _, hbErr := parseOptionalHeartbeat(ac.args)
+	if hbErr != nil {
+		return fieldErrorResult(hbErr), true
 	}
-	// Write HEARTBEAT.md if provided.
-	if hb, ok := ac.args["heartbeat"].(string); ok && strings.TrimSpace(hb) != "" {
-		if err := os.WriteFile(wsPath+"/HEARTBEAT.md", []byte(hb), 0o644); err != nil {
-			slog.Warn("sysagent: could not write HEARTBEAT.md", "id", ac.finalID, "error", err)
+	if strings.TrimSpace(heartbeat) != "" {
+		hbPath := filepath.Join(omnipusHome, "agents", ac.finalID, "HEARTBEAT.md")
+		if err := os.WriteFile(hbPath, []byte(heartbeat), 0o600); err != nil {
+			slog.Error("sysagent: create_agent: HEARTBEAT.md write failed after entity save",
+				"id", ac.finalID, "error", err)
+			return createHeartbeatPartialResult(ac.finalID, ac.mutation.Revision, mutationFieldNames(ac.args), err), true
 		}
 	}
 
@@ -466,23 +503,14 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 	// new agent is live and routable when it is NOT — it keeps 404ing on
 	// chat/delegate until the next restart or config reload. Pattern mirrors
 	// pkg/tools/task.go's update_task advance_warning field.
+	activation, publishErr := publishAgentActivation(ac.t.deps, ac.finalID)
 	var publishWarning string
-	if ac.t.deps.UpsertAgentFastFunc != nil {
-		if err := ac.t.deps.UpsertAgentFastFunc(ac.finalID); err != nil {
-			slog.Warn("sysagent: fast agent upsert after agent create failed — agent available after restart",
-				"id", ac.finalID, "error", err)
-			publishWarning = fmt.Sprintf(
-				"agent %q was created but is not yet live: fast publish failed (%s); it will become routable "+
-					"after the next config reload or gateway restart", ac.finalID, err.Error())
-		}
-	} else if ac.t.deps.ReloadFunc != nil {
-		if err := ac.t.deps.ReloadFunc(); err != nil {
-			slog.Warn("sysagent: hot-reload after agent create failed — agent available after restart",
-				"id", ac.finalID, "error", err)
-			publishWarning = fmt.Sprintf(
-				"agent %q was created but is not yet live: hot-reload failed (%s); it will become routable "+
-					"after the next gateway restart", ac.finalID, err.Error())
-		}
+	if publishErr != "" {
+		slog.Warn("sysagent: publish after agent create failed — agent available after restart",
+			"id", ac.finalID, "error", publishErr)
+		publishWarning = fmt.Sprintf(
+			"agent %q was created but is not yet live: publish failed (%s); it will become routable "+
+				"after the next config reload or gateway restart", ac.finalID, publishErr)
 	}
 
 	// status must reflect actual runnability, not
@@ -495,11 +523,15 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 		status = "joined_workspace"
 	}
 	result := map[string]any{
-		"id":     ac.finalID,
-		"name":   ac.name,
-		"model":  ac.model,
-		"type":   ac.agentType,
-		"status": status,
+		"id":                 ac.finalID,
+		"name":               ac.name,
+		"model":              ac.model,
+		"type":               ac.agentType,
+		"status":             status,
+		"revision":           ac.mutation.Revision,
+		"persistence_status": ac.mutation.PersistenceStatus,
+		"activation_status":  activation,
+		"changed_fields":     mutationFieldNames(ac.args),
 	}
 	if ac.agentType == "subagent_3p" {
 		result["cli"] = ac.execCLI
@@ -509,6 +541,46 @@ func (ac *agentCreateToolExecute) publishAndRespond() *tools.ToolResult {
 		result["publish_warning"] = publishWarning
 	}
 	return tools.NewToolResult(successJSON(result))
+}
+
+func parseOptionalHeartbeat(args map[string]any) (string, bool, error) {
+	raw, present := args["heartbeat"]
+	if !present {
+		return "", false, nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return "", true, fieldErr("heartbeat", "heartbeat must be a string")
+	}
+	return s, true, nil
+}
+
+func createHomePartialResult(id, revision string, fields []string, err error) *tools.ToolResult {
+	return tools.ErrorResult(successJSON(map[string]any{
+		"id":                 id,
+		"code":               "SAVE_FAILED",
+		"message":            "agent was saved but the agent home could not be initialized. Read current state before retrying.",
+		"persistence_status": agentstore.PersistencePartial,
+		"activation_status":  agentstore.ActivationNotAttempted,
+		"revision":           revision,
+		"changed_fields":     fields,
+		"error_stage":        "init_home",
+		"detail":             err.Error(),
+	}))
+}
+
+func createHeartbeatPartialResult(id, revision string, fields []string, err error) *tools.ToolResult {
+	return tools.ErrorResult(successJSON(map[string]any{
+		"id":                 id,
+		"code":               "SAVE_FAILED",
+		"message":            "agent was saved but HEARTBEAT.md could not be written. Read current state before retrying.",
+		"persistence_status": agentstore.PersistencePartial,
+		"activation_status":  agentstore.ActivationNotAttempted,
+		"revision":           revision,
+		"changed_fields":     fields,
+		"error_stage":        "heartbeat",
+		"detail":             err.Error(),
+	}))
 }
 
 // joinWorkspaceTeam appends agentID to workspace wsID's CoreTeam (deduped)
@@ -552,7 +624,7 @@ func NewAgentUpdateTool(d *Deps) *AgentUpdateTool { return &AgentUpdateTool{deps
 func (t *AgentUpdateTool) Name() string           { return "update_agent" }
 func (t *AgentUpdateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentUpdateTool) Description() string {
-	return "Update an existing agent's configuration. Only provided fields are changed; omitted fields are left as-is. Locked core agents (Mia, Jim, Ava, Ray) cannot be modified at all — the call is refused. An empty string is silently IGNORED for name/description/color/icon (they cannot be cleared this way — omit the field instead), but an empty string for provider CLEARS an existing provider pin (falls back to default-provider resolution) — this is a deliberate asymmetry, not a bug. The agent's type (Main/Subagent/subagent_3p) and, for subagent_3p, its external CLI runtime (cli/cli_path) cannot be changed after creation — delete and recreate the agent to change these."
+	return "Update an existing agent using the revision returned by get_agent. Only provided fields are changed; omitted fields are left as-is. Mia, Jim, Ava, Admin, Planner, Researcher, and General Purpose keep their built-in identity and instructions, while their tool policies, installed connector assignments, and skills are editable. Judge and Plan Supervisor allow instruction and supported tuning changes but keep fixed tool, connector, and skill capabilities. An empty provider clears its pin. Use fallback_models with model/provider objects; [] clears the fallback chain. The agent type and an external agent's cli/cli_path cannot change after creation; create a new agent for a different type."
 }
 
 func (t *AgentUpdateTool) Parameters() map[string]any {
@@ -560,6 +632,7 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 		"type": "object",
 		"properties": map[string]any{
 			"id":          map[string]any{"type": "string", "description": "Agent ID to update"},
+			"revision":    map[string]any{"type": "string", "description": "Opaque revision returned by get_agent"},
 			"name":        map[string]any{"type": "string"},
 			"description": map[string]any{"type": "string"},
 			"soul": map[string]any{
@@ -567,210 +640,33 @@ func (t *AgentUpdateTool) Parameters() map[string]any {
 				"description": "New personality/instructions (overwrites SOUL.md)",
 			},
 			"model":           map[string]any{"type": "string", "description": "New primary model slug"},
-			"model_fallbacks": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"fallback_models": fallbackModelsParameters(),
 			"provider": map[string]any{
 				"type":        "string",
 				"description": "Explicit provider routing key for the primary model. Empty string clears an existing pin (falls back to default-provider resolution).",
 			},
 			"color":               map[string]any{"type": "string"},
 			"icon":                map[string]any{"type": "string"},
-			"heartbeat":           map[string]any{"type": "string", "description": "New HEARTBEAT.md content"},
 			"max_tool_iterations": map[string]any{"type": "integer", "description": "New max tool calls per turn (0 = inherit the system default)"},
+			"skills":              skillsParameters(true),
+			"mcp_servers":         mcpServersParameters(),
+			"tool_policy_changes": toolPolicyChangesParameters(),
+			"memory_enabled":      map[string]any{"type": "boolean"},
+			"default":             map[string]any{"type": "boolean"},
+			"voice": map[string]any{
+				"type":        "string",
+				"description": "Per-agent TTS persona identifier. Persisted; playback is inactive in this release.",
+			},
+			"shell_policy":            shellPolicyParameters(),
+			"context_window_override": map[string]any{"type": "integer", "description": "Positive token override. JSON null clears the override."},
+			"model_params":            modelParamsParameters(),
 		},
-		"required": []string{"id"},
+		"required": []string{"id", "revision"},
 	}
 }
 
-func (t *AgentUpdateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
-	id, _ := args["id"].(string)
-	if id == "" {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", ""))
-	}
-	// Path traversal protection: validate id contains no path separators.
-	if err := validateID(id); err != nil {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT", err.Error(), ""))
-	}
-
-	// Validate color and icon before any mutation.
-	color, colorPresent := args["color"].(string)
-	if colorPresent {
-		if err := validateAgentColor(color); err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_COLOR", err.Error(), "Use a 6-digit hex color, e.g. #22C55E"))
-		}
-	}
-	icon, iconPresent := args["icon"].(string)
-	if iconPresent {
-		if err := validateAgentIcon(icon); err != nil {
-			return tools.ErrorResult(errorJSON("INVALID_ICON", err.Error(), "Use alphanumeric + hyphens, e.g. robot"))
-		}
-	}
-	// Validate max_tool_iterations before any mutation (same pattern as
-	// color/icon above) so an invalid value never reaches the store's
-	// read-modify-write closure.
-	maxToolIterations, maxToolIterationsPresent := args["max_tool_iterations"].(float64)
-	if maxToolIterationsPresent && maxToolIterations < 0 {
-		return tools.ErrorResult(errorJSON("INVALID_INPUT",
-			"max_tool_iterations must be >= 0", "Use 0 to inherit the system default"))
-	}
-	provider, providerPresent := args["provider"].(string)
-
-	// ADR-054 D2/§11 checklist item 6: agents are per-entity records under
-	// entities/agents/<id>.json, not config.json's agents.list — persist via
-	// the agent store's read-modify-write instead of t.deps.WithConfig +
-	// cfg.Agents.List splicing.
-	//
-	// Resolve home ONCE, before constructing the agent store, so the entity
-	// record and the workspace file writes below always agree on the same
-	// $OMNIPUS_HOME (resolveOmnipusHome's doc comment; matches
-	// AgentCreateTool's identical fix).
-	omnipusHome, homeErr := resolveOmnipusHome(t.deps.Home)
-	if homeErr != nil {
-		return tools.ErrorResult(errorJSON("WORKSPACE_ERROR", homeErr.Error(),
-			"Set OMNIPUS_HOME environment variable"))
-	}
-
-	var updated []string
-	_, updateErr := agentstore.New(omnipusHome).Update(id, func(a *config.AgentConfig) error {
-		if a.Locked {
-			return fmt.Errorf("agent %q is a locked core agent and cannot be modified: %w", id, errAgentLocked)
-		}
-		if v, ok := args["name"].(string); ok && v != "" {
-			a.Name = v
-			updated = append(updated, "name")
-		}
-		if v, ok := args["description"].(string); ok && v != "" {
-			a.Description = v
-			updated = append(updated, "description")
-		}
-		if colorPresent && color != "" {
-			a.Color = color
-			updated = append(updated, "color")
-		}
-		if iconPresent && icon != "" {
-			a.Icon = icon
-			updated = append(updated, "icon")
-		}
-		// Model config.
-		if v, ok := args["model"].(string); ok && v != "" {
-			if a.Model == nil {
-				a.Model = &config.AgentModelConfig{}
-			}
-			a.Model.Primary = v
-			updated = append(updated, "model")
-		}
-		if fb, ok := args["model_fallbacks"].([]any); ok {
-			if a.Model == nil {
-				a.Model = &config.AgentModelConfig{}
-			}
-			a.Model.Fallbacks = nil
-			for _, v := range fb {
-				if s, ok := v.(string); ok && s != "" {
-					a.Model.Fallbacks = append(a.Model.Fallbacks, s)
-				}
-			}
-			updated = append(updated, "model_fallbacks")
-		}
-		// O3 two-field model: persist (or clear) the explicit primary
-		// provider — mirrors REST's updateAgent handling of the same wire
-		// field (req.Provider). A non-empty value pins the provider; an
-		// explicit empty string clears it (falls back to default-provider
-		// resolution). Previously declared in Parameters() but never read
-		// here — a caller passing it got a success response implying it was
-		// applied when it silently was not.
-		if providerPresent {
-			if a.Model == nil {
-				a.Model = &config.AgentModelConfig{}
-			}
-			a.Model.Provider = strings.TrimSpace(provider)
-			updated = append(updated, "provider")
-		}
-		// Per-turn tool-call cap — mirrors REST's updateAgent handling of
-		// the same wire field (req.MaxToolIterations). Same
-		// previously-silently-ignored-parameter bug as provider above.
-		if maxToolIterationsPresent {
-			a.MaxToolIterations = int(maxToolIterations)
-			updated = append(updated, "max_tool_iterations")
-		}
-		// ADR-037: can_delegate_to is retired — see the matching comment in
-		// AgentCreateTool.Execute above. The workspace Team tab is the only
-		// place delegation trust is configured.
-		return nil
-	})
-	if updateErr != nil {
-		if errors.Is(updateErr, entity.ErrNotFound) {
-			return tools.ErrorResult(errorJSON("AGENT_NOT_FOUND",
-				fmt.Sprintf("No agent with ID %q", id),
-				"Use list_agents to see available agents",
-			))
-		}
-		if errors.Is(updateErr, errAgentLocked) {
-			// AGENT_LOCKED, not the generic SAVE_FAILED — same fix and same
-			// rationale as AgentDeleteTool.Execute's identical locked-agent
-			// check above: this is a permanent policy refusal, not a
-			// transient I/O failure.
-			return tools.ErrorResult(errorJSON("AGENT_LOCKED", updateErr.Error(),
-				"Locked core agents (Mia, Jim, Ava, Ray) cannot be modified"))
-		}
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", updateErr.Error(), ""))
-	}
-
-	// Write workspace files if provided.
-	wsPath := omnipusHome + "/agents/" + id
-	if v, ok := args["soul"].(string); ok && strings.TrimSpace(v) != "" {
-		if err := os.MkdirAll(wsPath, 0o700); err != nil {
-			return tools.ErrorResult(errorJSON("WRITE_ERROR", "could not update SOUL.md: "+err.Error(), ""))
-		} else if err := os.WriteFile(wsPath+"/SOUL.md", []byte(v), 0o644); err != nil {
-			return tools.ErrorResult(errorJSON("WRITE_ERROR", "could not update SOUL.md: "+err.Error(), ""))
-		} else {
-			updated = append(updated, "soul")
-		}
-	}
-	if v, ok := args["heartbeat"].(string); ok && strings.TrimSpace(v) != "" {
-		if err := os.MkdirAll(wsPath, 0o700); err == nil {
-			if err := os.WriteFile(wsPath+"/HEARTBEAT.md", []byte(v), 0o644); err != nil {
-				slog.Warn("sysagent: could not write HEARTBEAT.md", "id", id, "error", err)
-			} else {
-				updated = append(updated, "heartbeat")
-			}
-		}
-	}
-
-	// Publish the update so it takes effect immediately in routing,
-	// list_agents, and GET /api/v1/agents, without a restart — same
-	// fast-path-first pattern as AgentCreateTool.Execute above. A publish
-	// failure here is surfaced IN the success payload (fix-wave finding #3),
-	// not just logged: the store.Update above already durably persisted
-	// `updated`, so this is a real success, but an unqualified
-	// {"id":...,"updated_fields":[...]} response would tell the calling
-	// agent the change took effect when the LIVE routing/registry state
-	// still reflects the OLD config until the next restart or reload.
-	var publishWarning string
-	if t.deps.UpsertAgentFastFunc != nil {
-		if err := t.deps.UpsertAgentFastFunc(id); err != nil {
-			slog.Warn("sysagent: fast agent upsert after agent update failed — change available after restart",
-				"id", id, "error", err)
-			publishWarning = fmt.Sprintf(
-				"agent %q was updated but the change is not yet live: fast publish failed (%s); it will take "+
-					"effect after the next config reload or gateway restart", id, err.Error())
-		}
-	} else if t.deps.ReloadFunc != nil {
-		if err := t.deps.ReloadFunc(); err != nil {
-			slog.Warn("sysagent: hot-reload after agent update failed — change available after restart",
-				"id", id, "error", err)
-			publishWarning = fmt.Sprintf(
-				"agent %q was updated but the change is not yet live: hot-reload failed (%s); it will take "+
-					"effect after the next gateway restart", id, err.Error())
-		}
-	}
-
-	result := map[string]any{
-		"id":             id,
-		"updated_fields": updated,
-	}
-	if publishWarning != "" {
-		result["publish_warning"] = publishWarning
-	}
-	return tools.NewToolResult(successJSON(result))
+func (t *AgentUpdateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
+	return t.executeADR090(args)
 }
 
 // ---- system.agent.delete ----
@@ -783,30 +679,30 @@ func NewAgentDeleteTool(d *Deps) *AgentDeleteTool { return &AgentDeleteTool{deps
 func (t *AgentDeleteTool) Name() string           { return "delete_agent" }
 func (t *AgentDeleteTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *AgentDeleteTool) Description() string {
-	return "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and its home directory " +
-		"($OMNIPUS_HOME/agents/<id>/ — SOUL.md, HEARTBEAT.md, MEMORY.md, its skills folder). Also cascades: " +
+	return "Delete an agent. IRREVERSIBLE. Removes the agent's entity record and applicable SOUL.md instructions. Preserves unrelated files in its home, including HEARTBEAT.md, MEMORY.md and local skills. Also cascades: " +
 		"every chat session in the shared session store that belongs SOLELY to this agent is deleted, together " +
 		"with its uploaded files — a session another agent also participated in (e.g. via a mid-conversation " +
 		"agent switch) is left untouched to avoid destroying that agent's history, and is reported separately " +
 		"in the response. Every GTD task assigned to this agent is unassigned (not deleted — the task itself " +
 		"survives); tasks it merely created keep that historical attribution. This agent is also removed from " +
 		"every workspace's core_team, and every delegation-trust edge naming it (as either side) is dropped from " +
-		"each affected workspace's delegation graph. Locked core agents (Mia, Jim, Ava, Ray), the currently " +
+		"each affected workspace's delegation graph. Seeded built-ins (Mia, Jim, Ava, Admin, Planner, Researcher, General Purpose, Judge, and Plan Supervisor), the currently " +
 		"configured default agent, and an agent that owns at least one active (running) Plan cannot be deleted " +
 		"— set another agent as default first (Agents screen ★), or stop/reassign the Plan(s), before retrying. " +
 		"A step that fails partway through is reported in the response rather than " +
 		"silently swallowed — check for a warning field before assuming the cascade fully completed." +
-		"\nParameters: id (required), confirm (bool, must be true)."
+		"\nParameters: id (required), revision (required, from get_agent), confirm (bool, must be true)."
 }
 
 func (t *AgentDeleteTool) Parameters() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"id":      map[string]any{"type": "string"},
-			"confirm": map[string]any{"type": "boolean"},
+			"id":       map[string]any{"type": "string"},
+			"confirm":  map[string]any{"type": "boolean"},
+			"revision": map[string]any{"type": "string", "pattern": "^[0-9a-f]{64}$"},
 		},
-		"required": []string{"id", "confirm"},
+		"required": []string{"id", "confirm", "revision"},
 	}
 }
 
@@ -843,6 +739,7 @@ type agentDeleteToolExecute struct {
 	t                       *AgentDeleteTool
 	args                    map[string]any
 	id                      string
+	revision                string
 	omnipusHome             string
 	store                   *agentstore.Store
 	cascadeWarnings         []string
@@ -852,9 +749,10 @@ type agentDeleteToolExecute struct {
 	workspacesUpdated       int
 	edgesRemoved            int
 	publishWarning          string
+	deletionResult          agentstore.MutationResult
 }
 
-func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *AgentDeleteTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	ad := &agentDeleteToolExecute{t: t, args: args}
 
 	if r0, stop := ad.validateAndLoad(); stop {
@@ -873,6 +771,7 @@ func (t *AgentDeleteTool) Execute(_ context.Context, args map[string]any) *tools
 // validateAndLoad validates the request and refuses deletion when agent or plan safeguards apply.
 func (ad *agentDeleteToolExecute) validateAndLoad() (*tools.ToolResult, bool) {
 	ad.id, _ = ad.args["id"].(string)
+	ad.revision, _ = ad.args["revision"].(string)
 	confirm, _ := ad.args["confirm"].(bool)
 	if ad.id == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "id is required", "")), true
@@ -882,6 +781,9 @@ func (ad *agentDeleteToolExecute) validateAndLoad() (*tools.ToolResult, bool) {
 			"confirm must be true to delete an agent",
 			"Set confirm=true to proceed with deletion",
 		)), true
+	}
+	if err := agentstore.ValidateRevision(ad.revision); err != nil {
+		return tools.ErrorResult(errorJSON("INVALID_REVISION", err.Error(), "Read the agent again and retry with its current revision")), true
 	}
 	// Guard 0: refuse outright — BEFORE any
 	// destructive action — if id is the configured default agent. Deleting
@@ -941,8 +843,8 @@ func (ad *agentDeleteToolExecute) validateAndLoad() (*tools.ToolResult, bool) {
 		// for this exact refusal — a UAT run observed the tool and REST
 		// paths disagreeing on the error code for the identical condition.
 		return tools.ErrorResult(errorJSON("AGENT_LOCKED",
-			fmt.Sprintf("agent %q is a locked core agent and cannot be deleted", ad.id),
-			"Locked core agents (Mia, Jim, Ava, Ray) can never be deleted")), true
+			fmt.Sprintf("agent %q is a locked seeded agent and cannot be deleted", ad.id),
+			"seeded built-in agents cannot be deleted")), true
 	}
 	// Guard (ADR-049 D4/FR-065), ported from the REST deleteAgent handler
 	// (pkg/gateway/rest.go, search "agent_owns_active_plans"): an agent
@@ -1009,16 +911,24 @@ func (ad *agentDeleteToolExecute) deleteAndCascade() (*tools.ToolResult, bool) {
 	// which promises "a step that fails partway through is reported in the
 	// response rather than silently swallowed". With store.Delete FIRST: if
 	// it fails, nothing destructive has happened yet — the fail-safe order.
-	// This also matches the wsPath home-directory removal immediately below,
-	// which was already correctly sequenced after store.Delete.
-	if err := ad.store.Delete(ad.id); err != nil {
-		return tools.ErrorResult(errorJSON("SAVE_FAILED", err.Error(), "")), true
-	}
-	// Remove workspace directory (best-effort; failure is non-fatal but logged).
-	wsPath := datamodel.AgentHomePath(ad.omnipusHome, ad.id)
-	if err := os.RemoveAll(wsPath); err != nil {
-		slog.Warn("sysagent: workspace cleanup incomplete",
-			"agent_id", ad.id, "path", wsPath, "error", err)
+	// Unrelated files in the agent home are deliberately preserved; DeleteState
+	// removes only the entity and applicable SOUL bytes owned by this resource.
+	var err error
+	ad.deletionResult, err = ad.store.DeleteState(ad.id, ad.revision)
+	if err != nil {
+		if errors.Is(err, agentstore.ErrRevisionConflict) {
+			return tools.ErrorResult(errorJSON("REVISION_CONFLICT", err.Error(), "Read the agent again and retry with its current revision")), true
+		}
+		payload := map[string]any{
+			"code":               "SAVE_FAILED",
+			"message":            "agent storage deletion failed; read the agent again before retrying",
+			"persistence_status": ad.deletionResult.PersistenceStatus,
+			"activation_status":  ad.deletionResult.ActivationStatus,
+			"revision":           ad.deletionResult.Revision,
+			"changed_fields":     ad.deletionResult.ChangedFields,
+			"error_stage":        ad.deletionResult.ErrorStage,
+		}
+		return tools.ErrorResult(successJSON(payload)), true
 	}
 
 	// Step 1a: delete every session in the SHARED session store
@@ -1131,7 +1041,13 @@ func (ad *agentDeleteToolExecute) respond() *tools.ToolResult {
 	}
 	if ad.publishWarning != "" {
 		result["publish_warning"] = ad.publishWarning
+		result["activation_status"] = agentstore.ActivationFailed
+	} else {
+		result["activation_status"] = agentstore.ActivationActive
 	}
+	result["persistence_status"] = ad.deletionResult.PersistenceStatus
+	result["revision"] = ad.deletionResult.Revision
+	result["changed_fields"] = ad.deletionResult.ChangedFields
 	// A per-step cascade failure is best-effort and
 	// non-fatal (the agent record above is already durably deleted either
 	// way), but must not be silently swallowed — an unqualified

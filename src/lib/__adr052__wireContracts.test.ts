@@ -25,6 +25,7 @@ import {
   Agent as AgentSchema,
   AgentUpdateRequest as AgentUpdateRequestSchema,
   AcceptanceCriterion as AcceptanceCriterionSchema,
+  AcceptanceCriterionInput as AcceptanceCriterionInputSchema,
 } from '@/lib/api/generated/schemas'
 
 // ── Fixture builders ────────────────────────────────────────────────────────
@@ -89,6 +90,7 @@ function baseSession(overrides: Record<string, unknown> = {}) {
 
 function baseAgent(overrides: Record<string, unknown> = {}) {
   return {
+    revision: '0'.repeat(64),
     id: 'judge',
     name: 'Judge',
     type: 'system',
@@ -97,6 +99,7 @@ function baseAgent(overrides: Record<string, unknown> = {}) {
     soul: 'You are a skeptical, evidence-first verifier.',
     timeout_seconds: 120,
     max_tool_iterations: 10,
+    memory_enabled: true,
     // A-CONTRACT (ADR-068 FR-038): needs_model is required on every Agent.
     needs_model: false,
     ...overrides,
@@ -112,6 +115,18 @@ function baseCriterion(overrides: Record<string, unknown> = {}) {
     // schema (this file is a fixed `behavior`-kind, `judgment` is not the
     // field under test here).
     judgment: 'quantitative',
+    text: 'Called web_search at least 5 times',
+    author: { kind: 'agent', id: 'jim' },
+    status: 'pending',
+    ...overrides,
+  }
+}
+
+function baseCriterionInput(overrides: Record<string, unknown> = {}) {
+  return {
+    // Authoring-time twin (ADR-074 D2): `kind`/`judgment` are optional on
+    // AcceptanceCriterionInput (the server infers them from the payload);
+    // only text/author/status are required.
     text: 'Called web_search at least 5 times',
     author: { kind: 'agent', id: 'jim' },
     status: 'pending',
@@ -265,9 +280,10 @@ describe('ADR-052 FR-039 — Agent.memory_enabled wire contract', () => {
   })
 
   it('AgentUpdateRequest also carries memory_enabled as a plain optional boolean', () => {
-    const okTrue = AgentUpdateRequestSchema.safeParse({ memory_enabled: true })
-    const okFalse = AgentUpdateRequestSchema.safeParse({ memory_enabled: false })
-    const bad = AgentUpdateRequestSchema.safeParse({ memory_enabled: 'nope' })
+    const revision = '0'.repeat(64)
+    const okTrue = AgentUpdateRequestSchema.safeParse({ revision, memory_enabled: true })
+    const okFalse = AgentUpdateRequestSchema.safeParse({ revision, memory_enabled: false })
+    const bad = AgentUpdateRequestSchema.safeParse({ revision, memory_enabled: 'nope' })
     expect(okTrue.success).toBe(true)
     expect(okFalse.success).toBe(true)
     expect(bad.success).toBe(false)
@@ -381,27 +397,93 @@ describe('ADR-052 FR-034 — AcceptanceCriterion behavior-kind payload contract 
     expect(result.success).toBe(false)
   })
 
-  // ── Two FR-034 prose rules the OpenAPI `additionalProperties: false` /
-  //    "max_count >= min_count" constraint (AcceptanceCriterion.yaml:82-85,
-  //    ADR-052 spec DS-7 row 6) DOCUMENTS but which openapi-zod-client cannot
-  //    express as generated Zod code (no .strict()/.superRefine() emitted for
-  //    either additionalProperties:false or a cross-field business rule from
-  //    prose). These two tests assert the SPEC'd behavior and are marked
-  //    it.fails as inverted canaries for a known contract-fidelity gap
-  //    (tracked on the ADR-052 fix-wave ledger, not silently worked around):
-  //    the moment a contracts fix adds .strict()/.superRefine() coverage,
-  //    they flip to failing-as-fails, forcing removal of the .fails marker
-  //    and promotion to ordinary assertions.
-  it.fails('[KNOWN GAP — contract fidelity] rejects max_count < min_count per DS-7 row 6', () => {
+  // ── Two FR-034 prose rules the OpenAPI spec documents
+  //    (AcceptanceCriterion.yaml behavior: `additionalProperties: false` /
+  //    "max_count >= min_count when present", ADR-052 spec DS-7 row 6).
+  //    The generator seam (scripts/_gen-ts.sh nested strict/refine
+  //    post-process over the openapi-zod-client output) now emits `.strict()`
+  //    and the cross-field `.refine()` for exactly these rules, so these are
+  //    ordinary assertions — the former inverted canaries, promoted.
+  it('rejects max_count < min_count per DS-7 row 6', () => {
     const result = AcceptanceCriterionSchema.safeParse(
       baseCriterion({ behavior: { tool: 'web_search', min_count: 5, max_count: 2 } }),
     )
     expect(result.success).toBe(false)
   })
 
-  it.fails('[KNOWN GAP — contract fidelity] rejects an unknown field in the behavior payload (additionalProperties:false, AcceptanceCriterion.yaml:81-82)', () => {
+  it('rejects an unknown field in the behavior payload (additionalProperties:false, AcceptanceCriterion.yaml:81-82)', () => {
     const result = AcceptanceCriterionSchema.safeParse(
       baseCriterion({ behavior: { tool: 'web_search', bogus_field: 'nope' } }),
+    )
+    expect(result.success).toBe(false)
+  })
+
+  // ── Default-interplay lock: the refine compares against the DEFAULTED
+  //    min_count (Zod applies .default(1) before .refine() runs), mirroring
+  //    pkg/task/criterion.go::validateCriterionBehavior, which sets an absent
+  //    min_count to 1 BEFORE the max_count >= min_count check server-side.
+  //    max_count alone below any implicit floor is therefore rejected on BOTH
+  //    sides of the wire, never silently accepted client-side.
+  it('rejects a max_count below the implicit min_count default of 1 (semantics-locked to the Go validator)', () => {
+    const result = AcceptanceCriterionSchema.safeParse(
+      baseCriterion({ behavior: { tool: 'web_search', max_count: 0 } }),
+    )
+    expect(result.success).toBe(false)
+  })
+
+  // ── The positive twin of the reject case above — the DISCRIMINATING
+  //    default-interplay boundary. max_count: 0 alone rejects under BOTH a
+  //    refine that compares the defaulted min_count (0 >= 1 → false) and
+  //    one that compares the raw input (0 >= undefined → false), so that
+  //    test alone cannot tell them apart. Only this case can: max_count
+  //    alone at exactly the implicit floor accepts iff the refine observes
+  //    the DEFAULTED min_count (1 >= 1); a raw comparison
+  //    (1 >= undefined → false) would wrongly reject a legal payload.
+  it('accepts max_count alone equal to the implicit min_count default of 1 — the discriminating default-interplay case', () => {
+    const result = AcceptanceCriterionSchema.safeParse(
+      baseCriterion({ behavior: { tool: 'web_search', max_count: 1 } }),
+    )
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.behavior?.min_count).toBe(1)
+      expect(result.data.behavior?.max_count).toBe(1)
+    }
+  })
+})
+
+// ── AcceptanceCriterionInput `behavior` (FR-034) — the request-side twin ────
+//
+// The generator seam (scripts/_gen-ts.sh nested strict/refine post-process)
+// rewrites BOTH behavior objects — the response schema above and this
+// authoring-time Input twin — from one shared REFINE_CHAINS entry. Without
+// direct assertions here, a future regression no-op'ing the rewrite on just
+// the Input side would ship silently. Same rules, same oracles: the refine
+// (max_count >= the DEFAULTED min_count), strict unknown-key rejection, and
+// the documented defaults.
+
+describe('ADR-052 FR-034 — AcceptanceCriterionInput behavior-kind payload contract (request-side twin)', () => {
+  it('accepts max_count alone equal to the implicit min_count default of 1 and applies the documented defaults', () => {
+    const result = AcceptanceCriterionInputSchema.safeParse(
+      baseCriterionInput({ behavior: { tool: 'web_search', max_count: 1 } }),
+    )
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.behavior?.min_count).toBe(1)
+      expect(result.data.behavior?.max_count).toBe(1)
+      expect(result.data.behavior?.scope).toBe('task_session')
+    }
+  })
+
+  it('rejects max_count < min_count per DS-7 row 6 (the Input twin carries the same refine)', () => {
+    const result = AcceptanceCriterionInputSchema.safeParse(
+      baseCriterionInput({ behavior: { tool: 'web_search', min_count: 5, max_count: 2 } }),
+    )
+    expect(result.success).toBe(false)
+  })
+
+  it('rejects an unknown field in the Input behavior payload (additionalProperties:false, AcceptanceCriterionInput.yaml)', () => {
+    const result = AcceptanceCriterionInputSchema.safeParse(
+      baseCriterionInput({ behavior: { tool: 'web_search', bogus_field: 'nope' } }),
     )
     expect(result.success).toBe(false)
   })

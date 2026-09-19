@@ -52,7 +52,10 @@ import (
 	"time"
 
 	"github.com/chromedp/cdproto/page"
+	"github.com/chromedp/cdproto/target"
 	"github.com/chromedp/chromedp"
+
+	"github.com/elicify-ai/omnipus/pkg/logger"
 
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/captureext"
 	"github.com/elicify-ai/omnipus/pkg/tools/browser/webrtc"
@@ -679,6 +682,35 @@ func runEncoderStartup(caller, root context.Context, create func(context.Context
 	return tab.ctx, closeTarget, nil
 }
 
+// refocusCapturedTabBeforeEncoderLoad makes the captured tab Chrome's active
+// tab again BEFORE the encoder page loads. This is the Chrome 153
+// layout-freeze workaround, and the ordering is load-bearing.
+//
+// Measured on the CI worker's Chrome 153.0.8010.52 (2026-09-18, probes 6-9
+// against the managed launch flags): a tabCapture stream created with
+// explicit size constraints while the captured tab is NOT Chrome's active tab
+// freezes that tab's CSS layout viewport at its capture-start size —
+// permanently. The window still resizes (Browser.setWindowBounds succeeds and
+// GetWindowBounds confirms it), chrome.tabs.get and the tab's own
+// Page.getLayoutMetrics keep reporting the frozen size, the tab never
+// reflows, and neither stopping the stream, nor navigation, nor an
+// Emulation nudge releases it — only the freeze is why the ui-browser shard
+// failed with "window resize not fully reflected" against every resize
+// lever. A tab captured while it IS Chrome's active tab does not freeze and
+// keeps following resizes (probe 9, case 4).
+//
+// The encoder tab is created ACTIVATED (openActivatedTarget — the Chrome 153
+// attach-stall workaround, tab_open.go), which is exactly what left the
+// captured tab inactive while its capture started. The activation below is
+// therefore not cosmetic focus hygiene; it is the precondition for every
+// later viewport apply to land.
+func refocusCapturedTabBeforeEncoderLoad(ctx context.Context, capturedTargetID string) error {
+	if capturedTargetID == "" {
+		return nil
+	}
+	return target.ActivateTarget(target.ID(capturedTargetID)).Do(ctx)
+}
+
 // startEncoderWithFrame creates an untracked encoder target in the workspace's
 // shared Chrome. The caller has already prepared the captured target under the
 // live-input gate; this function performs no focus-based target selection.
@@ -710,6 +742,29 @@ func startEncoderWithFrame(ctx context.Context, mgr *BrowserManager, panelSessio
 		}
 		return tab, nil
 	}, func(runCtx context.Context) error {
+		// Re-focus the captured tab BEFORE the encoder page loads: the encoder
+		// tab was created ACTIVATED (openActivatedTarget), which left the
+		// captured tab inactive while its capture stream was about to start.
+		// See refocusCapturedTabBeforeEncoderLoad for why that state is fatal
+		// on Chrome 153. Best-effort: a failed re-focus is logged and the
+		// capture still starts — a working capture at a frozen viewport beats
+		// no capture at all.
+		// Through chromedp.Run, NOT a bare call: Target.activateTarget is a
+		// browser-level command needing a context that carries a CDP executor.
+		// runCtx does not have one, so the direct call returned "invalid
+		// context" on every capture (CI worker, 2026-09-18) — the layout freeze
+		// this exists to prevent kept happening while the code looked wired.
+		// The failure is logged and swallowed by design (a frozen capture beats
+		// no capture), so nothing else revealed it. The helper stays
+		// executor-agnostic so its tests can drive it with a recording executor.
+		if err := chromedp.Run(runCtx, chromedp.ActionFunc(func(c context.Context) error {
+			return refocusCapturedTabBeforeEncoderLoad(c, frame.TargetID)
+		})); err != nil {
+			logger.WarnCF("browser", "live view: could not re-focus the captured tab before its capture starts — the viewport may stop following resizes on Chrome 153", map[string]any{
+				"target_id": frame.TargetID,
+				"error":     err.Error(),
+			})
+		}
 		err := chromedp.Run(runCtx,
 			chromedp.ActionFunc(func(ctx context.Context) error {
 				_, err := page.AddScriptToEvaluateOnNewDocument(injectScript).Do(ctx)

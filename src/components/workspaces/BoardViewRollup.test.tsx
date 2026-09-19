@@ -71,6 +71,7 @@ const subtask = (overrides: Partial<Task> = {}): Task => ({
 })
 
 const agentRay: Agent = {
+  revision: '0'.repeat(64),
   id: 'ray',
   name: 'Ray',
   type: 'core',

@@ -136,6 +136,10 @@ func NewLibraryReadTool(
 	return &LibraryReadTool{inner: NewReadFileTool(workspace, restrict, maxReadFileSize, allowPaths...)}
 }
 
+func (t *LibraryReadTool) SetMaxInspectionImageBytes(maxBytes int) {
+	t.inner.SetMaxInspectionImageBytes(maxBytes)
+}
+
 func (t *LibraryReadTool) Name() string {
 	return "library_read"
 }
@@ -143,7 +147,9 @@ func (t *LibraryReadTool) Name() string {
 func (t *LibraryReadTool) Description() string {
 	return "Read a file from this workspace's library (chat file uploads land here). " +
 		"Give the exact path announced when the file was uploaded (e.g. \"report.pptx\"), " +
-		"or call library_list first if you are not sure of the name — never guess a filename."
+		"or call library_list first if you are not sure of the name — never guess a filename. " +
+		"PNG and JPEG files are inspected as visual input the same way as read_file. " +
+		readerImageInspectionParagraph
 }
 
 func (t *LibraryReadTool) Scope() ToolScope       { return ScopeGeneral }
@@ -159,11 +165,11 @@ func (t *LibraryReadTool) Parameters() map[string]any {
 			},
 			"offset": map[string]any{
 				"type":        "integer",
-				"description": "Byte offset to start reading from (default 0).",
+				"description": readerOffsetParamDesc,
 			},
 			"length": map[string]any{
 				"type":        "integer",
-				"description": "Number of bytes to read (default/max the configured read limit).",
+				"description": readerLengthParamDesc,
 			},
 		},
 		"required": []string{"path"},

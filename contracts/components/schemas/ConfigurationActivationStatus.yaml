@@ -1,0 +1,3 @@
+type: string
+enum: [active, failed, not_attempted]
+description: Whether the saved configuration is active. A saved but inactive configuration is not completed work.

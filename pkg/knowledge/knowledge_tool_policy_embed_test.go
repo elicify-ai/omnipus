@@ -4,10 +4,13 @@
 //
 // Embed authoring is an OPERATION on the existing knowledge_edit tool, never
 // a ninth tool name (EMB-095). The expected diff to tool policy is ZERO
-// LINES in both layers — the global ceiling and every per-agent seed already
-// carry an explicit "knowledge_edit" entry, and an operation needs no policy
-// entry of its own. This is pinned by SET EQUALITY over the eight
-// knowledge_* names, never by membership: a membership check
+// LINES — the global ceiling carries all eight knowledge_* names, and the
+// per-agent layer realizes ADR-090 §5's role postures as the sparse delta
+// from the allow ceiling (read tools ride the ceiling; write tools carry
+// the role's ask/deny posture; the hidden system agents deny all eight).
+// An operation needs no policy entry of its own. This is pinned by SET
+// EQUALITY over the eight knowledge_* names at the ceiling and SET+VALUE
+// equality per seeded role, never by membership: a membership check
 // ("knowledge_edit is present") would still pass if a ninth tool
 // (e.g. "knowledge_embed") were added beside it — exactly the regression
 // this test exists to catch.
@@ -82,6 +85,20 @@ func knowledgeKeysFromPolicyMap(m map[string]config.ToolPolicy) map[string]bool 
 	return out
 }
 
+// knowledgePoliciesFromPolicyMap filters a per-agent policy map to its
+// knowledge_* entries, keeping the VALUES — the per-role posture is part of
+// the ADR-090 contract the seed check pins (ask vs deny on the write tools),
+// not just the key set.
+func knowledgePoliciesFromPolicyMap(m map[string]config.ToolPolicy) map[string]config.ToolPolicy {
+	out := make(map[string]config.ToolPolicy)
+	for k, v := range m {
+		if strings.HasPrefix(k, "knowledge_") {
+			out[k] = v
+		}
+	}
+	return out
+}
+
 func TestKnowledgeToolPolicy_CatalogueUnchangedByEmbedOp(t *testing.T) {
 	// (1) The global ceiling's knowledge_* key set is EXACTLY the eight
 	// names — set equality, never membership.
@@ -90,13 +107,52 @@ func TestKnowledgeToolPolicy_CatalogueUnchangedByEmbedOp(t *testing.T) {
 	assert.Equal(t, wantKnowledgeTools, knowledgeKeysFromStringMap(cfg.Sandbox.ToolPolicies),
 		"the global ceiling's knowledge_* keys must be exactly the eight names op=\"embed\" was added inside")
 
-	// (2) No SEEDED core agent's key set gains or loses a knowledge_*
-	// entry.
+	// (2) No SEEDED agent's knowledge_* delta drifts. ADR-090 §5 (founder
+	// clarification, 2026-09-17/18) splits the eight names into four READ
+	// tools and four WRITE tools with per-role postures, realized as the
+	// ADR-077 sparse seed: a role's intended posture that equals the global
+	// "allow" ceiling persists NO key (riding the ceiling is the normal,
+	// intended state), so the shipped per-agent knowledge_* entries are:
+	//
+	//   - mia / jim / worker: write=ask (≠ ceiling) → exactly the four
+	//     write keys as ask; read rides the allow ceiling.
+	//   - ava / admin / planner / researcher: the §5 role table excludes
+	//     knowledge writes → a deliberate deny override on the four write
+	//     keys (omission alone is not denial); read rides the ceiling.
+	//   - judge / plansupervisor: read AND write excluded; the dense
+	//     system-agent seed carries all eight as explicit deny.
+	//
+	// Set AND value equality per role, never membership: a ninth tool name,
+	// a lost role posture, or a read key that silently stopped riding the
+	// ceiling all fail here.
+	knowledgeWriteNames := []string{
+		"knowledge_edit", "knowledge_restructure", "knowledge_configure", "knowledge_base_create",
+	}
+	knowledgeWriteAsk := map[string]config.ToolPolicy{}
+	knowledgeWriteDeny := map[string]config.ToolPolicy{}
+	for _, name := range knowledgeWriteNames {
+		knowledgeWriteAsk[name] = config.ToolPolicyAsk
+		knowledgeWriteDeny[name] = config.ToolPolicyDeny
+	}
+	knowledgeFullDeny := map[string]config.ToolPolicy{}
+	for name := range wantKnowledgeTools {
+		knowledgeFullDeny[name] = config.ToolPolicyDeny
+	}
+	expectedKnowledgeSeed := map[string]map[string]config.ToolPolicy{
+		"mia": knowledgeWriteAsk, "jim": knowledgeWriteAsk, "worker": knowledgeWriteAsk,
+		"ava": knowledgeWriteDeny, "admin": knowledgeWriteDeny,
+		"planner": knowledgeWriteDeny, "researcher": knowledgeWriteDeny,
+		"judge": knowledgeFullDeny, "plansupervisor": knowledgeFullDeny,
+	}
 	require.NotEmpty(t, cfg.Agents.List, "SeedConfig must have seeded at least one core agent")
 	for _, a := range cfg.Agents.List {
-		got := knowledgeKeysFromPolicyMap(a.Tools.Builtin.Policies)
-		assert.Equalf(t, wantKnowledgeTools, got,
-			"seeded agent %q's knowledge_* policy keys must stay the eight names", a.ID)
+		want, known := expectedKnowledgeSeed[a.ID]
+		if !known {
+			t.Fatalf("seeded agent %q is not in the ADR-090 knowledge matrix — extend expectedKnowledgeSeed consciously, do not inherit silently", a.ID)
+		}
+		got := knowledgePoliciesFromPolicyMap(a.Tools.Builtin.Policies)
+		assert.Equalf(t, want, got,
+			"seeded agent %q's knowledge_* policy must match the ADR-090 role posture", a.ID)
 	}
 
 	// (3) The NEW-CUSTOM-AGENT template (what a freshly created agent

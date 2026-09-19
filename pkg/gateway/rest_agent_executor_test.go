@@ -167,7 +167,7 @@ func TestGetEditPut_ExecutorRoundTripPreserved(t *testing.T) {
 	// 1. PUT an external-cli executor on the worker.
 	put1 := `{"executor":{"kind":"external-cli","cli":"claude-code"}}`
 	pw1 := httptest.NewRecorder()
-	pr1 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker", strings.NewReader(put1))
+	pr1 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker", strings.NewReader(put1))
 	pr1.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(pw1, pr1)
 	require.Equal(t, http.StatusOK, pw1.Code, "put body: %s", pw1.Body.String())
@@ -182,7 +182,7 @@ func TestGetEditPut_ExecutorRoundTripPreserved(t *testing.T) {
 	// 3. PUT an UNRELATED field (description) — must NOT erase the executor.
 	put2 := `{"description":"a helpful worker"}`
 	pw2 := httptest.NewRecorder()
-	pr2 := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-worker", strings.NewReader(put2))
+	pr2 := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-worker", strings.NewReader(put2))
 	pr2.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(pw2, pr2)
 	require.Equal(t, http.StatusOK, pw2.Code, "put body: %s", pw2.Body.String())

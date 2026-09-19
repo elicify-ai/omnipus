@@ -1,0 +1,74 @@
+{
+  "source_repository": "https://github.com/elicify-ai/elicify-Skills",
+  "source_commit": "687242a67612744c88aa1c6b4ac0a56a5537cde3",
+  "source_paths": [
+    "skills/elicify-docx",
+    "skills/elicify-xlsx",
+    "skills/elicify-pptx",
+    "skills/elicify-pdf"
+  ],
+  "license": "Proprietary; all rights reserved. Source LICENSE retained in each package.",
+  "distribution_status": "Internal integration authorized by owner; public redistribution terms unresolved. Do not publish packages before terms are ratified.",
+  "adaptation": "Source package bytes unchanged; added source repository LICENSE to each package.",
+  "files": {
+    "elicify-docx/LICENSE": "11425392cc0cad3b288256ebfd681ff8b06d55f19ab2917acc4c7818feb6dafa",
+    "elicify-docx/SKILL.md": "93f7ad845daee71c4583e39c470be215b1a649230caf303ac8d3d9338cffdc8d",
+    "elicify-docx/evals/evals.json": "135575f2bbd7c66437fa303fab2cdb51e4bf1657a4454d9f1ea5a827259e78db",
+    "elicify-docx/knowledge/create-and-layout.md": "1b58ec8a4a73d3d91f26167de365154e36fce0e21ade3187b40567b5342c9091",
+    "elicify-docx/knowledge/edit-and-preserve.md": "62842caaa690f506cf1bf2c911958b59d15e913b863b9f50d3f4c586a1cd8368",
+    "elicify-docx/knowledge/inspector-contract.md": "c1edd5d62653fa02285b9605924631c78e6b6808c0ef6391cfbc2893da409745",
+    "elicify-docx/knowledge/visual-qa.md": "2ab114b9871530b3553c00da4479bbe7b011d6d90e7fdab506dac132619b74d1",
+    "elicify-docx/scripts/inspect_docx.py": "f52a61ec8e6ddc71b0a5e712b9512243d06856d734aaecff4a797e69011a0a04",
+    "elicify-pdf/LICENSE": "11425392cc0cad3b288256ebfd681ff8b06d55f19ab2917acc4c7818feb6dafa",
+    "elicify-pdf/SKILL.md": "121f7bc43ffbf65431482df5ae9d2bc953d6a789584cd0306ce327392932351a",
+    "elicify-pdf/evals/evals.json": "38a2b14fd1c282b5bcb680966e8bd7dafa49852993eb0907a504db1d59664ec2",
+    "elicify-pdf/knowledge/inspector-contract.md": "bbc3dffe9b8e8ce0b730398e0fde79439ee84582578a7f95e1586b0d1a986c1f",
+    "elicify-pdf/knowledge/workflows.md": "baf72b9e0de26526854dc1b929c32241f7c713e2005a82553e66d4e26bc6ae93",
+    "elicify-pdf/scripts/inspect_pdf.py": "56b26234b58e1feded1f84b404573ac75c5747a50bf6a141f1a5b9464e15efff",
+    "elicify-pptx/LICENSE": "11425392cc0cad3b288256ebfd681ff8b06d55f19ab2917acc4c7818feb6dafa",
+    "elicify-pptx/SKILL.md": "1873782f1aa75c0dd7fb141444386ce7ce26fbd91bc2a371c144a3374e61f4d2",
+    "elicify-pptx/evals/evals.json": "e9732dbdd6f8f673a24994ebb1cbedd708c24c83d7702e3b3bb60e6cbc9f5f7f",
+    "elicify-pptx/knowledge/create-and-layout.md": "8880a2a11e50bdf68cba5ffb5727f5c0e494169dabe08449d2e8e92681883cc9",
+    "elicify-pptx/knowledge/edit-and-preserve.md": "8469dc10640b2fa8151a37704c9508103cbe2bb88bf95b7edf99437461725a27",
+    "elicify-pptx/knowledge/inspector-contract.md": "67228b25112acbf2f95f1a1df0d3c5410c85d2073b8be275c531249d1c8e488c",
+    "elicify-pptx/knowledge/visual-qa.md": "fae5800f4137a4e7efc90b152b2635b7a866907b3778db6774304b6ff3519932",
+    "elicify-pptx/scripts/inspect_pptx.py": "8507c25fd835c5d458891166810b67c7789a97b7c25bfb281aabbaa2d84001b7",
+    "elicify-xlsx/LICENSE": "11425392cc0cad3b288256ebfd681ff8b06d55f19ab2917acc4c7818feb6dafa",
+    "elicify-xlsx/SKILL.md": "36175cef02814b42ef0ea5312f880a155d563beb1121fc77871ed6af5038d29c",
+    "elicify-xlsx/evals/evals.json": "68bcd39acf89aeac96259bf83fb9ab8dd109da4d17fe60c1cd277a4ec4bd5554",
+    "elicify-xlsx/knowledge/inspector-contract.md": "9db85f35ec2c20ee5cf746eadf94e9a8251c3794acabbc62b8f715c9fbaadfc4",
+    "elicify-xlsx/knowledge/workflows.md": "b534e809bb803c90ff0dc8650005468eee47230ff350c29a7bc63ae85e16d19d",
+    "elicify-xlsx/scripts/inspect_workbook.py": "f152c089207a8a76c643875bcb471d55da8a6d17d4172cbf564033be7f9245bf"
+  },
+  "source_test_environment": {
+    "evidence_path": "docs/document-skills/verification.md",
+    "python": "3.12.13",
+    "libreoffice": "26.8.0.3",
+    "python_packages": {
+      "charset-normalizer": "3.5.1",
+      "et-xmlfile": "2.0.0",
+      "lxml": "6.1.3",
+      "openpyxl": "3.1.5",
+      "pillow": "12.3.0",
+      "pypdf": "6.19.0",
+      "pypdfium2": "5.13.0",
+      "python-docx": "1.2.0",
+      "python-pptx": "1.0.2",
+      "pyyaml": "6.0.3",
+      "reportlab": "5.0.1",
+      "typing-extensions": "4.16.0",
+      "xlsxwriter": "3.2.9"
+    },
+    "environment_lock_sha256": "2cceebbfef0706ca209e36a47084b2eb9f24bd3fd72db7d59628d4bb8d97f2ea",
+    "scope": "Previously tested source-package environment; does not certify Omnipus worker execution or supported-platform installation."
+  },
+  "omnipus_runtime_acceptance": {
+    "status": "pending",
+    "required": [
+      "Admin-managed versioned toolchain prefix",
+      "Mia and General Purpose actual bash probes",
+      "Linux/macOS/Windows sandbox read and execute configuration",
+      "Real DOCX/XLSX/PPTX/PDF generation, rendering and visual inspection"
+    ]
+  }
+}

@@ -351,7 +351,9 @@ func TestSpawnStop_RoundTrip(t *testing.T) {
 // command suitable for use as a test child.
 func sleepCommand() (exe string, args []string) {
 	if runtime.GOOS == "windows" {
-		return "cmd", []string{"/C", "timeout", "/T", "60", "/NOBREAK"}
+		// timeout exits immediately when stdin is not attached to a console;
+		// ping is the small, console-independent way to hold a test child open.
+		return "ping", []string{"-n", "60", "127.0.0.1"}
 	}
 	return "sleep", []string{"60"}
 }

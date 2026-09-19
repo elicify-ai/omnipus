@@ -1,0 +1,27 @@
+{
+  "skill_name": "elicify-xlsx",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create an editable sales workbook for a small shop. January sold 20 units at USD 12.50 each and February sold 24 at USD 12.50. Unit cost is USD 7.20. Show revenue, cost, gross profit and margin by month and total, with separate labelled assumptions and a chart. Calculate it, verify it and give me the workbook and a one-page PDF summary.",
+      "expected_output": "An XLSX with genuine formulas and a readable PDF. Independent totals: 44 units, revenue 550.00, cost 316.80, gross profit 233.20, gross margin 42.4%. Evidence distinguishes a real engine recalculation from missing cached results, and actual rendered-page inspection from text checks.",
+      "files": [],
+      "assertions": ["Formula cells remain formulas in the delivered XLSX", "Financial totals match independent arithmetic at declared precision", "A real engine recalculated results or the absence is reported explicitly", "The summary image was inspected for clipped labels and chart readability"]
+    },
+    {
+      "id": 2,
+      "prompt": "Update the tax-rate input in the supplied macro-enabled budget template from 7% to 7.5%. Keep everything else, including its hidden lookup sheet, names, charts, external links and macros. Do not run macros or refresh links. Deliver an edited copy and explain what you checked.",
+      "expected_output": "A targeted XLSM edit preserving the source. The agent inventories advanced features, retains the macro extension, compares macro binary and external link targets, checks formula references, and uses a preservation-capable route or states unsupported fidelity rather than silently dropping features.",
+      "files": [],
+      "fixture_requirements": ["Macro-enabled budget template with synthetic non-executable VBA payload, chart, named tax input, hidden lookup sheet and synthetic external link; package fixture supplied by the evaluation runner"],
+      "assertions": ["Original bytes unchanged", "Only intended tax input changes semantically", "No macro execution or external-link refresh", "Preservation claims have evidence; unsupported features produce an explicit limitation"]
+    },
+    {
+      "id": 3,
+      "prompt": "Import customer records into Excel and also give me a CSV for people to open in a spreadsheet. IDs 00123 and 00456 must keep their zeros. The notes include =HYPERLINK(\"https://example.invalid\",\"click\") and a value beginning with a tab then =1+1. Keep them as customer text. Explain any export changes.",
+      "expected_output": "A text-safe XLSX preserving IDs and untrusted strings, plus a CSV under an explicit neutralization policy or an explained safe alternative if exact bytes conflict with safe spreadsheet opening. CSV quoting alone is not presented as formula protection.",
+      "files": [],
+      "assertions": ["Imported notes reload as text, not formula cells", "Leading zeros preserved", "Tab-prefixed formula risk handled", "CSV mitigation and any changed raw values disclosed"]
+    }
+  ]
+}

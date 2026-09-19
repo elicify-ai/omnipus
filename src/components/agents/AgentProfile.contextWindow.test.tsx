@@ -62,6 +62,11 @@ import { fetchAgent, fetchSkills, fetchProviders, updateAgent } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 
 const baseAgent: Agent = {
+  revision: '0'.repeat(64),
+  editable_fields: [
+    { name: 'context_window_override', editable: true },
+    { name: 'max_tool_iterations', editable: true },
+  ],
   id: 'general-assistant',
   name: 'General Assistant',
   type: 'Main',
@@ -156,9 +161,9 @@ describe('AgentProfile — context window override (ADR-066 D9, FR-037)', () => 
     await openAdvanced(baseAgent)
     await screen.findByTestId('agent-context-window-override-input')
     // Nudge an unrelated field so an autosave fires.
-    const timeout = (await screen.findByTestId('agent-timeout-input')) as HTMLInputElement
+    const maxTools = (await screen.findByTestId('agent-max-tool-calls-input')) as HTMLInputElement
     vi.mocked(updateAgent).mockClear()
-    fireEvent.change(timeout, { target: { value: '90' } })
+    fireEvent.change(maxTools, { target: { value: '90' } })
     await waitFor(() => expect(updateAgent).toHaveBeenCalled(), { timeout: 6000 })
     const last = vi.mocked(updateAgent).mock.calls.at(-1)!
     expect('context_window_override' in last[1]).toBe(false)
