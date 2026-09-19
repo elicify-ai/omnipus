@@ -410,7 +410,15 @@ describe('authenticated class-builder aliases fail closed', () => {
       'two matching imports must not authenticate')
   })
 
-  it('keeps cva factory results unsupported in both direct and aliased positions', () => {
+  it('resolves cva factory results in both direct and aliased positions (item 4 port closes this)', () => {
+    // Item 4 (lead-assigned wave-3 follow-up), ported from ts-colors.mjs's
+    // own cva-factory call-site resolution (inspectClassExpr, ~line 1539) --
+    // see cvaFactoryDefinition's own header comment in spacing.mjs. This was
+    // previously pinned unsupported in BOTH shapes; the port re-inspects the
+    // cva definition's own config at each call site (sound: every string the
+    // call could ever produce is already a member of that config), so both
+    // resolve to the SAME real off-scale violation in the `bad` variant, not
+    // an unsupported marker.
     const source = `
       import { cva } from 'class-variance-authority'
       const badgeVariants = cva('p-[8px]', { variants: { tone: { bad: 'p-[13px]' } } })
@@ -418,8 +426,8 @@ describe('authenticated class-builder aliases fail closed', () => {
       export const B = () => { const v = badgeVariants({ tone: 'bad' }); return <span className={v} /> }
     `
     const result = scan({ path: 'src/x/badge.tsx', source, policy: POLICY, modules: { 'src/x/badge.tsx': source } })
-    const unsupported = result.filter((finding) => finding.ruleId === 'spacing/unsupported').map((finding) => finding.syntax)
-    assert.equal(unsupported.length, 2, `both cva shapes stay unsupported, got ${JSON.stringify(unsupported)}`)
+    assert.deepEqual(result.filter((finding) => finding.ruleId === 'spacing/unsupported'), [])
+    assert.ok(result.some((finding) => finding.ruleId === 'spacing/off-scale' && finding.syntax === 'p-[13px]'))
   })
 
   it('keeps a reassigned alias unsupported', () => {
@@ -437,15 +445,89 @@ describe('authenticated class-builder aliases fail closed', () => {
     assert.deepEqual(result.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: "className: cn('flex', 'p-[8px]')" }])
   })
 
-  it('still reports the generic pass-through inputs inside the real wrapper module', () => {
-    // Guardrail for group class-builder-infrastructure (owned by central
-    // contract registration, not this analyzer capability): resolving aliased
-    // calls must not clear the wrapper's own rest-parameter findings.
+  it('no longer reports the generic pass-through inputs inside the real wrapper module (P10 port closes this)', () => {
+    // P10 precision fix (ported from typography.mjs::classBuilderOwnParameterForward
+    // — see classBuilderOwnParameterForward's own header comment): cn()'s own
+    // definition (`export function cn(...inputs) { return twMerge(clsx(inputs)) }`)
+    // is a transparent pass-through of its own parameter, never a live class
+    // value to prove — every REAL class argument is already proven at each
+    // actual call site elsewhere. This used to be pinned here as an
+    // (intentionally accepted) unsupported finding, deferred to "central
+    // contract registration"; the P10 port now resolves it directly, so the
+    // real wrapper module scans clean of its own rest-parameter findings.
     const utilsSource = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../src/lib/utils.ts'), 'utf8')
     const result = scan({ path: 'src/lib/utils.ts', source: utilsSource, policy: POLICY })
     const unsupported = result.filter((finding) => finding.ruleId === 'spacing/unsupported').map((finding) => finding.syntax)
-    assert.ok(unsupported.includes('className: clsx(inputs)'), 'clsx(inputs) pass-through stays blocking')
-    assert.ok(unsupported.includes('className: inputs'), 'rest-parameter input stays blocking')
+    assert.ok(!unsupported.includes('className: clsx(inputs)'), 'clsx(inputs) pass-through no longer blocks')
+    assert.ok(!unsupported.includes('className: inputs'), 'rest-parameter input no longer blocks')
+  })
+})
+
+// P10 precision fix (ported from typography.mjs::classBuilderOwnParameterForward,
+// see typography-adversarial.test.mjs's own "P10 precision fix" describe
+// block for the reference suite this mirrors). Fairness controls mirror
+// dist/design-system-baseline/cli-lanes/fanout/COMMON-RULES.md: the clean
+// value alone gives [], the bad value written directly gives a finding.
+describe('P10 precision fix: a CLASS_BUILDER function definition forwarding its OWN parameter is not a live class value', () => {
+  const path = 'src/lib/utils.ts'
+  const jsxPath = 'src/lib/utils.tsx'
+  // spacing's guardClassBuilder authenticates a CLASS_BUILDER callee by its
+  // real import (clsx/tailwind-merge), unlike typography's simple name
+  // match -- every fixture below that CALLS clsx()/twMerge() needs their
+  // real imports present, or the inner call itself (not the P10 proof under
+  // test) would independently report unsupported for an unrelated reason.
+  const IMPORTS = "import { clsx } from 'clsx'\nimport { twMerge } from 'tailwind-merge'\n"
+
+  it('fairness control: the clean baseline (a registered spacing token, no class builder involved) gives no findings', () => {
+    expectClean(jsxPath, "export const x = <p className=\"p-[var(--space-2)]\" />")
+  })
+
+  it('fairness control: a plain off-scale violation written directly still gives a finding', () => {
+    const result = findings(jsxPath, "export const x = <p className=\"p-[7px]\" />")
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'p-[7px]'))
+  })
+
+  it("PERMITTED: cn()'s real definition shape (src/lib/utils.ts) -- a rest parameter forwarded through a chain of two CLASS_BUILDER calls -- scans clean", () => {
+    expectClean(path, IMPORTS + 'export function cn(...inputs) { return twMerge(clsx(inputs)) }')
+  })
+
+  it('PERMITTED: the arrow-function form of the same shape scans clean', () => {
+    expectClean(path, IMPORTS + 'export const cn = (...inputs) => twMerge(clsx(inputs))')
+  })
+
+  it('PERMITTED: a plain (non-rest) single parameter forwarded through one CLASS_BUILDER call scans clean', () => {
+    expectClean(path, IMPORTS + 'export function cn(input) { return clsx(input) }')
+  })
+
+  it('PERMITTED: a REAL class argument alongside the definition-site pass-through is still classified normally at its own call site', () => {
+    const result = findings(jsxPath, IMPORTS + "export function cn(...inputs) { return twMerge(clsx(inputs)) }\nexport const x = <p className={cn('p-[7px]')} />")
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'p-[7px]'))
+    assert.ok(!result.some((f) => f.ruleId === 'spacing/unsupported'))
+  })
+
+  it("FORBIDDEN: the enclosing function's own name is not a CLASS_BUILDER -- the transparent-definition proof is scoped to the trusted CLASS_BUILDERS set, not any rest-forwarding function", () => {
+    const result = findings(path, IMPORTS + 'export function wrap(...inputs) { return twMerge(clsx(inputs)) }')
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported' && f.syntax === 'className: inputs'))
+  })
+
+  it('FORBIDDEN: an extra statement before the return breaks the single-statement transparency proof', () => {
+    const result = findings(path, IMPORTS + 'export function cn(...inputs) { logIt(inputs); return twMerge(clsx(inputs)) }')
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported' && f.syntax === 'className: inputs'))
+  })
+
+  it("FORBIDDEN: forwarding a DIFFERENT identifier than the function's own parameter is not a pass-through", () => {
+    const result = findings(path, IMPORTS + 'export const cn = (...inputs) => twMerge(clsx(OTHER))')
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported' && f.syntax === 'className: OTHER'))
+  })
+
+  it('FORBIDDEN: more than one parameter is not the cn()/clsx() rest-forwarding shape', () => {
+    const result = findings(path, IMPORTS + 'export function cn(inputs, extra) { return twMerge(clsx(inputs)) }')
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported' && f.syntax === 'className: inputs'))
+  })
+
+  it("FORBIDDEN (mutation proof): reverting the fix's name-gate to accept ANY enclosing function name would silently pass this -- pinning `wrap` (not a CLASS_BUILDER) as still-unsupported is the sentinel that would catch that mutation", () => {
+    const result = findings(path, IMPORTS + 'export function classNamesHelper(...inputs) { return twMerge(clsx(inputs)) }')
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported' && f.syntax === 'className: inputs'))
   })
 })
 
@@ -915,6 +997,317 @@ describe('exported record readable from another module — false-green fix (port
     const q = `export function unrelated(){ return 1 }`
     const result = scan({ path: pPath, source, policy: POLICY, modules: { [pPath]: source, [qPath]: q } })
     assert.deepEqual(result, [], 'an unexported record cannot be imported anywhere, so no importer check applies')
+  })
+})
+
+// CAP-D1/CAP-D2 (lead-review narrowing, ported from ts-colors.mjs's b57bd04a3
+// -- see spacing.mjs's own comments ahead of computeRecordExportedUsesSafe):
+// an unrelated non-JS asset, an unrelated unparseable JS/TS module that does
+// not reference the origin, and an unrelated opaque dynamic import that
+// structurally cannot target the origin must none of them poison an exported
+// record's cross-module proof. Each "forbidden" pair pins that a genuinely
+// relevant instance of the SAME shape still blocks, unchanged.
+describe('exported record cross-module proof — CAP-D1/D2 narrowing (ported from ts-colors.mjs b57bd04a3)', () => {
+  const good = 'p-[var(--space-2)]'
+  const originPath = 'src/registry.ts'
+  const originSource = `export const REGISTRY = { a: '${good}' }\n`
+  const readerPath = 'src/components/Reader.tsx'
+  const readerSource = "import { REGISTRY } from '../registry'\nexport function V({k}){ return <i className={REGISTRY[k]}/> }\n"
+
+  function scanWith(extraModules) {
+    return scan({
+      path: readerPath,
+      source: readerSource,
+      policy: POLICY,
+      modules: { [originPath]: originSource, [readerPath]: readerSource, ...extraModules },
+    })
+  }
+
+  it('CONTROL: resolves cleanly with no unrelated modules present', () => {
+    assert.deepEqual(scanWith({}), [])
+  })
+
+  it('does not block when an unrelated module fails to parse and never references the origin (permitted)', () => {
+    const result = scanWith({
+      'src/components/Broken.tsx': "export function Broken( { return <div className='p-[var(--space-2",
+    })
+    assert.deepEqual(result, [], 'a parse-error module irrelevant to the origin must not poison every other export\'s proof')
+  })
+
+  it('still blocks when an unrelated module fails to parse but DOES import the origin (forbidden)', () => {
+    const result = scanWith({
+      'src/components/BrokenImporter.tsx': "import { REGISTRY } from '../registry'\nexport function Broken( { REGISTRY.a = 'p-[7px]'",
+    })
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported'), 'a parse-error module that imports the origin cannot be ruled irrelevant and must still block')
+  })
+
+  it('still blocks when an unrelated module fails to parse and its dynamic import()/require() argument is ambiguous (forbidden)', () => {
+    const result = scanWith({
+      'src/components/BrokenDynamic.tsx': "export function Broken( { return import(name",
+    })
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported'), 'an ambiguous dynamic import inside an unparseable module stays conservative, unchanged')
+  })
+
+  it('does not block on an unrelated .svg module present anywhere in the modules context (permitted)', () => {
+    const result = scanWith({
+      'src/assets/logo.svg': '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>',
+    })
+    assert.deepEqual(result, [], 'a non-JS asset can never contain import/export syntax and must not poison the proof')
+  })
+
+  it('does not block on an unrelated .css module present anywhere in the modules context (permitted)', () => {
+    const result = scanWith({
+      'src/styles/broken.css': '.foo { color: red; } @broken-at-rule {{{',
+    })
+    assert.deepEqual(result, [], 'a non-JS asset (even one that would fail to parse as CSS) must not poison the proof')
+  })
+
+  it('does not block on a directory-disjoint dynamic import template elsewhere (permitted)', () => {
+    const result = scanWith({
+      'src/lib/lazy.ts': 'export const load = (name) => import(`@/components/tools/${name}.tsx`)',
+    })
+    assert.deepEqual(result, [], 'a template head that structurally cannot resolve into the origin\'s directory must not poison the proof')
+  })
+
+  it('does not block on an npm-package dynamic import template elsewhere (permitted)', () => {
+    const result = scanWith({
+      'src/lib/lazy.ts': 'export const load = (mode) => import(`@codemirror/legacy-modes/mode/${mode}`)',
+    })
+    assert.deepEqual(result, [], 'a template head shaped like an npm package name can never grow into a local specifier and must not poison the proof')
+  })
+
+  it('still blocks on a dynamic import template sharing the origin directory (forbidden)', () => {
+    const result = scanWith({
+      'src/lib/lazy.ts': 'export const load = (mode) => import(`@/registry${mode}`)',
+    })
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported'), 'a template head sharing the origin\'s directory could still target it and must block')
+  })
+
+  it('still blocks on a dynamic import with a bare variable specifier, unchanged (forbidden)', () => {
+    const result = scanWith({
+      'src/lib/lazy.ts': 'export const load = (moduleName) => import(moduleName)',
+    })
+    assert.ok(result.some((f) => f.ruleId === 'spacing/unsupported'), 'a non-template opaque dynamic import argument stays exactly as conservative as before')
+  })
+})
+
+// Item 1 (lead-assigned wave-3 follow-up): renamed class-like parameter
+// forwards (ported from typography.mjs::forwardedClassBoundary/
+// parameterMemberBoundary/isClassLikeParameterName -- see
+// forwardedClassLikeBoundary/parameterMemberBoundary's own header comments
+// in spacing.mjs for exactly what was and was not ported). Fairness controls
+// mirror dist/design-system-baseline/cli-lanes/fanout/COMMON-RULES.md.
+describe('renamed class-like parameter forwards (ported from typography.mjs)', () => {
+  const jsxPath = 'src/components/Widget.tsx'
+
+  it('fairness control: the clean baseline (a registered spacing token, no class builder involved) gives no findings', () => {
+    const result = scan({ path: jsxPath, source: "export const x = <p className=\"p-[var(--space-2)]\" />", policy: POLICY })
+    assert.deepEqual(result, [])
+  })
+
+  it('fairness control: a plain off-scale violation written directly still gives a finding', () => {
+    const result = scan({ path: jsxPath, source: "export const x = <p className=\"p-[7px]\" />", policy: POLICY })
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'p-[7px]'))
+  })
+
+  it("PERMITTED: a class-like-suffix-named parameter (widthClass, sheet.tsx's real shape) forwarded unchanged becomes an extension-boundary, not unsupported", () => {
+    const source = "export function SheetContent({ widthClass }) { return <div className={cn('base', widthClass)} /> }"
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.ok(syntaxes(result, 'spacing/extension-boundary').includes('SheetContent#widthClass'))
+  })
+
+  it("PERMITTED: a `...ClassName`-suffix-named parameter (overlayClassName, dialog.tsx's real shape) forwarded unchanged becomes an extension-boundary", () => {
+    const source = "const DialogContent = React.forwardRef(({ overlayClassName }, ref) => <Overlay className={overlayClassName} />)"
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.ok(syntaxes(result, 'spacing/extension-boundary').includes('DialogContent#overlayClassName'))
+  })
+
+  it("PERMITTED: a render-prop's own renamed destructured className (calendar.tsx's Chevron shape) resolves through its render-prop owner, not unsupported", () => {
+    const source = [
+      "function Calendar({ className }) {",
+      '  return <DayPicker components={{ Chevron: ({ className: chevronClassName }) => <Icon className={chevronClassName} /> }} />',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.ok(result.some((f) => f.ruleId === 'spacing/extension-boundary' && f.syntax.endsWith('#chevronClassName')))
+  })
+
+  it("PERMITTED: a bare `.map()` callback parameter's own .className member read (item.className, smart-select.tsx's real shape) becomes an extension-boundary attributed to the nearest named ancestor", () => {
+    const source = "export function SmartSelect({ items }) { return <List>{items.map((item) => <Row key={item.value} className={item.className} />)}</List> }"
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.ok(syntaxes(result, 'spacing/extension-boundary').includes('SmartSelect#item.className'))
+  })
+
+  it('FORBIDDEN: a TRANSFORMED forward (a method call on the parameter, not passed unchanged) stays unsupported', () => {
+    const source = "export function SheetContent({ widthClass }) { return <div className={cn('base', widthClass.trim())} /> }"
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: widthClass.trim()'))
+  })
+
+  it('FORBIDDEN: a REASSIGNED class-like parameter stays unsupported', () => {
+    const source = "export function SheetContent({ widthClass }) { widthClass = 'extra'; return <div className={cn('base', widthClass)} /> }"
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: widthClass'))
+  })
+
+  it('FORBIDDEN: an UNNAMABLE owner (an anonymous callback with no named ancestor at all, e.g. a bare top-level IIFE) stays unsupported', () => {
+    const source = "(function ({ widthClass }) { return <div className={cn('base', widthClass)} /> })(props)"
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: widthClass'))
+  })
+
+  it("FORBIDDEN: a `containerProps ?? {}` fallback destructured to a class-like name stays unsupported (table.tsx's containerClassName real shape -- body destructuring of a DIFFERENT parameter's nullish-coalesced value, not a direct parameter forward)", () => {
+    const source = [
+      "export function Table({ className, containerProps }) {",
+      '  const { className: containerClassName } = containerProps ?? {}',
+      "  return <div className={cn('relative', containerClassName)}><table className={className} /></div>",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: containerClassName'))
+  })
+
+  it('FORBIDDEN: a member read of a NON-className property carries no class-name signal and stays unsupported (parameterMemberBoundary is restricted to the literal className/class key)', () => {
+    const source = "export function Row({ items }) { return items.map((item) => <span className={item.iconClass} />) }"
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: item.iconClass'))
+  })
+
+  it('mutation proof: reverting isClassLikeParameterName to require an EXACT literal "className" match would make the widthClass PERMITTED case above fail closed again -- pinning it PERMITTED is the sentinel', () => {
+    const source = "export function SheetContent({ widthClass }) { return <div className={cn('base', widthClass)} /> }"
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.equal(syntaxes(result, 'spacing/unsupported').length, 0)
+    assert.ok(syntaxes(result, 'spacing/extension-boundary').includes('SheetContent#widthClass'))
+  })
+})
+
+// Item 3 (lead-assigned wave-3 follow-up): a candidate set containing a
+// proven null/undefined branch must not poison the whole resolution when the
+// read is optional-chained (`x?.prop`); an unguarded read of the same chain
+// stays unsupported. See memberAccessIsNullGuarded's own header comment in
+// spacing.mjs for why this port is scoped to `?.` only, not the `x &&
+// x.prop` truthiness-guard form also named in the task (a separate,
+// unproven capability this pass deliberately does not ship).
+describe('null branches: a null/undefined candidate contributes nothing to a guarded read', () => {
+  const path = 'src/components/Widget.tsx'
+
+  it('fairness control: the clean baseline (a registered spacing token, no class builder involved) gives no findings', () => {
+    const result = scan({ path, source: "export const x = <p className=\"p-[var(--space-2)]\" />", policy: POLICY })
+    assert.deepEqual(result, [])
+  })
+
+  it('fairness control: a plain off-scale violation written directly still gives a finding', () => {
+    const result = scan({ path, source: "export const x = <p className=\"p-[7px]\" />", policy: POLICY })
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'p-[7px]'))
+  })
+
+  it("PERMITTED: a ternary's null branch contributes nothing to an optional-chained read of the non-null branch", () => {
+    const source = "export function V({flag}){ const cfg = flag ? { color: 'p-[7px]' } : null; return <i className={cn('base', cfg?.color)}/> }"
+    const result = scan({ path, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.deepEqual(syntaxes(result, 'spacing/off-scale'), ['p-[7px]'])
+  })
+
+  it("PERMITTED: a ternary's undefined branch is treated identically to a null branch", () => {
+    const source = "export function V({flag}){ const cfg = flag ? { color: 'p-[7px]' } : undefined; return <i className={cn('base', cfg?.color)}/> }"
+    const result = scan({ path, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.deepEqual(syntaxes(result, 'spacing/off-scale'), ['p-[7px]'])
+  })
+
+  it('FORBIDDEN: the SAME null-branch chain read WITHOUT optional chaining stays unsupported (unguarded, could throw or read off null at runtime)', () => {
+    const source = "export function V({flag}){ const cfg = flag ? { color: 'p-[7px]' } : null; return <i className={cn('base', cfg.color)}/> }"
+    const result = scan({ path, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: cfg.color'))
+  })
+
+  it('FORBIDDEN: a purely-null binding (no non-null branch at all) has nothing to resolve even when guarded -- stays unsupported, never crashes', () => {
+    const source = "export function V(){ const cfg = null; return <i className={cn('base', cfg?.color)}/> }"
+    const result = scan({ path, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').length > 0)
+  })
+
+  it('control: the pre-existing bare `undefined` class operand (unrelated to a proven-null record chain) is unaffected by this port', () => {
+    const source = 'export const X = (code) => { eval(code); return <button className={undefined}/> }'
+    const result = scan({ path, source, policy: POLICY })
+    assert.deepEqual(result, [{ ruleId: 'spacing/unsupported', path, syntax: 'className: undefined', message: 'Unsupported spacing expression; dynamic or cyclic class aliases cannot be verified against the D10 scale.', line: 1, column: 68 }])
+  })
+
+  it('mutation proof: reverting memberAccessIsNullGuarded to always return false would make the optional-chained PERMITTED case above fail closed again -- pinning it PERMITTED is the sentinel', () => {
+    const source = "export function V({flag}){ const cfg = flag ? { color: 'p-[7px]' } : null; return <i className={cn('base', cfg?.color)}/> }"
+    const result = scan({ path, source, policy: POLICY })
+    assert.equal(syntaxes(result, 'spacing/unsupported').length, 0)
+    assert.deepEqual(syntaxes(result, 'spacing/off-scale'), ['p-[7px]'])
+  })
+})
+
+// Item 4 (lead-assigned wave-3 follow-up): cva variant-function call-site
+// resolution, ported from ts-colors.mjs's own cva-factory handling (see
+// cvaFactoryDefinition/isCvaCallee's header comments in spacing.mjs).
+// Fairness controls mirror
+// dist/design-system-baseline/cli-lanes/fanout/COMMON-RULES.md.
+describe('cva variant function call-site resolution (ported from ts-colors.mjs)', () => {
+  const path = 'src/components/ui/badge.tsx'
+  const good = "cva('p-[var(--space-2)]', { variants: { tone: { ok: 'p-[var(--space-1)]' } } })"
+  const bad = "cva('p-[var(--space-2)]', { variants: { tone: { bad: 'p-[7px]' } } })"
+
+  it('fairness control: the clean baseline (a registered spacing token, no class builder involved) gives no findings', () => {
+    const result = scan({ path, source: "export const x = <p className=\"p-[var(--space-2)]\" />", policy: POLICY })
+    assert.deepEqual(result, [])
+  })
+
+  it('fairness control: a plain off-scale violation written directly still gives a finding', () => {
+    const result = scan({ path, source: "export const x = <p className=\"p-[7px]\" />", policy: POLICY })
+    assert.ok(result.some((f) => f.ruleId === 'spacing/off-scale' && f.syntax === 'p-[7px]'))
+  })
+
+  it("PERMITTED: a badgeVariants({...}) call resolves through to the cva definition's own violation, not unsupported (badge.tsx's real shape)", () => {
+    const source = `import { cva } from 'class-variance-authority'\nconst badgeVariants = ${bad}\nexport const A = () => <span className={badgeVariants({ tone: 'bad' })} />`
+    const result = scan({ path, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.ok(syntaxes(result, 'spacing/off-scale').includes('p-[7px]'))
+  })
+
+  it('PERMITTED: an all-clean cva factory call resolves with no findings at all', () => {
+    const source = `import { cva } from 'class-variance-authority'\nconst badgeVariants = ${good}\nexport const A = () => <span className={badgeVariants({ tone: 'ok' })} />`
+    const result = scan({ path, source, policy: POLICY })
+    assert.deepEqual(result, [])
+  })
+
+  it('PERMITTED: a renamed cva import is authenticated the same way as guardClassBuilder authenticates a renamed clsx/cn', () => {
+    const source = `import { cva as variants } from 'class-variance-authority'\nconst badgeVariants = ${bad.replace('cva(', 'variants(')}\nexport const A = () => <span className={badgeVariants({ tone: 'bad' })} />`
+    const result = scan({ path, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.ok(syntaxes(result, 'spacing/off-scale').includes('p-[7px]'))
+  })
+
+  it("FORBIDDEN: a `let`-bound cva factory is not authenticated -- reassignment cannot be ruled out, stays unsupported", () => {
+    const source = `import { cva } from 'class-variance-authority'\nlet badgeVariants = ${bad}\nexport const A = () => <span className={badgeVariants({ tone: 'bad' })} />`
+    const result = scan({ path, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes("className: badgeVariants({ tone: 'bad' })"))
+  })
+
+  it('FORBIDDEN: a same-named local function that is NOT actually cva (no cva import at all) is not authenticated by name alone', () => {
+    const source = `function cva() { return () => 'p-[7px]' }\nconst badgeVariants = cva()\nexport const A = () => <span className={badgeVariants({ tone: 'bad' })} />`
+    const result = scan({ path, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').length > 0, 'a local function merely NAMED cva must still be authenticated, not trusted by name alone once bound to a variable')
+  })
+
+  it("FORBIDDEN: a RENAMED import from the WRONG package is not authenticated (control -- proves the renamed path checks the import specifier, not just the local alias name)", () => {
+    const source = `import { cva as v } from 'not-the-real-cva-package'\nconst badgeVariants = v('p-[var(--space-2)]', { variants: { tone: { bad: 'p-[7px]' } } })\nexport const A = () => <span className={badgeVariants({ tone: 'bad' })} />`
+    const result = scan({ path, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes("className: badgeVariants({ tone: 'bad' })"))
+  })
+
+  it('mutation proof: reverting isCvaCallee to always return false would make the badge.tsx-shape PERMITTED case above fail closed again -- pinning it PERMITTED is the sentinel', () => {
+    const source = `import { cva } from 'class-variance-authority'\nconst badgeVariants = ${bad}\nexport const A = () => <span className={badgeVariants({ tone: 'bad' })} />`
+    const result = scan({ path, source, policy: POLICY })
+    assert.equal(syntaxes(result, 'spacing/unsupported').length, 0)
+    assert.ok(syntaxes(result, 'spacing/off-scale').includes('p-[7px]'))
   })
 })
 

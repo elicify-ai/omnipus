@@ -21,6 +21,80 @@ export const extensions = ['.css', '.js', '.jsx', '.ts', '.tsx']
 
 const CLASS_BUILDERS = new Set(['cn', 'clsx', 'classNames', 'classnames', 'twMerge', 'twJoin', 'cva', 'cx', 'tv'])
 
+// P10 port (typography.mjs::classBuilderOwnParameterForward) -- a
+// CLASS_BUILDER's OWN definition (`export function cn(...inputs:
+// ClassValue[]) { return twMerge(clsx(inputs)) }`, src/lib/utils.ts) is not
+// a live class value to prove: visitNode/visitClassBuilderArg walk EVERY
+// call to a CLASS_BUILDERS-named function anywhere in the file, not just
+// inside a className/cn() call site, so `cn`'s own body -- which itself
+// calls `twMerge`/`clsx`, both CLASS_BUILDERS members -- was being walked as
+// though it were a real usage, and its own rest parameter flagged as an
+// unresolved dynamic class expression. Every REAL class argument is already
+// proven at each actual call site elsewhere; the definition itself only
+// repackages/joins whatever was passed in. Narrow and structural (never a
+// name allowlist beyond the already-trusted CLASS_BUILDERS set): the
+// enclosing function's own resolvable declaration name must itself be a
+// CLASS_BUILDER, it must take exactly one parameter (plain or rest), its
+// body must be nothing but a single return of a chain of CLASS_BUILDER
+// calls, and the identifier under test must be that same parameter forwarded
+// unchanged (whole or spread) as a bare argument somewhere in that chain.
+// Anything else -- extra statements, a differently-named receiver, a
+// non-CLASS_BUILDER callee anywhere in the chain -- is left exactly as
+// unproven as before (falls through to the existing proofs / unsupported).
+function classBuilderOwnParameterForward(identifier) {
+  let fn = identifier.parent
+  while (fn && !ts.isFunctionLike(fn)) fn = fn.parent
+  if (!fn || fn.parameters.length !== 1) return false
+  const parameter = fn.parameters[0]
+  if (!ts.isIdentifier(parameter.name) || parameter.name.text !== identifier.text) return false
+  const declarationName = classBuilderDeclarationName(fn)
+  if (!declarationName || !CLASS_BUILDERS.has(declarationName)) return false
+  const returned = classBuilderSingleReturnExpression(fn)
+  if (!returned) return false
+  return classBuilderChainForwardsParameter(returned, parameter.name.text, new Set())
+}
+
+// The stable name a function-like node is declared under -- a function
+// declaration's own name, or the identifier of a `const NAME = (...) => ...`
+// / `const NAME = function (...) {...}` it is the initializer of. Anything
+// else (a method, an inline callback, an unnamed export default) is not a
+// recognizable CLASS_BUILDERS declaration and returns null.
+function classBuilderDeclarationName(fn) {
+  if (ts.isFunctionDeclaration(fn)) return fn.name ? fn.name.text : null
+  const parent = fn.parent
+  return parent && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name) && parent.initializer === fn
+    ? parent.name.text
+    : null
+}
+
+// A function-like node's body reduced to its single meaningful expression: a
+// block whose only statement is `return <expr>`, or an arrow function's
+// direct expression body. Any other shape (multiple statements, no return, a
+// non-expression return) is not provably transparent and returns null.
+function classBuilderSingleReturnExpression(fn) {
+  if (!fn.body) return null
+  if (!ts.isBlock(fn.body)) return fn.body
+  if (fn.body.statements.length !== 1) return null
+  const statement = fn.body.statements[0]
+  return ts.isReturnStatement(statement) && statement.expression ? statement.expression : null
+}
+
+// True when `expression` -- after unwrapping parens/as/satisfies/non-null --
+// is either the bare parameter identifier itself, or a call to a
+// CLASS_BUILDERS-named function where at least one argument recursively
+// forwards it the same way. `seen` guards against a call chain that somehow
+// revisits the same node. Deliberately NOT extended to a spread argument
+// (`clsx(...inputs)`): cn()'s real shape (src/lib/utils.ts) passes the whole
+// array (`clsx(inputs)`), never a spread.
+function classBuilderChainForwardsParameter(expression, parameterName, seen) {
+  const unwrapped = unwrap(expression)
+  if (!unwrapped || seen.has(unwrapped)) return false
+  seen.add(unwrapped)
+  if (ts.isIdentifier(unwrapped)) return unwrapped.text === parameterName
+  if (!ts.isCallExpression(unwrapped) || !ts.isIdentifier(unwrapped.expression) || !CLASS_BUILDERS.has(unwrapped.expression.text)) return false
+  return unwrapped.arguments.some((argument) => classBuilderChainForwardsParameter(argument, parameterName, seen))
+}
+
 const SPACING_PROPERTIES = new Set([
   'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
   'margin-block', 'margin-block-start', 'margin-block-end',
@@ -231,12 +305,23 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
     // reports its real value; an unprovable one blocks below.
     if (!hasUndefinedShadowOrDynamicScope(expr.getSourceFile())) return
   } else if (isProvenBoolean(expr, ctx)) return
+  // P10: this identifier IS the parameter of the CLASS_BUILDER function
+  // currently being DEFINED, forwarded unchanged into another CLASS_BUILDER
+  // call -- the definition site itself, not a live call-site usage.
+  if (ts.isIdentifier(expr) && classBuilderOwnParameterForward(expr)) return
   if (ts.isIdentifier(expr) || ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) {
-    const boundary = directForwardedParameter(expr, 'className')
+    const boundary = directForwardedParameter(expr, 'className') ?? forwardedClassLikeBoundary(expr)
     if (boundary) {
       pushFinding(ctx, RULE.extensionBoundary, `${boundary.symbol}#${boundary.name}`, 'Spacing extension boundary; caller-provided className is forwarded unchanged and requires exact central review.', withOrigin(location, expr))
       if (boundary.initializer) visitClassBuilderArg(boundary.initializer, ctx, sourceFile)
       return
+    }
+    if (ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) {
+      const memberBoundary = parameterMemberBoundary(expr)
+      if (memberBoundary) {
+        pushFinding(ctx, RULE.extensionBoundary, `${memberBoundary.symbol}#${memberBoundary.name}`, 'Spacing extension boundary; caller-provided className is forwarded unchanged and requires exact central review.', withOrigin(location, expr))
+        return
+      }
     }
     const dispatcher = resolveDispatcherMember(expr, ctx)
       ?? resolveDestructuredDispatcherMember(expr, ctx)
@@ -289,6 +374,22 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
     const joined = literalClassArrayJoin(expr)
     if (joined) {
       for (const element of joined.elements) visitClassBuilderArg(element, ctx, sourceFile, useLoc)
+      return
+    }
+    // Item 4 port (ts-colors.mjs::inspectClassExpr's cva-factory call-site
+    // resolution): `badgeVariants({ variant })` calling a const bound to
+    // `cva('base', { variants: {...} })` cannot be precisely resolved to the
+    // exact string ONE specific variant selection produces -- but every
+    // string the call could EVER return is already a member of the cva
+    // definition's own config, checked once at the DEFINITION site
+    // (visitClassObject, reached via visitNode's ordinary CLASS_BUILDERS
+    // dispatch on the `cva(...)` call itself). Re-inspecting that SAME
+    // definition at each call site is therefore sound -- it can never MISS a
+    // violation the call could produce -- without needing to trace which
+    // variant branch this specific call selects.
+    const cvaDefinition = cvaFactoryDefinition(expr.expression, ctx)
+    if (cvaDefinition) {
+      for (const argument of cvaDefinition.arguments) visitClassBuilderArg(argument, ctx, argument.getSourceFile())
       return
     }
     if (!viaAliasResolution && guardClassBuilder(expr.expression, ctx) && builderArgumentsStaticallyGoverned(expr, ctx)) return
@@ -396,6 +497,54 @@ function computeGuardImport(identifier, source) {
   return matches.length === 1 ? matches[0] : null
 }
 
+// Item 4 helpers. cva is authenticated separately from guardClassBuilder
+// above: that function verifies clsx/classnames/tailwind-merge/a locally-
+// defined cn() wrapper specifically, none of which share cva's "config
+// object -> call-site-selected subset" shape, so it has no cva branch at
+// all -- matched here by literal CLASS_BUILDERS name (the pre-existing,
+// pre-trusted dispatch every other builder already uses) or by a verified
+// import from 'class-variance-authority', covering a renamed import
+// (`import { cva as variants } from 'class-variance-authority'`) the same
+// way guardClassBuilder covers a renamed clsx/cn.
+// Deliberately NOT trusted by bare CLASS_BUILDERS name-matching the way
+// every OTHER builder call is elsewhere in this file (visitNode's own
+// top-level dispatch, guardClassBuilder's clsx/classnames/tailwind-merge
+// branches): those all treat the CALL's OWN arguments, at THAT call site,
+// as the class content to check -- safe regardless of what the named
+// function actually does at runtime, since nothing is inferred about ANY
+// OTHER call. cvaFactoryDefinition instead assumes that calling the
+// resolved factory AGAIN LATER, with DIFFERENT runtime arguments, can only
+// ever produce content already present in the ORIGINAL cva(...) definition
+// -- an assumption that holds for the real cva (its whole contract), but
+// is unsound for an unrelated function merely NAMED `cva` (verified by a
+// mutation fixture: a bare-name-only local `function cva() { return () =>
+// RAW_VALUE }` would walk zero arguments at its own call site and silently
+// report NOTHING, hiding whatever RAW_VALUE actually contains -- a false
+// green, not a false red). Requiring a verified import from the real
+// 'class-variance-authority' package closes that gap.
+function isCvaCallee(callee) {
+  const unwrapped = unwrap(callee)
+  if (!unwrapped) return false
+  const imported = guardImport(unwrapped)
+  return imported?.specifier === 'class-variance-authority' && imported.imported === 'cva'
+}
+
+// Resolves `callee` (a call's own expression, e.g. `badgeVariants` in
+// `badgeVariants({ variant })`) to the `cva(...)` CallExpression it is
+// declared equal to, when `callee` is an unambiguous `const` binding (local
+// declaration or import) whose initializer is itself an authenticated cva
+// call -- otherwise null, leaving the call exactly as unresolved as before.
+function cvaFactoryDefinition(callee, ctx) {
+  if (!ts.isIdentifier(callee)) return null
+  const binding = findLexicalBinding(callee, callee.text)
+  const imported = binding ? null : importedDeclaration(callee, ctx, new Set())
+  const resolvedBinding = binding ?? imported
+  if (!resolvedBinding || !resolvedBinding.initializer || !ts.isVariableDeclaration(resolvedBinding.declaration) || !isConstVariableDeclaration(resolvedBinding.declaration)) return null
+  const initializer = unwrap(resolvedBinding.initializer)
+  if (!initializer || !ts.isCallExpression(initializer) || !isCvaCallee(initializer.expression)) return null
+  return initializer
+}
+
 function guardClassBuilder(expression, ctx) {
   const callee = unwrap(expression)
   const imported = guardImport(callee)
@@ -493,6 +642,96 @@ function directForwardedParameter(expr, name) {
   const symbol = receivingSymbol(owner)
   if (!symbol) return null
   return { symbol, name: expr.text, initializer: parameter.initializer ?? null }
+}
+
+// Item 1 port (typography.mjs::isClassLikeParameterName + forwardedClassBoundary,
+// lead-assigned wave-3 follow-up to the CAP-D1/D2 narrowing above). A
+// parameter/property name carries a whole CSS class value, not just the
+// literal `className`/`class` (react-day-picker's `Chevron: ({ className:
+// chevronClassName })`, sheet.tsx's `widthClass`, smart-select's
+// `triggerClassName`, dialog.tsx's `overlayClassName`, table.tsx's
+// `containerClassName`, ...). Matched structurally (camelCase `...Class`/
+// `...ClassName` suffix) so directForwardedParameter's existing proof below
+// covers every such prop without a per-component allowlist. This only ever
+// WIDENS which identifiers are eligible for the existing unchanged-forwarding
+// proof (still gated by the same owner/reassignment checks); a false match
+// degrades at worst to an extra blocking extension-boundary finding, never a
+// silent pass.
+function isClassLikeParameterName(name) {
+  return name === 'className' || name === 'class'
+    || /(?:^|[a-z0-9])(?:ClassName|Class)$/.test(name)
+}
+
+// Generalizes directForwardedParameter('className') to any class-like-named
+// parameter (isClassLikeParameterName above), including one destructured
+// out of a JSX render-prop's own inline object literal (`components={{
+// Chevron: ({ className: chevronClassName }) => <Icon
+// className={chevronClassName}/> }}`, calendar.tsx's real shape). Unlike
+// typography.mjs's forwardedClassBoundary, this does not remap a renamed
+// destructured element back to its SOURCE property name ('className') --
+// every real target of this port is already a class-like-named identifier
+// at its own read site (chevronClassName/triggerClassName/widthClass/...),
+// so the local name IS the exact receiving identity to report; adding the
+// source-name remap would be unexercised, unproven complexity, not a real
+// capability gap. receivingSymbol already resolves the enclosing owner for
+// BOTH a plain variable-declared component AND a render-prop's own inline
+// PropertyAssignment (`Chevron: (...) => ...` climbs straight to
+// `ts.isPropertyAssignment(current)`, returning 'Chevron') -- no separate
+// render-prop-owner climb is needed.
+function forwardedClassLikeBoundary(expr) {
+  if (!ts.isIdentifier(expr) || !isClassLikeParameterName(expr.text)) return null
+  let owner = expr.parent
+  while (owner && !ts.isFunctionLike(owner)) owner = owner.parent
+  if (!owner) return null
+  const parameter = findParameterBinding(owner.parameters, expr.text)
+  if (!parameter || isReassignedWithin(owner, expr.text)) return null
+  const symbol = receivingSymbol(owner)
+  if (!symbol) return null
+  return { symbol, name: expr.text, initializer: parameter.initializer ?? null }
+}
+
+// Item 1 port (typography.mjs::parameterMemberBoundary, Capability B): `X.
+// className` / `X?.className` where X is an unmutated, bare (non-
+// destructured) parameter of the nearest enclosing function -- e.g. a
+// `.map((item) => <X className={item.className} />)` callback parameter
+// (smart-select.tsx's real shape). Distinct from forwardedClassLikeBoundary
+// (which proves the identifier ITSELF is an unchanged forwarded className):
+// here the identifier is a param and only ONE MEMBER of it is read.
+// Restricted to the literal `className`/`class` key (not the broader
+// class-like-name heuristic): unlike a same-named parameter, an arbitrary
+// property name carries no naming signal that it is a CSS class at all.
+function parameterMemberBoundary(node) {
+  const key = ts.isPropertyAccessExpression(node) ? node.name.text
+    : (() => { const argument = node.argumentExpression && unwrap(node.argumentExpression)
+      return argument && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) ? argument.text : null })()
+  if (key !== 'className' && key !== 'class') return null
+  const base = unwrap(node.expression)
+  if (!ts.isIdentifier(base)) return null
+  let fn = node.parent
+  while (fn && !ts.isFunctionLike(fn)) fn = fn.parent
+  if (!fn) return null
+  const parameter = findParameterBinding(fn.parameters, base.text)
+  if (!parameter || isReassignedWithin(fn, base.text)) return null
+  // receivingSymbol alone does not resolve an anonymous callback passed
+  // directly as a bare call argument (`items.map((item) => ...)`, not
+  // registered under a named variable/property) -- fall back to the nearest
+  // NAMED enclosing function/component as the stable receiving identity.
+  const ownerName = receivingSymbol(fn) ?? nearestNamedAncestorOwner(fn)
+  if (!ownerName) return null
+  return { symbol: ownerName, name: `${base.text}.${key}` }
+}
+
+function nearestNamedAncestorOwner(fn) {
+  let current = fn.parent
+  while (current) {
+    if (ts.isFunctionDeclaration(current) && current.name) return current.name.text
+    if (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) {
+      const name = receivingSymbol(current)
+      if (name) return name
+    }
+    current = current.parent
+  }
+  return null
 }
 
 function findParameterBinding(parameters, name) {
@@ -1059,9 +1298,49 @@ function clauseReturnExpression(clause) {
 // Returns null (never []) the instant any branch cannot be classified --
 // never a partial/best-effort subset, matching every other finite-branch
 // proof in this file.
+// Item 3 (lead-assigned wave-3 follow-up): a candidate set containing a
+// PROVEN null/undefined branch (`cond ? {...} : null`, `base ?? undefined`)
+// must not poison the WHOLE union the way an unclassifiable receiver
+// correctly does elsewhere in this proof -- a null/undefined branch is a
+// REAL, valid outcome of a conditional/nullish source, and a member read
+// that is itself optional-chained (`x?.prop`) already handles that outcome
+// at the read site: reading THROUGH `?.` can never actually reach the null
+// branch at runtime, so it contributes nothing to the read's own resolved
+// value set. An UNGUARDED read of the same chain (`x.prop`, no `?.`) could
+// actually throw or read off `null`/`undefined` at runtime for that branch
+// -- unprovable, stays unsupported exactly as before.
+//
+// Scoped to `?.` only, NOT the `x && x.prop` truthiness-guard form the task
+// also names: dispatcherBindingUsesSafe (this file's escape-safety proof for
+// a function-scoped dispatcher binding, immediately below in the call chain)
+// unconditionally treats ANY bare, non-`.member`-immediately-following
+// occurrence of the binding as an escape -- by design, for the general
+// mutation-safety proof, not specifically about null handling -- and a bare
+// `cfg` as the left operand of `&&` is EXACTLY such an occurrence. Every
+// `x && x.prop` fixture tried during this port hit that gate first and
+// stayed unsupported for an UNRELATED, pre-existing reason, never reaching
+// this null-candidate logic at all. Teaching dispatcherBindingUsesSafe a
+// truthiness-guard exemption (paralleling its existing destructuring
+// exemption) is a real, separate capability with its own soundness argument
+// (it would need to correlate the `&&` LEFT operand with the SAME binding's
+// `.member` access on the RIGHT, not just recognize any bare `&&` operand)
+// -- shipping it unverified here would be unproven complexity, not a proven
+// fix, so it is deliberately left out of this pass.
+const NULL_CANDIDATE = Symbol('spacing-null-candidate')
+
+function isNullOrUndefinedLiteral(expr) {
+  if (expr.kind === ts.SyntaxKind.NullKeyword) return true
+  return ts.isIdentifier(expr) && expr.text === 'undefined'
+}
+
+function memberAccessIsNullGuarded(expr) {
+  return Boolean(expr.questionDotToken)
+}
+
 function resolveRecordChain(node, ctx, seen) {
   const expr = unwrap(node)
   if (!expr) return null
+  if (isNullOrUndefinedLiteral(expr)) return [NULL_CANDIDATE]
   if (ts.isObjectLiteralExpression(expr)) return [expr]
   if (ts.isConditionalExpression(expr)) {
     const whenTrue = resolveRecordChain(expr.whenTrue, ctx, seen)
@@ -1086,8 +1365,13 @@ function resolveRecordChain(node, ctx, seen) {
     const staticKey = propertyName ?? ((keyExpr && (ts.isStringLiteral(keyExpr) || ts.isNoSubstitutionTemplateLiteral(keyExpr) || ts.isNumericLiteral(keyExpr))) ? keyExpr.text : null)
     const receivers = resolveRecordChain(expr.expression, ctx, seen)
     if (!receivers) return null
+    const nullGuarded = memberAccessIsNullGuarded(expr)
     const results = []
     for (const receiver of receivers) {
+      if (receiver === NULL_CANDIDATE) {
+        if (!nullGuarded) return null
+        continue // guarded (?. or `x && x.prop`): the null branch is never actually read, contributes nothing
+      }
       if (!ts.isObjectLiteralExpression(receiver)) return null
       if (staticKey !== null) {
         const classified = classifyDispatcherProperty(receiver, staticKey)
@@ -1142,6 +1426,16 @@ function resolveRecordChainIdentifier(identifier, ctx, seen) {
 function resolveRecordChainMember(expr, ctx) {
   const values = resolveRecordChain(expr, ctx, new Set())
   if (!values || values.length === 0) return null
+  // NULL_CANDIDATE (item 3) is only ever a meaningful INTERMEDIATE value,
+  // consumed and filtered by the ElementAccess/PropertyAccess branch's own
+  // guarded-member-read loop before it can reach this top level -- the only
+  // way one survives to here is `expr` itself resolving bare to null/
+  // undefined (or a conditional/`??` union of ONLY null/undefined) with no
+  // subsequent member access ever narrowing it. That is not a class-builder
+  // value to recurse into at all; every real AST node in `values` still
+  // gets its own visitClassBuilderArg(value.getSourceFile(), ...) call right
+  // after this returns, which would crash on the bare Symbol otherwise.
+  if (values.includes(NULL_CANDIDATE)) return null
   return { allAbsent: false, values }
 }
 
@@ -2219,10 +2513,10 @@ function recordBindingEscapes(scope, name, rootInitializer, cacheKey) {
 
 // SP-FALSE-GREEN fix (lead review of SP-RECOVER): ported from
 // ts-colors.mjs::knownClassExportUsesSafe and its dynamic-import helper
-// (dynamicImportProvenNotOrigin, simplified below to a fail-closed check --
-// this file has no existing template-literal-head analysis to reuse and the
-// repro shapes this closes never need one). recordBindingEscapes above only
-// ever walks ONE scope: the declaring module (for a same-file read) or the
+// (dynamicImportProvenNotOrigin, now ported below in full -- see its own
+// comment ahead of computeRecordExportedUsesSafe for the template-literal-
+// head proof). recordBindingEscapes above only ever walks ONE scope: the
+// declaring module (for a same-file read) or the
 // reading module (for an already-imported read). Neither walk looks at
 // OTHER files in the `modules` context that import the SAME exported record
 // and mutate it there -- an `export let`/`export const` record is reachable
@@ -2254,6 +2548,84 @@ function recordExportedUsesSafe(declaration, ctx, rootInitializer) {
   return result
 }
 
+// CAP-D2 port (ts-colors.mjs::dynamicImportProvenNotOrigin) -- a template-
+// literal dynamic import()/require() argument's HEAD is always the literal
+// prefix of whatever string it evaluates to at runtime (TemplateExpression
+// semantics: head + eval(span1) + text + ...) -- a substitution can only
+// APPEND characters after it, never rewrite or erase what is already there.
+// governedModulePath only ever resolves a specifier that itself starts with
+// '@/' or a relative '.' form. If the head cannot possibly grow into one of
+// those two forms (it already diverges from both -- e.g. an npm package name
+// interpolation like `@codemirror/legacy-modes/mode/${m}`), no runtime value
+// of the template can EVER be a governedModulePath-resolvable specifier at
+// all -- proven impossible, not guessed -- so it can never target `origin`.
+// When the head IS shaped like a local specifier, it must additionally share
+// `origin`'s directory (and, lacking a trailing '/', `origin`'s basename
+// must share the head's own final segment as a prefix), or it is still a
+// provably different target. Any other argument shape (bare identifier,
+// call, spread, or an ambiguous short head that could still complete into
+// '@/'/'.' once interpolation appends more text) stays exactly as
+// conservative as before: not excluded.
+function dynamicImportProvenNotOrigin(modulePath, argument, origin) {
+  if (!ts.isTemplateExpression(argument)) return false
+  const head = argument.head.text
+  if (head.startsWith('@/') || head.startsWith('./') || head.startsWith('../')) {
+    const prefix = head.startsWith('@/') ? `src/${head.slice(2)}` : path.posix.normalize(path.posix.join(path.posix.dirname(modulePath), head))
+    const prefixDir = prefix.endsWith('/') ? prefix.slice(0, -1) : path.posix.dirname(prefix)
+    const originDir = path.posix.dirname(origin)
+    if (originDir !== prefixDir) return true
+    if (prefix.endsWith('/')) return false
+    return !path.posix.basename(origin).startsWith(path.posix.basename(prefix))
+  }
+  if ('@/'.startsWith(head) || './'.startsWith(head) || '../'.startsWith(head)) return false
+  return true
+}
+
+// CAP-D1 fix (spacing-specific -- ts-colors.mjs has not itself narrowed this
+// case; its own knownClassExportUsesSafe still fails closed unconditionally
+// on ANY parse-error JS/TS module in the modules context). A JS/TS module
+// that fails to parse (moduleRecord's `valid` is false) may still contain
+// literal import/export/dynamic-import syntax the TS parser discarded during
+// error recovery: verified empirically that a broken JSX body preceding a
+// later `import` statement can make that import vanish from BOTH the
+// top-level statement list AND a full recursive `ts.forEachChild` walk --
+// the parser drops the tokens instead of attaching them to any recoverable
+// node. Trusting the parsed AST of an already-broken file to prove it is
+// IRRELEVANT to `origin` would therefore be unsound. Unconditionally
+// poisoning on ANY parse error anywhere in the tree is exactly the bug this
+// closes: with the lead applying live codemods elsewhere in src/, a single
+// transiently-broken, wholly unrelated file was enough to make every
+// exported record's cross-module proof fail everywhere (STATUS_BADGE.inbox,
+// MODE_CHIP_CLASS[m]). Scanning the RAW TEXT instead of the AST is safe in
+// the direction that matters: it can only ever find MORE candidate
+// specifiers than the file actually contains (a stray quoted string that
+// happens to look like a path), never fewer -- so it stays fail-closed. A
+// module is judged irrelevant only when NEITHER a plain quoted/no-
+// -substitution-backtick string ANYWHERE in its text governs to `origin`,
+// NOR an import()/require() call exists whose argument isn't itself a single
+// plain literal of that same shape immediately following the open paren
+// (anything else -- an identifier, a template with `${`, a call, nothing at
+// all -- stays ambiguous and fails closed, deliberately NOT attempting the
+// template-head proof above on already-broken text).
+const PLAIN_STRING_LITERAL_SOURCE = String.raw`'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|\`(?:[^\`\\$]|\\.|\$(?!\{))*\``
+const PLAIN_STRING_LITERAL_RE_G = new RegExp(PLAIN_STRING_LITERAL_SOURCE, 'g')
+const DYNAMIC_IMPORT_CALL_RE = /\b(?:import|require)\s*\(\s*/g
+const PLAIN_STRING_LITERAL_ARG_RE = new RegExp(`^(?:${PLAIN_STRING_LITERAL_SOURCE})\\s*[,)]`)
+
+function unparseableModuleMightTargetOrigin(modulePath, source, origin, modules) {
+  PLAIN_STRING_LITERAL_RE_G.lastIndex = 0
+  let match
+  while ((match = PLAIN_STRING_LITERAL_RE_G.exec(source))) {
+    if (governedModulePath(modulePath, match[0].slice(1, -1), modules) === origin) return true
+  }
+  DYNAMIC_IMPORT_CALL_RE.lastIndex = 0
+  while ((match = DYNAMIC_IMPORT_CALL_RE.exec(source))) {
+    const rest = source.slice(match.index + match[0].length)
+    if (!PLAIN_STRING_LITERAL_ARG_RE.test(rest)) return true // ambiguous argument shape -- fail closed
+  }
+  return false
+}
+
 function computeRecordExportedUsesSafe(declaration, ctx, rootInitializer) {
   if (!ctx.modules) return false
   const origin = declaration.getSourceFile().fileName
@@ -2261,7 +2633,11 @@ function computeRecordExportedUsesSafe(declaration, ctx, rootInitializer) {
   for (const modulePath of Object.keys(ctx.modules)) {
     if (!isJsModulePath(modulePath)) continue
     const record = moduleRecord(ctx, modulePath)
-    if (!record?.valid) return false
+    if (!record) return false
+    if (!record.valid) {
+      if (unparseableModuleMightTargetOrigin(modulePath, ctx.modules[modulePath], origin, ctx.modules)) return false
+      continue
+    }
     for (const item of record.sourceFile.statements) {
       if ((!ts.isImportDeclaration(item) && !ts.isExportDeclaration(item)) || !item.moduleSpecifier || !ts.isStringLiteral(item.moduleSpecifier)) continue
       if (governedModulePath(modulePath, item.moduleSpecifier.text, ctx.modules) !== origin) continue
@@ -2295,7 +2671,8 @@ function computeRecordExportedUsesSafe(declaration, ctx, rootInitializer) {
         if (!argument) dynamic = true
         else if (literal && (ts.isStringLiteral(literal) || ts.isNoSubstitutionTemplateLiteral(literal))) {
           if (governedModulePath(modulePath, literal.text, ctx.modules) === origin) dynamic = true
-        } else dynamic = true // any non-literal dynamic import()/require() argument is conservatively treated as possibly-origin
+        } else if (!literal || !dynamicImportProvenNotOrigin(modulePath, literal, origin)) dynamic = true
+        // any other non-literal dynamic import()/require() argument stays conservatively treated as possibly-origin
       }
       if (!dynamic) ts.forEachChild(node, visitDynamic)
     }
