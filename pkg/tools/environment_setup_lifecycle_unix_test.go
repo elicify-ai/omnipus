@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,7 +37,11 @@ sleep 60`,
 	require.NoError(t, err)
 	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 	require.NoError(t, err)
-	assert.False(t, pidAlive(pid), "the existing timeout group kill must reach an inherited child")
+	// SIGKILL is asynchronous: the group-kill syscall can return before the kernel
+	// finishes reaping every signaled process. Require death within a bounded window
+	// instead of racing the immediate PID check on slower runners.
+	require.Eventually(t, func() bool { return !pidAlive(pid) }, 3*time.Second, 50*time.Millisecond,
+		"the existing timeout group kill must reach an inherited child")
 }
 
 func TestEnvironmentSetup_DetachedChildLimitationIsHonest(t *testing.T) {
