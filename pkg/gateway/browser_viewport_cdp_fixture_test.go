@@ -153,6 +153,13 @@ func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int
 				switch expression {
 				case "self":
 					value = map[string]any{"type": "object", "className": "Window"}
+				case `({width:window.innerWidth,height:window.innerHeight})`:
+					observationMu.Lock()
+					value = map[string]any{
+						"type":  "object",
+						"value": map[string]any{"width": width, "height": height},
+					}
+					observationMu.Unlock()
 				case "window.devicePixelRatio":
 					observationMu.Lock()
 					value = map[string]any{"type": "number", "value": scale}
