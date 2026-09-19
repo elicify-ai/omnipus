@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
 import { contrastRatio, findColorVisionAmbiguities, simulateColorVision, statusContract, validateStatusContract } from './status'
+import type { StatusPresentation } from './status'
+
+// Named (not inline-anonymous) so each summary field reads off a review-stable
+// call site rather than an anonymous .map() callback.
+const toColorSummary = ([key, status]: [string, StatusPresentation]) => [key, {
+  color: status.resolvedColor,
+  label: status.label,
+  cue: status.nonColorCue,
+}] as const
 
 const D4_EXPECTED = {
   inbox: { color: '#9CA3AF', label: 'Inbox', cue: 'quiet-circle' },
@@ -14,11 +23,7 @@ const D4_EXPECTED = {
 
 describe('D4 status presentation contract', () => {
   it('defines the exact task-palette winner for all seven workflow presentations', () => {
-    expect(Object.fromEntries(Object.entries(statusContract).map(([key, status]) => [key, {
-      color: status.resolvedColor,
-      label: status.label,
-      cue: status.nonColorCue,
-    }]))).toEqual(D4_EXPECTED)
+    expect(Object.fromEntries(Object.entries(statusContract).map(toColorSummary))).toEqual(D4_EXPECTED)
   })
 
   it('defines every required presentation role as a generated token reference', () => {

@@ -434,7 +434,7 @@ export function GenericToolCall({
     statusConfig = getToolBadgeStatusConfig('success', { size: 12, durationMs })
   }
 
-  const hasDetail = !isRunning && (args !== undefined || result !== undefined || error)
+  const hasDetail = !!(!isRunning && (args !== undefined || result !== undefined || error))
 
   // Resolve result rendering: determine which sentinel type (if any) applies.
   // (marshalErr is already computed above, before the gate.)

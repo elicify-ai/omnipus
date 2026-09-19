@@ -43,6 +43,7 @@
 
 import type { ReactNode } from 'react'
 import { ArrowsClockwise } from '@phosphor-icons/react'
+import { cn } from './utils'
 import { formatDuration } from './formatDuration'
 
 // ── Shared span-status domain ─────────────────────────────────────────────────
@@ -66,7 +67,7 @@ export interface SpanStatusConfigOptions { // not-wire-format: SPA-internal call
 // delegationFailure branch (which has no equivalent status in either family)
 // so all three draw pixel-identical dots instead of three near-duplicates.
 export function statusDot(colorClass: string): ReactNode {
-  return <span aria-hidden="true" className={`w-2 h-2 rounded-full shrink-0 ${colorClass}`} />
+  return <span aria-hidden="true" className={cn('w-2 h-2 rounded-full shrink-0', colorClass)} />
 }
 
 // ── Inline style — ToolCallBadge, GenericToolCall ─────────────────────────────

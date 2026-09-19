@@ -2074,7 +2074,7 @@ function ComposerAttachmentChip() {
       filename={attachment.name}
       contentType={contentType}
       imageUrl={imageUrl}
-      className={cn('group', imageUrl && 'w-16 h-16')}
+      className={cn('group', !!imageUrl && 'w-16 h-16')}
       removeButton={
         <AttachmentPrimitive.Remove
           tabIndex={0}

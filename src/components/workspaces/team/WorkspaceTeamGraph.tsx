@@ -118,7 +118,7 @@ function AgentNode({ id, data }: NodeProps<AgentFlowNode>) {
   const { allNodes, editState, workerIds, onDelegate } = useTeamGraphCanvasContext()
 
   const connection = useConnection()
-  const isTarget = connection.inProgress && connection.fromNode?.id !== id
+  const isTarget = !!connection.inProgress && connection.fromNode?.id !== id
   const targetHandleStyle = {
     pointerEvents: connection.inProgress ? ('all' as const) : ('none' as const),
   }

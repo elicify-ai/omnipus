@@ -620,7 +620,8 @@ function StatusColumn({
   activeTask,
   onTaskClick,
 }: StatusColumnProps) {
-  const { setNodeRef, isOver } = useDroppable({ id: config.status })
+  const { setNodeRef, isOver: isOverDroppable } = useDroppable({ id: config.status })
+  const isOver = !!isOverDroppable
 
   // Visual feedback: highlight a cell the dragged card can legally land in.
   const canAccept = activeTask
