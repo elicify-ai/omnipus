@@ -200,7 +200,7 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
         <config.Icon
           size={13}
           weight="fill"
-          className={cn('shrink-0', config.pulse === true && 'animate-pulse')}
+          className={cn('shrink-0', config.pulse === true ? 'animate-pulse' : undefined)}
           aria-hidden="true"
         />
         <span className="font-medium max-w-[220px] truncate">

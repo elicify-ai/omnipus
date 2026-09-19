@@ -23,11 +23,11 @@ export function TokenCounter({ className }: { className?: string }) {
     >
       <ArrowsClockwise
         size={11}
-        className={cn(isStreaming && 'animate-spin text-[var(--color-accent)]')}
+        className={cn(isStreaming ? 'animate-spin text-[var(--color-accent)]' : undefined)}
         aria-hidden="true"
       />
       <span
-        className={cn('font-mono tabular-nums', isStreaming && 'text-[var(--color-secondary)]')}
+        className={cn('font-mono tabular-nums', isStreaming ? 'text-[var(--color-secondary)]' : undefined)}
         data-testid="session-token-value"
       >
         {formatTokens(sessionTokens)} tokens

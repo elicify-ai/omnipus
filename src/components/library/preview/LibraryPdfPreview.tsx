@@ -1745,7 +1745,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             aria-label="View"
             title="View"
             data-testid="library-pdf-mode-view"
-            className={cn(LIBRARY_ICON_BTN, mode === 'view' && 'text-[var(--color-accent)]')}
+            className={cn(LIBRARY_ICON_BTN, mode === 'view' ? 'text-[var(--color-accent)]' : undefined)}
           >
             <Eye size={15} weight={mode === 'view' ? 'fill' : 'regular'} />
           </button>
@@ -1758,7 +1758,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             aria-label="Edit"
             title={canEdit ? 'Fill fields or add a signature' : 'Edit'}
             data-testid="library-pdf-mode-edit"
-            className={cn(LIBRARY_ICON_BTN, mode === 'edit' && 'text-[var(--color-accent)]')}
+            className={cn(LIBRARY_ICON_BTN, mode === 'edit' ? 'text-[var(--color-accent)]' : undefined)}
           >
             <PencilSimple size={15} weight={mode === 'edit' ? 'fill' : 'regular'} />
           </button>
@@ -1829,7 +1829,7 @@ export function LibraryPdfPreview({ workspaceId, entry, variant = 'pane', pageFr
             aria-label={saveStatus === 'saving' ? 'Saving' : 'Save'}
             title={saveStatus === 'saving' ? 'Saving…' : 'Save'}
             data-testid="library-pdf-save"
-            className={cn(LIBRARY_ICON_BTN, dirty && saveStatus !== 'saving' && 'text-[var(--color-accent)]')}
+            className={cn(LIBRARY_ICON_BTN, dirty && saveStatus !== 'saving' ? 'text-[var(--color-accent)]' : undefined)}
           >
             <FloppyDisk size={15} weight={dirty ? 'fill' : 'regular'} />
           </button>

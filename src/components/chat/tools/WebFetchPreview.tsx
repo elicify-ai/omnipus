@@ -96,8 +96,8 @@ function WebFetchBlock({
           onClick={() => hasDetail && setExpanded((e) => !e)}
           className={cn(
             'flex min-w-0 flex-1 items-center gap-2 py-1 transition-colors text-left',
-            hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
-            !hasDetail && 'cursor-default'
+            hasDetail ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
+            !hasDetail ? 'cursor-default' : undefined
           )}
           aria-expanded={hasDetail ? expanded : undefined}
           disabled={!hasDetail}

@@ -480,7 +480,7 @@ export function GenericToolCall({
             // shrinks to its text and the row's middle is dead space.
             'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
             hasDetail && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
-            !hasDetail && 'cursor-default'
+            !hasDetail ? 'cursor-default' : undefined
           )}
           aria-expanded={hasDetail ? expanded : undefined}
           disabled={!hasDetail}

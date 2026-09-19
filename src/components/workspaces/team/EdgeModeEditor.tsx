@@ -115,7 +115,7 @@ export function EdgeModeEditor({
                 on
                   ? MODE_CHIP_CLASS[m]
                   : 'border-[var(--color-border)] bg-[var(--color-surface-2)] text-[var(--color-muted)] opacity-60 hover:opacity-100',
-                isLastOn && 'cursor-not-allowed',
+                isLastOn ? 'cursor-not-allowed' : undefined,
               )}
             >
               {MODE_LABEL[m]}

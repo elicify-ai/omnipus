@@ -49,7 +49,7 @@ export function TaskResultField({ task, occurrence }: TaskResultFieldProps) {
   return (
     <div className="space-y-1.5">
       <p className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-muted)]">Result</p>
-      <div className={cn('relative', isFailed && 'ring-1 ring-[var(--color-error)]/30 rounded-md')}>
+      <div className={cn('relative', isFailed ? 'ring-1 ring-[var(--color-error)]/30 rounded-md' : undefined)}>
         <pre
           data-testid="task-result-text"
           className="text-xs font-mono text-[var(--color-secondary)] bg-[var(--color-surface-2)] rounded-md p-3 max-h-[200px] overflow-y-auto whitespace-pre-wrap break-words leading-relaxed"

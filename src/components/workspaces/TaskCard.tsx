@@ -231,7 +231,7 @@ export function TaskCard({
       className={cn(
         'group relative rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] p-3 cursor-pointer',
         'transition-colors hover:border-[var(--color-border)]/60 hover:bg-[var(--color-surface-2)]/40',
-        hasRollup && 'border-[var(--color-accent)]/30',
+        hasRollup ? 'border-[var(--color-accent)]/30' : undefined,
       )}
     >
       {isDraggable && (

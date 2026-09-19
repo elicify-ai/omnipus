@@ -182,7 +182,7 @@ export function MessageItem({ message }: MessageItemProps) {
   return (
     <div
       data-message-id={message.id}
-      className={cn('group flex gap-3 px-4 py-3', isUser && 'flex-row-reverse')}
+      className={cn('group flex gap-3 px-4 py-3', isUser ? 'flex-row-reverse' : undefined)}
     >
       {/* Avatar — O11 icon attribution: for assistant messages, use the
           agent's own icon + color when known, rather than a generic Robot.
@@ -202,7 +202,7 @@ export function MessageItem({ message }: MessageItemProps) {
       </div>
 
       {/* Content */}
-      <div className={cn('flex flex-col gap-1 max-w-[85%] min-w-0', isUser && 'items-end')}>
+      <div className={cn('flex flex-col gap-1 max-w-[85%] min-w-0', isUser ? 'items-end' : undefined)}>
         {/* Agent label — shown above assistant messages when the agent is known */}
         {!isUser && agentName && (
           <span

@@ -130,8 +130,8 @@ export function TaskChecklistField({ task, value, onChange, disabled = false }: 
               )}
               <span className={cn(
                 'flex-1 text-[var(--color-secondary)]',
-                todo.status === 'completed' && 'line-through text-[var(--color-muted)]',
-                todo.status === 'in_progress' && 'text-[color:var(--color-warning)]',
+                todo.status === 'completed' ? 'line-through text-[var(--color-muted)]' : undefined,
+                todo.status === 'in_progress' ? 'text-[color:var(--color-warning)]' : undefined,
               )}>
                 {todo.text}
               </span>

@@ -111,7 +111,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
         )}
         <span className={cn(
           'text-xs text-[var(--color-muted)] flex-shrink-0',
-          workspace.task_count === 0 && 'hidden',
+          workspace.task_count === 0 ? 'hidden' : undefined,
         )}>
           {workspace.task_count} task{workspace.task_count !== 1 ? 's' : ''}
         </span>

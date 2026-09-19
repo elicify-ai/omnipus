@@ -123,7 +123,7 @@ function TaskNodeComponent({ data, selected }: NodeProps<TaskGraphNode>) {
       <div
         className={cn(
           'absolute right-1.5 top-1.5 z-20 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 [@media(hover:none)]:opacity-100',
-          selected && 'opacity-100',
+          selected ? 'opacity-100' : undefined,
         )}
       >
         <TaskActionButton task={task} className="bg-[var(--color-surface-1)]" />

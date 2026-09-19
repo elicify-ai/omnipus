@@ -75,7 +75,7 @@ export function LibraryTextPreview({
             aria-label="View"
             title="View"
             data-testid="library-preview-mode-view"
-            className={cn(LIBRARY_ICON_BTN, mode === 'view' && 'text-[var(--color-accent)]')}
+            className={cn(LIBRARY_ICON_BTN, mode === 'view' ? 'text-[var(--color-accent)]' : undefined)}
           >
             <Eye size={15} weight={mode === 'view' ? 'fill' : 'regular'} />
           </button>
@@ -87,7 +87,7 @@ export function LibraryTextPreview({
             aria-label="Edit"
             title="Edit"
             data-testid="library-preview-mode-edit"
-            className={cn(LIBRARY_ICON_BTN, mode === 'edit' && 'text-[var(--color-accent)]')}
+            className={cn(LIBRARY_ICON_BTN, mode === 'edit' ? 'text-[var(--color-accent)]' : undefined)}
           >
             <PencilSimple size={15} weight={mode === 'edit' ? 'fill' : 'regular'} />
           </button>
@@ -103,7 +103,7 @@ export function LibraryTextPreview({
           aria-label={status === 'saving' ? 'Saving' : 'Save'}
           title={status === 'saving' ? 'Saving…' : 'Save'}
           data-testid="library-preview-save"
-          className={cn(LIBRARY_ICON_BTN, isDirty && status !== 'saving' && 'text-[var(--color-accent)]')}
+          className={cn(LIBRARY_ICON_BTN, isDirty && status !== 'saving' ? 'text-[var(--color-accent)]' : undefined)}
         >
           <FloppyDisk size={15} weight={isDirty ? 'fill' : 'regular'} />
         </button>

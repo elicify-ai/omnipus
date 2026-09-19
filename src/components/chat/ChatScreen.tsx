@@ -2993,7 +2993,7 @@ export function OmnipusComposer({ agentRemoved = false }: { agentRemoved?: boole
                 'block w-full resize-none bg-transparent px-3 py-2 text-sm text-[var(--color-secondary)] outline-none',
                 'placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden',
                 'focus:outline-none focus:ring-0',
-                (!inputEnabled || isStreaming) && 'opacity-60 cursor-not-allowed',
+                (!inputEnabled || isStreaming) ? 'opacity-60 cursor-not-allowed' : undefined,
               )}
               aria-label="Message input"
               // Deferred item 2 (W3C APG combobox pattern — combobox with

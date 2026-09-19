@@ -359,7 +359,7 @@ function ColumnMenu({ label, align = 'left', sort, filter }: ColumnMenuProps) {
             isSorted || isFiltered
               ? 'text-[var(--color-secondary)]'
               : 'text-[var(--color-muted)] hover:text-[var(--color-secondary)]',
-            align === 'right' && 'ml-auto',
+            align === 'right' ? 'ml-auto' : undefined,
           )}
         >
           {`${label}${arrow}`}

@@ -142,7 +142,7 @@ export function LibraryEntryRow({
         // D-8: hidden entries must read as visually distinct even when the
         // Show Hidden toggle reveals them — dimmed, in addition to the
         // "hidden" badge below.
-        entry.is_hidden && 'opacity-60',
+        entry.is_hidden ? 'opacity-60' : undefined,
       )}
     >
       {/* Inline media preview (operator direction, 2026-08-04: "images and
@@ -162,7 +162,7 @@ export function LibraryEntryRow({
           // no rounding, just the glyph on the row's own background. The box
           // itself (w-8 h-8 flex centring) stays in BOTH cases so row text
           // stays aligned whether this cell holds a thumbnail or a glyph.
-          showThumb && 'rounded-md overflow-hidden',
+          showThumb ? 'rounded-md overflow-hidden' : undefined,
         )}
         style={
           showThumb

@@ -80,7 +80,7 @@ function FileReadBlock({
         onClick={() => !isRunning && setExpanded((e) => !e)}
         className={cn(
           'flex w-full items-center gap-2 py-1 transition-colors text-left',
-          !isRunning && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
+          !isRunning ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
           isRunning && 'cursor-default'
         )}
         aria-expanded={!isRunning ? expanded : undefined}

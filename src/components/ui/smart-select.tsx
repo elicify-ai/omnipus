@@ -159,7 +159,7 @@ function SearchableSelect({
             className
           )}
         >
-          <span className={cn('line-clamp-1', !selectedLabel && 'text-[var(--color-muted)]')}>
+          <span className={cn('line-clamp-1', !selectedLabel ? 'text-[var(--color-muted)]' : undefined)}>
             {selectedLabel ?? placeholder}
           </span>
           <CaretUpDown size={14} className="ml-2 shrink-0 opacity-50" aria-hidden="true" />

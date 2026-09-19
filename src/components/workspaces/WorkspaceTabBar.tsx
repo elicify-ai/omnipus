@@ -245,7 +245,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
               }}
               className={cn(
                 'flex items-center gap-2',
-                settingsActive && 'text-[var(--color-accent)]',
+                settingsActive ? 'text-[var(--color-accent)]' : undefined,
               )}
             >
               <Buildings size={15} weight={settingsActive ? 'fill' : 'regular'} />
@@ -270,7 +270,7 @@ export function WorkspaceTabBar({ workspaceId, workspaceName }: WorkspaceTabBarP
                   }}
                   className={cn(
                     'flex items-center gap-2',
-                    isActive && 'text-[var(--color-accent)]',
+                    isActive ? 'text-[var(--color-accent)]' : undefined,
                   )}
                 >
                   <Icon size={15} weight={isActive ? 'fill' : 'regular'} />

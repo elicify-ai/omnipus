@@ -143,8 +143,8 @@ export function ToolCallBadge({ toolCall, surface = 'thread' }: ToolCallBadgePro
           disabled={isRunning}
           className={cn(
             'flex flex-1 min-w-0 items-center gap-2 py-1 text-left transition-colors',
-            !isRunning && 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer',
-            isRunning && 'cursor-default'
+            !isRunning ? 'hover:bg-[var(--color-surface-2)]/60 cursor-pointer' : undefined,
+            isRunning ? 'cursor-default' : undefined
           )}
           aria-expanded={!isRunning ? expanded : undefined}
         >

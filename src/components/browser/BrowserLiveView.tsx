@@ -2649,7 +2649,7 @@ export function BrowserLiveView({
                     )}
                   >
                     <Globe size={12} weight={active ? 'fill' : 'regular'} className="shrink-0" />
-                    <span className={cn('min-w-0 flex-1 truncate', active && 'font-medium')}>{label}</span>
+                    <span className={cn('min-w-0 flex-1 truncate', active ? 'font-medium' : undefined)}>{label}</span>
                   </button>
                   <button tabIndex={0}
                     type="button"
@@ -2810,7 +2810,7 @@ export function BrowserLiveView({
             aria-label={annotateMode ? 'Exit annotate mode' : 'Annotate a region'}
             title={annotateMode ? 'Exit annotate mode' : 'Drag a region (or click a spot) to comment on it'}
             aria-pressed={annotateMode}
-            className={cn(TOOLBAR_ICON_BTN, annotateMode && 'text-[var(--color-accent)]')}
+            className={cn(TOOLBAR_ICON_BTN, annotateMode ? 'text-[var(--color-accent)]' : undefined)}
           >
             <ChatCircleDots size={16} weight={annotateMode ? 'fill' : 'regular'} />
           </button>
@@ -2860,7 +2860,7 @@ export function BrowserLiveView({
           className={cn(
             'pointer-events-none absolute inset-x-0 bottom-0 z-40 truncate px-3 py-1.5 text-center text-[11px] text-[var(--color-secondary)]',
             'bg-black/60 backdrop-blur-sm',
-            visualState !== 'you-driving' && 'invisible',
+            visualState !== 'you-driving' ? 'invisible' : undefined,
           )}
         >
           Send a message to hand back to {resolvedAgentName ?? 'the agent'} — or press Esc to stop driving

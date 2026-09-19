@@ -143,7 +143,7 @@ function TaskRunRow({ run, onOpenInChat }: { run: TaskRun; onOpenInChat: () => v
       data-testid="task-run-row"
       className={cn(
         'space-y-1.5 rounded-md border border-[var(--color-border)] bg-[var(--color-surface-1)] p-2.5',
-        isFailed && 'border-[color:var(--color-error)]/30',
+        isFailed ? 'border-[color:var(--color-error)]/30' : undefined,
       )}
     >
       <div className="flex items-center justify-between gap-2">

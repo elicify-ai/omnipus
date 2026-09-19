@@ -44,7 +44,7 @@ export const DateTriggerButton = React.forwardRef<HTMLButtonElement, DateTrigger
       {...rest}
     >
       <CalendarBlank size={16} className="shrink-0 opacity-70" aria-hidden="true" />
-      <span className={cn('truncate', !hasValue && 'text-[var(--color-muted)]')}>
+      <span className={cn('truncate', !hasValue ? 'text-[var(--color-muted)]' : undefined)}>
         {children}
       </span>
     </Button>

@@ -645,7 +645,7 @@ function StatusColumn({
         // bleeds into the page/board underneath (`overscroll-contain`).
         'flex flex-col flex-1 min-w-[162px] min-h-0 gap-2 p-2 overflow-y-auto overscroll-contain border-r border-[var(--color-border)]/25 last:border-r-0 transition-colors',
         isOver && canAccept && 'bg-[var(--color-accent)]/5 ring-1 ring-inset ring-[var(--color-accent)]/40',
-        isOver && !canAccept && 'bg-[var(--color-error)]/5 ring-1 ring-inset ring-[var(--color-error)]/40',
+        isOver && !canAccept ? 'bg-[var(--color-error)]/5 ring-1 ring-inset ring-[var(--color-error)]/40' : undefined,
       )}
     >
       {tasks.map((task) => (
@@ -696,7 +696,7 @@ function DraggableTaskCard({
     <div
       ref={setNodeRef}
       // The card while being dragged is shown in the DragOverlay; hide the source.
-      className={cn(isDragging && 'opacity-40')}
+      className={cn(isDragging ? 'opacity-40' : undefined)}
     >
       <TaskCard
         task={task}
