@@ -23,8 +23,15 @@ import (
 // tree registers exactly the kept subcommands and no removed verbs.
 //
 // Kept: onboard, start (+ gateway/g aliases), stop, credentials, audit, doctor,
-// records, version.
+// records, version, browser.
 // Removed: agent, auth, status, cron, migrate, model, skills.
+//
+// "browser" was added in the squad/k-browser-capability CI-provisioning
+// remediation (commit 26010a4d6) as the non-interactive installer entry
+// point onto the gateway's managed install path (the founder ruling pinned
+// the gateway's capture browser to the installer route, not the Playwright
+// cache). It is a one-shot operator/CLI command, not an agent tool —
+// belonging in the kept-command list, not the removed-verb list.
 func TestNewOmnipusCommand_KeptCommandsPresent(t *testing.T) {
 	cmd := NewOmnipusCommand()
 	require.NotNil(t, cmd)
@@ -35,6 +42,7 @@ func TestNewOmnipusCommand_KeptCommandsPresent(t *testing.T) {
 	// Canonical subcommand names (no aliases).
 	wantCommands := []string{
 		"audit",
+		"browser",
 		"credentials",
 		"doctor",
 		"onboard",

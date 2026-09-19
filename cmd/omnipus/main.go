@@ -122,6 +122,7 @@ func printRosterAndUsage(w *os.File, roster []rosterLine) {
 	fmt.Fprintln(w, "  omnipus credentials  manage secrets (set/list/delete/rotate)")
 	fmt.Fprintln(w, "  omnipus audit        view the audit log")
 	fmt.Fprintln(w, "  omnipus doctor       diagnose configuration issues")
+	fmt.Fprintln(w, "  omnipus browser      manage the gateway's managed Chrome install (provision, …)")
 	fmt.Fprintln(w, "  omnipus version      print build version")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, `Run "omnipus --help" for full documentation.`)
@@ -381,7 +382,7 @@ func autoStartAndRetryWith(
 
 // NewOmnipusCommand builds the root cobra command with the minimized CLI tree.
 //
-// Subcommands (resolved first by cobra): onboard, start, credentials, audit, doctor, version.
+// Subcommands (resolved first by cobra): onboard, start, credentials, audit, doctor, browser, version, records.
 // Root RunE handles the positional <agent> [<prompt>] execute path (FR-001/002/008).
 // Removed verbs (agent, auth, status, cron, migrate, model, skills) are no longer registered;
 // typing one prints a helpful message (US-11/AC-1) rather than "unknown agent".
