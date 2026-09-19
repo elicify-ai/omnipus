@@ -765,7 +765,15 @@ func encodeImageToDataURLCached(
 	// here — its inputs (the SVG markup) are not the same shape as the
 	// raster decode pipeline, and FR-004 covers the latter.
 	if mime == "image/svg+xml" {
-		return encodeSVGToDataURL(localPath, info, maxSize)
+		dataURL := encodeSVGToDataURL(localPath, info, maxSize)
+		limits := catalog.ResizeLimits{LongEdgePx: 7680, MaxBytes: int64(maxSize)}
+		if len(budget) > 0 && budget[0].LongEdgePx > 0 {
+			limits = budget[0]
+			if limits.MaxBytes <= 0 || limits.MaxBytes > int64(maxSize) {
+				limits.MaxBytes = int64(maxSize)
+			}
+		}
+		return normalizeDataURLToBudget(dataURL, limits)
 	}
 
 	// FR-011/014/015: resolve the effective budget BEFORE reading bytes
@@ -877,6 +885,26 @@ func encodeImageToDataURLCached(
 	library.GlobalNormalizeCache().Put(cacheKey, []byte(dataURL))
 
 	return dataURL
+}
+
+func normalizeDataURLToBudget(dataURL string, limits catalog.ResizeLimits) string {
+	comma := strings.IndexByte(dataURL, ',')
+	if comma < 0 {
+		return ""
+	}
+	raw, err := base64.StdEncoding.DecodeString(dataURL[comma+1:])
+	if err != nil {
+		return ""
+	}
+	decoded, _, err := image.Decode(bytes.NewReader(raw))
+	if err != nil {
+		return ""
+	}
+	result, err := resize.ResizeToFit(decoded, limits)
+	if err != nil {
+		return ""
+	}
+	return "data:" + result.Mime + ";base64," + base64.StdEncoding.EncodeToString(result.Data)
 }
 
 func maxInt(a, b int) int {

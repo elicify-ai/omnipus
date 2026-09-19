@@ -236,9 +236,10 @@ func TestAgentUpdate_DoesNotTriggerFullReload(t *testing.T) {
 	reloadCalls.Store(0)
 
 	updateResult := systools.NewAgentUpdateTool(deps).Execute(context.Background(), map[string]any{
-		"id":    agentID,
-		"soul":  "an updated soul, no cascade expected",
-		"model": "test-model-v2",
+		"id":       agentID,
+		"revision": currentAgentRevision(t, deps, agentID),
+		"soul":     "an updated soul, no cascade expected",
+		"model":    "test-model-v2",
 	})
 	if updateResult.IsError {
 		t.Fatalf("update_agent failed: %s", updateResult.ForLLM)
@@ -320,8 +321,9 @@ func TestAgentDelete_StillUsesFullReload_Deliberately(t *testing.T) {
 	reloadCalls.Store(0)
 
 	deleteResult := systools.NewAgentDeleteTool(deps).Execute(context.Background(), map[string]any{
-		"id":      agentID,
-		"confirm": true,
+		"id":       agentID,
+		"confirm":  true,
+		"revision": currentAgentRevision(t, deps, agentID),
 	})
 	if deleteResult.IsError {
 		t.Fatalf("delete_agent failed: %s", deleteResult.ForLLM)

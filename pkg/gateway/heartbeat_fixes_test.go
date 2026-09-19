@@ -190,7 +190,7 @@ func deleteSessionViaAPI(t *testing.T, api *restAPI, sessionID string) *httptest
 func deleteWorkspaceViaAPI(t *testing.T, api *restAPI, wsID string) *httptest.ResponseRecorder {
 	t.Helper()
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+wsID, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, wsID), nil)
 	r.URL.Path = "/api/v1/workspaces/" + wsID
 	api.HandleWorkspaces(w, r)
 	return w
@@ -199,9 +199,11 @@ func deleteWorkspaceViaAPI(t *testing.T, api *restAPI, wsID string) *httptest.Re
 // putMemberConfigs calls PUT /api/v1/workspaces/{id} with the given member_configs JSON.
 func putMemberConfigs(t *testing.T, api *restAPI, wsID, memberConfigsJSON string) *httptest.ResponseRecorder {
 	t.Helper()
-	body := fmt.Sprintf(`{"member_configs":%s}`, memberConfigsJSON)
+	state, err := workspace.ReadState(api.homePath, wsID)
+	require.NoError(t, err)
+	body := fmt.Sprintf(`{"revision":%q,"member_configs":%s}`, state.Revision, memberConfigsJSON)
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(body))
+	r := httptest.NewRequest(http.MethodPut, workspaceDeleteURL(t, api, wsID), strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/workspaces/" + wsID
 	api.HandleWorkspaces(w, r)
@@ -358,7 +360,7 @@ func TestWorkspacePUT_EagerSession(t *testing.T) {
 
 	// ── PUT 1: enable heartbeat ── //
 	w1 := httptest.NewRecorder()
-	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(enableBody))
+	r1 := httptest.NewRequest(http.MethodPut, workspaceDeleteURL(t, api, wsID), strings.NewReader(withWorkspaceRevisionJSON(t, api, wsID, enableBody)))
 	r1.Header.Set("Content-Type", "application/json")
 	r1.URL.Path = "/api/v1/workspaces/" + wsID
 	api.HandleWorkspaces(w1, r1)
@@ -395,7 +397,7 @@ func TestWorkspacePUT_EagerSession(t *testing.T) {
 
 	// ── PUT 2: enable again → same session_id (idempotent) ── //
 	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(enableBody))
+	r2 := httptest.NewRequest(http.MethodPut, workspaceDeleteURL(t, api, wsID), strings.NewReader(withWorkspaceRevisionJSON(t, api, wsID, enableBody)))
 	r2.Header.Set("Content-Type", "application/json")
 	r2.URL.Path = "/api/v1/workspaces/" + wsID
 	api.HandleWorkspaces(w2, r2)
@@ -413,7 +415,7 @@ func TestWorkspacePUT_EagerSession(t *testing.T) {
 	// ── PUT 3: disable ── //
 	disableBody := `{"member_configs":{"mia":{"heartbeat":{"enabled":false,"interval_minutes":10,"body":"Check tasks."}}}}`
 	w3 := httptest.NewRecorder()
-	r3 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(disableBody))
+	r3 := httptest.NewRequest(http.MethodPut, workspaceDeleteURL(t, api, wsID), strings.NewReader(withWorkspaceRevisionJSON(t, api, wsID, disableBody)))
 	r3.Header.Set("Content-Type", "application/json")
 	r3.URL.Path = "/api/v1/workspaces/" + wsID
 	api.HandleWorkspaces(w3, r3)
@@ -421,7 +423,7 @@ func TestWorkspacePUT_EagerSession(t *testing.T) {
 
 	// ── PUT 4: re-enable → new session_id ── //
 	w4 := httptest.NewRecorder()
-	r4 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(enableBody))
+	r4 := httptest.NewRequest(http.MethodPut, workspaceDeleteURL(t, api, wsID), strings.NewReader(withWorkspaceRevisionJSON(t, api, wsID, enableBody)))
 	r4.Header.Set("Content-Type", "application/json")
 	r4.URL.Path = "/api/v1/workspaces/" + wsID
 	api.HandleWorkspaces(w4, r4)
@@ -618,7 +620,7 @@ func TestWorkspaceDelete_Cascade(t *testing.T) {
 
 	// DELETE /api/v1/workspaces/{wsID}
 	w := deleteWorkspaceViaAPI(t, api, wsID)
-	require.Equal(t, http.StatusNoContent, w.Code, "DELETE workspace must return 204; body=%s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "DELETE workspace must return a 200 ConfigurationMutationState envelope (ADR-090 §5.2); body=%s", w.Body.String())
 
 	// Assert: cron job gone.
 	assert.Empty(t, heartbeatJobsFor(cs), "heartbeat cron job must be removed by cascade delete")
@@ -669,7 +671,7 @@ func TestWorkspaceDelete_Cascade_SharedStore(t *testing.T) {
 		"heartbeat cron job must exist before workspace delete (reconciled by the enable PUT)")
 
 	w := deleteWorkspaceViaAPI(t, api, wsID)
-	require.Equal(t, http.StatusNoContent, w.Code, "DELETE workspace must return 204; body=%s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "DELETE workspace must return a 200 ConfigurationMutationState envelope (ADR-090 §5.2); body=%s", w.Body.String())
 
 	assert.Empty(t, heartbeatJobsFor(cs), "heartbeat cron job must be removed by cascade delete")
 
@@ -770,7 +772,7 @@ func TestWorkspaceDelete_Cascade_DualCopy(t *testing.T) {
 
 	// DELETE /api/v1/workspaces/{wsID}
 	w := deleteWorkspaceViaAPI(t, api, wsID)
-	require.Equal(t, http.StatusNoContent, w.Code, "DELETE workspace must return 204; body=%s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "DELETE workspace must return a 200 ConfigurationMutationState envelope (ADR-090 §5.2); body=%s", w.Body.String())
 
 	// FIX 1: BOTH copies must be gone — not just the shared one.
 	_, sharedErrAfter := sharedStore.GetMeta(legacyMeta.ID)
@@ -906,7 +908,7 @@ func TestWorkspacePUT_SessionIDReadOnly(t *testing.T) {
 	// Enable heartbeat so the server mints a real session_id.
 	enableBody := `{"member_configs":{"mia":{"heartbeat":{"enabled":true,"interval_minutes":10,"body":"Check tasks."}}}}`
 	w1 := httptest.NewRecorder()
-	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(enableBody))
+	r1 := httptest.NewRequest(http.MethodPut, workspaceDeleteURL(t, api, wsID), strings.NewReader(withWorkspaceRevisionJSON(t, api, wsID, enableBody)))
 	r1.Header.Set("Content-Type", "application/json")
 	r1.URL.Path = "/api/v1/workspaces/" + wsID
 	api.HandleWorkspaces(w1, r1)
@@ -925,7 +927,7 @@ func TestWorkspacePUT_SessionIDReadOnly(t *testing.T) {
 		forgedID,
 	)
 	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(forgeBody))
+	r2 := httptest.NewRequest(http.MethodPut, workspaceDeleteURL(t, api, wsID), strings.NewReader(withWorkspaceRevisionJSON(t, api, wsID, forgeBody)))
 	r2.Header.Set("Content-Type", "application/json")
 	r2.URL.Path = "/api/v1/workspaces/" + wsID
 	api.HandleWorkspaces(w2, r2)
@@ -971,7 +973,7 @@ func TestWorkspacePUT_DisableReleasesSession(t *testing.T) {
 	// Step 1: enable heartbeat — session created.
 	enableBody := `{"member_configs":{"mia":{"heartbeat":{"enabled":true,"interval_minutes":10,"body":"Check tasks."}}}}`
 	w1 := httptest.NewRecorder()
-	r1 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(enableBody))
+	r1 := httptest.NewRequest(http.MethodPut, workspaceDeleteURL(t, api, wsID), strings.NewReader(withWorkspaceRevisionJSON(t, api, wsID, enableBody)))
 	r1.Header.Set("Content-Type", "application/json")
 	r1.URL.Path = "/api/v1/workspaces/" + wsID
 	api.HandleWorkspaces(w1, r1)
@@ -996,7 +998,7 @@ func TestWorkspacePUT_DisableReleasesSession(t *testing.T) {
 	// Step 2: disable heartbeat — session must be released.
 	disableBody := `{"member_configs":{"mia":{"heartbeat":{"enabled":false,"interval_minutes":10,"body":"Check tasks."}}}}`
 	w2 := httptest.NewRecorder()
-	r2 := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(disableBody))
+	r2 := httptest.NewRequest(http.MethodPut, workspaceDeleteURL(t, api, wsID), strings.NewReader(withWorkspaceRevisionJSON(t, api, wsID, disableBody)))
 	r2.Header.Set("Content-Type", "application/json")
 	r2.URL.Path = "/api/v1/workspaces/" + wsID
 	api.HandleWorkspaces(w2, r2)
@@ -1085,7 +1087,7 @@ func TestWorkspacePUT_CoreTeamShrinkReleasesHeartbeat(t *testing.T) {
 	// PUT with core_team shrunk to drop agentA (no member_configs).
 	shrinkBody := `{"core_team":["jim"]}`
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/workspaces/"+wsID, strings.NewReader(shrinkBody))
+	r := httptest.NewRequest(http.MethodPut, workspaceDeleteURL(t, api, wsID), strings.NewReader(withWorkspaceRevisionJSON(t, api, wsID, shrinkBody)))
 	r.Header.Set("Content-Type", "application/json")
 	r.URL.Path = "/api/v1/workspaces/" + wsID
 	api.HandleWorkspaces(w, r)

@@ -1,7 +1,9 @@
 ---
-name: Define Goal
+name: define-goal
 description: Articulate a goal, its acceptance criteria, and its Definition of Done before creating a task, plan, or goal. Use whenever you author, rewrite, or amend a goal or its criteria — the pattern here governs goal-, criteria-, and DoD-writing everywhere.
 context: global
+metadata:
+  display_name: Define Goal
 ---
 
 # Define Goal
@@ -14,10 +16,11 @@ A well-formed goal has **three parts**, authored together:
 3. **Definition of Done (DoD)** — the standing quality gates that apply *on top of*
    the criteria.
 
-Load this skill before you author a goal or its criteria anywhere: `create_task`,
-`create_plan`, `create_task_in_workspace`, `plan_correct` tail members, or a goal you
-are compiling. What you write here is exactly what the Judge will later hold the work
-to, and what the setter is asked to confirm — write it for those readers.
+Load this skill before you author a goal or its criteria anywhere: before `tool:create_task`
+or a goal you are compiling, branch:jim before `tool:create_plan`, and
+branch:plansupervisor before `tool:plan_correct` tail members. What you write here is
+exactly what the Judge will later hold the work to — write it for that reader.
+Goals activate when written; there is no setter-approval gate before work starts.
 
 ## Part 1 — The goal statement
 
@@ -38,7 +41,8 @@ Rules:
 - **A time or effort bound only if the request implies one** — never invented.
 - **Do not assert it is achievable.** Feasibility is judged separately; it is not part
   of the sentence.
-- The setter approves the statement (with the criteria) before work starts.
+- Persist the three parts with the role's write path as soon as they are clear. Do not
+  wait for a confirmation card.
 
 ## Part 2 — Acceptance criteria
 
@@ -109,8 +113,8 @@ lives here; outcome-specific checks live in the criteria. Never bolt a generic g
    workspace say nothing: no secrets or credentials in the output; every factual claim
    is grounded, not assumed. This layer is what **guarantees a DoD always exists**.
 4. **Bounded inference.** For gaps the layers above leave, infer a few sensible gates
-   appropriate to the *kind* of work — but only defensible ones, and **show them** so
-   the setter can approve or drop them. Never silently invent quality gates.
+   appropriate to the *kind* of work — but only defensible ones, and **state them in
+   the DoD text** so they are visible. Never silently invent quality gates.
 
 The Judge evaluates the goal against **its acceptance criteria and its DoD together**.
 
@@ -126,18 +130,22 @@ its absence on non-technical work is normal, not a deficiency.
 
 ## Unclear goals get questions, not guesses
 
-If the goal is genuinely ambiguous — success could reasonably mean two different
-things — ask the goal-setter before locking criteria in. A criteria set built on a
-guess is worse than a short delay, because "done" then means something the setter
-never asked for.
+branch:plansupervisor Skip this entire section, including “How to ask” and “When not to ask”; use the wake to supply criteria in your single `tool:plan_correct` call and do not ask anyone.
 
-- **Who to ask:** the goal-setter. A person in chat → ask them in the conversation
-  (use the `AskUserQuestion` card when available). Delegated work → the setter is the
-  delegating agent → ask via `message_parent`.
-- **How to ask:** at most a few sharp questions that distinguish the readings you
-  actually have. Name the interpretations; never an open-ended "what do you want?".
-- **When not to ask:** if the ambiguity would not change the criteria, resolve it
-  yourself and state the assumption in the criteria text where the Judge can see it.
+branch:mia If the goal is genuinely ambiguous — success could reasonably mean two different things — ask only enough to distinguish those readings. Do not ask for permission to write already-clear criteria.
+branch:jim If the goal is genuinely ambiguous — success could reasonably mean two different things — ask only enough to distinguish those readings. Do not ask for permission to write already-clear criteria.
+branch:planner If the goal is genuinely ambiguous — success could reasonably mean two different things — ask only enough to distinguish those readings. Do not ask for permission to write already-clear criteria.
+
+- branch:mia Ask the person in chat conversationally, using `tool:AskUserQuestion` only for a real unknown that would change the criteria.
+- branch:jim Ask the person in chat conversationally, using `tool:AskUserQuestion` only for a real unknown that would change the criteria.
+- branch:planner Ask Jim through `tool:message_parent`.
+- branch:plansupervisor Do not ask anyone. Take criteria from the wake and put replacement or append criteria on the `tool:plan_correct` call.
+- branch:mia **How to ask:** at most a few sharp questions that distinguish the readings you actually have. Name the interpretations; never an open-ended "what do you want?".
+- branch:jim **How to ask:** at most a few sharp questions that distinguish the readings you actually have. Name the interpretations; never an open-ended "what do you want?".
+- branch:planner **How to ask:** at most a few sharp questions that distinguish the readings you actually have. Name the interpretations; never an open-ended "what do you want?".
+- branch:mia **When not to ask:** if the ambiguity would not change the criteria, resolve it yourself and state the assumption in the criteria text where the Judge can see it.
+- branch:jim **When not to ask:** if the ambiguity would not change the criteria, resolve it yourself and state the assumption in the criteria text where the Judge can see it.
+- branch:planner **When not to ask:** if the ambiguity would not change the criteria, resolve it yourself and state the assumption in the criteria text where the Judge can see it.
 
 ## Worked examples (all three parts)
 
@@ -158,7 +166,7 @@ never asked for.
   - *(workspace)* Tests pass, no new lint errors.
   - *(floor)* No credentials in logs — failed attempts are not logged with the
     attempted password.
-  - *(inferred — confirm)* The 429 response includes a `Retry-After` header.
+  - *(inferred)* The 429 response includes a `Retry-After` header.
 
 ### Non-software
 
@@ -177,15 +185,15 @@ never asked for.
   - *(goal)* It stays a surprise — no invitation or plan detail is ever sent to my
     wife.
   - *(floor)* Availability and prices are confirmed, not assumed.
-  - *(inferred — confirm)* A backup plan exists if the venue falls through.
+  - *(inferred)* A backup plan exists if the venue falls through.
 
 ## Output shape
 
-Produce, together, and echo all three back to the setter when the flow calls for
-confirmation (they are agreeing to what you wrote, so it must say what they meant):
+Produce the three parts together and persist them with the role's write path.
+Show inferred DoD items in the text; do not hold the write for approval.
 
 1. **The goal statement** — one clear sentence per Part 1.
 2. **The acceptance criteria** — each tagged **yes/no**, **number**, or **artifact**,
    each clearing the quality bar, one thing per line.
-3. **The Definition of Done** — derived from the four layers, with any inferred item
-   flagged for the setter to approve or drop.
+3. **The Definition of Done** — derived from the four layers, with inferred items
+   labelled as inferred.

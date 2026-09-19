@@ -208,8 +208,13 @@ func (h *BrowserWSHandler) dispatchBrowserCommand(wc *browserWSConn, state *brow
 func failBrowserInput(wc *browserWSConn, state *browserConnState, viewerID, reason string) {
 	state.commands.close()
 	slog.Warn("browser input connection reset", "viewer_id", viewerID, "reason", reason)
-	if err := wc.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, reason), time.Now().Add(time.Second)); err != nil {
-		slog.Debug("browser input reset: close notification failed", "viewer_id", viewerID, "error", err)
+	// A failed negotiation can reach this cleanup before the transport is
+	// attached. The connection still needs local cleanup; only the close-frame
+	// notification requires a live transport.
+	if wc.conn != nil {
+		if err := wc.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, reason), time.Now().Add(time.Second)); err != nil {
+			slog.Debug("browser input reset: close notification failed", "viewer_id", viewerID, "error", err)
+		}
 	}
 	wc.close()
 }

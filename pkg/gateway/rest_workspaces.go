@@ -10,10 +10,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -36,6 +36,15 @@ import (
 // errWorkspaceNotFound is returned by readWorkspaceFile when the workspace file
 // does not exist on disk. Callers use errors.Is(err, errWorkspaceNotFound).
 var errWorkspaceNotFound = errors.New("workspace not found")
+
+// workspaceIDPattern is an allowlist for the externally supplied identifier
+// used to address workspace metadata files. Generated IDs are ULIDs; built-in
+// roster IDs are simple lowercase names.
+var workspaceIDPattern = regexp.MustCompile(`^[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*$`)
+
+func validWorkspaceID(id string) bool {
+	return len(id) <= 128 && workspaceIDPattern.MatchString(id)
+}
 
 // removeAllFn indirects os.RemoveAll so tests can inject a deterministic
 // failure. A chmod-based test (make the parent dir r-x so its contents cannot
@@ -129,6 +138,24 @@ func rejectMountsWriteField(w http.ResponseWriter, r *http.Request) bool {
 	return rejectTopLevelField(w, r, "mounts", mountsNotWritableHereMsg)
 }
 
+func rejectNullTopLevelField(w http.ResponseWriter, r *http.Request, field string) bool {
+	rawBody, err := io.ReadAll(io.LimitReader(r.Body, maxWorkspaceBodyBytes+1))
+	if err != nil {
+		jsonErr(w, http.StatusBadRequest, "could not read request body")
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(rawBody))
+	var top map[string]json.RawMessage
+	if json.Unmarshal(rawBody, &top) != nil {
+		return true
+	}
+	if raw, present := top[field]; present && string(raw) == "null" {
+		jsonErr(w, http.StatusBadRequest, field+" must be an array; null is not allowed")
+		return false
+	}
+	return true
+}
+
 // rejectTopLevelField 400s when the request body carries `field` as a TOP-LEVEL
 // KEY, and restores r.Body either way so the caller's normal decode is
 // unaffected.
@@ -171,6 +198,9 @@ func rejectTopLevelField(w http.ResponseWriter, r *http.Request, field, msg stri
 // readWorkspaceFile reads and parses ~/.omnipus/workspaces/{id}.json.
 // Greenfield: no legacy agent_ids→core_team migration (FR-1.10).
 func readWorkspaceFile(home, id string) (storedWorkspace, error) {
+	if !validWorkspaceID(id) {
+		return storedWorkspace{}, fmt.Errorf("%w: invalid workspace id", errWorkspaceNotFound)
+	}
 	path := filepath.Join(home, "workspaces", id+".json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -209,7 +239,7 @@ func listWorkspaceFiles(home string) ([]storedWorkspace, error) {
 		id := strings.TrimSuffix(e.Name(), ".json")
 		w, err := readWorkspaceFile(home, id)
 		if err != nil {
-			slog.Warn("rest: skipping malformed workspace file", "file", e.Name(), "error", err)
+			logsafeWarn("rest: skipping malformed workspace file", "file", e.Name(), "error", err)
 			continue
 		}
 		workspaces = append(workspaces, w)
@@ -235,12 +265,12 @@ func scanTasks(home string, fn func(id string, t task.Task)) error {
 		}
 		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
-			slog.Warn("rest_workspaces: scanTasks: failed to read task file", "file", e.Name(), "error", err)
+			logsafeWarn("rest_workspaces: scanTasks: failed to read task file", "file", e.Name(), "error", err)
 			continue
 		}
 		var t task.Task
 		if err := json.Unmarshal(data, &t); err != nil {
-			slog.Warn("rest_workspaces: scanTasks: failed to parse task file", "file", e.Name(), "error", err)
+			logsafeWarn("rest_workspaces: scanTasks: failed to parse task file", "file", e.Name(), "error", err)
 			continue
 		}
 		if !task.IsValidStatus(t.Status) {
@@ -279,7 +309,7 @@ func countTasksForWorkspace(home, workspaceID string) int {
 			count++
 		}
 	}); err != nil {
-		slog.Warn("rest_workspaces: countTasksForWorkspace: failed to scan tasks",
+		logsafeWarn("rest_workspaces: countTasksForWorkspace: failed to scan tasks",
 			"workspace_id", workspaceID, "error", err)
 		return 0
 	}
@@ -345,14 +375,33 @@ func mountsToWire(home, id string) *[]wireMount {
 // because mounts no longer live on the record and are loaded from their own
 // store (see mountsToWire).
 func workspaceToWire(home string, w storedWorkspace, taskCount int) gen.Workspace {
+	return workspaceToWireFrom(home, w, taskCount, nil)
+}
+
+func workspacePutGraph(rw *restAPIHandleWorkspacePut) *workspace.State {
+	edges := rw.state.Delegation
+	if rw.delegationChanged {
+		edges = rw.delegation
+	}
+	revision, err := workspace.RevisionForState(rw.ws, edges)
+	if err != nil {
+		revision = rw.state.Revision
+	}
+	return &workspace.State{Workspace: rw.ws, Delegation: edges, Revision: revision}
+}
+
+// workspaceToWireFrom maps a workspace record to the wire type. When graph is
+// non-nil it is the team/graph snapshot from the same ReadState/write as w —
+// do not LoadDelegation again after LockID is released (WO-1).
+func workspaceToWireFrom(home string, w storedWorkspace, taskCount int, graph *workspace.State) gen.Workspace {
 	createdAt, err := time.Parse(time.RFC3339, w.CreatedAt)
 	if err != nil {
-		slog.Warn("rest: workspace: invalid created_at timestamp", "id", w.ID, "raw", w.CreatedAt)
+		logsafeWarn("rest: workspace: invalid created_at timestamp", "id", w.ID, "raw", w.CreatedAt)
 		createdAt = time.Now().UTC()
 	}
 	updatedAt, err := time.Parse(time.RFC3339, w.UpdatedAt)
 	if err != nil {
-		slog.Warn("rest: workspace: invalid updated_at timestamp", "id", w.ID, "raw", w.UpdatedAt)
+		logsafeWarn("rest: workspace: invalid updated_at timestamp", "id", w.ID, "raw", w.UpdatedAt)
 		updatedAt = time.Now().UTC()
 	}
 
@@ -366,6 +415,10 @@ func workspaceToWire(home string, w storedWorkspace, taskCount int) gen.Workspac
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
 	}
+	persistence := gen.WorkspacePersistenceStatusComplete
+	activation := gen.WorkspaceActivationStatusActive
+	changed := []string{}
+	wire.PersistenceStatus, wire.ActivationStatus, wire.ChangedFields = &persistence, &activation, &changed
 	if w.IsDefault {
 		t := true
 		wire.IsDefault = &t
@@ -416,6 +469,45 @@ func workspaceToWire(home string, w storedWorkspace, taskCount int) gen.Workspac
 	// FR-5/FR-8.2: mounts, with each entry's status computed live (never
 	// stored — see mountsToWire's doc comment).
 	wire.Mounts = mountsToWire(home, w.ID)
+	var edges []workspace.DelegationEdge
+	if graph != nil {
+		edges = graph.Delegation
+		wire.Revision = graph.Revision
+	} else {
+		loaded, ok := workspace.LoadDelegation(home, w.ID)
+		if !ok {
+			return wire
+		}
+		edges = loaded
+		if revision, err := workspace.RevisionForState(w, edges); err == nil {
+			wire.Revision = revision
+		}
+	}
+	if len(edges) > 0 {
+		delegation := make([]struct {
+			Depth     *int                            `json:"depth,omitempty"`
+			FromAgent string                          `json:"from_agent"`
+			Modes     *[]gen.WorkspaceDelegationModes `json:"modes,omitempty"`
+			ToAgent   string                          `json:"to_agent"`
+		}, 0, len(edges))
+		for _, edge := range edges {
+			modes := make([]gen.WorkspaceDelegationModes, len(edge.Modes))
+			for i, mode := range edge.Modes {
+				modes[i] = gen.WorkspaceDelegationModes(mode)
+			}
+			var modePtr *[]gen.WorkspaceDelegationModes
+			if len(modes) > 0 {
+				modePtr = &modes
+			}
+			delegation = append(delegation, struct {
+				Depth     *int                            `json:"depth,omitempty"`
+				FromAgent string                          `json:"from_agent"`
+				Modes     *[]gen.WorkspaceDelegationModes `json:"modes,omitempty"`
+				ToAgent   string                          `json:"to_agent"`
+			}{edge.Depth, edge.FromAgent, modePtr, edge.ToAgent})
+		}
+		wire.Delegation = &delegation
+	}
 	return wire
 }
 
@@ -429,7 +521,7 @@ func deleteTasksForWorkspace(home, workspaceID string) error {
 			// RemoveLocked takes the task file's sidecar lock (the lock every
 			// task writer takes) and removes the sidecar with the task.
 			if err := fileutil.RemoveLocked(taskPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-				slog.Warn("rest: workspace cascade: failed to delete task",
+				logsafeWarn("rest: workspace cascade: failed to delete task",
 					"file", id+".json", "error", err)
 			}
 		}
@@ -448,7 +540,7 @@ func (a *restAPI) loadWorkspace(w http.ResponseWriter, id string) (storedWorkspa
 			jsonErr(w, http.StatusNotFound, "workspace not found")
 			return storedWorkspace{}, false
 		}
-		slog.Error("rest: load workspace", "error", err, "id", id)
+		logsafeError("rest: load workspace", "error", err, "id", id)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return storedWorkspace{}, false
 	}
@@ -481,7 +573,7 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 			// Best-effort: a back-fill failure is logged, not fatal — the
 			// gateway continues booting on the pre-existing default workspace.
 			if berr := ensureBuiltinRosterPresent(home, w, cfg); berr != nil {
-				slog.Warn("rest: ensureDefaultWorkspace: failed to back-fill built-in roster",
+				logsafeWarn("rest: ensureDefaultWorkspace: failed to back-fill built-in roster",
 					"workspace_id", w.ID, "error", berr)
 			}
 			return nil // already exists
@@ -519,7 +611,7 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 	validEdges := seedEdges[:0:0]
 	for _, edge := range seedEdges {
 		if verr := edge.Validate(team, ceiling); verr != nil {
-			slog.Warn("rest: ensureDefaultWorkspace: dropping invalid seed delegation edge",
+			logsafeWarn("rest: ensureDefaultWorkspace: dropping invalid seed delegation edge",
 				"from", edge.FromAgent, "to", edge.ToAgent, "error", verr)
 			continue
 		}
@@ -535,7 +627,7 @@ func ensureDefaultWorkspace(home, ownerUsername string, cfg *config.Config) erro
 	if err := saveWorkspaceDelegation(home, ws.ID, validEdges); err != nil {
 		return fmt.Errorf("ensureDefaultWorkspace: seed delegation: %w", err)
 	}
-	slog.Info("rest: default workspace auto-created",
+	logsafeInfo("rest: default workspace auto-created",
 		"id", ws.ID, "owner", ownerUsername,
 		"team_size", len(ws.CoreTeam), "edge_count", len(validEdges))
 	return nil
@@ -655,14 +747,14 @@ func (a *restAPI) handleWorkspaceList(w http.ResponseWriter, r *http.Request) {
 
 	workspaces, err := listWorkspaceFiles(a.homePath)
 	if err != nil {
-		slog.Error("rest: list workspaces", "error", err)
+		logsafeError("rest: list workspaces", "error", err)
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
 	taskCounts, err := computeWorkspaceTaskCounts(a.homePath)
 	if err != nil {
-		slog.Warn("rest: list workspaces: could not compute task counts", "error", err)
+		logsafeWarn("rest: list workspaces: could not compute task counts", "error", err)
 		taskCounts = make(map[string]int)
 	}
 
@@ -799,26 +891,35 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 	validSeedEdges := seedEdges[:0:0]
 	for _, edge := range seedEdges {
 		if verr := edge.Validate(createTeam, createCeiling); verr != nil {
-			slog.Warn("rest: handleWorkspaceCreate: dropping invalid seed delegation edge",
+			logsafeWarn("rest: handleWorkspaceCreate: dropping invalid seed delegation edge",
 				"from", edge.FromAgent, "to", edge.ToAgent, "error", verr)
 			continue
 		}
 		validSeedEdges = append(validSeedEdges, edge)
 	}
 
-	if err := writeWorkspaceFile(a.homePath, ws); err != nil {
-		slog.Error("rest: create workspace", "error", err)
+	createUnlock := workspace.LockID(ws.ID)
+	defer createUnlock()
+	workspacePath := filepath.Join(a.homePath, "workspaces", ws.ID+".json")
+	if _, err := os.Stat(workspacePath); err == nil {
+		jsonErr(w, http.StatusConflict, "workspace already exists")
+		return
+	} else if !errors.Is(err, os.ErrNotExist) {
 		jsonErr(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
-	// Seed edges go to the delegation store, never onto the record — see
-	// pkg/workspace/delegationstore.go. The workspace record is already
-	// committed at this point, so a store failure is logged rather than turned
-	// into a 500 the client would read as "nothing was created". The fallout is
-	// fail-closed (a workspace with no delegation graph denies every
-	// delegation) and repairable from the Team tab.
-	if err := saveWorkspaceDelegation(a.homePath, ws.ID, validSeedEdges); err != nil {
-		slog.Error("rest: create workspace: seed delegation store", "error", err, "id", ws.ID)
+	if err := writeWorkspaceFile(a.homePath, ws); err != nil {
+		logsafeError("rest: create workspace", "error", err)
+		jsonErr(w, http.StatusInternalServerError, "internal server error")
+		return
+	}
+	if err := workspaceSaveDelegationFn(a.homePath, ws.ID, validSeedEdges); err != nil {
+		logsafeError("rest: create workspace: seed delegation store", "error", err, "id", ws.ID)
+		if rollbackErr := fileutil.RemoveLocked(workspacePath); rollbackErr != nil && !errors.Is(rollbackErr, os.ErrNotExist) {
+			logsafeError("rest: create workspace: rollback record", "error", rollbackErr, "id", ws.ID)
+		}
+		jsonErr(w, http.StatusInternalServerError, "workspace could not be created")
+		return
 	}
 	// D3: a workspace created while the gateway is running was never named by
 	// the boot sweep, so nothing has ever resolved its scope. Sweeping it here
@@ -837,10 +938,26 @@ func (a *restAPI) handleWorkspacePost(w http.ResponseWriter, r *http.Request) {
 				Details:  map[string]any{"id": ws.ID, "name": ws.Name},
 			},
 		); err != nil {
-			slog.Warn("audit write failed", "event", "workspace.create", "id", ws.ID, "error", err)
+			logsafeWarn("audit write failed", "event", "workspace.create", "id", ws.ID, "error", err)
 		}
 	}
 	jsonCreated(w, wire)
+}
+
+func writeWorkspaceReadError(w http.ResponseWriter, err error) {
+	if errors.Is(err, workspace.ErrInvalidWorkspaceID) {
+		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
+		return
+	}
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, errWorkspaceNotFound) {
+		jsonErr(w, http.StatusNotFound, "workspace not found")
+		return
+	}
+	if errors.Is(err, workspace.ErrDelegationUnreadable) {
+		jsonErr(w, http.StatusInternalServerError, "workspace delegation record is unreadable")
+		return
+	}
+	jsonErr(w, http.StatusInternalServerError, "workspace record is unreadable")
 }
 
 func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id string) {
@@ -848,12 +965,13 @@ func (a *restAPI) handleWorkspaceGet(w http.ResponseWriter, r *http.Request, id 
 		jsonErr(w, http.StatusBadRequest, "invalid workspace ID")
 		return
 	}
-	ws, ok := a.loadWorkspace(w, id)
-	if !ok {
+	state, err := workspace.ReadState(a.homePath, id)
+	if err != nil {
+		writeWorkspaceReadError(w, err)
 		return
 	}
 	// FR-1.9: owner is attribution only — no access gate.
-	jsonOK(w, workspaceToWire(a.homePath, ws, countTasksForWorkspace(a.homePath, id)))
+	jsonOK(w, workspaceToWireFrom(a.homePath, state.Workspace, countTasksForWorkspace(a.homePath, id), &state))
 }
 
 // restAPIHandleWorkspacePut carries the shared state of handleWorkspacePut across its stages.
@@ -866,8 +984,12 @@ type restAPIHandleWorkspacePut struct {
 	incomingMC              map[string]workspace.MemberConfig
 	mcPresent               bool
 	ws                      storedWorkspace
+	state                   workspace.State
+	delegation              []storedDelegationEdge
+	delegationChanged       bool
 	rollbackCreatedSessions func()
 	changed                 bool
+	changedFields           []string
 	coreTeamChanged         bool
 }
 
@@ -905,7 +1027,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 			// deleteHeartbeatSessionAnyStore's doc for why (matches where the
 			// eager-creation call below now writes).
 			if delErr := deleteHeartbeatSessionAnyStore(rw.a.agentLoop, sc.agentID, sc.sessionID); delErr != nil {
-				slog.Warn("rest: workspace PUT: rollback session delete failed",
+				logsafeWarn("rest: workspace PUT: rollback session delete failed",
 					"agent_id", sc.agentID, "session_id", sc.sessionID, "error", delErr)
 			}
 		}
@@ -916,6 +1038,9 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 	effectiveCoreTeam := rw.ws.CoreTeam
 	if rw.req.CoreTeam != nil {
 		effectiveCoreTeam = deduplicateStrings(*rw.req.CoreTeam)
+	}
+	if rw.prepareDelegation(effectiveCoreTeam) {
+		return
 	}
 
 	// FR-010/022: validate and eagerly-session incoming member_configs before
@@ -953,7 +1078,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 					// a pause failure is logged, never blocks the PUT.
 					if pe := agent.GetPlanEngine(rw.a.agentLoop); pe != nil {
 						if perr := pe.PausePlansOwnedBy(agentID); perr != nil {
-							slog.Warn("rest: workspace PUT: pause plans on heartbeat disable failed",
+							logsafeWarn("rest: workspace PUT: pause plans on heartbeat disable failed",
 								"workspace_id", rw.id, "agent_id", agentID, "error", perr)
 						}
 					}
@@ -964,11 +1089,11 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 					// eager-creation default per the FIX comment above),
 					// leaving the standing session orphaned on disable.
 					if delErr := deleteHeartbeatSessionAnyStore(rw.a.agentLoop, agentID, stored.Heartbeat.SessionID); delErr != nil {
-						slog.Warn("rest: workspace PUT: disable-path session release failed",
+						logsafeWarn("rest: workspace PUT: disable-path session release failed",
 							"workspace_id", rw.id, "agent_id", agentID,
 							"session_id", stored.Heartbeat.SessionID, "error", delErr)
 					} else {
-						slog.Info("rest: workspace PUT: released heartbeat session on disable",
+						logsafeInfo("rest: workspace PUT: released heartbeat session on disable",
 							"workspace_id", rw.id, "agent_id", agentID,
 							"session_id", stored.Heartbeat.SessionID)
 					}
@@ -998,7 +1123,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 			// blocks the PUT.
 			if pe := agent.GetPlanEngine(rw.a.agentLoop); pe != nil {
 				if rerr := pe.ResumePlansOwnedBy(agentID); rerr != nil {
-					slog.Warn("rest: workspace PUT: resume plans on heartbeat enable failed",
+					logsafeWarn("rest: workspace PUT: resume plans on heartbeat enable failed",
 						"workspace_id", rw.id, "agent_id", agentID, "error", rerr)
 				}
 			}
@@ -1035,7 +1160,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 				// CoreTeam validation, so it must be registered). Persisting
 				// enabled=true with an empty session_id is invalid state — roll
 				// back any sessions created so far and return 500.
-				slog.Error("rest: workspace PUT: session store unavailable for heartbeat session",
+				logsafeError("rest: workspace PUT: session store unavailable for heartbeat session",
 					"workspace_id", rw.id, "agent_id", agentID)
 				rw.rollbackCreatedSessions()
 				jsonErr(rw.w, http.StatusInternalServerError, "session store unavailable for heartbeat session")
@@ -1043,7 +1168,7 @@ func (a *restAPI) handleWorkspacePut(w http.ResponseWriter, r *http.Request, id 
 			}
 			meta, sessErr := sessStore.NewHeartbeatSession(rw.id, agentID)
 			if sessErr != nil {
-				slog.Error("rest: workspace PUT: failed to create heartbeat session",
+				logsafeError("rest: workspace PUT: failed to create heartbeat session",
 					"workspace_id", rw.id, "agent_id", agentID, "error", sessErr)
 				// HIGH-2: roll back sessions created earlier in this loop.
 				rw.rollbackCreatedSessions()
@@ -1081,6 +1206,9 @@ func (rw *restAPIHandleWorkspacePut) validateRequest() bool {
 	// FR-5: mounts have their own dedicated lifecycle (workspace.CreateMount/
 	// DeleteMount) — see mountsNotWritableHereMsg's doc comment.
 	if !rejectMountsWriteField(rw.w, rw.r) {
+		return true
+	}
+	if !rejectNullTopLevelField(rw.w, rw.r, "delegation") {
 		return true
 	}
 
@@ -1122,11 +1250,20 @@ func (rw *restAPIHandleWorkspacePut) validateRequest() bool {
 
 // loadAndValidateTeam loads the locked workspace and validates newly introduced team members.
 func (rw *restAPIHandleWorkspacePut) loadAndValidateTeam() bool {
-	var ok bool
-	rw.ws, ok = rw.a.loadWorkspace(rw.w, rw.id)
-	if !ok {
+	state, err := workspace.CheckRevisionLocked(rw.a.homePath, rw.id, rw.req.Revision)
+	if err != nil {
+		switch {
+		case errors.Is(err, workspace.ErrInvalidRevision):
+			jsonErr(rw.w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, workspace.ErrRevisionConflict):
+			jsonErr(rw.w, http.StatusConflict, err.Error())
+		default:
+			jsonErr(rw.w, http.StatusNotFound, "workspace not found")
+		}
 		return true
 	}
+	rw.ws = state.Workspace
+	rw.state = state
 
 	// review r1 major M4/Gap #6 (ADR-054 D6 rule 1: "validate the delta, not
 	// the world"): reject an unregistered or System Agent id — but only
@@ -1166,6 +1303,57 @@ func (rw *restAPIHandleWorkspacePut) loadAndValidateTeam() bool {
 	return false
 }
 
+func (rw *restAPIHandleWorkspacePut) prepareDelegation(team []string) bool {
+	candidateTeam := workspace.TeamSet(team, nil)
+	if rw.req.Delegation != nil {
+		wire := make([]gen.WorkspaceDelegationEdge, 0, len(*rw.req.Delegation))
+		for _, edge := range *rw.req.Delegation {
+			var modes *[]gen.WorkspaceDelegationEdgeModes
+			if edge.Modes != nil {
+				converted := make([]gen.WorkspaceDelegationEdgeModes, len(*edge.Modes))
+				for i, mode := range *edge.Modes {
+					converted[i] = gen.WorkspaceDelegationEdgeModes(mode)
+				}
+				modes = &converted
+			}
+			wire = append(wire, gen.WorkspaceDelegationEdge{FromAgent: edge.FromAgent, ToAgent: edge.ToAgent, Modes: modes, Depth: edge.Depth})
+		}
+		edges, message := buildWorkspaceDelegationEdges(wire, candidateTeam, delegationDepthCeiling(rw.a.agentLoop.GetConfig()))
+		if message != "" {
+			jsonErr(rw.w, http.StatusBadRequest, message)
+			return true
+		}
+		rw.delegation = edges
+	} else {
+		for _, edge := range rw.state.Delegation {
+			if candidateTeam[edge.FromAgent] && candidateTeam[edge.ToAgent] {
+				rw.delegation = append(rw.delegation, edge)
+			}
+		}
+		existingTeam := workspace.TeamSet(rw.state.Workspace.CoreTeam, nil)
+		seeded := seedEdgesForTeam(defaultWorkspaceDelegationEdges(rw.a.agentLoop.GetConfig()), team)
+		for _, edge := range seeded {
+			if existingTeam[edge.FromAgent] && existingTeam[edge.ToAgent] {
+				continue
+			}
+			duplicate := false
+			for _, current := range rw.delegation {
+				if current.FromAgent == edge.FromAgent && current.ToAgent == edge.ToAgent {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				rw.delegation = append(rw.delegation, edge)
+			}
+		}
+	}
+	rw.delegationChanged = !slices.EqualFunc(rw.state.Delegation, rw.delegation, func(a, b storedDelegationEdge) bool {
+		return a.FromAgent == b.FromAgent && a.ToAgent == b.ToAgent && slices.Equal(a.Modes, b.Modes) && ((a.Depth == nil && b.Depth == nil) || (a.Depth != nil && b.Depth != nil && *a.Depth == *b.Depth))
+	})
+	return false
+}
+
 // applyUpdate applies workspace fields and reconciles member configurations in memory.
 func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 	// FR-1.9: no access gate — owner is attribution only.
@@ -1181,35 +1369,42 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 	if rw.req.Name != nil && *rw.req.Name != rw.ws.Name {
 		rw.ws.Name = *rw.req.Name
 		rw.changed = true
+		rw.changedFields = append(rw.changedFields, "name")
 	}
 	if rw.req.Description != nil && *rw.req.Description != rw.ws.Description {
 		rw.ws.Description = *rw.req.Description
 		rw.changed = true
+		rw.changedFields = append(rw.changedFields, "description")
 	}
 	if rw.req.CoreTeam != nil {
 		deduped := deduplicateStrings(*rw.req.CoreTeam)
 		if !slices.Equal(deduped, rw.ws.CoreTeam) {
 			rw.ws.CoreTeam = deduped
 			rw.changed = true
+			rw.changedFields = append(rw.changedFields, "core_team")
 		}
 	}
 	if rw.req.Status != nil && string(*rw.req.Status) != rw.ws.Status {
 		rw.ws.Status = string(*rw.req.Status)
 		rw.changed = true
+		rw.changedFields = append(rw.changedFields, "status")
 	}
 	if rw.req.Pinned != nil && *rw.req.Pinned != rw.ws.Pinned {
 		rw.ws.Pinned = *rw.req.Pinned
 		rw.changed = true
+		rw.changedFields = append(rw.changedFields, "pinned")
 	}
 	if rw.req.PinOrder != nil && *rw.req.PinOrder != rw.ws.PinOrder {
 		rw.ws.PinOrder = *rw.req.PinOrder
 		rw.changed = true
+		rw.changedFields = append(rw.changedFields, "pin_order")
 	}
 
 	// FR-022: merge incoming member_configs (when present) and GC stale entries
 	// (agents removed from CoreTeam) so the stored map stays consistent.
 	rw.coreTeamChanged = rw.req.CoreTeam != nil
 	if rw.mcPresent {
+		rw.changedFields = append(rw.changedFields, "member_configs")
 		if rw.ws.MemberConfigs == nil {
 			rw.ws.MemberConfigs = make(map[string]workspace.MemberConfig)
 		}
@@ -1219,7 +1414,7 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 		// GC: drop entries for agents no longer on the effective team.
 		pruned, removed := workspace.GCMemberConfigs(rw.ws.CoreTeam, rw.ws.MemberConfigs)
 		if len(removed) > 0 {
-			slog.Info("rest: workspace PUT: GC member_configs", "workspace_id", rw.id, "removed", removed)
+			logsafeInfo("rest: workspace PUT: GC member_configs", "workspace_id", rw.id, "removed", removed)
 			// FIX-4a: release standing sessions for GC-pruned members (members
 			// whose agent is no longer in the CoreTeam).
 			for _, removedID := range removed {
@@ -1227,11 +1422,11 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 					oldMC.Heartbeat != nil && oldMC.Heartbeat.SessionID != "" {
 					if delErr := deleteHeartbeatSessionAnyStore(
 						rw.a.agentLoop, removedID, oldMC.Heartbeat.SessionID); delErr != nil {
-						slog.Warn("rest: workspace PUT: GC session release failed",
+						logsafeWarn("rest: workspace PUT: GC session release failed",
 							"workspace_id", rw.id, "agent_id", removedID,
 							"session_id", oldMC.Heartbeat.SessionID, "error", delErr)
 					} else {
-						slog.Info("rest: workspace PUT: GC released heartbeat session",
+						logsafeInfo("rest: workspace PUT: GC released heartbeat session",
 							"workspace_id", rw.id, "agent_id", removedID,
 							"session_id", oldMC.Heartbeat.SessionID)
 					}
@@ -1246,18 +1441,18 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 		if rw.ws.MemberConfigs != nil {
 			pruned, removed := workspace.GCMemberConfigs(rw.ws.CoreTeam, rw.ws.MemberConfigs)
 			if len(removed) > 0 {
-				slog.Info("rest: workspace PUT: core_team shrink GC member_configs",
+				logsafeInfo("rest: workspace PUT: core_team shrink GC member_configs",
 					"workspace_id", rw.id, "removed", removed)
 				for _, removedID := range removed {
 					if oldMC, had := rw.ws.MemberConfigs[removedID]; had &&
 						oldMC.Heartbeat != nil && oldMC.Heartbeat.SessionID != "" {
 						if delErr := deleteHeartbeatSessionAnyStore(
 							rw.a.agentLoop, removedID, oldMC.Heartbeat.SessionID); delErr != nil {
-							slog.Warn("rest: workspace PUT: core_team shrink session release failed",
+							logsafeWarn("rest: workspace PUT: core_team shrink session release failed",
 								"workspace_id", rw.id, "agent_id", removedID,
 								"session_id", oldMC.Heartbeat.SessionID, "error", delErr)
 						} else {
-							slog.Info("rest: workspace PUT: core_team shrink released heartbeat session",
+							logsafeInfo("rest: workspace PUT: core_team shrink released heartbeat session",
 								"workspace_id", rw.id, "agent_id", removedID,
 								"session_id", oldMC.Heartbeat.SessionID)
 						}
@@ -1273,20 +1468,35 @@ func (rw *restAPIHandleWorkspacePut) applyUpdate() bool {
 // persistAndRespond persists a changed workspace, reconciles schedules, audits, and responds.
 func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 	// No-op: nothing changed — return current state without writing.
-	if !rw.changed {
-		jsonOK(rw.w, workspaceToWire(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id)))
+	if !rw.changed && !rw.delegationChanged {
+		jsonOK(rw.w, workspaceToWireFrom(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id), workspacePutGraph(rw)))
 		return
 	}
 
 	rw.ws.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 
 	if err := writeWorkspaceFile(rw.a.homePath, rw.ws); err != nil {
-		slog.Error("rest: update workspace: write", "id", rw.id, "error", err)
+		logsafeError("rest: update workspace: write", "id", rw.id, "error", err)
 		// HIGH-2: roll back any heartbeat sessions created this request since the
 		// workspace file was not persisted (they would be permanently orphaned).
 		rw.rollbackCreatedSessions()
 		jsonErr(rw.w, http.StatusInternalServerError, "internal server error")
 		return
+	}
+	if rw.delegationChanged {
+		rw.changedFields = append(rw.changedFields, "delegation")
+		if err := workspaceSaveDelegationFn(rw.a.homePath, rw.id, rw.delegation); err != nil {
+			logsafeError("rest: update workspace: delegation write", "id", rw.id, "error", err)
+			revision, _ := workspace.RevisionForState(rw.ws, rw.state.Delegation)
+			stage := "delegation"
+			message := "workspace fields were saved, but the delegation graph could not be saved; read the workspace again before retrying"
+			writeJSON(rw.w, http.StatusInternalServerError, gen.ConfigurationMutationState{
+				PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatusPartial,
+				ActivationStatus:  gen.ConfigurationMutationStateActivationStatusNotAttempted,
+				Revision:          revision, ChangedFields: append([]string{}, rw.changedFields[:len(rw.changedFields)-1]...), ErrorStage: &stage, Message: &message,
+			})
+			return
+		}
 	}
 
 	// FR-007: after persisting, reconcile cron schedules to reflect the new
@@ -1304,10 +1514,12 @@ func (rw *restAPIHandleWorkspacePut) persistAndRespond() {
 				Details:  map[string]any{"id": rw.id},
 			},
 		); err != nil {
-			slog.Warn("audit write failed", "event", "workspace.update", "id", rw.id, "error", err)
+			logsafeWarn("audit write failed", "event", "workspace.update", "id", rw.id, "error", err)
 		}
 	}
-	jsonOK(rw.w, workspaceToWire(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id)))
+	wire := workspaceToWireFrom(rw.a.homePath, rw.ws, countTasksForWorkspace(rw.a.homePath, rw.id), workspacePutGraph(rw))
+	wire.ChangedFields = &rw.changedFields
+	jsonOK(rw.w, wire)
 }
 
 // restAPIHandleWorkspaceDelete carries the shared state of handleWorkspaceDelete across its stages.
@@ -1363,13 +1575,20 @@ func (rd *restAPIHandleWorkspaceDelete) removeRecord() bool {
 	// shard-colliding kickoff's WS readLoop for no correctness benefit.
 	unlock := workspace.LockID(rd.id)
 
-	// Verify the workspace exists before cascading.
-	var ok bool
-	rd.ws, ok = rd.a.loadWorkspace(rd.w, rd.id)
-	if !ok {
+	state, err := workspace.CheckRevisionLocked(rd.a.homePath, rd.id, rd.r.URL.Query().Get("revision"))
+	if err != nil {
 		unlock()
+		switch {
+		case errors.Is(err, workspace.ErrInvalidRevision):
+			jsonErr(rd.w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, workspace.ErrRevisionConflict):
+			jsonErr(rd.w, http.StatusConflict, err.Error())
+		default:
+			jsonErr(rd.w, http.StatusNotFound, "workspace not found")
+		}
 		return true
 	}
+	rd.ws = state.Workspace
 
 	// FR-1.9: no access gate — owner is attribution only.
 
@@ -1385,7 +1604,7 @@ func (rd *restAPIHandleWorkspaceDelete) removeRecord() bool {
 	// delete with 500.
 	if err := deleteTasksForWorkspace(rd.a.homePath, rd.id); err != nil {
 		unlock()
-		slog.Error("rest: delete workspace: cascade tasks", "id", rd.id, "error", err)
+		logsafeError("rest: delete workspace: cascade tasks", "id", rd.id, "error", err)
 		jsonErr(rd.w, http.StatusInternalServerError, "failed to scan tasks for cascade delete")
 		return true
 	}
@@ -1398,7 +1617,7 @@ func (rd *restAPIHandleWorkspaceDelete) removeRecord() bool {
 	// guarantee: config unbind → workspace file delete.
 	if err := unbindChannelInstancesForWorkspace(rd.a, rd.id); err != nil {
 		unlock()
-		slog.Error("rest: delete workspace: cascade channel unbind", "id", rd.id, "error", err)
+		logsafeError("rest: delete workspace: cascade channel unbind", "id", rd.id, "error_type", fmt.Sprintf("%T", err))
 		jsonErr(rd.w, http.StatusInternalServerError, "failed to unbind channel instances for workspace")
 		return true
 	}
@@ -1410,7 +1629,7 @@ func (rd *restAPIHandleWorkspaceDelete) removeRecord() bool {
 	path := filepath.Join(rd.a.homePath, "workspaces", rd.id+".json")
 	if err := fileutil.RemoveLocked(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		unlock()
-		slog.Error("rest: delete workspace: remove file", "id", rd.id, "error", err)
+		logsafeError("rest: delete workspace: remove file", "id", rd.id, "error", err)
 		jsonErr(rd.w, http.StatusInternalServerError, "internal server error")
 		return true
 	}
@@ -1471,13 +1690,13 @@ func (rd *restAPIHandleWorkspaceDelete) removeBrowserAndStores() {
 	if pool := browserPoolFor(rd.a); pool != nil {
 		if key, kerr := browser.ParseBrowsingKeyString("ws:" + rd.id); kerr == nil {
 			if derr := deleteWorkspaceBrowserProfile(pool, key); derr != nil {
-				slog.Warn("rest: delete workspace: cascade browser profile", "id", rd.id, "error", derr)
+				logsafeWarn("rest: delete workspace: cascade browser profile", "id", rd.id, "error", derr)
 			}
 		} else {
 			// Never silent: an unusable key means the profile directory this
 			// workspace's logins live in is not addressable, so nothing below
 			// removes it and the data outlives the workspace.
-			slog.Warn("rest: delete workspace: cascade browser profile: unusable browsing key — "+
+			logsafeWarn("rest: delete workspace: cascade browser profile: unusable browsing key — "+
 				"the workspace's browser profile is NOT removed",
 				"id", rd.id, "error", kerr)
 		}
@@ -1487,7 +1706,7 @@ func (rd *restAPIHandleWorkspaceDelete) removeBrowserAndStores() {
 		// them enabled is still on disk, with the workspace's live logins in
 		// it, and this delete does not reach it. Say so rather than letting
 		// the absence of a pool read as the absence of a profile.
-		slog.Warn("rest: delete workspace: no browser pool on this gateway — a browser profile left on "+
+		logsafeWarn("rest: delete workspace: no browser pool on this gateway — a browser profile left on "+
 			"disk by an earlier boot is NOT removed by this delete",
 			"id", rd.id)
 	}
@@ -1500,7 +1719,7 @@ func (rd *restAPIHandleWorkspaceDelete) removeBrowserAndStores() {
 	// Best-effort, and it runs AFTER unlock() above because DeleteMountStore
 	// takes LockID itself and that pool is not reentrant.
 	if err := workspace.DeleteMountStore(rd.a.homePath, rd.id); err != nil {
-		slog.Warn("rest: delete workspace: cascade mount store", "id", rd.id, "error", err)
+		logsafeWarn("rest: delete workspace: cascade mount store", "id", rd.id, "error", err)
 	}
 
 	// Remove the workspace's delegation record, for the same reason and with
@@ -1512,7 +1731,7 @@ func (rd *restAPIHandleWorkspaceDelete) removeBrowserAndStores() {
 	// id were ever reused. Best-effort, and after unlock() because
 	// DeleteDelegationStore takes LockID itself and that pool is not reentrant.
 	if err := workspace.DeleteDelegationStore(rd.a.homePath, rd.id); err != nil {
-		slog.Warn("rest: delete workspace: cascade delegation store", "id", rd.id, "error", err)
+		logsafeWarn("rest: delete workspace: cascade delegation store", "id", rd.id, "error", err)
 	}
 }
 
@@ -1605,7 +1824,7 @@ func (rd *restAPIHandleWorkspaceDelete) removeMediaAndDirectory() {
 	rd.dirRemoveFailed = false
 	if err := removeAllFn(wsDir); err != nil {
 		rd.dirRemoveFailed = true
-		slog.Warn("rest: delete workspace: cascade dir", "id", rd.id, "dir", wsDir, "error", err)
+		logsafeWarn("rest: delete workspace: cascade dir", "id", rd.id, "dir", wsDir, "error", err)
 	}
 }
 
@@ -1624,7 +1843,7 @@ func (rd *restAPIHandleWorkspaceDelete) auditAndRespond() {
 				},
 			},
 		); err != nil {
-			slog.Warn("audit write failed", "event", "workspace.delete", "id", rd.id, "error", err)
+			logsafeWarn("audit write failed", "event", "workspace.delete", "id", rd.id, "error", err)
 		}
 	}
 
@@ -1643,16 +1862,31 @@ func (rd *restAPIHandleWorkspaceDelete) auditAndRespond() {
 	// in the media library via GET /workspaces/{id}/media.
 	if rd.mediaCascadeFailed || rd.dirRemoveFailed {
 		msg := "workspace deleted, but media library cleanup failed; see server logs"
+		stage := "remove_media"
 		switch {
 		case rd.mediaCascadeFailed && rd.dirRemoveFailed:
 			msg = "workspace deleted, but media library cleanup and on-disk directory removal both failed; see server logs"
+			stage = "remove_media_and_directory"
 		case rd.dirRemoveFailed:
 			msg = "workspace record deleted, but the on-disk workspace directory could not be fully removed; see server logs"
+			stage = "remove_directory"
 		}
-		jsonErr(rd.w, http.StatusInternalServerError, msg)
+		writeJSON(rd.w, http.StatusInternalServerError, gen.ConfigurationMutationState{
+			PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatusPartial,
+			ActivationStatus:  gen.ConfigurationMutationStateActivationStatusNotAttempted,
+			Revision:          workspace.EmptyRevision(),
+			ChangedFields:     []string{"workspace"},
+			ErrorStage:        &stage,
+			Message:           &msg,
+		})
 		return
 	}
-	rd.w.WriteHeader(http.StatusNoContent)
+	writeJSON(rd.w, http.StatusOK, gen.ConfigurationMutationState{
+		PersistenceStatus: gen.ConfigurationMutationStatePersistenceStatusComplete,
+		ActivationStatus:  gen.ConfigurationMutationStateActivationStatusActive,
+		Revision:          workspace.EmptyRevision(),
+		ChangedFields:     []string{"workspace"},
+	})
 }
 
 // releaseHeartbeatSessionsForWorkspace deletes the standing heartbeat session for
@@ -1672,7 +1906,7 @@ func releaseHeartbeatSessionsForWorkspace(al agentLoopAccessor, ws storedWorkspa
 			continue
 		}
 		if err := deleteHeartbeatSessionAnyStore(al, agentID, mc.Heartbeat.SessionID); err != nil {
-			slog.Warn("heartbeat cascade: failed to delete heartbeat session",
+			logsafeWarn("heartbeat cascade: failed to delete heartbeat session",
 				"workspace_id", ws.ID, "agent_id", agentID,
 				"session_id", mc.Heartbeat.SessionID, "error", err)
 		}
@@ -1824,7 +2058,7 @@ func unbindChannelInstancesForWorkspace(a *restAPI, workspaceID string) error {
 		}
 		m["channels"] = channels
 
-		slog.Info("rest: workspace delete: disabled and unbound channel instances",
+		logsafeInfo("rest: workspace delete: disabled and unbound channel instances",
 			"workspace_id", workspaceID, "instance_ids", boundKeys)
 		return nil
 	})
@@ -1871,7 +2105,7 @@ func removeMailboxesForWorkspace(a *restAPI, workspaceID string) {
 				// Malformed on-disk entry: skip this agent rather than aborting
 				// the whole cascade (best-effort). setAgentMailbox/deleteAgentMailbox
 				// will surface the malformed shape as a 500 on their own next write.
-				slog.Warn("rest: workspace delete: cascade mailboxes: malformed entry, skipping",
+				logsafeWarn("rest: workspace delete: cascade mailboxes: malformed entry, skipping",
 					"agent_id", agentID, "workspace_id", workspaceID, "error", err)
 				continue
 			}
@@ -1884,12 +2118,12 @@ func removeMailboxesForWorkspace(a *restAPI, workspaceID string) {
 		}
 		m["mailboxes"] = mailboxes
 
-		slog.Info("rest: workspace delete: removed bound mailboxes",
+		logsafeInfo("rest: workspace delete: removed bound mailboxes",
 			"workspace_id", workspaceID, "agent_ids", boundAgentIDs)
 		return nil
 	}); err != nil {
-		slog.Warn("rest: workspace delete: cascade mailboxes: config write failed",
-			"workspace_id", workspaceID, "agent_ids", boundAgentIDs, "error", err)
+		logsafeWarn("rest: workspace delete: cascade mailboxes: config write failed",
+			"workspace_id", workspaceID, "agent_ids", boundAgentIDs, "error_type", fmt.Sprintf("%T", err))
 		return
 	}
 
@@ -1899,7 +2133,7 @@ func removeMailboxesForWorkspace(a *restAPI, workspaceID string) {
 	// only on a real failure.
 	for _, agentID := range boundAgentIDs {
 		if err := a.removeStoredCredential(mailboxCredKey(agentID, workspaceID)); err != nil {
-			slog.Warn("rest: workspace delete: cascade mailboxes: credential removal failed",
+			logsafeWarn("rest: workspace delete: cascade mailboxes: credential removal failed",
 				"agent_id", agentID, "workspace_id", workspaceID, "error", err)
 		}
 	}

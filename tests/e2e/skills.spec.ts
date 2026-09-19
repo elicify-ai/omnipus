@@ -4,14 +4,6 @@ import { expectA11yClean } from './fixtures/a11y';
 
 // Global storageState provides pre-authenticated session (see playwright.config.ts + global-setup.ts).
 
-const FAKE_SKILL_JSON = JSON.stringify({
-  name: 'evil-skill',
-  version: '1.0.0',
-  description: 'A skill with a bad hash',
-  hash: 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-  tools: [],
-});
-
 test.beforeEach(async ({ page }) => {
   // HashRouter: routes live in the fragment, not the pathname.
   await page.goto('/#/skills');
@@ -32,17 +24,18 @@ test('(a) Browse Skills modal opens', async ({ page }) => {
   await expectA11yClean(page);
 });
 
-test('(b) skill install with hash mismatch shows block dialog', async ({ page }) => {
+test('(b) skill install from file: review dialog opens, and a rejected install is surfaced', async ({ page }) => {
   await expect(page).toHaveURL(/skills/, { timeout: 10_000 });
 
-  // Set up route to return a hash mismatch 409 whose JSON body carries
-  // {expected, got} — SkillBrowser.tsx:97-113 parses err.body (not err.message)
-  // to extract the two hashes and populate the hash-mismatch dialog.
+  // Contract: installs are file-upload + revision-checked — the SPA uploads
+  // the file, then POSTs /skills/install (SkillInstallRequest.yaml). A 409
+  // surfaces as the stale-review toast; a rejected install must be loudly
+  // surfaced, never silently swallowed.
   await page.route('**/api/v1/skills/install**', async (route) => {
     await route.fulfill({
       status: 409,
       contentType: 'application/json',
-      body: JSON.stringify({ error: 'hash mismatch', expected: 'abc123', got: 'def456' }),
+      body: JSON.stringify({ error: 'conflict: the installed skill changed since it was reviewed' }),
     });
   });
 
@@ -51,24 +44,30 @@ test('(b) skill install with hash mismatch shows block dialog', async ({ page })
   await expect(browseBtn).toBeVisible({ timeout: 10_000 });
   await browseBtn.click();
 
-  // SkillBrowser dialog opens (data-testid not set on the main dialog, but
-  // it renders a DialogTitle "Browse Skills").
+  // SkillBrowser dialog opens and renders a DialogTitle "Browse Skills".
   const modal = page.locator('[role="dialog"]').filter({ hasText: /Browse Skills/i }).first();
   await expect(modal).toBeVisible({ timeout: 10_000 });
 
-  // Step 1: set the file input — this triggers handleFileSelected which reads
-  // the file and opens the install-confirm dialog (pendingInstall !== null).
-  // The file input is hidden (.hidden) so we cannot click the button; use
-  // setInputFiles directly on the <input type="file"> inside the modal.
+  // Step 1: set the file input — this triggers handleFileSelected, which
+  // accepts only .md / .zip skill packages. The payload carries valid
+  // SKILL.md frontmatter (name + non-empty description, pkg/skills/
+  // authoring.go) so the mocked-install rejection tests the rejection
+  // surface against a well-formed input, not a malformed one.
   const fileInput = modal.locator('input[type="file"]');
   await fileInput.setInputFiles({
-    name: 'test-skill.json',
-    mimeType: 'application/json',
-    buffer: Buffer.from(FAKE_SKILL_JSON),
+    name: 'test-skill.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from(
+      '---\n' +
+        'name: test-skill\n' +
+        'description: Runs the install review flow against a mock install endpoint.\n' +
+        '---\n' +
+        '# test-skill\n\nMinimal skill body for the install-dialog e2e.\n',
+    ),
   });
 
-  // Step 2: the confirm dialog must now be visible
-  // (data-testid="skill-install-confirm-dialog" on DialogContent — SkillBrowser.tsx:180)
+  // Step 2: the review dialog must now be visible
+  // (data-testid="skill-install-confirm-dialog" on DialogContent — SkillBrowser.tsx)
   const confirmDialog = page.locator('[data-testid="skill-install-confirm-dialog"]');
   await expect(confirmDialog).toBeVisible({ timeout: 10_000 });
 
@@ -78,14 +77,14 @@ test('(b) skill install with hash mismatch shows block dialog', async ({ page })
   await expect(confirmInstallBtn).toBeVisible({ timeout: 5_000 });
   await confirmInstallBtn.click();
 
-  // Step 4: hash mismatch dialog must appear
-  // (data-testid="skill-hash-mismatch-dialog" on DialogContent — SkillBrowser.tsx:258)
-  const hashDialog = page.locator('[data-testid="skill-hash-mismatch-dialog"]');
-  await expect(hashDialog).toBeVisible({ timeout: 10_000 });
-
-  // The dialog surfaces the expected and got hashes from err.body
-  await expect(hashDialog).toContainText('abc123');
-  await expect(hashDialog).toContainText('def456');
+  // Step 4: the rejection must be surfaced. handleConfirmInstall's 409 branch
+  // toasts the stale-review message verbatim (SkillBrowser.tsx
+  // handleConfirmInstall); assert THAT exact string — a generic
+  // "something appeared" assertion would not prove the guard ran.
+  const conflictToast = page.getByText(
+    'This installed skill changed after you reviewed it. Close and reopen the browser before replacing it.',
+  );
+  await expect(conflictToast).toBeVisible({ timeout: 10_000 });
 });
 
 test('(c) MCP server add with duplicate name returns 409 and inline error', async ({ page }) => {

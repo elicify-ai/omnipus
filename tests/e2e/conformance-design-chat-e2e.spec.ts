@@ -24,7 +24,7 @@
 import { expect } from '@playwright/test'
 import { test } from './fixtures/plan-cleanup'
 import { chatInput, assistantMessages } from './fixtures/selectors'
-import { requireApiKey, startFreshChatWithJim } from './fixtures/conformance-helpers'
+import { requireApiKey, startFreshChatWithAgent, startFreshChatWithJim } from './fixtures/conformance-helpers'
 
 // ── Conformance_t0_ChatGoalE2E ───────────────────────────────────────────────
 //
@@ -54,7 +54,13 @@ test('Conformance_t0_ChatGoalE2E: /goal set compiles → worker turn → claim �
   // 420s = 60s compile/worker + 60s claim/idle + 60s verifier + 240s slack.
   test.setTimeout(420_000)
 
-  await startFreshChatWithJim(page)
+  // Mia, not Jim: the goal's [check: true exit:0] machine criterion requires
+  // the session agent to hold `bash` allow — Jim's ADR-090 policy denies bash,
+  // so the feasibility gate (FR-111/D9) rejects the goal at compile time,
+  // deterministically, before any LLM call. Mia's grants include bash,
+  // set_goal and goal_claim, so the walk is fully in-policy. The oracle
+  // (machine check + active pill walk) is unchanged.
+  await startFreshChatWithAgent(page, /Mia/i)
 
   // Send /goal <condition>. The goal loop (pkg/agent/goal_loop.go
   // applyGoalCommandPrompt) intercepts this BEFORE the LLM call and emits a

@@ -1,5 +1,3 @@
-//go:build !windows
-
 // Bidirectional contract tests — run with go test ./pkg/api/generated/...
 //
 // Verifies Go structs marshal to schema-valid JSON (contracts/asyncapi.yaml
@@ -10,10 +8,11 @@
 // Manual break test: change cloneStringAnyMap to return nil, run the tests,
 // observe the regression guard fail, restore, observe it pass.
 //
-// Build constraint: !windows because the yamlLoader uses file:// URLs with
-// POSIX paths (/absolute/path). Windows file:// URLs require drive-letter
-// handling (file:///C:/path) which is not implemented — this project is
-// Linux-primary (see CLAUDE.md hard constraints).
+// The schema-loading harness (validateAgainstComponentSchema and friends)
+// lives in schema_harness_test.go and is portable across Linux/macOS/Windows,
+// so this file carries no build constraint. It previously carried
+// //go:build !windows only because that harness's file-URL handling was
+// POSIX-only — see the history note in schema_harness_test.go (TEST-008).
 
 package generated
 
@@ -23,232 +22,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
 )
-
-// ── Schema loader setup ──────────────────────────────────────────────────────
-
-var (
-	schemaSetupOnce sync.Once
-	errSchemaSetup  error
-
-	// asyncapiFilePath is the absolute path to contracts/asyncapi.yaml.
-	// Used to build file:// URLs for asyncapi schema fragments.
-	asyncapiFilePath string
-
-	// componentSchemaDir is the absolute path to contracts/components/schemas/.
-	// Used to build file:// URLs for component schema files.
-	componentSchemaDir string
-
-	// sharedCompiler is the singleton compiler with all schemas pre-loaded.
-	sharedCompiler *jsonschema.Compiler
-
-	// sharedCompilerMu guards concurrent calls to sharedCompiler.Compile.
-	// jsonschema/v6's Compiler mutates internal state during Compile (it
-	// caches resolved schemas in an unsynchronised map), so calling Compile
-	// from multiple goroutines on the same instance is a data race —
-	// observed as "fatal error: concurrent map read and map write" on CI
-	// runners running TestCompileInboundSchema_ConcurrentDifferentSchemas.
-	// We serialize access here; the lock is held only across the Compile
-	// call so the cache hit path stays fast.
-	sharedCompilerMu sync.Mutex
-)
-
-// contractsDir returns the absolute path to the contracts/ directory.
-// Resolved relative to the location of this test file (pkg/api/generated/).
-func contractsDir() string {
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		panic("runtime.Caller failed — cannot resolve contracts dir")
-	}
-	// file is /path/to/pkg/api/generated/contract_test.go
-	// contracts/ is three dirs up
-	return filepath.Join(filepath.Dir(file), "..", "..", "..", "contracts")
-}
-
-// yamlLoader is a URLLoader that reads .yaml files by parsing them with yaml.v3.
-// The jsonschema/v6 library's built-in FileLoader only handles JSON; this wrapper
-// intercepts .yaml URLs and returns parsed YAML as map[string]any.
-type yamlLoader struct{}
-
-func (yamlLoader) Load(rawURL string) (any, error) {
-	// Strip the file:// prefix to get the file path.
-	// On Linux: file:///absolute/path → after trim: /absolute/path (correct).
-	// Windows is excluded via the //go:build !windows tag at the top of this file.
-	path := strings.TrimPrefix(rawURL, "file://")
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("yamlLoader: read %s: %w", path, err)
-	}
-
-	// Try JSON first (some .gen.go files embed JSON); fall back to YAML.
-	if len(data) > 0 && data[0] == '{' {
-		var doc any
-		if jsonErr := json.Unmarshal(data, &doc); jsonErr == nil {
-			return doc, nil
-		}
-	}
-
-	// Parse as YAML.
-	var doc any
-	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("yamlLoader: unmarshal %s: %w", path, err)
-	}
-	return doc, nil
-}
-
-// initSchemas initializes the shared compiler once per test binary run.
-// Called lazily from validateAgainstSchema — not from TestMain so tests can
-// run individually without requiring the full environment.
-func initSchemas(t *testing.T) *jsonschema.Compiler {
-	t.Helper()
-
-	schemaSetupOnce.Do(func() {
-		cdir := contractsDir()
-		asyncapiFilePath = filepath.Join(cdir, "asyncapi.yaml")
-		componentSchemaDir = filepath.Join(cdir, "components", "schemas")
-
-		// Verify the contracts directory is accessible before building the compiler.
-		if _, statErr := os.Stat(asyncapiFilePath); statErr != nil {
-			errSchemaSetup = fmt.Errorf("contracts/asyncapi.yaml not found at %s: %w", asyncapiFilePath, statErr)
-			return
-		}
-		if _, statErr := os.Stat(componentSchemaDir); statErr != nil {
-			errSchemaSetup = fmt.Errorf(
-				"contracts/components/schemas/ not found at %s: %w",
-				componentSchemaDir, statErr,
-			)
-			return
-		}
-
-		c := jsonschema.NewCompiler()
-
-		// Use our YAML-capable loader for file:// URLs.
-		c.UseLoader(jsonschema.SchemeURLLoader{
-			"file": yamlLoader{},
-		})
-
-		sharedCompiler = c
-	})
-
-	require.NoError(t, errSchemaSetup, "schema compiler setup failed")
-	return sharedCompiler
-}
-
-// fileURL converts an absolute file path to a file:// URL string.
-func fileURL(absPath string) string {
-	return "file://" + filepath.ToSlash(absPath)
-}
-
-// validateAgainstAsyncAPISchema validates v against a named schema from asyncapi.yaml.
-// schemaName is the key under components.schemas in asyncapi.yaml
-// (e.g. "ToolApprovalRequiredFrame", "DoneFrame").
-func validateAgainstAsyncAPISchema(t *testing.T, schemaName string, v any) error {
-	t.Helper()
-	c := initSchemas(t)
-
-	raw, err := json.Marshal(v)
-	require.NoError(t, err, "json.Marshal failed for fixture")
-
-	var doc any
-	require.NoError(t, json.Unmarshal(raw, &doc), "json.Unmarshal of marshaled fixture failed")
-
-	// Compile the schema as a fragment of the asyncapi.yaml document.
-	// Fragment path: /components/schemas/<schemaName>
-	// URL encodes as: file:///path/to/asyncapi.yaml#/components/schemas/SchemaName
-	fragment := "/components/schemas/" + schemaName
-	url := fileURL(asyncapiFilePath) + "#" + fragment
-
-	sharedCompilerMu.Lock()
-	sch, err := c.Compile(url)
-	sharedCompilerMu.Unlock()
-	require.NoError(t, err, "could not compile asyncapi schema %q", schemaName)
-
-	return sch.Validate(doc)
-}
-
-// validateAgainstComponentSchema validates v against a named component schema file.
-// schemaName is the filename without .yaml extension
-// (e.g. "Session", "LoginResponse", "ToolApprovalRequiredFrame").
-func validateAgainstComponentSchema(t *testing.T, schemaName string, v any) error {
-	t.Helper()
-	c := initSchemas(t)
-
-	raw, err := json.Marshal(v)
-	require.NoError(t, err, "json.Marshal failed for fixture")
-
-	var doc any
-	require.NoError(t, json.Unmarshal(raw, &doc), "json.Unmarshal of marshaled fixture failed")
-
-	schemaPath := filepath.Join(componentSchemaDir, schemaName+".yaml")
-	url := fileURL(schemaPath)
-
-	sharedCompilerMu.Lock()
-	sch, err := c.Compile(url)
-	sharedCompilerMu.Unlock()
-	require.NoError(t, err, "could not compile component schema %q from %s", schemaName, schemaPath)
-
-	return sch.Validate(doc)
-}
-
-// validateAgainstComponentSchemaRawJSON validates pre-marshaled JSON bytes against a component schema.
-func validateAgainstComponentSchemaRawJSON(t *testing.T, schemaName string, raw []byte) error {
-	t.Helper()
-	c := initSchemas(t)
-
-	var doc any
-	require.NoError(t, json.Unmarshal(raw, &doc))
-
-	schemaPath := filepath.Join(componentSchemaDir, schemaName+".yaml")
-	url := fileURL(schemaPath)
-
-	sharedCompilerMu.Lock()
-	sch, err := c.Compile(url)
-	sharedCompilerMu.Unlock()
-	require.NoError(t, err, "could not compile component schema %q", schemaName)
-
-	return sch.Validate(doc)
-}
-
-// ── Helper assertions ────────────────────────────────────────────────────────
-
-// mustPassComponent asserts the fixture validates against a component schema file.
-func mustPassComponent(t *testing.T, schemaName string, fixture any) {
-	t.Helper()
-	err := validateAgainstComponentSchema(t, schemaName, fixture)
-	assert.NoError(t, err, "fixture must validate against component schema %q", schemaName)
-}
-
-// mustFailComponent asserts the fixture produces schema-INVALID JSON.
-func mustFailComponent(t *testing.T, schemaName string, fixture any, reason string) {
-	t.Helper()
-	err := validateAgainstComponentSchema(t, schemaName, fixture)
-	assert.Error(t, err, "expected validation error for component schema %q — %s", schemaName, reason)
-}
-
-// mustPassAsyncAPI asserts the fixture validates against an asyncapi schema.
-func mustPassAsyncAPI(t *testing.T, schemaName string, fixture any) {
-	t.Helper()
-	err := validateAgainstAsyncAPISchema(t, schemaName, fixture)
-	assert.NoError(t, err, "fixture must validate against asyncapi schema %q", schemaName)
-}
-
-// mustFailAsyncAPI asserts the fixture produces schema-INVALID JSON.
-func mustFailAsyncAPI(t *testing.T, schemaName string, fixture any, reason string) {
-	t.Helper()
-	err := validateAgainstAsyncAPISchema(t, schemaName, fixture)
-	assert.Error(t, err, "expected validation error for asyncapi schema %q — %s", schemaName, reason)
-}
 
 // ── ToolApprovalRequiredFrame — the Ava-chat bug type ─────────────────────────
 // Traces to: contracts/components/schemas/ToolApprovalRequiredFrame.yaml
@@ -3390,61 +3171,13 @@ func TestContract_AgentUpdateRequest_EmptyObjectRejected(t *testing.T) {
 		"empty AgentUpdateRequest {} must fail — minProperties: 1 requires at least one field")
 }
 
-func TestContract_AgentUpdateRequest_SingleFieldAccepted(t *testing.T) {
-	// One field is the minimum that satisfies minProperties:1.
-	doc := map[string]any{"model": "gpt-4o"}
+func TestContract_AgentUpdateRequest_SingleChangeWithRevisionAccepted(t *testing.T) {
+	// ADR-090 requires the revision plus at least one changed field.
+	doc := map[string]any{"revision": strings.Repeat("a", 64), "model": "gpt-4o"}
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
 	assert.NoError(t, validateAgainstComponentSchemaRawJSON(t, "AgentUpdateRequest", raw),
-		"AgentUpdateRequest with one field (model) must pass — satisfies minProperties:1")
-}
-
-// ── Concurrent compile race test ──────────────────────────────────────────────
-// Traces to: Phase 7 fix-Y — concurrent schema compilation must be race-free
-
-func TestCompileInboundSchema_ConcurrentDifferentSchemas(t *testing.T) {
-	// This test must be run with -race to detect data races in the schema compiler cache.
-	// Traces to: pkg/gateway/rest_inbound_validate.go — compileInboundSchema with sync.Map cache.
-	t.Parallel()
-
-	// 10 different schema names to compile concurrently.
-	schemas := []string{
-		"AgentCreateRequestMain", "AgentUpdateRequest", "SessionCreateRequest",
-		"ProbeProviderRequest", "SandboxConfigUpdate", "ExecAllowlist",
-		"SessionScopeRequest", "AuditLogToggleRequest", "SkillTrustUpdateRequest",
-		"PromptGuardUpdateRequest",
-	}
-
-	type result struct {
-		name string
-		err  error
-	}
-	results := make(chan result, len(schemas))
-
-	for _, name := range schemas {
-		n := name
-		go func() {
-			// Always call initSchemas first — sync.Once serializes the write
-			// to componentSchemaDir + sharedCompiler. Reading the global var
-			// directly (the previous "skip init if non-empty" optimisation)
-			// races with the in-flight Once.Do on the first call, producing
-			// "fatal error: concurrent map read and map write" under -race
-			// when many goroutines hit this path on a cold cache.
-			_ = initSchemas(t)
-			raw := []byte(`{"name":"test"}`)
-			err := validateAgainstComponentSchemaRawJSON(t, n, raw)
-			// We expect validation to either pass or fail — no panic or race.
-			// The nil-vs-error outcome depends on the schema, but the important
-			// thing is no data race occurs.
-			results <- result{name: n, err: err}
-		}()
-	}
-
-	for range schemas {
-		r := <-results
-		// Each schema must compile without panicking (err may be non-nil for invalid fixture data).
-		t.Logf("schema %s: validate result=%v", r.name, r.err != nil)
-	}
+		"AgentUpdateRequest with revision and one change must pass")
 }
 
 // ── pkg/session.TranscriptEntry → Message.yaml round-trip ───────────────────
@@ -4024,10 +3757,9 @@ func TestContract_AgentUpdateRequest_Populated(t *testing.T) {
 	mustPassComponent(t, "AgentUpdateRequest", FixtureAgentUpdateRequest_Populated())
 }
 
-func TestContract_AgentUpdateRequest_UpdatedAt(t *testing.T) {
-	// A patch body with only a valid updated_at timestamp satisfies minProperties:1
-	// and the date-time format constraint.
-	mustPassComponent(t, "AgentUpdateRequest", FixtureAgentUpdateRequest_UpdatedAt())
+func TestContract_AgentUpdateRequest_Revision(t *testing.T) {
+	// ADR-090 replaces the timestamp precondition with an opaque state revision.
+	mustPassComponent(t, "AgentUpdateRequest", FixtureAgentUpdateRequest_Revision())
 }
 
 // ── ChannelRouting ────────────────────────────────────────────────────────────

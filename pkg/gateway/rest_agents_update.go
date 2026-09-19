@@ -8,19 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/elicify-ai/omnipus/pkg/agentmutation"
 	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
 	"github.com/elicify-ai/omnipus/pkg/entity"
-	"github.com/elicify-ai/omnipus/pkg/fileutil"
 	"github.com/elicify-ai/omnipus/pkg/tools"
 )
 
@@ -41,6 +39,8 @@ type restAPIUpdateAgent struct {
 	newModel                    string
 	defaultAgentIDChanged       bool
 	modelIdentityChanged        bool
+	mutationResult              agentstore.MutationResult
+	activationFailed            string
 }
 
 // restAPIUpdateAgentFlow carries the shared state of updateAgent across its stages.
@@ -54,6 +54,39 @@ type restAPIUpdateAgentFlow struct {
 	foundAgent          config.AgentConfig
 	toolsCoverageMutate func(*config.Config)
 	workspace           string
+}
+
+func suppliedRESTAgentFields(req *gen.AgentUpdateRequest) []string {
+	if req == nil {
+		return nil
+	}
+	fields := make([]string, 0, 20)
+	add := func(present bool, name string) {
+		if present {
+			fields = append(fields, name)
+		}
+	}
+	add(req.Name != nil, "name")
+	add(req.Description != nil, "description")
+	add(req.Color != nil, "color")
+	add(req.Icon != nil, "icon")
+	add(req.Soul != nil, "soul")
+	add(req.Skills != nil, "skills")
+	add(req.McpServers != nil, "mcp_servers")
+	add(req.ToolsCfg != nil, "tools_cfg")
+	add(req.ToolPolicyChanges != nil, "tool_policy_changes")
+	add(req.Model != nil, "model")
+	add(req.Provider != nil, "provider")
+	add(req.FallbackModels != nil, "fallback_models")
+	add(req.ContextWindowOverride != nil, "context_window_override")
+	add(req.ModelParams != nil, "model_params")
+	add(req.MaxToolIterations != nil, "max_tool_iterations")
+	add(req.MemoryEnabled != nil, "memory_enabled")
+	add(req.Default != nil, "default")
+	add(req.Voice != nil, "voice")
+	add(req.Executor != nil, "executor")
+	add(req.ShellPolicy != nil, "shell_policy")
+	return fields
 }
 
 func (a *restAPI) updateAgent(w http.ResponseWriter, r *http.Request, id string) {
@@ -121,6 +154,14 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 		return true
 	}
 	uf.r.Body = io.NopCloser(bytes.NewReader(uf.rawBody))
+	// The strict generated-shape validator intentionally rejects retired or
+	// unknown fields before semantic handlers run. A system-agent disable
+	// attempt uses exactly such an unknown field (`enabled`/`disabled`), so
+	// check that protection before shape validation to preserve its specific
+	// operator-facing error.
+	if uf.rejectSystemAgentDisable() {
+		return true
+	}
 	if bytes.Contains(uf.rawBody, []byte(`"sandbox_profile"`)) {
 		jsonErr(uf.w, http.StatusBadRequest,
 			`sandbox_profile is retired — use the global god-mode switch (POST /api/v1/gateway/god-mode)`)
@@ -153,6 +194,38 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 
 	validateEnabled := uf.cfg.Gateway.ValidateInbound
 	if !decodeAndValidate(uf.w, uf.r, "AgentUpdateRequest", &uf.ru.req, validateEnabled) {
+		return true
+	}
+	if uf.ru.req.Revision == "" {
+		jsonErr(uf.w, http.StatusBadRequest, "revision is required")
+		return true
+	}
+	if err := agentstore.ValidateRevision(uf.ru.req.Revision); err != nil {
+		jsonErr(uf.w, http.StatusBadRequest, err.Error())
+		return true
+	}
+	var presence map[string]json.RawMessage
+	if err := json.Unmarshal(uf.rawBody, &presence); err == nil {
+		if _, supplied := presence["updated_at"]; supplied {
+			writeJSON(uf.w, http.StatusBadRequest, gen.ErrorResponse{
+				Error: "updated_at is read-only; use revision for configuration updates",
+				Code:  strPtr("invalid_input"),
+				Field: strPtr("updated_at"),
+			})
+			return true
+		}
+		for _, field := range []string{"skills", "mcp_servers", "tool_policy_changes", "soul"} {
+			if raw, ok := presence[field]; ok && string(bytes.TrimSpace(raw)) == "null" {
+				jsonErr(uf.w, http.StatusBadRequest, field+" must not be null")
+				return true
+			}
+		}
+	}
+	if !validateAgentUpdateShape(uf.w, uf.rawBody) {
+		return true
+	}
+	if uf.ru.req.ToolsCfg != nil && uf.ru.req.ToolPolicyChanges != nil {
+		jsonErr(uf.w, http.StatusBadRequest, "tools_cfg and tool_policy_changes cannot be supplied together")
 		return true
 	}
 	// ADR-071 §5.1.3 part 2: "default" (case-insensitive) is reserved — see
@@ -201,61 +274,43 @@ func (uf *restAPIUpdateAgentFlow) validateRequest() bool {
 	return false
 }
 
+// rejectSystemAgentDisable inspects the raw update body before strict wire-shape
+// validation. AgentUpdateRequest deliberately has no enabled/disabled field; a
+// disable attempt is therefore an unknown-field request, but System Agents need
+// their explicit protection message rather than a generic schema error.
+func (uf *restAPIUpdateAgentFlow) rejectSystemAgentDisable() bool {
+	uf.foundAgent = uf.cfg.Agents.List[uf.foundIdx]
+	if !coreagent.IsSystemAgentID(coreagent.CoreAgentID(uf.foundAgent.ID)) && !uf.foundAgent.IsSystem() {
+		return false
+	}
+
+	var statePeek struct { // not-wire-format: decode-only local peek at raw body fields to reject a disable attempt, never serialized to any response
+		Enabled  *bool `json:"enabled"`
+		Disabled *bool `json:"disabled"`
+	}
+	if peekErr := json.Unmarshal(uf.rawBody, &statePeek); peekErr != nil {
+		// Unreachable by construction — the caller has already verified that
+		// this exact body is JSON. Logged rather than discarded so a future
+		// reordering that makes it reachable cannot silently disarm this guard.
+		logsafeWarn("gateway: could not peek enabled/disabled on System Agent update; disable guard not evaluated",
+			"agent_id", uf.foundAgent.ID, "error", peekErr)
+	}
+	if (statePeek.Enabled != nil && !*statePeek.Enabled) ||
+		(statePeek.Disabled != nil && *statePeek.Disabled) {
+		name := strings.TrimSpace(uf.foundAgent.Name)
+		if name == "" {
+			name = uf.foundAgent.ID
+		}
+		jsonErr(uf.w, http.StatusBadRequest,
+			fmt.Sprintf("the %s System Agent cannot be disabled", name))
+		return true
+	}
+	return false
+}
+
 // validateTarget enforces agent-type, lock, skill, and executor constraints.
 func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 	uf.foundAgent = uf.cfg.Agents.List[uf.foundIdx]
-	// ADR-049 D3 / ADR-055 — System Agent guards.
-	//
-	// NO seeded System Agent can be disabled. Both of today's members hold a
-	// grant nothing else holds, so switching one off silently breaks the loop
-	// that depends on it: disabling the Judge stalls every goal/plan loop via
-	// the D7 judge-unavailability pause, and disabling the PlanSupervisor —
-	// the SOLE holder of the plan-correction grant — leaves a wedged plan with
-	// no actor able to correct it. The condition is therefore the whole
-	// System-Agent category, not an id equality test: it was `== IDJudge` and
-	// the PlanSupervisor slipped straight through it.
-	//
-	// AgentUpdateRequest carries no enabled/disabled field, so a client can
-	// only smuggle one as an unknown field; sniff the raw body (mirrors the
-	// sandbox_profile/delegation_policy raw-body-sniff precedent above) and
-	// reject a disable attempt with a loud 400 rather than a silent drop.
-	//
-	// NOT the plan kill switch: containment is plan-scoped (stopping a plan
-	// stops its supervision). This only stops a locked System Agent being
-	// switched off through the agent API.
-	//
-	// Both predicates, deliberately: IsSystemAgentID is seeded-ROSTER
-	// membership, so a seeded System Agent stays protected even if its
-	// persisted type was tampered with in config.json (seedSystemAgents
-	// repairs the type at the next boot, but a PUT can land before that);
-	// IsSystem is the persisted-TYPE predicate every sibling System-Agent
-	// guard in this file already uses (the not-deletable 400 above, the
-	// soul-editable carve-out below), so the two categories cannot drift apart
-	// into "deletable: no, disable-able: yes" for the same agent.
-	if coreagent.IsSystemAgentID(coreagent.CoreAgentID(uf.foundAgent.ID)) || uf.foundAgent.IsSystem() {
-		var statePeek struct { // not-wire-format: decode-only local peek at raw body fields to reject a disable attempt, never serialized to any response
-			Enabled  *bool `json:"enabled"`
-			Disabled *bool `json:"disabled"`
-		}
-		if peekErr := json.Unmarshal(uf.rawBody, &statePeek); peekErr != nil {
-			// Unreachable by construction — decodeAndValidate above already
-			// parsed this exact body as JSON. Logged rather than discarded so
-			// a future reordering that makes it reachable cannot silently
-			// disarm this guard.
-			slog.Warn("gateway: could not peek enabled/disabled on System Agent update; disable guard not evaluated",
-				"agent_id", uf.foundAgent.ID, "error", peekErr)
-		}
-		if (statePeek.Enabled != nil && !*statePeek.Enabled) ||
-			(statePeek.Disabled != nil && *statePeek.Disabled) {
-			name := strings.TrimSpace(uf.foundAgent.Name)
-			if name == "" {
-				name = uf.foundAgent.ID
-			}
-			jsonErr(uf.w, http.StatusBadRequest,
-				fmt.Sprintf("the %s System Agent cannot be disabled", name))
-			return true
-		}
-	}
 	// Worker agents can never be the routing default — they are not chat targets
 	// (invoked only via delegation). Reject an attempt to star a worker before
 	// any work is done so the single-default invariant and routing stay coherent.
@@ -309,28 +364,14 @@ func (uf *restAPIUpdateAgentFlow) validateTarget() bool {
 		return true
 	}
 
-	if uf.foundAgent.Locked {
-		// Protected: name, description, soul (prompt content),
-		// color, icon, and skills are identity/capability fields — reject on locked agents.
-		// Skills are included here (B-2 defense-in-depth): core agents have compiled-in capability
-		// sets; allowing runtime skill assignment would silently override that invariant.
-		//
-		// ADR-052 FR-038 (soul/rubric unification, R3-1 CLOSED): AgentConfig.Rubric
-		// was deleted — a System Agent's (e.g. the Judge) verification standards ARE
-		// its soul, and the ADR is explicit that "the Judge's soul is editable while
-		// the agent stays otherwise locked (core agents keep their souls locked)".
-		// So req.Soul is exempted from the reject-set for System Agents ONLY —
-		// every other identity field (name/description/color/icon/skills) stays
-		// locked even for a System Agent, and core agents (Mia/Jim/Ava/Ray) keep
-		// the full reject-set including soul: their souls are product identity,
-		// not a verifier rubric.
-		soulLocked := uf.ru.req.Soul != nil && !uf.foundAgent.IsSystem()
-		if uf.ru.req.Name != nil || uf.ru.req.Description != nil ||
-			soulLocked ||
-			uf.ru.req.Color != nil || uf.ru.req.Icon != nil || uf.ru.req.Skills != nil {
-			jsonErr(uf.w, http.StatusForbidden, "cannot modify locked agent identity or prompt")
-			return true
+	if fieldErr := agentmutation.ValidateFields(uf.foundAgent, suppliedRESTAgentFields(&uf.ru.req)); fieldErr != nil {
+		var classified *agentmutation.FieldError
+		if errors.As(fieldErr, &classified) && classified.Code == agentmutation.ProtectedField {
+			jsonErr(uf.w, http.StatusForbidden, classified.Error())
+		} else {
+			jsonErr(uf.w, http.StatusBadRequest, fieldErr.Error())
 		}
+		return true
 	}
 	// Referential validation: reject unknown skill IDs before doing any work.
 	if uf.ru.req.Skills != nil && len(*uf.ru.req.Skills) > 0 {
@@ -584,17 +625,9 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 	var wsErr error
 	uf.workspace, wsErr = agentWorkspacePath(uf.cfg, uf.ru.id, capturedWorkspace, uf.ru.a.homePath)
 	if wsErr != nil {
-		slog.Error("rest: agentWorkspacePath for update", "agent_id", uf.ru.id, "error", wsErr)
+		logsafeError("rest: agentWorkspacePath for update", "agent_id", uf.ru.id, "error", wsErr)
 		jsonErr(uf.w, http.StatusInternalServerError, fmt.Sprintf("could not resolve workspace: %v", wsErr))
 		return true
-	}
-	if uf.ru.req.Soul != nil {
-		soulPath := filepath.Join(uf.workspace, "SOUL.md")
-		if err := fileutil.WriteFileAtomic(soulPath, []byte(*uf.ru.req.Soul), 0o600); err != nil {
-			slog.Error("rest: write SOUL.md for agent", "agent_id", uf.ru.id, "error", err)
-			jsonErr(uf.w, http.StatusInternalServerError, fmt.Sprintf("could not write SOUL.md: %v", err))
-			return true
-		}
 	}
 	// Rebuild the running agent only when a changed field is one the
 	// AgentInstance caches at construction (soul, skills, model params, context
@@ -686,12 +719,9 @@ func (uf *restAPIUpdateAgentFlow) persistAndReload() bool {
 		// updateConfigJSONLocked does when config is written but the in-memory
 		// refresh fails.
 		if rebuildErr := uf.ru.a.fastAgentUpsert(uf.ru.id); rebuildErr != "" {
-			slog.Error("updateAgent: change saved but the running agent could not be rebuilt",
+			logsafeError("updateAgent: change saved but the running agent could not be rebuilt",
 				"agent_id", uf.ru.id, "error", rebuildErr)
-			jsonErr(uf.w, http.StatusInternalServerError, fmt.Sprintf(
-				"agent %q was saved but the running agent could not be updated (%s); restart the gateway to apply the change",
-				uf.ru.id, rebuildErr))
-			return true
+			uf.ru.activationFailed = rebuildErr
 		}
 	}
 	return false
@@ -806,12 +836,22 @@ func (uf *restAPIUpdateAgentFlow) respond() {
 		}
 	}
 	// Override defaults with request values when provided.
-	if uf.ru.req.TimeoutSeconds != nil {
-		ag.TimeoutSeconds = *uf.ru.req.TimeoutSeconds
-	}
 	if uf.ru.req.MaxToolIterations != nil {
 		ag.MaxToolIterations = *uf.ru.req.MaxToolIterations
 	}
+	ag.Revision = uf.ru.mutationResult.Revision
+	applyAgentEditableFields(&ag, uf.foundAgent)
+	persistence := gen.AgentPersistenceStatusComplete
+	ag.PersistenceStatus = &persistence
+	activation := gen.AgentActivationStatusActive
+	if uf.ru.activationFailed != "" {
+		activation = gen.AgentActivationStatusFailed
+		message := fmt.Sprintf("saved but activation failed: %s", uf.ru.activationFailed)
+		ag.Message = &message
+	}
+	ag.ActivationStatus = &activation
+	changed := suppliedRESTAgentFields(&uf.ru.req)
+	ag.ChangedFields = &changed
 	jsonOK(uf.w, ag)
 }
 
@@ -827,9 +867,10 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 
 	store := agentstore.New(rp.ru.a.homePath)
 
-	_, updateErr := store.Update(rp.ru.id, func(agentRec *config.AgentConfig) error {
+	result, updateErr := store.MutateState(rp.ru.id, rp.ru.req.Revision, func(agentRec *config.AgentConfig) error {
 		return rp.updateRecord(agentRec)
-	})
+	}, rp.ru.req.Soul)
+	rp.ru.mutationResult = result
 	if updateErr != nil {
 		if rp.conflictErr != nil {
 			return errConflict
@@ -842,7 +883,13 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 			// errAgentVanishedDuringUpdate's doc comment).
 			return fmt.Errorf("%w: agent %q not found", errAgentVanishedDuringUpdate, rp.ru.id)
 		}
-		return fmt.Errorf("update agent entity record: %w", updateErr)
+		if errors.Is(updateErr, agentstore.ErrRevisionConflict) {
+			return errConflict
+		}
+		if errors.Is(updateErr, agentstore.ErrInvalidRevision) {
+			return fmt.Errorf("invalid revision: %w", updateErr)
+		}
+		return &configurationMutationError{Result: result, Err: fmt.Errorf("update agent entity record: %w", updateErr)}
 	}
 	// Single-default invariant, for real this time: the settings
 	// singleton (agents.defaults.default_agent_id) is the ONLY thing
@@ -894,18 +941,30 @@ func (ru *restAPIUpdateAgent) persistAgent(m map[string]any) error {
 
 // updateRecord applies the validated request fields to the locked agent record.
 func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentConfig) error {
-	// Optimistic concurrency check (runs INSIDE both a.configMu AND
-	// the entity's own sidecar lock, so two concurrent PUTs cannot
-	// both pass the version check and then both write). If the
-	// caller sent an updated_at value, it must match the persisted
-	// value exactly; otherwise another edit raced and we abort the
-	// mutate (nothing is written). The caller maps errConflict to
-	// HTTP 409.
-	if rp.ru.req.UpdatedAt != nil && agentRec.UpdatedAt != nil && !rp.ru.req.UpdatedAt.Equal(*agentRec.UpdatedAt) {
-		rp.conflictErr = errConflict
-		return errConflict
-	}
+	// MutateState checks the reviewed revision under the entity lock before
+	// applying these fields. UpdatedAt is display metadata, never a precondition.
 	storedModelBefore, storedFallbacksBefore := agentModelIdentity(agentRec)
+	rp.updateIdentityAndModel(agentRec)
+	rp.updatePresentationAndFallbacks(agentRec)
+	rp.updateToolsConfig(agentRec)
+	if err := rp.updateMCPServers(agentRec); err != nil {
+		return err
+	}
+	if err := rp.updateToolPolicies(agentRec); err != nil {
+		return err
+	}
+	rp.updateExecutorAndSkills(agentRec)
+
+	// Refresh the display timestamp with sub-second precision;
+	// the frontend compares it as an ordinal when incorporating autosaves.
+	storedModelAfter, storedFallbacksAfter := agentModelIdentity(agentRec)
+	rp.ru.modelIdentityChanged = !sameAgentModelIdentity(
+		storedModelBefore, storedFallbacksBefore, storedModelAfter, storedFallbacksAfter)
+	agentRec.UpdatedAt = &rp.ru.now
+	return nil
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updateIdentityAndModel(agentRec *config.AgentConfig) {
 	if rp.ru.req.Name != nil {
 		agentRec.Name = rp.ru.newName
 	}
@@ -972,6 +1031,9 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	} else if rp.ru.clearsContextWindowOverride {
 		agentRec.ContextWindowOverride = nil
 	}
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updatePresentationAndFallbacks(agentRec *config.AgentConfig) {
 	// tool_feedback was removed from the wire in W1 (it's now per-channel
 	// runtime behavior driven by pkg/agent/loop.go: webchat skips). The
 	// global config-level agents.defaults.tool_feedback stays.
@@ -1001,6 +1063,12 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	}
 	if rp.ru.req.Icon != nil {
 		agentRec.Icon = *rp.ru.req.Icon
+	}
+	// voice: ADR-090 FR-002 supported editable persona field. Persisted
+	// even though TTS playback is inactive. Worker non-empty values are
+	// rejected before this persist step. Empty string clears.
+	if rp.ru.req.Voice != nil {
+		agentRec.Voice = strings.TrimSpace(*rp.ru.req.Voice)
 	}
 	// memory_enabled (ADR-052 FR-039): "Allowed on all agents" per
 	// AgentUpdateRequest.yaml — including locked/system agents (the
@@ -1043,6 +1111,9 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 	if rp.ru.req.Default != nil {
 		agentRec.Default = *rp.ru.req.Default
 	}
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updateToolsConfig(agentRec *config.AgentConfig) {
 	if rp.ru.req.ToolsCfg != nil {
 		newTools := &config.AgentToolsCfg{}
 		if rp.ru.req.ToolsCfg.Builtin != nil {
@@ -1074,6 +1145,63 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 		}
 		agentRec.Tools = newTools
 	}
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updateMCPServers(agentRec *config.AgentConfig) error {
+	if rp.ru.req.McpServers == nil {
+		return nil
+	}
+	if agentRec.Tools == nil {
+		agentRec.Tools = &config.AgentToolsCfg{}
+	}
+	servers := make([]config.AgentMCPServerBinding, 0, len(*rp.ru.req.McpServers))
+	for _, s := range *rp.ru.req.McpServers {
+		binding := config.AgentMCPServerBinding{ID: s.Id, ToolsSpecified: s.Tools != nil}
+		if s.Tools != nil {
+			binding.Tools = *s.Tools
+		}
+		if err := config.ValidateAgentMCPServerBinding(binding); err != nil {
+			return err
+		}
+		if _, ok := rp.ru.a.agentLoop.GetConfig().Tools.MCP.Servers[s.Id]; !ok {
+			return fmt.Errorf("MCP server %q is not configured", s.Id)
+		}
+		servers = append(servers, binding)
+	}
+	agentRec.Tools.MCP.Servers = servers
+	return nil
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updateToolPolicies(agentRec *config.AgentConfig) error {
+	if rp.ru.req.ToolPolicyChanges == nil {
+		return nil
+	}
+	if agentRec.Tools == nil {
+		agentRec.Tools = &config.AgentToolsCfg{}
+	}
+	patch := agentmutation.ToolPolicyChanges{}
+	if rp.ru.req.ToolPolicyChanges.Set != nil {
+		patch.Set = make(map[string]config.ToolPolicy, len(*rp.ru.req.ToolPolicyChanges.Set))
+		for name, policy := range *rp.ru.req.ToolPolicyChanges.Set {
+			patch.Set[name] = config.ToolPolicy(policy)
+		}
+	}
+	if rp.ru.req.ToolPolicyChanges.Remove != nil {
+		patch.Remove = *rp.ru.req.ToolPolicyChanges.Remove
+	}
+	known := make(map[string]struct{})
+	for name := range buildKnownBuiltinToolNames() {
+		known[name] = struct{}{}
+	}
+	next, err := agentmutation.ApplyToolPolicyChanges(agentRec.Tools.Builtin.Policies, patch, known)
+	if err != nil {
+		return err
+	}
+	agentRec.Tools.Builtin.Policies = next
+	return nil
+}
+
+func (rp *restAPIUpdateAgentPersistAgent) updateExecutorAndSkills(agentRec *config.AgentConfig) {
 	// Executor: write the sub-agent executor under Subagents.Executor
 	// when the caller sends it. kind="native" with no cli clears any
 	// prior external-cli config (updatedExecutor == nil → clear).
@@ -1098,20 +1226,4 @@ func (rp *restAPIUpdateAgentPersistAgent) updateRecord(agentRec *config.AgentCon
 			agentRec.Skills = nil
 		}
 	}
-	// ADR-037: delegation_policy is retired — no longer written here.
-	// Heartbeat is workspace-scoped (ADR-027); per-agent heartbeat fields
-	// are ignored on PUT. Workspace handler manages member_configs.
-	// Optimistic concurrency timestamp: refresh on every successful save.
-	// Sub-second precision (time.Time, not truncated) — the frontend uses
-	// this field as an ordinal "is this newer" comparator
-	// (lastIncorporatedUpdatedAtRef in AgentProfile.tsx); whole-second
-	// precision let two distinct autosave writes within the same
-	// wall-clock second collide on an identical truncated timestamp,
-	// defeating the ordinal comparison (reopening the P-F2
-	// fallback_models data-loss class this fix wave closed).
-	storedModelAfter, storedFallbacksAfter := agentModelIdentity(agentRec)
-	rp.ru.modelIdentityChanged = !sameAgentModelIdentity(
-		storedModelBefore, storedFallbacksBefore, storedModelAfter, storedFallbacksAfter)
-	agentRec.UpdatedAt = &rp.ru.now
-	return nil
 }

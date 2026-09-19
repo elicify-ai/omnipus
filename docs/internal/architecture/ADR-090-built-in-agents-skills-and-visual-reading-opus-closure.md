@@ -1,5 +1,7 @@
 # Independent Opus closure review
 
+> Decision update (2026-09-18): the founder superseded M-3's owner-session-only/proposal-only resolution. Ava may apply user-confirmed changes in a delegated run, with the user’s answer relayed through Jim. There is no Ava-specific session-type write gate. The current ADR and configuration specification govern; the original review below is retained as historical evidence.
+
 Executed through Claude Code with `--model opus`, high effort and read-only tools; actual primary model `claude-opus-5`, 17 turns, 183,811 ms, successful completion and no permission denials. No runtime tests. Original output follows unchanged. Its opening count of “11 critical and major” is an arithmetic error: C-1/C-2 plus M-1–M-11 totals 13. All eight minor follow-up findings were subsequently corrected; see the [dispositions](ADR-090-built-in-agents-skills-and-visual-reading-opus-dispositions.md).
 
 ---

@@ -84,8 +84,12 @@ type Notifier interface {
 // package doc for the on-disk location and ADR-054 D2/D3/D6 rules it
 // implements.
 type Store struct {
-	inner    *entity.Store[config.AgentConfig]
-	notifier Notifier
+	inner       *entity.Store[config.AgentConfig]
+	notifier    Notifier
+	home        string
+	stageFile   func(string, []byte, os.FileMode) (string, error)
+	replaceFile func(string, string) error
+	removeFile  func(string) error
 }
 
 // New creates a Store rooted at $OMNIPUS_HOME/entities/agents. omnipusHome is
@@ -113,7 +117,13 @@ func New(omnipusHome string) *Store {
 		logger.WarnF("agentstore: could not pre-create entity directory (Create will retry via entity.Store's own MkdirAll)",
 			map[string]any{"dir": dir, "error": err.Error()})
 	}
-	return &Store{inner: entity.New[config.AgentConfig](dir, accessors)}
+	return &Store{
+		inner:       entity.New[config.AgentConfig](dir, accessors),
+		home:        omnipusHome,
+		stageFile:   stage,
+		replaceFile: replace,
+		removeFile:  os.Remove,
+	}
 }
 
 // SetNotifier wires the read-side cache invalidation hook (see Notifier).

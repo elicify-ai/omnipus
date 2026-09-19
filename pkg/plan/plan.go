@@ -688,13 +688,53 @@ type Plan struct { //nolint:revive // exported name matches package purpose
 	Rationale string `json:"rationale,omitempty"`
 
 	// --- attribution + lifecycle timestamps (RFC 3339 UTC) ---
-	Owner       string `json:"owner,omitempty"`
-	CreatedBy   string `json:"created_by,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	UpdatedAt   string `json:"updated_at"`
-	ApprovedAt  string `json:"approved_at,omitempty"`
-	StartedAt   string `json:"started_at,omitempty"`
-	CompletedAt string `json:"completed_at,omitempty"`
+	Owner string `json:"owner,omitempty"`
+	// CreatedBy is WHO authored the plan — a human username (REST/UI) or an
+	// agent ID (create_plan tool). A name from two namespaces with no
+	// discriminator: a human "admin" also resolves to the Admin agent, so
+	// CreatedByKind is the gate-authoritative discriminator and this field
+	// is display + attribution only.
+	CreatedBy string `json:"created_by,omitempty"`
+	// CreatedByKind is the authorship kind, server-set at creation and
+	// immutable (never in a request/PATCH body — the wire carries no such
+	// field, so a client cannot forge its tier). CreatedByKindUser = REST/UI
+	// path; CreatedByKindAgent = create_plan tool. Empty = legacy persisted
+	// data (greenfield: no migration); AuthoredByAgent falls back to the old
+	// registry heuristic for exactly that case.
+	CreatedByKind string `json:"created_by_kind,omitempty"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+	ApprovedAt    string `json:"approved_at,omitempty"`
+	StartedAt     string `json:"started_at,omitempty"`
+	CompletedAt   string `json:"completed_at,omitempty"`
+}
+
+// Plan authorship kinds (Plan.CreatedByKind), mirroring
+// task.CriterionAuthor.Kind's "user"/"agent" convention. Server-set at
+// creation only; never client-supplied.
+const (
+	CreatedByKindUser  = "user"  // authenticated human via REST/UI create
+	CreatedByKindAgent = "agent" // agent via the create_plan tool
+)
+
+// AuthoredByAgent resolves authorship for the SD-A7 tiered-DoD gate: the
+// explicit CreatedByKind wins; empty (legacy, pre-field data) falls back to
+// the injected registry probe; a nil probe fail-closes to strict.
+//
+// LIMIT: a kindless plan by a human whose username collides with an agent ID
+// stays on the strict tier — the stored bytes cannot distinguish the two.
+// Workaround: author a DoD.
+func (p *Plan) AuthoredByAgent(isAgentID func(string) bool) bool {
+	switch p.CreatedByKind {
+	case CreatedByKindAgent:
+		return true
+	case CreatedByKindUser:
+		return false
+	}
+	if isAgentID == nil {
+		return true // fail closed: unwired checker ⇒ strict tier
+	}
+	return isAgentID(p.CreatedBy)
 }
 
 // normalize applies field defaults and validates the entity. It does NOT
@@ -742,6 +782,15 @@ func (p *Plan) normalize() error {
 	}
 	if p.OwnerAgentID == "" {
 		return verr("owner_agent_id is required")
+	}
+	switch p.CreatedByKind {
+	case "", CreatedByKindUser, CreatedByKindAgent:
+		// "" is the legacy-kindless state — every plan written before the
+		// field existed must keep loading, creating and updating (greenfield
+		// policy: preserve existing UAT data, no migration). Only an
+		// unknown NON-empty value is rejected.
+	default:
+		return verr("invalid created_by_kind %q", p.CreatedByKind)
 	}
 	if p.State == "" {
 		p.State = StateDraft

@@ -45,9 +45,10 @@ func (t *SkillCreateTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillCreateTool) Description() string {
 	return fmt.Sprintf(
 		"Author a NEW skill (procedural memory). Writes a SKILL.md to the user skills "+
-			"directory; prior versions are snapshotted for rollback, but whether the write "+
-			"additionally prompts for operator approval depends on your operator's tool-approval "+
-			"policy for this tool. content must not exceed %d bytes. A name that already exists "+
+			"directory; prior versions are snapshotted for rollback. This call writes the file; it is not a "+
+			"confirmation step. Policy may still Ask at execution; that is not a "+
+			"substitute for the user's confirmation of the proposal, and you must not invent a "+
+			"second confirmation ritual. content must not exceed %d bytes. A name that already exists "+
 			"is refused — use edit_skill to modify it instead. "+
 			"Parameters: name (required, alphanumeric+hyphens), content (required, full SKILL.md "+
 			"including YAML frontmatter with name and description).",
@@ -69,7 +70,7 @@ func (t *SkillCreateTool) Parameters() map[string]any {
 	}
 }
 
-func (t *SkillCreateTool) Execute(_ context.Context, args map[string]any) *tools.ToolResult {
+func (t *SkillCreateTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	name, _ := args["name"].(string)
 	content, _ := args["content"].(string)
 	if name == "" {
@@ -86,7 +87,7 @@ func (t *SkillCreateTool) Execute(_ context.Context, args map[string]any) *tools
 			"skill writer not configured", "ensure the gateway is started with a valid workspace"))
 	}
 
-	path, err := t.deps.SkillWriter.CreateSkill(name, content)
+	path, revision, err := t.deps.SkillWriter.CreateSkillReviewed(name, content)
 	if err != nil {
 		return skillAuthoringError("create", name, err)
 	}
@@ -97,10 +98,14 @@ func (t *SkillCreateTool) Execute(_ context.Context, args map[string]any) *tools
 		"event", "skill_authored", "action", "create", "name", name, "path", path)
 
 	return tools.NewToolResult(successJSON(map[string]any{
-		"success": true,
-		"name":    name,
-		"path":    path,
-		"action":  "created",
+		"success":            true,
+		"name":               name,
+		"path":               path,
+		"action":             "created",
+		"revision":           revision,
+		"persistence_status": "complete",
+		"activation_status":  "active",
+		"changed_fields":     []string{"content"},
 	}))
 }
 
@@ -114,11 +119,13 @@ func (t *SkillEditTool) Scope() tools.ToolScope { return tools.ScopeCore }
 func (t *SkillEditTool) Description() string {
 	return fmt.Sprintf(
 		"Edit / refine an EXISTING skill (self-improvement). Snapshots the prior version "+
-			"for rollback, then writes the new SKILL.md; whether the write additionally prompts "+
-			"for operator approval depends on your operator's tool-approval policy for this tool. "+
+			"for rollback, then writes the new SKILL.md. This call writes the file; it is not a "+
+			"confirmation step. Policy may still Ask at execution; that is not a substitute for "+
+			"the user's confirmation of the proposal, and you must not invent a second "+
+			"confirmation ritual. "+
 			"Editing a built-in creates a user override; the built-in is never mutated in place. "+
 			"content must not exceed %d bytes. "+
-			"Parameters: name (required), content (required, full new SKILL.md).",
+			"Parameters: name, content (full new SKILL.md), and revision from the reviewed skill read are required. A conflict means the skill changed after review; stop, reread, and do not retry the stale write.",
 		skills.MaxSkillMarkdownBytes,
 	)
 }
@@ -132,14 +139,16 @@ func (t *SkillEditTool) Parameters() map[string]any {
 				"type":        "string",
 				"description": "Full new SKILL.md content including YAML frontmatter.",
 			},
+			"revision": map[string]any{"type": "string", "description": "Revision returned by the reviewed skill read."},
 		},
-		"required": []string{"name", "content"},
+		"required": []string{"name", "content", "revision"},
 	}
 }
 
 func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools.ToolResult {
 	name, _ := args["name"].(string)
 	content, _ := args["content"].(string)
+	revision, _ := args["revision"].(string)
 	if name == "" {
 		return tools.ErrorResult(errorJSON("INVALID_INPUT", "name is required", ""))
 	}
@@ -147,6 +156,9 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 		return tools.ErrorResult(
 			errorJSON("INVALID_INPUT", "content is required", "provide the full new SKILL.md including frontmatter"),
 		)
+	}
+	if revision == "" {
+		return tools.ErrorResult(errorJSON("INVALID_INPUT", "revision is required", "read the skill again before editing"))
 	}
 
 	if t.deps == nil || t.deps.SkillWriter == nil {
@@ -166,7 +178,7 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 	// global-root path below, unchanged.
 	if shelf := resolveProjectShelf(t.deps, ctx); shelf != nil {
 		if projWriter, ps, perr := skills.ResolveProjectSkillWriter(shelf, name); perr == nil {
-			path, _, editErr := projWriter.EditSkill(name, content, true)
+			path, _, nextRevision, editErr := projWriter.EditSkillReviewed(name, content, true, revision)
 			if editErr != nil {
 				return skillAuthoringError("edit", name, editErr)
 			}
@@ -176,12 +188,16 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 				"event", "skill_authored", "action", "edit", "name", name,
 				"path", path, "shelf", "project", "mount", ps.MountName)
 			return tools.NewToolResult(successJSON(map[string]any{
-				"success": true,
-				"name":    name,
-				"path":    path,
-				"action":  "edited",
-				"shelf":   "project",
-				"mount":   ps.MountName,
+				"success":            true,
+				"name":               name,
+				"path":               path,
+				"action":             "edited",
+				"shelf":              "project",
+				"mount":              ps.MountName,
+				"revision":           nextRevision,
+				"persistence_status": "complete",
+				"activation_status":  "active",
+				"changed_fields":     []string{"content"},
 			}))
 		} else if !errors.Is(perr, skills.ErrNotFound) {
 			// ErrProjectWriteEscapesMount or another shelf-integrity problem —
@@ -199,7 +215,26 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 	// create a user override in the writer's (global) root rather than failing.
 	allowOverride := skillExistsOnLoadPath(t.deps.SkillsLoader, name)
 
-	path, createdOverride, err := t.deps.SkillWriter.EditSkill(name, content, allowOverride)
+	var path, nextRevision string
+	var createdOverride bool
+	var err error
+	if allowOverride {
+		if _, localErr := t.deps.SkillWriter.SkillRevision(name); errors.Is(localErr, skills.ErrNotFound) {
+			sourcePath := ""
+			for _, info := range t.deps.SkillsLoader.ListSkills() {
+				if strings.EqualFold(info.ID, name) {
+					sourcePath = info.Path
+					break
+				}
+			}
+			path, nextRevision, err = t.deps.SkillWriter.CreateOverrideReviewed(name, content, sourcePath, revision)
+			createdOverride = err == nil
+		} else {
+			path, createdOverride, nextRevision, err = t.deps.SkillWriter.EditSkillReviewed(name, content, allowOverride, revision)
+		}
+	} else {
+		path, createdOverride, nextRevision, err = t.deps.SkillWriter.EditSkillReviewed(name, content, false, revision)
+	}
 	if err != nil {
 		return skillAuthoringError("edit", name, err)
 	}
@@ -213,11 +248,15 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 		action = "override_created"
 	}
 	return tools.NewToolResult(successJSON(map[string]any{
-		"success":          true,
-		"name":             name,
-		"path":             path,
-		"action":           action,
-		"created_override": createdOverride,
+		"success":            true,
+		"name":               name,
+		"path":               path,
+		"action":             action,
+		"created_override":   createdOverride,
+		"revision":           nextRevision,
+		"persistence_status": "complete",
+		"activation_status":  "active",
+		"changed_fields":     []string{"content"},
 	}))
 }
 
@@ -241,8 +280,13 @@ func (t *SkillEditTool) Execute(ctx context.Context, args map[string]any) *tools
 // sysagent tools have no access to a live ContextBuilder from inside
 // Execute.
 func resolveProjectShelf(deps *Deps, ctx context.Context) skills.ProjectShelf {
+	shelf, _ := resolveProjectShelfWithCollisions(deps, ctx)
+	return shelf
+}
+
+func resolveProjectShelfWithCollisions(deps *Deps, ctx context.Context) (skills.ProjectShelf, []skills.SlugCollision) {
 	if deps == nil || strings.TrimSpace(deps.Home) == "" {
-		return nil
+		return nil, nil
 	}
 	home := deps.Home
 
@@ -250,22 +294,21 @@ func resolveProjectShelf(deps *Deps, ctx context.Context) skills.ProjectShelf {
 	if wsID == "" {
 		def, err := workspacepkg.ResolveDefaultID(home)
 		if err != nil || def == "" {
-			return nil
+			return nil, nil
 		}
 		wsID = def
 	}
 
 	mounts, ok := workspacepkg.LoadMounts(home, wsID)
 	if !ok || len(mounts) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	pm := make([]skills.ProjectMount, 0, len(mounts))
 	for _, m := range mounts {
 		pm = append(pm, skills.ProjectMount{Name: m.Name, Root: m.HostPath})
 	}
-	shelf, _ := skills.MergeProjectSkills(pm)
-	return shelf
+	return skills.MergeProjectSkills(pm)
 }
 
 // skillExistsOnLoadPath reports whether a skill of the given name is resolvable
@@ -304,6 +347,9 @@ func skillAuthoringError(op, name string, err error) *tools.ToolResult {
 	case errors.Is(err, skills.ErrNotFound):
 		return tools.ErrorResult(errorJSON("NOT_FOUND",
 			fmt.Sprintf("skill %q not found", name), "use create_skill to author a new skill"))
+	case errors.Is(err, skills.ErrRevisionConflict):
+		return tools.ErrorResult(errorJSON("CONFLICT",
+			fmt.Sprintf("skill %q changed after review", name), "read the skill again and submit its current revision"))
 	default:
 		// Validation failures (invalid frontmatter, missing name/description)
 		// and I/O errors land here. Surface the cause for the agent to correct.

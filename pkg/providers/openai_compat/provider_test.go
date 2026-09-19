@@ -864,9 +864,14 @@ func TestSerializeMessages_MediaWithToolCallID(t *testing.T) {
 	if msgs[0]["tool_call_id"] != "call_1" {
 		t.Fatalf("tool_call_id not preserved with media, got %v", msgs[0]["tool_call_id"])
 	}
-	// Content should be multipart array
-	if _, ok := msgs[0]["content"].([]any); !ok {
-		t.Fatalf("expected array content, got %T", msgs[0]["content"])
+	if msgs[0]["content"] != "image result" {
+		t.Fatalf("tool result content=%v", msgs[0]["content"])
+	}
+	if len(msgs) != 2 || msgs[1]["role"] != "user" {
+		t.Fatalf("supplemental image message=%#v", msgs)
+	}
+	if _, ok := msgs[1]["content"].([]any); !ok {
+		t.Fatalf("expected supplemental array content, got %T", msgs[1]["content"])
 	}
 }
 

@@ -165,6 +165,15 @@ func newE2ECfg(t *testing.T, workspaceDir string) *config.Config {
 		},
 	}
 	cfg.Tools.Manifest.Compressed = true
+	// Production always boots with the reconciled global ceiling present
+	// (config.ReconcileToolPolicyCeiling at load/gateway boot). Mirror it
+	// here exactly as newCompressedCfg does: without it, every ceiling-riding
+	// grant in the ADR-090 sparse seed (e.g. Mia's find_skills, which equals
+	// the shipped ceiling allow and is therefore NOT stored per-agent) has no
+	// global half to merge against and resolves deny — a fixture artifact
+	// that shows up as permission_denied, not the offer-gate refusal the
+	// tests downstream of this fixture exist to pin.
+	cfg.Sandbox.ToolPolicies = config.DefaultConfig().Sandbox.ToolPolicies
 	coreagent.SeedConfig(cfg)
 	return cfg
 }

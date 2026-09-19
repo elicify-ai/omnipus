@@ -750,6 +750,37 @@ func (h *PathHandle) Open() (fs.File, error) {
 	return f, nil
 }
 
+// OpenRegularNonBlocking opens through the already-authorized anchored handle
+// and verifies the opened object. On Unix the platform flags include
+// O_NONBLOCK, so a concurrent replacement with a FIFO cannot block the turn.
+func (h *PathHandle) OpenRegularNonBlocking() (fs.File, error) {
+	if h.root == nil {
+		if err := h.recheckUnrestrictedCarveOut(); err != nil {
+			return nil, err
+		}
+		f, err := os.OpenFile(h.abs, regularReadOpenFlags(), 0)
+		if err != nil {
+			return nil, wrapOpenErr(err)
+		}
+		info, err := f.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			f.Close()
+			return nil, ErrImageSourceNotRegular
+		}
+		return f, nil
+	}
+	f, err := h.root.OpenFile(h.rel, regularReadOpenFlags(), 0)
+	if err != nil {
+		return nil, wrapOpenErr(err)
+	}
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		f.Close()
+		return nil, ErrImageSourceNotRegular
+	}
+	return f, nil
+}
+
 // MkdirAll creates the handle's target directory (and any missing parents).
 func (h *PathHandle) MkdirAll(perm os.FileMode) error {
 	if h.root == nil {

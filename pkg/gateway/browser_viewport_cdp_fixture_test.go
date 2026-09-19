@@ -149,20 +149,11 @@ func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int
 			case "Runtime.evaluate":
 				var expression string
 				_ = json.Unmarshal(command.Params["expression"], &expression)
-				value := map[string]any{"type": "undefined"}
-				switch expression {
-				case "self":
-					value = map[string]any{"type": "object", "className": "Window"}
-				case "window.devicePixelRatio":
+				result["result"] = viewportRuntimeEvaluate(expression, func() (int, int, float64) {
 					observationMu.Lock()
-					value = map[string]any{"type": "number", "value": scale}
-					observationMu.Unlock()
-				case "document.title":
-					value = map[string]any{"type": "string", "value": "Fixture"}
-				case "document.location.href", "window.location.href":
-					value = map[string]any{"type": "string", "value": "about:blank"}
-				}
-				result["result"] = value
+					defer observationMu.Unlock()
+					return width, height, scale
+				})
 			}
 			response := map[string]any{"id": command.ID, "result": result}
 			if command.Session != "" {
@@ -188,6 +179,29 @@ func newViewportCDPEndpoint(t *testing.T, pending bool, metricsHooks ...func(int
 		server.Close()
 	})
 	return "ws" + strings.TrimPrefix(server.URL, "http") + "/devtools/browser/viewport-fixture", observe, discovered, watchQueried
+}
+
+// viewportRuntimeEvaluate answers only the browser JavaScript queries used by
+// the viewport lifecycle, keeping the CDP endpoint's main command loop small.
+func viewportRuntimeEvaluate(expression string, metrics func() (int, int, float64)) map[string]any {
+	switch expression {
+	case "self":
+		return map[string]any{"type": "object", "className": "Window"}
+	case `({width:window.innerWidth,height:window.innerHeight})`:
+		width, height, _ := metrics()
+		return map[string]any{
+			"type":  "object",
+			"value": map[string]any{"width": width, "height": height},
+		}
+	case "window.devicePixelRatio":
+		_, _, scale := metrics()
+		return map[string]any{"type": "number", "value": scale}
+	case "document.title":
+		return map[string]any{"type": "string", "value": "Fixture"}
+	case "document.location.href", "window.location.href":
+		return map[string]any{"type": "string", "value": "about:blank"}
+	}
+	return map[string]any{"type": "undefined"}
 }
 
 // newViewportCDPEndpointURL returns only the WebSocket URL of a measured CDP

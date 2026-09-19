@@ -75,7 +75,7 @@ func newModelParamsTestAPI(t *testing.T) (*restAPI, *config.Config, string) {
 func putAgentModelParams(t *testing.T, api *restAPI, id, body string) (*httptest.ResponseRecorder, gen.Agent) {
 	t.Helper()
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+id, strings.NewReader(body))
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+id, strings.NewReader(body))
 	api.HandleAgents(w, r)
 	var resp gen.Agent
 	if w.Code == http.StatusOK {

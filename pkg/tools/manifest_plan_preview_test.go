@@ -23,32 +23,11 @@ import (
 	"github.com/elicify-ai/omnipus/pkg/config"
 )
 
-// manifestBullet is the prefix BuildCompressedManifest writes for one
-// previewed tool: "  - <name> — ".
-func manifestBullet(name string) string { return "  - " + name + " — " }
-
-// manifestLineFor returns the rendered description text of name's bullet in
-// note, or "" when note has no bullet for name.
-func manifestLineFor(note, name string) string {
-	for _, line := range strings.Split(note, "\n") {
-		if rest, ok := strings.CutPrefix(line, manifestBullet(name)); ok {
-			return rest
-		}
-	}
-	return ""
-}
-
-func TestManifest_PlanToolPreviewFollowsToolPolicy(t *testing.T) {
-	if previewAllLazy.Load() {
-		t.Fatal("precondition: the PreviewAllLazy revert is on, so every lazy tool previews and " +
-			"this test could not tell the previewed tier apart from the revert")
-	}
-
+func TestManifest_PlanToolUpfrontDefinitionsFollowToolPolicy(t *testing.T) {
 	catalog := []Tool{
 		&PlanCreateTool{},
 		&PlanExecuteTool{},
-		// Control: a previewed tool no case below ever denies. Without it an
-		// "absent" assertion would also pass on a block that rendered nothing.
+		// Control: another upfront tool no case below ever denies.
 		&fakeManifestTool{name: "create_task", desc: "Create a task.", cat: CategoryTasks},
 	}
 	ceilingAllow := map[string]config.ToolPolicy{
@@ -111,27 +90,25 @@ func TestManifest_PlanToolPreviewFollowsToolPolicy(t *testing.T) {
 			t.Run(agentType+"/"+tc.name, func(t *testing.T) {
 				filtered, verdicts := FilterToolsByPolicy(catalog, agentType,
 					&ToolPolicyCfg{Policies: tc.agent, GlobalPolicies: tc.global})
-				note := BuildCompressedManifest(filtered, nil)
-
-				if manifestLineFor(note, "create_task") == "" {
-					t.Fatalf("control: create_task must render in every case; block was:\n%s", note)
+				kept := make(map[string]bool, len(filtered))
+				for _, tool := range filtered {
+					kept[tool.Name()] = true
 				}
-				if got := manifestLineFor(note, "create_plan") != ""; got != tc.wantCreate {
-					t.Errorf("create_plan preview line present = %v, want %v (verdicts %v); block was:\n%s",
-						got, tc.wantCreate, verdicts, note)
+				if !kept["create_task"] {
+					t.Fatalf("control: create_task must remain offered; verdicts %v", verdicts)
 				}
-				if got := manifestLineFor(note, "execute_plan") != ""; got != tc.wantExecute {
-					t.Errorf("execute_plan preview line present = %v, want %v (verdicts %v); block was:\n%s",
-						got, tc.wantExecute, verdicts, note)
+				if got := kept["create_plan"]; got != tc.wantCreate {
+					t.Errorf("create_plan offered = %v, want %v (verdicts %v)", got, tc.wantCreate, verdicts)
+				}
+				if got := kept["execute_plan"]; got != tc.wantExecute {
+					t.Errorf("execute_plan offered = %v, want %v (verdicts %v)", got, tc.wantExecute, verdicts)
 				}
 			})
 		}
 	}
 }
 
-func TestManifest_PlanToolPreviewLinesSayWhenToUse(t *testing.T) {
-	note := BuildCompressedManifest([]Tool{&PlanCreateTool{}, &PlanExecuteTool{}}, nil)
-
+func TestManifest_PlanToolUpfrontDescriptionsSayWhenToUse(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		tool    Tool
@@ -153,19 +130,14 @@ func TestManifest_PlanToolPreviewLinesSayWhenToUse(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			line := manifestLineFor(note, tc.name)
-			if line == "" {
-				t.Fatalf("%s has no preview line; block was:\n%s", tc.name, note)
+			if got := ToolManifestTier(tc.name); got != ManifestFull {
+				t.Fatalf("ToolManifestTier(%q) = %v, want ManifestFull", tc.name, got)
 			}
-			first, _, _ := strings.Cut(tc.tool.Description(), "\n")
-			if want := strings.TrimSpace(first); line != want {
-				t.Errorf("%s preview line is not its description's whole first line — it was cut or "+
-					"the description lost its line break:\n got: %q\nwant: %q", tc.name, line, want)
-			}
+			description := tc.tool.Description()
 			for _, phrase := range tc.mustSay {
-				if !strings.Contains(line, phrase) {
-					t.Errorf("%s preview line must say %q so the model knows when to use it; got %q",
-						tc.name, phrase, line)
+				if !strings.Contains(description, phrase) {
+					t.Errorf("%s upfront description must say %q so the model knows when to use it; got %q",
+						tc.name, phrase, description)
 				}
 			}
 		})

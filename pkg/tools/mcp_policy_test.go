@@ -35,6 +35,8 @@ type mcpCategoryTool struct {
 	name string
 }
 
+func (m *mcpCategoryTool) MCPSource() (string, string) { return "uat", m.name }
+
 func (m *mcpCategoryTool) Name() string               { return m.name }
 func (m *mcpCategoryTool) Description() string        { return "mcp cat tool: " + m.name }
 func (m *mcpCategoryTool) Parameters() map[string]any { return map[string]any{"type": "object"} }
@@ -70,6 +72,7 @@ func TestFilterToolsByPolicy_DeniedMCPTool_ExcludedFromLLMView(t *testing.T) {
 	}
 
 	policyCfg := &ToolPolicyCfg{
+		MCPServers: []config.AgentMCPServerBinding{{ID: "uat"}},
 		Policies: map[string]config.ToolPolicy{
 			deniedTool: "deny",
 			// Explicit coverage (no default-policy fallback, CLAUDE.md hard
@@ -132,6 +135,7 @@ func TestFilterToolsByPolicy_MCPToolRegistryRoundTrip(t *testing.T) {
 	require.Len(t, allFromRegistry, 2, "MCPRegistry must contain both tools before filtering")
 
 	policyCfg := &ToolPolicyCfg{
+		MCPServers: []config.AgentMCPServerBinding{{ID: "uat"}},
 		Policies: map[string]config.ToolPolicy{
 			"mcp_uat_denied":  "deny",
 			"mcp_uat_allowed": "allow", // explicit coverage (no default-policy fallback)

@@ -17,10 +17,14 @@
 // (systools.SkillCreateTool, ScopeCore) under an explicit "ask" policy —
 // across every agentType passesScopeGate distinguishes (core/custom/empty)
 // and using the exact production wiring path (coreagent.SeedConfig's real
-// Ava seed, which ships create_skill:"ask" out of the box, plus
-// AgentLoop.WireSysagentDeps — not a synthetic stub tool and not a
-// hand-built policy map). Neither test reproduces the UAT-observed bypass:
-// the approver is consulted exactly once in every case.
+// Ava seed plus AgentLoop.WireSysagentDeps — not a synthetic stub tool and
+// not a hand-built policy map). Under the pre-ADR-090 seed that seed shipped
+// create_skill:"ask" out of the box; ADR-090 §5 changed Ava's seeded value
+// to allow, so the real-seed leg of that historical claim holds only for the
+// pre-ADR-090 contract this file was written against (see
+// TestRunTurn_AvaCreateSkillSeededAllow_RealSeed below). Neither test
+// reproduces the UAT-observed bypass: the approver is consulted exactly once
+// in every case where the policy under test is "ask".
 //
 // Given this, the fix landed for the S67 finding is NOT a change to the
 // ask-gate mechanism itself (there is no reproducible defect in it) — it is
@@ -91,13 +95,23 @@ func TestRunTurn_CreateSkillAskPolicy_ApproverConsulted(t *testing.T) {
 	}
 }
 
-// TestRunTurn_AvaCreateSkillAskPolicy_RealSeed drives a real Ava agent built
-// via the production coreagent.SeedConfig seed — Ava's own create_skill:"ask"
-// override, real AgentLoop.WireSysagentDeps registration (not
-// al.RegisterTool/StoreToolPolicy directly) — as close to the real gateway
-// boot path as pkg/agent's own test harness allows, and asserts the approver
-// is consulted before create_skill executes.
-func TestRunTurn_AvaCreateSkillAskPolicy_RealSeed(t *testing.T) {
+// TestRunTurn_AvaCreateSkillSeededAllow_RealSeed drives a real Ava agent
+// built via the production coreagent.SeedConfig seed — as close to the real
+// gateway boot path as pkg/agent's own test harness allows — and pins the
+// ADR-090 §5 role-policy flip: Ava's seeded create_skill policy is ALLOW
+// (she is the builder; authoring skills is her job, not an ask-gated
+// operation), so the wired PolicyApprover must NEVER be consulted for her
+// create_skill call.
+//
+// Historical note: this test was originally
+// TestRunTurn_AvaCreateSkillAskPolicy_RealSeed and asserted the inverse —
+// that Ava's then-seeded create_skill:"ask" routed through the approver
+// exactly once. ADR-090 §5 changed the seeded value to allow; the ask-gate
+// MECHANISM itself (toctouPolicy == "ask" → CheckGrantOrRequestApproval)
+// remains covered by TestRunTurn_CreateSkillAskPolicy_ApproverConsulted
+// above, which drives the same real sysagent tool under an explicit "ask"
+// policy across every agentType.
+func TestRunTurn_AvaCreateSkillSeededAllow_RealSeed(t *testing.T) {
 	cfg := config.DefaultConfig()
 	tmpHome := t.TempDir()
 	workspaceDir := filepath.Join(tmpHome, "workspace")
@@ -113,15 +127,16 @@ func TestRunTurn_AvaCreateSkillAskPolicy_RealSeed(t *testing.T) {
 	// resolution ladder.
 	cfg.Agents.Defaults.DefaultAgentID = string(coreagent.IDAva)
 
-	// DefaultConfig ships tools-on-demand ON, and create_skill is a lazy tool:
-	// on a compressed request it is offered to the model only after ToolSearch
-	// loads it (ADR-071: "callable only after load_tool promotes it"). A real
-	// model therefore loads it first — the offered-tool gate
-	// (tool_offer_gate.go) refuses a direct call to a never-loaded lazy tool
-	// before any approval prompt, which would never reach the ask gate this
-	// test exists to prove. Script that real production sequence: ToolSearch
-	// (seeded allow for every core agent, pkg/coreagent/core.go) loads
-	// create_skill, then create_skill is called and must go to the approver.
+	// create_skill is a search-only lazy tool under ADR-090 (the upfront set
+	// names `Skill`, not `create_skill`): on a compressed request it is
+	// offered to the model only after ToolSearch loads it. The offered-tool
+	// gate (tool_offer_gate.go) refuses a direct call to a never-loaded lazy
+	// tool before any approval prompt. Script the real production sequence:
+	// ToolSearch (upfront infrastructure, seeded allow for every agent) loads
+	// create_skill, then create_skill is called — and with the seeded allow
+	// it must execute WITHOUT consulting the approver. (The harness wires no
+	// SkillWriter, so the tool itself returns NOT_AVAILABLE after the policy
+	// decision — the claim under test is the decision, not the write.)
 	provider := testutil.NewScenario().
 		WithToolCall("ToolSearch", `{"names":["create_skill"]}`).
 		WithToolCall("create_skill", `{"name":"uat-s67","content":"---\nname: uat-s67\ndescription: debug\n---\nbody"}`).
@@ -139,6 +154,6 @@ func TestRunTurn_AvaCreateSkillAskPolicy_RealSeed(t *testing.T) {
 	_, err := al.ProcessDirect(context.Background(), "please create the uat-s67 skill", "test-session-uat-s67-ava")
 	require.NoError(t, err)
 
-	assert.Equal(t, 1, approver.callCount(),
-		"Ava's real seeded create_skill:ask policy MUST route through the approver")
+	assert.Zero(t, approver.callCount(),
+		"Ava's ADR-090 seeded create_skill policy is ALLOW — the approver must never be consulted (the ask path is covered by TestRunTurn_CreateSkillAskPolicy_ApproverConsulted)")
 }

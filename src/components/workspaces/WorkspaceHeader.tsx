@@ -19,7 +19,7 @@ export function WorkspaceHeader({ workspace }: WorkspaceHeaderProps) {
   const [nameDraft, setNameDraft] = useState(workspace.name)
 
   const updateMutation = useMutation({
-    mutationFn: (name: string) => updateWorkspace(workspace.id, { name }),
+    mutationFn: (name: string) => updateWorkspace(workspace.id, { revision: workspace.revision, name }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.list() })
       queryClient.invalidateQueries({ queryKey: workspacesQueryKeys.detail(workspace.id) })

@@ -15,8 +15,13 @@
  *
  * MECHANISM: forces a real provider truncation by setting the target
  * agent's `model_params.max_tokens` very low via `PUT /api/v1/agents/{id}`
- * (`contracts/components/schemas/AgentUpdateRequest.yaml`'s `model_params`),
- * then sends a prompt engineered to produce far more than that many tokens.
+ * (`contracts/components/schemas/AgentUpdateRequest.yaml`'s `model_params`).
+ * ADR-090 makes every write a revision-checked mutation: the PUT body MUST
+ * carry `revision` — the opaque SHA-256 state hash echoed from the preceding
+ * GET — or the endpoint rejects the write 400 ("revision is required").
+ * The fixture reads it fresh before every mutation (a successful PUT
+ * rotates it, so the restore re-reads too). The prompt is then engineered
+ * to produce far more than that many tokens.
  * A real OpenRouter-backed model (`OPENROUTER_API_KEY_CI`, enforced by
  * `global-setup.ts`'s preflight for the whole suite) will then genuinely hit
  * `finish_reason: "length"` — no gateway/provider mocking, matching every
@@ -46,6 +51,11 @@ import { apiFetch } from './fixtures/conformance-helpers'
 interface AgentSummary {
   id: string
   name: string
+  /** ADR-090: every Agent read carries the opaque SHA-256 state revision;
+   * every write (PUT /agents/{id}) must echo it back as a precondition —
+   * a body without it is rejected 400 ("revision is required"), and a
+   * stale one 409. The fixture reads it fresh before every mutation. */
+  revision: string
   model_params?: { max_tokens?: number | null; temperature?: number | null } | null
 }
 
@@ -84,10 +94,14 @@ async function tryForceMaxTokens(
   maxTokens: number,
 ): Promise<AgentSummary['model_params'] | null | 'unsupported'> {
   const before = await apiFetch<AgentSummary>(page, 'GET', `/api/v1/agents/${agentId}`)
-  if (!before.ok) return 'unsupported'
+  if (!before.ok || !before.body.revision) return 'unsupported'
   const original = before.body.model_params ?? null
 
+  // ADR-090 revision precondition: the PUT body must carry the revision
+  // exactly as the preceding GET returned it — without it the endpoint
+  // rejects the write 400 ("revision is required").
   const put = await apiFetch<AgentSummary>(page, 'PUT', `/api/v1/agents/${agentId}`, {
+    revision: before.body.revision,
     model_params: { max_tokens: maxTokens },
   })
   if (!put.ok) return 'unsupported'
@@ -107,7 +121,21 @@ async function restoreModelParams(
   agentId: string,
   original: AgentSummary['model_params'] | null,
 ): Promise<void> {
+  // The force PUT rotated the revision, so the revision captured before it is
+  // stale (409 on reuse). Read it fresh — the ADR-090 precondition is against
+  // CURRENT state, not the state the fixture last saw.
+  //
+  // NOTE on clearing: when Jim had NO prior max_tokens override, the restore
+  // sends `max_tokens: null` — the only clear-value the wire schema offers.
+  // The current update handler is merge-only for model_params (an explicit
+  // null sub-field decodes to a nil pointer, indistinguishable from absent),
+  // so that null is a documented no-op today — a product gap reported
+  // separately, not worked around. Contained: this is the last spec in the
+  // llm-chat shard and every CI shard runs a fresh gateway.
+  const cur = await apiFetch<AgentSummary>(page, 'GET', `/api/v1/agents/${agentId}`)
+  if (!cur.ok || !cur.body.revision) return
   await apiFetch(page, 'PUT', `/api/v1/agents/${agentId}`, {
+    revision: cur.body.revision,
     model_params: { max_tokens: original?.max_tokens ?? null },
   })
 }
@@ -138,8 +166,11 @@ test(
     if (forceResult === 'unsupported') {
       throw new Error(
         'BLOCKED: PUT /api/v1/agents/{id} model_params.max_tokens did not round-trip through an ' +
-          'independent GET on this build (config.AgentConfig.ModelParams persistence — see ' +
-          'pkg/gateway/rest.go, pkg/config/config.go). Without it the turn will never truncate, ' +
+          'independent GET on this build. The PUT either rejected the write (ADR-090 revision ' +
+          'precondition: the body must echo the revision from the preceding GET — see ' +
+          'contracts/components/schemas/AgentUpdateRequest.yaml) or accepted and persisted ' +
+          'nothing (config.AgentConfig.ModelParams — see pkg/gateway/rest.go, ' +
+          'pkg/config/config.go). Without the override the turn will never truncate, ' +
           'so every downstream assertion would be meaningless. A missing capability is exactly ' +
           'the case the skip policy says must fail RED, not skip green ' +
           '(tests/e2e/fixtures/skip-tracking.ts, "What does NOT belong in the allow-list").',

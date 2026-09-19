@@ -10,6 +10,13 @@ required:
   - soul
 additionalProperties: false
 properties:
+  mcp_servers:
+    type: array
+    description: Omission preserves assignments; an explicit empty list removes all assignments. Null is rejected.
+    items:
+      $ref: './AgentMCPBinding.yaml'
+  tool_policy_changes:
+    $ref: './ToolPolicyChanges.yaml'
   type:
     type: string
     enum:
@@ -85,27 +92,6 @@ properties:
         type: integer
         description: Maximum tokens to generate per turn.
         example: 4096
-  rate_limits:
-    type: object
-    description: Per-agent rate-limit overrides. When use_global_defaults is true the global policy applies.
-    properties:
-      use_global_defaults:
-        type: boolean
-        description: When true, global rate limits are used and per-agent overrides are ignored.
-        example: true
-      max_llm_calls_per_hour:
-        type: integer
-        description: Maximum LLM API calls per hour for this agent. Absent = no per-agent cap.
-        example: 100
-      max_tool_calls_per_minute:
-        type: integer
-        description: Maximum tool calls per minute for this agent. Absent = no per-agent cap.
-        example: 60
-      max_cost_per_day:
-        type: number
-        format: double
-        description: Maximum USD cost per day for this agent. Absent = no per-agent cap.
-        example: 5.0
   skills:
     type: array
     uniqueItems: true
@@ -133,11 +119,6 @@ properties:
     example: "alloy"
   shell_policy:
     $ref: './AgentShellPolicy.yaml'
-  timeout_seconds:
-    type: integer
-    minimum: 0
-    description: Maximum seconds a single agent turn may run before being interrupted.
-    example: 300
   max_tool_iterations:
     type: integer
     minimum: 0

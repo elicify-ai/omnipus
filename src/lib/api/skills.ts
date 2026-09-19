@@ -7,6 +7,7 @@ import {
   Skill as SkillSchema,
   SkillSearchResult as SkillSearchResultSchema,
   SkillMarketplaceStatus as SkillMarketplaceStatusSchema,
+  ConfigurationMutationState as ConfigurationMutationStateSchema,
   // Slash-command harmonization (contract-first #8):
   SlashCommand as SlashCommandSchema,
 } from '@/lib/api/generated/schemas'
@@ -15,16 +16,34 @@ import type {
   SkillSearchResult,
   SkillMarketplaceStatus,
   SkillInstallRequest,
+  ConfigurationMutationState,
   // Slash-command harmonization (contract-first #8):
   SlashCommand,
 } from '@/lib/api/generated/openapi-types'
 import { request } from './http'
+import { requestConfiguration } from './configuration'
+import { uploadFiles } from './uploads'
 
-export async function installSkillFromFile(content: string, filename: string): Promise<void> {
-  await request<void>('/skills/install', {
-    method: 'POST',
-    body: JSON.stringify({ content, filename }),
-  })
+export async function installSkillFromFile(
+  file: File,
+  uploadContextId: string,
+  revision?: string,
+  signal?: AbortSignal,
+): Promise<Skill> {
+  const uploaded = await uploadFiles(uploadContextId, [file], undefined, signal)
+  const uploadRef = uploaded.files[0]?.ref
+  if (!uploadRef) {
+    throw new Error('Upload completed without an installable media reference.')
+  }
+  const body: SkillInstallRequest = {
+    upload_id: uploadRef,
+    ...(revision ? { revision } : {}),
+  }
+  return requestConfiguration<Skill>(
+    '/skills/install',
+    { method: 'POST', body: JSON.stringify(body), signal },
+    SkillSchema as ZodType<Skill>,
+  )
 }
 
 /**
@@ -50,9 +69,9 @@ export async function searchSkills(q: string, limit = 20): Promise<SkillSearchRe
  * The backend returns 409 when the skill is already installed and 502 when
  * the registry is unreachable.
  */
-export async function installSkillBySlug(slug: string, version?: string): Promise<Skill> {
-  const body: SkillInstallRequest = version ? { slug, version } : { slug }
-  return request<Skill>(
+export async function installSkillBySlug(slug: string, version?: string, revision?: string): Promise<Skill> {
+  const body: SkillInstallRequest = { slug, ...(version ? { version } : {}), ...(revision ? { revision } : {}) }
+  return requestConfiguration<Skill>(
     '/skills/install',
     {
       method: 'POST',
@@ -114,16 +133,26 @@ export async function fetchSkills(): Promise<Skill[]> {
       out.push(parsed.data as Skill)
     } else dropped++
   }
-  if (dropped > 0 && import.meta.env?.DEV) {
-
-    console.warn(`fetchSkills: dropped ${dropped} skill(s) that failed schema validation`)
+  if (dropped > 0) {
+    if (import.meta.env?.DEV) {
+      console.warn(`fetchSkills: dropped ${dropped} skill(s) that failed schema validation`)
+    } else if (import.meta.env?.MODE !== 'test') {
+      logError({
+        event: 'skillSchemaDrop',
+        droppedCount: dropped,
+        totalCount: raw.length,
+      })
+    }
   }
   return out
 }
 
-export function deleteSkill(name: string): Promise<void> {
-  // no-schema: void response; DELETE has no body.
-  return request<void>(`/skills/${encodeURIComponent(name)}`, { method: 'DELETE' })
+export function deleteSkill(id: string, revision: string): Promise<ConfigurationMutationState> {
+  return requestConfiguration<ConfigurationMutationState>(
+    `/skills/${encodeURIComponent(id)}?${new URLSearchParams({ revision })}`,
+    { method: 'DELETE' },
+    ConfigurationMutationStateSchema as ZodType<ConfigurationMutationState>,
+  )
 }
 
 // ── Slash commands ─────────────────────────────────────────────────────────────

@@ -33,6 +33,9 @@ vi.mock('@/components/ui/popover', () => {
 const JIM = makeAgent({ id: 'jim', name: 'Jim', type: 'core', description: 'Orchestrator' })
 const MARS = makeAgent({ id: 'mars', name: 'Mars', type: 'Main', description: 'Ops lead' })
 const JUDGE = makeAgent({ id: 'judge', name: 'Judge', type: 'system', locked: true, description: 'Adjudicates DoD criteria' })
+// ADR-090: Admin is core (NOT type 'system'), so only an id-based exclusion
+// keeps it out of the picker — see the dedicated describe block below.
+const ADMIN = makeAgent({ id: 'admin', name: 'Admin', type: 'core', locked: true, description: 'Standalone operator' })
 
 function renderPicker(overrides: Partial<Parameters<typeof AddAgentPicker>[0]> = {}) {
   const onAdd = vi.fn()
@@ -135,5 +138,33 @@ describe('AddAgentPicker — empty states', () => {
     renderPicker()
     await user.type(screen.getByTestId('team-add-agent-search'), 'zzzznotanagent')
     expect(screen.getByText('No matching agents.')).toBeInTheDocument()
+  })
+})
+
+// ADR-090 FR-001/FR-006 — the Admin standalone operator. Admin is a chat-able
+// CORE agent (type 'core', not 'system'), so the SD-C17 system-type filter
+// above does not catch it; it needs its own exclusion. Admin is never on a
+// workspace team, and offering it here would let the operator attempt the
+// exact membership every write path refuses.
+describe('AddAgentPicker — Admin standalone-operator exclusion (ADR-090 FR-001)', () => {
+  it('never lists admin as a candidate, even though it is core, chat-able, and not a member', () => {
+    renderPicker({ agents: [JIM, ADMIN] as Agent[] })
+    expect(screen.getByTestId('team-add-agent-option-jim')).toBeInTheDocument()
+    expect(screen.queryByTestId('team-add-agent-option-admin')).not.toBeInTheDocument()
+    expect(screen.queryByText('Admin')).not.toBeInTheDocument()
+  })
+
+  it('a search query matching Admin by name still surfaces nothing', async () => {
+    const user = userEvent.setup()
+    renderPicker({ agents: [JIM, ADMIN] as Agent[] })
+    await user.type(screen.getByTestId('team-add-agent-search'), 'Admin')
+    expect(screen.queryByTestId('team-add-agent-option-admin')).not.toBeInTheDocument()
+    expect(screen.getByText('No matching agents.')).toBeInTheDocument()
+  })
+
+  it('when admin is the only non-member agent, the picker shows the empty state, not admin', () => {
+    renderPicker({ agents: [JIM, ADMIN], memberIds: new Set(['jim']) })
+    expect(screen.queryByTestId(/team-add-agent-option-/)).not.toBeInTheDocument()
+    expect(screen.getByText('Every agent is already on this team.')).toBeInTheDocument()
   })
 })

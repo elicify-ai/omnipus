@@ -51,10 +51,10 @@ func wireTestLoopWithGraphAndMaxDepth(t *testing.T, agentID string, maxDepth int
 func TestWireDelegationInjectors_AdvertisesEffectiveDepthNotRawUncapped(t *testing.T) {
 	const wsID = "01JWDEPTHPROMPT0000000001"
 	seedWorkspaceGraph(t, wsID, true, []graphEdge{
-		edge("ava", "ray", nil, nil), // no per-edge Depth (inherit); global unset
+		edge("jim", "worker", nil, nil), // no per-edge Depth (inherit); global unset
 	})
 
-	cb := wireTestLoopWithGraphAndMaxDepth(t, "ava", 0)
+	cb := wireTestLoopWithGraphAndMaxDepth(t, "jim", 0)
 
 	got := cb.buildDynamicContext("", "", "", "", "")
 	if !strings.Contains(got, "max chain depth: 3") {
@@ -75,10 +75,10 @@ func TestWireDelegationInjectors_AdvertisesEffectiveDepthNotRawUncapped(t *testi
 func TestWireDelegationInjectors_AdvertisesExplicitGlobalDepth(t *testing.T) {
 	const wsID = "01JWDEPTHPROMPT0000000002"
 	seedWorkspaceGraph(t, wsID, true, []graphEdge{
-		edge("ava", "ray", nil, nil),
+		edge("jim", "worker", nil, nil),
 	})
 
-	cb := wireTestLoopWithGraphAndMaxDepth(t, "ava", 7)
+	cb := wireTestLoopWithGraphAndMaxDepth(t, "jim", 7)
 
 	got := cb.buildDynamicContext("", "", "", "", "")
 	if !strings.Contains(got, "max chain depth: 7") {

@@ -1,9 +1,7 @@
-//go:build !windows
-
-// Must match contract_test.go's constraint: the mustPassAsyncAPI /
-// mustFailAsyncAPI helpers this file uses are defined there, and that file is
-// !windows. Without the same tag this file compiles on Windows WITHOUT its
-// helpers and fails as "undefined" — which is how it was found.
+// The mustPassAsyncAPI / mustFailAsyncAPI helpers this file uses live in
+// schema_harness_test.go, which is portable across Linux/macOS/Windows
+// (TEST-008) — this file previously carried //go:build !windows only because
+// the helpers did.
 
 package generated
 

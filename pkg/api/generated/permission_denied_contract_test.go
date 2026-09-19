@@ -1,7 +1,6 @@
-//go:build !windows
-
-// Must match contract_test.go's constraint — see the note in
-// file_exists_refusal_contract_test.go. Same helpers, same tag.
+// The helpers this file uses live in schema_harness_test.go, which is
+// portable across Linux/macOS/Windows (TEST-008) — see the note in
+// file_exists_refusal_contract_test.go.
 
 package generated
 

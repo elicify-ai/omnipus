@@ -99,6 +99,8 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
       builtin: { policies: { read_file: 'allow', exec: 'allow', web_search: 'allow' } },
     }
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
+      revision: '0'.repeat(64),
+      override_names: Object.keys(allAllowCfg.builtin?.policies ?? {}),
       config: allAllowCfg,
       tools: [],
     })
@@ -141,6 +143,7 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
       },
     }
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
+      revision: '0'.repeat(64), override_names: Object.keys(mixedCfg.builtin?.policies ?? {}),
       config: mixedCfg,
       tools: [],
     })
@@ -181,6 +184,7 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
       },
     }
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
+      revision: '0'.repeat(64), override_names: Object.keys(mostlyDenyCfg.builtin?.policies ?? {}),
       config: mostlyDenyCfg,
       tools: [],
     })
@@ -220,6 +224,7 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
       },
     }
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
+      revision: '0'.repeat(64), override_names: Object.keys(customCfg.builtin?.policies ?? {}),
       config: customCfg,
       tools: [],
     })
@@ -263,6 +268,7 @@ describe('oldPresetCompat: a persisted complete policy map round-trips unchanged
       },
     }
     vi.mocked(api.fetchAgentTools).mockResolvedValue({
+      revision: '0'.repeat(64), override_names: Object.keys(incompleteCfg.builtin?.policies ?? {}),
       config: incompleteCfg,
       tools: [],
     })

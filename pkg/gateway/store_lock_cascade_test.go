@@ -49,11 +49,11 @@ func TestHandleWorkspaceDelete_RemovesTheWorkspaceRecordLockFile(t *testing.T) {
 	lock := fileutil.SidecarLockPath(recordPath)
 	require.FileExists(t, lock, "precondition: creating the workspace wrote its record under the sidecar lock")
 
-	r := httptest.NewRequest(http.MethodDelete, "/api/v1/workspaces/"+id, nil)
+	r := httptest.NewRequest(http.MethodDelete, workspaceDeleteURL(t, api, id), nil)
 	r = r.WithContext(contextWithUser(r.Context(), "alice"))
 	w := httptest.NewRecorder()
 	api.handleWorkspaceDelete(w, r, id)
-	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	require.NoFileExists(t, recordPath)
 	require.NoFileExists(t, lock, "a deleted workspace must not leave its record's lock file behind")

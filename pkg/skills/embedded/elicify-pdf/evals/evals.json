@@ -1,0 +1,28 @@
+{
+  "skill_name": "elicify-pdf",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Create a polished two-page PDF briefing for a customer support team. Include a summary, a 35-row incident table with repeated headings, recommendations, and page numbers. Customer names contain accented characters and the notes include the literal text <urgent>. Deliver the PDF and inspect its layout.",
+      "expected_output": "A readable PDF with escaped literal text, correct glyphs, deliberate pagination and repeated table headers. The agent renders and visually inspects every page, revising overflow instead of claiming a successful save proves layout quality.",
+      "files": [],
+      "assertions": ["Literal <urgent> appears as text", "Accented characters render correctly", "Table rows are complete and headers repeat", "Actual page images inspected; page count requirement checked"]
+    },
+    {
+      "id": 2,
+      "prompt": "From the supplied three-page PDF, keep pages 3 then 1. Rotate the second output page clockwise 90 degrees and fill its customer_name field with Ada Lovelace. Keep the form editable and make sure the entered name is visible. Return a new PDF without changing my original.",
+      "expected_output": "Two pages in the requested order with correct rotation, a retained AcroForm field containing Ada Lovelace and a visible generated appearance. Both pages are rendered and inspected. The source is unchanged.",
+      "files": [],
+      "fixture_requirements": ["Three labelled pages with a customer_name AcroForm text field on original page 1"],
+      "assertions": ["Page order is original 3 then 1", "Second page rotation is 90 degrees", "Field value and editability are preserved", "Rendered appearance visibly contains Ada Lovelace", "Original bytes unchanged"]
+    },
+    {
+      "id": 3,
+      "prompt": "This scanned contract has a digital-signature field. Make it searchable and remove a confidential account number securely. I need to know whether the signature remains valid. Do not just cover the number with a rectangle.",
+      "expected_output": "The agent identifies OCR, secure-redaction and signature validation as separate requirements. It uses available capable tools with independent checks or reports specific unavailable capabilities; it preserves the original and never claims a field means a valid signature or an overlay means secure removal.",
+      "files": [],
+      "fixture_requirements": ["Synthetic scanned contract with a visible test account number, signature field and separate embedded text/metadata occurrence of that number"],
+      "assertions": ["Original preserved", "OCR accuracy checked against visible source", "No overlay-only redaction claim", "No cryptographic-validity claim based merely on signature-field presence", "Unavailable specialist checks are explicit"]
+    }
+  ]
+}

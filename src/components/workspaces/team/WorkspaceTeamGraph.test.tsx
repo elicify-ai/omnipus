@@ -300,13 +300,12 @@ describe('WorkspaceTeamGraph — implicit System agent node (Judge, ADR-049 D3)'
 })
 
 describe('WorkspaceTeamGraph — delegate picker wiring', () => {
-  it('a valid keyboard delegation reaches onConnect via the same handleConnect path as a drag', () => {
+  it('a keyboard delegation that closes a cycle is rejected before onConnect', () => {
     const { props } = renderGraph()
-    // planner (a worker) has no outgoing edge yet in STATE, so the mock
-    // picker's first-other-node target ('mia') is a valid new connection.
+    // mia -> jim -> planner already exists, so planner -> mia closes a cycle.
     fireEvent.click(screen.getByTestId('mock-delegate-planner'))
-    expect(props.onConnect).toHaveBeenCalledWith('planner', 'mia')
-    expect(props.onRejectConnection).not.toHaveBeenCalled()
+    expect(props.onConnect).not.toHaveBeenCalled()
+    expect(props.onRejectConnection).toHaveBeenCalledWith('That delegation would create a cycle.')
   })
 
   it('an invalid keyboard delegation is rejected through the same validateConnection path (no edge added)', () => {

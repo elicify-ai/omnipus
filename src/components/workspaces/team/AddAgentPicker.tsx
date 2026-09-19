@@ -60,6 +60,12 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
     return agents
       .filter((a) => !memberIds.has(a.id))
       .filter((a) => a.type !== 'system') // legacy/system agents aren't team-addable
+      // ADR-090 FR-001: Admin is the standalone operator — chat-able core
+      // (type 'core', so the system filter above doesn't catch it) with "no
+      // team membership". Every write path refuses an Admin membership; the
+      // picker must not offer the click that would only ever produce that
+      // refusal.
+      .filter((a) => a.id !== 'admin')
       .filter(
         (a) =>
           q === '' ||
@@ -114,6 +120,7 @@ export function AddAgentPicker({ agents, memberIds, onAdd }: AddAgentPickerProps
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search agents…"
+            aria-label="Search agents"
             data-testid="team-add-agent-search"
             className="w-full bg-transparent text-sm text-[var(--color-secondary)] placeholder:text-[var(--color-muted)] focus:outline-none"
           />

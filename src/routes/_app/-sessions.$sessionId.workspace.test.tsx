@@ -64,6 +64,7 @@ vi.mock('@tanstack/react-query', async (importOriginal) => {
 import { useSessionStore } from '@/store/session'
 import { useConnectionStore } from '@/store/connection'
 import { useWorkspacesStore } from '@/store/workspacesStore'
+import { useChatStore } from '@/store/chat'
 import type { SessionDetail } from '@/lib/api'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -134,6 +135,7 @@ function resetStores() {
     activePlanId: null,
     boardAltitude: 'top-level',
   })
+  useChatStore.setState({ sessionsById: {}, isReplaying: false })
   mockNavigate.mockClear()
   _mockWorkspaces = []
   _mockUseQueryData = null
@@ -143,18 +145,17 @@ function resetStores() {
 let SessionRoute: React.ComponentType | null = null
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+beforeEach(async () => {
+  vi.clearAllMocks()
+  resetStores()
 
-describe('SessionRoute — Bug 2: deep-link redirects to workspace', () => {
-  beforeEach(async () => {
-    vi.clearAllMocks()
-    resetStores()
+  if (!SessionRoute) {
+    const mod = await import('./sessions.$sessionId')
+    SessionRoute = (mod.Route as unknown as { component: React.ComponentType }).component
+  }
+})
 
-    if (!SessionRoute) {
-      const mod = await import('./sessions.$sessionId')
-      SessionRoute = (mod.Route as unknown as { component: React.ComponentType }).component
-    }
-  })
-
+describe('SessionRoute — redirect resolution (workspace vs inline attach)', () => {
   it(
     'sets activeWorkspaceId and activeSessionId then navigates to workspace chat (WS connected)',
     async () => {
@@ -266,7 +267,86 @@ describe('SessionRoute — Bug 2: deep-link redirects to workspace', () => {
       expect(mockNavigate).not.toHaveBeenCalled()
     },
   )
+})
 
+describe('SessionRoute — standalone attach deduplication', () => {
+  it(
+    'attaches a standalone session when the socket opens after the route recorded it offline',
+    async () => {
+      // Given the route first sees a connecting socket, it records the
+      // standalone session for reattachment. If the lifecycle open callback
+      // ran immediately before that write, the route itself must send the
+      // deferred attach when the observable connection state becomes ready.
+      // Merely seeing activeSessionId already set is not evidence that the
+      // gateway received attach_session.
+      const detail = makeChatSessionNoWorkspace()
+      _mockUseQueryData = detail
+
+      const mockConn = makeMockConnection()
+      useConnectionStore.setState({ connection: mockConn as never, isConnected: false })
+
+      const Route = SessionRoute
+      if (!Route) throw new Error('SessionRoute not loaded')
+      await act(async () => { render(<Route />) })
+
+      expect(useSessionStore.getState().activeSessionId).toBe(mockSessionId)
+      expect(mockConn.send).not.toHaveBeenCalled()
+
+      await act(async () => {
+        useConnectionStore.setState({ isConnected: true })
+      })
+
+      await waitFor(() => {
+        expect(mockConn.send).toHaveBeenCalledWith({ type: 'attach_session', session_id: mockSessionId })
+      })
+      expect(mockNavigate).not.toHaveBeenCalled()
+    },
+  )
+
+  it(
+    'does not attach a standalone session a second time when it is already attached',
+    async () => {
+      const detail = makeChatSessionNoWorkspace()
+      _mockUseQueryData = detail
+      const mockConn = makeMockConnection()
+      useConnectionStore.setState({ connection: mockConn as never, isConnected: true })
+      useSessionStore.setState({ activeSessionId: mockSessionId })
+
+      const Route = SessionRoute
+      if (!Route) throw new Error('SessionRoute not loaded')
+      await act(async () => { render(<Route />) })
+
+      expect(mockConn.send).not.toHaveBeenCalled()
+      expect(useSessionStore.getState().activeSessionId).toBe(mockSessionId)
+    },
+  )
+
+  it(
+    'does not duplicate the lifecycle attach when a connecting standalone session opens normally',
+    async () => {
+      const detail = makeChatSessionNoWorkspace()
+      _mockUseQueryData = detail
+      const mockConn = makeMockConnection()
+      useConnectionStore.setState({ connection: mockConn as never, isConnected: false })
+
+      const Route = SessionRoute
+      if (!Route) throw new Error('SessionRoute not loaded')
+      await act(async () => { render(<Route />) })
+
+      // Mirrors WsLifecycle.onConnected: it publishes readiness, then sends
+      // the attach and arms replay before React can run this route effect.
+      await act(async () => {
+        useChatStore.setState({ isReplaying: true })
+        useConnectionStore.setState({ isConnected: true })
+      })
+
+      expect(mockConn.send).not.toHaveBeenCalled()
+      expect(useSessionStore.getState().activeSessionId).toBe(mockSessionId)
+    },
+  )
+})
+
+describe('SessionRoute — sessionByWorkspace handoff contract', () => {
   it(
     'sessionByWorkspace is populated under wsId so enterWorkspaceChat is a no-op after redirect',
     async () => {

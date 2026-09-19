@@ -541,8 +541,9 @@ func TestToolChain_WorkspaceCascadeDelete(t *testing.T) {
 
 	// ── step 4: delete workspace ──────────────────────────────────────────
 	delResult := systools.NewWorkspaceDeleteTool(deps).Execute(ctx, map[string]any{
-		"id":      wsID,
-		"confirm": true,
+		"id":       wsID,
+		"revision": currentWorkspaceRevision(t, deps.Home, wsID),
+		"confirm":  true,
 	})
 	if delResult.IsError {
 		t.Fatalf("delete_workspace: %s", delResult.ForLLM)
@@ -589,7 +590,7 @@ func TestToolChain_WorkspaceCascadeDelete_Differentiation(t *testing.T) {
 
 	// Delete only Alpha.
 	delA := systools.NewWorkspaceDeleteTool(deps).Execute(ctx, map[string]any{
-		"id": idA, "confirm": true,
+		"id": idA, "confirm": true, "revision": currentWorkspaceRevision(t, deps.Home, idA),
 	})
 	if delA.IsError {
 		t.Fatalf("delete Alpha: %s", delA.ForLLM)

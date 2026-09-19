@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"math"
 	"os"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/pkg/audit"
 	"github.com/elicify-ai/omnipus/pkg/docextract"
+	"github.com/elicify-ai/omnipus/pkg/fspolicy"
 	"github.com/elicify-ai/omnipus/pkg/logger"
 )
 
@@ -426,8 +428,9 @@ type ReadFileTool struct {
 	agentHome string
 	// restrict maps to fspolicy.FSScopeConfined (true) / FSScopeUnrestricted
 	// (false) — the P1 equivalent of today's restrict flag.
-	restrict bool
-	maxSize  int64
+	restrict                bool
+	maxSize                 int64
+	maxInspectionImageBytes int64
 	// patterns is the operator-configured AllowRead/WritePaths regex axis —
 	// a feature orthogonal to filesystem_scope, bridged onto ResolvePath via
 	// ResolvePathAllowingPatterns.
@@ -455,11 +458,18 @@ func NewReadFileTool(
 	}
 
 	return &ReadFileTool{
-		agentHome:     workspace,
-		restrict:      restrict,
-		maxSize:       maxSize,
-		patterns:      patterns,
-		allowPathsLen: len(patterns),
+		agentHome:               workspace,
+		restrict:                restrict,
+		maxSize:                 maxSize,
+		maxInspectionImageBytes: MaxInspectionImageBytes,
+		patterns:                patterns,
+		allowPathsLen:           len(patterns),
+	}
+}
+
+func (t *ReadFileTool) SetMaxInspectionImageBytes(maxBytes int) {
+	if maxBytes > 0 {
+		t.maxInspectionImageBytes = int64(maxBytes)
 	}
 }
 
@@ -478,13 +488,27 @@ func (t *ReadFileTool) Name() string {
 	return "read_file"
 }
 
+// readerImageInspectionParagraph is the ADR-090 §6.6 model-facing image
+// contract, shared with library_read (same inner reader). Keep the two
+// descriptions in lock-step: an uploaded PNG is inspected the same way as
+// a workspace PNG.
+const readerImageInspectionParagraph = "Direct SVG reads return text; render SVG to PNG/JPEG before visual inspection. " +
+	"Image inspection rejects offset/length pagination, enforces the configured media byte limit, and supplies visible image content only to the model; it does not attach the image to the user or retain its bytes in history. "
+
+// readerOffsetParamDesc / readerLengthParamDesc state the actual units
+// readOpenFile and extractDocument use. Plain text seeks bytes; extracted
+// documents page by rune; PNG/JPEG reject any supplied offset or length.
+const readerOffsetParamDesc = "Start position. Plain text: byte offset. Word/PowerPoint/Excel/PDF: character offset into extracted text. Omit for PNG/JPEG — image inspection rejects offset and length."
+const readerLengthParamDesc = "Amount to read. Plain text: bytes (silently capped at the server-side max). Word/PowerPoint/Excel/PDF: characters of extracted text (also capped). Omit for PNG/JPEG — image inspection rejects offset and length."
+
 func (t *ReadFileTool) Description() string {
-	return "Read the contents of a file. Supports pagination via `offset` and `length`. " +
+	return "Read text and supported documents, or inspect a PNG or JPEG image in the current model turn. " +
+		readerImageInspectionParagraph +
+		"Text supports pagination via `offset` and `length` as bytes. " +
 		"Word (.docx), PowerPoint (.pptx), Excel (.xlsx), and PDF (.pdf) documents are " +
 		"automatically decoded to plain text; for these, `offset` and `length` count " +
 		"characters of extracted text rather than raw bytes. Other binary files (containing " +
-		"null bytes and not one of those document formats) are rejected outright — this tool " +
-		"is for text and the document formats above only. `length` above the server-side max " +
+		"null bytes and not one of those document or image formats) are rejected outright. `length` above the server-side max " +
 		"is silently capped, not rejected — check the returned header's total size if you need " +
 		"to know how much was actually read."
 }
@@ -502,12 +526,12 @@ func (t *ReadFileTool) Parameters() map[string]any {
 			},
 			"offset": map[string]any{
 				"type":        "integer",
-				"description": "Byte offset to start reading from.",
+				"description": readerOffsetParamDesc,
 				"default":     0,
 			},
 			"length": map[string]any{
 				"type":        "integer",
-				"description": "Maximum number of bytes to read.",
+				"description": readerLengthParamDesc,
 				"default":     t.maxSize,
 			},
 		},
@@ -546,17 +570,18 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	if offset < 0 {
-		return ErrorResult("offset must be >= 0")
-	}
 
 	// length (optional, capped at MaxReadFileSize)
 	length, err := getInt64Arg(args, "length", t.maxSize)
 	if err != nil {
 		return ErrorResult(err.Error())
 	}
-	if length <= 0 {
-		return ErrorResult("length must be > 0")
+	paginationSupplied := false
+	if _, ok := args["offset"]; ok {
+		paginationSupplied = true
+	}
+	if _, ok := args["length"]; ok {
+		paginationSupplied = true
 	}
 	if length > t.maxSize {
 		length = t.maxSize
@@ -571,9 +596,26 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 		return PermissionDeniedResult(t.Name(), err, err.Error())
 	}
 	defer handle.Close()
+	if _, imageNamed, _ := imageFormat(nil, path); imageNamed {
+		info, statErr := handle.Stat()
+		if statErr == nil && !info.Mode().IsRegular() {
+			return ErrorResult("image source must be a regular file")
+		}
+		if statErr == nil && info.Size() > t.maxInspectionImageBytes {
+			return ErrorResult("image exceeds byte limit")
+		}
+	}
 
-	file, err := handle.Open()
+	var file fs.File
+	if _, imageNamed, _ := imageFormat(nil, path); imageNamed {
+		file, err = handle.OpenRegularNonBlocking()
+	} else {
+		file, err = handle.Open()
+	}
 	if err != nil {
+		if errors.Is(err, ErrImageSourceNotRegular) {
+			return ErrorResult(err.Error())
+		}
 		// Emit a path.access_denied audit entry on workspace-guard rejections.
 		// The emitter is a no-op when t.auditLogger is nil (best-effort).
 		emitPathAccessDeniedCorrelated(ctx, t.auditLogger, t.Name(), path, err, t.allowPathsLen)
@@ -591,7 +633,19 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 	if resolved, realErr := handle.RealPath(); realErr == nil {
 		emitFileReadAudit(ctx, t.auditLogger, t.Name(), resolved, "read")
 	}
+	return t.readOpenFile(ctx, policy, handle, file, path, offset, length, paginationSupplied)
+}
 
+func (t *ReadFileTool) readOpenFile(
+	ctx context.Context,
+	policy fspolicy.FSPolicy,
+	handle *PathHandle,
+	file fs.File,
+	path string,
+	offset, length int64,
+	paginationSupplied bool,
+) *ToolResult {
+	var err error
 	// measure total size
 	totalSize := int64(-1) // -1 means unknown
 	if info, statErr := file.Stat(); statErr == nil {
@@ -606,10 +660,31 @@ func (t *ReadFileTool) Execute(ctx context.Context, args map[string]any) *ToolRe
 
 	// sniff the first 512 bytes to detect binary content before loading
 	// it into the LLM context. Seeking back to 0 afterwards restores state.
-	sniff := make([]byte, 512)
+	sniffLimit := min(int64(512), t.maxInspectionImageBytes+1)
+	sniff := make([]byte, sniffLimit)
 	sniffN, sniffErr := file.Read(sniff)
 	if sniffErr != nil && !errors.Is(sniffErr, io.EOF) {
 		return ErrorResult(fmt.Sprintf("failed to sniff file content: %v", sniffErr))
+	}
+	reauthorize := func(checkCtx context.Context) error {
+		fresh, checkErr := ResolvePathAllowingPatterns(checkCtx, policy, t.Name(), "", FSOpRead, path, t.patterns)
+		if checkErr != nil {
+			return checkErr
+		}
+		return fresh.Close()
+	}
+	sourceIdentity := path
+	if resolved, resolveErr := handle.RealPath(); resolveErr == nil {
+		sourceIdentity = resolved
+	}
+	if result, handled := inspectionImageResult(ctx, file, sourceIdentity, sniff[:sniffN], paginationSupplied, t.maxInspectionImageBytes, reauthorize); handled {
+		return result
+	}
+	if offset < 0 {
+		return ErrorResult("offset must be >= 0")
+	}
+	if length <= 0 {
+		return ErrorResult("length must be > 0")
 	}
 
 	// Reject binary files: null bytes are a reliable binary indicator.

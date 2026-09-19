@@ -66,7 +66,7 @@ func TestAgentProvider_CreateGetUpdateRoundTrip(t *testing.T) {
 	// 3. PUT a new provider.
 	{
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 			strings.NewReader(`{"provider":"anthropic"}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
@@ -80,7 +80,7 @@ func TestAgentProvider_CreateGetUpdateRoundTrip(t *testing.T) {
 	// 4. PUT provider:"" clears it.
 	{
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 			strings.NewReader(`{"provider":""}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
@@ -123,24 +123,23 @@ func readProviderTestConfigMap(t *testing.T, api *restAPI) map[string]any {
 	return m
 }
 
-// TestAgentPUT_HeartbeatFieldsIgnored proves ADR-027: heartbeat is workspace-scoped.
-// A PUT with heartbeat_enabled/heartbeat_interval fields on the agent endpoint is
-// silently accepted (the fields exist on AgentUpdateRequest for backward compat) but
-// NOT persisted on the agent config (heartbeat lives in workspace member_configs).
-// The response does NOT carry HeartbeatEnabled/HeartbeatInterval fields at all.
-func TestAgentPUT_HeartbeatFieldsIgnored(t *testing.T) {
+// TestAgentPUT_HeartbeatFieldsRejected proves ADR-027's current contract:
+// heartbeat is workspace-scoped, so legacy agent-endpoint heartbeat fields are
+// rejected rather than silently ignored or written to the wrong scope.
+func TestAgentPUT_HeartbeatFieldsRejected(t *testing.T) {
 	api := buildExecutorTestAPI(t)
 
 	// Create a Main agent.
 	created := postAgentProvider(t, api, `{"name":"HBAgent","type":"Main","soul":"s"}`)
 
-	// PUT with legacy heartbeat fields → must succeed (200), not 400.
+	// PUT with legacy heartbeat fields → must fail loudly with 400.
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+	r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 		strings.NewReader(`{"heartbeat_enabled":true,"heartbeat_interval":30}`))
 	r.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(w, r)
-	require.Equal(t, http.StatusOK, w.Code, "PUT with heartbeat fields must succeed: %s", w.Body.String())
+	require.Equal(t, http.StatusBadRequest, w.Code,
+		"PUT with legacy heartbeat fields must be rejected: %s", w.Body.String())
 
 	// The legacy heartbeat fields must NOT bleed into the global heartbeat block.
 	// (ADR-027: heartbeat is now workspace-scoped; per-agent config is decommissioned.)
@@ -206,7 +205,7 @@ func TestAgentProvider_NeedsModelDerived(t *testing.T) {
 		`{"name":"NMAgent2","type":"Main","soul":"s","model":"glm-5.2-air","provider":"openrouter"}`)
 	{
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+cleared.Id,
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+cleared.Id,
 			strings.NewReader(`{"provider":""}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)
@@ -227,7 +226,7 @@ func TestAgentProvider_NeedsModelDerived(t *testing.T) {
 	// needs_model true on the PUT response and on GET.
 	{
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/"+created.Id,
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/"+created.Id,
 			strings.NewReader(`{"provider":"groq"}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.HandleAgents(w, r)

@@ -88,6 +88,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     // ADR-052 FR-039: memory_enabled is required on the wire Agent type.
     memory_enabled: true,
     ...overrides,
+    revision: overrides.revision ?? '0'.repeat(64),
   }
 }
 
@@ -103,6 +104,7 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     updated_at: '2025-01-01T00:00:00Z',
     core_team: [],
     ...overrides,
+    revision: overrides.revision ?? '0'.repeat(64),
   }
 }
 

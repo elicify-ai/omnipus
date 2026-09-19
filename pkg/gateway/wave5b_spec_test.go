@@ -230,16 +230,18 @@ func TestOnboardingNeverReshow(t *testing.T) {
 // --------------------------------------------------------------------------
 
 // TestCoreAgentDefaults verifies the fresh-install agent roster as production
-// actually seeds it (Spec-3 roster re-cast + S3 specialist seeding):
-//   - 4 base core agents: mia, jim, ava, ray (wire type 'core'). Max was retired.
-//   - 3 seeded specialist subagents: planner, explorer, researcher (wire type
-//     'Subagent' — subagent-tier, native executor).
+// actually seeds it (ADR-090 §2.0 roster):
+//   - 4 base core agents: mia, jim, ava, admin (wire type 'core') — admin is
+//     the chat-able standalone operator; ray was retired by ADR-090.
+//   - 3 seeded subagent-tier agents: worker, planner, researcher (wire type
+//     'Subagent' — subagent-tier, native executor). explorer was retired by
+//     ADR-090.
 //
 // The retired "omnipus-system" agent is NOT seeded by production SeedConfig and is
 // therefore not asserted here (system/locked-agent handling is covered separately
 // in rest_test.go using a synthetic fixture).
 //
-// Traces to: Spec-3 (v0.1.0 roster re-cast) + S3 specialist seeding.
+// Traces to: ADR-090 §2.0 (built-in agent roster).
 func TestCoreAgentDefaults(t *testing.T) {
 	api := newWave5bTestAPI(t)
 
@@ -265,42 +267,49 @@ func TestCoreAgentDefaults(t *testing.T) {
 	assert.False(t, sysFound,
 		"omnipus-system (retired system agent) must NOT be seeded by production SeedConfig")
 
-	// Spec-3 4-base core agents must all be present with type "core". Max was retired.
-	coreAgents := []string{"mia", "jim", "ava", "ray"}
+	// ADR-090 §2.0 base core agents must all be present with type "core".
+	coreAgents := []string{"mia", "jim", "ava", "admin"}
 	for _, id := range coreAgents {
 		t.Run(id+" is present with type core", func(t *testing.T) {
 			agType, found := agentsByID[id]
 			assert.True(t, found,
-				"core agent %q must be present in agent list after SeedConfig (Spec-3)", id)
+				"core agent %q must be present in agent list after SeedConfig (ADR-090 §2.0)", id)
 			if found {
 				assert.Equal(t, "core", agType,
 					"core agent %q must have type 'core'", id)
 			}
 		})
 	}
-	// S3 seeded specialist subagents must all be present with wire type "Subagent"
-	// (subagent-tier, native executor).
-	specialists := []string{"planner", "explorer", "researcher"}
+	// ADR-090 §2.0 subagent-tier seeded agents must all be present with wire
+	// type "Subagent" (subagent-tier, native executor).
+	specialists := []string{"worker", "planner", "researcher"}
 	for _, id := range specialists {
 		t.Run(id+" specialist is present with type Subagent", func(t *testing.T) {
 			agType, found := agentsByID[id]
 			assert.True(t, found,
-				"specialist subagent %q must be present in agent list after SeedConfig (S3)", id)
+				"subagent-tier seeded agent %q must be present in agent list after SeedConfig (ADR-090 §2.0)", id)
 			if found {
 				assert.Equal(t, "Subagent", agType,
-					"specialist subagent %q must have wire type 'Subagent'", id)
+					"subagent-tier seeded agent %q must have wire type 'Subagent'", id)
 			}
 		})
 	}
 
-	// Max must NOT be present as a seeded base agent.
+	// Agents retired by ADR-090 must NOT be present as seeded agents.
 	t.Run("max is not a seeded base agent (Spec-3)", func(t *testing.T) {
 		_, found := agentsByID["max"]
 		assert.False(t, found, "max must not be in the seeded roster after Spec-3 re-cast")
 	})
+	for _, retiredID := range []string{"ray", "explorer"} {
+		t.Run(retiredID+" is not a seeded agent (ADR-090)", func(t *testing.T) {
+			_, found := agentsByID[retiredID]
+			assert.False(t, found,
+				"%q must not be in the seeded roster — retired by ADR-090 §2.0", retiredID)
+		})
+	}
 
 	// Old ad-hoc roster agents must NOT be present. NOTE: 'researcher' is a seeded
-	// S3 specialist now (asserted present above), so it is NOT in this removed set.
+	// subagent-tier agent (asserted present above), so it is NOT in this removed set.
 	for _, oldID := range []string{"general-assistant", "content-creator"} {
 		_, found := agentsByID[oldID]
 		assert.False(t, found,

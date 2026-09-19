@@ -72,6 +72,8 @@ import {
 // that only import from this component get the same type.
 export type { ToolPolicyValue }
 
+export const DISCOVERY_TOOL_NAME = 'ToolSearch'
+
 export interface ToolPolicyEditorProps {
   /** Full tool list from GET /api/v1/tools. */
   tools: RegistryTool[]
@@ -90,6 +92,17 @@ export interface ToolPolicyEditorProps {
    * nothing is locked.
    */
   globalPolicies?: ToolPolicyValue
+  /** Local override names. Tools in this list can be returned to global inheritance. */
+  overrideNames?: string[]
+  /** Remove a local override so the tool inherits the global ceiling. */
+  onInherit?: (toolName: string) => void
+  /**
+   * Disable role presets until the global ceiling is loaded. Per-tool badges
+   * stay available. An empty ceiling looks like a diff for every tool, so
+   * applying Cautious/Balanced/Full access before the ceiling arrives would
+   * densify override_names.
+   */
+  presetsDisabled?: boolean
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -289,12 +302,16 @@ function CategoryToolRow({
   onChange,
   disabled,
   globalPolicies,
+  isOverridden,
+  onInherit,
 }: {
   tool: RegistryTool
   policies: Record<string, ToolPolicy>
   onChange: (toolId: string, p: ToolPolicy) => void
   disabled?: boolean
   globalPolicies?: ToolPolicyValue
+  isOverridden?: boolean
+  onInherit?: (toolName: string) => void
 }) {
   const effective = resolvePolicy(tool.name, policies)
   const floor = globalOverrideFor(tool.name, globalPolicies)
@@ -307,11 +324,12 @@ function CategoryToolRow({
         `The effective policy is the most restrictive of the global and per-agent values (deny > ask > allow), ` +
         `so it cannot be relaxed here.`
       : undefined
+  const isDiscovery = tool.name === DISCOVERY_TOOL_NAME
   return (
     <div className="flex items-center justify-between py-1 gap-2" data-testid={`tool-row-${tool.name}`}>
       <span className="text-[11px] text-[var(--color-muted)] font-mono truncate flex-1 flex items-center gap-1.5" title={tool.name}>
         <span className="truncate">{tool.name}</span>
-        {effective === undefined && (
+        {effective === undefined && !isDiscovery && (
           <span
             title="This tool has no explicit policy entry — needs attention."
             data-testid={`tool-unconfigured-${tool.name}`}
@@ -321,7 +339,7 @@ function CategoryToolRow({
             Unset
           </span>
         )}
-        {floor && (
+        {floor && !isDiscovery && (
           // Hash link (no full reload) to Settings → Security where the global
           // policy is managed. Plain anchor (not router Link) so the editor
           // renders without a RouterProvider in any context/test.
@@ -336,20 +354,43 @@ function CategoryToolRow({
           </a>
         )}
       </span>
-      <div className="flex gap-1 shrink-0">
-        {ALL_POLICIES.map((p) => {
-          const locked = isPolicyLocked(p, floor)
-          return (
-            <PolicyBadge
-              key={p}
-              policy={p}
-              active={effective === p}
-              disabled={disabled || locked}
-              title={locked ? lockTitle : undefined}
-              onClick={() => onChange(tool.name, p)}
-            />
-          )
-        })}
+      <div className="flex gap-1 shrink-0 items-center">
+        {isDiscovery ? (
+          <span
+            data-testid="toolsearch-always-available"
+            className="text-[10px] text-[var(--color-muted)] max-w-[220px] text-right leading-snug"
+          >
+            Always available for discovery. Target tool permissions still apply.
+          </span>
+        ) : (
+          <>
+            {ALL_POLICIES.map((p) => {
+              const locked = isPolicyLocked(p, floor)
+              return (
+                <PolicyBadge
+                  key={p}
+                  policy={p}
+                  active={effective === p}
+                  disabled={disabled || locked}
+                  title={locked ? lockTitle : undefined}
+                  onClick={() => onChange(tool.name, p)}
+                />
+              )
+            })}
+            {onInherit && isOverridden && (
+              <button
+                type="button"
+                tabIndex={0}
+                disabled={disabled}
+                data-testid={`inherit-${tool.name}`}
+                onClick={() => onInherit(tool.name)}
+                className="px-1.5 py-0.5 rounded text-[10px] border border-[var(--color-border)] text-[var(--color-muted)] hover:text-[var(--color-secondary)] disabled:opacity-50"
+              >
+                Inherit
+              </button>
+            )}
+          </>
+        )}
       </div>
     </div>
   )
@@ -369,6 +410,8 @@ function CategorySection({
   onToolChange,
   disabled,
   globalPolicies,
+  overrideNames,
+  onInherit,
 }: {
   categoryKey: string
   tools: RegistryTool[]
@@ -376,6 +419,8 @@ function CategorySection({
   onToolChange: (toolId: string, p: ToolPolicy) => void
   disabled?: boolean
   globalPolicies?: ToolPolicyValue
+  overrideNames?: string[]
+  onInherit?: (toolName: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const label = CATEGORY_LABELS[categoryKey] ?? categoryKey
@@ -434,6 +479,8 @@ function CategorySection({
                 onChange={onToolChange}
                 disabled={disabled}
                 globalPolicies={globalPolicies}
+                isOverridden={overrideNames?.includes(tool.name)}
+                onInherit={onInherit}
               />
             ))}
           </div>
@@ -466,6 +513,8 @@ function McpServerSection({
   onWildcardPolicy,
   disabled,
   globalPolicies,
+  overrideNames,
+  onInherit,
 }: {
   server: string
   serverTools: RegistryTool[]
@@ -474,6 +523,8 @@ function McpServerSection({
   onWildcardPolicy: (wildcardKey: string, p: ToolPolicy) => void
   disabled?: boolean
   globalPolicies?: ToolPolicyValue
+  overrideNames?: string[]
+  onInherit?: (toolName: string) => void
 }) {
   const [open, setOpen] = useState(false)
 
@@ -571,6 +622,8 @@ function McpServerSection({
                 onChange={onToolChange}
                 disabled={disabled}
                 globalPolicies={globalPolicies}
+                isOverridden={overrideNames?.includes(tool.name)}
+                onInherit={onInherit}
               />
             ))}
           </div>
@@ -591,7 +644,7 @@ type PendingExecutePlanGrant =
   | { kind: 'tool'; toolId: string; policy: ToolPolicy }
   | { kind: 'preset'; role: RolePreset }
 
-export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolicies }: ToolPolicyEditorProps) {
+export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolicies, overrideNames, onInherit, presetsDisabled = false }: ToolPolicyEditorProps) {
   const { policies } = value
   const [pendingGrant, setPendingGrant] = useState<PendingExecutePlanGrant | null>(null)
 
@@ -651,6 +704,7 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
   }
 
   function handlePresetClick(role: RolePreset) {
+    if (disabled || presetsDisabled) return
     if (presetGrantsExecutePlanAllow(role)) {
       setPendingGrant({ kind: 'preset', role })
       return
@@ -713,10 +767,10 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
             <button tabIndex={0}
               key={role}
               type="button"
-              disabled={disabled}
+              disabled={disabled || presetsDisabled}
               onClick={() => handlePresetClick(role)}
               data-testid={`preset-${role}`}
-              title={preset.description}
+              title={presetsDisabled ? 'Waiting for the global permission ceiling.' : preset.description}
               className={`px-3 py-1.5 rounded-md text-[11px] font-medium border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                 activePreset === role
                   ? 'bg-[var(--color-accent)]/20 text-[var(--color-accent)] border-[var(--color-accent)]/40'
@@ -749,6 +803,8 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
                 onToolChange={handleToolPolicy}
                 disabled={disabled}
                 globalPolicies={globalPolicies}
+                overrideNames={overrideNames}
+                onInherit={onInherit}
               />
             ))}
           </div>
@@ -770,6 +826,8 @@ export function ToolPolicyEditor({ tools, value, onChange, disabled, globalPolic
                 onWildcardPolicy={handleWildcardPolicy}
                 disabled={disabled}
                 globalPolicies={globalPolicies}
+                overrideNames={overrideNames}
+                onInherit={onInherit}
               />
             ))}
           </div>

@@ -70,6 +70,8 @@ read-only afterwards; duplicate registration is boot-fatal.
   check_spawn_status) with one task-status map — the pre-merge bug was
   spawn writing a map status never read. Assuming separate spawn/status
   tools is wrong.
-- The old unconditional "infra force-allow" for ToolSearch was deleted;
-  it now ships as literal seeded data. Re-adding a resolution-time
-  shortcut violates Hard Constraint #6.
+- ADR-090 makes `ToolSearch` infrastructure that is always registered,
+  discoverable, and non-deniable. Its resolution-time availability is
+  intentional and must not be replaced with seeded policy data. This does
+  not grant access to any discovered target: the target tool still passes
+  its own effective policy, MCP assignment, session, and execution checks.

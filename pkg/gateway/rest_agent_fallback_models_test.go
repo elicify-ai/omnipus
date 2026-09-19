@@ -45,7 +45,7 @@ func TestGetEditPut_FallbackModels_NotSilentlyReplacedByUnrelatedPUT(t *testing.
 	// Seed one fallback entry.
 	seedBody := `{"fallback_models":[{"model":"openai/gpt-5-mini","provider":"openai"}]}`
 	seedW := httptest.NewRecorder()
-	seedR := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent", strings.NewReader(seedBody))
+	seedR := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent", strings.NewReader(seedBody))
 	seedR.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(seedW, seedR)
 	require.Equal(t, http.StatusOK, seedW.Code, "seed body: %s", seedW.Body.String())
@@ -70,7 +70,7 @@ func TestGetEditPut_FallbackModels_NotSilentlyReplacedByUnrelatedPUT(t *testing.
 	require.NoError(t, err)
 
 	putW := httptest.NewRecorder()
-	putR := httptest.NewRequest(http.MethodPut, "/api/v1/agents/test-agent",
+	putR := revisionedAgentMutationRequest(t, api, "/api/v1/agents/test-agent",
 		strings.NewReader(`{"fallback_models":`+string(appendedJSON)+`}`))
 	putR.Header.Set("Content-Type", "application/json")
 	api.HandleAgents(putW, putR)

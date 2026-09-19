@@ -14,7 +14,7 @@ import {
 import type {
   ToolRegistryEntry,
   GlobalToolPolicies,
-  AgentToolsCfg,
+  AgentToolsUpdateRequest,
   McpServer,
   McpServerCreate,
   McpServerUpdate,
@@ -27,6 +27,7 @@ import type {
 } from '@/lib/api/generated/openapi-types'
 import { REAUTH_HEADER } from './auth'
 import { request } from './http'
+import { requestConfiguration } from './configuration'
 
 // ── Tools & Channels ──────────────────────────────────────────────────────────
 
@@ -106,10 +107,10 @@ export function fetchAgentTools(agentId: string): Promise<AgentToolsResponse> {
 // dialog and retries with the minted token. // not-wire-format
 export function updateAgentTools(
   agentId: string,
-  cfg: AgentToolsCfg,
+  cfg: AgentToolsUpdateRequest,
   reAuthToken?: string,
 ): Promise<AgentToolsResponse> {
-  return request<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, {
+  return requestConfiguration<AgentToolsResponse>(`/agents/${encodeURIComponent(agentId)}/tools`, {
     method: 'PUT',
     headers: reAuthToken ? { [REAUTH_HEADER]: reAuthToken } : undefined,
     body: JSON.stringify(cfg),

@@ -9,6 +9,7 @@ import {
   WorkspaceDelegation as WorkspaceDelegationSchema,
   // Workspace / Project Instructions (contract-first #8):
   WorkspaceInstructionsResponse as WorkspaceInstructionsResponseSchema,
+  ConfigurationMutationState as ConfigurationMutationStateSchema,
   // ADR-051 Rev 4 — workspace media library (contract-first #8):
   MediaLibraryEntry as MediaLibraryEntrySchema,
 } from '@/lib/api/generated/schemas'
@@ -17,9 +18,9 @@ import type {
   Workspace,
   WorkspaceCreateRequest,
   WorkspaceUpdateRequest,
+  ConfigurationMutationState,
   // M5 per-workspace delegation graph (contract-first #8):
   WorkspaceDelegation,
-  WorkspaceDelegationEdge,
   WorkspaceDelegationUpdateRequest,
   // Workspace / Project Instructions (contract-first #8):
   WorkspaceInstructionsResponse,
@@ -29,6 +30,7 @@ import type {
   MediaAttachmentRequest,
 } from '@/lib/api/generated/openapi-types'
 import { request } from './http'
+import { requestConfiguration } from './configuration'
 
 // ── Workspaces ────────────────────────────────────────────────────────────────
 //
@@ -64,7 +66,7 @@ export function fetchWorkspace(id: string): Promise<Workspace> {
 }
 
 export function createWorkspace(body: WorkspaceCreateRequest): Promise<Workspace> {
-  return request<Workspace>(
+  return requestConfiguration<Workspace>(
     '/workspaces',
     { method: 'POST', body: JSON.stringify(body) },
     WorkspaceSchema as ZodType<Workspace>,
@@ -72,15 +74,19 @@ export function createWorkspace(body: WorkspaceCreateRequest): Promise<Workspace
 }
 
 export function updateWorkspace(id: string, body: WorkspaceUpdateRequest): Promise<Workspace> {
-  return request<Workspace>(
+  return requestConfiguration<Workspace>(
     `/workspaces/${encodeURIComponent(id)}`,
     { method: 'PUT', body: JSON.stringify(body) },
     WorkspaceSchema as ZodType<Workspace>,
   )
 }
 
-export function deleteWorkspace(id: string): Promise<void> {
-  return request<void>(`/workspaces/${encodeURIComponent(id)}`, { method: 'DELETE' })
+export function deleteWorkspace(id: string, revision: string): Promise<ConfigurationMutationState> {
+  return requestConfiguration<ConfigurationMutationState>(
+    `/workspaces/${encodeURIComponent(id)}?${new URLSearchParams({ revision })}`,
+    { method: 'DELETE' },
+    ConfigurationMutationStateSchema as ZodType<ConfigurationMutationState>,
+  )
 }
 
 // ── ADR-051 Rev 4 — Workspace Media Library (Slice H) ─────────────────────────
@@ -154,10 +160,9 @@ export function fetchWorkspaceDelegation(id: string): Promise<WorkspaceDelegatio
 
 export function updateWorkspaceDelegation(
   id: string,
-  edges: WorkspaceDelegationEdge[],
+  body: WorkspaceDelegationUpdateRequest,
 ): Promise<WorkspaceDelegation> {
-  const body: WorkspaceDelegationUpdateRequest = { edges }
-  return request<WorkspaceDelegation>(
+  return requestConfiguration<WorkspaceDelegation>(
     `/workspaces/${encodeURIComponent(id)}/delegation`,
     { method: 'PUT', body: JSON.stringify(body) },
     WorkspaceDelegationSchema as ZodType<WorkspaceDelegation>,
@@ -181,11 +186,12 @@ export function fetchWorkspaceInstructions(workspaceId: string): Promise<Workspa
 export function updateWorkspaceInstructions(
   workspaceId: string,
   content: string,
-): Promise<WorkspaceInstructionsResponse> {
-  const body: WorkspaceInstructionsRequest = { content }
-  return request<WorkspaceInstructionsResponse>(
+  revision: string,
+): Promise<ConfigurationMutationState> {
+  const body: WorkspaceInstructionsRequest = { content, revision }
+  return requestConfiguration<ConfigurationMutationState>(
     `/workspaces/${encodeURIComponent(workspaceId)}/instructions`,
     { method: 'PUT', body: JSON.stringify(body) },
-    WorkspaceInstructionsResponseSchema as ZodType<WorkspaceInstructionsResponse>,
+    ConfigurationMutationStateSchema as ZodType<ConfigurationMutationState>,
   )
 }

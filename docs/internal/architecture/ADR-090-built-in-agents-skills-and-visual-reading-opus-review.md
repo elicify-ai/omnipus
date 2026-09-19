@@ -1,5 +1,7 @@
 # Independent Claude Code Opus review — ADR-090 and specifications
 
+> Decision update (2026-09-18): the founder superseded M-3's owner-session-only/proposal-only resolution. Ava may apply user-confirmed changes in a delegated run, with the user’s answer relayed through Jim. There is no Ava-specific session-type write gate. The current ADR and configuration specification govern; the original review below is retained as historical evidence.
+
 Executed 2026-09-17 using Claude Code 2.1.274 with `--model opus`, high effort, and only Read/Glob/Grep tools. CLI result: success, no permission denials; model usage identifies `claude-opus-5` (and the CLI's `claude-haiku-4-5-20251001` auxiliary usage). Duration 629,904 ms, 86 turns. This is source/document review, not tests or runtime execution.
 
 The original review below is retained verbatim as the findings record. Its “all findings open” ending describes that review snapshot; author corrections and final closure are recorded in the [disposition report](ADR-090-built-in-agents-skills-and-visual-reading-opus-dispositions.md). Two suggested founder questions are resolved from already-confirmed requirements: Admin installation ships Allow as the accepted matrix states, with explicit other-role restrictions; connector execution requires assignment, consistent with the configured-assignment model. The separate, verified document-skill license choice L1 remains pending and must not be conflated with those engineering clarifications.

@@ -87,7 +87,13 @@ type ProcessSession struct {
 	stdinWriter     io.Writer
 	outputBuffer    *bytes.Buffer
 	outputTruncated bool
-	ptyMaster       *os.File
+	// resultNote is the terminal-outcome note written by the completion
+	// goroutine once the terminal state is FULLY determined (after
+	// publication/cleanup settles — MAJ-1). It feeds poll alongside the
+	// status/exit JSON so a late poller sees the same story the async
+	// callback told. Empty for sessions with no terminal note (bash today).
+	resultNote string
+	ptyMaster  *os.File
 
 	// ptyKeyMode tracks arrow key encoding mode (CSI vs SS3)
 	ptyKeyMode PtyKeyMode
@@ -160,6 +166,14 @@ func (s *ProcessSession) SetStatus(status SessionStatus) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.Status = status
+}
+
+// ResultNote returns the terminal-outcome note (see the field comment); ""
+// when none was written.
+func (s *ProcessSession) ResultNote() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resultNote
 }
 
 func (s *ProcessSession) GetExitCode() int {
@@ -260,6 +274,8 @@ func (s *ProcessSession) KillAndRelabel(status SessionStatus) error {
 		return ErrSessionDone
 	}
 
+	// PID is read without s.mu (set once at process-creation time and never
+	// mutated afterward — same invariant as OwnerSessionID/StartTime).
 	pid := s.PID
 	if pid <= 0 {
 		return ErrSessionNotFound

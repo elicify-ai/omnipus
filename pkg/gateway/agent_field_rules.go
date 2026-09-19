@@ -79,6 +79,19 @@ var subagent3pCreateOnlyExemptFields = map[string]string{
 	// mutable) is guarded separately in updateAgent / rest_agent_executor.go,
 	// not by subagent3pForbiddenUpdateFields.
 	"executor": "3p-required; per-field mutability guarded separately in rest_agent_executor.go",
+	// mcp_servers is Main-create-only wire sugar (ADR-090 §5.4): it seeds the
+	// agent's MCP bindings at create time and is thereafter managed
+	// exclusively through the dedicated tools surface (PUT
+	// /api/v1/agents/{id}/tools — rest_tool_registry.go), never through the
+	// generic agent PUT. AgentCreateRequestSubagent3p structurally omits it
+	// because a 3p agent's CLI owns its own connectors.
+	"mcp_servers": "create-time-only field; ongoing management is exclusively via PUT /api/v1/agents/{id}/tools",
+	// tool_policy_changes is Main-create-only wire sugar (ADR-090 §5.4),
+	// mirroring mcp_servers above: seeded at create, then managed exclusively
+	// through PUT /api/v1/agents/{id}/tools. The PUT path enforces
+	// subagent_3p's posture through the tools_cfg entry in
+	// subagent3pForbiddenUpdateFields rather than this field's own name.
+	"tool_policy_changes": "create-time-only field; ongoing management is exclusively via PUT /api/v1/agents/{id}/tools",
 }
 
 // firstForbiddenSubagent3pField returns the first forbidden field supplied on

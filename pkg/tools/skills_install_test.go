@@ -56,6 +56,19 @@ func TestInstallSkillToolMissingSlug(t *testing.T) {
 	assert.Contains(t, result.ForLLM, "identifier is required and must be a non-empty string")
 }
 
+func TestInstallSkillToolAvaDelegatedContextCanInstall(t *testing.T) {
+	root := t.TempDir()
+	mgr := skills.NewRegistryManager()
+	mgr.AddRegistry(fakeSkillRegistry{})
+	tool := NewInstallSkillTool(mgr, root)
+	ctx := WithDelegationDepth(WithAgentID(context.Background(), "ava"), 1)
+	result := tool.Execute(ctx, map[string]any{"slug": "delegated-skill", "registry": "fake"})
+	require.False(t, result.IsError, result.ForLLM)
+	content, err := os.ReadFile(filepath.Join(root, "delegated-skill", "SKILL.md"))
+	require.NoError(t, err)
+	require.Equal(t, "---\nname: delegated-skill\ndescription: a fake test skill for install_skill's global-dir test\n---\n\nBody.\n", string(content))
+}
+
 func TestInstallSkillToolEmptySlug(t *testing.T) {
 	tool := NewInstallSkillTool(skills.NewRegistryManager(), t.TempDir())
 	result := tool.Execute(context.Background(), map[string]any{
@@ -187,11 +200,18 @@ type fakeOwnerScopedRegistry struct {
 func (f *fakeOwnerScopedRegistry) Name() string { return "fake-owner-scoped" }
 
 func (f *fakeOwnerScopedRegistry) DownloadAndInstallForOwner(
-	_ context.Context, slug, ownerHandle, version, _ string,
+	_ context.Context, slug, ownerHandle, version, targetDir string,
 ) (*skills.InstallResult, error) {
 	f.gotSlug = slug
 	f.gotOwnerHandle = ownerHandle
 	f.gotVersion = version
+	if err := os.MkdirAll(targetDir, 0o755); err != nil {
+		return nil, err
+	}
+	content := "---\nname: " + slug + "\ndescription: Use this owner-scoped test skill when requested.\n---\n\nBody.\n"
+	if err := os.WriteFile(filepath.Join(targetDir, "SKILL.md"), []byte(content), 0o644); err != nil {
+		return nil, err
+	}
 	return &skills.InstallResult{Version: "2.0.0"}, nil
 }
 

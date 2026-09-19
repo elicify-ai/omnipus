@@ -108,20 +108,23 @@ func TestAgents_JudgeUndeletable(t *testing.T) {
 	api := newJudgeRosterAPI(t)
 
 	w := httptest.NewRecorder()
-	api.deleteAgent(w, "judge")
+	api.deleteAgent(w, httptest.NewRequest(http.MethodDelete, "/api/v1/agents/judge?revision="+strings.Repeat("a", 64), nil), "judge")
 
 	require.Equal(t, http.StatusBadRequest, w.Code, "DELETE judge must be 400; body=%s", w.Body.String())
 	assert.Contains(t, strings.ToLower(w.Body.String()), "not deletable")
 }
 
 // TestAgents_JudgeUndisable verifies PUT /api/v1/agents/judge with a disable
-// intent ({"enabled":false} or {"disabled":true}) is rejected 400.
+// intent ({"enabled":false} or {"disabled":true}) is rejected 400. The
+// request carries the current entity revision (ADR-090 §5.2 precondition) —
+// the "cannot be disabled" refusal is the assertion under test, not the
+// revision gate.
 func TestAgents_JudgeUndisable(t *testing.T) {
 	for _, body := range []string{`{"enabled":false}`, `{"disabled":true}`} {
 		t.Run(body, func(t *testing.T) {
 			api := newJudgeRosterAPI(t)
 			w := httptest.NewRecorder()
-			r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/judge", strings.NewReader(body))
+			r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/judge", strings.NewReader(body))
 			r.Header.Set("Content-Type", "application/json")
 			api.updateAgent(w, r, "judge")
 
@@ -131,26 +134,19 @@ func TestAgents_JudgeUndisable(t *testing.T) {
 	}
 }
 
-// TestAgents_JudgeRubricAbsent verifies ADR-052 FR-038 (soul unification):
-// AgentConfig.Rubric was deleted and the generated wire Agent type no longer
-// carries a rubric field at all — the Judge's prompt now lives in its
-// SOUL.md, lazily seeded from coreagent.JudgeDefaultRubric by pkg/agent's
-// ensureVerifierSoul, not echoed via this REST surface. A PUT carrying a
-// stray "rubric" field is silently ignored (unknown field, no dedicated
-// guard left — soul-editability is a Wave-2 item) and GET must not render a
-// "rubric" key at all.
+// TestAgents_JudgeRubricAbsent verifies both halves of the rubric contract:
+// ADR-090 rejects unknown request fields rather than silently dropping them,
+// and the generated Agent response does not resurrect a rubric field.
 func TestAgents_JudgeRubricAbsent(t *testing.T) {
 	api := newJudgeRosterAPI(t)
 
-	t.Run("stray rubric field on a non-system agent PUT is not rejected as a rubric guard", func(t *testing.T) {
+	t.Run("stray rubric field on a non-system agent PUT is rejected", func(t *testing.T) {
 		w := httptest.NewRecorder()
-		r := httptest.NewRequest(http.MethodPut, "/api/v1/agents/mia", strings.NewReader(`{"rubric":"nope"}`))
+		r := revisionedAgentMutationRequest(t, api, "/api/v1/agents/mia", strings.NewReader(`{"rubric":"nope"}`))
 		r.Header.Set("Content-Type", "application/json")
 		api.updateAgent(w, r, "mia")
-		// The rubric-specific 400 guard was deleted along with AgentConfig.Rubric
-		// (FIX 1, ADR-052 compile cleanup) — a stray "rubric" key is just an
-		// unrecognized field now, not a rejected one.
-		require.Equal(t, http.StatusOK, w.Code, "PUT with a stray rubric field must not 400; body=%s", w.Body.String())
+		require.Equal(t, http.StatusBadRequest, w.Code,
+			"PUT with a stray rubric field must be rejected as an unknown field; body=%s", w.Body.String())
 	})
 
 	t.Run("Judge GET response carries no rubric field", func(t *testing.T) {

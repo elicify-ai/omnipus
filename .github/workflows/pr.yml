@@ -1358,7 +1358,7 @@ jobs:
         # narrowly.
         run: |
           set +e
-          # -timeout 30m: go test's DEFAULT is 10 minutes PER PACKAGE, and
+          # -timeout 45m: go test's DEFAULT is 10 minutes PER PACKAGE, and
           # pkg/agent has been measured at 752s (12.5 min) on a developer
           # machine under load. A package that exceeds it fails with
           # "panic: test timed out after 10m0s" -- a timeout, not an assertion,
@@ -1366,7 +1366,10 @@ jobs:
           # other workflows here already pass -timeout explicitly
           # (cross-platform.yml, and pr.yml's own e2e steps at 600s/900s/300s);
           # this step was the one that inherited the default.
-          out=$(go test -tags goolm,stdjson -count=1 -timeout 30m ./... 2>&1)
+          # The gateway package's own tests now exceed 30m on a two-core
+          # runner. 45m gives that package room while preserving a finite
+          # hang signal for every package.
+          out=$(go test -tags goolm,stdjson -count=1 -timeout 45m ./... 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
@@ -1720,7 +1723,11 @@ jobs:
             echo "would report a pass without testing the intended packages." >&2
             exit 1
           fi
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s "${race_pkgs[@]}" 2>&1)
+          # Gateway's race package crossed the old 900s budget on the release
+          # integration. Match the plain gate's 45m package budget here: race
+          # instrumentation costs time, but a finite package timeout remains
+          # the hang signal.
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s "${race_pkgs[@]}" 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
@@ -1795,7 +1802,7 @@ jobs:
             # THIS run, so testing only its exit code let a race reported in
             # the SECOND run be stamped "FLAKE (passed isolated)" and excused
             # — precisely what the carve-out forbids.
-            if go test -race -tags goolm,stdjson -count=1 -timeout 900s -p 1 "$p" >/tmp/rr_race.log 2>&1 \
+            if go test -race -tags goolm,stdjson -count=1 -timeout 2700s -p 1 "$p" >/tmp/rr_race.log 2>&1 \
                && ! grep -aq "DATA RACE" /tmp/rr_race.log; then
               echo "FLAKE (passed isolated): $p"
             else
@@ -2254,7 +2261,17 @@ jobs:
           echo "OPENROUTER_API_KEY_CI is set (${#OPENROUTER_API_KEY_CI} chars)."
 
       - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
+        # Install the engines the shard's playwright.config.ts projects
+        # actually launch: the preview-isolation shard matches the
+        # isolation-firefox / isolation-webkit projects; every other shard
+        # is Chromium-only.
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.group }}" = "preview-isolation" ]; then
+            npx playwright install --with-deps chromium firefox webkit
+          else
+            npx playwright install --with-deps chromium
+          fi
 
       - name: Run Playwright tests
         # OPENROUTER_API_KEY_CI is inherited per-shard from $GITHUB_ENV (Resolve shard LLM key).
@@ -2280,7 +2297,19 @@ jobs:
           OMNIPUS_URL: http://localhost:6060
           OPENROUTER_API_KEY: ${{ env.OPENROUTER_API_KEY_CI }}
           PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/pw-results.json
-        run: npx playwright test ${{ matrix.specs }} --reporter=html,list,json
+        run: |
+          set -euo pipefail
+          # The preview-headed project pins headless:false — the browser's
+          # own PDF viewer (ADR-067 §13.4 item 4) is what's measured, and
+          # headless Chromium has none. Runners have no X server, so launch
+          # under xvfb-run: a real headed browser on a virtual display. Do
+          # NOT flip the project to headless — that replaces the thing
+          # under test.
+          if [ "${{ matrix.group }}" = "preview-headed" ]; then
+            xvfb-run -a npx playwright test ${{ matrix.specs }} --reporter=html,list,json
+          else
+            npx playwright test ${{ matrix.specs }} --reporter=html,list,json
+          fi
 
       - name: Fail on skipped or flaky Playwright tests
         # Two ways this suite went green without being green:
@@ -2350,6 +2379,22 @@ jobs:
             test-results/
           retention-days: 7
 
+      - name: Prepare gateway logs for upload
+        # Bound each log (last 5000 lines / 5 MB) and scrub provider-key
+        # shapes before upload — logs are archived on every outcome, so no
+        # credential material may ride along.
+        if: always()
+        run: |
+          set -euo pipefail
+          STAGING=/tmp/gateway-logs-staging
+          rm -rf "$STAGING" && mkdir -p "$STAGING"
+          for f in /tmp/omnipus.log /tmp/omnipus-e2e/logs/*; do
+            [ -f "$f" ] || continue
+            out="$STAGING/$(basename "$f")"
+            tail -c 5242880 "$f" | tail -n 5000 \
+              | sed -E 's/sk-or-[A-Za-z0-9_-]+/[REDACTED]/g; s/sk-[A-Za-z0-9_-]{16,}/[REDACTED]/g' > "$out"
+          done
+
       - name: Upload gateway logs
         if: always()
         uses: actions/upload-artifact@v7
@@ -2359,9 +2404,7 @@ jobs:
           # uploaded twice and upload-artifact 409s — failing an always()/failure()
           # step and the job, for a reason unrelated to the code under test.
           overwrite: true
-          path: |
-            /tmp/omnipus.log
-            /tmp/omnipus-e2e/logs/
+          path: /tmp/gateway-logs-staging/
           retention-days: 7
 
       - name: Stop gateway

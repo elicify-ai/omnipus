@@ -2,7 +2,8 @@
 // AgentPicker dropdown (composer/AgentPicker.tsx) and the `@` mention menu
 // (useSlashMenu.ts's mention mode). Extracted so the two surfaces share ONE
 // `['agents']` react-query cache entry and apply IDENTICAL scoping
-// (ready-to-chat status, worker exclusion, active workspace's core_team)
+// (ready-to-chat status, worker exclusion, active workspace's core_team,
+// plus the ADR-090 Admin standalone-operator exemption from TEAM scoping)
 // instead of two hand-rolled copies of the same filter drifting apart.
 //
 // Query keys are deliberately unchanged from AgentPicker's original inline
@@ -32,11 +33,28 @@ import type { Agent, Workspace } from '@/lib/api'
 // once both queries have resolved.
 const EMPTY_AGENTS: Agent[] = []
 const EMPTY_WORKSPACES: Workspace[] = []
+const CHAT_BUILTIN_IDS = new Set(['mia', 'jim', 'ava', 'admin'])
+
+export function isChatEligibleAgent(agent: Agent): boolean {
+  if (agent.type === 'core') return CHAT_BUILTIN_IDS.has(agent.id)
+  return agent.type === 'Main'
+}
+
+// ADR-090 FR-001 / §2.2: Admin is a chat-able CORE agent with "no team
+// membership". Team-add surfaces refuse an Admin membership; chat surfaces
+// must still offer a ready Admin, independent of the active workspace's
+// core_team. The type gate is load-bearing: a custom Main agent that
+// happens to be named "admin" is an ordinary agent and stays team-scoped.
+// Readiness / worker / hidden-role filters still apply — this predicate
+// only exempts Admin from TEAM scoping, never from those.
+function isStandaloneChatOperator(agent: Agent): boolean {
+  return agent.type === 'core' && agent.id === 'admin'
+}
 
 export interface UseChatAgentsResult {
   /** Unfiltered agent list straight from the `['agents']` query — needed by callers that must distinguish "no agents at all" (hard error) from "no chat-eligible agents" (all-draft), e.g. AgentPicker's error/draft branches. */
   agents: Agent[]
-  /** Ready-to-chat (active/idle), non-worker agents, scoped to the active workspace's core_team when one is set. */
+  /** Ready-to-chat (active/idle), non-worker agents, scoped to the active workspace's core_team when one is set. A ready Admin is kept even when the team does not list it (ADR-090 standalone operator) — that is not a workspace membership grant. */
   chatAgents: Agent[]
   isError: boolean
   refetch: () => void
@@ -81,8 +99,17 @@ export function useChatAgents(): UseChatAgentsResult {
         // ADR-049 D3: type:system (the locked Judge) is never a chat target —
         // it must not appear in the AgentPicker dropdown or the "@" mention
         // menu, both of which consume this hook.
-        .filter((a) => (a.status === 'active' || a.status === 'idle') && !isWorker(a) && a.type !== 'system')
-        .filter((a) => !teamIds || teamIds.length === 0 || teamIds.includes(a.id)),
+        .filter((a) =>
+          (a.status === 'active' || a.status === 'idle')
+          && !isWorker(a)
+          && isChatEligibleAgent(a),
+        )
+        .filter((a) =>
+          !teamIds
+          || teamIds.length === 0
+          || teamIds.includes(a.id)
+          || isStandaloneChatOperator(a),
+        ),
     [agents, teamIds],
   )
 

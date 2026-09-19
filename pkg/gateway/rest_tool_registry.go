@@ -14,10 +14,11 @@ package gateway
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 
+	"github.com/elicify-ai/omnipus/pkg/agentstore"
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
 	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/coreagent"
@@ -193,7 +194,7 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 	registry := a.agentLoop.GetRegistry()
 	agentInstance, ok := registry.GetAgent(agentID)
 	if !ok {
-		slog.Warn("rest: agent not found in registry for tool view", "agent_id", agentID)
+		logsafeWarn("rest: agent not found in registry for tool view", "agent_id", agentID)
 		jsonErr(w, http.StatusNotFound, fmt.Sprintf("agent %q not found", agentID))
 		return
 	}
@@ -314,20 +315,46 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 		builtinPolicies[toolName] = gen.AgentToolsResponseConfigBuiltinPolicies(configured)
 	}
 	agentTypeVal := gen.AgentToolsResponseAgentType(wireAgentType)
+	state, stateErr := agentstore.New(a.homePath).ReadState(agentID)
+	if stateErr != nil {
+		jsonErr(w, http.StatusInternalServerError, fmt.Sprintf("could not read agent revision: %v", stateErr))
+		return
+	}
+	overrideNames := make([]string, 0)
+	if toolsCfg != nil {
+		for name := range toolsCfg.Builtin.Policies {
+			overrideNames = append(overrideNames, name)
+		}
+	}
+	sort.Strings(overrideNames)
+
+	mcpServers := make([]gen.AgentToolsMcpServerBinding, 0)
+	if toolsCfg != nil {
+		for _, binding := range toolsCfg.MCP.Servers {
+			entry := gen.AgentToolsMcpServerBinding{Id: binding.ID}
+			if binding.ToolsSpecified {
+				copied := append([]string(nil), binding.Tools...)
+				if copied == nil {
+					copied = []string{}
+				}
+				entry.Tools = &copied
+			}
+			mcpServers = append(mcpServers, entry)
+		}
+	}
 
 	// Build the AgentToolsResponse. The Tools field uses the same anonymous struct
 	// as gen.AgentToolsResponse.Tools, aliased as toolsEntry above.
 	resp := gen.AgentToolsResponse{
-		AgentType: &agentTypeVal,
+		AgentType:     &agentTypeVal,
+		Revision:      state.Revision,
+		OverrideNames: overrideNames,
 		Config: struct {
 			Builtin *struct {
 				Policies map[string]gen.AgentToolsResponseConfigBuiltinPolicies `json:"policies"`
 			} `json:"builtin,omitempty"`
 			Mcp *struct {
-				Servers *[]struct {
-					Id    string    `json:"id"`
-					Tools *[]string `json:"tools,omitempty"`
-				} `json:"servers,omitempty"`
+				Servers *[]gen.AgentToolsMcpServerBinding `json:"servers,omitempty"`
 			} `json:"mcp,omitempty"`
 		}{
 			Builtin: &struct {
@@ -338,8 +365,27 @@ func (a *restAPI) HandleAgentToolsRegistry(w http.ResponseWriter, r *http.Reques
 				// source of truth, with no separate "default" value to report.
 				Policies: builtinPolicies,
 			},
+			// Always serialize stored MCP bindings so Settings can round-trip
+			// assignment. An empty servers list means no servers assigned;
+			// omitted tools on a binding still means all tools of that server.
+			Mcp: &struct {
+				Servers *[]gen.AgentToolsMcpServerBinding `json:"servers,omitempty"`
+			}{Servers: &mcpServers},
 		},
 		Tools: toolEntries,
+	}
+	persistence := gen.AgentToolsResponsePersistenceStatusComplete
+	activation := gen.AgentToolsResponseActivationStatusActive
+	changed := []string{"tools_cfg"}
+	resp.PersistenceStatus = &persistence
+	resp.ActivationStatus = &activation
+	resp.ChangedFields = &changed
+	if r.Method == http.MethodPut {
+		if message := r.Header.Get("X-Omnipus-Activation-Failed"); message != "" {
+			activation = gen.AgentToolsResponseActivationStatusFailed
+			resp.ActivationStatus = &activation
+			resp.Message = &message
+		}
 	}
 	jsonOK(w, resp)
 }
@@ -472,7 +518,7 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	resolved, gone := a.approvalReg.resolve(approvalID, action)
 	if gone {
 		// Entry already in terminal state — FR-018.
-		slog.Warn("tool-approval: late action on resolved approval",
+		logsafeWarn("tool-approval: late action on resolved approval",
 			"approval_id", approvalID, "action", string(body.Action))
 		jsonErr(w, http.StatusGone, "approval already resolved")
 		return
@@ -505,13 +551,13 @@ func (a *restAPI) HandleToolApprovals(w http.ResponseWriter, r *http.Request) {
 	if recordGrant {
 		recorded := a.agentLoop.ApprovalGrants().Record(entry.SessionID, entry.AgentID, entry.ToolName, entry.Args)
 		if recorded {
-			slog.Info("tool-approval: recorded session Always-Allow grant",
+			logsafeInfo("tool-approval: recorded session Always-Allow grant",
 				"approval_id", approvalID,
 				"session_id", entry.SessionID,
 				"agent_id", entry.AgentID,
 				"tool", entry.ToolName)
 		} else {
-			slog.Warn("tool-approval: 'always' action approved this call but the grant was NOT recorded "+
+			logsafeWarn("tool-approval: 'always' action approved this call but the grant was NOT recorded "+
 				"(missing session_id/agent_id/tool identity on the approval entry) — the next matching call will prompt again",
 				"approval_id", approvalID,
 				"session_id", entry.SessionID,
@@ -619,7 +665,7 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 	// second component is entry.AgentID (see doc comment above).
 	parentAgent, err := a.agentLoop.AgentForSession(meta.ParentSessionID)
 	if err != nil || parentAgent == nil {
-		slog.Warn("tool-approval: could not resolve the delegating parent's agent for grant inheritance; "+
+		logsafeWarn("tool-approval: could not resolve the delegating parent's agent for grant inheritance; "+
 			"the grant recorded above will not survive this delegation's own teardown",
 			"approval_id", approvalID,
 			"child_session_id", entry.SessionID,
@@ -628,7 +674,7 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 		return false
 	}
 	if a.agentLoop.ApprovalGrants().Record(meta.ParentSessionID, entry.AgentID, entry.ToolName, entry.Args) {
-		slog.Info("tool-approval: also recorded Always-Allow grant on the delegating parent's session, "+
+		logsafeInfo("tool-approval: also recorded Always-Allow grant on the delegating parent's session, "+
 			"scoped to the SAME agent identity the approval modal named, so it survives this delegation's "+
 			"own teardown without crossing into the parent's own agent identity",
 			"approval_id", approvalID,
@@ -639,7 +685,7 @@ func (a *restAPI) recordGrantOnDelegationParent(entry *approvalEntry, approvalID
 			"tool", entry.ToolName)
 		return true
 	}
-	slog.Warn("tool-approval: parent Always-Allow grant was NOT recorded "+
+	logsafeWarn("tool-approval: parent Always-Allow grant was NOT recorded "+
 		"(missing parent session, agent, or tool identity) — this delegation's teardown will drop the child grant",
 		"approval_id", approvalID,
 		"child_session_id", entry.SessionID,

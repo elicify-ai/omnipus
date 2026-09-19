@@ -121,6 +121,11 @@ func (al *AgentLoop) wireExecToolDepsOn(registry *AgentRegistry) {
 		}
 		agent.Tools.RegisterReplacing(execTool)
 	}
+
+	// ADR-090: the environment_setup tool rides the same registry pass —
+	// god mode, egress proxy and the production storage adapter land with
+	// each exec-deps refresh, and hot-reload re-applies them identically.
+	al.wireEnvironmentSetupDepsOn(registry)
 }
 
 // WireTier13Deps registers the web_serve, workspace.shell, and
@@ -1593,6 +1598,9 @@ func (rw *registerSharedToolsWire3) registerSkillTool(agentID string, agent *Age
 
 		if _, already := agent.Tools.Get("Skill"); !already {
 			skillTool := tools.NewSkillTool(skillMaxResults)
+			if agent.DocumentRuntime != nil {
+				skillTool.SetDocumentRuntime(*agent.DocumentRuntime)
+			}
 			skillTool.SetResolver(
 				// load resolves slug for the acting agent through the full
 				// per-shelf grant model (ADR-072 D4/D4.1, via

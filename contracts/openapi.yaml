@@ -96,6 +96,22 @@ components:
 
         '
   schemas:
+    ConfigurationRevision:
+      $ref: ./components/schemas/ConfigurationRevision.yaml
+    ConfigurationPersistenceStatus:
+      $ref: ./components/schemas/ConfigurationPersistenceStatus.yaml
+    ConfigurationActivationStatus:
+      $ref: ./components/schemas/ConfigurationActivationStatus.yaml
+    ConfigurationMutationState:
+      $ref: ./components/schemas/ConfigurationMutationState.yaml
+    ConfigurationMutationFailureState:
+      $ref: ./components/schemas/ConfigurationMutationFailureState.yaml
+    AgentFieldDescriptor:
+      $ref: ./components/schemas/AgentFieldDescriptor.yaml
+    AgentMCPBinding:
+      $ref: ./components/schemas/AgentMCPBinding.yaml
+    ToolPolicyChanges:
+      $ref: ./components/schemas/ToolPolicyChanges.yaml
     ErrorResponse:
       $ref: ./components/schemas/ErrorResponse.yaml
     LoginRequest:
@@ -1332,6 +1348,8 @@ components:
       $ref: ./components/schemas/AgentShellPolicy.yaml
     AgentToolsCfg:
       $ref: ./components/schemas/AgentToolsCfg.yaml
+    AgentToolsMcpServerBinding:
+      $ref: ./components/schemas/AgentToolsMcpServerBinding.yaml
     AgentToolsUpdateRequest:
       $ref: ./components/schemas/AgentToolsUpdateRequest.yaml
     # AgentCreateRequest is a discriminated union hosted INLINE here (not in a
@@ -2895,9 +2913,10 @@ paths:
     put:
       operationId: updateAgent
       summary: Update agent configuration
-      description: 'Updates the specified agent. All fields are optional (only provided fields change). Locked core agents reject mutations to name, description, soul, heartbeat (403). Writing soul/heartbeat triggers a config reload. Model, timeout, max_tool_iterations, heartbeat_enabled, heartbeat_interval changes do NOT trigger a reload.
-
-        '
+      description: >
+        Applies changed editable fields with a required revision. Protected or invalid
+        fields and stale revisions reject without writes. Successful saves report
+        live activation separately; partial storage failures report actual state.
       tags:
       - agents
       security:
@@ -2931,8 +2950,14 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Revision or inherited global policy changed; no writes occurred.
         '500':
-          $ref: '#/components/responses/500InternalServerError'
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
     delete:
       operationId: deleteAgent
       summary: Delete a custom agent
@@ -2940,8 +2965,8 @@ paths:
         Removes a custom (non-core, non-system) agent from config.json and
         reloads the live config. Built-in core/system agents (locked) and the
         `omnipus-system` agent CANNOT be deleted (403, code `agent_locked`).
-        Deleting an agent also clears its session history and on-disk
-        workspace artifacts via the cascade pipeline. Audited (severity INFO,
+        Deleting an agent removes its entity and applicable SOUL bytes but
+        preserves unrelated files in the agent home. Audited (severity INFO,
         event `agent.delete`).
       tags:
       - agents
@@ -2955,9 +2980,18 @@ paths:
           type: string
         description: Agent ID.
         example: 550e8400-e29b-41d4-a716-446655440000
+      - name: revision
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/ConfigurationRevision'
       responses:
-        '204':
-          description: Agent deleted.
+        '200':
+          description: Agent deleted. Reports persisted and activated state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
@@ -2966,8 +3000,14 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Revision or inherited global policy changed; no writes occurred.
         '500':
-          $ref: '#/components/responses/500InternalServerError'
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
   /agents/{id}/sessions:
     get:
       operationId: listAgentSessions
@@ -3039,9 +3079,10 @@ paths:
     put:
       operationId: updateAgentTools
       summary: Replace per-agent tool policy configuration
-      description: 'Replaces the agent''s tools_cfg in config.json. Locked (core/system) agents cannot have their tool policy overwritten via this endpoint (403). Triggers a config reload on success.
-
-        '
+      description: >
+        Replaces capability settings with explicit sparse override intent and a
+        required revision. Ordinary built-ins are editable; hidden capabilities
+        remain fixed. Reports persistence and live activation separately.
       tags:
       - agents
       security:
@@ -3075,8 +3116,14 @@ paths:
           $ref: '#/components/responses/403Forbidden'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Revision or inherited global policy changed; no writes occurred.
         '500':
-          $ref: '#/components/responses/500InternalServerError'
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
   /agents/{id}/runner/test:
     post:
       operationId: testAgentRunner
@@ -6087,6 +6134,12 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '409':
           $ref: '#/components/responses/409Conflict'
+        '500':
+          description: Publication failed after storage changed; reports the actual persisted state. Revision is omitted when no live package remains.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationFailureState'
         '502':
           $ref: '#/components/responses/502BadGateway'
   /skills/marketplace:
@@ -6166,6 +6219,12 @@ paths:
         description: Skill slug (matches the `id` field on Skill).
         schema:
           type: string
+      - name: revision
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/ConfigurationRevision'
+        description: Revision returned by GET /skills for the reviewed installed skill.
       responses:
         '204':
           description: Skill removed.
@@ -7808,6 +7867,14 @@ paths:
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Workspace membership or graph revision changed; no writes occurred.
+        '500':
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
     delete:
       operationId: deleteWorkspace
       summary: Delete a workspace and cascade-delete its tasks and session links
@@ -7836,17 +7903,32 @@ paths:
         required: true
         schema:
           type: string
+      - name: revision
+        in: query
+        required: true
+        schema:
+          $ref: '#/components/schemas/ConfigurationRevision'
       responses:
-        '204':
-          description: Deleted
+        '200':
+          description: Workspace record deleted. Reports persisted and activated state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Workspace membership or graph revision changed, or the default workspace cannot be deleted; no authoritative delete occurred.
         '500':
-          $ref: '#/components/responses/500InternalServerError'
+          description: Storage failed after the workspace record was removed; reports actual partial state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
 
   /workspaces/{id}/media:
     get:
@@ -9835,6 +9917,14 @@ paths:
         '404':
           $ref: '#/components/responses/404NotFound'
 
+        '409':
+          description: Workspace membership or graph revision changed; no writes occurred.
+        '500':
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationState'
   /workspaces/{id}/mounts:
     post:
       operationId: createWorkspaceMount
@@ -9996,17 +10086,19 @@ paths:
               $ref: '#/components/schemas/WorkspaceInstructionsRequest'
       responses:
         '200':
-          description: Updated AGENT.md content (echoed back).
+          description: Instructions saved. Reports persisted and activated state; GET instructions for content readback.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/WorkspaceInstructionsResponse'
+                $ref: '#/components/schemas/ConfigurationMutationState'
         '400':
           $ref: '#/components/responses/400BadRequest'
         '401':
           $ref: '#/components/responses/401Unauthorized'
         '404':
           $ref: '#/components/responses/404NotFound'
+        '409':
+          description: Instructions revision changed; no writes occurred.
         '405':
           description: Method not allowed.
           content:
@@ -10014,7 +10106,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '500':
-          $ref: '#/components/responses/500InternalServerError'
+          description: Storage failed; reports actual saved state.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConfigurationMutationFailureState'
 
   /workspaces/{id}/plans:
     get:

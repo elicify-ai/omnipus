@@ -34,7 +34,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
@@ -105,22 +104,13 @@ func (a *restAPI) auditPlan(event, id string, kvs ...any) {
 		Decision: audit.DecisionAllow,
 		Details:  details,
 	}); err != nil {
-		slog.Error("rest: plan audit log failed", "event", event, "error", err)
+		logsafeError("rest: plan audit log failed", "event", event, "error", err)
 	}
 }
 
-// isAgentID reports whether id resolves to a known agent in the registry
-// (SD-A7's tiered-DoD authorship-kind heuristic: a Plan's CreatedBy is either
-// a human username or an agent ID depending on who created it — there is no
-// separate discriminator field, mirroring how CriterionAuthor.Kind is
-// recorded explicitly at criterion-authorship time but Plan.CreatedBy is not).
-// Every plan created via THIS wave's only creation path (handleWorkspacePlanCreate,
-// human/UI via REST) sets CreatedBy to the caller's username, which never
-// resolves to an agent ID — so this heuristic naturally routes every
-// REST-created plan through the soft tier today, while staying
-// forward-compatible with a future agent-side create_plan tool (out of this
-// wave's scope) that would set CreatedBy to an agent ID and thereby trigger
-// the strict tier automatically, with no change needed here.
+// isAgentID reports whether id resolves to a registered agent. Only the
+// legacy-kindless fallback inside plan.AuthoredByAgent now; the approve gate
+// reads the creation-time CreatedByKind stamp first.
 func (a *restAPI) isAgentID(id string) bool {
 	if id == "" || a.agentLoop == nil {
 		return false
@@ -305,7 +295,7 @@ func (a *restAPI) toWirePlan(p plan.Plan, lister plan.TaskLister) gen.Plan {
 			if ts, err := time.Parse(time.RFC3339, p.Supervision.WakeAt); err == nil {
 				s.WakeAt = &ts
 			} else {
-				slog.Warn("rest: plan supervision.wake_at is not RFC3339; omitted from the wire payload",
+				logsafeWarn("rest: plan supervision.wake_at is not RFC3339; omitted from the wire payload",
 					"plan_id", p.ID, "wake_at", p.Supervision.WakeAt, "error", err)
 			}
 		}
@@ -336,7 +326,7 @@ func (a *restAPI) toWirePlan(p plan.Plan, lister plan.TaskLister) gen.Plan {
 			pr := float32(progress)
 			out.Progress = &pr
 		} else {
-			slog.Warn("rest: plan progress compute failed", "plan_id", p.ID, "error", err)
+			logsafeWarn("rest: plan progress compute failed", "plan_id", p.ID, "error", err)
 		}
 	}
 	return out
@@ -647,7 +637,7 @@ func (a *restAPI) handleWorkspacePlansList(w http.ResponseWriter, workspaceID st
 	}
 	plans, err := a.planStore.List(plan.Filter{WorkspaceID: workspaceID})
 	if err != nil {
-		slog.Error("rest: plan list failed", "workspace_id", workspaceID, "error", err)
+		logsafeError("rest: plan list failed", "workspace_id", workspaceID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not list plans")
 		return
 	}
@@ -671,7 +661,7 @@ func (a *restAPI) handleWorkspacePlansList(w http.ResponseWriter, workspaceID st
 			// computed per-plan (toWirePlan(p, nil) below uses a.taskStore
 			// directly), each of which logs its own Warn and omits progress
 			// rather than failing the whole plan list.
-			slog.Warn("rest: plan list: task snapshot fetch failed; progress will be computed per-plan instead",
+			logsafeWarn("rest: plan list: task snapshot fetch failed; progress will be computed per-plan instead",
 				"workspace_id", workspaceID, "error", sErr)
 		} else {
 			lister = taskSnapshotLister{tasks: snapshotTasks}
@@ -683,7 +673,7 @@ func (a *restAPI) handleWorkspacePlansList(w http.ResponseWriter, workspaceID st
 	}
 	resp, err := planListResponse(wire)
 	if err != nil {
-		slog.Error("rest: plan list response build failed", "workspace_id", workspaceID, "error", err)
+		logsafeError("rest: plan list response build failed", "workspace_id", workspaceID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not build plan list response")
 		return
 	}
@@ -733,11 +723,14 @@ func (a *restAPI) handleWorkspacePlanCreate(w http.ResponseWriter, r *http.Reque
 	// trim needed here.
 	c := a.callerIdentity(r)
 	p := &plan.Plan{
-		WorkspaceID:  workspaceID,
-		Title:        req.Title,
-		OwnerAgentID: req.OwnerAgentId,
-		Owner:        c.Username,
-		CreatedBy:    c.Username,
+		WorkspaceID: workspaceID,
+		Title:       req.Title,
+		// A REST create is an authenticated-human action — stamp the soft
+		// tier even when the username collides with an agent ID.
+		Owner:         c.Username,
+		CreatedBy:     c.Username,
+		CreatedByKind: plan.CreatedByKindUser,
+		OwnerAgentID:  req.OwnerAgentId,
 	}
 	if req.Goal != nil {
 		p.Goal = *req.Goal
@@ -777,7 +770,7 @@ func (a *restAPI) handleWorkspacePlanCreate(w http.ResponseWriter, r *http.Reque
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		slog.Error("rest: plan create failed", "workspace_id", workspaceID, "error", err)
+		logsafeError("rest: plan create failed", "workspace_id", workspaceID, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not create plan")
 		return
 	}
@@ -858,7 +851,7 @@ func (a *restAPI) handlePlanGet(w http.ResponseWriter, id string) {
 			jsonErr(w, http.StatusNotFound, "plan not found")
 			return
 		}
-		slog.Error("rest: plan get failed", "id", id, "error", err)
+		logsafeError("rest: plan get failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not read plan")
 		return
 	}
@@ -928,7 +921,7 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 				jsonErr(w, http.StatusNotFound, "plan not found")
 				return
 			}
-			slog.Error("rest: plan get failed (pre-update state check)", "id", id, "error", gerr)
+			logsafeError("rest: plan get failed (pre-update state check)", "id", id, "error", gerr)
 			jsonErr(w, http.StatusInternalServerError, "could not read plan")
 			return
 		}
@@ -1064,7 +1057,7 @@ func (a *restAPI) handlePlanPut(w http.ResponseWriter, r *http.Request, id strin
 			jsonErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		slog.Error("rest: plan update failed", "id", id, "error", err)
+		logsafeError("rest: plan update failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not update plan")
 		return
 	}
@@ -1125,7 +1118,7 @@ func (a *restAPI) handlePlanDelete(w http.ResponseWriter, id string) {
 			jsonErr(w, http.StatusConflict, err.Error())
 			return
 		}
-		slog.Error("rest: plan delete failed", "id", id, "error", err)
+		logsafeError("rest: plan delete failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not delete plan")
 		return
 	}
@@ -1149,7 +1142,7 @@ func (a *restAPI) handlePlanDelete(w http.ResponseWriter, id string) {
 	if a.taskStore != nil {
 		members, lerr := a.taskStore.List(task.Filter{PlanID: id})
 		if lerr != nil {
-			slog.Error("rest: plan delete: list former member tasks failed; any next/in_progress member remains attached to the deleted plan_id (fails closed, cannot auto-dispatch, but needs manual re-triage)",
+			logsafeError("rest: plan delete: list former member tasks failed; any next/in_progress member remains attached to the deleted plan_id (fails closed, cannot auto-dispatch, but needs manual re-triage)",
 				"plan_id", id, "error", lerr)
 		} else {
 			for _, t := range members {
@@ -1188,7 +1181,7 @@ func (a *restAPI) detachMemberOnPlanDelete(planID, taskID string) {
 		_, err = a.taskStore.Update(taskID, task.Patch{PlanID: &empty})
 	}
 	if err != nil {
-		slog.Error("rest: plan delete: detach member task failed; task still references the deleted plan_id (fails closed, cannot auto-dispatch, but needs manual re-triage)",
+		logsafeError("rest: plan delete: detach member task failed; task still references the deleted plan_id (fails closed, cannot auto-dispatch, but needs manual re-triage)",
 			"plan_id", planID, "task_id", taskID, "error", err)
 	}
 }
@@ -1209,7 +1202,7 @@ func (a *restAPI) handlePlanApprove(w http.ResponseWriter, id string) {
 			jsonErr(w, http.StatusNotFound, "plan not found")
 			return
 		}
-		slog.Error("rest: plan approve: get failed", "id", id, "error", err)
+		logsafeError("rest: plan approve: get failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not read plan")
 		return
 	}
@@ -1220,8 +1213,8 @@ func (a *restAPI) handlePlanApprove(w http.ResponseWriter, id string) {
 		return
 	}
 
-	// SD-A7 tiered DoD gate.
-	if a.isAgentID(p.CreatedBy) && len(p.DoD) == 0 {
+	// SD-A7 tiered-DoD gate — origin via the explicit CreatedByKind stamp.
+	if p.AuthoredByAgent(a.isAgentID) && len(p.DoD) == 0 {
 		writeJSON(w, http.StatusBadRequest, gen.PlanApproveError{
 			Error: ptr("plan requires a Definition of Done before approval (agent-authored plan)"),
 		})
@@ -1235,7 +1228,7 @@ func (a *restAPI) handlePlanApprove(w http.ResponseWriter, id string) {
 	}
 	members, lerr := a.taskStore.List(task.Filter{PlanID: id})
 	if lerr != nil {
-		slog.Error("rest: plan approve: list member tasks failed", "id", id, "error", lerr)
+		logsafeError("rest: plan approve: list member tasks failed", "id", id, "error", lerr)
 		jsonErr(w, http.StatusInternalServerError, "could not list member tasks")
 		return
 	}
@@ -1275,7 +1268,7 @@ func (a *restAPI) handlePlanApprove(w http.ResponseWriter, id string) {
 			writeJSON(w, http.StatusBadRequest, gen.PlanApproveError{Error: ptr(uerr.Error())})
 			return
 		}
-		slog.Error("rest: plan approve: update failed", "id", id, "error", uerr)
+		logsafeError("rest: plan approve: update failed", "id", id, "error", uerr)
 		jsonErr(w, http.StatusInternalServerError, "could not approve plan")
 		return
 	}
@@ -1308,7 +1301,7 @@ func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id stri
 			jsonErr(w, http.StatusNotFound, "plan not found")
 			return
 		}
-		slog.Error("rest: plan stop: get failed", "id", id, "error", err)
+		logsafeError("rest: plan stop: get failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not read plan")
 		return
 	}
@@ -1346,7 +1339,7 @@ func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id stri
 				jsonErr(w, http.StatusConflict, serr.Error())
 				return
 			}
-			slog.Error("rest: plan stop: engine stop failed", "id", id, "error", serr)
+			logsafeError("rest: plan stop: engine stop failed", "id", id, "error", serr)
 			jsonErr(w, http.StatusInternalServerError, "could not stop plan")
 			return
 		}
@@ -1357,7 +1350,7 @@ func (a *restAPI) handlePlanStop(w http.ResponseWriter, r *http.Request, id stri
 		// in_progress. Map this honestly as a server error rather than an
 		// unqualified 200: the caller must know to re-check member state
 		// instead of assuming a fully clean stop.
-		slog.Error("rest: plan stop: partial fan-out failure", "id", id, "error", serr)
+		logsafeError("rest: plan stop: partial fan-out failure", "id", id, "error", serr)
 		a.auditPlan("plan.stop", id)
 		jsonErr(w, http.StatusInternalServerError, serr.Error())
 		return
@@ -1391,7 +1384,7 @@ func (a *restAPI) handlePlanRestart(w http.ResponseWriter, r *http.Request, id s
 			jsonErr(w, http.StatusNotFound, "plan not found")
 			return
 		}
-		slog.Error("rest: plan restart: get failed", "id", id, "error", err)
+		logsafeError("rest: plan restart: get failed", "id", id, "error", err)
 		jsonErr(w, http.StatusInternalServerError, "could not read plan")
 		return
 	}
@@ -1406,7 +1399,7 @@ func (a *restAPI) handlePlanRestart(w http.ResponseWriter, r *http.Request, id s
 			jsonErr(w, http.StatusConflict, perr.Error())
 			return
 		}
-		slog.Error("rest: plan restart: PlayPlan failed", "id", id, "error", perr)
+		logsafeError("rest: plan restart: PlayPlan failed", "id", id, "error", perr)
 		jsonErr(w, http.StatusInternalServerError, "could not restart plan")
 		return
 	}
@@ -1423,7 +1416,7 @@ func (a *restAPI) handlePlanRestart(w http.ResponseWriter, r *http.Request, id s
 			for _, memberID := range playRes.StillFailedMemberIDs {
 				m, gerr := a.taskStore.Get(memberID)
 				if gerr != nil {
-					slog.Error("rest: plan restart: get failed member after PlayPlan",
+					logsafeError("rest: plan restart: get failed member after PlayPlan",
 						"id", id, "member_id", memberID, "error", gerr)
 					jsonErr(w, http.StatusInternalServerError, "could not verify member reset state after PlayPlan")
 					return
@@ -1450,7 +1443,7 @@ func (a *restAPI) handlePlanRestart(w http.ResponseWriter, r *http.Request, id s
 	// respond from a post-mutation re-read.
 	updated, uerr := a.planStore.Get(id)
 	if uerr != nil {
-		slog.Error("rest: plan restart: re-read after PlayPlan", "id", id, "error", uerr)
+		logsafeError("rest: plan restart: re-read after PlayPlan", "id", id, "error", uerr)
 		jsonErr(w, http.StatusInternalServerError, "plan restarted but could not be re-read")
 		return
 	}

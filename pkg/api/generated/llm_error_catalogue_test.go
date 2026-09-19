@@ -1,5 +1,3 @@
-//go:build !windows
-
 // llm_error_catalogue_test.go — four-way contract agreement for the LLMError
 // user-facing copy catalogue.
 //
@@ -21,9 +19,6 @@
 // The companion file llm_error_codes_test.go closes the OTHER half of the
 // contract — that the Go classifier constants, the JSON-Schema enums, and the
 // generated Zod enum all name the same set of codes.
-//
-// Build constraint: !windows — repoRoot() lives in llm_error_codes_test.go,
-// which is !windows-gated for its schema loader.
 
 package generated
 
