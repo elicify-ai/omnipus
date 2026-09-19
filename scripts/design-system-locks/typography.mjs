@@ -100,6 +100,21 @@ const REMAPPED_FAMILY_UTILITIES = new Set(['mono', 'headline', 'body'])
 
 const CLASS_BUILDERS = new Set(['cn', 'clsx', 'cva', 'twMerge', 'classnames', 'classNames'])
 
+// A parameter/property name carries a whole CSS class value, not just the
+// literal `className`/`class` (react-day-picker's `Chevron: ({ className:
+// chevronClassName })`, sheet.tsx's `widthClass`, smart-select's
+// `triggerClassName`, ...). Matched structurally (camelCase `...Class`/
+// `...ClassName` suffix) so the extension-boundary/forwarding proofs below
+// cover every such prop without a per-component allowlist. This only ever
+// WIDENS which identifiers are eligible for the existing unchanged-forwarding
+// proof (still gated by the same reassignment/shadow/ownership checks); a
+// false match degrades at worst to an extra blocking extension-boundary
+// finding, never a silent pass.
+function isClassLikeParameterName(name) {
+  return name === 'className' || name === 'class'
+    || /(?:^|[a-z0-9])(?:ClassName|Class)$/.test(name)
+}
+
 const STYLE_SIZE_PROPERTY_NAMES = new Set(['fontSize', 'font-size'])
 const STYLE_FAMILY_PROPERTY_NAMES = new Set(['fontFamily', 'font-family'])
 const STYLE_SHORTHAND_PROPERTY_NAMES = new Set(['font'])
@@ -918,24 +933,33 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
     if (plainDeclarationShadows(identifier, fn)) return null
     let initializer = null
     let declaration = null
+    // The label always reports the SOURCE contract name (e.g. `className`
+    // for a renamed `{ className: chevronClassName }`), never the local
+    // alias — the alias is an implementation detail, the source prop name is
+    // the stable receiving identity the contract requires.
+    let boundaryName = identifier.text
     for (const parameter of fn.parameters) {
-      if (ts.isIdentifier(parameter.name) && parameter.name.text === identifier.text && identifier.text === 'className') {
+      if (ts.isIdentifier(parameter.name) && parameter.name.text === identifier.text && isClassLikeParameterName(identifier.text)) {
         initializer = parameter.initializer; declaration = parameter.name; break
       }
       if (ts.isObjectBindingPattern(parameter.name)) for (const element of parameter.name.elements) {
         if (!ts.isBindingElement(element) || !ts.isIdentifier(element.name) || element.name.text !== identifier.text) continue
         const property = element.propertyName?.getText(sourceFile) ?? element.name.text
-        if (property === 'className') { initializer = element.initializer; declaration = element.name; break }
+        if (isClassLikeParameterName(property)) { initializer = element.initializer; declaration = element.name; boundaryName = property; break }
       }
     }
     let sourceParameterName = null
+    let sourceProperty = 'className'
     if (!declaration && fn.body) {
       // Body destructuring — `const { className } = props` and the renamed
       // `const { className: alias } = props` — is the second proven unchanged
       // forwarding shape. Provenance requires the destructured source to be a
       // bare identifier that is a parameter of this same function and the
       // binding to be `const`; helper/store outputs, member objects with
-      // fallbacks, `let` bindings and non-className properties keep unsupported.
+      // fallbacks (incl. `props ?? {}` — pinned unsupported by an existing
+      // fixture: "keeps body-destructured forwarding with unproven
+      // provenance unsupported"), `let` bindings and non-class-like
+      // properties keep unsupported.
       const parameterNames = new Set()
       for (const parameter of fn.parameters) if (ts.isIdentifier(parameter.name)) parameterNames.add(parameter.name.text)
       let scope = identifier.parent
@@ -951,14 +975,18 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
               for (const element of candidate.name.elements) {
                 if (!ts.isBindingElement(element) || !ts.isIdentifier(element.name) || element.name.text !== identifier.text) continue
                 const property = element.propertyName?.getText(sourceFile) ?? element.name.text
-                if (property === 'className') matches.push({ initializer: element.initializer, declaration: element.name, source: source.text })
+                // Narrower than the direct-parameter branches above (pinned
+                // by an existing fixture): body destructuring only proves
+                // literal `className`/`class`, never a class-like alias of a
+                // different source property name.
+                if (property === 'className' || property === 'class') matches.push({ initializer: element.initializer, declaration: element.name, source: source.text, property })
               }
             }
           }
           // Only the innermost unambiguous destructuring classifies.
           if (matches.length > 1) return null
           if (matches.length === 1) {
-            initializer = matches[0].initializer; declaration = matches[0].declaration; sourceParameterName = matches[0].source; break
+            initializer = matches[0].initializer; declaration = matches[0].declaration; sourceParameterName = matches[0].source; sourceProperty = matches[0].property; boundaryName = matches[0].property; break
           }
         }
         scope = scope.parent
@@ -974,10 +1002,10 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
       if (sourceParameterName) {
         if (ts.isBinaryExpression(node) && ts.isIdentifier(node.left) && node.left.text === sourceParameterName
           && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) reassigned = true
-        if (ts.isBinaryExpression(node) && ts.isPropertyAccessExpression(node.left) && node.left.name.text === 'className'
+        if (ts.isBinaryExpression(node) && ts.isPropertyAccessExpression(node.left) && node.left.name.text === sourceProperty
           && ts.isIdentifier(node.left.expression) && node.left.expression.text === sourceParameterName
           && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) reassigned = true
-        if (ts.isDeleteExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'className'
+        if (ts.isDeleteExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === sourceProperty
           && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === sourceParameterName) reassigned = true
         if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'assign'
           && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'Object'
@@ -987,17 +1015,105 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
     }
     if (fn.body) check(fn.body)
     if (reassigned) return null
+    const ownerName = ownerNameFor(fn)
+    if (!ownerName) return null
+    return { symbol: ownerName, name: boundaryName, initializer, declaration }
+  }
+
+  // Shared by forwardedClassBoundary and parameterMemberBoundary: resolves
+  // the stable component/function name a boundary finding's `symbol` names,
+  // unwrapping parenthesized/as/satisfies wrappers and forwardRef/memo.
+  function ownerNameFor(fn) {
     let parent = fn.parent
     while (parent && (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isSatisfiesExpression(parent))) parent = parent.parent
     while (parent && ts.isCallExpression(parent) && isComponentWrapper(parent.expression)) {
       parent = parent.parent
       while (parent && (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isSatisfiesExpression(parent))) parent = parent.parent
     }
-    const ownerName = ts.isFunctionDeclaration(fn) && fn.name ? fn.name.text
+    return ts.isFunctionDeclaration(fn) && fn.name ? fn.name.text
       : parent && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name) ? parent.name.text
         : anonymousRegistrationOwner(fn)
+  }
+
+  // Capability B (independent review): `X.className` / `X?.className` where
+  // X is an unmutated, uniquely-bound, bare (non-destructured) parameter of
+  // the nearest enclosing function — e.g. a `.map((item) => <X
+  // className={item.className} />)` callback parameter, or a
+  // `RetryableState({ iconProps }) { ... iconProps?.className ... }` prop
+  // object read directly by member access rather than destructured. Distinct
+  // from forwardedClassBoundary (which proves the *identifier itself* is an
+  // unchanged forwarded className): here the identifier is a param and only
+  // one MEMBER of it is read. Restricted to the literal `className`/`class`
+  // key (not the broader class-like-name heuristic) since, unlike a
+  // same-named parameter, an arbitrary property name carries no naming
+  // signal that it is a CSS class at all.
+  function parameterMemberBoundary(node) {
+    const key = ts.isPropertyAccessExpression(node) ? node.name.text
+      : node.argumentExpression && (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))
+        ? node.argumentExpression.text : null
+    if (key !== 'className' && key !== 'class') return null
+    const base = unwrapStatic(node.expression)
+    if (!ts.isIdentifier(base)) return null
+    if (duplicateBindings.has(base.text) || hasMultipleVariableDeclarations(sourceFile, base.text)) return null
+    let fn = node.parent
+    while (fn && !ts.isFunctionLike(fn)) fn = fn.parent
+    if (!fn) return null
+    if (plainDeclarationShadows(base, fn)) return null
+    // `base` may be a bare parameter (`function f(item) { ... item.className }`)
+    // or itself a destructured element of an object-pattern parameter
+    // (`RetryableState({ iconProps }) { ... iconProps?.className ... }`) —
+    // either way it is the whole prop object being read, not further
+    // destructured.
+    const parameter = fn.parameters.find((candidate) => {
+      if (ts.isIdentifier(candidate.name) && candidate.name.text === base.text) return true
+      if (ts.isObjectBindingPattern(candidate.name)) {
+        return candidate.name.elements.some((element) =>
+          ts.isBindingElement(element) && !element.dotDotDotToken && ts.isIdentifier(element.name) && element.name.text === base.text)
+      }
+      return false
+    })
+    if (!parameter) return null
+    let reassigned = false
+    function check(current) {
+      if (!reassigned) {
+        if (ts.isBinaryExpression(current) && current.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && current.operatorToken.kind <= ts.SyntaxKind.LastAssignment) {
+          if (ts.isIdentifier(current.left) && current.left.text === base.text) reassigned = true
+          if (ts.isPropertyAccessExpression(current.left) && current.left.name.text === key
+            && ts.isIdentifier(current.left.expression) && current.left.expression.text === base.text) reassigned = true
+        }
+        if (ts.isDeleteExpression(current) && ts.isPropertyAccessExpression(current.expression) && current.expression.name.text === key
+          && ts.isIdentifier(current.expression.expression) && current.expression.expression.text === base.text) reassigned = true
+        if (ts.isCallExpression(current) && ts.isPropertyAccessExpression(current.expression) && current.expression.name.text === 'assign'
+          && ts.isIdentifier(current.expression.expression) && current.expression.expression.text === 'Object'
+          && current.arguments.length > 0 && ts.isIdentifier(current.arguments[0]) && current.arguments[0].text === base.text) reassigned = true
+        current.forEachChild(check)
+      }
+    }
+    if (fn.body) check(fn.body)
+    if (reassigned) return null
+    // ownerNameFor alone (shared with forwardedClassBoundary, left untouched
+    // there) does not resolve an anonymous callback passed directly as a
+    // bare call argument — `items.map((item) => ...)`, not registered under
+    // a named object property — since anonymousRegistrationOwner requires at
+    // least one named property in the chain. That shape is common for this
+    // capability (a rendered list item), so fall back to the nearest NAMED
+    // enclosing function/component as the stable receiving identity.
+    const ownerName = ownerNameFor(fn) ?? nearestNamedAncestorOwner(fn)
     if (!ownerName) return null
-    return { symbol: ownerName, name: 'className', initializer, declaration }
+    return { symbol: ownerName, name: `${base.text}.${key}` }
+  }
+
+  function nearestNamedAncestorOwner(fn) {
+    let current = fn.parent
+    while (current) {
+      if (ts.isFunctionDeclaration(current) && current.name) return current.name.text
+      if (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) {
+        const name = ownerNameFor(current)
+        if (name) return name
+      }
+      current = current.parent
+    }
+    return null
   }
 
   function isComponentWrapper(expression) {
@@ -1044,7 +1160,7 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
   }
 
   const moduleContext = { modules, moduleCache }
-  const classWalker = createClassWalker({ report, positionAt, sourceFile, registeredTokens, bindings, duplicateBindings, forwardedClassBoundary, scannedParameterDefaults, moduleContext, handledCalls })
+  const classWalker = createClassWalker({ report, positionAt, sourceFile, registeredTokens, bindings, duplicateBindings, forwardedClassBoundary, parameterMemberBoundary, scannedParameterDefaults, moduleContext, handledCalls })
   const styleWalker = createStyleWalker({ report, positionAt, sourceFile, registeredTokens, resolvedTokenValues, moduleContext })
   function visit(node) {
     if (ts.isJsxAttribute(node)) {
@@ -1101,7 +1217,7 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
   return findings
 }
 
-function createClassWalker({ report, positionAt, sourceFile, registeredTokens, bindings, duplicateBindings, forwardedClassBoundary, scannedParameterDefaults, moduleContext, handledCalls }) {
+function createClassWalker({ report, positionAt, sourceFile, registeredTokens, bindings, duplicateBindings, forwardedClassBoundary, parameterMemberBoundary, scannedParameterDefaults, moduleContext, handledCalls }) {
   const nodeHelpers = createClassNodeHelpers(sourceFile)
   // A sink bound to one source range; token positions refine it.
   function classReporterFor(node) {
@@ -1185,6 +1301,22 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
           returns.forEach((returned) => walkClassExpression(returned, sink))
           return
         }
+        const joinerDeclaration = transparentJoinerDeclaration(callee)
+        if (joinerDeclaration) {
+          node.arguments.forEach((argument) => walkClassExpression(argument, sink))
+          return
+        }
+        // Broader than pureFunctionReturns above (single-statement, fully
+        // pure return only): a local/imported/IIFE callee whose body is a
+        // finite if-chain and/or switch of return statements (BULK_BUTTON_CLASS
+        // style, or BrowserLiveView's `(() => { if (...) return {...}; ...
+        // })()` chip config). Tried second so the stricter, longer-proven
+        // path above still wins whenever both would apply.
+        const finiteReturns = finiteCallReturns(node, moduleContext)
+        if (finiteReturns) {
+          finiteReturns.forEach((returned) => walkClassExpression(returned, sink))
+          return
+        }
         emitUnsupported(node, sink)
         return
       }
@@ -1238,10 +1370,52 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
             return
           }
         }
+        {
+          const destructured = duplicateBindings.has(node.text) || hasMultipleVariableDeclarations(sourceFile, node.text)
+            ? null : findDestructuredBinding(node, node.text)
+          if (destructured) {
+            const leaves = classCarryingLeaves(destructured.source)
+            if (leaves) {
+              let sawValue = false
+              let unprovable = false
+              for (const leaf of leaves) {
+                const property = leaf.properties.find((candidate) => propertyKeyName(candidate) === destructured.property)
+                if (!property) continue
+                sawValue = true
+                if (ts.isPropertyAssignment(property)) walkClassExpression(property.initializer, sink)
+                else if (ts.isShorthandPropertyAssignment(property)) walkClassExpression(property.name, sink)
+                else unprovable = true
+              }
+              if (unprovable) { emitUnsupported(node, sink); return }
+              if (sawValue) return
+              if (destructured.defaultExpr) { walkClassExpression(destructured.defaultExpr, sink); return }
+              return // proven absent on every branch: no class content, safe no-op
+            }
+          }
+        }
         emitUnsupported(node, sink)
         return
       case ts.SyntaxKind.PropertyAccessExpression:
       case ts.SyntaxKind.ElementAccessExpression: {
+        const parameterBoundary = parameterMemberBoundary(node)
+        if (parameterBoundary) {
+          sink.emit({
+            ruleId: 'typography/extension-boundary', syntax: `${parameterBoundary.symbol}#${parameterBoundary.name}`,
+            message: 'Unchanged caller-supplied className member crosses a component extension boundary and remains blocking until exact central review.',
+          })
+          return
+        }
+        const proven = resolveProvenPropertyAccess(node)
+        if (proven) {
+          if (proven.unprovable) { emitUnsupported(node, sink); return }
+          proven.values.forEach((value) => walkClassExpression(value, sink))
+          return
+        }
+        const importedRecord = importedRecordAllValues(node)
+        if (importedRecord) {
+          importedRecord.forEach((value) => walkClassExpression(value, sink))
+          return
+        }
         const candidates = localCandidates(node)
         if (candidates.length > 0) {
           candidates.forEach((candidate) => walkClassExpression(candidate, sink))
@@ -1267,6 +1441,225 @@ function createClassWalker({ report, positionAt, sourceFile, registeredTokens, b
 
   function emitUnsupported(node, sink) {
     sink.emit({ ruleId: 'typography/unsupported-text-utility', syntax: node.getText(sourceFile), message: DYNAMIC_UTILITY_MESSAGE })
+  }
+
+  // A same-file top-level `function name(...rest) { return rest(.filter(Boolean))?.join(sep) }`
+  // — a transparent variadic class joiner sharing cn()/clsx()'s semantics
+  // under a project-local name (ChipListInput.tsx's `classes()`). Detected
+  // structurally rather than allowlisted by name: only a single rest
+  // parameter, a single statement, and a `.join()` call (optionally preceded
+  // by `.filter(Boolean)`) directly on that same rest parameter qualify —
+  // anything else (extra statements, a different receiver, additional
+  // transforms) is not provably transparent and is left alone.
+  function transparentJoinerDeclaration(callee) {
+    if (!ts.isIdentifier(callee)) return null
+    const fnDecl = sameFileFunctionDeclaration(callee.text, sourceFile)
+    if (!fnDecl || fnDecl.parameters.length !== 1) return null
+    const parameter = fnDecl.parameters[0]
+    if (!parameter.dotDotDotToken || !ts.isIdentifier(parameter.name)) return null
+    const restName = parameter.name.text
+    if (fnDecl.body.statements.length !== 1) return null
+    const statement = fnDecl.body.statements[0]
+    if (!ts.isReturnStatement(statement) || !statement.expression) return null
+    const expression = statement.expression
+    if (!ts.isCallExpression(expression) || !ts.isPropertyAccessExpression(expression.expression) || expression.expression.name.text !== 'join') return null
+    let receiver = expression.expression.expression
+    if (ts.isCallExpression(receiver) && ts.isPropertyAccessExpression(receiver.expression) && receiver.expression.name.text === 'filter') {
+      receiver = receiver.expression.expression
+    }
+    return ts.isIdentifier(receiver) && receiver.text === restName ? fnDecl : null
+  }
+
+  function isLeafSplittingOwner(node) {
+    return ts.isCallExpression(node) || ts.isConditionalExpression(node)
+      || (ts.isBinaryExpression(node) && (node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || node.operatorToken.kind === ts.SyntaxKind.BarBarToken))
+  }
+
+  // The owner expression a property-access base resolves to, restricted to
+  // the NEW shapes handled by resolveProvenPropertyAccess/classCarryingLeaves
+  // below (a call, a conditional, or a `??`/`||` fallback chain of such) —
+  // plain object-literal owners keep going through the pre-existing
+  // localCandidates path unchanged, so this never re-decides a case that
+  // already worked.
+  function ownerExpressionFor(expression) {
+    const unwrapped = unwrapStatic(expression)
+    if (!unwrapped) return null
+    if (isLeafSplittingOwner(unwrapped)) return unwrapped
+    if (ts.isIdentifier(unwrapped) && !duplicateBindings.has(unwrapped.text) && !hasMultipleVariableDeclarations(sourceFile, unwrapped.text)) {
+      const lexical = findLexicalBinding(unwrapped, unwrapped.text)
+      const initializer = lexical?.initializer ?? (bindings.has(unwrapped.text) && !duplicateBindings.has(unwrapped.text) ? bindings.get(unwrapped.text) : null)
+      const resolved = initializer ? unwrapStatic(initializer) : null
+      return resolved && isLeafSplittingOwner(resolved) ? resolved : null
+    }
+    return null
+  }
+
+  // Resolves a bare identifier to a top-level/lexical const-bound, or
+  // imported, object literal — a "record" (STATUS_BADGE/PRIORITY_BADGE
+  // style). Rejects spreads at the call sites below, not here.
+  function resolveRecordObjectLiteral(node) {
+    const unwrapped = unwrapStatic(node)
+    if (!unwrapped || !ts.isIdentifier(unwrapped)) return null
+    if (duplicateBindings.has(unwrapped.text) || hasMultipleVariableDeclarations(sourceFile, unwrapped.text)) return null
+    const lexical = findLexicalBinding(unwrapped, unwrapped.text)
+    const localInitializer = lexical?.initializer ?? (bindings.has(unwrapped.text) ? bindings.get(unwrapped.text) : null)
+    const local = localInitializer ? unwrapStatic(localInitializer) : null
+    if (local && ts.isObjectLiteralExpression(local)) return local
+    const declaration = importedDeclaration(unwrapped, moduleContext)
+    if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer) {
+      const imported = unwrapStatic(declaration.initializer)
+      if (imported && ts.isObjectLiteralExpression(imported)) return imported
+    }
+    return null
+  }
+
+  // The finite set of object-literal "leaves" a class-carrying expression can
+  // resolve to: the expression itself if it is already an object literal
+  // (rejecting spreads — an unproven source of extra properties), every leaf
+  // of a (possibly nested) conditional or `??`/`||` fallback chain, every
+  // finite return of a call, or a record lookup (RECORD[key] / RECORD.key,
+  // local or imported — a literal key selects one property, proven absent is
+  // an empty-but-valid result; a dynamic key enumerates every value, mirroring
+  // importedRecordAllValues but composable inside a leaf chain, e.g.
+  // `PRIORITY_BADGE[priority] ?? PRIORITY_BADGE[3]`) — each recursively
+  // reduced the same way. Returns null if any branch is not provably one of
+  // these shapes (fail closed — no partial results).
+  function classCarryingLeaves(node, seen = new Set()) {
+    const expression = unwrapStatic(node)
+    if (!expression) return null
+    if (ts.isObjectLiteralExpression(expression)) {
+      return expression.properties.some((property) => ts.isSpreadAssignment(property)) ? null : [expression]
+    }
+    if (ts.isConditionalExpression(expression)) {
+      const yes = classCarryingLeaves(expression.whenTrue, seen)
+      const no = classCarryingLeaves(expression.whenFalse, seen)
+      return yes && no ? [...yes, ...no] : null
+    }
+    if (ts.isBinaryExpression(expression) && (expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken || expression.operatorToken.kind === ts.SyntaxKind.BarBarToken)) {
+      const left = classCarryingLeaves(expression.left, seen)
+      const right = classCarryingLeaves(expression.right, seen)
+      return left && right ? [...left, ...right] : null
+    }
+    if (ts.isCallExpression(expression)) {
+      if (seen.has(expression)) return null
+      const nextSeen = new Set(seen).add(expression)
+      const branches = finiteCallReturns(expression, moduleContext)
+      if (!branches) return null
+      const leaves = []
+      for (const branch of branches) {
+        const nested = classCarryingLeaves(branch, nextSeen)
+        if (!nested) return null
+        leaves.push(...nested)
+      }
+      return leaves
+    }
+    if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
+      const key = ts.isPropertyAccessExpression(expression) ? expression.name.text
+        : expression.argumentExpression && (ts.isStringLiteral(expression.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(expression.argumentExpression) || ts.isNumericLiteral(expression.argumentExpression))
+          ? expression.argumentExpression.text : null
+      const object = resolveRecordObjectLiteral(expression.expression)
+      if (!object) return null
+      if (key !== null) {
+        const property = object.properties.find((candidate) => propertyKeyName(candidate) === key)
+        if (!property) return [] // proven absent on this record entry: no class content, safe
+        if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) return null
+        return classCarryingLeaves(ts.isPropertyAssignment(property) ? property.initializer : property.name, seen)
+      }
+      if (object.properties.some((property) => ts.isSpreadAssignment(property))) return null
+      const leaves = []
+      for (const property of object.properties) {
+        if (!ts.isPropertyAssignment(property) && !ts.isShorthandPropertyAssignment(property)) return null
+        const nested = classCarryingLeaves(ts.isPropertyAssignment(property) ? property.initializer : property.name, seen)
+        if (!nested) return null
+        leaves.push(...nested)
+      }
+      return leaves
+    }
+    return null
+  }
+
+  // Capability C1/C2 (independent review) applied to property access:
+  // `X.prop`/`X?.prop`/`X['prop']` where X (after at most one identifier
+  // hop) is a call or conditional expression provably reducible to a finite
+  // set of object-literal leaves (classCarryingLeaves). A leaf missing the
+  // property contributes nothing (proven absent, safe); a leaf whose
+  // matching property is a getter/method/computed key is unprovable and
+  // fails the WHOLE access closed (never a silent partial result).
+  function resolveProvenPropertyAccess(node) {
+    const key = ts.isPropertyAccessExpression(node) ? node.name.text
+      : node.argumentExpression && (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))
+        ? node.argumentExpression.text : null
+    if (key === null) return null
+    const owner = ownerExpressionFor(node.expression)
+    if (!owner) return null
+    const leaves = classCarryingLeaves(owner)
+    if (!leaves) return null
+    const values = []
+    for (const leaf of leaves) {
+      const property = leaf.properties.find((candidate) => propertyKeyName(candidate) === key)
+      if (!property) continue
+      if (ts.isPropertyAssignment(property)) values.push(property.initializer)
+      else if (ts.isShorthandPropertyAssignment(property)) values.push(property.name)
+      else return { unprovable: true }
+    }
+    return { unprovable: false, values }
+  }
+
+  // "Indexing into a finite const record with all values enumerated"
+  // (existing localCandidates behavior) generalized to an IMPORTED record:
+  // `IMPORTED_RECORD[dynamicKey]` where the static key can't be read but the
+  // imported object literal's full, spread-free value set can — every value
+  // is a valid candidate (STATUS_BADGE[status] style). A literal string key
+  // is left to the existing resolveImportedExpression path untouched.
+  function importedRecordAllValues(node) {
+    if (!ts.isElementAccessExpression(node)) return null
+    const key = node.argumentExpression && (ts.isStringLiteral(node.argumentExpression) || ts.isNoSubstitutionTemplateLiteral(node.argumentExpression))
+      ? node.argumentExpression.text : null
+    if (key !== null) return null
+    const base = unwrapStatic(node.expression)
+    if (!ts.isIdentifier(base)) return null
+    const declaration = importedDeclaration(base, moduleContext)
+    if (!declaration || !ts.isVariableDeclaration(declaration) || !declaration.initializer) return null
+    const object = unwrapStatic(declaration.initializer)
+    if (!ts.isObjectLiteralExpression(object) || object.properties.some((property) => ts.isSpreadAssignment(property))) return null
+    const values = []
+    for (const property of object.properties) {
+      if (ts.isPropertyAssignment(property)) values.push(property.initializer)
+      else if (ts.isShorthandPropertyAssignment(property)) values.push(property.name)
+      else return null
+    }
+    return values
+  }
+
+  // A body-level destructured local — `const { x } = <expr>` — bound to a
+  // call/conditional/object-literal `<expr>` (GoalIndicator's `const {
+  // className } = describeNonActiveState(state)`). Distinct from bindings/
+  // findLexicalBinding, which only track simple identifier declarations, not
+  // destructuring patterns. Scoped to the innermost enclosing block, same
+  // uniqueness discipline as the rest of this file: more than one qualifying
+  // destructure of the same local name in scope is unprovable.
+  function findDestructuredBinding(identifier, name) {
+    let scope = identifier.parent
+    while (scope) {
+      if (ts.isBlock(scope) || ts.isSourceFile(scope)) {
+        const matches = []
+        for (const statement of scope.statements) {
+          if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue
+          for (const declaration of statement.declarationList.declarations) {
+            if (!ts.isObjectBindingPattern(declaration.name) || !declaration.initializer) continue
+            for (const element of declaration.name.elements) {
+              if (!ts.isBindingElement(element) || element.dotDotDotToken || !ts.isIdentifier(element.name) || element.name.text !== name) continue
+              const property = element.propertyName?.getText(sourceFile) ?? element.name.text
+              matches.push({ property, source: declaration.initializer, defaultExpr: element.initializer ?? null })
+            }
+          }
+        }
+        if (matches.length > 1) return null
+        if (matches.length === 1) return matches[0]
+      }
+      scope = scope.parent
+    }
+    return null
   }
 
   function localInitializer(node) {
@@ -1407,15 +1800,40 @@ function createClassNodeHelpers(sourceFile) {
 
   function walkDynamicTemplate(node, sink, recurse) {
     const staticTexts = [node.head.text, ...node.templateSpans.map((span) => span.literal.text)]
+    // Capability A (independent review): a span that LOOKS glued by raw
+    // static-text adjacency can still be provably separated when the
+    // interpolation is a (possibly nested) conditional whose every branch is
+    // either empty or itself supplies the missing whitespace boundary — e.g.
+    // `` `cell${isToday ? ' today' : ''}` `` (glued-before, both branches are
+    // empty or start with a space) or ChatImage's `` `...${c ? ` ${c}` : ''}` ``
+    // (the true branch is a nested template whose OWN head starts with a
+    // space; its interior interpolation is resolved by the ordinary
+    // recursive walk once reached). Computed up front so both passes below
+    // (which token a static text's boundary must/must not trim, and how a
+    // span itself classifies) agree.
+    const selfSeparating = node.templateSpans.map((span, index) => {
+      const before = staticTexts[index]
+      const after = staticTexts[index + 1]
+      const gluedBeforeRaw = /\S$/.test(before) || (before === '' && index > 0)
+      const gluedAfterRaw = /^\S/.test(after) || (after === '' && index < node.templateSpans.length - 1)
+      if (!gluedBeforeRaw && !gluedAfterRaw) return false
+      const partial = before.split(/\s+/).filter(Boolean).pop() ?? ''
+      if (partial === 'text-' || partial === 'font-' || partial === 'leading-' || partial === 'tracking-') return false
+      if (/\[(?:[^\]]*)?$/.test(partial) || /\((?:[^)]*)?$/.test(partial)) return false
+      return isSelfSeparatingConditional(span.expression, gluedBeforeRaw, gluedAfterRaw)
+    })
     staticTexts.forEach((text, index) => {
       const isFirst = index === 0
       const isLast = index === staticTexts.length - 1
       const tokens = text.split(/\s+/).filter(Boolean)
       const interior = [...tokens]
       // Tokens glued to an interpolation boundary are partial; the glue check
-      // below handles them. Interior tokens classify normally.
-      if (!isFirst && /^\S/.test(text) && interior.length > 0) interior.shift()
-      if (!isLast && /\S$/.test(text) && interior.length > 0) interior.pop()
+      // below handles them. Interior tokens classify normally. A boundary
+      // whose adjacent span is self-separating is NOT partial — the static
+      // token is already complete on its own (the branch supplies its own
+      // separator or is empty), so it must not be trimmed away here.
+      if (!isFirst && !selfSeparating[index - 1] && /^\S/.test(text) && interior.length > 0) interior.shift()
+      if (!isLast && !selfSeparating[index] && /\S$/.test(text) && interior.length > 0) interior.pop()
       for (const token of interior) classifyClassToken(token, sink)
     })
     node.templateSpans.forEach((span, index) => {
@@ -1432,6 +1850,8 @@ function createClassNodeHelpers(sourceFile) {
         sink.emit({ ruleId: 'typography/unsupported-text-utility', syntax: `${partial}\${…}`, message: DYNAMIC_UTILITY_MESSAGE })
       } else if (/\[(?:[^\]]*)?$/.test(partial) || /\((?:[^)]*)?$/.test(partial)) {
         sink.emit({ ruleId: 'typography/unsupported-text-utility', syntax: `${partial}\${…}`, message: DYNAMIC_UTILITY_MESSAGE })
+      } else if (selfSeparating[index]) {
+        recurse(span.expression, sink)
       } else if (gluedBefore || gluedAfter) {
         // The joined token is not statically knowable, so the whole template
         // fails closed. Fragment values are never walked as whole classes.
@@ -1446,6 +1866,38 @@ function createClassNodeHelpers(sourceFile) {
     })
   }
   return { walkClassBinary, walkDynamicTemplate }
+}
+
+// Capability A's proof for a template span glued to adjacent static text:
+// true only when every leaf of `node` (through nested conditionals) is
+// either an empty string/no-substitution-template literal, or a string
+// literal / template expression whose own boundary text already supplies
+// the missing whitespace on every side the outer static text is glued on.
+// A template-expression leaf's INTERIOR interpolations are not inspected
+// here — they are resolved by the ordinary recursive template walk once
+// this leaf is reached as separated. Any other expression shape (identifier,
+// call, member access, non-whitespace-bounded literal) fails the proof.
+function isSelfSeparatingConditional(node, gluedBefore, gluedAfter) {
+  const expression = unwrapStatic(node)
+  if (ts.isConditionalExpression(expression)) {
+    return isSelfSeparatingConditional(expression.whenTrue, gluedBefore, gluedAfter)
+      && isSelfSeparatingConditional(expression.whenFalse, gluedBefore, gluedAfter)
+  }
+  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+    const text = expression.text
+    if (text === '') return true
+    if (gluedBefore && !/^\s/.test(text)) return false
+    if (gluedAfter && !/\s$/.test(text)) return false
+    return true
+  }
+  if (ts.isTemplateExpression(expression)) {
+    const head = expression.head.text
+    const tail = expression.templateSpans[expression.templateSpans.length - 1].literal.text
+    if (gluedBefore && !/^\s/.test(head)) return false
+    if (gluedAfter && !/\s$/.test(tail)) return false
+    return true
+  }
+  return false
 }
 
 function createStyleWalker({ report, positionAt, sourceFile, registeredTokens, resolvedTokenValues, moduleContext }) {
@@ -2007,6 +2459,136 @@ function isPureStaticExpression(node) {
   }
   visit(node)
   return pure
+}
+
+// ---------------------------------------------------------------------------
+// Finite-return call resolution (independent review capabilities C1/C2):
+// resolves a call to a local/imported function, or an immediately-invoked
+// function expression, whose body is provably a FINITE, enumerable set of
+// return expressions — an if-chain of guard returns ending optionally in an
+// unconditional return, and/or a single switch statement — with only
+// harmless (`const`, `void <expr>`, `throw`) statements otherwise. Used both
+// to resolve a whole call used directly as a class value (BULK_BUTTON_CLASS
+// style) and, via classCarryingLeaves below, to resolve property reads off a
+// call's returned object literal (statusConfig.textClass style). Anything
+// outside this shape (mutable state, unenumerable control flow, `let`
+// reassignment across branches, opaque helper output) is NOT provable here
+// and callers must fail closed.
+// ---------------------------------------------------------------------------
+
+// Resolves the single meaningful return/throw in a short statement list
+// (a switch clause body or an if-branch body), skipping only harmless
+// leading `const` declarations and `void <expr>` statements. Returns
+// { ok:true, expr } (expr is null for a bare `return;`/`throw`) when proven,
+// { ok:false } otherwise (unrecognized statement — fail closed).
+function terminalReturnOutcome(statements) {
+  for (const statement of statements) {
+    if (ts.isBlock(statement)) return terminalReturnOutcome(statement.statements)
+    if (ts.isReturnStatement(statement)) return { ok: true, expr: statement.expression ?? null }
+    if (ts.isThrowStatement(statement)) return { ok: true, expr: null }
+    if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.Const)) continue
+    if (ts.isExpressionStatement(statement) && ts.isVoidExpression(statement.expression)) continue
+    return { ok: false }
+  }
+  return { ok: false }
+}
+
+// A fallthrough (empty-statement) case clause contributes nothing of its
+// own — the next non-empty clause's outcome covers it — so it is simply
+// skipped rather than resolved.
+function collectSwitchReturns(switchStatement) {
+  const results = []
+  for (const clause of switchStatement.caseBlock.clauses) {
+    if (clause.statements.length === 0) continue
+    const outcome = terminalReturnOutcome(clause.statements)
+    if (!outcome.ok) return null
+    if (outcome.expr) results.push(outcome.expr)
+  }
+  return results
+}
+
+// Collects every reachable return-value expression from a function body's
+// top-level statements: const declarations and `void` statements are
+// transparent; an `if (cond) return <expr>` guard (no `else`) contributes
+// its outcome and falls through to the next statement; a switch statement
+// contributes every clause's outcome; a return statement must be the LAST
+// statement (nothing can follow it) and ends collection. No unconditional
+// terminal return is a safe, valid outcome — the implicit `undefined` value
+// contributes no class content, exactly like a switch with no default.
+// Anything else (loops, try/catch, if/else, reassignment) is unprovable.
+function collectFiniteReturns(statements) {
+  const results = []
+  for (let index = 0; index < statements.length; index += 1) {
+    const statement = statements[index]
+    if (ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.Const)) continue
+    if (ts.isExpressionStatement(statement) && ts.isVoidExpression(statement.expression)) continue
+    if (ts.isReturnStatement(statement)) {
+      if (index !== statements.length - 1) return null
+      if (statement.expression) results.push(statement.expression)
+      return results
+    }
+    if (ts.isIfStatement(statement) && !statement.elseStatement) {
+      const body = ts.isBlock(statement.thenStatement) ? statement.thenStatement.statements : [statement.thenStatement]
+      const outcome = terminalReturnOutcome(body)
+      if (!outcome.ok) return null
+      if (outcome.expr) results.push(outcome.expr)
+      continue
+    }
+    if (ts.isSwitchStatement(statement)) {
+      const switchResults = collectSwitchReturns(statement)
+      if (!switchResults) return null
+      results.push(...switchResults)
+      continue
+    }
+    return null
+  }
+  return results
+}
+
+// A same-file top-level `function name(...) {...}` declaration — distinct
+// from findLexicalBinding (const bindings + parameters only) and
+// importedDeclaration (import statements only), neither of which sees a
+// plain function declaration in the SAME file.
+function sameFileFunctionDeclaration(name, sourceFile) {
+  for (const statement of sourceFile.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name?.text === name && statement.body) return statement
+  }
+  return null
+}
+
+// Resolves a call's callee to a function-like declaration: a local
+// const-bound arrow/function expression, a same-file function declaration,
+// an imported function, or (unlike functionDeclarationFor, used by the
+// stricter single-return pureFunctionReturns above) an immediately-invoked
+// function expression (`(() => {...})()`), whose callee is the function
+// itself, not an identifier.
+function calleeDeclaration(call, context) {
+  const callee = unwrapStatic(call.expression)
+  if (!callee) return null
+  if (ts.isArrowFunction(callee) || ts.isFunctionExpression(callee)) return callee
+  if (!ts.isIdentifier(callee)) return null
+  const local = findLexicalBinding(callee, callee.text)?.initializer
+  const localFunction = unwrapStatic(local)
+  if (localFunction && (ts.isArrowFunction(localFunction) || ts.isFunctionExpression(localFunction))) return localFunction
+  const sameFile = sameFileFunctionDeclaration(callee.text, callee.getSourceFile())
+  if (sameFile) return sameFile
+  const imported = importedDeclaration(callee, context)
+  return imported && (ts.isFunctionDeclaration(imported) || ts.isArrowFunction(imported) || ts.isFunctionExpression(imported)) ? imported : null
+}
+
+// Every finite return-value expression a call can produce, or null if the
+// callee/body is not provably finite. A non-block (concise) arrow body is
+// trivially one expression.
+function finiteCallReturns(call, context) {
+  const declaration = calleeDeclaration(call, context)
+  if (!declaration?.body) return null
+  if (!ts.isBlock(declaration.body)) return [declaration.body]
+  return collectFiniteReturns(declaration.body.statements)
+}
+
+function propertyKeyName(property) {
+  return property.name && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name) || ts.isNumericLiteral(property.name))
+    ? property.name.text : null
 }
 
 // ---------------------------------------------------------------------------

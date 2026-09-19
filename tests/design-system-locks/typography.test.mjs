@@ -1084,6 +1084,18 @@ describe('fail-closed: unsupported governed expressions', () => {
     expectOne('export function Chip(x){return <div className={`text-xs${x.a}`}/>}', 'typography/unsupported-text-utility', '`text-xs${x.a}`')
   })
 
+  // Task 1 regression pin (independent review, nonblocking note #1):
+  // "glue-after-with-static" — a static fragment glued directly AFTER an
+  // interpolation (no leading-glue involved). GA1/GA2 in the review's own
+  // probe battery; verified correct there but unpinned by any test or
+  // mutation (M8/M9 both targeted glue-BEFORE/adjacent-empty, not this
+  // branch). Whole template must fail closed exactly like every other glued
+  // shape — never silently pass, never partially resolve.
+  it('keeps a static fragment glued directly after an interpolation failing closed (glue-after-with-static, GA1/GA2)', () => {
+    expectOne('export function Chip(x){return <div className={`${x.a}suffix`}/>}', 'typography/unsupported-text-utility', '`${x.a}suffix`')
+    expectOne('export function Chip(x){return <div className={`safe ${x.a}suffix`}/>}', 'typography/unsupported-text-utility', '`safe ${x.a}suffix`')
+  })
+
   it('keeps governed fragment prefixes failing closed as fragments, never as whole classes', () => {
     expectOne('export function Chip(x){return <div className={`text-${x.size}`}/>}', 'typography/unsupported-text-utility', 'text-${…}')
     expectOne('export function Chip(x){return <div className={`leading-${x.l}`}/>}', 'typography/unsupported-text-utility', 'leading-${…}')
