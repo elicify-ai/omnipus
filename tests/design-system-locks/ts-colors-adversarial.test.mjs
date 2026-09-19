@@ -1600,3 +1600,92 @@ test('a same-named "keys" method on a non-Object receiver still blocks (forbidde
   const findings = pass2Findings(source)
   assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY[k].textClass'))
 })
+
+// CAP-H — nested-reference escape through `Object.values`/`Object.entries`
+// (independent-review Finding 2, round 4). Unlike `Object.keys`, `values`
+// and `entries` hand out LIVE references to a record's own nested objects —
+// mutating an element mutates the record in place. Every consumption shape
+// below must still block: forEach/for-of iteration, `Array.from`, spread,
+// and the same escape reached through an importer's own use of the export.
+// The one permitted case (`Object.keys(...).map(k => k.length)`) proves the
+// unconditionally-safe methods were not swept up by the tightened rule.
+
+test('Object.values(record).forEach mutating a nested value blocks the colour read (forbidden)', () => {
+  const source = [
+    "const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }",
+    "Object.values(REGISTRY).forEach(v => { v.textClass = 'text-red-500' })",
+    'export function V(){ return <i className={REGISTRY.a.textClass}/> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY.a.textClass'))
+})
+
+test('for...of over Object.entries(record) mutating the destructured value blocks (forbidden)', () => {
+  const source = [
+    "const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }",
+    "for (const [, v] of Object.entries(REGISTRY)) { v.textClass = 'text-red-500' }",
+    'export function V(){ return <i className={REGISTRY.a.textClass}/> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY.a.textClass'))
+})
+
+test('an imported record mutated via Object.values by the importer blocks the colour read in the exporting module (forbidden)', () => {
+  const recPath = 'src/lib/registry.ts'
+  const recSource = "export const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }"
+  const consumerSource = [
+    "import { REGISTRY } from '../lib/registry'",
+    "Object.values(REGISTRY).forEach(v => { v.textClass = 'text-red-500' })",
+    'export function V(){ return <i className={REGISTRY.a.textClass}/> }',
+  ].join('\n')
+  const findings = pass2Findings(consumerSource, { [recPath]: recSource, [path]: consumerSource })
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY.a.textClass'))
+})
+
+test('Array.from(Object.values(record))[0] mutation blocks the colour read (forbidden)', () => {
+  const source = [
+    "const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }",
+    "Array.from(Object.values(REGISTRY))[0].textClass = 'text-red-500'",
+    'export function V(){ return <i className={REGISTRY.a.textClass}/> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY.a.textClass'))
+})
+
+test('[...Object.values(record)][0] mutation blocks the colour read (forbidden)', () => {
+  // The leading `;` is load-bearing: without it, ASI merges the previous
+  // statement's closing `}` with the following `[` into a single computed
+  // member-access expression on the object literal itself, which is not the
+  // construct this test intends to exercise.
+  const source = [
+    "const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }",
+    ";[...Object.values(REGISTRY)][0].textClass = 'text-red-500'",
+    'export function V(){ return <i className={REGISTRY.a.textClass}/> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY.a.textClass'))
+})
+
+test('Object.freeze(record) does not prove nested safety: a later nested mutation still blocks (forbidden)', () => {
+  const source = [
+    "const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }",
+    'Object.freeze(REGISTRY)',
+    "REGISTRY.a.textClass = 'text-red-500'",
+    'export function V(){ return <i className={REGISTRY.a.textClass}/> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY.a.textClass'))
+})
+
+test('Object.keys(record).map(k => k.length) elsewhere still resolves the colour read (permitted, positive control)', () => {
+  const source = [
+    "export const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' }, b: { textClass: 'text-[var(--color-primary)]' } }",
+    'const LENS = Object.keys(REGISTRY).map(k => k.length)',
+    "export function View({ k }) { return <i className={REGISTRY[k].textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(
+    findings.filter((f) => f.ruleId === 'ts-colors/unsupported'),
+    [],
+  )
+})

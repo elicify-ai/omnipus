@@ -1162,7 +1162,13 @@ function knownClassReceiverStable(node, ctx, seen = new Set()) {
 // to make EVERY exported const's receiver-stability proof fail the instant
 // the module set contained even one such file — unconditionally, everywhere,
 // regardless of relevance (found via `src/assets/logo/omnipus-avatar.svg`
-// poisoning `STATUS_BADGE`'s proof in a completely unrelated file).
+// poisoning `STATUS_BADGE`'s proof in a completely unrelated file). This
+// exemption is sound only because this project's build never executes an
+// `.svg` or `.css` file as script: `vite.config.ts` registers no svgr-type
+// plugin (no transform turns an `.svg` import into executable JS/TS), and
+// every SVG is imported as a plain URL. If a plugin like that is ever added,
+// this exemption must be revisited — an `.svg`/`.css` file could then carry
+// real import/export/mutation code invisible to this cross-module proof.
 function isJsModulePath(path) {
   const ext = extname(path).toLowerCase()
   return ext === '.ts' || ext === '.tsx' || ext === '.js' || ext === '.jsx'
@@ -1260,24 +1266,60 @@ function isJsxTagName(expression) {
   return Boolean(parent) && (ts.isJsxOpeningElement(parent) || ts.isJsxSelfClosingElement(parent) || ts.isJsxClosingElement(parent)) && parent.tagName === expression
 }
 
-// `Object.keys/values/entries/freeze/isFrozen/getOwnPropertyNames(X)` are
-// well-known, spec-pure static reads: none of them can mutate `X` or hand a
-// mutable reference to `X`'s OWN nested values back to the caller (`keys`/
-// `getOwnPropertyNames` return new string arrays; `values`/`entries` return
-// a new array whose elements are `X`'s existing property values, already
-// covered by the SAME per-property proof used elsewhere in this file;
-// `freeze`/`isFrozen` only touch `X`'s own mutability flag). A terminal read
-// this way is exactly as safe as a JSX-tag render — recognizing it stops
-// e.g. `Object.keys(PRIORITY_BADGE)` (read once, for its domain of keys)
-// from blanket-blocking every OTHER, unrelated read of the same record.
-const READONLY_OBJECT_STATIC_METHODS = new Set(['keys', 'values', 'entries', 'freeze', 'isFrozen', 'getOwnPropertyNames'])
+// `Object.keys/isFrozen/getOwnPropertyNames(X)` are well-known, spec-pure
+// static reads that can neither mutate `X` nor hand a mutable reference to
+// `X`'s OWN nested values back to the caller: `keys`/`getOwnPropertyNames`
+// return a brand-new array of STRINGS, and `isFrozen` returns a boolean. A
+// terminal read this way is exactly as safe as a JSX-tag render —
+// recognizing it stops e.g. `Object.keys(PRIORITY_BADGE)` (read once, for
+// its domain of keys) from blanket-blocking every OTHER, unrelated read of
+// the same record. Being passed the receiver at all is the complete proof:
+// nothing about how the call's own return value is later used can turn this
+// back into a mutable escape, so these are safe unconditionally.
+const UNCONDITIONALLY_READONLY_STATIC_METHODS = new Set(['keys', 'isFrozen', 'getOwnPropertyNames'])
+
+// `Object.values`/`Object.entries` also return a brand-new array — but its
+// elements (for `entries`, each pair's second element) are `X`'s OWN nested
+// property VALUES, handed out live: mutating an element mutates `X` itself.
+// Exempting the argument occurrence and stopping there (as this file used to
+// do, folding these in with `keys`) is unsound — it proves nothing about
+// what the caller does with the returned array afterward (store it, iterate
+// it with `forEach`/`for...of`/`.map`/spread/`Array.from`, mutate an
+// element). This scanner does not attempt to trace every way such a
+// live-reference array can be consumed, so per the "when in doubt, treat it
+// as an escape" rule, passing the receiver to either of these is itself
+// treated as an escape of its nested values — there is no safe default here
+// the way there is for `keys`.
+const NESTED_REFERENCE_RETURNING_STATIC_METHODS = new Set(['values', 'entries'])
+
+// `Object.freeze(X)` returns the SAME reference passed in — not a copy — and
+// only sets `X`'s own (shallow) mutability flag: nested objects reachable
+// through `X` stay fully mutable after the call. Treating the argument
+// occurrence as safe is sound ONLY when nobody captures or chains off the
+// call's return value (a bare `Object.freeze(X)` statement); the instant the
+// return value is assigned, chained, or otherwise consumed, it is exactly as
+// live an alias of `X` as `X` itself and must not be exempted here.
+function objectFreezeCallArgumentDiscardsReturn(callExpr) {
+  return ts.isExpressionStatement(callExpr.parent)
+}
+
+function objectStaticCallArgumentMethod(node) {
+  const parent = node.parent
+  if (!ts.isCallExpression(parent) || parent.expression === node || !parent.arguments.includes(node)) return null
+  const callee = unwrap(parent.expression)
+  if (!ts.isPropertyAccessExpression(callee) || !ts.isIdentifier(callee.expression) || callee.expression.text !== 'Object') return null
+  return { method: callee.name.text, call: parent }
+}
 
 function isReadonlyObjectStaticCallArgument(node) {
-  const parent = node.parent
-  if (!ts.isCallExpression(parent) || parent.expression === node || !parent.arguments.includes(node)) return false
-  const callee = unwrap(parent.expression)
-  return ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'Object'
-    && READONLY_OBJECT_STATIC_METHODS.has(callee.name.text)
+  const call = objectStaticCallArgumentMethod(node)
+  if (!call) return false
+  if (UNCONDITIONALLY_READONLY_STATIC_METHODS.has(call.method)) return true
+  if (call.method === 'freeze') return objectFreezeCallArgumentDiscardsReturn(call.call)
+  // `values`/`entries` and any unrecognized static method both fall through
+  // to `false` here — an escape, per the "when in doubt" rule above.
+  if (NESTED_REFERENCE_RETURNING_STATIC_METHODS.has(call.method)) return false
+  return false
 }
 
 // A ternary/`??` composed entirely of literal leaves (e.g. `cond ? 'a' : 'b'`)
