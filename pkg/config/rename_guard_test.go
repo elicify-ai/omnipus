@@ -186,19 +186,20 @@ var allowedWorkspaceIdentifierLines = map[string]bool{
 	// ADR-090 workspace.State.Workspace is the multi-agent workspace record
 	// paired with its delegation graph and revision, not an agent home.
 	// These callers read that state through ReadState/CheckRevisionLocked.
-	// (Re-pointed 2026-09-18 after the ADR-090 delivery shifted the lines;
-	// per the fragility note above, a uniform shift means re-pointing, not a
-	// regression. The old entries were rest_workspace_delegation.go:140,213;
-	// rest_workspaces.go:1208,1276,1534; workspace.go:336,1224.)
-	"pkg/gateway/rest_workspace_delegation.go:139":             true,
-	"pkg/gateway/rest_workspace_delegation.go:212":             true,
+	// (Re-pointed 2026-09-19 after the log-sanitization and workspace-ID
+	// validation changes shifted the lines; per the fragility note above, a
+	// reviewed shift means re-pointing, not a regression. The previous
+	// gateway entries were rest_workspace_delegation.go:139,212 and
+	// rest_workspaces.go:378,962,1253,1321,1579.)
+	"pkg/gateway/rest_workspace_delegation.go:138":             true,
+	"pkg/gateway/rest_workspace_delegation.go:211":             true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:32":      true,
 	"pkg/gateway/rest_workspace_wire_snapshot_test.go:37":      true,
-	"pkg/gateway/rest_workspaces.go:378":                       true,
-	"pkg/gateway/rest_workspaces.go:962":                       true,
-	"pkg/gateway/rest_workspaces.go:1253":                      true,
-	"pkg/gateway/rest_workspaces.go:1321":                      true,
-	"pkg/gateway/rest_workspaces.go:1579":                      true,
+	"pkg/gateway/rest_workspaces.go:390":                       true,
+	"pkg/gateway/rest_workspaces.go:974":                       true,
+	"pkg/gateway/rest_workspaces.go:1265":                      true,
+	"pkg/gateway/rest_workspaces.go:1333":                      true,
+	"pkg/gateway/rest_workspaces.go:1591":                      true,
 	"pkg/sysagent/tools/workspace.go:102":                      true,
 	"pkg/sysagent/tools/workspace.go:103":                      true,
 	"pkg/sysagent/tools/workspace.go:104":                      true,
