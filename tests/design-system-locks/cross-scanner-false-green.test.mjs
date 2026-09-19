@@ -280,6 +280,54 @@ const CASES = [
       }
     },
   },
+  {
+    id: 'Object.values mutation of a nested const record',
+    build: (good, bad) => ({
+      source:
+        "const REC = { a: { cls: '" +
+        good +
+        "' } }\nObject.values(REC).forEach(v => { v.cls = '" +
+        bad +
+        "' })\nexport function V(){ return <i className={REC.a.cls}/> }",
+    }),
+  },
+  {
+    id: 'Object.entries mutation of a nested const record',
+    build: (good, bad) => ({
+      source:
+        "const REC = { a: { cls: '" +
+        good +
+        "' } }\nfor (const [, v] of Object.entries(REC)) v.cls = '" +
+        bad +
+        "'\nexport function V(){ return <i className={REC.a.cls}/> }",
+    }),
+  },
+  {
+    id: 'array alias mutation of a nested object',
+    build: (good, bad) => ({
+      source:
+        "const REC = { a: { cls: '" +
+        good +
+        "' } }\nconst list = [REC.a]; list[0].cls = '" +
+        bad +
+        "'\nexport function V(){ return <i className={REC.a.cls}/> }",
+    }),
+  },
+  {
+    id: 'imported record mutated via Object.values by the importer',
+    build: (good, bad) => {
+      const recPath = 'src/lib/rec.ts'
+      const recSource = "export const REC = { a: { cls: '" + good + "' } }"
+      const consumerSource =
+        "import { REC } from '../lib/rec'\nObject.values(REC).forEach(v => { v.cls = '" +
+        bad +
+        "' })\nexport function V(){ return <i className={REC.a.cls}/> }"
+      return {
+        source: consumerSource,
+        modules: Object.freeze({ [recPath]: recSource, [MAIN_PATH]: consumerSource }),
+      }
+    },
+  },
 ]
 
 function runScan(scan, input) {
