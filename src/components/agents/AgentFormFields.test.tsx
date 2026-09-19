@@ -110,13 +110,14 @@ describe('IconPicker', () => {
     // accessible name must identify the FIELD, e.g. "Icon", not float with
     // whatever value happens to be selected — a value-only name is
     // useless to a screen-reader user who can't tell which field they're
-    // on). IconPicker passes ariaLabel="Icon", so the button's accessible
+    // on). IconPicker passes ariaLabel="Icon", so the trigger's accessible
     // name is "Icon" while its visible text content remains the chosen
-    // item's label ("Robot") for sighted users. The trigger is a Radix
-    // popover trigger button with aria-haspopup="listbox".
+    // item's label ("Robot") for sighted users. Per
+    // docs/internal/design/components/smart-select.md the trigger carries
+    // role="combobox" (a <button> element exposing the combobox role).
     const onChange = vi.fn()
     render(<IconPicker value="Robot" onChange={onChange} />)
-    const trigger = screen.getByRole('button', { name: 'Icon' })
+    const trigger = screen.getByRole('combobox', { name: 'Icon' })
     expect(trigger).toBeInTheDocument()
     // Selected label must still be visible to the user (sighted) via the
     // trigger's text content, even though it no longer drives the
@@ -128,12 +129,12 @@ describe('IconPicker', () => {
     // Traces: wave5a-wire-ui-spec.md US-7 AC1 — every ICON_OPTIONS entry
     // is available from the picker. SmartSelect renders the options inside
     // a Radix popover; opening it (click the trigger) materialises the
-    // items as cmdk CommandItem nodes. The trigger button also carries the
+    // items as cmdk CommandItem nodes. The combobox trigger also carries the
     // selected label as visible text, so use findAllByText and assert
     // >= 1 (the popover's CommandItem).
     const onChange = vi.fn()
     render(<IconPicker value="Robot" onChange={onChange} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Icon' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Icon' }))
     for (const { name } of ICON_OPTIONS) {
       // cmdk renders each CommandItem with the item label as text content.
       // With 10 items (>= SmartSelect's SEARCHABLE_THRESHOLD of 5), the
@@ -148,7 +149,7 @@ describe('IconPicker', () => {
     // the wire-shape IconName back to the parent.
     const onChange = vi.fn()
     render(<IconPicker value="Robot" onChange={onChange} />)
-    fireEvent.click(screen.getByRole('button', { name: 'Icon' }))
+    fireEvent.click(screen.getByRole('combobox', { name: 'Icon' }))
     // Pick a non-default option to prove the change is observed.
     const target = 'Lightbulb'
     fireEvent.click(await screen.findByText(target))

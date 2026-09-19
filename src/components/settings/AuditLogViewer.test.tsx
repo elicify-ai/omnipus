@@ -149,7 +149,7 @@ describe('AuditLogViewer — security_setting_change rendering (D20)', () => {
     renderViewer()
     await waitFor(() => screen.getByText('tool_call'))
 
-    await user.click(screen.getByRole('button', { name: 'Event type filter' }))
+    await user.click(screen.getByRole('combobox', { name: 'Event type filter' }))
     const option = await screen.findByRole('option', { name: 'security_setting_change' })
     await user.click(option)
 
@@ -179,7 +179,7 @@ describe('AuditLogViewer — security_setting_change rendering (D20)', () => {
     renderViewer()
     await waitFor(() => screen.getByText('tool_call'))
 
-    await user.click(screen.getByRole('button', { name: 'Event type filter' }))
+    await user.click(screen.getByRole('combobox', { name: 'Event type filter' }))
     const option = await screen.findByRole('option', { name: 'browser.live.control_taken' })
     await user.click(option)
 
