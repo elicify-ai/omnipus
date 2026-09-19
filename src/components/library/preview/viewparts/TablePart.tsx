@@ -138,14 +138,13 @@ function Cell({
   // the whole <td>, padding included, not just the text inside it.
   const inert =
     editContext !== undefined && !primary && cell !== undefined && cell.type !== undefined && !canEditCell(editContext, row, cell)
-  const inertProps = inert
-    ? { className: 'cursor-default', onClick: (event: MouseEvent<HTMLTableCellElement>) => event.stopPropagation() }
-    : { className: '' }
+  const inertClassName = inert ? 'cursor-default' : ''
+  const inertOnClick = inert ? (event: MouseEvent<HTMLTableCellElement>) => event.stopPropagation() : undefined
   if (!numeric) {
     return (
       <td
-        className={`max-w-[16rem] truncate border-b border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)] ${inertProps.className}`}
-        {...(inert ? { onClick: inertProps.onClick, 'data-inert': 'true' } : {})}
+        className={`max-w-[16rem] truncate border-b border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)] ${inertClassName}`}
+        {...(inert ? { onClick: inertOnClick, 'data-inert': 'true' } : {})}
       >
         {primary && onOpenPath ? (
           <RowOpenButton rowTitle={row.title} onOpen={() => onOpenPath(row.path)} className="block w-full truncate text-left">

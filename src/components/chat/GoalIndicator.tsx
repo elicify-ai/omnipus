@@ -236,11 +236,11 @@ export function GoalIndicator({ goalStatus, loopStatus }: GoalIndicatorProps) {
               </>
             )}
             {goalStatus.state !== 'active' && (() => {
-              const { testId, text, className } = describeNonActiveState(goalStatus.state)
+              const nonActiveState = describeNonActiveState(goalStatus.state)
               return (
                 <>
-                  <p className={className} data-testid={testId}>
-                    {text}
+                  <p className={nonActiveState.className} data-testid={nonActiveState.testId}>
+                    {nonActiveState.text}
                   </p>
                   {goalStatus.latest_reason && (
                     <p className="text-[var(--color-muted)] mt-0.5 italic truncate" title={goalStatus.latest_reason}>

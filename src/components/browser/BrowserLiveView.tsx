@@ -155,6 +155,80 @@ type VisualState = 'agent-working' | 'you-driving' | 'annotating' | 'error' | 'i
 /** Presentation state; only annotation and connectivity gate input. */
 type DriveMode = 'annotating' | 'agent-working' | 'you-driving' | 'disconnected' | 'other-driving' | 'idle'
 
+// ── ADR-040 D6 — the finite key `driveChipConfig` switches on below.
+// `visualState` alone decides 4 of the 7 chip states directly; the 5th
+// (`'idle'`) needs `visualDriveMode` too (connecting/reconnecting vs.
+// someone else driving vs. genuinely idle) — this collapses both into ONE
+// discriminant so `driveChipConfig` can stay a single flat switch instead
+// of delegating to a second dispatcher function from inside a `case`. That
+// avoids a real gap: ts-colors.mjs's lexical-binding resolver
+// (absenceLexicalBinding) treats a `switch`'s CaseBlock as an opaque wall
+// for identifier lookups — by design, since it has no
+// case-delegates-to-another-dispatcher support the way spacing.mjs's
+// resolveDispatcherMember does — so a case clause that itself CALLS another
+// top-level function can never be proven by ts-colors.mjs, only by
+// spacing.mjs. A single switch with only literal-object-returning clauses
+// has no such call for either scanner to trip on.
+type DriveChipKey = 'agent-working' | 'you-driving' | 'annotating' | 'error' | 'idle-disconnected' | 'idle-other-driving' | 'idle-default'
+
+function driveChipKeyFor(visualState: VisualState, visualDriveMode: DriveMode): DriveChipKey {
+  if (visualState !== 'idle') return visualState
+  if (visualDriveMode === 'disconnected') return 'idle-disconnected'
+  if (visualDriveMode === 'other-driving') return 'idle-other-driving'
+  return 'idle-default'
+}
+
+// ── ADR-040 D6 — header chip config (icon + text label + colour), derived
+// from `visualState`/`visualDriveMode` via driveChipKeyFor above. Words +
+// icon back up the colour for accessibility (never colour alone).
+//
+// Top-level named function (not the inline IIFE this replaces) with a
+// single `switch` on the finite `DriveChipKey` union, every clause
+// returning a plain object literal — behaviourally identical to the
+// original if-chain (each key maps to exactly the same returned literal
+// the removed inline branch returned for that same visualState/
+// visualDriveMode combination). This shape is required, not stylistic:
+// none of the three design-system scanners can resolve a member read
+// (`driveChip.textClass`, `driveChip.dotClass`) off a `const` bound to an
+// inline IIFE's if-chain — spacing.mjs's finite-dispatcher proof
+// (resolveDispatcherMember/collectFiniteDispatcherReturns) only follows a
+// CALL to a top-level, switch-shaped function whose clauses return object
+// literals directly (or delegate via a call OUTSIDE any case block); and
+// ts-colors.mjs's calleeDeclaration/absenceFactory path needs that same
+// named-top-level-call shape, with every clause a literal (see
+// driveChipKeyFor's comment for why a two-function, call-from-inside-a-
+// case version breaks ts-colors.mjs specifically).
+function driveChipConfig(visualState: VisualState, visualDriveMode: DriveMode, statusState: LiveStatus, agentDisplayName: string) {
+  switch (driveChipKeyFor(visualState, visualDriveMode)) {
+    case 'agent-working':
+      return { label: `${agentDisplayName} is browsing…`, Icon: Robot, textClass: 'text-[var(--color-info)]', dotClass: 'bg-[var(--color-info)]', pulse: true }
+    case 'you-driving':
+      return { label: "You're driving", Icon: Cursor, textClass: 'text-[var(--color-accent)]', dotClass: 'bg-[var(--color-accent)]', pulse: true }
+    case 'annotating':
+      return { label: "You're annotating", Icon: ChatCircleDots, textClass: 'text-[var(--color-accent)]', dotClass: 'bg-[var(--color-accent)]', pulse: false }
+    case 'error':
+      return { label: 'Error', Icon: WarningCircle, textClass: 'text-[var(--color-error)]', dotClass: 'bg-[var(--color-error)]', pulse: false }
+    case 'idle-disconnected':
+      return {
+        label: statusState === 'disconnected' ? 'Reconnecting…' : 'Connecting…',
+        Icon: SpinnerGap,
+        textClass: 'text-[var(--color-muted)]',
+        dotClass: 'bg-[var(--color-muted)]',
+        pulse: false,
+      }
+    case 'idle-other-driving':
+      // Informational, NOT a lock-out. Control is shared — this viewer's mouse,
+      // keyboard and omnibox all still work while someone else is also active
+      // (operator directive, 2026-08-03). The old label read "Someone else is
+      // driving", which told the user their input would be ignored — and it
+      // was, because the client and server both gated on the lock. Both gates
+      // are gone; the chip now just says who else is here.
+      return { label: 'Also viewing', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
+    default:
+      return { label: 'Click to drive', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
+  }
+}
+
 function computeDriveMode(state: {
   annotateMode: boolean
   agentWorking: boolean
@@ -2437,49 +2511,11 @@ export function BrowserLiveView({
     }
   }, [canDispatchInput, dispatchInput, textComposition])
 
-  // ── ADR-040 D6 — header chip config (icon + text label + colour), derived
-  // from `visualState`. Words + icon back up the colour for accessibility
-  // (never colour alone). The 'idle' bucket further distinguishes connection
-  // lifecycle (connecting/reconnecting) from a genuinely idle, ready-to-drive
-  // frame — the old corner pill's connecting/disconnected states still need
-  // SOME visible home now that the pill itself is gone.
-  const driveChip = (() => {
-    if (visualState === 'agent-working') {
-      return { label: `${agentDisplayName} is browsing…`, Icon: Robot, textClass: 'text-[var(--color-info)]', dotClass: 'bg-[var(--color-info)]', pulse: true }
-    }
-    if (visualState === 'you-driving') {
-      return { label: "You're driving", Icon: Cursor, textClass: 'text-[var(--color-accent)]', dotClass: 'bg-[var(--color-accent)]', pulse: true }
-    }
-    if (visualState === 'annotating') {
-      return { label: "You're annotating", Icon: ChatCircleDots, textClass: 'text-[var(--color-accent)]', dotClass: 'bg-[var(--color-accent)]', pulse: false }
-    }
-    if (visualState === 'error') {
-      return { label: 'Error', Icon: WarningCircle, textClass: 'text-[var(--color-error)]', dotClass: 'bg-[var(--color-error)]', pulse: false }
-    }
-    // 'idle' visualState — visualDriveMode further distinguishes
-    // disconnected/other-driving/genuinely-idle, reading the SAME display
-    // source of truth `visualState` itself derives from, instead of
-    // re-deriving `!connected`/`controlledByOther` here too.
-    if (visualDriveMode === 'disconnected') {
-      return {
-        label: statusState === 'disconnected' ? 'Reconnecting…' : 'Connecting…',
-        Icon: SpinnerGap,
-        textClass: 'text-[var(--color-muted)]',
-        dotClass: 'bg-[var(--color-muted)]',
-        pulse: false,
-      }
-    }
-    if (visualDriveMode === 'other-driving') {
-      // Informational, NOT a lock-out. Control is shared — this viewer's mouse,
-      // keyboard and omnibox all still work while someone else is also active
-      // (operator directive, 2026-08-03). The old label read "Someone else is
-      // driving", which told the user their input would be ignored — and it
-      // was, because the client and server both gated on the lock. Both gates
-      // are gone; the chip now just says who else is here.
-      return { label: 'Also viewing', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
-    }
-    return { label: 'Click to drive', Icon: Eye, textClass: 'text-[var(--color-muted)]', dotClass: 'bg-[var(--color-muted)]', pulse: false }
-  })()
+  // ── ADR-040 D6 — header chip config; see driveChipConfig's top-level
+  // definition (module scope, above) for why this is a named function call
+  // and not an inline IIFE — none of the three design-system scanners can
+  // resolve a member read off a `const` bound to an inline IIFE's if-chain.
+  const driveChip = driveChipConfig(visualState, visualDriveMode, statusState, agentDisplayName)
 
   // ADR-040 D2/D6 — "Take over" affordance's aria-label/title (reviewer
   // finding: this exact ternary was duplicated across both attributes — the

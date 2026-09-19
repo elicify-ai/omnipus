@@ -173,7 +173,6 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
   if (frame.state === 'queued') return null
 
   const config = describePillState(frame.state)
-  const { Icon } = config
 
   // UAT E-14: the Judge can retry in the background after the chat turn has
   // already ended, and its retry reason (e.g. "…did not answer in time.
@@ -198,10 +197,10 @@ function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
           config.accentClass,
         )}
       >
-        <Icon
+        <config.Icon
           size={13}
           weight="fill"
-          className={cn('shrink-0', config.pulse && 'animate-pulse')}
+          className={cn('shrink-0', config.pulse === true && 'animate-pulse')}
           aria-hidden="true"
         />
         <span className="font-medium max-w-[220px] truncate">
