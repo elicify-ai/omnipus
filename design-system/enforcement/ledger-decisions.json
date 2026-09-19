@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "description": "Lead ownership decisions for the design-system debt ledger builder (scripts/design-system/ledger-build.mjs, loaded by loadDecisions()). Each decision assigns an owner and a repair checkpoint to fingerprints that would otherwise be unresolved — a path with no lane in design-system/surfaces.json, or no matching entry in RULE_CHECKPOINT. Decisions are tried in array order; the first match wins. A path already resolved by lane ownership or classified as a runtime extension-boundary rule never reaches this list. Schema per decision: name (string, required) human-readable label used in reporting and in the ledger entry's \"owner\" string; type (string, required) one of \"catalogClassification\" | \"exactPaths\"; checkpoint (string, required) one of ledger.schema.json's expiryCheckpoint enum (A, B, C1, C2, C3, C4, C5, C6) — the repair batch this decision's entries are due in; owner (string, required) ownership label — a matched ledger entry's \"owner\" field is \"<checkpoint> <owner>\"; classifications (string array, required when type=catalogClassification) matches a finding when design-system/catalog.json has an entry for the finding's path whose \"classification\" field is one of these values; paths (string array, required when type=exactPaths) matches a finding when its path is exactly one of these repo-relative paths.",
+  "decisions": [
+    {
+      "name": "Shared catalog foundations (foundation/primitive/composite classification)",
+      "type": "catalogClassification",
+      "classifications": ["foundation", "foundations", "primitive", "composite"],
+      "checkpoint": "C1",
+      "owner": "Lead—shared foundations: Catalog foundation/primitive/composite internals"
+    },
+    {
+      "name": "Lane 2: Calendar CSS and eventMapping",
+      "type": "exactPaths",
+      "paths": ["src/styles/fullcalendar-theme.css", "src/lib/calendar/eventMapping.ts"],
+      "checkpoint": "C1",
+      "owner": "Lane 2: Calendar and workspace management/team/settings"
+    },
+    {
+      "name": "Lane 1: React Flow theme CSS",
+      "type": "exactPaths",
+      "paths": ["src/components/workspaces/reactflow-theme.css"],
+      "checkpoint": "C1",
+      "owner": "Lane 1: Workspace board, list, graph and task/plan controls"
+    },
+    {
+      "name": "Shared foundations: Global stylesheets",
+      "type": "exactPaths",
+      "paths": ["src/styles/globals.css", "src/styles/library.css"],
+      "checkpoint": "C1",
+      "owner": "Lead—shared foundations: Global stylesheets"
+    },
+    {
+      "name": "D4 status foundations",
+      "type": "exactPaths",
+      "paths": ["src/lib/statusColors.ts", "src/lib/planStateColors.ts"],
+      "checkpoint": "C1",
+      "owner": "Lead—shared D4 status foundations: Status colour mappings"
+    },
+    {
+      "name": "Lane 6: Provider model groups",
+      "type": "exactPaths",
+      "paths": ["src/lib/providerModelGroups.ts"],
+      "checkpoint": "C1",
+      "owner": "Lane 6: Settings, providers, connectors and policy controls"
+    }
+  ]
+}
