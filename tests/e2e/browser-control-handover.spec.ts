@@ -38,7 +38,7 @@
  * real-model spec in this suite (e.g. goal-work-first.spec.ts).
  */
 
-import { expect, type Page } from '@playwright/test';
+import { expect, type Page, type TestInfo } from '@playwright/test';
 import { test } from './fixtures/console-errors';
 import {
   chatInput,
@@ -51,6 +51,10 @@ import {
   browserLiveFrame,
   browserLiveVideo,
 } from './fixtures/selectors';
+import {
+  installWebrtcDebug,
+  logWebrtcDebug,
+} from './fixtures/webrtc-debug';
 
 const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]');
 
@@ -68,7 +72,7 @@ async function waitForViewportInput(page: Page): Promise<void> {
 }
 
 /** Click empty space inside the rendered video, never its object-contain letterbox. */
-async function takeControlFromRenderedVideo(page: Page): Promise<void> {
+async function takeControlFromRenderedVideo(page: Page, testInfo: TestInfo): Promise<void> {
   const frame = browserLiveFrame(page);
   const video = browserLiveVideo(page);
   const box = await frame.boundingBox();
@@ -78,6 +82,10 @@ async function takeControlFromRenderedVideo(page: Page): Promise<void> {
     return { width: element.videoWidth, height: element.videoHeight };
   });
   if (media.width === 0 || media.height === 0) {
+    // Squad J — dump the four debug values the brief asks for at the first
+    // oracle failure so the cause of "0x0 dimensions" is recoverable from
+    // the report alone, without a rerun.
+    await logWebrtcDebug(page, testInfo, 'browser-control-handover:0x0-dimensions');
     throw new Error('the live video has no decoded frame dimensions');
   }
   const scale = Math.min(box.width / media.width, box.height / media.height);
@@ -106,11 +114,14 @@ async function endTurnDeterministically(page: Page): Promise<void> {
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
+  // Squad J instrumentation — patch RTCPeerConnection so the first oracle
+  // failure in this spec can dump pc/track/stats state. Idempotent.
+  await installWebrtcDebug(page);
 });
 
 test(
   'taking the wheel emits a live waiting notice in the thread, which survives a reload',
-  async ({ page }) => {
+  async ({ page }, testInfo) => {
     // Worst-case budget: connect + new-chat + agent-select + a browser_navigate
     // turn (real LLM) + opening the live panel/waiting for the first frame +
     // taking control + the notice arriving + a reload + replay hydration.
@@ -157,7 +168,7 @@ test(
       // Click empty space away from any link the agent's own navigation
       // might have landed on, but inside the rendered video rather than an
       // object-contain letterbox where production deliberately rejects input.
-      await takeControlFromRenderedVideo(page);
+      await takeControlFromRenderedVideo(page, testInfo);
       await expect(
         statusChip(page),
         'the take-control gesture must be confirmed by the live panel before BROWSER-FR-041/042 can be tested',

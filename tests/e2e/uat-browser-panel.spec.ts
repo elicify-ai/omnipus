@@ -46,6 +46,10 @@ import {
   waitForConnected,
 } from './fixtures/selectors';
 import { restoreAdminSession } from './fixtures/admin-api';
+import {
+  installWebrtcDebug,
+  logWebrtcDebug,
+} from './fixtures/webrtc-debug';
 
 /**
  * Record an observation. Attached to the Playwright report AND printed to
@@ -506,6 +510,12 @@ async function waitForViewportInput(page: Page): Promise<void> {
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('UAT Group C — the live browser panel', () => {
+  // Squad J instrumentation — patch RTCPeerConnection so the first oracle
+  // failure in any UAT case can dump pc/track/stats state. Idempotent.
+  test.beforeEach(async ({ page }) => {
+    await installWebrtcDebug(page);
+  });
+
   test('UAT-C0 — with no browser open yet, the panel says so rather than sitting blank', async ({
     page,
   }, testInfo) => {
@@ -595,6 +605,10 @@ test.describe('UAT Group C — the live browser panel', () => {
     const loaded = await sampleFrame(video);
     await saveFrame(testInfo, 'frame-loaded.png', loaded);
     const lum = meanLuminance(loaded);
+    // Squad J — at the first oracle failure (luminance=0.0 / blank capture),
+    // dump the four debug values the brief asks for so the cause of
+    // "no decoded frames" is recoverable from the report alone.
+    await logWebrtcDebug(page, testInfo, 'uat-browser-panel:UAT-13:black-capture');
     expect(
       lum,
       `the captured frame is essentially black (mean luminance ${lum.toFixed(1)}) — every ` +
@@ -692,6 +706,10 @@ test.describe('UAT Group C — the live browser panel', () => {
     // page. Take it deliberately, on empty space well below the link list, and
     // confirm the panel agrees before measuring anything.
     await clickRemotePoint(page, { x: media.width / 2, y: media.height * 0.92 });
+    // Squad J — at the first oracle failure ("did not put the panel into
+    // You're driving"), dump the four debug values the brief asks for so
+    // the cause is recoverable from the report alone.
+    await logWebrtcDebug(page, testInfo, 'uat-browser-panel:UAT-14:not-driving');
     await expect(
       statusChip(page),
       'clicking into the frame did not put the panel into "You\'re driving" — the case cannot ' +
@@ -865,6 +883,10 @@ test.describe('UAT Group C — the live browser panel', () => {
     const frameBox = await browserLiveFrame(page).boundingBox();
     if (!frameBox) throw new Error('the live frame has no bounding box');
     await page.mouse.click(frameBox.x + frameBox.width / 2, frameBox.y + frameBox.height * 0.92);
+    // Squad J — at the first oracle failure ("clicking the picture must
+    // take the wheel"), dump the four debug values the brief asks for so
+    // the cause is recoverable from the report alone.
+    await logWebrtcDebug(page, testInfo, 'uat-browser-panel:UAT-15-human:not-driving');
     await expect(chip, 'clicking the picture must take the wheel').toHaveText(/You're driving/, {
       timeout: 20_000,
     });
@@ -976,6 +998,10 @@ test.describe('UAT Group C — the live browser panel', () => {
     );
     if (media.width === 0 || media.height === 0 || media.frames === 0) {
       const panelText = (await browserLivePanel(page).innerText().catch(() => '')).trim();
+      // Squad J — at the first oracle failure (no decoded frames), dump
+      // the four debug values the brief asks for so the cause is
+      // recoverable from the report alone.
+      await logWebrtcDebug(page, testInfo, 'uat-browser-panel:UAT-15-agent:blocked');
       throw new Error(
         'BLOCKED: the live panel never decoded a single frame, so nothing this case measures ' +
           'could ever change — this is a live-view/capture failure, not a handover failure. ' +
@@ -1048,6 +1074,11 @@ test.describe('UAT Group C — the live browser panel', () => {
         JSON.stringify(transcript),
     ).toBe(false);
 
+    // Squad J — at the first oracle failure (agent could not browser_type —
+// the deployed-gateway "browser tools blocked by policy" failure mode),
+// dump the four debug values the brief asks for so the cause is
+// recoverable from the report alone.
+    await logWebrtcDebug(page, testInfo, 'uat-browser-panel:UAT-15-agent:policy-block');
     expect(
       agentTyped,
       'after the operator released the wheel the agent was asked to fill a field and the page ' +
