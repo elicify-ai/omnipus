@@ -2273,6 +2273,47 @@ jobs:
             npx playwright install --with-deps chromium
           fi
 
+      - name: Verify Playwright browser binaries exist (preview-isolation shard)
+        # Defensive check on top of the conditional install above: the original
+        # defect (run 35346106208, E2E — preview-isolation) was 60
+        # `browserType.launch: Executable doesn't exist at
+        # /home/runner/.cache/ms-playwright/firefox-1532/...` failures surfacing
+        # at TEST launch time, because the install step at that commit was a
+        # one-liner that installed chromium only. `npx playwright install`
+        # exits 0 when the requested browsers install, so a future regression
+        # that drops firefox/webkit from the preview-isolation branch would
+        # still pass this step's preconditions yet explode 60 lines later in
+        # the run step. This assertion closes that gap at the only point
+        # where the cause is still locally diagnosable.
+        #
+        # Paths are the build numbers Playwright 1.61.1 publishes (frozen by
+        # package-lock.json's exact `"playwright": "1.61.1"` pin). If the
+        # version ever bumps, change here too — a stale expected path is the
+        # exact "test ran but assertion proved nothing" false green this
+        # step is designed against.
+        if: matrix.group == 'preview-isolation'
+        run: |
+          set -euo pipefail
+          missing=()
+          for p in \
+            /home/runner/.cache/ms-playwright/firefox-1532/firefox/firefox \
+            /home/runner/.cache/ms-playwright/webkit-2311/pw_run.sh; do
+            if [ ! -e "$p" ]; then
+              missing+=("$p")
+            fi
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::Playwright browser binary missing after install:" >&2
+            for m in "${missing[@]}"; do
+              echo "  $m" >&2
+            done
+            echo "Expected (per Playwright @1.61.1 pinned in package-lock.json):" >&2
+            echo "  firefox-1532 -> /home/runner/.cache/ms-playwright/firefox-1532/firefox/firefox" >&2
+            echo "  webkit-2311  -> /home/runner/.cache/ms-playwright/webkit-2311/pw_run.sh" >&2
+            exit 1
+          fi
+          echo "preview-isolation Playwright binaries verified: firefox-1532, webkit-2311"
+
       - name: Run Playwright tests
         # OPENROUTER_API_KEY_CI is inherited per-shard from $GITHUB_ENV (Resolve shard LLM key).
         # Mirror it onto OPENROUTER_API_KEY so self-managed gateways
