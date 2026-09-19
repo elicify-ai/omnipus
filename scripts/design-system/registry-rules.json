@@ -1,0 +1,214 @@
+{
+  "version": 1,
+  "source": "docs/internal/design/design-system-migration-plan.md §5 (Exception ledger, founder decision 2026-09-19 adding caller pass-through and live layout measurement to the constitutional registries) plus the Stage B closure triage. Each rule is an EXACT [ruleId, path, syntax] match against an audit report's debt.fingerprints — no globs, no directory-wide exemptions. Reviewed sources: dist/design-system-baseline/cli-lanes/fanout/L9/registry-draft.ledger.json (9 entries), dist/design-system-baseline/cli-lanes/fanout/L3/registry-draft.json (DependencyEdge — ts-colors/unsupported there is REFUSED, never registered; only the spacing/extension-boundary and, after commit d45146f13, ts-colors/extension-boundary sibling findings for the exact syntax DependencyEdgeComponent#style are registrable), dist/design-system-baseline/cli-lanes/fanout/L6/registry-draft.json (caller pass-through, registrable only after the lead applies scripts/design-system/codemod-classname-passthrough.mjs), and the BC-colour/BC-typography syntax strings from commit d45146f13 (ts-colors.mjs colour-lock) and commit d83e44d09 (typography Calendar#Chevron boundary).",
+  "rules": [
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "AgentProfile#dom-style.backgroundColor<-selectedColor",
+      "category": "user-authored colours",
+      "owner": "user-authored colours exception registry",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1; founder decision 2026-09-19; commit d45146f13 (ts-colors.mjs colour lock) classification P2. AgentProfile.tsx::AgentProfile holds `selectedColor` in useState (the agent's own colour-picker field, src/components/agents/AgentProfile.tsx line 331) and writes it unchanged to the avatar preview's inline `style.backgroundColor` (line 1468). The colour is governed where the user picks it in this same colour picker, not at this paint sink; a proven direct runtime paint read at a known DOM style site per contract.runtimeBoundaryClassification, not an assertion of contrast compliance."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/agents/AgentProfile.tsx",
+      "syntax": "AgentProfile#svg-attribute.color<-selectedColor",
+      "category": "user-authored colours",
+      "owner": "user-authored colours exception registry",
+      "reason": "Category: user-authored colours — migration plan §5 permanent governed registry 1; founder decision 2026-09-19; commit d45146f13 (ts-colors.mjs colour lock) classification P2. Same `selectedColor` state as AgentProfile#dom-style.backgroundColor<-selectedColor above, this time forwarded unchanged to an SVG `color` attribute in the same avatar preview markup. Governed at the colour picker, not this paint sink."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "AssistantMessageAvatar#dom-style.backgroundColor<-agent?.color",
+      "category": "user-authored colours",
+      "owner": "user-authored colours exception registry",
+      "reason": "Category: user-authored colours (per-entity agent/task/plan colour field) — migration plan §5, permanent governed registry 1; founder decision 2026-09-19; triage P2. Receiving symbol AssistantMessageAvatar, receiver kind dom-style, paint property backgroundColor, sourced from the agent's own user-chosen `color` field (never a design-system token). The colour is governed where the user picks it (agent settings), not at this paint sink; this is a proven direct runtime paint read at a known DOM style site per contract.runtimeBoundaryClassification, not an assertion of contrast compliance."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatScreen.tsx",
+      "syntax": "VirtualAssistantMessageRow#dom-style.backgroundColor<-agent?.color",
+      "category": "user-authored colours",
+      "owner": "user-authored colours exception registry",
+      "reason": "Category: user-authored colours (per-entity agent/task/plan colour field) — migration plan §5, permanent governed registry 1; founder decision 2026-09-19; triage P2. Receiving symbol VirtualAssistantMessageRow, receiver kind dom-style, paint property backgroundColor, sourced from the agent's own user-chosen `color` field. Same boundary as the AssistantMessageAvatar entry above, in the virtualized list row renderer."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/composer/AgentPicker.tsx",
+      "syntax": "AgentPicker#dom-style.backgroundColor<-lockedWorkerAgent.color",
+      "category": "user-authored colours",
+      "owner": "user-authored colours exception registry",
+      "reason": "Category: user-authored colours (per-entity agent/task/plan colour field) — migration plan §5, permanent governed registry 1; founder decision 2026-09-19; triage P2. Receiving symbol AgentPicker, receiver kind dom-style, paint property backgroundColor, sourced from the locked worker agent's user-chosen `color` field."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/composer/AgentPicker.tsx",
+      "syntax": "AgentPicker#dom-style.backgroundColor<-activeAgent?.color",
+      "category": "user-authored colours",
+      "owner": "user-authored colours exception registry",
+      "reason": "Category: user-authored colours (per-entity agent/task/plan colour field) — migration plan §5, permanent governed registry 1; founder decision 2026-09-19; triage P2. Receiving symbol AgentPicker, receiver kind dom-style, paint property backgroundColor, sourced from the active agent's user-chosen `color` field."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/MessageItem.tsx",
+      "syntax": "avatarStyle#dom-style.backgroundColor<-agentColor",
+      "category": "user-authored colours",
+      "owner": "user-authored colours exception registry",
+      "reason": "Category: user-authored colours (per-entity agent/task/plan colour field) — migration plan §5, permanent governed registry 1; founder decision 2026-09-19; triage P2. Receiving symbol avatarStyle (the local helper that builds the avatar's inline style object), receiver kind dom-style, paint property backgroundColor, sourced from the message's `agentColor` parameter, itself the agent's user-chosen `color` field. This entry covers only avatarStyle's own parameter-to-paint mapping."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/workspaces/RollupBadge.tsx",
+      "syntax": "RollupAvatar#dom-style.color<-agent?.color",
+      "category": "user-authored colours",
+      "owner": "user-authored colours exception registry",
+      "reason": "Category: user-authored colours (per-entity agent/task/plan colour field) — migration plan §5, permanent governed registry 1; founder decision 2026-09-19; triage P2. Receiving symbol RollupAvatar, receiver kind dom-style, paint property color, sourced from the agent's user-chosen `color` field."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/layout/AppShell.tsx",
+      "syntax": "applyMetrics#dom-style.--app-top<-appTop",
+      "category": "live layout measurement",
+      "owner": "live layout measurement exception registry",
+      "reason": "Category: live layout measurement — migration plan §5 founder decision 2026-09-19 (\"A value measured from the browser at run time... is written to a CSS custom property. It is a measurement, not a chosen colour or size.\"); commit d45146f13 classification. AppShell.tsx::applyMetrics reads visualViewport/window.innerHeight via computeAppMetrics and writes the resulting `appTop` string with document.documentElement.style.setProperty('--app-top', appTop) (src/components/layout/AppShell.tsx lines 111-114) — the on-screen-keyboard/safe-area top offset fix. This is a live browser measurement, not a colour or design-scale value; --app-top is not a colour-named custom property so it gets no measurement exception waiver — it is registered here exactly."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/layout/AppShell.tsx",
+      "syntax": "applyMetrics#dom-style.--app-vh<-appVh",
+      "category": "live layout measurement",
+      "owner": "live layout measurement exception registry",
+      "reason": "Category: live layout measurement — migration plan §5 founder decision 2026-09-19; commit d45146f13 classification. Same applyMetrics site as --app-top above, this time writing the measured `appVh` (visual-viewport height unit) with document.documentElement.style.setProperty('--app-vh', appVh) (src/components/layout/AppShell.tsx line 115). A live browser measurement written to a CSS custom property, not a chosen colour or size."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/settings/ProfileSection.tsx",
+      "syntax": "ProfileSection#useEffect#dom-style.--user-font-size<-fontSize",
+      "category": "user-adjustable root font",
+      "owner": "user-adjustable root font exception registry",
+      "reason": "Category: the user-adjustable root font — migration plan §5 Stage B closure; founder-approved permanent category alongside user-authored colours and live layout measurement; commit d45146f13 classification. ProfileSection.tsx's settings-screen useEffect writes the user's chosen font-size preference with document.documentElement.style.setProperty('--user-font-size', `${fontSize}px`) (src/components/settings/ProfileSection.tsx lines 181-182), driven by the `fontSize` useState the user adjusts with the settings slider (line 66, bound to the same slider at line 275). The value is governed where the user sets it (the accessibility font-size control), not at this root-level write site."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/chat/markdown-shared.tsx",
+      "syntax": "th#style",
+      "category": "third-party widget values",
+      "owner": "third-party integration boundary exception registry",
+      "reason": "Category: third-party widget values (remark-gfm table-cell alignment) — migration plan §5 note on third-party widget values, applied via the existing reviewed-boundary mechanism after L3's exact-source repair pass; triage P4 leftover. Receiving symbol th, the table-header cell renderer registered with react-markdown/remark-gfm; the `style` parameter is remark-gfm's own encoding of column alignment (`:---:` -> `style={{ textAlign }}`) forwarded unchanged — dropping it left-aligns every column."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/chat/markdown-shared.tsx",
+      "syntax": "td#style",
+      "category": "third-party widget values",
+      "owner": "third-party integration boundary exception registry",
+      "reason": "Category: third-party widget values (remark-gfm table-cell alignment) — migration plan §5 note on third-party widget values, applied via the existing reviewed-boundary mechanism after L3's exact-source repair pass; triage P4 leftover. Receiving symbol td, the table-data cell renderer registered with react-markdown/remark-gfm; same remark-gfm textAlign forwarding as the th entry above."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/markdown-shared.tsx",
+      "syntax": "th#style",
+      "category": "third-party widget values",
+      "owner": "third-party integration boundary exception registry",
+      "reason": "Category: third-party widget values (remark-gfm table-cell alignment) — migration plan §5 note on third-party widget values; commit d45146f13 (ts-colors.mjs colour lock) moved this exact forwarded-style boundary from ts-colors/unsupported to ts-colors/extension-boundary alongside its pre-existing spacing/extension-boundary sibling finding for the same th#style syntax. Same remark-gfm textAlign-only forwarding as the spacing rule above; only spacing.mjs and, after d45146f13, ts-colors.mjs classify this shape as an extension boundary."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/markdown-shared.tsx",
+      "syntax": "td#style",
+      "category": "third-party widget values",
+      "owner": "third-party integration boundary exception registry",
+      "reason": "Category: third-party widget values (remark-gfm table-cell alignment) — migration plan §5 note on third-party widget values; commit d45146f13 (ts-colors.mjs colour lock) moved this exact forwarded-style boundary from ts-colors/unsupported to ts-colors/extension-boundary alongside its pre-existing spacing/extension-boundary sibling finding for the same td#style syntax. Same remark-gfm textAlign-only forwarding as the spacing rule above."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/workspaces/graph/DependencyEdge.tsx",
+      "syntax": "DependencyEdgeComponent#style",
+      "category": "third-party widget values",
+      "owner": "third-party integration boundary exception registry",
+      "reason": "Category: third-party widget values (ReactFlow EdgeProps) — migration plan §5 note on third-party widget values, applied via the existing reviewed-boundary mechanism after L3's exact-source repair pass; triage P4 leftover. Receiving symbol DependencyEdgeComponent, the ReactFlow custom-edge component; the `style` parameter is ReactFlow's own EdgeProps.style, built by buildTaskGraph from the caller-owned task/agent state and forwarded unchanged onto BaseEdge. L3's assessment (dist/design-system-baseline/cli-lanes/fanout/L3/registry-draft.json) refused registration under the bare `ts-colors/unsupported \"style\"` syntax as unprovable — that refusal stands and is never registered by this rule set; this rule registers only the distinct, exact `spacing/extension-boundary` finding for the stable receiving-symbol syntax `DependencyEdgeComponent#style`, which spacing.mjs already classifies as a boundary."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/workspaces/graph/DependencyEdge.tsx",
+      "syntax": "DependencyEdgeComponent#style",
+      "category": "third-party widget values",
+      "owner": "third-party integration boundary exception registry",
+      "reason": "Category: third-party widget values (ReactFlow EdgeProps) — migration plan §5 note on third-party widget values; commit d45146f13 (ts-colors.mjs colour lock) moved this exact receiving-symbol boundary (DependencyEdgeComponent#style) from ts-colors/unsupported to ts-colors/extension-boundary, alongside its pre-existing spacing/extension-boundary sibling finding for the same syntax. This supersedes L3's earlier per-file assessment, which analysed the bare `style` parameter under the pre-d45146f13 scanner and is refused rather than registered (see the sibling spacing rule's reason); this rule registers only the new, exact, stable-symbol `DependencyEdgeComponent#style` finding that d45146f13 introduced."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/ui/calendar.tsx",
+      "syntax": "Calendar#Chevron.className",
+      "category": "third-party widget values",
+      "owner": "third-party integration boundary exception registry",
+      "reason": "Category: third-party widget values (react-day-picker Chevron component override) — migration plan §5 note on third-party widget values; commit d83e44d09 (typography checks downstream importers; calendar chevron is a boundary) classification. calendar.tsx::Calendar registers a `Chevron` override with react-day-picker whose `className` parameter is the library's own orientation-driven class, forwarded unchanged (destructured as `chevronClassName`, src/components/ui/calendar.tsx line 67) into the rendered icon; only typography.mjs currently classifies this exact receiving-symbol shape as an extension boundary."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/ChatImage.tsx",
+      "syntax": "ChatImage#className",
+      "category": "caller pass-through",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5 founder decision 2026-09-19 (\"A primitive or composite forwards a className or style that its caller supplied, unmodified. The value is governed where the caller writes it; the forwarding site itself is the registered boundary.\"). Source: dist/design-system-baseline/cli-lanes/fanout/L6/registry-draft.json. Registrable once scripts/design-system/codemod-classname-passthrough.mjs's template-join transform is applied to ChatImage.tsx (verified dist/design-system-baseline/cli-lanes/fanout/L6/validate-e2e.log): before, ts-colors/unsupported \"className\"; after, ts-colors/extension-boundary \"ChatImage#className\", zero new findings. Do not treat a MATCH on the pre-codemod audit as proof the rewrite already landed everywhere in this file — ChatImage.tsx also forwards className through a separate cn(...) call site that remains ts-colors/unsupported until repaired."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/chat/MediaActionToolbar.tsx",
+      "syntax": "MediaActionToolbar#className",
+      "category": "caller pass-through",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5 founder decision 2026-09-19. Source: dist/design-system-baseline/cli-lanes/fanout/L6/registry-draft.json. Registrable once scripts/design-system/codemod-classname-passthrough.mjs's template-join transform is applied to MediaActionToolbar.tsx (verified dist/design-system-baseline/cli-lanes/fanout/L6/validate-e2e.log): before, ts-colors/unsupported \"className\"; after, ts-colors/extension-boundary \"MediaActionToolbar#className\". The shipped codemod wraps `containerClasses` in its own template shell to reproduce pre-rewrite scanning depth with zero new findings."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/AutoSaveIndicator.tsx",
+      "syntax": "AutoSaveIndicator#className",
+      "category": "caller pass-through",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5 founder decision 2026-09-19. Source: dist/design-system-baseline/cli-lanes/fanout/L6/registry-draft.json. Registrable once scripts/design-system/codemod-classname-passthrough.mjs's template-join transform is applied to AutoSaveIndicator.tsx (verified dist/design-system-baseline/cli-lanes/fanout/L6/validate-e2e.log): before, ts-colors/unsupported \"className\"; after, ts-colors/extension-boundary \"AutoSaveIndicator#className\", zero new findings. Emits clsx(...), not cn(...) — see L6's equality-proof.log for why that is unconditionally invisible for any caller value."
+    },
+    {
+      "ruleId": "ts-colors/extension-boundary",
+      "path": "src/components/ui/icon-button.tsx",
+      "syntax": "IconButton#className",
+      "category": "caller pass-through",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5 founder decision 2026-09-19. Source: dist/design-system-baseline/cli-lanes/fanout/L6/registry-draft.json. Registrable once scripts/design-system/codemod-classname-passthrough.mjs applies BOTH its param-destructure-hoist transform (moving `const { className } = props` into the parameter list) THEN its template-join transform to icon-button.tsx (verified dist/design-system-baseline/cli-lanes/fanout/L6/debug-icon-button3.mjs and validate-e2e.log): before, ts-colors/unsupported on the whole `.trim()`-wrapped template expression; after, ts-colors/extension-boundary \"IconButton#className\", zero new findings."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/icon-button.tsx",
+      "syntax": "IconButton#className",
+      "category": "caller pass-through",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5 founder decision 2026-09-19. Source: dist/design-system-baseline/cli-lanes/fanout/L6/registry-draft.json. Same param-destructure-hoist-then-template-join prerequisite as the ts-colors rule for icon-button.tsx above: before, spacing/unsupported on the whole `.trim()`-wrapped template expression; after, spacing/extension-boundary \"IconButton#className\", zero new findings."
+    },
+    {
+      "ruleId": "spacing/extension-boundary",
+      "path": "src/components/ui/button.tsx",
+      "syntax": "Button#className",
+      "category": "caller pass-through",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5 founder decision 2026-09-19. Source: dist/design-system-baseline/cli-lanes/fanout/L6/registry-draft.json. Registrable once scripts/design-system/codemod-classname-passthrough.mjs's cva-arg-split transform is applied to button.tsx (verified dist/design-system-baseline/cli-lanes/fanout/L6/validate-e2e.log): before, spacing/unsupported \"className: buttonVariants({ variant, size, className })\"; after, spacing/extension-boundary \"Button#className\" (ts-colors and typography also gain extension-boundary for this site as a bonus). CAVEAT carried from L6: splitting className out leaves the residual `buttonVariants({ variant, size })` call independently spacing/unsupported under a new syntax text — a pre-existing triage P7 gap, not covered by this rule, and not registrable here."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/workspaces/ChipListInput.tsx",
+      "syntax": "ChipListInput#chipClassName",
+      "category": "caller pass-through",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5 founder decision 2026-09-19. Source: dist/design-system-baseline/cli-lanes/fanout/L6/registry-draft.json. Registrable once scripts/design-system/codemod-classname-passthrough.mjs's hoist-out-of-map transform is applied to ChipListInput.tsx (verified dist/design-system-baseline/cli-lanes/fanout/L6/repro1.mjs and validate-e2e.log): before, typography/unsupported-text-utility \"chipClassName\"; after, typography/extension-boundary \"ChipListInput#chipClassName\", zero new findings. `chipClassName` is a genuine, unmodified caller-supplied parameter referenced from inside a `.map()` callback; hoisting the computed class list out of the map makes it resolve from ChipListInput's own body."
+    },
+    {
+      "ruleId": "typography/extension-boundary",
+      "path": "src/components/workspaces/ChipListInput.tsx",
+      "syntax": "ChipListInput#chipRemoveClassName",
+      "category": "caller pass-through",
+      "owner": "caller pass-through exception registry",
+      "reason": "Category: caller pass-through — migration plan §5 founder decision 2026-09-19. Source: dist/design-system-baseline/cli-lanes/fanout/L6/registry-draft.json. Registrable once scripts/design-system/codemod-classname-passthrough.mjs's hoist-out-of-map transform is applied to ChipListInput.tsx (verified dist/design-system-baseline/cli-lanes/fanout/L6/validate-e2e.log): before, typography/unsupported-text-utility \"chipRemoveClassName\"; after, typography/extension-boundary \"ChipListInput#chipRemoveClassName\", zero new findings. Same root cause and fix as the chipClassName entry above."
+    }
+  ]
+}
