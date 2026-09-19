@@ -1,0 +1,398 @@
+// GoalPillTray — ADR-053 FE-1 / US-14 / design §1.
+//
+// Relocates the goal indicator from the full-width above-composer box to a
+// BOTTOM-RIGHT pill tray (mirroring the subagent pill placement grammar),
+// renders ONE pill per goal-id (a session carrying 2 goals shows 2 pills +
+// 2 timers), and click-expands a pill to reveal the full condition + round
+// accounting + the latest per-criterion verdict.
+//
+// Driven entirely by the chat store's per-goal-id `goalPills` map (populated
+// by `case 'goal_status'` in chat.ts — one entry per GoalStatusFrame.goal_id,
+// falling back to '_default'). The latest goal-scoped JudgeVerdict (for the
+// expanded per-criterion view) is read from the global judgeActivity store.
+//
+// 8 of the 9 wire-enum pill states render with distinct colour/icon grammar
+// per the design: active (gold target) / waiting_on_user (amber) /
+// judge_unavailable (amber) / re-planning (amber) / judging (muted pulse) /
+// done (green) / failed (red) / cleared (muted — a deliberate user stop is
+// neither success nor failure, UAT S3 fix). The 9th, `queued`, is retired
+// (ADR-088 D5/D9): the backend never emits it anymore (the pending-confirm
+// state it represented is deleted in full), so it renders no pill at all —
+// see the defensive skip in `GoalPill` and the pre-filter in `GoalPillTray`
+// below. The wire-enum value itself survives untouched in the generated
+// type (Constraint #8; do not edit generated files), which is why
+// `describePillState` still narrows it out explicitly rather than the type
+// simply not existing. The pill-state→render mapping for the 8 live states
+// lives in `describePillState` below — an exhaustive switch with a `never`
+// default so a future 10th enum value fails typecheck.
+//
+// TERMINAL-PILL LIFETIME (regression fix, bc66345f follow-up): a terminal
+// pill (done/failed/cleared) stays visible for `TERMINAL_PILL_DISPLAY_MS` —
+// long enough to be the confirmation the user needs that a goal actually
+// finished — then this component stops rendering it (`useVisibleGoalPills`
+// below). It is NOT deleted from the store the instant it terminates (that
+// would deny the user the "goal met"/"cleared" confirmation), and the
+// underlying `goalPills` map is separately capped in chat.ts
+// (`evictGoalPillsOverCap`) so it can never grow unbounded even though this
+// component may still be showing (or have already hidden) any given entry.
+// This keeps the render-timing decision entirely in this component, per
+// chat.ts's stated design ("components decide whether/how to render each
+// state — no special-casing here") — the store still just stores frames
+// verbatim, forever, up to its own cap; only THIS file decides how long a
+// terminal one stays on screen.
+//
+// `aria-live="polite"` on the tray root announces state transitions to screen
+// readers without stealing focus.
+
+import { useEffect, useRef, useState } from 'react'
+import { Target, CaretDown, CaretUp, CheckCircle, XCircle, Spinner, ChatCircleDots, FlagBannerFold, Pencil, MinusCircle, ShieldWarning, ArrowsCounterClockwise, Prohibit, ArrowUUpLeft, ClockCountdown } from '@phosphor-icons/react'
+import type { GoalStatusFrame, JudgeVerdictFrame } from '@/lib/api/generated/asyncapi-types'
+import { useChatStore, GOAL_TERMINAL_STATES } from '@/store/chat'
+import { useJudgeActivityStore } from '@/store/judgeActivity'
+import { cn } from '@/lib/utils'
+
+// ── Display cap for the goal condition (grapheme-safe, mirrors GoalIndicator) ─
+const CONDITION_DISPLAY_CAP = 80
+
+function truncateCondition(raw: string): string {
+  const clusters = Array.from(raw)
+  if (clusters.length <= CONDITION_DISPLAY_CAP) return raw
+  return clusters.slice(0, CONDITION_DISPLAY_CAP).join('') + '…'
+}
+
+// ── Pill-state → render config (exhaustive, 13 values) ────────────────────────
+//
+// Each state maps to a testId, icon, accent class, and human label. The
+// exhaustive switch with a `never` default ensures a future 14th enum value
+// fails typecheck here instead of silently rendering nothing.
+//
+// Five states ADDED by the joint ADR-084/ADR-085/ADR-086 delivery (C-39,
+// plan §3 wave U2): `judge_refused_god_mode` (JUDGE-FR-057a),
+// `judge_cas_loss` (JUDGE-FR-083 — the machine-readable reason string
+// stays `cas_loss`; this file only names the wire enum value
+// `judge_cas_loss`), `blocked` (JUDGE-FR-093), `claim_overturned`
+// (JUDGE-FR-102), `expired` (ADR-086 GOAL-FR-028). Per plan OQ-17,
+// `blocked` and `claim_overturned` are deliberately NOT terminal (see
+// `GOAL_TERMINAL_STATES` in chat.ts) — a pill in either state can still
+// receive another frame, so it must never be hidden by the terminal-pill
+// display timer. `expired` IS terminal (chat.ts's `GOAL_TERMINAL_STATES`
+// gains it, joining done/failed/cleared as the fourth terminal member).
+
+interface PillStateConfig {
+  testId: string
+  label: string
+  /** Tailwind text-colour class for the icon + label. */
+  accentClass: string
+  /** True for the pulse animation (judging). */
+  pulse?: boolean
+  /** Phosphor icon component. */
+  Icon: typeof Target
+}
+
+function describePillState(state: Exclude<GoalStatusFrame['state'], 'queued'>): PillStateConfig {
+  switch (state) {
+    case 'active':
+      return { testId: 'goal-pill-active', label: 'active', accentClass: 'text-[var(--color-accent)]', Icon: Target }
+    case 'waiting_on_user':
+      return { testId: 'goal-pill-waiting', label: 'waiting on you', accentClass: 'text-[color:var(--color-warning)]', Icon: ChatCircleDots }
+    case 'judge_unavailable':
+      return { testId: 'goal-pill-judge-unavailable', label: 'judge unavailable', accentClass: 'text-[color:var(--color-warning)]', Icon: FlagBannerFold }
+    case 're-planning':
+      return { testId: 'goal-pill-replanning', label: 're-planning', accentClass: 'text-[color:var(--color-warning)]', Icon: Pencil }
+    case 'judging':
+      return { testId: 'goal-pill-judging', label: 'judging', accentClass: 'text-[var(--color-muted)]', Icon: Spinner, pulse: true }
+    case 'done':
+      return { testId: 'goal-pill-done', label: 'done', accentClass: 'text-[color:var(--color-success)]', Icon: CheckCircle }
+    case 'failed':
+      return { testId: 'goal-pill-failed', label: 'failed', accentClass: 'text-[color:var(--color-error)]', Icon: XCircle }
+    case 'cleared':
+      // UAT S3 fix: a user-initiated `/goal clear` is a deliberate, successful
+      // stop — NOT a failure. Neutral/muted, distinct from both `done`
+      // (green success) and `failed` (red error).
+      return { testId: 'goal-pill-cleared', label: 'cleared', accentClass: 'text-[var(--color-muted)]', Icon: MinusCircle }
+    case 'judge_refused_god_mode':
+      // JUDGE-FR-057a: distinct, operator-ACTIONABLE state — the operator
+      // cannot fix this by waiting (unlike judge_unavailable), only by
+      // turning god mode off. Warning tone, a shield icon rather than the
+      // flag `judge_unavailable` uses, so the two are never confusable at
+      // a glance.
+      return { testId: 'goal-pill-judge-refused-god-mode', label: 'god mode blocks judging', accentClass: 'text-[color:var(--color-warning)]', Icon: ShieldWarning }
+    case 'judge_cas_loss':
+      // JUDGE-FR-083: a verifier_registry compare-and-swap loss — another
+      // adjudication for this unit is already in flight. A real, brief
+      // concurrency event, distinguishable from judge_unavailable (which
+      // reads as a provider outage the operator cannot fix by waiting);
+      // this one resolves itself. Pulsing, like `judging`, since it is
+      // also ephemeral.
+      return { testId: 'goal-pill-judge-cas-loss', label: 'verifying elsewhere', accentClass: 'text-[color:var(--color-warning)]', Icon: ArrowsCounterClockwise, pulse: true }
+    case 'blocked':
+      // JUDGE-FR-093: the agent called goal_claim with status: blocked —
+      // parked WITHOUT an adjudication and WITHOUT consuming a round.
+      // Distinct from waiting_on_user: "I cannot proceed and it is not a
+      // question you can answer" vs. "I need an answer". NOT terminal
+      // (OQ-17) — see GOAL_TERMINAL_STATES in chat.ts.
+      return { testId: 'goal-pill-blocked', label: 'blocked', accentClass: 'text-[color:var(--color-warning)]', Icon: Prohibit }
+    case 'claim_overturned':
+      // JUDGE-FR-102: a background adjudication disagreed with an earlier
+      // claim the operator already saw answered — "a state, not an
+      // alert" (ADR §8 open item 2). NOT terminal (OQ-17): the goal keeps
+      // iterating and the steer arrives as an ordinary async turn.
+      return { testId: 'goal-pill-claim-overturned', label: 'claim overturned', accentClass: 'text-[color:var(--color-error)]', Icon: ArrowUUpLeft }
+    case 'expired':
+      // ADR-086 GOAL-FR-028: the 7-day idle-expiry sweep (D-A) ended this
+      // goal with no claim ever made. Terminal — the fourth distinguishable
+      // terminal ending alongside done/failed/cleared. Muted-warning tone:
+      // neither a success (green) nor an active failure the operator did
+      // something wrong to cause (red) — the goal was simply abandoned.
+      return { testId: 'goal-pill-expired', label: 'expired', accentClass: 'text-[color:var(--color-warning)]', Icon: ClockCountdown }
+    default: {
+      const exhaustiveCheck: never = state
+      throw new Error(`GoalPillTray: unhandled goal pill state ${String(exhaustiveCheck)}`)
+    }
+  }
+}
+
+// ── GoalPill — one pill for one goal-id ───────────────────────────────────────
+
+interface GoalPillProps {
+  goalId: string
+  frame: GoalStatusFrame
+  /** Latest goal-scoped verdict for the expanded per-criterion view, or null. */
+  latestVerdict: JudgeVerdictFrame | null
+}
+
+function GoalPill({ goalId, frame, latestVerdict }: GoalPillProps) {
+  const [expanded, setExpanded] = useState(false)
+
+  // ADR-088 D5/D9: `queued` is retired — the backend never emits it
+  // anymore. `GoalPillTray` already filters queued frames out before
+  // mapping to this component; this is a defensive second layer (never
+  // reached in practice) that also narrows `frame.state` for
+  // `describePillState`'s exhaustive switch below, which no longer has a
+  // `queued` case.
+  if (frame.state === 'queued') return null
+
+  const config = describePillState(frame.state)
+  const { Icon } = config
+
+  // UAT E-14: the Judge can retry in the background after the chat turn has
+  // already ended, and its retry reason (e.g. "…did not answer in time.
+  // Trying again in 60 s (try 2).") is otherwise only visible by expanding
+  // the pill. Surface it as a muted, truncated subtitle under the collapsed
+  // pill for the two states where the Judge is actively working —
+  // `judging` and `judge_unavailable` — so it's visible without a click.
+  const showSubtitle = !expanded && (frame.state === 'judging' || frame.state === 'judge_unavailable') && !!frame.latest_reason
+
+  return (
+    <div className="flex flex-col items-end" data-testid="goal-pill-wrapper">
+      <button
+        type="button"
+        tabIndex={0}
+        data-testid={config.testId}
+        data-goal-id={goalId}
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        aria-label={`Goal: ${truncateCondition(frame.condition)}, state ${config.label}. Click to ${expanded ? 'collapse' : 'expand'}.`}
+        className={cn(
+          'flex items-center gap-1.5 rounded-full border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-1.5 text-xs shadow-md transition-colors hover:bg-[var(--color-surface-2)] cursor-pointer',
+          config.accentClass,
+        )}
+      >
+        <Icon
+          size={13}
+          weight="fill"
+          className={cn('shrink-0', config.pulse && 'animate-pulse')}
+          aria-hidden="true"
+        />
+        <span className="font-medium max-w-[220px] truncate">
+          {truncateCondition(frame.condition)}
+        </span>
+        <span className="shrink-0 tabular-nums opacity-80">
+          {frame.round}/{frame.max_rounds}
+        </span>
+        {expanded ? <CaretUp size={11} aria-hidden="true" /> : <CaretDown size={11} aria-hidden="true" />}
+      </button>
+
+      {showSubtitle && (
+        <p
+          data-testid="goal-pill-subtitle"
+          title={frame.latest_reason}
+          className="mt-0.5 max-w-[260px] truncate text-[10px] text-[var(--color-muted)]"
+        >
+          {frame.latest_reason}
+        </p>
+      )}
+
+      {expanded && (
+        <div
+          data-testid="goal-pill-expanded"
+          className="mt-1 w-[320px] max-w-[calc(100vw-2rem)] rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] px-3 py-2.5 text-xs shadow-lg"
+        >
+          {/* Condition (full, not truncated) */}
+          <div className="flex items-start gap-2">
+            <Target size={12} weight="fill" className="mt-0.5 shrink-0 text-[var(--color-accent)]" aria-hidden="true" />
+            <div className="flex-1 min-w-0">
+              <p className="text-[var(--color-secondary)] break-words" data-testid="goal-pill-condition">
+                {frame.condition}
+              </p>
+              <p className="text-[var(--color-muted)] mt-1 tabular-nums" data-testid="goal-pill-round">
+                round {frame.round}/{frame.max_rounds} · active loops {frame.active_loops}/{frame.cap}
+              </p>
+            </div>
+          </div>
+
+          {/* Latest judge reason */}
+          {frame.latest_reason && (
+            <p className="text-[var(--color-muted)] mt-1.5 italic break-words" title={frame.latest_reason}>
+              {frame.latest_reason}
+            </p>
+          )}
+
+          {/* Latest per-criterion verdict (from judgeActivity, goal-scoped) */}
+          {latestVerdict && (
+            <div className="mt-2 border-t border-[var(--color-border)] pt-2">
+              <p className="text-[var(--color-muted)] uppercase tracking-wide text-[10px] font-sans mb-1">
+                Latest verdict — {latestVerdict.met ? 'met' : 'not met'} (round {latestVerdict.round})
+              </p>
+              <ul className="space-y-0.5" data-testid="goal-pill-verdict-criteria">
+                {latestVerdict.per_criterion.map((c) => (
+                  <li key={c.criterion_id} className="flex items-start gap-1.5 text-[11px]">
+                    {c.met ? (
+                      <CheckCircle size={11} className="mt-0.5 shrink-0 text-[color:var(--color-success)]" aria-hidden="true" />
+                    ) : (
+                      <XCircle size={11} className="mt-0.5 shrink-0 text-[color:var(--color-error)]" aria-hidden="true" />
+                    )}
+                    <span className="text-[var(--color-secondary)] break-words">{c.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Terminal-pill display window ──────────────────────────────────────────
+//
+// A terminal goal (done/failed/cleared) is the user's confirmation that
+// something just happened, so it must render for a beat — but the
+// regression this fixes was exactly that a terminal pill never went away
+// (chat.ts's `goalPills` map only grows; nothing ever deleted an entry).
+// This hook is the render-layer answer: after `TERMINAL_PILL_DISPLAY_MS`,
+// it drops a terminal goal_id out of what gets rendered — it does NOT
+// touch the store, so `goalPills` itself is unaffected (that map's own
+// bound is chat.ts's `evictGoalPillsOverCap`, a separate, size-based
+// concern — see that function's comment for why the two are independent).
+//
+// Mirrors the existing `useCancelState` house pattern (a
+// `MIN_STOPPING_DISPLAY_MS`-style minimum/brief display before a state
+// transition takes visible effect) rather than inventing a new idiom.
+const TERMINAL_PILL_DISPLAY_MS = 4_000
+
+function useVisibleGoalPills(goalPills: Record<string, GoalStatusFrame>): Record<string, GoalStatusFrame> {
+  const [hiddenIds, setHiddenIds] = useState<ReadonlySet<string>>(() => new Set())
+  const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+
+  useEffect(() => {
+    const timers = timersRef.current
+
+    // Arm a hide timer for every terminal goal_id that doesn't have one yet
+    // (a brand-new terminal frame, or one that arrived before this effect
+    // last ran). Once a goal_id is terminal it can never become non-terminal
+    // again (goal_id is unique per generation, ADR-053) — no branch here
+    // needs to reverse a hide once armed.
+    for (const [goalId, frame] of Object.entries(goalPills)) {
+      if (GOAL_TERMINAL_STATES.has(frame.state) && !timers.has(goalId) && !hiddenIds.has(goalId)) {
+        const timer = setTimeout(() => {
+          timers.delete(goalId)
+          setHiddenIds((prev) => {
+            const next = new Set(prev)
+            next.add(goalId)
+            return next
+          })
+        }, TERMINAL_PILL_DISPLAY_MS)
+        timers.set(goalId, timer)
+      }
+    }
+
+    // Reconcile against the CURRENT goalPills map: a goal_id can disappear
+    // from the store (evicted by `evictGoalPillsOverCap`'s own cap) without
+    // this component's timer ever having fired — drop its timer/hidden
+    // bookkeeping too, so this hook's local state never outlives the data
+    // it describes (otherwise hiddenIds would itself grow unbounded across
+    // a long session, reintroducing the exact class of leak this fix
+    // closes, just one layer up).
+    for (const [goalId, timer] of timers) {
+      if (!(goalId in goalPills)) {
+        clearTimeout(timer)
+        timers.delete(goalId)
+      }
+    }
+    setHiddenIds((prev) => {
+      let changed = false
+      const next = new Set(prev)
+      for (const goalId of prev) {
+        if (!(goalId in goalPills)) {
+          next.delete(goalId)
+          changed = true
+        }
+      }
+      return changed ? next : prev
+    })
+  }, [goalPills, hiddenIds])
+
+  // Unmount: clear every outstanding timer so none fire (and call
+  // setState) after this component is gone.
+  useEffect(() => {
+    const timers = timersRef.current
+    return () => {
+      for (const timer of timers.values()) clearTimeout(timer)
+      timers.clear()
+    }
+  }, [])
+
+  if (hiddenIds.size === 0) return goalPills
+  const visible: Record<string, GoalStatusFrame> = {}
+  for (const [goalId, frame] of Object.entries(goalPills)) {
+    if (!hiddenIds.has(goalId)) visible[goalId] = frame
+  }
+  return visible
+}
+
+// ── GoalPillTray — bottom-right floating tray ─────────────────────────────────
+
+export function GoalPillTray() {
+  const goalPills = useChatStore((s) => s.goalPills ?? {})
+  const verdicts = useJudgeActivityStore((s) => s.verdicts)
+  const visiblePills = useVisibleGoalPills(goalPills)
+
+  // ADR-088 D5/D9: `queued` is retired and never emitted — filtered here
+  // (not just inside `GoalPill`) so a session holding only a stale/legacy
+  // queued pill renders NO tray at all, rather than an empty container.
+  const entries = Object.entries(visiblePills).filter(([, frame]) => frame.state !== 'queued')
+  if (entries.length === 0) return null
+
+  // Find the latest goal-scoped verdict for correlation in the expanded view.
+  // JudgeVerdictFrame carries no goal_id (correlated by scope='goal'); the
+  // most-recent goal-scoped verdict is the best available correlation. This
+  // is display-only enrichment — the pill renders correctly without it.
+  const latestGoalVerdict: JudgeVerdictFrame | null =
+    [...verdicts].reverse().find((v) => v.scope === 'goal') ?? null
+
+  return (
+    <div
+      data-testid="goal-pill-tray"
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none absolute bottom-[calc(100%+0.5rem)] right-4 z-20 flex flex-col items-end gap-1.5"
+    >
+      {entries.map(([goalId, frame]) => (
+        <div key={goalId} className="pointer-events-auto">
+          <GoalPill goalId={goalId} frame={frame} latestVerdict={latestGoalVerdict} />
+        </div>
+      ))}
+    </div>
+  )
+}

@@ -122,22 +122,13 @@ test('validateLedger — no meta at all simply skips bucket arithmetic (does not
   assert.equal(result.bucketArithmetic, null)
 })
 
-test('validateLedger — regression: validating the real W4-ledger build output (if present) reports ok with 3378 entries', { skip: !presentEvidence() }, () => {
-  const dir = `${repoRoot}dist/design-system-baseline/cli-lanes/fanout/W4-ledger/ledger-build-out/`
-  const baseline = JSON.parse(readFileSync(`${dir}proposal-baseline.json`, 'utf8'))
-  const ledger = JSON.parse(readFileSync(`${dir}proposal-ledger.json`, 'utf8'))
-  const meta = JSON.parse(readFileSync(`${dir}proposal-meta.json`, 'utf8'))
-  const result = validateLedger({ baseline, ledger, baselineSchema, ledgerSchema, meta })
-  assert.equal(result.ok, true)
-  assert.equal(ledger.entries.length, 3378)
-  assert.equal(result.bucketArithmetic.decidedByLead, 227)
+test('validateLedger — the INSTALLED design-system/enforcement baseline and ledger are valid and row-aligned', () => {
+  // Runs everywhere, CI included: both files are tracked. No counts are pinned,
+  // because the ledger shrinks as the C batches repair debt; validity must hold
+  // at every step.
+  const baseline = JSON.parse(readFileSync(`${repoRoot}design-system/enforcement/baseline.json`, 'utf8'))
+  const ledger = JSON.parse(readFileSync(`${repoRoot}design-system/enforcement/ledger.json`, 'utf8'))
+  const result = validateLedger({ baseline, ledger, baselineSchema, ledgerSchema })
+  assert.equal(result.ok, true, JSON.stringify(result.errors))
+  assert.equal(ledger.entries.length, baseline.fingerprints.length)
 })
-
-function presentEvidence() {
-  try {
-    readFileSync(`${repoRoot}dist/design-system-baseline/cli-lanes/fanout/W4-ledger/ledger-build-out/proposal-ledger.json`)
-    return true
-  } catch {
-    return false
-  }
-}

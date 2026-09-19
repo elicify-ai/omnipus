@@ -11,10 +11,14 @@ after(() => {
   for (const root of fixtureRoots) rmSync(root, { recursive: true, force: true })
 })
 
-// L13's own evidence dir (dist/design-system-baseline/cli-lanes/fanout/L13/)
-// — fixtures never touch a shared location another concurrent lane owns.
+// Neutral scratch prefix directly under dist/design-system-baseline/, like
+// every other codemod-*.test.mjs — a lane-specific evidence path
+// (dist/design-system-baseline/cli-lanes/fanout/L13/) only exists on a
+// machine that has run that fanout lane; CI runs on a fresh checkout with no
+// dist/ at all, so the parent must be created here, not assumed.
 function fixtureRepo() {
-  const root = mkdtempSync(resolve('dist/design-system-baseline/cli-lanes/fanout/L13/codemod-crossmodule-'))
+  mkdirSync(resolve('dist/design-system-baseline'), { recursive: true })
+  const root = mkdtempSync(resolve('dist/design-system-baseline/codemod-crossmodule-'))
   fixtureRoots.push(root)
   return root
 }
@@ -213,7 +217,8 @@ test('MUTATION PROOF: flipping the PlusToken match condition breaks the MATCH ca
   assert.notEqual(mutated, realSource, 'sanity: the mutation must actually change the source')
   // codemod-lib.mjs is imported by relative specifier ('./codemod-lib.mjs'),
   // so the mutant copy must sit next to a real codemod-lib.mjs to resolve it.
-  const mutantDir = mkdtempSync(resolve('dist/design-system-baseline/cli-lanes/fanout/L13/codemod-crossmodule-mutant-'))
+  mkdirSync(resolve('dist/design-system-baseline'), { recursive: true })
+  const mutantDir = mkdtempSync(resolve('dist/design-system-baseline/codemod-crossmodule-mutant-'))
   fixtureRoots.push(mutantDir)
   writeFileSync(resolve(mutantDir, 'codemod-lib.mjs'), readFileSync(resolve('scripts/design-system/codemod-lib.mjs'), 'utf8'), 'utf8')
   const mutantPath = resolve(mutantDir, 'codemod-cross-module-ternary-suffix-fold.mjs')

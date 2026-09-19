@@ -13,9 +13,22 @@ after(() => {
 })
 
 function fixtureRepo() {
+  // CI runs `node --test scripts/design-system/codemod-*.test.mjs` on a
+  // fresh checkout with no dist/ at all — create the parent explicitly
+  // rather than relying on another test file having created it first.
+  mkdirSync(resolve('dist/design-system-baseline'), { recursive: true })
   const root = mkdtempSync(resolve('dist/design-system-baseline/codemod-mdalign-'))
   fixtureRoots.push(root)
   return root
+}
+
+// Pre-apply pinned fixture (see
+// scripts/design-system/fixtures/codemod-third-party-markdown-align/README.md)
+// — the pre-commit-8c58a0e7e shape of the real markdown-shared.tsx, so the
+// mutation-proof test below stays independent of the live src/ tree's
+// current (post-apply) state.
+function readMarkdownSharedFixture() {
+  return readFileSync(resolve('scripts/design-system/fixtures/codemod-third-party-markdown-align/markdown-shared.tsx.fixture'), 'utf8')
 }
 
 function write(root, relPath, content) {
@@ -235,35 +248,46 @@ test('IDEMPOTENT: a second --apply over an already-fixed tree makes zero further
 })
 
 // ── Mutation proof on an isolated copy ──────────────────────────────────────
-// Copies the REAL production markdown-shared.tsx into an isolated fixture,
-// proves the codemod produces the expected narrowed output on it, then
-// mutates that isolated copy (renaming the bound `style` identifier to an
-// alias, the one shape this codemod explicitly refuses to guess about) and
-// proves the codemod's safety net actually engages instead of silently
-// mis-transforming the mutated source — i.e. the test suite would catch a
-// real regression in the matcher's precision.
+// Copies the PRE-APPLY fixture (the exact pre-commit-8c58a0e7e shape of the
+// real markdown-shared.tsx — see
+// scripts/design-system/fixtures/codemod-third-party-markdown-align/README.md)
+// into an isolated fixture, proves the codemod produces the expected
+// narrowed output on it, then mutates that isolated copy (renaming the bound
+// `style` identifier to an alias, the one shape this codemod explicitly
+// refuses to guess about) and proves the codemod's safety net actually
+// engages instead of silently mis-transforming the mutated source — i.e. the
+// test suite would catch a real regression in the matcher's precision.
+//
+// This deliberately does NOT read the live src/ file: the codemod already
+// applied and committed this exact narrowing (8c58a0e7e), so the live file no
+// longer carries the pre-apply `style={style}` passthrough this test asserts
+// on — reading it here would make this test fail forever after a correct
+// apply, and would make it fragile to any later, unrelated edit of the same
+// file. The IDEMPOTENT test above already proves the live-tree behaviour
+// (re-applying to an already-narrowed file makes zero further changes) using
+// its own synthetic fixture.
 
-test('MUTATION PROOF: isolated copy of the real markdown-shared.tsx narrows exactly as predicted, and a mutated (aliased) copy is left untouched instead of silently mis-transformed', () => {
+test('MUTATION PROOF: isolated copy of the pre-apply fixture for markdown-shared.tsx narrows exactly as predicted, and a mutated (aliased) copy is left untouched instead of silently mis-transformed', () => {
   const root = fixtureRepo()
   writeProvenPackages(root)
-  const realFile = readFileSync(resolve('src/components/chat/markdown-shared.tsx'), 'utf8')
-  assert.match(realFile, /th: \(\{ children, style \}: \{ children\?: ReactNode; style\?: CSSProperties \}\) =>/, 'sanity: real file still has the exact shape this codemod targets')
+  const fixtureText = readMarkdownSharedFixture()
+  assert.match(fixtureText, /th: \(\{ children, style \}: \{ children\?: ReactNode; style\?: CSSProperties \}\) =>/, 'sanity: the pre-apply fixture still has the exact shape this codemod targets')
 
-  const isolatedCopy = write(root, 'src/components/chat/markdown-shared.tsx', realFile)
-  const { edits: realEdits, refusals: realRefusals } = planFileEdits(root, isolatedCopy)
-  assert.equal(realRefusals.length, 0)
-  assert.equal(realEdits.length, 2, 'th and td both narrow on the real file')
+  const isolatedCopy = write(root, 'src/components/chat/markdown-shared.tsx', fixtureText)
+  const { edits: cleanEdits, refusals: cleanRefusals } = planFileEdits(root, isolatedCopy)
+  assert.equal(cleanRefusals.length, 0)
+  assert.equal(cleanEdits.length, 2, 'th and td both narrow on the fixture')
 
   // Mutate: alias the destructured binding (`style: cellStyle`) on the `th`
   // renderer only. A correct codemod must now REFUSE that one occurrence
   // (findStyleBindingName returns undefined for a renamed binding) while
   // still fixing the untouched `td` — proving the matcher does not
   // overreach past what it can actually verify.
-  const mutated = realFile.replace(
+  const mutated = fixtureText.replace(
     'th: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => (\n    <th style={style} className=',
     'th: ({ children, style: cellStyle }: { children?: ReactNode; style?: CSSProperties }) => (\n    <th style={cellStyle} className=',
   )
-  assert.notEqual(mutated, realFile, 'sanity: mutation actually changed the fixture')
+  assert.notEqual(mutated, fixtureText, 'sanity: mutation actually changed the fixture')
   const mutatedCopy = write(root, 'src/components/chat/markdown-shared.tsx', mutated)
   const { edits: mutatedEdits, refusals: mutatedRefusals, text } = planFileEdits(root, mutatedCopy)
   assert.equal(mutatedEdits.length, 1, 'only the untouched td renderer is still fixed')

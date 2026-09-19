@@ -1,7 +1,7 @@
 import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs'
-import { resolve, dirname } from 'node:path'
+import { resolve, dirname, basename } from 'node:path'
 import ts from 'typescript'
 import {
   planGoalIndicatorNonActiveState,
@@ -21,6 +21,10 @@ after(() => {
 })
 
 function fixtureRepo() {
+  // CI runs `node --test scripts/design-system/codemod-*.test.mjs` on a
+  // fresh checkout with no dist/ at all — create the parent explicitly
+  // rather than relying on another test file having created it first.
+  mkdirSync(resolve('dist/design-system-baseline'), { recursive: true })
   const root = mkdtempSync(resolve('dist/design-system-baseline/codemod-finite-branch-'))
   fixtureRoots.push(root)
   return root
@@ -31,6 +35,13 @@ function write(root, relPath, content) {
   mkdirSync(dirname(abs), { recursive: true })
   writeFileSync(abs, content, 'utf8')
   return abs
+}
+
+// Pre-apply pinned fixtures (see scripts/design-system/fixtures/codemod-finite-branch/README.md)
+// — the pre-commit-0650b3c23 shape of each real P8 site, so these tests stay
+// independent of the live src/ tree's current (post-apply) state.
+function readFixture(site) {
+  return readFileSync(resolve('scripts/design-system/fixtures/codemod-finite-branch', `${basename(site.file)}.fixture`), 'utf8')
 }
 
 function editedText(text, edits) {
@@ -408,15 +419,26 @@ test('IDEMPOTENCY (site 5): a second run on the rewritten output is a clean no-o
 })
 
 // ════════════════════════════════════════════════════════════════════════
-// Mutation proof on isolated copies of the REAL production files
+// Mutation proof on isolated copies of the pre-apply production fixtures
 // ════════════════════════════════════════════════════════════════════════
-// For every one of the five real P8 sites: copy the REAL file from src/
-// into an isolated fixture repo, prove the codemod plans the expected edit
-// count against it (sanity: the site shape this codemod targets is still
-// present in the actual codebase), then mutate one distinguishing token in
-// the isolated copy and prove the codemod's safety net refuses instead of
-// silently mis-transforming — i.e. the suite would catch a real regression
-// in any recipe's precision, not just in a synthetic fixture.
+// For every one of the five real P8 sites: copy the PRE-APPLY fixture (the
+// exact pre-commit-0650b3c23 shape of the real src/ file — see
+// scripts/design-system/fixtures/codemod-finite-branch/README.md) into an
+// isolated fixture repo, prove the codemod plans the expected edit count
+// against it (sanity: the site shape this codemod targets is exactly the
+// shape it was built and reviewed against), then mutate one distinguishing
+// token in the isolated copy and prove the codemod's safety net refuses
+// instead of silently mis-transforming — i.e. the suite would catch a real
+// regression in any recipe's precision, not just in a synthetic fixture.
+//
+// These deliberately do NOT read the live src/ files: the codemod already
+// applied and committed this exact rewrite (0650b3c23), so the live files no
+// longer carry the pre-apply pattern these tests assert on — reading them
+// here would make every one of these tests fail forever after a correct
+// apply, and would make them fragile to any later, unrelated edit of the
+// same files. The fixture pins the recipe's target shape independently of
+// the live tree's current state; live-tree idempotence is proven separately
+// below.
 
 const REAL_SITE_EXPECTATIONS = [
   {
@@ -463,18 +485,18 @@ const REAL_SITE_EXPECTATIONS = [
 
 for (const expectation of REAL_SITE_EXPECTATIONS) {
   const site = SITES.find((s) => s.id === expectation.id)
-  test(`MUTATION PROOF (${expectation.id}): isolated copy of the real ${site.file} plans as predicted, and a mutated copy is refused instead of silently mis-transformed`, () => {
+  test(`MUTATION PROOF (${expectation.id}): isolated copy of the pre-apply fixture for ${site.file} plans as predicted, and a mutated copy is refused instead of silently mis-transformed`, () => {
     const root = fixtureRepo()
-    const realFile = readFileSync(resolve(site.file), 'utf8')
-    assert.match(realFile, expectation.sanity, `sanity: real ${site.file} still has the exact shape this recipe targets`)
+    const fixtureText = readFixture(site)
+    assert.match(fixtureText, expectation.sanity, `sanity: the pre-apply fixture for ${site.file} still has the exact shape this recipe targets`)
 
-    write(root, site.file, realFile)
+    write(root, site.file, fixtureText)
     const cleanPlan = planSite(root, site)
-    assert.equal(cleanPlan.ok, true, `expected the isolated copy of the real file to plan cleanly: ${cleanPlan.reason ?? ''}`)
-    assert.ok(cleanPlan.edits.length > 0, 'expected at least one edit against the real, unmutated file')
+    assert.equal(cleanPlan.ok, true, `expected the isolated fixture copy to plan cleanly: ${cleanPlan.reason ?? ''}`)
+    assert.ok(cleanPlan.edits.length > 0, 'expected at least one edit against the fixture, unmutated')
 
-    const mutated = expectation.mutate(realFile)
-    assert.notEqual(mutated, realFile, 'sanity: mutation actually changed the fixture')
+    const mutated = expectation.mutate(fixtureText)
+    assert.notEqual(mutated, fixtureText, 'sanity: mutation actually changed the fixture')
     write(root, site.file, mutated)
     const mutatedPlan = planSite(root, site)
     assert.equal(mutatedPlan.ok, false, 'the mutated copy must be refused, not mis-transformed')
@@ -483,17 +505,50 @@ for (const expectation of REAL_SITE_EXPECTATIONS) {
 }
 
 // ════════════════════════════════════════════════════════════════════════
-// End-to-end: runCodemod dry-run against the real repo closes exactly the
-// five sites and touches nothing outside them.
+// End-to-end (a): runCodemod dry-run against a fixture tree — the five
+// pre-apply fixtures placed at their original relative paths under a fresh
+// temp root — plans exactly the five sites with zero refusals, and --apply
+// there is idempotent. This is the fixture-pinned equivalent of what the old
+// "against the real repo" test proved before the codemod was committed.
 // ════════════════════════════════════════════════════════════════════════
 
-test('END-TO-END dry-run: runCodemod against the real repo plans all 5 sites with zero refusals, and --apply is idempotent', () => {
-  const repoRoot = resolve('.')
-  const dryRun = runCodemod({ repoRoot, apply: false })
+test('END-TO-END (a) dry-run against a fixture tree: runCodemod plans all 5 sites with zero refusals, and --apply is idempotent', () => {
+  const root = fixtureRepo()
+  for (const site of SITES) write(root, site.file, readFixture(site))
+
+  const dryRun = runCodemod({ repoRoot: root, apply: false })
   assert.equal(dryRun.totalSites, 5)
   assert.equal(dryRun.totalRefused, 0, JSON.stringify(dryRun.results.filter((r) => !r.ok).map((r) => ({ id: r.id, reason: r.reason }))))
   assert.equal(dryRun.totalApplied, 5)
   for (const r of dryRun.results) {
     assertParses(r.filePath, r.after)
   }
+
+  const applied = runCodemod({ repoRoot: root, apply: true })
+  assert.equal(applied.totalRefused, 0)
+  assert.equal(applied.totalApplied, 5)
+
+  const secondRun = runCodemod({ repoRoot: root, apply: true })
+  assert.equal(secondRun.totalRefused, 0)
+  assert.equal(secondRun.totalApplied, 0, '--apply is idempotent: a second run over already-applied output makes no further edits')
+  assert.equal(secondRun.totalAlreadyApplied, 5)
+})
+
+// ════════════════════════════════════════════════════════════════════════
+// End-to-end (b): runCodemod dry-run against the REAL, live repo. The
+// codemod was already applied and committed (0650b3c23), so this proves
+// idempotence on the live tree — zero sites still need the rewrite, zero
+// refusals. It does NOT assert the pre-apply pattern (that's (a) and the
+// mutation proofs above, both fixture-pinned), so it stays true regardless
+// of the live tree's current state, the same way the other codemods'
+// "idempotent over an already-fixed tree" tests do.
+// ════════════════════════════════════════════════════════════════════════
+
+test('END-TO-END (b) dry-run against the real repo: already applied, plans ZERO sites (idempotent on the live tree)', () => {
+  const repoRoot = resolve('.')
+  const dryRun = runCodemod({ repoRoot, apply: false })
+  assert.equal(dryRun.totalSites, 5, 'the site registry itself is still 5 entries')
+  assert.equal(dryRun.totalRefused, 0, JSON.stringify(dryRun.results.filter((r) => !r.ok).map((r) => ({ id: r.id, reason: r.reason }))))
+  assert.equal(dryRun.totalApplied, 0, 'zero sites should still need the rewrite — it was already applied and committed in 0650b3c23')
+  assert.equal(dryRun.totalAlreadyApplied, 5)
 })

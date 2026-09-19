@@ -10,10 +10,13 @@ after(() => {
 })
 
 function fixtureRepo() {
-  // Isolated scratch dirs live inside THIS lane's evidence dir only (W3-events
-  // ownership boundary) — never dist/design-system-baseline/ directly and
-  // never /tmp.
-  const root = mkdtempSync(resolve('dist/design-system-baseline/cli-lanes/fanout/W3-events/test-fixture-'))
+  // Neutral scratch prefix directly under dist/design-system-baseline/, like
+  // every other codemod-*.test.mjs — a lane-specific evidence path
+  // (dist/design-system-baseline/cli-lanes/fanout/W3-events/) only exists on
+  // a machine that has run that fanout lane; CI runs on a fresh checkout with
+  // no dist/ at all, so the parent must be created here, not assumed.
+  mkdirSync(resolve('dist/design-system-baseline'), { recursive: true })
+  const root = mkdtempSync(resolve('dist/design-system-baseline/codemod-event-mapping-style-key-rename-'))
   fixtureRoots.push(root)
   return root
 }

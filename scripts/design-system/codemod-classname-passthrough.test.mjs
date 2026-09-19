@@ -11,6 +11,10 @@ after(() => {
 })
 
 function fixtureRepo() {
+  // CI runs `node --test scripts/design-system/codemod-*.test.mjs` on a
+  // fresh checkout with no dist/ at all — create the parent explicitly
+  // rather than relying on another test file having created it first.
+  mkdirSync(resolve('dist/design-system-baseline'), { recursive: true })
   const root = mkdtempSync(resolve('dist/design-system-baseline/codemod-classname-passthrough-'))
   fixtureRoots.push(root)
   return root
