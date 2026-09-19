@@ -43,6 +43,13 @@ import (
 // inline offer handler would block on awaitAttachment and prevent both.
 func TestBrowserWS_SlowWebRTCOffer_DoesNotBlockReadLoop(t *testing.T) {
 	t.Setenv("OMNIPUS_HOME", t.TempDir())
+	// The attachment under test is the controlled CDP endpoint, not the
+	// FR-060 host-memory admission gate. Pin that gate open so a busy CI host
+	// does not turn this timing assertion into a low-memory refusal.
+	t.Cleanup(config.SetMemoryProviderForTest(
+		func() (bool, bool) { return false, true },
+		func() (uint64, bool) { return 8 << 30, true },
+	))
 	// Hold the real browser protocol endpoint while an attachment is pending.
 	// The subsequent offer must await that exact attachment without blocking
 	// Ping/Pong or detach on the same authenticated application socket.
@@ -98,7 +105,7 @@ func TestBrowserWS_SlowWebRTCOffer_DoesNotBlockReadLoop(t *testing.T) {
 	select {
 	case remote := <-connections:
 		t.Cleanup(func() { remote.Close() })
-	case <-time.After(5 * time.Second):
+	case <-time.After(browserAttachmentArrivalBound):
 		t.Fatal("attachment did not reach controlled browser endpoint")
 	}
 	select {

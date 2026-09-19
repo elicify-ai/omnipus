@@ -1358,7 +1358,7 @@ jobs:
         # narrowly.
         run: |
           set +e
-          # -timeout 30m: go test's DEFAULT is 10 minutes PER PACKAGE, and
+          # -timeout 45m: go test's DEFAULT is 10 minutes PER PACKAGE, and
           # pkg/agent has been measured at 752s (12.5 min) on a developer
           # machine under load. A package that exceeds it fails with
           # "panic: test timed out after 10m0s" -- a timeout, not an assertion,
@@ -1366,7 +1366,10 @@ jobs:
           # other workflows here already pass -timeout explicitly
           # (cross-platform.yml, and pr.yml's own e2e steps at 600s/900s/300s);
           # this step was the one that inherited the default.
-          out=$(go test -tags goolm,stdjson -count=1 -timeout 30m ./... 2>&1)
+          # The gateway package's own tests now exceed 30m on a two-core
+          # runner. 45m gives that package room while preserving a finite
+          # hang signal for every package.
+          out=$(go test -tags goolm,stdjson -count=1 -timeout 45m ./... 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
@@ -1720,7 +1723,11 @@ jobs:
             echo "would report a pass without testing the intended packages." >&2
             exit 1
           fi
-          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 900s "${race_pkgs[@]}" 2>&1)
+          # Gateway's race package crossed the old 900s budget on the release
+          # integration. Match the plain gate's 45m package budget here: race
+          # instrumentation costs time, but a finite package timeout remains
+          # the hang signal.
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s "${race_pkgs[@]}" 2>&1)
           code=$?
           echo "$out"
           # DATA RACE is checked BEFORE the exit-code short-circuit on purpose: a
@@ -1795,7 +1802,7 @@ jobs:
             # THIS run, so testing only its exit code let a race reported in
             # the SECOND run be stamped "FLAKE (passed isolated)" and excused
             # — precisely what the carve-out forbids.
-            if go test -race -tags goolm,stdjson -count=1 -timeout 900s -p 1 "$p" >/tmp/rr_race.log 2>&1 \
+            if go test -race -tags goolm,stdjson -count=1 -timeout 2700s -p 1 "$p" >/tmp/rr_race.log 2>&1 \
                && ! grep -aq "DATA RACE" /tmp/rr_race.log; then
               echo "FLAKE (passed isolated): $p"
             else

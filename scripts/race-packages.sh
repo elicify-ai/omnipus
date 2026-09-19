@@ -38,7 +38,7 @@
 #
 # Usage:
 #   scripts/race-packages.sh                 # one package path per line
-#   go test -race -tags goolm,stdjson -count=1 -timeout 900s $(scripts/race-packages.sh) ./tests/...
+#   go test -race -tags goolm,stdjson -count=1 -timeout 2700s $(scripts/race-packages.sh) ./tests/...
 #
 # When adding or removing a package from the -race surface: edit ONLY the
 # list below. Both pr.yml and runci.sh pick it up automatically — no other
