@@ -561,3 +561,161 @@ describe('finite-dispatcher binding safety — additional escape shapes (frozen 
       'passing the live binding to an arbitrary function is an escape the proof cannot see past')
   })
 })
+
+describe('record-binding escape guard (round 4 — closes the SIZES/REC-shaped false greens)', () => {
+  // LEAD DECISION (round 4, cross-scanner-false-green.test.mjs, committed
+  // ee0551dc3): resolveExpr's identifier branch trusted a `const` record's
+  // ORIGINAL literal forever, regardless of any later mutation or escape,
+  // because its only guard (isReassignedWithin(sourceFile, name)) matched
+  // nothing but a bare `name = ...` reassignment and never descended past a
+  // function boundary. recordBindingEscapes (spacing.mjs) replaces that for
+  // record-shaped (object/array literal) bindings only -- see
+  // recordLiteralRoot's own describe block below for why a CallExpression
+  // alias is deliberately excluded. Each test here is a red/green regression
+  // guard for exactly one shape recordBindingEscapes must catch; the shared
+  // dist/design-system-baseline/cli-lanes/claude-spacing-fix4/parity.md
+  // records the mutation-proof kill for each.
+  const scanConsumer = (source, extraModules = {}) => scan({
+    path: 'src/components/Adversarial.tsx',
+    source,
+    policy: POLICY,
+    modules: { 'src/components/Adversarial.tsx': source, ...extraModules },
+  })
+
+  it('keeps a property write onto a local const record unsupported after the write', () => {
+    const source = "const SIZES = { small: 'p-[var(--space-2)]' }\nSIZES.small = 'p-[7px]'\nexport function V(){ return <i className={SIZES.small}/> }"
+    const result = scanConsumer(source)
+    assert.deepEqual(result.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: SIZES.small' }])
+  })
+
+  it('keeps Object.assign onto a local const record unsupported', () => {
+    const source = "const SIZES = { small: 'p-[var(--space-2)]' }\nObject.assign(SIZES, { small: 'p-[7px]' })\nexport function V(){ return <i className={SIZES.small}/> }"
+    const result = scanConsumer(source)
+    assert.deepEqual(result.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: SIZES.small' }])
+  })
+
+  it('keeps Reflect.set and Object.defineProperty onto a local const record unsupported', () => {
+    for (const mutator of ["Reflect.set(SIZES, 'small', 'p-[7px]')", "Object.defineProperty(SIZES, 'small', { value: 'p-[7px]' })"]) {
+      const source = `const SIZES = { small: 'p-[var(--space-2)]' }\n${mutator}\nexport function V(){ return <i className={SIZES.small}/> }`
+      const result = scanConsumer(source)
+      assert.deepEqual(result.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: SIZES.small' }], mutator)
+    }
+  })
+
+  it('keeps a delete-then-reassign onto a local const record unsupported', () => {
+    const source = "const SIZES = { small: 'p-[var(--space-2)]' }\ndelete SIZES.small\nSIZES.small = 'p-[7px]'\nexport function V(){ return <i className={SIZES.small}/> }"
+    const result = scanConsumer(source)
+    assert.deepEqual(result.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: SIZES.small' }])
+  })
+
+  it('keeps an imported record directly mutated by the importer unsupported', () => {
+    const result = scanConsumer("import { SIZES } from '../lib/sizes'\nSIZES.small = 'p-[7px]'\nexport function V(){ return <i className={SIZES.small}/> }", {
+      'src/lib/sizes.ts': "export const SIZES = { small: 'p-[var(--space-2)]' }",
+    })
+    assert.deepEqual(result.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: SIZES.small' }])
+  })
+
+  it('keeps an export mutated by a helper inside its OWN exporting module unsupported (never touching the importer)', () => {
+    // The importer's local `REC2` binding is never written to at all here --
+    // only the exporting module's own declaration is. The escape guard must
+    // still catch this (see resolveExpr's exportingScope check), matching
+    // ts-colors.mjs::absenceFactory's re-application of absenceBindingUsesSafe
+    // to the resolved EXPORTING declaration.
+    const result = scanConsumer("import { REC2 } from '../lib/rec2'\nexport function V(){ return <i className={REC2.small}/> }", {
+      'src/lib/rec2.ts': "export const REC2 = { small: 'p-[var(--space-2)]' }\nfunction poison(){ REC2.small = 'p-[7px]' }\npoison()",
+    })
+    assert.deepEqual(result.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: REC2.small' }])
+  })
+
+  it('keeps a nested object mutated through Object.values/Object.entries live references unsupported (closes the colour-scanner nested-escape hole for spacing)', () => {
+    // Object.values/Object.entries return LIVE references to REC's own
+    // nested objects -- ts-colors.mjs::READONLY_OBJECT_STATIC_METHODS
+    // whitelists these call names as safe arguments, which is exactly the
+    // hole this closes: no call name is trusted here for a container-typed
+    // (non-primitive) argument, only a structurally-proven primitive leaf.
+    for (const mutator of [
+      "Object.values(REC).forEach(v => { v.cls = 'p-[7px]' })",
+      "for (const [, v] of Object.entries(REC)) v.cls = 'p-[7px]'",
+    ]) {
+      const source = `const REC = { a: { cls: 'p-[var(--space-2)]' } }\n${mutator}\nexport function V(){ return <i className={REC.a.cls}/> }`
+      const result = scanConsumer(source)
+      assert.deepEqual(result.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: REC.a.cls' }], mutator)
+    }
+  })
+
+  it('keeps an array-literal alias of a nested object unsupported even though the alias itself is never renamed back', () => {
+    const source = "const REC = { a: { cls: 'p-[var(--space-2)]' } }\nconst list = [REC.a]; list[0].cls = 'p-[7px]'\nexport function V(){ return <i className={REC.a.cls}/> }"
+    const result = scanConsumer(source)
+    assert.deepEqual(result.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: REC.a.cls' }])
+  })
+
+  it('keeps an imported nested object mutated via Object.values by the importer unsupported', () => {
+    const result = scanConsumer("import { REC } from '../lib/rec'\nObject.values(REC).forEach(v => { v.cls = 'p-[7px]' })\nexport function V(){ return <i className={REC.a.cls}/> }", {
+      'src/lib/rec.ts': "export const REC = { a: { cls: 'p-[var(--space-2)]' } }",
+    })
+    assert.deepEqual(result.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: 'className: REC.a.cls' }])
+  })
+
+  it('still resolves a plain, unmutated local const record cleanly (no over-blocking)', () => {
+    const source = "const SIZES = { small: 'p-[var(--space-2)]' }\nexport function V(){ return <i className={SIZES.small}/> }"
+    expectClean('src/components/Adversarial.tsx', source, 'unmutated local record')
+  })
+
+  it('still resolves a plain, unmutated imported record cleanly (no over-blocking)', () => {
+    const result = scanConsumer("import { SIZES } from '../lib/sizes'\nexport function V(){ return <i className={SIZES.small}/> }", {
+      'src/lib/sizes.ts': "export const SIZES = { small: 'p-[var(--space-2)]' }",
+    })
+    assert.deepEqual(result, [])
+  })
+
+  it('does not treat embedding a resolved STRING property (a primitive leaf) in another literal or call as an escape', () => {
+    // The container-escape guard only fires for a NON-primitive (object/
+    // array) embedded value -- a plain string copied into a new array
+    // literal or passed to an arbitrary helper cannot carry a live
+    // reference back into the record, so a LATER, direct read of the same
+    // record property must stay trusted (not collapse to unsupported just
+    // because an earlier statement also read it into a literal/call).
+    const source =
+      "const SIZES = { small: 'p-[var(--space-2)]', large: 'p-[var(--space-4)]' }\n" +
+      "const list = [SIZES.small, SIZES.large]\n" +
+      'void list\n' +
+      "function widths(strings){ return strings }\n" +
+      'widths(SIZES.small)\n' +
+      "export function V(){ return <i className={SIZES.small}/> }"
+    expectClean('src/components/Adversarial.tsx', source, 'string properties copied by value are not an escape')
+  })
+
+  it('still resolves numeric-key array-record element access cleanly after the escape guard (Record<number,string> shape)', () => {
+    const source = "const styles = ['p-[var(--space-2)]', 'p-[var(--space-3)]'] as const\nexport const X = () => <div className={styles[1]} />"
+    expectClean('src/components/Adversarial.tsx', source, 'static numeric element access on an unmutated array record')
+  })
+})
+
+describe('record-binding escape guard is scoped to record-shaped initializers only (round 4 non-regression)', () => {
+  // recordLiteralRoot gates recordBindingEscapes to object/array-literal
+  // (optionally Object.freeze/seal/preventExtensions-wrapped) initializers
+  // only. A CallExpression-initialized alias keeps using the pre-existing,
+  // narrower isReassignedWithin gate so authenticatedBuilderAlias's own
+  // const-ness check remains the deciding guarantee for those (see spacing.
+  // mjs's comment at the resolveExpr identifier branch) -- these three
+  // shapes are the ones the round-4 change could have silently regressed by
+  // applying the stricter guard too broadly.
+  const definition = "import { clsx } from 'clsx'; import { twMerge } from 'tailwind-merge'; export function cn(...inputs) { return twMerge(clsx(inputs)) }"
+
+  it('still drills into a reassigned `let` call-expression alias at its definition site rather than collapsing to a generic unsupported', () => {
+    const source = "import { cn } from '@/lib/utils'\nexport const X = () => { let btn = cn('flex', 'p-[8px]'); btn = 'extra'; return <button className={btn} /> }"
+    const result = scan({ path: 'src/x/consumer.tsx', source, policy: POLICY, modules: { 'src/x/consumer.tsx': source, 'src/lib/utils.ts': definition } })
+    assert.deepEqual(result.map(({ ruleId, syntax }) => ({ ruleId, syntax })), [{ ruleId: 'spacing/unsupported', syntax: "className: cn('flex', 'p-[8px]')" }])
+  })
+
+  it('still reports an aliased call-expression export exactly once at its definition site (date-picker shape)', () => {
+    const source = "import { cn } from '@/lib/utils'\nexport const TRIGGER = cn('flex items-center gap-2', 'px-3 py-1')\nexport const X = ({ className }) => <button className={cn(TRIGGER, className)} />"
+    const result = scan({ path: 'src/x/consumer.tsx', source, policy: POLICY, modules: { 'src/x/consumer.tsx': source, 'src/lib/utils.ts': definition } })
+    assert.deepEqual(result.filter((f) => f.ruleId === 'spacing/unsupported'), [], 'TRIGGER passed as an ordinary cn() argument must not be treated as a record-binding escape')
+  })
+
+  it('still trusts an Object.freeze-wrapped const record exactly like a plain literal one', () => {
+    const source = "const SIZES = Object.freeze({ small: 'p-[var(--space-2)]' })\nexport function V(){ return <i className={SIZES.small}/> }"
+    expectClean('src/components/Adversarial.tsx', source, 'Object.freeze-wrapped record initializer')
+  })
+})

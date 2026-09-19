@@ -1688,16 +1688,255 @@ function isConcatOrLogic(kind) {
 
 const UNRESOLVED_EXPR = Symbol('unresolved spacing expression')
 
+// record-binding escape/mutation guard for resolveExpr's identifier branch.
+//
+// LEAD DECISION (round 4, cross-scanner-false-green.test.mjs, committed
+// ee0551dc3): the prior guard here (`isReassignedWithin(node.getSourceFile(),
+// name)`) had two independent holes proven by that shared suite:
+//   1. It only matched a bare `name = ...` reassignment (`ts.isIdentifier
+//      (node.left)`) -- a property write (`SIZES.small = 'p-[7px]'`),
+//      Object.assign/Reflect.set/Object.defineProperty onto the binding, or
+//      any other escape of the binding itself was completely invisible.
+//   2. Its walk (`isReassignedWithin`) stops descending the INSTANT it meets
+//      any function-like node that is not the scope it started from -- for
+//      a module-scope `const SIZES = {...}`, the scope IS the SourceFile,
+//      so a mutation written inside ANY function in the file (the common
+//      case: a component body) was never visited at all.
+//
+// recordBindingEscapes below is a direct structural sibling of
+// dispatcherBindingUsesSafe (same file) and ts-colors.mjs's
+// absenceBindingUsesSafe: it walks the FULL scope (real recursive descent,
+// no function-boundary stop) looking for every occurrence of the binding's
+// name, climbs each occurrence's containing property/element-access chain,
+// and classifies the terminal use as either an ordinary read (safe), a
+// direct mutation (assignment/delete/++/--/for-of-or-in target -- unsafe),
+// or a container escape: the chain gets embedded in an array/object
+// literal, a spread, a shorthand property, or passed as a bare call
+// argument to ANY function.
+//
+// The container-escape branch is deliberately STRICTER than
+// ts-colors.mjs::absenceBindingUsesSafe/knownClassDerivedUsesSafe, which
+// both whitelist Object.keys/values/entries/freeze/isFrozen/
+// getOwnPropertyNames as safe call arguments. That whitelist is exactly the
+// nested-reference escape hole the same shared suite proved against the
+// colour scanner: `Object.values(REC).forEach(v => { v.cls = '...' })`
+// receives LIVE references to REC's own nested objects, so trusting
+// Object.values/entries as "read-only" lets a later write through the
+// returned references mutate REC without ever naming REC on the left of an
+// assignment. No call name is safe to whitelist for a container-typed
+// argument here -- only a chain that structurally resolves (via
+// structuralValueAtPath, walking the SAME literal resolveExpr would have
+// trusted) to a primitive leaf (string/number/boolean/null/template) is
+// allowed to be embedded or passed, because a primitive cannot carry a
+// mutable reference back into the record.
+function isAssignmentOperatorKind(kind) {
+  return kind >= ts.SyntaxKind.FirstAssignment && kind <= ts.SyntaxKind.LastAssignment
+}
+
+function isIncDecOperator(operator) {
+  return operator === ts.SyntaxKind.PlusPlusToken || operator === ts.SyntaxKind.MinusMinusToken
+}
+
+function isPrimitiveLeafNode(node) {
+  const value = unwrap(node)
+  if (!value) return false
+  if (ts.isStringLiteralLike(value) || ts.isNumericLiteral(value)) return true
+  if (ts.isNoSubstitutionTemplateLiteral(value) || ts.isTemplateExpression(value)) return true
+  return [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(value.kind)
+}
+
+// Rebuilds the static string/numeric key path an occurrence's climbed
+// property/element-access chain represents (`REC` -> `REC.a` -> `REC.a.b`
+// yields `['a', 'b']`); null on any dynamic/computed segment (fail closed --
+// callers treat null exactly like an unresolvable, non-primitive value).
+function chainPropertyPath(occurrence, climbed) {
+  const path = []
+  let current = occurrence
+  while (current !== climbed) {
+    const parent = current.parent
+    if (ts.isPropertyAccessExpression(parent) && parent.expression === current) {
+      path.push(parent.name.text)
+      current = parent
+      continue
+    }
+    if (ts.isElementAccessExpression(parent) && parent.expression === current) {
+      const keyExpr = unwrap(parent.argumentExpression)
+      const key = keyExpr && (ts.isStringLiteral(keyExpr) || ts.isNoSubstitutionTemplateLiteral(keyExpr) || ts.isNumericLiteral(keyExpr))
+        ? keyExpr.text
+        : null
+      if (key === null) return null
+      path.push(key)
+      current = parent
+      continue
+    }
+    if (ts.isParenthesizedExpression(parent) || ts.isAsExpression(parent) || ts.isNonNullExpression(parent)) {
+      current = parent
+      continue
+    }
+    return null
+  }
+  return path
+}
+
+function structuralValueAtPath(root, path) {
+  let current = unwrap(root)
+  for (const key of path) {
+    if (!current) return null
+    if (ts.isObjectLiteralExpression(current)) {
+      const init = propertyInit(current, key)
+      current = init ? unwrap(init) : null
+      continue
+    }
+    if (ts.isArrayLiteralExpression(current)) {
+      const index = Number(key)
+      if (!Number.isSafeInteger(index) || index < 0 || index >= current.elements.length) return null
+      const element = current.elements[index]
+      current = element && !ts.isOmittedExpression(element) ? unwrap(element) : null
+      continue
+    }
+    return null
+  }
+  return current
+}
+
+// Nearest enclosing Block/SourceFile a binding's mutations could occur in --
+// same shape as the declaration-scope walks already used throughout this
+// file (e.g. wholeValueWritesAbsent's sibling in ts-colors.mjs). A parameter
+// has no enclosing block of its own; its owning function's body is the
+// correct scope.
+function recordDeclarationScope(declaration) {
+  if (ts.isParameter(declaration)) {
+    const owner = declaration.parent
+    return owner && ts.isFunctionLike(owner) && owner.body ? owner.body : null
+  }
+  let scope = declaration.parent
+  while (scope && !ts.isBlock(scope) && !ts.isSourceFile(scope)) scope = scope.parent
+  return scope
+}
+
+// A binding only counts as "record-shaped" -- and so only gets the stricter
+// recordBindingEscapes treatment -- when it structurally resolves to a
+// plain object or array literal, through any number of
+// Object.freeze/seal/preventExtensions wraps (mirroring resolveExpr's own
+// unwrap of that call shape below). Anything else (a CallExpression alias
+// such as `const TRIGGER = cn(...)`, a template, a conditional, ...) is
+// deliberately left to the narrower, pre-existing isReassignedWithin gate.
+function recordLiteralRoot(initializer) {
+  let current = unwrap(initializer)
+  while (
+    current
+    && ts.isCallExpression(current)
+    && ts.isPropertyAccessExpression(current.expression)
+    && ts.isIdentifier(current.expression.expression)
+    && current.expression.expression.text === 'Object'
+    && ['freeze', 'seal', 'preventExtensions'].includes(current.expression.name.text)
+    && current.arguments[0]
+  ) current = unwrap(current.arguments[0])
+  return current && (ts.isObjectLiteralExpression(current) || ts.isArrayLiteralExpression(current)) ? current : null
+}
+
+const RECORD_ESCAPE_CACHE = new WeakMap()
+
+// Returns true when `name` escapes or is mutated anywhere in `scope` --
+// false only when every occurrence is a provably safe read. `rootInitializer`
+// is the object/array literal (or whatever resolveExpr already resolved the
+// binding to) used to classify a container-escape's embedded value as a
+// primitive leaf or not.
+function recordBindingEscapes(scope, name, rootInitializer, cacheKey) {
+  if (!scope) return true
+  if (cacheKey) {
+    let byScope = RECORD_ESCAPE_CACHE.get(cacheKey)
+    if (byScope?.has(scope)) return byScope.get(scope)
+  }
+  let unsafe = false
+  const visit = (node) => {
+    if (unsafe) return
+    if (ts.isIdentifier(node) && node.text === name) {
+      let climbed = node
+      while (climbed.parent && (
+        (ts.isPropertyAccessExpression(climbed.parent) && climbed.parent.expression === climbed)
+        || (ts.isElementAccessExpression(climbed.parent) && climbed.parent.expression === climbed)
+        || ts.isParenthesizedExpression(climbed.parent)
+        || ts.isAsExpression(climbed.parent)
+        || ts.isNonNullExpression(climbed.parent)
+      )) climbed = climbed.parent
+      const use = climbed.parent
+      if (!use) { unsafe = true; return }
+      if (ts.isBinaryExpression(use) && use.left === climbed && isAssignmentOperatorKind(use.operatorToken.kind)) { unsafe = true; return }
+      if ((ts.isForOfStatement(use) || ts.isForInStatement(use)) && use.initializer === climbed) { unsafe = true; return }
+      if (ts.isDeleteExpression(use)) { unsafe = true; return }
+      if ((ts.isPrefixUnaryExpression(use) || ts.isPostfixUnaryExpression(use)) && isIncDecOperator(use.operator)) { unsafe = true; return }
+      const embeds = ts.isArrayLiteralExpression(use)
+        || (ts.isPropertyAssignment(use) && use.initializer === climbed)
+        || ts.isShorthandPropertyAssignment(use)
+        || ts.isSpreadElement(use)
+        || ts.isSpreadAssignment(use)
+        || (ts.isCallExpression(use) && use.arguments.includes(climbed))
+      if (embeds) {
+        const path = chainPropertyPath(node, climbed)
+        const value = path && rootInitializer ? structuralValueAtPath(rootInitializer, path) : null
+        if (!value || !isPrimitiveLeafNode(value)) { unsafe = true; return }
+      }
+      return
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(scope)
+  if (cacheKey) {
+    let byScope = RECORD_ESCAPE_CACHE.get(cacheKey)
+    if (!byScope) { byScope = new Map(); RECORD_ESCAPE_CACHE.set(cacheKey, byScope) }
+    byScope.set(scope, unsafe)
+  }
+  return unsafe
+}
+
 function resolveExpr(expr, ctx, seen = new Set()) {
   const node = unwrap(expr)
   if (!node) return null
   if (ts.isIdentifier(node)) {
     const binding = findLexicalBinding(node, node.text)
-    if (binding && isReassignedWithin(node.getSourceFile(), node.text)) return UNRESOLVED_EXPR
     const imported = binding ? null : importedDeclaration(node, ctx, seen)
     const resolvedBinding = binding ?? imported
     if (!resolvedBinding || !resolvedBinding.initializer) return UNRESOLVED_EXPR
     if (seen.has(resolvedBinding.declaration)) return UNRESOLVED_EXPR
+    // The stricter record-binding escape guard (recordBindingEscapes) only
+    // applies when the binding is actually record-shaped (a plain object or
+    // array literal, optionally Object.freeze/seal/preventExtensions-
+    // wrapped) -- that shape is what the container-escape/primitive-leaf
+    // classification needs to mean anything. A CallExpression-initialized
+    // alias (`const TRIGGER = cn(...)`, `let btn = cn(...)`) is deliberately
+    // left to the ORIGINAL, narrower isReassignedWithin gate: authenticated-
+    // BuilderAlias (below, unchanged) independently requires const-ness
+    // before trusting such an alias, and multiple existing tests (`keeps a
+    // reassigned alias unsupported`, `reports definition debt once while a
+    // reassigned renamed alias stays blocking at the sink`, `reports
+    // aliased-call debt exactly once at the definition site (date-picker
+    // shape)`) depend on a call-expression alias resolving THROUGH to its
+    // definition site rather than collapsing to a generic unsupported here.
+    const literalRoot = recordLiteralRoot(resolvedBinding.initializer)
+    if (literalRoot && binding) {
+      const scope = recordDeclarationScope(resolvedBinding.declaration)
+      if (recordBindingEscapes(scope, node.text, literalRoot, resolvedBinding.declaration)) return UNRESOLVED_EXPR
+    } else if (literalRoot && imported) {
+      // The LOCAL import specifier's own binding, scoped to the whole
+      // IMPORTING module -- `SIZES.small = '...'`/`Object.values(SIZES)...`
+      // written anywhere in the consumer file after the import, not just
+      // near the read site (import bindings are module-scoped, not
+      // block-scoped, so the walk root is the whole SourceFile).
+      const importerScope = node.getSourceFile()
+      if (recordBindingEscapes(importerScope, node.text, literalRoot, resolvedBinding.declaration)) return UNRESOLVED_EXPR
+      // The EXPORTING module's own declaration, scoped to ITS whole module --
+      // a helper inside the exporting file that mutates its own export
+      // (never touching the importer's local name at all) must be exactly
+      // as disqualifying.
+      const exportingDeclaration = resolvedBinding.declaration
+      if (ts.isVariableDeclaration(exportingDeclaration) && ts.isIdentifier(exportingDeclaration.name)) {
+        const exportingScope = exportingDeclaration.getSourceFile()
+        if (recordBindingEscapes(exportingScope, exportingDeclaration.name.text, literalRoot, exportingDeclaration)) return UNRESOLVED_EXPR
+      }
+    } else if (binding && isReassignedWithin(node.getSourceFile(), node.text)) {
+      return UNRESOLVED_EXPR
+    }
     seen.add(resolvedBinding.declaration)
     return resolveExpr(resolvedBinding.initializer, ctx, seen)
   }
