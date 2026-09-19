@@ -1,6 +1,6 @@
 # Design-system foundation policy
 
-Status: A1 Encode contract, 2026-09-17. This policy implements D1, D2 and D9–D16 of the design-system definition. The machine-readable source is `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/design-system/tokens/foundations.json`.
+Status: A1 Encode contract, 2026-09-17; amended 2026-09-19 for founder decision D17 (touch adaptation follows the input in use). This policy implements D1, D2 and D9–D17 of the design-system definition. The machine-readable source is `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/design-system/tokens/foundations.json`.
 
 ## Scope and activation
 
@@ -14,6 +14,8 @@ The visual-delta classification is:
 | Text below 12px raised to the floor | Approved Normalization D2 | Encoded; applied in C1 |
 | Current 14px-root rem gaps mapped to the 4px / 8px scale | Approved Normalization D10 | Encoded; applied in C1 |
 | Reduced-motion behavior | Approved Normalization D12 | Policy encoded; applied and browser-tested later |
+| Touch adaptation keyed to the input in use instead of the device's primary pointer | Approved Normalization D17 | Policy recorded; mechanism and tokens encoded and applied in C1 |
+| Touch-mode text-entry size `max(16px, current size)` | Approved Normalization D17 | Policy recorded; token encoded and applied in C1 |
 | Any other type, density, geometry, timing or overlay-order change | Redesign Risk | Not authorized by this package |
 
 ## Typography
@@ -22,7 +24,7 @@ The product root remains user-adjustable through `clamp(12px, var(--user-font-si
 
 Outfit owns display and headings. Inter owns interface and body text. JetBrains Mono owns code, identifiers and aligned technical data. Product roles are display, page title, section title, body, compact body, label, caption and code. Each role has a family, size, weight, line height, letter spacing and maximum measure token. Marketing may retain its established 16px body default.
 
-Twelve pixels is a computed floor at every root setting. There is no 9px, 10px or 11px role and no compact-mode exemption. The caption and compact roles use a CSS `max()` expression so user scaling cannot push them below 12px. D2 authorizes only this floor correction; role migration must otherwise preserve the existing computed family, size, weight, line height and tracking of each surface.
+Twelve pixels is a computed floor at every root setting. In touch mode (D17), native text-entry controls, search inputs and the chat composer additionally render at `max(16px, current size)` through one registered typography token and one element-level rule, so iOS Safari does not zoom on focus and text never shrinks at a larger root. Dropdown triggers and date pickers keep their current size until the founder decides the open D17 question. There is no 9px, 10px or 11px role and no compact-mode exemption. The caption and compact roles use a CSS `max()` expression so user scaling cannot push them below 12px. D2 authorizes only this floor correction; role migration must otherwise preserve the existing computed family, size, weight, line height and tracking of each surface.
 
 Body copy may use the 65-character measure token where an existing presentation already fits the constitutional 45–75 character target. C1 must not impose that measure on an established surface whose layout differs without recording and approving the visual delta.
 
@@ -32,9 +34,9 @@ The closed product spacing scale is 0, 4, 8, 16, 24, 32, 40, 48 and 64px. Named 
 
 The sidebar width, 44px chrome header, 34px live-browser tab row, 40px swatch geometry and minimum hit regions are explicit preserved geometry. They are not an invitation to add off-grid spacing. In particular, changing the 34px browser tab row changes the remote viewport and requires its own approved visual delta.
 
-Breakpoints describe behavior: 320px is the minimum reflow viewport, 640px is the current intermediate content transition, and 1024px is the current wide-content transition. Application layouts must reflow at 320px without two-dimensional scrolling, apart from intrinsically two-dimensional tables, canvases and timelines. New device-branded or one-screen breakpoints are not allowed.
+Breakpoints describe behavior: 320px is the minimum reflow viewport, 640px is the current intermediate content transition, and 1024px is the current wide-content transition. Application layouts must reflow at 320px without two-dimensional scrolling, apart from intrinsically two-dimensional tables, canvases and timelines. New device-branded or one-screen breakpoints are not allowed. Layout follows window width only: a full-screen iPad gets the desktop layout with or without a keyboard, and the phone layout starts below 640px. By founder ruling on 2026-09-19, the workspace task board and the calendar grid count as two-dimensional content for this program; their phone layouts are dedicated later work (#737, #738).
 
-Comfortable and compact density are opt-in modes over the same scale. They may change control gaps and geometry. They never reduce the 12px type floor or an accessible hit region. Pointer adaptation is independent: fine-pointer targets are at least 24×24px only when the WCAG spacing exception is satisfied; coarse-pointer, destructive, primary and isolated controls use at least 44×44px. Enlarged hit regions must not overlap.
+Comfortable and compact density are opt-in modes over the same scale. They may change control gaps and geometry. They never reduce the 12px type floor or an accessible hit region. Pointer adaptation is independent of density and follows the input in use (D17): pointer-mode targets are at least 24×24px only when the WCAG spacing exception is satisfied; touch-mode, destructive, primary and isolated controls use at least 44×44px. Touch mode enlarges invisible hit regions first, so switching modes does not move the page. Enlarged hit regions must not overlap.
 
 ## Radius, borders, elevation and overlays
 
@@ -64,7 +66,7 @@ Reduced motion sets non-essential duration and travel to zero. Essential state c
 
 Phosphor is the standard product icon family. The named metric set records the established sizes used across product surfaces: 12px small, 14px compact, 16px medium, 18px control, 20px large, 24px prominent, 28px feature, 32px display and 48px hero. The 14px size is currently the most prevalent explicit Phosphor size; 18px and 24px are established control and prominent-state sizes. `regular` is the default weight and `fill` is reserved for established emphasis and status treatment. A small optical baseline adjustment of at most 0.125em is available for inline alignment; arbitrary per-screen nudges are not.
 
-Icon pixels and target pixels are separate. A 12px icon can sit within a 24px fine-pointer or 44px coarse-pointer hit region. Standalone interactive icons use `IconButton`. Decorative icons are hidden from assistive technology. Meaningful icons have an accessible-name owner; when visible text already supplies the name, the icon remains decorative. Product chrome does not introduce a competing icon family. The two audited inline-SVG integrations remain governed integration exceptions rather than a second icon system.
+Icon pixels and target pixels are separate. A 12px icon can sit within a 24px pointer-mode or 44px touch-mode hit region. Standalone interactive icons use `IconButton`. Decorative icons are hidden from assistive technology. Meaningful icons have an accessible-name owner; when visible text already supplies the name, the icon remains decorative. Product chrome does not introduce a competing icon family. The two audited inline-SVG integrations remain governed integration exceptions rather than a second icon system.
 
 ## Content, forms and localization
 
@@ -88,4 +90,4 @@ In forced-colours mode, the standalone library uses the user's system palette: C
 
 The A1 token source must pass the shared JSON schema, uniqueness, defined-reference and layer-direction checks. Focused tests additionally lock the type floor, role completeness, closed spacing scale, density invariants, finite geometry scales, overlay order, motion/loading timings and icon metrics.
 
-C1 and later packages add the enforcement that requires runtime context: computed type-floor tests at 12/14/20px roots, off-grid source locks, 320px and 200% reflow, coarse/fine pointer checks, reduced-motion browser tests, overlay interaction tests, locale expansion, visualization monochrome checks, and founder review of approved visual deltas. No A1 check claims that those user-visible gates have already run.
+C1 and later packages add the enforcement that requires runtime context: computed type-floor tests at 12/14/20px roots, off-grid source locks, 320px and 200% reflow, pointer-mode and touch-mode checks, the D17 in-context touch check on real routes at phone and tablet sizes, a one-time real-device iPhone and iPad Safari check, reduced-motion browser tests, overlay interaction tests, locale expansion, visualization monochrome checks, and founder review of approved visual deltas. No A1 check claims that those user-visible gates have already run.

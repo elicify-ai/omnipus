@@ -1,6 +1,6 @@
 # Omnipus Design System — Migration Plan
 
-**Status:** Delivery plan for the target-state constitution, amended 2026-09-17. Small bounded visual changes are in scope. **The founder judges “no redesign” by eye — there is no screenshot suite and no photo baseline.**
+**Status:** Delivery plan for the target-state constitution, amended 2026-09-17 and 2026-09-19 (touch and mobile decisions, definition D17). Small bounded visual changes are in scope. **The founder judges “no redesign” by eye — there is no screenshot suite and no photo baseline.**
 
 **Target state:** `/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/docs/internal/design/design-system-definition.md`
 
@@ -12,7 +12,7 @@ The SPA moves to the complete design system in one dedicated program. Product-wi
 
 Green lint alone is insufficient. The program must preserve intended behavior, reach the actual route inventory, and pass visual, interaction, accessibility, and bundle checks.
 
-The current rendered application is the accepted visual baseline. Every work package declares its visual delta as Invisible, Normalization, or Redesign Risk. The approved normalizations (12px floor, status-colour unification, 4px / 8px spacing snap) are required work. Anything outside that table is Redesign Risk and stays out unless the founder approves it.
+The current rendered application is the accepted visual baseline. Every work package declares its visual delta as Invisible, Normalization, or Redesign Risk. The approved normalizations (12px floor, status-colour unification, 4px / 8px spacing snap, and the touch-mode adaptations in definition D17) are required work. Anything outside that table is Redesign Risk and stays out unless the founder approves it.
 
 **Visual continuity is founder-judged.** Do not photograph the app as a start gate, and do not run a screenshot regression suite as a completion gate. Encode the rules, enforce them in CI, then repair what does not comply. The founder looks at the running app and says whether it still looks like Omnipus.
 
@@ -36,14 +36,28 @@ Storybook is required development verification before screen conversion. It is n
 
 | Batch | Fix | Why this order |
 |---|---|---|
-| C1 | Tokens, 12px floor, 4px / 8px spacing, status colours; then activate those four locks | Everything else sits on this |
+| C1 | Tokens, 12px floor, 4px / 8px spacing, status colours, and the D17 touch-mode foundations; then activate those four locks | Everything else sits on this |
 | C2 | Raw buttons, dialogs, confirms, switches; then activate the raw-control lock | Destination parts must exist first |
 | C3 | Sheets, forms, overlays | Needs Field / Dialog / Confirm |
 | C4 | Empty, error, loading, save, long-running | Needs the composites |
 | C5 | Domain widgets out of `ui/`; public-import cleanup | After callers use the official parts |
 | C6 | Verify every lock is repository-blocking; empty the exception list | Cutover |
 
-Usability work (empty Board, Library, pickers, task panel, Knowledge) is **not** this program. It starts after C6.
+Usability work (empty Board, Library, pickers, task panel, Knowledge) is **not** this program. It starts after C6. The phone-adapted workspace task board ([#737](https://github.com/elicify-ai/omnipus/issues/737)) and calendar ([#738](https://github.com/elicify-ai/omnipus/issues/738)) are also dedicated later work by founder ruling on 2026-09-19.
+
+### Touch and mobile — founder decisions, 2026-09-19
+
+The founder approved these on 2026-09-19. The rules are definition D17; the evidence is `docs/internal/design/evidence/mobile-review-2026-09-19/`.
+
+| When | Work |
+|---|---|
+| Before C1 applies any touch or text-size change | Build the in-context touch check (definition D17 Enforcement): real routes from the checked-in inventory, as a touch phone and a touch tablet, in pointer and touch modes, before and after each batch. Choose how the one-time real iPhone and iPad Safari check is done. |
+| C1 | One shared input-mode mechanism on the document root, replacing the device-type `pointer: coarse` rules; the registered touch-mode text-entry token `max(16px, current size)`; a registered safe-area inset token replacing ad hoc `env(safe-area-inset-*)` use; dynamic viewport height instead of `100vh` / `h-screen` on full-height screens. |
+| C2 | Primitives enlarge invisible hit regions in touch mode; the login show-password toggle reaches 44px in touch mode. |
+| C3 | Controls revealed only on hover are also shown in touch mode. |
+| Open | Whether dropdown triggers and date pickers match the 16px text-entry size in touch mode. They keep their current size until decided. |
+
+Layout follows window width only, so a full-screen iPad keeps the desktop layout. Touch adjustments switch on only while someone is using a finger. The founder reviews only what the in-context touch check flags.
 
 ## 1b. Execution model — four concurrent agents
 
@@ -110,7 +124,7 @@ After each batch, pause all edits, run integrated checks, resolve findings and r
 
 Run seven independent review assignments in waves of at most three workers: correctness/security, test coverage, silent failures, type/API design, simplification, comment accuracy, and UI/accessibility. Assign each review to a worker who did not implement the reviewed files; split review scope when necessary to preserve independence. The reproduction assignment uses a free worker slot after review work frees it, never a fifth concurrent agent. Repeat the seven-review gate at feature integration and on the complete program diff.
 
-Verification remains Chromium, Firefox and WebKit; applicable keyboard flows and axe checks; 12/14/20px root settings; 200% zoom; 320px reflow; reduced motion; forced colours; and non-overlapping fine/coarse-pointer targets. Obtain representative human screen-reader evidence for navigation, a validating form, dialog/sheet, collection state and a long-running job. Automation does not substitute for that evidence.
+Verification remains Chromium, Firefox and WebKit; applicable keyboard flows and axe checks; 12/14/20px root settings; 200% zoom; 320px reflow; reduced motion; forced colours; non-overlapping hit regions in pointer and touch modes; and the D17 in-context touch check at phone and tablet sizes. Obtain representative human screen-reader evidence for navigation, a validating form, dialog/sheet, collection state and a long-running job. Automation does not substitute for that evidence.
 
 The approved production budget remains **zero Storybook payload, at most 25 KiB additional compressed initial JavaScript/CSS, and at most 250 KiB additional total embedded assets**, compared with the same starting revision and build environment. Run applicable frontend and CI checks, GitNexus change detection before commits, and verify the actual running application. No screenshot suite.
 
@@ -292,6 +306,7 @@ Each batch records numerator, denominator, exclusions, command, and artifact for
 | Keyboard flows | Every keyboard check required by the checked-in inventory and public-component manifests passes |
 | Zoom/reflow | Every applicable inventory mapping passes at 200% zoom and 320px without loss of content/function |
 | Forced colors/reduced motion | Every applicable inventory and public-component mapping passes |
+| Touch and mobile | The D17 in-context touch check passes on every inventoried route in pointer and touch modes at phone and tablet sizes, and the one-time real iPhone and iPad Safari check is recorded |
 | Visual continuity | Founder sign-off on the running app. No screenshot suite |
 | Storybook coverage | 100% of curated public exports have complete applicable manifests, stories, assertions |
 | Bundle delta | Zero Storybook modules in production; embedded delta measured, explained, within approved budget |

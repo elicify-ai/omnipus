@@ -18,6 +18,7 @@ This constitution defines the finished system, not rollout order. Where product 
 4. **Gaps follow an 8px scale.** Today’s 7 / 14 / 21px steps become 8 / 16 / 24px. One scale, everywhere.
 5. **Screens use the shared parts.** Buttons, confirms, switches, empty, error, and loading come from the named components. Those replacements keep today’s look.
 6. **Inventing a one-off fails the build.** A new colour, a 10px label, a homemade button, or a one-off gap does not ship unless it is on the exception ledger.
+7. **Touch follows the finger, not the device.** The page looks and behaves like desktop until someone actually touches it. An iPad used with a keyboard and trackpad stays desktop. Rule D17.
 
 Screen-by-screen first-run problems (empty Board, empty Library, the model list) are not these rules. They are product findings and are handled separately.
 
@@ -59,6 +60,7 @@ Existing rendered values take precedence over illustrative brand scales or newly
 | D13 | Consistent punctuation, `…` loading copy, locale-aware numbers | Copy and format | A new stacked Field layout that moves labels or units |
 | D14 | Add a second non-colour series cue on charts | Encoding, not a new palette | Recolouring charts, Mermaid, or syntax themes |
 | D16 | Dark `color-scheme` and semantic heading/form wiring | Native controls and names | A new Settings information architecture |
+| D17 | Touch adaptation follows the input in use; in touch mode, text-entry controls render at `max(16px, current size)`, hover-only controls also appear, and hit regions enlarge invisibly (founder decision 2026-09-19) | Pointer mode is unchanged; touch-mode changes are bounded and verified in context | Resizing dropdown triggers or date pickers (open decision in D17), or any touch-mode reflow the in-context check does not require |
 
 Anything not in this table is Invisible by default, or Redesign Risk. Two versions of a foundation (old spacing and new spacing, old type and new type) are not an accepted end state.
 
@@ -223,13 +225,13 @@ Consolidation standardizes ownership without standardizing every presentation. D
 
 **Decision.** `IconButton` is distinct from `Button`. It requires an accessible name through a TypeScript union of `aria-label` or `aria-labelledby`; `Button` remains child-agnostic. `Button` defaults to `type="button"`. Decorative icons are `aria-hidden`; meaningful icons have an owned accessible name. `CommandInput` has a programmatic label.
 
-Visual size and hit area are separate. Interactive hit regions are at least 24×24px and become at least 44×44px for coarse pointers. Wrappers or pseudo-elements may enlarge a hit region without enlarging dense chrome. Enlarged regions must not overlap. The WCAG spacing exception at 24px applies only when adjacent-target spacing satisfies the criterion; destructive, primary, and isolated touch controls use 44px.
+Visual size and hit area are separate. Interactive hit regions are at least 24×24px and become at least 44×44px in touch mode (D17). Wrappers or pseudo-elements may enlarge a hit region without enlarging dense chrome. Enlarged regions must not overlap. The WCAG spacing exception at 24px applies only when adjacent-target spacing satisfies the criterion; destructive, primary, and isolated touch controls use 44px.
 
-**Visual delta: Normalization.** Accessible-name and button-type repairs are invisible. Effective hit regions are normally invisible; spacing may change subtly to noticeably where compliant, non-overlapping coarse-pointer targets cannot fit without reflow, using the least disruptive treatment.
+**Visual delta: Normalization.** Accessible-name and button-type repairs are invisible. Effective hit regions are normally invisible; spacing may change subtly to noticeably where compliant, non-overlapping touch-mode targets cannot fit without reflow, using the least disruptive treatment.
 
 **Evidence (facts only).** Lane C found central focus styling and Radix semantics, but no primitive guarantee for button type, icon names, decorative icons, command-input labeling, reduced motion, or minimum hit regions. It also found a hand-rolled Settings switch.
 
-**Enforcement.** Type contracts and development assertions enforce accessible names and button type. Storybook interaction tests use axe and accessible-name assertions. Pointer-event tests verify effective hit regions and non-overlap at fine and coarse pointer settings. The primitive checklist blocks release when a required item is absent.
+**Enforcement.** Type contracts and development assertions enforce accessible names and button type. Storybook interaction tests use axe and accessible-name assertions. Pointer-event tests verify effective hit regions and non-overlap in pointer mode and touch mode (D17). The primitive checklist blocks release when a required item is absent.
 
 ### D8. Storybook and `@omnipus/ui` are the verified front door
 
@@ -258,9 +260,9 @@ Existing parts keep their current look. New parts are added to fill the holes; t
 
 ### D9. Typography is a role system, not a bag of sizes
 
-**Decision.** Outfit is for display/headings, Inter for interface/body, and JetBrains Mono for code, identifiers, and aligned technical data. The role system documents and tokenizes the current effective family, size, weight, line height, letter spacing, and maximum line length for display, page title, section title, body, compact body, label, caption, and code at the 14px default density. It does not introduce a new scale. The only approved size change is D2's 12px floor. Body copy targets 45–75 characters per line where that already reflects the current presentation; changing an established measure requires a declared delta.
+**Decision.** Outfit is for display/headings, Inter for interface/body, and JetBrains Mono for code, identifiers, and aligned technical data. The role system documents and tokenizes the current effective family, size, weight, line height, letter spacing, and maximum line length for display, page title, section title, body, compact body, label, caption, and code at the 14px default density. It does not introduce a new scale. The only approved size changes are D2's 12px floor and D17's touch-mode text-entry floor. Body copy targets 45–75 characters per line where that already reflects the current presentation; changing an established measure requires a declared delta.
 
-**Visual delta: Invisible by default; Redesign Risk for any new value.** Any change from current rendered typography—including family, size, weight, line height, tracking, or measure—must identify affected surfaces and receive approval before implementation, apart from D2's approved normalization.
+**Visual delta: Invisible by default; Redesign Risk for any new value.** Any change from current rendered typography—including family, size, weight, line height, tracking, or measure—must identify affected surfaces and receive approval before implementation, apart from D2's and D17's approved normalizations.
 
 **Evidence (facts only).** The brand defines the three families and three example roles: 48px heading, 16px body, and 12px caption. Lane A found family tokens but no complete size, weight, or line-height system, and found `font-sans` not mapped to Inter.
 
@@ -272,15 +274,15 @@ Existing parts keep their current look. New parts are added to fill the holes; t
 
 Today's default Tailwind rem steps at the 14px root compute to 7, 14, 21, 28px and similar. The big-bang maps those onto the 4px / 8px scale. Spacing and control geometry use this scale in pixels so they do not jump when the user changes font size (D1: `rem` is for type). Named tokens cover control gaps, content padding, sections, gutters, and page margins. Hairlines and 1px borders stay 1px.
 
-Breakpoints express content behavior rather than device brands. Layouts reflow at 320px without two-dimensional scrolling except for intrinsically two-dimensional content such as data tables, canvases, and timelines.
+Breakpoints express content behavior rather than device brands. Layouts reflow at 320px without two-dimensional scrolling except for intrinsically two-dimensional content such as data tables, canvases, and timelines. By founder ruling on 2026-09-19, the workspace task board and the calendar grid count as two-dimensional content for this program; their phone-adapted layouts are dedicated later work (issues #737 and #738). Layout follows window width only, never device type (D17).
 
-Density has comfortable and compact modes. Those modes are additive and opt-in; they are not a second unnamed scale. The default density is this 4px / 8px system on every in-scope surface. Density changes spacing and control geometry, never the 12px floor or accessible hit region. Coarse pointers select touch-adapted spacing and 44px targets independently of visual density.
+Density has comfortable and compact modes. Those modes are additive and opt-in; they are not a second unnamed scale. The default density is this 4px / 8px system on every in-scope surface. Density changes spacing and control geometry, never the 12px floor or accessible hit region. Touch mode (D17) selects touch-adapted hit regions and 44px targets independently of visual density.
 
 **Visual delta: Normalization — approved.** Mapping current 14px-root rem geometry onto the 4px / 8px scale shifts common padding and gaps by about one pixel per step (about 14% on those steps). Close comparison will notice it; it is not a redesign. A default switch to compact or comfortable density, or any larger reflow, remains Redesign Risk.
 
 **Evidence (facts only).** Lane A found tokens for sidebar width, 44px tap target, and two chrome heights, but no general spacing scale. Lane D found 23 literal 44px dimensions despite an existing token.
 
-**Enforcement.** Stylelint rejects unregistered spacing and breakpoint values in system-owned CSS. Responsive stories and browser tests cover 320px, intermediate widths, wide layouts, both density modes, and coarse/fine pointers.
+**Enforcement.** Stylelint rejects unregistered spacing and breakpoint values in system-owned CSS. Responsive stories and browser tests cover 320px, intermediate widths, wide layouts, both density modes, and pointer and touch modes (D17).
 
 ### D11. Radius, borders, elevation, and overlays have finite scales
 
@@ -358,6 +360,26 @@ The system additionally requires:
 **Evidence (facts only).** Lane C found good Radix focus traps and roles in audited dialogs, a central focus ring, and strong keyboard behavior in several complex controls. It also found gaps in decorative-icon treatment, `CommandInput` naming, heading order, form wiring, dark color-scheme declaration, modal overscroll, and Settings tab URL state. Automated tests alone cannot establish screen-reader usability.
 
 **Enforcement.** CI runs axe, keyboard interaction tests, forced-colors tests, 200% zoom and 320px reflow, and reduced-motion browser coverage. Release evidence includes representative screen-reader checks for navigation, a validating form, a dialog/sheet, a collection state, and a long-running job. Component owners own accessible names; callers supply domain wording where needed.
+
+### D17. Touch adaptation follows the input in use — added 2026-09-19 by founder decision
+
+**Decision.** The page decides touch behaviour from the input the person is actually using, not from the type of device. It is in *touch mode* after a finger interaction and in *pointer mode* after a mouse, trackpad or pen interaction. Keyboard input never changes the mode. A device that reports no fine pointer at all starts in touch mode; every other device starts in pointer mode. One shared foundation mechanism records the mode on the document root, and tokens and components read that single signal. No component detects input on its own, and no new `pointer: coarse` or `hover: none` media query is added for touch adaptation. Existing coarse-pointer rules migrate to the mode signal in C1.
+
+Layout follows window width only (D10). An iPad at full screen gets the desktop layout, whether or not a keyboard is attached; a narrow split-screen window follows its width. The phone layout starts below the 640px transition.
+
+Touch mode enlarges invisible hit regions first (D7), so switching modes does not move the page. Visible touch-mode changes are limited to:
+
+- **Text entry.** Native inputs, textareas, search inputs and the chat composer render at `max(16px, current size)` through one registered typography token and one element-level rule, so iOS Safari does not zoom on focus and no user's text gets smaller at a larger root setting.
+- **Hover-only controls.** A control that is revealed only on hover is also shown in touch mode.
+- **Unavoidable geometry.** Where the in-context touch check shows an invisible hit region cannot fit without overlap, the least disruptive visible adjustment is used.
+
+**Open decision.** Whether dropdown triggers and date pickers, which do not cause focus zoom, match the 16px text-entry size in touch mode. Until the founder decides, they keep their current size.
+
+**Visual delta: Normalization — approved 2026-09-19.** Pointer mode is unchanged apart from the other approved normalizations. The touch-mode changes above are bounded and each is verified in context.
+
+**Evidence (facts only).** Eight application source files, plus five test and story files, decide touch adaptation from the device's primary pointer, which an iPad reports as touch even with a keyboard attached. On 2026-07-15, blanket 44px coarse-pointer floors inflated the chat composer controls and cut off the agent picker on iPad; they were removed in commit `80afc1329`. Text inputs compute to 12.25px at the default 14px root, below the 16px threshold at which iOS Safari zooms on focus. No production code observes the input type actually used. The mobile assessment and its independent critique are in `docs/internal/design/evidence/mobile-review-2026-09-19/`.
+
+**Enforcement.** The in-context touch check runs the real application routes from the checked-in inventory as a touch phone and a touch tablet, in both modes, before and after each repair batch. For every visible interactive control it asserts four things: no ancestor that hides overflow clips it; no label or entered text is clipped; hit regions do not overlap; and declared key rows stay within their height budget, measured as numbers. It also completes task flows: choosing a model in the model picker, composing a chat message, and signing in. A failure blocks the batch. The founder reviews only flagged items, each with one explanatory image; this is not a screenshot suite. The typography lock rejects an ad hoc 16px value; only the registered token is allowed. Real iPhone and iPad Safari behaviour, including focus zoom and mode switching, is verified once on real devices before C1 closes, because browser emulation cannot reproduce it.
 
 ## Non-goals and governance
 
