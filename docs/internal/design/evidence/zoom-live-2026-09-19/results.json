@@ -1,0 +1,1312 @@
+{
+  "environments": {
+    "desktop-chromium": {
+      "taskGraphSmall": {
+        "openingScale": 0.8,
+        "nodeFit": {
+          "total": 8,
+          "offscreen": 0
+        },
+        "controls": {
+          "zoomIn": true,
+          "zoomOut": true,
+          "fitView": true,
+          "minimap": true
+        },
+        "effectiveLabelPx": 11.200000000000001,
+        "wheelNoModifier": {
+          "before": 0.8,
+          "after": 1.05561,
+          "cx": 720,
+          "cy": 569.5
+        },
+        "ctrlWheel": {
+          "before": 1.05561,
+          "after": 1.39288,
+          "cx": 720,
+          "cy": 569.5
+        },
+        "zoomLimits": {
+          "maxScale": 1.75,
+          "minScale": 0.2
+        },
+        "afterDoubleClick": 0.4,
+        "afterFitButton": 0.8,
+        "touchPinch": {
+          "before": 0.8,
+          "after": 1.75,
+          "visualViewportBefore": 1,
+          "visualViewportAfter": 1
+        }
+      },
+      "taskGraphLarge": {
+        "openingScale": 0.8,
+        "nodeFit": {
+          "total": 40,
+          "offscreen": 34
+        },
+        "controls": {
+          "zoomIn": true,
+          "zoomOut": true,
+          "fitView": true,
+          "minimap": true
+        },
+        "effectiveLabelPx": 11.200000000000001,
+        "wheelNoModifier": {
+          "before": 0.8,
+          "after": 1.05561,
+          "cx": 720,
+          "cy": 569.5
+        },
+        "ctrlWheel": {
+          "before": 1.05561,
+          "after": 1.39288,
+          "cx": 720,
+          "cy": 569.5
+        },
+        "zoomLimits": {
+          "maxScale": 1.75,
+          "minScale": 0.2
+        },
+        "afterDoubleClick": 0.4,
+        "afterFitButton": 0.8,
+        "touchPinch": {
+          "before": 0.8,
+          "after": 1.75,
+          "visualViewportBefore": 1,
+          "visualViewportAfter": 1
+        }
+      },
+      "teamGraph": {
+        "openingScale": 0.5,
+        "nodeFit": {
+          "total": 14,
+          "offscreen": 6
+        },
+        "controls": {
+          "zoomIn": true,
+          "zoomOut": true,
+          "fitView": true,
+          "minimap": false
+        },
+        "effectiveLabelPx": 7,
+        "zoomLimits": {
+          "maxScale": 2,
+          "minScale": 0.5
+        },
+        "afterDoubleClick": 1,
+        "afterFitButton": 0.5
+      },
+      "diagramCount": 0,
+      "diagramBoxes": [],
+      "chatImage": {
+        "renderedBox": {
+          "x": 823,
+          "y": -1681.5625,
+          "width": 240,
+          "height": 180.5
+        },
+        "src": "/api/v1/media/workspace/01M2WJPFED1PM9CFVPHQ1JS4G6/9bb88fd1-6154-4a01-bcbf-d92e00e97f75"
+      },
+      "chatImageLightbox": {
+        "controlsPresent": [
+          "Copy image",
+          "Download",
+          "Close image preview"
+        ],
+        "mediaBoxOpening": {
+          "width": 800,
+          "height": 600,
+          "top": 176.25,
+          "left": 320
+        },
+        "viewport": {
+          "width": 1440,
+          "height": 900
+        },
+        "wheelNoModifierTransform": "matrix(1.15, 0, 0, 1.15, 0, 0.0375)",
+        "ctrlWheelTransform": "matrix(1.3225, 0, 0, 1.3225, 0, 0.080625)",
+        "touchPinch": {
+          "transformAfter": "matrix(1.74901, 0, 0, 1.74901, 0.520875, 0.252839)",
+          "visualViewportAfter": 1.9999998807907104
+        },
+        "afterDoubleClickTransform": "matrix(1.74901, 0, 0, 1.74901, 0.520875, 0.252839)",
+        "scrollMetrics": {
+          "mediaHeight": 1049.40380859375,
+          "mediaBottom": 1001.2047424316406,
+          "dialogHeight": 900,
+          "dialogBottom": 900,
+          "cutOff": true
+        },
+        "closedOnEscape": true
+      }
+    },
+    "ipad-chromium": {
+      "taskGraphSmall": {
+        "openingScale": 0.8,
+        "nodeFit": {
+          "total": 8,
+          "offscreen": 2
+        },
+        "controls": {
+          "zoomIn": true,
+          "zoomOut": true,
+          "fitView": true,
+          "minimap": true
+        },
+        "effectiveLabelPx": 11.200000000000001,
+        "wheelNoModifier": {
+          "before": 0.8,
+          "after": 0.918959,
+          "cx": 597,
+          "cy": 536.5
+        },
+        "ctrlWheel": {
+          "before": 0.918959,
+          "after": 1.05561,
+          "cx": 597,
+          "cy": 536.5
+        },
+        "zoomLimits": {
+          "maxScale": 1.75,
+          "minScale": 0.2
+        },
+        "afterDoubleClick": 0.2,
+        "afterFitButton": 0.8,
+        "touchPinch": {
+          "before": 0.8,
+          "after": 1.29345,
+          "visualViewportBefore": 1,
+          "visualViewportAfter": 1
+        }
+      },
+      "taskGraphLarge": {
+        "openingScale": 0.8,
+        "nodeFit": {
+          "total": 40,
+          "offscreen": 34
+        },
+        "controls": {
+          "zoomIn": true,
+          "zoomOut": true,
+          "fitView": true,
+          "minimap": true
+        },
+        "effectiveLabelPx": 11.200000000000001,
+        "wheelNoModifier": {
+          "before": 0.8,
+          "after": 0.918959,
+          "cx": 597,
+          "cy": 536.5
+        },
+        "ctrlWheel": {
+          "before": 0.918959,
+          "after": 1.05561,
+          "cx": 597,
+          "cy": 536.5
+        },
+        "zoomLimits": {
+          "maxScale": 1.75,
+          "minScale": 0.2
+        },
+        "afterDoubleClick": 0.4,
+        "afterFitButton": 0.8,
+        "touchPinch": {
+          "before": 0.8,
+          "after": 1.29345,
+          "visualViewportBefore": 1,
+          "visualViewportAfter": 1
+        }
+      },
+      "teamGraph": {
+        "openingScale": 0.5,
+        "nodeFit": {
+          "total": 14,
+          "offscreen": 6
+        },
+        "controls": {
+          "zoomIn": true,
+          "zoomOut": true,
+          "fitView": true,
+          "minimap": false
+        },
+        "effectiveLabelPx": 7,
+        "zoomLimits": {
+          "maxScale": 2,
+          "minScale": 0.5
+        },
+        "afterDoubleClick": 1,
+        "afterFitButton": 0.5
+      },
+      "diagramCount": 2,
+      "diagramBoxes": [
+        {
+          "i": 0,
+          "box": {
+            "x": 269,
+            "y": -122.5625,
+            "width": 612.59375,
+            "height": 52.078125
+          },
+          "aspect": 11.762976297629763
+        },
+        {
+          "i": 1,
+          "box": {
+            "x": 269,
+            "y": -29.984375,
+            "width": 612.59375,
+            "height": 698.375
+          },
+          "aspect": 0.87717021657419
+        }
+      ],
+      "chatMermaidWide": {
+        "renderedBox": {
+          "x": 269,
+          "y": -122.5625,
+          "width": 612.59375,
+          "height": 52.078125
+        },
+        "natural": {
+          "viewBox": "0 0 1975.8125 168",
+          "widthAttr": "100%",
+          "naturalWidth": 1975.8125
+        },
+        "openingScale": 0.3100464998576535,
+        "wheelTest": {
+          "scrollBefore": 475,
+          "scrollAfter": 475,
+          "widthBefore": 612.59375,
+          "widthAfter": 612.59375
+        }
+      },
+      "chatMermaidWideLightbox": {
+        "controlsPresent": [
+          "Copy diagram as PNG",
+          "Download diagram as PNG",
+          "Close image preview"
+        ],
+        "mediaBoxOpening": {
+          "width": 299.890625,
+          "height": 25.484375,
+          "top": 430.5,
+          "left": 447.046875
+        },
+        "viewport": {
+          "width": 1194,
+          "height": 834
+        },
+        "wheelNoModifierTransform": "matrix(1.15, 0, 0, 1.15, 0.15, 0.0375)",
+        "ctrlWheelTransform": "matrix(1.15, 0, 0, 1.15, 0.15, 0.0375)",
+        "touchPinch": {
+          "transformAfter": "matrix(2.31306, 0, 0, 2.31306, 1.66002, 1.22799)",
+          "visualViewportAfter": 1.9999990463256836
+        },
+        "afterDoubleClickTransform": "matrix(1, 0, 0, 1, 0, 0)",
+        "scrollMetrics": {
+          "mediaHeight": 25.484375,
+          "mediaBottom": 455.984375,
+          "dialogHeight": 834,
+          "dialogBottom": 834,
+          "cutOff": false
+        },
+        "closedOnEscape": true,
+        "openedViaEnlargeButton": true
+      },
+      "chatMermaidTall": {
+        "renderedBox": {
+          "x": -29,
+          "y": -446.984375,
+          "width": 612.59375,
+          "height": 698.375
+        },
+        "natural": {
+          "viewBox": "0 0 944.7030029296875 1077",
+          "widthAttr": "100%",
+          "naturalWidth": 944.7030029296875
+        },
+        "openingScale": 0.6484511514203308,
+        "wheelTest": {
+          "scrollBefore": 892,
+          "scrollAfter": 892,
+          "widthBefore": 612.59375,
+          "widthAfter": 612.59375
+        }
+      },
+      "chatMermaidError": "Error: cdpSession.send: Protocol error (Input.synthesizePinchGesture): Position out of bounds",
+      "chatImage": {
+        "error": "TimeoutError: locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-testid=\"chat-input\"], textarea[placeholder*=\"message\" i]').first()\u001b[22m\n\u001b[2m    - locator resolved to <textarea rows=\"1\" name=\"input\" tabindex=\"2\" role=\"combobox\" aria-expanded=\"false\" data-testid=\"chat-input\" aria-autocomplete=\"list\" data-no-focus-ring=\"true\" aria-label=\"Message input\" placeholder=\"Message Ava — Builder…\" class=\"block w-full resize-none bg-transparent px-3 py-2 text-sm text-[var(--color-secondary)] outline-none placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden focus:outline-none focus:ring-0\"></textarea>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <svg width=\"16\" height=\"16\" fill=\"currentColor\" viewBox=\"0 0 256 256\" xmlns=\"http://www.w3.org/2000/svg\">…</svg> from <button tabindex=\"5\" type=\"button\" title=\"Attach from library\" data-testid=\"composer-library-attach\" aria-label=\"Attach a file from the workspace library\" class=\"shrink-0 h-7 w-7 mb-1.5 rounded-full flex items-center justify-center text-[var(--color-muted)] hover:text-[var(--color-secondary)] hover:bg-[var(--color-surface-3)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed\">…</button> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m    - element is visible, enabled and stable\u001b[22m\n\u001b[2m    - scrolling into view if needed\u001b[22m\n\u001b[2m    - done scrolling\u001b[22m\n\u001b[2m    - <svg width=\"100%\" class=\"flowchart\" id=\"mermaid-ntgrierjwtc\" xmlns=\"http://www.w3.org/2000/svg\" aria-roledescription=\"flowchart-v2\" viewBox=\"0 0 944.7030029296875 1077\">…</svg> from <div data-testid=\"virtualized-message-list\" class=\"flex-1 overflow-y-auto overscroll-contain pt-4 pb-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m  2 × retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m      - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div id=\"root\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m  57 × retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div id=\"root\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m  - retrying click action\u001b[22m\n\u001b[2m    - waiting 500ms\u001b[22m\n"
+      }
+    },
+    "ipad-webkit": {
+      "taskGraphSmall": {
+        "openingScale": 0.8,
+        "nodeFit": {
+          "total": 8,
+          "offscreen": 0
+        },
+        "controls": {
+          "zoomIn": true,
+          "zoomOut": true,
+          "fitView": true,
+          "minimap": true
+        },
+        "effectiveLabelPx": 11.200000000000001,
+        "wheelNoModifier": {
+          "before": 0.8,
+          "after": 1.055606,
+          "cx": 597,
+          "cy": 536.5
+        },
+        "ctrlWheel": {
+          "before": 0.8,
+          "after": 1.75,
+          "cx": 597,
+          "cy": 536.5
+        },
+        "zoomLimits": {
+          "maxScale": 1.75,
+          "minScale": 0.2
+        },
+        "afterDoubleClick": 0.4,
+        "afterFitButton": 0.8,
+        "touchPinch": "not synthesizable (WebKit / no CDP)"
+      },
+      "taskGraphLarge": {
+        "openingScale": 0.8,
+        "nodeFit": {
+          "total": 8,
+          "offscreen": 0
+        },
+        "controls": {
+          "zoomIn": true,
+          "zoomOut": true,
+          "fitView": true,
+          "minimap": true
+        },
+        "effectiveLabelPx": 11.200000000000001,
+        "wheelNoModifier": null,
+        "ctrlWheel": {
+          "before": 0.8,
+          "after": 1.75,
+          "cx": 597,
+          "cy": 536.5
+        },
+        "zoomLimits": {
+          "maxScale": 1.75,
+          "minScale": 0.2
+        },
+        "afterDoubleClick": 0.4,
+        "afterFitButton": 0.8,
+        "touchPinch": "not synthesizable (WebKit / no CDP)"
+      },
+      "teamGraph": {
+        "openingScale": 0.5,
+        "nodeFit": {
+          "total": 14,
+          "offscreen": 6
+        },
+        "controls": {
+          "zoomIn": true,
+          "zoomOut": true,
+          "fitView": true,
+          "minimap": false
+        },
+        "effectiveLabelPx": 7,
+        "zoomLimits": {
+          "maxScale": 2,
+          "minScale": 0.5
+        },
+        "afterDoubleClick": 1,
+        "afterFitButton": 0.5
+      },
+      "diagramCount": 2,
+      "diagramBoxes": [
+        {
+          "i": 0,
+          "box": {
+            "x": 266,
+            "y": -682.96875,
+            "width": 612.59375,
+            "height": 17.25
+          },
+          "aspect": 35.51268115942029
+        },
+        {
+          "i": 1,
+          "box": {
+            "x": 392.4375,
+            "y": -625.21875,
+            "width": 359.71875,
+            "height": 1292.84375
+          },
+          "aspect": 0.27823837954122455
+        }
+      ],
+      "chatMermaidError": "Error: mouse.wheel: Mouse wheel is not supported in mobile WebKit",
+      "chatImage": {
+        "error": "Error: mouse.wheel: Mouse wheel is not supported in mobile WebKit"
+      }
+    },
+    "iphone-chromium": {
+      "taskGraphSmall": {
+        "error": "TimeoutError: locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-testid=\"tasks-view-graph\"]')\u001b[22m\n\u001b[2m    - locator resolved to <button role=\"radio\" type=\"button\" tabindex=\"-1\" aria-checked=\"false\" data-testid=\"tasks-view-graph\" class=\"flex items-center gap-1.5 text-sm font-medium transition-colors text-[var(--color-muted)] hover:text-[var(--color-secondary)]\">…</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    58 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n"
+      },
+      "taskGraphLarge": {
+        "error": "TimeoutError: locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-testid=\"tasks-view-graph\"]')\u001b[22m\n\u001b[2m    - locator resolved to <button role=\"radio\" type=\"button\" tabindex=\"-1\" aria-checked=\"false\" data-testid=\"tasks-view-graph\" class=\"flex items-center gap-1.5 text-sm font-medium transition-colors text-[var(--color-muted)] hover:text-[var(--color-secondary)]\">…</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    58 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n"
+      },
+      "teamGraph": {
+        "openingScale": 0.5,
+        "nodeFit": {
+          "total": 14,
+          "offscreen": 8
+        },
+        "controls": {
+          "zoomIn": true,
+          "zoomOut": true,
+          "fitView": true,
+          "minimap": false
+        },
+        "effectiveLabelPx": 7,
+        "zoomLimits": {
+          "maxScale": 2,
+          "minScale": 0.5
+        },
+        "afterDoubleClick": 1,
+        "afterFitButton": 0.5
+      },
+      "diagramCount": 1,
+      "diagramBoxes": [
+        {
+          "i": 0,
+          "box": {
+            "x": 64,
+            "y": 408.25,
+            "width": 277.6875,
+            "height": 41.5625
+          },
+          "aspect": 6.681203007518797
+        }
+      ],
+      "chatMermaidWide": {
+        "renderedBox": {
+          "x": 64,
+          "y": 408.25,
+          "width": 277.6875,
+          "height": 41.5625
+        },
+        "natural": {
+          "viewBox": "0 0 1797.140625 269",
+          "widthAttr": "100%",
+          "naturalWidth": 1797.140625
+        },
+        "openingScale": 0.15451628889642402,
+        "wheelTest": {
+          "scrollBefore": 0,
+          "scrollAfter": 346,
+          "widthBefore": 277.6875,
+          "widthAfter": 277.6875
+        }
+      },
+      "chatMermaidWideLightbox": {
+        "controlsPresent": [
+          "Copy diagram as PNG",
+          "Download diagram as PNG",
+          "Close image preview"
+        ],
+        "mediaBoxOpening": {
+          "width": 299.890625,
+          "height": 44.875,
+          "top": 335.8125,
+          "left": 45.046875
+        },
+        "viewport": {
+          "width": 390,
+          "height": 664
+        },
+        "wheelNoModifierTransform": "matrix(1.15, 0, 0, 1.15, 0.15, 0.0375)",
+        "ctrlWheelTransform": "matrix(1.3225, 0, 0, 1.3225, 0.3225, 0.080625)",
+        "touchPinch": {
+          "transformAfter": "matrix(3.05902, 0, 0, 3.05902, 3.71657, 3.60666)",
+          "visualViewportAfter": 2
+        },
+        "afterDoubleClickTransform": "matrix(1, 0, 0, 1, 0, 0)",
+        "scrollMetrics": {
+          "mediaHeight": 44.875,
+          "mediaBottom": 380.6875,
+          "dialogHeight": 664,
+          "dialogBottom": 664,
+          "cutOff": false
+        },
+        "closedOnEscape": true,
+        "openedViaEnlargeButton": true
+      },
+      "chatImage": {
+        "error": "TimeoutError: locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-testid=\"chat-input\"], textarea[placeholder*=\"message\" i]').first()\u001b[22m\n\u001b[2m    - locator resolved to <textarea rows=\"1\" name=\"input\" tabindex=\"2\" role=\"combobox\" aria-expanded=\"false\" data-testid=\"chat-input\" aria-autocomplete=\"list\" data-no-focus-ring=\"true\" aria-label=\"Message input\" placeholder=\"Message Ava — Builder…\" class=\"block w-full resize-none bg-transparent px-3 py-2 text-sm text-[var(--color-secondary)] outline-none placeholder:text-[var(--color-muted)] min-h-[24px] max-h-[200px] leading-6 overflow-hidden focus:outline-none focus:ring-0\"></textarea>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div id=\"root\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <div id=\"root\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    11 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div id=\"root\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <foreignobject height=\"21\" width=\"122.1875\">Request Approved</foreignobject> from <div data-testid=\"virtualized-message-list\" class=\"flex-1 overflow-y-auto overscroll-contain pt-4 pb-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div id=\"root\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m       - waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div id=\"root\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n\u001b[2m    14 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <div id=\"root\">…</div> intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n"
+      }
+    },
+    "iphone-webkit": {
+      "taskGraphSmall": {
+        "error": "TimeoutError: locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-testid=\"tasks-view-graph\"]')\u001b[22m\n\u001b[2m    - locator resolved to <button role=\"radio\" type=\"button\" tabindex=\"-1\" aria-checked=\"false\" data-testid=\"tasks-view-graph\" class=\"flex items-center gap-1.5 text-sm font-medium transition-colors text-[var(--color-muted)] hover:text-[var(--color-secondary)]\">…</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    56 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n"
+      },
+      "taskGraphLarge": {
+        "error": "TimeoutError: locator.click: Timeout 30000ms exceeded.\nCall log:\n\u001b[2m  - waiting for locator('[data-testid=\"tasks-view-graph\"]')\u001b[22m\n\u001b[2m    - locator resolved to <button role=\"radio\" type=\"button\" tabindex=\"-1\" aria-checked=\"false\" data-testid=\"tasks-view-graph\" class=\"flex items-center gap-1.5 text-sm font-medium transition-colors text-[var(--color-muted)] hover:text-[var(--color-secondary)]\">…</button>\u001b[22m\n\u001b[2m  - attempting click action\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m    - waiting 20ms\u001b[22m\n\u001b[2m    2 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m      - element is visible, enabled and stable\u001b[22m\n\u001b[2m      - scrolling into view if needed\u001b[22m\n\u001b[2m      - done scrolling\u001b[22m\n\u001b[2m      - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m    - retrying click action\u001b[22m\n\u001b[2m      - waiting 100ms\u001b[22m\n\u001b[2m    56 × waiting for element to be visible, enabled and stable\u001b[22m\n\u001b[2m       - element is visible, enabled and stable\u001b[22m\n\u001b[2m       - scrolling into view if needed\u001b[22m\n\u001b[2m       - done scrolling\u001b[22m\n\u001b[2m       - <button tabindex=\"0\" type=\"button\" id=\"radix-_r_8_\" data-ds-action=\"\" data-state=\"closed\" aria-haspopup=\"menu\" aria-expanded=\"false\" data-action-state=\"idle\" aria-label=\"Filter by agent (current: all agents)\" class=\"relative justify-center whitespace-nowrap transition-colors motion-reduce:transition-none forced-colors:border forced-colors:border-[ButtonText] forced-colors:bg-[ButtonFace] forced-colors:text-[ButtonText] forced-colors:[forced-color-adjust:none] disabled:pointer-events-none disabled:opac…>…</button> from <div class=\"flex items-center justify-center gap-2\">…</div> subtree intercepts pointer events\u001b[22m\n\u001b[2m     - retrying click action\u001b[22m\n\u001b[2m       - waiting 500ms\u001b[22m\n"
+      },
+      "teamGraph": {
+        "openingScale": 0.5,
+        "nodeFit": {
+          "total": 14,
+          "offscreen": 8
+        },
+        "controls": {
+          "zoomIn": true,
+          "zoomOut": true,
+          "fitView": true,
+          "minimap": false
+        },
+        "effectiveLabelPx": 7,
+        "zoomLimits": {
+          "maxScale": 2,
+          "minScale": 0.5
+        },
+        "afterDoubleClick": 1,
+        "afterFitButton": 0.5
+      },
+      "diagramCount": 2,
+      "diagramBoxes": [
+        {
+          "i": 0,
+          "box": {
+            "x": 64,
+            "y": -103.4375,
+            "width": 272.59375,
+            "height": 12.484375
+          },
+          "aspect": 21.834793491864833
+        },
+        {
+          "i": 1,
+          "box": {
+            "x": 64,
+            "y": -50.453125,
+            "width": 272.59375,
+            "height": 549.09375
+          },
+          "aspect": 0.49644300267486197
+        }
+      ],
+      "chatMermaidError": "Error: mouse.wheel: Mouse wheel is not supported in mobile WebKit",
+      "chatImage": {
+        "error": "Error: mouse.wheel: Mouse wheel is not supported in mobile WebKit"
+      }
+    }
+  },
+  "screenshots": [
+    {
+      "name": "desktop-chromium-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-opening.png",
+      "sha256": "6b72a2a32f748850c223534eacdd4dfe32746891de016a6eaa688bf70cd8b609"
+    },
+    {
+      "name": "desktop-chromium-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-after-zoom-reset.png",
+      "sha256": "2923e99ce3eeaf56615cc0a87c0760384a38f884d29e868e71ea8843a02df05c"
+    },
+    {
+      "name": "desktop-chromium-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-opening.png",
+      "sha256": "3ff6ef76fdb96aaf44483030277d35a583299676449d8f00367f4dc331463708"
+    },
+    {
+      "name": "desktop-chromium-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-after-zoom-reset.png",
+      "sha256": "0fa25bf403db7517a3c46b3e6e5acfe0bb1b29aedf2ae109837876d21e07b2c2"
+    },
+    {
+      "name": "desktop-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-opening.png",
+      "sha256": "641806b007becea181dee6f9d167a9723c7a0a8dd0af37142ea70d160a5fcf6e"
+    },
+    {
+      "name": "desktop-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-after-zoom-reset.png",
+      "sha256": "d08c6caf6946d9dc9bd336a97a2d0adc3c1a3a47efb9d75d515346f4aaebc54b"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-inline.png",
+      "sha256": "3ce4c6467d24d13a49c5b8f369131b0fe8db2d0512550ee4d78e1900e2a378d5"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-opening.png",
+      "sha256": "edcaee80ebea2953dd9b76eab311a3404dd975a1fdd1f99dcf3d5a16b8128a5f"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-wheel.png",
+      "sha256": "4d93fffbb36b17e0eaa132733db522eb4afc7556331082064b5c67ea59c7f400"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-interactions",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-interactions.png",
+      "sha256": "5d7465957a7f016e9d14066e021d03c4298b389f73a54b6069f57cdee90346a3"
+    },
+    {
+      "name": "desktop-chromium-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-opening.png",
+      "sha256": "ab261b34663f748c63d9663901f6621a4c44e18f856d2c9fec39cca04a812055"
+    },
+    {
+      "name": "desktop-chromium-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-after-zoom-reset.png",
+      "sha256": "16829005b00b79c59d6ca50acb6b4e660a462fb5b5a6e5823d1154689655a9f8"
+    },
+    {
+      "name": "desktop-chromium-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-opening.png",
+      "sha256": "02d085ce3af92dfd0e3cb3129653a757eef044d430b7258d2134e190c01578f0"
+    },
+    {
+      "name": "desktop-chromium-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-after-zoom-reset.png",
+      "sha256": "c3fac0d0a635859deae024907b7ff83413608e6a3f32b822b1fd857c5b0317df"
+    },
+    {
+      "name": "desktop-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-opening.png",
+      "sha256": "641806b007becea181dee6f9d167a9723c7a0a8dd0af37142ea70d160a5fcf6e"
+    },
+    {
+      "name": "desktop-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-after-zoom-reset.png",
+      "sha256": "d08c6caf6946d9dc9bd336a97a2d0adc3c1a3a47efb9d75d515346f4aaebc54b"
+    },
+    {
+      "name": "desktop-chromium-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-opening.png",
+      "sha256": "6b72a2a32f748850c223534eacdd4dfe32746891de016a6eaa688bf70cd8b609"
+    },
+    {
+      "name": "desktop-chromium-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-after-zoom-reset.png",
+      "sha256": "2923e99ce3eeaf56615cc0a87c0760384a38f884d29e868e71ea8843a02df05c"
+    },
+    {
+      "name": "desktop-chromium-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-opening.png",
+      "sha256": "a4c9dc511fd2c7e0768db01aece184f39dbae9bda9f65ff145f61cb9eaa5b489"
+    },
+    {
+      "name": "desktop-chromium-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-after-zoom-reset.png",
+      "sha256": "fc01086cf7829484e47970a5023e2cfe6511e76504586b48f9ca9a8dcffb2900"
+    },
+    {
+      "name": "desktop-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-opening.png",
+      "sha256": "641806b007becea181dee6f9d167a9723c7a0a8dd0af37142ea70d160a5fcf6e"
+    },
+    {
+      "name": "desktop-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-after-zoom-reset.png",
+      "sha256": "d7f48bf4ca884093190183378068b2d62802df2da3c901fa1b5880b443479b87"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-inline.png",
+      "sha256": "225134f3eee7cad0a215a47b8fcb42a719712d815798f79457b89eea2e239e7f"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-opening.png",
+      "sha256": "ef070b40e73e729a117a0af159f3e2cb6efab0c562b86b37380b58fdd0ff8443"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-wheel.png",
+      "sha256": "31da3072a7a3e93a64ae3a2de288e06e5c84eb929b45728ef4e1ab48da46ad6a"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-interactions",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-interactions.png",
+      "sha256": "f6ad46ac1026e2428214ac9074617c336617b0bef24b86a2df0c35da0b2dc51b"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-inline.png",
+      "sha256": "410690930b1c3169c7c82ca0bf92820a5c56673bfb3677141906df3f51077765"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-lightbox-opening.png",
+      "sha256": "101d8795f8547e656f088c38ef164916075cb97ffa5f56343dc9ea0871a10c42"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-lightbox-after-wheel.png",
+      "sha256": "101d8795f8547e656f088c38ef164916075cb97ffa5f56343dc9ea0871a10c42"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-lightbox-after-interactions",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-lightbox-after-interactions.png",
+      "sha256": "97bacb8e877a13ccf773f9f0ff429a3b26278fc313b50638dea2031886519cb7"
+    },
+    {
+      "name": "desktop-chromium-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-opening.png",
+      "sha256": "6b72a2a32f748850c223534eacdd4dfe32746891de016a6eaa688bf70cd8b609"
+    },
+    {
+      "name": "desktop-chromium-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-after-zoom-reset.png",
+      "sha256": "2923e99ce3eeaf56615cc0a87c0760384a38f884d29e868e71ea8843a02df05c"
+    },
+    {
+      "name": "desktop-chromium-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-opening.png",
+      "sha256": "073ee29a2883400aa36e8b12a19ac0c076c515c7bee56a198d69e5dc3d35050f"
+    },
+    {
+      "name": "desktop-chromium-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-after-zoom-reset.png",
+      "sha256": "2e0630799f1d0d1409d35a5f913f24bbf7ec85c678528a984090f0be453326f6"
+    },
+    {
+      "name": "desktop-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-opening.png",
+      "sha256": "641806b007becea181dee6f9d167a9723c7a0a8dd0af37142ea70d160a5fcf6e"
+    },
+    {
+      "name": "desktop-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-after-zoom-reset.png",
+      "sha256": "d8d55775ed8166042d2674372ad5f5181ed811536711c222189905488105c9c3"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-inline.png",
+      "sha256": "c76ec85d349cedd4805bb1a679e1572d0c9f6b8be8e1aa378601f16f3c9b61e9"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-opening.png",
+      "sha256": "ba69e8a172e19d84ac98ca2b3c8ee650159f24efa25ce0777fc95eade09d8d8b"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-wheel.png",
+      "sha256": "fac8719666d60a7c18c091dbc9dd57d0c8ef892d795d5f8efca6559935771ec1"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-interactions",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-interactions.png",
+      "sha256": "4a251c49ba4faa678f7b9a40dc3738cc12aa5a4c7e8993d107d1004b542b96f1"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-inline.png",
+      "sha256": "d17c25ac6de761c6ad649a8c7ed46a1ff7fbcfcc9aff67a07a75823973cd45d9"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-lightbox-opening.png",
+      "sha256": "ff26020075c4602ef40021bb7105143ab0e433f9b40861ba9d4b9bcaeade79c1"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-lightbox-after-wheel.png",
+      "sha256": "0dbc8ff0de1aae2620f222d87c0ffc0f5f068f91523594dc9da26ba094cffc3b"
+    },
+    {
+      "name": "desktop-chromium-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-opening.png",
+      "sha256": "6b72a2a32f748850c223534eacdd4dfe32746891de016a6eaa688bf70cd8b609"
+    },
+    {
+      "name": "desktop-chromium-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-after-zoom-reset.png",
+      "sha256": "2923e99ce3eeaf56615cc0a87c0760384a38f884d29e868e71ea8843a02df05c"
+    },
+    {
+      "name": "desktop-chromium-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-opening.png",
+      "sha256": "02d085ce3af92dfd0e3cb3129653a757eef044d430b7258d2134e190c01578f0"
+    },
+    {
+      "name": "desktop-chromium-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-after-zoom-reset.png",
+      "sha256": "c3fac0d0a635859deae024907b7ff83413608e6a3f32b822b1fd857c5b0317df"
+    },
+    {
+      "name": "desktop-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-opening.png",
+      "sha256": "641806b007becea181dee6f9d167a9723c7a0a8dd0af37142ea70d160a5fcf6e"
+    },
+    {
+      "name": "desktop-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-after-zoom-reset.png",
+      "sha256": "d7f48bf4ca884093190183378068b2d62802df2da3c901fa1b5880b443479b87"
+    },
+    {
+      "name": "desktop-chromium-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-opening.png",
+      "sha256": "6b72a2a32f748850c223534eacdd4dfe32746891de016a6eaa688bf70cd8b609"
+    },
+    {
+      "name": "desktop-chromium-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-after-zoom-reset.png",
+      "sha256": "2923e99ce3eeaf56615cc0a87c0760384a38f884d29e868e71ea8843a02df05c"
+    },
+    {
+      "name": "desktop-chromium-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-opening.png",
+      "sha256": "02d085ce3af92dfd0e3cb3129653a757eef044d430b7258d2134e190c01578f0"
+    },
+    {
+      "name": "desktop-chromium-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-after-zoom-reset.png",
+      "sha256": "c3fac0d0a635859deae024907b7ff83413608e6a3f32b822b1fd857c5b0317df"
+    },
+    {
+      "name": "desktop-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-opening.png",
+      "sha256": "641806b007becea181dee6f9d167a9723c7a0a8dd0af37142ea70d160a5fcf6e"
+    },
+    {
+      "name": "desktop-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-after-zoom-reset.png",
+      "sha256": "d08c6caf6946d9dc9bd336a97a2d0adc3c1a3a47efb9d75d515346f4aaebc54b"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-inline.png",
+      "sha256": "b2ef545775b051df44931e06722fe3ed006eb2284cbfaaa90df50284dba1afea"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-opening.png",
+      "sha256": "5fa14c41719d98606f51f377ce09c0bcaa54184ba9bf552746678702af00eff3"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-wheel.png",
+      "sha256": "20d7e63bfdb96559b57dd973a06ddc2c1911cf90d7a65962cdec749b2114c138"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-interactions",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-interactions.png",
+      "sha256": "2c888c258dad3409a1169f183fc7c14a0dfecf230253304fa67a8cd7d3dcdb44"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-inline.png",
+      "sha256": "3400c2c53a3379aec2898593aaeccf1bc8f255e2650ee03028fcdf0f619a6b4b"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-lightbox-opening.png",
+      "sha256": "43d66faeed334e31649840d52c8027cb0ae67e076d8886879c83aa63a02db854"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-lightbox-after-wheel.png",
+      "sha256": "cbdd6a425bd4db93df95347a5b10dad37c6f4c51b617500f06ed62dc979ab9a1"
+    },
+    {
+      "name": "desktop-chromium-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-opening.png",
+      "sha256": "ab261b34663f748c63d9663901f6621a4c44e18f856d2c9fec39cca04a812055"
+    },
+    {
+      "name": "desktop-chromium-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-after-zoom-reset.png",
+      "sha256": "16829005b00b79c59d6ca50acb6b4e660a462fb5b5a6e5823d1154689655a9f8"
+    },
+    {
+      "name": "desktop-chromium-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-opening.png",
+      "sha256": "e4ee23524fb71052b88e071832759d25853099f2db2adb87668db749ecc784ff"
+    },
+    {
+      "name": "desktop-chromium-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-after-zoom-reset.png",
+      "sha256": "41e0c15b146bdd4317ea11692f9d269da0e24a1f5d7baf91f0d5eba0b7654316"
+    },
+    {
+      "name": "desktop-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-opening.png",
+      "sha256": "641806b007becea181dee6f9d167a9723c7a0a8dd0af37142ea70d160a5fcf6e"
+    },
+    {
+      "name": "desktop-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-after-zoom-reset.png",
+      "sha256": "d7f48bf4ca884093190183378068b2d62802df2da3c901fa1b5880b443479b87"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-inline.png",
+      "sha256": "77589a258af94415dbdfde85e8e2f9318aef1fe5a8814883aef11cdecc73e53e"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-opening.png",
+      "sha256": "bd86c1c684f18f600ef0fb16177849bfa6f2a91a49aca30aec0c8ca33f1d1537"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-wheel.png",
+      "sha256": "146c44da9f3a93cf3f7d3bfe39f56607d491eddee38335e503302fdb7ee6b5d3"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-interactions",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-interactions.png",
+      "sha256": "0b198889cc2f3a22e41f2944c3c22497bfc792cee1345db7a30fdb79e1a1f1cb"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-inline.png",
+      "sha256": "7dec042987d6213e6c1f8fa86be78ac22c946863d876417941b80c398ce6fe4e"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-lightbox-opening.png",
+      "sha256": "4c703e73fb43d8e486c4e62af83dd77a7e63509d462ac2fb4eb9963966f729d6"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-lightbox-after-wheel.png",
+      "sha256": "e7c568cac9a00f9388d53523b8f85fc02846e18010a33702cacc588b5a7241d0"
+    },
+    {
+      "name": "desktop-chromium-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-opening.png",
+      "sha256": "6b72a2a32f748850c223534eacdd4dfe32746891de016a6eaa688bf70cd8b609"
+    },
+    {
+      "name": "desktop-chromium-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-after-zoom-reset.png",
+      "sha256": "2923e99ce3eeaf56615cc0a87c0760384a38f884d29e868e71ea8843a02df05c"
+    },
+    {
+      "name": "desktop-chromium-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-opening.png",
+      "sha256": "c10375328dc90c208ce3b21b2a428d442b4ca435c768f6e7019db8149c2e43f5"
+    },
+    {
+      "name": "desktop-chromium-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-after-zoom-reset.png",
+      "sha256": "349e6c42b7e72279bdc871b6acc702b26fd6b2464c5773f3291a50f36da58fff"
+    },
+    {
+      "name": "desktop-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-opening.png",
+      "sha256": "641806b007becea181dee6f9d167a9723c7a0a8dd0af37142ea70d160a5fcf6e"
+    },
+    {
+      "name": "desktop-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-after-zoom-reset.png",
+      "sha256": "d7f48bf4ca884093190183378068b2d62802df2da3c901fa1b5880b443479b87"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-inline.png",
+      "sha256": "d0783fa8dac10dad2784f7e635f3da9a3f7addcfcb98032da66fe0cc7de5e6b5"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-opening.png",
+      "sha256": "442f29f65f8631eaf3f9de1998e72371e429c4838d8de90e7c9c2631d12e5e25"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-wheel.png",
+      "sha256": "efa8b919d7994630906bea0baa1cc2e7f2a1739c237eb6e24c03d5398d4c8d82"
+    },
+    {
+      "name": "desktop-chromium-wide-mermaid-lightbox-after-interactions",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-wide-mermaid-lightbox-after-interactions.png",
+      "sha256": "d64c85ec5c0b4e87e61c305039bbebcfe78c41346c85947a78e1c2dbdde2fe7c"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-inline.png",
+      "sha256": "8e6474b5c5ab45f9e72f408a99b6146d9506b93e282af6e7b62829f20b51616b"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-lightbox-opening.png",
+      "sha256": "e17c42434cceb1e58ab3a481b8e07c543718bb7ac062561ac730c8a7c594df45"
+    },
+    {
+      "name": "desktop-chromium-tall-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-tall-mermaid-lightbox-after-wheel.png",
+      "sha256": "76e7c8a99f30ae83558a725aa1a05830bdf26da0203b869b3ba0614874e59f31"
+    },
+    {
+      "name": "desktop-chromium-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-opening.png",
+      "sha256": "6b72a2a32f748850c223534eacdd4dfe32746891de016a6eaa688bf70cd8b609"
+    },
+    {
+      "name": "desktop-chromium-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-after-zoom-reset.png",
+      "sha256": "2923e99ce3eeaf56615cc0a87c0760384a38f884d29e868e71ea8843a02df05c"
+    },
+    {
+      "name": "desktop-chromium-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-opening.png",
+      "sha256": "965aaede57118304db735d3661e9a67d3a9953818e1c81cafbf029f39a6bf373"
+    },
+    {
+      "name": "desktop-chromium-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-after-zoom-reset.png",
+      "sha256": "1f5d4feb7bef2444a54317d7941bc1cc950cea683de9e0e2517555ab149ecf74"
+    },
+    {
+      "name": "desktop-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-opening.png",
+      "sha256": "641806b007becea181dee6f9d167a9723c7a0a8dd0af37142ea70d160a5fcf6e"
+    },
+    {
+      "name": "desktop-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-after-zoom-reset.png",
+      "sha256": "d7f48bf4ca884093190183378068b2d62802df2da3c901fa1b5880b443479b87"
+    },
+    {
+      "name": "desktop-chromium-image-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-image-inline.png",
+      "sha256": "ef2069ffc88ffcbd2b0aaaccad63f68303ac1771b5f7d1a2960fd8d63e7d0b72"
+    },
+    {
+      "name": "desktop-chromium-image-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-image-lightbox-opening.png",
+      "sha256": "9c6671b9de4ac5aae233a1a601e5f53e2208b9d1483beb37ff6c6f54279d492f"
+    },
+    {
+      "name": "desktop-chromium-image-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-image-lightbox-after-wheel.png",
+      "sha256": "c398c445e5052d79b16b865471730ef2fc9523205c306eb24ad5b714451775e6"
+    },
+    {
+      "name": "desktop-chromium-image-lightbox-after-interactions",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-image-lightbox-after-interactions.png",
+      "sha256": "06e314e62425a1b6973ecd6974cd732c4df4821883538aada9fc156236fee945"
+    },
+    {
+      "name": "ipad-chromium-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-small-opening.png",
+      "sha256": "96007277f22528b9db0f16082b39b302de879cffa5a0145ff74da309a6530280"
+    },
+    {
+      "name": "ipad-chromium-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-small-after-zoom-reset.png",
+      "sha256": "129f2d03abe82599ada241e8b974cfd5bf03193b84dcaa3ff33e931dad082685"
+    },
+    {
+      "name": "ipad-chromium-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-large-opening.png",
+      "sha256": "506833ae5bcc0297f8c361f8b7739c4bcf69b17643adac057b1169fa6cf6ffc5"
+    },
+    {
+      "name": "ipad-chromium-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-large-after-zoom-reset.png",
+      "sha256": "90464438c6a6eab36c43f4beb8256b0b65bef1c632b3fead9efbbb8b6993928b"
+    },
+    {
+      "name": "ipad-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-team-opening.png",
+      "sha256": "629b505a79639440225a6eac69a3d73f7925c457168cea7923023734b1169cc4"
+    },
+    {
+      "name": "ipad-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-team-after-zoom-reset.png",
+      "sha256": "629b505a79639440225a6eac69a3d73f7925c457168cea7923023734b1169cc4"
+    },
+    {
+      "name": "ipad-chromium-wide-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-wide-mermaid-inline.png",
+      "sha256": "f48336abc6ea1439f7c9308cea911e0edbb01c43df44f17ca57a06e85d45c9b0"
+    },
+    {
+      "name": "ipad-chromium-wide-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-wide-mermaid-lightbox-opening.png",
+      "sha256": "5862bcdbc526d70eba47dbd6f61e1e590223bfc140fb2d92ad7d93c1e3268c6d"
+    },
+    {
+      "name": "ipad-chromium-wide-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-wide-mermaid-lightbox-after-wheel.png",
+      "sha256": "e4d7f9456ba2c1345e99b94e9b9a5d5e2006d94792d39e5eb42b6018c910e76f"
+    },
+    {
+      "name": "ipad-chromium-wide-mermaid-lightbox-after-interactions",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-wide-mermaid-lightbox-after-interactions.png",
+      "sha256": "a0848d7100cf00745309640d548e03ab7f4a563580cbb9d930d40a3a4f19d45f"
+    },
+    {
+      "name": "ipad-chromium-tall-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-tall-mermaid-inline.png",
+      "sha256": "c93925b507edf55c46b60ff920ae9837550da668283450548530b8be8418cb11"
+    },
+    {
+      "name": "ipad-chromium-tall-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-tall-mermaid-lightbox-opening.png",
+      "sha256": "cbef0865406ac8962839f9a322d11ce758de7ffba131e627df393db425bc2cf2"
+    },
+    {
+      "name": "ipad-chromium-tall-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-chromium-tall-mermaid-lightbox-after-wheel.png",
+      "sha256": "89c1e8b39825c1f975a662e503f0fa6d57d94c4b36226660c5eadbd5f79e7896"
+    },
+    {
+      "name": "ipad-webkit-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-webkit-small-opening.png",
+      "sha256": "d7fdc55cd4dd6ed99550f10f7508e5cd46e8077e96f699e1a43885a5b4eb17f1"
+    },
+    {
+      "name": "ipad-webkit-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-webkit-small-after-zoom-reset.png",
+      "sha256": "aa9e0286f5a725d9bf6320a821f0007cb7df6c94aa2be811b77b485b26e7a9c8"
+    },
+    {
+      "name": "ipad-webkit-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-webkit-large-opening.png",
+      "sha256": "59bfd353a5e15ed5b3a2270601643afadafc831bd99d5f1b6571ea7da73ca17a"
+    },
+    {
+      "name": "ipad-webkit-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-webkit-large-after-zoom-reset.png",
+      "sha256": "bf06c33020b6b084f310ba0c9d92e17cdce57f614de2910b1bfe34873ba09e98"
+    },
+    {
+      "name": "ipad-webkit-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-webkit-team-opening.png",
+      "sha256": "cb05892b5580f3378f414ddee39a5d06dbee5404574f82ba2eb226908fc0f23c"
+    },
+    {
+      "name": "ipad-webkit-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-webkit-team-after-zoom-reset.png",
+      "sha256": "6c641a9c94653b6b26b30c9f7d2ef34df7e3f93782a48613374e61473ebb6bd2"
+    },
+    {
+      "name": "ipad-webkit-wide-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-webkit-wide-mermaid-inline.png",
+      "sha256": "8d6a1553a5e9802d4578fdb6e99f4ca2702f7d20cff83af6c3ec3a7856cc38a2"
+    },
+    {
+      "name": "ipad-webkit-image-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-webkit-image-inline.png",
+      "sha256": "4d629d516c04438809944e8f94cf33bde24b77a763bc772321ce33167ad27853"
+    },
+    {
+      "name": "ipad-webkit-image-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/ipad-webkit-image-lightbox-opening.png",
+      "sha256": "0683d09a35be85e25ed3f83a2300e85343d8d744c26c1f8f2d1f7195d3ce6ac2"
+    },
+    {
+      "name": "iphone-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/iphone-chromium-team-opening.png",
+      "sha256": "faefa1b8bba1ce9ea630e98e63b5988dee79e4318006afe44975f09b829072c2"
+    },
+    {
+      "name": "iphone-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/iphone-chromium-team-after-zoom-reset.png",
+      "sha256": "80ca8377d586aba056f9d9757fac9df790e03025153f5d5bab97bb40136b672c"
+    },
+    {
+      "name": "iphone-chromium-wide-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/iphone-chromium-wide-mermaid-inline.png",
+      "sha256": "478c4d6b3be174a0d391383bbed5a9c32202cd0477631c0e6c5b88feff62c6b9"
+    },
+    {
+      "name": "iphone-chromium-wide-mermaid-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/iphone-chromium-wide-mermaid-lightbox-opening.png",
+      "sha256": "f223e3cd6c9931ba2a28d19ff55a63dd6317f272bfcf7027d5d94e091f3665bb"
+    },
+    {
+      "name": "iphone-chromium-wide-mermaid-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/iphone-chromium-wide-mermaid-lightbox-after-wheel.png",
+      "sha256": "bfd9e95103c936b661f2fb86b388cb36af83afcc1c231553a319aa7ed160dbbc"
+    },
+    {
+      "name": "iphone-chromium-wide-mermaid-lightbox-after-interactions",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/iphone-chromium-wide-mermaid-lightbox-after-interactions.png",
+      "sha256": "07a2ec69c490c850661c31d47fe1b8f716ff5d415d36f5c00d999814aa516e32"
+    },
+    {
+      "name": "iphone-webkit-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/iphone-webkit-team-opening.png",
+      "sha256": "a9a00879bea6fad14dec586e9620f914f533be7bceacedc7d4dc3a48941c3432"
+    },
+    {
+      "name": "iphone-webkit-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/iphone-webkit-team-after-zoom-reset.png",
+      "sha256": "688741c85c9370c65a19df648d2ac607ec416c79165668e6b699183d3456c81f"
+    },
+    {
+      "name": "iphone-webkit-wide-mermaid-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/iphone-webkit-wide-mermaid-inline.png",
+      "sha256": "b897a2a4e3a3a1742216a8c34572815ae2e113df752b4fb4b1cfa96beaf52562"
+    },
+    {
+      "name": "iphone-webkit-image-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/iphone-webkit-image-inline.png",
+      "sha256": "1c29b70471b52fbd8322011275022b09852a72d6e45037c216cb3e145c0261a8"
+    },
+    {
+      "name": "iphone-webkit-image-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/iphone-webkit-image-lightbox-opening.png",
+      "sha256": "75dddb3c8132ef62d5201e3cffc2080de15bdc09c63329b85e7d320ac3cf76a5"
+    },
+    {
+      "name": "desktop-chromium-small-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-opening.png",
+      "sha256": "cbd37af182873a600040c56ee4326defe1cca3a7d559d8886326b27af4dc2d6d"
+    },
+    {
+      "name": "desktop-chromium-small-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-small-after-zoom-reset.png",
+      "sha256": "edef434c2d050356f477b753778ffa123e4d45caa4e819a24c60e79b738d00a6"
+    },
+    {
+      "name": "desktop-chromium-large-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-opening.png",
+      "sha256": "e4ee23524fb71052b88e071832759d25853099f2db2adb87668db749ecc784ff"
+    },
+    {
+      "name": "desktop-chromium-large-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-large-after-zoom-reset.png",
+      "sha256": "57b135df8ab632c0b2e8dbf868d93253f6dd22d7f84988782c5b2e86f9c68894"
+    },
+    {
+      "name": "desktop-chromium-team-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-opening.png",
+      "sha256": "641806b007becea181dee6f9d167a9723c7a0a8dd0af37142ea70d160a5fcf6e"
+    },
+    {
+      "name": "desktop-chromium-team-after-zoom-reset",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-team-after-zoom-reset.png",
+      "sha256": "d7f48bf4ca884093190183378068b2d62802df2da3c901fa1b5880b443479b87"
+    },
+    {
+      "name": "desktop-chromium-image-inline",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-image-inline.png",
+      "sha256": "be772db6b276cee749c337b66ac049e1e38b5a8f358e886703c18650d46c57e0"
+    },
+    {
+      "name": "desktop-chromium-image-lightbox-opening",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-image-lightbox-opening.png",
+      "sha256": "955131e4451a9b6097d5db3e8df403be1c8f27592510ce84c52afcfb717fca8d"
+    },
+    {
+      "name": "desktop-chromium-image-lightbox-after-wheel",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-image-lightbox-after-wheel.png",
+      "sha256": "853e6f06561b7fb11c35ccdb79a8d05f77bcebf7fe4c29944d3340ef24d4b58b"
+    },
+    {
+      "name": "desktop-chromium-image-lightbox-after-interactions",
+      "file": "/Users/danielpiatkowski/AI-Agent-Workspace/omnipus/wt-release-session/dist/design-system-baseline/cli-lanes/claude-zoom-live/screenshots/desktop-chromium-image-lightbox-after-interactions.png",
+      "sha256": "126cbd817af5b03ed4bd75dc7bb85f9121c9e783d5382560a9fdc6060a415f9a"
+    }
+  ]
+}
