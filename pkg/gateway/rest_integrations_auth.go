@@ -190,12 +190,25 @@ func (a *restAPI) auditReAuth(r *http.Request, username string, verified bool) {
 	}
 }
 
-// requireReAuth enforces the consent primitive on a sensitive request. It reads
-// the X-Reauth-Token header, validates+consumes it (single-use), and returns
-// true when the caller may proceed. On failure it writes a 403 and returns
-// false. This is the HTTP-layer counterpart to the tool-layer ws_approval used
-// for skill writes — and explicitly NOT RequireNotBypass (a 503 dev guard).
+// requireReAuth enforces the consent primitive on a sensitive request in
+// LOCAL mode only. It reads the X-Reauth-Token header, validates+consumes it
+// (single-use), and returns true when the caller may proceed. On failure it
+// writes a 403 and returns false. This is the HTTP-layer counterpart to the
+// tool-layer ws_approval used for skill writes — and explicitly NOT
+// RequireNotBypass (a 503 dev guard).
+//
+// In PLATFORM mode this is a no-op that always returns true (ADR-0010 WP2
+// deliverable 3): there is no local password to re-type, the omnipus.ai
+// session itself is the guard, and the SPA confirms the change with the
+// operator before sending (ADR-0008 ruling 6). WP3 wires the equivalent
+// step-up consent mode into the other sensitive handlers this same function
+// gates (rest_providers.go, rest_sandbox_config.go, rest_god_mode.go,
+// rest_performance.go) — this mode check is what makes that safe to do
+// without duplicating the platform/local branch in every call site.
 func (a *restAPI) requireReAuth(w http.ResponseWriter, r *http.Request, username string) bool {
+	if config.EditionAuthMode() == config.AuthModePlatform {
+		return true
+	}
 	token := strings.TrimSpace(r.Header.Get(reAuthHeader))
 	if a.reauthStoreOrInit().consume(token, username) {
 		return true

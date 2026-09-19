@@ -4,9 +4,7 @@ description: >
   voice-input integration provider (FR-12.1). Setting an api_key stores it
   encrypted (AES-256-GCM) in credentials.json and writes only the credential
   reference to config.json. Setting active=true selects this provider as the
-  active one for its kind. Because integration edits are sensitive, the SPA must
-  first obtain a re-auth token (POST /auth/reauth) and replay it in the
-  X-Reauth-Token header — requests without a valid token are rejected 403.
+  active one for its kind. Integration edits are sensitive. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6).
 required:
   - kind
 additionalProperties: false

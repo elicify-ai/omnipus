@@ -13,8 +13,21 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Separator } from '@/components/ui/separator'
-import { fetchConfig, updateConfig, fetchStorageStats, createBackup, fetchBackups, restoreBackup, clearAllSessions, getErrorMessage } from '@/lib/api'
+import {
+  fetchConfig,
+  updateConfig,
+  fetchStorageStats,
+  fetchAppState,
+  createBackup,
+  fetchBackups,
+  restoreBackup,
+  clearAllSessions,
+  getErrorMessage,
+} from '@/lib/api'
+import type { AppState } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
+import { useStepUp } from './useStepUp'
+import { isReAuthCancelled } from './useReAuthGate'
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -23,11 +36,23 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`
 }
 
+// WP4 (ADR-0010): local backup is off in platform mode. `identity.mode` is a
+// required field of the generated AppState (WP1); an absent state (query not
+// answered yet) reads as not-local, i.e. the section stays hidden — the same
+// fail-closed posture a misbuilt edition has on the server.
+function isLocalMode(state: AppState | undefined): boolean {
+  return state?.identity?.mode === 'local'
+}
+
 export function DataSection() {
   const { addToast } = useUiStore()
   const queryClient = useQueryClient()
   const [clearConfirmOpen, setClearConfirmOpen] = useState(false)
   const [restoreTarget, setRestoreTarget] = useState<string | null>(null)
+  // Restore overwrites the whole vault, so it takes the step-up gate (ADR-0010
+  // WP3): the password prompt in local mode, which is the only mode where the
+  // route exists.
+  const stepUp = useStepUp()
 
   const { data: config, isLoading: configLoading } = useQuery({
     queryKey: ['config'],
@@ -37,6 +62,21 @@ export function DataSection() {
   const { data: stats, isLoading: statsLoading } = useQuery({
     queryKey: ['storage-stats'],
     queryFn: fetchStorageStats,
+  })
+
+  // Shared with AppShell/VideoEmbed's ['app-state'] query — same cache entry,
+  // so this rarely triggers its own network round trip.
+  const { data: appState } = useQuery({
+    queryKey: ['app-state'],
+    queryFn: fetchAppState,
+  })
+  const localMode = isLocalMode(appState)
+
+  const { data: backups = [], isLoading: backupsLoading, isError: backupsError } = useQuery({
+    queryKey: ['backups'],
+    queryFn: fetchBackups,
+    enabled: localMode,
+    retry: false,
   })
 
   // Task 3 fix: fetchStorageStats()'s `warnings` field (non-fatal per-agent
@@ -62,12 +102,6 @@ export function DataSection() {
       variant: 'warning',
     })
   }, [stats?.warnings, addToast])
-
-  const { data: backups = [], isLoading: backupsLoading, isError: backupsError } = useQuery({
-    queryKey: ['backups'],
-    queryFn: fetchBackups,
-    retry: false,
-  })
 
   const isDirtyRef = useRef(false)
   const markDirty = () => { isDirtyRef.current = true }
@@ -105,24 +139,6 @@ export function DataSection() {
     { disabled: !retentionHydrated },
   )
 
-  const { mutate: doBackup, isPending: isCreatingBackup } = useMutation({
-    mutationFn: createBackup,
-    onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ['backups'] })
-      addToast({ message: `Backup created: ${res.path}`, variant: 'success' })
-    },
-    onError: (err: unknown) => addToast({ message: getErrorMessage(err, 'Backup failed'), variant: 'error' }),
-  })
-
-  const { mutate: doRestore, isPending: isRestoring } = useMutation({
-    mutationFn: (filename: string) => restoreBackup(filename),
-    onSuccess: () => {
-      addToast({ message: 'Restore complete. Restart gateway to apply.', variant: 'success' })
-      setRestoreTarget(null)
-    },
-    onError: (err: unknown) => addToast({ message: getErrorMessage(err, 'Restore failed'), variant: 'error' }),
-  })
-
   const { mutate: doClearSessions, isPending: isClearing } = useMutation({
     mutationFn: clearAllSessions,
     onSuccess: (res) => {
@@ -140,6 +156,25 @@ export function DataSection() {
     onError: (err: unknown) => addToast({ message: getErrorMessage(err, 'Clear failed'), variant: 'error' }),
   })
 
+  const { mutate: doBackup, isPending: isCreatingBackup } = useMutation({
+    mutationFn: createBackup,
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['backups'] })
+      addToast({ message: `Backup created: ${res.path}`, variant: 'success' })
+    },
+    onError: (err: unknown) => addToast({ message: getErrorMessage(err, 'Backup failed'), variant: 'error' }),
+  })
+
+  const { mutateAsync: doRestoreAsync, isPending: isRestoring } = useMutation({
+    mutationFn: ({ filename, token }: { filename: string; token?: string }) =>
+      token === undefined ? restoreBackup(filename) : restoreBackup(filename, token),
+    onSuccess: () => {
+      addToast({ message: 'Restore complete. Restart gateway to apply.', variant: 'success' })
+      setRestoreTarget(null)
+    },
+    onError: (err: unknown) => addToast({ message: getErrorMessage(err, 'Restore failed'), variant: 'error' }),
+  })
+
   const isLoading = configLoading || statsLoading
 
   if (isLoading) return <div className="text-sm text-[var(--color-muted)]">Loading...</div>
@@ -148,9 +183,9 @@ export function DataSection() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">Data & Backup</h2>
+          <h2 className="font-headline font-bold text-base text-[var(--color-secondary)]">{localMode ? 'Data & Backup' : 'Data'}</h2>
           <p className="text-xs text-[var(--color-muted)] mt-0.5">
-            Manage session retention, storage, and backups.
+            {localMode ? 'Manage session retention, storage, and backups.' : 'Manage session retention and storage.'}
           </p>
         </div>
         <AutoSaveIndicator status={saveStatus} error={saveError} />
@@ -200,55 +235,60 @@ export function DataSection() {
         </div>
       </section>
 
-      <Separator />
+      {/* Backup & Restore — WP4 (ADR-0010): local backup, off in platform
+          mode. Hidden entirely rather than shown-disabled: the server
+          answers 404 for these three routes outside local mode, so a
+          visible-but-broken control would be worse than no control. */}
+      {localMode && (
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Backup & Restore</h3>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 px-2 gap-1 text-xs"
+              onClick={() => doBackup()}
+              disabled={isCreatingBackup}
+            >
+              <Archive size={11} />
+              {isCreatingBackup ? 'Creating...' : 'Create backup'}
+            </Button>
+          </div>
 
-      {/* Backup & Restore */}
-      <section className="space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="text-xs font-semibold text-[var(--color-muted)] uppercase tracking-wider">Backup & Restore</h3>
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-7 px-2 gap-1 text-xs"
-            onClick={() => doBackup()}
-            disabled={isCreatingBackup}
-          >
-            <Archive size={11} />
-            {isCreatingBackup ? 'Creating...' : 'Create backup'}
-          </Button>
-        </div>
-
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
-          {backupsLoading && (
-            <div className="p-4 text-sm text-[var(--color-muted)]">Loading backups...</div>
-          )}
-          {backupsError && (
-            <div className="p-4 text-sm text-red-400">Failed to load backups. Please try again.</div>
-          )}
-          {!backupsLoading && !backupsError && backups.length === 0 && (
-            <div className="p-4 text-sm text-[var(--color-muted)]">No backups yet.</div>
-          )}
-          {backups.map((b) => (
-            <div key={b.filename} className="flex items-center justify-between px-4 py-2.5">
-              <div>
-                <p className="text-xs font-mono text-[var(--color-secondary)]">{b.filename}</p>
-                <p className="text-[10px] text-[var(--color-muted)]">
-                  {formatBytes(b.size_bytes)} &middot; {new Date(b.created_at).toLocaleString()}
-                </p>
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-1)] divide-y divide-[var(--color-border)]">
+            {backupsLoading && (
+              <div className="p-4 text-sm text-[var(--color-muted)]">Loading backups...</div>
+            )}
+            {backupsError && (
+              <div className="p-4 text-sm text-red-400">Failed to load backups. Please try again.</div>
+            )}
+            {!backupsLoading && !backupsError && backups.length === 0 && (
+              <div className="p-4 text-sm text-[var(--color-muted)]">No backups yet.</div>
+            )}
+            {backups.map((b) => (
+              <div key={b.filename} className="flex items-center justify-between px-4 py-2.5">
+                <div>
+                  <p className="text-xs font-mono text-[var(--color-secondary)]">{b.filename}</p>
+                  <p className="text-[10px] text-[var(--color-muted)]">
+                    {formatBytes(b.size_bytes)} &middot; {new Date(b.created_at).toLocaleString()}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="h-7 px-2 gap-1 text-xs"
+                  onClick={() => setRestoreTarget(b.filename)}
+                >
+                  <ArrowCounterClockwise size={11} />
+                  Restore
+                </Button>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 px-2 gap-1 text-xs"
-                onClick={() => setRestoreTarget(b.filename)}
-              >
-                <ArrowCounterClockwise size={11} />
-                Restore
-              </Button>
-            </div>
-          ))}
-        </div>
-      </section>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <Separator />
 
       {/* Danger zone */}
       <section className="space-y-3">
@@ -269,29 +309,6 @@ export function DataSection() {
           </Button>
         </div>
       </section>
-
-      {/* Restore confirmation */}
-      <Dialog open={!!restoreTarget} onOpenChange={() => setRestoreTarget(null)}>
-        <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle className="font-headline text-base">Restore backup?</DialogTitle>
-          </DialogHeader>
-          <p className="text-sm text-[var(--color-muted)] py-2">
-            Restore from <span className="font-mono text-[var(--color-secondary)]">{restoreTarget}</span>?
-            Current data will be overwritten. Gateway restart required after restore.
-          </p>
-          <DialogFooter>
-            <Button variant="outline" size="sm" onClick={() => setRestoreTarget(null)}>Cancel</Button>
-            <Button
-              size="sm"
-              onClick={() => restoreTarget && doRestore(restoreTarget)}
-              disabled={isRestoring}
-            >
-              {isRestoring ? 'Restoring...' : 'Restore'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Clear sessions confirmation */}
       <Dialog open={clearConfirmOpen} onOpenChange={setClearConfirmOpen}>
@@ -315,6 +332,44 @@ export function DataSection() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Restore confirmation */}
+      <Dialog open={!!restoreTarget} onOpenChange={() => setRestoreTarget(null)}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="font-headline text-base">Restore backup?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-[var(--color-muted)] py-2">
+            Restore from <span className="font-mono text-[var(--color-secondary)]">{restoreTarget}</span>?
+            Current data will be overwritten. Gateway restart required after restore.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setRestoreTarget(null)}>Cancel</Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                if (!restoreTarget) return
+                const filename = restoreTarget
+                void stepUp
+                  .gate((token) => doRestoreAsync({ filename, token }), {
+                    title: 'Restore this backup?',
+                    body: `Restore from ${filename}? Current data will be overwritten.`,
+                    confirmLabel: 'Restore',
+                  })
+                  .catch((err: unknown) => {
+                    // A cancelled gate sent nothing; a real failure already toasted.
+                    if (!isReAuthCancelled(err)) return
+                  })
+              }}
+              disabled={isRestoring}
+            >
+              {isRestoring ? 'Restoring...' : 'Restore'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {stepUp.dialogs}
     </div>
   )
 }

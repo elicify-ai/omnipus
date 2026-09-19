@@ -1,5 +1,14 @@
 /**
- * -onboarding-probe-id.test.tsx — ADR-067 spec test T46 (task T067-13).
+ * -onboarding-probe-id.test.tsx — ADR-067 spec test T46 (task T067-13),
+ * restored from the merge base (184d7247) and adapted for the local-mode
+ * wizard's Personal-preferences step (ADR-0010 WP5; founder decision
+ * 2026-09-19: kept in the open-source build too and proposed upstream with
+ * the seams PR, rather than restoring upstream's original 3-step flow). The
+ * ONLY changes from the merge base are: `goToStep3` becomes `goToStep4` and
+ * fills the Personal step's name field on the way through, and the
+ * provider-step heading text ("Add a model key" → "Select your model
+ * provider and default model"). The platform-mode counterpart of this file
+ * is -onboarding-probe-id-platform.test.tsx.
  *
  * US-10 / FR-023: `ProbeProviderRequest.id` is a FREE STRING (1..64, no enum,
  * no pattern), validated at runtime against the served catalog. The SPA half of
@@ -124,7 +133,7 @@ beforeEach(() => {
   mockNavigate.mockResolvedValue(undefined)
 })
 
-async function goToStep3() {
+async function goToStep4() {
   if (!WizardComponent) throw new Error('WizardComponent not loaded — beforeAll did not run')
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
@@ -138,7 +147,11 @@ async function goToStep3() {
   fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
   fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: 'password123' } })
   fireEvent.click(screen.getByRole('button', { name: /continue/i }))
-  await waitFor(() => screen.getByText(/add a model key/i))
+  // Personal-preferences step (ADR-0010 WP5) — new step 3, ahead of Provider.
+  await waitFor(() => screen.getByLabelText(/^name$/i))
+  fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: 'Daniel' } })
+  fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+  await waitFor(() => screen.getByText(/select your model provider and default model/i))
   await waitFor(() => screen.getByTestId('onboarding-provider-picker'))
 }
 
@@ -175,7 +188,7 @@ describe('onboarding probe — free-string provider id (US-10, FR-023)', () => {
       error: 'unknown provider "z-ai"',
     })
 
-    await goToStep3()
+    await goToStep4()
     await submitCustomEndpoint('z-ai')
 
     fireEvent.change(screen.getByTestId('onboarding-model-select'), { target: { value: 'some-model' } })
@@ -208,7 +221,7 @@ describe('onboarding probe — free-string provider id (US-10, FR-023)', () => {
   it('sends an operator-named id verbatim — no normalisation, no case folding', async () => {
     vi.mocked(probeProvider).mockResolvedValue({ success: false, error: 'unknown provider "My-Proxy"' })
 
-    await goToStep3()
+    await goToStep4()
     await submitCustomEndpoint('My-Proxy')
 
     fireEvent.change(screen.getByTestId('onboarding-model-select'), { target: { value: 'm' } })

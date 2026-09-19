@@ -43,6 +43,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gen "github.com/elicify-ai/omnipus/pkg/api/generated"
+	"github.com/elicify-ai/omnipus/pkg/config"
 	"github.com/elicify-ai/omnipus/pkg/providers"
 	"github.com/elicify-ai/omnipus/pkg/providers/catalog"
 	"github.com/elicify-ai/omnipus/pkg/security"
@@ -251,6 +252,11 @@ func installProbeCatalog(t *testing.T, cat *catalog.Catalog) {
 // exactly the pair the SSRF row needs.
 func newProbeAPI(t *testing.T) *restAPI {
 	t.Helper()
+	// HandleOnboardingProbeProvider's gate now dispatches by
+	// config.EditionAuthMode() (WP5, ADR-0010); every caller of this helper
+	// (including rest_signin_copilot_probe_wording_test.go) means the
+	// PLATFORM-mode gate, so pin it here rather than at every call site.
+	withEdition(t, config.EditionHosted)
 	api, _ := newAuthMethodOnboardingAPI(t)
 	cat := probeTestCatalog(t)
 	api.providerCatalog = cat
@@ -268,7 +274,7 @@ func newProbeAPI(t *testing.T) *restAPI {
 // which owns the fake-CLI scaffolding; the sign-in rows that are decided by
 // catalog data alone — a provider that does not OFFER sign-in — are here.
 func TestProbeProviderID_Validation(t *testing.T) {
-	up := startProbeUpstream(t)
+	up := startProbeUpstream(t) // mode pinned inside newProbeAPI below
 
 	cases := []struct {
 		name string
@@ -542,6 +548,7 @@ func TestProbeProviderID_Validation(t *testing.T) {
 // model_not_found would report a DIFFERENT model as working and hand the
 // operator a green probe for a model they never picked (FR-029).
 func TestProbeProviderID_VerbatimModelDoesNotFallThrough(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	up := startProbeUpstream(t)
 	api := newProbeAPI(t)
 
@@ -573,6 +580,7 @@ func TestProbeProviderID_VerbatimModelDoesNotFallThrough(t *testing.T) {
 // walks the whole candidate list and the recorded completions ARE the
 // ordered Recommended list.
 func TestProbeProviderID_RecommendedOrder(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	var mu sync.Mutex
 	var asked []string
 	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -621,6 +629,7 @@ func TestProbeProviderID_RecommendedOrder(t *testing.T) {
 // provider would make the probe unusable exactly when the operator most needs
 // it. The other rules still apply.
 func TestProbeProviderID_NoCatalogAdmitsAnyID(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	up := startProbeUpstream(t)
 	api := newProbeAPI(t)
 	// catalog.New() is a catalog with no document — the E7 state.
@@ -717,6 +726,7 @@ echo '{"type":"item.completed","item":{"id":"1","type":"agent_message","text":"o
 }
 
 func TestProbeProvider_SignIn(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake vendor CLIs are POSIX shell stubs")
 	}

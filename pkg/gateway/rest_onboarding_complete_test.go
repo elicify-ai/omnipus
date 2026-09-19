@@ -68,19 +68,20 @@ func providerRow(t *testing.T, cfgRaw map[string]any, id, model string) map[stri
 // TestOnboardingComplete_AuthMethod is TDD row 22 / the BDD scenario
 // "Onboarding complete with sign-in".
 func TestOnboardingComplete_AuthMethod(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	t.Run("sign_in without a key completes, stores no credential and writes the pair",
 		func(t *testing.T) {
 			api, tmpDir := newAuthMethodOnboardingAPI(t)
 			body := `{"provider":{"auth_method":"sign_in","id":"codex-cli","model":"gpt-5.3-codex"},` +
-				`"admin":{"username":"admin","password":"secret123"}}`
+				`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 
 			w := postOnboardingComplete(api, body)
 
 			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 			var resp map[string]any
 			require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-			assert.NotEmpty(t, resp["token"])
-			assert.Equal(t, "admin", resp["username"])
+			assert.NotContains(t, resp, "token", "completion mints no bearer token")
+			assert.Equal(t, "operator@example.com", resp["username"])
 			// The plaintext-key warning must NOT fire: there is no key. Before
 			// the sign-in path existed, an empty credRefName was proof of a
 			// failed encrypted store; on this variant it is the normal state.
@@ -131,7 +132,7 @@ func TestOnboardingComplete_AuthMethod(t *testing.T) {
 		func(t *testing.T) {
 			api, tmpDir := newAuthMethodOnboardingAPI(t)
 			body := `{"provider":{"auth_method":"sign_in","id":"codex-cli"},` +
-				`"admin":{"username":"admin","password":"secret123"}}`
+				`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 
 			w := postOnboardingComplete(api, body)
 			require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
@@ -155,7 +156,8 @@ func TestOnboardingComplete_AuthMethod(t *testing.T) {
 	t.Run("sign_in carrying an api_key is 400 and persists nothing", func(t *testing.T) {
 		api, tmpDir := newAuthMethodOnboardingAPI(t)
 		body := `{"provider":{"auth_method":"sign_in","id":"codex-cli","model":"gpt-5.3-codex",` +
-			`"api_key":"sk-should-not-be-here"},"admin":{"username":"admin","password":"secret123"}}`
+			`"api_key":"sk-should-not-be-here"},` +
+			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 
 		w := postOnboardingComplete(api, body)
 
@@ -177,7 +179,7 @@ func TestOnboardingComplete_AuthMethod(t *testing.T) {
 	t.Run("api_key without a key is 400", func(t *testing.T) {
 		api, _ := newAuthMethodOnboardingAPI(t)
 		body := `{"provider":{"auth_method":"api_key","id":"openai","model":"gpt-4o"},` +
-			`"admin":{"username":"admin","password":"secret123"}}`
+			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 
 		w := postOnboardingComplete(api, body)
 
@@ -191,7 +193,7 @@ func TestOnboardingComplete_AuthMethod(t *testing.T) {
 	t.Run("sign_in on a key-only provider is 400", func(t *testing.T) {
 		api, _ := newAuthMethodOnboardingAPI(t)
 		body := `{"provider":{"auth_method":"sign_in","id":"openrouter","model":"openai/gpt-4o"},` +
-			`"admin":{"username":"admin","password":"secret123"}}`
+			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 
 		w := postOnboardingComplete(api, body)
 

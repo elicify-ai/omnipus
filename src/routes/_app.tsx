@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from '@tanstack/react-router'
 import { AppShell } from '@/components/layout/AppShell'
-import { fetchAppState, validateToken } from '@/lib/api'
+import { fetchAppState, validateToken, type AppState } from '@/lib/api'
 import { forceLogout } from '@/lib/authLogout'
 import { hasStoredSession } from '@/store/auth'
 import { checkTokenValidity, resetTokenValidationCache } from './authValidation'
@@ -14,24 +14,52 @@ export { resetTokenValidationCache }
 export const Route = createFileRoute('/_app')({
   beforeLoad: async () => {
     // First check onboarding state — if not complete, redirect to onboarding
-    let state: { onboarding_complete: boolean } | undefined
+    let state: AppState | undefined
     try {
       state = await fetchAppState()
     } catch (err) {
       console.error('[app] Failed to fetch app state:', err)
-      // State endpoint failed — proceed to auth check (may redirect to login)
+      // State endpoint failed — proceed to auth check (may redirect to login).
+      // This is ALSO where an older backend lands: its /state response has
+      // no `identity` field, which fails the AppState Zod schema (identity
+      // is required — ADR-0010) and throws here exactly like any other
+      // fetch failure, so `state` stays undefined and the fallback path
+      // below runs unchanged.
     }
     if (state && !state.onboarding_complete) {
       throw redirect({ to: '/onboarding' })
     }
 
-    // Onboarding is complete — require an authenticated session. Auth is the
-    // omnipus-session HttpOnly cookie (US-5 / FR-010): the SPA has no
-    // JS-visible signal of whether one exists, so it always asks the server
-    // rather than pre-checking local storage for the cookie itself (there is
-    // nothing to check — the cookie is invisible to JS). validateToken() rides
-    // the cookie automatically (credentials:'include' in src/lib/api.ts); a
-    // fresh install or expired/missing session comes back 401.
+    // ADR-0010 / login-and-onboarding-spec.md §2.4 — collapse the boot path.
+    // GET /api/v1/state already carries `identity.signed_in`, so a signed-in
+    // caller never needs the separate GET /api/v1/auth/validate round trip
+    // this route used to await in series. `state?.identity` (not just
+    // `state`) is the guard: `identity` is a required AppState field on the
+    // current contract, so a real gateway response either has it or the
+    // request already threw above (caught, `state` stays undefined) — but an
+    // OLDER backend's response can still resolve here without one, so this
+    // checks for the field itself, not just a successful fetch.
+    if (state?.identity) {
+      if (!state.identity.signed_in) {
+        // The server already told us: not signed in. No point asking
+        // /auth/validate too — same destination, one less round trip.
+        throw redirect({ to: '/login' })
+      }
+      // Signed in per the boot request itself — proceed into the app
+      // without the separate validate call.
+      return
+    }
+
+    // Onboarding is complete and `identity` is unavailable (fetchAppState
+    // failed above — network error — or an older backend whose response has
+    // no `identity` field). Fall back to exactly today's behaviour: auth is
+    // the omnipus-session HttpOnly cookie (US-5 / FR-010); the SPA has no
+    // JS-visible signal of whether one exists, so it asks the server rather
+    // than pre-checking local storage for the cookie itself (there is
+    // nothing to check — the cookie is invisible to JS). validateToken()
+    // rides the cookie automatically (credentials:'include' in
+    // src/lib/api.ts); a fresh install or expired/missing session comes
+    // back 401.
     //
     // One thing IS checkable locally first: whether this browser has EVER
     // signed in at all (hasStoredSession(), src/store/auth.ts —

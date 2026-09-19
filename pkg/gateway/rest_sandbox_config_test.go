@@ -585,3 +585,45 @@ func TestHandleSandboxConfig_PUT_ModeMarksRestartRequired(t *testing.T) {
 	assert.Equal(t, true, resp["requires_restart"],
 		"mode change is restart-gated per FR-J-015")
 }
+
+// TestHandleSandboxConfig_PUT_Unauthenticated_Is401 proves the authentication
+// guard fires independently of the re-auth consent gate (ADR-0010 WP3 restored
+// requireReAuth on this route in local mode; requireAuthOutsideOnboarding-style
+// "no user in context at all" is a distinct, earlier check that still applies
+// in every mode). Every other PUT test in this file goes through
+// sandboxConfigPUT, which calls withReAuthAdmin, so nothing else exercises the
+// anonymous case.
+//
+// This is the highest-blast-radius of the three: the body below turns the
+// sandbox permissive.
+//
+// MUTATION ORACLE: delete or invert the
+// `user, ok := r.Context().Value(UserContextKey{}).(*config.UserConfig)` /
+// `if !ok || user == nil` guard at the top of putSandboxConfig
+// (rest_sandbox_config.go). Deleted, this anonymous PUT returns 200 and
+// persists sandbox.mode=permissive; the config.json comparison below fails
+// even if some later guard produced a 401 anyway.
+func TestHandleSandboxConfig_PUT_Unauthenticated_Is401(t *testing.T) {
+	api := newTestRestAPIWithHome(t)
+	cfgPath := filepath.Join(api.homePath, "config.json")
+	before, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+
+	// Deliberately NOT sandboxConfigPUT: that helper authenticates.
+	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
+		strings.NewReader(`{"mode":"permissive"}`))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	api.HandleSandboxConfig(w, r)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code,
+		"an anonymous PUT /api/v1/security/sandbox-config must be 401; body=%s", w.Body.String())
+	assert.Contains(t, strings.ToLower(w.Body.String()), "not authenticated")
+
+	after, err := os.ReadFile(cfgPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after),
+		"a refused sandbox-config PUT must leave config.json byte-for-byte unchanged")
+	assert.NotContains(t, string(after), "permissive",
+		"the refused mode must not have reached disk under any key")
+}

@@ -26,7 +26,13 @@ import (
 //	                                logs/ and backups/, so the archive carries
 //	                                master.key, credentials.json, config.json,
 //	                                cli.token, auth.json, entities/, agents/,
-//	                                workspaces/.
+//	                                workspaces/. WP4 (ADR-0010): the endpoints
+//	                                that write these are restored behind the
+//	                                local auth-mode switch, so a hosted/desktop
+//	                                build never creates the directory — but
+//	                                this deny matches by name regardless, and a
+//	                                local-mode or pre-switch install can still
+//	                                have the archive on disk.
 //	$OMNIPUS_HOME/auth.json         per-provider OAuth access and refresh tokens
 //	                                in PLAINTEXT (pkg/auth/store.go).
 //

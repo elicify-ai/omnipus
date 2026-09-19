@@ -399,11 +399,15 @@ func reportInjectionErrors(errs []error, phase string) []error {
 // Sequence (matches ADR-004 §Boot Order Contract):
 //  1. NewStore → Unlock (fatal on failure)
 //  2. LoadConfigWithStore (fatal on failure)
-//  3. InjectFromConfig for provider env-vars (fatal only on a store-wide
+//  3. EditionMisbuild tripwire (fatal on failure — ADR-0010): a core-stamped
+//     binary that has a platform trust anchor configured is a hosted or
+//     desktop build that lost its edition stamp, and must never serve the
+//     password login that combination implies.
+//  4. InjectFromConfig for provider env-vars (fatal only on a store-wide
 //     failure; a single unresolvable ref is an ERROR + degraded entry — see
 //     reportInjectionErrors)
-//  4. ResolveBundle for channel secrets (NotFoundError for disabled channels is Info, rest Warn)
-//  5. cfg.RegisterSensitiveValues with all resolved plaintexts
+//  5. ResolveBundle for channel secrets (NotFoundError for disabled channels is Info, rest Warn)
+//  6. cfg.RegisterSensitiveValues with all resolved plaintexts
 //
 // Both Run and boot_order_test.go call this helper so that a refactor of one
 // cannot silently drift from the other.
@@ -418,6 +422,12 @@ func bootCredentials(
 	cfg, err := config.LoadConfigWithStore(configPath, credStore)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("error loading config: %w", err)
+	}
+
+	// ADR-0010 boot tripwire: refuse to serve a misbuilt binary. See
+	// config.EditionMisbuild's doc for the two shapes this refuses.
+	if reason := config.EditionMisbuild(cfg.Security.PlatformAuth.Issuer); reason != "" {
+		return nil, nil, nil, fmt.Errorf("refusing to start: %s", reason)
 	}
 
 	// Inject provider API keys into the process environment so LLM SDK clients

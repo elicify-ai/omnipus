@@ -1,14 +1,23 @@
 type: object
 description: >
-  Body for POST /onboarding/complete. Atomically sets up the first LLM provider
-  and creates the initial admin account. CSRF-exempt (no cookie exists at this point).
+  Body for POST /onboarding/complete. WP5 (ADR-0010) composes this by auth
+  mode: in local mode (open-source edition, config.EditionAuthMode() ==
+  AuthModeLocal) the route runs BEFORE any session exists and atomically
+  mints the instance's first account — `admin` is REQUIRED, upstream's
+  behaviour restored verbatim. In platform mode (hosted/desktop) the caller
+  is ALREADY signed in (ADR-0008 rulings 1 and 2 — the omnipus.ai account is
+  the login): `admin` is REFUSED (400) because no local credential is ever
+  minted on that edition, and a body still sending one is rejected rather
+  than silently ignored.
+  `preferences` (step 1's name/tone/detail) is optional in BOTH modes and,
+  when present, is written into the global USER.md after the transaction
+  succeeds — generic to both editions.
   NOTE (ADR-068 / ADR-034): `provider` is a discriminated union. This file is
   the inbound-validator twin (pkg/gateway/inboundschemas); the codegen-facing
   wrapper is hosted INLINE in contracts/openapi.yaml over the same two
   variant schemas — keep the two in lockstep.
 required:
   - provider
-  - admin
 additionalProperties: false
 properties:
   provider:
@@ -20,10 +29,15 @@ properties:
       - $ref: './OnboardingProviderSignIn.yaml'
   admin:
     type: object
-    description: Initial admin account credentials.
+    description: >
+      Initial admin account credentials. Required in local mode (upstream's
+      shape — this route mints the instance's first account there); refused
+      with a 400 in platform mode, where the caller already holds the
+      omnipus.ai session and no local credential is ever created.
     required:
       - username
       - password
+    additionalProperties: false
     properties:
       username:
         type: string
@@ -37,3 +51,9 @@ properties:
         minLength: 8
         description: Admin password. Minimum 8 characters.
         example: "s3cr3tpassword"
+  preferences:
+    description: >
+      Step 1's name/tone/detail (FR-OB-010..-018). Optional in both modes;
+      when present it is written into the global USER.md after the
+      transaction succeeds (FR-OB-013a).
+    $ref: './OnboardingPreferences.yaml'

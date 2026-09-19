@@ -12,7 +12,18 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/elicify-ai/omnipus/pkg/config"
 )
+
+// withEdition stamps config.Edition for the duration of a test and restores
+// it on cleanup — same save/restore pattern as pkg/config/edition_test.go.
+func withEdition(t *testing.T, e string) {
+	t.Helper()
+	prev := config.Edition
+	config.Edition = e
+	t.Cleanup(func() { config.Edition = prev })
+}
 
 // TestDirectoryInitialization verifies first-run creates the complete directory tree.
 // Traces to: wave1-core-foundation-spec.md Scenario: First-run creates complete directory tree (US-1 AC1)
@@ -36,7 +47,6 @@ func TestDirectoryInitialization(t *testing.T) {
 		"pins",
 		"channels",
 		"skills",
-		"backups",
 		"system",
 		"logs",
 	}
@@ -75,7 +85,8 @@ func TestDirectoryInitPartialExists(t *testing.T) {
 	home := t.TempDir()
 	omnipusHome := filepath.Join(home, ".omnipus")
 
-	// Pre-create partial directory structure (missing "tasks", "backups").
+	// Pre-create a partial directory structure: only "agents" and "system"
+	// exist, so every other entry in omnipusDirs is missing.
 	require.NoError(t, os.MkdirAll(filepath.Join(omnipusHome, "agents"), 0o700))
 	require.NoError(t, os.MkdirAll(filepath.Join(omnipusHome, "system"), 0o700))
 
@@ -90,7 +101,7 @@ func TestDirectoryInitPartialExists(t *testing.T) {
 	require.NoError(t, Init(omnipusHome), "Init must succeed on partial directory")
 
 	// Verify previously missing directories are now present.
-	for _, dir := range []string{"tasks", "backups", "pins", "skills", "channels", "logs"} {
+	for _, dir := range []string{"tasks", "pins", "skills", "channels", "logs"} {
 		path := filepath.Join(omnipusHome, dir)
 		dirInfo, statErr := os.Stat(path)
 		require.NoError(t, statErr, "directory %q must be created", dir)
@@ -115,6 +126,36 @@ func TestDirectoryInitIdempotent(t *testing.T) {
 	require.NoError(t, Init(omnipusHome))
 	require.NoError(t, Init(omnipusHome), "second Init call must be idempotent")
 	require.NoError(t, Init(omnipusHome), "third Init call must be idempotent")
+}
+
+// TestDirectoryInit_BackupsDirGuardedByEditionAuthMode verifies the
+// "backups" directory (WP4, ADR-0010) is created only in local mode —
+// mirroring the fact that its only writers, HandleCreateBackup /
+// HandleListBackups / HandleRestore, are routed only in local mode.
+func TestDirectoryInit_BackupsDirGuardedByEditionAuthMode(t *testing.T) {
+	t.Run("local mode creates backups", func(t *testing.T) {
+		withEdition(t, config.EditionCore)
+		home := t.TempDir()
+		omnipusHome := filepath.Join(home, ".omnipus")
+
+		require.NoError(t, Init(omnipusHome))
+
+		info, err := os.Stat(filepath.Join(omnipusHome, "backups"))
+		require.NoError(t, err, "backups directory must exist in local mode")
+		assert.True(t, info.IsDir())
+		assert.Equal(t, os.FileMode(0o700), info.Mode().Perm())
+	})
+
+	t.Run("platform mode does not create backups", func(t *testing.T) {
+		withEdition(t, config.EditionHosted)
+		home := t.TempDir()
+		omnipusHome := filepath.Join(home, ".omnipus")
+
+		require.NoError(t, Init(omnipusHome))
+
+		_, err := os.Stat(filepath.Join(omnipusHome, "backups"))
+		assert.True(t, os.IsNotExist(err), "backups directory must NOT exist in platform mode")
+	})
 }
 
 // TestAgentWorkspaceInitialization verifies agent workspace creates correct subdirectories.

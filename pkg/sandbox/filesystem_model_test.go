@@ -152,8 +152,9 @@ func TestSecretPaths(t *testing.T) {
 		// Found by review, not by the merge of the two old lists. Each is a
 		// live disclosure reachable in ONE tool call once FR-2.2 opened reads:
 		// auth.json is plaintext OAuth access + refresh tokens (pkg/auth), and
-		// backups/*.tar.gz is an archive of the ENTIRE vault (createTarGz
-		// excludes only logs/ and backups/). See fspolicy.SecretEntriesAlways.
+		// backups/*.tar.gz is an archive of the ENTIRE vault left behind by
+		// the local backup/restore endpoints this tree has since removed.
+		// See fspolicy.SecretEntriesAlways.
 		"/home/x/.omnipus/auth.json",
 		"/home/x/.omnipus/backups",
 		"/home/x/.omnipus/system",

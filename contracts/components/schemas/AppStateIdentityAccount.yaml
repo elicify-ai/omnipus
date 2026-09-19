@@ -1,0 +1,25 @@
+title: AppStateIdentityAccount
+type: object
+description: >
+  The signed-in account, present on `AppState.identity.account` only when
+  `identity.signed_in` is true (docs/specs/login-and-onboarding-spec.md §2.2).
+required:
+  - label
+  - email_masked
+  - org
+additionalProperties: false
+properties:
+  label:
+    type: string
+    description: Display name for the signed-in account.
+    example: "Daniel Piątkowski"
+  email_masked:
+    type: string
+    description: >
+      The account's email, masked for display — never the full address.
+    example: "d•••@elicify.ai"
+  org:
+    type: string
+    nullable: true
+    description: The signed-in account's organization, or null.
+    example: null

@@ -40,13 +40,21 @@ vi.mock('@/lib/api', async (importOriginal) => {
     ...actual,
     fetchPerformanceSettings: vi.fn(),
     updatePerformanceSettings: vi.fn(),
-    reAuth: vi.fn(),
+    fetchAppState: vi.fn(),
     isApiError: actual.isApiError,
   }
 })
 
 import * as api from '@/lib/api'
+import type { AppState } from '@/lib/api'
 import { PerformanceSection } from './PerformanceSection'
+
+// Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
+// ConfirmDialog, no consent token (ADR-0010 WP3).
+const PLATFORM_APP_STATE = {
+  onboarding_complete: true,
+  identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+} as AppState
 
 const SETTINGS = {
   max_parallel_agents: 4,
@@ -71,6 +79,7 @@ function renderSection() {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(api.fetchPerformanceSettings).mockResolvedValue(SETTINGS as never)
+  vi.mocked(api.fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
 })
 
 afterEach(() => {
@@ -117,8 +126,7 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     expect(document.body.textContent).not.toMatch(/adjudication|owner loop|verifiers|sentinel/i)
   })
 
-  it('S-34 adapted: raising the global budget in the interface opens re-auth, and confirming saves ONLY goal_max_rounds', async () => {
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok_goal', expires_in: 300 } as never)
+  it('S-34 adapted: raising the global budget in the interface opens the confirmation, and confirming saves ONLY goal_max_rounds', async () => {
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue({ ...SETTINGS, goal_max_rounds: 30 } as never)
 
     vi.useRealTimers()
@@ -129,18 +137,16 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     fireEvent.change(screen.getByLabelText('Tries per goal'), { target: { value: '30' } })
 
     // Before the debounce fires, no PUT and no dialog yet.
-    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
 
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    await waitFor(() => screen.getByTestId('confirm-accept'))
+    fireEvent.click(screen.getByTestId('confirm-accept'))
 
     await waitFor(() => {
-      expect(api.reAuth).toHaveBeenCalledWith('mypassword')
       // Load-bearing: the body carries ONLY goal_max_rounds. If the max
       // parallel/tools_on_demand fields were bundled in here it would mean
       // this control secretly writes the other two settings too, which
@@ -148,7 +154,7 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
       // whatever an operator has open in another tab.
       expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
         { goal_max_rounds: 30 },
-        'reauth_tok_goal',
+        undefined,
       )
     })
   })
@@ -168,7 +174,7 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
         message: 'Tries per goal must be a whole number of at least 1.',
       })
     })
-    expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+    expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
     expect(api.updatePerformanceSettings).not.toHaveBeenCalled()
   })
 
@@ -209,7 +215,6 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
   })
 
   it('accepts exactly 1 (the floor)', async () => {
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok_floor', expires_in: 300 } as never)
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue({ ...SETTINGS, goal_max_rounds: 1 } as never)
 
     vi.useRealTimers()
@@ -221,14 +226,13 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    await waitFor(() => screen.getByTestId('confirm-accept'))
+    fireEvent.click(screen.getByTestId('confirm-accept'))
 
     await waitFor(() => {
       expect(api.updatePerformanceSettings).toHaveBeenCalledWith(
         { goal_max_rounds: 1 },
-        'reauth_tok_floor',
+        undefined,
       )
     })
   })
@@ -239,7 +243,6 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     // input through the shared buildBody (max_parallel_agents +
     // tools_on_demand), this assertion catches it because the payload would
     // then also carry those two fields.
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok_indep', expires_in: 300 } as never)
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue({ ...SETTINGS, goal_max_rounds: 45 } as never)
 
     vi.useRealTimers()
@@ -251,9 +254,8 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    await waitFor(() => screen.getByTestId('confirm-accept'))
+    fireEvent.click(screen.getByTestId('confirm-accept'))
 
     await waitFor(() => {
       const call = vi.mocked(api.updatePerformanceSettings).mock.calls[0]
@@ -276,13 +278,13 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     await act(async () => { vi.advanceTimersByTime(700) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('reauth-confirm'))
+    await waitFor(() => screen.getByTestId('confirm-accept'))
     expect(screen.getByLabelText('Tries per goal')).toHaveValue(99)
 
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
+    fireEvent.click(screen.getByTestId('confirm-cancel'))
 
     await waitFor(() => {
-      expect(screen.queryByTestId('reauth-confirm')).not.toBeInTheDocument()
+      expect(screen.queryByTestId('confirm-dialog')).not.toBeInTheDocument()
     })
     await waitFor(() => {
       expect(screen.getByLabelText('Tries per goal')).toHaveValue(20)
@@ -302,7 +304,6 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
   // These two cases drive the real component through the real debounce
   // timers: nothing here hands the component a pre-merged body.
   it('finding 15: editing BOTH controls inside the debounce window saves BOTH — neither write discards the other', async () => {
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok_both', expires_in: 300 } as never)
     vi.mocked(api.updatePerformanceSettings).mockResolvedValue({
       ...SETTINGS,
       max_parallel_agents: 9,
@@ -324,9 +325,8 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     await act(async () => { vi.advanceTimersByTime(1000) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    await waitFor(() => screen.getByTestId('confirm-accept'))
+    fireEvent.click(screen.getByTestId('confirm-accept'))
 
     await waitFor(() => expect(api.updatePerformanceSettings).toHaveBeenCalled())
 
@@ -346,7 +346,6 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     vi.mocked(api.fetchPerformanceSettings).mockImplementation(
       async () => ({ ...serverState }) as never,
     )
-    vi.mocked(api.reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok_norevert', expires_in: 300 } as never)
     vi.mocked(api.updatePerformanceSettings).mockImplementation(async (body) => {
       serverState = { ...serverState, ...(body as Record<string, unknown>) }
       if (typeof serverState.max_parallel_agents === 'number') {
@@ -366,9 +365,8 @@ describe('PerformanceSection — goal round budget (GOAL-FR-045, D-D/D-E)', () =
     await act(async () => { vi.advanceTimersByTime(1000) })
     vi.useRealTimers()
 
-    await waitFor(() => screen.getByTestId('reauth-password-input'))
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
+    await waitFor(() => screen.getByTestId('confirm-accept'))
+    fireEvent.click(screen.getByTestId('confirm-accept'))
 
     await waitFor(() => expect(api.updatePerformanceSettings).toHaveBeenCalled())
 

@@ -61,6 +61,18 @@ const (
 	// GatewayPreviewEnabled gates /preview/ and serve_web. Read live — it is
 	// deliberately NOT in RestartGatedKeys (ADR-044, FR-006/FR-007).
 	GatewayPreviewEnabled ConfigKey = "gateway.preview_enabled"
+	// The omnipus.ai trust anchor (ADR-0008, ADR-0005 E3). All four are
+	// restart-gated, and that is a security property rather than a
+	// convenience: who vouches for the people signing in is a boot decision,
+	// and a setting that appears to change while the running process still
+	// enforces the old value is its own class of bug. They are constants
+	// rather than string literals for the reason this whole file exists —
+	// three separate consumers (the restart gate, the REST block list, the
+	// agent-tool block list) would otherwise drift on the first rename.
+	SecurityPlatformAuthIssuer     ConfigKey = "security.platform_auth.issuer"
+	SecurityPlatformAuthClientID   ConfigKey = "security.platform_auth.client_id"
+	SecurityPlatformAuthInstanceID ConfigKey = "security.platform_auth.instance_id"
+	SecurityPlatformAuthKeys       ConfigKey = "security.platform_auth.keys"
 	// GatewayVideoEmbedHosts is the external-video frame allow-list (ADR-083
 	// D9, EMB-081). It is a CSP-widening control: every entry becomes a
 	// `frame-src` source in the SPA's own policy, so an agent able to write it

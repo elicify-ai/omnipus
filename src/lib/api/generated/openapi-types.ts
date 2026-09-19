@@ -4,6 +4,66 @@
  */
 
 export interface paths {
+    "/auth/platform/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Begin an omnipus.ai sign-in
+         * @description Mints a PKCE verifier (S256) and a single-use, 10-minute state, then returns the platform's authorization URL for the SPA to open in the SYSTEM browser (RFC 8252 §8.12 — never an embedded web view). The verifier never leaves the gateway. The redirect_uri is this gateway's own loopback address, http://127.0.0.1:<port>/auth/callback, which needs no OS URL-scheme registration an unsigned desktop build cannot reliably claim (ADR-0008, 'The return trip is loopback'). CSRF-exempt and unauthenticated — it is the route a signed-out user reaches first — and it seeds the __Host-csrf cookie on success. Answers 503 when security.platform_auth.issuer is unset: there is no local password to fall back to.
+         */
+        post: operations["startPlatformAuth"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/platform/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Collect the session the browser half of a sign-in just opened
+         * @description Exists because the browser's cookie jar is not the application's. On desktop the sign-in page opens in the user's REAL browser (RFC 8252 §8.12), so the Set-Cookie written by /auth/callback lands there and the Electron renderer never sees it — without this route the app would poll /auth/session forever behind a browser tab that says "You're signed in". A successful callback records the session it minted for 60 seconds, once, under a key derived from the state; presenting that state here issues the SAME omnipus-session and CSRF cookies on THIS response, making the caller the signed-in client. Delete-on-lookup, so a second claim cannot succeed. Unauthenticated by necessity (the caller is claiming the session it does not have), rate-limited on its own bucket, and NOT CSRF-exempt — /auth/platform/start seeded the CSRF cookie already. An unknown state, an expired entry and an already-collected one are one indistinguishable 404: a caller must not learn which.
+         */
+        post: operations["claimPlatformAuth"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Report whether this request carries a valid session
+         * @description Resolves the omnipus-session cookie and returns the account it belongs to, or 401 when there is none. Deliberately the thinnest possible answer: it performs no side effects, so both the sign-in screen (waiting for the browser half to finish) and the desktop shell (waiting to raise its window) can poll it about once a second without consequence. Rate-limited: 120 requests per IP per minute.
+         */
+        get: operations["getAuthSession"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/auth/login": {
         parameters: {
             query?: never;
@@ -14,8 +74,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Authenticate with username and password
-         * @description Validates credentials against the bcrypt hashes in config.json. On success, issues a bearer token, an HttpOnly session cookie (omnipus-session), and a __Host-csrf cookie. CSRF-exempt (cookie cannot pre-exist before login). Rate-limited: 5 failures per IP+username per 15 minutes → 429.
+         * Authenticate with username and password (local mode)
+         * @description Local-mode sign-in (core edition; ADR-0010 WP2 auth-mode seam). Validates credentials against the bcrypt hashes in config.json. On success, issues a bearer token, an HttpOnly session cookie (omnipus-session), and a __Host-csrf cookie. CSRF-exempt (cookie cannot pre-exist before login). Rate-limited: 5 failures per IP+username per 15 minutes → 429. Not registered at all in platform mode (desktop, hosted) — see /auth/platform/start.
          */
         post: operations["login"];
         delete?: never;
@@ -94,8 +154,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Change the authenticated user's own password
-         * @description Self-service password change. Requires the current password for verification. Requires authentication.
+         * Change the authenticated user's own password (local mode)
+         * @description Local-mode self-service password change (core edition; ADR-0010 WP2 auth-mode seam). Requires the current password for verification. Requires authentication. Not registered at all in platform mode.
          */
         post: operations["changePassword"];
         delete?: never;
@@ -114,8 +174,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Re-verify the user's password to consent to a sensitive setting change
-         * @description Single-user consent primitive (FR-12.2). Re-verifies the authenticated user's one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited.
+         * Re-verify the user's password to consent to a sensitive setting change (local mode)
+         * @description Local-mode consent primitive (core edition; FR-12.2; ADR-0010 WP2 auth-mode seam). Re-verifies the authenticated user's one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited. Not registered at all in platform mode, where the signed-in session itself is the guard.
          */
         post: operations["reAuth"];
         delete?: never;
@@ -154,7 +214,7 @@ export interface paths {
         get?: never;
         /**
          * Configure a search or voice-input integration provider
-         * @description Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403. Requires authentication.
+         * @description Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
          */
         put: operations["updateIntegrationProvider"];
         post?: never;
@@ -215,7 +275,7 @@ export interface paths {
         put?: never;
         /**
          * Finalize first-run onboarding
-         * @description Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when the pre-auth onboarding window is closed — onboarding is already complete, this instance already has an authentication authority (any configured gateway user, or OMNIPUS_BEARER_TOKEN set), its onboarding state file is unreadable, or the requested admin username already exists. The refusal body is identical for every one of those reasons so an anonymous caller cannot use it to probe the instance's state; the reason is recorded in the audit log (onboarding.refused). The authority check is what stops an anonymous caller minting a second administrator on an instance whose state.json was lost or corrupted, and it applies whatever the onboarding flag says. Creating an admin never overwrites an existing account's password. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
+         * @description AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no `admin` block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response's `warning` field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry.
          */
         post: operations["completeOnboarding"];
         delete?: never;
@@ -1274,8 +1334,8 @@ export interface paths {
         get: operations["getGodMode"];
         put?: never;
         /**
-         * Toggle the global god-mode switch (O14, password step-up)
-         * @description Flips the global god-mode ("bypass-permissions") switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required=true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
+         * Toggle the global god-mode switch (O14, confirmation dialog)
+         * @description Flips the global god-mode ("bypass-permissions") switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent's tool policy is floored at "allow", the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required=true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503); the SPA additionally confirms the flip with the operator before sending (ADR-0008 ruling 6). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
          */
         post: operations["setGodMode"];
         delete?: never;
@@ -1379,7 +1439,7 @@ export interface paths {
         put?: never;
         /**
          * Rotate the credential vault key via a new passphrase
-         * @description Re-encrypts the entire credential vault under a new Argon2id key derived from new_passphrase (and a fresh salt). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022). No restart is required; the in-memory key is updated in place.
+         * @description Re-encrypts the entire credential vault under a new Argon2id key derived from new_passphrase (and a fresh salt). Sensitive change — the SPA confirms it with the operator before sending (ADR-0008 ruling 6). No restart is required; the in-memory key is updated in place.
          */
         post: operations["rotateCredentials"];
         delete?: never;
@@ -3623,6 +3683,45 @@ export interface components {
              */
             warning?: string;
         };
+        /** @description Which omnipus.ai sign-in method the user picked on the in-app sign-in screen (ADR-0008 ruling 5, revised). It is only a HINT passed through to the platform's own sign-in page — the platform decides what it actually offers, and the instance never sees a credential either way. */
+        PlatformAuthStartRequest: {
+            /**
+             * @description The provider the user chose. "google" and "email" are the launch set (ADR-0008, "What a user may sign in with"); Sign in with Apple is deliberately not offered until there is an iOS client.
+             * @example google
+             * @enum {string}
+             */
+            method: "google" | "email";
+        };
+        /** @description Where to send the user's system browser to sign in, and the opaque handle that ties the eventual redirect back to this attempt. The PKCE verifier behind it NEVER leaves the gateway — the client sees only the challenge, already embedded in authorize_url. */
+        PlatformAuthStartResponse: {
+            /**
+             * Format: uri
+             * @description The platform's authorization URL, complete with client_id, the loopback redirect_uri, response_type=code, the S256 code_challenge, state and the chosen method hint. Open it in the SYSTEM browser, never in an embedded web view (RFC 8252 §8.12).
+             * @example https://api.omnipus.ai/v1/oauth/authorize?client_id=omnipus-desktop&code_challenge=...
+             */
+            authorize_url: string;
+            /**
+             * @description The single-use, 10-minute anti-forgery value the platform will echo back to /auth/callback. Keep it in memory for as long as the sign-in is in progress: for the 60 seconds after a successful callback it is also what POST /auth/platform/claim accepts to hand the resulting session to the application, so during that window it IS a credential. Do not store it, log it or show it.
+             * @example T1c0bWl0aGVzdGF0ZXZhbHVlZXhhbXBsZQ
+             */
+            state: string;
+        };
+        /** @description The state the caller received from POST /auth/platform/start, presented to collect the session that the browser half of the sign-in just opened. The desktop app needs this because the browser's cookie jar is not its own: the Set-Cookie written by /auth/callback lands in the user's real browser, and without this route the application would poll for a session it can never see. */
+        PlatformAuthClaimRequest: {
+            /**
+             * @description The state value from PlatformAuthStartResponse. For the 60 seconds after a successful callback it is what identifies the waiting session, so treat it as a credential for that window and keep it in memory only.
+             * @example T1c0bWl0aGVzdGF0ZXZhbHVlZXhhbXBsZQ
+             */
+            state: string;
+        };
+        /** @description Who the omnipus-session cookie on this request belongs to. Returned by GET /auth/session, which answers 200 with this body when the cookie resolves to a user and 401 when it does not — nothing else. The sign-in screen polls it while the user finishes in their browser, and the desktop shell polls it to know when to bring its window back to the front. */
+        AuthSessionResponse: {
+            /**
+             * @description The signed-in account's email address. Since ADR-0008 the account IS the login, so this is an email and not a locally chosen name.
+             * @example daniel@elicify.ai
+             */
+            username: string;
+        };
         /**
          * BrowserInspectRequest
          * @description Resolve the DOM element at a point in the live browser so the SPA can attach the element's text/HTML as context when a user annotates a spot. Coordinates are device (CSS) pixels of the WebRTC video frame. Best-effort — see ADR-039.
@@ -3668,13 +3767,13 @@ export interface components {
         };
         /**
          * OnboardingCompleteRequest
-         * @description Body for POST /onboarding/complete. Atomically sets up the first LLM provider and creates the initial admin account. CSRF-exempt (no cookie exists at this point). `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014).
+         * @description Body for POST /onboarding/complete. WP5 (ADR-0010) composes this by auth mode: in local mode (open-source edition) the route runs BEFORE any session exists and mints the instance's first account — `admin` is REQUIRED, upstream's behaviour restored. In platform mode (hosted/desktop) the caller is ALREADY signed in (ADR-0008 rulings 1 and 2: the omnipus.ai account is the login) — `admin` is REFUSED (400) because no local credential is ever minted on that edition. `provider` is discriminated by `auth_method`: `api_key` requires `api_key`; `sign_in` forbids it (ADR-068 MAJ-014). `preferences` is optional in both modes.
          */
         OnboardingCompleteRequest: {
             /** @description LLM provider configuration to persist, discriminated by `auth_method`. */
             provider: components["schemas"]["OnboardingProviderApiKey"] | components["schemas"]["OnboardingProviderSignIn"];
-            /** @description Initial admin account credentials. */
-            admin: {
+            /** @description Initial admin account credentials. Required in local mode; refused (400) in platform mode. */
+            admin?: {
                 /**
                  * @description Admin login name.
                  * @example admin
@@ -3686,6 +3785,27 @@ export interface components {
                  */
                 password: string;
             };
+            preferences?: components["schemas"]["OnboardingPreferences"];
+        };
+        /** @description Step 1's name and tone/detail preferences (spec: onboarding-and-profile-spec.md FR-OB-010..-018). Onboarding has no per-step persistence, so these ride in the same POST /onboarding/complete request as the provider — the server writes them into the global USER.md as prose (FR-OB-013/-013a) after the config transaction succeeds. */
+        OnboardingPreferences: {
+            /**
+             * @description Display name as typed on step 1. The server strips control characters, leading `#`/backticks and collapses whitespace before writing it into USER.md (FR-OB-014) — this field itself carries the raw typed value.
+             * @example Daniel
+             */
+            name: string;
+            /**
+             * @description How the person wants agents to talk to them.
+             * @example direct
+             * @enum {string}
+             */
+            tone: "direct" | "warm" | "formal";
+            /**
+             * @description How much detail the person wants by default.
+             * @example brief
+             * @enum {string}
+             */
+            detail: "brief" | "thorough";
         };
         /** @description The `api_key` variant of OnboardingCompleteRequest.provider (ADR-068, MAJ-014). Discriminated by `auth_method` following the ADR-034 inline oneOf mechanism; `api_key` is REQUIRED here and is not a property of the sign-in variant. */
         OnboardingProviderApiKey: {
@@ -3840,7 +3960,21 @@ export interface components {
              */
             interval_seconds?: number;
         };
-        OnboardingCompleteResponse: components["schemas"]["LoginResponse"];
+        /** @description Returned on a successful POST /onboarding/complete. WP5 (ADR-0010) composes this by auth mode: `token` is present ONLY in local mode — the caller had no session before this call, so completion bootstraps one via a one-shot bearer token, upstream's behaviour restored. In platform mode the caller already held a session (ADR-0008 ruling 2 — the omnipus.ai account is the login, and completion runs behind that session), so no token is issued and the field is absent. `username` is always present: the account the instance was set up for (the admin username just minted, in local mode; the authenticated account, in platform mode) — echoed back so the SPA does not have to re-read it. */
+        OnboardingCompleteResponse: {
+            /**
+             * @description The account the instance was set up for.
+             * @example operator@example.com
+             */
+            username: string;
+            /** @description Local-mode-only bootstrap bearer token for the admin account this completion just created. Absent in platform mode. */
+            token?: components["schemas"]["BearerToken"];
+            /**
+             * @description Non-fatal advisory message, present for either of two independent reasons, mutually exclusive on a single response: (1) the credential store is locked and the API key was stored in plaintext, or (2) the provider API key was submitted but could not be positively verified — the provider was unreachable, the key has no credit, access is regionally/model restricted, or no endpoint was available to probe against. Absent entirely when the key was actively verified as valid. A key the provider actively confirms is WRONG is never represented via this field — that outcome rejects the request with 400 instead.
+             * @example Couldn't reach OpenAI to check the key — check your internet connection. Continuing for now; the key will be used as entered.
+             */
+            warning?: string;
+        };
         /** @description Body for POST /onboarding/probe-provider. Validates credentials against a provider and returns the probed model. Non-persistent — nothing is written to disk. CSRF-exempt. Returns 409 once onboarding is complete. ONE shape, owned by ADR-067 (id, api_base, protocol) and ADR-068 (auth, api_key, model) — see ADR-067 FR-023 / ADR-068 FR-036. Runtime rules the schema cannot express: id must be in the served catalog OR be accompanied by both api_base and protocol (a custom row) — otherwise 400 naming the field id with the message 'unknown provider "<id>"' and never a list of accepted ids; the reserved literals "catalog" and "default-model" are never valid ids; api_key is required iff auth is api_key (400 naming api_key) and must be absent with auth sign_in; a tier "unsupported" provider → 400 with its unsupported_reason; any api_base passes the SSRF gate (422 when blocked). */
         ProbeProviderRequest: {
             /**
@@ -9335,7 +9469,7 @@ export interface components {
         };
         /**
          * GodModeUpdateRequest
-         * @description Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change and requires a valid single-use re-auth consent token (password step-up) replayed in the X-Reauth-Token header — call POST /api/v1/auth/reauth first. Returns 403 when god mode is not SUPPORTED in this build (compiled with the nogodmode tag) and enabled=true. Enabling is otherwise always permitted: when the build supports it but this boot was not already authorized (see GodModeStatus.available), enabling persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config in the same write, and the response's restart_required flag signals that the gateway must restart before the override actually takes effect. Disabling is always permitted regardless of availability (fail-safe: an operator can always reach the more-restrictive state).
+         * @description Body for POST /api/v1/gateway/god-mode. Flips the global god-mode ("bypass-permissions") switch. This is a high-blast-radius security change. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6). Returns 403 when god mode is not SUPPORTED in this build (compiled with the nogodmode tag) and enabled=true. Enabling is otherwise always permitted: when the build supports it but this boot was not already authorized (see GodModeStatus.available), enabling persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config in the same write, and the response's restart_required flag signals that the gateway must restart before the override actually takes effect. Disabling is always permitted regardless of availability (fail-safe: an operator can always reach the more-restrictive state).
          */
         GodModeUpdateRequest: {
             /**
@@ -10176,7 +10310,7 @@ export interface components {
              */
             active_voice?: string;
         };
-        /** @description Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Because integration edits are sensitive, the SPA must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid token are rejected 403. */
+        /** @description Body for PUT /api/v1/integrations/providers/{id}. Configures a search or voice-input integration provider (FR-12.1). Setting an api_key stores it encrypted (AES-256-GCM) in credentials.json and writes only the credential reference to config.json. Setting active=true selects this provider as the active one for its kind. Integration edits are sensitive. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6). */
         IntegrationProviderUpdateRequest: {
             /**
              * @description Whether this provider is a search engine or a voice transcriber.
@@ -10919,6 +11053,7 @@ export interface components {
              * @example true
              */
             onboarding_complete: boolean;
+            identity: components["schemas"]["AppStateIdentity"];
             /**
              * Format: date-time
              * @description RFC3339 timestamp of the last health-check run. Absent if never run.
@@ -10952,6 +11087,57 @@ export interface components {
              *     ]
              */
             video_embed_hosts?: string[];
+        };
+        /**
+         * AppStateIdentity
+         * @description Which edition this binary was built as, and whether the caller is signed in (ADR-0010, docs/specs/login-and-onboarding-spec.md §2.2). This is the ONLY field the UI reads to branch on edition or sign-in state — no build-time flag, no `window.isElectron` sniffing. `mode` mirrors `config.EditionAuthMode()` (derived from the stamped edition, never a runtime setting); `edition` mirrors the stamped `config.Edition`. `account` is present only when `signed_in` is true; `blocked_reason` is present only when it is false. `sign_in.start_url` is deliberately NOT carried here — the app starts sign-in itself.
+         */
+        AppStateIdentity: {
+            /**
+             * @description How this build authenticates its users — mirrors `security.platform_auth.mode` (FR-PA-080). `local` is the open-source edition's own password login; `platform` delegates sign-in to a registered omnipus.ai provider.
+             * @example local
+             * @enum {string}
+             */
+            mode: "local" | "platform";
+            /**
+             * @description The product this binary was built as, stamped at build time.
+             * @example core
+             * @enum {string}
+             */
+            edition: "core" | "desktop" | "hosted";
+            /**
+             * @description Whether the caller of this request is authenticated.
+             * @example false
+             */
+            signed_in: boolean;
+            account?: components["schemas"]["AppStateIdentityAccount"];
+            /**
+             * @description Present only when `signed_in` is false.
+             * @example signed_out
+             * @enum {string}
+             */
+            blocked_reason?: "none" | "signed_out" | "expired" | "revoked" | "no_account" | "subject_mismatch" | "unreachable";
+        };
+        /**
+         * AppStateIdentityAccount
+         * @description The signed-in account, present on `AppState.identity.account` only when `identity.signed_in` is true (docs/specs/login-and-onboarding-spec.md §2.2).
+         */
+        AppStateIdentityAccount: {
+            /**
+             * @description Display name for the signed-in account.
+             * @example Daniel Piątkowski
+             */
+            label: string;
+            /**
+             * @description The account's email, masked for display — never the full address.
+             * @example d•••@elicify.ai
+             */
+            email_masked: string;
+            /**
+             * @description The signed-in account's organization, or null.
+             * @example null
+             */
+            org: string | null;
         };
         /**
          * ValidateTokenResponse
@@ -12525,7 +12711,7 @@ export interface components {
         };
         /**
          * CredentialRotateRequest
-         * @description Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022).
+         * @description Request body for POST /api/v1/credentials/rotate. Re-encrypts the entire credential vault under a new passphrase-derived key (Argon2id). Sensitive change. In the core edition (local auth mode) the request must carry a re-auth consent token in the X-Reauth-Token header — call POST /api/v1/auth/reauth first (Spec-6 FR-12.2); in the desktop and hosted editions (platform auth mode) the SPA confirms the change with the operator before sending and the wire guard is the authenticated session (ADR-0008 ruling 6).
          */
         CredentialRotateRequest: {
             /**
@@ -15873,6 +16059,100 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    startPlatformAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformAuthStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Sign-in started. Open authorize_url in the system browser. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PlatformAuthStartResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+            /** @description Platform sign-in is not configured on this instance. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    claimPlatformAuth: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlatformAuthClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description The session was handed over; this response carries the cookies. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSessionResponse"];
+                };
+            };
+            400: components["responses"]["400BadRequest"];
+            /** @description Nothing is waiting to be collected — unknown, expired or already claimed, deliberately not distinguished. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            429: components["responses"]["429TooManyRequests"];
+            500: components["responses"]["500InternalServerError"];
+        };
+    };
+    getAuthSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cookie resolves to a signed-in account. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuthSessionResponse"];
+                };
+            };
+            401: components["responses"]["401Unauthorized"];
+            429: components["responses"]["429TooManyRequests"];
+        };
+    };
     login: {
         parameters: {
             query?: never;
@@ -16149,16 +16429,17 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Onboarding completed successfully. Bearer token ready. */
+            /** @description Onboarding completed successfully for the authenticated account. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LoginResponse"];
+                    "application/json": components["schemas"]["OnboardingCompleteResponse"];
                 };
             };
             400: components["responses"]["400BadRequest"];
+            401: components["responses"]["401Unauthorized"];
             409: components["responses"]["409Conflict"];
             429: components["responses"]["429TooManyRequests"];
             500: components["responses"]["500InternalServerError"];
@@ -18945,15 +19226,6 @@ export interface operations {
             };
             /** @description Invalid request (e.g. empty passphrase). */
             400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Re-auth required or invalid consent token. */
-            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -23017,10 +23289,15 @@ export type ToolPolicyChanges = components["schemas"]["ToolPolicyChanges"];
 export type ErrorResponse = components["schemas"]["ErrorResponse"];
 export type LoginRequest = components["schemas"]["LoginRequest"];
 export type LoginResponse = components["schemas"]["LoginResponse"];
+export type PlatformAuthStartRequest = components["schemas"]["PlatformAuthStartRequest"];
+export type PlatformAuthStartResponse = components["schemas"]["PlatformAuthStartResponse"];
+export type PlatformAuthClaimRequest = components["schemas"]["PlatformAuthClaimRequest"];
+export type AuthSessionResponse = components["schemas"]["AuthSessionResponse"];
 export type BrowserInspectRequest = components["schemas"]["BrowserInspectRequest"];
 export type BrowserInspectResponse = components["schemas"]["BrowserInspectResponse"];
 export type ChangePasswordRequest = components["schemas"]["ChangePasswordRequest"];
 export type OnboardingCompleteRequest = components["schemas"]["OnboardingCompleteRequest"];
+export type OnboardingPreferences = components["schemas"]["OnboardingPreferences"];
 export type OnboardingProviderApiKey = components["schemas"]["OnboardingProviderApiKey"];
 export type OnboardingProviderSignIn = components["schemas"]["OnboardingProviderSignIn"];
 export type SignInStartResponse = components["schemas"]["SignInStartResponse"];
@@ -23225,6 +23502,8 @@ export type McpServerUpdate = components["schemas"]["McpServerUpdate"];
 export type McpServerTestResponse = components["schemas"]["McpServerTestResponse"];
 export type McpServerToolsResponse = components["schemas"]["McpServerToolsResponse"];
 export type AppState = components["schemas"]["AppState"];
+export type AppStateIdentity = components["schemas"]["AppStateIdentity"];
+export type AppStateIdentityAccount = components["schemas"]["AppStateIdentityAccount"];
 export type ValidateTokenResponse = components["schemas"]["ValidateTokenResponse"];
 export type DoctorIssue = components["schemas"]["DoctorIssue"];
 export type DoctorResult = components["schemas"]["DoctorResult"];

@@ -624,24 +624,21 @@ func FixtureDevicePairingRequestFrame_ZeroValue() DevicePairingRequestFrame {
 
 // ── REST response type fixtures (OpenAPI) ────────────────────────────────────
 
-// LoginResponse
+// OnboardingCompleteResponse (contracts/components/schemas/OnboardingCompleteResponse.yaml).
+// It is its own schema now, not an alias of the deleted LoginResponse, and it
+// carries NO bearer token: completion runs behind an existing session
+// (ADR-0008 ruling 2), so there is nothing left to bootstrap.
 
-func FixtureLoginResponse_Populated() LoginResponse {
+func FixtureOnboardingCompleteResponse_Populated() OnboardingCompleteResponse {
 	warning := strPtr("API key stored in plaintext")
-	return LoginResponse{
-		Token:    "omnipus_" + repeatStr("a", 64),
+	return OnboardingCompleteResponse{
 		Username: "admin",
 		Warning:  warning,
 	}
 }
 
-func FixtureLoginResponse_ZeroValue() LoginResponse {
-	return LoginResponse{}
-}
-
-func FixtureLoginResponse_Edge() LoginResponse {
-	return LoginResponse{
-		Token:    "omnipus_" + repeatStr("f", 64),
+func FixtureOnboardingCompleteResponse_Edge() OnboardingCompleteResponse {
+	return OnboardingCompleteResponse{
 		Username: "unicode-user-🔑",
 	}
 }
@@ -1249,7 +1246,7 @@ func FixtureAppState_Populated() AppState {
 	godModeAvail := false
 	godModeOptedIn := false
 	devModeBypass := false
-	return AppState{
+	s := AppState{
 		OnboardingComplete: true,
 		LastDoctorRun:      &lastRun,
 		LastDoctorScore:    &score,
@@ -1257,27 +1254,46 @@ func FixtureAppState_Populated() AppState {
 		GodModeOptedIn:     &godModeOptedIn,
 		DevModeBypass:      &devModeBypass,
 	}
+	// identity became required by AppState.yaml (ADR-0010 WP1); mode/edition
+	// are themselves enum-constrained (AppStateIdentity.yaml), so the zero
+	// value ("") never validates. local/core/signed out mirrors the example
+	// values in the schema.
+	s.Identity.Mode = AppStateIdentityModeLocal
+	s.Identity.Edition = AppStateIdentityEditionCore
+	s.Identity.SignedIn = false
+	return s
 }
 
-// FixtureAppState_ZeroValue — Go zero value.
-// Expected: PASS — onboarding_complete is the only required field,
-// and bool zero value (false) is a valid boolean (not an absent value).
-// This is one of the few types where ZeroValue passes.
+// FixtureAppState_ZeroValue — Go zero value for every OPTIONAL field.
+// identity is required as of ADR-0010 WP1 and its mode/edition subfields are
+// enum-constrained, so this can no longer be a true Go zero value end to end
+// (unlike the comment historically claimed) — identity is populated with the
+// same minimal valid value as Populated so the fixture still exercises "every
+// optional field absent" rather than failing on the one required object.
 func FixtureAppState_ZeroValue() AppState {
-	return AppState{}
+	s := AppState{}
+	s.Identity.Mode = AppStateIdentityModeLocal
+	s.Identity.Edition = AppStateIdentityEditionCore
+	return s
 }
 
-// FixtureAppState_Edge — onboarding not complete, god mode available and opted in.
+// FixtureAppState_Edge — onboarding not complete, god mode available and
+// opted in, identity in the platform/hosted/signed-in posture (differs from
+// Populated's local/core/signed-out identity for TestContract_AppState_Differentiation).
 func FixtureAppState_Edge() AppState {
 	godModeAvail := true
 	godModeOptedIn := true
 	devModeBypass := true
-	return AppState{
+	s := AppState{
 		OnboardingComplete: false,
 		GodModeAvailable:   &godModeAvail,
 		GodModeOptedIn:     &godModeOptedIn,
 		DevModeBypass:      &devModeBypass,
 	}
+	s.Identity.Mode = AppStateIdentityModePlatform
+	s.Identity.Edition = AppStateIdentityEditionHosted
+	s.Identity.SignedIn = true
+	return s
 }
 
 // ── ValidateTokenResponse ─────────────────────────────────────────────────────
@@ -1531,31 +1547,6 @@ func FixtureDevicesResponse_Edge() DevicesResponse {
 			PairedAt    time.Time                   `json:"paired_at"`
 			Status      DevicesResponsePairedStatus `json:"status"`
 		}{},
-	}
-}
-
-// ── BackupEntry (inlined in listBackups response, tested via raw JSON) ─────────
-// Note: oapi-codegen inlined BackupEntry as an anonymous object in the listBackups
-// response. Tests validate against the component schema BackupEntry.yaml directly.
-// Traces to: contracts/components/schemas/BackupEntry.yaml
-
-func FixtureBackupEntryJSON_Populated() map[string]any {
-	return map[string]any{
-		"filename":   "omnipus-backup-2026-05-16T10-00-00Z.tar.gz",
-		"size_bytes": int64(1048576),
-		"created_at": "2026-05-16T10:00:00Z",
-	}
-}
-
-func FixtureBackupEntryJSON_ZeroValue() map[string]any {
-	return map[string]any{}
-}
-
-func FixtureBackupEntryJSON_Edge() map[string]any {
-	return map[string]any{
-		"filename":   "omnipus-backup-" + repeatStr("x", 30) + ".tar.gz",
-		"size_bytes": int64(0), // minimum: 0 — empty archive is valid
-		"created_at": "2026-01-01T00:00:00Z",
 	}
 }
 
@@ -2009,29 +2000,6 @@ func FixtureChannelTestResponse_Edge() ChannelTestResponse {
 	}
 }
 
-// ── BackupCreateResponse ──────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/BackupCreateResponse.yaml
-
-func FixtureBackupCreateResponse_Populated() BackupCreateResponse {
-	return BackupCreateResponse{
-		Path:      "/home/user/.omnipus/backups/backup-20260516T103000Z.tar.gz",
-		SizeBytes: 1048576,
-		CreatedAt: time.Date(2026, 5, 16, 10, 30, 0, 0, time.UTC),
-	}
-}
-
-func FixtureBackupCreateResponse_ZeroValue() BackupCreateResponse {
-	return BackupCreateResponse{}
-}
-
-func FixtureBackupCreateResponse_Edge() BackupCreateResponse {
-	return BackupCreateResponse{
-		Path:      "/home/user/.omnipus/backups/backup-" + repeatStr("x", 30) + ".tar.gz",
-		SizeBytes: 0, // minimum: 0 — empty archive valid
-		CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-	}
-}
-
 // ── OperationResult ───────────────────────────────────────────────────────────
 // Traces to: contracts/components/schemas/OperationResult.yaml
 
@@ -2448,26 +2416,6 @@ func FixtureIntegrationProvider_Populated() IntegrationProvider {
 // validation: kind is "" (not in [search, voice]).
 func FixtureIntegrationProvider_ZeroValue() IntegrationProvider {
 	return IntegrationProvider{}
-}
-
-// ── ReAuthResponse ───────────────────────────────────────────────────────────
-// Traces to: contracts/components/schemas/ReAuthResponse.yaml
-// Note: all required fields are scalar with no value constraints, so the Go
-// zero value ({verified:false, token:"", expires_in:0}) is a VALID object —
-// there is no ZeroValue-fails case for this type.
-
-func FixtureReAuthResponse_Populated() ReAuthResponse {
-	return ReAuthResponse{
-		Verified:  true,
-		Token:     "reauth_2f1a9c0b8d7e6f5a",
-		ExpiresIn: 300,
-	}
-}
-
-// FixtureReAuthResponse_ZeroValue — Go zero values. Expected to PASS: all
-// required fields are present (false/""/0 are valid for their types).
-func FixtureReAuthResponse_ZeroValue() ReAuthResponse {
-	return ReAuthResponse{}
 }
 
 // ── PerformanceSettings ──────────────────────────────────────────────────────

@@ -7,11 +7,10 @@
 // handler called it. This suite drives a real 'unauthorized' verdict through
 // beforeLoad and asserts forceLogout('expired') fires before the redirect.
 //
-// Sibling to the existing #27 coverage in routes/-login.test.tsx (which tests
-// the ONBOARDING branch of the same beforeLoad — fetchAppState resolving
-// onboarding_complete:false). That suite hard-mocks checkTokenValidity to
-// always resolve 'ok', so it structurally cannot reach this branch — hence a
-// dedicated file with its own mock of ./authValidation.
+// This file owns the branch on its own, with its own mock of
+// ./authValidation. (It used to be the sibling of an onboarding-branch test in
+// routes/-login.test.tsx; that suite tested the password login and was deleted
+// with it — ADR-0008 ruling 2.)
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
@@ -84,6 +83,20 @@ describe('_app.tsx beforeLoad — auth-check branch (D2)', () => {
     localStorage.clear()
   })
 
+  // Explicit 60000ms (not this file's implicit 30000ms testTimeout): this is
+  // the FIRST test in the file, so its `await import('./_app')` inside
+  // getBeforeLoad() pays the one-time TanStack Router plugin transform cost
+  // vitest.config.ts already documents for this exact file ("importing a
+  // route/screen module triggers the router plugin's transform across every
+  // route file... 20-30s on a cold run" — -app-auth is named there by name,
+  // issue #616). That cost falls inside the test BODY, so hookTimeout's 60s
+  // margin (granted to beforeAll/beforeEach) never covers it, only
+  // testTimeout's 30s does — confirmed present on unmodified origin/main,
+  // deterministic in isolation, unrelated to the WP5/WP3 seam patches this
+  // fix landed alongside. The other 9 tests in this file pay no such cost
+  // (the transform is warm afterward, even though vi.resetModules() in
+  // beforeEach clears vitest's own module registry each time) and keep the
+  // file's default timeout.
   it('calls forceLogout("expired") BEFORE throwing the redirect on a confirmed 401 ("unauthorized" verdict)', async () => {
     mockCheckTokenValidity.mockResolvedValue('unauthorized')
     const beforeLoad = await getBeforeLoad()
@@ -106,7 +119,7 @@ describe('_app.tsx beforeLoad — auth-check branch (D2)', () => {
     // forceLogout must run before the redirect is thrown — it clears the
     // stale auth-store state that the old code path left behind.
     expect(callOrder).toEqual(['forceLogout', 'redirect-thrown'])
-  })
+  }, 60000)
 
   it('does NOT call forceLogout when the verdict is "ok"', async () => {
     mockCheckTokenValidity.mockResolvedValue('ok')
@@ -211,5 +224,69 @@ describe('_app.tsx beforeLoad — skip validateToken for a never-signed-in brows
     expect(mockCheckTokenValidity).toHaveBeenCalledOnce()
     expect(mockForceLogout).toHaveBeenCalledWith('expired')
     expect((thrown as { to: string }).to).toBe('/login')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// ADR-0010 / login-and-onboarding-spec.md §2.4 — the boot path collapses to
+// ONE request when GET /api/v1/state carries `identity`: the separate GET
+// /api/v1/auth/validate round trip (checkTokenValidity/validateToken) must
+// never fire when `identity.signed_in` already answered the question. An
+// OLDER backend's /state response has no `identity` field at all — that must
+// keep today's exact hasStoredSession()/checkTokenValidity() behaviour
+// (already covered by the two describe blocks above, whose mocks resolve
+// `{ onboarding_complete: true }` with no `identity` key).
+// ---------------------------------------------------------------------------
+describe('_app.tsx beforeLoad — identity-driven boot path (WP1/WP5a)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.resetModules()
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    localStorage.clear()
+  })
+
+  it('skips checkTokenValidity entirely when identity.signed_in is true', async () => {
+    mockFetchAppState.mockResolvedValue({
+      onboarding_complete: true,
+      identity: { mode: 'local', edition: 'core', signed_in: true, account: { label: 'a', email_masked: 'a', org: null } },
+    })
+    const beforeLoad = await getBeforeLoad()
+
+    await expect(beforeLoad()).resolves.toBeUndefined()
+    expect(mockCheckTokenValidity).not.toHaveBeenCalled()
+    expect(mockForceLogout).not.toHaveBeenCalled()
+  })
+
+  it('redirects to /login without calling checkTokenValidity when identity.signed_in is false', async () => {
+    mockFetchAppState.mockResolvedValue({
+      onboarding_complete: true,
+      identity: { mode: 'local', edition: 'core', signed_in: false, blocked_reason: 'signed_out' },
+    })
+    const beforeLoad = await getBeforeLoad()
+
+    let thrown: unknown = null
+    try {
+      await beforeLoad()
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(mockCheckTokenValidity).not.toHaveBeenCalled()
+    expect((thrown as { to: string }).to).toBe('/login')
+  })
+
+  it('falls back to hasStoredSession()/checkTokenValidity() when identity is absent (older backend)', async () => {
+    // No `identity` key at all — the exact shape an older backend's /state
+    // response has, and the exact shape the two describe blocks above mock.
+    mockFetchAppState.mockResolvedValue({ onboarding_complete: true })
+    localStorage.setItem('omnipus_auth_username', 'admin')
+    mockCheckTokenValidity.mockResolvedValue('ok')
+    const beforeLoad = await getBeforeLoad()
+
+    await expect(beforeLoad()).resolves.toBeUndefined()
+    expect(mockCheckTokenValidity).toHaveBeenCalledOnce()
   })
 })

@@ -1,0 +1,18 @@
+type: object
+description: >
+  Who the omnipus-session cookie on this request belongs to. Returned by
+  GET /auth/session, which answers 200 with this body when the cookie resolves
+  to a user and 401 when it does not — nothing else. The sign-in screen polls
+  it while the user finishes in their browser, and the desktop shell polls it
+  to know when to bring its window back to the front.
+required:
+  - username
+additionalProperties: false
+properties:
+  username:
+    type: string
+    minLength: 1
+    description: >
+      The signed-in account's email address. Since ADR-0008 the account IS the
+      login, so this is an email and not a locally chosen name.
+    example: "daniel@elicify.ai"

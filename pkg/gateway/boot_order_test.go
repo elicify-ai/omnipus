@@ -416,3 +416,60 @@ func TestBootOrder_OldOrderWouldLoseDataModelInitLogs(t *testing.T) {
 			"Init runs before the bridge is installed — if it does, this negative control is broken")
 	}
 }
+
+// withEditionForBootTest sets the package-level config.Edition for the
+// duration of a test and restores it afterward, mirroring the withEdition
+// save/restore helper in pkg/config/edition_test.go (that helper is
+// unexported and lives in package config, so this is its gateway-package
+// equivalent, operating on the same exported config.Edition var).
+func withEditionForBootTest(t *testing.T, e string) {
+	t.Helper()
+	prev := config.Edition
+	config.Edition = e
+	t.Cleanup(func() { config.Edition = prev })
+}
+
+// TestGatewayBoot_EditionMisbuildRefusesToStart pins the ADR-0010 boot
+// tripwire added to bootCredentials: a core-stamped binary whose config.json
+// has a platform trust anchor configured (security.platform_auth.issuer) is a
+// hosted or desktop build that lost its edition stamp, and must never boot —
+// serving it would expose the password login on what is supposed to be a
+// platform-only instance. A plain core build (no issuer configured) must
+// still boot normally.
+func TestGatewayBoot_EditionMisbuildRefusesToStart(t *testing.T) {
+	withEditionForBootTest(t, config.EditionCore)
+
+	tmpDir := t.TempDir()
+	t.Setenv("OMNIPUS_MASTER_KEY", fixedHexKey)
+
+	// --- Sub-test 1: core edition + configured platform issuer → fatal. ---
+	misbuiltConfigPath := filepath.Join(tmpDir, "config_misbuilt.json")
+	writeBootTestFile(t, misbuiltConfigPath, `{
+		"version": 1,
+		"security": {
+			"platform_auth": {
+				"issuer": "https://platform.example"
+			}
+		},
+		"gateway": { "host": "127.0.0.1", "port": 19995 }
+	}`)
+
+	err := bootCredentialsError(tmpDir, misbuiltConfigPath)
+	if err == nil {
+		t.Fatal("bootCredentials must refuse to start a core-stamped binary with a platform trust anchor configured")
+	}
+	if !strings.Contains(err.Error(), "refusing to start") {
+		t.Errorf("error must surface the EditionMisbuild refusal; got: %q", err.Error())
+	}
+
+	// --- Sub-test 2: core edition, no platform issuer configured → boots normally. ---
+	plainConfigPath := filepath.Join(tmpDir, "config_plain.json")
+	writeBootTestFile(t, plainConfigPath, `{
+		"version": 1,
+		"gateway": { "host": "127.0.0.1", "port": 19994 }
+	}`)
+
+	if err := bootCredentialsError(tmpDir, plainConfigPath); err != nil {
+		t.Fatalf("bootCredentials must NOT fail for a plain core build with no platform trust anchor; got: %v", err)
+	}
+}

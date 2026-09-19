@@ -105,6 +105,21 @@ const (
 	// registered as a bare literal below) — FR-018c: two distinct record
 	// shapes under one audit event kind.
 	EventSkillCall = "skill.call"
+	// EventPlatformSignIn records every attempt to open a session from an
+	// omnipus.ai account (ADR-0008 ruling 5; pkg/gateway/rest_platform_auth.go).
+	// Decision is allow for a completed sign-in and deny for every refusal
+	// class — unknown or expired state, a failed token exchange, a token that
+	// did not verify, a replayed jti, a second account on a single-user
+	// instance.
+	//
+	// Details carry {reason, source_ip, route} plus, where they are known,
+	// {username, sub, jti, iss, method}. `jti` is deliberate: it is the shared
+	// identifier that lets the platform's issue event and our redeem event be
+	// matched, which CP-20 records as otherwise unspecified. The raw token,
+	// the session token and any key material are NEVER logged — the platform's
+	// human-access policy requires audit payloads that carry no assertions,
+	// tickets or keys.
+	EventPlatformSignIn = "auth.platform_sign_in"
 )
 
 // Decision values for audit entries. Values are Decision-compatible
@@ -164,7 +179,7 @@ func IsValidEventName(e EventName) bool {
 		EventExecutorSmokeTest,
 		// First-run onboarding authority events (pkg/gateway/rest_onboarding.go).
 		EventOnboardingAdminCreated,
-		EventOnboardingRefused,
+		EventOnboardingRefused, EventPlatformSignIn, // omnipus.ai sign-in (pkg/gateway/rest_platform_auth.go).
 		// Tool Registry redesign event names from events.go. These are
 		// emitted from the agent loop and the policy package.
 		EventToolPolicyDenyAttempted,

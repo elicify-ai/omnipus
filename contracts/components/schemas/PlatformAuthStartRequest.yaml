@@ -1,0 +1,20 @@
+type: object
+description: >
+  Which omnipus.ai sign-in method the user picked on the in-app sign-in screen
+  (ADR-0008 ruling 5, revised). It is only a HINT passed through to the
+  platform's own sign-in page — the platform decides what it actually offers,
+  and the instance never sees a credential either way.
+required:
+  - method
+additionalProperties: false
+properties:
+  method:
+    type: string
+    enum:
+      - google
+      - email
+    description: >
+      The provider the user chose. "google" and "email" are the launch set
+      (ADR-0008, "What a user may sign in with"); Sign in with Apple is
+      deliberately not offered until there is an iOS client.
+    example: "google"

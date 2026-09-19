@@ -5,24 +5,25 @@ import { AnimatePresence, motion } from 'framer-motion'
 import {
   ArrowRight,
   ArrowLeft,
-  Eye,
-  EyeSlash,
   SpinnerGap,
   CheckCircle,
   XCircle,
   User,
-  Key,
   Star,
   ChatCircle,
+  Key,
+  Eye,
+  EyeSlash,
 } from '@phosphor-icons/react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { ModelSelector, type ModelCatalogGroup } from '@/components/ui/model-selector'
 import { probeProvider, completeOnboardingTransaction, fetchAppState, isApiError } from '@/lib/api'
 import { providersCatalogQueryOptions } from '@/lib/providersCatalogQuery'
 import OmnipusAvatar from '@/assets/logo/omnipus-avatar.svg?url'
 import { useUiStore } from '@/store/ui'
-import { useAuthStore } from '@/store/auth'
+import { useAuthStore, hasStoredSession } from '@/store/auth'
 import { queryClient } from '@/lib/queryClient'
 import { ProviderValidationBanner } from '@/components/providers/ProviderValidationBanner'
 import { ProviderPicker, type PickerSelection } from '@/components/providers/ProviderPicker'
@@ -30,6 +31,7 @@ import type { ProviderDetailSelection } from '@/components/providers/ProviderDet
 import { SignInDialog } from '@/components/providers/SignInDialog'
 import type { AuthMethod } from '@/components/providers/AuthMethodControl'
 import type {
+  AppState,
   CatalogProvider,
   OnboardingProviderApiKey,
   OnboardingProviderSignIn,
@@ -47,22 +49,61 @@ import {
   catalogSubtitle,
 } from '@/lib/catalogDisplay'
 
-// First-launch onboarding flow — full-screen, outside AppShell.
+// First-launch onboarding flow — full-screen, outside AppShell. WP5
+// (ADR-0010) composes this by auth mode, both editions showing the FULL
+// wizard (founder decision, 2026-09-18): in PLATFORM mode (hosted/desktop)
+// this is reached only once a platform sign-in has already established a
+// session (ADR-0008 rulings 1/2 — the account is the login), and the wizard
+// is TWO numbered steps — personal preferences → provider/model. In LOCAL
+// mode (the open-source edition) nothing has signed in yet: two upstream
+// admin-account steps (username → password, restored from the merge base,
+// NameStep/PasswordStep below) run FIRST, so the wizard is FOUR numbered
+// steps. Both modes end on the same unnumbered "Meet your Assistant"
+// completion screen, introducing Mia (the default ⭐ Assistant agent,
+// auto-provisioned by coreagent.SeedConfig at gateway boot) — the step
+// indicator tracks only the numbered steps.
 //
-// Spec-6 FR-12.3: three numbered steps — name → password → model key — followed
-// by an unnumbered "Meet your Assistant" completion screen that introduces Mia
-// (the default ⭐ Assistant agent, auto-provisioned by coreagent.SeedConfig at
-// gateway boot). The step indicator tracks the 3 numbered steps only; the
-// completion screen is not a numbered step.
-
-type Step = 1 | 2 | 3
+// Which mode applies is read off GET /state's `identity.mode` — see
+// readOnboardingAuthMode below. That field is being added to AppState by a
+// parallel lane and is NOT yet in the generated OpenAPI types this file
+// imports, so it is read defensively through a local type extension rather
+// than a generated property.
+//
+// SECURITY / DEFAULT DIRECTION: local (upstream) is the fallback, platform
+// is the opt-in. A hosted or desktop server always answers an explicit
+// identity.mode: 'platform' on GET /state (config.Edition is stamped at
+// build time and an unstamped binary fails closed — ADR-0010 WP1), so
+// 'local', undefined, and "the fetch itself failed" are ALL the same case in
+// practice: no real platform server ever produces them. Treating that case
+// as local/upstream's own behaviour, rather than platform's, is what keeps
+// this seam byte-for-byte upstream on a tree upstream's own tests still
+// exercise (oracle-checked in provider-save.test.tsx's sibling files here).
+// It is also safe, not merely permissive: the SERVER is the real enforcement
+// point — platform-mode onboarding refuses a request that carries an admin
+// block (pkg/gateway/rest_onboarding_authority_test.go's
+// TestOnboardingComplete_BodyCarryingAnAdminBlock_Is400) and requireReAuth is
+// a no-op in platform mode — so a UI that falls back to the local screens
+// here exposes no capability a platform server would ever honour.
+type Step = 1 | 2 | 3 | 4
 type TestStatus = 'idle' | 'testing' | 'success' | 'error'
+
+/**
+ * readOnboardingAuthMode reads the auth mode off a GET /state response.
+ * `identity` is a required field of the generated AppState (WP1), so the only
+ * defensive case left is a missing state altogether (the query has not
+ * answered yet). Returns undefined when unknown — callers must treat that
+ * the same as 'local' (upstream's own behaviour), never as 'platform': see
+ * the SECURITY note above.
+ */
+function readOnboardingAuthMode(state: AppState | null | undefined): AppState['identity']['mode'] | undefined {
+  return state?.identity?.mode
+}
 
 // ── Provider data model (ADR-068 FR-037/FR-021) ──────────────────────────────
 //
 // The picker sources from the registry-fed catalog the gateway serves at
 // GET /api/v1/providers/catalog (src/lib/api.ts::fetchProvidersCatalog) —
-// there is NO bundled catalog (SC-010). Onboarding step 3 renders the ONE
+// there is NO bundled catalog (SC-010). Onboarding step 2 renders the ONE
 // shared `ProviderPicker` (first level: Popular tiles / letter-grouped list /
 // Custom endpoint) and its `ProviderDetailPanel` second level (plan, region,
 // auth method), the same pair Settings → Providers renders.
@@ -78,10 +119,11 @@ export const PROVIDERS_REQUIRING_ENDPOINT = new Set(['azure', 'azure-openai'])
 export { PLAN_LABELS, REGION_LABELS }
 
 /**
- * FR-029, verbatim: the model field's accessible label on onboarding step 3.
- * Exported so the test asserts the shipped string rather than a copy of it.
+ * FR-OB-021, verbatim: the model field's accessible label on onboarding
+ * step 2. Exported so the test asserts the shipped string rather than a
+ * copy of it.
  */
-export const ONBOARDING_MODEL_LABEL = 'Model for your first agent'
+export const ONBOARDING_MODEL_LABEL = 'Default model'
 
 // ── Catalog helpers ───────────────────────────────────────────────────────────
 //
@@ -115,11 +157,12 @@ export function probeErrorIsMissingCli(message: string): boolean {
   return /not found|not installed|no such file|executable file not found/i.test(message)
 }
 
-
-// Lightweight, dependency-free password strength heuristic. Scores on length
-// plus character-class diversity (lower / upper / digit / symbol). Returns a
-// 1–4 score with a human label and a brand token for the meter fill (or null
-// for empty input, so the meter is hidden until the user types).
+// Lightweight, dependency-free password strength heuristic (LOCAL MODE ONLY —
+// WP5, ADR-0010, restored verbatim from upstream merge base 184d7247 for the
+// admin-account password PasswordStep below). Scores on length plus
+// character-class diversity (lower / upper / digit / symbol). Returns a 1–4
+// score with a human label and a brand token for the meter fill (or null for
+// empty input, so the meter is hidden until the user types).
 type PasswordStrengthLabel = 'Too short' | 'Weak' | 'Fair' | 'Good' | 'Strong'
 type PasswordStrengthColor =
   | 'var(--color-error)'
@@ -213,10 +256,27 @@ export function friendlyProbeError(raw: string, providerName: string): string {
 
 // Eye show/hide toggle button: pads the hit area to a 44x44 mobile tap target
 // (touch min) without enlarging the 14px icon — the icon is centered in the
-// padded box. Collapses to a snug box on sm+ (pointer). Shared by every
-// password/key field in onboarding + login.
+// padded box. Collapses to a snug box on sm+ (pointer). LOCAL MODE ONLY (WP5):
+// shared by PasswordStep's two password fields below.
 const EYE_TOGGLE_CLASS =
   'absolute right-1 sm:right-2.5 top-1/2 -translate-y-1/2 inline-flex items-center justify-center min-h-11 min-w-11 sm:min-h-0 sm:min-w-0 transition-colors'
+
+// Step 1's tone/detail choices (FR-OB-010/-011). Deliberately few and plainly
+// worded — a preference, not a personality test — and *Direct*/*Brief* are
+// pre-selected so the step is completable without touching either. The
+// one-line description on each is also what gets written into USER.md
+// (FR-OB-014), lower-cased, by handleComplete below.
+export type OnboardingTone = 'direct' | 'warm' | 'formal'
+export type OnboardingDetail = 'brief' | 'thorough'
+export const TONE_OPTIONS: { value: OnboardingTone; label: string; description: string }[] = [
+  { value: 'direct', label: 'Direct', description: 'Answers first. No preamble.' },
+  { value: 'warm', label: 'Warm', description: 'Friendly, a little conversational.' },
+  { value: 'formal', label: 'Formal', description: 'Professional register throughout.' },
+]
+export const DETAIL_OPTIONS: { value: OnboardingDetail; label: string; description: string }[] = [
+  { value: 'brief', label: 'Brief', description: 'The short version unless I ask.' },
+  { value: 'thorough', label: 'Thorough', description: 'Show the reasoning and the caveats.' },
+]
 
 const stepVariants = {
   enter: (direction: number) => ({
@@ -231,7 +291,7 @@ const stepVariants = {
 }
 
 /**
- * What step 3 holds once the picker's second-level panel is confirmed — one
+ * What step 2 holds once the picker's second-level panel is confirmed — one
  * configurable provider row plus whatever the operator typed for it. A custom
  * endpoint row carries `apiBase`/`protocol` and no catalog entry; a catalog row
  * carries the entry and neither.
@@ -252,7 +312,20 @@ type ProviderSelection = {
 function OnboardingWizard() {
   const navigate = useNavigate()
   const { addToast } = useUiStore()
-  const { appStateBannerMessage } = useRouteContext({ from: '/onboarding' })
+  const { appStateBannerMessage, onboardingAuthMode } = useRouteContext({ from: '/onboarding' })
+
+  // isLocalMode selects upstream's admin-account steps (WP5, ADR-0010).
+  // local/upstream is the DEFAULT: anything other than the literal
+  // 'platform' — including 'local' and undefined — takes this branch. See
+  // the SECURITY note above readOnboardingAuthMode for why defaulting to
+  // upstream's own behaviour here is the safe direction, not just the
+  // upstream-compatible one.
+  const isLocalMode = onboardingAuthMode !== 'platform'
+  const totalSteps = isLocalMode ? 4 : 2
+  // Step numbers for the two steps both modes share, shifted by two in local
+  // mode to make room for the admin-account steps ahead of them.
+  const personalStepNumber: Step = isLocalMode ? 3 : 1
+  const providerStepNumber: Step = isLocalMode ? 4 : 2
 
   // Source providers from the registry-fed catalog (ADR-068 FR-037), on the
   // shared ETag re-validation policy (providersCatalogQuery.ts).
@@ -265,14 +338,22 @@ function OnboardingWizard() {
   const providers = useMemo(() => catalogDoc?.providers ?? [], [catalogDoc])
 
   const [step, setStep] = useState<Step>(1)
+  // LOCAL MODE ONLY (WP5): the admin account this wizard mints before
+  // anything else. Held only in wizard state, same as the preference fields
+  // below — nothing is sent until handleComplete fires.
+  const [adminUsername, setAdminUsername] = useState('')
+  const [adminPassword, setAdminPassword] = useState('')
+  const [adminPasswordConfirm, setAdminPasswordConfirm] = useState('')
+  const [showAdminPassword, setShowAdminPassword] = useState(false)
+  const [adminError, setAdminError] = useState('')
   const [direction, setDirection] = useState(1)
   // `completed` flips true once completeOnboardingTransaction succeeds; the
   // numbered step indicator is hidden and the unnumbered "Meet your Assistant"
   // completion screen is rendered instead.
   const [completed, setCompleted] = useState(false)
-  // Step 3 — the confirmed provider row (null while the picker is open).
+  // Step 2 — the confirmed provider row (null while the picker is open).
   const [selection, setSelection] = useState<ProviderSelection | null>(null)
-  // Step 3 sign-in (ADR-068 §8b, FR-045/FR-050) — the SAME SignInDialog
+  // Step 2 sign-in (ADR-068 §8b, FR-045/FR-050) — the SAME SignInDialog
   // Settings → Providers uses. FR-050 makes the five sign-in routes reachable
   // while onboarding is incomplete, which is what lets an operator sign in
   // here before any admin account exists to authenticate as.
@@ -288,19 +369,18 @@ function OnboardingWizard() {
   // passed for a DIFFERENT model can never enable Finish.
   const [probedModel, setProbedModel] = useState('')
   const [isSaving, setIsSaving] = useState(false)
-  // Surfaced inline on step 3 when completeOnboardingTransaction fails, so the
+  // Surfaced inline on step 2 when completeOnboardingTransaction fails, so the
   // user stays on the step and can retry rather than failing silently.
   const [finishError, setFinishError] = useState('')
   // Non-blocking validation warning from the last probe (no_credit / unreachable
   // / restricted). Cleared when the user changes provider or re-probes.
   const [probeValidation, setProbeValidation] = useState<ProviderValidation | undefined>(undefined)
-  // Step 1 — name/username
-  const [adminUsername, setAdminUsername] = useState('')
-  // Step 2 — password + confirm
-  const [adminPassword, setAdminPassword] = useState('')
-  const [adminPasswordConfirm, setAdminPasswordConfirm] = useState('')
-  const [showAdminPassword, setShowAdminPassword] = useState(false)
-  const [adminError, setAdminError] = useState('')
+  // Step 1 — name + tone/detail preferences (FR-OB-010..-013). Held only in
+  // wizard state: onboarding has no per-step persistence, so nothing is
+  // written until the completion request (handleComplete) fires.
+  const [personalName, setPersonalName] = useState('')
+  const [tone, setTone] = useState<OnboardingTone>('direct')
+  const [detail, setDetail] = useState<OnboardingDetail>('brief')
 
   // Monotonic probe id. Changing the model re-probes (FR-029) and a slow first
   // response must never overwrite a newer one — that is how a passing probe for
@@ -441,8 +521,12 @@ function OnboardingWizard() {
     if (autoProbe && model.trim()) void runProbe(model)
   }
 
-  // Step 1 → 2: validate the username before advancing.
-  const handleNameContinue = () => {
+  // LOCAL MODE ONLY (WP5): step 1 → 2, the username → password admin steps,
+  // restored from upstream. Validation mirrors upstream's NameStep/PasswordStep
+  // gate exactly; the server re-validates independently (usernameRE,
+  // reservedUsernames, the 8-character floor) — this is convenience, not the
+  // authority.
+  const handleAdminUsernameContinue = () => {
     if (!adminUsername.trim()) {
       setAdminError('Choose a username to continue')
       return
@@ -451,8 +535,7 @@ function OnboardingWizard() {
     goTo(2)
   }
 
-  // Step 2 → 3: validate the password before advancing.
-  const handlePasswordContinue = () => {
+  const handleAdminPasswordContinue = () => {
     if (adminPassword.length < 8) {
       setAdminError('Password must be at least 8 characters')
       return
@@ -462,14 +545,33 @@ function OnboardingWizard() {
       return
     }
     setAdminError('')
-    goTo(3)
+    goTo(personalStepNumber)
   }
 
-  // Step 3 → completion: fire the atomic onboarding transaction. On success,
+  // Step 1 → 2 (FR-OB-012/-013/-030a). Continue is disabled until the name is
+  // non-empty (guarded again here so a form submit can't bypass a disabled
+  // button), so there is nothing to validate beyond that. Nothing is POSTed
+  // here — onboarding has no per-step persistence; name/tone/detail ride in
+  // the completion request (handleComplete). The one write that DOES happen
+  // now is `omnipus_pref_name`, the Profile screen's own localStorage-only
+  // Display name field (ProfileSection.tsx) — left blank here, it would read
+  // blank the moment Profile opens, directly above the account email.
+  const handlePersonalContinue = () => {
+    const trimmed = personalName.trim()
+    if (!trimmed) return
+    try {
+      localStorage.setItem('omnipus_pref_name', JSON.stringify(trimmed))
+    } catch (err) {
+      console.warn('[onboarding] omnipus_pref_name write failed:', err)
+    }
+    goTo(providerStepNumber)
+  }
+
+  // Step 2 → completion: fire the atomic onboarding transaction. On success,
   // the gateway has already issued the omnipus-session HttpOnly cookie
   // (US-5 / FR-011) — the SPA only needs to remember the display-only
   // username, then reveal the "Meet your Assistant" screen. On failure,
-  // surface the error inline on step 3 so the user can retry without losing
+  // surface the error inline on step 2 so the user can retry without losing
   // their place.
   const handleComplete = async () => {
     if (!selection) return
@@ -496,10 +598,12 @@ function OnboardingWizard() {
             }
       const resp = await completeOnboardingTransaction({
         provider,
-        admin: {
-          username: adminUsername,
-          password: adminPassword,
-        },
+        // LOCAL MODE ONLY (WP5): the admin block this route requires to
+        // mint the instance's first account. Absent entirely in platform
+        // mode, where sending one is refused 400 (ADR-0008 ruling 2 — the
+        // caller already holds the session the platform issued).
+        ...(isLocalMode ? { admin: { username: adminUsername, password: adminPassword } } : {}),
+        preferences: { name: personalName.trim(), tone, detail },
       })
       useAuthStore.getState().setUsername(resp.username)
       // Bugfix (slash-palette silent-empty): completeOnboardingTransaction is
@@ -522,7 +626,7 @@ function OnboardingWizard() {
       queryClient.invalidateQueries({ queryKey: ['workspaces'] })
       setCompleted(true)
     } catch (err) {
-      // Surface the failure both inline (so the user stays on step 3 and can
+      // Surface the failure both inline (so the user stays on step 2 and can
       // retry) and as a toast — never strand the error silently.
       const message = `Could not complete setup: ${err instanceof Error ? err.message : 'Unknown error'}`
       setFinishError(message)
@@ -581,9 +685,10 @@ function OnboardingWizard() {
           and the sr-only line gives a plain-text "Step X of N" announcement.
           Hidden on the unnumbered "Meet your Assistant" completion screen.
 
-          FR-028: the auth-method control lives INSIDE step 3's second-level
-          panel, so this stays three steps — a fourth numbered step for it is
-          exactly what the FR forbids. */}
+          FR-OB-002/FR-028: the auth-method control lives INSIDE the provider
+          step's second-level panel, so that step never grows a numbered
+          sibling for it. totalSteps is 2 in platform mode and 4 in local mode
+          (WP5, ADR-0010) — the two upstream admin-account steps ahead of it. */}
       {!completed && (
         <div className="flex flex-col items-center gap-2 mb-12 z-10">
           {/* Visible step counter for sighted users — the dots alone are unlabeled. */}
@@ -592,18 +697,18 @@ function OnboardingWizard() {
             className="text-xs font-medium tracking-wide"
             style={{ color: 'var(--color-muted)' }}
           >
-            Step {step} of 3
+            Step {step} of {totalSteps}
           </span>
           <div
             className="flex items-center gap-2"
             role="progressbar"
             aria-valuenow={step}
             aria-valuemin={1}
-            aria-valuemax={3}
-            aria-label={`Onboarding progress: step ${step} of 3`}
+            aria-valuemax={totalSteps}
+            aria-label={`Onboarding progress: step ${step} of ${totalSteps}`}
           >
-            <span className="sr-only">Step {step} of 3</span>
-            {([1, 2, 3] as Step[]).map((s) => (
+            <span className="sr-only">Step {step} of {totalSteps}</span>
+            {Array.from({ length: totalSteps }, (_, i) => (i + 1) as Step).map((s) => (
               <motion.div
                 key={s}
                 aria-hidden
@@ -639,9 +744,9 @@ function OnboardingWizard() {
             >
               <MeetAssistantStep onStartChatting={handleStartChatting} />
             </motion.div>
-          ) : step === 1 ? (
+          ) : isLocalMode && step === 1 ? (
             <motion.div
-              key="step1"
+              key="admin-username"
               custom={direction}
               variants={stepVariants}
               initial="enter"
@@ -653,12 +758,12 @@ function OnboardingWizard() {
                 username={adminUsername}
                 onUsernameChange={setAdminUsername}
                 error={adminError}
-                onContinue={handleNameContinue}
+                onContinue={handleAdminUsernameContinue}
               />
             </motion.div>
-          ) : step === 2 ? (
+          ) : isLocalMode && step === 2 ? (
             <motion.div
-              key="step2"
+              key="admin-password"
               custom={direction}
               variants={stepVariants}
               initial="enter"
@@ -674,13 +779,33 @@ function OnboardingWizard() {
                 showPassword={showAdminPassword}
                 onToggleShowPassword={() => setShowAdminPassword((v) => !v)}
                 error={adminError}
-                onContinue={handlePasswordContinue}
+                onContinue={handleAdminPasswordContinue}
                 onBack={() => goTo(1)}
+              />
+            </motion.div>
+          ) : step === personalStepNumber ? (
+            <motion.div
+              key="personal"
+              custom={direction}
+              variants={stepVariants}
+              initial="enter"
+              animate="center"
+              exit="exit"
+              transition={{ duration: 0.22, ease: 'easeInOut' }}
+            >
+              <PersonalStep
+                name={personalName}
+                onNameChange={setPersonalName}
+                tone={tone}
+                onToneChange={setTone}
+                detail={detail}
+                onDetailChange={setDetail}
+                onContinue={handlePersonalContinue}
               />
             </motion.div>
           ) : (
             <motion.div
-              key="step3"
+              key="provider"
               custom={direction}
               variants={stepVariants}
               initial="enter"
@@ -704,7 +829,7 @@ function OnboardingWizard() {
                 probeError={probeError}
                 probedModel={probedModel}
                 onReprobe={() => { void runProbe(selectedModel) }}
-                onBack={() => goTo(2)}
+                onBack={() => goTo(personalStepNumber)}
                 onComplete={handleComplete}
                 isSaving={isSaving}
                 finishError={finishError}
@@ -736,7 +861,14 @@ function OnboardingWizard() {
 }
 
 
-// ── Step 1: What should I call you? ────────────────────────────────────────────
+// ── LOCAL MODE ONLY steps 1–2: create the admin account ─────────────────────
+//
+// WP5 (ADR-0010): restored verbatim from upstream (merge base 184d7247) for
+// config.EditionAuthMode() == 'local' — the open-source edition, where this
+// wizard runs BEFORE any session exists and these two steps are what create
+// one. In platform mode neither component is ever rendered (see
+// OnboardingWizard's step switch): the account already exists (ADR-0008
+// rulings 1/2), so there is nothing here for that edition to do.
 
 function NameStep({
   username,
@@ -846,8 +978,6 @@ function NameStep({
     </form>
   )
 }
-
-// ── Step 2: Set your password ──────────────────────────────────────────────────
 
 function PasswordStep({
   password,
@@ -1043,7 +1173,163 @@ function PasswordStep({
   )
 }
 
-// ── Step 3: connect a provider ────────────────────────────────────────────────
+// ── Step 1: What should I call you? ────────────────────────────────────────────
+//
+// onboarding-and-profile-spec.md US-2 / FR-OB-010..-018. PLATFORM MODE this is
+// numbered step 1; LOCAL MODE this is step 3, after the two admin-account
+// steps above. Nothing here is sent yet (FR-OB-013) — see handlePersonalContinue
+// and handleComplete in OnboardingWizard.
+
+function PersonalStep({
+  name,
+  onNameChange,
+  tone,
+  onToneChange,
+  detail,
+  onDetailChange,
+  onContinue,
+}: {
+  name: string
+  onNameChange: (v: string) => void
+  tone: OnboardingTone
+  onToneChange: (v: OnboardingTone) => void
+  detail: OnboardingDetail
+  onDetailChange: (v: OnboardingDetail) => void
+  onContinue: () => void
+}) {
+  return (
+    <form
+      className="flex flex-col items-center text-center gap-6"
+      onSubmit={(e) => {
+        e.preventDefault()
+        onContinue()
+      }}
+    >
+      <motion.div
+        initial={{ scale: 0.8, opacity: 0 }}
+        animate={{ scale: 1, opacity: 1 }}
+        transition={{ duration: 0.4 }}
+      >
+        <div
+          className="h-16 w-16 rounded-full flex items-center justify-center"
+          style={{ backgroundColor: 'rgba(212,175,55,0.12)' }}
+        >
+          <User size={28} weight="duotone" style={{ color: 'var(--color-accent)' }} />
+        </div>
+      </motion.div>
+
+      <motion.div
+        initial={{ y: 14, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ delay: 0.15, duration: 0.38 }}
+      >
+        <h2 className="font-headline text-3xl font-bold mb-2"
+          style={{ color: 'var(--color-secondary)' }}>
+          What should I call you?
+        </h2>
+        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+          And how you like to be talked to. You can change any of this later.
+        </p>
+      </motion.div>
+
+      <motion.div
+        initial={{ y: 14, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ delay: 0.25, duration: 0.38 }}
+        className="w-full space-y-5 text-left"
+      >
+        <div>
+          <Label htmlFor="pref-name" className="text-xs font-medium mb-1.5 block"
+            style={{ color: 'var(--color-muted)' }}>
+            Name
+          </Label>
+          <Input
+            id="pref-name"
+            type="text"
+            value={name}
+            onChange={(e) => onNameChange(e.target.value)}
+            placeholder="Your name"
+            autoFocus
+          />
+        </div>
+
+        <div>
+          <p className="text-xs font-medium mb-1.5" style={{ color: 'var(--color-muted)' }}>Tone</p>
+          <div className="grid gap-2">
+            {TONE_OPTIONS.map(({ value, label, description }) => (
+              <button
+                key={value}
+                type="button"
+                tabIndex={0}
+                onClick={() => onToneChange(value)}
+                aria-pressed={tone === value}
+                className="text-left rounded-lg border px-3 py-2"
+                style={
+                  tone === value
+                    ? { borderColor: 'var(--color-accent)', backgroundColor: 'rgba(212,175,55,0.06)' }
+                    : { borderColor: 'var(--color-border)' }
+                }
+              >
+                <span className="text-sm block" style={{ color: 'var(--color-secondary)' }}>{label}</span>
+                <span className="text-xs" style={{ color: 'var(--color-muted)' }}>{description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-xs font-medium mb-1.5" style={{ color: 'var(--color-muted)' }}>How much detail</p>
+          <div className="grid grid-cols-2 gap-2">
+            {DETAIL_OPTIONS.map(({ value, label, description }) => (
+              <button
+                key={value}
+                type="button"
+                tabIndex={0}
+                onClick={() => onDetailChange(value)}
+                aria-pressed={detail === value}
+                className="text-left rounded-lg border px-3 py-2"
+                style={
+                  detail === value
+                    ? { borderColor: 'var(--color-accent)', backgroundColor: 'rgba(212,175,55,0.06)' }
+                    : { borderColor: 'var(--color-border)' }
+                }
+              >
+                <span className="text-sm block" style={{ color: 'var(--color-secondary)' }}>{label}</span>
+                <span className="text-xs" style={{ color: 'var(--color-muted)' }}>{description}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+          This is saved to your profile as{' '}
+          <strong style={{ color: 'var(--color-secondary)' }}>Workspace Context</strong> — plain
+          text you can read and edit any time.
+        </p>
+      </motion.div>
+
+      {/* Navigation */}
+      <motion.div
+        initial={{ y: 14, opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        transition={{ delay: 0.35, duration: 0.38 }}
+        className="w-full"
+      >
+        <Button
+          type="submit"
+          className="w-full h-11 gap-2 font-headline font-bold text-base"
+          disabled={!name.trim()}
+        >
+          Continue
+          <ArrowRight size={16} weight="bold" />
+        </Button>
+      </motion.div>
+    </form>
+  )
+}
+
+
+// ── Step 2: connect a provider ────────────────────────────────────────────────
 //
 // ADR-068 FR-021/FR-028/FR-029. The step is the shared `ProviderPicker` until a
 // row is confirmed, then a short configuration block: what was chosen, the
@@ -1152,7 +1438,7 @@ function ProviderStep({
           className="font-headline text-2xl font-bold mb-1"
           style={{ color: 'var(--color-secondary)' }}
         >
-          Add a model key
+          Select your model provider and default model
         </h2>
         <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
           Omnipus needs an AI provider to power your agents.
@@ -1540,24 +1826,54 @@ function MeetAssistantStep({ onStartChatting }: { onStartChatting: () => void })
 
 export const Route = createFileRoute('/onboarding')({
   beforeLoad: async () => {
+    // FR-OB-001 / US-1: sign-in is a gate BEFORE onboarding — in PLATFORM
+    // mode (ADR-0008), where a browser with no session has nothing to
+    // onboard. In LOCAL mode (WP5, ADR-0010), or when the mode can't be
+    // determined at all, onboarding itself is what creates the first session
+    // — the two admin-account steps above are the whole point — so there is
+    // nothing to gate on there. That is also upstream's own behaviour at the
+    // merge base: upstream's beforeLoad has no sign-in gate whatsoever,
+    // because upstream has no other mode.
+    //
+    // Which mode applies is read off GET /state, so the fetch runs FIRST
+    // (unlike this route's behaviour before WP5, which checked
+    // hasStoredSession() before ever fetching state). GET /state is
+    // reachable pre-auth in both modes (pkg/gateway/rest.go registers it
+    // withOptionalAuth), so this does not regress platform mode: a real
+    // platform server always answers identity.mode: 'platform' (ADR-0010
+    // WP1's fail-closed edition stamp), so an unauthenticated platform
+    // caller still takes this gate below.
     try {
       const state = await fetchAppState()
+      const onboardingAuthMode = readOnboardingAuthMode(state)
       if (state?.onboarding_complete) {
         throw redirect({ to: '/' })
       }
-      return { appStateBannerMessage: null as string | null }
+      // SECURITY: gate on an EXPLICIT 'platform', never on "not local" — see
+      // the SECURITY note above readOnboardingAuthMode. 'local', undefined,
+      // and any other value all take upstream's own no-gate path.
+      if (onboardingAuthMode === 'platform' && !hasStoredSession()) {
+        throw redirect({ to: '/login' })
+      }
+      return { appStateBannerMessage: null as string | null, onboardingAuthMode }
     } catch (err) {
       // Re-throw redirect so we don't swallow navigation errors.
       if (err && typeof err === 'object' && 'to' in err) throw err
       // Log non-redirect errors so operators can diagnose fetch failures.
       console.error('onboarding.app_state_fetch_failed', err)
+      // The mode is unknown when the fetch itself failed — same rule as
+      // above: fall back to upstream's own behaviour (no sign-in gate), not
+      // platform's. A real platform server that is reachable enough to serve
+      // this route at all always answers identity.mode on GET /state, so a
+      // fetch failure here is never platform mode silently losing its gate.
+      //
       // Surface a visible banner for 5xx server errors. Network failures still
       // allow the wizard to proceed (fresh install with broken /about endpoint).
       const bannerMessage =
         isApiError(err) && err.status >= 500
           ? `Could not load setup state — server returned ${err.status}`
           : null
-      return { appStateBannerMessage: bannerMessage }
+      return { appStateBannerMessage: bannerMessage, onboardingAuthMode: undefined as string | undefined }
     }
   },
   component: OnboardingWizard,

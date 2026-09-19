@@ -34,7 +34,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
     runDoctor: vi.fn(),
     fetchSkillTrust: vi.fn(),
     updateSkillTrust: vi.fn(),
-    reAuth: vi.fn(),
+    fetchAppState: vi.fn(),
   }
 })
 
@@ -62,23 +62,21 @@ import {
   updateGlobalToolPolicies,
   fetchDoctorResults,
   fetchSkillTrust,
-  reAuth,
   rotateCredentials,
-  ApiError,
+  fetchAppState,
 } from '@/lib/api'
+import type { AppState } from '@/lib/api'
 import { useUiStore } from '@/store/ui'
 import { SecuritySection } from './SecuritySection'
 import type { RegistryTool } from '@/lib/api'
 
-// reAuth403 is the exact 403 the backend's requireReAuth gate returns. The
-// useReAuthGate hook detects it by body match and opens the consent dialog.
-function reAuth403() {
-  return new ApiError(
-    403,
-    "You don't have permission to perform this action.",
-    { body: '{"error":"this change requires re-typing your password — call POST /api/v1/auth/reauth first"}' },
-  )
-}
+// Platform mode (identity.mode: 'platform') pins useStepUp() to 'confirm' —
+// ConfirmDialog, no consent token (ADR-0010 WP3). The password-mode (local
+// edition) equivalent lives in SecuritySection.password.test.tsx.
+const PLATFORM_APP_STATE = {
+  onboarding_complete: true,
+  identity: { mode: 'platform', edition: 'hosted', signed_in: true },
+} as AppState
 
 // ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -188,6 +186,7 @@ beforeEach(() => {
   vi.mocked(fetchGlobalToolPolicies).mockResolvedValue(GLOBAL_POLICIES)
   vi.mocked(fetchDoctorResults).mockResolvedValue(null)
   vi.mocked(fetchSkillTrust).mockResolvedValue(SKILL_TRUST_RESPONSE)
+  vi.mocked(fetchAppState).mockResolvedValue(PLATFORM_APP_STATE)
 })
 
 // ── US-B1: Two-layer IA ───────────────────────────────────────────────────────
@@ -469,16 +468,15 @@ describe('SecuritySection — #340 SkillTrustSection mounted', () => {
   })
 })
 
-// ── Re-auth gate for global tool policies (Spec-3 FR-3.3 / Spec-6 FR-12.2) ──────
+// ── Global tool policies — no step-up, and no confirmation (FR-OB-046) ───────
+//
+// rest_tool_policies.go:69 removed this endpoint's server gate deliberately, so
+// the client used to ask for a password the server never demanded. It is not one
+// of ADR-0008 ruling 6's six controls, so it gets no confirmation either.
 
-describe('SecuritySection — global tool-policy re-auth gate', () => {
-  it('opens the re-auth dialog when the gated PUT returns 403, then replays the token', async () => {
-    // First auto-save attempt (no consent token) is rejected by the re-auth
-    // gate; the replay (with the minted token) succeeds.
-    vi.mocked(updateGlobalToolPolicies)
-      .mockRejectedValueOnce(reAuth403())
-      .mockResolvedValueOnce({ policies: {} } as never)
-    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'reauth_tok', expires_in: 300 } as never)
+describe('SecuritySection — global tool-policy save', () => {
+  it('saves directly with no confirmation and no consent token', async () => {
+    vi.mocked(updateGlobalToolPolicies).mockResolvedValue({ policies: {} } as never)
 
     renderSection()
 
@@ -495,139 +493,150 @@ describe('SecuritySection — global tool-policy re-auth gate', () => {
     // Switch the default policy ask → allow; this triggers the debounced PUT.
     fireEvent.click(screen.getByTestId('preset-balanced'))
 
-    // The first PUT (token '') fired and 403'd → consent dialog appears.
     await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+      expect(updateGlobalToolPolicies).toHaveBeenCalledTimes(1)
     })
-    expect(vi.mocked(updateGlobalToolPolicies).mock.calls[0][1]).toBe('')
-
-    // Re-authenticate; the PUT is replayed with the consent token.
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
-
-    await waitFor(() => {
-      expect(reAuth).toHaveBeenCalledWith('mypassword')
-      expect(updateGlobalToolPolicies).toHaveBeenCalledTimes(2)
-      expect(vi.mocked(updateGlobalToolPolicies).mock.calls[1][1]).toBe('reauth_tok')
-    })
+    // One argument only — the consent-token parameter is gone.
+    expect(vi.mocked(updateGlobalToolPolicies).mock.calls[0]).toHaveLength(1)
+    expect(screen.queryByTestId('confirm-dialog')).toBeNull()
   })
 })
 
-// ── Credential vault re-auth gate (B4 bug fix) ───────────────────────────────
+// ── Credential vault confirmations (ADR-0008 ruling 6, spec FR-OB-040/041) ───
+//
+// Each of the three vault operations gets its OWN confirmation: deleting and
+// re-keying the vault are among the highest-blast-radius operations in the
+// product, and "the vault is one control" is a UI grouping, not a licence to
+// confirm once.
 
-describe('SecuritySection — credential vault re-auth gate', () => {
-  it('addCredential: opens the re-auth dialog on 403, retries with token, fires success toast', async () => {
-    // First attempt (token '') is rejected by the re-auth gate; the retry succeeds.
-    vi.mocked(addCredential)
-      .mockRejectedValueOnce(reAuth403())
-      .mockResolvedValueOnce(undefined)
-    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'cred_tok', expires_in: 300 } as never)
-
-    const mockToast = vi.fn()
-    vi.mocked(useUiStore).mockReturnValue({ addToast: mockToast } as never)
-
+describe('SecuritySection — credential vault confirmations', () => {
+  async function openAddCredentialForm() {
     renderSection()
+    fireEvent.click(await screen.findByText('Add key'))
+    fireEvent.change(await screen.findByPlaceholderText('e.g. OPENAI_API_KEY'), {
+      target: { value: 'MY_KEY' },
+    })
+    fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: 'sk-secret' } })
+    fireEvent.click(screen.getByTestId('add-cred-save'))
+  }
 
-    // Wait for the section to be fully loaded.
+  it('set: the confirmation has exactly Cancel and one confirm, and no input', async () => {
+    await openAddCredentialForm()
+
+    const dialog = await screen.findByTestId('confirm-dialog')
+    expect(dialog).toHaveTextContent('Store this credential?')
+    expect(within(dialog).getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
+    expect(within(dialog).getByTestId('confirm-accept')).toHaveTextContent('Store credential')
+    expect(within(dialog).getAllByRole('button')).toHaveLength(3) // Cancel, confirm, Radix close
+    // No input of any kind — this is a decision, not a credential prompt.
+    expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
+    // FR-OB-042: never the destructive variant.
+    expect(within(dialog).getByTestId('confirm-accept').className).not.toMatch(/color-error/)
+    expect(addCredential).not.toHaveBeenCalled()
+  })
+
+  it('set: confirming performs the save', async () => {
+    vi.mocked(addCredential).mockResolvedValue(undefined as never)
+
+    await openAddCredentialForm()
+    fireEvent.click(await screen.findByTestId('confirm-accept'))
+
     await waitFor(() => {
-      expect(screen.getByText(/add key/i)).toBeInTheDocument()
-    })
-
-    // Open the "Add Credential" modal.
-    fireEvent.click(screen.getByText(/add key/i))
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText(/e\.g\. OPENAI_API_KEY/i)).toBeInTheDocument()
-    })
-
-    // Fill in the credential form.
-    fireEvent.change(screen.getByPlaceholderText(/e\.g\. OPENAI_API_KEY/i), {
-      target: { value: 'MY_SECRET_KEY' },
-    })
-    fireEvent.change(screen.getByPlaceholderText(/sk-\.\.\./i), {
-      target: { value: 'super-secret-value' },
-    })
-
-    // Submit — first attempt will 403 and open the re-auth dialog.
-    fireEvent.click(screen.getByRole('button', { name: /^save$/i }))
-
-    // Re-auth dialog must appear.
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
-    })
-
-    // Confirm the first attempt passed no token.
-    expect(vi.mocked(addCredential).mock.calls[0][2]).toBe('')
-
-    // Enter password and confirm.
-    fireEvent.change(screen.getByTestId('reauth-password-input'), {
-      target: { value: 'mypassword' },
-    })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
-
-    // The retry is issued with the minted token and a success toast fires.
-    await waitFor(() => {
-      expect(reAuth).toHaveBeenCalledWith('mypassword')
-      expect(vi.mocked(addCredential)).toHaveBeenCalledTimes(2)
-      expect(vi.mocked(addCredential).mock.calls[1][2]).toBe('cred_tok')
-      expect(mockToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'success' }),
-      )
+      expect(vi.mocked(addCredential).mock.calls).toEqual([['MY_KEY', 'sk-secret', undefined]])
     })
   })
 
-  it('deleteCredential: opens the re-auth dialog on 403, retries with token, fires success toast', async () => {
-    vi.mocked(fetchCredentials).mockResolvedValue([{ key: 'SOME_KEY' }])
-    vi.mocked(deleteCredential)
-      .mockRejectedValueOnce(reAuth403())
-      .mockResolvedValueOnce(undefined)
-    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'del_tok', expires_in: 300 } as never)
+  it('set: cancelling performs nothing', async () => {
+    await openAddCredentialForm()
+    fireEvent.click(await screen.findByTestId('confirm-cancel'))
 
-    const mockToast = vi.fn()
-    vi.mocked(useUiStore).mockReturnValue({ addToast: mockToast } as never)
+    await waitFor(() => {
+      expect(screen.queryByTestId('confirm-dialog')).toBeNull()
+    })
+    expect(addCredential).not.toHaveBeenCalled()
+  })
 
+  async function openDeleteConfirmation() {
+    vi.mocked(fetchCredentials).mockResolvedValue([{ key: 'MY_KEY' }] as never)
     renderSection()
+    fireEvent.click(await screen.findByTestId('delete-cred-MY_KEY'))
+  }
 
-    // Wait for the credential to appear in the list.
+  it('delete: the confirmation has exactly Cancel and one confirm, and no input', async () => {
+    await openDeleteConfirmation()
+
+    const dialog = await screen.findByTestId('confirm-dialog')
+    expect(dialog).toHaveTextContent('Remove this credential?')
+    expect(within(dialog).getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
+    expect(within(dialog).getByTestId('confirm-accept')).toHaveTextContent('Remove credential')
+    expect(within(dialog).getAllByRole('button')).toHaveLength(3)
+    expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
+    expect(within(dialog).getByTestId('confirm-accept').className).not.toMatch(/color-error/)
+    expect(deleteCredential).not.toHaveBeenCalled()
+  })
+
+  it('delete: confirming performs the save', async () => {
+    vi.mocked(deleteCredential).mockResolvedValue(undefined as never)
+
+    await openDeleteConfirmation()
+    fireEvent.click(await screen.findByTestId('confirm-accept'))
+
     await waitFor(() => {
-      expect(screen.getByText('SOME_KEY')).toBeInTheDocument()
+      expect(vi.mocked(deleteCredential).mock.calls).toEqual([['MY_KEY', undefined]])
     })
+  })
 
-    // Click the trash/delete button to open the confirmation modal.
-    // Find the delete icon button via the credential row's DOM proximity.
-    const credRow = screen.getByText('SOME_KEY').closest('div[class*="flex"]')!
-    const deleteBtn = credRow.querySelector('button')!
-    fireEvent.click(deleteBtn)
+  it('delete: cancelling performs nothing', async () => {
+    await openDeleteConfirmation()
+    fireEvent.click(await screen.findByTestId('confirm-cancel'))
 
-    // Confirm the "Remove credential?" dialog.
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: /^remove$/i })).toBeInTheDocument()
+      expect(screen.queryByTestId('confirm-dialog')).toBeNull()
     })
-    fireEvent.click(screen.getByRole('button', { name: /^remove$/i }))
+    expect(deleteCredential).not.toHaveBeenCalled()
+  })
 
-    // Re-auth dialog must appear.
+  async function openRotateConfirmation() {
+    renderSection()
+    fireEvent.click(await screen.findByTestId('rotate-master-key'))
+    fireEvent.change(await screen.findByTestId('rotate-passphrase-input'), {
+      target: { value: 'new-pass-phrase' },
+    })
+    fireEvent.click(screen.getByTestId('rotate-confirm'))
+  }
+
+  it('rotate: the confirmation has exactly Cancel and one confirm, and no input', async () => {
+    await openRotateConfirmation()
+
+    const dialog = await screen.findByTestId('confirm-dialog')
+    expect(dialog).toHaveTextContent('Rotate the master key?')
+    expect(within(dialog).getByTestId('confirm-cancel')).toHaveTextContent('Cancel')
+    expect(within(dialog).getByTestId('confirm-accept')).toHaveTextContent('Rotate master key')
+    expect(within(dialog).getAllByRole('button')).toHaveLength(3)
+    expect(dialog.querySelectorAll('input, textarea, select')).toHaveLength(0)
+    expect(within(dialog).getByTestId('confirm-accept').className).not.toMatch(/color-error/)
+    expect(rotateCredentials).not.toHaveBeenCalled()
+  })
+
+  it('rotate: confirming performs the save', async () => {
+    vi.mocked(rotateCredentials).mockResolvedValue(undefined as never)
+
+    await openRotateConfirmation()
+    fireEvent.click(await screen.findByTestId('confirm-accept'))
+
     await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
+      expect(vi.mocked(rotateCredentials).mock.calls).toEqual([['new-pass-phrase', undefined]])
     })
+  })
 
-    // Confirm the first delete attempt passed no token.
-    expect(vi.mocked(deleteCredential).mock.calls[0][1]).toBe('')
+  it('rotate: cancelling performs nothing', async () => {
+    await openRotateConfirmation()
+    fireEvent.click(await screen.findByTestId('confirm-cancel'))
 
-    // Enter password and confirm re-auth.
-    fireEvent.change(screen.getByTestId('reauth-password-input'), {
-      target: { value: 'mypassword' },
-    })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
-
-    // The retry is issued with the minted token and a success toast fires.
     await waitFor(() => {
-      expect(reAuth).toHaveBeenCalledWith('mypassword')
-      expect(vi.mocked(deleteCredential)).toHaveBeenCalledTimes(2)
-      expect(vi.mocked(deleteCredential).mock.calls[1][1]).toBe('del_tok')
-      expect(mockToast).toHaveBeenCalledWith(
-        expect.objectContaining({ variant: 'success' }),
-      )
+      expect(screen.queryByTestId('confirm-dialog')).toBeNull()
     })
+    expect(rotateCredentials).not.toHaveBeenCalled()
   })
 })
 
@@ -695,8 +704,7 @@ describe('SecuritySection — MCP tools in GlobalToolPoliciesSection', () => {
     expect(within(categoryGrid).queryByTestId('tool-row-mcp_testsvr_read')).not.toBeInTheDocument()
   })
 
-  it('changing an MCP tool policy fires updateGlobalToolPolicies through the re-auth gate', async () => {
-    // The auto-save is immediate on first success (no 403 on this path).
+  it('changing an MCP tool policy fires updateGlobalToolPolicies directly', async () => {
     vi.mocked(updateGlobalToolPolicies).mockResolvedValue({
       policies: {},
     } as never)
@@ -729,152 +737,6 @@ describe('SecuritySection — MCP tools in GlobalToolPoliciesSection', () => {
     )
   })
 
-  it('changing an MCP tool policy that triggers a re-auth 403 opens the consent dialog', async () => {
-    vi.mocked(updateGlobalToolPolicies)
-      .mockRejectedValueOnce(reAuth403())
-      .mockResolvedValueOnce({ policies: {} } as never)
-    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'tok_mcp', expires_in: 300 } as never)
-
-    await renderWithMcpAndExpand()
-
-    const mcpSection = screen.getByTestId('mcp-tools-section')
-    const serverTrigger = within(mcpSection).getAllByTestId('advanced-disclosure-trigger')[0]
-    fireEvent.click(serverTrigger)
-
-    await waitFor(() => {
-      expect(screen.getByTestId('tool-row-mcp_testsvr_read')).toBeInTheDocument()
-    })
-
-    // Trigger an MCP policy change that will 403 on first attempt.
-    const readRow = screen.getByTestId('tool-row-mcp_testsvr_read')
-    fireEvent.click(within(readRow).getByRole('button', { name: /deny/i }))
-
-    // The re-auth dialog must appear.
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
-    })
-
-    // Complete re-auth; the PUT is replayed with the consent token.
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'secret' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
-
-    await waitFor(() => {
-      expect(reAuth).toHaveBeenCalledWith('secret')
-      expect(vi.mocked(updateGlobalToolPolicies).mock.calls[1][1]).toBe('tok_mcp')
-    })
-  })
-})
-
-// ── Credential vault re-auth gate (B4) ───────────────────────────────────────
-
-describe('SecuritySection — credential vault re-auth gate (B4)', () => {
-  it('opens the re-auth dialog when add-credential 403s, then replays the consent token', async () => {
-    // First attempt (token '') is rejected by the server's re-auth gate; the
-    // replay (with the minted token) succeeds. Before B4 this 403 surfaced as a
-    // generic "You don't have permission" toast instead of a password prompt.
-    vi.mocked(addCredential)
-      .mockRejectedValueOnce(reAuth403())
-      .mockResolvedValueOnce(undefined as never)
-    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'cred_tok', expires_in: 300 } as never)
-
-    renderSection()
-
-    // Open the Add Credential modal and fill it.
-    fireEvent.click(await screen.findByText('Add key'))
-    fireEvent.change(screen.getByPlaceholderText('e.g. OPENAI_API_KEY'), { target: { value: 'MY_KEY' } })
-    fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: 'sk-secret' } })
-    fireEvent.click(screen.getByText('Save'))
-
-    // The first POST (token '') 403'd → consent dialog appears (not a toast).
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
-    })
-    expect(vi.mocked(addCredential).mock.calls[0][2]).toBe('')
-
-    // Re-authenticate; the POST is replayed with the consent token.
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'mypassword' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
-
-    await waitFor(() => {
-      expect(reAuth).toHaveBeenCalledWith('mypassword')
-      expect(addCredential).toHaveBeenCalledTimes(2)
-      expect(vi.mocked(addCredential).mock.calls[1][2]).toBe('cred_tok')
-    })
-  })
-
-  it('opens the re-auth dialog when delete-credential 403s, then replays the token with the key', async () => {
-    vi.mocked(fetchCredentials).mockResolvedValue([{ key: 'MY_KEY' }] as never)
-    vi.mocked(deleteCredential)
-      .mockRejectedValueOnce(reAuth403())
-      .mockResolvedValueOnce(undefined as never)
-    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'del_tok', expires_in: 300 } as never)
-
-    renderSection()
-
-    fireEvent.click(await screen.findByTestId('delete-cred-MY_KEY'))
-    fireEvent.click(await screen.findByText('Remove'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
-    })
-    expect(vi.mocked(deleteCredential).mock.calls[0]).toEqual(['MY_KEY', ''])
-
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'pw' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
-
-    await waitFor(() => {
-      expect(deleteCredential).toHaveBeenCalledTimes(2)
-      expect(vi.mocked(deleteCredential).mock.calls[1]).toEqual(['MY_KEY', 'del_tok'])
-    })
-  })
-
-  it('dismissing the re-auth dialog does NOT raise an error toast (B4 cancellation)', async () => {
-    vi.mocked(addCredential).mockRejectedValueOnce(reAuth403())
-
-    renderSection()
-
-    fireEvent.click(await screen.findByText('Add key'))
-    fireEvent.change(screen.getByPlaceholderText('e.g. OPENAI_API_KEY'), { target: { value: 'K' } })
-    fireEvent.change(screen.getByPlaceholderText('sk-...'), { target: { value: 'v' } })
-    fireEvent.click(screen.getByText('Save'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-cancel')).toBeInTheDocument()
-    })
-    // Dismiss instead of confirming → cancellation sentinel, swallowed by onError.
-    fireEvent.click(screen.getByTestId('reauth-cancel'))
-
-    await waitFor(() => {
-      expect(screen.queryByTestId('reauth-confirm')).toBeNull()
-    })
-    expect(mockAddToast).not.toHaveBeenCalledWith(expect.objectContaining({ variant: 'error' }))
-  })
-
-  it('(G5) rotate master key goes through the re-auth gate then replays the token', async () => {
-    vi.mocked(rotateCredentials)
-      .mockRejectedValueOnce(reAuth403())
-      .mockResolvedValueOnce(undefined as never)
-    vi.mocked(reAuth).mockResolvedValue({ verified: true, token: 'rot_tok', expires_in: 300 } as never)
-
-    renderSection()
-
-    fireEvent.click(await screen.findByTestId('rotate-master-key'))
-    fireEvent.change(await screen.findByTestId('rotate-passphrase-input'), { target: { value: 'new-pass-phrase' } })
-    fireEvent.click(screen.getByTestId('rotate-confirm'))
-
-    await waitFor(() => {
-      expect(screen.getByTestId('reauth-confirm')).toBeInTheDocument()
-    })
-    expect(vi.mocked(rotateCredentials).mock.calls[0]).toEqual(['new-pass-phrase', ''])
-
-    fireEvent.change(screen.getByTestId('reauth-password-input'), { target: { value: 'pw' } })
-    fireEvent.click(screen.getByTestId('reauth-confirm'))
-
-    await waitFor(() => {
-      expect(rotateCredentials).toHaveBeenCalledTimes(2)
-      expect(vi.mocked(rotateCredentials).mock.calls[1]).toEqual(['new-pass-phrase', 'rot_tok'])
-    })
-  })
 })
 
 // D3 (UAT v0.1.1 defects) — hydration must never trigger a spurious PUT.

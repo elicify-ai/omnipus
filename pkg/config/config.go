@@ -118,6 +118,22 @@ type Config struct {
 	// while a grant that never existed can still be introduced exactly once.
 	SeededSkillGrants []string `json:"seeded_skill_grants,omitempty" yaml:"-"`
 
+	// Security holds the platform-authentication trust anchor and the
+	// coordinates of the omnipus.ai issuer this instance signs in against
+	// (ADR-0008; platform-auth-instance-spec.md §4.1 FR-PA-040).
+	//
+	// It lives under `security.` and not `gateway.` for one reason, and it is
+	// a security property rather than tidiness: BOTH of the engine's two
+	// config-blocking tables already deny the whole `security` subtree —
+	// pkg/gateway/blocked_paths.go's blockedPaths (the REST PUT /config
+	// surface) and pkg/sysagent/tools/config.go's blockedConfigKeys (the
+	// agent's own set_config tool). A key added here is unwritable by an
+	// agent the day it is added, with no new deny entry to remember. Under
+	// `gateway.` the opposite holds: that prefix is on the agent tool's ALLOW
+	// list, so a new key there would be agent-writable by default — and an
+	// agent that can rewrite the trust anchor can point it at a key it
+	// controls and sign itself in (ADR-0005 E3).
+	Security SecurityConfig `json:"security,omitempty" yaml:"-"`
 	// SeededToolPolicyUpdates records which one-time updates to a seeded
 	// agent's stored tool policy have already run on this install. Each entry
 	// is a marker string (e.g. "adr084-worker-goal-claim-allow"); the update
@@ -2367,6 +2383,28 @@ func seedPublicURLFromEnv(cfg *Config) {
 	})
 }
 
+// freshInstallConfig builds the config a fresh install boots with: the
+// defaults, the devpod preview URL, and every env-tagged field.
+//
+// Code-review finding 8: this is the TRUE fresh-install path — no usable
+// config.json exists yet — and every env-tagged field
+// (OMNIPUS_MAX_PARALLEL_AGENTS, OMNIPUS_SECURITY_PLATFORM_AUTH_*, etc.) is
+// documented elsewhere in this file as something env.Parse applies on load.
+// Without this call that promise silently did not hold on a genuinely fresh
+// instance — only once config.json existed on disk (e.g. after a first
+// self-heal write) did the version-1 branch's env.Parse(cfg) ever run. A
+// fresh desktop/hosted instance provisioning its platform-auth trust anchor
+// purely via OMNIPUS_SECURITY_PLATFORM_AUTH_KEYS would see an empty anchor on
+// its very first boot and only pick up the env var on the next one.
+func freshInstallConfig() (*Config, error) {
+	c := DefaultConfig()
+	seedPublicURLFromEnv(c) // fresh pod: no config.json, but $DEVPOD_PREVIEW_URL may be set
+	if err := env.Parse(c); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealWriteHook) (*Config, error) {
 	logger.Debugf("loading config from %s", path)
 
@@ -2374,9 +2412,7 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			logger.WarnF("config file not found, using default config", map[string]any{"path": path})
-			c := DefaultConfig()
-			seedPublicURLFromEnv(c) // fresh pod: no config.json, but $DEVPOD_PREVIEW_URL may be set
-			return c, nil
+			return freshInstallConfig()
 		}
 		logger.Errorf("failed to read config file: %v", err)
 		return nil, err
@@ -2399,9 +2435,8 @@ func loadConfigInternal(path string, store CredentialStore, onSelfHeal SelfHealW
 	}
 	if len(data) <= 10 {
 		logger.Warn(fmt.Sprintf("content is [%s]", string(data)))
-		c := DefaultConfig()
-		seedPublicURLFromEnv(c)
-		return c, nil
+		// An effectively-empty config.json is still a fresh install.
+		return freshInstallConfig()
 	}
 
 	// Load config based on detected version

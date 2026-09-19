@@ -29,11 +29,23 @@ import { VideoEmbed, parseVideoEmbedUrl, buildEmbedSrc, VIDEO_ID_PATTERN } from 
 const ALLOWED_HOST = 'www.youtube-nocookie.com'
 const VIDEO_ID = 'dQw4w9WgXcQ' // 11 chars — the spec's own F1 fixture
 
+// ADR-0010 / login-and-onboarding-spec.md §2.2 — `identity` is a required
+// AppState field; this suite is about video-embed hosts, not identity.
+const DEFAULT_IDENTITY: AppState['identity'] = {
+  mode: 'local',
+  edition: 'core',
+  signed_in: false,
+  blocked_reason: 'signed_out',
+}
+
 function appState(over: Partial<AppState> = {}): AppState {
   return {
     onboarding_complete: true,
     video_embed_hosts: [ALLOWED_HOST],
     ...over,
+    // Set explicitly (not via spread) so the return type's `identity` is
+    // never widened to `| undefined` when `over` omits it.
+    identity: over.identity ?? DEFAULT_IDENTITY,
   }
 }
 

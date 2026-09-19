@@ -80,6 +80,21 @@ func matchBlockedPath(body map[string]any, blocked []config.ConfigKey) (string, 
 // themselves contain dots (dot-path literals) are treated as already-dotted
 // paths and are merged with any prefix from their ancestors.
 //
+// KNOWN LIMIT, stated because a security walker's gaps must not be discovered.
+// A dot-containing key is recorded as ONE already-joined path and is never
+// split, so its own prefixes are not emitted: {"security.platform_auth.keys":…}
+// yields exactly "security.platform_auth.keys" and therefore does NOT match the
+// blocked ancestor "security". A dotted key that IS a blocked entry
+// ({"gateway.users": …}) still matches, because that match is exact; the gap is
+// only for a literal deeper than a blocked entry.
+//
+// It is not a way past the gate today, and the reason is outside this file:
+// PUT /api/v1/config's mutator writes such a key VERBATIM, so it becomes a
+// top-level config.json member with a dot in its name and unmarshals onto no
+// field of config.Config at all. Make that mutator dot-aware and this becomes a
+// real hole. pkg/gateway/rest_platform_auth_test.go's
+// TestTrustAnchor_DotPathLiteralDeeperThanABlockedEntry pins both halves.
+//
 
 func collectPaths(body map[string]any) map[string]struct{} {
 	out := make(map[string]struct{})

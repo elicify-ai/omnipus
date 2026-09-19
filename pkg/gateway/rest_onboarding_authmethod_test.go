@@ -54,15 +54,17 @@ func postOnboardingComplete(api *restAPI, body string) *httptest.ResponseRecorde
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/onboarding/complete", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	api.HandleCompleteOnboarding(w, req)
+	api.HandleCompleteOnboarding(w, signedIn(req))
 	return w
 }
 
 func TestOnboardingComplete_AuthMethodApiKey_UnchangedBehaviour(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	api, tmpDir := newAuthMethodOnboardingAPI(t)
 	upstream := startFakeProviderUpstream(t)
 	body := withProviderEndpoint(
-		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-pin-key","model":"gpt-4o"},"admin":{"username":"admin","password":"secret123"}}`,
+		`{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-pin-key","model":"gpt-4o"},`+
+			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`,
 		upstream,
 	)
 
@@ -71,8 +73,8 @@ func TestOnboardingComplete_AuthMethodApiKey_UnchangedBehaviour(t *testing.T) {
 	require.Equal(t, http.StatusOK, w.Code, "body=%s", w.Body.String())
 	var resp map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.NotEmpty(t, resp["token"])
-	assert.Equal(t, "admin", resp["username"])
+	assert.NotContains(t, resp, "token", "completion mints no bearer token")
+	assert.Equal(t, "operator@example.com", resp["username"])
 	assert.Nil(t, resp["warning"])
 
 	// Credential store holds the key under the <id>_API_KEY name.
@@ -109,9 +111,10 @@ func TestOnboardingComplete_AuthMethodApiKey_UnchangedBehaviour(t *testing.T) {
 // The rule exercised is OnboardingProviderSignIn.yaml's own: the id must name a
 // catalog row that declares sign_in, and `openrouter` is api_key-only.
 func TestOnboardingComplete_AuthMethodSignIn_RejectedBodyPersistsNothing(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	api, tmpDir := newAuthMethodOnboardingAPI(t)
 	body := `{"provider":{"auth_method":"sign_in","id":"openrouter","model":"openai/gpt-4o"},` +
-		`"admin":{"username":"admin","password":"secret123"}}`
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 
 	w := postOnboardingComplete(api, body)
 
@@ -129,9 +132,12 @@ func TestOnboardingComplete_AuthMethodSignIn_RejectedBodyPersistsNothing(t *test
 }
 
 func TestOnboardingComplete_AuthMethodMissingOrUnknown_400(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	for name, body := range map[string]string{
-		"missing": `{"provider":{"id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`,
-		"unknown": `{"provider":{"auth_method":"oauth","id":"openai","api_key":"sk-test"},"admin":{"username":"admin","password":"secret123"}}`,
+		"missing": `{"provider":{"id":"openai","api_key":"sk-test"},` +
+			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`,
+		"unknown": `{"provider":{"auth_method":"oauth","id":"openai","api_key":"sk-test"},` +
+			`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			api, _ := newAuthMethodOnboardingAPI(t)
@@ -148,10 +154,12 @@ func TestOnboardingComplete_AuthMethodMissingOrUnknown_400(t *testing.T) {
 }
 
 func TestOnboardingComplete_ApiKeyVariant_RejectsFieldsOffTheVariant(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	// Strict decode into the named variant: a field the api_key variant does
 	// not carry is a 400 regardless of ValidateInbound (ADR-034 rule).
 	api, _ := newAuthMethodOnboardingAPI(t)
-	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test","device_code":"x"},"admin":{"username":"admin","password":"secret123"}}`
+	body := `{"provider":{"auth_method":"api_key","id":"openai","api_key":"sk-test","device_code":"x"},` +
+		`"preferences":{"name":"Daniel","tone":"direct","detail":"brief"}}`
 	w := postOnboardingComplete(api, body)
 	require.Equal(t, http.StatusBadRequest, w.Code, "body=%s", w.Body.String())
 	assert.Contains(t, w.Body.String(), "field not allowed on provider auth_method")
@@ -185,6 +193,7 @@ func TestOnboardingComplete_ApiKeyVariant_RejectsFieldsOffTheVariant(t *testing.
 //     that one does not, so removing it here would drop that route's
 //     coverage of the same FR-050 requirement.
 func TestProviderSignInRoutes_AuthGating(t *testing.T) {
+	withEdition(t, config.EditionHosted)
 	routes := []struct{ method, path string }{
 		{http.MethodPost, "/api/v1/providers/codex-cli/sign-in"},
 		{http.MethodGet, "/api/v1/providers/codex-cli/sign-in/status"},

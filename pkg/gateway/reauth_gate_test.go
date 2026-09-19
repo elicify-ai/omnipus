@@ -67,6 +67,7 @@ func withReAuthAdminNoToken(r *http.Request) *http.Request {
 // TestPerformancePUT_RequiresReAuth proves the max-parallel-agents PUT rejects a
 // request that carries the admin user but no re-auth consent token (403).
 func TestPerformancePUT_RequiresReAuth(t *testing.T) {
+	withEdition(t, config.EditionCore) // local mode: requireReAuth performs the real token check
 	api := newTestRestAPIWithHome(t)
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/performance",
 		strings.NewReader(`{"max_parallel_agents":4}`))
@@ -112,6 +113,7 @@ func TestPerformancePUT_Unauthenticated_Rejected(t *testing.T) {
 // TestSandboxConfigPUT_RequiresReAuth proves the sandbox-config PUT rejects a
 // request that carries the admin user but no re-auth consent token (403).
 func TestSandboxConfigPUT_RequiresReAuth(t *testing.T) {
+	withEdition(t, config.EditionCore) // local mode: requireReAuth performs the real token check
 	api := newTestRestAPIWithHome(t)
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/security/sandbox-config",
 		strings.NewReader(`{"mode":"permissive"}`))
@@ -207,6 +209,7 @@ func TestToolPoliciesPUT_WithReAuthToken_StillSucceeds(t *testing.T) {
 // incomplete in this fixture, but the gate keys on "a user is in context", which
 // withReAuthAdminNoToken supplies — so the token requirement still applies.
 func TestProvidersPUT_RequiresReAuth(t *testing.T) {
+	withEdition(t, config.EditionCore) // local mode: requireReAuth performs the real token check
 	api := newTestRestAPIWithHome(t)
 	r := httptest.NewRequest(http.MethodPut, "/api/v1/providers/openai",
 		strings.NewReader(`{"api_key":"sk-test","model":"gpt-4o"}`))
@@ -426,6 +429,7 @@ func newCredVaultReAuthTestAPI(t *testing.T) *restAPI {
 // rejected (403). The gate fires before the request body is decoded, so an empty
 // body still exercises the gate.
 func TestSetCredential_RequiresReAuth(t *testing.T) {
+	withEdition(t, config.EditionCore) // local mode: requireReAuth performs the real token check
 	api := newCredVaultReAuthTestAPI(t)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/credentials",
 		strings.NewReader(`{"key":"TEST_KEY","value":"hunter2"}`))
@@ -466,6 +470,7 @@ func TestSetCredential_WithReAuth_Succeeds(t *testing.T) {
 // token is rejected (403). Deleting a stored secret mid-session can revoke a
 // channel or provider, so it is gated just like the write.
 func TestDeleteCredential_RequiresReAuth(t *testing.T) {
+	withEdition(t, config.EditionCore) // local mode: requireReAuth performs the real token check
 	api := newCredVaultReAuthTestAPI(t)
 	// Seed a credential so the delete would otherwise succeed — proving the 403
 	// is from the gate, not a missing-key 404.
@@ -511,6 +516,7 @@ func TestDeleteCredential_WithReAuth_Succeeds(t *testing.T) {
 // carrying the admin user but no re-auth consent token is rejected (403). Rotation
 // re-encrypts the whole vault, so it is gated like set/delete.
 func TestRotateCredentials_RequiresReAuth(t *testing.T) {
+	withEdition(t, config.EditionCore) // local mode: requireReAuth performs the real token check
 	api := newCredVaultReAuthTestAPI(t)
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/credentials/rotate",
 		strings.NewReader(`{"new_passphrase":"new-pass"}`))

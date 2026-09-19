@@ -1,6 +1,15 @@
 /**
- * -onboarding-signin.test.tsx — ADR-068 §8b sign-in wiring in onboarding
- * step 3 (T068-33; FR-005, FR-045, FR-049, FR-050).
+ * -onboarding-signin.test.tsx — ADR-068 §8b sign-in wiring in onboarding,
+ * restored from the merge base (184d7247) and adapted for the local-mode
+ * wizard's Personal-preferences step (ADR-0010 WP5; founder decision
+ * 2026-09-19: kept in the open-source build too and proposed upstream with
+ * the seams PR, rather than restoring upstream's original 3-step flow). The
+ * sign-in wiring under test is now reached on step 4, not upstream's
+ * original step 3 (T068-33; FR-005, FR-045, FR-049, FR-050): `goToStep3`
+ * becomes `goToStep4` and fills the Personal step's name field on the way
+ * through, and the provider-step heading text changes ("Add a model key" →
+ * "Select your model provider and default model"). The platform-mode
+ * counterpart of this file is -onboarding-signin-platform.test.tsx.
  *
  * Kept out of -onboarding.test.tsx because it needs its own SignInDialog stub:
  * the dialog is fully unit-tested in SignInDialog.test.tsx, and mocking it
@@ -151,7 +160,7 @@ beforeEach(() => {
   } as never)
 })
 
-async function goToStep3() {
+async function goToStep4() {
   await renderWizard()
   fireEvent.change(screen.getByLabelText(/username/i), { target: { value: 'admin' } })
   fireEvent.click(screen.getByRole('button', { name: /continue/i }))
@@ -159,7 +168,11 @@ async function goToStep3() {
   fireEvent.change(screen.getByLabelText(/^password$/i), { target: { value: 'password123' } })
   fireEvent.change(screen.getByLabelText(/confirm password/i), { target: { value: 'password123' } })
   fireEvent.click(screen.getByRole('button', { name: /continue/i }))
-  await waitFor(() => screen.getByText(/add a model key/i))
+  // Personal-preferences step (ADR-0010 WP5) — new step 3, ahead of Provider.
+  await waitFor(() => screen.getByLabelText(/^name$/i))
+  fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: 'Daniel' } })
+  fireEvent.click(screen.getByRole('button', { name: /continue/i }))
+  await waitFor(() => screen.getByText(/select your model provider and default model/i))
   await waitFor(() => screen.getByTestId('onboarding-provider-picker'))
 }
 
@@ -189,17 +202,17 @@ function lastProbeRequest(): ProbeProviderRequest {
 
 const finishButton = () => screen.getByRole('button', { name: /finish|retry setup/i })
 
-/** Reach step 3 with the ChatGPT sign-in row confirmed. */
+/** Reach step 4 with the ChatGPT sign-in row confirmed. */
 async function confirmChatGptSignInRow() {
-  await goToStep3()
+  await goToStep4()
   await openPanelForCompany('ChatGPT', 'chatgpt')
   fireEvent.click(screen.getByTestId('provider-detail-panel-continue'))
   await waitFor(() => screen.getByTestId('onboarding-provider-summary'))
 }
 
-describe('OnboardingWizard — ADR-068 §8b sign-in on step 3', () => {
+describe('OnboardingWizard — ADR-068 §8b sign-in on step 4', () => {
   it('a sign_in-only company offers Sign in and no API-key field (FR-005)', async () => {
-    await goToStep3()
+    await goToStep4()
     await openPanelForCompany('ChatGPT', 'chatgpt')
 
     expect(screen.getByTestId('provider-detail-panel-auth-signin-start')).toBeInTheDocument()
@@ -209,7 +222,7 @@ describe('OnboardingWizard — ADR-068 §8b sign-in on step 3', () => {
   })
 
   it('Sign in in the picker panel opens the shared dialog for that provider (FR-045)', async () => {
-    await goToStep3()
+    await goToStep4()
     await openPanelForCompany('ChatGPT', 'chatgpt')
 
     expect(screen.queryByTestId('sign-in-dialog-stub')).not.toBeInTheDocument()
@@ -279,7 +292,7 @@ describe('OnboardingWizard — ADR-068 §8b sign-in on step 3', () => {
   })
 
   it('an api_key-only company never renders a sign-in control (FR-049, §8b decision 4)', async () => {
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('anthropic')
 
     expect(screen.queryByTestId('provider-detail-panel-auth-signin-start')).not.toBeInTheDocument()
@@ -288,7 +301,7 @@ describe('OnboardingWizard — ADR-068 §8b sign-in on step 3', () => {
   })
 
   it('xAI stays key-only with no sign-in control and no forward-looking copy (FR-049)', async () => {
-    await goToStep3()
+    await goToStep4()
     await openPanelForTile('xai')
 
     expect(screen.queryByTestId('provider-detail-panel-auth-signin-start')).not.toBeInTheDocument()

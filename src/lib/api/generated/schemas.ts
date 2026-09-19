@@ -28,10 +28,13 @@ type LoginResponse = {
 type BearerToken = string;
 type OnboardingCompleteRequest = {
   provider: OnboardingProviderApiKey | OnboardingProviderSignIn;
-  admin: {
-    username: string;
-    password: string;
-  };
+  admin?:
+    | {
+        username: string;
+        password: string;
+      }
+    | undefined;
+  preferences?: OnboardingPreferences | undefined;
 };
 type OnboardingProviderApiKey = {
   auth_method: "api_key";
@@ -45,6 +48,11 @@ type OnboardingProviderSignIn = {
   id: string;
   model?: string | undefined;
   endpoint?: string | undefined;
+};
+type OnboardingPreferences = {
+  name: string;
+  tone: "direct" | "warm" | "formal";
+  detail: "brief" | "thorough";
 };
 type SignInStartResponse =
   | SignInStartResponseCliLogin
@@ -62,7 +70,11 @@ type SignInStartResponseDeviceCode = {
   expires_at: string;
   interval_seconds: number;
 };
-type OnboardingCompleteResponse = LoginResponse;
+type OnboardingCompleteResponse = {
+  username: string;
+  token?: BearerToken | undefined;
+  warning?: string | undefined;
+};
 type ProbeProviderResponse = {
   success: boolean;
   models?: Array<string> | undefined;
@@ -1635,6 +1647,38 @@ type TaskTrigger = {
     }
   >;
 };
+type AppState = {
+  onboarding_complete: boolean;
+  identity: AppStateIdentity;
+  last_doctor_run?: string | undefined;
+  last_doctor_score?: number | undefined;
+  god_mode_available?: boolean | undefined;
+  god_mode_opted_in?: boolean | undefined;
+  dev_mode_bypass?: boolean | undefined;
+  video_embed_hosts?: Array<string> | undefined;
+};
+type AppStateIdentity = {
+  mode: "local" | "platform";
+  edition: "core" | "desktop" | "hosted";
+  signed_in: boolean;
+  account?: AppStateIdentityAccount | undefined;
+  blocked_reason?:
+    | (
+        | "none"
+        | "signed_out"
+        | "expired"
+        | "revoked"
+        | "no_account"
+        | "subject_mismatch"
+        | "unreachable"
+      )
+    | undefined;
+};
+type AppStateIdentityAccount = {
+  label: string;
+  email_masked: string;
+  org: string | null;
+};
 type DoctorResult = {
   score: number;
   issues: Array<DoctorIssue>;
@@ -2614,6 +2658,23 @@ type MessageParentHandback = {
   mode: "final" | "pause";
 };
 
+export const PlatformAuthStartRequest = z.object({
+  method: z.enum(["google", "email"]),
+});
+export const PlatformAuthStartResponse = z.object({
+  authorize_url: z.string().url(),
+  state: z.string().min(1),
+});
+export const ErrorResponse = z
+  .object({
+    error: z.string(),
+    code: z.string().optional(),
+    field: z.string().optional(),
+    details: z.object({}).partial().passthrough().optional(),
+  })
+  .passthrough();
+export const PlatformAuthClaimRequest = z.object({ state: z.string().min(1) });
+export const AuthSessionResponse = z.object({ username: z.string().min(1) });
 export const LoginRequest = z.object({
   username: z.string().min(1),
   password: z.string().min(1).max(72),
@@ -2626,14 +2687,6 @@ export const LoginResponse: z.ZodType<LoginResponse> = z.object({
   username: z.string(),
   warning: z.string().optional(),
 });
-export const ErrorResponse = z
-  .object({
-    error: z.string(),
-    code: z.string().optional(),
-    field: z.string().optional(),
-    details: z.object({}).partial().passthrough().optional(),
-  })
-  .passthrough();
 export const BrowserInspectRequest = z.object({
   session_id: z.string().min(1).max(128),
   agent_id: z.string().min(1).max(128),
@@ -2722,6 +2775,13 @@ export const OnboardingProviderSignIn =
     model: z.string().min(1).max(256).optional(),
     endpoint: z.string().optional(),
   }) satisfies z.ZodType<OnboardingProviderSignIn>;
+export const OnboardingPreferences: z.ZodType<OnboardingPreferences> = z.object(
+  {
+    name: z.string().max(200),
+    tone: z.enum(["direct", "warm", "formal"]),
+    detail: z.enum(["brief", "thorough"]),
+  }
+);
 export const OnboardingCompleteRequest =
   z.object({
     provider: z.discriminatedUnion("auth_method", [
@@ -2737,8 +2797,18 @@ export const OnboardingCompleteRequest =
           .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{1,62}$/),
         password: z.string().min(8),
       })
-      .passthrough(),
+      .optional(),
+    preferences: OnboardingPreferences.optional(),
   }) satisfies z.ZodType<OnboardingCompleteRequest>;
+export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
+  z.object({
+    username: z.string(),
+    token: BearerToken.min(72)
+      .max(81)
+      .regex(/^omnipus_([a-f0-9]{8}_)?[a-f0-9]{64}$/)
+      .optional(),
+    warning: z.string().optional(),
+  });
 export const ProbeProviderRequest = z.object({
   id: z.string().min(1).max(64),
   auth: z.enum(["api_key", "sign_in"]),
@@ -4024,8 +4094,32 @@ export const UploadedFile: z.ZodType<UploadedFile> = z.object({
 export const UploadFilesResponse: z.ZodType<UploadFilesResponse> = z
   .object({ files: z.array(UploadedFile) })
   .passthrough();
-export const AppState = z.object({
+export const AppStateIdentityAccount: z.ZodType<AppStateIdentityAccount> =
+  z.object({
+    label: z.string(),
+    email_masked: z.string(),
+    org: z.string().nullable(),
+  });
+export const AppStateIdentity: z.ZodType<AppStateIdentity> = z.object({
+  mode: z.enum(["local", "platform"]),
+  edition: z.enum(["core", "desktop", "hosted"]),
+  signed_in: z.boolean(),
+  account: AppStateIdentityAccount.optional(),
+  blocked_reason: z
+    .enum([
+      "none",
+      "signed_out",
+      "expired",
+      "revoked",
+      "no_account",
+      "subject_mismatch",
+      "unreachable",
+    ])
+    .optional(),
+});
+export const AppState: z.ZodType<AppState> = z.object({
   onboarding_complete: z.boolean(),
+  identity: AppStateIdentity,
   last_doctor_run: z.string().datetime({ offset: true }).optional(),
   last_doctor_score: z.number().int().gte(0).lte(100).optional(),
   god_mode_available: z.boolean().optional(),
@@ -5541,8 +5635,6 @@ export const CliValidateResponse = z.object({
   version: z.string().nullish(),
   detail: z.string().optional(),
 });
-export const OnboardingCompleteResponse: z.ZodType<OnboardingCompleteResponse> =
-  LoginResponse;
 export const KnowledgeMountConflictError = z.object({
   error: z.string().min(1),
   code: z.literal("knowledge_mount_conflict"),
@@ -7030,7 +7122,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/auth/change-password",
     alias: "changePassword",
-    description: `Self-service password change. Requires the current password for verification. Requires authentication.
+    description: `Local-mode self-service password change (core edition; ADR-0010 WP2 auth-mode seam). Requires the current password for verification. Requires authentication. Not registered at all in platform mode.
 `,
     requestFormat: "json",
     parameters: [
@@ -7068,7 +7160,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/auth/login",
     alias: "login",
-    description: `Validates credentials against the bcrypt hashes in config.json. On success, issues a bearer token, an HttpOnly session cookie (omnipus-session), and a __Host-csrf cookie. CSRF-exempt (cookie cannot pre-exist before login). Rate-limited: 5 failures per IP+username per 15 minutes → 429.
+    description: `Local-mode sign-in (core edition; ADR-0010 WP2 auth-mode seam). Validates credentials against the bcrypt hashes in config.json. On success, issues a bearer token, an HttpOnly session cookie (omnipus-session), and a __Host-csrf cookie. CSRF-exempt (cookie cannot pre-exist before login). Rate-limited: 5 failures per IP+username per 15 minutes → 429. Not registered at all in platform mode (desktop, hosted) — see /auth/platform/start.
 `,
     requestFormat: "json",
     parameters: [
@@ -7125,9 +7217,85 @@ Includes session_start events from all agent stores and task lifecycle events.
   },
   {
     method: "post",
+    path: "/auth/platform/claim",
+    alias: "claimPlatformAuth",
+    description: `Exists because the browser&#x27;s cookie jar is not the application&#x27;s. On desktop the sign-in page opens in the user&#x27;s REAL browser (RFC 8252 §8.12), so the Set-Cookie written by /auth/callback lands there and the Electron renderer never sees it — without this route the app would poll /auth/session forever behind a browser tab that says &quot;You&#x27;re signed in&quot;. A successful callback records the session it minted for 60 seconds, once, under a key derived from the state; presenting that state here issues the SAME omnipus-session and CSRF cookies on THIS response, making the caller the signed-in client. Delete-on-lookup, so a second claim cannot succeed. Unauthenticated by necessity (the caller is claiming the session it does not have), rate-limited on its own bucket, and NOT CSRF-exempt — /auth/platform/start seeded the CSRF cookie already. An unknown state, an expired entry and an already-collected one are one indistinguishable 404: a caller must not learn which.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: z.object({ state: z.string().min(1) }),
+      },
+    ],
+    response: z.object({ username: z.string().min(1) }),
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 404,
+        description: `Nothing is waiting to be collected — unknown, expired or already claimed, deliberately not distinguished.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
+    path: "/auth/platform/start",
+    alias: "startPlatformAuth",
+    description: `Mints a PKCE verifier (S256) and a single-use, 10-minute state, then returns the platform&#x27;s authorization URL for the SPA to open in the SYSTEM browser (RFC 8252 §8.12 — never an embedded web view). The verifier never leaves the gateway. The redirect_uri is this gateway&#x27;s own loopback address, http://127.0.0.1:&lt;port&gt;/auth/callback, which needs no OS URL-scheme registration an unsigned desktop build cannot reliably claim (ADR-0008, &#x27;The return trip is loopback&#x27;). CSRF-exempt and unauthenticated — it is the route a signed-out user reaches first — and it seeds the __Host-csrf cookie on success. Answers 503 when security.platform_auth.issuer is unset: there is no local password to fall back to.
+`,
+    requestFormat: "json",
+    parameters: [
+      {
+        name: "body",
+        type: "Body",
+        schema: PlatformAuthStartRequest,
+      },
+    ],
+    response: PlatformAuthStartResponse,
+    errors: [
+      {
+        status: 400,
+        description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 500,
+        description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 503,
+        description: `Platform sign-in is not configured on this instance.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "post",
     path: "/auth/reauth",
     alias: "reAuth",
-    description: `Single-user consent primitive (FR-12.2). Re-verifies the authenticated user&#x27;s one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited.
+    description: `Local-mode consent primitive (core edition; FR-12.2; ADR-0010 WP2 auth-mode seam). Re-verifies the authenticated user&#x27;s one password and mints a short-lived consent token the SPA replays in the X-Reauth-Token header on the immediately-following sensitive request (e.g. configuring an integration provider). This is NOT the dev-mode bypass guard (RequireNotBypass returns 503 in dev mode and is unrelated). Requires authentication. Rate-limited. Not registered at all in platform mode, where the signed-in session itself is the guard.
 `,
     requestFormat: "json",
     parameters: [
@@ -7157,6 +7325,27 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 500,
         description: `Internal server error.`,
+        schema: ErrorResponse,
+      },
+    ],
+  },
+  {
+    method: "get",
+    path: "/auth/session",
+    alias: "getAuthSession",
+    description: `Resolves the omnipus-session cookie and returns the account it belongs to, or 401 when there is none. Deliberately the thinnest possible answer: it performs no side effects, so both the sign-in screen (waiting for the browser half to finish) and the desktop shell (waiting to raise its window) can poll it about once a second without consequence. Rate-limited: 120 requests per IP per minute.
+`,
+    requestFormat: "json",
+    response: z.object({ username: z.string().min(1) }),
+    errors: [
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 429,
+        description: `Rate limit exceeded.`,
         schema: ErrorResponse,
       },
     ],
@@ -7718,7 +7907,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/credentials/rotate",
     alias: "rotateCredentials",
-    description: `Re-encrypts the entire credential vault under a new Argon2id key derived from new_passphrase (and a fresh salt). Sensitive change — requires a re-auth consent token in the X-Reauth-Token header (Spec-6 FR-12.2 / ADR-022). No restart is required; the in-memory key is updated in place.
+    description: `Re-encrypts the entire credential vault under a new Argon2id key derived from new_passphrase (and a fresh salt). Sensitive change — the SPA confirms it with the operator before sending (ADR-0008 ruling 6). No restart is required; the in-memory key is updated in place.
 `,
     requestFormat: "json",
     parameters: [
@@ -7733,11 +7922,6 @@ Includes session_start events from all agent stores and task lifecycle events.
       {
         status: 400,
         description: `Invalid request (e.g. empty passphrase).`,
-        schema: ErrorResponse,
-      },
-      {
-        status: 403,
-        description: `Re-auth required or invalid consent token.`,
         schema: ErrorResponse,
       },
       {
@@ -7824,7 +8008,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "post",
     path: "/gateway/god-mode",
     alias: "setGodMode",
-    description: `Flips the global god-mode (&quot;bypass-permissions&quot;) switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent&#x27;s tool policy is floored at &quot;allow&quot;, the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required&#x3D;true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503) AND a single-use password re-auth consent token (X-Reauth-Token header; call POST /api/v1/auth/reauth first, 403 otherwise). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
+    description: `Flips the global god-mode (&quot;bypass-permissions&quot;) switch. When the build supports god mode AND this boot was already authorized (see GodModeStatus.available), the toggle applies or reverts the override live (no restart) — every agent&#x27;s tool policy is floored at &quot;allow&quot;, the kernel sandbox is off, network egress is open, and the shell guard is off, regardless of per-agent profiles. When enabling from a boot that was NOT yet authorized, this call persists authorization (sandbox.god_mode_allowed) and the runtime switch (sandbox.god_mode) to config and returns restart_required&#x3D;true — the override only takes effect after the gateway restarts. Disabling is always applied live. Audit logging, the prompt-injection guard, and rate limiting stay on. High blast radius — secured by RequireNotBypass (dev_mode_bypass returns 503); the SPA additionally confirms the flip with the operator before sending (ADR-0008 ruling 6). Returns 403 when enabling and god mode is not SUPPORTED in this build (compiled with nogodmode). Every toggle is audit-logged with the acting user.
 `,
     requestFormat: "json",
     parameters: [
@@ -7940,7 +8124,7 @@ Includes session_start events from all agent stores and task lifecycle events.
     method: "put",
     path: "/integrations/providers/:id",
     alias: "updateIntegrationProvider",
-    description: `Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403. Requires authentication.
+    description: `Sets the API key and/or selects a provider as active for its kind (FR-12.1). Keys are stored encrypted (AES-256-GCM) in credentials.json; only the credential reference is written to config.json. This is a sensitive settings change: in local mode the caller must first obtain a re-auth token (POST /auth/reauth) and replay it in the X-Reauth-Token header — requests without a valid, unexpired token are rejected 403; in platform mode there is no local password to re-type, so the authenticated session is the guard and the SPA confirms the change with the operator before sending (ADR-0008 ruling 6). Requires authentication.
 `,
     requestFormat: "json",
     parameters: [
@@ -9813,7 +9997,7 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
     method: "post",
     path: "/onboarding/complete",
     alias: "completeOnboarding",
-    description: `Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and admin user to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response&#x27;s &#x60;warning&#x60; field explains what could not be checked, because this endpoint is the only door into the product and a flaky network must not make it uninstallable. Returns 409 when the pre-auth onboarding window is closed — onboarding is already complete, this instance already has an authentication authority (any configured gateway user, or OMNIPUS_BEARER_TOKEN set), its onboarding state file is unreadable, or the requested admin username already exists. The refusal body is identical for every one of those reasons so an anonymous caller cannot use it to probe the instance&#x27;s state; the reason is recorded in the audit log (onboarding.refused). The authority check is what stops an anonymous caller minting a second administrator on an instance whose state.json was lost or corrupted, and it applies whatever the onboarding flag says. Creating an admin never overwrites an existing account&#x27;s password. CSRF-exempt (no cookie exists yet). Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry. On success, issues a __Host-csrf cookie so the SPA can immediately make CSRF-protected requests.
+    description: `AUTHENTICATED. Onboarding runs AFTER sign-in (ADR-0008 rulings 1 and 2): the caller already holds the session the platform issued, so this endpoint requires it and returns 401 without it. It mints no credential of any kind — no account is created, no password is hashed, no bearer token and no cookie is issued, and the request body carries no &#x60;admin&#x60; block (a body that still carries one is rejected 400 by the strict decode). Two-phase commit: probes the submitted provider API key against the real provider (a billable upstream call, same validator as PUT /providers/{id}), then writes the LLM provider config and the default model to config.json atomically, then marks onboarding complete in state.json. Returns 400 when the provider confirms the key is wrong (invalid_key) — nothing is persisted and the request may be retried with a corrected key. A key the provider could not verify for any other reason (unreachable, no credit, regionally restricted, or no endpoint to probe) does NOT block: onboarding still completes and the response&#x27;s &#x60;warning&#x60; field explains what could not be checked, because a flaky network must not make the product unusable on first run. Returns 409 when onboarding is already complete — the instance is set up and providers are managed through PUT /providers/{id} from then on. The owner recorded in the audit record (onboarding.admin_created) is the authenticated account, never a value from the body. Rate-limited: 3 requests per IP per minute — a probe can take up to ~25s (model-catalog fetch + completion probe), so a mistyped key costs real wall-clock time before the caller can retry.
 `,
     requestFormat: "json",
     parameters: [
@@ -9823,11 +10007,16 @@ Idempotent and deliberately uninformative: 204 whether the token was live, alrea
         schema: OnboardingCompleteRequest,
       },
     ],
-    response: LoginResponse,
+    response: OnboardingCompleteResponse,
     errors: [
       {
         status: 400,
         description: `Bad request — missing or invalid field.`,
+        schema: ErrorResponse,
+      },
+      {
+        status: 401,
+        description: `Authentication required or credentials invalid.`,
         schema: ErrorResponse,
       },
       {
