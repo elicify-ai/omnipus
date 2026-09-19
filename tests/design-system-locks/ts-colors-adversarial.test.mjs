@@ -1689,3 +1689,287 @@ test('Object.keys(record).map(k => k.length) elsewhere still resolves the colour
     [],
   )
 })
+
+// ── L8a precision fixes ──────────────────────────────────────────────────────
+// dist/design-system-baseline/cli-lanes/claudem-review/ts-colors/review.md
+// (W1, W3) and dist/design-system-baseline/cli-lanes/claude-codemods/
+// triage.json (P10, P11, P13). Each capability below pairs a forbidden
+// control (the fix must not relax) with a permitted case (the fix must now
+// resolve), and a same-shape mutation the fix must not paper over.
+
+// W1 — knownClassDerivedUsesSafe over-blocked a single-use const record read
+// directly into a JsxExpression (a JSX attribute value or child) whose
+// resolved target is not a primitive leaf: no NEW alias is created there for
+// something else to capture and mutate later, so there is nothing for the
+// escape walk to catch.
+test('W1: a single-use non-primitive record read directly into a JsxExpression resolves clean (permitted)', () => {
+  const source = [
+    "const REC = { color: 'text-[var(--color-primary)]' }",
+    "export function V({ c }) { const cfg = { color: REC.color }; return <i className={cfg.color} /> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+// W1 forbidden control — a SIBLING read of the same binding (even one that
+// is itself JsxExpression-terminal) must still gate the whole binding when a
+// DIFFERENT property's value is genuinely unresolvable: the single-use carve
+// out must not become "any non-alias JsxExpression use is safe".
+test('W1: a record with a sibling read and an unresolvable branch still blocks (forbidden)', () => {
+  const source = [
+    "const REC = { color: 'text-[var(--color-primary)]' }",
+    "export function V({ c, flag }) { const cfg = { label: flag ? opaque() : 'y', color: REC.color }; return <i title={cfg.label} className={cfg.color} /> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'cfg.color'))
+})
+
+// W1 forbidden control — the read must still block when it IS captured into
+// a real alias (the escape the walk exists to catch), proving the carve-out
+// is JsxExpression-specific, not "any single-use binding is safe".
+test('W1: a single-use record whose read is captured into a real alias still blocks (forbidden)', () => {
+  const source = [
+    "const REC = { color: 'text-[var(--color-primary)]' }",
+    "export function V({ c }) { const cfg = { color: REC.color }; const alias = cfg.color; mutate(alias); return <i className={cfg.color} /> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported'))
+})
+
+// W3 — objectFreezeCallArgumentDiscardsReturn only recognized the bare
+// `Object.freeze(X);` statement form; a parenthesized statement
+// (`;(Object.freeze(X))`) discards the return exactly the same way and must
+// be exempted too.
+test('W3: a parenthesized Object.freeze statement is exempted like the bare form (permitted)', () => {
+  const source = [
+    "const REC = { color: 'text-[var(--color-primary)]' }",
+    ';(Object.freeze(REC))',
+    'export function V(){ return <i className={REC.color}/> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+// W3 forbidden control — the return value must still be treated as a live
+// alias the instant it is actually consumed (assigned), parens or not: this
+// proves the fix widened only the discarded-return shape, not freeze's
+// mutability contract.
+test('W3: a parenthesized Object.freeze whose return is captured still blocks (forbidden)', () => {
+  const source = [
+    "const REC = { color: 'text-[var(--color-primary)]' }",
+    'const frozen = (Object.freeze(REC))',
+    "frozen.color = 'text-red-500'",
+    'export function V(){ return <i className={REC.color}/> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REC.color'))
+})
+
+// P10 — a generic class-composing utility (cn/clsx and the project-local
+// classes/statusDot names) flagged its OWN rest/sole parameter as an
+// unproven value at its DEFINITION site, even though every CALL site's
+// arguments are already independently inspected. A recognized composer's
+// forward parameter now resolves like a literal `className` parameter
+// (extension-boundary, not unsupported) — still tracked, never silently
+// clean.
+test('P10: a recognized composer rest parameter is an extension boundary at its own definition, not unsupported (permitted)', () => {
+  const source = [
+    'function classes(...parts) { return parts.filter(Boolean).join(" ") }',
+    "export function View({ chipClassName }) { return <span className={classes(chipClassName, 'base')} /> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/extension-boundary' && f.syntax === 'classes#parts'))
+})
+
+// P10 forbidden control — an UNRECOGNIZED local helper with the exact same
+// rest-parameter-forwarding shape must still be unsupported: the fix is a
+// named exemption for specific composer identities, not a structural
+// "any rest parameter forwarded to .filter/.join is safe" relaxation.
+test('P10: an unrecognized helper with the same rest-parameter shape still blocks (forbidden)', () => {
+  const source = [
+    'function mergeThings(...parts) { return parts.filter(Boolean).join(" ") }',
+    "export function View({ chipClassName }) { return <span className={mergeThings(chipClassName, 'base')} /> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported'))
+})
+
+// P10 — the same contract for a plain (non-rest) sole parameter, matching
+// the real statusDot(colorClass: string) shape.
+test('P10: a recognized composer sole string parameter is an extension boundary at its own definition (permitted)', () => {
+  const source = [
+    'function paintDot(dotClass) { return <span className={`w-2 h-2 ${dotClass}`} /> }',
+  ].join('\n')
+  // Deliberately NOT in LOCAL_CLASS_COMPOSERS — this is the forbidden half
+  // of the pair, proving an arbitrary sole-parameter function name is not
+  // swept in by shape alone.
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported'))
+})
+
+test('P10: statusDot\'s own sole colour-class parameter is a recognized composer forward parameter (permitted)', () => {
+  const source = [
+    'function statusDot(colorClass) { return <span aria-hidden="true" className={`w-2 h-2 rounded-full shrink-0 ${colorClass}`} /> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  // A forwardClassName parameter spliced into a TEMPLATE (not used bare)
+  // stays unsupported by the existing, separately-tested template-mode rule
+  // ('only a proven parameter member at a class sink becomes unverified
+  // governed debt', ts-colors.test.mjs) — this permitted case instead
+  // proves the parameter is now recognized as a genuine forward parameter
+  // (bare usage), matching the real statusDot's own contract.
+  const bareSource = [
+    'function statusDot(colorClass) { return <span className={colorClass} /> }',
+  ].join('\n')
+  const bareFindings = pass2Findings(bareSource)
+  assert.deepEqual(bareFindings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+  assert.ok(bareFindings.some((f) => f.ruleId === 'ts-colors/extension-boundary' && f.syntax === 'statusDot#colorClass'))
+  // The template-splice shape (the REAL statusDot body) still resolves via
+  // the pre-existing forwardClassName template rule, not silently ignored:
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported'))
+})
+
+// P10 / `.filter()` receiver-preserving recursion — `.filter(predicate)`
+// (any predicate, including `Boolean`) can only REMOVE elements from its
+// receiver, never manufacture new content, so recursing into the receiver
+// (like the pre-existing `.join()` handling) is sound.
+test('.filter(Boolean).join(sep) resolves through to a safe receiver (permitted)', () => {
+  const source = [
+    "const parts = ['text-[var(--color-primary)]', undefined]",
+    'export function V(){ return <i className={parts.filter(Boolean).join(" ")}/> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+// forbidden control — `.map()` CAN manufacture new content from its
+// callback, so it must not be swept into the same receiver-preserving set;
+// this proves the fix is method-name-scoped (join/filter only), not
+// "any array method on a resolvable receiver is safe".
+test('.map() is not treated as receiver-preserving — still blocks (forbidden)', () => {
+  const source = [
+    "const parts = ['a', 'b']",
+    'export function V(){ return <i className={parts.map(p => opaque(p)).join(" ")}/> }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported'))
+})
+
+// P13 — the blanket "any color-shaped object literal, anywhere" walk
+// (inspectStyleObject's top-level invocation) cannot tell a real,
+// eventually-rendered style object apart from one handed directly to a
+// non-paint API: a jest-dom/testing-library assertion (already recognized
+// for `z`/`expect` chains) or a Vitest mock return value, whose keys can
+// coincidentally collide with a CSS colour-property name (Canvas 2D's
+// `stroke()` method, not the SVG `stroke` colour attribute).
+test('P13: an object literal passed to expect(...).toHaveStyle(...) is not treated as a real style object (permitted)', () => {
+  const source = "expect(label).toHaveStyle({ color: `var(${colorVar})` })"
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings, [])
+})
+
+test('P13: an object literal passed to a Vitest mock return value is not treated as a real style object (permitted)', () => {
+  const source = [
+    "vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({",
+    '  stroke: () => {},',
+    '  fill: () => {},',
+    '} as unknown as CanvasRenderingContext2D)',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings, [])
+})
+
+// P13 forbidden control — the SAME key names, in an object literal that is
+// NOT an argument to a recognized non-paint API, must still be scanned as a
+// real style object: the fix gates on the enclosing call, not the property
+// names.
+test('P13: the same color-shaped object literal outside a non-paint API call still blocks (forbidden)', () => {
+  const source = [
+    'const mockContext = {',
+    "  stroke: () => {},",
+    "  fill: '#ffffff',",
+    '}',
+    'export function useIt(el) { el.style.cssText = JSON.stringify(mockContext) }',
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/raw-color' && f.syntax === '#ffffff'))
+})
+
+// P13 forbidden control — a genuine style object built for a REAL element
+// and reached only incidentally through a `vi`-rooted variable name must
+// still block: recognizing the `vi.*` root does not mean "anything a test
+// file constructs is exempt".
+test('P13: a real style object assigned inside a vi.fn() implementation body still blocks (forbidden)', () => {
+  const source = [
+    "vi.fn(() => { document.body.style.color = '#ffffff' })",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/raw-color' && f.syntax === '#ffffff'))
+})
+
+// P11 — a computed object-literal property key that is itself a string
+// literal (`['color']`, or the same behind a cast) was never evaluated by
+// the whole-object completeness proofs: resolveDestructuredTargets and
+// resolveMemberTargets treated ANY computed key as opaque, even one
+// propertyNameOf already resolves to a plain name.
+test('P11: a literal computed key participates in the completeness proof like a plain key (permitted)', () => {
+  const source = [
+    "const CFG = { ['a']: { ['textClass' as string]: 'text-[var(--color-primary)]' } }",
+    "export function View({ k }) { const { textClass } = CFG[k]; return <i className={textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+// P11 forbidden control — a genuinely dynamic (non-literal) computed key
+// must still void the proof: the fix narrows the check to keys
+// propertyNameOf can resolve, not computed keys in general.
+test('P11: a genuinely dynamic computed key still blocks (forbidden)', () => {
+  const source = [
+    "const CFG = { a: { [dynamicKey()]: 'z', textClass: 'text-[var(--color-primary)]' } }",
+    "export function View({ k }) { const { textClass } = CFG[k]; return <i className={textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported'))
+})
+
+// P11 mutation-representative — propertyInit must resolve LAST-match, not
+// first, once a literal computed key participates: a later plain key
+// overriding an earlier literal computed key must be trusted...
+test('P11: a later plain key overrides an earlier literal computed key (last-write-wins, permitted)', () => {
+  const source = [
+    "const CFG = { a: { ['textClass']: 'text-red-500', textClass: 'text-[var(--color-primary)]' } }",
+    "export function View({ k }) { const { textClass } = CFG[k]; return <i className={textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/raw-color'), [])
+})
+
+// ...and the reverse order must still catch the real violation — this is
+// the case that would have silently regressed had propertyInit stayed
+// first-match once computed literal keys were allowed to participate.
+test('P11: a later literal computed key overriding a safe plain key still surfaces the violation (forbidden)', () => {
+  const source = [
+    "const CFG = { a: { textClass: 'text-[var(--color-primary)]', ['textClass']: 'text-red-500' } }",
+    "export function View({ k }) { const { textClass } = CFG[k]; return <i className={textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/raw-color' && f.syntax === 'text-red-500'))
+})
+
+// P10 forbidden control — a composer body that MUTATES its own rest
+// parameter in place before forwarding it (an array-mutating method call)
+// injects content no call site's argument inspection ever validated; the
+// forward-parameter trust must not cover this shape.
+test('P10: a composer body that pushes onto its own rest parameter before forwarding still blocks (forbidden)', () => {
+  const source = [
+    "import { twMerge } from 'tailwind-merge'",
+    "import { clsx } from 'clsx'",
+    "export function cn(...inputs) { inputs.push('text-[10px]'); return twMerge(clsx(inputs)) }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'inputs'))
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/extension-boundary'), [])
+})

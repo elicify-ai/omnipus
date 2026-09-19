@@ -21,6 +21,28 @@ const CLASS_BUILDERS = new Set([
   'classnames',
 ])
 
+// Project-local class-composing helper names (not an importable package, so
+// not reachable through CLASS_BUILDERS' name-resolution path) that make the
+// exact same contract as cn/clsx: every CALL site already gets its own
+// arguments independently inspected (inspectClassBuilderCall for a
+// CLASS_BUILDERS name, or plain className/cn(...)-argument inspection
+// wherever these are invoked), so the value flowing through this function's
+// OWN parameter, at its OWN definition site, is never new — it is exactly
+// what a validated call site handed it. Treating that parameter as an
+// unproven value there is redundant re-validation of an already-covered
+// site, not a real gap (P10 review finding). Named explicitly, like
+// CLASS_BUILDERS, rather than inferred structurally, so an unrelated
+// same-named local helper is never accidentally trusted.
+const LOCAL_CLASS_COMPOSERS = new Set(['classes', 'statusDot'])
+
+// Array methods whose result can never contain content absent from their
+// receiver — `.join(sep)` stringifies exactly the receiver's own elements;
+// `.filter(predicate)` (any predicate) only ever removes elements. Neither
+// can manufacture a NEW, unproven value, so recursing into the receiver
+// (rather than treating the call itself as an opaque, unresolvable value)
+// does not weaken the proof — it is the same array, narrowed or stringified.
+const ARRAY_RECEIVER_PRESERVING_METHODS = new Set(['join', 'filter'])
+
 const COLOR_FUNCS = new Set(['rgb', 'rgba', 'hsl', 'hsla', 'hwb', 'lab', 'lch', 'oklab', 'oklch', 'color'])
 
 const GROUP_FUNCS = new Set([
@@ -389,9 +411,43 @@ function inspectNode(node, ctx) {
     markParameterReassignment(node, ctx)
     inspectPaintAssignment(node, ctx)
   }
-  if (ts.isObjectLiteralExpression(node)) {
+  if (ts.isObjectLiteralExpression(node) && !isNonPaintApiObjectArgument(node, ctx)) {
     inspectStyleObject(node, ctx, new Set(), false)
   }
+}
+
+// The blanket "any color-shaped object literal, anywhere" walk above exists
+// to catch a style object built separately from the JSX/DOM site that later
+// applies it (an indirect construction inspectStyleExpr's own JSX-triggered
+// walk cannot see). It has no way to tell that apart from an object literal
+// that is never applied to anything — most visibly, a fixture object handed
+// directly to a known non-paint API: a jest-dom/testing-library assertion
+// (`expect(el).toHaveStyle({ color: … })`, matching the file's existing
+// `expect`/`z` non-paint recognition below) or a Vitest mock return value
+// (`vi.spyOn(...).mockReturnValue({ stroke: () => {} })` — `stroke` there is
+// a Canvas 2D method name, not the SVG colour property it happens to share a
+// name with). Neither can ever reach a real render; skip only the object
+// literal that is itself (or is inside a single array wrapper of) a direct
+// argument to such a call (P13 review finding) — this does not touch the
+// object literal's OWN nested values, spreads, or any other object literal
+// found elsewhere in the walk.
+function isNonPaintApiObjectArgument(node, ctx) {
+  let expr = node
+  // Walk out through a cast/paren/non-null wrapper directly on the object
+  // literal itself (`{…} as unknown as CanvasRenderingContext2D`, a common
+  // vitest `mockReturnValue(...)` shape) and, separately, through a single
+  // array-literal wrapper (`mockReturnValue([{…}])`) — neither changes
+  // which call the object literal is ultimately an argument to.
+  while (expr.parent && (ts.isParenthesizedExpression(expr.parent) || ts.isAsExpression(expr.parent)
+    || ts.isSatisfiesExpression(expr.parent) || ts.isNonNullExpression(expr.parent))) expr = expr.parent
+  let parent = expr.parent
+  if (parent && ts.isArrayLiteralExpression(parent)) {
+    expr = parent
+    while (expr.parent && (ts.isParenthesizedExpression(expr.parent) || ts.isAsExpression(expr.parent)
+      || ts.isSatisfiesExpression(expr.parent) || ts.isNonNullExpression(expr.parent))) expr = expr.parent
+    parent = expr.parent
+  }
+  return Boolean(parent) && ts.isCallExpression(parent) && parent.arguments.includes(expr) && isNonPaintApiCall(parent, ctx)
 }
 
 function isFunctionLike(node) {
@@ -421,12 +477,18 @@ function bind(ctx, name, init) {
 
 function bindParams(ctx, parameters, owner) {
   const ownerName = functionIdentity(owner)
-  for (const parameter of parameters) bindParameterPattern(ctx, parameter.name, parameter, ownerName)
+  for (const parameter of parameters) {
+    // composerForwardParameter is only ever true for the TOP-LEVEL parameter
+    // identifier itself (it requires ts.isIdentifier(parameter.name)), never
+    // propagated into a destructured sub-pattern — an unrelated same-named
+    // field of a destructured options object is never swept in.
+    bindParameterPattern(ctx, parameter.name, parameter, ownerName, composerForwardParameter(parameter, owner))
+  }
 }
 
-function bindParameterPattern(ctx, name, declaration, ownerName) {
+function bindParameterPattern(ctx, name, declaration, ownerName, composerForward = false) {
   if (ts.isIdentifier(name)) {
-    bind(ctx, name.text, { kind: PARAMETER_BINDING, name: name.text, ownerName, declaration, reassigned: false, boolean: parameterIsBoolean(name.text, declaration, ctx), forwardClassName: name.text === 'className' })
+    bind(ctx, name.text, { kind: PARAMETER_BINDING, name: name.text, ownerName, declaration, reassigned: false, boolean: parameterIsBoolean(name.text, declaration, ctx), forwardClassName: name.text === 'className' || composerForward })
     return
   }
   if (ts.isObjectBindingPattern(name) || ts.isArrayBindingPattern(name)) {
@@ -855,6 +917,22 @@ function propertyNameOf(name) {
   return null
 }
 
+// A member is "opaque" for the whole-object completeness proofs above when
+// ECMAScript could make its later evaluation silently override a sibling
+// property in a way this scanner cannot statically account for: any
+// non-PropertyAssignment member (spread, shorthand, method, getter/setter —
+// none of these are looked up by propertyInit at all) is always opaque. A
+// PropertyAssignment with a computed key is opaque only when the key itself
+// cannot be pinned to a static literal name — a computed key that IS a
+// static literal (`['color']`, a cast literal, a resolved const) is exactly
+// as provable as a plain `color:` key once propertyNameOf resolves it, and
+// propertyInit's last-match-wins lookup already applies the same
+// left-to-right override order the language uses (P11 review finding).
+function opaqueObjectMember(member) {
+  if (!ts.isPropertyAssignment(member)) return true
+  return ts.isComputedPropertyName(member.name) && propertyNameOf(member.name) === null
+}
+
 function isColorPropertyName(name) {
   const normalized = name.replace(/-/g, '').toLowerCase()
   return COLOR_PROPERTIES.has(normalized) || normalized.endsWith('color')
@@ -1065,7 +1143,19 @@ function inspectClassExpr(node, ctx, stack, boundary = null) {
       return
     }
   }
-  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(unwrap(node.expression)) && unwrap(node.expression).name.text === 'join') {
+  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(unwrap(node.expression))
+    && ARRAY_RECEIVER_PRESERVING_METHODS.has(unwrap(node.expression).name.text)) {
+    // `.join(sep)` only ever stringifies the array it's called on — never
+    // invents new content. `.filter(predicate)` (any predicate, including
+    // `Boolean`) can only REMOVE elements from its receiver, never add one:
+    // whatever safety proof holds for the receiver array already covers
+    // every element that could survive the filter. Recursing into the
+    // receiver (exactly like the existing `.join()` handling) lets a
+    // locally-defined class-composing helper's own filter/join chain over
+    // its OWN parameter (e.g. `parts.filter(Boolean).join(' ')`) resolve
+    // through to that parameter — which the composer-forwarding proof above
+    // already covers — instead of dead-ending on the unresolvable
+    // `.filter(...)` call itself (P10 review finding).
     inspectClassExpr(unwrap(node.expression).expression, ctx, stack)
     return
   }
@@ -1300,7 +1390,15 @@ const NESTED_REFERENCE_RETURNING_STATIC_METHODS = new Set(['values', 'entries'])
 // return value is assigned, chained, or otherwise consumed, it is exactly as
 // live an alias of `X` as `X` itself and must not be exempted here.
 function objectFreezeCallArgumentDiscardsReturn(callExpr) {
-  return ts.isExpressionStatement(callExpr.parent)
+  // Walk out through any wrapping parens (`;(Object.freeze(X))`,
+  // `(Object.freeze(X));`) — these are the exact same discarded-return
+  // shape as the bare statement, just with redundant parens; only the
+  // paren wrapper sits between the call and the statement (W3 review
+  // finding). Do not also unwrap `void`/`if (...)  Object.freeze(X)` here —
+  // those are separate, unreviewed shapes this fix does not claim to cover.
+  let node = callExpr
+  while (ts.isParenthesizedExpression(node.parent)) node = node.parent
+  return ts.isExpressionStatement(node.parent)
 }
 
 function objectStaticCallArgumentMethod(node) {
@@ -1350,6 +1448,21 @@ function knownClassDerivedUsesSafe(declaration, ctx, seen = new Set()) {
   let scope = declaration.parent
   while (scope && !ts.isBlock(scope) && !ts.isSourceFile(scope)) scope = scope.parent
   if (!scope) return false
+  // The JsxExpression carve-out below (W1 review finding) is sound ONLY for
+  // a binding read exactly once in scope — the review's own probe frames it
+  // as a "single-use const record". With a SIBLING read elsewhere (even one
+  // that is itself JsxExpression-terminal), an unresolvable branch anywhere
+  // in the binding's structure still voids the WHOLE binding's proof for
+  // every property, not just the one that happens to be unresolvable — see
+  // the adversarial "a sibling whose ternary has one opaque literal branch
+  // still blocks" case this single-use gate exists to keep blocking.
+  let occurrences = 0
+  const countOccurrences = node => {
+    if (ts.isIdentifier(node) && node.text === declaration.name.text && node !== declaration.name) occurrences += 1
+    ts.forEachChild(node, countOccurrences)
+  }
+  countOccurrences(scope)
+  const singleUse = occurrences === 1
   let safe = true
   const visit = node => {
     if (!safe) return
@@ -1381,7 +1494,18 @@ function knownClassDerivedUsesSafe(declaration, ctx, seen = new Set()) {
           while ((ts.isBinaryExpression(derived.parent) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(derived.parent.operatorToken.kind))
             || (ts.isConditionalExpression(derived.parent) && (derived.parent.whenTrue === derived || derived.parent.whenFalse === derived))) derived = derived.parent
           const alias = derived.parent
-          if (!ts.isVariableDeclaration(alias) || alias.initializer !== derived
+          // A read consumed directly by a JsxExpression (`{cfg.color}` as a
+          // JSX attribute value or child) is a terminal, read-only render
+          // consumption — no NEW alias is created here for something else to
+          // capture and later mutate, so there is nothing for the escape walk
+          // below to catch. This is distinct from every other non-alias
+          // consumer (a call argument, a return statement, …): those CAN
+          // hand the value to code that stores or mutates it, so they must
+          // keep failing the proof. Only widen this one, narrowly-provable
+          // carve-out (W1 review finding) — do not broaden to "any non-alias
+          // use is safe", which would defeat the walk entirely.
+          if (singleUse && ts.isJsxExpression(alias)) { /* terminal read; no escape */ }
+          else if (!ts.isVariableDeclaration(alias) || alias.initializer !== derived
             || !(alias.parent.flags & ts.NodeFlags.Const) || !absenceBindingUsesSafe(alias, false, true)
             || !knownClassDerivedUsesSafe(alias, ctx, next)) { safe = false; return }
         }
@@ -1561,7 +1685,14 @@ function isNonPaintApiCall(call, ctx) {
     if (ts.isCallExpression(expression)) expression = unwrap(expression.expression)
   }
   const root = ts.isIdentifier(expression) ? expression.text : ''
-  if (root === 'z' || root === 'expect' || names.includes('stringMatching')) return true
+  // `vi` is Vitest's test-utility namespace (vi.fn/vi.spyOn/vi.mock/…) — it
+  // is only ever importable inside a test file, never bundled into runtime
+  // application code, so a value that is the argument to (or return/
+  // implementation of) a `vi.*` call can never reach a real render; it is
+  // fixture/mock data standing in for a real API's shape (P13 review
+  // finding — e.g. `vi.spyOn(Canvas...).mockReturnValue({ stroke: () => {} })`,
+  // where `stroke` is the Canvas 2D method name, not an SVG colour property).
+  if (root === 'z' || root === 'expect' || root === 'vi' || names.includes('stringMatching')) return true
   if (!root || !ctx) return false
   const binding = lookup(ctx, root)
   const value = bindingValue(binding)
@@ -1574,7 +1705,7 @@ function originatesFromNonPaintApi(node, ctx, seen) {
   if (ts.isCallExpression(node)) return originatesFromNonPaintApi(node.expression, ctx, seen)
   if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) return originatesFromNonPaintApi(node.expression, ctx, seen)
   if (!ts.isIdentifier(node)) return false
-  if (node.text === 'z' || node.text === 'expect') return true
+  if (node.text === 'z' || node.text === 'expect' || node.text === 'vi') return true
   if (seen.has(node.text)) return false
   seen.add(node.text)
   const value = bindingValue(lookup(ctx, node.text))
@@ -2036,12 +2167,18 @@ function resolveDestructuredTargets(ident, ctx, stack) {
   const resolution = { incomplete: false }
   const objects = resolveToObjects(unwrap(declaration.initializer), ctx, stack, resolution)
   // Same incompleteness rule resolveMemberTargets enforces for ordinary
-  // member access: a spread or computed key on ANY candidate object means
-  // ECMAScript could resolve the target property from an opaque runtime
-  // value (a later spread overrides an earlier explicit property), so the
-  // whole destructuring proof must be voided, not silently first-match-won.
-  if (objects.some(obj => obj.properties.some(member =>
-    !ts.isPropertyAssignment(member) || ts.isComputedPropertyName(member.name)))) resolution.incomplete = true
+  // member access: a spread, or a computed key whose name cannot be
+  // statically pinned down, on ANY candidate object means ECMAScript could
+  // resolve the target property from an opaque runtime value (a later
+  // spread, or unresolvable computed key, overrides an earlier explicit
+  // property), so the whole destructuring proof must be voided, not
+  // silently first-match-won. A computed key that IS statically a literal
+  // (`['color']`, `[SOME_CONST]` resolved to a literal, or the same wrapped
+  // in a cast) carries no such opacity — propertyNameOf already resolves it
+  // to a plain name, and propertyInit's last-match-wins lookup below
+  // resolves it in the same left-to-right override order the language
+  // uses, so it does not need to blank the whole proof (P11 review finding).
+  if (objects.some(obj => obj.properties.some(opaqueObjectMember))) resolution.incomplete = true
   if (resolution.incomplete || objects.length === 0) return { resolved: false }
   const targets = []
   for (const obj of objects) {
@@ -2079,6 +2216,54 @@ function literalDestructuredTemplateTargets(expression, ctx, stack) {
 // when no frame is being resolved — the walk-time binding of that same
 // parameter (in-place inspection). Anything else blocks: parameters never
 // fall through to module maps (V4).
+// An array-mutating method call whose RECEIVER is the composer's own rest
+// parameter (`inputs.push('text-[10px]')`) injects content that never
+// passed through any call site's argument inspection — the forward-
+// parameter trust below must not cover it.
+const ARRAY_MUTATING_METHODS = new Set(['push', 'pop', 'shift', 'unshift', 'splice', 'sort', 'reverse', 'fill', 'copyWithin'])
+
+function composerParameterIsMutated(owner, paramName) {
+  let mutated = false
+  const visit = node => {
+    if (mutated || !node) return
+    if (ts.isIdentifier(node) && node.text === paramName) {
+      const parent = node.parent
+      if (ts.isPropertyAccessExpression(parent) && parent.expression === node
+        && ARRAY_MUTATING_METHODS.has(parent.name.text)
+        && ts.isCallExpression(parent.parent) && parent.parent.expression === parent) { mutated = true; return }
+      if (ts.isElementAccessExpression(parent) && parent.expression === node
+        && ts.isBinaryExpression(parent.parent) && parent.parent.left === parent
+        && parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) { mutated = true; return }
+    }
+    ts.forEachChild(node, visit)
+  }
+  if (owner.body) visit(owner.body)
+  return mutated
+}
+
+// A rest/destructured parameter of a recognized class-composing function
+// (cn/clsx/… or the project-local classes/statusDot) is, structurally,
+// exactly the same forward-parameter contract as one literally named
+// `className` — every call site's own arguments are independently
+// inspected wherever THAT call is written, so the composed value reaching
+// this parameter is never new — UNLESS the composer's own body mutates the
+// parameter in place before forwarding it (an array-mutating method call, or
+// a direct element assignment), which injects content no call site's
+// argument inspection ever saw (P10 forbidden control — a composer body
+// that pushes an unvalidated literal onto its rest parameter must keep
+// blocking, not be swept into the same trust as a pure forward). Computed
+// statelessly from the parameter/owner AST alone (not the walk-time scope
+// binding — see the call site below for why the latter is unavailable
+// here) so it holds regardless of whether this parameter is reached through
+// an active callee frame or the in-place walk (P10 review finding).
+function composerForwardParameter(parameter, owner) {
+  if (!ts.isIdentifier(parameter.name)) return false
+  const ownerName = functionIdentity(owner)
+  if (!CLASS_BUILDERS.has(ownerName) && !LOCAL_CLASS_COMPOSERS.has(ownerName)) return false
+  if (!(Boolean(parameter.dotDotDotToken) || owner.parameters.length === 1)) return false
+  return !composerParameterIsMutated(owner, parameter.name.text)
+}
+
 function positionalParameterInit(owner, name, ctx) {
   let parameter = null
   let index = -1
@@ -2095,8 +2280,20 @@ function positionalParameterInit(owner, name, ctx) {
   for (let depth = ctx.callFrames.length - 1; depth >= 0; depth -= 1) {
     const frame = ctx.callFrames[depth]
     if (frame.declaration !== owner) continue
-    // A pattern or rest parameter cannot bind to a single call argument.
-    if (!bindable) return LOOKUP_UNBOUND
+    // A pattern or rest parameter cannot bind to a single call argument —
+    // UNLESS it is a recognized composer's own forward parameter, whose
+    // call-site arguments are validated at every call site regardless of
+    // how many collapse into this one rest slot; surface that as a
+    // parameter binding here (rather than the walk-time scope lookup,
+    // which is no longer on the scope stack while tracing a callee's body
+    // from a DIFFERENT function's call site) so the existing
+    // forwardClassName → extension-boundary path applies uniformly.
+    if (!bindable) {
+      if (composerForwardParameter(parameter, owner)) {
+        return { kind: PARAMETER_BINDING, name, ownerName: functionIdentity(owner), declaration: parameter, reassigned: false, boolean: false, forwardClassName: true }
+      }
+      return LOOKUP_UNBOUND
+    }
     const argument = frame.call.arguments[index]
     if (argument) return argument
     return parameter.initializer ?? LOOKUP_UNBOUND
@@ -2239,8 +2436,12 @@ function resolveMemberTargets(node, ctx, stack, resolution = null) {
     }
   }
   const objects = resolveToObjects(unwrap(node.expression), ctx, stack, resolution)
-  if (resolution && objects.some(obj => obj.properties.some(member =>
-    !ts.isPropertyAssignment(member) || ts.isComputedPropertyName(member.name)))) resolution.incomplete = true
+  // See resolveDestructuredTargets' matching comment: a computed key that
+  // statically resolves to a literal name is not opaque (P11 review
+  // finding) — only a spread/method/getter member, or a computed key with
+  // no provable literal name, still voids the whole-object completeness
+  // proof.
+  if (resolution && objects.some(obj => obj.properties.some(opaqueObjectMember))) resolution.incomplete = true
   const member = (obj, key) => {
     const value = propertyInit(obj, key)
     if (resolution && (!value && !absenceValue(obj, key, ctx))) resolution.incomplete = true
@@ -2316,12 +2517,21 @@ function resolveToObject(node, ctx, stack) {
 }
 
 function propertyInit(obj, name) {
+  // Last match wins, matching real object-literal evaluation order (a later
+  // property with the same key — including one written through a literal
+  // computed key, `['color']` alongside `color:` — overrides an earlier
+  // one). Required for the narrowed computed-key completeness checks below
+  // (P11 review finding): once a computed key that resolves to a literal
+  // name is allowed to participate in the proof at all, this lookup MUST
+  // resolve it in the same order the language does, or a later override
+  // (safe or unsafe) could silently be missed in either direction.
+  let result = null
   for (const prop of obj.properties) {
     if (!ts.isPropertyAssignment(prop)) continue
     const key = propertyNameOf(prop.name)
-    if (key === name) return prop.initializer
+    if (key === name) result = prop.initializer
   }
-  return null
+  return result
 }
 
 function isClassBuilderCall(node, ctx) {
