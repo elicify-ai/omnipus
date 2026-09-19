@@ -1098,6 +1098,14 @@ function knownClassReceiverStable(node, ctx, seen = new Set()) {
   node = unwrap(node)
   if (!node || seen.has(node)) return false
   const next = new Set(seen).add(node)
+  // A fixed literal value can never carry a mutable reference back to
+  // anything — it is trivially receiver-stable on its own, independent of
+  // whichever container produced it. Recognizing this base case here (rather
+  // than re-deriving it at every call site) lets a ternary/`??` branch made
+  // of plain literals (e.g. `cond ? 'a' : 'b'`) prove stable through the SAME
+  // recursive conditional/binary handling just below.
+  if (ts.isStringLiteralLike(node) || ts.isNumericLiteral(node) || ts.isTemplateExpression(node)
+    || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(node.kind)) return true
   if (ts.isObjectLiteralExpression(node) || ts.isArrayLiteralExpression(node)) return true
   if (ts.isConditionalExpression(node)) return knownClassReceiverStable(node.whenTrue, ctx, next) && knownClassReceiverStable(node.whenFalse, ctx, next)
   if (ts.isBinaryExpression(node) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)) {
@@ -1137,6 +1145,50 @@ function knownClassReceiverStable(node, ctx, seen = new Set()) {
     && Boolean(declaration.initializer) && knownClassReceiverStable(declaration.initializer, ctx, next)
 }
 
+// Only a JS/TS module can contain import/export/require syntax relevant to
+// this cross-module proof. An asset file (`.svg`, `.css`, …) parsed as
+// TS/JSX always produces parse diagnostics (it is not JS at all), which used
+// to make EVERY exported const's receiver-stability proof fail the instant
+// the module set contained even one such file — unconditionally, everywhere,
+// regardless of relevance (found via `src/assets/logo/omnipus-avatar.svg`
+// poisoning `STATUS_BADGE`'s proof in a completely unrelated file).
+function isJsModulePath(path) {
+  const ext = extname(path).toLowerCase()
+  return ext === '.ts' || ext === '.tsx' || ext === '.js' || ext === '.jsx'
+}
+
+// A template-literal dynamic import()/require() argument's HEAD is always
+// the literal prefix of whatever string it evaluates to at runtime — a
+// substitution can only append characters after it, never rewrite or erase
+// them (TemplateExpression semantics: head + eval(span1) + text + …).
+// governedModulePath only ever resolves a specifier that itself starts with
+// '@/' or a relative '.' form. If the head cannot possibly grow into one of
+// those two forms (it already diverges from both — e.g. an npm package name
+// interpolation like `@codemirror/legacy-modes/mode/${m}`), no runtime value
+// of the template can EVER be a governedModulePath-resolvable specifier at
+// all — proven impossible, not guessed — so it can never target `origin`.
+// When the head IS shaped like a local specifier, it must additionally share
+// `origin`'s directory (and, lacking a trailing '/', `origin`'s basename
+// must share the head's own final segment as a prefix), or it is still a
+// provably different target. Any other argument shape (bare identifier,
+// call, spread, or an ambiguous short head that could still complete into
+// '@/'/'.' once interpolation appends more text) stays exactly as
+// conservative as before: not excluded.
+function dynamicImportProvenNotOrigin(modulePath, argument, origin) {
+  if (!ts.isTemplateExpression(argument)) return false
+  const head = argument.head.text
+  if (head.startsWith('@/') || head.startsWith('./') || head.startsWith('../')) {
+    const prefix = head.startsWith('@/') ? `src/${head.slice(2)}` : posix.normalize(posix.join(posix.dirname(modulePath), head))
+    const prefixDir = prefix.endsWith('/') ? prefix.slice(0, -1) : posix.dirname(prefix)
+    const originDir = posix.dirname(origin)
+    if (originDir !== prefixDir) return true
+    if (prefix.endsWith('/')) return false
+    return !posix.basename(origin).startsWith(posix.basename(prefix))
+  }
+  if ('@/'.startsWith(head) || './'.startsWith(head) || '../'.startsWith(head)) return false
+  return true
+}
+
 // Exported objects can be mutated through a different importer. Check all
 // supplied modules; namespace/re-export/dynamic access stays unresolved rather
 // than guessing which exported object it might expose.
@@ -1146,6 +1198,7 @@ function knownClassExportUsesSafe(declaration, ctx) {
   if (!ctx.modules || !ts.isIdentifier(declaration.name)) return false
   const origin = declaration.getSourceFile().fileName
   for (const modulePath of Object.keys(ctx.modules)) {
+    if (!isJsModulePath(modulePath)) continue
     const record = moduleRecord(ctx, modulePath)
     if (!record || record.sf.parseDiagnostics.length) return false
     for (const item of record.sf.statements) {
@@ -1170,8 +1223,10 @@ function knownClassExportUsesSafe(declaration, ctx) {
       if (ts.isCallExpression(node) && (node.expression.kind === ts.SyntaxKind.ImportKeyword
         || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))) {
         const argument = node.arguments[0]
-        if (!argument || !ts.isStringLiteralLike(argument)
-          || governedModulePath(modulePath, argument.text, ctx.modules) === origin) dynamic = true
+        if (!argument) dynamic = true
+        else if (ts.isStringLiteralLike(argument)) {
+          if (governedModulePath(modulePath, argument.text, ctx.modules) === origin) dynamic = true
+        } else if (!dynamicImportProvenNotOrigin(modulePath, argument, origin)) dynamic = true
       }
       if (!dynamic) ts.forEachChild(node, visit)
     }
@@ -1179,6 +1234,58 @@ function knownClassExportUsesSafe(declaration, ctx) {
     if (dynamic) return false
   }
   return true
+}
+
+// A resolved member value consumed purely as a JSX element's own tag name
+// (`<Icon/>`, `<driveChip.Icon/>`) is a terminal render read: React only
+// invokes/constructs the referenced value, it is never handed anything that
+// could reach back and mutate the stable record that produced it. Without
+// recognizing this, an UNRELATED sibling property rendered as a component
+// (e.g. `cfg.icon`) blanket-blocks every OTHER property drawn from the very
+// same finite record (e.g. `cfg.activeColor`) purely because it isn't itself
+// a further `.member` read.
+function isJsxTagName(expression) {
+  const parent = expression.parent
+  return Boolean(parent) && (ts.isJsxOpeningElement(parent) || ts.isJsxSelfClosingElement(parent) || ts.isJsxClosingElement(parent)) && parent.tagName === expression
+}
+
+// `Object.keys/values/entries/freeze/isFrozen/getOwnPropertyNames(X)` are
+// well-known, spec-pure static reads: none of them can mutate `X` or hand a
+// mutable reference to `X`'s OWN nested values back to the caller (`keys`/
+// `getOwnPropertyNames` return new string arrays; `values`/`entries` return
+// a new array whose elements are `X`'s existing property values, already
+// covered by the SAME per-property proof used elsewhere in this file;
+// `freeze`/`isFrozen` only touch `X`'s own mutability flag). A terminal read
+// this way is exactly as safe as a JSX-tag render — recognizing it stops
+// e.g. `Object.keys(PRIORITY_BADGE)` (read once, for its domain of keys)
+// from blanket-blocking every OTHER, unrelated read of the same record.
+const READONLY_OBJECT_STATIC_METHODS = new Set(['keys', 'values', 'entries', 'freeze', 'isFrozen', 'getOwnPropertyNames'])
+
+function isReadonlyObjectStaticCallArgument(node) {
+  const parent = node.parent
+  if (!ts.isCallExpression(parent) || parent.expression === node || !parent.arguments.includes(node)) return false
+  const callee = unwrap(parent.expression)
+  return ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'Object'
+    && READONLY_OBJECT_STATIC_METHODS.has(callee.name.text)
+}
+
+// A ternary/`??` composed entirely of literal leaves (e.g. `cond ? 'a' : 'b'`)
+// is just as immutable and escape-free as a single literal — unlike an
+// object/array literal, which CAN still be captured by a separate alias and
+// mutated elsewhere (that risk is exactly what `knownClassDerivedUsesSafe`'s
+// alias-escape walk below must keep catching, so this stays deliberately
+// narrower than `knownClassReceiverStable` and never treats a container
+// literal or an identifier chain as a safe leaf on its own).
+function primitiveLeaf(value) {
+  value = unwrap(value)
+  if (!value) return false
+  if (ts.isStringLiteralLike(value) || ts.isNumericLiteral(value) || ts.isTemplateExpression(value)
+    || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(value.kind)) return true
+  if (ts.isConditionalExpression(value)) return primitiveLeaf(value.whenTrue) && primitiveLeaf(value.whenFalse)
+  if (ts.isBinaryExpression(value) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(value.operatorToken.kind)) {
+    return primitiveLeaf(value.left) && primitiveLeaf(value.right)
+  }
+  return false
 }
 
 // A property read may expose a nested configuration object. Follow const
@@ -1199,9 +1306,24 @@ function knownClassDerivedUsesSafe(declaration, ctx, seen = new Set()) {
         while ((ts.isPropertyAccessExpression(member.parent) || ts.isElementAccessExpression(member.parent)) && member.parent.expression === member) member = member.parent
         const resolution = { incomplete: false }
         const targets = resolveMemberTargets(member, ctx, new Set(), resolution)
-        const primitive = value => ts.isStringLiteralLike(value) || ts.isNumericLiteral(value) || ts.isTemplateExpression(value)
-          || [ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(value.kind)
-        if (resolution.incomplete || targets.length === 0 || !targets.every(primitive)) {
+        // A sibling property's inability to be fully ENUMERATED (e.g. an
+        // optional field omitted on some branches, blocked by the
+        // deliberately-unrelaxed null-prototype absence rule) is a
+        // value-completeness concern already independently enforced at that
+        // property's own emission site — it is not evidence THIS receiver
+        // could be mutated, so `resolution.incomplete` must not gate the
+        // escape check below (that would blanket-block an unrelated, fully
+        // resolvable sibling property purely because ANOTHER property
+        // couldn't prove absence). `targets.length === 0` stays a trigger:
+        // `[].every(primitive)` is vacuously true, so a totally unresolvable
+        // occurrence must still be treated as potentially escaping. This
+        // uses `primitiveLeaf`, NOT `knownClassReceiverStable` — the latter
+        // also accepts a bare object/array literal as "stable", which is
+        // right for TRAVERSING into one but wrong here: that literal can
+        // still be captured by a separate alias and mutated elsewhere, which
+        // is exactly the escape the alias-check below exists to catch.
+        const primitive = value => primitiveLeaf(value)
+        if ((targets.length === 0 || !targets.every(primitive)) && !isJsxTagName(member)) {
           let derived = member
           while ((ts.isBinaryExpression(derived.parent) && [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(derived.parent.operatorToken.kind))
             || (ts.isConditionalExpression(derived.parent) && (derived.parent.whenTrue === derived || derived.parent.whenFalse === derived))) derived = derived.parent
@@ -1256,6 +1378,22 @@ function absenceLexicalBinding(identifier) {
   return null
 }
 
+// A simple, non-rest, non-default, non-nested object-destructuring read of a
+// stable receiver (`const { Icon } = cfg`) is safe when every extracted
+// local is itself only ever used safely (recursing through this same
+// property-or-terminal-JSX-tag proof) — the same "read-only, never a whole
+// mutable escape" guarantee this function already proves for a plain
+// member-access alias, just entered through a binding pattern instead of a
+// `const x = y.z` initializer.
+function destructuredPatternUsesSafe(pattern) {
+  if (!ts.isObjectBindingPattern(pattern)) return false
+  for (const element of pattern.elements) {
+    if (element.dotDotDotToken || !ts.isIdentifier(element.name) || element.initializer) return false
+    if (!absenceBindingUsesSafe(element, false, true)) return false
+  }
+  return true
+}
+
 // A receiver may only be read through properties; a factory may only be called.
 // Whole-object references, aliases, writes and calls through its members escape
 // the proof. Scanning the enclosing scope also catches writes after the sink.
@@ -1274,6 +1412,9 @@ function absenceBindingUsesSafe(declaration, factory, indexedReads = false) {
       if (factory) {
         if (!ts.isCallExpression(parent) || parent.expression !== node) { safe = false; return }
       } else {
+        if (isJsxTagName(node)) return
+        if (ts.isVariableDeclaration(parent) && parent.initializer === node && destructuredPatternUsesSafe(parent.name)) return
+        if (isReadonlyObjectStaticCallArgument(node)) return
         if ((!ts.isPropertyAccessExpression(parent) && !ts.isElementAccessExpression(parent)) || parent.expression !== node) { safe = false; return }
         const property = ts.isPropertyAccessExpression(parent) ? parent.name.text
           : ts.isStringLiteral(unwrap(parent.argumentExpression)) ? unwrap(parent.argumentExpression).text : null

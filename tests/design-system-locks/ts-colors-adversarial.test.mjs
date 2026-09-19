@@ -1149,3 +1149,264 @@ test('an unproven-type numeric template is unaffected by the destructured-litera
   const findings = scan({ path, source, policy })
   assert.deepEqual(findings.map((f) => f.ruleId), ['ts-colors/unsupported'])
 })
+
+
+// ── Pass-2 capability suite ─────────────────────────────────────────────
+// Six structural fixes to the "is this chained-member receiver stable"
+// proof (knownClassReceiverStable / knownClassDerivedUsesSafe /
+// absenceBindingUsesSafe / knownClassExportUsesSafe), found by tracing WHY
+// real, already-resolvable findings (STATUS_BADGE[run.status],
+// MODE_CHIP_CLASS[m], cfg.activeColor, driveChip.textClass, PRIORITY_BADGE
+// via Object.keys) were still reported `unsupported` despite their target
+// values already resolving to plain literals. Each capability gets a
+// permitted case (the real shape that must now resolve) and at least one
+// forbidden/mutated case (the same shape with the one detail changed that
+// must still block) so the fix cannot be a blanket relaxation.
+
+const pass2Policy = { tokenCssNames: [], resolvedTokens: {} }
+
+function pass2Findings(source, modules) {
+  return scan({ path, source, policy: pass2Policy, modules: modules ?? { [path]: source } })
+}
+
+// CAP-D1 — a non-JS asset file (.svg/.css) elsewhere in the module set must
+// not poison an exported const's cross-module receiver-stability proof: it
+// can never contain import/export/require syntax relevant to that proof, so
+// trying to TS-parse it (and finding diagnostics, since it isn't JS) must
+// not blanket-fail the check the moment such a file exists anywhere.
+test('an unparseable non-JS module elsewhere does not block an exported record receiver (permitted)', () => {
+  const configSource = "export const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }"
+  const source = "import { REGISTRY } from '@/registry'; export const View = ({ k }) => <i className={REGISTRY[k].textClass}/>"
+  const modules = {
+    [path]: source,
+    'src/registry.ts': configSource,
+    'src/assets/logo.svg': '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>',
+  }
+  const findings = pass2Findings(source, modules)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/undefined-token' && f.syntax === 'var(--color-primary)'))
+})
+
+test('a genuinely unsafe cross-module export use still blocks, even with a non-JS module present (forbidden)', () => {
+  const configSource = "export const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }"
+  const source = "import { REGISTRY } from '@/registry'; export const View = ({ k }) => <i className={REGISTRY[k].textClass}/>"
+  const modules = {
+    [path]: source,
+    'src/registry.ts': configSource,
+    'src/assets/logo.svg': '<?xml version="1.0" encoding="UTF-8"?>\n<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0"/></svg>',
+    'src/mutate.ts': "import { REGISTRY as alias } from '@/registry'; alias.a.textClass = external",
+  }
+  const findings = pass2Findings(source, modules)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY[k].textClass'))
+})
+
+// CAP-D2 — a template-literal dynamic import()/require() whose literal head
+// structurally cannot resolve to `origin` (proven, not guessed, from the
+// TemplateExpression's fixed prefix) must not contaminate every OTHER
+// exported const's stability proof just for existing somewhere in the tree.
+test('a directory-disjoint dynamic import template elsewhere does not block an exported record (permitted)', () => {
+  const configSource = "export const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }"
+  const source = "import { REGISTRY } from '@/registry'; export const View = ({ k }) => <i className={REGISTRY[k].textClass}/>"
+  const modules = {
+    [path]: source,
+    'src/registry.ts': configSource,
+    'src/lib/lazy.ts': 'export const load = (name) => import(`@/components/tools/${name}.tsx`)',
+  }
+  const findings = pass2Findings(source, modules)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('an npm-package dynamic import template elsewhere does not block an exported record (permitted)', () => {
+  const configSource = "export const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }"
+  const source = "import { REGISTRY } from '@/registry'; export const View = ({ k }) => <i className={REGISTRY[k].textClass}/>"
+  const modules = {
+    [path]: source,
+    'src/registry.ts': configSource,
+    'src/lib/lazy.ts': 'export const load = (mode) => import(`@codemirror/legacy-modes/mode/${mode}`)',
+  }
+  const findings = pass2Findings(source, modules)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('a dynamic import template sharing the origin directory still blocks (forbidden)', () => {
+  const configSource = "export const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }"
+  const source = "import { REGISTRY } from '@/registry'; export const View = ({ k }) => <i className={REGISTRY[k].textClass}/>"
+  const modules = {
+    [path]: source,
+    'src/registry.ts': configSource,
+    'src/lib/lazy.ts': 'export const load = (mode) => import(`@/registry${mode}`)',
+  }
+  const findings = pass2Findings(source, modules)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY[k].textClass'))
+})
+
+test('a dynamic import with a bare variable specifier still blocks, unchanged (forbidden)', () => {
+  const configSource = "export const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' } }"
+  const source = "import { REGISTRY } from '@/registry'; export const View = ({ k }) => <i className={REGISTRY[k].textClass}/>"
+  const modules = {
+    [path]: source,
+    'src/registry.ts': configSource,
+    'src/lib/lazy.ts': 'export const load = (moduleName) => import(moduleName)',
+  }
+  const findings = pass2Findings(source, modules)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY[k].textClass'))
+})
+
+// CAP-E1 — a resolved member consumed only as a JSX element's own tag name
+// (directly, or through a `const Alias = cfg.member` indirection) is a
+// terminal render read and must not blanket-block an unrelated sibling
+// property of the same finite record.
+test('an unrelated sibling rendered as a JSX tag (direct member access) does not block a colour sibling (permitted)', () => {
+  const source = [
+    "const CFG = { a: { Icon: RealIcon, textClass: 'text-[var(--color-primary)]' } }",
+    "export function View({ k }) { return <div><CFG[k].Icon size={12}/><i className={CFG[k].textClass}/></div> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('an unrelated sibling aliased then rendered as a JSX tag does not block a colour sibling (permitted)', () => {
+  const source = [
+    "const CFG = { a: { icon: RealIcon, textClass: 'text-[var(--color-primary)]' } }",
+    "export function View({ k }) { const cfg = CFG[k]; const Icon = cfg.icon; return <div><Icon size={12}/><i className={cfg.textClass}/></div> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('an aliased sibling that escapes beyond a JSX tag still blocks (forbidden)', () => {
+  const source = [
+    "const CFG = { a: { icon: RealIcon, textClass: 'text-[var(--color-primary)]' } }",
+    "export function View({ k }) { const cfg = CFG[k]; const Icon = cfg.icon; mutate(Icon); return <div><Icon size={12}/><i className={cfg.textClass}/></div> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'cfg.textClass'))
+})
+
+// CAP-E2 — a simple, non-rest, non-default, non-nested object-destructuring
+// read of a stable receiver is safe when every extracted local is itself
+// only ever used safely (recursing through the same proof) — must not
+// block an unrelated sibling drawn from the SAME receiver via a plain
+// member access.
+test('destructuring an unrelated icon out of a receiver used only as a JSX tag does not block a colour sibling (permitted)', () => {
+  const source = [
+    "const CFG = { a: { icon: RealIcon, textClass: 'text-[var(--color-primary)]' } }",
+    "export function View({ k }) { const cfg = CFG[k]; const { icon: Icon } = cfg; return <div><Icon size={12}/><i className={cfg.textClass}/></div> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('destructuring with a rest element still blocks (forbidden)', () => {
+  const source = [
+    "const CFG = { a: { icon: RealIcon, textClass: 'text-[var(--color-primary)]' } }",
+    "export function View({ k }) { const cfg = CFG[k]; const { icon: Icon, ...rest } = cfg; use(rest); return <div><Icon size={12}/><i className={cfg.textClass}/></div> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'cfg.textClass'))
+})
+
+test('a destructured local that itself escapes beyond a JSX tag still blocks (forbidden)', () => {
+  const source = [
+    "const CFG = { a: { icon: RealIcon, textClass: 'text-[var(--color-primary)]' } }",
+    "export function View({ k }) { const cfg = CFG[k]; const { icon: Icon } = cfg; mutate(Icon); return <div><Icon size={12}/><i className={cfg.textClass}/></div> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'cfg.textClass'))
+})
+
+// CAP-F — a ternary/`??` composed entirely of literal leaves is exactly as
+// immutable/escape-free as one literal; recognizing this must not treat a
+// bare object/array literal sibling the same way (that one CAN still be
+// captured by a separate alias and mutated — the alias-escape check below
+// must keep catching that).
+test('a sibling whose value is a ternary of plain literals does not block a colour sibling (permitted)', () => {
+  const source = [
+    "const CFG = { a: { label: flag ? 'x' : 'y', textClass: 'text-[var(--color-primary)]' } }",
+    "export function View({ k }) { const cfg = CFG[k]; return <i title={cfg.label} className={cfg.textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('a sibling whose ternary has one opaque literal branch still blocks (forbidden)', () => {
+  const source = [
+    "const CFG = { a: { label: flag ? opaque() : 'y', textClass: 'text-[var(--color-primary)]' } }",
+    "export function View({ k }) { const cfg = CFG[k]; return <i title={cfg.label} className={cfg.textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'cfg.textClass'))
+})
+
+test('a sibling that is a plain nested object literal still requires the alias-escape check, not treated as a leaf (forbidden/mutation-representative)', () => {
+  // Same shape as the real 'tones["good"]' regression this decoupling could
+  // have reintroduced: the SAME nested object literal is reachable through a
+  // second alias that mutates it, so `config.textClass` (read through a
+  // THIRD, otherwise-unrelated access of the same source) must still block.
+  const source = [
+    "const tones = { good: { textClass: 'text-[var(--color-primary)]' } }",
+    "export function View() { const alias = tones['good']; alias.textClass = external; const config = tones['good']; return <i className={config.textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'config.textClass'))
+})
+
+// CAP-G — a sibling property's inability to be fully ENUMERATED (e.g. an
+// optional field omitted on some branches, blocked by the deliberately
+// unrelaxed null-prototype absence rule) must not blanket-block an
+// unrelated, fully-resolvable sibling — but the incomplete property itself
+// must still report unsupported, and a TOTALLY unresolvable sibling
+// (targets.length === 0) must still gate the escape check (the vacuous-
+// truth guard).
+test('an incomplete-but-primitive sibling does not block a fully resolvable sibling (permitted)', () => {
+  const source = [
+    "function factory(flag) { if (flag) return { textClass: 'text-[var(--color-primary)]', pulse: true }; return { textClass: 'text-[var(--color-primary)]' } }",
+    "export function View({ flag }) { const config = factory(flag); return <i className={cn(config.textClass, config.pulse && 'animate-pulse')}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'config.textClass'), [])
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'config.pulse'))
+})
+
+test('a totally unresolvable sibling still gates the escape check (forbidden/vacuous-truth guard)', () => {
+  const source = [
+    "function factory(flag) { if (flag) return { textClass: 'text-[var(--color-primary)]', other: opaque() }; return { textClass: 'text-[var(--color-primary)]', other: opaque() } }",
+    "export function View({ flag }) { const config = factory(flag); mutate(config.other); return <i className={config.textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'config.textClass'))
+})
+
+// CAP — Object.keys/values/entries/freeze/isFrozen/getOwnPropertyNames(X) is
+// a spec-pure static read of X: it can neither mutate X nor hand out a
+// mutable reference to X's own nested values. A terminal use this way must
+// not blanket-block an unrelated read of the very same record.
+test('Object.keys(record) elsewhere does not block a colour read of the same record (permitted)', () => {
+  const source = [
+    "export const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' }, b: { textClass: 'text-[var(--color-primary)]' } }",
+    'const ORDER = Object.keys(REGISTRY)',
+    "export function View({ k }) { return <i className={REGISTRY[k].textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
+})
+
+test('passing the record to a non-allowlisted function still blocks (forbidden)', () => {
+  const source = [
+    "export const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' }, b: { textClass: 'text-[var(--color-primary)]' } }",
+    'mutate(REGISTRY)',
+    "export function View({ k }) { return <i className={REGISTRY[k].textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY[k].textClass'))
+})
+
+test('a same-named "keys" method on a non-Object receiver still blocks (forbidden)', () => {
+  const source = [
+    "export const REGISTRY = { a: { textClass: 'text-[var(--color-primary)]' }, b: { textClass: 'text-[var(--color-primary)]' } }",
+    'NotObject.keys(REGISTRY)',
+    "export function View({ k }) { return <i className={REGISTRY[k].textClass}/> }",
+  ].join('\n')
+  const findings = pass2Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'REGISTRY[k].textClass'))
+})
