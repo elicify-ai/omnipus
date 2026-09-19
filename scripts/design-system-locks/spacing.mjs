@@ -95,6 +95,41 @@ function classBuilderChainForwardsParameter(expression, parameterName, seen) {
   return unwrapped.arguments.some((argument) => classBuilderChainForwardsParameter(argument, parameterName, seen))
 }
 
+// Item 2 port (typography.mjs::transparentJoinerDeclaration, ChipListInput.tsx
+// lead-assigned follow-up): a same-file, TOP-LEVEL `function name(...rest) {
+// return rest.filter(Boolean).join(sep) }` (the `.filter(Boolean)` prefix is
+// optional) -- a transparent variadic class joiner sharing cn()/clsx()'s own
+// semantics under a project-local name. Detected structurally, never
+// allowlisted by name: only a single rest parameter, a single statement, and
+// a `.join()` call directly on that same rest parameter (optionally preceded
+// by `.filter(Boolean)` on it) qualify -- extra statements, a differently-
+// named receiver, or an additional transform in between all leave the call
+// exactly as unproven as before (falls through to the pre-existing proofs /
+// unsupported). Restricted to a top-level FunctionDeclaration (matching
+// typography.mjs's own sameFileFunctionDeclaration) -- a nested or
+// const-bound joiner is not this proof's target and stays unsupported.
+function transparentJoinerDeclaration(callee, sourceFile) {
+  if (!ts.isIdentifier(callee)) return null
+  let fnDecl = null
+  for (const statement of sourceFile.statements) {
+    if (ts.isFunctionDeclaration(statement) && statement.name?.text === callee.text && statement.body) { fnDecl = statement; break }
+  }
+  if (!fnDecl || fnDecl.parameters.length !== 1) return null
+  const parameter = fnDecl.parameters[0]
+  if (!parameter.dotDotDotToken || !ts.isIdentifier(parameter.name)) return null
+  const restName = parameter.name.text
+  if (fnDecl.body.statements.length !== 1) return null
+  const statement = fnDecl.body.statements[0]
+  if (!ts.isReturnStatement(statement) || !statement.expression) return null
+  const expression = statement.expression
+  if (!ts.isCallExpression(expression) || !ts.isPropertyAccessExpression(expression.expression) || expression.expression.name.text !== 'join') return null
+  let receiver = expression.expression.expression
+  if (ts.isCallExpression(receiver) && ts.isPropertyAccessExpression(receiver.expression) && receiver.expression.name.text === 'filter') {
+    receiver = receiver.expression.expression
+  }
+  return ts.isIdentifier(receiver) && receiver.text === restName ? fnDecl : null
+}
+
 const SPACING_PROPERTIES = new Set([
   'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
   'margin-block', 'margin-block-start', 'margin-block-end',
@@ -311,6 +346,7 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
   if (ts.isIdentifier(expr) && classBuilderOwnParameterForward(expr)) return
   if (ts.isIdentifier(expr) || ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) {
     const boundary = directForwardedParameter(expr, 'className') ?? forwardedClassLikeBoundary(expr)
+      ?? (ts.isIdentifier(expr) ? bodyDestructuredClassBoundary(expr) : null)
     if (boundary) {
       pushFinding(ctx, RULE.extensionBoundary, `${boundary.symbol}#${boundary.name}`, 'Spacing extension boundary; caller-provided className is forwarded unchanged and requires exact central review.', withOrigin(location, expr))
       if (boundary.initializer) visitClassBuilderArg(boundary.initializer, ctx, sourceFile)
@@ -326,6 +362,7 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
     const dispatcher = resolveDispatcherMember(expr, ctx)
       ?? resolveDestructuredDispatcherMember(expr, ctx)
       ?? resolveRecordChainMember(expr, ctx)
+      ?? ((ts.isPropertyAccessExpression(expr) || ts.isElementAccessExpression(expr)) ? resolveArrayCallbackMember(expr, ctx) : null)
     if (dispatcher) {
       if (dispatcher.allAbsent) return
       for (const value of dispatcher.values) visitClassBuilderArg(value, ctx, value.getSourceFile(), location)
@@ -374,6 +411,17 @@ function visitClassBuilderArg(node, ctx, sourceFile, useLoc = null, viaAliasReso
     const joined = literalClassArrayJoin(expr)
     if (joined) {
       for (const element of joined.elements) visitClassBuilderArg(element, ctx, sourceFile, useLoc)
+      return
+    }
+    // Item 2 port (typography.mjs::transparentJoinerDeclaration): a same-file
+    // top-level `function name(...rest) { return rest(.filter(Boolean))?.join(sep) }`
+    // -- a transparent variadic class joiner sharing cn()/clsx()'s semantics
+    // under a project-local name (ChipListInput.tsx's `classes()`). Proven
+    // structurally (see transparentJoinerDeclaration below), never trusted by
+    // name -- CLASS_BUILDERS stays a closed, authenticated set.
+    const joinerDeclaration = transparentJoinerDeclaration(expr.expression, expr.getSourceFile())
+    if (joinerDeclaration) {
+      for (const argument of expr.arguments) visitClassBuilderArg(argument, ctx, sourceFile, useLoc)
       return
     }
     // Item 4 port (ts-colors.mjs::inspectClassExpr's cva-factory call-site
@@ -688,6 +736,92 @@ function forwardedClassLikeBoundary(expr) {
   const symbol = receivingSymbol(owner)
   if (!symbol) return null
   return { symbol, name: expr.text, initializer: parameter.initializer ?? null }
+}
+
+// Item 1 port (typography.mjs::forwardedClassBoundary's body-destructuring
+// branch): `const { className: alias } = containerProps` where
+// `containerProps` is itself a NAMED element of the enclosing function's own
+// parameter list (table.tsx's Table: `({ className, containerProps = {},
+// ...props }, ref) => { const { className: containerClassName } =
+// containerProps; ... }`). Distinct from forwardedClassLikeBoundary (which
+// proves a DIRECTLY destructured parameter unchanged): here the caller-
+// supplied value passes through TWO destructuring hops. The SOURCE property
+// name is always `className`/`class`, never the broader class-like-name
+// heuristic -- an arbitrary property name on a body destructure carries no
+// naming signal it is ever a real caller-forwarded value; the direct-
+// parameter branch's heuristic already covers named forwards at the OUTER
+// hop. A REST element (`...rest`) is excluded from the eligible parameter
+// names -- it is a freshly assembled object of whatever remains, not itself a
+// single named caller-supplied value -- and only the INNERMOST unambiguous
+// destructure of a name qualifies, matching every other body-destructuring
+// proof convention. The finding names the receiving identity prefixed with
+// the source parameter name WHEN that source was itself reached through a
+// destructured element of the function's parameter list (`containerProps`,
+// not the whole-props catch-all) -- `Table#containerProps.className`, never
+// colliding with the SAME function's own direct className boundary
+// (`Table#className`); a source bound as a plain identifier parameter
+// (`function Chip(props) { const { className } = props }`) keeps the bare
+// `Chip#className` form, matching typography.mjs's identical naming rule.
+function bodyDestructuredClassBoundary(identifier) {
+  let fn = identifier.parent
+  while (fn && !ts.isFunctionLike(fn)) fn = fn.parent
+  if (!fn || !fn.body) return null
+  const plainParameterNames = new Set()
+  const destructuredParameterNames = new Set()
+  for (const parameter of fn.parameters) {
+    if (ts.isIdentifier(parameter.name)) plainParameterNames.add(parameter.name.text)
+    else if (ts.isObjectBindingPattern(parameter.name)) {
+      for (const element of parameter.name.elements) {
+        if (ts.isBindingElement(element) && !element.dotDotDotToken && ts.isIdentifier(element.name)) destructuredParameterNames.add(element.name.text)
+      }
+    }
+  }
+  let match = null
+  for (let scope = identifier.parent; scope && scope !== fn; scope = scope.parent) {
+    if (!ts.isBlock(scope)) continue
+    const matches = []
+    for (const statement of scope.statements) {
+      if (!ts.isVariableStatement(statement) || !(statement.declarationList.flags & ts.NodeFlags.Const)) continue
+      for (const candidate of statement.declarationList.declarations) {
+        if (!ts.isObjectBindingPattern(candidate.name)) continue
+        const source = candidate.initializer
+        if (!ts.isIdentifier(source) || !(plainParameterNames.has(source.text) || destructuredParameterNames.has(source.text))) continue
+        for (const element of candidate.name.elements) {
+          if (!ts.isBindingElement(element) || !ts.isIdentifier(element.name) || element.name.text !== identifier.text) continue
+          const property = element.propertyName ? staticPropertyName(element.propertyName) : element.name.text
+          if (property === 'className' || property === 'class') matches.push({ initializer: element.initializer ?? null, source: source.text, property })
+        }
+      }
+    }
+    if (matches.length > 1) return null
+    if (matches.length === 1) { match = matches[0]; break }
+  }
+  if (!match) return null
+  if (isReassignedWithin(fn, identifier.text) || isReassignedWithin(fn, match.source)) return null
+  // Mutating the source parameter's own className member before the read
+  // breaks unchanged provenance -- mirrors typography.mjs's own
+  // sourceParameterName reassignment guard, deliberately NOT stopping at
+  // nested function-like nodes (a mutation performed inside a closure over
+  // the source parameter is exactly as real as one written directly here).
+  let mutated = false
+  const check = (node) => {
+    if (mutated) return
+    if (ts.isBinaryExpression(node) && ts.isPropertyAccessExpression(node.left) && node.left.name.text === match.property
+      && ts.isIdentifier(node.left.expression) && node.left.expression.text === match.source
+      && node.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && node.operatorToken.kind <= ts.SyntaxKind.LastAssignment) { mutated = true; return }
+    if (ts.isDeleteExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === match.property
+      && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === match.source) { mutated = true; return }
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'assign'
+      && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'Object'
+      && node.arguments.length > 0 && ts.isIdentifier(node.arguments[0]) && node.arguments[0].text === match.source) { mutated = true; return }
+    ts.forEachChild(node, check)
+  }
+  check(fn.body)
+  if (mutated) return null
+  const symbol = receivingSymbol(fn)
+  if (!symbol) return null
+  const boundaryName = destructuredParameterNames.has(match.source) ? `${match.source}.${match.property}` : match.property
+  return { symbol, name: boundaryName, initializer: match.initializer }
 }
 
 // Item 1 port (typography.mjs::parameterMemberBoundary, Capability B): `X.
@@ -1060,6 +1194,43 @@ function isTopLevelFiniteDispatcherFunction(declaration) {
       && ts.isSourceFile(variable.parent.parent.parent)
   }
   return false
+}
+
+// Item 5: a plain top-level `function name(...) { if (a) { return {...} } if
+// (b) { return {...} } ... return {...} }` if-chain dispatcher -- the style-
+// helper counterpart of collectFiniteDispatcherReturns's own switch-based
+// proof above (MessageItem.tsx's avatarStyle: `if (isUser) { return {...} }
+// if (agentColor) { return {...} } return {...}`). Reuses
+// dispatcherFunctionDeclarationFor/isTopLevelFiniteDispatcherFunction
+// unchanged -- same callee-binding-safety and top-level/non-async/non-
+// generator discipline, only the recognized BODY SHAPE differs. Deliberately
+// narrower than a general control-flow prover: every statement but the last
+// must be a single-statement `if (<cond>) { return <expr> }` block with no
+// `else` and no further nesting, and the LAST statement must itself be a bare
+// `return <expr>`. Any other statement shape (an assignment, a loop, an
+// else-branch, a multi-statement if-body, a condition with side effects) is
+// not provably exhaustive this way and returns null -- callers fall through
+// to the ordinary unsupported path, never a silent pass.
+function collectFiniteIfChainReturns(call, ctx) {
+  const declaration = dispatcherFunctionDeclarationFor(call.expression, ctx)
+  if (!declaration || !declaration.body || !ts.isBlock(declaration.body)) return null
+  if (!isTopLevelFiniteDispatcherFunction(declaration)) return null
+  const statements = declaration.body.statements
+  if (statements.length === 0) return null
+  const results = []
+  for (let i = 0; i < statements.length - 1; i += 1) {
+    const statement = statements[i]
+    if (!ts.isIfStatement(statement) || statement.elseStatement) return null
+    const body = statement.thenStatement
+    if (!ts.isBlock(body) || body.statements.length !== 1) return null
+    const inner = body.statements[0]
+    if (!ts.isReturnStatement(inner) || !inner.expression) return null
+    results.push(inner.expression)
+  }
+  const last = statements[statements.length - 1]
+  if (!ts.isReturnStatement(last) || !last.expression) return null
+  results.push(last.expression)
+  return results
 }
 
 // --- Dispatcher-FUNCTION binding safety (round 3: guard parity with
@@ -1541,6 +1712,84 @@ function resolveDestructuredDispatcherMember(expr, ctx) {
   return { allAbsent: values.length === 0, values }
 }
 
+// Item 3a port (typography.mjs::resolveArrayCallbackPropertyAccess +
+// resolveArrayLiteral + arrayElementPropertyValues): `item.prop` (or
+// `item['prop']`) read off the SOLE parameter of a `.map(...)` callback whose
+// receiver resolves -- after unwrapping any leading `.filter()`/`.slice()`
+// (neither changes an element's own shape) -- to a finite, never-mutated
+// const array literal, local or imported (TaskDetailPanel.tsx's
+// `STATUS_OPTIONS.filter(...).map((o) => ({ ..., className: cn('text-xs',
+// o.color) }))`). Reuses the SAME record-shaped mutation-safety proof
+// (recordLiteralRoot/recordBindingEscapes/recordExportedUsesSafe, via
+// resolveExpr's own identifier branch) this file already trusts for a direct
+// property/element read off a record binding -- this only adds the missing
+// MIDDLE step, iterating a proven-safe array's elements through a callback
+// parameter, never loosens that proof. Narrow and structural, mirroring
+// forwardedClassLikeBoundary's own shape/reassignment discipline: the
+// identifier must be the callback's own SOLE parameter (not a same-named
+// shadow reached through a nested closure -- `fn.parent` must be the `.map()`
+// call itself), and the parameter must never be reassigned in the callback
+// body before this read.
+function resolveArrayCallbackMember(node, ctx) {
+  const key = ts.isPropertyAccessExpression(node) ? staticPropertyName(node.name)
+    : (() => { const argument = node.argumentExpression && unwrap(node.argumentExpression)
+      return argument && (ts.isStringLiteral(argument) || ts.isNoSubstitutionTemplateLiteral(argument)) ? argument.text : null })()
+  if (key === null || ['__proto__', 'prototype', 'constructor'].includes(key)) return null
+  const base = unwrap(node.expression)
+  if (!base || !ts.isIdentifier(base)) return null
+  let fn = base.parent
+  while (fn && !ts.isFunctionLike(fn)) fn = fn.parent
+  if (!fn || fn.parameters.length !== 1) return null
+  const parameter = fn.parameters[0]
+  if (!ts.isIdentifier(parameter.name) || parameter.name.text !== base.text) return null
+  if (isReassignedWithin(fn, base.text)) return null
+  const callExpression = fn.parent
+  if (!callExpression || !ts.isCallExpression(callExpression) || callExpression.arguments[0] !== fn) return null
+  if (!ts.isPropertyAccessExpression(callExpression.expression) || callExpression.expression.name.text !== 'map') return null
+  const array = resolveSafeArrayLiteral(callExpression.expression.expression, ctx)
+  if (!array) return null
+  return arrayElementPropertyValues(array, key)
+}
+
+// Resolves `node` -- itself, or after unwrapping a leading `.filter(...)`/
+// `.slice(...)` (neither changes an element's own shape, only which/how many
+// survive) -- to a finite array literal, reusing resolveExpr's own identifier
+// resolution (and so its record-shaped mutation-safety proof) unchanged.
+// Returns null (fail closed) for anything not provably this shape.
+function resolveSafeArrayLiteral(node, ctx) {
+  const unwrapped = unwrap(node)
+  if (!unwrapped) return null
+  if (ts.isCallExpression(unwrapped) && ts.isPropertyAccessExpression(unwrapped.expression)
+    && (unwrapped.expression.name.text === 'filter' || unwrapped.expression.name.text === 'slice')) {
+    return resolveSafeArrayLiteral(unwrapped.expression.expression, ctx)
+  }
+  if (!ts.isIdentifier(unwrapped)) return null
+  const resolved = resolveExpr(unwrapped, ctx)
+  if (resolved === UNRESOLVED_EXPR || !resolved) return null
+  return ts.isArrayLiteralExpression(resolved) ? resolved : null
+}
+
+// Every value `key` can hold across a finite array literal's elements --
+// rejecting a spread anywhere (the array itself or an element) and any
+// element that is not a plain object literal, the same fail-closed
+// discipline as classifyDispatcherProperty's own record leaves (reused here
+// unmodified). Returns { allAbsent, values }, or null when any element
+// cannot be classified -- the caller falls through to the ordinary
+// unsupported path, never a silent pass.
+function arrayElementPropertyValues(arrayLiteral, key) {
+  if (arrayLiteral.elements.some((element) => ts.isSpreadElement(element))) return null
+  const values = []
+  for (const element of arrayLiteral.elements) {
+    const item = unwrap(element)
+    if (!item || !ts.isObjectLiteralExpression(item) || item.properties.some((property) => ts.isSpreadAssignment(property))) return null
+    const classified = classifyDispatcherProperty(item, key)
+    if (classified.kind === 'unknown') return null
+    if (classified.kind === 'present') { values.push(classified.initializer); continue }
+    if (!hasNullPrototypeLiteral(item)) return null
+  }
+  return { allAbsent: values.length === 0, values }
+}
+
 function visitClassObject(expr, ctx, sourceFile) {
   for (const prop of expr.properties) {
     if (ts.isSpreadAssignment(prop)) {
@@ -1611,6 +1860,14 @@ function visitStyleLike(initializer, ctx, sourceFile) {
       for (const returned of returns) visitStyleLike(returned, ctx, returned.getSourceFile())
       return
     }
+    // Item 5 port (finite if-chain dispatcher, style-helper counterpart of
+    // this file's own switch-based finite dispatcher): MessageItem.tsx's
+    // `avatarStyle(isUser, agent?.color)`.
+    const ifChainReturns = collectFiniteIfChainReturns(expr, ctx)
+    if (ifChainReturns) {
+      for (const returned of ifChainReturns) visitStyleLike(returned, ctx, returned.getSourceFile())
+      return
+    }
     pushFinding(ctx, RULE.unsupported, `style: ${expr.getText(expr.getSourceFile())}`, 'Unsupported spacing expression; dynamic or impure style helpers cannot be verified against the D10 scale.', locFromTs(expr, sourceFile))
     return
   }
@@ -1618,6 +1875,19 @@ function visitStyleLike(initializer, ctx, sourceFile) {
     visitStyleLike(expr.whenTrue, ctx, sourceFile)
     visitStyleLike(expr.whenFalse, ctx, sourceFile)
     return
+  }
+  // Item 6: a locally-declared, never-escaping style accumulator (see
+  // localAssignedStyleObject below) read back whole (KbMarkdownImage.tsx's
+  // `style={Object.keys(style).length > 0 ? style : undefined}`).
+  if (ts.isIdentifier(expr)) {
+    const assigned = localAssignedStyleObject(expr)
+    if (assigned) {
+      for (const { propertyName, valueExprs } of assigned) {
+        if (!SPACING_PROPERTIES.has(propertyName)) continue
+        for (const valueExpr of valueExprs) analyzeStyleValue(propertyName, unwrap(valueExpr), ctx, locFromTs(valueExpr, sourceFile))
+      }
+      return
+    }
   }
   const resolved = resolveExpr(expr, ctx)
   if (resolved === UNRESOLVED_EXPR) {
@@ -1677,6 +1947,75 @@ function analyzeStyleValue(propName, valueExpr, ctx, loc) {
     return
   }
   pushFinding(ctx, RULE.unsupported, `${propName}: {expr}`, 'Unsupported spacing expression; dynamic spacing values cannot be verified against the D10 scale.', loc)
+}
+
+// Item 6: a locally-declared, never-escaping style accumulator --
+// `const NAME: Record<string, string | number> = {}` followed by a sequence
+// of `NAME.prop = value` assignment statements in the SAME declaring scope
+// (KbMarkdownImage.tsx's D-40/D-134 width/height box), read back whole at the
+// render site through a presence check (`Object.keys(NAME).length > 0 ?
+// NAME : undefined`). Deliberately narrow: the declaration's own initializer
+// must be a literal EMPTY object (nothing pre-existing to merge/shadow), and
+// EVERY other occurrence of the identifier anywhere in its declaring scope
+// must be either a bare `NAME.prop = value` assignment or the object's own
+// key list being read (read-only, transient `Object.keys/values/entries
+// (NAME)`, never a value derived FROM an enumerated key) -- a compound
+// assignment, `delete`, spread, reassignment of the whole binding, or being
+// passed anywhere else aborts the whole proof and returns null (fail
+// closed), exactly like every other escape guard in this file. This
+// Object.keys/values/entries allowance is intentionally separate from, and
+// does not touch or loosen, recordBindingEscapes's own refusal of that same
+// call shape for a dispatcher/record VALUE lookup (ListView.tsx's
+// PRIORITY_ORDER) -- a presence/key-count check never derives a further
+// lookup from the enumerated keys, so it carries none of that shape's risk.
+// Each property's possible values are the UNION of every assignment found (a
+// later conditional branch can overwrite an earlier one at runtime;
+// collecting both is the SOUND over-approximation -- it can never miss a
+// value the property could actually hold, only ever consider one it can't).
+function localAssignedStyleObject(identifier) {
+  const binding = findLexicalBinding(identifier, identifier.text)
+  if (!binding || !ts.isVariableDeclaration(binding.declaration) || !isConstVariableDeclaration(binding.declaration)) return null
+  const initializer = binding.initializer
+  if (!initializer || !ts.isObjectLiteralExpression(initializer) || initializer.properties.length > 0) return null
+  const scope = recordDeclarationScope(binding.declaration)
+  if (!scope) return null
+  const byProperty = new Map()
+  let unsafe = false
+  const visit = (node) => {
+    if (unsafe) return
+    if (ts.isIdentifier(node) && node.text === identifier.text && node !== binding.declaration.name) {
+      const parent = node.parent
+      // A JSX attribute's own NAME (`style={...}`'s `style`) or an object
+      // property's own KEY (`{ style: ... }`'s `style`) is an unrelated
+      // syntactic label that happens to share this identifier's text -- not
+      // a reference to the variable at all -- and must not be treated as a
+      // use, safe or otherwise.
+      if ((ts.isJsxAttribute(parent) && parent.name === node)
+        || (ts.isPropertyAssignment(parent) && parent.name === node && !ts.isComputedPropertyName(parent.name))
+        || (ts.isBindingElement(parent) && parent.propertyName === node)) return
+      if (ts.isPropertyAccessExpression(parent) && parent.expression === node
+        && ts.isBinaryExpression(parent.parent) && parent.parent.left === parent
+        && parent.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        const propertyName = kebab(parent.name.text)
+        if (!byProperty.has(propertyName)) byProperty.set(propertyName, [])
+        byProperty.get(propertyName).push(parent.parent.right)
+        return
+      }
+      if (ts.isCallExpression(parent) && parent.arguments.length === 1 && parent.arguments[0] === node
+        && ts.isPropertyAccessExpression(parent.expression) && ts.isIdentifier(parent.expression.expression)
+        && parent.expression.expression.text === 'Object'
+        && ['keys', 'values', 'entries'].includes(parent.expression.name.text)) return
+      if (node === identifier) return // the read site itself
+      unsafe = true
+      return
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(scope)
+  if (unsafe) return null
+  const result = []
+  for (const [propertyName, valueExprs] of byProperty) result.push({ propertyName, valueExprs })
+  return result
 }
 
 function scanInlineStyle(text, ctx, loc) {
@@ -2371,17 +2710,24 @@ function structuralValueAtPath(root, path) {
 // though the record itself is exactly as safe as any other primitive-only
 // record. This does not touch chainPropertyPath/structuralValueAtPath's own
 // contract or loosen the primitive-leaf requirement anywhere -- it is a
-// SEPARATE, narrower proof tried only as a fallback: every segment up to
-// (not including) the FINAL hop must still be a fully static path, and that
-// final hop must be a dynamic ElementAccessExpression landing exactly on
-// `climbed` (i.e., nothing else happens to the dynamically-selected value
-// before the embed) -- when so, the embedded value is SOME property of the
-// object literal the static prefix resolves to, safe to embed exactly when
-// EVERY one of that object's own properties is independently a primitive
-// leaf (mirrors this file's dynamic-key fan-out capability's own "no call
-// name is safe to whitelist... only a primitive leaf" contract, applied at
-// the embed site instead of the read site). A spread/method/getter/
-// computed-key branch, or any non-primitive property, still fails closed.
+// SEPARATE, narrower proof tried only as a fallback: every segment up to the
+// dynamic hop must still be a fully static path, and that hop must be a
+// dynamic ElementAccessExpression -- when so, the embedded value is SOME
+// property of the object literal the static prefix resolves to.
+//
+// Item 3b widening (TaskDetailPanel.tsx's `PRIORITY_CONFIG[p]?.color`): the
+// dynamic hop need not be the FINAL one any more -- a chain of further
+// STATIC hops (`.color`) between it and `climbed` is allowed, collected as
+// `tailPath`. When `tailPath` is empty (the original, still-supported shape)
+// this requires EVERY one of the dynamically-indexed object's own properties
+// to independently be a primitive leaf, exactly as before. When `tailPath` is
+// non-empty, each of THOSE properties is itself an object one hop closer to
+// the actual embedded value -- so instead the proof requires every branch's
+// value AT `tailPath` (not the branch object itself) to be a primitive leaf;
+// this is narrower where `tailPath` is empty and identical there, never a
+// looser check on the SAME shape. A second dynamic hop inside the tail
+// (chainPropertyPath returns null) or any non-static tail shape still fails
+// closed, matching every other proof in this file.
 function dynamicTailEmbedIsSafe(occurrence, climbed, rootInitializer) {
   const path = []
   let current = occurrence
@@ -2398,13 +2744,18 @@ function dynamicTailEmbedIsSafe(occurrence, climbed, rootInitializer) {
         ? keyExpr.text
         : null
       if (key === null) {
-        if (parent !== climbed) return false // a dynamic key must be the FINAL hop to qualify for this proof
+        const tailPath = chainPropertyPath(parent, climbed)
+        if (tailPath === null) return false // a second dynamic hop, or a non-static tail shape, is not provable this way
         const target = structuralValueAtPath(rootInitializer, path)
         if (!target || !ts.isObjectLiteralExpression(target)) return false
         return target.properties.every((prop) => {
-          if (ts.isShorthandPropertyAssignment(prop)) return isPrimitiveLeafNode(prop.name)
-          if (!ts.isPropertyAssignment(prop) || ts.isComputedPropertyName(prop.name)) return false
-          return isPrimitiveLeafNode(prop.initializer)
+          let branchValue
+          if (ts.isShorthandPropertyAssignment(prop)) branchValue = prop.name
+          else if (ts.isPropertyAssignment(prop) && !ts.isComputedPropertyName(prop.name)) branchValue = prop.initializer
+          else return false
+          if (tailPath.length === 0) return isPrimitiveLeafNode(branchValue)
+          const narrowed = structuralValueAtPath(branchValue, tailPath)
+          return narrowed ? isPrimitiveLeafNode(narrowed) : false
         })
       }
       path.push(key)

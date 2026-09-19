@@ -960,6 +960,25 @@ describe('explicit typography extension boundaries', () => {
     expectOne('export const nodes = values.map((className) => <div className={className} />)', 'typography/unsupported-text-utility', 'className')
   })
 
+  it('classifies a body-destructured className read off a NAMED destructured parameter element with a source-prefixed name, distinct from the SAME function\'s own direct className boundary (table.tsx real shape)', () => {
+    const source = [
+      'const Table = React.forwardRef(({ className, containerProps = {}, ...props }, ref) => {',
+      '  const { className: containerClassName, onKeyDown, ...restContainerProps } = containerProps',
+      '  return (',
+      "    <div className={cn('relative w-full overflow-auto', containerClassName)}>",
+      "      <table ref={ref} className={cn('w-full text-xs', className)} {...props} />",
+      '    </div>',
+      '  )',
+      '})',
+    ].join('\n')
+    const found = findings(source)
+    const boundaries = found.filter((f) => f.ruleId === 'typography/extension-boundary').map((f) => f.syntax)
+    assert.deepEqual(boundaries.sort(), ['Table#className', 'Table#containerProps.className'])
+    // The naming fix's whole point: two distinct receiving identities never
+    // collapse to the same syntax string under one fingerprint.
+    assert.equal(new Set(boundaries).size, 2)
+  })
+
   it('keeps body-destructured forwarding with unproven provenance unsupported', () => {
     // helper/store outputs, member-object sources with fallbacks, non-className
     // props, `let` bindings and closures out of the nearest function are not

@@ -1045,11 +1045,24 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
       // assembled object of whatever properties remain, not itself a single
       // named caller-supplied value.
       const parameterNames = new Set()
+      // Tracked separately from the union `parameterNames` above (which only
+      // decides ELIGIBILITY as a source): a source reached through a
+      // destructured element of the function's own parameter list
+      // (`containerProps`, table.tsx's Table) is a NAMED sub-object, not the
+      // whole-props catch-all a plain identifier parameter (`props`) is — the
+      // finding below prefixes the boundary name with it so a body-
+      // destructured forward through a named sub-object never collides with
+      // the SAME function's own direct className boundary (`Table#className`
+      // vs `Table#containerProps.className`).
+      const destructuredParameterNames = new Set()
       for (const parameter of fn.parameters) {
         if (ts.isIdentifier(parameter.name)) parameterNames.add(parameter.name.text)
         else if (ts.isObjectBindingPattern(parameter.name)) {
           for (const element of parameter.name.elements) {
-            if (ts.isBindingElement(element) && !element.dotDotDotToken && ts.isIdentifier(element.name)) parameterNames.add(element.name.text)
+            if (ts.isBindingElement(element) && !element.dotDotDotToken && ts.isIdentifier(element.name)) {
+              parameterNames.add(element.name.text)
+              destructuredParameterNames.add(element.name.text)
+            }
           }
         }
       }
@@ -1077,7 +1090,14 @@ function scanTypeScript({ path, source, registeredTokens, resolvedTokenValues, m
           // Only the innermost unambiguous destructuring classifies.
           if (matches.length > 1) return null
           if (matches.length === 1) {
-            initializer = matches[0].initializer; declaration = matches[0].declaration; sourceParameterName = matches[0].source; sourceProperty = matches[0].property; boundaryName = matches[0].property; break
+            initializer = matches[0].initializer; declaration = matches[0].declaration; sourceParameterName = matches[0].source; sourceProperty = matches[0].property
+            // A source reached through a destructured element of the
+            // function's OWN parameter list (containerProps) is prefixed so
+            // it never collides with the same function's direct className
+            // boundary; a plain identifier parameter (props) keeps the bare
+            // property name, matching every existing fixture.
+            boundaryName = destructuredParameterNames.has(matches[0].source) ? `${matches[0].source}.${matches[0].property}` : matches[0].property
+            break
           }
         }
         scope = scope.parent

@@ -759,17 +759,35 @@ describe('dynamic-key record read passed as a bare class-builder argument (cn(RE
     assert.deepEqual(syntaxes(findings, RULE.offScale), ['p-[13px]'])
   })
 
-  it('keeps the embed unsupported when the dynamic hop is NOT the final one (a further static property follows it)', () => {
+  it('resolves the embed when the dynamic hop is followed by a further STATIC property, and every branch is primitive at that tail (lane R2 widening: PRIORITY_CONFIG[p]?.color shape)', () => {
     const findings = tsx(`
       const sizeClasses = { sm: { cls: 'p-[13px]' }, md: { cls: 'p-[8px]' } }
       export function Avatar({ size }) { return <div className={cn('base', sizeClasses[size].cls)}/> }
     `)
-    // dynamicTailEmbedIsSafe only proves a dynamic key that lands EXACTLY on
-    // `climbed` (nothing else happens to the selected value before the
-    // embed) -- here `.cls` is read afterward, which is a different,
-    // untouched shape this session did not implement (a two-hop dynamic
-    // chain terminating at the embed site).
+    // dynamicTailEmbedIsSafe now also proves a dynamic key followed by a
+    // chain of further STATIC hops (`.cls`) up to the embed site: every
+    // branch's value AT THAT TAIL, not the branch object itself, must be a
+    // primitive leaf. sm's tail value ('p-[13px]') is still off-scale --
+    // this widening only proves resolution is SAFE, never that the resolved
+    // value is clean.
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), [])
+    assert.deepEqual(syntaxes(findings, RULE.offScale), ['p-[13px]'])
+  })
+
+  it('keeps the embed unsupported when a dynamic hop is followed by a further STATIC property but one branch\'s tail value is non-primitive', () => {
+    const findings = tsx(`
+      const sizeClasses = { sm: { cls: { nested: true } }, md: { cls: 'p-[8px]' } }
+      export function Avatar({ size }) { return <div className={cn('base', sizeClasses[size].cls)}/> }
+    `)
     assert.deepEqual(syntaxes(findings, RULE.unsupported), ['className: cn(\'base\', sizeClasses[size].cls)'])
+  })
+
+  it('keeps the embed unsupported when a SECOND dynamic hop follows the first (two-hop dynamic chain is still not provable)', () => {
+    const findings = tsx(`
+      const sizeClasses = { sm: { sub: { a: 'p-[13px]' } } }
+      export function Avatar({ size, key }) { return <div className={cn('base', sizeClasses[size].sub[key])}/> }
+    `)
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), ['className: cn(\'base\', sizeClasses[size].sub[key])'])
   })
 
   it('keeps the embed unsupported when the record has a non-primitive branch', () => {

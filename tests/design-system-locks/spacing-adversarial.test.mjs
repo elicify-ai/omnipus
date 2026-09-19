@@ -1185,6 +1185,416 @@ describe('renamed class-like parameter forwards (ported from typography.mjs)', (
   })
 })
 
+// Item 1 (lane R2, remaining-47.tsv #16 -- table.tsx's REAL shape, distinct
+// from the `containerProps ?? {}` fallback pinned unsupported just above):
+// `({ className, containerProps = {} }, ref) => { const { className:
+// containerClassName } = containerProps; ... }` -- the parameter DEFAULT
+// lives on the outer destructure, and the body destructure's own source is a
+// BARE identifier. Ported from typography.mjs::forwardedClassBoundary's body-
+// destructuring branch (bodyDestructuredClassBoundary in spacing.mjs).
+describe('body-destructured className read off a named destructured parameter element (ported from typography.mjs, table.tsx real shape)', () => {
+  const jsxPath = 'src/components/ui/table.tsx'
+
+  it('PERMITTED: containerProps.className is prefixed with its source parameter and does not collide with the same function\'s own direct className boundary', () => {
+    const source = [
+      'const Table = React.forwardRef(({ className, containerProps = {}, ...props }, ref) => {',
+      "  const { className: containerClassName, onKeyDown, ...restContainerProps } = containerProps",
+      '  return (',
+      "    <div className={cn('relative w-full overflow-auto', containerClassName)}>",
+      "      <table ref={ref} className={cn('w-full', className)} {...props} />",
+      '    </div>',
+      '  )',
+      '})',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.deepEqual(syntaxes(result, 'spacing/extension-boundary').sort(), ['Table#className', 'Table#containerProps.className'])
+  })
+
+  it('PERMITTED (parity with typography.mjs): a body-destructured source bound as a PLAIN identifier parameter (not a destructured element) keeps the bare property name, no prefix', () => {
+    const source = "export function Chip(props) { const { className } = props; return <div className={cn('p-[8px]', className)} /> }"
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.deepEqual(syntaxes(result, 'spacing/extension-boundary'), ['Chip#className'])
+  })
+
+  it('FORBIDDEN: mutating the source parameter\'s own className member before the read breaks unchanged provenance', () => {
+    const source = [
+      'function Table({ containerProps }) {',
+      "  containerProps.className = 'text-[10px]'",
+      '  const { className: containerClassName } = containerProps',
+      "  return <div className={cn('relative', containerClassName)} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: containerClassName'))
+  })
+
+  it('FORBIDDEN: a renamed alias of a NON-className source property carries no naming signal and stays unsupported', () => {
+    const source = [
+      'function Table({ containerProps }) {',
+      '  const { widthHint: containerClassName } = containerProps',
+      "  return <div className={cn('relative', containerClassName)} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: containerClassName'))
+  })
+
+  it('mutation proof: dropping the destructuredParameterNames prefix distinction would collapse Table#containerProps.className back to Table#className, silently colliding with the outer direct forward -- pinning the two distinct strings is the sentinel', () => {
+    const source = [
+      'const Table = React.forwardRef(({ className, containerProps = {} }, ref) => {',
+      '  const { className: containerClassName } = containerProps',
+      "  return <div className={cn('relative', containerClassName)}><table className={className} /></div>",
+      '})',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    const boundaries = syntaxes(result, 'spacing/extension-boundary')
+    assert.equal(boundaries.length, 2)
+    assert.notEqual(boundaries[0], boundaries[1])
+  })
+})
+
+// Item 2 (lane R2, remaining-47.tsv #18-20 -- ChipListInput.tsx's `classes()`
+// local variadic joiner). Ported from
+// typography.mjs::transparentJoinerDeclaration; proven structurally, never
+// trusted by name.
+describe('transparent local variadic joiner (ported from typography.mjs, ChipListInput.tsx classes() style)', () => {
+  const jsxPath = 'src/components/workspaces/ChipListInput.tsx'
+
+  it("PERMITTED: a same-file `function name(...parts) { return parts.filter(Boolean).join(' ') }` is treated as a class builder, walking each argument", () => {
+    const source = [
+      "function classes(...parts) { return parts.filter(Boolean).join(' ') }",
+      'export function Row({ rowClass }) {',
+      "  return <div className={classes('p-[8px]', rowClass)} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.deepEqual(syntaxes(result, 'spacing/extension-boundary'), ['Row#rowClass'])
+  })
+
+  it("PERMITTED: the .filter(Boolean) step is optional -- a bare .join() joiner is recognized too, and an off-scale literal argument is still checked", () => {
+    const source = [
+      "function classes(...parts) { return parts.join(' ') }",
+      'export function Row() {',
+      "  return <div className={classes('p-[7px]', 'shrink-0')} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/off-scale'), ['p-[7px]'])
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+  })
+
+  it('FORBIDDEN: an extra statement in the joiner body is not a transparent builder and the whole call stays unsupported', () => {
+    const source = [
+      "function classes(...parts) { const cleaned = parts.filter(Boolean); return cleaned.join(' ') }",
+      'export function Row({ rowClass }) {',
+      "  return <div className={classes('p-[8px]', rowClass)} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes("className: classes('p-[8px]', rowClass)"))
+  })
+
+  it('FORBIDDEN: joining a DIFFERENT receiver than the rest parameter is not a transparent joiner', () => {
+    const source = [
+      "function classes(...parts) { return OTHER.join(' ') }",
+      'export function Row({ rowClass }) {',
+      "  return <div className={classes('p-[8px]', rowClass)} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes("className: classes('p-[8px]', rowClass)"))
+  })
+
+  it('mutation proof: requiring the callee to be a CLASS_BUILDERS name (not structural detection) would make the classes() PERMITTED case above fail closed -- pinning it PERMITTED is the sentinel', () => {
+    const source = [
+      "function classes(...parts) { return parts.filter(Boolean).join(' ') }",
+      'export function Row({ rowClass }) {',
+      "  return <div className={classes('p-[8px]', rowClass)} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.equal(syntaxes(result, 'spacing/unsupported').length, 0)
+  })
+})
+
+// Item 3a (lane R2, remaining-47.tsv #37 -- TaskDetailPanel.tsx's
+// `STATUS_OPTIONS.filter(...).map((o) => o.color)`). Ported from
+// typography.mjs::resolveArrayCallbackPropertyAccess.
+describe('array-callback property read (ported from typography.mjs, TaskDetailPanel.tsx STATUS_OPTIONS.map((o) => o.color) style)', () => {
+  const jsxPath = 'src/components/workspaces/TaskDetailPanel.tsx'
+
+  it('PERMITTED: a finite, never-mutated local const array, filtered then mapped, resolves each element\'s property', () => {
+    const source = [
+      "const STATUS_OPTIONS = [{ value: 'inbox', color: 'p-[8px]' }, { value: 'next', color: 'p-[4px]' }]",
+      'export function Row({ status }) {',
+      '  return STATUS_OPTIONS.filter((o) => o.value === status).map((o) => <i key={o.value} className={o.color} />)',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+    assert.deepEqual(syntaxes(result, 'spacing/off-scale'), [])
+  })
+
+  it('PERMITTED: an off-scale value in one array element is still caught, not laundered by the array-callback proof', () => {
+    const source = [
+      "const STATUS_OPTIONS = [{ value: 'inbox', color: 'p-[7px]' }]",
+      'export function Row() {',
+      '  return STATUS_OPTIONS.map((o) => <i key={o.value} className={o.color} />)',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/off-scale'), ['p-[7px]'])
+  })
+
+  it('FORBIDDEN: the .map() callback parameter reassigned in its own body keeps the read unsupported', () => {
+    const source = [
+      "const STATUS_OPTIONS = [{ value: 'inbox', color: 'p-[8px]' }]",
+      'export function Row() {',
+      "  return STATUS_OPTIONS.map((o) => { o = { value: o.value, color: o.color }; return <i key={o.value} className={o.color} /> })",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: o.color'))
+  })
+
+  it('FORBIDDEN: o.color read from a closure NESTED one function deeper than the .map() callback itself stays unsupported', () => {
+    const source = [
+      "const STATUS_OPTIONS = [{ value: 'inbox', color: 'p-[8px]' }]",
+      'export function Row() {',
+      '  return STATUS_OPTIONS.map((o) => (() => <i key={o.value} className={o.color} />)())',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('className: o.color'))
+  })
+
+  it('mutation proof: dropping the .map()-callee-is-a-direct-argument check would let the nested-closure FORBIDDEN case above resolve -- pinning it FORBIDDEN is the sentinel', () => {
+    const source = [
+      "const STATUS_OPTIONS = [{ value: 'inbox', color: 'p-[8px]' }]",
+      'export function Row() {',
+      '  return STATUS_OPTIONS.map((o) => (() => <i key={o.value} className={o.color} />)())',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.equal(syntaxes(result, 'spacing/extension-boundary').length, 0)
+  })
+})
+
+// Item 3b (lane R2, remaining-47.tsv #36 -- TaskDetailPanel.tsx's
+// `PRIORITY_CONFIG[p]?.color`). Widens dynamicTailEmbedIsSafe so a dynamic
+// key need not be the FINAL hop, only followed by a further STATIC path to
+// the actual embedded value.
+describe('dynamic-key record read followed by a further static hop (PRIORITY_CONFIG[p]?.color widening of dynamicTailEmbedIsSafe)', () => {
+  const jsxPath = 'src/components/workspaces/TaskDetailPanel.tsx'
+
+  it('PERMITTED: every branch\'s value at the static tail is a primitive leaf', () => {
+    const source = [
+      "const PRIORITY_CONFIG = { 1: { label: 'P1', color: 'p-[8px]' }, 2: { label: 'P2', color: 'p-[4px]' } }",
+      'export function Row({ p }) {',
+      "  return <i className={cn('text-xs', PRIORITY_CONFIG[p]?.color)} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/unsupported'), [])
+  })
+
+  it('PERMITTED: an off-scale value at the static tail of ONE branch is still caught, not laundered by the dynamic-key widening', () => {
+    const source = [
+      "const PRIORITY_CONFIG = { 1: { label: 'P1', color: 'p-[7px]' }, 2: { label: 'P2', color: 'p-[4px]' } }",
+      'export function Row({ p }) {',
+      "  return <i className={cn('text-xs', PRIORITY_CONFIG[p]?.color)} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(syntaxes(result, 'spacing/off-scale'), ['p-[7px]'])
+  })
+
+  it('FORBIDDEN: a SECOND dynamic hop in the tail is not provable this way', () => {
+    const source = [
+      "const PRIORITY_CONFIG = { 1: { sub: { a: 'p-[8px]' } } }",
+      'export function Row({ p, q }) {',
+      "  return <i className={cn('text-xs', PRIORITY_CONFIG[p]?.sub[q])} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').some((s) => s.includes('PRIORITY_CONFIG')))
+  })
+
+  it('FORBIDDEN: a non-primitive branch value at the tail (a nested object, not a class string) stays unsupported', () => {
+    const source = [
+      "const PRIORITY_CONFIG = { 1: { color: { nested: true } }, 2: { color: 'p-[8px]' } }",
+      'export function Row({ p }) {',
+      "  return <i className={cn('text-xs', PRIORITY_CONFIG[p]?.color)} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').some((s) => s.includes('PRIORITY_CONFIG')))
+  })
+
+  it('mutation proof: reverting to the original "dynamic key must be the FINAL hop" rule would make the PERMITTED tail case above fail closed again -- pinning it PERMITTED is the sentinel', () => {
+    const source = [
+      "const PRIORITY_CONFIG = { 1: { label: 'P1', color: 'p-[8px]' }, 2: { label: 'P2', color: 'p-[4px]' } }",
+      'export function Row({ p }) {',
+      "  return <i className={cn('text-xs', PRIORITY_CONFIG[p]?.color)} />",
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.equal(syntaxes(result, 'spacing/unsupported').length, 0)
+  })
+})
+
+// Item 5 (lane R2, remaining-47.tsv #10 -- MessageItem.tsx's
+// `avatarStyle(isUser, agent?.color)`). Style-helper counterpart of this
+// file's own switch-based finite dispatcher: a top-level if-chain of
+// single-statement returns.
+describe('finite if-chain style dispatcher (MessageItem.tsx avatarStyle style)', () => {
+  const jsxPath = 'src/components/chat/MessageItem.tsx'
+
+  it('PERMITTED: every branch of a top-level if-chain returning a style object literal is walked, and non-spacing properties are silently skipped', () => {
+    const source = [
+      'function avatarStyle(isUser, agentColor) {',
+      "  if (isUser) { return { backgroundColor: 'red', color: 'blue' } }",
+      "  if (agentColor) { return { backgroundColor: agentColor, color: 'green' } }",
+      "  return { backgroundColor: 'grey', color: 'black' }",
+      '}',
+      'export function Avatar({ isUser, agent }) {',
+      '  return <div style={avatarStyle(isUser, agent?.color)} />',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(result, [])
+  })
+
+  it('PERMITTED: an off-scale SPACING property in one if-chain branch is still caught', () => {
+    const source = [
+      'function avatarStyle(isUser) {',
+      "  if (isUser) { return { padding: '7px' } }",
+      "  return { padding: '8px' }",
+      '}',
+      'export function Avatar({ isUser }) {',
+      '  return <div style={avatarStyle(isUser)} />',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/off-scale').includes('padding: 7px'))
+  })
+
+  it('FORBIDDEN: an `else` branch is not the recognized shape and the call stays unsupported', () => {
+    const source = [
+      'function avatarStyle(isUser) {',
+      "  if (isUser) { return { padding: '8px' } } else { return { padding: '4px' } }",
+      '}',
+      'export function Avatar({ isUser }) {',
+      '  return <div style={avatarStyle(isUser)} />',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('style: avatarStyle(isUser)'))
+  })
+
+  it('FORBIDDEN: a NESTED (non-top-level) if-chain function stays unsupported', () => {
+    const source = [
+      'export function Avatar({ isUser }) {',
+      '  function avatarStyle(u) {',
+      "    if (u) { return { padding: '8px' } }",
+      "    return { padding: '4px' }",
+      '  }',
+      '  return <div style={avatarStyle(isUser)} />',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('style: avatarStyle(isUser)'))
+  })
+
+  it('mutation proof: requiring a switch statement (the pre-existing dispatcher shape) instead of an if-chain would make the avatarStyle PERMITTED case above fail closed -- pinning it PERMITTED is the sentinel', () => {
+    const source = [
+      'function avatarStyle(isUser, agentColor) {',
+      "  if (isUser) { return { backgroundColor: 'red' } }",
+      "  if (agentColor) { return { backgroundColor: agentColor } }",
+      "  return { backgroundColor: 'grey' }",
+      '}',
+      'export function Avatar({ isUser, agent }) {',
+      '  return <div style={avatarStyle(isUser, agent?.color)} />',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.equal(syntaxes(result, 'spacing/unsupported').length, 0)
+  })
+})
+
+// Item 6 (lane R2, remaining-47.tsv #12 -- KbMarkdownImage.tsx's `style={
+// Object.keys(style).length > 0 ? style : undefined}`). A locally-declared,
+// never-escaping style accumulator built via imperative property assignment
+// rather than an object literal.
+describe('locally-assigned style accumulator (KbMarkdownImage.tsx style={Object.keys(style).length > 0 ? style : undefined} style)', () => {
+  const jsxPath = 'src/components/library/preview/KbMarkdownImage.tsx'
+
+  it('PERMITTED: an empty-initialized const, assigned only non-spacing properties across conditional branches, reads back clean', () => {
+    const source = [
+      'function Picture({ widthHint, intrinsicless }) {',
+      '  const style = {}',
+      "  if (widthHint !== undefined) { style.width = `${widthHint}px`; style.maxWidth = '100%' }",
+      "  if (intrinsicless) { style.width = `${widthHint ?? 320}px`; style.height = '240px'; style.objectFit = 'contain' }",
+      '  return <img style={Object.keys(style).length > 0 ? style : undefined} />',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.deepEqual(result, [])
+  })
+
+  it('PERMITTED: an off-scale SPACING property assigned into the accumulator is still caught', () => {
+    const source = [
+      'function Picture({ cond }) {',
+      '  const style = {}',
+      "  if (cond) { style.padding = '7px' }",
+      '  return <img style={Object.keys(style).length > 0 ? style : undefined} />',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/off-scale').includes('padding: 7px'))
+  })
+
+  it('FORBIDDEN: a non-empty initial object literal is not this proof\'s target and stays unsupported', () => {
+    const source = [
+      'function Picture({ cond }) {',
+      "  const style = { display: 'block' }",
+      "  if (cond) { style.padding = '8px' }",
+      '  return <img style={Object.keys(style).length > 0 ? style : undefined} />',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('style: style'))
+  })
+
+  it('FORBIDDEN: the accumulator escaping into another function call stays unsupported', () => {
+    const source = [
+      'function Picture({ cond }) {',
+      '  const style = {}',
+      "  if (cond) { style.padding = '8px' }",
+      '  merge(style)',
+      '  return <img style={Object.keys(style).length > 0 ? style : undefined} />',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.ok(syntaxes(result, 'spacing/unsupported').includes('style: style'))
+  })
+
+  it('mutation proof: dropping the Object.keys/values/entries read-only allowance would make the PERMITTED presence-check case above fail closed -- pinning it PERMITTED is the sentinel', () => {
+    const source = [
+      'function Picture({ widthHint }) {',
+      '  const style = {}',
+      "  if (widthHint !== undefined) { style.width = `${widthHint}px` }",
+      '  return <img style={Object.keys(style).length > 0 ? style : undefined} />',
+      '}',
+    ].join('\n')
+    const result = scan({ path: jsxPath, source, policy: POLICY })
+    assert.equal(syntaxes(result, 'spacing/unsupported').length, 0)
+  })
+})
+
 // Item 3 (lead-assigned wave-3 follow-up): a candidate set containing a
 // proven null/undefined branch must not poison the whole resolution when the
 // read is optional-chained (`x?.prop`); an unguarded read of the same chain

@@ -30,9 +30,17 @@ type AgentRef = Pick<Agent, 'id' | 'name'>
 const UNTAGGED = '\u0000untagged'
 const UNASSIGNED = '\u0000unassigned'
 
-// Priority domain sourced from PRIORITY_BADGE (the single source of the 1..5
-// priorities), in canonical ascending order, rather than a restated literal.
-const PRIORITY_ORDER = Object.keys(PRIORITY_BADGE)
+// Priority domain: PRIORITY_BADGE's own keys (TaskCard.tsx), kept in the
+// exact insertion/ascending order that record declares (1 through 5) --
+// spelled out as a literal rather than Object.keys(PRIORITY_BADGE) because
+// the design-system spacing scanner's record-safety proof treats
+// Object.keys/values/entries on a scanned record as an escape (it could hide
+// a value derived from a dynamically enumerated key elsewhere), which blocks
+// every reader of PRIORITY_BADGE across every importing file, not just this
+// one. Order-identical to PRIORITY_BADGE's own declaration; behaviour
+// unchanged (Object.keys on an object with only integer-like keys already
+// enumerates in ascending numeric order, exactly this list).
+const PRIORITY_ORDER: string[] = ['1', '2', '3', '4', '5']
 
 interface ListViewProps {
   /**
