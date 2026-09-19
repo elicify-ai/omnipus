@@ -243,6 +243,10 @@ Align commits or pull-request units to observable patterns so a regression can b
 There are two kinds:
 
 1. **Permanent governed exceptions** in constitutional registries: user-authored colors, QR/document surfaces, syntax highlighting, and data visualization.
+   Founder decision 2026-09-19 added two categories, each registered per exact path, rule and receiving symbol:
+   - **Caller pass-through.** A primitive or composite forwards a `className` or `style` that its caller supplied, unmodified. The value is governed where the caller writes it; the forwarding site itself is the registered boundary.
+   - **Live layout measurement.** A value measured from the browser at run time, such as the visual-viewport height used for the on-screen-keyboard fix, is written to a CSS custom property. It is a measurement, not a chosen colour or size.
+   Third-party widget values (date picker, markdown renderer, graph library) use the existing reviewed-boundary mechanism of the enforcement contract, but only after an exact-source repair has been tried. For example, markdown table cells forward only `textAlign`, not the whole style object. Test-only stand-in components are not an exception category; their unprovable style forwarding is removed by exact-source repair.
 2. **Temporary migration exceptions**, which must reach zero before completion.
 
 Temporary entries use:
