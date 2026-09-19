@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
-import { existsSync, readFileSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { resolve } from 'node:path'
+import { dirname, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import test from 'node:test'
+import test, { after } from 'node:test'
 import ts from 'typescript'
 import { inspectPublishedPackage } from './package-boundary.mjs'
 
@@ -116,4 +116,34 @@ test('every CSS asset reference is embedded or resolves inside the published dis
     assert.ok(target.startsWith(output + '/'), `CSS asset escapes the package: ${url}`)
     assert.equal(existsSync(target), true, `missing published CSS asset: ${url}`)
   }
+})
+
+// Moved from package-boundary.test.mjs: it needs the built dist/lib, which
+// only exists after `npm run build:lib` (test:design-system:package).
+const boundaryCatalog = JSON.parse(readFileSync(resolve(root, 'design-system/catalog.json'), 'utf8'))
+const fixtureRoots = []
+after(() => {
+  for (const directory of fixtureRoots) rmSync(directory, { recursive: true, force: true })
+})
+
+function snapshotDistribution() {
+  mkdirSync(resolve(root, 'dist/design-system-baseline'), { recursive: true })
+  const directory = mkdtempSync(resolve(root, 'dist/design-system-baseline/package-boundary-'))
+  fixtureRoots.push(directory)
+  const copy = resolve(directory, 'dist/lib')
+  cpSync(output, copy, { recursive: true })
+  return copy
+}
+
+test('serialized Board.d.ts insertion into a dist/lib copy is rejected and discarded', () => {
+  const liveDummy = resolve(output, 'components/screens/Board.d.ts')
+  assert.equal(existsSync(liveDummy), false, 'live dist/lib must not be mutated to plant the dummy')
+  const copy = snapshotDistribution()
+  const dummy = resolve(copy, 'components/screens/Board.d.ts')
+  mkdirSync(dirname(dummy), { recursive: true })
+  writeFileSync(dummy, 'export declare const Board: unknown\n')
+  const result = inspectPublishedPackage({ root, catalog: boundaryCatalog, pkg, output: copy })
+  assert.ok(result.unexpected.includes('components/screens/Board.d.ts'))
+  rmSync(copy, { recursive: true, force: true })
+  assert.equal(existsSync(liveDummy), false, 'dummy insertion must remain on the serialized copy')
 })

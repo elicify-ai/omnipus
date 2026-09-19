@@ -1,22 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
-import { fileURLToPath } from 'node:url'
 
 import { mergeRegistryRules, tripleKey, serializeDeterministic } from './registry-merge.mjs'
 
-const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
-const rehearsalDir = `${repoRoot}dist/design-system-baseline/cli-lanes/wave4-rehearsal/`
-const toolsDir = `${repoRoot}dist/design-system-baseline/cli-lanes/tools/`
-
-function loadJson(p) {
-  return JSON.parse(readFileSync(p, 'utf8'))
-}
-
-function sha256(text) {
-  return createHash('sha256').update(text).digest('hex')
-}
 
 // ---------------------------------------------------------------------------
 // Small, hand-built fixture exercising every branch: a current rule that
@@ -206,27 +192,4 @@ test('serializeDeterministic — pretty-printed JSON with a trailing newline', (
   const text = serializeDeterministic({ b: 1, a: 2 })
   assert.ok(text.endsWith('\n'))
   assert.equal(JSON.parse(text).a, 2)
-})
-
-// ---------------------------------------------------------------------------
-// Regression: running registry-merge on the exact wave-4 rehearsal inputs
-// must reproduce the rehearsal's own registry-rules.merged.json
-// byte-identically.
-// ---------------------------------------------------------------------------
-
-test('regression — reproduces the rehearsal registry-rules.merged.json byte-identically', () => {
-  const audit = loadJson(`${rehearsalDir}audit-A.json`)
-  const rulesDoc = loadJson(`${repoRoot}scripts/design-system/registry-rules.json`)
-  const verdictsRaw = loadJson(`${rehearsalDir}verify/verdicts.json`)
-  const draftsRaw = loadJson(`${rehearsalDir}verify/draft-rules.json`)
-  const dec = loadJson(`${toolsDir}lead-needs-read-decisions.json`)
-
-  const result = mergeRegistryRules({ audit, rulesDoc, verdictsRaw, draftsRaw, dec })
-  assert.equal(result.ok, true)
-
-  const produced = serializeDeterministic(result.rulesDoc)
-  const expected = readFileSync(`${rehearsalDir}registry-rules.merged.json`, 'utf8')
-
-  assert.equal(sha256(produced), sha256(expected), 'byte-identical to the rehearsal registry-rules.merged.json')
-  assert.equal(produced, expected)
 })

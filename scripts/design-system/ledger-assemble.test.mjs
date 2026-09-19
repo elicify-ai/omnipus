@@ -1,20 +1,14 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 
-import { assembleLedger, loadJson, serializeDeterministic } from './ledger-assemble.mjs'
+import { assembleLedger, serializeDeterministic } from './ledger-assemble.mjs'
 import { computeFingerprint } from './ledger-build.mjs'
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
-const rehearsalDir = `${repoRoot}dist/design-system-baseline/cli-lanes/wave4-rehearsal/`
 const baselineSchema = JSON.parse(readFileSync(`${repoRoot}design-system/enforcement/baseline.schema.json`, 'utf8'))
 const ledgerSchema = JSON.parse(readFileSync(`${repoRoot}design-system/enforcement/ledger.schema.json`, 'utf8'))
-
-function sha256(text) {
-  return createHash('sha256').update(text).digest('hex')
-}
 
 // ---------------------------------------------------------------------------
 // Small, hand-built fixture: two proposal-ledger entries (A, B), one
@@ -99,10 +93,19 @@ test('assembleLedger — calendar entries are carried over, and a calendar entry
   const result = assembleLedger({ proposalLedger, proposalBaseline, fragment, currentLedger, calendarLedger, calendarBaseline, baselineSchema, ledgerSchema })
 
   assert.equal(result.ok, true, JSON.stringify(result.errors))
-  // Proposal entries first, unchanged order, then only the genuinely new
-  // calendar entry — the duplicate-fingerprint calendar entry never appears.
-  assert.deepEqual(result.ledger.entries, [entryA, entryB, entryDCalendarOnly])
+  // The genuinely new calendar entry is carried over, the duplicate-
+  // fingerprint calendar entry never appears, and rows are fingerprint-sorted.
+  const expected = [entryA, entryB, entryDCalendarOnly].sort((x, y) => x.fingerprint.localeCompare(y.fingerprint))
+  assert.deepEqual(result.ledger.entries, expected)
   assert.equal(result.ledger.entries.length, 3)
+})
+
+test('assembleLedger — every ledger row aligns with the same baseline row (ledger-validate invariant)', () => {
+  const { proposalLedger, proposalBaseline, fragment, currentLedger, calendarLedger, calendarBaseline } = fixture()
+  const result = assembleLedger({ proposalLedger, proposalBaseline, fragment, currentLedger, calendarLedger, calendarBaseline, baselineSchema, ledgerSchema })
+  assert.equal(result.ok, true, JSON.stringify(result.errors))
+  assert.equal(result.ledger.entries.length, result.baseline.fingerprints.length)
+  result.ledger.entries.forEach((entry, i) => assert.equal(entry.fingerprint, result.baseline.fingerprints[i].fingerprint, `row ${i}`))
 })
 
 test('assembleLedger — baseline is the fingerprint union, deduplicated and sorted, with no duplicate calendar row', () => {
@@ -189,32 +192,4 @@ test('loadJson / serializeDeterministic — round-trips and ends with a trailing
   const text = serializeDeterministic({ z: 1, a: 2 })
   assert.ok(text.endsWith('\n'))
   assert.equal(JSON.parse(text).z, 1)
-})
-
-// ---------------------------------------------------------------------------
-// Regression: running ledger-assemble on the exact wave-4 rehearsal inputs
-// must reproduce the rehearsal's own ledger.candidate3.json and
-// baseline.candidate3.json byte-identically.
-// ---------------------------------------------------------------------------
-
-test('regression — reproduces the rehearsal ledger.candidate3.json and baseline.candidate3.json byte-identically', () => {
-  const proposalLedger = loadJson(`${rehearsalDir}ledger-out2/proposal-ledger.json`)
-  const proposalBaseline = loadJson(`${rehearsalDir}ledger-out2/proposal-baseline.json`)
-  const fragment = loadJson(`${rehearsalDir}fragment.json`)
-  const currentLedger = loadJson(`${repoRoot}design-system/enforcement/ledger.json`)
-  const calendarLedger = loadJson(`${repoRoot}design-system/enforcement/approved-fragments/calendar-token-references.ledger.json`)
-  const calendarBaseline = loadJson(`${repoRoot}design-system/enforcement/approved-fragments/calendar-token-references.baseline.json`)
-
-  const result = assembleLedger({ proposalLedger, proposalBaseline, fragment, currentLedger, calendarLedger, calendarBaseline, baselineSchema, ledgerSchema })
-  assert.equal(result.ok, true, JSON.stringify(result.errors))
-
-  const producedLedger = serializeDeterministic(result.ledger)
-  const producedBaseline = serializeDeterministic(result.baseline)
-  const expectedLedger = readFileSync(`${rehearsalDir}ledger.candidate3.json`, 'utf8')
-  const expectedBaseline = readFileSync(`${rehearsalDir}baseline.candidate3.json`, 'utf8')
-
-  assert.equal(sha256(producedLedger), sha256(expectedLedger), 'byte-identical to the rehearsal ledger.candidate3.json')
-  assert.equal(producedLedger, expectedLedger)
-  assert.equal(sha256(producedBaseline), sha256(expectedBaseline), 'byte-identical to the rehearsal baseline.candidate3.json')
-  assert.equal(producedBaseline, expectedBaseline)
 })

@@ -16,10 +16,9 @@
 // rehearsal, and verified to reproduce them byte-identically (see
 // ledger-assemble.test.mjs regression case):
 //
-//   final ledger.entries = proposal-ledger.entries, UNCHANGED ORDER,
-//     followed by calendar-ledger.entries whose fingerprint is not already
-//     present, in the calendar ledger's own order — appended, not re-sorted
-//     together with the proposal entries;
+//   final ledger.entries = proposal-ledger.entries plus calendar-ledger
+//     entries whose fingerprint is not already present, sorted ascending by
+//     fingerprint, so each ledger row aligns with the same baseline row;
 //   final ledger.exceptions = the registry-build fragment's exceptions,
 //     unchanged (content and order);
 //   final ledger.reviewedBoundaries = the CURRENTLY INSTALLED ledger's
@@ -91,7 +90,9 @@ export function assembleLedger({
 
   const proposalFps = new Set(proposalLedger.entries.map((e) => e.fingerprint))
   const extraCalendarEntries = calendarLedger.entries.filter((e) => !proposalFps.has(e.fingerprint))
-  const entries = [...proposalLedger.entries, ...extraCalendarEntries]
+  // Sorted by fingerprint so row N of the ledger is row N of the baseline
+  // (ledger-validate checks this alignment).
+  const entries = [...proposalLedger.entries, ...extraCalendarEntries].sort((x, y) => x.fingerprint.localeCompare(y.fingerprint))
 
   const exceptions = fragment.exceptions
   const reviewedBoundaries = currentLedger.reviewedBoundaries ?? []

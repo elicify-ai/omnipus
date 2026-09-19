@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import test, { after } from 'node:test'
 import { inspectPublishedPackage, localCssAssetPaths, publishedPackageAllowlist } from './package-boundary.mjs'
 
@@ -9,18 +9,12 @@ const catalog = JSON.parse(readFileSync(resolve(root, 'design-system/catalog.jso
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'))
 const output = resolve(root, 'dist/lib')
 const fixtureRoots = []
+// Temporary fixture folders live under dist/, which a fresh checkout lacks.
+mkdirSync(resolve(root, 'dist/design-system-baseline'), { recursive: true })
 
 after(() => {
   for (const directory of fixtureRoots) rmSync(directory, { recursive: true, force: true })
 })
-
-function snapshotDistribution() {
-  const directory = mkdtempSync(resolve(root, 'dist/design-system-baseline/package-boundary-'))
-  fixtureRoots.push(directory)
-  const copy = resolve(directory, 'dist/lib')
-  cpSync(output, copy, { recursive: true })
-  return copy
-}
 
 test('rejects a dummy screen declaration leaked into the published package', () => {
   const files = [
@@ -117,17 +111,4 @@ test('rejects an unreviewed helper placed in a broadly named source directory', 
 test('does not claim that entrypoint timestamps prove distribution freshness', () => {
   const result = inspectPublishedPackage({ root, catalog, pkg, output, files: [] })
   assert.equal(Object.hasOwn(result, 'stale'), false)
-})
-
-test('serialized Board.d.ts insertion into a dist/lib copy is rejected and discarded', () => {
-  const liveDummy = resolve(output, 'components/screens/Board.d.ts')
-  assert.equal(existsSync(liveDummy), false, 'live dist/lib must not be mutated to plant the dummy')
-  const copy = snapshotDistribution()
-  const dummy = resolve(copy, 'components/screens/Board.d.ts')
-  mkdirSync(dirname(dummy), { recursive: true })
-  writeFileSync(dummy, 'export declare const Board: unknown\n')
-  const result = inspectPublishedPackage({ root, catalog, pkg, output: copy })
-  assert.ok(result.unexpected.includes('components/screens/Board.d.ts'))
-  rmSync(copy, { recursive: true, force: true })
-  assert.equal(existsSync(liveDummy), false, 'dummy insertion must remain on the serialized copy')
 })

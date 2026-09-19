@@ -1,6 +1,6 @@
 import test, { after } from 'node:test'
 import assert from 'node:assert/strict'
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { validateCatalog } from './catalog.mjs'
 
@@ -10,6 +10,7 @@ after(() => {
 })
 
 function fixture() {
+  mkdirSync(resolve('dist/design-system-baseline'), { recursive: true })
   const directory = mkdtempSync(resolve('dist/design-system-baseline/catalog-'))
   fixtureRoots.push(directory)
   cpSync('design-system/catalog.json', resolve(directory, 'design-system/catalog.json'), { recursive: true })
