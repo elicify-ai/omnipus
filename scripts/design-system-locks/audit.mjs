@@ -81,12 +81,46 @@ function isExpired(expiry, current) {
   return checkpointIndex(expiry) !== -1 && checkpointIndex(current) !== -1 && checkpointIndex(expiry) <= checkpointIndex(current)
 }
 
-function infrastructureKind(ruleId, message = '') {
+/**
+ * Classifies a finding as infrastructure debt that can never be baselined
+ * or exempted, regardless of what the ledger says: an "unsupported"
+ * coverage gap, a parse failure a scanner reports explicitly, or an
+ * unclassified parse failure inferred from the message. Returns null for
+ * ordinary debt. Exported so scripts/design-system/registry-build.mjs (and
+ * its test) can consult the exact same gate audit.mjs runs, instead of a
+ * copy that could drift.
+ */
+export function infrastructureKind(ruleId, message = '') {
   const id = String(ruleId ?? '')
   if (/(^|[.:/_-])unsupported([.:/_-]|$)/i.test(id)) return 'unsupported'
   if (/(^|[.:/_-])parse-failure([.:/_-]|$)/i.test(id) || /(^|[.:/_-])parse([.:/_-]|$)/i.test(id)) return 'parse-failure'
   if (/(unclassified\s+parse|parse\s+failure|failed\s+to\s+parse)/i.test(message) && !/parse/i.test(id)) return 'unclassified-parse'
   return null
+}
+
+// Single source of truth for which ruleIds may ever appear as a
+// ledger.exceptions entry: only the founder-approved Stage B closure
+// categories (docs/internal/design/design-system-migration-plan.md §5) are
+// registrable — any "*/extension-boundary" ruleId (any scanner), or exactly
+// "ts-colors/unverified-governed-value" (design-system/enforcement/
+// contract.json's runtimeBoundaryClassification and
+// unverifiedGovernedValuePolicy are the only registrable classes). Any
+// other ruleId (raw-color, off-scale, unsupported, parse-failure, or any
+// other debt) is not registrable, whether or not a finding currently
+// matches it. Previously this set was enforced only by
+// scripts/design-system/registry-build.mjs, an offline tool not run in CI —
+// a hand-edited ledger.json exception for an ordinary debt rule silently
+// suppressed the finding because accountFindings() below only ever checked
+// infrastructureKind() before consulting exceptions. Both audit.mjs (the CI
+// gate, below) and registry-build.mjs now import isAllowedExceptionRuleId
+// from here so the two can never diverge again.
+const EXTENSION_BOUNDARY_SUFFIX = /\/extension-boundary$/
+const UNVERIFIED_GOVERNED_VALUE_RULE_ID = 'ts-colors/unverified-governed-value'
+
+export function isAllowedExceptionRuleId(ruleId) {
+  if (typeof ruleId !== 'string' || ruleId.length === 0) return false
+  if (ruleId === UNVERIFIED_GOVERNED_VALUE_RULE_ID) return true
+  return EXTENSION_BOUNDARY_SUFFIX.test(ruleId)
 }
 
 function reviewedBoundaryKindMatches(path, kind) {
@@ -281,6 +315,14 @@ function validateExactBoundaries(root, ledger, errors) {
     if (exception?.path && isBlanketPath(root, exception.path)) {
       addError(errors, 'blanket-directory', `exception path is not an exact file: ${exception.path}`)
     }
+    if (!isAllowedExceptionRuleId(exception?.ruleId)) {
+      addError(
+        errors,
+        'unregistrable-exception',
+        `ledger exception names a non-registrable ruleId and cannot be applied: ${exception?.ruleId} at ${exception?.path} (${exception?.syntax}) — only a "*/extension-boundary" ruleId or exactly "ts-colors/unverified-governed-value" may be a ledger exception`,
+        { ruleId: exception?.ruleId, path: exception?.path, syntax: exception?.syntax },
+      )
+    }
   }
   for (const boundary of ledger.reviewedBoundaries ?? []) {
     if (boundary?.path && isBlanketPath(root, boundary.path)) {
@@ -447,7 +489,17 @@ function collectScannerFindings({ scanner, file, source, policy, catalog, module
 }
 
 function accountFindings({ findings, ledger, extraReviewed, errors }) {
-  const exceptions = new Set((ledger.exceptions ?? []).map((item) => JSON.stringify([item.ruleId, item.path, item.syntax])))
+  // Only a registrable boundary ruleId (see isAllowedExceptionRuleId above) may ever be
+  // applied as an exception. validateExactBoundaries already reports a
+  // blocking 'unregistrable-exception' error for any ledger.exceptions entry
+  // outside that set, whether or not a finding matches it; this filter is
+  // the second, independent half of fail-closed — even if that validation
+  // were ever skipped, a non-registrable exception is never applied here.
+  const exceptions = new Set(
+    (ledger.exceptions ?? [])
+      .filter((item) => isAllowedExceptionRuleId(item?.ruleId))
+      .map((item) => JSON.stringify([item.ruleId, item.path, item.syntax])),
+  )
   const counts = new Map()
   const appliedExceptions = []
   const appliedBoundaries = []

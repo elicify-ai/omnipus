@@ -20,7 +20,12 @@
 // unverifiedGovernedValuePolicy are the only registrable classes for this
 // builder. Any other ruleId named by a rule (raw-color, off-scale, unsupported,
 // or any other debt) is refused and reported, never emitted, even if the
-// rules file names one.
+// rules file names one. That allow-list is defined once, in
+// scripts/design-system-locks/audit.mjs::isAllowedExceptionRuleId — the
+// exact same function scripts/design-system-locks/audit.mjs (the CI gate)
+// uses to reject a non-registrable ledger.exceptions entry — so the two can
+// never drift apart. isAllowedRuleId below is that same function under this
+// module's established export name.
 //
 // Output format matches design-system/enforcement/approved-fragments/*.ledger.json
 // and design-system/enforcement/ledger.schema.json exactly: { version: 1,
@@ -28,6 +33,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { isAllowedExceptionRuleId } from '../design-system-locks/audit.mjs'
 
 const LEDGER_VERSION = 1
 
@@ -35,12 +41,11 @@ const LEDGER_VERSION = 1
  * The only two registrable ruleId classes for this builder (lane R1 brief):
  * "*\/extension-boundary" (any scanner) or the exact ts-colors governed-value
  * rule. Never raw-color, off-scale, unsupported, or any other debt ruleId.
+ * Re-exported under this name for backward compatibility; the logic itself
+ * lives in scripts/design-system-locks/audit.mjs so its ledger-exception
+ * gate can never diverge from this builder's allow-list.
  */
-export function isAllowedRuleId(ruleId) {
-  if (typeof ruleId !== 'string' || ruleId.length === 0) return false
-  if (ruleId === 'ts-colors/unverified-governed-value') return true
-  return /\/extension-boundary$/.test(ruleId)
-}
+export const isAllowedRuleId = isAllowedExceptionRuleId
 
 export function tripleKey(ruleId, path, syntax) {
   return JSON.stringify([ruleId, path, syntax])

@@ -116,9 +116,18 @@ test('an exact permanent exception cannot suppress a parse failure', async () =>
     },
   })
 
+  // Two independent blocks, both required: infrastructureKind still fires on
+  // the finding itself (parse-failure), AND — since 'controls/parse-error' is
+  // not a registrable */extension-boundary or ts-colors/unverified-governed-value
+  // ruleId either — the exception entry itself is now also rejected as
+  // unregistrable (it always would have been, even for a finding that never
+  // occurred).
   assert.deepEqual(
-    report.errors.map(({ code, path: errorPath, ruleId }) => ({ code, path: errorPath, ruleId })),
-    [{ code: 'parse-failure', path, ruleId: 'controls/parse-error' }],
+    report.errors.map(({ code, path: errorPath, ruleId }) => ({ code, path: errorPath, ruleId })).sort((a, b) => a.code.localeCompare(b.code)),
+    [
+      { code: 'parse-failure', path, ruleId: 'controls/parse-error' },
+      { code: 'unregistrable-exception', path, ruleId: 'controls/parse-error' },
+    ],
   )
 })
 
@@ -141,9 +150,15 @@ test('an exact permanent exception cannot suppress unsupported syntax', async ()
     },
   })
 
+  // Same double block as the parse-failure case above: infrastructureKind
+  // fires on the finding (unsupported), and 'enforcement/unsupported-syntax'
+  // is separately rejected as a non-registrable exception ruleId.
   assert.deepEqual(
-    report.errors.map(({ code, path: errorPath, ruleId }) => ({ code, path: errorPath, ruleId })),
-    [{ code: 'unsupported', path, ruleId: 'enforcement/unsupported-syntax' }],
+    report.errors.map(({ code, path: errorPath, ruleId }) => ({ code, path: errorPath, ruleId })).sort((a, b) => a.code.localeCompare(b.code)),
+    [
+      { code: 'unregistrable-exception', path, ruleId: 'enforcement/unsupported-syntax' },
+      { code: 'unsupported', path, ruleId: 'enforcement/unsupported-syntax' },
+    ],
   )
 })
 

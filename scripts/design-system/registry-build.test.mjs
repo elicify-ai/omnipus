@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import Ajv2020 from 'ajv/dist/2020.js'
 
 import { buildRegistry, serializeDeterministic, isAllowedRuleId, tripleKey } from './registry-build.mjs'
+import { infrastructureKind, isAllowedExceptionRuleId } from '../design-system-locks/audit.mjs'
 
 const repoRoot = fileURLToPath(new URL('../../', import.meta.url))
 const schemaPath = `${repoRoot}design-system/enforcement/ledger.schema.json`
@@ -57,6 +58,16 @@ test('isAllowedRuleId — only */extension-boundary or exact ts-colors/unverifie
   // Not fooled by a ruleId that merely contains the substring.
   assert.equal(isAllowedRuleId('spacing/extension-boundary-ish'), false)
   assert.equal(isAllowedRuleId('not-ts-colors/unverified-governed-value'), false)
+})
+
+test('registry-build.mjs::isAllowedRuleId IS scripts/design-system-locks/audit.mjs::isAllowedExceptionRuleId — same function, not a copy that can drift', () => {
+  // This is the fix for the reviewed gap: registry-build.mjs used to define
+  // its own allow-list and scripts/design-system-locks/audit.mjs (the CI
+  // gate) never checked it at all. Both now consult one shared function.
+  // Asserting reference identity (not just matching behaviour on a few
+  // inputs) is the strongest proof there is no second copy to fall out of
+  // sync with the CI gate's ledger.exceptions check.
+  assert.equal(isAllowedRuleId, isAllowedExceptionRuleId)
 })
 
 test('exact matching — a rule matches only on an identical [ruleId,path,syntax] triple', () => {
@@ -248,18 +259,11 @@ test('schema validity — the real registry-rules.json, run against a synthetic 
 })
 
 test('accountFindings replay — every emitted exception would be applied by the real audit.mjs gate (infrastructureKind never fires on an extension-boundary/unverified-governed-value ruleId)', () => {
-  // Verbatim from scripts/design-system-locks/audit.mjs::infrastructureKind —
-  // the exact gate accountFindings runs BEFORE checking exceptions. An emitted
-  // exception must never have a ruleId this function would reject as
-  // infrastructure debt, or the ledger entry would never apply.
-  function infrastructureKind(ruleId, message = '') {
-    const id = String(ruleId ?? '')
-    if (/(^|[.:/_-])unsupported([.:/_-]|$)/i.test(id)) return 'unsupported'
-    if (/(^|[.:/_-])parse-failure([.:/_-]|$)/i.test(id) || /(^|[.:/_-])parse([.:/_-]|$)/i.test(id)) return 'parse-failure'
-    if (/(unclassified\s+parse|parse\s+failure|failed\s+to\s+parse)/i.test(message) && !/parse/i.test(id)) return 'unclassified-parse'
-    return null
-  }
-
+  // Imports the REAL scripts/design-system-locks/audit.mjs::infrastructureKind
+  // — the exact gate accountFindings runs BEFORE checking exceptions; no
+  // copy lives here to drift from it. An emitted exception must never have
+  // a ruleId this function would reject as infrastructure debt, or the
+  // ledger entry would never apply.
   const rulesDocPath = fileURLToPath(new URL('./registry-rules.json', import.meta.url))
   const rulesDoc = JSON.parse(readFileSync(rulesDocPath, 'utf8'))
   for (const r of rulesDoc.rules) {

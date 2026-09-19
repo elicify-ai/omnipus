@@ -334,28 +334,78 @@ test('missing, unknown, and duplicate ledger or baseline fingerprints fail', asy
 })
 
 test('permanent exceptions match exact path/rule/syntax and reject blanket directories', async () => {
+  // Uses a registrable ruleId (css-colors/extension-boundary) throughout: the
+  // point of this test is exact-triple matching and blanket-directory
+  // rejection, not the separate registrable-ruleId gate covered by
+  // 'a ledger exception naming a non-registrable ruleId fails closed' below.
   const root = fixture()
   mkdirSync(resolve(root, 'src/components'), { recursive: true })
   const allowed = await run(root, {
     files: { 'src/qr.tsx': 'const ink = "#000000"\n' },
-    scanners: [scanner(['.tsx'], ({ path }) => [finding('css-colors.raw-hex', path, '#000000')])],
-    ledger: ledgerDoc([], { exceptions: [{ ruleId: 'css-colors.raw-hex', path: 'src/qr.tsx', syntax: '#000000', reason: 'QR quiet zone' }] }),
+    scanners: [scanner(['.tsx'], ({ path }) => [finding('css-colors/extension-boundary', path, '#000000')])],
+    ledger: ledgerDoc([], { exceptions: [{ ruleId: 'css-colors/extension-boundary', path: 'src/qr.tsx', syntax: '#000000', reason: 'QR quiet zone' }] }),
   })
   assert.equal(allowed.code, 0, JSON.stringify(allowed.report.errors))
 
   const differentSyntax = await run(fixture(), {
     files: { 'src/qr.tsx': 'const ink = "#111111"\n' },
-    scanners: [scanner(['.tsx'], ({ path }) => [finding('css-colors.raw-hex', path, '#111111')])],
-    ledger: ledgerDoc([], { exceptions: [{ ruleId: 'css-colors.raw-hex', path: 'src/qr.tsx', syntax: '#000000', reason: 'QR quiet zone' }] }),
+    scanners: [scanner(['.tsx'], ({ path }) => [finding('css-colors/extension-boundary', path, '#111111')])],
+    ledger: ledgerDoc([], { exceptions: [{ ruleId: 'css-colors/extension-boundary', path: 'src/qr.tsx', syntax: '#000000', reason: 'QR quiet zone' }] }),
   })
   assert.ok(codes(differentSyntax.report).includes('new-debt'))
 
   const blanket = await run(fixture(), {
     files: { 'src/components/x.tsx': 'export {}\n' },
     scanners: [scanner(['.tsx'], () => [])],
-    ledger: ledgerDoc([], { exceptions: [{ ruleId: 'css-colors.raw-hex', path: 'src/components', syntax: '#000000', reason: 'too broad' }] }),
+    ledger: ledgerDoc([], { exceptions: [{ ruleId: 'css-colors/extension-boundary', path: 'src/components', syntax: '#000000', reason: 'too broad' }] }),
   })
   assert.ok(codes(blanket.report).includes('blanket-directory'))
+})
+
+test('a ledger exception naming a non-registrable ruleId fails closed and is never applied', async () => {
+  // This is the reviewed HIGH finding: a hand-edited ledger.json exception
+  // for an ordinary debt rule (e.g. css-colors/raw-color) used to silently
+  // suppress the finding because accountFindings only ever checked
+  // infrastructureKind() before consulting ledger.exceptions — never whether
+  // the exception's ruleId was itself registrable. Only a "*/extension-boundary"
+  // ruleId or exactly "ts-colors/unverified-governed-value" may be a ledger
+  // exception (scripts/design-system-locks/audit.mjs::isAllowedExceptionRuleId); anything
+  // else must block the audit AND must not suppress the finding.
+  const root = fixture()
+  const { code, report } = await run(root, {
+    files: { 'src/foo.tsx': 'const ink = "#ff0000"\n' },
+    scanners: [scanner(['.tsx'], ({ path }) => [finding('css-colors/raw-color', path, '#ff0000')])],
+    ledger: ledgerDoc([], { exceptions: [{ ruleId: 'css-colors/raw-color', path: 'src/foo.tsx', syntax: '#ff0000', reason: 'hand-edited exception' }] }),
+  })
+  assert.equal(code, 1)
+  assert.equal(report.ok, false)
+  assert.ok(codes(report).includes('unregistrable-exception'), JSON.stringify(report.errors))
+  const gate = report.errors.find((error) => error.code === 'unregistrable-exception')
+  assert.match(gate.message, /css-colors\/raw-color/)
+  assert.match(gate.message, /src\/foo\.tsx/)
+  assert.equal(gate.ruleId, 'css-colors/raw-color')
+  assert.equal(gate.path, 'src/foo.tsx')
+  // The finding itself must still surface as new debt — the exception was
+  // never applied, not merely reported as invalid alongside a silent pass.
+  assert.ok(codes(report).includes('new-debt'), JSON.stringify(report.errors))
+  assert.deepEqual(report.appliedExceptions, [])
+})
+
+test('a legitimate extension-boundary exception still applies once the registrable-ruleId gate is in place', async () => {
+  const root = fixture()
+  const { code, report } = await run(root, {
+    files: { 'src/foo.tsx': 'const ink = "var(--color-accent)"\n' },
+    scanners: [scanner(['.tsx'], ({ path }) => [finding('ts-colors/extension-boundary', path, 'DomStyle#backgroundColor<-selectedColor')])],
+    ledger: ledgerDoc([], {
+      exceptions: [{ ruleId: 'ts-colors/extension-boundary', path: 'src/foo.tsx', syntax: 'DomStyle#backgroundColor<-selectedColor', reason: 'user-authored colour', owner: 'lane-audit' }],
+    }),
+  })
+  assert.equal(code, 0, JSON.stringify(report.errors))
+  assert.equal(report.ok, true)
+  assert.deepEqual(report.errors, [])
+  assert.deepEqual(report.appliedExceptions, [
+    { ruleId: 'ts-colors/extension-boundary', path: 'src/foo.tsx', syntax: 'DomStyle#backgroundColor<-selectedColor' },
+  ])
 })
 
 test('parse, unsupported, and unclassified parse findings cannot be baselined away', async () => {
