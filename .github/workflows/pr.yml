@@ -1716,17 +1716,24 @@ jobs:
           # rejects that as malformed (SC1125) and ignores it, so the
           # suppression never actually applied — the same trap as a nosec
           # annotation with trailing prose. An array removes the need for one.
-          mapfile -t race_pkgs < <(scripts/race-packages.sh)
+          # ./pkg/gateway/... is split out into its OWN step below — the
+          # shared step's 2700s budget is enough for every remaining package
+          # but not for pkg/gateway under -race (CI run 35432082880:
+          # pkg/gateway FAILED at 2703.194s, isolated re-run hit 2700s again;
+          # no DATA RACE / no --- FAIL — duration-only). Filter the canonical
+          # list here so the shared step's 2700s is no longer held hostage by
+          # one slow package. `scripts/race-packages.sh` remains the single
+          # source of truth — the shared step just consumes a subset.
+          mapfile -t race_pkgs < <(scripts/race-packages.sh | grep -v '^\./pkg/gateway/')
           if [ ${#race_pkgs[@]} -eq 0 ]; then
             echo "ERROR: scripts/race-packages.sh produced no packages." >&2
             echo "Refusing to run: a bare 'go test -race' with no package list" >&2
             echo "would report a pass without testing the intended packages." >&2
             exit 1
           fi
-          # Gateway's race package crossed the old 900s budget on the release
-          # integration. Match the plain gate's 45m package budget here: race
-          # instrumentation costs time, but a finite package timeout remains
-          # the hang signal.
+          # 2700s (45m) per binary: comfortably covers every package here
+          # without the gateway (the slowest remaining was pkg/tools/browser
+          # at 676s on the same run). A finite hang signal is preserved.
           out=$(go test -race -tags goolm,stdjson -count=1 -timeout 2700s "${race_pkgs[@]}" 2>&1)
           code=$?
           echo "$out"
@@ -1807,6 +1814,134 @@ jobs:
               echo "FLAKE (passed isolated): $p"
             else
               echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL|DATA RACE' /tmp/rr_race.log | head; rc=1
+            fi
+          done
+          exit $rc
+
+      - name: Run go test -race ./pkg/gateway/... (extended timeout)
+        # Squad H (race-gateway) — pkg/gateway is run in its OWN step here,
+        # not as part of the shared race-packages.sh loop above, because
+        # under -race it exceeds the shared step's 2700s (45m) per-binary
+        # budget. Every other package in race-packages.sh finishes comfortably
+        # inside 2700s (CI run 35432082880: pkg/tools/browser 676s,
+        # pkg/agent 455s, tests/integration 77s, pkg/gateway/middleware
+        # 9.958s) — only pkg/gateway itself doesn't, and pkg/gateway/middleware
+        # is pulled in here too because the glob `./pkg/gateway/...` is the
+        # smallest unit we can address separately.
+        #
+        # Evidence — duration-only, not a race:
+        #   * Parallel run:  FAIL  github.com/elicify-ai/omnipus/pkg/gateway 2703.194s
+        #     — i.e. it crossed 2700s and `go test` reported the FAIL after the
+        #     per-binary timeout fired. 2703.194s = 45m03s, 3.194s past the
+        #     budget. No DATA RACE line, no `--- FAIL` line in the verdict.
+        #   * Flake-filter isolated (-p 1) re-run: REAL FAILURE (failed twice):
+        #     github.com/elicify-ai/omnipus/pkg/gateway, started 09:39:27,
+        #     verdict 10:24:32 = 45m05s — the 2700s timeout fired again.
+        #     Same carve-outs applied (DATA RACE / --- FAIL both absent).
+        # The race detector never reported a race. This is purely the cost of
+        # -race instrumentation (typically 2-20x CPU and memory overhead)
+        # layered on a package whose plain (non-race) tests step already
+        # documents "now exceed 30m on a two-core runner" with its own 45m
+        # budget. The instrumentation costs the difference.
+        #
+        # Timeout choice — 3600s (60m), not the shared 2700s:
+        #   * ~15 min headroom over the observed 2703s/2705s failures.
+        #   * Stays finite: a hang still reads as a hang, just later.
+        #   * Matches the plain step's design intent ("give the package room
+        #     while preserving a finite hang signal") extended by the known
+        #     race-instrumentation cost.
+        #   * Larger numbers (75m, 90m) buy more headroom but defer the
+        #     hang signal further — the right move is to fix the duration
+        #     driver, not keep widening the budget.
+        #
+        # TEMPORARY: when pkg/gateway reliably finishes under -race within
+        # the shared step's 2700s, fold this step back in and delete it.
+        # Candidate duration drivers in pkg/gateway (Squad G's lane, NOT
+        # touched here per the brief): api_e2e_test.go carries 3 full-pipeline
+        # E2E tests (grep -c '^func Test' pkg/gateway/api_e2e_test.go = 3)
+        # covering gateway → agent loop → WebSocket → session — full-pipeline
+        # shape means each test can take significant wall time even at low
+        # test counts, so 3 here is consistent with the observed cost.
+        #
+        # Sequencing: this step runs AFTER the shared race step above.
+        # GitHub Actions steps within a single job are strictly sequential —
+        # there is no parallel-step mechanism inside a job (`needs:` orders
+        # JOBS, not steps). Job wall-clock is therefore shared-step + this
+        # step, not max().
+        #
+        # Honest wall-clock arithmetic (no parallelism):
+        #   * Old path — shared step with all 15 packages, pkg/gateway
+        #     hitting the 2700s budget and triggering the flake-filter
+        #     isolated re-run:
+        #       shared run  ~2700s (timed out on pkg/gateway)
+        #     + re-run     ~2700s (timed out again on pkg/gateway)
+        #                 = up to ~5400s (~90m), and RED
+        #   * New path — shared step with 14 packages (long pole
+        #     pkg/tools/browser at 676s ≈ 11m), then this step:
+        #       shared run  ≤2700s in practice (~11m observed long pole)
+        #     + this step  ≤3600s (60m, the race-instrumentation budget
+        #                     for pkg/gateway with 15m headroom over the
+        #                     observed 2703s failure)
+        #                 = up to ~6300s (~71m worst case), GREEN if this
+        #                   step passes
+        # Net is still an improvement: ~90m RED → ~71m GREEN worst case, and
+        # the flake-filter re-run path (sequential in either world) only
+        # fires if this step itself fails — i.e. usually not at all.
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set +e
+          out=$(go test -race -tags goolm,stdjson -count=1 -timeout 3600s ./pkg/gateway/... 2>&1)
+          code=$?
+          echo "$out"
+          # Same DATA RACE carve-out as the shared step — a race is never
+          # routed through a flake filter (mirrors run_gorace in
+          # deploy/ci-worker/runci.sh, which both gates must keep in
+          # lockstep on).
+          if [[ $out == *"DATA RACE"* ]]; then
+            echo ""
+            echo "=== DATA RACE detected in pkg/gateway race step — skipping flake filter entirely ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (data race detected — never excused): $p"
+              done
+            else
+              echo "REAL FAILURE (data race detected — never excused): race detected but no package-level FAIL line matched; see full output above"
+            fi
+            exit 1
+          fi
+          # Same --- FAIL carve-out as the shared step — contention does not
+          # cause assertion failures, so any `--- FAIL` line is real signal
+          # under any load.
+          if [[ $out == *"--- FAIL"* ]]; then
+            echo ""
+            echo "=== --- FAIL detected in pkg/gateway race step — an assertion failure is never excused by an isolated re-run ==="
+            failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+            if [ -n "$failed" ]; then
+              for p in $failed; do
+                echo "REAL FAILURE (assertion failure detected — never excused): $p"
+              done
+            else
+              echo "REAL FAILURE (assertion failure detected — never excused): --- FAIL detected but no package-level FAIL line matched; see full output above"
+            fi
+            exit 1
+          fi
+          [ $code -eq 0 ] && exit 0
+          # Hang/contention flake filter — same shape as the shared step's,
+          # same DATA RACE grep on the isolated re-run's log (so a race
+          # reported in the second run is not silently excused either).
+          failed=$(printf '%s\n' "$out" | grep -aE '^FAIL[[:space:]]' | awk '{print $2}' | grep -a '/' | sort -u)
+          [ -z "$failed" ] && exit $code
+          echo ""
+          echo "=== FLAKE FILTER (-race pkg/gateway): re-running isolated (-p 1): $failed ==="
+          rc=0
+          for p in $failed; do
+            if go test -race -tags goolm,stdjson -count=1 -timeout 3600s -p 1 "$p" >/tmp/rr_gw_race.log 2>&1 \
+               && ! grep -aq "DATA RACE" /tmp/rr_gw_race.log; then
+              echo "FLAKE (passed isolated): $p"
+            else
+              echo "REAL FAILURE (failed twice): $p"; grep -aE '^--- FAIL|DATA RACE' /tmp/rr_gw_race.log | head; rc=1
             fi
           done
           exit $rc
