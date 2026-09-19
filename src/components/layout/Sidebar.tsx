@@ -954,7 +954,7 @@ function SidebarSessionRow({
   const indent = depth > 0 ? 12 + depth * 14 : 12
   return (
     <>
-      <div className="flex items-center pr-4" style={{ paddingLeft: indent }}>
+      <div className="flex items-center pr-4" style={{ '--sidebar-indent-depth-px': indent, paddingLeft: 'calc(var(--sidebar-indent-depth-px) * 1px)' } as import('react').CSSProperties}>
         {hasChildren ? (
           <SessionExpandToggle
             expanded={isExpanded}
@@ -997,7 +997,7 @@ function SidebarSessionRow({
       {childrenEmpty && (
         <p
           className="py-1 text-[12px] text-[var(--color-muted)] opacity-70"
-          style={{ paddingLeft: indent + 18 }}
+          style={{ '--sidebar-indent-depth-px': indent + 18, paddingLeft: 'calc(var(--sidebar-indent-depth-px) * 1px)' } as import('react').CSSProperties}
         >
           No delegated sessions found
         </p>
@@ -1012,7 +1012,7 @@ function SidebarSessionRow({
           type="button"
           onClick={onLoadMore}
           disabled={isLoading}
-          style={{ paddingLeft: indent + 18 }}
+          style={{ '--sidebar-indent-depth-px': indent + 18, paddingLeft: 'calc(var(--sidebar-indent-depth-px) * 1px)' } as import('react').CSSProperties}
           className="flex items-center gap-1 py-1 pr-4 text-[12px] text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline transition-opacity"
         >
           {isLoading ? 'Loading…' : 'Load more'}

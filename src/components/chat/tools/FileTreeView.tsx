@@ -126,7 +126,7 @@ function FileTreeBlock({
               <div
                 key={i}
                 className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--color-secondary)]"
-                style={{ paddingLeft: `${entry.indent * 12}px` }}
+                style={{ '--file-tree-view-indent-depth-px': entry.indent * 12, paddingLeft: 'calc(var(--file-tree-view-indent-depth-px) * 1px)' } as import('react').CSSProperties}
               >
                 {entry.isDir
                   ? <Folder size={11} weight="duotone" className="text-[var(--color-accent)] shrink-0" />

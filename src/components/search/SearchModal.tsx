@@ -103,7 +103,7 @@ function AgentSessionList({
   const renderRow = (row: SessionTreeFlatRow) => {
     const s = row.node.session
     return (
-      <div className="flex items-center" style={row.depth > 0 ? { paddingLeft: row.depth * 14 } : undefined}>
+      <div className="flex items-center" style={row.depth > 0 ? { '--search-modal-indent-depth-px': row.depth * 14, paddingLeft: 'calc(var(--search-modal-indent-depth-px) * 1px)' } as import('react').CSSProperties : undefined}>
         {row.hasChildren ? (
           <SessionExpandToggle
             expanded={row.isExpanded}
