@@ -306,12 +306,12 @@ export const commonMarkdownComponents = {
   // `style` is forwarded on table cells: remark-gfm encodes column alignment
   // (:---:) as a `style={{ textAlign }}` prop; dropping it left-aligns every column.
   th: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => (
-    <th style={style} className="border border-[var(--color-border)] px-3 py-1.5 text-left font-semibold bg-[var(--color-surface-2)] text-[var(--color-secondary)]">
+    <th style={style?.textAlign ? { textAlign: style.textAlign } : undefined} className="border border-[var(--color-border)] px-3 py-1.5 text-left font-semibold bg-[var(--color-surface-2)] text-[var(--color-secondary)]">
       {children}
     </th>
   ),
   td: ({ children, style }: { children?: ReactNode; style?: CSSProperties }) => (
-    <td style={style} className="border border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)]">{children}</td>
+    <td style={style?.textAlign ? { textAlign: style.textAlign } : undefined} className="border border-[var(--color-border)] px-3 py-1.5 text-[var(--color-secondary)]">{children}</td>
   ),
 
   hr: () => <hr className="my-4 border-[var(--color-border)]" />,
