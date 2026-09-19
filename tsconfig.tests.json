@@ -52,5 +52,5 @@
     "types": ["node"],
     "jsx": "react-jsx"
   },
-  "include": ["tests", "playwright.config.ts", "playwright.design-system.config.ts", ".storybook"]
+  "include": ["tests", "playwright.config.ts", "playwright.design-system.config.ts", "playwright.touch-in-context.config.ts", ".storybook"]
 }
