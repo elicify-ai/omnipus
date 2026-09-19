@@ -526,21 +526,21 @@ export function ProviderPicker({
               {virtualItems.map((item) => {
                 const entry = entries[item.index]
                 if (!entry) return null
-                const common: React.CSSProperties = {
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: item.size,
-                  transform: `translateY(${item.start}px)`,
-                }
                 if (entry.kind === 'header') {
                   return (
                     <div
                       key={`h-${entry.letter}`}
                       role="presentation"
                       data-testid={`picker-letter-${entry.letter}`}
-                      style={{ ...common, color: 'var(--color-muted)' }}
+                      style={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        width: '100%',
+                        height: item.size,
+                        transform: `translateY(${item.start}px)`,
+                        color: 'var(--color-muted)',
+                      }}
                       className="flex items-center px-2 text-xs uppercase"
                     >
                       {entry.letter}
@@ -562,7 +562,15 @@ export function ProviderPicker({
                     aria-setsize={rowCount}
                     aria-posinset={entry.position}
                     onClick={() => select({ kind: 'company', key: row.company })}
-                    style={{ ...common, color: 'var(--color-secondary)' }}
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      height: item.size,
+                      transform: `translateY(${item.start}px)`,
+                      color: 'var(--color-secondary)',
+                    }}
                     className="flex cursor-pointer items-center gap-2 px-2 text-sm"
                   >
                     {row.disabled && <Prohibit size={14} aria-hidden="true" />}

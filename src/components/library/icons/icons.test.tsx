@@ -61,10 +61,10 @@ describe('MountFolderIcon', () => {
     expect(defaultSvg?.getAttribute('width')).toBe('16')
     expect(defaultSvg?.getAttribute('height')).toBe('16')
 
-    const { container } = render(<MountFolderIcon size={20} className="my-class" />)
+    const { container } = render(<MountFolderIcon size={20} className="p-[var(--space-2)]" />)
     const svg = container.querySelector('svg')
     expect(svg?.getAttribute('width')).toBe('20')
     expect(svg?.getAttribute('height')).toBe('20')
-    expect(svg?.getAttribute('class')).toBe('my-class')
+    expect(svg?.getAttribute('class')).toBe('p-[var(--space-2)]')
   })
 })
