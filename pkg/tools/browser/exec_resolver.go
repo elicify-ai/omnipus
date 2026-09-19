@@ -52,6 +52,35 @@ func InstallRootForProfileDir(profileDir string) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(filepath.Clean(profileDir)), "..", "chromium"))
 }
 
+// EffectiveInstallRoot computes the managed-Chromium install root the same
+// way the gateway's BrowserManager does at runtime: when configuredProfileDir
+// is empty (the operator did not pin a profile_dir in config.json or via
+// OMNIPUS_TOOLS_BROWSER_PROFILE_DIR), it falls back to the same default
+// `DefaultConfig()` applies, so a doctor run (or any other offline inspector
+// reading `cfg.Tools.Browser.ProfileDir` directly) inspects the SAME
+// directory the gateway would actually install into / launch from, instead
+// of a relative `../chromium` whose meaning depends on the inspector's cwd
+// and that previously produced a spurious WARN-BROWSER-003 even when the
+// full Chrome was already installed by the gateway.
+//
+// Squad K (founder ruling 2026-09-19, contract — installer route only):
+// the doctor must see what the runtime sees, otherwise its not_capable
+// signal cannot be trusted. Inspectors that already hold a resolved
+// BrowserConfig (the live gateway) should keep calling InstallRoot() on
+// their manager — the per-workspace root that manager uses. This helper
+// exists for the off-band inspector path, which previously inspected a
+// different path from the live one and got the wrong answer.
+func EffectiveInstallRoot(configuredProfileDir string) (string, error) {
+	if configuredProfileDir != "" {
+		return InstallRootForProfileDir(configuredProfileDir), nil
+	}
+	bc, err := DefaultConfig()
+	if err != nil {
+		return "", err
+	}
+	return InstallRootForProfileDir(bc.ProfileDir), nil
+}
+
 // managedChromeCmdline is the rendered command line + environment for a
 // managed Chrome launch over the CDP pipe transport (cdppipe). It REPLACES
 // the pre-pipe []chromedp.ExecAllocatorOption return: cdppipe drives Chrome
