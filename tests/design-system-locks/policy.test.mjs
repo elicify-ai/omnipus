@@ -19,6 +19,7 @@ const EXPECTED = {
 }
 
 function fixture(t) {
+  mkdirSync(resolve('dist/design-system-baseline/cli-lanes'), { recursive: true }) // a fresh checkout has no dist/
   const root = mkdtempSync(resolve('dist/design-system-baseline/cli-lanes/token-policy-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(resolve(root, 'design-system/tokens'), { recursive: true })

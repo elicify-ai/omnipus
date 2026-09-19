@@ -21,6 +21,7 @@ const FORMATS = {
 }
 
 function fixture(t, omitted = null) {
+  mkdirSync(resolve('dist/design-system-baseline/cli-lanes'), { recursive: true }) // a fresh checkout has no dist/
   const root = mkdtempSync(resolve('dist/design-system-baseline/cli-lanes/audit-scope-test-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   function write(file, source) {

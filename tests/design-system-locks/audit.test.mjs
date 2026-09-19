@@ -26,6 +26,7 @@ function fingerprint(ruleId, path, syntax) {
 }
 
 function fixture() {
+  mkdirSync(resolve(repoRoot, 'dist/design-system-baseline/cli-lanes'), { recursive: true }) // a fresh checkout has no dist/
   const directory = mkdtempSync(resolve(repoRoot, 'dist/design-system-baseline/cli-lanes/audit-'))
   fixtureRoots.push(directory)
   mkdirSync(resolve(directory, 'src'), { recursive: true })

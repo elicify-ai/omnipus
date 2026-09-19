@@ -9,6 +9,7 @@ import test from 'node:test'
 import { audit } from '../../scripts/design-system-locks/audit.mjs'
 
 function fixture(t, color) {
+  mkdirSync(resolve('dist/design-system-baseline/cli-lanes'), { recursive: true }) // a fresh checkout has no dist/
   const root = mkdtempSync(resolve('dist/design-system-baseline/cli-lanes/audit-modules-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   mkdirSync(resolve(root, 'src'), { recursive: true })

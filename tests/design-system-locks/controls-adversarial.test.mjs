@@ -37,6 +37,7 @@ test('raw violations remain findings in UI, story, and test paths', () => {
 
 test('concurrent audit roots classify ui imports from their own immutable catalog', async (t) => {
   const make = (publicExports) => {
+    mkdirSync(resolve('dist/design-system-baseline/cli-lanes'), { recursive: true }) // a fresh checkout has no dist/
     const root = mkdtempSync(resolve('dist/design-system-baseline/cli-lanes/controls-catalog-'))
     t.after(() => rmSync(root, { recursive: true, force: true }))
     mkdirSync(resolve(root, 'src/features'), { recursive: true })
