@@ -53,6 +53,41 @@ const ARRAY_RECEIVER_PRESERVING_METHODS = new Set(['join', 'filter'])
 // template/string is exactly as sound as the existing join/filter handling.
 const STRING_TRIM_METHODS = new Set(['trim', 'trimStart', 'trimEnd'])
 
+// Case-changing String methods (generated-token-accessor capability, lane R4
+// — dist/design-system-baseline/cli-lanes/fanout/R3/scanner-spec-generated-
+// token-accessor.md bullet (a)): `.toUpperCase()` / `.toLowerCase()` can only
+// ever change the CASE of characters already present in the receiver — same
+// "cannot manufacture a NEW, unproven value" reasoning as STRING_TRIM_METHODS,
+// one level narrower still. Deliberately excludes every OTHER String method
+// (`.replace()`, `.concat()`, `.slice()`, …), which CAN introduce content
+// absent from the receiver — see generatedTokenAccessorReturnIsGoverned,
+// the only place this set is consulted: it is scoped to that one narrow
+// recognizer, not wired into the general css-value dispatch (see that
+// function's own doc comment for why).
+const STRING_CASE_METHODS = new Set(['toUpperCase', 'toLowerCase'])
+
+// Mirrors scripts/design-system-locks/audit.mjs::CANONICAL_GENERATED_TOKEN_PATHS
+// EXACTLY — the audit's own authoritative allowlist of canonical generated-
+// token output paths (repo-root-relative POSIX paths). Not imported directly:
+// audit.mjs pulls in Ajv plus the baseline/ledger JSON schemas purely to run
+// the audit CLI, a heavyweight dependency this scanner's hot path has no
+// business acquiring just to read one constant, and audit.mjs dynamically
+// imports every scanner (including this file) to run it — a static import
+// back the other way would work today (audit.mjs finishes its own top-level
+// evaluation before it ever dynamically imports a scanner) but ties this
+// scanner's loadability to audit.mjs's own unrelated dependencies forever.
+// Mirrored instead, with the mirror never silent:
+// tests/design-system-locks/ts-colors.test.mjs imports BOTH lists and
+// asserts they are identical, so any future drift between the audit's list
+// and this one fails CI rather than silently narrowing or widening the
+// governed-token-accessor gate below.
+export const CANONICAL_GENERATED_TOKEN_PATHS = Object.freeze([
+  'src/styles/tokens.generated.css',
+  'src/styles/tokens.theme.generated.css',
+  'src/design-system/tokens.ts',
+])
+const CANONICAL_GENERATED_TOKEN_PATH_SET = new Set(CANONICAL_GENERATED_TOKEN_PATHS)
+
 const COLOR_FUNCS = new Set(['rgb', 'rgba', 'hsl', 'hsla', 'hwb', 'lab', 'lch', 'oklab', 'oklch', 'color'])
 
 const GROUP_FUNCS = new Set([
@@ -1448,6 +1483,14 @@ function inspectCssValueExpr(node, ctx, stack, boundary = null) {
     return
   }
   if (ts.isCallExpression(node)) {
+    // Generated-token-accessor capability (lane R4) — see
+    // isGeneratedTokenAccessorCall's own doc comment for the full soundness
+    // argument. A matching call reports CLEAN and returns here; every other
+    // call (including every FORBIDDEN shape: a non-canonical module, a local
+    // object literal or parameter base, an unrecognized String method, a
+    // mixed literal return) takes no special action and falls straight
+    // through, unchanged, to the withCalleeFrame handling immediately below.
+    if (isGeneratedTokenAccessorCall(node, ctx, stack)) return
     const returns = withCalleeFrame(node, ctx, stack, (collected) => {
       for (const returned of collected) inspectCssValueExpr(returned, ctx, stack, boundary)
       return collected
@@ -3302,6 +3345,153 @@ function withCalleeFrame(call, ctx, stack, body) {
     ctx.callFrames.pop()
     stack.delete(marker)
   }
+}
+
+// ── Generated-token-accessor capability (lane R4, 2026-09-20) ───────────────
+//
+// Closes the last ts-colors/unsupported finding in the tree:
+// src/design-system/status.ts's `generatedColor()`, whose sole return
+// (`value.toUpperCase()`) is unresolvable by the ordinary interprocedural
+// walk — `.toUpperCase()`'s callee isn't a local declaration, so
+// withCalleeFrame collects zero returns and inspectCssValueExpr's generic
+// CallExpression branch falls to emitUnsupported. Root cause and the shape
+// this recognizes are documented in full in
+// dist/design-system-baseline/cli-lanes/fanout/R3/scanner-spec-generated-
+// token-accessor.md; this implementation refines that spec in two ways the
+// R4 lane brief (2026-09-20) makes binding:
+//   1. A matching call site reports CLEAN, never ts-colors/extension-
+//      boundary — extension-boundary is reserved for RUNTIME ENTITY DATA (a
+//      prop, a user-chosen persisted field) that still needs central,
+//      per-call-site review (see the R1 design note, same fanout dir). A
+//      value read from the project's OWN generated-token output, through an
+//      accessor whose only content-shaping step is a case change, is not
+//      that: nothing this call can evaluate to is anything other than what
+//      the token generator itself produced for that key. It is the same
+//      trust class as a `var(--token)` CSS reference, which this scanner
+//      already treats as clean (see COMMON-RULES' colour fairness control).
+//      An extension-boundary marker here would misfile a governed-pipeline
+//      read as an ad hoc runtime value needing case-by-case sign-off.
+//   2. No structural throw-guard match is required (the spec's condition 3).
+//      The classification here is "is this call site definitionally reading
+//      the token module's own generated content", not "is this value
+//      provably a valid colour" — a throw-guard's presence or absence
+//      changes the latter, not the former. Requiring one would add AST-
+//      matching surface without closing any additional required case.
+//
+// Deliberately implemented as ONE atomic structural match at the CALL SITE
+// (isGeneratedTokenAccessorCall), not as a composition of "recurse through
+// .toUpperCase()" plus "recurse through the element access" as two
+// independent, generally-wired capabilities. That composition was tried
+// first and rejected: wiring `.toUpperCase()`/.trim()` as a general
+// receiver-preserving case in inspectCssValueExpr (mirroring
+// inspectClassExpr's existing STRING_TRIM_METHODS handling exactly) makes
+// `generatedValues[id]` reachable as a plain ElementAccessExpression with a
+// non-literal key — which resolveMemberTargets already handles today, via
+// its pre-existing "unprovable key → every value of the resolved object is
+// a candidate" fallback (the same fallback the R1 STATUS_VISUALS test at
+// ts-colors.test.mjs exercises deliberately). Probed directly
+// (dist/design-system-baseline/cli-lanes/fanout/R4/probes/baseline-probe.log):
+// with only that general change, a NON-canonical, purely local finite
+// object (`const LOCAL = {'color.a': '#112233'}; LOCAL[id]`) does NOT stay
+// unsupported once reachable — it resolves to ts-colors/raw-color at each
+// property, same as the canonical case would. That is sound in general (a
+// module-const/finite-palette value must always resolve, never become an
+// exception — R1 design note bullet 1) but it defeats this lane's own
+// FORBIDDEN requirement that the non-canonical/local/parameter shapes stay
+// unsupported. Matching the WHOLE call site atomically avoids the conflict
+// entirely: every non-governed shape (wrong module, local object literal,
+// bare parameter, an unrecognized String method, a mixed literal return)
+// takes NO special action here and falls straight through, byte-for-byte
+// unchanged, to the pre-existing withCalleeFrame/collectReturns handling
+// immediately below — which for `<x>.toUpperCase()` was, is, and remains
+// emitUnsupported when `<x>` doesn't resolve any other way. This is a pure
+// ADDITION: every existing return path is reached exactly as before unless
+// ALL of a matching function's return expressions independently prove
+// governed.
+function isGeneratedTokenAccessorCall(call, ctx, stack) {
+  const declaration = calleeDeclaration(call, ctx, stack)
+  if (!isLocalFunction(declaration)) return false
+  const returns = collectReturns(declaration)
+  if (!returns.length) return false
+  return returns.every((expr) => generatedTokenAccessorReturnIsGoverned(expr, declaration, ctx))
+}
+
+// A governed return is either the bare identifier bound to a governed
+// element-access read (see isGovernedTokenIdentifier), or that same
+// identifier wrapped in exactly one content-preserving String method call
+// (STRING_TRIM_METHODS / STRING_CASE_METHODS — never any other method,
+// which could introduce content the token pipeline never produced).
+function generatedTokenAccessorReturnIsGoverned(expr, declaration, ctx) {
+  let target = unwrap(expr)
+  if (ts.isCallExpression(target) && target.arguments.length === 0) {
+    const callee = unwrap(target.expression)
+    if (ts.isPropertyAccessExpression(callee) && (STRING_TRIM_METHODS.has(callee.name.text) || STRING_CASE_METHODS.has(callee.name.text))) {
+      target = unwrap(callee.expression)
+    }
+  }
+  return ts.isIdentifier(target) && isGovernedTokenIdentifier(target, declaration, ctx)
+}
+
+// True when `identNode` names a `const` declared, in the SAME function body
+// as `declaration`, directly by an element access (`values[id]`, any key —
+// literal or dynamic, it does not matter which) whose BASE resolves — via
+// resolveGeneratedTokenModulePath below — to an export of a module on
+// CANONICAL_GENERATED_TOKEN_PATHS.
+function isGovernedTokenIdentifier(identNode, declaration, ctx) {
+  const local = findLocalConstDeclaration(declaration.body, identNode.text)
+  if (!local || !local.initializer) return false
+  const initializer = unwrap(local.initializer)
+  if (!ts.isElementAccessExpression(initializer)) return false
+  const base = unwrap(initializer.expression)
+  if (!ts.isIdentifier(base)) return false
+  const modulePath = resolveGeneratedTokenModulePath(base, ctx)
+  return modulePath !== null && CANONICAL_GENERATED_TOKEN_PATH_SET.has(modulePath)
+}
+
+// Finds the `const <name> = …` VariableDeclaration textually inside `body`
+// (a function Block), never descending into a nested function's own scope —
+// a same-named local inside a closure the outer function merely defines,
+// but never itself reads before returning, must not be mistaken for this
+// function's own binding.
+function findLocalConstDeclaration(body, name) {
+  if (!body || !ts.isBlock(body)) return null
+  let found = null
+  const visit = (node) => {
+    if (found || isFunctionLike(node)) return
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name
+      && node.parent && ts.isVariableDeclarationList(node.parent) && (node.parent.flags & ts.NodeFlags.Const)) {
+      found = node
+      return
+    }
+    ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(body, visit)
+  return found
+}
+
+// Resolves `ident` to a canonical-token-module path when it is either (a) a
+// named import, or (b) a `const` alias — through an `as`/type-assertion cast
+// or plain reassignment-free binding, any number of hops, each hop still
+// required to be `const` — of one. Anything else (a parameter, a `let`, an
+// object/array literal, an opaque call) returns null: the ONLY two shapes
+// that can carry this proof are "this name IS the import" and "this name IS
+// a const alias of a name that, recursively, resolves the same way."
+function resolveGeneratedTokenModulePath(ident, ctx, seen = new Set()) {
+  const sourceFile = ident.getSourceFile()
+  const marker = `${sourceFile.fileName}#${ident.text}`
+  if (seen.has(marker)) return null
+  seen.add(marker)
+  const record = ctx.sourceRecords.get(sourceFile) ?? indexModuleRecord(sourceFile.fileName, sourceFile)
+  const name = ident.text
+  const imported = record.imports.get(name)
+  if (imported) return governedModulePath(record.path, imported.specifier, ctx.modules)
+  const declaration = record.declarations.get(name)
+  if (declaration && ts.isVariableDeclaration(declaration) && declaration.initializer
+    && declaration.parent && ts.isVariableDeclarationList(declaration.parent) && (declaration.parent.flags & ts.NodeFlags.Const)) {
+    const target = unwrap(declaration.initializer)
+    if (ts.isIdentifier(target)) return resolveGeneratedTokenModulePath(target, ctx, seen)
+  }
+  return null
 }
 
 // True for the literal `null` keyword or the `undefined` identifier — the

@@ -2395,3 +2395,157 @@ test('R1 permitted: an enumeration-method terminal call on an exported const arr
   assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/unsupported'), [])
   assert.ok(findings.some((f) => f.ruleId === 'ts-colors/raw-color' && f.syntax === '#22c55e'))
 })
+
+// ── R4 — generated-token-accessor capability: FORBIDDEN controls ───────────
+//
+// Companion to the PERMITTED tests in ts-colors.test.mjs. Each control here
+// changes exactly ONE detail of the governed shape (spec:
+// dist/design-system-baseline/cli-lanes/fanout/R3/scanner-spec-generated-
+// token-accessor.md, binding correction in the R4 lane brief, 2026-09-20:
+// reports CLEAN, never extension-boundary) so the fix cannot be a blanket
+// relaxation. Oracle: the capability's own stated gate — an EXACT
+// CANONICAL_GENERATED_TOKEN_PATHS match on the element access's base, a
+// content-preserving String method only — never the implementation.
+
+const R4_TOKENS_PATH = 'src/design-system/tokens.ts'
+const R4_TOKENS_SOURCE = `export const resolvedTokens: Record<string, string | number> = {
+  'color.a': '#112233',
+}
+`
+const R4_ACCESSOR_PATH = 'src/design-system/accessor.tsx'
+
+function r4Findings(accessorSource, tokensPath = R4_TOKENS_PATH, tokensSource = R4_TOKENS_SOURCE) {
+  return scan({
+    path: R4_ACCESSOR_PATH,
+    source: accessorSource,
+    modules: { [tokensPath]: tokensSource, [R4_ACCESSOR_PATH]: accessorSource },
+  })
+}
+
+test('R4 forbidden control: the same accessor shape reading from a NON-canonical module stays unsupported', () => {
+  const source = `import { resolvedTokens } from './other-tokens'
+const values = resolvedTokens as Readonly<Record<string, string | number>>
+function readToken(id: string): string {
+  const value = values[id]
+  if (typeof value !== 'string') throw new Error('bad')
+  return value.toUpperCase()
+}
+const A = readToken('color.a')
+function Swatch() { return <div style={{ color: A }} /> }
+`
+  // 'src/design-system/other-tokens.ts' is NOT on CANONICAL_GENERATED_TOKEN_PATHS
+  // — same shape, same directory, deliberately not the allowlisted file.
+  const findings = r4Findings(source, 'src/design-system/other-tokens.ts', R4_TOKENS_SOURCE)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'value.toUpperCase()'))
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/extension-boundary'), [])
+})
+
+test('R4 forbidden control: a read whose base is a local object literal stays unsupported', () => {
+  const source = `const LOCAL = { 'color.a': '#112233' } as Record<string, string>
+function readLocal(id: string): string {
+  const value = LOCAL[id]
+  if (typeof value !== 'string') throw new Error('bad')
+  return value.toUpperCase()
+}
+const A = readLocal('color.a')
+function Swatch() { return <div style={{ color: A }} /> }
+`
+  const findings = r4Findings(source)
+  assert.deepEqual(
+    findings.map((f) => ({ ruleId: f.ruleId, syntax: f.syntax })),
+    [{ ruleId: 'ts-colors/unsupported', syntax: 'value.toUpperCase()' }],
+  )
+})
+
+test('R4 forbidden control: a read whose base is a parameter stays unsupported', () => {
+  const source = `function readParam(values: Record<string, string>, id: string): string {
+  const value = values[id]
+  if (typeof value !== 'string') throw new Error('bad')
+  return value.toUpperCase()
+}
+const A = readParam({ a: '#112233' }, 'a')
+function Swatch() { return <div style={{ color: A }} /> }
+`
+  const findings = r4Findings(source)
+  assert.deepEqual(
+    findings.map((f) => ({ ruleId: f.ruleId, syntax: f.syntax })),
+    [{ ruleId: 'ts-colors/unsupported', syntax: 'value.toUpperCase()' }],
+  )
+})
+
+const R4_OTHER_STRING_METHODS = [
+  ['.replace()', "value.replace('a', 'b')"],
+  ['.concat()', "value.concat('x')"],
+  ['.slice()', 'value.slice(0, 4)'],
+  // Zero-argument, like .trim()/.toUpperCase()/.toLowerCase() — this one
+  // specifically isolates the METHOD-NAME gate from the separate
+  // zero-argument gate the three above also happen to fail on (mutation
+  // proof: dist/design-system-baseline/cli-lanes/fanout/R4/mutation/
+  // mutation2-result.log shows the three above stay green even with the
+  // method-name check fully disabled, because their own non-empty argument
+  // lists already block them independently; only this fixture actually
+  // exercises the method-name allowlist).
+  ['.toString()', 'value.toString()'],
+]
+
+for (const [name, expression] of R4_OTHER_STRING_METHODS) {
+  test(`R4 forbidden control: an arbitrary other String method (${name}) on an otherwise-governed base stays unsupported`, () => {
+    const source = `import { resolvedTokens } from './tokens'
+const values = resolvedTokens as Readonly<Record<string, string | number>>
+function readToken(id: string): string {
+  const value = values[id]
+  if (typeof value !== 'string') throw new Error('bad')
+  return ${expression}
+}
+const A = readToken('color.a')
+function Swatch() { return <div style={{ color: A }} /> }
+`
+    const findings = r4Findings(source)
+    assert.deepEqual(
+      findings.map((f) => ({ ruleId: f.ruleId, syntax: f.syntax })),
+      [{ ruleId: 'ts-colors/unsupported', syntax: expression }],
+    )
+  })
+}
+
+test('R4 forbidden control: a literal colour mixed into the same accessor\'s return set is still reported as raw-color', () => {
+  const source = `import { resolvedTokens } from './tokens'
+const values = resolvedTokens as Readonly<Record<string, string | number>>
+function readTokenMixed(id: string): string {
+  if (id === 'x') return '#ff0000'
+  const value = values[id]
+  if (typeof value !== 'string') throw new Error('bad')
+  return value.toUpperCase()
+}
+const A = readTokenMixed('color.a')
+function Swatch() { return <div style={{ color: A }} /> }
+`
+  const findings = r4Findings(source)
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/raw-color' && f.syntax === '#ff0000'))
+  // The mixed return set is not wholesale exempted either: the OTHER
+  // (governed-shaped) return still blocks rather than silently passing,
+  // because "every return must independently prove governed" fails the
+  // moment ANY one return does not — see isGeneratedTokenAccessorCall's
+  // own doc comment (ts-colors.mjs) for why that is the deliberately
+  // conservative choice, not a gap.
+  assert.ok(findings.some((f) => f.ruleId === 'ts-colors/unsupported' && f.syntax === 'value.toUpperCase()'))
+})
+
+test('R4 forbidden control: the governed shape never resolves to ts-colors/extension-boundary even when the wrapping property name is a colour sink', () => {
+  const source = `import { resolvedTokens } from './tokens'
+const values = resolvedTokens as Readonly<Record<string, string | number>>
+function generatedColor(id: string): string {
+  const value = values[id]
+  if (typeof value !== 'string') throw new Error('bad')
+  return value.toUpperCase()
+}
+function status(tokenName: string) {
+  const color = generatedColor('color.status.' + tokenName)
+  return Object.freeze({ resolvedColor: color })
+}
+export const statusContract = Object.freeze({ inbox: status('inbox') })
+`
+  const findings = r4Findings(source)
+  assert.deepEqual(findings, [])
+  assert.deepEqual(findings.filter((f) => f.ruleId === 'ts-colors/extension-boundary'), [])
+})

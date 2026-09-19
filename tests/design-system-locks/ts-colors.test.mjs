@@ -21,7 +21,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { extensions, scan } from '../../scripts/design-system-locks/ts-colors.mjs'
+import { CANONICAL_GENERATED_TOKEN_PATHS, extensions, scan } from '../../scripts/design-system-locks/ts-colors.mjs'
+import { CANONICAL_GENERATED_TOKEN_PATHS as AUDIT_CANONICAL_GENERATED_TOKEN_PATHS } from '../../scripts/design-system-locks/audit.mjs'
 
 const DEFAULT_PATH = 'src/features/fixture.tsx'
 
@@ -1190,4 +1191,113 @@ export function AvatarColorPicker({ value, onChange }) {
     findings.filter((finding) => finding.ruleId === 'ts-colors/raw-color').map((finding) => finding.syntax).sort(),
     ['#22c55e', '#3b82f6'],
   )
+})
+
+// ── R4 — generated-token-accessor capability ────────────────────────────────
+//
+// Closes the last ts-colors/unsupported finding in the tree:
+// src/design-system/status.ts's `generatedColor()`. Spec:
+// dist/design-system-baseline/cli-lanes/fanout/R3/scanner-spec-generated-
+// token-accessor.md; the R4 lane brief (2026-09-20) makes the outcome
+// binding: CLEAN, never ts-colors/extension-boundary. Oracle: the spec's own
+// stated invariant ("nothing this call can evaluate to is anything other
+// than whatever the token generator itself produced for that key" — the
+// audit's own CANONICAL_GENERATED_TOKEN_PATHS names exactly which modules
+// count as "the token generator's own output"), not the implementation.
+
+test('R4: the audit\'s canonical generated-token path allowlist and this scanner\'s mirror of it never drift', () => {
+  // scripts/design-system-locks/audit.mjs::CANONICAL_GENERATED_TOKEN_PATHS is
+  // the single authoritative list (also gates the audit's own reviewed-
+  // boundary "generated-tokens" kind). This scanner keeps its own copy
+  // rather than importing audit.mjs directly (see that constant's doc
+  // comment in ts-colors.mjs for why) — this test is what keeps the mirror
+  // honest: any future edit to either list without the other fails here.
+  assert.deepEqual([...CANONICAL_GENERATED_TOKEN_PATHS].sort(), [...AUDIT_CANONICAL_GENERATED_TOKEN_PATHS].sort())
+})
+
+const GENERATED_TOKENS_MODULE_PATH = 'src/design-system/tokens.ts'
+const GENERATED_TOKENS_MODULE_SOURCE = `export const resolvedTokens: Record<string, string | number> = {
+  'color.a': '#112233',
+  'color.b': '#445566',
+}
+`
+
+test('R4 permitted: a runtime-validated element-access read off an imported canonical generated-token export, returned through .toUpperCase(), reports clean', () => {
+  // The R3 spec's own minimal fixture, at a real canonical path so the
+  // allowlist gate is exercised for real rather than vacuously.
+  const accessorPath = 'src/design-system/accessor.tsx'
+  const source = `import { resolvedTokens } from './tokens'
+const values = resolvedTokens as Readonly<Record<string, string | number>>
+function readToken(id: string): string {
+  const value = values[id]
+  if (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(value)) {
+    throw new Error('missing token: ' + id)
+  }
+  return value.toUpperCase()
+}
+const A = readToken('color.a')
+function Swatch() { return <div style={{ color: A }} /> }
+`
+  const findings = scan({ path: accessorPath, source, modules: { [GENERATED_TOKENS_MODULE_PATH]: GENERATED_TOKENS_MODULE_SOURCE, [accessorPath]: source } })
+  assert.deepEqual(findings, [])
+})
+
+test('R4 permitted: status.ts\'s exact shape (module-level generatedColor() feeding a resolvedColor field) reports clean, not unsupported and not extension-boundary', () => {
+  // A faithful minimal reproduction of src/design-system/status.ts's actual
+  // shape: two named exports imported and aliased through an `as` cast,
+  // consumed by a helper whose return feeds a `resolvedColor` property —
+  // the exact property name whose "color"-suffix match is what makes
+  // isColorPropertyName walk into this in the first place.
+  const statusPath = 'src/design-system/status-like.ts'
+  const source = `import { resolvedTokens } from './tokens'
+const generatedValues = resolvedTokens as Readonly<Record<string, string | number>>
+function generatedColor(id: string): string {
+  const value = generatedValues[id]
+  if (typeof value !== 'string' || !/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(value)) {
+    throw new Error('generated colour token is missing or invalid: ' + id)
+  }
+  return value.toUpperCase()
+}
+function status(tokenName: string) {
+  const color = generatedColor('color.status.' + tokenName)
+  return Object.freeze({ resolvedColor: color })
+}
+export const statusContract = Object.freeze({ inbox: status('inbox') })
+`
+  const findings = scan({ path: statusPath, source, modules: { [GENERATED_TOKENS_MODULE_PATH]: GENERATED_TOKENS_MODULE_SOURCE, [statusPath]: source } })
+  assert.deepEqual(findings, [])
+})
+
+test('R4 permitted: .trim() and .toLowerCase() are governed the same way .toUpperCase() is', () => {
+  const accessorPath = 'src/design-system/accessor2.tsx'
+  for (const method of ['trim', 'toLowerCase']) {
+    const source = `import { resolvedTokens } from './tokens'
+const values = resolvedTokens as Readonly<Record<string, string | number>>
+function readToken(id: string): string {
+  const value = values[id]
+  if (typeof value !== 'string') throw new Error('bad')
+  return value.${method}()
+}
+const A = readToken('color.a')
+function Swatch() { return <div style={{ color: A }} /> }
+`
+    const findings = scan({ path: accessorPath, source, modules: { [GENERATED_TOKENS_MODULE_PATH]: GENERATED_TOKENS_MODULE_SOURCE, [accessorPath]: source } })
+    assert.deepEqual(findings, [], `.${method}() should be governed the same as .toUpperCase()`)
+  }
+})
+
+test('R4 permitted: a bare identifier return (no wrapping String method) off a governed element access also reports clean', () => {
+  const accessorPath = 'src/design-system/accessor3.tsx'
+  const source = `import { resolvedTokens } from './tokens'
+const values = resolvedTokens as Readonly<Record<string, string | number>>
+function readToken(id: string): string {
+  const value = values[id]
+  if (typeof value !== 'string') throw new Error('bad')
+  return value
+}
+const A = readToken('color.a')
+function Swatch() { return <div style={{ color: A }} /> }
+`
+  const findings = scan({ path: accessorPath, source, modules: { [GENERATED_TOKENS_MODULE_PATH]: GENERATED_TOKENS_MODULE_SOURCE, [accessorPath]: source } })
+  assert.deepEqual(findings, [])
 })
