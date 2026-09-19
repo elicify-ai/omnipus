@@ -56,6 +56,17 @@ const stopButton = (page: Page) => page.locator('[data-testid="stop-btn"]');
 
 const handoverNotice = (page: Page) => page.locator('[data-testid="browser-handover-notice"]');
 
+const statusChip = (page: Page) =>
+  page.locator('[data-testid="browser-live-status-chip"]');
+
+/** Wait until the panel's explicit viewport handoff says input has resumed. */
+async function waitForViewportInput(page: Page): Promise<void> {
+  await expect(
+    page.getByText('Resizing browser. Input will resume when the new picture is ready.'),
+    'the viewport handoff never finished, so a take-control gesture would only measure rejected input',
+  ).toBeHidden({ timeout: 45_000 });
+}
+
 /** Click empty space inside the rendered video, never its object-contain letterbox. */
 async function takeControlFromRenderedVideo(page: Page): Promise<void> {
   const frame = browserLiveFrame(page);
@@ -142,10 +153,15 @@ test(
     await test.step('take the wheel by clicking into the live frame', async () => {
       const frame = browserLiveFrame(page);
       await expect(frame).toBeVisible({ timeout: 90_000 });
+      await waitForViewportInput(page);
       // Click empty space away from any link the agent's own navigation
       // might have landed on, but inside the rendered video rather than an
       // object-contain letterbox where production deliberately rejects input.
       await takeControlFromRenderedVideo(page);
+      await expect(
+        statusChip(page),
+        'the take-control gesture must be confirmed by the live panel before BROWSER-FR-041/042 can be tested',
+      ).toHaveText(/You're driving/, { timeout: 20_000 });
     });
 
     await test.step(

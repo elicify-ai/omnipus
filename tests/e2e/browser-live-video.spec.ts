@@ -785,6 +785,15 @@ test("live browser view streams genuinely playing video with real audio and real
     const frame = browserLiveFrame(page);
     await expect(frame).toBeVisible({ timeout: 10_000 });
 
+    // A viewer's first gesture acquires control and is consumed by that
+    // ownership round trip. Acquire first so the measured click is the one
+    // that actually reaches the agent's tab.
+    await frame.click();
+    await expect(
+      page.locator('[data-testid="browser-live-status-chip"]'),
+      "the viewer must hold the live browser before measuring real input delivery",
+    ).toHaveText(/You're driving/, { timeout: 20_000 });
+
     const before = await sampleFrame(video);
 
     const t0 = Date.now();
