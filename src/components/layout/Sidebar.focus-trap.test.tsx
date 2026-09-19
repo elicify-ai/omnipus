@@ -142,8 +142,8 @@ function makeWrapper() {
 // than a ref (a plain function-component test double can't receive one).
 vi.mock('framer-motion', () => ({
   motion: {
-    aside: ({ children, className, style, role, 'aria-modal': ariaModal, 'aria-label': ariaLabel, ...rest }: React.HTMLAttributes<HTMLElement> & { 'aria-modal'?: string; 'aria-label'?: string }) => (
-      <aside className={className} style={style} role={role} aria-modal={ariaModal} aria-label={ariaLabel} {...rest}>{children}</aside>
+    aside: ({ children, className, role, 'aria-modal': ariaModal, 'aria-label': ariaLabel, ...rest }: React.HTMLAttributes<HTMLElement> & { 'aria-modal'?: string; 'aria-label'?: string }) => (
+      <aside className={className} role={role} aria-modal={ariaModal} aria-label={ariaLabel} {...rest}>{children}</aside>
     ),
     div: ({ children, className, onClick, ...rest }: React.HTMLAttributes<HTMLDivElement>) => (
       <div className={className} onClick={onClick} {...rest}>{children}</div>

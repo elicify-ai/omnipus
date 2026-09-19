@@ -210,8 +210,8 @@ function makeWrapperWithClient() {
 // Mock Framer Motion — AnimatePresence/motion renders children without animation
 vi.mock('framer-motion', () => ({
   motion: {
-    aside: ({ children, className, style, ...rest }: React.HTMLAttributes<HTMLElement>) => (
-      <aside className={className} style={style} {...rest}>{children}</aside>
+    aside: ({ children, className, ...rest }: React.HTMLAttributes<HTMLElement>) => (
+      <aside className={className} {...rest}>{children}</aside>
     ),
     div: ({ children, className, onClick, ...rest }: React.HTMLAttributes<HTMLDivElement>) => (
       <div className={className} onClick={onClick} {...rest}>{children}</div>
