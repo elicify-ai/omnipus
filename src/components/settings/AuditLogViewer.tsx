@@ -375,7 +375,7 @@ export function AuditLogViewer({ open, onOpenChange }: AuditLogViewerProps) {
               </p>
             </div>
           ) : (
-            <Table>
+            <Table containerProps={{ role: 'region', 'aria-label': 'Audit log entries', tabIndex: 0 }}>
               <TableHeader>
                 <TableRow className="hover:bg-transparent">
                   <TableHead className="w-[180px]">Timestamp</TableHead>

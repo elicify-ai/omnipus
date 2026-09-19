@@ -86,7 +86,7 @@ Read these files first, in this order:
 - Storybook builds and runs on Chromium, Firefox, WebKit + coarse pointer.
 - Component suite: 456 tests across 42 files, all passing.
 - Story suite: 159 tests × 3 engines, all passing.
-- Browser suite: 437 checks across 4 projects, all passing.
+- Browser suite: 1172 checks across 4 projects, all passing (0 skipped, 0 flaky; stage-a-gate-record.md item 7). The 437 below is a different number: manifest-declared checks with executed evidence.
 - Typecheck: passing.
 - Production bundle budget: passing (+16,835 B gzip initial, +32,929 B raw total — both within limits).
 - Package isolation: 8/8 checks passing (library builds without app code).

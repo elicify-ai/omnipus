@@ -167,6 +167,22 @@ describe('AuditLogViewer — security_setting_change rendering (D20)', () => {
   // to isolate it — a filter that silently omits most of the vocabulary is a
   // control that lies about its own coverage. The option list is now derived
   // from the records actually loaded, unioned with the original flat families.
+  // The table's horizontal scroll container is a labelled, focusable region
+  // (docs/internal/design/components/table.md): without tabIndex a keyboard
+  // user can never reach it, and Table's ArrowLeft/ArrowRight scrolling only
+  // runs when the container itself has focus.
+  it('renders the log table inside a labelled, keyboard-focusable scroll region', async () => {
+    vi.mocked(fetchAuditLog).mockResolvedValue({
+      entries: [{ timestamp: '2026-09-02T10:00:00Z', event: 'tool_call', decision: 'allow', tool: 'bash' }],
+      chain_status: 'unknown',
+    } as never)
+    renderViewer()
+    await waitFor(() => screen.getByText('tool_call'))
+    const region = screen.getByRole('region', { name: 'Audit log entries' })
+    expect(region).toHaveAttribute('tabindex', '0')
+    expect(region).toHaveAttribute('data-table-scroll')
+  })
+
   it('offers a filter option for a dotted event name that is present in the log', async () => {
     const user = userEvent.setup()
     vi.mocked(fetchAuditLog).mockResolvedValue({
