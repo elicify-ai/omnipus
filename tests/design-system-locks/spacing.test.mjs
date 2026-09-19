@@ -1070,8 +1070,26 @@ describe('finite-dispatcher member resolution (closes statusConfig.textClass-sha
   // unshadowed `undefined`) and PRESENCE (every branch either omits it or
   // sets it to a plain value, each visited like an array literal's
   // elements). Any branch this cannot classify — spread, computed key,
-  // non-switch control flow, a reassigned binding, a call cycle — aborts the
-  // whole proof and falls through to the ordinary unsupported path.
+  // non-switch control flow, a non-const or reassigned/mutated binding, a
+  // call cycle — aborts the whole proof and falls through to the ordinary
+  // unsupported path.
+  //
+  // LEAD DECISION (frozen review of bb1fd56b2 — see
+  // dist/design-system-baseline/cli-lanes/claude-spacing-review/review.md —
+  // found two BLOCKING false greens in the original version of this
+  // capability): the dispatcher-result binding must be `const`, declared
+  // inside a function, and unmutated/unreassigned/unescaped anywhere in
+  // that enclosing function (see the "finite-dispatcher binding safety"
+  // describe block below for the direct regression tests); and an ABSENT
+  // classification additionally requires the object literal to carry an
+  // explicit `__proto__: null`, or the read stays unsupported (an ordinary
+  // literal can inherit the property from prototype mutations elsewhere).
+  // The tests below were rewritten to declare the dispatcher-result binding
+  // inside the consuming component (not at module scope, which this fix no
+  // longer trusts — see directForwardedParameter's owner search) and to
+  // carry `__proto__: null` on every absent-classified branch, so they keep
+  // demonstrating the capability actually resolving real code, not just
+  // becoming blanket-conservative.
   const fixturePath = 'src/components/Fixture.tsx'
 
   function runWith(source) {
@@ -1082,13 +1100,15 @@ describe('finite-dispatcher member resolution (closes statusConfig.textClass-sha
     const source = `
       function describeStatus(status) {
         switch (status) {
-          case 'a': return { label: 'A' }
-          case 'b': return { label: 'B' }
-          default: { const x = 0; void x; return { label: 'C' } }
+          case 'a': return { __proto__: null, label: 'A' }
+          case 'b': return { __proto__: null, label: 'B' }
+          default: { const x = 0; void x; return { __proto__: null, label: 'C' } }
         }
       }
-      const config = describeStatus(status)
-      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+      export const X = ({status}) => {
+        const config = describeStatus(status)
+        return <div className={cn('shrink-0', config.textClass)}/>
+      }
     `
     assert.deepEqual(runWith(source), [], 'a provably always-undefined member must not block or produce a false finding')
   })
@@ -1102,8 +1122,10 @@ describe('finite-dispatcher member resolution (closes statusConfig.textClass-sha
           default: return { label: 'C', textClass: 'p-[8px]' }
         }
       }
-      const config = describeStatus(status)
-      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+      export const X = ({status}) => {
+        const config = describeStatus(status)
+        return <div className={cn('shrink-0', config.textClass)}/>
+      }
     `
     const findings = runWith(source)
     assert.deepEqual(syntaxes(findings, RULE.offScale).sort(), ['p-[7px]', 'p-[9px]'], 'on-scale p-[8px] must not be reported; both off-scale branches must be')
@@ -1113,10 +1135,12 @@ describe('finite-dispatcher member resolution (closes statusConfig.textClass-sha
   it('follows a ternary chain of dispatcher calls to prove absence', () => {
     const source = `
       function describeStatus(status) {
-        switch (status) { case 'a': return { label: 'A' }; default: return { label: 'B' } }
+        switch (status) { case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } }
       }
-      const config = isRunning ? describeStatus('a') : isDone ? describeStatus('b') : { label: 'z' }
-      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+      export const X = ({status, isRunning, isDone}) => {
+        const config = isRunning ? describeStatus('a') : isDone ? describeStatus('b') : { __proto__: null, label: 'z' }
+        return <div className={cn('shrink-0', config.textClass)}/>
+      }
     `
     assert.deepEqual(runWith(source), [])
   })
@@ -1124,22 +1148,39 @@ describe('finite-dispatcher member resolution (closes statusConfig.textClass-sha
   it('follows one dispatcher delegating to another (nested finite dispatch)', () => {
     const source = `
       function inner(s) {
-        switch (s) { case 'x': return { label: 'X' }; default: return { label: 'Y' } }
+        switch (s) { case 'x': return { __proto__: null, label: 'X' }; default: return { __proto__: null, label: 'Y' } }
       }
       function outer(status) {
         switch (status) { case 'a': return inner('x'); default: return inner('y') }
       }
-      const config = outer(status)
-      export const X = () => <div className={cn('shrink-0', config.textClass)}/>
+      export const X = ({status}) => {
+        const config = outer(status)
+        return <div className={cn('shrink-0', config.textClass)}/>
+      }
     `
     assert.deepEqual(runWith(source), [])
   })
 
-  it('resolves the real getToolBadgeStatusConfig/getSpanStatusDot shapes from src/lib/toolStatusConfig.tsx (absence proof)', () => {
+  it('keeps the real getToolBadgeStatusConfig member read unsupported without a null-prototype literal (frozen review fix; LEAD DECISION)', () => {
+    // Prior version of this test asserted the read resolved clean (pure
+    // absence proof) because no switch branch of getToolBadgeStatusConfig
+    // ever sets textClass. The frozen independent review found that
+    // trusting an ordinary (non-null-prototype) object literal's *absence*
+    // of a property assumes a pure module graph — a prototype mutation
+    // anywhere else in the real app could inject the property onto that
+    // literal. The scanner cannot prove the real
+    // src/lib/toolStatusConfig.tsx literals carry `__proto__: null` (they
+    // do not, and adding it there is out of scope for this fix), so per the
+    // LEAD DECISION this read correctly returns to spacing/unsupported.
+    // This is the intended, correct outcome, not a regression — see the
+    // review's "Combined impact" section (dist/design-system-baseline/
+    // cli-lanes/claude-spacing-review/review.md) for why the prior green
+    // here was unsound.
     const toolStatusConfigSource = readFileSync(resolve(ROOT, 'src/lib/toolStatusConfig.tsx'), 'utf8')
     const source = "import { getToolBadgeStatusConfig } from '@/lib/toolStatusConfig'; export const X = ({status}) => { const statusConfig = getToolBadgeStatusConfig(status); return <span className={cn('text-[var(--color-muted)] shrink-0', statusConfig.textClass)}/> }"
     const findings = run(fixturePath, source, policy, { [fixturePath]: source, 'src/lib/toolStatusConfig.tsx': toolStatusConfigSource })
-    assert.deepEqual(syntaxes(findings, RULE.unsupported), [], 'no branch of getToolBadgeStatusConfig ever sets textClass; the member read must resolve, not block')
+    assert.deepEqual(syntaxes(findings, RULE.unsupported), ['className: statusConfig.textClass'],
+      'without a null-prototype literal, absence cannot be proven; the read must stay unsupported')
   })
 
   it('keeps a spread branch unsupported (cannot rule out an injected property)', () => {
@@ -1198,5 +1239,200 @@ describe('finite-dispatcher member resolution (closes statusConfig.textClass-sha
       export const X = () => <div className={cn('shrink-0', config.textClass)}/>
     `
     assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: config.textClass'])
+  })
+})
+
+describe('finite-dispatcher binding safety (frozen review fix: mutation/reassignment/escape must never be invisible)', () => {
+  // Independent review of bb1fd56b2 found two BLOCKING false greens: a
+  // property written onto (or otherwise escaping through) the
+  // dispatcher-result binding after the call reached a className with ZERO
+  // findings — not even the pre-existing conservative `spacing/unsupported`
+  // — on code shapes the review called "ordinary... not exotic". Root
+  // cause: resolveDispatcherMember only inspected the call's return-value
+  // SHAPE, never whether the caller subsequently wrote to the binding; and
+  // its only reassignment guard (isReassignedWithin) was invoked with the
+  // whole SourceFile as `owner`, whose traversal stops descending the
+  // instant it meets the first function-like node — a near no-op for any
+  // component body, since virtually all real consumer code here is a
+  // function component or hook. Every case below is reproduced directly
+  // from the frozen review (dist/design-system-baseline/cli-lanes/
+  // claude-spacing-review/review.md) and the lead's spacing-repro.mjs
+  // three-case script (dist/design-system-baseline/cli-lanes/claude-lead/).
+  const fixturePath = 'src/components/Fixture.tsx'
+  const getConfigHelper = "function getConfig(s) { switch (s) { case 'a': return { label: 'A' }; default: return { label: 'B' } } }\n"
+
+  function runWith(source) {
+    return run(fixturePath, source, policy, { [fixturePath]: source })
+  }
+
+  it('keeps a property write after the dispatcher call unsupported (review finding 1 — lead repro case 1)', () => {
+    const source = `${getConfigHelper}export function V({status}) { const cfg = getConfig(status); cfg.textClass = 'p-[7px]'; return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'],
+      'a property written onto the binding after the call must keep the read blocking, never silently pass')
+  })
+
+  it('keeps a `let` binding reassigned inside the enclosing function unsupported (review finding 2 — lead repro case 2)', () => {
+    const source = `${getConfigHelper}export function V({status}) { let cfg = getConfig(status); cfg = { textClass: 'p-[7px]' }; return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'],
+      'reassignment inside the component must be visible, not only at module scope')
+  })
+
+  it('keeps an absent member unsupported when its object literal has no null-prototype guard (lead repro case 3)', () => {
+    const source = `${getConfigHelper}export function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'],
+      'absence without an explicit __proto__: null assumes a pure module graph, which the contract forbids')
+  })
+
+  it('keeps an Object.assign write onto the dispatcher-result binding unsupported', () => {
+    const source = `${getConfigHelper}export function V({status}) { const cfg = getConfig(status); Object.assign(cfg, { textClass: 'p-[7px]' }); return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('keeps a delete on the dispatcher-result binding unsupported', () => {
+    const source = `${getConfigHelper}export function V({status}) { const cfg = getConfig(status); delete cfg.label; return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('keeps a write through an alias of the dispatcher-result binding unsupported', () => {
+    const source = `${getConfigHelper}export function V({status}) { const cfg = getConfig(status); const x = cfg; x.textClass = 'p-[7px]'; return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'],
+      'merely aliasing the binding (const x = cfg) is itself an escape this proof cannot see past')
+  })
+
+  it('keeps a write performed inside a nested callback unsupported (does not stop descending at the first closure)', () => {
+    const source = `${getConfigHelper}export function V({status}) { const cfg = getConfig(status); [1].forEach(() => { cfg.textClass = 'p-[7px]' }); return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'],
+      'a mutation inside a nested closure is exactly as real as one at the top of the function')
+  })
+
+  it('keeps a property write inside a nested block unsupported', () => {
+    const source = `${getConfigHelper}export function V({status}) { const cfg = getConfig(status); if (status === 'a') { cfg.textClass = 'p-[7px]' } return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('keeps a reassignment inside a nested block unsupported', () => {
+    const source = `${getConfigHelper}export function V({status}) { let cfg = getConfig(status); if (status === 'a') { cfg = { textClass: 'p-[7px]' } } return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('resolves a null-prototype absence proof scoped to the enclosing function (positive control — must still resolve)', () => {
+    const source = `
+      function getConfig(s) { switch (s) { case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } } }
+      export function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }
+    `
+    assert.deepEqual(runWith(source), [], 'a genuinely null-prototype, unmutated, const binding must still resolve — the fix must not become blanket-conservative')
+  })
+
+  it('resolves a null-prototype presence proof scoped to the enclosing function (positive control — off-scale value still reported)', () => {
+    const source = `
+      function getConfig(s) { switch (s) { case 'a': return { __proto__: null, textClass: 'p-[7px]' }; default: return { __proto__: null, label: 'B' } } }
+      export function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }
+    `
+    assert.deepEqual(syntaxes(runWith(source), RULE.offScale), ['p-[7px]'])
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), [])
+  })
+
+  it('control: a direct off-scale literal still reports (sanity check the harness itself works)', () => {
+    const source = "export function V() { return <div className='p-[7px]'/> }"
+    assert.deepEqual(syntaxes(runWith(source), RULE.offScale), ['p-[7px]'])
+  })
+
+  it('rejects a generator dispatcher function (calling it returns a Generator, not the object)', () => {
+    const source = "function* getConfig(s) { switch (s) { case 'a': return { label: 'A' }; default: return { label: 'B' } } }\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('rejects an async dispatcher function (calling it returns a Promise, not the object)', () => {
+    const source = "async function getConfig(s) { switch (s) { case 'a': return { label: 'A' }; default: return { label: 'B' } } }\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('rejects a dispatcher function nested inside the consuming component itself (not top-level)', () => {
+    const source = "export function V({status}) { function getConfig(s) { switch (s) { case 'a': return { label: 'A' }; default: return { label: 'B' } } } const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+})
+
+describe('finite-dispatcher binding safety — mutation-isolated variants (each guard is the ONLY thing standing between resolve and unsupported)', () => {
+  // Self-verification gate (test-plan-and-write / test-driven-development):
+  // every fixture above that models a mutation/reassignment/escape or an
+  // unsafe dispatcher function uses a helper whose branches never set
+  // `textClass` AND never carry `__proto__: null` — so classifyDispatcherProperty
+  // classifies every branch 'absent', and hasNullPrototypeLiteral independently
+  // fails regardless of whether the mutation-safety or top-level-function guard
+  // is even evaluated. A mutation round that disables ONLY
+  // dispatcherBindingUsesSafe, isTopLevelFiniteDispatcherFunction, or (for a
+  // never-mutated `let`) isConstVariableDeclaration therefore does not
+  // necessarily kill those fixtures — hasNullPrototypeLiteral can mask the
+  // disabled guard and still report unsupported for the right output, wrong
+  // reason. This block repeats the same shapes with a `__proto__: null`
+  // dispatcher (or, for the const-only case, a binding that is never
+  // mutated at all) so each fixture would otherwise resolve cleanly, making
+  // the specific guard under test the sole reason it stays unsupported —
+  // confirmed by the mutation proof in this fix's evidence directory
+  // (dist/design-system-baseline/cli-lanes/claude-spacing-fix/mutants/),
+  // where disabling any one of these guards on an isolated copy flips the
+  // corresponding test here (and only here) to a false green.
+  const fixturePath = 'src/components/Fixture.tsx'
+  const nullProtoHelper = "function getConfig(s) { switch (s) { case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } } }\n"
+
+  function runWith(source) {
+    return run(fixturePath, source, policy, { [fixturePath]: source })
+  }
+
+  it('isolates dispatcherBindingUsesSafe: a property write after the call on an otherwise-resolvable null-prototype dispatcher', () => {
+    const source = `${nullProtoHelper}export function V({status}) { const cfg = getConfig(status); cfg.textClass = 'p-[7px]'; return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates dispatcherBindingUsesSafe: Object.assign onto an otherwise-resolvable null-prototype dispatcher', () => {
+    const source = `${nullProtoHelper}export function V({status}) { const cfg = getConfig(status); Object.assign(cfg, { textClass: 'p-[7px]' }); return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates dispatcherBindingUsesSafe: delete onto an otherwise-resolvable null-prototype dispatcher', () => {
+    const source = `${nullProtoHelper}export function V({status}) { const cfg = getConfig(status); delete cfg.label; return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates dispatcherBindingUsesSafe: an alias write onto an otherwise-resolvable null-prototype dispatcher', () => {
+    const source = `${nullProtoHelper}export function V({status}) { const cfg = getConfig(status); const x = cfg; x.textClass = 'p-[7px]'; return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates dispatcherBindingUsesSafe: a nested-callback write onto an otherwise-resolvable null-prototype dispatcher', () => {
+    const source = `${nullProtoHelper}export function V({status}) { const cfg = getConfig(status); [1].forEach(() => { cfg.textClass = 'p-[7px]' }); return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates dispatcherBindingUsesSafe: a nested-block property write onto an otherwise-resolvable null-prototype dispatcher', () => {
+    const source = `${nullProtoHelper}export function V({status}) { const cfg = getConfig(status); if (status === 'a') { cfg.textClass = 'p-[7px]' } return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates isConstVariableDeclaration: a `let` binding that is never reassigned or mutated must still stay unsupported', () => {
+    // No mutation, no reassignment, no escape at all — dispatcherBindingUsesSafe
+    // would report this binding safe. Only the const-only trust rule (LEAD
+    // DECISION: "the binding is const") keeps this blocking; a `let` binding
+    // trusted merely because no mutation was FOUND, rather than because the
+    // binding categorically cannot be reassigned, is exactly the gap the
+    // frozen review's finding 2 exploited.
+    const source = `${nullProtoHelper}export function V({status}) { let cfg = getConfig(status); return <div className={cfg.textClass}/> }`
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates isTopLevelFiniteDispatcherFunction: a generator dispatcher with an otherwise-resolvable null-prototype shape', () => {
+    const source = "function* getConfig(s) { switch (s) { case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } } }\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates isTopLevelFiniteDispatcherFunction: an async dispatcher with an otherwise-resolvable null-prototype shape', () => {
+    const source = "async function getConfig(s) { switch (s) { case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } } }\nexport function V({status}) { const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
+  })
+
+  it('isolates isTopLevelFiniteDispatcherFunction: a dispatcher nested inside the component with an otherwise-resolvable null-prototype shape', () => {
+    const source = "export function V({status}) { function getConfig(s) { switch (s) { case 'a': return { __proto__: null, label: 'A' }; default: return { __proto__: null, label: 'B' } } } const cfg = getConfig(status); return <div className={cfg.textClass}/> }"
+    assert.deepEqual(syntaxes(runWith(source), RULE.unsupported), ['className: cfg.textClass'])
   })
 })

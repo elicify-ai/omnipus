@@ -563,10 +563,10 @@ function isCssModuleClassReference(expr, sourceFile) {
 }
 
 // finite-dispatcher member resolution: `identifier.prop` where identifier is
-// a single, unreassigned const/let binding whose initializer resolves
-// (through ternary chains and calls to "finite dispatcher" functions — see
-// collectFiniteDispatcherReturns) to a closed set of object literals. Two
-// provable outcomes:
+// a single const binding, declared inside a function, whose initializer
+// resolves (through ternary chains and calls to "finite dispatcher"
+// functions — see collectFiniteDispatcherReturns) to a closed set of object
+// literals. Two provable outcomes:
 //   - ABSENCE: every literal omits `prop` — the read is PROVEN to always be
 //     `undefined`. An unshadowed `undefined` already contributes nothing to
 //     a class-builder argument (see the identifier-`undefined` branch
@@ -584,16 +584,42 @@ function isCssModuleClassReference(expr, sourceFile) {
 // that classifies to a value we cannot statically enumerate this way aborts
 // the whole proof and falls through to the ordinary unsupported path — this
 // never trusts a partial/best-effort subset of branches.
+//
+// LEAD DECISION (frozen review of bb1fd56b2 found two BLOCKING false
+// greens: a property write/Object.assign/delete/alias/reassignment on the
+// bound variable after the dispatcher call was invisible, at ANY scope,
+// because the only guard (isReassignedWithin) either never inspected member
+// writes at all or was scoped to the whole SourceFile — which stops
+// descending the instant it meets the first function-like node, i.e. it is
+// a near no-op for code inside any component). The fix below requires,
+// mirroring ts-colors.mjs::absenceValue/absenceBindingUsesSafe:
+//   - the binding is `const` (never `let`/`var`/a parameter);
+//   - the binding is declared inside a function, and every reassignment,
+//     member write, Object.assign, delete, spread-into or other escape of
+//     that binding ANYWHERE IN THE ENCLOSING FUNCTION (found the same way
+//     directForwardedParameter finds its owner — not the whole source
+//     file, and not stopping at nested closures the way isReassignedWithin
+//     does, since a mutation inside a nested callback is exactly as real as
+//     one at the top of the function) is treated as unprovable;
+//   - ABSENCE additionally requires every absent-classified branch's object
+//     literal to carry an explicit `__proto__: null` — an ordinary literal
+//     can inherit the property from prototype mutations elsewhere, so
+//     absence without a null prototype would assume a pure module graph,
+//     which the contract forbids. PRESENCE values do not need this: an own
+//     data property always shadows the prototype on a plain read.
 function resolveDispatcherMember(expr, ctx) {
   if (!ts.isPropertyAccessExpression(expr)) return null
   const propertyName = staticPropertyName(expr.name)
-  if (propertyName === null) return null
+  if (propertyName === null || ['__proto__', 'prototype', 'constructor'].includes(propertyName)) return null
   const target = unwrap(expr.expression)
   if (!target) return null
   let source = target
   if (ts.isIdentifier(target)) {
     const binding = findLexicalBinding(target, target.text)
-    if (!binding || !binding.initializer || isReassignedWithin(target.getSourceFile(), target.text)) return null
+    if (!binding || !binding.initializer || !ts.isVariableDeclaration(binding.declaration) || !isConstVariableDeclaration(binding.declaration)) return null
+    let owner = binding.declaration.parent
+    while (owner && !ts.isFunctionLike(owner)) owner = owner.parent
+    if (!owner || !dispatcherBindingUsesSafe(owner, binding.declaration.name, target.text)) return null
     source = binding.initializer
   } else if (!ts.isCallExpression(target) && !ts.isConditionalExpression(target)) {
     return null
@@ -604,7 +630,10 @@ function resolveDispatcherMember(expr, ctx) {
   for (const obj of objects) {
     const classified = classifyDispatcherProperty(obj, propertyName)
     if (classified.kind === 'unknown') return null
-    if (classified.kind === 'present') values.push(classified.initializer)
+    if (classified.kind === 'present') { values.push(classified.initializer); continue }
+    // classified.kind === 'absent': only provable without a null prototype
+    // to guard the literal against an injected property (see LEAD DECISION).
+    if (!hasNullPrototypeLiteral(obj)) return null
   }
   return { allAbsent: values.length === 0, values }
 }
@@ -628,6 +657,57 @@ function classifyDispatcherProperty(obj, name) {
     if (key === name) initializer = prop.initializer
   }
   return initializer ? { kind: 'present', initializer } : { kind: 'absent' }
+}
+
+// True only when every declared `__proto__` property on this literal is an
+// explicit `null` initializer, and at least one such property exists.
+// Mirrors ts-colors.mjs::absenceValue's nullPrototype computation.
+function hasNullPrototypeLiteral(obj) {
+  const protoProps = obj.properties.filter((prop) => ts.isPropertyAssignment(prop)
+    && !ts.isComputedPropertyName(prop.name) && staticPropertyName(prop.name) === '__proto__')
+  return protoProps.length > 0 && protoProps.every((prop) => unwrap(prop.initializer)?.kind === ts.SyntaxKind.NullKeyword)
+}
+
+// A dispatcher-result binding may only be read through a property or
+// element access; any other use of the identifier anywhere in `owner`
+// (reassignment, a property/element write including compound assignment,
+// `delete`, `++`/`--`, being passed as a call argument such as
+// `Object.assign(cfg, ...)`, being spread, or being aliased via another
+// declaration such as `const x = cfg`) is treated as an escape and fails
+// the proof. Deliberately does NOT stop descending at nested function-like
+// nodes (unlike isReassignedWithin) — a mutation performed inside a nested
+// callback closed over the binding is exactly as real as one written
+// directly in the enclosing function body. Mirrors, and is scoped like,
+// ts-colors.mjs::absenceBindingUsesSafe(declaration, false).
+function dispatcherBindingUsesSafe(owner, declarationName, name) {
+  if (!owner.body) return false
+  let safe = true
+  const visit = (node) => {
+    if (!safe) return
+    if (ts.isIdentifier(node) && node.text === name && node !== declarationName) {
+      const parent = node.parent
+      if ((!ts.isPropertyAccessExpression(parent) && !ts.isElementAccessExpression(parent)) || parent.expression !== node) { safe = false; return }
+      const property = ts.isPropertyAccessExpression(parent) ? parent.name.text : null
+      if (!property || ['__proto__', 'prototype', 'constructor'].includes(property)) { safe = false; return }
+      let expression = parent
+      while (expression.parent && (
+        ts.isPropertyAccessExpression(expression.parent) || ts.isElementAccessExpression(expression.parent)
+        || ts.isParenthesizedExpression(expression.parent) || ts.isAsExpression(expression.parent)
+        || ts.isNonNullExpression(expression.parent) || ts.isObjectLiteralExpression(expression.parent)
+        || ts.isArrayLiteralExpression(expression.parent) || ts.isPropertyAssignment(expression.parent)
+        || ts.isSpreadAssignment(expression.parent) || ts.isSpreadElement(expression.parent)
+      )) expression = expression.parent
+      const use = expression.parent
+      if ((ts.isBinaryExpression(use) && use.left === expression
+          && use.operatorToken.kind >= ts.SyntaxKind.FirstAssignment && use.operatorToken.kind <= ts.SyntaxKind.LastAssignment)
+        || ((ts.isForOfStatement(use) || ts.isForInStatement(use)) && use.initializer === expression)
+        || ts.isDeleteExpression(use) || ts.isPrefixUnaryExpression(use) || ts.isPostfixUnaryExpression(use)
+        || (ts.isCallExpression(use) && use.expression === expression)) { safe = false; return }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(owner.body)
+  return safe
 }
 
 // Resolves `node` to the closed set of object literals it could evaluate to,
@@ -660,10 +740,16 @@ function collectDispatchedObjectLiterals(node, ctx, seen) {
 // into A) without penalizing the same function being called from two
 // independent sibling branches — each recursive descent gets its own copy
 // rather than mutating a shared set, so siblings never see each other's
-// visited functions.
+// visited functions. Per LEAD DECISION, the function itself must be a safe,
+// non-async, non-generator, top-level declaration (see
+// isTopLevelFiniteDispatcherFunction) — an async/generator call does not
+// return the object at all (a Promise/Generator instead), and a dispatcher
+// nested inside the very component being analyzed could close over local
+// mutable state the proof cannot see.
 function collectFiniteDispatcherReturns(call, ctx, seen) {
   const declaration = functionDeclarationFor(call.expression, ctx)
   if (!declaration || !declaration.body || !ts.isBlock(declaration.body)) return null
+  if (!isTopLevelFiniteDispatcherFunction(declaration)) return null
   if (seen.has(declaration)) return null
   const nextSeen = new Set(seen)
   nextSeen.add(declaration)
@@ -684,6 +770,24 @@ function collectFiniteDispatcherReturns(call, ctx, seen) {
   }
   if (results.length === 0) return null
   return results
+}
+
+// Safe: not a generator, not async (both return a wrapper object, not the
+// literal, at the call site). Top-level: a plain `function` declaration or a
+// `const`-bound arrow/function-expression, either way declared directly at
+// module scope — never nested inside another function, where it could close
+// over caller-local mutable state this proof does not (and cannot cheaply)
+// account for.
+function isTopLevelFiniteDispatcherFunction(declaration) {
+  if (declaration.asteriskToken || declaration.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.AsyncKeyword)) return false
+  if (ts.isFunctionDeclaration(declaration)) return ts.isSourceFile(declaration.parent)
+  if (ts.isArrowFunction(declaration) || ts.isFunctionExpression(declaration)) {
+    const variable = declaration.parent
+    return ts.isVariableDeclaration(variable) && isConstVariableDeclaration(variable)
+      && ts.isVariableDeclarationList(variable.parent) && ts.isVariableStatement(variable.parent.parent)
+      && ts.isSourceFile(variable.parent.parent.parent)
+  }
+  return false
 }
 
 // Sentinel: a clause that provably never returns a value (an

@@ -533,3 +533,31 @@ describe('renamed builder imports fail closed', () => {
       ['className: fmt(o)', 'className: o'])
   })
 })
+
+describe('finite-dispatcher binding safety — additional escape shapes (frozen review fix)', () => {
+  // Companion to the direct regression tests in spacing.test.mjs (same
+  // frozen review: dist/design-system-baseline/cli-lanes/
+  // claude-spacing-review/review.md). Covers two further escape shapes of
+  // dispatcherBindingUsesSafe (spacing.mjs) that the direct tests do not
+  // already exercise: spreading the binding into another object literal,
+  // and passing it as an ordinary call argument. Either would let a caller
+  // read or capture the live object and mutate it through that second
+  // reference, which the binding-safety proof cannot see past — so both
+  // must keep the member read blocking exactly like a direct property
+  // write does.
+  const getConfigHelper = "function getConfig(s) { switch (s) { case 'a': return { label: 'A' }; default: return { label: 'B' } } }\n"
+
+  it('keeps a spread-into-object escape of the dispatcher-result binding unsupported', () => {
+    const source = `${getConfigHelper}export function V({status}) { const cfg = getConfig(status); const merged = { ...cfg }; void merged; return <div className={cfg.textClass}/> }`
+    const result = findings('src/components/Adversarial.tsx', source)
+    assert.deepEqual(result.filter((f) => f.ruleId === 'spacing/unsupported').map((f) => f.syntax), ['className: cfg.textClass'],
+      'spreading the binding into another literal is an escape the proof cannot see past')
+  })
+
+  it('keeps the dispatcher-result binding unsupported once it is passed as an ordinary call argument', () => {
+    const source = `${getConfigHelper}function poison(o) { o.textClass = 'p-[7px]' }\nexport function V({status}) { const cfg = getConfig(status); poison(cfg); return <div className={cfg.textClass}/> }`
+    const result = findings('src/components/Adversarial.tsx', source)
+    assert.deepEqual(result.filter((f) => f.ruleId === 'spacing/unsupported').map((f) => f.syntax), ['className: cfg.textClass'],
+      'passing the live binding to an arbitrary function is an escape the proof cannot see past')
+  })
+})
