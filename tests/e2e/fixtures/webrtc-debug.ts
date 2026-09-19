@@ -352,11 +352,23 @@ export async function shouldDumpWebrtcDebug(
 /**
  * Persist the dump to the test report (as both a console log and an
  * attachment) so the failure is debuggable from the report alone.
- * Squad J review advisory (folded in by Squad K, 2026-09-20): the
- * entire body is wrapped in try/catch so a fixture failure (closed
- * page, detached context, broken script) can never mask the oracle
- * message at the call site. A failed dump returns an empty snapshot
- * and console.warns; the caller still throws its own real assertion.
+ *
+ * Squad J review advisory (folded in by Squad K, 2026-09-20) — the
+ * gate `shouldDumpWebrtcDebug` is now wired INTO this function
+ * (Squad K remediation 2026-09-20): a healthy run that already has
+ * decoded video dimensions and at least one inbound video track
+ * returns the empty snapshot immediately, without paying the
+ * dump's evaluate+getStats cost and without polluting the report
+ * with a "everything is fine" attachment. The 5 prior call sites
+ * (browser-control-handover, browser-live-video, uat-browser-panel
+ * UAT-13/14/15-human/15-agent) all hit this gate on the green
+ * path; the dump fires only when the oracle is about to fail.
+ *
+ * Squad J review advisory — second half: the entire body is wrapped
+ * in try/catch so a fixture failure (closed page, detached context,
+ * broken script) can never mask the oracle message at the call
+ * site. A failed dump returns an empty snapshot and console.warns;
+ * the caller still throws its own real assertion.
  */
 export async function logWebrtcDebug(
   page: Page,
@@ -364,6 +376,25 @@ export async function logWebrtcDebug(
   label: string,
   videoSelector: string = '[data-testid="browser-live-video"]',
 ): Promise<WebrtcDebugSnapshot> {
+  // Gate first: a healthy stream does not need a debug dump and
+  // does not need an attachment. The probe is cheap (one
+  // page.evaluate) compared to the dump below; skipping the
+  // dump on the green path is the whole reason this gate exists.
+  try {
+    const shouldDump = await shouldDumpWebrtcDebug(page, videoSelector);
+    if (!shouldDump) {
+      // Return a minimal snapshot (matches the oracle pass shape) so
+      // call sites that log the return value do not see a different
+      // type on the green path vs the red path. No console line, no
+      // attachment — the test report stays clean.
+      return emptySnapshot(label);
+    }
+  } catch {
+    // Probe itself failed (page closed, etc.) — fall through to the
+    // dump, which has its own try/catch. The operator gets the
+    // failure mode in the report either way.
+  }
+
   try {
     const dump = await dumpWebrtcDebug(page, label, videoSelector);
     const line = `[webrtc-debug] ${label} video=${dump.video.videoWidth}x${dump.video.videoHeight} ` +

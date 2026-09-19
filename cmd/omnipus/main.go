@@ -31,6 +31,7 @@ import (
 
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal"
 	auditcmd "github.com/elicify-ai/omnipus/cmd/omnipus/internal/audit"
+	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/browser"
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/clitoken"
 	credcmd "github.com/elicify-ai/omnipus/cmd/omnipus/internal/credentials"
 	"github.com/elicify-ai/omnipus/cmd/omnipus/internal/doctor"
@@ -606,6 +607,7 @@ If an agent shares a name with a subcommand, use the agent's ID directly via the
 	cmd.AddCommand(
 		onboard.NewOnboardCommand(),
 		auditcmd.NewAuditCommand(),
+		browser.NewBrowserCommand(),
 		credcmd.NewCredentialsCommand(),
 		recordscmd.NewRecordsCommand(),
 		doctor.NewDoctorCommand(),
